@@ -28,7 +28,8 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.utils.common_demo_utils import get_mesh_mappers
 from models.demos.utils.llm_demo_utils import verify_perf
-from models.demos.whisper.tt.ttnn_whisper import WHISPER_L1_SMALL_SIZE, TtnnWhisper
+from models.demos.whisper.tt import ttnn_whisper
+from models.demos.whisper.tt.ttnn_whisper import WHISPER_L1_SMALL_SIZE
 
 
 @dataclass
@@ -114,7 +115,7 @@ def load_conditional_generation_ref_model(model_repo, language, task):
 
 
 def init_conditional_generation_tt_model(
-    hf_ref_model, config, ttnn_whisper_instance, mesh_device, weights_mesh_mapper, max_batch_size=1, max_seq_len=512
+    hf_ref_model, config, mesh_device, weights_mesh_mapper, max_batch_size=1, max_seq_len=512
 ):
     model = hf_ref_model.model
     linear_weight = hf_ref_model.proj_out.weight
@@ -126,12 +127,12 @@ def init_conditional_generation_tt_model(
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
-        convert_to_ttnn=ttnn_whisper_instance.convert_to_ttnn,
-        custom_preprocessor=ttnn_whisper_instance.create_custom_mesh_preprocessor(weights_mesh_mapper),
+        convert_to_ttnn=ttnn_whisper.convert_to_ttnn,
+        custom_preprocessor=ttnn_whisper.create_custom_mesh_preprocessor(weights_mesh_mapper),
         device=mesh_device,
     )
     # Note: config.max_length is typically 448 for whisper large models
-    kv_cache = TtnnWhisper.init_kv_cache(
+    kv_cache = ttnn_whisper.init_kv_cache(
         config, mesh_device, max_batch_size, max_seq_len=max_seq_len, weights_mesh_mapper=weights_mesh_mapper
     )
 
@@ -139,7 +140,6 @@ def init_conditional_generation_tt_model(
 
 
 def create_functional_whisper_for_conditional_generation_inference_pipeline(
-    ttnn_whisper_instance,
     mesh_device,
     model_repo,
     generation_params: Optional[GenerationParams] = None,
@@ -151,8 +151,7 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(
     the callable returns the full decoded output.
 
     Args:
-        ttnn_whisper_instance: The TtnnWhisper instance
-        device: The target device
+        mesh_device: The target device
         model_repo: HuggingFace model repository ID. Must be one of the supported models.
         generation_params: Generation parameters for the model. If None, defaults will be used.
     """
@@ -163,7 +162,7 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(
         model_repo, generation_params.language, generation_params.task
     )
     parameters, ttnn_linear_weight, kv_cache = init_conditional_generation_tt_model(
-        hf_ref_model, config, ttnn_whisper_instance, mesh_device, weights_mesh_mapper=weights_mesh_mapper
+        hf_ref_model, config, mesh_device, weights_mesh_mapper=weights_mesh_mapper
     )
 
     def _model_pipeline(
@@ -180,8 +179,10 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(
             f"Running model on batch of {len(current_batch)} samples with durations: {['{:.3f}s'.format(d) for d in durations]}"
         )
 
-        return ttnn_whisper_instance.generate(
+        return ttnn_whisper.generate(
             config,
+            mesh_device,
+            (input_mesh_mapper, weights_mesh_mapper),
             current_batch,
             feature_extractor,
             parameters=parameters,
@@ -209,7 +210,6 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(
 
 def run_demo_whisper_for_audio_classification_inference(
     input_path,
-    ttnn_whisper_instance,
     mesh_device,
     num_inputs,
     batch_size_per_device=1,
@@ -229,8 +229,8 @@ def run_demo_whisper_for_audio_classification_inference(
     inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer = get_mesh_mappers(mesh_device)
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
-        convert_to_ttnn=ttnn_whisper_instance.convert_to_ttnn,
-        custom_preprocessor=ttnn_whisper_instance.create_custom_mesh_preprocessor(weights_mesh_mapper),
+        convert_to_ttnn=ttnn_whisper.convert_to_ttnn,
+        custom_preprocessor=ttnn_whisper.create_custom_mesh_preprocessor(weights_mesh_mapper),
         device=mesh_device,
     )
     batch_size = batch_size_per_device * mesh_device.get_num_devices()
@@ -269,7 +269,7 @@ def run_demo_whisper_for_audio_classification_inference(
         input_features = torch.cat(all_input_features, dim=0)  # Shape: [current_batch_size, x, y]
         del all_input_features
         # Encode inputs
-        input_embedding = ttnn_whisper_instance.preprocess_encoder_inputs(
+        input_embedding = ttnn_whisper.preprocess_encoder_inputs(
             config=config,
             input_features=input_features,
             parameters=parameters.encoder,
@@ -278,7 +278,7 @@ def run_demo_whisper_for_audio_classification_inference(
             weights_mesh_mapper=weights_mesh_mapper,
         )
 
-        encoder_outputs = ttnn_whisper_instance.encoder(
+        encoder_outputs = ttnn_whisper.encoder(
             config=config, inputs_embeds=input_embedding, parameters=parameters.encoder
         )
 
@@ -307,7 +307,6 @@ def run_demo_whisper_for_audio_classification_inference(
 
 def run_demo_whisper_for_conditional_generation_inference(
     input_path,
-    ttnn_whisper_instance,
     mesh_device,
     num_inputs,
     model_repo,
@@ -318,7 +317,6 @@ def run_demo_whisper_for_conditional_generation_inference(
     torch.manual_seed(0)
     # instantiate model inference pipeline
     model_pipeline = create_functional_whisper_for_conditional_generation_inference_pipeline(
-        ttnn_whisper_instance,
         mesh_device,
         model_repo,
         generation_params,
@@ -383,7 +381,6 @@ def run_demo_whisper_for_conditional_generation_inference(
 
 
 def run_demo_whisper_for_conditional_generation_dataset(
-    ttnn_whisper_instance,
     mesh_device,
     model_repo,
     generation_params: Optional[GenerationParams] = None,
@@ -393,7 +390,6 @@ def run_demo_whisper_for_conditional_generation_dataset(
     torch.manual_seed(0)
     # instantiate model inference pipeline
     model_pipeline = create_functional_whisper_for_conditional_generation_inference_pipeline(
-        ttnn_whisper_instance,
         mesh_device,
         model_repo,
         generation_params,
@@ -460,7 +456,6 @@ def run_demo_whisper_for_conditional_generation_dataset(
 
 
 def run_demo_whisper_for_translation_dataset(
-    ttnn_whisper_instance,
     mesh_device,
     model_repo,
     num_inputs,
@@ -498,7 +493,6 @@ def run_demo_whisper_for_translation_dataset(
     logger.info(f"Using source language code: {source_lang_code_full} with task={generation_params.task}")
 
     model_pipeline = create_functional_whisper_for_conditional_generation_inference_pipeline(
-        ttnn_whisper_instance,
         mesh_device,
         model_repo,
         generation_params,
@@ -608,10 +602,6 @@ def run_demo_whisper_for_translation_dataset(
 
 
 @pytest.mark.parametrize(
-    "ttnn_whisper_instance",
-    (TtnnWhisper(),),
-)
-@pytest.mark.parametrize(
     "num_inputs,batch_size_per_device",
     [(1, 1)],
 )
@@ -629,24 +619,19 @@ def run_demo_whisper_for_translation_dataset(
 )
 # To run the demo with specific device configurations, provide the desired number of devices under the `mesh_device` parameter.
 def test_demo_for_audio_classification_inference(
-    input_path, ttnn_whisper_instance, mesh_device, num_inputs, batch_size_per_device, is_ci_env, request
+    input_path, mesh_device, num_inputs, batch_size_per_device, is_ci_env, request
 ):
     if is_ci_env:
         pytest.skip("Skipping test in CI since it provides redundant testing")
 
     return run_demo_whisper_for_audio_classification_inference(
         input_path,
-        ttnn_whisper_instance,
         mesh_device,
         num_inputs,
         batch_size_per_device,
     )
 
 
-@pytest.mark.parametrize(
-    "ttnn_whisper_instance",
-    (TtnnWhisper(),),
-)
 @pytest.mark.parametrize(
     "num_inputs,batch_size_per_device",
     [(1, 1)],
@@ -661,7 +646,7 @@ def test_demo_for_audio_classification_inference(
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
 def test_demo_for_audio_classification_dataset(
-    input_path, ttnn_whisper_instance, mesh_device, num_inputs, batch_size_per_device, is_ci_env, request
+    input_path, mesh_device, num_inputs, batch_size_per_device, is_ci_env, request
 ):
     if is_ci_env:
         pytest.skip("Skipping test in CI since it provides redundant testing")
@@ -669,7 +654,6 @@ def test_demo_for_audio_classification_dataset(
     ds = load_dataset("google/fleurs", "all", split="validation", streaming=True)
     return run_demo_whisper_for_audio_classification_inference(
         input_path,
-        ttnn_whisper_instance,
         mesh_device,
         num_inputs,
         batch_size_per_device,
@@ -678,10 +662,6 @@ def test_demo_for_audio_classification_dataset(
     )
 
 
-@pytest.mark.parametrize(
-    "ttnn_whisper_instance",
-    (TtnnWhisper(),),
-)
 @pytest.mark.parametrize(
     "num_inputs,batch_size_per_device",
     [(2, 1)],
@@ -724,7 +704,6 @@ def test_demo_for_audio_classification_dataset(
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
 def test_demo_for_conditional_generation(
     input_path,
-    ttnn_whisper_instance,
     mesh_device,
     num_inputs,
     model_repo,
@@ -751,7 +730,6 @@ def test_demo_for_conditional_generation(
     )
     ttft, decode_throughput = run_demo_whisper_for_conditional_generation_inference(
         input_path,
-        ttnn_whisper_instance,
         mesh_device,
         num_inputs,
         model_repo,
@@ -794,10 +772,6 @@ def test_demo_for_conditional_generation(
 
 
 @pytest.mark.parametrize(
-    "ttnn_whisper_instance",
-    (TtnnWhisper(),),
-)
-@pytest.mark.parametrize(
     "model_repo",
     ("openai/whisper-large-v3", "distil-whisper/distil-large-v3"),
 )
@@ -834,7 +808,6 @@ def test_demo_for_conditional_generation(
 )
 # To run the demo with specific device configurations, provide the desired number of devices under the `mesh_device` parameter.
 def test_demo_for_conditional_generation_dataset(
-    ttnn_whisper_instance,
     mesh_device,
     model_repo,
     language,
@@ -862,7 +835,6 @@ def test_demo_for_conditional_generation_dataset(
         task=task,
     )
     return run_demo_whisper_for_conditional_generation_dataset(
-        ttnn_whisper_instance,
         mesh_device,
         model_repo,
         generation_params,
@@ -871,10 +843,6 @@ def test_demo_for_conditional_generation_dataset(
     )
 
 
-@pytest.mark.parametrize(
-    "ttnn_whisper_instance",
-    (TtnnWhisper(),),
-)
 @pytest.mark.parametrize(
     "model_repo",
     ("openai/whisper-large-v3",),
@@ -900,7 +868,6 @@ def test_demo_for_conditional_generation_dataset(
     [(0.0, None, None, None, False), (0.0, 2.4, -2.0, 0.6, True)],  # Translation needs relaxed thresholds
 )
 def test_demo_for_translation_dataset(
-    ttnn_whisper_instance,
     mesh_device,
     model_repo,
     source_language,
@@ -927,7 +894,6 @@ def test_demo_for_translation_dataset(
         task="translate",
     )
     return run_demo_whisper_for_translation_dataset(
-        ttnn_whisper_instance,
         mesh_device,
         model_repo,
         num_inputs,
