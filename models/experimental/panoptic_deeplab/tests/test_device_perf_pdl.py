@@ -12,7 +12,7 @@ from models.experimental.panoptic_deeplab.reference.pytorch_model import DEEPLAB
     [
         (
             "pytest models/experimental/panoptic_deeplab/tests/pcc/test_tt_model.py::test_model_panoptic_deeplab -k test_panoptic_deeplab",
-            51_749_520,
+            32_661_399,
             PANOPTIC_DEEPLAB,
             PANOPTIC_DEEPLAB,
             1,
@@ -37,8 +37,6 @@ from models.experimental.panoptic_deeplab.reference.pytorch_model import DEEPLAB
 def test_device_perf_pdl(
     command, expected_device_perf_ns_per_iteration, subdir, model_name, num_iterations, batch_size, margin, comments
 ):
-    if model_name == PANOPTIC_DEEPLAB:
-        pytest.skip("PANOPTIC_DEEPLAB is currently not supported")
     run_model_device_perf_test(
         command=command,
         expected_device_perf_ns_per_iteration=expected_device_perf_ns_per_iteration,
