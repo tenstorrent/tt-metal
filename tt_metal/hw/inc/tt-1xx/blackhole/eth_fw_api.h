@@ -292,6 +292,28 @@ FORCE_INLINE bool is_link_up() {
 #endif
 }
 
+FORCE_INLINE void base_fw_dynamic_noc_local_state_init() {
+    constexpr uint32_t risc1_mailbox_addr = MEM_SYSENG_ETH_MAILBOX_ADDR + (MAILBOX_RISC1 * sizeof(eth_mailbox_t));
+
+    volatile tt_l1_ptr uint32_t* risc1_mailbox_msg_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(risc1_mailbox_addr + offsetof(eth_mailbox_t, msg));
+    uint32_t risc1_mailbox_val = *risc1_mailbox_msg_ptr;
+
+    // Make sure mailbox is free to accept a new message
+    do {
+        invalidate_l1_cache();
+        risc1_mailbox_val = *risc1_mailbox_msg_ptr;
+    } while (((risc1_mailbox_val & MEM_SYSENG_ETH_MSG_STATUS_MASK) != MEM_SYSENG_ETH_MSG_DONE) &&
+             risc1_mailbox_val != 0);
+
+    *risc1_mailbox_msg_ptr = MEM_SYSENG_ETH_MSG_CALL | MEM_SYSENG_ETH_MSG_DYNAMIC_NOC_INIT;
+
+    do {
+        invalidate_l1_cache();
+        risc1_mailbox_val = *risc1_mailbox_msg_ptr;
+    } while ((risc1_mailbox_val & MEM_SYSENG_ETH_MSG_STATUS_MASK) == MEM_SYSENG_ETH_MSG_CALL);
+}
+
 FORCE_INLINE bool is_port_up() {
     invalidate_l1_cache();
     return ((eth_status_t*)(MEM_SYSENG_ETH_STATUS))->port_status == port_status_e::PORT_UP;
