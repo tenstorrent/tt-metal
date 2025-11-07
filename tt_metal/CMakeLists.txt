@@ -299,7 +299,7 @@ target_link_libraries(
         TT::STL
         tt-logger::tt-logger
         ${EXECINFO_LIB}
-        xtensor # ttnn/core/distributed/distributed_tensor depends on xtensor
+        xtensor
     PRIVATE
         Metalium::Metal::Impl
         metal_common_libs
