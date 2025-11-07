@@ -31,7 +31,7 @@ from ttml.common.data import build_causal_mask
 import tt_serialization  # noqa: F401
 
 # Configuration
-CONFIG = "training_shakespeare_tinyllama.yaml"
+CONFIG = "training_gsm8k_tinyllama.yaml"
 
 
 class SpeedrunScheduler:
