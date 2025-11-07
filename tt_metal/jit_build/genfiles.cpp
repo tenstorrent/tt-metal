@@ -41,7 +41,9 @@ namespace {
 
 void gen_kernel_cpp(const string& src, const string& dst_name, const vector<string>& prolog) {
     std::ofstream out(dst_name);
-    for (const string& s : prolog) out << s;
+    for (const string& s : prolog) {
+        out << s;
+    }
     out << src;
 }
 
