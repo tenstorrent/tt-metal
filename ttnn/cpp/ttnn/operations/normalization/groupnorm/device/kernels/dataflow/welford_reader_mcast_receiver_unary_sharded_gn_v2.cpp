@@ -82,19 +82,6 @@ void kernel_main() {
                 combine_welford_stats<tt::constants::TILE_WIDTH, block_hw * tt::constants::TILE_WIDTH, local_stride>(
                     p_local_means, p_local_vars);
 
-            // DPRINT << "p_local_means: " << ENDL();
-            for (uint32_t idx = 0; idx < tt::constants::TILE_WIDTH; ++idx) {
-                // DPRINT << BF16(p_local_means[2 * idx]) << " ";
-            }
-            // DPRINT << ENDL();
-            // DPRINT << "local_result.mean: " << BF16(local_result.mean) << ENDL();
-            // DPRINT << "p_local_vars: " << ENDL();
-            for (uint32_t idx = 0; idx < tt::constants::TILE_WIDTH; ++idx) {
-                // DPRINT << BF16(p_local_vars[2 * idx]) << " ";
-            }
-            // DPRINT << ENDL();
-            // DPRINT << "local_result.variance: " << BF16(local_result.variance) << ENDL();
-
             // Write this to cb_ex_global
             auto p_global_means = reinterpret_cast<volatile uint16_t*>(global_means_ptr);
             auto p_global_vars = reinterpret_cast<volatile uint16_t*>(global_vars_ptr);

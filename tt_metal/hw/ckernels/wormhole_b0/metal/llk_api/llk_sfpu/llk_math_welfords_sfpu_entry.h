@@ -29,7 +29,7 @@ inline void llk_math_welfords_sfpu_calculate_welfords_partial_tile_(
     uint32_t num_rows,
     const std::array<uint32_t, reciprocal_size>& reciprocal_lut) {
     _llk_math_welfords_sfpu_params_(
-        ckernel::sfpu::_calculate_welfords_partial_tile_w_<reciprocal_size>,
+        ckernel::sfpu::_calculate_welfords_partial_tile_<reciprocal_size>,
         input_dst_idx,
         start_idx,
         start_row,

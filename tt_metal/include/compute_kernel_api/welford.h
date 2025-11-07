@@ -160,11 +160,12 @@ ALWI void welford_store_mean_var_to_dst_raw(
     MATH((llk_math_welfords_sfpu_store_mean_var_to_dst_raw<reciprocal_size>(mean_dst_idx, scale_idx, reciprocal_lut)));
 }
 
-// ----------------------------------------------------------------------------
-// The below functions are flavors of above 3 to use with group_id argument
-// Refer to the docstring of the above 3 functions for more details.
-// @param group_id The group id to store the data for.
-// ----------------------------------------------------------------------------
+/* -------------------------------------------------------------------------------------------------
+ * The below functions are flavors of above 3 to use with group_id argument
+ * Refer to the docstring of the above 3 functions for more details.
+ * @param group_id The group id to store the data for.
+ * -------------------------------------------------------------------------------------------------
+ */
 ALWI void welford_store_mean_m2_to_dst(uint32_t mean_dst_idx, uint32_t group_id) {
     MATH((llk_math_welfords_sfpu_store_mean_m2_to_dst(mean_dst_idx, group_id)));
 }

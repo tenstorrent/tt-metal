@@ -157,6 +157,7 @@ void kernel_main() {
     constexpr uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial);
     // This is the stride between two consecutive local means/variances in the cb_ex_partial
     constexpr uint32_t local_stride = 2;
+    constexpr uint32_t global_stride = NOC_L1_READ_ALIGNMENT_BYTES / 2;
     constexpr uint32_t single_row_size_bytes = single_tile_size_bytes / tt::constants::TILE_HEIGHT;
     constexpr uint32_t local_stride_per_group = local_stride * single_row_size_bytes;
 
@@ -196,19 +197,6 @@ void kernel_main() {
                 combine_welford_stats<tt::constants::TILE_WIDTH, block_hw * tt::constants::TILE_WIDTH, local_stride>(
                     p_local_means, p_local_vars);
 
-            // DPRINT << "p_local_means: " << ENDL();
-            for (uint32_t idx = 0; idx < tt::constants::TILE_WIDTH; ++idx) {
-                // DPRINT << BF16(p_local_means[2 * idx]) << " ";
-            }
-            // DPRINT << ENDL();
-            // DPRINT << "local_result.mean: " << BF16(local_result.mean) << ENDL();
-            // DPRINT << "p_local_vars: " << ENDL();
-            for (uint32_t idx = 0; idx < tt::constants::TILE_WIDTH; ++idx) {
-                // DPRINT << BF16(p_local_vars[2 * idx]) << " ";
-            }
-            // DPRINT << ENDL();
-            // DPRINT << "local_result.variance: " << BF16(local_result.variance) << ENDL();
-
             // Write this to cb_ex_global
             auto p_global_means = reinterpret_cast<volatile uint16_t*>(global_means_ptr);
             auto p_global_vars = reinterpret_cast<volatile uint16_t*>(global_vars_ptr);
@@ -223,34 +211,21 @@ void kernel_main() {
                 for (uint32_t i = 1; i < num_mcast_cores; ++i) {
                     noc_async_read_one_packet(
                         multicast_data_noc | global_means_ptr,
-                        global_means_ptr + i * 2 * NOC_L1_READ_ALIGNMENT_BYTES,
-                        2 * NOC_L1_READ_ALIGNMENT_BYTES);
+                        global_means_ptr + i * NOC_L1_READ_ALIGNMENT_BYTES,
+                        NOC_L1_READ_ALIGNMENT_BYTES);
                     noc_async_read_one_packet(
                         multicast_data_noc | global_vars_ptr,
-                        global_vars_ptr + i * 2 * NOC_L1_READ_ALIGNMENT_BYTES,
-                        2 * NOC_L1_READ_ALIGNMENT_BYTES);
+                        global_vars_ptr + i * NOC_L1_READ_ALIGNMENT_BYTES,
+                        NOC_L1_READ_ALIGNMENT_BYTES);
                 }
                 noc_async_read_barrier();
             }
 
             // Read mean and variance arrays from cb_ex_global, then combine using Welford
-            constexpr uint32_t stride = 2 * NOC_L1_READ_ALIGNMENT_BYTES / 2;
-            auto global_result =
-                combine_welford_stats<num_mcast_cores, block_hw * 32 * 32, stride>(p_global_means, p_global_vars);
-
-            DPRINT << "p_global_means: " << ENDL();
-            for (uint32_t idx = 0; idx < num_mcast_cores; ++idx) {
-                DPRINT << BF16(p_global_means[stride * idx]) << " ";
-            }
-            DPRINT << ENDL();
-            DPRINT << "global_result.mean: " << BF16(global_result.mean) << ENDL();
-
-            DPRINT << "p_global_vars: " << ENDL();
-            for (uint32_t idx = 0; idx < num_mcast_cores; ++idx) {
-                DPRINT << BF16(p_global_vars[stride * idx]) << " ";
-            }
-            DPRINT << ENDL();
-            DPRINT << "global_result.variance: " << BF16(global_result.variance) << ENDL();
+            auto global_result = combine_welford_stats<
+                num_mcast_cores,
+                block_hw * tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT,
+                global_stride>(p_global_means, p_global_vars);
 
             // Write this to cb_ex_global
             p_global_means[0] = global_result.mean;
