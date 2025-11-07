@@ -187,19 +187,6 @@ class WanPipelineI2V(DiffusionPipeline, WanLoraLoaderMixin):
 
         self.tt_vae.load_state_dict(self.vae.state_dict())
 
-        # Initialize the host-side encoder
-        # self.host_encoder = WanEncoder(
-        #     base_dim=self.vae.config.base_dim,
-        #     z_dim=self.vae.config.z_dim,
-        #     dim_mult=self.vae.config.dim_mult,
-        #     num_res_blocks=self.vae.config.num_res_blocks,
-        #     attn_scales=self.vae.config.attn_scales,
-        #     temperal_downsample=self.vae.config.temperal_downsample,
-        #     is_residual=self.vae.config.is_residual,
-        #     in_channels=self.vae.config.in_channels,
-        # )
-        # self.host_encoder.load_state_dict(self.vae.state_dict())
-
         self.register_to_config(boundary_ratio=boundary_ratio)
         self.register_to_config(expand_timesteps=expand_timesteps)
         self.vae_scale_factor_temporal = self.vae.config.scale_factor_temporal if getattr(self, "vae", None) else 4
@@ -340,6 +327,46 @@ class WanPipelineI2V(DiffusionPipeline, WanLoraLoaderMixin):
         return prompt_embeds
 
     def encode_on_host(self, x: torch.Tensor) -> torch.Tensor:
+        mean = [
+            -0.7571,
+            -0.7089,
+            -0.9113,
+            0.1075,
+            -0.1745,
+            0.9653,
+            -0.1517,
+            1.5508,
+            0.4134,
+            -0.0715,
+            0.5517,
+            -0.3632,
+            -0.1922,
+            -0.9497,
+            0.2503,
+            -0.2921,
+        ]
+        std = [
+            2.8184,
+            1.4541,
+            2.3275,
+            2.6558,
+            1.2196,
+            1.7708,
+            2.6052,
+            2.0743,
+            3.2687,
+            2.1526,
+            2.8652,
+            1.5579,
+            1.6382,
+            1.1253,
+            2.8251,
+            1.9160,
+        ]
+        mean = torch.tensor(mean, dtype=x.dtype)
+        std = torch.tensor(std, dtype=x.dtype)
+        scale = [mean, 1.0 / std]
+
         _, _, num_frame, height, width = x.shape
 
         self.vae.clear_cache()
@@ -364,9 +391,11 @@ class WanPipelineI2V(DiffusionPipeline, WanLoraLoaderMixin):
                 )
                 out = torch.cat([out, out_], 2)
 
-        enc = self.vae.quant_conv(out).chunk(2, dim=1)[0]
+        mu = self.vae.quant_conv(out).chunk(2, dim=1)[0]
+        mu = (mu - scale[0].view(1, 16, 1, 1, 1)) * scale[1].view(1, 16, 1, 1, 1)
         self.vae.clear_cache()
-        return enc
+        # return enc
+        return mu
 
     def prepare_image(
         self,
