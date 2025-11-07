@@ -2,15 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/tensor/tensor_utils.hpp"
+#include "tt-metalium/tensor/tensor_utils.hpp"
 
 #include <tt_stl/overloaded.hpp>
 
 #include "tt-metalium/distributed_host_buffer.hpp"
-#include "ttnn/distributed/api.hpp"
-#include "ttnn/tensor/host_buffer/functions.hpp"
-#include "ttnn/tensor/storage.hpp"
-#include "ttnn/tensor/types.hpp"
+// #include <tt-metalium/distributed/api.hpp>  // TODO: How to handle this?
+#include "tt-metalium/tensor/host_buffer/functions.hpp"
+#include "tt-metalium/tensor/storage.hpp"
+#include "tt-metalium/tensor/types.hpp"
 
 #include <tracy/Tracy.hpp>
 

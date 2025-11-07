@@ -12,6 +12,8 @@
 #include "tt_stl/span.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/distributed/types.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include <ttnn/common/queue_id.hpp>
 
 namespace ttnn::distributed {
 

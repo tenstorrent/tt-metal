@@ -26,6 +26,7 @@
 
 #include "ttnn/tensor/xtensor/partition.hpp"
 #include "ttnn/tensor/xtensor/conversion_utils.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 
 namespace ttnn {
 namespace {

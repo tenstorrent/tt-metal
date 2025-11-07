@@ -3,8 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include "types.hpp"
-#include "ttnn/common/queue_id.hpp"
+#include "tt-metalium/tensor/types.hpp"
+#include <tt-metalium/queue_id.hpp>
+#include <tt_stl/optional_reference.hpp>
+#include <tt-metalium/tensor/layout/layout.hpp>
 
 namespace tt::tt_metal {
 class Tensor;

@@ -6,8 +6,9 @@
 
 #include <cstdint>
 
-#include <ttnn/tensor/tensor.hpp>
-// #include <types.hpp>
+#include <tt-metalium/tensor/tensor.hpp>
+#include <tt-metalium/tensor/types.hpp>
+#include <tt-metalium/shape.hpp>
 
 namespace tt {
 

@@ -10,23 +10,26 @@
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <flatbuffers/flatbuffers.h>
 
-#include "ttnn/tensor/types.hpp"
-#include "ttnn/tensor/tensor_spec.hpp"
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/distributed/types.hpp"
-#include "ttnn/distributed/tensor_topology.hpp"
-#include "ttnn/tensor/storage.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
+#include "tt-metalium/tensor/types.hpp"
+#include "tt-metalium/tensor/tensor_spec.hpp"
+#include "tt-metalium/tensor/tensor.hpp"
 
-#include "mesh_shape_generated.h"
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/system_mesh.hpp>
+
+#include "tt-metalium/distributed/tensor_topology.hpp"
+#include "tt-metalium/tensor/storage.hpp"
+#include "tt-metalium/tensor/tensor_utils.hpp"
+
+#include "tt-metalium/tensor/mesh_shape_generated.h"
 #include <tt-metalium/serialized_descriptors/mesh_coordinate_generated.h>
-#include "tensor_generated.h"
+#include "tt-metalium/tensor/tensor_generated.h"
 
 #include <vector>
 #include <cstdint>
 #include <unordered_map>
 
-namespace ttnn {
+namespace tt::tt_metal {
 namespace {
 
 flatbuffers::Offset<tt::tt_metal::distributed::flatbuffer::MeshCoordinate> to_flatbuffer(
@@ -89,25 +92,25 @@ tt::tt_metal::HostBuffer create_host_buffer_from_bytes(
     TT_THROW("Unreachable");
 }
 
-flatbuffers::Offset<ttnn::flatbuffer::TensorTopology> to_flatbuffer(
+flatbuffers::Offset<flatbuffer::TensorTopology> to_flatbuffer(
     const tt::tt_metal::TensorTopology& topology, flatbuffers::FlatBufferBuilder& builder) {
     auto dist_shape_offset = to_flatbuffer(topology.distribution_shape(), builder);
 
-    std::vector<flatbuffers::Offset<ttnn::flatbuffer::MeshMapperPlacement>> placement_offsets;
+    std::vector<flatbuffers::Offset<flatbuffer::MeshMapperPlacement>> placement_offsets;
     placement_offsets.reserve(topology.placements().size());
     for (const auto& placement_variant : topology.placements()) {
-        ttnn::flatbuffer::MeshMapperPlacementType type = ttnn::flatbuffer::MeshMapperPlacementType::Replicate;
+        flatbuffer::MeshMapperPlacementType type = flatbuffer::MeshMapperPlacementType::Replicate;
         int32_t tensor_dim = -1;
 
         if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Replicate>(placement_variant)) {
-            type = ttnn::flatbuffer::MeshMapperPlacementType::Replicate;
+            type = flatbuffer::MeshMapperPlacementType::Replicate;
         } else {
             const auto& shard = std::get<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placement_variant);
-            type = ttnn::flatbuffer::MeshMapperPlacementType::Shard;
+            type = flatbuffer::MeshMapperPlacementType::Shard;
             tensor_dim = shard.dim;
         }
 
-        placement_offsets.push_back(ttnn::flatbuffer::CreateMeshMapperPlacement(builder, type, tensor_dim));
+        placement_offsets.push_back(flatbuffer::CreateMeshMapperPlacement(builder, type, tensor_dim));
     }
     auto placements_vec = builder.CreateVector(placement_offsets);
 
@@ -118,10 +121,10 @@ flatbuffers::Offset<ttnn::flatbuffer::TensorTopology> to_flatbuffer(
     }
     auto mesh_coords_vec = builder.CreateVector(coord_offsets);
 
-    return ttnn::flatbuffer::CreateTensorTopology(builder, dist_shape_offset, placements_vec, mesh_coords_vec);
+    return flatbuffer::CreateTensorTopology(builder, dist_shape_offset, placements_vec, mesh_coords_vec);
 }
 
-tt::tt_metal::TensorTopology from_flatbuffer(const ttnn::flatbuffer::TensorTopology* fb_topology) {
+tt::tt_metal::TensorTopology from_flatbuffer(const flatbuffer::TensorTopology* fb_topology) {
     TT_FATAL(fb_topology != nullptr, "TensorTopology flatbuffer pointer must not be null");
 
     const auto* fb_dist_shape = fb_topology->distribution_shape();
@@ -133,9 +136,9 @@ tt::tt_metal::TensorTopology from_flatbuffer(const ttnn::flatbuffer::TensorTopol
         placements.reserve(fb_placements->size());
         for (const auto* p : *fb_placements) {
             TT_FATAL(p != nullptr, "MeshMapperPlacement element must not be null");
-            if (p->type() == ttnn::flatbuffer::MeshMapperPlacementType::Replicate) {
+            if (p->type() == flatbuffer::MeshMapperPlacementType::Replicate) {
                 placements.emplace_back(tt::tt_metal::distributed::MeshMapperConfig::Replicate{});
-            } else if (p->type() == ttnn::flatbuffer::MeshMapperPlacementType::Shard) {
+            } else if (p->type() == flatbuffer::MeshMapperPlacementType::Shard) {
                 placements.emplace_back(tt::tt_metal::distributed::MeshMapperConfig::Shard{.dim = p->tensor_dim()});
             } else {
                 TT_THROW("Unknown MeshMapperPlacementType");
@@ -157,16 +160,16 @@ tt::tt_metal::TensorTopology from_flatbuffer(const ttnn::flatbuffer::TensorTopol
 
 }  // namespace
 
-flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
+flatbuffers::Offset<flatbuffer::Tensor> to_flatbuffer(
     const Tensor& tensor, flatbuffers::FlatBufferBuilder& builder, std::vector<tt::tt_metal::HostBuffer>& buffers) {
     TT_FATAL(buffers.empty(), "Buffers vector must be empty");
     TT_FATAL(!is_device_tensor(tensor), "Device tensors are not supported in flatbuffer serialization");
 
-    auto tensor_spec_offset = ttnn::to_flatbuffer(tensor.tensor_spec(), builder);
+    auto tensor_spec_offset = to_flatbuffer(tensor.tensor_spec(), builder);
 
     const auto& host_storage = tensor.host_storage();
 
-    std::vector<flatbuffers::Offset<ttnn::flatbuffer::TensorShard>> shards_vector;
+    std::vector<flatbuffers::Offset<flatbuffer::TensorShard>> shards_vector;
     // Used to deduplicate buffer addresses for replicated tensor data.
     std::unordered_map<const std::byte*, uint64_t> buffer_to_offset;
     uint64_t next_buffer_offset = 0;
@@ -186,12 +189,12 @@ flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
                 shard_buffer_offset = it->second;
             }
 
-            auto inline_storage = ttnn::flatbuffer::InlineFileStorage(shard_buffer_offset, buffer_size);
+            auto inline_storage = flatbuffer::InlineFileStorage(shard_buffer_offset, buffer_size);
             auto mesh_coord_offset = to_flatbuffer(coord, builder);
 
-            auto shard_offset = ttnn::flatbuffer::CreateTensorShard(
+            auto shard_offset = flatbuffer::CreateTensorShard(
                 builder,
-                ttnn::flatbuffer::TensorBuffer::InlineFileStorage,
+                flatbuffer::TensorBuffer::InlineFileStorage,
                 builder.CreateStruct(inline_storage).Union(),
                 mesh_coord_offset);
 
@@ -205,16 +208,16 @@ flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
     auto topology_offset = to_flatbuffer(tensor.tensor_topology(), builder);
 
     auto tensor_offset =
-        ttnn::flatbuffer::CreateTensor(builder, tensor_spec_offset, mesh_shape_offset, shards, topology_offset);
+        flatbuffer::CreateTensor(builder, tensor_spec_offset, mesh_shape_offset, shards, topology_offset);
 
     return tensor_offset;
 }
 
 Tensor from_flatbuffer(
-    const ttnn::flatbuffer::Tensor* fb_tensor,
+    const flatbuffer::Tensor* fb_tensor,
     tt::stl::Span<std::byte> tensor_data,
     const tt::tt_metal::MemoryPin& memory_pin) {
-    auto spec = ttnn::from_flatbuffer(fb_tensor->tensor_spec());
+    auto spec = from_flatbuffer(fb_tensor->tensor_spec());
 
     const auto* mesh_shape = fb_tensor->mesh_shape();
     TT_FATAL(mesh_shape != nullptr, "Mesh shape is required for tensor");
@@ -224,7 +227,7 @@ Tensor from_flatbuffer(
     for (size_t i = 0; i < fb_tensor->shards()->size(); ++i) {
         const auto* shard = fb_tensor->shards()->Get(i);
 
-        const auto* inline_storage = shard->buffer_as<ttnn::flatbuffer::InlineFileStorage>();
+        const auto* inline_storage = shard->buffer_as<flatbuffer::InlineFileStorage>();
         TT_FATAL(inline_storage != nullptr, "Only InlineFileStorage is supported in flatbuffer deserialization");
 
         const uint64_t offset = inline_storage->offset();
@@ -250,4 +253,4 @@ Tensor from_flatbuffer(
     return Tensor(std::move(host_storage), spec, std::move(topology));
 }
 
-}  // namespace ttnn
+}  // namespace tt::tt_metal

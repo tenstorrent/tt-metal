@@ -6,10 +6,10 @@
 
 #include <tt-metalium/shape2d.hpp>
 
-#include <ttnn/tensor/layout/alignment.hpp>
-#include <ttnn/tensor/layout/page_config.hpp>
-#include <ttnn/tensor/shape/shape.hpp>
-#include <ttnn/tensor/types.hpp>
+#include <tt-metalium/tensor/layout/alignment.hpp>
+#include <tt-metalium/tensor/layout/page_config.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/tensor/types.hpp>
 
 namespace tt::tt_metal {
 

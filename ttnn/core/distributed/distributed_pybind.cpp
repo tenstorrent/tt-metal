@@ -26,7 +26,7 @@
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/types.hpp"
-#include "ttnn/distributed/tensor_topology.hpp"
+#include <tt-metalium/distributed/tensor_topology.hpp>
 #include "distribution_mode.hpp"
 
 // This is required for automatic conversions, as in the creation of mesh devices

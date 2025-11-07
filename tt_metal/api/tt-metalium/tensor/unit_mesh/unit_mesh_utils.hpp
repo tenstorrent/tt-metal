@@ -6,7 +6,7 @@
 
 #include <vector>
 
-#include <ttnn/tensor/tensor.hpp>
+#include <tt-metalium/tensor/tensor.hpp>
 
 namespace tt::tt_metal::experimental::unit_mesh {
 
@@ -26,5 +26,4 @@ Tensor aggregate(const std::vector<tt::tt_metal::Tensor>& tensors);
 //
 // Returns a vector of tensors, one per submesh, all sharing the same buffer address.
 std::vector<tt::tt_metal::Tensor> disaggregate(const tt::tt_metal::Tensor& tensor);
-
 }  // namespace tt::tt_metal::experimental::unit_mesh

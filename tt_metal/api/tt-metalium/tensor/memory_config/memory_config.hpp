@@ -15,7 +15,7 @@
 #include <tt_stl/reflection.hpp>
 #include <tt_stl/span.hpp>
 
-#include <ttnn/tensor/types.hpp>
+#include <tt-metalium/tensor/types.hpp>
 
 namespace tt {
 

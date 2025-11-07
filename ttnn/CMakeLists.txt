@@ -23,18 +23,18 @@ add_library(TTNN::Core ALIAS ttnn_core)
 target_compile_definitions(ttnn_core PUBLIC "$<$<CXX_COMPILER_ID:GNU>:DISABLE_NAMESPACE_STATIC_ASSERT>")
 target_precompile_headers(ttnn_core REUSE_FROM TT::CommonPCH)
 
-set(TENSOR_FLATBUFFER_SCHEMAS
-    ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/mesh_shape.fbs
-    ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/tensor_spec.fbs
-    ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/tensor_topology.fbs
-    ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/tensor.fbs
-)
+# set(TENSOR_FLATBUFFER_SCHEMAS
+#     ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/mesh_shape.fbs
+#     ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/tensor_spec.fbs
+#     ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/tensor_topology.fbs
+#     ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/tensor.fbs
+# )
 
-set(TENSOR_FLATBUFFER_GENERATED_HEADERS)
-foreach(FBS_FILE ${TENSOR_FLATBUFFER_SCHEMAS})
-    GENERATE_FBS_HEADER(${FBS_FILE} TARGET TTNN::Core)
-    list(APPEND TENSOR_FLATBUFFER_GENERATED_HEADERS ${FBS_GENERATED_HEADER_FILE})
-endforeach()
+# set(TENSOR_FLATBUFFER_GENERATED_HEADERS)
+# foreach(FBS_FILE ${TENSOR_FLATBUFFER_SCHEMAS})
+#     GENERATE_FBS_HEADER(${FBS_FILE} TARGET TTNN::Core)
+#     list(APPEND TENSOR_FLATBUFFER_GENERATED_HEADERS ${FBS_GENERATED_HEADER_FILE})
+# endforeach()
 
 set_target_properties(
     ttnn_core
@@ -52,9 +52,9 @@ target_sources(
         FILE_SET jit_api
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES cpp/ttnn/kernel/kernel_common_utils.hpp cpp/ttnn/kernel/kernel_utils.hpp api/ttnn/tensor/layout/layout.hpp
+        FILES cpp/ttnn/kernel/kernel_common_utils.hpp cpp/ttnn/kernel/kernel_utils.hpp
     PRIVATE
-        ${TENSOR_FLATBUFFER_GENERATED_HEADERS}
+        #${TENSOR_FLATBUFFER_GENERATED_HEADERS}
         core/async_runtime.cpp
         core/cluster.cpp
         core/config.cpp
@@ -62,10 +62,8 @@ target_sources(
         core/device.cpp
         core/distributed/api.cpp
         core/distributed/distributed_tensor.cpp
-        core/distributed/distributed_configs.cpp
         core/distributed/distribution_mode.cpp
         core/distributed/host_ccl.cpp
-        core/distributed/tensor_topology.cpp
         core/distributed/bidirectional_fabric_socket.cpp
         core/distributed/create_socket.cpp
         core/distributed/fabric_socket.cpp
@@ -79,25 +77,10 @@ target_sources(
         core/old_infra_device_operation.cpp
         core/reports.cpp
         core/run_operation.cpp
-        core/tensor/flatbuffer/tensor_flatbuffer.cpp
-        core/tensor/flatbuffer/tensor_spec_flatbuffer.cpp
-        core/tensor/host_buffer/functions.cpp
-        core/tensor/layout/alignment.cpp
-        core/tensor/layout/layout.cpp
-        core/tensor/layout/page_config.cpp
-        core/tensor/layout/tensor_layout.cpp
-        core/tensor/memory_config/memory_config.cpp
         core/tensor/serialization.cpp
-        core/tensor/storage.cpp
-        core/tensor/tensor.cpp
-        core/tensor/tensor_attributes.cpp
         core/tensor/tensor_impl.cpp
         core/tensor/tensor_ops.cpp
-        core/tensor/tensor_spec.cpp
-        core/tensor/tensor_utils.cpp
-        core/tensor/types.cpp
-        core/tensor/unit_mesh/unit_mesh_utils.cpp
-        core/tensor/xtensor/partition.cpp
+        core/tensor/tensor.cpp
 )
 target_include_directories(
     ttnn_core
@@ -114,7 +97,6 @@ target_link_libraries(
     PUBLIC
         TT::Metalium
     PRIVATE
-        xtensor
         FlatBuffers::FlatBuffers
         Boost::algorithm
 )

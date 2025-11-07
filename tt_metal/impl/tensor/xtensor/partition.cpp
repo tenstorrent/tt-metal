@@ -2,17 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tensor/xtensor/partition.hpp"
+#include "tt-metalium/tensor/xtensor/partition.hpp"
 
 #include <type_traits>
 #include <algorithm>
 
 #include <tt_stl/span.hpp>
-#include "ttnn/operations/functions.hpp"
-#include "ttnn/tensor/layout/tensor_layout.hpp"
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/types.hpp"
-#include "ttnn/tensor/xtensor/conversion_utils.hpp"
+
+#include "tt-metalium/tensor/layout/tensor_layout.hpp"
+#include "tt-metalium/tensor/tensor.hpp"
+#include "tt-metalium/tensor/types.hpp"
+#include "tt-metalium/tensor/xtensor/conversion_utils.hpp"
 #include <xtensor/containers/xadapt.hpp>
 #include <xtensor/views/xdynamic_view.hpp>
 #include <xtensor/containers/xstorage.hpp>

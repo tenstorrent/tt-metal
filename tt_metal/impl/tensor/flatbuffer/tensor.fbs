@@ -3,7 +3,7 @@ include "tensor_topology.fbs";
 include "mesh_shape.fbs";
 include "tt-metalium/serialized_descriptors/mesh_coordinate.fbs";
 
-namespace ttnn.flatbuffer;
+namespace tt.tt_metal.flatbuffer;
 
 union TensorBuffer {
     InlineFileStorage = 1,

@@ -68,14 +68,14 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Small_Backward) {
     xt::xarray<float> input_tensor = {{{{1.F, 2.F, 3.F, 4.F, 1.F, 2.F, 3.F, 4.F}}}};
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
     std::cout << "Input Logits:\n";
-    input.print();
+    std::cout << ttnn::to_string(input) << std::endl;
 
     xt::xarray<uint32_t> target_tensor = xt::zeros<uint32_t>({N, H});
     target_tensor(0, 0) = 1U;
     auto target = core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
         target_tensor, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR);
     std::cout << "Input Target Indexes:\n";
-    target.print();
+    std::cout << ttnn::to_string(target) << std::endl;
 
     xt::xarray<float> grad_tensor = xt::ones<float>({1U, 1U, 1U, 1U});
     auto grad = core::from_xtensor(grad_tensor, &autograd::ctx().get_device());
@@ -84,12 +84,12 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Small_Backward) {
 
     auto result = ttml::metal::cross_entropy_bw(input, target, grad, scaler);
     std::cout << "CrossEntropyBackward_Test:\nResult:\n";
-    result.print();
+    std::cout << ttnn::to_string(result) << std::endl;
 
     auto expected_result = calculate_cross_entropy_backward(input_tensor, target_tensor, scaler);
     auto expected_result_print = core::from_xtensor(expected_result, &autograd::ctx().get_device());
     std::cout << "Expected Result:\n";
-    expected_result_print.print();
+    std::cout << ttnn::to_string(expected_result_print) << std::endl;
 
     // Check if the result is close to the expected result
     auto result_xtensor = core::to_xtensor(result);
@@ -125,12 +125,12 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Batch) {
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
     std::cout << "Input Logits:\n";
-    input.print();
+    std::cout << ttnn::to_string(input) << std::endl;
 
     auto target = core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
         target_tensor, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR);
     std::cout << "Input Target Indexes:\n";
-    target.print();
+    std::cout << ttnn::to_string(target) << std::endl;
 
     auto grad = core::from_xtensor(grad_tensor, &autograd::ctx().get_device());
 
@@ -139,12 +139,12 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Batch) {
 
     auto result = ttml::metal::cross_entropy_bw(input, target, grad, scaler);
     std::cout << "CrossEntropyBackward_Test:\nResult:\n";
-    result.print();
+    std::cout << ttnn::to_string(result) << std::endl;
 
     auto expected_result = calculate_cross_entropy_backward(input_tensor, target_tensor, scaler);
     auto expected_result_print = core::from_xtensor(expected_result, &autograd::ctx().get_device());
     std::cout << "Expected Result:\n";
-    expected_result_print.print();
+    std::cout << ttnn::to_string(expected_result_print) << std::endl;
 
     // Check if the result is close to the expected result
     auto result_xtensor = core::to_xtensor(result);
@@ -180,12 +180,12 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Large_Batch) {
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
     std::cout << "Input Logits:\n";
-    input.print();
+    std::cout << ttnn::to_string(input) << std::endl;
 
     auto target = core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
         target_tensor, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR);
     std::cout << "Input Target Indexes:\n";
-    target.print();
+    std::cout << ttnn::to_string(target) << std::endl;
 
     auto grad = core::from_xtensor(grad_tensor, &autograd::ctx().get_device());
 
@@ -193,12 +193,12 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Large_Batch) {
 
     auto result = ttml::metal::cross_entropy_bw(input, target, grad, scaler);
     std::cout << "CrossEntropyBackward_Test:\nResult:\n";
-    result.print();
+    std::cout << ttnn::to_string(result) << std::endl;
 
     auto expected_result = calculate_cross_entropy_backward(input_tensor, target_tensor, scaler);
     auto expected_result_print = core::from_xtensor(expected_result, &autograd::ctx().get_device());
     std::cout << "Expected Result:\n";
-    expected_result_print.print();
+    std::cout << ttnn::to_string(expected_result_print) << std::endl;
 
     // Check if the result is close to the expected result
     auto result_xtensor = core::to_xtensor(result);
@@ -234,12 +234,12 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Large_Backward) {
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
     std::cout << "Input Logits:\n";
-    input.print();
+    std::cout << ttnn::to_string(input) << std::endl;
 
     auto target = core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
         target_tensor, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR);
     std::cout << "Input Target Indexes:\n";
-    target.print();
+    std::cout << ttnn::to_string(target) << std::endl;
 
     auto grad = core::from_xtensor(grad_tensor, &autograd::ctx().get_device());
 
@@ -247,12 +247,12 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Large_Backward) {
 
     auto result = ttml::metal::cross_entropy_bw(input, target, grad, scaler);
     std::cout << "CrossEntropyBackward_Test:\nResult:\n";
-    result.print();
+    std::cout << ttnn::to_string(result) << std::endl;
 
     auto expected_result = calculate_cross_entropy_backward(input_tensor, target_tensor, scaler);
     auto expected_result_print = core::from_xtensor(expected_result, &autograd::ctx().get_device());
     std::cout << "Expected Result:\n";
-    expected_result_print.print();
+    std::cout << ttnn::to_string(expected_result_print) << std::endl;
 
     // Check if the result is close to the expected result
     auto result_xtensor = core::to_xtensor(result);
@@ -292,12 +292,12 @@ TEST_F(CrossEntropyBackwardTest, NIGHTLY_CrossEntropyBackward_Huge_Backward) {
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
     std::cout << "Input Logits:\n";
-    input.print();
+    std::cout << ttnn::to_string(input) << std::endl;
 
     auto target = core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
         target_tensor, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR);
     std::cout << "Input Target Indexes:\n";
-    target.print();
+    std::cout << ttnn::to_string(target) << std::endl;
 
     auto grad = core::from_xtensor(grad_tensor, &autograd::ctx().get_device());
 
@@ -305,12 +305,12 @@ TEST_F(CrossEntropyBackwardTest, NIGHTLY_CrossEntropyBackward_Huge_Backward) {
 
     auto result = ttml::metal::cross_entropy_bw(input, target, grad, scaler);
     std::cout << "CrossEntropyBackward_Test:\nResult:\n";
-    result.print();
+    std::cout << ttnn::to_string(result) << std::endl;
 
     auto expected_result = calculate_cross_entropy_backward(input_tensor, target_tensor, scaler);
     auto expected_result_print = core::from_xtensor(expected_result, &autograd::ctx().get_device());
     std::cout << "Expected Result:\n";
-    expected_result_print.print();
+    std::cout << ttnn::to_string(expected_result_print) << std::endl;
 
     // Check if the result is close to the expected result
     auto result_xtensor = core::to_xtensor(result);

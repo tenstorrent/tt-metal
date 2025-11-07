@@ -45,9 +45,9 @@ TEST_F(ProfilerNoOpTest, ProfilerNoOpTest_Batch) {
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR);
     std::cout << "Input Logits:\n";
-    input.print();
+    std::cout << ttnn::to_string(input) << std::endl;
 
     auto result = ttml::metal::profiler_no_op(input, "identifier");
     std::cout << "Profiler_no_op_test:\nResult:\n";
-    result.print();
+    std::cout << ttnn::to_string(result) << std::endl;
 }

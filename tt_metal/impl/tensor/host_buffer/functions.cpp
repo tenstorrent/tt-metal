@@ -8,8 +8,8 @@
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/reflection.hpp>
 
-#include "ttnn/tensor/storage.hpp"
-#include "ttnn/tensor/tensor.hpp"
+#include "tt-metalium/tensor/storage.hpp"
+#include "tt-metalium/tensor/tensor.hpp"
 
 namespace tt::tt_metal::host_buffer {
 

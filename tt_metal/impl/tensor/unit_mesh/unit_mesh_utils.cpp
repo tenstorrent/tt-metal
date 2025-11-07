@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/tensor/unit_mesh/unit_mesh_utils.hpp"
+#include "tt-metalium/tensor/unit_mesh/unit_mesh_utils.hpp"
 
-#include "ttnn/tensor/storage.hpp"
-#include "ttnn/distributed/tensor_topology.hpp"
+#include "tt-metalium/tensor/storage.hpp"
+#include <tt-metalium/distributed/tensor_topology.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/allocator_state.hpp>

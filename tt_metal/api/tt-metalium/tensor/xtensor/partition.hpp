@@ -5,10 +5,10 @@
 #pragma once
 
 #include <tt_stl/small_vector.hpp>
-#include <ttnn/tensor/xtensor/conversion_utils.hpp>
+#include <tt-metalium/tensor/xtensor/conversion_utils.hpp>
 #include <vector>
 #include <xtensor/views/xstrided_view.hpp>
-#include <ttnn/tensor/tensor.hpp>
+#include <tt-metalium/tensor/tensor.hpp>
 
 namespace tt::tt_metal::experimental::xtensor {
 namespace detail {

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/tensor/tensor.hpp"
+#include "tt-metalium/tensor/tensor.hpp"
 
 #include <cstdint>
 #include <memory>
@@ -15,16 +15,16 @@
 #include <tt_stl/overloaded.hpp>
 #include "tt_stl/small_vector.hpp"
 #include "tt_stl/span.hpp"
-#include "ttnn/operations/core/core.hpp"
-#include "ttnn/tensor/storage.hpp"
+
+#include "tt-metalium/tensor/storage.hpp"
 
 #include "tt-metalium/mesh_device_view.hpp"
 #include "tensor/tensor_ops.hpp"
-#include "ttnn/tensor/tensor_impl.hpp"
-#include "ttnn/tensor/tensor_impl_wrapper.hpp"
+#include "tt-metalium/tensor/tensor_impl.hpp"
+#include "tt-metalium/tensor/tensor_impl_wrapper.hpp"
 #include <tt-metalium/host_buffer.hpp>
-#include "ttnn/tensor/tensor_utils.hpp"
-#include "ttnn/tensor/types.hpp"
+#include "tt-metalium/tensor/tensor_utils.hpp"
+#include "tt-metalium/tensor/types.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -33,9 +33,13 @@
 #include <tt-metalium/mesh_command_queue.hpp>
 #include <tracy/Tracy.hpp>
 #include <tt-metalium/graph_tracking.hpp>
-#include "ttnn/core.hpp"
-#include "ttnn/tensor/layout/tensor_layout.hpp"
-#include "ttnn/distributed/api.hpp"
+
+#include "tt-metalium/tensor/layout/tensor_layout.hpp"
+#include "tt-metalium/tensor/core_ids.hpp"
+
+#include <tt-metalium/queue_id.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/tensor/tensor_impl.hpp>
 
 namespace tt::tt_metal {
 namespace {
@@ -133,7 +137,7 @@ void Tensor::deallocate_impl(bool force) {
         std::visit(
             tt::stl::overloaded{
                 [](HostStorage&) {},
-                [this, force, &can_deallocate](DeviceStorage& storage) {
+                [force, &can_deallocate](DeviceStorage& storage) {
                     if (can_deallocate(storage.mesh_buffer, force)) {
                         storage.mesh_buffer->deallocate();
                     }
@@ -400,8 +404,6 @@ Tensor Tensor::to_layout(Layout target_layout) const { return tensor_ops::tensor
 
 std::string Tensor::write_to_string() const { return tensor_impl::to_string_wrapper(*this); }
 
-void Tensor::print() const { tensor_ops::tensor_print(*this); }
-
 Tensor Tensor::pad(
     const tt::tt_metal::Shape& output_padded_shape,
     const tt::tt_metal::Shape& input_tensor_start,
@@ -651,7 +653,7 @@ Tensor set_tensor_id(const Tensor& tensor) {
         return tensor;
     }
     auto output = tensor;
-    output.tensor_id = ttnn::CoreIDs::instance().fetch_and_increment_tensor_id();
+    output.tensor_id = tt::tt_metal::CoreIDs::instance().fetch_and_increment_tensor_id();
     return output;
 };
 
@@ -713,32 +715,8 @@ Tensor view(const Tensor& input_tensor, const Shape& new_shape) {
 }
 Tensor to_dtype(const Tensor& tensor, DataType dtype) { return tensor_ops::tensor_to_dtype(tensor, dtype); }
 
-std::string to_string(const Tensor& tensor) {
-    const auto& shape = tensor.logical_shape();
+std::string to_string(const Tensor& tensor) { return tensor_impl::to_string_wrapper(tensor); }
 
-    if (!tensor.is_allocated()) {
-        return fmt::format(
-            "{}(<buffer is not allocated>, shape={}, dtype={}, layout={})",
-            "ttnn.Tensor",
-            shape,
-            tensor.dtype(),
-            tensor.layout());
-    }
-
-    if (std::holds_alternative<tt::tt_metal::DeviceStorage>(tensor.storage())) {
-        auto storage = std::get<tt::tt_metal::DeviceStorage>(tensor.storage());
-        if (storage.mesh_buffer != nullptr) {
-            auto* mesh_device = storage.mesh_buffer->device();  // cause crash
-
-            if (mesh_device->num_devices() == 1) {
-                auto cpu_tensor = tensor.cpu();
-                return tt::tt_metal::tensor_impl::to_string_wrapper(
-                    ttnn::distributed::get_device_tensors(cpu_tensor).at(0));
-            }
-        }
-    }
-    return tt::tt_metal::tensor_impl::to_string_wrapper(tensor);
-}
 }  // namespace ops
 
 }  // namespace tt::tt_metal

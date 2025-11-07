@@ -26,7 +26,6 @@ ALLOWED_PREFIXES = {
     "tt-logger",
     "tracy",
     "xtensor",
-    "ttnn",
 }
 
 STD_HEADERS = {

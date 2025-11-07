@@ -176,11 +176,11 @@ std::vector<uint16_t> replicate_config(const std::vector<uint16_t>& config_vecto
 std::vector<uint16_t> remap_nhw_scalar_argument_across_full_grid(
     const std::vector<uint16_t>& config, const ParallelConfig& parallel_config);
 
-Tensor construct_on_host_config_tensor(
+tt::tt_metal::Tensor construct_on_host_config_tensor(
     const std::vector<std::vector<uint16_t>>& config, const ParallelConfig& p_config, bool store_in_dram = false);
 
-Tensor move_config_tensor_to_device(
-    const Tensor& config_tensor,
+tt::tt_metal::Tensor move_config_tensor_to_device(
+    const tt::tt_metal::Tensor& config_tensor,
     const ParallelConfig& p_config,
     bool is_block_sharded,
     tt::tt_metal::distributed::MeshDevice* device,

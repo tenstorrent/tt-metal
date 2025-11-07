@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/tensor/tensor_impl.hpp"
+#include <tt-metalium/tensor/tensor_impl.hpp>
+#include "tt-metalium/tensor/tensor_utils.hpp"
 #include <fmt/format.h>
 #include <optional>
 
@@ -11,7 +12,7 @@
 #include <tt_stl/assert.hpp>
 #include "tt-metalium/distributed_host_buffer.hpp"
 #include "tt-metalium/host_buffer.hpp"
-#include "tt-metalium/memory_pin.hpp"
+
 #include "tt-metalium/mesh_buffer.hpp"
 #include "tt-metalium/mesh_coord.hpp"
 #include "tt-metalium/mesh_device.hpp"
@@ -19,14 +20,17 @@
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/span.hpp>
 #include "tt-metalium/shape.hpp"
-#include "ttnn/distributed/distributed_tensor.hpp"
 
-#include "ttnn/tensor/storage.hpp"
-#include "ttnn/tensor/tensor_impl_wrapper.hpp"
-#include "ttnn/tensor/layout/tensor_layout.hpp"
-#include "ttnn/tensor/types.hpp"
-#include "ttnn/operations/core/core.hpp"
-#include "ttnn/distributed/api.hpp"
+#include "tt-metalium/tensor/storage.hpp"
+#include "tt-metalium/tensor/layout/tensor_layout.hpp"
+#include "tt-metalium/tensor/types.hpp"
+
+#include "tt_stl/concepts.hpp"
+
+#include "tt-metalium/bfloat16.hpp"
+
+#include <algorithm>
+#include <type_traits>
 
 #include <tracy/Tracy.hpp>
 
@@ -454,7 +458,7 @@ std::string to_string(const Tensor& tensor) {
         if (tensor.layout() == Layout::ROW_MAJOR) {
             return tensor;
         } else if (tensor.dtype() == DataType::BFLOAT8_B || tensor.dtype() == DataType::BFLOAT4_B) {
-            return to_layout<T>(to_dtype(tensor, DataType::FLOAT32), Layout::ROW_MAJOR);
+            return to_layout<T>(ops::to_dtype(tensor, DataType::FLOAT32), Layout::ROW_MAJOR);
         } else {
             return to_layout<T>(tensor, Layout::ROW_MAJOR);
         }
@@ -468,7 +472,7 @@ std::string to_string(const Tensor& tensor) {
 
     return std::visit(
         tt::stl::overloaded{
-            [&](const HostStorage& storage) -> std::string {
+            [&](const HostStorage&) -> std::string {
                 const Tensor row_major_tensor = get_row_major_tensor(tensor);
                 const auto strides = row_major_tensor.tensor_spec().compute_strides();
                 const std::vector<HostBuffer> buffers = get_device_buffers(row_major_tensor.host_storage());
@@ -649,12 +653,12 @@ std::pair<DeviceStorage, TensorTopology> to_device_mesh_buffer(
     const Storage& host_storage,
     const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer,
     const TensorSpec& tensor_spec,
-    const TensorAttributes& host_tensor_attributes,
+    const TensorAttributes&,
     const TensorTopology& tensor_topology,
     std::optional<tt::tt_metal::QueueId> cq_id) {
     return std::visit(
         tt::stl::overloaded{
-            [&mesh_buffer, &tensor_spec, cq_id, &host_tensor_attributes, &tensor_topology](
+            [&mesh_buffer, &tensor_spec, &tensor_topology, cq_id](
                 const HostStorage& storage) -> std::pair<DeviceStorage, TensorTopology> {
                 const auto& host_storage_shape = storage.buffer().shape();
                 const auto& mesh_device_shape = mesh_buffer->device()->shape();

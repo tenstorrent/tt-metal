@@ -3,7 +3,7 @@
 
 #include <tt_stl/assert.hpp>
 
-#include "ttnn/tensor/layout/layout.hpp"
+#include "tt-metalium/tensor/layout/layout.hpp"
 
 namespace tt::tt_metal {
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Layout& layout) {

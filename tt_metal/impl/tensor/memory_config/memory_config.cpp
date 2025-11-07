@@ -5,9 +5,9 @@
 
 #include <tt_stl/reflection.hpp>
 
-#include "ttnn/tensor/types.hpp"
-#include "ttnn/tensor/memory_config/memory_config.hpp"
-#include "ttnn/tensor/tensor_impl.hpp"
+#include "tt-metalium/tensor/types.hpp"
+#include "tt-metalium/tensor/memory_config/memory_config.hpp"
+#include "tt-metalium/tensor/tensor_impl.hpp"
 
 namespace tt::tt_metal {
 

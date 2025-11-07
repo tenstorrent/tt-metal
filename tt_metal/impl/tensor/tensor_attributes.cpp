@@ -4,9 +4,9 @@
 
 #include <tt-metalium/host_buffer.hpp>
 
-#include "ttnn/tensor/storage.hpp"
-#include "ttnn/tensor/tensor_attributes.hpp"
-#include "ttnn/tensor/tensor_spec.hpp"
+#include "tt-metalium/tensor/storage.hpp"
+#include "tt-metalium/tensor/tensor_attributes.hpp"
+#include "tt-metalium/tensor/tensor_spec.hpp"
 
 namespace tt::tt_metal {
 

@@ -73,6 +73,7 @@
 #include "ttnn/operations/uniform/uniform_pybind.hpp"
 #include "ttnn/operations/rand/rand_pybind.hpp"
 #include "ttnn/operations/experimental/test/hang_device/hang_device_operation_pybind.hpp"
+#include <tt-metalium/tensor/core_ids.hpp>
 
 namespace ttnn::operations {
 
@@ -296,35 +297,40 @@ PYBIND11_MODULE(_ttnn, module) {
     module.attr("CONFIG") = &ttnn::CONFIG;
     module.def(
         "get_python_operation_id",
-        []() -> std::uint64_t { return ttnn::CoreIDs::instance().get_python_operation_id(); },
+        []() -> std::uint64_t { return tt::tt_metal::CoreIDs::instance().get_python_operation_id(); },
         "Get operation id");
     module.def(
         "set_python_operation_id",
-        [](std::uint64_t id) { ttnn::CoreIDs::instance().set_python_operation_id(id); },
+        [](std::uint64_t id) { tt::tt_metal::CoreIDs::instance().set_python_operation_id(id); },
         "Set operation id");
     module.def(
         "fetch_and_increment_python_operation_id",
-        []() -> std::uint64_t { return ttnn::CoreIDs::instance().fetch_and_increment_python_operation_id(); },
+        []() -> std::uint64_t { return tt::tt_metal::CoreIDs::instance().fetch_and_increment_python_operation_id(); },
         "Increment tensor id and return the previously held id");
 
     module.def(
-        "get_tensor_id", []() -> std::uint64_t { return ttnn::CoreIDs::instance().get_tensor_id(); }, "Get tensor id");
-    module.def("set_tensor_id", [](std::uint64_t id) { ttnn::CoreIDs::instance().set_tensor_id(id); }, "Set tensor id");
+        "get_tensor_id",
+        []() -> std::uint64_t { return tt::tt_metal::CoreIDs::instance().get_tensor_id(); },
+        "Get tensor id");
+    module.def(
+        "set_tensor_id",
+        [](std::uint64_t id) { tt::tt_metal::CoreIDs::instance().set_tensor_id(id); },
+        "Set tensor id");
     module.def(
         "fetch_and_increment_tensor_id",
-        []() -> std::uint64_t { return ttnn::CoreIDs::instance().fetch_and_increment_tensor_id(); },
+        []() -> std::uint64_t { return tt::tt_metal::CoreIDs::instance().fetch_and_increment_tensor_id(); },
         "Increment tensor id and return the previously held id");
 
     module.def(
         "get_device_operation_id",
-        []() -> std::uint64_t { return ttnn::CoreIDs::instance().get_device_operation_id(); },
+        []() -> std::uint64_t { return tt::tt_metal::CoreIDs::instance().get_device_operation_id(); },
         "Get device operation id");
     module.def(
         "set_device_operation_id",
-        [](std::uint64_t id) { ttnn::CoreIDs::instance().set_device_operation_id(id); },
+        [](std::uint64_t id) { tt::tt_metal::CoreIDs::instance().set_device_operation_id(id); },
         "Set device operation id");
     module.def(
         "fetch_and_increment_device_operation_id",
-        []() -> std::uint64_t { return ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id(); },
+        []() -> std::uint64_t { return tt::tt_metal::CoreIDs::instance().fetch_and_increment_device_operation_id(); },
         "Increment device operation id and return the previously held id");
 }

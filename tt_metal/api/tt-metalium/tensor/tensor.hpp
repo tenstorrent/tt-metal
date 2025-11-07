@@ -15,22 +15,21 @@
 #include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include <ttnn/common/queue_id.hpp>
-#include <ttnn/distributed/tensor_topology.hpp>
+#include <tt-metalium/queue_id.hpp>
+#include <tt-metalium/distributed/tensor_topology.hpp>
 #include <tt-metalium/host_buffer.hpp>
-#include <ttnn/tensor/types.hpp>
-#include <ttnn/tensor/storage.hpp>
-#include <ttnn/tensor/tensor_attributes.hpp>
-#include <ttnn/tensor/tensor_spec.hpp>
-#include <ttnn/tensor/layout/tensor_layout.hpp>
+#include <tt-metalium/tensor/types.hpp>
+#include <tt-metalium/tensor/storage.hpp>
+#include <tt-metalium/tensor/tensor_attributes.hpp>
+#include <tt-metalium/tensor/tensor_spec.hpp>
+#include <tt-metalium/tensor/layout/tensor_layout.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt_stl/reflection.hpp>
 #include <tt_stl/optional_reference.hpp>
-#include <ttnn/tensor/memory_config/memory_config.hpp>
-#include <ttnn/tensor/layout/layout.hpp>
-// #include <types.hpp>
+#include <tt-metalium/tensor/memory_config/memory_config.hpp>
+#include <tt-metalium/tensor/layout/layout.hpp>
 
 namespace tt {
 
@@ -185,7 +184,6 @@ public:
     [[nodiscard]] Tensor unpad_from_tile(const tt::tt_metal::Shape& output_tensor_shape) const;
 
     [[nodiscard]] std::string write_to_string() const;
-    void print() const;
 
     // Deallocates device-side Tensor storage.
     // If the tensor is on host, does nothing.
@@ -333,10 +331,3 @@ std::string to_string(const Tensor& tensor);
 }  // namespace tt_metal
 
 }  // namespace tt
-
-namespace ttnn {
-
-using Tensor = tt::tt_metal::Tensor;
-using TensorSpec = tt::tt_metal::TensorSpec;
-
-}  // namespace ttnn

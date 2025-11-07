@@ -4,16 +4,18 @@
 
 #include "tensor/tensor_ops.hpp"
 
-#include "ttnn/common/queue_id.hpp"
-#include "ttnn/tensor/storage.hpp"
-#include "ttnn/tensor/tensor.hpp"
+#include <tt_stl/overloaded.hpp>
+#include <tt-metalium/queue_id.hpp>
+#include <tt-metalium/tensor/storage.hpp>
+#include <tt-metalium/tensor/tensor.hpp>
 
 #include <cstdint>
 
 #include <tt-metalium/bfloat16.hpp>
-#include "ttnn/tensor/tensor_impl_wrapper.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
-#include "ttnn/tensor/types.hpp"
+#include <tt-metalium/tensor/tensor_impl.hpp>
+#include <tt-metalium/tensor/tensor_impl_wrapper.hpp>
+#include <tt-metalium/tensor/tensor_utils.hpp>
+#include <tt-metalium/tensor/types.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
 #include <tracy/Tracy.hpp>
@@ -282,5 +284,4 @@ Tensor tensor_reshape(const Tensor& input_tensor, const tt::tt_metal::Shape& new
 Tensor tensor_to_dtype(const Tensor& input_tensor, DataType dtype) {
     return tensor_impl::to_dtype(input_tensor, dtype);
 }
-
 }  // namespace tt::tt_metal::tensor_ops

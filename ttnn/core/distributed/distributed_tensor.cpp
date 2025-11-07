@@ -26,7 +26,7 @@
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/xtensor/conversion_utils.hpp"
 #include "ttnn/tensor/xtensor/partition.hpp"
-#include "ttnn/distributed/tensor_topology.hpp"
+#include <tt-metalium/distributed/tensor_topology.hpp>
 #include "ttnn/distributed/host_ccl.hpp"
 #include "distribution_mode.hpp"
 
