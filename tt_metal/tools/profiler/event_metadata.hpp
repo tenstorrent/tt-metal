@@ -141,6 +141,10 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         std::memcpy(this, &raw_data, sizeof(KernelProfilerNocEventMetadata));
     }
 
+    static bool isValidEventType(NocEventType event_type) {
+        return event_type >= NocEventType::READ && event_type <= NocEventType::FABRIC_ROUTING_FIELDS_2D;
+    }
+
     static bool isFabricEventType(NocEventType event_type) {
         return event_type >= NocEventType::FABRIC_UNICAST_WRITE &&
                event_type <= NocEventType::FABRIC_UNICAST_SCATTER_WRITE;
