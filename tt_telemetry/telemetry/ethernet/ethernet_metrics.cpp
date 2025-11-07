@@ -2,6 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+/*
+ * TODO:
+ * -----
+ * - Once we refactor to support arbitrary attributes (for serialization directly as Prometheus
+ *   attributes), fabric telemetry static information (e.g. device and mesh ID) should become
+ *   attributes of every fabric metric rather thn independent metrics.
+ */
+
 #include <chrono>
 #include <cstring>
 #include <bit>
