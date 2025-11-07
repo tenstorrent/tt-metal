@@ -502,7 +502,8 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(tt::
             ct_args.push_back(router_channels_mask);
 
             auto proc = static_cast<tt::tt_metal::DataMovementProcessor>(risc_id);
-            if (tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode() &&
+            if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::BLACKHOLE &&
+                tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode() &&
                 num_enabled_risc_cores == 1) {
                 // Force fabric to run on erisc1 due to stack usage exceeded with MUX on erisc0
                 proc = tt::tt_metal::DataMovementProcessor::RISCV_1;
