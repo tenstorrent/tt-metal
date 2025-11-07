@@ -47,7 +47,7 @@ std::string normalize_path(const char* path, const std::string& subdir = "") {
 }
 
 // Helper function to check if environment variable value is "1" (enabled)
-inline bool is_env_enabled(const char* value) { return value && value[0] == '1'; }
+bool is_env_enabled(const char* value) { return value && value[0] == '1'; }
 }  // namespace
 
 RunTimeOptions::RunTimeOptions() :
