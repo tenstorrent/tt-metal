@@ -17,8 +17,15 @@ from tests.sweep_framework.sweep_utils.conv2d_common import (
     run_conv1d_short_sweep,
 )
 
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader
+
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 60
+
+# Load traced configurations from real model tests
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("conv2d", all_cases=False)
 
 parameters = {
     "short_sweep_suite_conv2d": {
@@ -30,6 +37,10 @@ parameters = {
         "is_conv1d": [False],
     },
 }
+
+# Only add model_traced suite if it has valid configurations
+if model_traced_params:
+    parameters["model_traced"] = model_traced_params
 
 
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
