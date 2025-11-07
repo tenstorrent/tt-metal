@@ -357,30 +357,17 @@ function mergeAndDeduplicateRuns(previousRuns, newRuns, days) {
  * @param {object} octokit - Octokit client
  * @param {object} context - GitHub Actions context
  * @param {Map} grouped - Map of workflow names to their runs
- * @param {Array} workflowConfigs - Array of workflow configuration objects
  * @param {string} branch - Branch to filter runs by
  * @param {number} days - Number of days to look back
  * @param {Set} existingAttemptsSet - Set of existing (run ID, attempt) combinations
  * @returns {Promise<Array>} Array of new runs with newer attempts to add
  */
-async function recheckForNewerAttempts(octokit, context, grouped, workflowConfigs, branch, days, existingAttemptsSet) {
-  const { workflowMatchesConfig } = require('./logs');
+async function recheckForNewerAttempts(octokit, context, grouped, branch, days, existingAttemptsSet) {
   const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-  // Filter workflows to only those matching the configuration (if provided)
-  const workflowsToRecheck = [];
-  if (workflowConfigs.length > 0) {
-    for (const [name, runs] of grouped.entries()) {
-      if (workflowMatchesConfig(name, workflowConfigs)) {
-        workflowsToRecheck.push([name, runs]);
-      }
-    }
-    core.info(`[RECHECK] Filtered to ${workflowsToRecheck.length} workflows matching config (out of ${grouped.size} total)`);
-  } else {
-    // If no configs provided, check all workflows (backward compatibility)
-    workflowsToRecheck.push(...grouped.entries());
-    core.info(`[RECHECK] No workflow_configs provided, checking all ${workflowsToRecheck.length} workflows`);
-  }
+  // Process all workflows (we only fetched runs for workflows we care about)
+  const workflowsToRecheck = Array.from(grouped.entries());
+  core.info(`[RECHECK] Checking all ${workflowsToRecheck.length} workflows for newer attempts`);
 
   // For each workflow, find the latest run ID (by date, then by attempt) and check for newer attempts
   const delayBetweenChecks = 100; // Small delay to avoid rate limits

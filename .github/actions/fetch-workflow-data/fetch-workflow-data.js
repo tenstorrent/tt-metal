@@ -38,7 +38,6 @@ const {
 } = cache;
 
 const {
-  workflowMatchesConfig,
   processWorkflowLogs,
 } = logs;
 
@@ -61,22 +60,6 @@ async function run() {
     const rawCachePath = core.getInput('cache-path', { required: false });
     const defaultOutputPath = path.join(process.env.GITHUB_WORKSPACE || process.cwd(), 'workflow-data.json');
     const outputPath = rawCachePath && rawCachePath.trim() ? rawCachePath : defaultOutputPath;
-    const workflowConfigsInput = core.getInput('workflow_configs', { required: false });
-    let workflowConfigs = [];
-    if (workflowConfigsInput) {
-      try {
-        workflowConfigs = JSON.parse(workflowConfigsInput);
-        if (!Array.isArray(workflowConfigs)) {
-          core.warning('[CONFIG] workflow_configs is not an array, ignoring');
-          workflowConfigs = [];
-        } else {
-          core.info(`[CONFIG] Loaded ${workflowConfigs.length} workflow configurations`);
-        }
-      } catch (e) {
-        core.warning(`[CONFIG] Failed to parse workflow_configs: ${e.message}`);
-        workflowConfigs = [];
-      }
-    }
     const workflowIdsInput = core.getInput('workflow_ids', { required: false });
     let workflowIds = null;
     if (workflowIdsInput) {
@@ -174,7 +157,7 @@ async function run() {
     // Check for newer attempts on the latest run ID for each workflow we care about
     // Pre-compute Set of existing (run ID, attempt) combinations for O(1) lookup
     const existingAttemptsSet = new Set(mergedRuns.map(r => `${r.id}:${r.run_attempt || 1}`));
-    const newRunsToAdd = await recheckForNewerAttempts(octokit, github.context, grouped, workflowConfigs, branch, days, existingAttemptsSet);
+    const newRunsToAdd = await recheckForNewerAttempts(octokit, github.context, grouped, branch, days, existingAttemptsSet);
 
     // Add the new runs to mergedRuns (both old and new attempts will be present)
     if (newRunsToAdd.length > 0) {
@@ -200,7 +183,6 @@ async function run() {
     // Update last success timestamps
     lastSuccessPath = await updateLastSuccessTimestamps(
       grouped,
-      workflowConfigs,
       branch,
       octokit,
       github.context,

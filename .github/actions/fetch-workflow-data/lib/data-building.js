@@ -11,7 +11,6 @@ const { getCutoffDate } = fetching;
 /**
  * Updates last success timestamps for workflows
  * @param {Map} grouped - Map of workflow names to their runs
- * @param {Array} workflowConfigs - Array of workflow configuration objects
  * @param {string} branch - Branch to filter runs by
  * @param {object} octokit - Octokit client
  * @param {object} context - GitHub Actions context
@@ -20,8 +19,7 @@ const { getCutoffDate } = fetching;
  * @param {string} outputDir - Output directory path
  * @returns {Promise<string>} Path to the saved last success timestamps file
  */
-async function updateLastSuccessTimestamps(grouped, workflowConfigs, branch, octokit, context, cachedLastSuccessTimestamps, workspace, outputDir) {
-  const { workflowMatchesConfig } = require('./logs');
+async function updateLastSuccessTimestamps(grouped, branch, octokit, context, cachedLastSuccessTimestamps, workspace, outputDir) {
   const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
   const owner = context.repo.owner;
   const repo = context.repo.repo;
@@ -30,22 +28,9 @@ async function updateLastSuccessTimestamps(grouped, workflowConfigs, branch, oct
   const lastSuccessTimestamps = new Map(Object.entries(cachedLastSuccessTimestamps || {}));
   core.info(`[LAST_SUCCESS] Starting last success search (cached: ${lastSuccessTimestamps.size} workflows)`);
 
-  // Filter workflows to only those matching the configuration (if provided)
-  const workflowsToCheck = [];
-  if (workflowConfigs.length > 0) {
-    for (const [name, runs] of grouped.entries()) {
-      if (workflowMatchesConfig(name, workflowConfigs)) {
-        workflowsToCheck.push([name, runs]);
-      } else {
-        core.info(`[LAST_SUCCESS] Skipping workflow '${name}' (not in workflow_configs)`);
-      }
-    }
-    core.info(`[LAST_SUCCESS] Filtered to ${workflowsToCheck.length} workflows matching config (out of ${grouped.size} total)`);
-  } else {
-    // If no configs provided, check all workflows (backward compatibility)
-    workflowsToCheck.push(...grouped.entries());
-    core.info(`[LAST_SUCCESS] No workflow_configs provided, checking all ${workflowsToCheck.length} workflows`);
-  }
+  // Process all workflows (we only fetched runs for workflows we care about)
+  const workflowsToCheck = Array.from(grouped.entries());
+  core.info(`[LAST_SUCCESS] Checking all ${workflowsToCheck.length} workflows`);
 
   for (const [name, runs] of workflowsToCheck) {
     try {

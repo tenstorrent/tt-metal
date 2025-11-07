@@ -72,20 +72,6 @@ jobs:
               ".github/workflows/metal-run-microbenchmarks.yaml",
               ".github/workflows/apc-nightly-debug.yaml"
             ]
-          workflow_configs: |
-            [
-              {"display": "All post-commit tests", "wkflw_name": "All post-commit tests"},
-              {"display": "Blackhole post-commit tests", "wkflw_name": "Blackhole post-commit tests"},
-              {"display": "(Blackhole) prefix", "wkflw_prefix": "(Blackhole)"},
-              {"display": "Galaxy prefix", "wkflw_prefix": "(Galaxy)"},
-              {"display": "(T3K) prefix", "wkflw_prefix": "(T3K)"},
-              {"display": "(Single-card) prefix", "wkflw_prefix": "(Single-card)"},
-              {"display": "Nightly tt-metal L2 tests", "wkflw_name": "Nightly tt-metal L2 tests"},
-              {"display": "ttnn - Run sweeps", "wkflw_name": "ttnn - Run sweeps"},
-              {"display": "vLLM nightly tests", "wkflw_name": "vLLM nightly tests"},
-              {"display": "Metal microbenchmarks", "wkflw_name": "metal - Run microbenchmarks"},
-              {"display": "APC nightly debug run", "wkflw_name": "apc nightly debug run"}
-            ]
       - name: Upload workflow data
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 #@v4
         with:
@@ -240,20 +226,6 @@ jobs:
           other-logs-index-path: ${{ github.workspace }}/logs/other/other-logs-index.json
           last-success-timestamps-path: ${{ github.workspace }}/last-success-timestamps.json
           alert-all: 'false'
-          workflow_configs: |
-            [
-              {"display": "All post-commit tests", "wkflw_name": "All post-commit tests"},
-              {"display": "Blackhole post-commit tests", "wkflw_name": "Blackhole post-commit tests"},
-              {"display": "(Blackhole) prefix", "wkflw_prefix": "(Blackhole)"},
-              {"display": "Galaxy prefix", "wkflw_prefix": "(Galaxy)"},
-              {"display": "(T3K) prefix", "wkflw_prefix": "(T3K)"},
-              {"display": "(Single-card) prefix", "wkflw_prefix": "(Single-card)"},
-              {"display": "Nightly tt-metal L2 tests", "wkflw_name": "Nightly tt-metal L2 tests"},
-              {"display": "ttnn - Run sweeps", "wkflw_name": "ttnn - Run sweeps"},
-              {"display": "vLLM nightly tests", "wkflw_name": "vLLM nightly tests"},
-              {"display": "Metal microbenchmarks", "wkflw_name": "metal - Run microbenchmarks"},
-              {"display": "APC nightly debug run", "wkflw_name": "apc nightly debug run"}
-            ]
       - name: Upload status changes artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 #@v4
         with:
@@ -276,6 +248,6 @@ jobs:
       - name: Post regressions to Slack
         uses: ./.github/actions/slack-report-analyze-workflow-data
         with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_AGGREGATE_PIPELINE_STATUS_ALERT }}
+          slack_webhook_url: ${{ secrets.SLACK_TESTING_CHANNEL }}
           regressed_workflows: ${{ needs.analyze-data.outputs.regressed_workflows }}
           alert_all_message: ${{ needs.analyze-data.outputs.alert_all_message }}
