@@ -147,6 +147,7 @@ class TtModulatedDeformConv2dPack:
         x = ttnn.to_torch(x).permute(0, 3, 1, 2).to(dtype=torch.float)
         offset = ttnn.to_torch(offset).permute(0, 3, 1, 2).to(dtype=torch.float)
 
+        print("Calling modulated_deform_conv2d as ttnn call")
         result = modulated_deform_conv2d(
             x,
             offset,

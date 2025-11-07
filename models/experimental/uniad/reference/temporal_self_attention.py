@@ -25,8 +25,12 @@ class TemporalSelfAttention(nn.Module):
         if embed_dims % num_heads != 0:
             raise ValueError(f"embed_dims must be divisible by num_heads, " f"but got {embed_dims} and {num_heads}")
         dim_per_head = embed_dims // num_heads
-        self.norm_cfg = norm_cfg
+
+        # batch_first (bool): Key, Query and Value are shape
+        # of (batch, n, embed_dim)
+        # or (n, batch, embed_dim). Default to False.
         self.batch_first = batch_first
+
         self.fp16_enabled = False
 
         self.im2col_step = im2col_step
@@ -58,6 +62,20 @@ class TemporalSelfAttention(nn.Module):
         flag="decoder",
         **kwargs,
     ):
+        print_debug = False
+        if print_debug:
+            print("TemporalSelfAttention forward begin")
+            print("query shape: ", query.shape)
+            print("key shape: ", key.shape if key is not None else None)
+            print("value shape: ", value.shape if value is not None else None)
+            print("identity shape: ", identity.shape if identity is not None else None)
+            print("query_pos shape: ", query_pos.shape)
+            print("key_padding_mask shape: ", key_padding_mask.shape if key_padding_mask is not None else None)
+            print("reference_points shape: ", reference_points.shape)
+            print("spatial_shapes shape: ", spatial_shapes.shape)
+            print("level start index: ", level_start_index)
+            print("flag: ", flag)
+            print("TemporalSelfAttention forward end")
         if value is None:
             assert self.batch_first
             bs, len_bev, c = query.shape

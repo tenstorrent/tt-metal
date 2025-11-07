@@ -91,10 +91,16 @@ class BEVFormerEncoder(nn.Module):
                 torch.linspace(0.5, H - 0.5, H, dtype=dtype, device=device),
                 torch.linspace(0.5, W - 0.5, W, dtype=dtype, device=device),
             )
-            ref_y = ref_y.reshape(-1)[None] / H
-            ref_x = ref_x.reshape(-1)[None] / W
+            a = torch.linspace(0.5, H - 0.5, H, dtype=dtype, device=device)
+            b = torch.linspace(0.5, W - 0.5, W, dtype=dtype, device=device)
+            torch.set_printoptions(threshold=float("inf"))
+
+            ref_y = ref_y.reshape(-1).unsqueeze(0) / H
+            ref_x = ref_x.reshape(-1).unsqueeze(0) / W
+
             ref_2d = torch.stack((ref_x, ref_y), -1)
-            ref_2d = ref_2d.repeat(bs, 1, 1).unsqueeze(2)
+            ref_2d = ref_2d.repeat(bs, 1, 1)
+            ref_2d = ref_2d.unsqueeze(2)
         return ref_2d
 
     def point_sampling(self, reference_points, pc_range, img_metas):  # TODO Handle fp32
@@ -176,6 +182,12 @@ class BEVFormerEncoder(nn.Module):
         ref_2d = self.get_reference_points(
             bev_h, bev_w, dim="2d", bs=bev_query.size(1), device=bev_query.device, dtype=bev_query.dtype
         )
+        print("bev_query size: ", bev_query.size())
+        print(
+            f"Calling get_reference_points for ref_2d, with arguments: bev_h = {bev_h} bev_w = {bev_w} and bs = {bev_query.size(1)}"
+        )
+        print("ref_2d points shape: ", ref_2d.shape)
+        # print("ref_2d points: ", ref_2d)
 
         reference_points_cam, bev_mask = self.point_sampling(ref_3d, self.pc_range, kwargs["img_metas"])
 
@@ -340,8 +352,8 @@ class BEVFormerLayer(nn.Module):
             if layer == "self_attn":
                 query = self.attentions[attn_index](
                     query,
-                    prev_bev,
-                    prev_bev,
+                    prev_bev,  # key
+                    prev_bev,  # value
                     identity if self.pre_norm else None,
                     query_pos=bev_pos,
                     key_pos=bev_pos,

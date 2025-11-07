@@ -45,6 +45,22 @@ class SpatialCrossAttention(nn.Module):
         flag="encoder",
         **kwargs,
     ):
+        print_debug = False
+        if print_debug:
+            print("SpatialCrossAttention forward begin")
+            print("query shape: ", query.shape)
+            print("key shape: ", key.shape)
+            print("value shape: ", value.shape)
+            print("residual shape: ", residual.shape if residual is not None else None)
+            print("query_pos shape: ", query_pos.shape if query_pos is not None else None)
+            print("key_padding_mask shape: ", key_padding_mask.shape if key_padding_mask is not None else None)
+            print("reference_points shape: ", reference_points.shape)
+            print("spatial_shapes shape: ", spatial_shapes.shape)
+            print("reference_points_cam shape: ", reference_points_cam.shape)
+            print("bev_mask shape: ", bev_mask.shape)
+            print("level start index: ", level_start_index)
+            print("flag: ", flag)
+            print("SpatialCrossAttention forward end")
         if key is None:
             key = query
         if value is None:
