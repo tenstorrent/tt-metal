@@ -91,7 +91,6 @@ target_sources(
         core/tensor/storage.cpp
         core/tensor/tensor.cpp
         core/tensor/tensor_attributes.cpp
-        core/tensor/tensor_id_counter.cpp
         core/tensor/tensor_impl.cpp
         core/tensor/tensor_ops.cpp
         core/tensor/tensor_spec.cpp
