@@ -505,6 +505,7 @@ public:
 
     void connect_to_downstream_edm(FabricDatamoverBuilder downstream_builder);
     void connect_to_downstream_edm(FabricDatamoverBuilder downstream_builder, FabricDatamoverBuilder vc1_edm_builder);
+    void connect_to_local_tensix_builder(FabricTensixDatamoverBuilder& tensix_builder);
 
     eth_chan_directions get_direction() const;
     size_t get_configured_risc_count() const;
@@ -579,6 +580,7 @@ public:
     bool wait_for_host_signal = false;
     bool has_tensix_extension = false;
     uint32_t num_downstream_tensix_connections = 0;
+    bool udm_mode = false;  // UDM mode: router connects to local tensix relay
 
 private:
     // Shared helper for setting up VC connections

@@ -1004,6 +1004,9 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         ct_args.push_back(remote_worker_sender_channel);
     }
 
+    // Add UDM mode flag
+    ct_args.push_back(this->udm_mode ? 1 : 0);
+
     // special tag
     ct_args.push_back(0xabcd9876);
 
@@ -1131,6 +1134,10 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
 
     rt_args.reserve(rt_args.size() + args_pt2.size());
     std::ranges::copy(args_pt2, std::back_inserter(rt_args));
+
+    // Pack relay connection args at the end (UDM mode only)
+    receiver_channel_to_downstream_adapter->pack_adaptor_to_relay_rt_args(rt_args);
+
     return rt_args;
 }
 
@@ -1421,6 +1428,32 @@ void FabricEriscDatamoverBuilder::connect_to_downstream_edm(FabricDatamoverBuild
 void FabricEriscDatamoverBuilder::connect_to_downstream_edm(
     FabricDatamoverBuilder downstream_builder, FabricDatamoverBuilder vc1_edm_builder) {
     connect_to_downstream_edm_impl(downstream_builder, vc1_edm_builder);
+}
+
+void FabricEriscDatamoverBuilder::connect_to_local_tensix_builder(FabricTensixDatamoverBuilder& tensix_builder) {
+    const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
+    const bool is_2D_routing = fabric_context.is_2D_routing_enabled();
+    TT_FATAL(is_2D_routing, "connect_to_local_tensix_builder requires 2D routing");
+
+    // In UDM mode, router receiver connects to local relay on the tensix core
+    // Get connection specs from relay builder to set up receiver-to-relay connection
+    // Relay only has one channel (ROUTER_CHANNEL = 0) for upstream fabric router traffic
+    eth_chan_directions local_tensix_dir = tensix_builder.get_direction();
+    auto adapter_spec = tensix_builder.build_connection_to_relay_channel();
+
+    // Enable UDM mode
+    this->udm_mode = true;
+
+    // Only one local relay connection (we can consider the local relay connection as one ds tensix connection)
+    this->num_downstream_tensix_connections = 1;
+
+    auto adapter_ptr = receiver_channel_to_downstream_adapter.get();
+    const auto tensix_noc_x = tensix_builder.get_noc_x();
+    const auto tensix_noc_y = tensix_builder.get_noc_y();
+    adapter_ptr->add_local_tensix_connection(adapter_spec, local_tensix_dir, CoreCoord(tensix_noc_x, tensix_noc_y));
+
+    // Provide router NOC coordinates to relay kernel for sending packets back to router
+    tensix_builder.append_relay_router_noc_xy(this->my_noc_x, this->my_noc_y);
 }
 
 // TODO: take the downstream sender channel, based on the VC index, and use it to construct our
