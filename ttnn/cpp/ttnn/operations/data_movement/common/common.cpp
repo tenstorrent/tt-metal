@@ -555,10 +555,11 @@ uint32_t pack_two_uint16_into_uint32(std::pair<uint16_t, uint16_t> two_uint16s) 
     return (uint32_t)two_uint16s.first | ((uint32_t)two_uint16s.second << 16);
 }
 
-ttnn::Shape compute_padded_shape(
-    const ttnn::Shape& logical_shape, const uint32_t tile_height, const uint32_t tile_width) {
+ttnn::Shape compute_padded_shape(ttnn::Shape logical_shape, const uint32_t tile_height, const uint32_t tile_width) {
+    // Special case: if input tensor is row-major 1D, after tiling output
+    // tensor will be 2D
     if (logical_shape.rank() == 1) {
-        return ttnn::Shape{tile_height, tile_width};
+        logical_shape = ttnn::Shape({1, logical_shape[0]});
     }
 
     ttnn::SmallVector<uint32_t> output_shape_vec(logical_shape.rank());
