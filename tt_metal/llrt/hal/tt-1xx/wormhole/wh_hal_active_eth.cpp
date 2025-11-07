@@ -66,6 +66,7 @@ HalCoreInfoType create_active_eth_mem_map(bool is_base_routing_fw_enabled) {
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::LINK_UP)] =
         MEM_SYSENG_BOOT_RESULTS_BASE + offsetof(boot_results_t, link_status);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_TELEMETRY)] = MEM_AERISC_FABRIC_TELEMETRY_BASE;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTING_TABLE)] = MEM_AERISC_ROUTING_TABLE_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTER_CONFIG)] =
         eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTING_PATH_1D)] =
@@ -101,6 +102,7 @@ HalCoreInfoType create_active_eth_mem_map(bool is_base_routing_fw_enabled) {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::RETRAIN_COUNT)] = sizeof(uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::RETRAIN_FORCE)] = sizeof(uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_TELEMETRY)] = MEM_AERISC_FABRIC_TELEMETRY_SIZE;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTING_TABLE)] = MEM_AERISC_ROUTING_TABLE_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTER_CONFIG)] =
         eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTING_PATH_1D)] =

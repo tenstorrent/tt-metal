@@ -63,6 +63,7 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
+        timeout-minutes: 10
         with:
           runner-label: ${{ inputs.runner-label }}
       - name: ${{ matrix.test-group.name }} tests
