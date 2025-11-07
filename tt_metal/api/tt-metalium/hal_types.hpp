@@ -16,6 +16,7 @@ static constexpr uint32_t NumHalProgrammableCoreTypes = static_cast<uint32_t>(Ha
 
 enum class HalProcessorClassType : uint8_t { DM = 0, COMPUTE = 1 };
 
+// TODO: Move to llrt/hal.hpp after device function cleanup
 enum class HalL1MemAddrType : uint8_t {
     BASE,
     BARRIER,
