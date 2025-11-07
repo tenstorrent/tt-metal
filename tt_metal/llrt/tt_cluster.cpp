@@ -221,7 +221,8 @@ Cluster::Cluster(llrt::RunTimeOptions& rtoptions, const tt_metal::Hal& hal) : rt
 
     this->initialize_ethernet_sockets();
 
-    this->tunnels_from_mmio_device = llrt::discover_tunnels_from_mmio_device(this->driver_);
+    TT_FATAL(this->driver_, "UMD cluster object must be initialized and available");
+    this->tunnels_from_mmio_device = llrt::discover_tunnels_from_mmio_device(*this->driver_);
 
     if (this->target_type_ != tt::TargetDevice::Mock){
         this->assert_risc_reset();
@@ -351,7 +352,7 @@ const std::unordered_map<CoreCoord, int32_t>& Cluster::get_virtual_routing_to_pr
     return this->virtual_routing_to_profiler_flat_id_.at(this->get_board_type(chip_id));
 }
 
-void Cluster::open_driver(const bool &skip_driver_allocs) {
+void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
     std::unique_ptr<tt::umd::Cluster> device_driver;
     std::string sdesc_path = get_soc_description_file(this->arch_, this->target_type_, rtoptions_);
     if (this->target_type_ == TargetDevice::Silicon) {
@@ -864,7 +865,7 @@ void Cluster::verify_eth_fw_capability() const {
     if (rtoptions_.get_simulator_enabled()) {
         return;
     }
-    const auto fw_version = this->driver_->get_ethernet_fw_version();
+    const auto fw_version = this->driver_->get_ethernet_firmware_version();
     if (fw_version) {
         hal_.verify_eth_fw_version(fw_version.value());
     }
@@ -911,7 +912,8 @@ uint64_t Cluster::get_pcie_base_addr_from_device(ChipId chip_id) const {
 }
 
 const std::unordered_set<ChipId>& Cluster::get_devices_controlled_by_mmio_device(ChipId mmio_device_id) const {
-    return llrt::get_devices_controlled_by_mmio_device(driver_, mmio_device_id);
+    TT_FATAL(driver_, "UMD cluster object must be initialized and available");
+    return llrt::get_devices_controlled_by_mmio_device(*driver_, mmio_device_id);
 }
 
 std::unordered_map<ChipId, std::vector<CoreCoord>> Cluster::get_ethernet_cores_grouped_by_connected_chips(

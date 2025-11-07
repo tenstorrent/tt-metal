@@ -17,7 +17,7 @@
 #include "ttnn/tensor/unit_mesh/unit_mesh_utils.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
-namespace ttnn::experimental::unit_mesh {
+namespace tt::tt_metal::experimental::unit_mesh {
 namespace {
 
 using ::testing::HasSubstr;
@@ -233,4 +233,4 @@ TEST_F(UnitMeshUtils2x4Test, DisaggregateWithoutSubmeshes) {
 }
 
 }  // namespace
-}  // namespace ttnn::experimental::unit_mesh
+}  // namespace tt::tt_metal::experimental::unit_mesh

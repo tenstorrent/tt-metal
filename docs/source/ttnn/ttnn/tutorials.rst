@@ -34,10 +34,13 @@ Available tutorials:
 
 .. toctree::
 
-   tutorials/2025_dx_rework/ttnn_add_tensors.ipynb
-   tutorials/2025_dx_rework/ttnn_basic_operations.ipynb
-   tutorials/2025_dx_rework/ttnn_mlp_inference_mnist.ipynb
-   tutorials/2025_dx_rework/ttnn_multihead_attention.ipynb
-   tutorials/2025_dx_rework/ttnn_basic_conv.ipynb
-   tutorials/2025_dx_rework/ttnn_simplecnn_inference.ipynb
-   tutorials/2025_dx_rework/ttnn_visualizer.md
+   tutorials/tutorials/ttnn_add_tensors.ipynb
+   tutorials/tutorials/ttnn_basic_operations.ipynb
+   tutorials/tutorials/ttnn_basic_matrix_multiplication.ipynb
+   tutorials/tutorials/ttnn_mlp_inference_mnist.ipynb
+   tutorials/tutorials/ttnn_multihead_attention.ipynb
+   tutorials/tutorials/ttnn_basic_conv.ipynb
+   tutorials/tutorials/ttnn_simplecnn_inference.ipynb
+   tutorials/tutorials/ttnn_clip_zero_shot_classification.ipynb
+   tutorials/tutorials/ttnn_visualizer.md
+   tutorials/tutorials/ttnn_tracer_model.ipynb
