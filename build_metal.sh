@@ -308,6 +308,8 @@ fi
 
 if [ "$disable_profiler" = "ON" ]; then
     cmake_args+=("-DENABLE_TRACY=OFF")
+else
+    cmake_args+=("-DENABLE_TRACY=ON")
 fi
 
 if [ "$export_compile_commands" = "ON" ]; then
