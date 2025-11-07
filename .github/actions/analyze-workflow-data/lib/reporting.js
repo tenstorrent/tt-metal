@@ -2,8 +2,11 @@
 // Handles report generation, workflow filtering, alerting, status changes, and enrichment
 
 const core = require('@actions/core');
-const { DEFAULT_LOOKBACK_DAYS, EMPTY_VALUE, SUCCESS_EMOJI, FAILURE_EMOJI, SHA_SHORT_LENGTH } = require('./data-loading');
-const { getWorkflowStats, fetchPRInfo } = require('./analysis');
+const github = require('@actions/github');
+const { DEFAULT_LOOKBACK_DAYS, EMPTY_VALUE, SUCCESS_EMOJI, FAILURE_EMOJI, SHA_SHORT_LENGTH, DEFAULT_INFRA_OWNER, getTimeSinceLastSuccess } = require('./data-loading');
+const { getWorkflowStats, fetchPRInfo, findFirstFailInWindow, fetchCommitAuthor, renderCommitsTable } = require('./analysis');
+const { fetchErrorSnippetsForRun, inferJobAndTestFromSnippet, resolveOwnersForSnippet, findOwnerForLabel, renderErrorsTable } = require('./error-processing');
+const { getAnnotationsDirForRunId, listCommitsBetweenOffline } = require('./data-loading');
 
 /**
  * Generates a GitHub Actions workflow URL.
@@ -249,6 +252,669 @@ function filterRunsByDate(runs, days) {
   });
 }
 
+/**
+ * Filters workflows by configuration and tracks failed workflows
+ * @param {Map} grouped - Map of workflow names to their runs
+ * @param {Map} previousGrouped - Map of previous workflow names to their runs (can be null)
+ * @param {Array} workflowConfigs - Array of workflow configuration objects
+ * @param {number} days - Number of days to look back
+ * @returns {Object} Object containing filteredGrouped, filteredPreviousGrouped, and failedWorkflows
+ */
+function filterWorkflowsByConfig(grouped, previousGrouped, workflowConfigs, days) {
+  const filteredGrouped = new Map();
+  const filteredPreviousGrouped = new Map();
+  const failedWorkflows = [];
+  const hasPrevious = previousGrouped && Array.isArray(previousGrouped);
+
+  for (const config of workflowConfigs) {
+    core.info(`Processing config: ${JSON.stringify(config)}`);
+    for (const [name, runs] of grouped) {
+      if ((config.wkflw_name && name === config.wkflw_name) ||
+          (config.wkflw_prefix && name.startsWith(config.wkflw_prefix))) {
+        core.info(`Matched workflow: ${name} with config: ${JSON.stringify(config)}`);
+        // Filter runs by date range
+        const filteredRuns = filterRunsByDate(runs, days);
+        if (filteredRuns.length > 0) {
+          filteredGrouped.set(name, filteredRuns);
+
+          // Check if latest run on main is failing
+          // First deduplicate by run ID, keeping highest attempt
+          const runsByID = new Map();
+          for (const run of filteredRuns.filter(r => r.head_branch === 'main')) {
+            const runId = run.id;
+            const currentAttempt = run.run_attempt || 1;
+            const existingRun = runsByID.get(runId);
+            const existingAttempt = existingRun ? (existingRun.run_attempt || 1) : 0;
+            if (!existingRun || currentAttempt > existingAttempt) {
+              runsByID.set(runId, run);
+            }
+          }
+          const mainBranchRuns = Array.from(runsByID.values())
+            .sort((a, b) => {
+              // Sort by date (newest first), then by run_attempt (highest first) as tiebreaker
+              const dateDiff = new Date(b.created_at) - new Date(a.created_at);
+              if (dateDiff !== 0) {
+                return dateDiff;
+              }
+              const attemptA = a.run_attempt || 1;
+              const attemptB = b.run_attempt || 1;
+              return attemptB - attemptA; // Prefer higher attempt number
+            });
+          if (mainBranchRuns[0]?.conclusion !== 'success') {
+            failedWorkflows.push(name);
+          }
+        }
+      }
+    }
+
+    if (hasPrevious) {
+      for (const [name, runs] of previousGrouped) {
+        if ((config.wkflw_name && name === config.wkflw_name) ||
+            (config.wkflw_prefix && name.startsWith(config.wkflw_prefix))) {
+          const filteredRuns = filterRunsByDate(runs, days);
+          if (filteredRuns.length > 0) {
+            filteredPreviousGrouped.set(name, filteredRuns);
+          }
+        }
+      }
+    }
+  }
+
+  return { filteredGrouped, filteredPreviousGrouped, failedWorkflows };
+}
+
+/**
+ * Builds a Slack-ready alert message for failing workflows
+ * @param {Map} filteredGrouped - Map of workflow names to their runs
+ * @param {Array} failedWorkflows - Array of workflow names that are failing
+ * @param {boolean} alertAll - Whether to ping owners in the message
+ * @param {Map} errorSnippetsCache - Cache for error snippets (will be populated)
+ * @returns {Promise<string>} Alert message string (empty if no failures)
+ */
+async function buildAlertMessage(filteredGrouped, failedWorkflows, alertAll, errorSnippetsCache) {
+  if (failedWorkflows.length === 0) {
+    return '';
+  }
+
+  const mention = (owners) => {
+    const arr = Array.isArray(owners) ? owners : (owners ? [owners] : []);
+    const parts = arr.map(o => {
+      if (!o || !o.id) return '';
+      const id = String(o.id);
+      if (id.startsWith('S')) {
+        const fallback = o.name ? `@${o.name}` : '@team';
+        return `<!subteam^${id}|${fallback}>`;
+      }
+      return `<@${id}>`;
+    }).filter(Boolean);
+    return parts.length ? parts.join(' ') : '';
+  };
+
+  const failingItems = [];
+  for (const [name, runs] of filteredGrouped.entries()) {
+    // First deduplicate by run ID, keeping highest attempt
+    const runsByID = new Map();
+    for (const run of runs.filter(r => r.head_branch === 'main')) {
+      const runId = run.id;
+      const currentAttempt = run.run_attempt || 1;
+      const existingRun = runsByID.get(runId);
+      const existingAttempt = existingRun ? (existingRun.run_attempt || 1) : 0;
+      if (!existingRun || currentAttempt > existingAttempt) {
+        runsByID.set(runId, run);
+      }
+    }
+    const mainRuns = Array.from(runsByID.values())
+      .sort((a, b) => {
+        // Sort by date (newest first), then by run_attempt (highest first) as tiebreaker
+        const dateDiff = new Date(b.created_at) - new Date(a.created_at);
+        if (dateDiff !== 0) {
+          return dateDiff;
+        }
+        const attemptA = a.run_attempt || 1;
+        const attemptB = b.run_attempt || 1;
+        return attemptB - attemptA; // Prefer higher attempt number
+      });
+    if (!mainRuns[0] || mainRuns[0].conclusion === 'success') continue;
+
+    // Use the latest failing run for snippet-based owner detection
+    const latestFail = mainRuns.find(r => r.conclusion !== 'success');
+    let owners = undefined;
+    let combinedOwnerNames = [];
+    let failingJobNames = undefined;
+    try {
+      const errs = await fetchErrorSnippetsForRun(
+        latestFail.id,
+        20,
+        undefined,
+        getAnnotationsDirForRunId(latestFail.id)
+      );
+      errorSnippetsCache.set(latestFail.id, errs);
+      // Infer job/test and resolve owners per snippet, then aggregate
+      const ownerSet = new Map();
+      const genericExitOrigOwners = new Map();
+      const isGenericExit = (s) => typeof s === 'string' && /^Process completed with exit code 1\.?$/i.test(String(s).trim());
+      for (const sn of (errs || [])) {
+        const inferred = inferJobAndTestFromSnippet(sn);
+        if (inferred) { sn.job = inferred.job; sn.test = inferred.test; }
+        resolveOwnersForSnippet(sn, name);
+        if (Array.isArray(sn.owner)) {
+          for (const o of sn.owner) {
+            if (!o) continue;
+            const k = `${o.id || ''}|${o.name || ''}`;
+            ownerSet.set(k, o);
+          }
+        }
+        // Capture original pipeline owners when infra override occurred
+        if (sn.owner_source && String(sn.owner_source).startsWith('infra_due_to_missing_test') && Array.isArray(sn.original_owners)) {
+          for (const oo of sn.original_owners) {
+            const nm = (oo && (oo.name || oo.id)) || '';
+            if (nm) genericExitOrigOwners.set(nm, true);
+            if (oo) {
+              const k2 = `${oo.id || ''}|${oo.name || ''}`;
+              ownerSet.set(k2, { id: oo.id, name: oo.name });
+            }
+          }
+        }
+      }
+      owners = Array.from(ownerSet.values());
+      const origNames = Array.from(genericExitOrigOwners.keys());
+      combinedOwnerNames = (() => {
+        const seen = new Map();
+        for (const o of (owners || [])) {
+          const nm = (o && (o.name || o.id)) || '';
+          if (nm) seen.set(nm, true);
+        }
+        for (const nm of origNames) { if (nm) seen.set(nm, true); }
+        return Array.from(seen.keys());
+      })();
+      // Extract failing job names from error snippets
+      failingJobNames = [];
+      const jobs = new Set();
+      for (const sn of (errs || [])) {
+        const jobName = (sn && sn.job) ? String(sn.job) : '';
+        if (jobName) jobs.add(jobName);
+      }
+      failingJobNames = Array.from(jobs);
+    } catch (_) { /* ignore */ }
+    if (!failingJobNames) failingJobNames = [];
+    // Fallback: try to resolve owners from the workflow name
+    if (!owners || owners.length === 0) {
+      owners = findOwnerForLabel(name) || [DEFAULT_INFRA_OWNER];
+    }
+    const ownerNamesText = (() => {
+      const names = Array.isArray(combinedOwnerNames) ? combinedOwnerNames : [];
+      return (names.length ? names.join(', ') : DEFAULT_INFRA_OWNER.name);
+    })();
+    const fallbackMention = `<!subteam^${DEFAULT_INFRA_OWNER.id}|${DEFAULT_INFRA_OWNER.name}>`;
+    const ownerMentions = alertAll ? (mention(owners) || fallbackMention) : ownerNamesText;
+    const jobsNote = failingJobNames.length > 0 ? ` (failed ${failingJobNames.join(', ')})` : '';
+    const wfUrl = getWorkflowLink(github.context, runs[0]?.path);
+    failingItems.push(`• ${name} ${wfUrl ? `<${wfUrl}|open>` : ''} ${ownerMentions}${jobsNote}`.trim());
+  }
+
+  if (failingItems.length) {
+    return [
+      '*Alerts: failing workflows on main*',
+      ...failingItems
+    ].join('\n');
+  }
+
+  return '';
+}
+
+/**
+ * Helper function to deduplicate runs by run ID, keeping highest attempt, and sort by date
+ * @param {Array} runs - Array of workflow runs
+ * @returns {Array} Deduplicated and sorted runs
+ */
+function deduplicateAndSortRuns(runs) {
+  const runsByID = new Map();
+  for (const run of runs.filter(r => r.head_branch === 'main')) {
+    const runId = run.id;
+    const currentAttempt = run.run_attempt || 1;
+    const existingRun = runsByID.get(runId);
+    const existingAttempt = existingRun ? (existingRun.run_attempt || 1) : 0;
+    if (!existingRun || currentAttempt > existingAttempt) {
+      runsByID.set(runId, run);
+    }
+  }
+  return Array.from(runsByID.values())
+    .sort((a, b) => {
+      const dateDiff = new Date(b.created_at) - new Date(a.created_at);
+      if (dateDiff !== 0) {
+        return dateDiff;
+      }
+      const attemptA = a.run_attempt || 1;
+      const attemptB = b.run_attempt || 1;
+      return attemptB - attemptA;
+    });
+}
+
+/**
+ * Computes the latest conclusion for a set of runs
+ * @param {Array} runs - Array of workflow runs
+ * @returns {string|null} 'success', 'failure', or null
+ */
+function computeLatestConclusion(runs) {
+  const mainBranchRuns = deduplicateAndSortRuns(runs);
+  const latest = mainBranchRuns[0];
+  if (!latest) return null;
+  return latest.conclusion === 'success' ? 'success' : 'failure';
+}
+
+/**
+ * Gets the latest run info for a set of runs
+ * @param {Array} runs - Array of workflow runs
+ * @returns {Object|null} Run info object or null
+ */
+function computeLatestRunInfo(runs) {
+  const mainBranchRuns = deduplicateAndSortRuns(runs);
+  const latest = mainBranchRuns[0];
+  if (!latest) return null;
+  return { id: latest.id, url: latest.html_url, created_at: latest.created_at, head_sha: latest.head_sha, path: latest.path };
+}
+
+/**
+ * Gets main branch runs within the current window, deduplicated and sorted
+ * @param {Array} runs - Array of workflow runs
+ * @returns {Array} Deduplicated and sorted main branch runs
+ */
+function getMainWindowRuns(runs) {
+  return deduplicateAndSortRuns(runs);
+}
+
+/**
+ * Computes status changes between current and previous workflow runs
+ * @param {Map} filteredGrouped - Map of current workflow names to their runs
+ * @param {Map} filteredPreviousGrouped - Map of previous workflow names to their runs
+ * @param {object} context - GitHub Actions context
+ * @returns {Object} Object containing changes, regressedDetails, and stayedFailingDetails arrays
+ */
+function computeStatusChanges(filteredGrouped, filteredPreviousGrouped, context) {
+  const allNames = new Set([
+    ...Array.from(filteredGrouped.keys()),
+    ...Array.from(filteredPreviousGrouped.keys())
+  ]);
+
+  const changes = [];
+  const regressedDetails = [];
+  const stayedFailingDetails = [];
+
+  for (const name of allNames) {
+    const currentRuns = filteredGrouped.get(name);
+    const previousRuns = filteredPreviousGrouped.get(name);
+    if (!currentRuns || !previousRuns) continue;
+
+    const current = computeLatestConclusion(currentRuns);
+    const previous = computeLatestConclusion(previousRuns);
+    if (!current || !previous) continue;
+
+    let change;
+    if (previous === 'success' && current === 'success') change = 'stayed_succeeding';
+    else if (previous !== 'success' && current !== 'success') change = 'stayed_failing';
+    else if (previous !== 'success' && current === 'success') change = 'fail_to_success';
+    else if (previous === 'success' && current !== 'success') change = 'success_to_fail';
+
+    if (change) {
+      const info = computeLatestRunInfo(currentRuns);
+      const workflowUrl = info?.path ? getWorkflowLink(context, info.path) : undefined;
+      const aggregateRunUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+      const commitUrl = info?.head_sha ? `https://github.com/${context.repo.owner}/${context.repo.repo}/commit/${info.head_sha}` : undefined;
+      const commitShort = info?.head_sha ? info.head_sha.substring(0, SHA_SHORT_LENGTH) : undefined;
+      changes.push({
+        name,
+        previous,
+        current,
+        change,
+        run_id: info?.id,
+        run_url: info?.url,
+        created_at: info?.created_at,
+        workflow_url: workflowUrl,
+        workflow_path: info?.path,
+        aggregate_run_url: aggregateRunUrl,
+        commit_sha: info?.head_sha,
+        commit_short: commitShort,
+        commit_url: commitUrl
+      });
+      if (change === 'success_to_fail' && info) {
+        regressedDetails.push({
+          name,
+          run_id: info.id,
+          run_url: info.url,
+          created_at: info.created_at,
+          workflow_url: workflowUrl,
+          workflow_path: info.path,
+          aggregate_run_url: aggregateRunUrl,
+          commit_sha: info.head_sha,
+          commit_short: commitShort,
+          commit_url: commitUrl,
+          owners: []
+        });
+      } else if (change === 'stayed_failing' && info) {
+        stayedFailingDetails.push({
+          name,
+          run_id: info.id,
+          run_url: info.url,
+          created_at: info.created_at,
+          workflow_url: workflowUrl,
+          workflow_path: info.path,
+          aggregate_run_url: aggregateRunUrl,
+          commit_sha: info.head_sha,
+          commit_short: commitShort,
+          commit_url: commitUrl
+        });
+      }
+    }
+  }
+
+  return { changes, regressedDetails, stayedFailingDetails };
+}
+
+/**
+ * Enriches regression details with first failing run, commits, authors, and error snippets
+ * @param {Array} regressedDetails - Array of regression detail objects (modified in place)
+ * @param {Map} filteredGrouped - Map of workflow names to their runs
+ * @param {Map} errorSnippetsCache - Cache for error snippets (will be populated)
+ * @param {Array} changes - Array of change objects (will be updated with enrichment data)
+ * @param {object} context - GitHub Actions context
+ */
+async function enrichRegressions(regressedDetails, filteredGrouped, errorSnippetsCache, changes, context) {
+  for (const item of regressedDetails) {
+    try {
+      const windowRuns = getMainWindowRuns(filteredGrouped.get(item.name) || []);
+      const res = findFirstFailInWindow(windowRuns);
+      if (res && res.run) {
+        item.first_failed_run_id = res.run.id;
+        item.first_failed_run_url = res.run.html_url;
+        item.first_failed_created_at = res.run.created_at;
+        item.first_failed_head_sha = res.run.head_sha;
+        item.first_failed_head_short = res.run.head_sha ? res.run.head_sha.substring(0, SHA_SHORT_LENGTH) : undefined;
+        item.no_success_in_window = !!res.noSuccessInWindow;
+        if (!res.noSuccessInWindow && res.boundarySuccessRun && res.boundarySuccessRun.head_sha) {
+          item.commits_between = listCommitsBetweenOffline(context, res.boundarySuccessRun.head_sha, item.first_failed_head_sha);
+        }
+        if (item.first_failed_head_sha) {
+          const author = await fetchCommitAuthor(item.first_failed_head_sha);
+          item.first_failed_author_login = author.login;
+          item.first_failed_author_name = author.name;
+          item.first_failed_author_url = author.htmlUrl;
+        }
+        if (item.run_id) {
+          item.error_snippets = errorSnippetsCache.get(item.run_id) || await fetchErrorSnippetsForRun(
+            item.run_id,
+            20,
+            undefined,
+            getAnnotationsDirForRunId(item.run_id)
+          );
+          if (!errorSnippetsCache.has(item.run_id)) {
+            errorSnippetsCache.set(item.run_id, item.error_snippets);
+          }
+        } else {
+          item.error_snippets = [];
+        }
+        try {
+          for (const sn of (item.error_snippets || [])) {
+            const inferred = inferJobAndTestFromSnippet(sn);
+            if (inferred) { sn.job = inferred.job; sn.test = inferred.test; }
+            resolveOwnersForSnippet(sn, item.name);
+          }
+          const ownerSet = new Map();
+          const genericExitOrigOwners = new Map();
+          const isGenericExit = (s) => typeof s === 'string' && /^Process completed with exit code 1\.?$/i.test(String(s).trim());
+          for (const sn of (item.error_snippets || [])) {
+            if (Array.isArray(sn.owner)) {
+              for (const o of sn.owner) {
+                if (!o) continue;
+                const k = `${o.id || ''}|${o.name || ''}`;
+                ownerSet.set(k, o);
+              }
+            }
+            if (sn.owner_source && String(sn.owner_source).startsWith('infra_due_to_missing_test') && isGenericExit(sn.snippet) && Array.isArray(sn.original_owners)) {
+              for (const oo of sn.original_owners) {
+                const nm = (oo && (oo.name || oo.id)) || '';
+                if (nm) genericExitOrigOwners.set(nm, true);
+              }
+            }
+          }
+          let owners = Array.from(ownerSet.values());
+          if (!owners.length) {
+            owners = findOwnerForLabel(item.name) || [DEFAULT_INFRA_OWNER];
+          }
+          item.owners = owners;
+          item.original_owner_names_for_generic_exit = Array.from(genericExitOrigOwners.keys());
+          const failingJobNames = (() => {
+            const jobs = new Set();
+            for (const sn of (item.error_snippets || [])) {
+              const jobName = (sn && sn.job) ? String(sn.job) : '';
+              if (jobName) jobs.add(jobName);
+            }
+            return Array.from(jobs);
+          })();
+          item.failing_jobs = failingJobNames;
+        } catch (_) { /* ignore */ }
+        item.repeated_errors = [];
+        const changeRef = changes.find(c => c.name === item.name && c.change === 'success_to_fail');
+        if (changeRef) {
+          Object.assign(changeRef, {
+            first_failed_run_id: item.first_failed_run_id,
+            first_failed_run_url: item.first_failed_run_url,
+            first_failed_created_at: item.first_failed_created_at,
+            first_failed_head_sha: item.first_failed_head_sha,
+            first_failed_head_short: item.first_failed_head_short,
+            no_success_in_window: item.no_success_in_window,
+            first_failed_author_login: item.first_failed_author_login,
+            first_failed_author_name: item.first_failed_author_name,
+            first_failed_author_url: item.first_failed_author_url,
+            commits_between: item.commits_between || [],
+            error_snippets: item.error_snippets || [],
+            repeated_errors: item.repeated_errors || [],
+            failing_jobs: item.failing_jobs || [],
+            owners: item.owners || [],
+            original_owner_names_for_generic_exit: item.original_owner_names_for_generic_exit || [],
+          });
+        }
+      }
+    } catch (e) {
+      core.warning(`Failed to find first failing run for ${item.name}: ${e.message}`);
+    }
+  }
+}
+
+/**
+ * Enriches stayed failing details with first failing run, commits, authors, and error snippets
+ * @param {Array} stayedFailingDetails - Array of stayed failing detail objects (modified in place)
+ * @param {Map} filteredGrouped - Map of workflow names to their runs
+ * @param {Map} errorSnippetsCache - Cache for error snippets (will be populated)
+ * @param {Array} changes - Array of change objects (will be updated with enrichment data)
+ * @param {object} context - GitHub Actions context
+ */
+async function enrichStayedFailing(stayedFailingDetails, filteredGrouped, errorSnippetsCache, changes, context) {
+  for (const item of stayedFailingDetails) {
+    try {
+      const windowRuns = getMainWindowRuns(filteredGrouped.get(item.name) || []);
+      const res = findFirstFailInWindow(windowRuns);
+      if (res && res.run) {
+        item.first_failed_run_id = res.run.id;
+        item.first_failed_run_url = res.run.html_url;
+        item.first_failed_created_at = res.run.created_at;
+        item.first_failed_head_sha = res.run.head_sha;
+        item.first_failed_head_short = res.run.head_sha ? res.run.head_sha.substring(0, SHA_SHORT_LENGTH) : undefined;
+        item.no_success_in_window = !!res.noSuccessInWindow;
+        if (!item.no_success_in_window && res.boundarySuccessRun && res.boundarySuccessRun.head_sha) {
+          item.commits_between = listCommitsBetweenOffline(context, res.boundarySuccessRun.head_sha, item.first_failed_head_sha);
+        }
+        if (item.first_failed_head_sha) {
+          const author = await fetchCommitAuthor(item.first_failed_head_sha);
+          item.first_failed_author_login = author.login;
+          item.first_failed_author_name = author.name;
+          item.first_failed_author_url = author.htmlUrl;
+        }
+        if (item.run_id) {
+          item.error_snippets = errorSnippetsCache.get(item.run_id) || await fetchErrorSnippetsForRun(
+            item.run_id,
+            20,
+            undefined,
+            getAnnotationsDirForRunId(item.run_id)
+          );
+          if (!errorSnippetsCache.has(item.run_id)) {
+            errorSnippetsCache.set(item.run_id, item.error_snippets);
+          }
+        } else {
+          item.error_snippets = [];
+        }
+        try {
+          for (const sn of (item.error_snippets || [])) {
+            const inferred = inferJobAndTestFromSnippet(sn);
+            if (inferred) { sn.job = inferred.job; sn.test = inferred.test; }
+            resolveOwnersForSnippet(sn, item.name);
+          }
+        } catch (_) { /* ignore */ }
+        item.repeated_errors = [];
+      }
+      const changeRef = changes.find(c => c.name === item.name && c.change === 'stayed_failing');
+      if (changeRef) {
+        Object.assign(changeRef, {
+          first_failed_run_id: item.first_failed_run_id,
+          first_failed_run_url: item.first_failed_run_url,
+          first_failed_created_at: item.first_failed_created_at,
+          first_failed_head_sha: item.first_failed_head_sha,
+          first_failed_head_short: item.first_failed_head_short,
+          no_success_in_window: item.no_success_in_window,
+          first_failed_author_login: item.first_failed_author_login,
+          first_failed_author_name: item.first_failed_author_name,
+          first_failed_author_url: item.first_failed_author_url,
+          commits_between: item.commits_between || [],
+          error_snippets: item.error_snippets || [],
+          repeated_errors: item.repeated_errors || [],
+        });
+      }
+    } catch (e) {
+      core.warning(`Failed to find first failing run for ${item.name}: ${e.message}`);
+    }
+  }
+}
+
+/**
+ * Builds the regressions section of the report
+ * @param {Array} regressedDetails - Array of enriched regression detail objects
+ * @param {object} context - GitHub Actions context
+ * @returns {string} Markdown section for regressions
+ */
+function buildRegressionsSection(regressedDetails, context) {
+  if (regressedDetails.length === 0) {
+    return ['', '## Regressions (Pass → Fail)', '- None', ''].join('\n');
+  }
+
+  const lines = regressedDetails.map(it => {
+    const workflowName = it.workflow_url ? `<a href="${it.workflow_url}">${it.name}</a>` : it.name;
+    const timeSinceSuccess = getTimeSinceLastSuccess(it.name);
+    const timeBadge = timeSinceSuccess !== EMPTY_VALUE ? ` <em>(Last success: ${timeSinceSuccess})</em>` : '';
+
+    if (it.first_failed_run_url) {
+      const sha = it.first_failed_head_short || (it.first_failed_head_sha ? it.first_failed_head_sha.substring(0, SHA_SHORT_LENGTH) : undefined);
+      const shaLink = sha ? `[\`${sha}\`](https://github.com/${context.repo.owner}/${context.repo.repo}/commit/${it.first_failed_head_sha})` : '';
+      const when = it.first_failed_created_at ? new Date(it.first_failed_created_at).toISOString() : '';
+      const author = it.first_failed_author_login
+        ? `by [@${it.first_failed_author_login}](${it.first_failed_author_url})`
+        : (it.first_failed_author_name ? `by ${it.first_failed_author_name}` : '');
+
+      let errorsList = '';
+      const errorsHtml = renderErrorsTable(it.error_snippets || []);
+      errorsList = [errorsHtml, ''].join('\n');
+
+      if (it.no_success_in_window) {
+        const latestWhenIso = it.created_at ? new Date(it.created_at).toISOString() : '';
+        const latestShaShort = it.commit_short || (it.commit_sha ? it.commit_sha.substring(0, SHA_SHORT_LENGTH) : undefined);
+        const latestShaLink = (latestShaShort && it.commit_sha)
+          ? ` [\`${latestShaShort}\`](https://github.com/${context.repo.owner}/${context.repo.repo}/commit/${it.commit_sha})`
+          : '';
+        const latestLine = it.run_url
+          ? ` | Latest failing run: [Run](${it.run_url}) ${latestWhenIso}${latestShaLink}`
+          : '';
+        const content = `  - Failed to find any successful run in the last two weeks. Oldest failing run is: [Run](${it.first_failed_run_url}) ${when} ${shaLink}${latestLine}`;
+        return ['<details>', `<summary>${workflowName}${timeBadge}</summary>`, '', content, errorsList, '</details>', ''].join('\n');
+      }
+
+      let commitsList = '';
+      const commitsMd = renderCommitsTable(it.commits_between || []);
+      commitsList = [commitsMd, ''].join('\n');
+
+      const latestWhenIso = it.created_at ? new Date(it.created_at).toISOString() : '';
+      const latestShaShort = it.commit_short || (it.commit_sha ? it.commit_sha.substring(0, SHA_SHORT_LENGTH) : undefined);
+      const latestShaLink = (latestShaShort && it.commit_sha)
+        ? ` [\`${latestShaShort}\`](https://github.com/${context.repo.owner}/${context.repo.repo}/commit/${it.commit_sha})`
+        : '';
+      const latestLine = it.run_url
+        ? `\n  - Latest failing run: [Run](${it.run_url}) ${latestWhenIso}${latestShaLink}`
+        : '';
+      const content = `  - First failing run on main: [Run](${it.first_failed_run_url}) ${when} ${shaLink} ${author}${latestLine}`;
+      return ['<details>', `<summary>${workflowName}${timeBadge}</summary>`, '', content, errorsList, commitsList, '</details>', ''].join('\n');
+    }
+    return ['<details>', `<summary>${workflowName}${timeBadge}</summary>`, '', '  - No failure details available', '</details>', ''].join('\n');
+  });
+
+  return ['', '## Regressions (Pass → Fail)', ...lines, ''].join('\n');
+}
+
+/**
+ * Builds the stayed failing section of the report
+ * @param {Array} stayedFailingDetails - Array of enriched stayed failing detail objects
+ * @param {object} context - GitHub Actions context
+ * @returns {string} Markdown section for stayed failing workflows
+ */
+function buildStayedFailingSection(stayedFailingDetails, context) {
+  if (stayedFailingDetails.length === 0) {
+    return ['', '## Still Failing (No Recovery)', '- None', ''].join('\n');
+  }
+
+  const lines = stayedFailingDetails.map(it => {
+    const workflowName = it.workflow_url ? `<a href="${it.workflow_url}">${it.name}</a>` : it.name;
+    const timeSinceSuccess = getTimeSinceLastSuccess(it.name);
+    const timeBadge = timeSinceSuccess !== EMPTY_VALUE ? ` <em>(Last success: ${timeSinceSuccess})</em>` : '';
+
+    if (it.first_failed_run_url) {
+      const sha = it.first_failed_head_short || (it.first_failed_head_sha ? it.first_failed_head_sha.substring(0, SHA_SHORT_LENGTH) : undefined);
+      const shaLink = sha ? `[\`${sha}\`](https://github.com/${context.repo.owner}/${context.repo.repo}/commit/${it.first_failed_head_sha})` : '';
+      const when = it.first_failed_created_at ? new Date(it.first_failed_created_at).toISOString() : '';
+
+      let errorsList = '';
+      const errorsHtml2 = renderErrorsTable(it.error_snippets || []);
+      errorsList = [errorsHtml2, ''].join('\n');
+
+      if (it.no_success_in_window) {
+        const latestWhenIso = it.created_at ? new Date(it.created_at).toISOString() : '';
+        const latestShaShort = it.commit_short || (it.commit_sha ? it.commit_sha.substring(0, SHA_SHORT_LENGTH) : undefined);
+        const latestShaLink = (latestShaShort && it.commit_sha)
+          ? ` [\`${latestShaShort}\`](https://github.com/${context.repo.owner}/${context.repo.repo}/commit/${it.commit_sha})`
+          : '';
+        const latestLine = it.run_url
+          ? ` | Latest failing run: [Run](${it.run_url}) ${latestWhenIso}${latestShaLink}`
+          : '';
+        const content = `  - Failed to find any successful run in the last two weeks. Oldest failing run is: [Run](${it.first_failed_run_url}) ${when} ${shaLink}${latestLine}`;
+        return ['<details>', `<summary>${workflowName}${timeBadge}</summary>`, '', content, errorsList, '</details>', ''].join('\n');
+      }
+
+      let commitsList = '';
+      const commitsMd2 = renderCommitsTable(it.commits_between || []);
+      commitsList = [commitsMd2, ''].join('\n');
+
+      const latestWhenIso = it.created_at ? new Date(it.created_at).toISOString() : '';
+      const latestShaShort = it.commit_short || (it.commit_sha ? it.commit_sha.substring(0, SHA_SHORT_LENGTH) : undefined);
+      const latestShaLink = (latestShaShort && it.commit_sha)
+        ? ` [\`${latestShaShort}\`](https://github.com/${context.repo.owner}/${context.repo.repo}/commit/${it.commit_sha})`
+        : '';
+      const latestLine = it.run_url
+        ? `\n  - Latest failing run: [Run](${it.run_url}) ${latestWhenIso}${latestShaLink}`
+        : '';
+      const content = `  - First failing run on main: [Run](${it.first_failed_run_url}) ${when} ${shaLink}${latestLine}`;
+      return ['<details>', `<summary>${workflowName}${timeBadge}</summary>`, '', content, errorsList, commitsList, '</details>', ''].join('\n');
+    }
+    return ['<details>', `<summary>${workflowName}${timeBadge}</summary>`, '', '  - No failure details available', '</details>', ''].join('\n');
+  });
+
+  return ['', '## Still Failing (No Recovery)', ...lines, ''].join('\n');
+}
+
 module.exports = {
   getWorkflowLink,
   findGoodBadCommits,
@@ -256,4 +922,14 @@ module.exports = {
   generateSummaryBox,
   buildReport,
   filterRunsByDate,
+  filterWorkflowsByConfig,
+  buildAlertMessage,
+  computeLatestConclusion,
+  computeLatestRunInfo,
+  getMainWindowRuns,
+  computeStatusChanges,
+  enrichRegressions,
+  enrichStayedFailing,
+  buildRegressionsSection,
+  buildStayedFailingSection,
 };
