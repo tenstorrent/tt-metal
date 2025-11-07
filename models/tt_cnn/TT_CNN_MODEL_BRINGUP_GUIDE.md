@@ -2,24 +2,24 @@
 
 This documents demonstrates how to bring-up new vision models using the TT-CNN library.
 
-Throughout this document we will refer to the Vanilla UNet implementation as a concrete example of how to use the available TT-CNN modules to create a model. Take a look at the implementation [here](../demos/vanilla_unet/README.md).
+The TT-CNN library comprises several components designed to assist the development of vision models on Tenstorrent devices. At a high level, the main TT-CNN modules include:
 
-The TT-CNN library comprises several modular components designed to assist the development of vision models on Tenstorrent devices. At a high level, the main TT-CNN modules include:
-
-- **Pipeline**: Provides high-performance abstractions for model execution, with out-of-the-box support for tracing, and multi-command command queue pipelining.
-- **Builder**: Offers configuration-driven factories for defining and instantiating TTNN-compatible CNN and pooling layers, making it easy to compose models from reusable configuration classes.
+- **Pipeline**: Provides abstractions for high-performance end-to-end model inference, with out-of-the-box support for tracing, and multi-command command queue pipelining.
+- **Builder**: Provides configuration-driven API for defining and instantiating convolution and pooling layers, making it easy to compose models from reusable configuration classes.
 
 Each module is documented and illustrated with working examples. To dive deeper into:
 - **Pipeline API, memory layouts, and performance tuning**, see the [README.md](README.md) "Pipeline" and "Performance Optimization Techniques" sections.
 - **Builder API, configuration patterns, and layer composition**, refer to the [README.md](README.md) "Builder" section.
 
-This guide provides a stepwise introduction to bringing up new TT-NN models. For further details, practical tips, and reference patterns, please explore the in-depth documentation in [README.md](README.md).
+Throughout this document we will refer to the Vanilla UNet implementation as a concrete example of how to use the available TT-CNN modules to create a model. Take a look at the implementation [here](../demos/vanilla_unet/README.md).
+
+For further details, practical tips, and reference patterns, please explore the in-depth documentation in [README.md](README.md).
 
 ## Overview
 
 The general flow for bringing up a vision model with TT-CNN is:
 
-1. **Reference Model**: Define your model reference using standard PyTorch modules (`nn.Module`) or use an available open source model. This reference implementation will serve as your accuracy benchmark to ensure that the TT-NN version of this model is correct.
+1. **Reference Model**: Define your model reference using standard PyTorch modules (`nn.Module`) or use an available open source model. This reference implementation will serve as your correctness/accuracy benchmark to ensure that the TT-NN version of this model is correct.
 
 2. **Parameter Preprocessing**: Extract, convert, and optionally fuse your PyTorch weights (e.g., batch norm folding). Also extract other layer parameters (kernel size, stride, etc.) from the reference model.
 
@@ -44,19 +44,6 @@ Pipeline Optimization (compile, enqueue, run)
 ```
 
 Let's examine each step using the Vanilla UNet as our example.
-
-## Supported Operations
-
-TT-CNN currently provides high-level APIs for:
-- **Conv2d**: Standard 2D convolution with various configurations
-- **MaxPool2d**: Max pooling operations
-- **Upsample**: Upsampling operations (bilinear and nearest interpolation)
-
-For operations not yet in TT-CNN, use the TT-NN API directly:
-- Transpose convolution: `ttnn.conv_transpose2d` (will be added to TT-CNN in the future)
-- Normalization: `ttnn.layer_norm`, `ttnn.group_norm`, `ttnn.batch_norm`
-- Activations (unless fused with conv2d): `ttnn.relu`, `ttnn.gelu`, `ttnn.silu`, `ttnn.leaky_relu`
-- Other operations: See the full TT-NN API documentation
 
 ## 1. Model Structure Organization
 
@@ -237,6 +224,20 @@ class TtUNetConfigBuilder:
             **kwargs
         )
 ```
+
+### Supported Operations
+
+The builder API currently provides high-level APIs for:
+- **Conv2d**: Standard 2D convolution with various configurations
+- **MaxPool2d**: Max pooling operations
+- **Upsample**: Upsampling operations (bilinear and nearest interpolation)
+
+For operations not yet in TT-CNN, use the TT-NN API directly:
+- Transpose convolution: `ttnn.conv_transpose2d` (will be added to TT-CNN in the future)
+- Normalization: `ttnn.layer_norm`, `ttnn.group_norm`, `ttnn.batch_norm`
+- Activations (unless fused with conv2d): `ttnn.relu`, `ttnn.gelu`, `ttnn.silu`, `ttnn.leaky_relu`
+- Other operations: See the full TT-NN API documentation
+
 
 ### Choosing Sharding Strategies
 
