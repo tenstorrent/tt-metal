@@ -12,14 +12,16 @@ from models.common.utility_functions import skip_for_blackhole, skip_for_wormhol
 @skip_for_blackhole("This test is for wormhole")
 @pytest.mark.parametrize("num_links", [3], ids=["3links"])
 @pytest.mark.parametrize(
-    "num_devices, ag_output_shape, dim, layout, ag_input_dtype",
+    "num_devices, ag_output_shape, dim, layout, ag_input_dtype, enable_trace, num_iters",
     [
-        (8, [1, 1, 1024, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (8, [1, 1, 352, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        # Perf variant (with tracing)
+        (8, [1, 1, 1024, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10),
+        # Check variant (without tracing)
+        (8, [1, 1, 352, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1),
     ],
     ids=[
-        "sd35_spatial",
-        "sd35_prompt",
+        "sd35_spatial-perf",
+        "sd35_prompt-check",
     ],
 )
 @pytest.mark.parametrize(
@@ -30,14 +32,6 @@ from models.common.utility_functions import skip_for_blackhole, skip_for_wormhol
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         )
     ],
-)
-@pytest.mark.parametrize(
-    "enable_trace, num_iters",
-    [
-        (True, 10),
-        (False, 1),
-    ],
-    ids=["perf", "check"],
 )
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
@@ -106,20 +100,22 @@ def test_all_gather_async(
 @skip_for_blackhole("This test is for wormhole")
 @pytest.mark.parametrize("num_links", [3], ids=["3links"])
 @pytest.mark.parametrize(
-    "num_devices, ag_output_shape, dim, layout, ag_input_dtype",
+    "num_devices, ag_output_shape, dim, layout, ag_input_dtype, enable_trace, num_iters",
     [
-        (4, [1, 1, 32, 896], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (8, [1, 1, 32, 256], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (8, [1, 1, 32, 1536], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (8, [1, 8, 32, 576], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (8, [1, 1, 32, 7168], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        # Perf variants (with tracing)
+        (4, [1, 1, 32, 896], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10),
+        (8, [1, 1, 32, 1536], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10),
+        (8, [1, 8, 32, 576], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10),
+        # Check variants (without tracing)
+        (8, [1, 1, 32, 256], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1),
+        (8, [1, 1, 32, 7168], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1),
     ],
     ids=[
-        "deepseek_1",
-        "deepseek_2",
-        "deepseek_3",
-        "deepseek_4",
-        "deepseek_5",
+        "deepseek_1-perf",
+        "deepseek_3-perf",
+        "deepseek_4-perf",
+        "deepseek_2-check",
+        "deepseek_5-check",
     ],
 )
 @pytest.mark.parametrize(
@@ -130,14 +126,6 @@ def test_all_gather_async(
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         )
     ],
-)
-@pytest.mark.parametrize(
-    "enable_trace, num_iters",
-    [
-        (True, 10),
-        (False, 1),
-    ],
-    ids=["perf", "check"],
 )
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
@@ -197,14 +185,16 @@ def test_all_gather_deepseek(
 @skip_for_wormhole_b0("This test is for blackhole")
 @pytest.mark.parametrize("num_links", [1], ids=["1links"])
 @pytest.mark.parametrize(
-    "num_devices, ag_output_shape, dim, layout, ag_input_dtype",
+    "num_devices, ag_output_shape, dim, layout, ag_input_dtype, enable_trace, num_iters",
     [
-        (4, [1, 1, 1024, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (4, [1, 1, 352, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        # Perf variant (with tracing)
+        (4, [1, 1, 1024, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10),
+        # Check variant (without tracing)
+        (4, [1, 1, 352, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1),
     ],
     ids=[
-        "sd35_spatial",
-        "sd35_prompt",
+        "sd35_spatial-perf",
+        "sd35_prompt-check",
     ],
 )
 @pytest.mark.parametrize(
@@ -215,14 +205,6 @@ def test_all_gather_deepseek(
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         )
     ],
-)
-@pytest.mark.parametrize(
-    "enable_trace, num_iters",
-    [
-        (True, 10),
-        (False, 1),
-    ],
-    ids=["perf", "check"],
 )
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
