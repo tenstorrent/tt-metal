@@ -50,7 +50,7 @@ def split_list(lst, n):
     start = 0
     for i in range(n):
         chunks.append(list(lst[start : start + chunk_size]))  # Convert to list explicitly
-        start = end
+        start += chunk_size
     return chunks
 
 
@@ -565,20 +565,21 @@ class Generator:
         Run decode forward text with tracing
         """
         # The trace is different depending on whether we are doing device sampling or not
-        if not self.trace_ids_decode[argmax_on_device]:
+        if not self.trace_ids_decode[sampling_on_device]:
             trace_ids, tt_out_trace, *device_inputs = self._capture_decode_trace_text(
-                tokens, current_pos, page_table=page_table, kv_cache=kv_cache, argmax_on_device=argmax_on_device
+                tokens, current_pos, page_table=page_table, kv_cache=kv_cache, sampling_on_device=sampling_on_device
             )
-            self.trace_ids_decode[argmax_on_device] = trace_ids
-            self.trace_inputs_decode[argmax_on_device] = device_inputs
-            self.trace_output_decode[argmax_on_device] = tt_out_trace
+            self.trace_ids_decode[sampling_on_device] = trace_ids
+            self.trace_inputs_decode[sampling_on_device] = device_inputs
+            self.trace_output_decode[sampling_on_device] = tt_out_trace
 
         reset_inputs = not sampling_on_device
         if self.prev_page_table is None or any(
             not torch.equal(prev, curr) for prev, curr in zip(self.prev_page_table, page_table)
         ):
+            # If the page table has changed, it means that the inputs have shuffled, so we need to copy them from host again
             reset_inputs = True
-            self.prev_page_table = page_table
+            self.prev_page_table = tuple(pt.clone() for pt in page_table)
 
         if reset_inputs:
             for i in range(self.data_parallel):
@@ -587,13 +588,13 @@ class Generator:
 
                 copy_host_to_device(
                     host_tensors=host_inputs_i,
-                    device_tensors=self.trace_inputs_decode[argmax_on_device][i],
+                    device_tensors=self.trace_inputs_decode[sampling_on_device][i],
                 )
 
-        for i, trace_id in self.trace_ids_decode[argmax_on_device].items():
+        for i, trace_id in self.trace_ids_decode[sampling_on_device].items():
             ttnn.execute_trace(self.model_args[i].mesh_device, trace_id, cq_id=0, blocking=False)
 
-        return self.trace_output_decode[argmax_on_device]
+        return self.trace_output_decode[sampling_on_device]
 
     def _prefill_forward_single_user(
         self,
