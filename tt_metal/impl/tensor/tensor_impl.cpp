@@ -472,7 +472,7 @@ std::string to_string(const Tensor& tensor) {
 
     return std::visit(
         tt::stl::overloaded{
-            [&](const HostStorage& storage) -> std::string {
+            [&](const HostStorage&) -> std::string {
                 const Tensor row_major_tensor = get_row_major_tensor(tensor);
                 const auto strides = row_major_tensor.tensor_spec().compute_strides();
                 const std::vector<HostBuffer> buffers = get_device_buffers(row_major_tensor.host_storage());
@@ -653,12 +653,12 @@ std::pair<DeviceStorage, TensorTopology> to_device_mesh_buffer(
     const Storage& host_storage,
     const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer,
     const TensorSpec& tensor_spec,
-    const TensorAttributes& host_tensor_attributes,
+    const TensorAttributes&,
     const TensorTopology& tensor_topology,
     std::optional<tt::tt_metal::QueueId> cq_id) {
     return std::visit(
         tt::stl::overloaded{
-            [&mesh_buffer, &tensor_spec, cq_id, &host_tensor_attributes, &tensor_topology](
+            [&mesh_buffer, &tensor_spec, &tensor_topology, cq_id](
                 const HostStorage& storage) -> std::pair<DeviceStorage, TensorTopology> {
                 const auto& host_storage_shape = storage.buffer().shape();
                 const auto& mesh_device_shape = mesh_buffer->device()->shape();
