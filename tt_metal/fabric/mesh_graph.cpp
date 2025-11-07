@@ -191,6 +191,11 @@ std::unordered_map<ChipId, RouterEdge> MeshGraph::get_valid_connections(
     std::unordered_map<ChipId, RouterEdge> valid_connections;
 
     MeshShape mesh_shape = mesh_coord_range.shape();
+    ChipId src_chip_id = (src_mesh_coord[0] * mesh_shape[1]) + src_mesh_coord[1];
+
+    // Check if this is a 1x1 or 1xA topology (1 row)
+    bool is_1d_topology = (mesh_shape[0] == 1);
+
     MeshCoordinate N(src_mesh_coord[0] - 1, src_mesh_coord[1]);
     MeshCoordinate E(src_mesh_coord[0], src_mesh_coord[1] + 1);
     MeshCoordinate S(src_mesh_coord[0] + 1, src_mesh_coord[1]);
@@ -211,6 +216,16 @@ std::unordered_map<ChipId, RouterEdge> MeshGraph::get_valid_connections(
           std::pair{W, RoutingDirection::W}}) {
         if (mesh_coord_range.contains(coord)) {
             ChipId fabric_chip_id = (coord[0] * mesh_shape[1]) + coord[1];
+
+            // For torus topologies with 1x1 or 1xA shapes, skip self-connections in the 1D direction (X direction)
+            bool is_torus_x = has_flag(fabric_type, FabricType::TORUS_X);
+            bool is_self_connection = (fabric_chip_id == src_chip_id);
+            bool is_x_direction = (direction == RoutingDirection::E || direction == RoutingDirection::W);
+
+            if (is_1d_topology && is_torus_x && is_self_connection && is_x_direction) {
+                continue;  // Skip self-connections in X direction for 1D torus topologies
+            }
+
             valid_connections.insert(
                 {fabric_chip_id,
                  RouterEdge{

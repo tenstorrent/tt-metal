@@ -47,6 +47,13 @@ bool requires_more_connectivity(FabricType requested_type, FabricType available_
         return false;
     }
 
+    // Special case: 1x1 topologies allow any torus type since there's only one chip
+    // Wrap-around connections don't matter for single-chip topologies
+    bool is_1x1 = (mesh_shape[0] == 1 && mesh_shape[1] == 1);
+    if (is_1x1) {
+        return false;
+    }
+
     // Check if available topology can satisfy the requested topology
     if (available_type == FabricType::MESH) {
         // Special case: 2-element dimensions make torus wrap-around equivalent to mesh neighbor connections
