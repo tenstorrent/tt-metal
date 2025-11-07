@@ -485,8 +485,8 @@ class TransformerBlock:
             # Metric.MAX_ABS_ERROR: 2e-1,
             Metric.PCC: 0.99,
         },
-        enabled=False,
-        return_reference_output=False,
+        enabled=True,
+        return_reference_output=True,
         raise_exceptions=True,
     )
     def __call__(
@@ -616,7 +616,7 @@ class QwenModel:
             # Metric.MEAN_ABS_ERROR: 1e-2,
             Metric.PCC: 0.90,
         },
-        enabled=True,
+        enabled=False,
         return_reference_output=True,
     )
     def forward(self, tokens: torch.Tensor, start_pos: int = 0):  # [batch, seq_len]
