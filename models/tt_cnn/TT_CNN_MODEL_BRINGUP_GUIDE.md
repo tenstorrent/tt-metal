@@ -314,7 +314,7 @@ class TtUNetEncoder:
 
 ### Handling Skip Connections and Concatenation
 
-For architectures with skip connections (ResNet, UNet, etc.), you'll need to:
+For architectures with skip connections (ResNet, UNet, etc.), you may need to:
 
 1. **Store skip connections in DRAM** to free L1 memory:
    ```python
@@ -334,7 +334,7 @@ For architectures with skip connections (ResNet, UNet, etc.), you'll need to:
 
 This is a common pattern for any architecture with residual connections or feature fusion.
 
-## 6. Complete Integration Example
+## 6. Put it all Together
 
 Here's how everything comes together in the demo:
 
@@ -413,9 +413,14 @@ outputs = pipeline.enqueue(input_tensors).pop_all()
 pipeline.cleanup()
 ```
 
-## 8. Performance Optimization Tips
+## 8. Performance Optimization
+
+### Use sharding everywhere!
+
+Try to avoid going to L1 or DRAM interleaved wherever possible. For example, make sure residuals are sharded before performance channel-wise concatenation. Select sharding configs that will minimize the about of reshards throughout the model.
 
 ### Sliding Window Configuration
+Tuning activation block sizes can make a significant improvement in performance in convolution layers. Experiment with increasing block size as much as possible (without running out of L1) on each convolution layer.
 ```python
 # Tune convolution activation block sizes to improve performance
 sharding_strategy = HeightShardedStrategyConfiguration(
@@ -429,6 +434,7 @@ enable_weights_double_buffer=True,  # Double buffer weights
 ```
 
 ### Data Types
+Lower precision data types can improve performance at the cost of some accuracy. You can experiement with different activation and weight data types to determine the optimial value for each layer.
 ```python
 # Example mixed precision strategy
 encoder1_conv1=Conv2dConfiguration(
@@ -463,32 +469,15 @@ parameters = preprocess_model_parameters(
 
 1. **Memory Errors** (`Out of L1 memory`):
    - Reduce `act_block_h_override` to create smaller shards
-   - Use slice strategies for large layers that don't fit
+   - Use DRAM slicing for large layers that don't fit
    - Move intermediate tensors to DRAM
+   - Use bfloat8_b activations
 
-2. **Shape Mismatches**:
-   - Verify CHW/HWC conversions are in the right places
-   - Check that padding/stride calculations match PyTorch
-   - Ensure skip connection dimensions align for concatenation
-
-3. **Accuracy Issues**:
-   - Start with all bfloat16 to establish baseline
-   - Compare intermediate outputs with PyTorch using `ttnn.to_torch()`
-   - Check batch norm folding is correct
-   - Verify weight preprocessing matches layer order
+2. **Accuracy Issues**:
+   - Rule out correctness issues using (comparison model)[../../tech_reports/ttnn/comparison-mode.md] or unit tests
+   - Start with all activations in bfloat16 to establish baseline
 
 4. **Performance Issues**:
    - Use the Pipeline API with tracing enabled
    - Enable double buffering for weights and activations
    - Profile with `ttnn.DumpDeviceProfiler()` to identify bottlenecks
-
-## Summary
-
-The TT-CNN library provides a structured approach for vision model development:
-
-1. **Weight Preprocessing**: Extract and convert PyTorch weights with operations like batch norm folding
-2. **Configuration Building**: Create detailed layer configs that include the preprocessed weights
-3. **Model Construction**: Use TT-CNN builder components with weight-containing configurations
-4. **Pipeline Optimization**: Apply tracing and multi-CQ for maximum performance
-
-The key insight is that weights flow through the pipeline as TT-NN tensors, embedded within layer configurations, ensuring optimal memory placement and format throughout the model lifecycle.
