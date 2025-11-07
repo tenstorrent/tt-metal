@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from ttnn.types import BlackholeComputeKernelConfig
+
 import ttnn
 from models.demos.blackhole.ufld_v2.ttnn.ttnn_resnet_34 import TtnnResnet34
 from models.demos.ufld_v2.ttnn.common import TtnnUFLDV2Conv2D
@@ -53,7 +55,7 @@ class TtnnUFLDv2:
         fea = ttnn.to_memory_config(fea, mem_config)
         fea = ttnn.permute(fea, (0, 1, 3, 2))
         fea = ttnn.reshape(fea, (fea.shape[0], fea.shape[1], 1, fea.shape[2] * fea.shape[3]))
-        compute_config = ttnn.BlackholeComputeKernelConfig(
+        compute_config = BlackholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
