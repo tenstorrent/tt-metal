@@ -214,8 +214,7 @@ void EthernetKernel::process_defines(
     const std::function<void(const std::string& define, const std::string& value)> callback) const {
     KernelImpl::process_defines(callback);
     callback("NOC_INDEX", std::to_string(this->config_.noc));
-    // pass default noc mode as eth does not need it, just for compile to pass
-    callback("NOC_MODE", std::to_string(NOC_MODE::DM_DEDICATED_NOC));
+    callback("NOC_MODE", std::to_string(this->config_.noc_mode));
 }
 
 std::string_view DataMovementKernel::get_compiler_opt_level() const {
