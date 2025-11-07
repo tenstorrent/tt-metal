@@ -5,7 +5,7 @@
 
 namespace ttnn {
 
-std::string to_string(const Tensor& tensor) {
+std::string to_string(const tt::tt_metal::Tensor& tensor) {
     const auto& shape = tensor.logical_shape();
 
     if (!tensor.is_allocated()) {

@@ -715,6 +715,8 @@ Tensor view(const Tensor& input_tensor, const Shape& new_shape) {
 }
 Tensor to_dtype(const Tensor& tensor, DataType dtype) { return tensor_ops::tensor_to_dtype(tensor, dtype); }
 
+std::string to_string(const Tensor& tensor) { return tensor_impl::to_string_wrapper(tensor); }
+
 }  // namespace ops
 
 }  // namespace tt::tt_metal
