@@ -1528,46 +1528,50 @@ FORCE_INLINE void update_telemetry(
     bool rx_progress,
     LocalTelemetryT& local_fabric_telemetry,
     volatile tt_l1_ptr LocalTelemetryT* fabric_telemetry) {
-    // Helper to safely write to volatile BandwidthTelemetry destinations without discarding qualifiers
-    auto store_bandwidth_telemetry = [](volatile BandwidthTelemetry* dst, const BandwidthTelemetry& src) {
-        dst->elapsed_active_cycles.full = src.elapsed_active_cycles.full;
-        dst->elapsed_cycles.full = src.elapsed_cycles.full;
-        dst->num_words_sent = src.num_words_sent;
-        dst->num_packets_sent = src.num_packets_sent;
-    };
+    if constexpr (ENABLE_FABRIC_TELEMETRY) {
+        // Helper to safely write to volatile BandwidthTelemetry destinations without discarding qualifiers
+        auto store_bandwidth_telemetry = [](volatile BandwidthTelemetry* dst, const BandwidthTelemetry& src) {
+            dst->elapsed_active_cycles.full = src.elapsed_active_cycles.full;
+            dst->elapsed_cycles.full = src.elapsed_cycles.full;
+            dst->num_words_sent = src.num_words_sent;
+            dst->num_packets_sent = src.num_packets_sent;
+        };
 
-    bool sender_idle = !any_sender_channels_active(local_sender_channel_free_slots_stream_ids_ordered);
-    bool receiver_idle = (get_ptr_val<to_receiver_packets_sent_streams[0]>() == 0);
-    if constexpr (enable_deadlock_avoidance && !skip_receiver_channel_1_connection) {
-        receiver_idle = receiver_idle && (get_ptr_val<to_receiver_packets_sent_streams[1]>() == 0);
-    }
-
-    {  // heartbeat update
-        volatile RiscTimestampV2* tx_heartbeat_addr = &fabric_telemetry->dynamic_info.erisc[MY_ERISC_ID].tx_heartbeat;
-        volatile RiscTimestampV2* rx_heartbeat_addr = &fabric_telemetry->dynamic_info.erisc[MY_ERISC_ID].rx_heartbeat;
-        if (sender_idle || tx_progress) {
-            local_fabric_telemetry.dynamic_info.erisc[MY_ERISC_ID].tx_heartbeat.full++;
-            tx_heartbeat_addr->full = local_fabric_telemetry.dynamic_info.erisc[MY_ERISC_ID].tx_heartbeat.full;
+        bool sender_idle = !any_sender_channels_active(local_sender_channel_free_slots_stream_ids_ordered);
+        bool receiver_idle = (get_ptr_val<to_receiver_packets_sent_streams[0]>() == 0);
+        if constexpr (enable_deadlock_avoidance && !skip_receiver_channel_1_connection) {
+            receiver_idle = receiver_idle && (get_ptr_val<to_receiver_packets_sent_streams[1]>() == 0);
         }
-        if (receiver_idle || rx_progress) {
-            local_fabric_telemetry.dynamic_info.erisc[MY_ERISC_ID].rx_heartbeat.full++;
-            rx_heartbeat_addr->full = local_fabric_telemetry.dynamic_info.erisc[MY_ERISC_ID].rx_heartbeat.full;
-        }
-    }
 
-    {  // bandwidth update: write the locally-accumulated counters to L1
-        if constexpr (NUM_ACTIVE_ERISCS == 1) {
-            store_bandwidth_telemetry(
-                &fabric_telemetry->dynamic_info.bandwidth_tx, local_fabric_telemetry.dynamic_info.bandwidth_tx);
-            store_bandwidth_telemetry(
-                &fabric_telemetry->dynamic_info.bandwidth_rx, local_fabric_telemetry.dynamic_info.bandwidth_rx);
-        } else {
-            if constexpr (MY_ERISC_ID == 0) {
+        {  // heartbeat update
+            volatile RiscTimestampV2* tx_heartbeat_addr =
+                &fabric_telemetry->dynamic_info.erisc[MY_ERISC_ID].tx_heartbeat;
+            volatile RiscTimestampV2* rx_heartbeat_addr =
+                &fabric_telemetry->dynamic_info.erisc[MY_ERISC_ID].rx_heartbeat;
+            if (sender_idle || tx_progress) {
+                local_fabric_telemetry.dynamic_info.erisc[MY_ERISC_ID].tx_heartbeat.full++;
+                tx_heartbeat_addr->full = local_fabric_telemetry.dynamic_info.erisc[MY_ERISC_ID].tx_heartbeat.full;
+            }
+            if (receiver_idle || rx_progress) {
+                local_fabric_telemetry.dynamic_info.erisc[MY_ERISC_ID].rx_heartbeat.full++;
+                rx_heartbeat_addr->full = local_fabric_telemetry.dynamic_info.erisc[MY_ERISC_ID].rx_heartbeat.full;
+            }
+        }
+
+        {  // bandwidth update
+            if constexpr (NUM_ACTIVE_ERISCS == 1) {
                 store_bandwidth_telemetry(
-                    &fabric_telemetry->dynamic_info.bandwidth_tx, local_fabric_telemetry.dynamic_info.bandwidth_tx);
+                    &fabric_telemetry->dynamic_info.tx_bandwidth, local_fabric_telemetry.dynamic_info.tx_bandwidth);
+                store_bandwidth_telemetry(
+                    &fabric_telemetry->dynamic_info.rx_bandwidth, local_fabric_telemetry.dynamic_info.rx_bandwidth);
             } else {
-                store_bandwidth_telemetry(
-                    &fabric_telemetry->dynamic_info.bandwidth_rx, local_fabric_telemetry.dynamic_info.bandwidth_rx);
+                if constexpr (MY_ERISC_ID == 0) {
+                    store_bandwidth_telemetry(
+                        &fabric_telemetry->dynamic_info.tx_bandwidth, local_fabric_telemetry.dynamic_info.tx_bandwidth);
+                } else {
+                    store_bandwidth_telemetry(
+                        &fabric_telemetry->dynamic_info.rx_bandwidth, local_fabric_telemetry.dynamic_info.rx_bandwidth);
+                }
             }
         }
     }
@@ -1576,31 +1580,35 @@ FORCE_INLINE void update_telemetry(
 template <typename LocalTelemetryT>
 FORCE_INLINE void update_bw_counters(
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header, LocalTelemetryT& local_fabric_telemetry) {
-    if constexpr ((NUM_ACTIVE_ERISCS == 1) || (MY_ERISC_ID == 0)) {
-        size_t packet_bytes = packet_header->get_payload_size_including_header();
-        local_fabric_telemetry.dynamic_info.bandwidth_tx.num_packets_sent++;
-        local_fabric_telemetry.dynamic_info.bandwidth_tx.num_words_sent += (packet_bytes + 3) >> 2;
-    }
-    if constexpr ((NUM_ACTIVE_ERISCS == 1) || (MY_ERISC_ID == 1)) {
-        size_t packet_bytes = packet_header->get_payload_size_including_header();
-        local_fabric_telemetry.dynamic_info.bandwidth_rx.num_packets_sent++;
-        local_fabric_telemetry.dynamic_info.bandwidth_rx.num_words_sent += (packet_bytes + 3) >> 2;
+    if constexpr (ENABLE_FABRIC_TELEMETRY) {
+        if constexpr ((NUM_ACTIVE_ERISCS == 1) || (MY_ERISC_ID == 0)) {
+            size_t packet_bytes = packet_header->get_payload_size_including_header();
+            local_fabric_telemetry.dynamic_info.tx_bandwidth.num_packets_sent++;
+            local_fabric_telemetry.dynamic_info.tx_bandwidth.num_words_sent += (packet_bytes + 3) >> 2;
+        }
+        if constexpr ((NUM_ACTIVE_ERISCS == 1) || (MY_ERISC_ID == 1)) {
+            size_t packet_bytes = packet_header->get_payload_size_including_header();
+            local_fabric_telemetry.dynamic_info.rx_bandwidth.num_packets_sent++;
+            local_fabric_telemetry.dynamic_info.rx_bandwidth.num_words_sent += (packet_bytes + 3) >> 2;
+        }
     }
 }
 
 template <typename LocalTelemetryT>
 FORCE_INLINE void update_bw_cycles(
     uint64_t loop_delta_cycles, bool tx_progress, bool rx_progress, LocalTelemetryT& local_fabric_telemetry) {
-    if constexpr ((NUM_ACTIVE_ERISCS == 1) || (MY_ERISC_ID == 0)) {
-        local_fabric_telemetry.dynamic_info.bandwidth_tx.elapsed_cycles.full += loop_delta_cycles;
-        if (tx_progress) {
-            local_fabric_telemetry.dynamic_info.bandwidth_tx.elapsed_active_cycles.full += loop_delta_cycles;
+    if constexpr (ENABLE_FABRIC_TELEMETRY) {
+        if constexpr ((NUM_ACTIVE_ERISCS == 1) || (MY_ERISC_ID == 0)) {
+            local_fabric_telemetry.dynamic_info.tx_bandwidth.elapsed_cycles.full += loop_delta_cycles;
+            if (tx_progress) {
+                local_fabric_telemetry.dynamic_info.tx_bandwidth.elapsed_active_cycles.full += loop_delta_cycles;
+            }
         }
-    }
-    if constexpr ((NUM_ACTIVE_ERISCS == 1) || (MY_ERISC_ID == 1)) {
-        local_fabric_telemetry.dynamic_info.bandwidth_rx.elapsed_cycles.full += loop_delta_cycles;
-        if (rx_progress) {
-            local_fabric_telemetry.dynamic_info.bandwidth_rx.elapsed_active_cycles.full += loop_delta_cycles;
+        if constexpr ((NUM_ACTIVE_ERISCS == 1) || (MY_ERISC_ID == 1)) {
+            local_fabric_telemetry.dynamic_info.rx_bandwidth.elapsed_cycles.full += loop_delta_cycles;
+            if (rx_progress) {
+                local_fabric_telemetry.dynamic_info.rx_bandwidth.elapsed_active_cycles.full += loop_delta_cycles;
+            }
         }
     }
 }

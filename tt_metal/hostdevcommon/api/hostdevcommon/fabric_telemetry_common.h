@@ -84,8 +84,8 @@ struct DynamicInfo {
     };
 
     // Per-core shared bandwidth counters
-    BandwidthTelemetry bandwidth_tx;
-    BandwidthTelemetry bandwidth_rx;
+    BandwidthTelemetry tx_bandwidth;
+    BandwidthTelemetry rx_bandwidth;
     // Per-ERISC dynamic entries
     EriscDynamicEntry erisc[NUM_ERISCS];
 };
