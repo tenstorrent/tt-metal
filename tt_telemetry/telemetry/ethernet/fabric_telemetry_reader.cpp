@@ -60,10 +60,10 @@ void FabricTelemetryReader::update_telemetry(
         // Update only the appropriate object based on architecture
         switch (cluster->get_cluster_description()->get_arch()) {
         case tt::ARCH::WORMHOLE_B0:
-            cached_fabric_telemetry_ = read_from_device<FabricTelemetry<1>>(cluster, chip_id_, ethernet_core_, fabric_telemetry_addr_);
+            cached_fabric_telemetry_ = read_from_device<FabricTelemetry<FabricArch::WORMHOLE_B0>>(cluster, chip_id_, ethernet_core_, fabric_telemetry_addr_);
             break;
         case tt::ARCH::BLACKHOLE:
-            cached_fabric_telemetry_ = read_from_device<FabricTelemetry<2>>(cluster, chip_id_, ethernet_core_, fabric_telemetry_addr_);
+            cached_fabric_telemetry_ = read_from_device<FabricTelemetry<FabricArch::BLACKHOLE>>(cluster, chip_id_, ethernet_core_, fabric_telemetry_addr_);
             break;
         default:
             TT_FATAL(false, "Unknown architecture: {}", cluster->get_cluster_description()->get_arch());

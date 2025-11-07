@@ -173,9 +173,49 @@ private:
     std::shared_ptr<FabricTelemetryReader> telemetry_reader_;
 };
 
-class FabricWordsSentMetric: public UIntMetric {
+class FabricTxWordsMetric: public UIntMetric {
 public:
-    FabricWordsSentMetric(
+    FabricTxWordsMetric(
+        tt::tt_metal::TrayID tray_id,
+        tt::tt_metal::ASICLocation asic_location,
+        uint32_t channel,
+        std::shared_ptr<FabricTelemetryReader> telemetry_reader);
+
+    const std::vector<std::string> telemetry_path() const override;
+    void update(
+        const std::unique_ptr<tt::umd::Cluster>& cluster,
+        std::chrono::steady_clock::time_point start_of_update_cycle) override;
+
+private:
+    tt::tt_metal::TrayID tray_id_;
+    tt::tt_metal::ASICLocation asic_location_;
+    uint32_t channel_;
+    std::shared_ptr<FabricTelemetryReader> telemetry_reader_;
+};
+
+class FabricTxPacketsMetric: public UIntMetric {
+public:
+    FabricTxPacketsMetric(
+        tt::tt_metal::TrayID tray_id,
+        tt::tt_metal::ASICLocation asic_location,
+        uint32_t channel,
+        std::shared_ptr<FabricTelemetryReader> telemetry_reader);
+
+    const std::vector<std::string> telemetry_path() const override;
+    void update(
+        const std::unique_ptr<tt::umd::Cluster>& cluster,
+        std::chrono::steady_clock::time_point start_of_update_cycle) override;
+
+private:
+    tt::tt_metal::TrayID tray_id_;
+    tt::tt_metal::ASICLocation asic_location_;
+    uint32_t channel_;
+    std::shared_ptr<FabricTelemetryReader> telemetry_reader_;
+};
+
+class FabricHeartbeatTxMetric: public UIntMetric {
+public:
+    FabricHeartbeatTxMetric(
         tt::tt_metal::TrayID tray_id,
         tt::tt_metal::ASICLocation asic_location,
         uint32_t channel,
@@ -195,9 +235,49 @@ private:
     std::shared_ptr<FabricTelemetryReader> telemetry_reader_;
 };
 
-class FabricPacketsSentMetric: public UIntMetric {
+class FabricRxWordsMetric: public UIntMetric {
 public:
-    FabricPacketsSentMetric(
+    FabricRxWordsMetric(
+        tt::tt_metal::TrayID tray_id,
+        tt::tt_metal::ASICLocation asic_location,
+        uint32_t channel,
+        std::shared_ptr<FabricTelemetryReader> telemetry_reader);
+
+    const std::vector<std::string> telemetry_path() const override;
+    void update(
+        const std::unique_ptr<tt::umd::Cluster>& cluster,
+        std::chrono::steady_clock::time_point start_of_update_cycle) override;
+
+private:
+    tt::tt_metal::TrayID tray_id_;
+    tt::tt_metal::ASICLocation asic_location_;
+    uint32_t channel_;
+    std::shared_ptr<FabricTelemetryReader> telemetry_reader_;
+};
+
+class FabricRxPacketsMetric: public UIntMetric {
+public:
+    FabricRxPacketsMetric(
+        tt::tt_metal::TrayID tray_id,
+        tt::tt_metal::ASICLocation asic_location,
+        uint32_t channel,
+        std::shared_ptr<FabricTelemetryReader> telemetry_reader);
+
+    const std::vector<std::string> telemetry_path() const override;
+    void update(
+        const std::unique_ptr<tt::umd::Cluster>& cluster,
+        std::chrono::steady_clock::time_point start_of_update_cycle) override;
+
+private:
+    tt::tt_metal::TrayID tray_id_;
+    tt::tt_metal::ASICLocation asic_location_;
+    uint32_t channel_;
+    std::shared_ptr<FabricTelemetryReader> telemetry_reader_;
+};
+
+class FabricHeartbeatRxMetric: public UIntMetric {
+public:
+    FabricHeartbeatRxMetric(
         tt::tt_metal::TrayID tray_id,
         tt::tt_metal::ASICLocation asic_location,
         uint32_t channel,
@@ -217,9 +297,9 @@ private:
     std::shared_ptr<FabricTelemetryReader> telemetry_reader_;
 };
 
-class FabricHeartbeatMetric: public UIntMetric {
+class FabricRouterStateMetric: public UIntMetric {
 public:
-    FabricHeartbeatMetric(
+    FabricRouterStateMetric(
         tt::tt_metal::TrayID tray_id,
         tt::tt_metal::ASICLocation asic_location,
         uint32_t channel,

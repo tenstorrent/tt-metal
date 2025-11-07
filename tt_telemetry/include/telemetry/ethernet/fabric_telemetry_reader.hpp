@@ -20,7 +20,7 @@
 #include <tt_metal/fabric/physical_system_descriptor.hpp>
 #include <tt_metal/api/tt-metalium/fabric_telemetry.hpp>
 
-using FabricTelemetryContainer =  std::variant<FabricTelemetry<1>, FabricTelemetry<2>>;
+using FabricTelemetryContainer =  std::variant<FabricTelemetry<FabricArch::WORMHOLE_B0>, FabricTelemetry<FabricArch::BLACKHOLE>>;
 
 class FabricTelemetryReader {
 public:
