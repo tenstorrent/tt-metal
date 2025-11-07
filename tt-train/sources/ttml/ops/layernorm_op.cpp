@@ -85,7 +85,6 @@ autograd::TensorPtr layernorm(
         &autograd::ctx().get_device(),
         tensor->get_value().memory_config());
     auto rstd = ttnn::empty_like(mean);
-    auto output = ttnn::empty_like(tensor->get_value());
 
     auto out_tensors =
         ttml::metal::layernorm_fw(tensor->get_value(), gamma->get_value(), beta->get_value(), 1e-6F, true);
