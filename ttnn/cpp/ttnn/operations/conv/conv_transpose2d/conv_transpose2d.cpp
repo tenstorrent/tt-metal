@@ -209,8 +209,12 @@ Result conv_transpose2d(
         kernel_size[0],
         kernel_size[1],
         output_width,
+        conv_out_memory_config.shard_spec().value().grid.num_cores(),
         get_fp32_dest_acc_en(compute_config),
-        conv_config.full_inner_dim);
+        conv_config.full_inner_dim,
+        device->arch(),
+        conv_config.enable_activation_reuse,
+        conv_config.force_subblock_1x1_wormhole);
 
     bool weight_is_on_device = tt::tt_metal::is_device_tensor(weight_tensor);
     ttnn::Tensor weight_tensor_on_device = weight_tensor;

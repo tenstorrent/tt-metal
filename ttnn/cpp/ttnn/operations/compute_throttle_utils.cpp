@@ -14,20 +14,13 @@ namespace compute_throttle_utils {
 
 void add_stagger_defines_if_needed(
     const tt::ARCH arch, const int num_cores, std::map<std::string, std::string>& mm_kernel_defines) {
-    // Empirically deduced di/dt problems appear for matmuls using more than 48
-    // cores; when there is 48 cores or less, we never enable stagger since the
-    // delay impacts op performance
-    constexpr uint32_t WH_B0_MM_MAX_CORES_NO_STAGGER = 48;
-    // TODO: determine min core threshold for throttle to be needed on BH
-    constexpr uint32_t BH_MM_MAX_CORES_NO_STAGGER = 0;
-
     // Apply stagger delay on Wormhole B0 on odd rows, so that only half of cores start doing work at once.
     // This is done to mitigate di/dt issues, in case the environment var is set.
     // See issue #9857.
     const char* stagger_type = std::getenv("TT_MM_STAGGER_TYPE");
     const char* stagger_value = std::getenv("TT_MM_STAGGER_VALUE");
-    if (stagger_type && ((arch == tt::ARCH::WORMHOLE_B0 && num_cores > WH_B0_MM_MAX_CORES_NO_STAGGER) ||
-                         (arch == tt::ARCH::BLACKHOLE && num_cores > BH_MM_MAX_CORES_NO_STAGGER))) {
+    if (stagger_type && ((arch == tt::ARCH::WORMHOLE_B0 && num_cores > WH_B0_MM_MAX_CORES_NO_THROTTLE_OR_STAGGER) ||
+                         (arch == tt::ARCH::BLACKHOLE && num_cores > BH_MM_MAX_CORES_NO_THROTTLE_OR_STAGGER))) {
         // TODO check range for stagger_type
         mm_kernel_defines["MM_STAGGER_TYPE"] = stagger_type;
 
@@ -43,13 +36,15 @@ void add_stagger_defines_if_needed(
 }
 
 void throttle_mm_perf(
-    tt::ARCH arch, int num_cores, std::map<std::string, std::string>& mm_kernel_defines, ThrottleLevel throttle_level) {
-    // Empirically deduced di/dt problems appear for OPs calling matmul using more than 48 cores on WH_B0
-    constexpr uint32_t WH_B0_MM_MAX_CORES_NO_THROTTLE = 48;
-    // TODO: determine min core threshold for throttle to be needed on BH
-    constexpr uint32_t BH_MM_MAX_CORES_NO_THROTTLE = 0;
-    const bool mm_throttle_needed = (arch == tt::ARCH::WORMHOLE_B0 && num_cores > WH_B0_MM_MAX_CORES_NO_THROTTLE) ||
-                                    (arch == tt::ARCH::BLACKHOLE && num_cores > BH_MM_MAX_CORES_NO_THROTTLE);
+    tt::ARCH arch,
+    int num_cores,
+    std::map<std::string, std::string>& mm_kernel_defines,
+    uint32_t out_subblock_h_ntiles,
+    uint32_t out_subblock_w_ntiles,
+    ThrottleLevel throttle_level) {
+    const bool mm_throttle_needed =
+        (arch == tt::ARCH::WORMHOLE_B0 && num_cores > WH_B0_MM_MAX_CORES_NO_THROTTLE_OR_STAGGER) ||
+        (arch == tt::ARCH::BLACKHOLE && num_cores > BH_MM_MAX_CORES_NO_THROTTLE_OR_STAGGER);
 
     if (!mm_throttle_needed) {
         return;
@@ -73,6 +68,10 @@ void throttle_mm_perf(
     }
 
     mm_kernel_defines["MM_THROTTLE"] = std::to_string(uint_throttle_level);
+
+    if (uint_throttle_level != 0 && (out_subblock_h_ntiles == 1 && out_subblock_w_ntiles == 1)) {
+        log_warning(tt::LogOp, "Throttle matmul perf enabled for out_subblock_h == 1 and out_subblock_w == 1");
+    }
 
     if (uint_throttle_level == 5) {
         log_info(tt::LogOp, "Throttle matmul perf to max 33%");

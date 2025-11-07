@@ -25,6 +25,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/compute_throttle_utils.hpp"
 #include "ttnn/operations/data_movement/move/move.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/types.hpp"
@@ -366,9 +367,12 @@ Conv2dBlockConfig determine_per_core_conv_block_config(
     uint32_t window_h,
     uint32_t window_w,
     uint32_t output_width,
+    uint32_t num_compute_cores,
     bool fp32_accum,
     bool full_inner_dim,
-    bool enable_activation_reuse) {
+    tt::ARCH arch,
+    bool enable_activation_reuse,
+    bool force_subblock_1x1_wormhole) {
     if (act_block_h_override > 0) {
         TT_ASSERT(
             act_block_h_override % 32 == 0,
@@ -433,9 +437,21 @@ Conv2dBlockConfig determine_per_core_conv_block_config(
 
     TT_ASSERT(act_block_w % tt::constants::TILE_HEIGHT == 0);
     uint32_t act_block_w_ntiles = act_block_w / tt::constants::TILE_HEIGHT;
+
     uint32_t weight_block_w_ntiles = conv_op_parallel_config.per_core_out_matrix_width_ntile;
-    auto [out_subblock_h_ntiles, out_subblock_w_ntiles] =
-        determine_largest_subblock_size(act_block_h_ntiles, weight_block_w_ntiles, fp32_accum);
+    uint32_t out_subblock_h_ntiles = 1;
+    uint32_t out_subblock_w_ntiles = 1;
+    if (force_subblock_1x1_wormhole == true && arch == tt::ARCH::WORMHOLE_B0 &&
+        num_compute_cores > compute_throttle_utils::WH_B0_MM_MAX_CORES_NO_THROTTLE_OR_STAGGER) {
+        log_debug(
+            tt::LogOp,
+            "Using 1x1 subblock due to force_subblock flag being set and num_compute_cores = {}",
+            num_compute_cores);
+    } else {
+        std::tie(out_subblock_h_ntiles, out_subblock_w_ntiles) =
+            determine_largest_subblock_size(act_block_h_ntiles, weight_block_w_ntiles, fp32_accum);
+    }
+
     return {
         .act_block_h_ntiles = act_block_h_ntiles,
         .act_block_w_ntiles = act_block_w_ntiles,
@@ -1088,9 +1104,12 @@ std::tuple<Conv2dParallelizationConfig, Conv2dBlockConfig, MemoryConfig> get_con
         kernel_size[0],
         kernel_size[1],
         output_width,
+        conv_out_memory_config.shard_spec().value().grid.num_cores(),
         get_fp32_dest_acc_en(compute_config),
         conv_config.full_inner_dim,
-        conv_config.enable_activation_reuse);
+        get_arch_from_compute_config(compute_config),
+        conv_config.enable_activation_reuse,
+        conv_config.force_subblock_1x1_wormhole);
     return {opt_conv_op_parallel_config, opt_conv_op_block_config, conv_out_memory_config};
 }
 

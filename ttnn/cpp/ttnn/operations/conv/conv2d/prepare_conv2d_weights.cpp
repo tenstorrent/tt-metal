@@ -1052,9 +1052,7 @@ static Conv2dBlockConfig get_opt_block_config(
                  get_num_cores_channels_from_parallel_config(output_parallel_config) * tt::constants::TILE_WIDTH)}),
         output_parallel_config,
         tt::constants::TILE_HEIGHT);
-    ParallelConfig largest_parallel_config = output_parallel_config.grid.num_cores() > parallel_config.grid.num_cores()
-                                                 ? output_parallel_config
-                                                 : parallel_config;
+
     Conv2dParallelizationConfig opt_conv_op_parallel_config =
         determine_conv_op_parallel_config_from_conv_output_mem_config(
             conv_out_memory_config,
@@ -1078,9 +1076,12 @@ static Conv2dBlockConfig get_opt_block_config(
         kernel_size[0],
         kernel_size[1],
         output_width,
+        conv_out_memory_config.shard_spec().value().grid.num_cores(),
         get_fp32_dest_acc_en(compute_config),
         conv_config.full_inner_dim,
-        conv_config.enable_activation_reuse);
+        device->arch(),
+        conv_config.enable_activation_reuse,
+        conv_config.force_subblock_1x1_wormhole);
 }
 
 static uint32_t calculate_out_channels_padded(uint32_t out_channels, const ParallelConfig& output_parallel_config) {

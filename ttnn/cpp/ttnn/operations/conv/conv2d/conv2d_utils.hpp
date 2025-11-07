@@ -121,9 +121,12 @@ Conv2dBlockConfig determine_per_core_conv_block_config(
     uint32_t window_h,
     uint32_t window_w,
     uint32_t output_width,
+    uint32_t num_compute_cores,
     bool fp32_accum,
     bool full_inner_dim,
-    bool enable_activation_reuse = false);
+    tt::ARCH arch,
+    bool enable_activation_reuse = false,
+    bool force_subblock_1x1_wormhole = false);
 
 std::tuple<Conv2dParallelizationConfig, Conv2dBlockConfig, MemoryConfig> get_conv_configs(
     const Conv2dConfig& conv_config,

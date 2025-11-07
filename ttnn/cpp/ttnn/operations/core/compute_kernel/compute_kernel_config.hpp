@@ -31,9 +31,18 @@ struct WormholeComputeKernelConfig {
         ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE;
 };
 
-using BlackholeComputeKernelConfig = WormholeComputeKernelConfig;
+struct BlackholeComputeKernelConfig {
+    MathFidelity math_fidelity = MathFidelity::LoFi;
+    bool math_approx_mode = true;
+    bool fp32_dest_acc_en = false;
+    bool packer_l1_acc = false;
+    bool dst_full_sync_en = false;
+    ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level =
+        ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE;
+};
 
-using DeviceComputeKernelConfig = std::variant<GrayskullComputeKernelConfig, WormholeComputeKernelConfig>;
+using DeviceComputeKernelConfig =
+    std::variant<GrayskullComputeKernelConfig, WormholeComputeKernelConfig, BlackholeComputeKernelConfig>;
 
 DeviceComputeKernelConfig init_device_compute_kernel_config(
     tt::ARCH arch,

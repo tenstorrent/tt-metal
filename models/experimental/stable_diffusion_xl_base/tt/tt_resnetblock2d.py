@@ -260,6 +260,9 @@ class TtResnetBlock2D(LightweightModule):
             self.tt_conv1_weights = tt_conv1_weights
             self.tt_conv1_bias = tt_conv1_bias
 
+        #        ttnn.synchronize_device(self.device)
+        #        print("Conv1 done")
+
         # ToDo: move to implace version or even better fuse iwth conv2d.
         # Currently both optinos have pcc issues.
         temb = ttnn.silu(temb)

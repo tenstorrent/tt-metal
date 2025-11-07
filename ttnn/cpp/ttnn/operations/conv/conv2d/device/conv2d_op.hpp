@@ -118,6 +118,11 @@ struct Conv2dConfig {
     // If not Height sharded and activation block size height is not greater than 32, then this is ignored.
     // If not set, then split reader heuristic is used to determine if it should be enabled.
     std::optional<bool> force_split_reader = std::nullopt;
+
+    // Force subblock 1x1 overrides matmul subblock size selection and forces it to be 1x1, if the convolution
+    // computation is on wormhole and is using more than 48 cores. This is an alternative to using throttle levels on
+    // convolutions, as it can have better performance compared to using throttle levels, and is easier to control.
+    bool force_subblock_1x1_wormhole = false;
     // ===============================================================
 
     static constexpr auto attribute_names = std::make_tuple(
@@ -140,7 +145,8 @@ struct Conv2dConfig {
         "in_place",
         "enable_kernel_stride_folding",
         "enable_activation_reuse",
-        "force_split_reader");
+        "force_split_reader",
+        "force_subblock_1x1_wormhole");
     auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->weights_dtype),
@@ -162,7 +168,8 @@ struct Conv2dConfig {
             std::cref(this->in_place),
             std::cref(this->enable_kernel_stride_folding),
             std::cref(this->enable_activation_reuse),
-            std::cref(this->force_split_reader));
+            std::cref(this->force_split_reader),
+            std::cref(this->force_subblock_1x1_wormhole));
     }
 };
 
