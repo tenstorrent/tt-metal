@@ -27,7 +27,6 @@ void kernel_main() {
     uint32_t in0_valid_semaphore_addr = get_semaphore(get_compile_time_arg_val(16));
     constexpr uint32_t is_output_writer = get_compile_time_arg_val(17);
     constexpr uint32_t is_injector_core = get_compile_time_arg_val(18);
-    constexpr bool fuse_op = (bool)get_compile_time_arg_val(19);
 
     // Load input/output addresses and range parameters
     uint32_t argidx = 0;
@@ -46,7 +45,7 @@ void kernel_main() {
     const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
 
     // Tensor accessor for input tensor
-    constexpr auto in0_args = TensorAccessorArgs<20>();
+    constexpr auto in0_args = TensorAccessorArgs<19>();
     const auto in0_reader = TensorAccessor(in0_args, in0_addr, in0_tile_size);
     constexpr auto out_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
     const auto out_reader = TensorAccessor(out_args, out_addr, out_tile_size);
@@ -68,11 +67,13 @@ void kernel_main() {
     constexpr uint32_t cb_id_in2 = tt::CBIndex::c_4;
 #endif
 
+#ifdef FUSE_AG
     // Receiver for ccl fusing
     MinimalMatmulOpReceiver fused_op_receiver;
-    if constexpr (fuse_op) {
+    if constexpr (is_injector_core) {
         fused_op_receiver = MinimalMatmulOpReceiver(true, argidx, K_num_blocks);
     }
+#endif
 
     volatile tt_l1_ptr uint32_t* in0_valid_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_valid_semaphore_addr);
@@ -96,6 +97,10 @@ void kernel_main() {
      * reuse.
      */
 
+    bool k_forward = true;
+    bool n_forward = true;
+    bool reuse_block = false;
+
     uint32_t defer_write_m_tile = 0;
     uint32_t defer_write_m_tile_end = 0;
     uint32_t defer_write_n_tile = 0;
@@ -108,8 +113,11 @@ void kernel_main() {
         uint32_t current_M_block_tiles = m_tile_end - m_tile;
         uint32_t current_block_bytes = current_M_block_tiles * K_block_tiles * in0_tile_size;
 
+        // When striding M block, in0 gets no reuse
+        reuse_block = false;
         for (uint32_t n_block_iter = 0; n_block_iter < N_blocks_per_core; n_block_iter++) {
-            uint32_t n_tile = N_start_tile + n_block_iter * N_block_tiles;
+            uint32_t n_tile = n_forward ? N_start_tile + n_block_iter * N_block_tiles
+                                        : N_start_tile + (N_blocks_per_core - 1 - n_block_iter) * N_block_tiles;
             uint32_t n_tile_end = std::min(n_tile + N_block_tiles, N_end_tile);
 
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
@@ -130,14 +138,21 @@ void kernel_main() {
                     }
                 }
 
-                uint32_t k_block = k_block_iter;
+                if (reuse_block && k_block_iter == 0) {
+                    // We strided an N block and this is the first k block, so we get reuse and do not need to read in0
+                    reuse_block = false;
+                    continue;
+                }
+                uint32_t k_block = k_forward ? k_block_iter : (K_num_blocks - 1) - k_block_iter;
                 cb_reserve_back(cb_id_in0, in0_block_num_tiles);
 
                 uint32_t in0_start_address = get_write_ptr(cb_id_in0);
                 if constexpr (is_injector_core) {
-                    if constexpr (fuse_op) {
+#ifdef FUSE_AG
+                    if constexpr (is_injector_core) {
                         k_block = fused_op_receiver.compute_actual_k_block_iter(k_block_iter);
                     }
+#endif
                     read_in0_block_sync<M_block_tiles, K_block_tiles>(
                         in0_reader,
                         in0_shape,
@@ -192,6 +207,12 @@ void kernel_main() {
             }
 #endif
 
+#ifndef FUSE_AG
+            k_forward = !k_forward;
+            // We get reuse on in0 when striding N block
+            reuse_block = true;
+#endif
+
             defer_write_m_tile = m_tile;
             defer_write_m_tile_end = m_tile_end;
             defer_write_n_tile = n_tile;
@@ -210,6 +231,9 @@ void kernel_main() {
                 }
             }
         }
+#ifndef FUSE_AG
+        n_forward = !n_forward;
+#endif
     }
     noc_async_write_barrier();
     noc_async_atomic_barrier();

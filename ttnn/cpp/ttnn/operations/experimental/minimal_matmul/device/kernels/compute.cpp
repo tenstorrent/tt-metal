@@ -153,6 +153,11 @@ void MAIN {
     constexpr uint32_t M_num_subblocks = M_block_tiles / subblock_h;
     constexpr uint32_t N_num_subblocks = N_block_tiles / subblock_w;
 
+    bool n_forward = true;
+
+    bool reuse_in0_block = false;
+    bool reuse_in1_block = false;
+
     uint32_t current_M_block_tiles = M_block_tiles;
     uint32_t current_N_block_tiles = N_block_tiles;
     uint32_t current_subblock_h = subblock_h;
@@ -165,7 +170,8 @@ void MAIN {
         current_subblock_h = std::min(current_M_block_tiles, subblock_h);
 
         for (uint32_t n_block_iter = 0; n_block_iter < N_blocks_per_core; n_block_iter++) {
-            uint32_t n_tile = N_start_tile + n_block_iter * N_block_tiles;
+            uint32_t n_tile = n_forward ? N_start_tile + n_block_iter * N_block_tiles
+                                        : N_start_tile + (N_blocks_per_core - 1 - n_block_iter) * N_block_tiles;
             uint32_t n_tile_end = std::min(n_tile + N_block_tiles, N_end_tile);
             current_N_block_tiles = n_tile_end - n_tile;
             current_subblock_w = std::min(current_N_block_tiles, subblock_w);
@@ -196,8 +202,30 @@ void MAIN {
                     current_subblock_h,
                     current_subblock_w);
 
-                cb_pop_front(in0_cb, in0_block_num_tiles);
-                cb_pop_front(in1_cb, in1_block_num_tiles);
+#ifndef FUSE_AG
+                if (k_block == K_num_blocks - 1) {
+                    /**
+                     * On next iteration we're going to get some reuse on in0 or in1
+                     * Therefore you should not pop one of them
+                     *
+                     */
+                    if (n_block_iter < N_blocks_per_core - 1) {
+                        // going to stride on N, so reuse in0
+                        reuse_in0_block = true;
+                    } else {
+                        // going to stride on M, so reuse in1
+                        reuse_in1_block = true;
+                    }
+                }
+#endif
+                if (!reuse_in0_block) {
+                    cb_pop_front(in0_cb, in0_block_num_tiles);
+                }
+                if (!reuse_in1_block) {
+                    cb_pop_front(in1_cb, in1_block_num_tiles);
+                }
+                reuse_in0_block = false;
+                reuse_in1_block = false;
                 if (k_block == 0) {
                     PACK((llk_pack_reconfig_l1_acc(1)));
                 }
@@ -216,6 +244,9 @@ void MAIN {
 #endif
             cb_pop_front(intermediate_cb, out_block_num_tiles);
         }
+#ifndef FUSE_AG
+        n_forward = !n_forward;
+#endif
     }
 }
 }  // namespace NAMESPACE
