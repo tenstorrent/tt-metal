@@ -20,7 +20,7 @@ set(TYPES
     kernel
 )
 
-set(TLS_ARCHS quasar)
+set(TLS_ARCH_CPUS quasar:tt-qsr32:tt-qsr64)
 # name:number:cpu
 set(TLS_PROCS
     trisc:4:tt-qsr32
@@ -243,7 +243,9 @@ foreach(ARCH IN LISTS ARCHS)
 endforeach()
 
 # TLS-style
-foreach(ARCH IN LISTS TLS_ARCHS)
+foreach(ARCH_CPU IN LISTS TLS_ARCH_CPUS)
+    string(REPLACE ":" ";" ARCH_CPU_LIST ${ARCH_CPU})
+    list(GET ARCH_CPU_LIST 0 ARCH)
     set(HW_INCLUDE "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/tt-2xx/${ARCH}")
     set(HW_OUTPUT_DIR "runtime/hw/toolchain/${ARCH}")
     string(TOUPPER ${ARCH} ARCH_DEFINE)
@@ -282,7 +284,8 @@ foreach(ARCH IN LISTS TLS_ARCHS)
                         ${CMAKE_COMMAND} -E make_directory ${PROJECT_SOURCE_DIR}/${HW_OUTPUT_DIR}
                     COMMAND
                         ${CMAKE_CXX_COMPILER} -DTYPE_${TYPE_DEFINE} -DCOMPILE_FOR_${PROC_DEFINE} -DARCH_${ARCH_DEFINE}
-                        -I${HW_INCLUDE} -E -P -x c -o ${PROJECT_SOURCE_DIR}/${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE}
+                        -DOBJECTS="${CPU}-crt0-tls.o" -I${HW_INCLUDE} -E -P -x c -o
+                        ${PROJECT_SOURCE_DIR}/${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE}
                         ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/main-tls.ld
                     DEPENDS
                         ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/main-tls.ld
@@ -326,17 +329,13 @@ set(GPP_FLAGS_common
 )
 
 # We are going to build 5 or 6 object files foreach ARCH
+# old-style
 foreach(ARCH IN LISTS ARCHS)
-    if(ARCH STREQUAL "quasar")
-        set(HW_VERSION_PATH "tt-2xx")
-    else()
-        set(HW_VERSION_PATH "tt-1xx")
-    endif()
     # These are the set of object files we are to build foreach ARCH
     set(HW_OBJ_SRC_PAIRS
         "substitutes.o:tt_metal/hw/toolchain/substitutes.cpp"
         "tdma_xmov.o:tt_metal/hw/firmware/src/tt-1xx/tdma_xmov.c"
-        "noc.o:tt_metal/hw/firmware/src/${HW_VERSION_PATH}/${ARCH}/noc.c"
+        "noc.o:tt_metal/hw/firmware/src/tt-1xx/${ARCH}/noc.c"
         "tmu-crt0.o:tt_metal/hw/toolchain/tmu-crt0.S"
     )
     set(ARCH_ALIAS ${ARCH})
@@ -350,13 +349,6 @@ foreach(ARCH IN LISTS ARCHS)
             "wh-iram-trampoline.o:tt_metal/hw/toolchain/wh-iram-trampoline.S"
         )
     endif()
-
-    # TODO quasar should use crt0.S, missing some header file
-    # if(ARCH STREQUAL "quasar")
-    #     list(APPEND HW_OBJ_SRC_PAIRS "tmu-crt0.o:tt_metal/hw/firmware/src/${HW_VERSION_PATH}/${ARCH}/crt0.S")
-    # else()
-    #     list(APPEND HW_OBJ_SRC_PAIRS "tmu-crt0.o:tt_metal/hw/toolchain/tmu-crt0.S")
-    # endif()
 
     # Set GPP_FLAGS based on ARCH
     set(GPP_FLAGS
@@ -379,17 +371,16 @@ foreach(ARCH IN LISTS ARCHS)
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/debug
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/firmware/src/tt-1xx
-        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/firmware/src/tt-2xx
     )
 
     # Architecture specific include paths
     list(
         APPEND
         GPP_INCLUDES
-        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${HW_VERSION_PATH}/${ARCH}
-        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${HW_VERSION_PATH}/${ARCH}/${ARCH_ALIAS}_defines
-        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${HW_VERSION_PATH}/${ARCH}/noc
-        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${HW_VERSION_PATH}/${ARCH}/overlay
+        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/tt-1xx/${ARCH}
+        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/tt-1xx/${ARCH}/${ARCH_ALIAS}_defines
+        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/tt-1xx/${ARCH}/noc
+        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/tt-1xx/${ARCH}/overlay
         -I${PROJECT_SOURCE_DIR}/tt_metal/third_party/umd/device/${ARCH}
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/ckernels/${ARCH_ALIAS}/metal/common
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/ckernels/${ARCH_ALIAS}/metal/llk_io
@@ -408,7 +399,7 @@ foreach(ARCH IN LISTS ARCHS)
             COMMAND
                 ${CMAKE_COMMAND} -E make_directory ${HW_OBJ_DIR}
             COMMAND
-                ${GPP_CMD} ${GPP_FLAGS} ${GPP_DEFINES} ${GPP_INCLUDES} -c -o ${HW_OBJ_DIR}/${HWOBJ}
+                ${GPP_CMD} ${GPP_FLAGS} ${GPP_DEFINES} ${GPP_INCLUDES} -c -o ${HW_OUTPUT_FILE}
                 ${PROJECT_SOURCE_DIR}/${HWSRC}
             DEPENDS
                 ${PROJECT_SOURCE_DIR}/${HWSRC}
@@ -418,6 +409,66 @@ foreach(ARCH IN LISTS ARCHS)
             VERBATIM
         )
         list(APPEND OBJ_FILES ${HW_OUTPUT_FILE})
+    endforeach()
+endforeach()
+
+# TLS-style
+foreach(ARCH_CPU IN LISTS TLS_ARCH_CPUS)
+    string(REPLACE ":" ";" CPUS ${ARCH_CPU})
+    list(GET CPUS 0 ARCH)
+    list(POP_FRONT CPUS)
+
+    # TODO:Review this list
+    set(CPP_INCLUDES
+        -I.
+        -I..
+        -I${PROJECT_SOURCE_DIR}
+        -I${PROJECT_SOURCE_DIR}/tt_metal
+        -I${PROJECT_SOURCE_DIR}/tt_metal/api
+        -I${PROJECT_SOURCE_DIR}/tt_metal/api/tt-metalium
+        -I${PROJECT_SOURCE_DIR}/tt_metal/include
+        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc
+        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/debug
+        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/firmware/src/tt-2xx
+        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/tt-2xx/${ARCH}
+        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/ckernels/${ARCH}/metal/common
+        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/ckernels/${ARCH}/metal/llk_io
+    )
+    set(HW_OBJ_DIR ${PROJECT_SOURCE_DIR}/runtime/hw/lib/${ARCH})
+    set(HW_OBJ_SRC_PAIRS
+        "substitutes.o:tt_metal/hw/toolchain/substitutes.cpp"
+        "crt0-tls.o:tt_metal/hw/toolchain/crt0-tls.S"
+    )
+    set(GPP_DEFINES -D${ARCH})
+
+    foreach(HW_PAIR IN LISTS HW_OBJ_SRC_PAIRS)
+        string(REPLACE ":" ";" HW_PAIR_LIST ${HW_PAIR})
+        list(GET HW_PAIR_LIST 0 HWOBJ)
+        list(GET HW_PAIR_LIST 1 HWSRC)
+        foreach(CPU IN LISTS CPUS)
+            set(HW_OBJ_FILE "${CPU}-${HWOBJ}")
+
+            set(GPP_FLAGS
+                -mcpu=${CPU}
+                ${CPP_FLAGS_common}
+            )
+            add_custom_command(
+                OUTPUT
+                    ${HW_OBJ_DIR}/${HW_OBJ_FILE}
+                COMMAND
+                    ${CMAKE_COMMAND} -E make_directory ${HW_OBJ_DIR}
+                COMMAND
+                    ${GPP_CMD} ${GPP_FLAGS} ${GPP_DEFINES} ${GPP_INCLUDES} -c -o ${HW_OBJ_DIR}/${HW_OBJ_FILE}
+                    ${PROJECT_SOURCE_DIR}/${HWSRC}
+                DEPENDS
+                    ${PROJECT_SOURCE_DIR}/${HWSRC}
+                    # If the compiler changes, rebuild
+                    ../sfpi-version
+                COMMENT "Building ${ARCH}:${CPU} hw lib ${HW_OBJ_FILE} from ${HWSRC}"
+                VERBATIM
+            )
+            list(APPEND OBJ_FILES ${HW_OBJ_DIR}/${HW_OBJ_FILE})
+        endforeach()
     endforeach()
 endforeach()
 

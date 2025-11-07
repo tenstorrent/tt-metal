@@ -95,6 +95,10 @@ OUTPUT_ARCH(riscv)
 
 ENTRY(_start)
 
+#if defined(OBJECTS)
+INPUT(OBJECTS)
+#endif
+
 PHDRS {
   attributes 0x70000003;
   IF_KERNEL(firmtext PT_LOAD; firmtextdel 0x60000000;)
