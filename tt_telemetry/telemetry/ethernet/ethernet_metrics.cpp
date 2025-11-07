@@ -21,6 +21,7 @@
 #include <telemetry/ethernet/ethernet_helpers.hpp>
 #include <telemetry/ethernet/fabric_telemetry_reader.hpp>
 #include <topology/topology.hpp>
+#include <tt-metalium/fabric_types.hpp>
 
 /**************************************************************************************************
  Metric Creation
@@ -130,6 +131,8 @@ void create_ethernet_metrics(
             std::make_unique<FabricDeviceIDMetric>(tray_id, asic_location, channel, telemetry_reader));
         string_metrics.push_back(
             std::make_unique<FabricDirectionMetric>(tray_id, asic_location, channel, telemetry_reader));
+        string_metrics.push_back(
+            std::make_unique<FabricConfigMetric>(tray_id, asic_location, channel, telemetry_reader));
         uint_metrics.push_back(
             std::make_unique<FabricTxWordsMetric>(tray_id, asic_location, channel, telemetry_reader));
         uint_metrics.push_back(
@@ -771,6 +774,47 @@ void FabricDirectionMetric::update(
     raw_value_ = new_raw_value;
     if (changed_since_transmission_) {
         value_ = tt::tt_fabric::eth_chan_direction_to_string(static_cast<tt::tt_fabric::eth_chan_directions>(new_raw_value));
+    }
+    set_timestamp_now();
+}
+
+/**************************************************************************************************
+FabricConfigMetric
+
+Fabric configuration from static info.
+**************************************************************************************************/
+
+FabricConfigMetric::FabricConfigMetric(
+    tt::tt_metal::TrayID tray_id,
+    tt::tt_metal::ASICLocation asic_location,
+    uint32_t channel,
+    std::shared_ptr<FabricTelemetryReader> telemetry_reader) :
+    StringMetric(),
+    tray_id_(tray_id),
+    asic_location_(asic_location),
+    channel_(channel),
+    telemetry_reader_(telemetry_reader),
+    raw_value_(0) {
+    value_ = tt::tt_fabric::fabric_config_to_string(static_cast<tt::tt_fabric::FabricConfig>(raw_value_));
+}
+
+const std::vector<std::string> FabricConfigMetric::telemetry_path() const {
+    return endpoint_telemetry_path(tray_id_, asic_location_, channel_, "fabricConfig");
+}
+
+void FabricConfigMetric::update(
+    const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
+    uint32_t new_raw_value = 0;
+    const FabricTelemetryContainer& telemetry = telemetry_reader_->get_fabric_telemetry(cluster, start_of_update_cycle);
+    std::visit([&](auto&& tel) {
+        new_raw_value = static_cast<uint32_t>(tel.static_info.fabric_config);
+    }, telemetry);
+    
+    // Only convert to string if the raw value changed
+    changed_since_transmission_ = new_raw_value != raw_value_;
+    raw_value_ = new_raw_value;
+    if (changed_since_transmission_) {
+        value_ = tt::tt_fabric::fabric_config_to_string(static_cast<tt::tt_fabric::FabricConfig>(new_raw_value));
     }
     set_timestamp_now();
 }
