@@ -76,7 +76,9 @@ jobs:
               ".github/workflows/ttnn-run-sweeps.yaml",
               ".github/workflows/vllm-nightly-tests.yaml",
               ".github/workflows/metal-run-microbenchmarks.yaml",
-              ".github/workflows/apc-nightly-debug.yaml"
+              ".github/workflows/apc-nightly-debug.yaml",
+              ".github/workflows/merge-gate.yaml",
+              ".github/workflows/pr-gate.yaml"
             ]
       - name: Upload workflow data
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 #@v4
