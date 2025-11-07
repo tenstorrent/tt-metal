@@ -38,6 +38,7 @@
 #include "ttnn/operations/experimental/copy/typecast/typecast_nanobind.hpp"
 #include "ttnn/operations/experimental/matmul/attn_matmul/attn_matmul_nanobind.hpp"
 #include "ttnn/operations/experimental/matmul/group_attn_matmul/group_attn_matmul_nanobind.hpp"
+#include "ttnn/operations/experimental/minimal_matmul/minimal_matmul_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/ccl_experimental_nanobind.hpp"
 #include "ttnn/operations/experimental/plusone/plusone_nanobind.hpp"
 #include "ttnn/operations/experimental/dropout/dropout_nanobind.hpp"
@@ -76,8 +77,8 @@ void py_module(nb::module_& mod) {
     transformer::bind_rotary_embedding_llama_fused_qk(mod);
     transformer::bind_rotate_half(mod);
 
-    reduction::detail::bind_argmax_operation(mod);
-    reduction::detail::bind_argmin_operation(mod);
+    // reduction::detail::bind_argmax_operation(mod); // temporarily disabled: header/source not included
+    // reduction::detail::bind_argmin_operation(mod); // temporarily disabled: header/source not included
     reduction::detail::bind_fast_reduce_nc(mod);
 
     ssm::detail::bind_prefix_scan(mod);
@@ -97,6 +98,7 @@ void py_module(nb::module_& mod) {
     matmul::detail::bind_attn_matmul(mod);
     matmul::detail::bind_attn_matmul_from_cache(mod);
     matmul::detail::bind_group_attn_matmul(mod);
+    minimal_matmul::detail::bind_minimal_matmul(mod);
 
     plusone::detail::bind_experimental_plusone_operation(mod);
     dropout::detail::bind_experimental_dropout_operation(mod);

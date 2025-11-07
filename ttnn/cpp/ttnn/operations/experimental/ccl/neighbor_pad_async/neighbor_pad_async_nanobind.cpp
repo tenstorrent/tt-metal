@@ -44,7 +44,7 @@ void bind_neighbor_pad_async_op(nb::module_& mod, const ccl_operation_t& operati
 
 }  // namespace
 
-void py_bind_neighbor_pad_async(nb::module_& mod) {
+void bind_neighbor_pad_async(nb::module_& mod) {
     bind_neighbor_pad_async_op(
         mod,
         ttnn::experimental::neighbor_pad_async,

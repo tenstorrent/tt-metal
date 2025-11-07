@@ -12,7 +12,7 @@
 
 #include "ttnn-nanobind/decorators.hpp"
 
-#include "ttnn/operations/experimental/reduction/argmax/argmax.hpp"
+#include "ttnn/operations/reduction/argmax/argmax.hpp"
 
 namespace ttnn::operations::experimental::reduction::detail {
 
@@ -41,10 +41,10 @@ void bind_argmax_operation(nb::module_& mod) {
                 * :attr:`memory_config`: Memory Config of the output tensor
         )doc";
 
-    using OperationType = decltype(ttnn::experimental::argmax);
+    using OperationType = decltype(ttnn::argmax);
     bind_registered_operation(
         mod,
-        ttnn::experimental::argmax,
+        ttnn::argmax,
         doc,
         ttnn::nanobind_overload_t{
             [](const OperationType& self,
