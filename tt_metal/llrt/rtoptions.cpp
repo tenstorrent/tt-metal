@@ -374,6 +374,17 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             }
             break;
 
+        // TT_METAL_FORCE_JIT_COMPILE
+        // Force JIT compilation even if dependencies are up-to-date.
+        // This overrides the dependency tracking optimization.
+        // Default: false (uses dependency tracking)
+        // Usage: export TT_METAL_FORCE_JIT_COMPILE=1
+        case EnvVarID::TT_METAL_FORCE_JIT_COMPILE:
+            if (value) {
+                this->force_jit_compile = true;
+            }
+            break;
+
         // TT_METAL_FORCE_REINIT
         // Force context reinitialization on each run.
         // Default: false (normal initialization)
