@@ -17,6 +17,7 @@ file(
     concatenate_heads/device/kernels/*
     create_qkv_heads/device/kernels/*
     create_qkv_heads_from_separate_tensors/device/kernels/*
+    fused_distributed_rmsnorm/device/kernels/*
     nlp_concat_heads/device/kernels/*
     nlp_concat_heads_boltz/device/kernels/*
     nlp_concat_heads_decode/device/kernels/*
@@ -85,6 +86,12 @@ target_sources(
         nlp_kv_cache_load_slice/device/nlp_kv_cache_load_slice_device_operation.cpp
         nlp_kv_cache_load_slice/device/nlp_kv_cache_load_slice_program_factory.cpp
         nlp_kv_cache_load_slice/nlp_kv_cache_load_slice.cpp
+        fused_distributed_rmsnorm/rmsnorm_pre_all_gather.cpp
+        fused_distributed_rmsnorm/rmsnorm_post_all_gather.cpp
+        fused_distributed_rmsnorm/device/rmsnorm_pre_all_gather_op.cpp
+        fused_distributed_rmsnorm/device/rmsnorm_post_all_gather_op.cpp
+        fused_distributed_rmsnorm/device/multicore/rmsnorm_pre_all_gather_op_multi_core.cpp
+        fused_distributed_rmsnorm/device/multicore/rmsnorm_post_all_gather_op_multi_core.cpp
         rotary_embedding/device/rotary_embedding_device_operation.cpp
         rotary_embedding/device/rotary_embedding_program_factory.cpp
         rotary_embedding/rotary_embedding.cpp

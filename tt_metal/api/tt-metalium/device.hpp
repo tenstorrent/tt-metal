@@ -66,7 +66,7 @@ public:
     IDevice& operator=(const IDevice& other) = delete;
 
     IDevice(IDevice&& other) = default;
-    IDevice& operator=(IDevice&& other) = default;
+    IDevice& operator=(IDevice&& /*other*/) = default;
 
     virtual tt::ARCH arch() const = 0;
 

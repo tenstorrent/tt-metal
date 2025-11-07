@@ -322,6 +322,9 @@ void write_tensor(
 Tensor set_tensor_id(const Tensor& tensor);
 
 namespace ops {
+Tensor view(
+    const Tensor& input_tensor, const tt::tt_metal::Shape& new_shape, const tt::tt_metal::Shape& new_padded_shape);
+Tensor view(const Tensor& input_tensor, const tt::tt_metal::Shape& new_shape);
 Tensor to_dtype(const Tensor& tensor, DataType dtype);
 }  // namespace ops
 

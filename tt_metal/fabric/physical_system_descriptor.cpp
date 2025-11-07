@@ -263,7 +263,7 @@ void PhysicalSystemDescriptor::run_local_discovery(bool run_live_discovery) {
         // As part of live discovery, we create a new cluster descriptor to query the latest state from UMD.
         // Otherwise, we use the existing cluster descriptor, which may be stale with respect to the state of
         // the hardware.
-        cluster_desc_ = tt::umd::Cluster::create_cluster_descriptor("", {}, umd::IODeviceType::PCIe);
+        cluster_desc_ = tt::umd::Cluster::create_cluster_descriptor();
     }
     const auto& chip_unique_ids = cluster_desc_->get_chip_unique_ids();
     const auto& eth_connections = cluster_desc_->get_ethernet_connections();
@@ -337,6 +337,8 @@ void PhysicalSystemDescriptor::run_local_discovery(bool run_live_discovery) {
     }
 
     system_graph_.host_connectivity_graph[hostname] = {};
+    // Get Ethernet Firmware Version from the driver - Initialize to 0 if not available
+    ethernet_firmware_version_ = cluster_->get_ethernet_firmware_version().value_or(tt::umd::semver_t(0, 0, 0));
 }
 
 void PhysicalSystemDescriptor::run_global_discovery() {
@@ -391,6 +393,20 @@ void PhysicalSystemDescriptor::remove_unresolved_nodes() {
                    asic_descriptors_.find(exit_node.dst_exit_node) == asic_descriptors_.end();
         });
     }
+}
+
+void PhysicalSystemDescriptor::validate_eth_fw_versions(
+    const tt::umd::semver_t& peer_ethernet_firmware_version,
+    const std::string& my_host_name,
+    const std::string& peer_host_name) {
+    TT_FATAL(
+        peer_ethernet_firmware_version == ethernet_firmware_version_,
+        "Ethernet Firmware Versions are expected to be consistent across all nodes in the cluster. Hosts: {} and {} "
+        "have different Ethernet Firmware Versions: {} and {}.",
+        my_host_name,
+        peer_host_name,
+        ethernet_firmware_version_.to_string(),
+        peer_ethernet_firmware_version.to_string());
 }
 
 void PhysicalSystemDescriptor::exchange_metadata(bool issue_gather) {
@@ -449,6 +465,10 @@ void PhysicalSystemDescriptor::exchange_metadata(bool issue_gather) {
                 Rank{rank},
                 Tag{0});
             auto peer_desc = deserialize_physical_system_descriptor_from_bytes(serialized_peer_desc);
+            this->validate_eth_fw_versions(
+                peer_desc.get_ethernet_firmware_version(),
+                asic_descriptors_.begin()->second.host_name,
+                peer_desc.get_asic_descriptors().begin()->second.host_name);
             this->merge(std::move(peer_desc));
         }
     }
@@ -893,19 +913,19 @@ std::string PhysicalSystemDescriptor::get_host_name_for_asic(AsicID asic_id) con
     return asic_descriptors_.at(asic_id).host_name;
 }
 
-UID PhysicalSystemDescriptor::get_u_id(const std::string& hostname) {
+UID PhysicalSystemDescriptor::get_u_id(const std::string& /*hostname*/) {
     TT_THROW("Querying Host UID requires the Cable Spec which is not currently supported.");
 }
 
-RackID PhysicalSystemDescriptor::get_rack_id(const std::string& hostname) {
+RackID PhysicalSystemDescriptor::get_rack_id(const std::string& /*hostname*/) {
     TT_THROW("Querying Host Rack ID requires the Cable Spec which is not currently supported.");
 }
 
-AisleID PhysicalSystemDescriptor::get_aisle_id(const std::string& hostname) {
+AisleID PhysicalSystemDescriptor::get_aisle_id(const std::string& /*hostname*/) {
     TT_THROW("Querying Host Aisle ID requires the Cable Spec which is not currently supported.");
 }
 
-HallID PhysicalSystemDescriptor::get_hall_id(const std::string& hostname) {
+HallID PhysicalSystemDescriptor::get_hall_id(const std::string& /*hostname*/) {
     TT_THROW("Querying Host Hall ID requires the Cable Spec which is not currently supported.");
 }
 

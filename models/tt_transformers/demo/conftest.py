@@ -62,10 +62,18 @@ def pytest_addoption(parser):
         help="Whether to enable tracing",
     )
     parser.addoption(
-        "--disable_trace",
-        action="store_false",
-        dest="enable_trace",
-        help="Whether to disable tracing",
+        "--num_layers",
+        action="store",
+        default=None,
+        type=int,
+        help="Number of layers to use",
+    )
+    parser.addoption(
+        "--mode",
+        action="store",
+        default="full",
+        type=str,
+        help="Mode to use for full model demo tests (values can be 'prefill','decode','full')",
     )
 
 
