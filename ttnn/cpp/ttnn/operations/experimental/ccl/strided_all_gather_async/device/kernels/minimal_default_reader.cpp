@@ -128,8 +128,7 @@ void kernel_main() {
                 input_tensor_Wt,
                 output_tensor_Wt,
                 my_chip_id,
-                false,
-                fuse_op);
+                false);
 
             // Receive this chunk from all other devices
             uint32_t slices_received = 0;
@@ -164,8 +163,7 @@ void kernel_main() {
                         input_tensor_Wt,
                         output_tensor_Wt,
                         actual_sender_chip_id,
-                        true,
-                        fuse_op);
+                        true);
                 }
                 slices_received++;
                 if constexpr (fuse_op) {
