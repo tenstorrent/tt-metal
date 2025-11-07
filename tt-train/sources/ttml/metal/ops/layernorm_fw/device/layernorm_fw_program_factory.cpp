@@ -70,7 +70,8 @@ bool fits_in_l1_check(
     const uint32_t block_size,
     const uint32_t bfloat16_single_tile_size_bytes,
     const uint32_t float32_single_tile_size_bytes,
-    tt::tt_metal::IDevice* device) {
+    tt::tt_metal::IDevice* device,
+    const bool return_mean_rstd) {
     // Calculate available L1 memory
     const uint32_t available_L1_in_bytes =
         device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
@@ -85,8 +86,6 @@ bool fits_in_l1_check(
 
     // Memory for output CBs
     const uint64_t output_memory = Wt * bfloat16_single_tile_size_bytes;
-    const uint64_t mean_output_memory = kNumMeanBcastTiles * bfloat16_single_tile_size_bytes;
-    const uint64_t rstd_output_memory = kNumRstdBcastTiles * bfloat16_single_tile_size_bytes;
 
     // Memory for intermediate computation CBs
     const uint64_t sum_memory = kNumSumTiles * float32_single_tile_size_bytes;
@@ -98,11 +97,16 @@ bool fits_in_l1_check(
     const uint64_t output_intermediate_memory = block_size * bfloat16_single_tile_size_bytes;
 
     // Total L1 memory required
-    const uint64_t required_L1_in_bytes =
-        scaler_memory + mask_memory + eps_memory + gamma_memory + beta_memory + input_memory + output_memory +
-        mean_output_memory + rstd_output_memory + sum_memory + mean_bcast_memory + variance_sum_memory +
-        variance_reduced_memory + rstd_bcast_memory + x_hat_memory + output_intermediate_memory;
+    uint64_t required_L1_in_bytes = scaler_memory + mask_memory + eps_memory + gamma_memory + beta_memory +
+                                    input_memory + output_memory + sum_memory + mean_bcast_memory +
+                                    variance_sum_memory + variance_reduced_memory + rstd_bcast_memory + x_hat_memory +
+                                    output_intermediate_memory;
 
+    if (return_mean_rstd) {
+        const uint64_t mean_output_memory = kNumMeanBcastTiles * bfloat16_single_tile_size_bytes;
+        const uint64_t rstd_output_memory = kNumRstdBcastTiles * bfloat16_single_tile_size_bytes;
+        required_L1_in_bytes += mean_output_memory + rstd_output_memory;
+    }
     return required_L1_in_bytes <= available_L1_in_bytes;
 }
 
@@ -264,10 +268,12 @@ LayerNormForwardProgramFactory::cached_program_t LayerNormForwardProgramFactory:
     // Output CBs
     [[maybe_unused]] auto cb_output = create_circular_buffer(
         program, all_cores, kOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, num_output_tiles);
-    [[maybe_unused]] auto cb_mean = create_circular_buffer(
-        program, all_cores, kMeanCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumMeanBcastTiles);
-    [[maybe_unused]] auto cb_rstd = create_circular_buffer(
-        program, all_cores, kRstdCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumRstdBcastTiles);
+    if (return_mean_rstd) {
+        [[maybe_unused]] auto cb_mean = create_circular_buffer(
+            program, all_cores, kMeanCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumMeanBcastTiles);
+        [[maybe_unused]] auto cb_rstd = create_circular_buffer(
+            program, all_cores, kRstdCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumRstdBcastTiles);
+    }
 
     // Intermediate computation CBs
     [[maybe_unused]] auto cb_sum = create_circular_buffer(
