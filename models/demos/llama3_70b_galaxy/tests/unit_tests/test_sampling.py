@@ -13,7 +13,7 @@ from models.common.utility_functions import (
 from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
 from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 
-from models.demos.llama3_70b_galaxy.tt.sampling import TTSampling
+from models.common.tt_sampling import TTSampling
 
 import numpy as np
 from scipy.stats import entropy

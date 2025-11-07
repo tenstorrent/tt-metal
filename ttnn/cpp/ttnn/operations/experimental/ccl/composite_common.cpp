@@ -48,11 +48,6 @@ bool use_composite_reduce_scatter(
         return true;
     }
 
-    // Use composite if we don't support scattering on the provided dim
-    if (normalized_scatter_dim != 1 && normalized_scatter_dim != 2 && normalized_scatter_dim != 3) {
-        return true;
-    }
-
     // Use composite if tiled and scattering on padded dim 2 or 3
     auto output_shape = input_shape;
     output_shape[scatter_dim] /= num_devices;

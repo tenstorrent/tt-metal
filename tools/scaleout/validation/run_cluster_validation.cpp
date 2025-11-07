@@ -190,14 +190,15 @@ AsicTopology validate_connectivity(const InputArgs& input_args, PhysicalSystemDe
     physical_system_descriptor.dump_to_yaml(gsd_yaml_path);
     log_output_rank0("Validating Factory System Descriptor (Golden Representation) against Global System Descriptor");
     bool log_output = *distributed_context.rank() == 0;
+    const auto fsd_path = get_factory_system_descriptor_path(input_args);
     auto missing_physical_connections = tt::scaleout_tools::validate_fsd_against_gsd(
-        get_factory_system_descriptor_path(input_args), gsd_yaml_path, true, input_args.fail_on_warning, log_output);
+        fsd_path, gsd_yaml_path, true, input_args.fail_on_warning, log_output);
     log_output_rank0("Factory System Descriptor (Golden Representation) Validation Complete");
     // TODO (AS): We shouldn't need to dump files to disk for validation, once validate_fsd_against_gsd can support
     // comparing string representations of the FSD and GSD. For now, each rank dumps a file to disk, which gets deleted
     // post validation (for all ranks except rank 0).
     if (*distributed_context.rank() != 0) {
-        cleanup_metadata(input_args, gsd_yaml_path, gsd_yaml_filename);
+        cleanup_metadata(input_args, gsd_yaml_path, fsd_path);
     }
     return generate_asic_topology_from_connections(missing_physical_connections, physical_system_descriptor);
 }
