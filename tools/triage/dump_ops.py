@@ -33,7 +33,7 @@ except ImportError:
     print("Please run 'scripts/install_debugger.sh' to install the required debugging dependencies.")
     exit(1)
 
-import re, textwrap, subprocess, shutil
+import re, textwrap, subprocess, shutil, linecache
 import os
 from pathlib import Path
 
@@ -322,19 +322,6 @@ def generate_tests_for_operations(host_id_op_names, inspector_data):
 
 
 # Color constants for argument highlighting
-RST = "\033[0m"
-COLORS = [
-    "\033[31m",  # Red
-    "\033[32m",  # Green
-    "\033[33m",  # Yellow
-    "\033[34m",  # Blue
-    "\033[35m",  # Magenta
-    "\033[36m",  # Cyan
-    "\033[91m",  # Bright Red
-    "\033[92m",  # Bright Green
-    "\033[94m",  # Bright Blue
-    "\033[95m",  # Bright Magenta
-]
 
 
 def format_text_concise(text: str) -> str:
@@ -558,104 +545,11 @@ def extract_arguments_from_call(call_line: str) -> list[str]:
     return []
 
 
-def colorize_arguments(text: str) -> str:
-    """Add colors to function calls and their corresponding argument descriptions."""
-    lines = text.split("\n")
-
-    # Find the operation call (last non-empty line of callstack section)
-    call_line = None
-
-    for i, line in enumerate(lines):
-        stripped = line.strip()
-        # Look for lines that contain function calls or operations
-        if (
-            (
-                ("(" in stripped and ")" in stripped)
-                or any(op in stripped for op in [" + ", " - ", " * ", " / ", " == ", " != "])
-            )
-            and not stripped.startswith("File ")
-            and not stripped.startswith("return ")
-            and not stripped.startswith("exec(")
-        ):
-            call_line = stripped
-            break
-
-    if not call_line:
-        return text
-
-    # Extract arguments from the call
-    arguments = extract_arguments_from_call(call_line)
-    if not arguments:
-        return text
-
-    # Create color mapping for arguments and parameter names
-    arg_colors = {}  # Maps call arguments (result3, 1.0) to colors
-    param_colors = {}  # Maps parameter names (arg_0, arg_1) to colors
-
-    for i, arg in enumerate(arguments):
-        color = COLORS[i % len(COLORS)]
-        arg_colors[arg] = color
-        # Also map positional parameter names
-        param_colors[f"arg_{i}"] = color
-
-    # Also look for keyword arguments in the argument descriptions
-    # and add any named parameters we find
-    for line in lines:
-        line_stripped = line.lstrip(" ·")
-        # Look for parameter names that aren't arg_0, arg_1 style
-        param_match = re.match(r"^([a-zA-Z_][a-zA-Z0-9_]*)\s*[:\[=]", line_stripped)
-        if param_match:
-            param_name = param_match.group(1)
-            if param_name not in param_colors and not param_name.startswith("arg_"):
-                # Find the position in arguments to assign consistent color
-                # This handles keyword arguments like 'tensor', 'device', etc.
-                if len(param_colors) < len(COLORS):
-                    param_colors[param_name] = COLORS[len(param_colors) % len(COLORS)]
-
-    # Apply colors to the text
-    colored_lines = []
-    for line in lines:
-        colored_line = line
-
-        # Color the function call line
-        if call_line in line:
-            for arg, color in arg_colors.items():
-                # Use word boundaries to match exact argument names
-                pattern = r"\b" + re.escape(arg) + r"\b"
-                colored_line = re.sub(pattern, f"{color}{arg}{RST}", colored_line)
-
-        # Color the argument descriptions (lines starting with parameter name)
-        else:
-            line_stripped = line.lstrip(" ·")
-            for param_name, color in param_colors.items():
-                # Match both verbose format (arg :) and concise format (arg [shape])
-                if (
-                    line_stripped.startswith(f"{param_name} :")
-                    or line_stripped.startswith(f"{param_name} [")
-                    or line_stripped.startswith(f"{param_name} =")
-                ):
-                    # Color the entire line in the argument's color
-                    indent_match = re.match(r"^(\s*·?\s*)", line)
-                    indent = indent_match.group(1) if indent_match else ""
-                    content = line_stripped
-                    # Color the parameter name at the start
-                    content = re.sub(r"^(" + re.escape(param_name) + r")", f"{color}\\1{RST}", content)
-                    colored_line = indent + content
-                    break
-
-        colored_lines.append(colored_line)
-
-    return "\n".join(colored_lines)
-
-
 def preserve_indentation_serializer(value) -> str:
-    """Custom serializer that preserves indentation and adds colors to multiline strings."""
+    """Custom serializer that preserves indentation for multiline strings."""
     if isinstance(value, str) and "\n" in value:
-        # First apply colorization
-        colored_value = colorize_arguments(value)
-
-        # Then replace leading spaces with a single dot followed by spaces
-        lines = colored_value.split("\n")
+        # Replace leading spaces with a single dot followed by spaces
+        lines = value.split("\n")
         preserved_lines = []
         for line in lines:
             # Count leading spaces and replace with one dot + remaining spaces
@@ -928,6 +822,26 @@ def dump_ops(
                                 break_on_hyphens=False,
                             )
                             callstack_args_lines.append(wrapped)
+
+                        # Extract filepath and line number to read source line content
+                        # Expected format: "#0 path/to/file.py:42" or "#0 func [binary(+0x123)]"
+                        frame_match = re.match(r"#\d+\s+(.+?):(\d+)", frame_stripped)
+                        if frame_match:
+                            filepath, lineno = frame_match.groups()
+                            try:
+                                line_content = linecache.getline(filepath, int(lineno)).strip()
+                                if line_content:
+                                    # Display with 6-space indent, respect max_width
+                                    if len(line_content) + 6 <= max_width:
+                                        callstack_args_lines.append(f"      {line_content}")
+                                    else:
+                                        # Truncate to fit within max_width
+                                        truncate_len = max_width - 9  # 6 for indent + 3 for "..."
+                                        if truncate_len > 0:
+                                            callstack_args_lines.append(f"      {line_content[:truncate_len]}...")
+                            except:
+                                # Silently skip if file is not accessible
+                                pass
             elif "<-" in resolved_callstack:
                 # Old format with <- separator - split and number frames, filter unhelpful frames
                 def is_unhelpful_frame_old(frame):
@@ -961,6 +875,25 @@ def dump_ops(
                                 break_on_hyphens=False,
                             )
                             callstack_args_lines.append(wrapped)
+
+                        # Extract filepath and line number to read source line content
+                        frame_match = re.match(r"#\d+\s+(.+?):(\d+)", frame_text)
+                        if frame_match:
+                            filepath, lineno = frame_match.groups()
+                            try:
+                                line_content = linecache.getline(filepath, int(lineno)).strip()
+                                if line_content:
+                                    # Display with 6-space indent, respect max_width
+                                    if len(line_content) + 6 <= max_width:
+                                        callstack_args_lines.append(f"      {line_content}")
+                                    else:
+                                        # Truncate to fit within max_width
+                                        truncate_len = max_width - 9  # 6 for indent + 3 for "..."
+                                        if truncate_len > 0:
+                                            callstack_args_lines.append(f"      {line_content[:truncate_len]}...")
+                            except:
+                                # Silently skip if file is not accessible
+                                pass
             else:
                 # Single frame or unparseable format - wrap if needed
                 if len(resolved_callstack) + 11 <= max_width:  # 11 = len("Callstack: ")
