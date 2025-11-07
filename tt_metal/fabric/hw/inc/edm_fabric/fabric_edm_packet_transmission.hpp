@@ -230,6 +230,38 @@ FORCE_INLINE
     };
 }
 
+// Forward packet to local relay in UDM mode
+// Unlike execute_chip_unicast_to_local_chip, this sends the FULL packet (header + payload)
+// to the relay, which will then handle forwarding to local chip workers
+//
+// !!!WARNING!!!
+// !!!WARNING!!! * ENSURE RELAY HAS SPACE FOR PACKET BEFORE CALLING
+// !!!WARNING!!!
+template <typename LocalRelayInterfaceT>
+__attribute__((optimize("jump-tables"))) void execute_chip_unicast_to_relay(
+    LocalRelayInterfaceT& local_relay_interface,
+    tt_l1_ptr PACKET_HEADER_TYPE* const packet_start,
+    uint16_t payload_size_bytes,
+    uint32_t transaction_id,
+    uint8_t rx_channel_id) {
+    // Assert that relay has space (best effort check)
+    ASSERT(local_relay_interface.edm_has_space_for_packet());
+
+    // Send the full packet (header + payload) to relay
+    // The relay will handle the local chip forwarding
+    uint32_t packet_address = reinterpret_cast<size_t>(packet_start);
+    uint32_t total_size_bytes = payload_size_bytes + sizeof(PACKET_HEADER_TYPE);
+
+    // Send to relay using the same mechanism as router-to-router forwarding
+    local_relay_interface.template send_payload_non_blocking_from_address_with_trid<
+        enable_deadlock_avoidance,
+        false,  // vc1_has_different_downstream_dest - relay doesn't use VC1
+        tt::tt_fabric::edm_to_downstream_noc,
+        false,  // stateful_api
+        true    // increment_pointers
+        >(packet_address, total_size_bytes, transaction_id);
+}
+
 FORCE_INLINE void update_packet_header_for_next_hop(
     volatile tt_l1_ptr tt::tt_fabric::PacketHeader* packet_header, tt::tt_fabric::RoutingFields cached_routing_fields) {
     // if the distance field is one, it means the range field decrements, else the start distance field decrements
