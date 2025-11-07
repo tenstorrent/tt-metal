@@ -395,7 +395,7 @@ std::vector<uint32_t> FabricTensixDatamoverRelayConfig::get_compile_time_args() 
     TT_FATAL(mux_config != nullptr, "Mux config must exist for relay to connect to it");
 
     // Calculate all compile-time arguments
-    constexpr uint8_t relay_channel_id = 0;
+    constexpr uint32_t relay_channel_id = static_cast<uint32_t>(UdmRelayChannelId::ROUTER_CHANNEL);
     constexpr uint32_t mux_relay_channel_id = static_cast<uint32_t>(UdmMuxChannelId::RELAY_CHANNEL);
     auto channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
 
@@ -629,7 +629,7 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_runtime_args(tt::tt_m
     if (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::UDM) {
         TT_FATAL(
             upstream_routers_noc_x_.size() == 0 && upstream_routers_noc_y_.size() == 0,
-            "In UDM mode there should be any upstream routers being set");
+            "In UDM mode there should NOT be any upstream routers being set");
     }
     runtime_args.insert(runtime_args.end(), upstream_routers_noc_x_.begin(), upstream_routers_noc_x_.end());
     runtime_args.insert(runtime_args.end(), upstream_routers_noc_y_.begin(), upstream_routers_noc_y_.end());
@@ -747,6 +747,11 @@ std::vector<uint32_t> FabricTensixDatamoverRelayBuilder::get_runtime_args(tt::tt
     }
 
     return runtime_args;
+}
+
+void FabricTensixDatamoverRelayBuilder::append_router_noc_xy(uint32_t noc_x, uint32_t noc_y) {
+    router_noc_x_ = noc_x;
+    router_noc_y_ = noc_y;
 }
 
 }  // namespace tt::tt_fabric

@@ -40,6 +40,15 @@ enum class UdmMuxChannelId : uint32_t {
 };
 
 /**
+ * UDM Mode Relay Channel Assignments
+ * - Relay has only one channel for upstream fabric router traffic
+ */
+enum class UdmRelayChannelId : uint32_t {
+    ROUTER_CHANNEL = 0,  // Upstream fabric router connects to relay on this channel
+    NUM_CHANNELS = 1
+};
+
+/**
  * FabricTensixDatamoverBaseConfig
  * - Base class for mux and relay kernel configurations
  * - Forked from FabricMuxConfig to provide common functionality
@@ -311,7 +320,7 @@ public:
     uint32_t get_noc_y() const { return noc_y_; }
     eth_chan_directions get_direction() const { return direction_; }
 
-    void append_upstream_routers_noc_xy(uint32_t noc_x, uint32_t noc_y);
+    void append_router_noc_xy(uint32_t noc_x, uint32_t noc_y);
 
 private:
     const char* get_kernel_file_path() const;
@@ -339,9 +348,9 @@ private:
     // Channel connection liveness check disable array
     mutable std::array<bool, builder_config::num_sender_channels> channel_connection_liveness_check_disable_array_{};
 
-    // Upstream router coordinate for sync
-    uint32_t router_noc_x_;
-    uint32_t router_noc_y_;
+    // Router coordinate for sync (relay connects to one local router)
+    uint32_t router_noc_x_ = 0;
+    uint32_t router_noc_y_ = 0;
 };
 
 }  // namespace tt::tt_fabric

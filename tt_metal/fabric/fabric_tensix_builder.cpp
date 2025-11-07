@@ -537,15 +537,22 @@ void FabricTensixDatamoverBuilder::create_and_compile(tt::tt_metal::Program& pro
 
     // In UDM mode, also create and compile relay builder
     if (relay_builder_ != nullptr) {
-        // relay_builder_->create_and_compile(program);
+        relay_builder_->create_and_compile(program);
     }
 }
 
 tt::tt_fabric::SenderWorkerAdapterSpec FabricTensixDatamoverBuilder::build_connection_to_fabric_channel(
     uint32_t channel_id) const {
-    // Delegate to mux builder
+    // This method connects to mux channels (for worker traffic, inter-mux forwarding, etc.)
     TT_FATAL(mux_builder_ != nullptr, "Mux builder must not be null");
     return mux_builder_->build_connection_to_fabric_channel(channel_id);
+}
+
+tt::tt_fabric::SenderWorkerAdapterSpec FabricTensixDatamoverBuilder::build_connection_to_relay_channel() const {
+    // This method connects to relay's channel (for router-to-relay traffic in UDM mode)
+    TT_FATAL(relay_builder_ != nullptr, "Relay builder must not be null in UDM mode");
+    constexpr uint32_t relay_channel_id = static_cast<uint32_t>(UdmRelayChannelId::ROUTER_CHANNEL);
+    return relay_builder_->build_connection_to_fabric_channel(relay_channel_id);
 }
 
 const CoreCoord& FabricTensixDatamoverBuilder::get_logical_core() const { return logical_core_; }
@@ -574,6 +581,11 @@ eth_chan_directions FabricTensixDatamoverBuilder::get_direction() const { return
 void FabricTensixDatamoverBuilder::append_upstream_routers_noc_xy(uint32_t noc_x, uint32_t noc_y) {
     TT_FATAL(mux_builder_ != nullptr, "Mux builder must not be null");
     mux_builder_->append_upstream_routers_noc_xy(noc_x, noc_y);
+}
+
+void FabricTensixDatamoverBuilder::append_relay_router_noc_xy(uint32_t noc_x, uint32_t noc_y) {
+    TT_FATAL(relay_builder_ != nullptr, "Relay builder must not be null in UDM mode");
+    relay_builder_->append_router_noc_xy(noc_x, noc_y);
 }
 
 }  // namespace tt::tt_fabric

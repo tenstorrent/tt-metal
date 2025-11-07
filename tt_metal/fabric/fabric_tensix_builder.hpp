@@ -160,6 +160,9 @@ public:
     // Build connection to fabric channel - returns connection specs for EDMs to connect to this mux
     tt::tt_fabric::SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t channel_id) const;
 
+    // Build connection to relay channel - returns connection specs for router to connect to relay (UDM mode only)
+    tt::tt_fabric::SenderWorkerAdapterSpec build_connection_to_relay_channel() const;
+
     // Getters - delegate to mux builder (primary builder)
     const CoreCoord& get_logical_core() const;
     tt::tt_fabric::FabricNodeId get_local_fabric_node_id() const;
@@ -171,6 +174,7 @@ public:
     eth_chan_directions get_direction() const;
 
     void append_upstream_routers_noc_xy(uint32_t noc_x, uint32_t noc_y);
+    void append_relay_router_noc_xy(uint32_t noc_x, uint32_t noc_y);
 
 private:
     // Private constructor - use build() factory method
