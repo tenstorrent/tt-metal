@@ -88,7 +88,7 @@ void kernel_main() {
             0         // offset
         );
 
-        noc_async_write_barrier();
+        noc_async_writes_flushed();
         cb_pop_front(CB_ID, 1);
     }
 
