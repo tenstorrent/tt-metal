@@ -59,12 +59,8 @@ def load_expert_weights(
     up_proj = state_dict["gate_up_proj"][..., 1::2].reshape(
         1, config.num_experts, config.hidden_size, config.intermediate_size
     )
-    gate_proj_bias = state_dict["gate_up_proj_bias"][..., ::2].reshape(
-        1, config.num_experts, 1, config.intermediate_size
-    )
-    up_proj_bias = state_dict["gate_up_proj_bias"][..., 1::2].reshape(
-        1, config.num_experts, 1, config.intermediate_size
-    )
+    gate_proj_bias = state_dict["gate_up_proj_bias"][..., ::2].reshape(1, config.num_experts, config.intermediate_size)
+    up_proj_bias = state_dict["gate_up_proj_bias"][..., 1::2].reshape(1, config.num_experts, config.intermediate_size)
 
     # Get mesh mappers
     col_mesh_mapper = mesh_config.column_parallel(mesh_device)
@@ -116,7 +112,7 @@ def load_expert_weights(
 
     # Load down projection
     down_proj = state_dict["down_proj"].reshape(1, config.num_experts, config.intermediate_size, config.hidden_size)
-    down_proj_bias = state_dict["down_proj_bias"].reshape(1, config.num_experts, 1, config.hidden_size)
+    down_proj_bias = state_dict["down_proj_bias"].reshape(1, config.num_experts, config.hidden_size)
 
     down_proj_tt = ttnn.as_tensor(
         down_proj,

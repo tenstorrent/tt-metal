@@ -143,7 +143,7 @@ def load_attention_weights(
         o_proj_bias,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
-        dtype=weight_dtype,
+        dtype=bias_dtype,
         mesh_mapper=col_mesh_mapper,
         cache_file_name=get_cache_file_name(tensor_cache_path, "o_proj_bias"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
