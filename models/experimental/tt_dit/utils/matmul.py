@@ -111,8 +111,9 @@ def get_matmul_config(M, K, N, core_grid):
         config_tuple = grid_89_configs.get((M, K, N))
     elif getattr(core_grid, "x", None) == 13 and getattr(core_grid, "y", None) == 9:
         config_tuple = grid_13_9_configs.get((M, K, N))
-        subblock_h, subblock_w = config_tuple[3]
-        config_tuple = config_tuple[:3]
+        if config_tuple is not None:
+            subblock_h, subblock_w = config_tuple[3]
+            config_tuple = config_tuple[:3]
 
     if config_tuple is None:
         M_block_size, K_block_size, N_block_size = 8, 8, 8
