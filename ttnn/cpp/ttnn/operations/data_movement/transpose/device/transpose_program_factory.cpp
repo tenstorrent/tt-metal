@@ -1759,10 +1759,10 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor& a,
     uint32_t H = padded_shape[2];
     uint32_t Hs = shard_shape[0], Ws = shard_shape[1];
 
-    uint32_t Hts = Hs / tile.tile_shape[0];
-    uint32_t Wts = Ws / tile.tile_shape[1];
+    uint32_t Hts = Hs / tile.get_height();
+    uint32_t Wts = Ws / tile.get_width();
 
-    uint32_t Ht = H / tile.tile_shape[0];
+    uint32_t Ht = H / tile.get_height();
     uint32_t Ht_per_shard = std::min(Ht, Hts);
 
     uint32_t num_hw_blocks_per_shard = Hts > Ht ? Hts / Ht : 1;
@@ -1840,10 +1840,10 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor& a,
         uint32_t H = padded_shape[2];
         uint32_t Hs = shard_shape[0], Ws = shard_shape[1];
 
-        uint32_t Hts = Hs / tile.tile_shape[0];
-        uint32_t Wts = Ws / tile.tile_shape[1];
+        uint32_t Hts = Hs / tile.get_height();
+        uint32_t Wts = Ws / tile.get_width();
 
-        uint32_t Ht = H / tile.tile_shape[0];
+        uint32_t Ht = H / tile.get_height();
         uint32_t Ht_per_shard = std::min(Ht, Hts);
 
         uint32_t num_hw_blocks_per_shard = Hts > Ht ? Hts / Ht : 1;
