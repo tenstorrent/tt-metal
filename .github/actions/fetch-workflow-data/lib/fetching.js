@@ -34,7 +34,7 @@ function getCutoffDate(days) {
 async function fetchAllWorkflowRuns(github, context, days, cachedRunIds = null, workflowIds = null, eventType='', branch = null, status = null) {
   const allRuns = [];
   const cutoffDate = getCutoffDate(days);
-  const twoWeeksAgo = getCutoffDate(14); // For early exit check
+  const twoWeeksAgo = getCutoffDate(15); // For early exit check
   const cachedIds = cachedRunIds || new Set();
 
   core.info(`[FETCH] cutoffDate: ${cutoffDate.toISOString()}`);
