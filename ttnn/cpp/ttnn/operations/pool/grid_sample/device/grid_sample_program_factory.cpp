@@ -99,7 +99,7 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     // Shape and dimensions
     const auto& [input_shape, grid_shape, output_shape] =
         std::tie(input_tensor.padded_shape(), grid_tensor.padded_shape(), output_tensor.padded_shape());
-    const uint32_t input_height = input_shape[1], input_width = input_shape[2];
+    const uint32_t input_batch = input_shape[0], input_height = input_shape[1], input_width = input_shape[2];
     const uint32_t grid_height = grid_shape[1], grid_width = grid_shape[2];
     const uint32_t grid_hw = grid_height * grid_width;
     const uint32_t grid_batching_factor = get_grid_batching_factor(grid_tensor, use_precomputed_grid);
@@ -109,20 +109,23 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     uint32_t num_cores, grid_nsticks_per_core, output_nsticks_per_core = 0;
     uint32_t num_sticks_per_core_group_1 = 0, num_sticks_per_core_group_2 = 0;
     std::vector<CoreCoord> logical_cores;
+    // Calculate total work and determine actual cores needed
+    const uint32_t total_grid_nsticks = grid_tensor.physical_volume() / grid_shape[-1];
 
     if (is_sharded) {
         const auto grid_shard_spec = grid_tensor.shard_spec().value();
-        all_cores = grid_shard_spec.grid;
-        num_cores = grid_shard_spec.num_cores();
         grid_nsticks_per_core = grid_shard_spec.shape[0];
         output_nsticks_per_core = output_tensor.shard_spec().value().shape[0];
+
+        num_cores = (total_grid_nsticks + grid_nsticks_per_core - 1) / grid_nsticks_per_core;
+        all_cores = grid_shard_spec.grid;
         logical_cores = corerange_to_cores(
             all_cores, num_cores, grid_shard_spec.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
+
     } else {
-        const uint32_t grid_nsticks = grid_tensor.physical_volume() / grid_shape[-1];
         const auto compute_grid_size = device->compute_with_storage_grid_size();
         auto [num_cores_used, all_cores_range, core_group_1_range, core_group_2_range, num_sticks_1, num_sticks_2] =
-            tt::tt_metal::split_work_to_cores(compute_grid_size, grid_nsticks);
+            tt::tt_metal::split_work_to_cores(compute_grid_size, total_grid_nsticks);
 
         std::tie(num_cores, all_cores, core_group_1, core_group_2) =
             std::make_tuple(num_cores_used, all_cores_range, core_group_1_range, core_group_2_range);
@@ -195,18 +198,19 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
         scalar_cb_index_0,                           // ct_arg[2]: scalar_cb_index_0
         input_stick_size,                            // ct_arg[3]: input_stick_size
         grid_stick_size_arg,                         // ct_arg[4]: grid_stick_size
-        input_height,                                // ct_arg[5]: input_height
-        input_width,                                 // ct_arg[6]: input_width
-        grid_batching_factor,                        // ct_arg[7]: grid_batching_factor (shared)
-        static_cast<uint32_t>(grid_tensor.dtype()),  // ct_arg[8]: grid_dtype (shared)
-        grid_hw,                                     // ct_arg[9]: grid_hw (shared)
-        use_precomputed_grid ? 1U : 0U               // ct_arg[10]: use_precomputed_grid (shared)
+        input_batch,                                 // ct_arg[5]: input_batch
+        input_height,                                // ct_arg[6]: input_height
+        input_width,                                 // ct_arg[7]: input_width
+        grid_batching_factor,                        // ct_arg[8]: grid_batching_factor (shared)
+        static_cast<uint32_t>(grid_tensor.dtype()),  // ct_arg[9]: grid_dtype (shared)
+        grid_hw,                                     // ct_arg[10]: grid_hw (shared)
+        use_precomputed_grid ? 1U : 0U               // ct_arg[11]: use_precomputed_grid (shared)
     };
 
     if (is_sharded) {
-        reader_compile_time_args.push_back(enable_split_reader ? 1U : 0U);   // ct_arg[11]: enable_split_reader
-        reader_compile_time_args.push_back(0U);  // ct_arg[12]: reader_id (will be set later per reader)
-        reader_compile_time_args.push_back(grid_nsticks_per_core);  // ct_arg[13]: grid_nsticks_per_core
+        reader_compile_time_args.push_back(enable_split_reader ? 1U : 0U);  // ct_arg[12]: enable_split_reader
+        reader_compile_time_args.push_back(0U);  // ct_arg[13]: reader_id (will be set later per reader)
+        reader_compile_time_args.push_back(grid_nsticks_per_core);  // ct_arg[14]: grid_nsticks_per_core
     }
 
     tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_compile_time_args);
@@ -227,7 +231,7 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     tt::tt_metal::KernelHandle reader0_kernel_id, reader1_kernel_id = 0;
     if (is_sharded) {
         auto reader0_compile_time_args = reader_compile_time_args;
-        reader0_compile_time_args[12] = 0;  // ct_arg[12]: reader_id = 0
+        reader0_compile_time_args[13] = 0;  // ct_arg[13]: reader_id = 0
 
         reader0_kernel_id = tt::tt_metal::CreateKernel(
             program,
@@ -242,7 +246,7 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
             auto reader1_compile_time_args = reader_compile_time_args;
             reader1_compile_time_args[0] = input_cb_index_1;   // ct_arg[0]: input_cb_index_1
             reader1_compile_time_args[2] = scalar_cb_index_1;  // ct_arg[2]: scalar_cb_index_1
-            reader1_compile_time_args[12] = 1;                 // ct_arg[12]: reader_id = 1
+            reader1_compile_time_args[13] = 1;                 // ct_arg[13]: reader_id = 1
 
             reader1_kernel_id = tt::tt_metal::CreateKernel(
                 program,
@@ -315,15 +319,13 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
                 .defines = get_defines(pool::Pool2DType::AVG_POOL2D)});
     };
 
-    tt::tt_metal::KernelHandle compute_kernel_group_1 = 0, compute_kernel_group_2 = 0;
     if (is_sharded || core_group_1.num_cores() > 0) {
-        compute_kernel_group_1 = create_compute_kernel(
+        create_compute_kernel(
             is_sharded ? all_cores : core_group_1,
             grid_batching_factor * (is_sharded ? grid_nsticks_per_core : num_sticks_per_core_group_1));
     }
     if (!is_sharded && core_group_2.num_cores() > 0) {
-        compute_kernel_group_2 =
-            create_compute_kernel(core_group_2, grid_batching_factor * num_sticks_per_core_group_2);
+        create_compute_kernel(core_group_2, grid_batching_factor * num_sticks_per_core_group_2);
     }
 
     // Writer kernel (interleaved only)

@@ -99,6 +99,7 @@ list(
     Headers
     Library
     json-dev
+    ttml
     Unspecified # TODO: audit if there's anything we need to ship here
 )
 
@@ -163,15 +164,15 @@ cpack_add_component(
 )
 cpack_add_component(ttnn-validation GROUP nn-validation)
 
-cpack_add_component_group(ttml)
+cpack_add_component_group(ml)
 cpack_add_component(
-    ttml
+    ml
     DEPENDS
         nn
         metalium
-    GROUP ttml
+    GROUP ml
     DESCRIPTION "TT-Train runtime library"
 )
-cpack_add_component(ttml GROUP ttml)
+cpack_add_component(ttml GROUP ml)
 
 include(CPack)

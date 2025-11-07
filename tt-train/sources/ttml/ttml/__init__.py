@@ -36,6 +36,7 @@ def _initialize():
             FileNotFoundError,
             json.JSONDecodeError,
         ):
+            # These exceptions indicate a non editable instance, catch them and return False.
             pass
 
         return False
@@ -78,7 +79,7 @@ def _initialize():
             )
 
         # Load required libraries
-        required_libs = ["libtt_metal.so", "_ttnncpp.so", "_ttnn.so"]
+        required_libs = ["libtt_metal.so", "_ttnncpp.so"]
 
         for filename in required_libs:
             lib_path = lib_dir / filename

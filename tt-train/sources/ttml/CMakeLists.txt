@@ -27,6 +27,7 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/core/mesh_device.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/not_null.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/random.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/random_sse.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/scoped.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/system_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/system_utils.hpp
@@ -346,6 +347,7 @@ if(NOT TARGET TT::Metalium)
                     INTERFACE_INCLUDE_DIRECTORIES
                         "${METALIUM_INCLUDE_DIRS}"
             )
+            target_link_libraries(TTNN::TTNN INTERFACE TT::Metalium)
             message(STATUS "Successfully found _ttnncpp.so at ${TTNNCPP_LIBRARY}")
         else()
             message(FATAL_ERROR "_ttnncpp.so not found in ${METALIUM_LIB_PATH}")
@@ -392,6 +394,7 @@ target_link_libraries(
         Boost::core
         Boost::container
         tt-logger
+        simde::simde
 )
 
 message(STATUS "xtensor_SOURCE_DIR: ${xtensor_SOURCE_DIR}")
@@ -459,7 +462,6 @@ set(TTML_SRC_NANOBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/__init__.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_autograd.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_autograd.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_bfloat16.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_export_enum.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_fwd.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_models.cpp
@@ -528,7 +530,6 @@ set(CPACK_COMPONENTS_ALL ttml)
 # Debian-specific settings
 set(CPACK_DEBIAN_TTML_PACKAGE_NAME "ttml")
 set(CPACK_DEBIAN_TTML_FILE_NAME "ttml-${CPACK_PACKAGE_VERSION}-Linux.deb")
-set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
 
 # Set the package architecture
 set(CPACK_DEBIAN_PACKAGE_ARCHITECTURE "amd64")
