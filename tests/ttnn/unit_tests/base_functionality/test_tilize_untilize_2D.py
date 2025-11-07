@@ -23,7 +23,7 @@ def random_torch_tensor(dtype, shape):
     return torch.rand(shape).bfloat16().float()
 
 
-dtypes = [ttnn.bfloat16, ttnn.float32, ttnn.int32, ttnn.uint16]
+dtypes = [ttnn.bfloat16, ttnn.float32, ttnn.int32, ttnn.uint32, ttnn.uint16]
 
 
 @pytest.mark.parametrize("in_dtype", dtypes)
