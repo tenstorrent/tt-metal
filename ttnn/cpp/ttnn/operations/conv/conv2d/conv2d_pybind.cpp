@@ -142,6 +142,7 @@ nput tensor.
                   - TILE
                 * - BFLOAT8_B
                   - TILE
+
         Applies a 2D convolution over an input signal composed of several input planes.
 
         For more information, refer to `this tech report. <https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/CNNs/ttcnn.md>`_
