@@ -139,7 +139,7 @@ def parametrize_batch_seq(configs=None):
     ids = [
         f"prefill_{seq_len//1024 if seq_len > 1024 else seq_len}" + ("k" if seq_len > 1024 else "")
         if seq_len > 1
-        else "decode"
+        else "decode_mode"
         for batch_size, seq_len in configs
     ]
     return pytest.mark.parametrize("batch_size, seq_len", configs, ids=ids)

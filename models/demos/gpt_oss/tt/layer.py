@@ -91,7 +91,7 @@ class DecoderLayer:
         residual = hidden_states
         hidden_states_post_norm = self.input_layernorm(hidden_states)
         hidden_states = self.self_attn(
-            x=hidden_states_post_norm,
+            hidden_states_post_norm,
             rope_mats=position_embeddings,
             position_idx=position_idx,
             page_table=page_table,

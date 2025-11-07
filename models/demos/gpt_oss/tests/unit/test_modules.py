@@ -266,6 +266,8 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, re
 
     # Create attention mask like the working attention test
     mask = torch.triu(torch.full((1, 1, seq_len, seq_len), -float("inf")), diagonal=1)
+    if reference_layer.attention_type == "sliding_attention":
+        mask += torch.tril(torch.full((1, 1, seq_len, seq_len), -float("inf")), diagonal=-config.sliding_window)
 
     # Handle decode mode for TT model like original
     if seq_len == 1:  # decode
