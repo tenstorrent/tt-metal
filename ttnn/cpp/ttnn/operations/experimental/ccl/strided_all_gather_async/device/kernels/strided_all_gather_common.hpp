@@ -81,8 +81,7 @@ FORCE_INLINE uint32_t read_chunk(
     uint32_t input_tensor_Wt,
     uint32_t output_tensor_Wt,
     uint32_t actual_sender_chip_id,
-    bool read_output,
-    bool fuse_op) {
+    bool read_output) {
     uint32_t tiles_left = tiles_per_core - tiles_read;
     uint32_t worker_tiles_in_curr_chunk =
         (tiles_per_chunk / ag_worker_cores) + ((ag_worker_core_id < (tiles_per_chunk % ag_worker_cores)) ? 1 : 0);
@@ -157,8 +156,7 @@ FORCE_INLINE uint32_t write_chunk(
     volatile PACKET_HEADER_TYPE* pkt_hdr_sem_inc,
     uint64_t out_ready_sem_noc_addr_in_pkt,
     bool direction,
-    bool write_local,
-    bool fuse_op) {
+    bool write_local) {
     uint32_t tiles_left = tiles_per_core - tiles_written;
     uint32_t worker_tiles_in_curr_chunk =
         (tiles_per_chunk / ag_worker_cores) + ((ag_worker_core_id < (tiles_per_chunk % ag_worker_cores)) ? 1 : 0);
