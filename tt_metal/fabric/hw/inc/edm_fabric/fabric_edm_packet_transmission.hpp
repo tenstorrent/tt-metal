@@ -253,7 +253,6 @@ __attribute__((optimize("jump-tables"))) void execute_chip_unicast_to_relay(
     uint32_t total_size_bytes = payload_size_bytes + sizeof(PACKET_HEADER_TYPE);
 
     // Send to relay using the same mechanism as router-to-router forwarding
-    DPRINT << "Router execute_chip_unicast_to_relay " << ENDL();
     local_relay_interface.template send_payload_non_blocking_from_address_with_trid<
         enable_deadlock_avoidance,
         false,  // vc1_has_different_downstream_dest - relay doesn't use VC1

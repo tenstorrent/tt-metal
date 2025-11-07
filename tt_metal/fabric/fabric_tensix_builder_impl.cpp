@@ -584,7 +584,8 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_persistent_channels_f
             num_full_size_channels);
 
         is_persistent_channels[static_cast<uint32_t>(UdmMuxChannelId::RELAY_CHANNEL)] = 1;      // Relay channel
-        is_persistent_channels[static_cast<uint32_t>(UdmMuxChannelId::INTER_MUX_CHANNEL)] = 1;  // Inter-mux channel
+        // TODO: set it to 0 for now, later when we have inter-mux conn implemented, set back to 1.
+        is_persistent_channels[static_cast<uint32_t>(UdmMuxChannelId::INTER_MUX_CHANNEL)] = 0;  // Inter-mux channel
     } else {
         // MUX mode: use channel_connection_liveness_check_disable_array_ to determine persistent channels
         for (uint8_t i = 0; i < num_full_size_channels; i++) {
