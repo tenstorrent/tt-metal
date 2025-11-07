@@ -1324,3 +1324,34 @@ def test_transpose_29126(device):
     ttnn_output = ttnn.to_torch(ttnn_output.cpu())
 
     assert_with_pcc(torch_output, ttnn_output, 0.9999)
+
+
+@pytest.mark.parametrize("n", [16])
+@pytest.mark.parametrize("c", [128])
+@pytest.mark.parametrize("h", [256])
+@pytest.mark.parametrize("w", [16])
+def test_transpose_hc_mem_config(device, n, c, h, w):
+    torch.manual_seed(2005)
+    torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
+    torch_output_tensor = torch_input_tensor.transpose(1, 2)
+    tt_input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    # shard config
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
+    shard_spec = ttnn.ShardSpec(shard_grid, (8192, 16), ttnn.ShardOrientation.ROW_MAJOR)
+    sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
+    )
+    print("input memory config:", tt_input_tensor.memory_config())
+    tt_output_tensor = ttnn.transpose(tt_input_tensor, 1, 2, memory_config=sharded_mem_config)
+    print("output memory config:", tt_output_tensor.memory_config())
+    tt_output_tensor = ttnn.to_memory_config(tt_output_tensor, ttnn.L1_MEMORY_CONFIG)
+    tt_output_tensor = ttnn.from_device(tt_output_tensor)
+    tt_output_tensor = ttnn.to_torch(tt_output_tensor)
+
+    assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9999)
