@@ -387,9 +387,12 @@ def parse_dump_ops_table(dump_output: str) -> list:
                 operation = parts[1]
                 callstack_args = parts[2]
 
-                # Validate device/core format: "N / X,Y" or just operation continuation
-                device_core_pattern = r"^\d+\s*/\s*\d+,\d+$"
-                if re.match(device_core_pattern, device_core):
+                # Validate device/core format:
+                # - Single core: "N / X,Y"
+                # - Multiple cores: "N cores: ..." or "N cores:"
+                single_core_pattern = r"^\d+\s*/\s*\d+,\d+$"
+                multi_core_pattern = r"^\d+\s+cores:"
+                if re.match(single_core_pattern, device_core) or re.match(multi_core_pattern, device_core):
                     # Finalize previous operation if any
                     if current_op and callstack_frames:
                         current_op["callstack"] = " ".join(callstack_frames)
@@ -469,8 +472,10 @@ def verify_dump_ops_table(
     # Verify each operation
     found_expected_op = False
     for op in operations:
-        # 1. Validate device/core format
-        if not re.match(r"^\d+\s*/\s*\d+,\d+$", op["device_core"]):
+        # 1. Validate device/core format (single core: "N / X,Y" or multi-core: "N cores: ...")
+        single_core_pattern = r"^\d+\s*/\s*\d+,\d+$"
+        multi_core_pattern = r"^\d+\s+cores:"
+        if not (re.match(single_core_pattern, op["device_core"]) or re.match(multi_core_pattern, op["device_core"])):
             pytest.fail(f"Invalid device/core format: {op['device_core']}")
 
         # 2. Validate operation name contains ttnn::

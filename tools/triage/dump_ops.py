@@ -805,13 +805,16 @@ def dump_ops(
         tuple: (list of DumpOpsData, list of (host_id, operation_name) tuples)
     """
     blocks_to_test = ["functional_workers", "eth"]
-    result: list[DumpOpsData] = []
     host_id_op_names: list[tuple[int, str]] = []
 
     # Get operations from Inspector RPC
     host_id_mapping = fetch_operations_from_inspector(inspector_data) if inspector_data else {}
 
     seen_host_ids = set()
+
+    # Aggregate cores by operation ID
+    # Maps operation_id -> list of (device_id, location) tuples
+    op_to_cores: dict[int, list[tuple[int, str]]] = {}
 
     for block_to_test in blocks_to_test:
         for location in device.get_block_locations(block_to_test):
@@ -831,7 +834,7 @@ def dump_ops(
                     kernel_config_host_id = dispatcher_core_data.host_assigned_id
                     break  # Data is the same across all RISCs, so use first valid one
 
-            # If we found a valid kernel_config_host_id, add one entry for this location
+            # If we found a valid kernel_config_host_id, track this core
             if kernel_config_host_id is not None:
                 # Track unique host IDs and their operation names
                 if kernel_config_host_id not in seen_host_ids and kernel_config_host_id > 0:
@@ -846,195 +849,281 @@ def dump_ops(
                             op_name = mapping.get("operation_name", "unknown_op")
                             host_id_op_names.append((kernel_config_host_id, op_name))
 
-                # device_operation_id matches host_assigned_id directly
-                operation_id_key = str(kernel_config_host_id)
+                # Add this core to the list for this operation
+                if kernel_config_host_id not in op_to_cores:
+                    op_to_cores[kernel_config_host_id] = []
+                op_to_cores[kernel_config_host_id].append((device._id, location.to_str("logical")))
 
-                # Get operation info from mapping if available
-                operation_name = None
-                callstack = ""
-                args = ""
-                if operation_id_key in host_id_mapping:
-                    mapping = host_id_mapping[operation_id_key]
-                    operation_name = mapping.get("operation_name", None)
-                    callstack = mapping.get("callstack", "")
-                    args = mapping.get("arguments", "")
+    # Now create aggregated results - one entry per unique operation
+    result: list[DumpOpsData] = []
 
-                # Format operation name for the Operation column
-                if operation_name:
-                    operation_display = operation_name
-                else:
-                    # No mapping available, just show the ID
-                    operation_display = f"ID: {kernel_config_host_id}"
+    for kernel_config_host_id, cores in sorted(op_to_cores.items()):
+        operation_id_key = str(kernel_config_host_id)
 
-                # Format callstack and arguments for the combined column
-                callstack_args_lines = []
+        # Get operation info from mapping if available
+        operation_name = None
+        callstack = ""
+        args = ""
+        if operation_id_key in host_id_mapping:
+            mapping = host_id_mapping[operation_id_key]
+            operation_name = mapping.get("operation_name", None)
+            callstack = mapping.get("callstack", "")
+            args = mapping.get("arguments", "")
 
-                # Add callstack if available
-                if callstack:
-                    # Try to resolve C++ addresses to source locations if debug symbols are available
-                    resolved_callstack = resolve_cpp_callstack(callstack)
+        # Format operation name for the Operation column
+        if operation_name:
+            operation_display = operation_name
+        else:
+            # No mapping available, just show the ID
+            operation_display = f"ID: {kernel_config_host_id}"
 
-                    # Parse and format callstack frames - each frame on its own line
-                    # Expected format: "#0 file.py:42 #1 file.py:81" or "#0 func [binary(+0x123)] #1 ..."
-                    # Also handle old format: "func1 <- func2 <- func3"
-                    import re
+        # Format callstack and arguments for the combined column
+        callstack_args_lines = []
 
-                    frame_pattern = r"#\d+\s+[^#]+"
-                    frames = re.findall(frame_pattern, resolved_callstack)
+        # Add callstack if available
+        if callstack:
+            # Try to resolve C++ addresses to source locations if debug symbols are available
+            resolved_callstack = resolve_cpp_callstack(callstack)
 
-                    if frames:
-                        # New numbered format - filter out decorator frames and runtime startup code
-                        # Keep only user code and meaningful library frames
-                        def is_unhelpful_frame(frame):
-                            """Check if frame is internal decorator or runtime startup code"""
-                            # Filter out decorator template frames
-                            if "decorators.hpp" in frame:
-                                return True
-                            # Filter out C runtime startup code
-                            if any(pattern in frame for pattern in ["_start", "__libc_start_main", "libc.so.6"]):
-                                return True
-                            # Filter out unresolved frames from the binary itself (startup code)
-                            # These look like: [build/test/.../binary(+0x12345)]
-                            if "run_operation_chain_cpp(+" in frame and ".cpp:" not in frame:
-                                return True
-                            return False
+            # Parse and format callstack frames - each frame on its own line
+            # Expected format: "#0 file.py:42 #1 file.py:81" or "#0 func [binary(+0x123)] #1 ..."
+            # Also handle old format: "func1 <- func2 <- func3"
+            import re
 
-                        filtered_frames = [f for f in frames if not is_unhelpful_frame(f)]
-                        if filtered_frames:
-                            callstack_args_lines.append("Callstack:")
-                            for frame in filtered_frames:
-                                # Add with two-space indent so triage framework renders as bullet point
-                                callstack_args_lines.append(f"  {frame.strip()}")
-                    elif "<-" in resolved_callstack:
-                        # Old format with <- separator - split and number frames, filter unhelpful frames
-                        def is_unhelpful_frame_old(frame):
-                            """Check if frame is internal decorator or runtime startup code"""
-                            # Filter out decorator template frames
-                            if "decorators.hpp" in frame:
-                                return True
-                            # Filter out C runtime startup code
-                            if any(pattern in frame for pattern in ["_start", "__libc_start_main", "libc.so.6"]):
-                                return True
-                            # Filter out unresolved binary frames
-                            if "run_operation_chain_cpp(+" in frame and ".cpp:" not in frame:
-                                return True
-                            return False
+            frame_pattern = r"#\d+\s+[^#]+"
+            frames = re.findall(frame_pattern, resolved_callstack)
 
-                        old_frames = [
-                            f.strip() for f in resolved_callstack.split("<-") if not is_unhelpful_frame_old(f)
-                        ]
-                        if old_frames:
-                            callstack_args_lines.append("Callstack:")
-                            for i, frame in enumerate(old_frames):
-                                callstack_args_lines.append(f"  #{i} {frame}")
-                    else:
-                        # Single frame or unparseable format - show as single line
-                        callstack_args_lines.append(f"Callstack: {resolved_callstack}")
+            if frames:
+                # New numbered format - filter out decorator frames and runtime startup code
+                # Keep only user code and meaningful library frames
+                def is_unhelpful_frame(frame):
+                    """Check if frame is internal decorator or runtime startup code"""
+                    # Filter out decorator template frames
+                    if "decorators.hpp" in frame:
+                        return True
+                    # Filter out C runtime startup code
+                    if any(pattern in frame for pattern in ["_start", "__libc_start_main", "libc.so.6"]):
+                        return True
+                    # Filter out unresolved frames from the binary itself (startup code)
+                    # These look like: [build/test/.../binary(+0x12345)]
+                    if "run_operation_chain_cpp(+" in frame and ".cpp:" not in frame:
+                        return True
+                    return False
 
-                # Add arguments based on mode
-                if args:
-                    if summary:
-                        # Summary mode: extract and show each argument on its own line
-                        import re
-
-                        # Split arguments by top-level commas (but not commas inside parentheses/brackets)
-                        # Simple approach: find commas that are not inside any brackets
-                        bracket_depth = 0
-                        paren_depth = 0
-                        arg_parts = []
-                        current_arg = []
-
-                        for char in args:
-                            if char == "(" or char == "[":
-                                paren_depth += 1
-                                bracket_depth += 1
-                                current_arg.append(char)
-                            elif char == ")" or char == "]":
-                                paren_depth -= 1
-                                bracket_depth -= 1
-                                current_arg.append(char)
-                            elif char == "," and bracket_depth == 0:
-                                # This is a top-level comma - split here
-                                arg_parts.append("".join(current_arg).strip())
-                                current_arg = []
-                            else:
-                                current_arg.append(char)
-
-                        # Don't forget the last argument
-                        if current_arg:
-                            arg_parts.append("".join(current_arg).strip())
-
-                        # Parse each argument
-                        arguments = []
-                        for arg in arg_parts:
-                            if not arg:
-                                continue
-
-                            # Check if this is a tensor (contains "logical_shape=Shape")
-                            shape_match = re.search(r"logical_shape=Shape\(\[([^\]]+)\]\)", arg)
-                            if shape_match:
-                                shape = shape_match.group(1)
-                                properties = []
-
-                                # Extract data type
-                                dtype_match = re.search(r"dtype=DataType::(\w+)", arg)
-                                if dtype_match:
-                                    properties.append(dtype_match.group(1))
-
-                                # Extract memory layout
-                                layout_match = re.search(r"memory_layout=TensorMemoryLayout::(\w+)", arg)
-                                if layout_match:
-                                    properties.append(layout_match.group(1))
-
-                                # Extract buffer type
-                                buffer_match = re.search(r"buffer_type=BufferType::(\w+)", arg)
-                                if buffer_match:
-                                    properties.append(buffer_match.group(1))
-
-                                if properties:
-                                    arguments.append(f"  Tensor[{shape}] ({', '.join(properties)})")
-                                else:
-                                    arguments.append(f"  Tensor[{shape}]")
-                            else:
-                                # Non-tensor argument - show compact representation
-                                # Could be a scalar, enum, etc.
-                                if len(arg) <= 50:
-                                    arguments.append(f"  {arg}")
-                                else:
-                                    arguments.append(f"  {arg[:47]}...")
-
-                        if arguments:
-                            callstack_args_lines.append("Arguments:")
-                            callstack_args_lines.extend(arguments)
+                filtered_frames = [f for f in frames if not is_unhelpful_frame(f)]
+                if filtered_frames:
+                    callstack_args_lines.append("Callstack:")
+                    for frame in filtered_frames:
+                        # Add with two-space indent and wrap if too long
+                        frame_stripped = frame.strip()
+                        if len(frame_stripped) + 2 <= max_width:
+                            callstack_args_lines.append(f"  {frame_stripped}")
                         else:
-                            callstack_args_lines.append(f"Arguments: {args[:80]}...")
-                    else:
-                        # Full mode: wrap long argument lines
-                        if len(args) <= max_width - 11:  # 11 is length of "Arguments: "
-                            callstack_args_lines.append(f"Arguments: {args}")
-                        else:
-                            # Wrap the arguments text
+                            # Wrap the frame
                             wrapped = textwrap.fill(
-                                args,
-                                width=max_width - 11,  # Account for "Arguments: " prefix
-                                initial_indent="Arguments: ",
-                                subsequent_indent="           ",  # 11 spaces to align with "Arguments: "
+                                frame_stripped,
+                                width=max_width,
+                                initial_indent="  ",
+                                subsequent_indent="    ",
                                 break_long_words=False,
                                 break_on_hyphens=False,
                             )
                             callstack_args_lines.append(wrapped)
+            elif "<-" in resolved_callstack:
+                # Old format with <- separator - split and number frames, filter unhelpful frames
+                def is_unhelpful_frame_old(frame):
+                    """Check if frame is internal decorator or runtime startup code"""
+                    # Filter out decorator template frames
+                    if "decorators.hpp" in frame:
+                        return True
+                    # Filter out C runtime startup code
+                    if any(pattern in frame for pattern in ["_start", "__libc_start_main", "libc.so.6"]):
+                        return True
+                    # Filter out unresolved binary frames
+                    if "run_operation_chain_cpp(+" in frame and ".cpp:" not in frame:
+                        return True
+                    return False
 
-                callstack_args_info = "\n".join(callstack_args_lines) if callstack_args_lines else "No details"
+                old_frames = [f.strip() for f in resolved_callstack.split("<-") if not is_unhelpful_frame_old(f)]
+                if old_frames:
+                    callstack_args_lines.append("Callstack:")
+                    for i, frame in enumerate(old_frames):
+                        frame_text = f"#{i} {frame}"
+                        if len(frame_text) + 2 <= max_width:
+                            callstack_args_lines.append(f"  {frame_text}")
+                        else:
+                            # Wrap the frame
+                            wrapped = textwrap.fill(
+                                frame_text,
+                                width=max_width,
+                                initial_indent="  ",
+                                subsequent_indent="    ",
+                                break_long_words=False,
+                                break_on_hyphens=False,
+                            )
+                            callstack_args_lines.append(wrapped)
+            else:
+                # Single frame or unparseable format - wrap if needed
+                if len(resolved_callstack) + 11 <= max_width:  # 11 = len("Callstack: ")
+                    callstack_args_lines.append(f"Callstack: {resolved_callstack}")
+                else:
+                    wrapped = textwrap.fill(
+                        resolved_callstack,
+                        width=max_width,
+                        initial_indent="Callstack: ",
+                        subsequent_indent="           ",
+                        break_long_words=False,
+                        break_on_hyphens=False,
+                    )
+                    callstack_args_lines.append(wrapped)
 
-                # Combine device ID and core location into a single string
-                dev_core = f"{device._id} / {location.to_str('logical')}"
+        # Add arguments based on mode
+        if args:
+            if summary:
+                # Summary mode: extract and show each argument on its own line
+                import re
 
-                ops_data = DumpOpsData(
-                    dev_core=dev_core,
-                    operation=operation_display,
-                    callstack_and_args=callstack_args_info,
-                )
-                result.append(ops_data)
+                # Split arguments by top-level commas (but not commas inside parentheses/brackets)
+                # Simple approach: find commas that are not inside any brackets
+                bracket_depth = 0
+                paren_depth = 0
+                arg_parts = []
+                current_arg = []
+
+                for char in args:
+                    if char == "(" or char == "[":
+                        paren_depth += 1
+                        bracket_depth += 1
+                        current_arg.append(char)
+                    elif char == ")" or char == "]":
+                        paren_depth -= 1
+                        bracket_depth -= 1
+                        current_arg.append(char)
+                    elif char == "," and bracket_depth == 0:
+                        # This is a top-level comma - split here
+                        arg_parts.append("".join(current_arg).strip())
+                        current_arg = []
+                    else:
+                        current_arg.append(char)
+
+                # Don't forget the last argument
+                if current_arg:
+                    arg_parts.append("".join(current_arg).strip())
+
+                # Parse each argument
+                arguments = []
+                for arg in arg_parts:
+                    if not arg:
+                        continue
+
+                    # Check if this is a tensor (contains "logical_shape=Shape")
+                    shape_match = re.search(r"logical_shape=Shape\(\[([^\]]+)\]\)", arg)
+                    if shape_match:
+                        shape = shape_match.group(1)
+                        properties = []
+
+                        # Extract data type
+                        dtype_match = re.search(r"dtype=DataType::(\w+)", arg)
+                        if dtype_match:
+                            properties.append(dtype_match.group(1))
+
+                        # Extract memory layout
+                        layout_match = re.search(r"memory_layout=TensorMemoryLayout::(\w+)", arg)
+                        if layout_match:
+                            properties.append(layout_match.group(1))
+
+                        # Extract buffer type
+                        buffer_match = re.search(r"buffer_type=BufferType::(\w+)", arg)
+                        if buffer_match:
+                            properties.append(buffer_match.group(1))
+
+                        if properties:
+                            arguments.append(f"  Tensor[{shape}] ({', '.join(properties)})")
+                        else:
+                            arguments.append(f"  Tensor[{shape}]")
+                    else:
+                        # Non-tensor argument - show compact representation
+                        # Could be a scalar, enum, etc.
+                        if len(arg) <= 50:
+                            arguments.append(f"  {arg}")
+                        else:
+                            arguments.append(f"  {arg[:47]}...")
+
+                if arguments:
+                    callstack_args_lines.append("Arguments:")
+                    for arg_line in arguments:
+                        # Wrap argument lines if they exceed max_width
+                        if len(arg_line) <= max_width:
+                            callstack_args_lines.append(arg_line)
+                        else:
+                            wrapped = textwrap.fill(
+                                arg_line.strip(),
+                                width=max_width,
+                                initial_indent="  ",
+                                subsequent_indent="    ",
+                                break_long_words=False,
+                                break_on_hyphens=False,
+                            )
+                            callstack_args_lines.append(wrapped)
+                else:
+                    fallback_text = f"Arguments: {args[:80]}..."
+                    if len(fallback_text) <= max_width:
+                        callstack_args_lines.append(fallback_text)
+                    else:
+                        wrapped = textwrap.fill(
+                            args,
+                            width=max_width,
+                            initial_indent="Arguments: ",
+                            subsequent_indent="           ",
+                            break_long_words=False,
+                            break_on_hyphens=False,
+                        )
+                        callstack_args_lines.append(wrapped)
+            else:
+                # Full mode: wrap long argument lines
+                if len(args) <= max_width - 11:  # 11 is length of "Arguments: "
+                    callstack_args_lines.append(f"Arguments: {args}")
+                else:
+                    # Wrap the arguments text
+                    wrapped = textwrap.fill(
+                        args,
+                        width=max_width - 11,  # Account for "Arguments: " prefix
+                        initial_indent="Arguments: ",
+                        subsequent_indent="           ",  # 11 spaces to align with "Arguments: "
+                        break_long_words=False,
+                        break_on_hyphens=False,
+                    )
+                    callstack_args_lines.append(wrapped)
+
+        callstack_args_info = "\n".join(callstack_args_lines) if callstack_args_lines else "No details"
+
+        # Format the list of cores for this operation
+        if len(cores) == 1:
+            dev_core = f"{cores[0][0]} / {cores[0][1]}"
+        else:
+            # Multiple cores - show count and list with max 4 core IDs per line
+            core_strs = [f"{dev_id}/{loc}" for dev_id, loc in cores]
+            core_lines = []
+            for i in range(0, len(core_strs), 4):
+                core_lines.append(", ".join(core_strs[i : i + 4]))
+
+            # In summary mode, limit to 12 lines max
+            if summary and len(core_lines) > 12:
+                core_lines = core_lines[:12]
+                core_lines.append("...")
+
+            if len(core_lines) == 1:
+                dev_core = f"{len(cores)} cores: {core_lines[0]}"
+            else:
+                # Multi-line formatting with proper indentation
+                dev_core = f"{len(cores)} cores:\n  " + "\n  ".join(core_lines)
+
+        ops_data = DumpOpsData(
+            dev_core=dev_core,
+            operation=operation_display,
+            callstack_and_args=callstack_args_info,
+        )
+        result.append(ops_data)
 
     return result, host_id_op_names
 
