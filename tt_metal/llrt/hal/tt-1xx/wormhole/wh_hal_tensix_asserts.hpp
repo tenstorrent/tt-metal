@@ -44,8 +44,6 @@ static_assert(MEM_TENSIX_ROUTING_TABLE_BASE % 16 == 0, "Tensix routing table bas
 static_assert(MEM_ROUTING_TABLE_SIZE % 16 == 0, "Tensix routing table size must be 16-byte aligned");
 static_assert(MEM_TENSIX_FABRIC_CONNECTIONS_BASE % 16 == 0, "Tensix fabric connections base must be 16-byte aligned");
 static_assert(MEM_TENSIX_FABRIC_CONNECTIONS_SIZE % 16 == 0, "Tensix fabric connections size must be 16-byte aligned");
-static_assert(MEM_TENSIX_ROUTING_PATH_BASE_1D % 16 == 0, "Routing path base must be 16-byte aligned");
-static_assert(MEM_TENSIX_ROUTING_PATH_BASE_2D % 16 == 0, "Routing path base must be 16-byte aligned");
-static_assert(MEM_TENSIX_ROUTING_PATH_SIZE % 16 == 0, "Routing path size must be 16-byte aligned");
-static_assert(MEM_TENSIX_EXIT_NODE_TABLE_BASE % 16 == 0, "Tensix exit node table base must be 16-byte aligned");
-static_assert(MEM_EXIT_NODE_TABLE_SIZE % 16 == 0, "Tensix exit node table size must be 16-byte aligned");
+static_assert(
+    MEM_TENSIX_FABRIC_CONNECTIONS_BASE - MEM_TENSIX_ROUTING_TABLE_BASE ==
+    sizeof(tt::tt_fabric::tensix_routing_l1_info_t));
