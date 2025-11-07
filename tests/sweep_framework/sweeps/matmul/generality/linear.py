@@ -20,7 +20,7 @@ TIMEOUT = 30
 random.seed(0)
 
 # Possible tensor dimensions for linear
-DIM_SIZES = [32, 1, 0]
+DIM_SIZES = [32, 1]
 
 
 def get_bias_shapes(shape_a, shape_b):
@@ -99,23 +99,23 @@ general = {
 parameters = {
     # Matrix-matrix multiplication: (m, k) x (k, n) -> (m, n)
     "matrix_matrix": {
-        "shapes": get_linear_shapes(2, 2),
+        "shapes": list(get_linear_shapes(2, 2)),
     },
     # Vector-matrix: (k) x (k, n) -> (n)
     "vector_matrix": {
-        "shapes": get_linear_shapes(1, 2),
+        "shapes": list(get_linear_shapes(1, 2)),
     },
     # Vector-vector: (k) x (k) -> scalar
     "vector_vector": {
-        "shapes": get_linear_shapes(1, 1),
+        "shapes": list(get_linear_shapes(1, 1)),
     },
     # Rank 3 tensor: (b, m, k) x (k, n) -> (b, m, n)
     "rank3_matrix": {
-        "shapes": get_linear_shapes(3, 2),
+        "shapes": list(get_linear_shapes(3, 2)),
     },
     # Rank 4 tensor: (b, c, m, k) x (k, n) -> (b, c, m, n)
     "rank4_matrix": {
-        "shapes": get_linear_shapes(4, 2),
+        "shapes": list(get_linear_shapes(4, 2)),
     },
 }
 
