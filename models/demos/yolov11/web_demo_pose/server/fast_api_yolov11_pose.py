@@ -6,6 +6,7 @@ import os
 import sys
 from io import BytesIO
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 import torch
@@ -15,6 +16,7 @@ from PIL import Image
 # Global model variable
 model = None
 device_global = None
+trace_ctx: Optional["PoseTraceContext"] = None
 
 # Import TTNN here so it's available for the model
 import ttnn
@@ -29,6 +31,120 @@ for parent in SCRIPT_DIR.parents:
 
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+
+TRACE_REGION_SIZE = 6434816
+TRACE_INPUT_SHAPE = (1, 3, 640, 640)
+DEVICE_ID = 0
+
+
+class PoseTraceContext:
+    def __init__(self, device, model):
+        self.device = device
+        self.model = model
+        self.trace_id: Optional[int] = None
+        self.trace_input = None
+        self.trace_output = None
+
+    def capture(self, torch_input: torch.Tensor) -> None:
+        if self.trace_id is not None:
+            self.release()
+        host_tensor = ttnn.from_torch(torch_input.contiguous(), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+        self.trace_input = ttnn.to_device(host_tensor, self.device)
+        ttnn.deallocate(host_tensor)
+        self.trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
+        self.trace_output = self.model(self.trace_input)
+        ttnn.end_trace_capture(self.device, self.trace_id, cq_id=0)
+
+    def run(self, torch_input: torch.Tensor):
+        if self.trace_id is None or self.trace_input is None or self.trace_output is None:
+            raise RuntimeError("Pose trace context not initialized")
+        host_tensor = ttnn.from_torch(torch_input.contiguous(), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.copy_host_to_device_tensor(host_tensor, self.trace_input)
+        ttnn.deallocate(host_tensor)
+        ttnn.execute_trace(self.device, self.trace_id, cq_id=0, blocking=True)
+        return self.trace_output
+
+    def release(self) -> None:
+        if self.trace_id is not None:
+            ttnn.release_trace(self.device, self.trace_id)
+            self.trace_id = None
+        if self.trace_input is not None:
+            ttnn.deallocate(self.trace_input)
+            self.trace_input = None
+        if self.trace_output is not None:
+            ttnn.deallocate(self.trace_output)
+            self.trace_output = None
+
+
+def ensure_pose_engine_initialized() -> bool:
+    global model, device_global, trace_ctx
+    if model is not None and device_global is not None and trace_ctx is not None:
+        return False
+
+    from models.demos.yolov11.reference.yolov11_pose_correct import YoloV11Pose
+    from models.demos.yolov11.tt.model_preprocessing_pose import create_yolov11_pose_model_parameters
+    from models.demos.yolov11.tt.ttnn_yolov11_pose_model import TtnnYoloV11Pose
+
+    if trace_ctx is not None:
+        try:
+            trace_ctx.release()
+        except Exception as release_error:  # pylint: disable=broad-except
+            logging.warning("Failed to release existing pose trace context: %s", release_error)
+        trace_ctx = None
+
+    if device_global is None:
+        device_global = ttnn.CreateDevice(
+            DEVICE_ID,
+            l1_small_size=32768,
+            trace_region_size=TRACE_REGION_SIZE,
+            num_command_queues=2,
+        )
+        try:
+            device_global.enable_program_cache()
+        except AttributeError:
+            logging.debug("Program cache enable not supported on this device object")
+
+    torch_model = YoloV11Pose()
+    weights_path = REPO_ROOT / "models" / "demos" / "yolov11" / "reference" / "yolov11_pose_pretrained_correct.pth"
+    if weights_path.exists():
+        torch_model.load_state_dict(torch.load(str(weights_path), map_location="cpu"))
+        print("✓ Loaded pretrained weights")
+    else:
+        print(f"⚠ Pretrained weights not found at {weights_path}")
+        reference_dir = REPO_ROOT / "models" / "demos" / "yolov11" / "reference"
+        if str(reference_dir) not in sys.path:
+            sys.path.insert(0, str(reference_dir))
+        try:
+            from models.demos.yolov11.reference.load_weights_correct import load_weights as generate_pose_weights
+
+            print("Attempting to auto-download YOLOv11 pose weights...")
+            reference_dir.mkdir(parents=True, exist_ok=True)
+            cwd = os.getcwd()
+            try:
+                os.chdir(reference_dir)
+                generate_pose_weights()
+            finally:
+                os.chdir(cwd)
+        except ModuleNotFoundError as exc:
+            logging.exception("Auto-download failed: unable to import weight generator: %s", exc)
+        except Exception as exc:  # pylint: disable=broad-except
+            logging.exception("Auto-download failed while generating YOLOv11 pose weights: %s", exc)
+
+        if weights_path.exists():
+            torch_model.load_state_dict(torch.load(str(weights_path), map_location="cpu"))
+            print("✓ Auto-downloaded and loaded pretrained weights")
+        else:
+            raise FileNotFoundError(
+                f"Unable to locate pretrained pose weights at {weights_path}. Please ensure the weights are available."
+            )
+
+    sample_input = torch.zeros(TRACE_INPUT_SHAPE, dtype=torch.float32)
+    parameters = create_yolov11_pose_model_parameters(torch_model, sample_input.clone(), device=device_global)
+    model = TtnnYoloV11Pose(device=device_global, parameters=parameters)
+    trace_ctx = PoseTraceContext(device_global, model)
+    trace_ctx.capture(sample_input)
+
+    return True
 
 
 def apply_pytorch_postprocessing(predictions, anchors_per_stride):
@@ -242,9 +358,6 @@ logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", handlers=[logging.StreamHandler()]
 )
 
-# Global model variable
-model = None
-
 
 @app.get("/")
 async def root():
@@ -257,56 +370,12 @@ async def startup():
     print("=== FASTAPI SERVER STARTUP ===")
     print("Loading TTNN YOLOv11 pose model...")
     try:
-        from models.demos.yolov11.reference.yolov11_pose_correct import YoloV11Pose
-        from models.demos.yolov11.tt.model_preprocessing_pose import create_yolov11_pose_model_parameters
-        from models.demos.yolov11.tt.ttnn_yolov11_pose_model import TtnnYoloV11Pose
-
-        device_id = 0
-        device_global = ttnn.CreateDevice(device_id, l1_small_size=32768)  # Increased for pose model
-
-        # Load PyTorch model for parameter creation
-        torch_model = YoloV11Pose()
-        weights_path = REPO_ROOT / "models" / "demos" / "yolov11" / "reference" / "yolov11_pose_pretrained_correct.pth"
-        if weights_path.exists():
-            torch_model.load_state_dict(torch.load(str(weights_path), map_location="cpu"))
-            print("✓ Loaded pretrained weights")
+        initialized = ensure_pose_engine_initialized()
+        if initialized:
+            print("✓ TTNN pose model loaded successfully")
         else:
-            print(f"⚠ Pretrained weights not found at {weights_path}")
-            reference_dir = REPO_ROOT / "models" / "demos" / "yolov11" / "reference"
-            if str(reference_dir) not in sys.path:
-                sys.path.insert(0, str(reference_dir))
-            try:
-                from models.demos.yolov11.reference.load_weights_correct import load_weights as generate_pose_weights
-
-                print("Attempting to auto-download YOLOv11 pose weights...")
-                reference_dir.mkdir(parents=True, exist_ok=True)
-                cwd = os.getcwd()
-                try:
-                    os.chdir(reference_dir)
-                    generate_pose_weights()
-                finally:
-                    os.chdir(cwd)
-            except ModuleNotFoundError as exc:
-                logging.exception("Auto-download failed: unable to import weight generator: %s", exc)
-            except Exception as exc:
-                logging.exception("Auto-download failed while generating YOLOv11 pose weights: %s", exc)
-
-            if weights_path.exists():
-                torch_model.load_state_dict(torch.load(str(weights_path), map_location="cpu"))
-                print("✓ Auto-downloaded and loaded pretrained weights")
-            else:
-                raise FileNotFoundError(
-                    f"Unable to locate pretrained pose weights at {weights_path}. Please ensure the weights are available."
-                )
-
-        # Create TTNN model parameters
-        img_tensor_batched = torch.randn(1, 3, 640, 640)  # Dummy tensor for parameter creation
-        parameters = create_yolov11_pose_model_parameters(torch_model, img_tensor_batched, device=device_global)
-
-        # Create TTNN model
-        model = TtnnYoloV11Pose(device=device_global, parameters=parameters)
-        print("✓ TTNN pose model loaded successfully")
-    except Exception as e:
+            print("✓ TTNN pose model already initialized")
+    except Exception as e:  # pylint: disable=broad-except
         print(f"✗ Failed to load TTNN pose model: {e}")
         import traceback
 
@@ -317,24 +386,34 @@ async def startup():
 
 @app.on_event("shutdown")
 async def shutdown():
-    global model, device_global
+    global model, device_global, trace_ctx
+    if trace_ctx:
+        try:
+            trace_ctx.release()
+            print("✓ Pose trace released")
+        except Exception as e:  # pylint: disable=broad-except
+            print(f"Warning: Failed to release pose trace: {e}")
+        trace_ctx = None
     if model:
         try:
-            model.release()
+            if hasattr(model, "release"):
+                model.release()
             print("✓ Model released")
-        except Exception as e:
+        except Exception as e:  # pylint: disable=broad-except
             print(f"Warning: Failed to release model: {e}")
+        model = None
     if device_global:
         try:
             ttnn.close_device(device_global)
             print("✓ Device closed")
-        except Exception as e:
+        except Exception as e:  # pylint: disable=broad-except
             print(f"Warning: Failed to close device: {e}")
+        device_global = None
 
 
 @app.post("/pose_estimation_v2")
 async def pose_estimation_v2(file: UploadFile = File(...)):
-    global model, device_global
+    global model, device_global, trace_ctx
     global request_count
     if "request_count" not in globals():
         request_count = 0
@@ -343,34 +422,15 @@ async def pose_estimation_v2(file: UploadFile = File(...)):
     print(f"DEBUG: Received pose estimation request #{request_count}")
 
     # Lazy loading of TTNN model
-    if model is None:
+    if model is None or trace_ctx is None or device_global is None:
         try:
             print("=== LAZY LOADING TTNN MODEL ===")
-
-            print("Creating device...")
-            device_id = 0
-            # Use the exact same configuration as the working ttnn_raw_output_demo.py
-            device_global = ttnn.open_device(device_id=device_id, l1_small_size=32768)
-
-            print("Loading TTNN model...")
-            # Use EXACTLY the same approach as the working ttnn_raw_output_demo.py
-            from models.demos.yolov11.reference.yolov11_pose_correct import YoloV11Pose
-            from models.demos.yolov11.tt.model_preprocessing_pose import create_yolov11_pose_model_parameters
-            from models.demos.yolov11.tt.ttnn_yolov11_pose_model import TtnnYoloV11Pose
-
-            # Load PyTorch model (same as working demo)
-            torch_model = YoloV11Pose()
-
-            # Create sample input for preprocessing (same as working demo)
-            img_tensor_batched = torch.randn(1, 3, 640, 640)  # Add batch dimension
-            parameters = create_yolov11_pose_model_parameters(torch_model, img_tensor_batched, device=device_global)
-
-            # Create TTNN model (same as working demo)
-            model = TtnnYoloV11Pose(device=device_global, parameters=parameters)
-
-            print("✓ TTNN model loaded successfully")
-
-        except Exception as e:
+            initialized = ensure_pose_engine_initialized()
+            if initialized:
+                print("✓ TTNN model loaded successfully")
+            else:
+                print("✓ TTNN model already initialized")
+        except Exception as e:  # pylint: disable=broad-except
             print(f"TTNN model loading failed: {e}")
             import traceback
 
@@ -436,23 +496,16 @@ async def pose_estimation_v2(file: UploadFile = File(...)):
 
         # Run TTNN pose inference
         try:
-            # Convert to TTNN tensor
-            tt_input = ttnn.from_torch(image_tensor.unsqueeze(0), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-            tt_input = ttnn.to_device(tt_input, device_global)
-
-            # Run inference
-            tt_output = model(tt_input)
+            pose_input = image_tensor.unsqueeze(0)
+            device_output = trace_ctx.run(pose_input)
 
             # Convert back to torch
-            processed_output = ttnn.to_torch(tt_output)
+            processed_output = ttnn.to_torch(device_output)
 
             # Decode raw TTNN outputs to match PyTorch pose head format
             processed_output = processed_output.cpu()
             processed_output = apply_pytorch_postprocessing(processed_output, anchors_per_stride)
 
-            # Clean up TTNN tensors
-            ttnn.deallocate(tt_input)
-            ttnn.deallocate(tt_output)
             print("DEBUG: TTNN pose inference completed successfully")
         except Exception as e:
             print(f"DEBUG: TTNN pose inference failed: {e}")
