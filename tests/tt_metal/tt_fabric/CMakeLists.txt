@@ -225,6 +225,43 @@ set_target_properties(
             ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
 )
 
+# ---- Bench: all_gather ----
+add_executable(
+    bench_all_gather
+    ${CMAKE_CURRENT_SOURCE_DIR}/benchmark/collectives/all_gather/bench_all_gather_main.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/benchmark/collectives/all_gather/run_all_gather_once.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/benchmark/collectives/common/perf_helpers.cpp
+)
+
+target_link_libraries(
+    bench_all_gather
+    PRIVATE
+        tt_metal
+        gtest
+        test_common_libs
+)
+
+add_dependencies(bench_all_gather tt_metal)
+
+target_include_directories(
+    bench_all_gather
+    PRIVATE
+        ${PROJECT_SOURCE_DIR}
+        ${UMD_HOME}
+        ${PROJECT_SOURCE_DIR}/tests
+        ${PROJECT_SOURCE_DIR}/tt_metal
+        ${CMAKE_CURRENT_SOURCE_DIR}/common
+        ${PROJECT_BINARY_DIR}/tt_metal/third_party/umd/device/api
+        ${PROJECT_BINARY_DIR}/tt_metal/third_party/umd/device/generated
+)
+
+set_target_properties(
+    bench_all_gather
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
+)
+
 # ---- Test: addrgen_write (unified test for all addrgen variants) ----
 add_executable(
     test_addrgen_write

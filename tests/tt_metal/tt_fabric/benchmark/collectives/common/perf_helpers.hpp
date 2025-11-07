@@ -57,6 +57,8 @@ struct PerfParams {
     tt::tt_metal::CoreCoord receiver_core = kDefaultCore;
     uint32_t trace_iters = kDefaultTraceIters;  // number of enqueues captured per trace
     AddrgenApiVariant api_variant = AddrgenApiVariant::UnicastWrite;  // API variant to test
+    uint32_t mesh_rows = 0;  // mesh rectangle rows for multicast (0 = use full mesh)
+    uint32_t mesh_cols = 0;  // mesh rectangle cols for multicast (0 = use full mesh)
 };
 
 struct PerfStats {
