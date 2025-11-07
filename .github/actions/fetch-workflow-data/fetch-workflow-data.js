@@ -368,8 +368,9 @@ async function run() {
     const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
     // Fetch runs from specified workflows (or all workflows if workflowIds not provided)
+    // Filter at API level: only fetch completed runs on the target branch
     core.info('Fetching workflow runs...');
-    const allRuns = await fetchAllWorkflowRuns(octokit, github.context, days, cachedRunIds, workflowIds);
+    const allRuns = await fetchAllWorkflowRuns(octokit, github.context, days, cachedRunIds, workflowIds, '', branch, 'completed');
     core.info(`[FETCH] Fetched ${allRuns.length} new runs (skipped cached runs during fetch)`);
 
     // If workflow IDs are provided, we've already fetched all runs for those workflows
@@ -379,7 +380,7 @@ async function run() {
       // Wait for 1 second to avoid rate limiting
       await delay(1000);
       core.info('[FETCH] Fetching scheduled runs...');
-      const scheduledRuns = await fetchAllWorkflowRuns(octokit, github.context, days, cachedRunIds, null, 'schedule');
+      const scheduledRuns = await fetchAllWorkflowRuns(octokit, github.context, days, cachedRunIds, null, 'schedule', branch, 'completed');
       core.info(`[FETCH] Fetched ${scheduledRuns.length} new scheduled runs (skipped cached runs during fetch)`);
       // Combine all the results into a single array (already filtered for new runs only)
       newRuns = [...scheduledRuns, ...allRuns];
@@ -412,15 +413,14 @@ async function run() {
     let mergedRuns = Array.from(seen.values());
     core.info(`[MERGE] After deduplication: ${mergedRuns.length} unique runs (by run id + attempt)`);
 
-    // Only keep runs on main branch, completed, and within the last N days
+    // Filter by date (branch and status are already filtered at API level)
     const cutoff = getCutoffDate(days);
     const beforeFilter = mergedRuns.length;
     mergedRuns = mergedRuns.filter(run =>
-      run.head_branch === branch &&
-      run.status === 'completed' &&
       new Date(run.created_at) >= cutoff
     );
-    core.info(`[MERGE] After filtering (branch=${branch}, status=completed, date>=${cutoff.toISOString()}): ${mergedRuns.length} runs (removed ${beforeFilter - mergedRuns.length})`);
+    core.info(`[MERGE] After filtering (date>=${cutoff.toISOString()}): ${mergedRuns.length} runs (removed ${beforeFilter - mergedRuns.length})`);
+    core.info(`[MERGE] Note: branch=${branch} and status=completed were already filtered at API level`);
 
     // Group runs by workflow name
     const grouped = groupRunsByName(mergedRuns);

@@ -27,16 +27,18 @@ function getCutoffDate(days) {
  * @param {Set<string>} cachedRunIds - Set of run IDs that are already cached (skip these)
  * @param {Array<string>} workflowIds - Array of workflow file paths to fetch runs for
  * @param {string} eventType - Optional event type filter
+ * @param {string} branch - Optional branch filter (e.g., 'main')
+ * @param {string} status - Optional status filter (e.g., 'completed')
  * @returns {Promise<Array>} Array of workflow run objects (only new, non-cached runs)
  */
-async function fetchAllWorkflowRuns(github, context, days, cachedRunIds = null, workflowIds = null, eventType='') {
+async function fetchAllWorkflowRuns(github, context, days, cachedRunIds = null, workflowIds = null, eventType='', branch = null, status = null) {
   const allRuns = [];
   const cutoffDate = getCutoffDate(days);
   const twoWeeksAgo = getCutoffDate(14); // For early exit check
   const cachedIds = cachedRunIds || new Set();
 
   core.info(`[FETCH] cutoffDate: ${cutoffDate.toISOString()}`);
-  core.info(`[FETCH] days: ${days}, cachedRunIds: ${cachedIds.size}, eventType: ${eventType || 'all'}`);
+  core.info(`[FETCH] days: ${days}, cachedRunIds: ${cachedIds.size}, eventType: ${eventType || 'all'}, branch: ${branch || 'all'}, status: ${status || 'all'}`);
   core.info(`[FETCH] workflowIds: ${workflowIds ? workflowIds.length + ' workflows' : 'all workflows (backward compatibility)'}`);
 
   const MAX_CONSECUTIVE_CACHED = 50; // Stop after 50 consecutive cached runs
@@ -69,6 +71,12 @@ async function fetchAllWorkflowRuns(github, context, days, cachedRunIds = null, 
         };
         if (eventType) {
           params.event = eventType;
+        }
+        if (branch) {
+          params.branch = branch;
+        }
+        if (status) {
+          params.status = status;
         }
 
         try {
@@ -171,6 +179,12 @@ async function fetchAllWorkflowRuns(github, context, days, cachedRunIds = null, 
     };
     if (eventType) {
       params.event = eventType;
+    }
+    if (branch) {
+      params.branch = branch;
+    }
+    if (status) {
+      params.status = status;
     }
     const { data: runs } = await github.rest.actions.listWorkflowRunsForRepo(params);
     if (!runs.workflow_runs.length) {
