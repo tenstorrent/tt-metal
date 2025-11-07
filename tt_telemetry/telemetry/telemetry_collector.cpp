@@ -332,7 +332,7 @@ static void telemetry_thread(
                 log_info(tt::LogAlways, "Our hostname is: {}", topology_translation->my_host_name);
 
                 create_ethernet_metrics(
-                    bool_metrics_, uint_metrics_, double_metrics_, cluster, fsd, topology_translation, hal);
+                    bool_metrics_, uint_metrics_, double_metrics_, string_metrics_, cluster, fsd, topology_translation, hal);
                 create_arc_metrics(
                     bool_metrics_, uint_metrics_, double_metrics_, string_metrics_, cluster, topology_translation, hal);
                 log_info(tt::LogAlways, "Initialized metrics");

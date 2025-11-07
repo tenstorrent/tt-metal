@@ -35,6 +35,7 @@ void create_ethernet_metrics(
     std::vector<std::unique_ptr<BoolMetric>>& bool_metrics,
     std::vector<std::unique_ptr<UIntMetric>>& uint_metrics,
     std::vector<std::unique_ptr<DoubleMetric>>& double_metrics,
+    std::vector<std::unique_ptr<StringMetric>>& string_metrics,
     const std::unique_ptr<tt::umd::Cluster>& cluster,
     const tt::scaleout_tools::fsd::proto::FactorySystemDescriptor& fsd,
     const std::unique_ptr<TopologyHelper>& topology_translation,
@@ -123,19 +124,26 @@ void create_ethernet_metrics(
         auto telemetry_reader = std::make_shared<FabricTelemetryReader>(
             tray_id, asic_location, chip_id, channel, cluster, hal);
     
+        uint_metrics.push_back(
+            std::make_unique<FabricMeshIDMetric>(tray_id, asic_location, channel, telemetry_reader));
+        uint_metrics.push_back(
+            std::make_unique<FabricDeviceIDMetric>(tray_id, asic_location, channel, telemetry_reader));
+        string_metrics.push_back(
+            std::make_unique<FabricDirectionMetric>(tray_id, asic_location, channel, telemetry_reader));
+        uint_metrics.push_back(
+            std::make_unique<FabricTxWordsMetric>(tray_id, asic_location, channel, telemetry_reader));
+        uint_metrics.push_back(
+            std::make_unique<FabricRxWordsMetric>(tray_id, asic_location, channel, telemetry_reader));
+        uint_metrics.push_back(
+            std::make_unique<FabricTxPacketsMetric>(tray_id, asic_location, channel, telemetry_reader));
+        uint_metrics.push_back(
+            std::make_unique<FabricRxPacketsMetric>(tray_id, asic_location, channel, telemetry_reader));
+
         for (size_t erisc_core = 0; erisc_core < num_erisc_cores_by_arch[arch]; erisc_core++) {
             // TODO: does not work as expected, disable for now
             // double_metrics.push_back(
             //     std::make_unique<FabricBandwidthMetric>(tray_id, asic_location, chip_id, channel, erisc_core, telemetry_reader));
-            uint_metrics.push_back(
-                std::make_unique<FabricTxWordsMetric>(tray_id, asic_location, channel, telemetry_reader));
-            uint_metrics.push_back(
-                std::make_unique<FabricRxWordsMetric>(tray_id, asic_location, channel, telemetry_reader));
-            uint_metrics.push_back(
-                std::make_unique<FabricTxPacketsMetric>(tray_id, asic_location, channel, telemetry_reader));
-            uint_metrics.push_back(
-                std::make_unique<FabricRxPacketsMetric>(tray_id, asic_location, channel, telemetry_reader));
-            uint_metrics.push_back(
+            uint_metrics.push_back(    
                 std::make_unique<FabricHeartbeatTxMetric>(tray_id, asic_location, channel, erisc_core, telemetry_reader));
             uint_metrics.push_back(
                 std::make_unique<FabricHeartbeatRxMetric>(tray_id, asic_location, channel, erisc_core, telemetry_reader));
@@ -720,6 +728,56 @@ void FabricDeviceIDMetric::update(
     const FabricTelemetryContainer& telemetry = telemetry_reader_->get_fabric_telemetry(cluster, start_of_update_cycle);
     std::visit([&](auto&& tel) {
         new_value = static_cast<uint64_t>(tel.static_info.device_id);
+    }, telemetry);
+    changed_since_transmission_ = new_value != value_;
+    value_ = new_value;
+    set_timestamp_now();
+}
+
+/**************************************************************************************************
+ FabricDirectionMetric
+
+ Fabric direction from static info.
+**************************************************************************************************/
+
+static std::string direction_to_lowercase_string(tt::tt_fabric::eth_chan_directions direction) {
+    switch (direction) {
+        case tt::tt_fabric::eth_chan_directions::EAST:
+            return "east";
+        case tt::tt_fabric::eth_chan_directions::WEST:
+            return "west";
+        case tt::tt_fabric::eth_chan_directions::NORTH:
+            return "north";
+        case tt::tt_fabric::eth_chan_directions::SOUTH:
+            return "south";
+        default:
+            return "unknown (" + std::to_string(static_cast<uint8_t>(direction)) + ")";
+    }
+}
+
+FabricDirectionMetric::FabricDirectionMetric(
+    tt::tt_metal::TrayID tray_id,
+    tt::tt_metal::ASICLocation asic_location,
+    uint32_t channel,
+    std::shared_ptr<FabricTelemetryReader> telemetry_reader) :
+    StringMetric(),
+    tray_id_(tray_id),
+    asic_location_(asic_location),
+    channel_(channel),
+    telemetry_reader_(telemetry_reader) {
+    value_ = "";
+}
+
+const std::vector<std::string> FabricDirectionMetric::telemetry_path() const {
+    return endpoint_telemetry_path(tray_id_, asic_location_, channel_, "fabricDirection");
+}
+
+void FabricDirectionMetric::update(
+    const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
+    std::string new_value;
+    const FabricTelemetryContainer& telemetry = telemetry_reader_->get_fabric_telemetry(cluster, start_of_update_cycle);
+    std::visit([&](auto&& tel) {
+        new_value = direction_to_lowercase_string(tel.static_info.direction);
     }, telemetry);
     changed_since_transmission_ = new_value != value_;
     value_ = new_value;
