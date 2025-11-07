@@ -71,7 +71,7 @@ void kernel_main() {
                 // Issue noc async read commands for current block
                 uint32_t temp_l1_write_addr = l1_write_addr;
                 for (uint32_t h = 0; h < curr_block_num_pages; ++h) {
-                    noc_async_read_tile_with_state_with_trid<skip_ptr_update>(
+                    noc_async_read_one_packet_with_state_with_trid<skip_ptr_update>(
                         src_base_addr, src_read_addr, temp_l1_write_addr, curr_block_trid);
                     src_read_addr += curr_page_size;
                     temp_l1_write_addr += curr_page_size;

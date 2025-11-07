@@ -48,7 +48,7 @@ void kernel_main() {
                 noc_async_read_one_packet_set_state<true>(src_base_addr, current_page_size, vc);
             }
 
-            noc_async_read_tile_with_state_with_trid(
+            noc_async_read_one_packet_with_state_with_trid(
                 src_base_addr, l1_read_addr, l1_write_addr, curr_block_trid);
             l1_read_addr += current_page_size;
             l1_write_addr += current_page_size;

@@ -37,7 +37,8 @@ void kernel_main() {
                 noc_async_read_one_packet_set_state(src_noc_addr, page_size_bytes);
                 noc_async_read_set_trid(curr_trid);
                 for (uint32_t i = 0; i < pages_per_bank; i++) {
-                    noc_async_read_tile_with_state_with_trid(src_noc_addr, i * page_size_bytes, dst_addr, curr_trid);
+                    noc_async_read_one_packet_with_state_with_trid(
+                        src_noc_addr, i * page_size_bytes, dst_addr, curr_trid);
                     dst_addr += page_size_bytes;
                 }
                 curr_trid = (curr_trid + 1) % num_of_trids;  // keep trid between 0 and num_of_trids-1

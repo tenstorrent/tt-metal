@@ -2055,7 +2055,7 @@ inline void RISC_POST_HEARTBEAT(uint32_t& heartbeat) {
  */
 // clang-format on
 template <bool skip_ptr_update = false>
-FORCE_INLINE void noc_async_read_tile_with_state_with_trid(
+FORCE_INLINE void noc_async_read_one_packet_with_state_with_trid(
     uint32_t src_base_addr, uint32_t src_addr, uint32_t dest_addr, uint32_t trid = 0, uint8_t noc = noc_index) {
     RECORD_NOC_EVENT(NocEventType::READ_WITH_STATE_AND_TRID);
 
