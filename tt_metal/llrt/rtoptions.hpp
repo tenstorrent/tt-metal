@@ -222,6 +222,9 @@ class RunTimeOptions {
     // Reliability mode override parsed from environment (RELIABILITY_MODE)
     std::optional<tt::tt_fabric::FabricReliabilityMode> reliability_mode = std::nullopt;
 
+    // Force JIT compile even if dependencies are up to date
+    bool force_jit_compile = false;
+
 public:
     RunTimeOptions();
     RunTimeOptions(const RunTimeOptions&) = delete;
@@ -531,6 +534,9 @@ public:
     // Using MGD 1.0 syntax for mesh graph descriptor in Fabric Control Plane
     // TODO: This will be removed after MGD 1.0 is deprecated
     bool get_use_mesh_graph_descriptor_1_0() const { return use_mesh_graph_descriptor_1_0; }
+
+    bool get_force_jit_compile() const { return force_jit_compile; }
+    void set_force_jit_compile(bool enable) { force_jit_compile = enable; }
 
     // Parse all feature-specific environment variables, after hal is initialized.
     // (Needed because syntax of some env vars is arch-dependent.)
