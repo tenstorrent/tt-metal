@@ -8,20 +8,31 @@ import torch.nn as nn
 
 from ttnn.dot_access import make_dot_access_dict
 from ttnn.model_preprocessing import (
-    convert_torch_model_to_ttnn_model,
+    infer_ttnn_module_args,
     fold_batch_norm2d_into_conv2d,
+    convert_torch_model_to_ttnn_model,
 )
-
+from models.experimental.efficientdetd0.reference.efficientnetb0 import Efficientnetb0
 from models.experimental.efficientdetd0.reference.efficientdet import EfficientDetBackbone
 from models.experimental.efficientdetd0.reference.modules import Regressor, Classifier, BiFPN
 from models.experimental.efficientdetd0.reference.modules import SeparableConvBlock
 
 
-def _preprocess_conv_parameter(weight, bias, *, dtype=ttnn.float32):
+def _preprocess_conv_bn_parameter(conv, bn, *, dtype=ttnn.float32):
     parameters = {}
-    parameters["weight"] = ttnn.from_torch(weight, dtype=dtype)
-    parameters["bias"] = ttnn.from_torch(bias.reshape((1, 1, 1, -1)), dtype=dtype)
+    conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(conv, bn)
+    parameters["weight"] = ttnn.from_torch(conv_weight, dtype=dtype)
+    parameters["bias"] = ttnn.from_torch(conv_bias.reshape((1, 1, 1, -1)), dtype=dtype)
     return parameters
+
+
+def _preprocess_conv_params(conv):
+    weight = conv.weight
+    bias = conv.bias
+    bias = torch.reshape(bias, (1, 1, 1, -1))
+    weight = ttnn.from_torch(weight, dtype=ttnn.float32)
+    bias = ttnn.from_torch(bias, dtype=ttnn.float32)
+    return weight, bias
 
 
 def _extract_seperable_conv(model, bn=None):
@@ -75,56 +86,16 @@ def custom_preprocessor(
                 parameters["conv_list"][layer_num][id] = _extract_seperable_conv(model.conv_list[id], bn)
             parameters["header_list"][layer_num] = _extract_seperable_conv(model.header)
     elif isinstance(model, BiFPN):
-        # Process all separable conv blocks for upsampling path
-        parameters["conv6_up"] = _extract_seperable_conv(model.conv6_up)
-        parameters["conv5_up"] = _extract_seperable_conv(model.conv5_up)
-        parameters["conv4_up"] = _extract_seperable_conv(model.conv4_up)
-        parameters["conv3_up"] = _extract_seperable_conv(model.conv3_up)
-
-        # Process all separable conv blocks for downsampling path
-        parameters["conv4_down"] = _extract_seperable_conv(model.conv4_down)
-        parameters["conv5_down"] = _extract_seperable_conv(model.conv5_down)
-        parameters["conv6_down"] = _extract_seperable_conv(model.conv6_down)
-        parameters["conv7_down"] = _extract_seperable_conv(model.conv7_down)
-
-        if model.use_p8:
-            parameters["conv7_up"] = _extract_seperable_conv(model.conv7_up)
-            parameters["conv8_down"] = _extract_seperable_conv(model.conv8_down)
-
-        # Process first_time channel reduction layers
-        if model.first_time:
-            # Extract conv + batchnorm for channel reduction
-            parameters["p3_down_channel"] = {}
-            conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(model.p3_down_channel[0], model.p3_down_channel[1])
-            parameters["p3_down_channel"][0] = _preprocess_conv_parameter(conv_weight, conv_bias)
-
-            parameters["p4_down_channel"] = {}
-            conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(model.p4_down_channel[0], model.p4_down_channel[1])
-            parameters["p4_down_channel"][0] = _preprocess_conv_parameter(conv_weight, conv_bias)
-
-            parameters["p5_down_channel"] = {}
-            conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(model.p5_down_channel[0], model.p5_down_channel[1])
-            parameters["p5_down_channel"][0] = _preprocess_conv_parameter(conv_weight, conv_bias)
-
-            # P5 to P6 conversion (conv + bn + maxpool)
-            parameters["p5_to_p6"] = {}
-            conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(model.p5_to_p6[0], model.p5_to_p6[1])
-            parameters["p5_to_p6"][0] = _preprocess_conv_parameter(conv_weight, conv_bias)
-            # Note: p5_to_p6[2] is MaxPool2d, handled separately in conv_params
-
-            # Additional channel reduction for bottom-up path
-            parameters["p4_down_channel_2"] = {}
-            conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(
-                model.p4_down_channel_2[0], model.p4_down_channel_2[1]
-            )
-            parameters["p4_down_channel_2"][0] = _preprocess_conv_parameter(conv_weight, conv_bias)
-
-            parameters["p5_down_channel_2"] = {}
-            conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(
-                model.p5_down_channel_2[0], model.p5_down_channel_2[1]
-            )
-            parameters["p5_down_channel_2"][0] = _preprocess_conv_parameter(conv_weight, conv_bias)
-
+        # Let the sub-modules handle their own preprocessing
+        for child_name, child in model.named_children():
+            if isinstance(child, SeparableConvBlock):
+                parameters[child_name] = _extract_seperable_conv(child)
+            elif isinstance(child, nn.Sequential) and len(child) > 1:
+                if isinstance(child[0], nn.Conv2d) and isinstance(child[1], nn.BatchNorm2d):
+                    parameters[child_name] = {}
+                    parameters[child_name][0] = _preprocess_conv_bn_parameter(child[0], child[1])
+                else:
+                    continue  # Maxpool case
         # Store attention weights if using fast attention
         if model.attention:
             parameters["p6_w1"] = model.p6_w1.data
@@ -135,6 +106,21 @@ def custom_preprocessor(
             parameters["p5_w2"] = model.p5_w2.data
             parameters["p6_w2"] = model.p6_w2.data
             parameters["p7_w2"] = model.p7_w2.data
+    elif isinstance(model, Efficientnetb0):
+        parameters = {}
+        parameters["_conv_stem"] = _preprocess_conv_bn_parameter(model._conv_stem, model._bn0)
+        blocks_params = {}
+        for i in range(0, 16):
+            block_parameters = {}
+            block = model.__getattr__(f"_blocks{i}")
+            if i != 0:
+                block_parameters["_expand_conv"] = _preprocess_conv_bn_parameter(block._expand_conv, block._bn0)
+            block_parameters["_depthwise_conv"] = _preprocess_conv_bn_parameter(block._depthwise_conv, block._bn1)
+            block_parameters["_se_reduce"] = _preprocess_conv_params(block._se_reduce)
+            block_parameters["_se_expand"] = _preprocess_conv_params(block._se_expand)
+            block_parameters["_project_conv"] = _preprocess_conv_bn_parameter(block._project_conv, block._bn2)
+            blocks_params[f"_blocks{i}"] = block_parameters
+        parameters["blocks"] = blocks_params
     elif isinstance(
         model,
         (EfficientDetBackbone,),
@@ -256,3 +242,14 @@ def infer_torch_module_args(model, input, layer_type=(nn.Conv2d, nn.MaxPool2d)):
         h.remove()
 
     return _make_dot_accessible_args(layer_info)
+
+
+def infer_module_args(*, model, input):
+    assert isinstance(model, EfficientDetBackbone)
+    backbone = model.backbone_net
+    conv_params = infer_torch_module_args(model=model, input=input)
+    conv_params_backbone = infer_ttnn_module_args(
+        model=backbone, run_model=lambda backbone: backbone(input), device=None
+    )
+    conv_params["backbone"] = conv_params_backbone
+    return conv_params

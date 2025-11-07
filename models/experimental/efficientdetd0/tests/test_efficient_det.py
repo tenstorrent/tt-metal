@@ -12,10 +12,9 @@ import pytest
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 from models.experimental.efficientdetd0.tt.custom_preprocessor import (
+    infer_torch_module_args,
     create_custom_mesh_preprocessor,
 )
-from ttnn.model_preprocessing import infer_ttnn_module_args
-from models.demos.utils.common_demo_utils import get_mesh_mappers
 
 torch.manual_seed(0)
 
@@ -34,30 +33,18 @@ def test_efficient_det(batch, channels, height, width, device):
         load_weights=False,
     )
     torch_model.eval()
-    # torch_model.to(device)
     # Run PyTorch forward pass
     torch_inputs = torch.randn(batch, channels, height, width)
     with torch.no_grad():
         torch_outputs = torch_model(torch_inputs)
-    _, weights_mesh_mapper, _ = get_mesh_mappers(device)
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: torch_model,
-        custom_preprocessor=create_custom_mesh_preprocessor(
-            # mesh_mapper=weights_mesh_mapper,
-            input_tensor=torch_inputs,
-            device=device,
-        ),
+        custom_preprocessor=create_custom_mesh_preprocessor(None),
         device=device,
     )
-    print(".........................................................")
-    print(f"parameters: {parameters=}")
-    print(".........................................................")
-    print(".........................................................")
-    # Infer module arguments for all Conv2d layers
-    module_args = infer_ttnn_module_args(
-        model=torch_model, run_model=lambda torch_model: torch_model(torch_inputs), device=None
-    )
+    # module_args = infer_module_args(model=torch_model, input=torch_inputs)
+    module_args = infer_torch_module_args(model=torch_model, input=torch_inputs)
 
     # Create TTNN BiFPN model
     ttnn_model = TtEfficientDetBackbone(

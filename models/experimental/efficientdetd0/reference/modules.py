@@ -6,7 +6,7 @@ import torch.nn as nn
 import torch
 from torchvision.ops.boxes import nms as nms_torch
 from efficientnet_pytorch import EfficientNet
-from models.experimental.efficientnetb0.reference.efficientnetb0 import Efficientnetb0 as EffNet
+from models.experimental.efficientdetd0.reference.efficientnetb0 import Efficientnetb0 as EffNet
 from .utils import (
     MemoryEfficientSwish,
     Swish,
@@ -445,13 +445,10 @@ class EfficientNet(nn.Module):
 
     def __init__(self, compound_coef, load_weights=False):
         super(EfficientNet, self).__init__()
-        # model= EfficientNet.from_pretrained(f"efficientnet-b{compound_coef}", load_weights)
-        # model = EffNet.from_pretrained(f"efficientnet-b{compound_coef}", load_weights)
         model = EffNet()
         del model._conv_head
         del model._bn1
         del model._avg_pooling
-        # del model._dropout
         del model._fc
         self.model = model
 
