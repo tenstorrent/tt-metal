@@ -73,7 +73,9 @@ public:
                 }
 
                 std::transform(name_str.begin(), name_str.end(), name_str.begin(), [](unsigned char c) {
-                    if (std::isalnum(c)) return static_cast<char>(std::tolower(c));
+                    if (std::isalnum(c)) {
+                        return static_cast<char>(std::tolower(c));
+                    }
                     return '_';
                 });
 
@@ -81,8 +83,12 @@ public:
                     return a == '_' && b == '_';
                 }), name_str.end());
 
-                if (!name_str.empty() && name_str.front() == '_') name_str.erase(0, 1);
-                if (!name_str.empty() && name_str.back() == '_') name_str.pop_back();
+                if (!name_str.empty() && name_str.front() == '_') {
+                    name_str.erase(0, 1);
+                }
+                if (!name_str.empty() && name_str.back() == '_') {
+                    name_str.pop_back();
+                }
 
                 // Get current date and time
                 auto now = std::chrono::system_clock::now();
