@@ -929,8 +929,8 @@ def _ensure_watchdog_started(config):
         logger.warning(f"Stale watchdog process found, joining and cleaning up")
         try:
             process.join(timeout=1)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Exception during watchdog process cleanup: {e}")
 
     try:
         cmd_queue = multiprocess.Queue()
@@ -1005,7 +1005,7 @@ def _watchdog_main(parent_pid, cmd_queue):
             logger.debug(f"Watchdog received start command: {msg}")
             try:
                 test_id = str(msg["test_id"])
-                timeout_secs = float(msg["timeout"])  # seconds from now
+                timeout_secs = float(msg["timeout"])
                 deadlines[test_id] = time.monotonic() + timeout_secs
                 logger.debug(f"Watchdog armed for {test_id} in {timeout_secs} seconds")
             except Exception as e:
@@ -1018,8 +1018,7 @@ def _watchdog_main(parent_pid, cmd_queue):
             except Exception as e:
                 logger.error(f"Watchdog failed to cancel: {e}")
         elif cmd == "shutdown":
-            logger.debug(f"Watchdog received shutdown command: {msg}")
-            logger.debug(f"Watchdog shutting down")
+            logger.debug(f"Watchdog received shutdown command: {msg}; shutting down")
             break
         else:
             logger.warning(f"Watchdog received unknown command: {cmd}")
