@@ -140,6 +140,9 @@ ALWI void log_with_base_tile(uint32_t idst, uint32_t base_scale) {
 // TODO: Move to trigonometry.h
 /**
  * Please refer to documentation for any_init.
+ *
+ * If using fast and approximate implementation of tanh_tile(), then tanh_tile_init() should be also be called with
+ * fast_and_approx = true.
  */
 template <bool fast_and_approx = false>
 ALWI void tanh_tile_init() {
@@ -154,13 +157,16 @@ ALWI void tanh_tile_init() {
  * acquired state via *acquire_dst* call. This call is blocking and is only
  * available on the compute engine.
  *
+ * If using fast and approximate mode, then tanh_tile_init() should be also be called with fast_and_approx = true beforehand.
+ *
  * Return value: None
  *
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | fast_and_approx | Whether to use fast and approximate mode                                   | bool     | True or False                                         | False    |
  */
- // clang-format on
+// clang-format on
 template <bool fast_and_approx = false>
 ALWI void tanh_tile(uint32_t idst) {
     MATH((llk_math_eltwise_unary_sfpu_tanh<fast_and_approx, DST_ACCUM_MODE>(idst)));

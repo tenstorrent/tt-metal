@@ -18,7 +18,7 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_continued_fraction_(sfpi::vFloat val) {
     // This approximation is derived from a continued fraction formula of tanh(x)
 
     // For negative numbers, we compute tanh(x) = -tanh(x)
-    sfpi::vFloat x = sfpi::setsgn(val, 0);  // set positive
+    sfpi::vFloat x = sfpi::abs(val);  // set positive
 
     // Compute numerator and denominator of continued fraction using Horner's method
     sfpi::vFloat x2 = x * x;
@@ -46,7 +46,7 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_continued_fraction_(sfpi::vFloat val) {
 template <bool is_fp32_acc_to_dest_mode = true>
 sfpi_inline sfpi::vFloat _sfpu_tanh_polynomial_(sfpi::vFloat x) {
     // For negative numbers, we compute tanh(-x) = -tanh(x)
-    sfpi::vFloat val = sfpi::setsgn(x, 0);  // set positive
+    sfpi::vFloat val = sfpi::abs(x);  // set positive
 
     // Polynomial coefficients found using Sollya
     // val * (0.999004364013671875 + val * (3.0897438526153564453125e-2 + val * (-0.4890659749507904052734375 + val *
