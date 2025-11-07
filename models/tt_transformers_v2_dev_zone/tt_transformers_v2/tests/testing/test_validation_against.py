@@ -442,7 +442,7 @@ def test_validation_non_decorator_class_vs_class_ttnn(ttnn_mesh_device: ttnn.Mes
         def __call__(self, inp):
             return ttnn.matmul(inp, self.weight)
 
-    class TTLinearRef:
+    class TorchLinearRef:
         def __init__(self, weight: torch.Tensor, device: ttnn.MeshDevice):
             self.weight = weight
 
@@ -451,7 +451,7 @@ def test_validation_non_decorator_class_vs_class_ttnn(ttnn_mesh_device: ttnn.Mes
 
     # Instantiate both implementations
     layer = TTLinear(w, ttnn_mesh_device)
-    ref_layer = TTLinearRef(w, ttnn_mesh_device)
+    ref_layer = TorchLinearRef(w, ttnn_mesh_device)
 
     # # Convert input to TTNN tensor (add device batch dim)
     # x_tt = ttnn.from_torch(x.unsqueeze(0), device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
@@ -466,7 +466,7 @@ def test_validation_non_decorator_class_vs_class_ttnn(ttnn_mesh_device: ttnn.Mes
             Metric.MAX_ABS_ERROR: 1.5e-1,
             Metric.PCC: 0.99,
         },
-    )(TTLinearRef.forward)
+    )(TorchLinearRef.forward)
 
     ttnn.SetDefaultDevice(ttnn_mesh_device)
     _ = validated_call(ref_layer, x.unsqueeze(0))

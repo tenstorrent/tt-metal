@@ -443,6 +443,40 @@ def _align_ref_output_to_impl(ref_output: Any, impl_output: Any) -> Any:
 # todo)) enhance report to use file line number as index to summarize the validation results
 # e.g., ✗ FAIL - __main__.Attention.__call__ (line 100) -> 100 failed validations
 
+# todo)) remove compile time from speed up calculation -- e.g., 9118.15ms should be removed in the example below:
+# ================================================================================
+# VALIDATION REPORT
+# ================================================================================
+# Total validations: 1400
+# Passed: 1400 (100.0%)
+# Failed: 0
+# Average speedup: 0.97x
+
+# ✓ PASS - __main__.TransformerBlock.__call__
+#   Execution time: impl=9118.15ms, ref=14.84ms
+#   Metrics:
+#     pcc: 0.999743 — PASS
+
+# ✓ PASS - __main__.TransformerBlock.__call__
+#   Execution time: impl=3.05ms, ref=12.73ms
+#   Metrics:
+#     pcc: 0.999913 — PASS
+
+# ✓ PASS - __main__.TransformerBlock.__call__
+#   Execution time: impl=3.31ms, ref=12.48ms
+#   Metrics:
+#     pcc: 0.999962 — PASS
+
+# ✓ PASS - __main__.TransformerBlock.__call__
+#   Execution time: impl=3.11ms, ref=12.89ms
+#   Metrics:
+#     pcc: 1.000000 — PASS
+
+# ✓ PASS - __main__.TransformerBlock.__call__
+#   Execution time: impl=3.16ms, ref=12.97ms
+#   Metrics:
+#     pcc: 0.999998 — PASS
+
 
 # todo)) stretch goals:
 # - generate unit test automatically from the failed validations

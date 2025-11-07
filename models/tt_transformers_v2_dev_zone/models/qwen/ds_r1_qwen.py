@@ -8,6 +8,9 @@ from typing import Optional
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+# Validation framework
+from tt_transformers_v2.src.testing import Metric, compare_to_torch, get_validation_registry, to_torch_auto_compose
+
 import ttnn
 
 # todo)) work on ds_r1_qwen model validation using new decorator
@@ -29,10 +32,22 @@ class RMSNorm:
 
     def __init__(self, weight: torch.Tensor, eps: float, device):
         self.eps = eps
+        self.device = device
+        self.weight_torch = weight
+        self.ref_module = None  # optional HF module for validation
         self.weight = ttnn.from_torch(
             weight.unsqueeze(0).unsqueeze(0), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
         )
 
+    @compare_to_torch(
+        reference_fn=lambda self, x: self._ref_call(x),
+        metric_tolerances={
+            # Metric.MAX_ABS_ERROR: 1e-2,
+            # Metric.MEAN_ABS_ERROR: 1e-3,
+            Metric.PCC: 0.99,
+        },
+        enabled=False,
+    )
     def __call__(self, x):
         # x shape: [1, seq_len, hidden_size]
         # Compute RMS: sqrt(mean(x^2) + eps)
@@ -42,6 +57,13 @@ class RMSNorm:
         # Normalize and scale
         x_normed = ttnn.mul(x, ttnn.reciprocal(rms))
         return ttnn.mul(x_normed, self.weight)
+
+    def _ref_call(self, x_torch):
+        # Use the HF RMSNorm module only; no manual fallback
+        if self.ref_module is None:
+            raise RuntimeError("HF RMSNorm reference module not set for validation")
+        mod_dtype = next(self.ref_module.parameters()).dtype
+        return self.ref_module(x_torch.to(mod_dtype))
 
 
 class RotaryEmbedding:
@@ -130,6 +152,27 @@ class Attention:
         self.cache_k = torch.zeros((1, num_kv_heads, max_seq_len, head_dim))
         self.cache_v = torch.zeros((1, num_kv_heads, max_seq_len, head_dim))
 
+        # Optional HF attention module and past KV for validation
+        self.hf_attn = None
+        self.hf_past_kv = None
+        # HF rotary embedding (for reference path)
+        self.hf_rotary_emb = None
+
+    @compare_to_torch(
+        reference_fn=lambda self, x, start_pos, mask: self._ref_call(x, start_pos, mask),
+        input_to_torch=lambda self, x, start_pos, mask: (
+            self,
+            to_torch_auto_compose(x).squeeze(0),
+            start_pos,
+            mask,
+        ),
+        metric_tolerances={
+            # Metric.MAX_ABS_ERROR: 2e-1,
+            # Metric.MEAN_ABS_ERROR: 2e-2,
+            Metric.PCC: 0.95,
+        },
+        enabled=False,
+    )
     def __call__(self, x, start_pos: int, mask: Optional[torch.Tensor] = None):  # TTNN tensor [1, seq_len, hidden_size]
         # Project to Q, K, V
         xq = ttnn.matmul(x, self.wq)
@@ -189,6 +232,40 @@ class Attention:
 
         return output_tt
 
+    def _ref_call(self, x_torch: torch.Tensor, start_pos: int, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+        # Use the HF attention module only; no manual fallback
+        if self.hf_attn is None:
+            raise RuntimeError("HF Attention reference module not set for validation")
+        x_t = x_torch
+        if x_t.dim() == 2:
+            x_t = x_t.unsqueeze(0)
+        bsz, seq_len, _ = x_t.shape
+        position_ids = torch.arange(start_pos, start_pos + seq_len, device=x_t.device).unsqueeze(0).expand(bsz, -1)
+        mod_dtype = next(self.hf_attn.parameters()).dtype
+        x_cast = x_t.to(mod_dtype)
+
+        # Use HF rotary embedding module for position embeddings (cos, sin)
+        if self.hf_rotary_emb is None:
+            raise RuntimeError("HF RotaryEmbedding reference module not set for validation")
+        cos, sin = self.hf_rotary_emb(x_cast, position_ids)
+
+        out = self.hf_attn(
+            hidden_states=x_cast,
+            attention_mask=None,  # rely on HF's internal causal masking
+            position_ids=position_ids,
+            position_embeddings=(cos, sin),
+            past_key_value=self.hf_past_kv,
+            output_attentions=False,
+            use_cache=True,
+        )
+        if isinstance(out, tuple):
+            attn_out = out[0]
+            self.hf_past_kv = out[-1]
+        else:
+            attn_out = getattr(out, "hidden_states", out)
+            self.hf_past_kv = getattr(out, "past_key_value", self.hf_past_kv)
+        return attn_out
+
 
 class MLP:
     """Feed-forward network"""
@@ -202,6 +279,8 @@ class MLP:
         down_proj: torch.Tensor,
         device,
     ):
+        # Optional HF MLP module for validation
+        self.ref_module = None
         self.gate_proj = ttnn.from_torch(
             gate_proj.T.unsqueeze(0).unsqueeze(0), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
         )
@@ -212,6 +291,15 @@ class MLP:
             down_proj.T.unsqueeze(0).unsqueeze(0), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
         )
 
+    @compare_to_torch(
+        reference_fn=lambda self, x: self._ref_call(x),
+        metric_tolerances={
+            # Metric.MAX_ABS_ERROR: 2e-1,
+            # Metric.MEAN_ABS_ERROR: 2e-2,
+            Metric.PCC: 0.95,
+        },
+        enabled=False,
+    )
     def __call__(self, x):
         # SwiGLU activation: gate(x) * up(x) then down projection
         gate = ttnn.matmul(x, self.gate_proj)
@@ -224,11 +312,18 @@ class MLP:
 
         return output
 
+    def _ref_call(self, x_torch):
+        # Use the HF MLP module only; no manual fallback
+        if self.ref_module is None:
+            raise RuntimeError("HF MLP reference module not set for validation")
+        mod_dtype = next(self.ref_module.parameters()).dtype
+        return self.ref_module(x_torch.to(mod_dtype))
+
 
 class TransformerBlock:
     """Single transformer layer"""
 
-    def __init__(self, layer_id: int, config, layer_weights, device, max_seq_len: int = 2048):
+    def __init__(self, layer_id: int, config, layer_weights, device, max_seq_len: int = 2048, hf_layer=None):
         self.layer_id = layer_id
 
         # Attention
@@ -262,6 +357,57 @@ class TransformerBlock:
             layer_weights["post_attention_layernorm.weight"], config.rms_norm_eps, device
         )
 
+        # Hook up HF reference submodules for validation if provided
+        if hf_layer is not None:
+            self.hf_layer = hf_layer
+            try:
+                self.attention.hf_attn = hf_layer.self_attn
+            except Exception:
+                pass
+            try:
+                # Use HF rotary embedding module for reference path
+                from transformers.models.qwen2.modeling_qwen2 import Qwen2RotaryEmbedding as HFQwen2RotaryEmbedding
+
+                self.attention.hf_rotary_emb = HFQwen2RotaryEmbedding(config)
+            except Exception:
+                pass
+            try:
+                self.input_layernorm.ref_module = hf_layer.input_layernorm
+            except Exception:
+                pass
+            try:
+                self.post_attention_layernorm.ref_module = hf_layer.post_attention_layernorm
+            except Exception:
+                pass
+            try:
+                self.mlp.ref_module = hf_layer.mlp
+            except Exception:
+                pass
+
+    def _ref_call(self, x_torch: torch.Tensor, start_pos: int, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """Reference path using HF submodules wired into this block.
+
+        Runs: x + Attn(RMSNorm(x)) then x + MLP(RMSNorm(x)).
+        """
+        out = self.hf_layer.forward(x_torch, start_pos, mask)
+        return out.logits
+
+    @compare_to_torch(
+        reference_fn=lambda self, x, start_pos, mask: self._ref_call(x, start_pos, mask),
+        # input_to_torch=lambda self, x, start_pos, mask: (
+        #     self,
+        #     to_torch_auto_compose(x).squeeze(0),
+        #     start_pos,
+        #     mask,
+        # ),
+        metric_tolerances={
+            Metric.MAX_ABS_ERROR: 2e-1,
+            Metric.PCC: 0.95,
+        },
+        enabled=True,
+        return_reference_output=False,
+        raise_exceptions=True,
+    )
     def __call__(self, x, start_pos: int, mask: Optional[torch.Tensor] = None):
         # Attention with residual
         h = self.input_layernorm(x)
@@ -287,6 +433,11 @@ class QwenModel:
         self.config = hf_model.config
         self.device = device
         self.max_seq_len = max_seq_len
+        # Keep HF model as reference when validation is enabled
+        self._validate = os.environ.get("TTNN_VALIDATE", "0") == "1"
+        self.hf_model = hf_model.eval() if self._validate else None
+        # HF cache for decode validation
+        self._hf_past_kv = None
 
         print(f"Model config:")
         print(f"  Hidden size: {self.config.hidden_size}")
@@ -318,6 +469,7 @@ class QwenModel:
                 layer_weights=layer_weights,
                 device=device,
                 max_seq_len=max_seq_len,
+                hf_layer=(hf_model.model.layers[layer_id] if self._validate else None),
             )
             self.layers.append(layer)
 
@@ -326,6 +478,12 @@ class QwenModel:
 
         # Final norm
         self.norm = RMSNorm(state_dict["model.norm.weight"], self.config.rms_norm_eps, device)
+        # Hook HF final norm for validation
+        if self._validate:
+            try:
+                self.norm.ref_module = hf_model.model.norm
+            except Exception:
+                pass
 
         # LM head (output projection)
         self.lm_head = ttnn.from_torch(
@@ -337,10 +495,40 @@ class QwenModel:
 
         print("Model loaded successfully!")
 
-        # Free HF model
-        del hf_model
+        # Free HF model weights if not validating
+        if not self._validate:
+            del hf_model
         del state_dict
 
+    # Reference forward using the original HF model (host/CPU)
+    # Supports both prefill (start_pos == 0) and decode (start_pos > 0) by
+    # maintaining HF past_key_values alongside the TTNN KV cache.
+    def _ref_forward(self, tokens: torch.Tensor, start_pos: int = 0):
+        with torch.inference_mode():
+            if self.hf_model is None:
+                raise RuntimeError("HF reference model not available for validation")
+
+            # Prefill path: compute logits over full prompt and initialize cache
+            if start_pos == 0:
+                out = self.hf_model(input_ids=tokens, use_cache=True)
+                # Store past for subsequent decode steps
+                self._hf_past_kv = out.past_key_values if hasattr(out, "past_key_values") else None
+                return out.logits  # [batch, seq, vocab]
+
+            # Decode path: use past_kv and only pass new tokens
+            out = self.hf_model(input_ids=tokens, use_cache=True, past_key_values=self._hf_past_kv)
+            self._hf_past_kv = out.past_key_values if hasattr(out, "past_key_values") else self._hf_past_kv
+            return out.logits  # [batch, seq(=len(tokens)), vocab]
+
+    @compare_to_torch(
+        reference_fn=lambda self, tokens, start_pos=0: self._ref_forward(tokens, start_pos),
+        metric_tolerances={
+            # Metric.MAX_ABS_ERROR: 1e-1,
+            # Metric.MEAN_ABS_ERROR: 1e-2,
+            Metric.PCC: 0.90,
+        },
+        enabled=False,
+    )
     def forward(self, tokens: torch.Tensor, start_pos: int = 0):  # [batch, seq_len]
         batch_size, seq_len = tokens.shape
 
@@ -359,6 +547,7 @@ class QwenModel:
         h_tt = ttnn.from_torch(h.unsqueeze(0), device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
         # Apply transformer layers
+        # todo)) use non-decorated use of host_validate_against to validate the first layer layer!
         for layer in self.layers:
             h_tt = layer(h_tt, start_pos, mask)
 
@@ -375,6 +564,47 @@ class QwenModel:
         for layer in self.layers:
             layer.attention.cache_k.zero_()
             layer.attention.cache_v.zero_()
+            # Reset reference HF attention cache if present
+            if hasattr(layer.attention, "hf_past_kv"):
+                layer.attention.hf_past_kv = None
+        # Reset HF cache used for validation during decode
+        self._hf_past_kv = None
+
+
+def generate_hf_ref(model: QwenModel, tokenizer, prompt: str, max_new_tokens: int = 50, temperature: float = 1.0):
+    """Generate text using HF reference path for speed/validation."""
+
+    # Tokenize
+    tokens = tokenizer.encode(prompt, return_tensors="pt")
+
+    # Reset caches (also clears HF past_kv)
+    model.reset_kv_cache()
+
+    # Prefill using HF model
+    logits = model._ref_forward(tokens, start_pos=0)  # [1, seq_len, vocab]
+    next_token_id = torch.argmax(logits[:, -1, :], dim=-1).item()
+
+    generated = [next_token_id]
+    current_pos = tokens.shape[1]
+
+    # Decode using cached HF past_kv
+    for _ in range(max_new_tokens - 1):
+        next_token = torch.tensor([[next_token_id]], dtype=torch.long)
+        logits = model._ref_forward(next_token, start_pos=current_pos)  # [1, 1, vocab]
+
+        if temperature > 0:
+            probs = torch.nn.functional.softmax(logits[:, -1, :] / temperature, dim=-1)
+            next_token_id = torch.multinomial(probs.squeeze(0), num_samples=1).item()
+        else:
+            next_token_id = torch.argmax(logits[:, -1, :], dim=-1).item()
+
+        if tokenizer.eos_token_id is not None and next_token_id == tokenizer.eos_token_id:
+            break
+
+        generated.append(next_token_id)
+        current_pos += 1
+
+    return tokenizer.decode(generated, skip_special_tokens=True)
 
 
 def generate(model: QwenModel, tokenizer, prompt: str, max_new_tokens: int = 50, temperature: float = 1.0):
@@ -463,7 +693,8 @@ def main():
     print()
 
     # Generate
-    response = generate(model, tokenizer, prompt, max_new_tokens=50)
+    response = generate_hf_ref(model, tokenizer, prompt, max_new_tokens=50)
+    # response = generate(model, tokenizer, prompt, max_new_tokens=50)
 
     print()
     print("Response:", response)
