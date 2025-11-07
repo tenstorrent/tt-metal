@@ -30,8 +30,6 @@ void bind_reduction_operation(py::module& module, const reduction_operation_t& o
             scalar (float, optional): A scaling factor to be applied to the input tensor. Defaults to `1.0`.
             correction (bool, optional): Applies only to :func:`ttnn.std` - whether to apply Bessel's correction (i.e. N-1). Defaults to `True`.
 
-        Returns:
-            ttnn.Tensor: the output tensor.
 
         Note:
             The input tensor supports the following data types and layouts:

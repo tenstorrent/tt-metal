@@ -15,7 +15,7 @@ namespace ttnn::operations::data_movement::detail {
 namespace py = pybind11;
 
 void bind_concat(py::module& module) {
-    const auto doc = R"doc(
+    const auto doc = R"doc(Concatenates :attr:`tensors` in the given :attr:`dim`.
 
 Args:
     input_tensor (List of ttnn.Tensor): the input tensors.
@@ -26,8 +26,6 @@ Keyword Args:
     output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
     groups (int, optional): When `groups` is set to a value greater than 1, the inputs are split into N `groups` partitions, and elements are interleaved from each group into the output tensor. Each group is processed independently, and elements from each group are concatenated in an alternating pattern based on the number of groups. This is useful for recombining grouped convolution outputs during residual concatenation. Defaults to `1`. Currently, groups > `1` is only supported for two height sharded input tensors.
 
-Returns:
-    ttnn.Tensor: the output tensor.
 
 Example:
 

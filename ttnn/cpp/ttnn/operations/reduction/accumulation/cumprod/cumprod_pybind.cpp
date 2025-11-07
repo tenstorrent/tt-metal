@@ -17,9 +17,7 @@
 namespace ttnn::operations::reduction::accumulation::detail {
 void bind_reduction_cumprod_operation(py::module& module) {
     auto docstring =
-        R"doc(
-        Returns cumulative product of `input` along dimension `dim`
-        For a given `input` of size N, the `output` will also contain N elements and be such that:
+        R"doc(Returns cumulative product of `input` along dimension `dim`. For a given `input` of size N, the `output` will also contain N elements and be such that:
 
         .. math::
             \mathrm{{output}}_i = \mathrm{{input}}_1 \times \mathrm{{input}}_2 \times \cdots \times \mathrm{{input}}_i
@@ -34,8 +32,6 @@ void bind_reduction_cumprod_operation(py::module& module) {
             reverse_order (bool, optional, default False): whether to perform accumulation from the end to the beginning of accumulation axis.
             out (ttnn.Tensor, optional): preallocated output. If specified, `out` must have same shape as `input`, and must be on the same device.
 
-        Returns:
-            ttnn.Tensor: the output tensor.
 
         Note:
             If both `dtype` and `output` are specified then `output.dtype` must match `dtype`.

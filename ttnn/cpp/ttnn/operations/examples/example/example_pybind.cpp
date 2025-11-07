@@ -23,9 +23,7 @@ void bind_example_operation(py::module& module) {
         Args:
             input_tensor (ttnn.Tensor): The input tensor.
 
-        Returns:
-            ttnn.Tensor: The output tensor.
-        )doc",
+                )doc",
 
         // Add pybind overloads for the C++ APIs that should be exposed to python
         // There should be no logic here, just a call to `self` with the correct arguments
