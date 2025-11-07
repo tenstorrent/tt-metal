@@ -20,7 +20,7 @@
 #include <tt_stl/reflection.hpp>
 #include <tt_stl/span.hpp>
 
-#include "ttnn/tensor/shape/shape.hpp"
+#include <ttnn/tensor/shape/shape.hpp>
 
 namespace tt {
 

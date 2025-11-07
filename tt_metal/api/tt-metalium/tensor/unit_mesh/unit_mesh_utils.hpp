@@ -6,7 +6,7 @@
 
 #include <vector>
 
-#include "ttnn/tensor/tensor.hpp"
+#include <ttnn/tensor/tensor.hpp>
 
 namespace tt::tt_metal::experimental::unit_mesh {
 

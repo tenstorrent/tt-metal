@@ -8,7 +8,7 @@
 #include <tt_stl/reflection.hpp>
 #include <type_traits>
 
-#include "ttnn/tensor/tensor.hpp"
+#include <ttnn/tensor/tensor.hpp>
 
 namespace tt::tt_metal {
 namespace host_buffer {

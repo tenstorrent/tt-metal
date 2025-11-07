@@ -6,9 +6,9 @@
 
 #include <memory>
 
-#include "ttnn/tensor/storage.hpp"
-#include "ttnn/tensor/tensor_spec.hpp"
-#include "ttnn/distributed/tensor_topology.hpp"
+#include <ttnn/tensor/storage.hpp>
+#include <ttnn/tensor/tensor_spec.hpp>
+#include <ttnn/distributed/tensor_topology.hpp>
 
 namespace tt::tt_metal {
 

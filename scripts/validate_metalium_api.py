@@ -24,6 +24,9 @@ ALLOWED_PREFIXES = {
     "enchantum",
     "nlohmann",
     "tt-logger",
+    "tracy",
+    "xtensor",
+    "ttnn",
 }
 
 STD_HEADERS = {

@@ -15,22 +15,22 @@
 #include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include "ttnn/common/queue_id.hpp"
-#include "ttnn/distributed/tensor_topology.hpp"
+#include <ttnn/common/queue_id.hpp>
+#include <ttnn/distributed/tensor_topology.hpp>
 #include <tt-metalium/host_buffer.hpp>
-#include "ttnn/tensor/types.hpp"
-#include "ttnn/tensor/storage.hpp"
-#include "ttnn/tensor/tensor_attributes.hpp"
-#include "ttnn/tensor/tensor_spec.hpp"
-#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include <ttnn/tensor/types.hpp>
+#include <ttnn/tensor/storage.hpp>
+#include <ttnn/tensor/tensor_attributes.hpp>
+#include <ttnn/tensor/tensor_spec.hpp>
+#include <ttnn/tensor/layout/tensor_layout.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt_stl/reflection.hpp>
 #include <tt_stl/optional_reference.hpp>
-#include "ttnn/tensor/memory_config/memory_config.hpp"
-#include "ttnn/tensor/layout/layout.hpp"
-#include "types.hpp"
+#include <ttnn/tensor/memory_config/memory_config.hpp>
+#include <ttnn/tensor/layout/layout.hpp>
+// #include <types.hpp>
 
 namespace tt {
 

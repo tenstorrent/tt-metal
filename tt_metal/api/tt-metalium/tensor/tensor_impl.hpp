@@ -15,12 +15,12 @@
 
 #include <tracy/Tracy.hpp>
 
-#include "ttnn/tensor/host_buffer/functions.hpp"
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
-#include "ttnn/tensor/types.hpp"
-#include "ttnn/tensor/layout/tensor_layout.hpp"
-#include "ttnn/types.hpp"
+#include <ttnn/tensor/host_buffer/functions.hpp>
+#include <ttnn/tensor/tensor.hpp>
+#include <ttnn/tensor/tensor_utils.hpp>
+#include <ttnn/tensor/types.hpp>
+#include <ttnn/tensor/layout/tensor_layout.hpp>
+#include <ttnn/types.hpp>
 
 namespace tt::tt_metal::tensor_impl {
 

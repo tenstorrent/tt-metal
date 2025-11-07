@@ -6,8 +6,8 @@
 
 #include <cstdint>
 
-#include "ttnn/tensor/tensor.hpp"
-#include "types.hpp"
+#include <ttnn/tensor/tensor.hpp>
+// #include <types.hpp>
 
 namespace tt {
 
