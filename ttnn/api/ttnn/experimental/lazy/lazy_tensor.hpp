@@ -20,6 +20,8 @@ class MeshDevice;
 namespace ttnn::experimental::lazy {
 
 struct LazyOperation;
+struct LazyOperationInputs;
+
 using LazyTensorId = uint32_t;
 enum class LazyTensorState {
     LAZY,       // Contains graph node information
@@ -29,33 +31,34 @@ enum class LazyTensorState {
 
 class LazyTensor {
     using LazyOperationPtr = std::shared_ptr<ttnn::experimental::lazy::LazyOperation>;
+    using LazyOperationInputsPtr = std::shared_ptr<ttnn::experimental::lazy::LazyOperationInputs>;
     using TensorSpec = tt::tt_metal::TensorSpec;
     using MaterializedTensor = tt::tt_metal::metal_tensor::Tensor;
 
 public:
     LazyTensor() = default;
     LazyTensor(
-        const std::vector<std::shared_ptr<LazyTensor>>& op_inputs,
+        const LazyOperationInputsPtr& op_inputs,
         const LazyOperationPtr& op,
         const TensorSpec& tensor_spec);
     LazyTensor(const MaterializedTensor& metal_tensor);
 
     // This used for ops that return a single tensor
     static std::shared_ptr<LazyTensor> make_lazy_tensor(
-        const std::vector<std::shared_ptr<LazyTensor>>& op_inputs,
+        const LazyOperationInputsPtr& op_inputs,
         const LazyOperationPtr& op,
         const TensorSpec& tensor_spec);
 
     // This used for ops that return multiple tensors
     static std::vector<std::shared_ptr<LazyTensor>> make_lazy_tensors(
-        const std::vector<std::shared_ptr<LazyTensor>>& op_inputs,
+        const LazyOperationInputsPtr& op_inputs,
         const LazyOperationPtr& op,
         const std::vector<TensorSpec>& tensor_specs);
 
     static std::shared_ptr<LazyTensor> make_materialized_tensor(const MaterializedTensor& metal_tensor);
 
     // Inputs and outputs getters
-    const std::vector<std::shared_ptr<LazyTensor>>& op_inputs() const;
+    const LazyOperationInputsPtr& op_inputs() const;
     const std::vector<std::shared_ptr<LazyTensor>>& siblings() const;
     const std::vector<MaterializedTensor>& materialized_tensors() const;
     const MaterializedTensor& materialized_tensor() const;
@@ -85,7 +88,7 @@ public:
     // Allow optimization passes to modify the graph structure
     // TODO: Maybe we should switch to immutable graph structure? (#31772)
     // TODO: I think we should probably make Pass class friend and make those private
-    void set_op_inputs(const std::vector<std::shared_ptr<LazyTensor>>& new_inputs);
+    void set_op_inputs(std::shared_ptr<LazyOperationInputs> new_inputs);
     void set_op(const LazyOperationPtr& new_op);
 
 private:
@@ -124,7 +127,7 @@ private:
             const TensorSpec& tensor_spec,
             tt::tt_metal::distributed::MeshDevice* device,
             tt::tt_metal::StorageType storage_type);
-        TensorMetadata(const TensorSpec& tensor_spec, const std::vector<std::shared_ptr<LazyTensor>>& op_inputs);
+        TensorMetadata(const TensorSpec& tensor_spec, const std::shared_ptr<LazyOperationInputs>& op_inputs);
     };
 
     TensorMetadata tensor_metadata_;
@@ -132,7 +135,7 @@ private:
     // Links to dependencies and information required to materialize the tensor.
     // TODO: Should we still keep op and inputs in eager mode?
     LazyOperationPtr op_;
-    std::vector<std::shared_ptr<LazyTensor>> op_inputs_;
+    std::shared_ptr<LazyOperationInputs> op_inputs_;
     std::vector<std::shared_ptr<LazyTensor>> siblings_;
     LazyTensorState state_ = LazyTensorState::LAZY;
     LazyTensorId id_ = 0;

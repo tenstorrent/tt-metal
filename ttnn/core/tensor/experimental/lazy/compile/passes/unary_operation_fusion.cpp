@@ -4,6 +4,7 @@
 #include "ttnn/operations/eltwise/unary/device/unary_device_operation.hpp"
 #include "ttnn/experimental/lazy/graph_utils.hpp"
 #include <enchantum/enchantum.hpp>
+#include "ttnn/experimental/lazy/lazy_operation_inputs_utils.hpp"
 
 namespace ttnn::experimental::lazy {
 
@@ -35,12 +36,12 @@ void UnaryOperationsFusionPass::run(const ttnn::Tensor& tensor) {
 
         // Check if this unary operation has exactly one input
         const auto& inputs = current_tensor->op_inputs();
-        if (inputs.size() != 1) {
+        if (count(inputs) != 1) {
             continue;
         }
 
         // Check if the input is also a unary operation
-        auto input_tensor = inputs[0];
+        auto input_tensor = get(inputs, 0);
         auto input_op = input_tensor->op();
         if (!input_op) {
             continue;
@@ -73,11 +74,11 @@ void UnaryOperationsFusionPass::run(const ttnn::Tensor& tensor) {
             chain_tensors.push_back(current);
 
             const auto& curr_inputs = current->op_inputs();
-            if (curr_inputs.size() != 1) {
+            if (count(curr_inputs) != 1) {
                 break;
             }
 
-            current = curr_inputs[0];
+            current = get(curr_inputs, 0);
         }
 
         // If we have more than one unary op in the chain, fuse them
@@ -113,15 +114,12 @@ void UnaryOperationsFusionPass::run(const ttnn::Tensor& tensor) {
             auto* last_unary_op = chain.back();
             auto old_attributes = last_unary_op->attributes();
 
-            // Get the tensor structure metadata from the first operation (since we'll use its inputs)
-            auto* first_unary_op = chain.front();
-            auto tensor_args_meta = first_unary_op->tensor_args_metadata();
-
             // Get the output specs from the last operation (since that's what our fused op will output)
             auto output_specs = last_unary_op->compute_output_specs();
 
             // Get the input of the first operation in the chain (for graph dependency update)
-            auto first_op_input_tensor = chain_tensors[0]->op_inputs()[0];
+            auto first_op_inputs = chain_tensors[0]->op_inputs();
+            auto first_op_tensor_args = std::any_cast<ttnn::operations::unary::UnaryDeviceOperation::tensor_args_t>(first_op_inputs->inputs());
 
             // Create new attributes with merged op_chain
             auto merged_attributes = ttnn::operations::unary::operation_attributes_t{
@@ -134,11 +132,11 @@ void UnaryOperationsFusionPass::run(const ttnn::Tensor& tensor) {
 
             // Create a new LazyDeviceOperation with the merged attributes and metadata from existing ops
             auto new_fused_op = std::make_shared<LazyDeviceOperation<ttnn::operations::unary::UnaryDeviceOperation>>(
-                merged_attributes, tensor_args_meta, output_specs, "fused_unary_operation");
+                merged_attributes, first_op_tensor_args, "fused_unary_operation");
 
             // Update the last tensor in the chain to use the new operation and new input
             chain_tensors.back()->set_op(new_fused_op);
-            chain_tensors.back()->set_op_inputs({first_op_input_tensor});
+            chain_tensors.back()->set_op_inputs(first_op_inputs);
 
             // Mark all tensors in the chain as fused
             for (const auto& t : chain_tensors) {

@@ -11,9 +11,20 @@
 #include <vector>
 #include <memory>
 #include <utility>
-#include <boost/pfr.hpp>
 
 namespace ttnn::experimental::lazy {
+
+struct LazyCompositeOperationInputs : public LazyOperationInputs {
+    LazyCompositeOperationInputs(const std::vector<Tensor>& input_tensors) : input_tensors_(input_tensors) {}
+    void for_each(const std::function<void(const std::shared_ptr<LazyTensor>&)>& fn) const override {
+        for (const auto& tensor : input_tensors_) {
+            fn(tensor.lazy());
+        }
+    }
+    std::any inputs() const override { return input_tensors_; }
+private:
+    std::vector<Tensor> input_tensors_;
+};
 
 // Generic wrapper that adapts any device operation to LazyOperation
 template <typename operation_t>
@@ -26,15 +37,11 @@ public:
     std::string_view name() const override { return std::string_view(name_.c_str()); }
 
     std::vector<tt::tt_metal::metal_tensor::Tensor> invoke(
-        const std::vector<tt::tt_metal::metal_tensor::Tensor>& input_tensors) override {
+        const LazyOperationInputs& inputs) override {
         // Use the standard device operation eager execution path
         // TODO: Remove this conversion once we have a proper metal tensor
-        std::vector<Tensor> tnn_input_tensors;
-        std::transform(
-            input_tensors.begin(), input_tensors.end(), std::back_inserter(tnn_input_tensors), [](const auto& tensor) {
-                return Tensor(tensor);
-            });
-        return convert_result_to_vector(operation_.invoke(tnn_input_tensors));
+        auto input_tensors = std::any_cast<std::vector<Tensor>>(inputs.inputs());
+        return convert_result_to_vector(operation_.invoke(input_tensors));
     }
 
     tt::stl::hash::hash_t operation_type_id() const override { return tt::stl::hash::type_hash<operation_t>; }
@@ -69,6 +76,12 @@ template <typename operation_t>
 std::shared_ptr<LazyCompositeOperation<operation_t>> make_lazy_composite_operation(
     operation_t operation, const std::string& name) {
     return std::make_shared<LazyCompositeOperation<operation_t>>(operation, name);
+}
+
+template <typename operation_t>
+std::shared_ptr<LazyCompositeOperationInputs> make_lazy_composite_operation_inputs(
+    const std::vector<Tensor>& input_tensors) {
+    return std::make_shared<LazyCompositeOperationInputs>(input_tensors);
 }
 
 }  // namespace ttnn::experimental::lazy

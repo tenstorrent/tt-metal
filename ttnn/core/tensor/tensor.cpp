@@ -271,25 +271,17 @@ std::shared_ptr<TensorAttributes> Tensor::tensor_attributes() const {
 }
 
 Tensor Tensor::make_lazy_tensor(
-    const std::vector<Tensor>& op_inputs,
+    const std::shared_ptr<ttnn::experimental::lazy::LazyOperationInputs>& op_inputs,
     const std::shared_ptr<ttnn::experimental::lazy::LazyOperation>& op,
     TensorSpec tensor_spec) {
-    std::vector<std::shared_ptr<LazyTensor>> lazy_op_inputs;
-    std::transform(op_inputs.begin(), op_inputs.end(), std::back_inserter(lazy_op_inputs), [](const Tensor& tensor) {
-        return tensor.lazy();
-    });
-    return Tensor(LazyTensor::make_lazy_tensor(lazy_op_inputs, op, std::move(tensor_spec)));
+    return Tensor(LazyTensor::make_lazy_tensor(op_inputs, op, std::move(tensor_spec)));
 }
 
 std::vector<Tensor> Tensor::make_lazy_tensors(
-    const std::vector<Tensor>& op_inputs,
+    const std::shared_ptr<ttnn::experimental::lazy::LazyOperationInputs>& op_inputs,
     const std::shared_ptr<ttnn::experimental::lazy::LazyOperation>& op,
     const std::vector<TensorSpec>& tensor_specs) {
-    std::vector<std::shared_ptr<LazyTensor>> lazy_op_inputs;
-    std::transform(op_inputs.begin(), op_inputs.end(), std::back_inserter(lazy_op_inputs), [](const Tensor& tensor) {
-        return tensor.lazy();
-    });
-    auto lazy_tensors = LazyTensor::make_lazy_tensors(lazy_op_inputs, op, tensor_specs);
+    auto lazy_tensors = LazyTensor::make_lazy_tensors(op_inputs, op, tensor_specs);
     std::vector<Tensor> tensors;
     tensors.reserve(lazy_tensors.size());
     for (const auto& lazy_tensor : lazy_tensors) {

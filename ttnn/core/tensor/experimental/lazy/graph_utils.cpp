@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/experimental/lazy/graph_utils.hpp"
+#include "ttnn/experimental/lazy/lazy_operation.hpp"
 
 namespace ttnn::experimental::lazy {
 
@@ -18,9 +19,9 @@ void GraphUtils::dfs_visit(
     visitor(node);
 
     // Visit all input nodes
-    for (const auto& input : node->op_inputs()) {
+    node->op_inputs()->for_each([&](const std::shared_ptr<LazyTensor>& input) {
         dfs_visit(input, visited, visitor);
-    }
+    });
 }
 
 LazyTensorId GraphUtils::get_available_lazy_tensor_id() {
@@ -42,9 +43,9 @@ std::vector<std::shared_ptr<LazyTensor>> GraphUtils::get_ancestors(const std::sh
     std::vector<std::shared_ptr<LazyTensor>> ancestors;
 
     dfs_visit(root, visited, [&](const std::shared_ptr<LazyTensor>& node) {
-        for (const auto& input : node->op_inputs()) {
+        node->op_inputs()->for_each([&](const std::shared_ptr<LazyTensor>& input) {
             ancestors.push_back(input);
-        }
+        });
     });
 
     return ancestors;
@@ -82,9 +83,9 @@ std::vector<std::shared_ptr<LazyTensor>> GraphUtils::topological_sort(const std:
         temp_visited.insert(id);
 
         // Visit all input nodes first (dependencies)
-        for (const auto& input : node->op_inputs()) {
+        node->op_inputs()->for_each([&](const std::shared_ptr<LazyTensor>& input) {
             dfs(input);
-        }
+        });
 
         temp_visited.erase(id);
         visited.insert(id);
