@@ -27,8 +27,9 @@ void Tilize::validate(const std::vector<Tensor>& input_tensors) const {
     uint32_t stick_s = width;
     TT_FATAL(
         input_tensor_a.dtype() == DataType::BFLOAT16 or input_tensor_a.dtype() == DataType::FLOAT32 or
-            input_tensor_a.dtype() == DataType::UINT32 or input_tensor_a.dtype() == DataType::INT32,
-        "data type must be bfloat16, float32, uint32 or int32");
+            input_tensor_a.dtype() == DataType::UINT32 or input_tensor_a.dtype() == DataType::INT32 or
+            input_tensor_a.dtype() == DataType::UINT16,
+        "data type must be bfloat16, float32, uint32, int32, or uint16");
 
     uint32_t stick_size = stick_s * input_tensor_a.element_size();  // Assuming bfloat16 dataformat
 
