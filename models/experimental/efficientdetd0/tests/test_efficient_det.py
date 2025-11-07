@@ -69,14 +69,28 @@ def test_efficient_det(batch, channels, height, width, device):
     )
     ttnn_outputs = ttnn_model(ttnn_input_tensor)
 
-    ttnn_outputs = ttnn.to_torch(ttnn_outputs)
-    passing, pcc_message = check_with_pcc(torch_outputs, ttnn_outputs, PCC_THRESHOLD)
-    logger.info(f"Output PCC: {pcc_message}")
+    # Compare each output
+    all_passed = True
+    for i, (torch_output, ttnn_output) in enumerate(zip(torch_outputs, ttnn_outputs)):
+        ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
-    if passing:
+        # Get expected dimensions from PyTorch output (NCHW format)
+        expected_batch, expected_channels, expected_h, expected_w = torch_output.shape
+
+        # TTNN output is in format [1, 1, H*W, C] (NHWC flattened)
+        # Reshape to [batch, H, W, C]
+        ttnn_output_torch = ttnn_output_torch.reshape(expected_batch, expected_h, expected_w, expected_channels)
+
+        # Permute from NHWC to NCHW to match PyTorch
+        ttnn_output_torch = ttnn_output_torch.permute(0, 3, 1, 2)
+
+        passing, pcc_message = check_with_pcc(torch_output, ttnn_output_torch, PCC_THRESHOLD)
+        logger.info(f"Output {i} PCC: {pcc_message}")
+        all_passed = all_passed and passing
+
+    if all_passed:
         logger.info("Efficient Det Test Passed!")
     else:
         logger.warning("Efficient Det Test Failed!")
 
-    assert passing, f"PCC value is lower than {PCC_THRESHOLD}. Check implementation! {pcc_message}"
-    pytest.skip("Skipping efficient det test")
+    assert all_passed, f"PCC value is lower than {PCC_THRESHOLD}. Check implementation!"

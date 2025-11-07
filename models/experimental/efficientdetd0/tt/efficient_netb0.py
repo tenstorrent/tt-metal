@@ -278,7 +278,6 @@ class Efficientnetb0:
         x = self._blocks4(x_3)
 
         x = x + x_3
-        ttnn.deallocate(x_3)
 
         x_5 = self._blocks5(x)
 
@@ -297,7 +296,6 @@ class Efficientnetb0:
         x = self._blocks9(x_8)
 
         x_10_in = x + x_8
-        ttnn.deallocate(x_8)
 
         x = self._blocks10(x_10_in)
 
