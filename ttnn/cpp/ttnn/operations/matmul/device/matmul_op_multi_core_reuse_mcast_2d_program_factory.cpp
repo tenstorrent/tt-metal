@@ -543,8 +543,16 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
         device->arch(), cores.size(), mm_kernel_defines);
-    ttnn::operations::compute_throttle_utils::throttle_mm_perf(
-        device->arch(), cores.size(), mm_kernel_defines, throttle_level);
+    if (out_subblock_h != 1 || out_subblock_w != 1) {
+        ttnn::operations::compute_throttle_utils::throttle_mm_perf(
+            device->arch(), cores.size(), mm_kernel_defines, throttle_level);
+    } else {
+        log_warning(
+            tt::LogOp,
+            "Throttle matmul perf not enabled for out_subblock_h = {} and out_subblock_w = {}",
+            out_subblock_h,
+            out_subblock_w);
+    }
 
     if (in0_receiver_interleaved.num_cores() == 0) {
         mm_kernel_in0_sender_interleaved_defines["SKIP_MCAST"] = "1";
