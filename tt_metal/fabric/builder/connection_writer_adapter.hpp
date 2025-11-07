@@ -74,10 +74,12 @@ private:
 class StaticSizedChannelConnectionWriterAdapter final : public ChannelConnectionWriterAdapter {
 public:
     StaticSizedChannelConnectionWriterAdapter(
-        FabricStaticSizedChannelsAllocator& allocator, tt::tt_fabric::Topology topology);
+        FabricStaticSizedChannelsAllocator& allocator,
+        tt::tt_fabric::Topology topology,
+        eth_chan_directions my_direction);
 
-     void add_downstream_connection(
-        SenderWorkerAdapterSpec const& adapter_spec,
+    void add_downstream_connection(
+        const SenderWorkerAdapterSpec& adapter_spec,
         uint32_t inbound_vc_idx,
         eth_chan_directions downstream_direction,
         CoreCoord downstream_noc_xy,
@@ -121,6 +123,7 @@ private:
         downstream_edm_vcs_worker_location_info_address = {};
 
     bool is_2D_routing = false;
+    eth_chan_directions my_direction = eth_chan_directions::EAST;
 };
 
 

@@ -760,7 +760,8 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
         "Channel allocator must be a FabricStaticSizedChannelsAllocator. Failed to build TT-Fabric router. Internal "
         "error.");
     this->receiver_channel_to_downstream_adapter =
-        std::make_shared<tt::tt_fabric::StaticSizedChannelConnectionWriterAdapter>(*static_allocator, config.topology);
+        std::make_shared<tt::tt_fabric::StaticSizedChannelConnectionWriterAdapter>(
+            *static_allocator, config.topology, direction);
 
     // Add this log right at the beginning of the constructor body
     log_debug(
@@ -861,6 +862,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
 
     const auto& fabric_context = control_plane.get_fabric_context();
     const auto topology = fabric_context.get_fabric_topology();
+    const bool is_2D_routing = FabricContext::is_2D_topology(topology);
 
     auto sender_channel_to_check = get_worker_connected_sender_channel(direction, topology);
 
@@ -922,10 +924,14 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     bool vc1_has_different_downstream_dest =
         fabric_context.need_deadlock_avoidance_support(this->direction) && this->has_tensix_extension;
 
+    // Get the VC0 downstream EDM count based on 2D routing
+    uint32_t num_vc0_downstream_edms = builder_config::get_vc0_downstream_edm_count(is_2D_routing);
+
     const std::vector<uint32_t> main_args_part1 = {
         num_sender_channels,
         num_receiver_channels,
         config.num_fwd_paths,
+        num_vc0_downstream_edms,
         this->wait_for_host_signal ? 1 : 0,
 
         this->firmware_context_switch_interval,
@@ -1144,17 +1150,19 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
     // downstream_connection_1->pack_inbound_channel_rt_args(0, rt_args);
     // downstream_connection_2->pack_inbound_channel_rt_args(1, rt_args);
 
-    auto args_pt2 = std::vector<uint32_t>{
-        this->receiver_channels_downstream_teardown_semaphore_id[0].value_or(-1),
-        this->receiver_channels_downstream_teardown_semaphore_id[1].value_or(-1),
-        this->receiver_channels_downstream_teardown_semaphore_id[2].value_or(-1),
-        this->receiver_channels_downstream_teardown_semaphore_id[3].value_or(-1),
-        this->receiver_channels_downstream_teardown_semaphore_id[4].value_or(-1),
-        this->sender_channels_flow_control_semaphore_id[0],
-        this->sender_channels_flow_control_semaphore_id[1],
-        this->sender_channels_flow_control_semaphore_id[2],
-        this->sender_channels_flow_control_semaphore_id[3],
-        this->sender_channels_flow_control_semaphore_id[4]};
+    // Pack runtime args - device side reads fixed MAX_NUM_SENDER_CHANNELS values
+    // Only the first NUM_DOWNSTREAM_CHANNELS values are used based on topology
+    auto args_pt2 = std::vector<uint32_t>{};
+
+    // Pack downstream teardown semaphores (always send MAX_NUM_SENDER_CHANNELS for compatibility)
+    for (uint32_t i = 0; i < builder_config::num_sender_channels; i++) {
+        args_pt2.push_back(this->receiver_channels_downstream_teardown_semaphore_id[i].value_or(-1));
+    }
+
+    // Pack sender flow control semaphores (always send MAX_NUM_SENDER_CHANNELS)
+    for (uint32_t i = 0; i < builder_config::num_sender_channels; i++) {
+        args_pt2.push_back(this->sender_channels_flow_control_semaphore_id[i]);
+    }
 
     rt_args.reserve(rt_args.size() + args_pt2.size());
     std::ranges::copy(args_pt2, std::back_inserter(rt_args));
@@ -1256,8 +1264,8 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
             tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().is_2D_routing_enabled();
         uint32_t num_vc0_downstream_edms = builder_config::get_vc0_downstream_edm_count(is_2D_routing);
 
-        // Setup VC0 downstrteam edm semaphore settings.
-        // 1D has 1 downstream edm. 2D has 3 downstream EDMs
+        // Setup VC0 downstream edm semaphore settings.
+        // 1D has 1 downstream edm. 2D has 3 downstream EDMs (excluding router's own direction)
         // 2D uses the reserved addresses in L1 from FabricEriscDatamoverConfig
         for (uint32_t i = 0; i < num_vc0_downstream_edms; i++) {
             receiver_channels_downstream_flow_control_semaphore_id[i] =

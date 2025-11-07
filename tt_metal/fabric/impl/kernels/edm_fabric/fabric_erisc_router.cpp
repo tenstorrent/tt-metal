@@ -457,10 +457,45 @@ FORCE_INLINE bool can_forward_packet_completely(
     return deliver_locally_only || downstream_edm_interface.edm_has_space_for_packet();
 }
 
+// Map downstream direction to compact array index [0-2], excluding my_direction
+// This function assumes 2D fabric where routers don't forward to themselves
+// Examples:
+// - EAST router (my_direction=0): WEST(1)→0, NORTH(2)→1, SOUTH(3)→2
+// - WEST router (my_direction=1): EAST(0)→0, NORTH(2)→1, SOUTH(3)→2
+// - NORTH router (my_direction=2): EAST(0)→0, WEST(1)→1, SOUTH(3)→2
+// - SOUTH router (my_direction=3): EAST(0)→0, WEST(1)→1, NORTH(2)→2
+FORCE_INLINE constexpr size_t map_downstream_direction_to_compact_index(eth_chan_directions downstream_dir) {
+    if constexpr (is_2d_fabric) {
+        if constexpr (my_direction == 0) {
+            // EAST router: skip index 0, map 1→0, 2→1, 3→2
+            return downstream_dir - 1;
+        } else {
+            // For other directions: if downstream < my_direction, use as-is; else subtract 1
+            return (downstream_dir < my_direction) ? downstream_dir : (downstream_dir - 1);
+        }
+    } else {
+        // For 1D fabric, no mapping needed
+        return downstream_dir;
+    }
+}
+
+// Runtime version of the mapping function
+FORCE_INLINE size_t map_downstream_direction_to_compact_index_runtime(eth_chan_directions downstream_dir) {
+    if constexpr (is_2d_fabric) {
+        if constexpr (my_direction == 0) {
+            return downstream_dir - 1;
+        } else {
+            return (downstream_dir < my_direction) ? downstream_dir : (downstream_dir - 1);
+        }
+    } else {
+        return downstream_dir;
+    }
+}
+
 template <uint8_t rx_channel_id, eth_chan_directions downstream_direction>
 FORCE_INLINE constexpr size_t get_downstream_edm_interface_index() {
-    // could be over-written later based on VC1 constraints
-    size_t downstream_edm_interface_index = downstream_direction;
+    // Map downstream direction to compact array index (excluding router's own direction)
+    size_t downstream_edm_interface_index = map_downstream_direction_to_compact_index(downstream_direction);
 
     if constexpr (enable_deadlock_avoidance) {
         if constexpr (rx_channel_id == 1) {
@@ -484,8 +519,8 @@ FORCE_INLINE constexpr size_t get_downstream_edm_interface_index() {
 
 template <uint8_t rx_channel_id>
 FORCE_INLINE size_t get_downstream_edm_interface_index(eth_chan_directions downstream_direction) {
-    // could be over-written later based on VC1 constraints
-    size_t downstream_edm_interface_index = downstream_direction;
+    // Map downstream direction to compact array index (excluding router's own direction)
+    size_t downstream_edm_interface_index = map_downstream_direction_to_compact_index_runtime(downstream_direction);
 
     if constexpr (enable_deadlock_avoidance) {
         if constexpr (rx_channel_id == 1) {
@@ -2611,33 +2646,49 @@ void kernel_main() {
 
     if (has_downstream_edm_vc0_buffer_connection) {
         // Only bit 0 is set for 1D
-        // upto 3 bits set for 2D. 0, 1, 2, 3 for East, West, North, South downstream connections.
-        uint32_t has_downstream_edm = has_downstream_edm_vc0_buffer_connection & 0xF;
-        uint32_t edm_index = 0;
+        // For 2D: 3 bits set for compact indices 0, 1, 2 (excluding router's own direction)
+        uint32_t has_downstream_edm = has_downstream_edm_vc0_buffer_connection & 0x7;  // 3-bit mask
+        uint32_t compact_index = 0;
         while (has_downstream_edm) {
             if (has_downstream_edm & 0x1) {
-                const auto teardown_sem_address = local_sem_for_teardown_from_downstream_edm[edm_index];
+                const auto teardown_sem_address = local_sem_for_teardown_from_downstream_edm[compact_index];
                 // reset the handshake addresses to 0 (this is for router -> router handshake for connections over noc)
                 *reinterpret_cast<volatile uint32_t* const>(teardown_sem_address) = 0;
 
-                auto downstream_direction = edm_index;
+                // For 2D fabric, we need to convert compact index (0-2) back to actual direction
+                // by inverting the compact mapping
+                eth_chan_directions downstream_direction;
+                if constexpr (is_2d_fabric) {
+                    // Inverse mapping: given compact index, get actual direction
+                    if constexpr (my_direction == 0) {
+                        // EAST router: compact 0→WEST(1), 1→NORTH(2), 2→SOUTH(3)
+                        downstream_direction = static_cast<eth_chan_directions>(compact_index + 1);
+                    } else {
+                        // For other directions: if compact_index < my_direction, use as-is; else add 1
+                        downstream_direction = static_cast<eth_chan_directions>(
+                            (compact_index < my_direction) ? compact_index : (compact_index + 1));
+                    }
+                } else {
+                    downstream_direction = static_cast<eth_chan_directions>(compact_index);
+                }
+
                 auto receiver_channel_free_slots_stream_id =
                     is_2d_fabric ? StreamId{receiver_channel_free_slots_stream_ids[downstream_direction]}
                                  : StreamId{receiver_channel_free_slots_stream_ids[0]};
-                new (&downstream_edm_noc_interfaces_vc0[edm_index]) RouterToRouterSender<
+                new (&downstream_edm_noc_interfaces_vc0[compact_index]) RouterToRouterSender<
                     DOWNSTREAM_SENDER_NUM_BUFFERS_VC0>(
                     // persistent_mode -> hardcode to false for 1D because for 1D, EDM -> EDM
                     // connections we must always use semaphore lookup
                     // For 2D, downstream_edm_vc0_semaphore_id is an address.
                     is_persistent_fabric,
-                    (downstream_edm_vc0_noc_x >> (edm_index * 8)) & 0xFF,
-                    (downstream_edm_vc0_noc_y >> (edm_index * 8)) & 0xFF,
+                    (downstream_edm_vc0_noc_x >> (compact_index * 8)) & 0xFF,
+                    (downstream_edm_vc0_noc_y >> (compact_index * 8)) & 0xFF,
                     downstream_edm_vc0_buffer_base_address,
                     DOWNSTREAM_SENDER_NUM_BUFFERS_VC0,
                     downstream_edm_vc0_worker_registration_id,
                     downstream_edm_vc0_worker_location_info_address,
                     channel_buffer_size,
-                    local_sender_channel_connection_buffer_index_id[edm_index],
+                    local_sender_channel_connection_buffer_index_id[compact_index],
                     0,  // Unused for Router->Router connections. Router->Router always uses stream registers for
                         // credits. Used by Worker->Router connections. This is an address in the worker's L1. The
                         // Router that a Worker adapter is connected to writes its read counter to this address. The
@@ -2662,13 +2713,13 @@ void kernel_main() {
                     receiver_channel_forwarding_sync_cmd_buf_ids[0]);
                 // Only receiver channel servicing cores should be setting up the noc cmd buf.
                 if constexpr (NUM_ACTIVE_ERISCS == 1 && !FORCE_ALL_PATHS_TO_USE_SAME_NOC) {
-                    downstream_edm_noc_interfaces_vc0[edm_index]
+                    downstream_edm_noc_interfaces_vc0[compact_index]
                         .template setup_edm_noc_cmd_buf<
                             tt::tt_fabric::edm_to_downstream_noc,
                             tt::tt_fabric::forward_and_local_write_noc_vc>();
                 }
             }
-            edm_index++;
+            compact_index++;
             has_downstream_edm >>= 1;
         }
     }
@@ -2839,7 +2890,7 @@ void kernel_main() {
     }
 
     if constexpr (is_2d_fabric) {
-        uint32_t has_downstream_edm = has_downstream_edm_vc0_buffer_connection & 0xF;
+        uint32_t has_downstream_edm = has_downstream_edm_vc0_buffer_connection & 0x7;  // 3-bit mask
         uint32_t edm_index = 0;
         while (has_downstream_edm) {
             if constexpr (is_receiver_channel_serviced[0]) {
@@ -2891,7 +2942,7 @@ void kernel_main() {
         // just the fabric bringup phase. These calls are also located earlier for the
         // single erisc mode
         if constexpr (!FORCE_ALL_PATHS_TO_USE_SAME_NOC) {
-            uint32_t has_downstream_edm = has_downstream_edm_vc0_buffer_connection & 0xF;
+            uint32_t has_downstream_edm = has_downstream_edm_vc0_buffer_connection & 0x7;  // 3-bit mask
             uint32_t edm_index = 0;
             while (has_downstream_edm) {
                 if (has_downstream_edm & 0x1) {
