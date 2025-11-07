@@ -161,6 +161,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
+      gtest_filter: ${{ contains(inputs.runner-label, "P100") && "*" || "*-*NIGHTLY_*" }}
   models-unit-tests:
     needs: [build-artifact, generate-matrix]
     secrets: inherit
