@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
 
 torch.manual_seed(0)
 
@@ -25,7 +25,10 @@ def random_torch_tensor(dtype, shape):
 
 @pytest.mark.parametrize(
     "concat_spec",
-    (([[1, 1, 4, 4], [1, 1, 4, 4]], -1),),
+    [
+        ([[1, 1, 4, 4], [1, 1, 4, 4]], -1),
+        ([[96], [96]], 0),  # tiled 1D tensors
+    ],
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32, ttnn.uint32])
 def test_tiled_concat(device, concat_spec, dtype):
@@ -41,7 +44,7 @@ def test_tiled_concat(device, concat_spec, dtype):
     output = ttnn.concat(input_tensors, dim=dim)
     output = ttnn.to_torch(output)
 
-    assert torch.equal(torch_output_tensor, output)
+    assert_equal(torch_output_tensor, output)
 
 
 @pytest.mark.parametrize("height", [20, 32])
@@ -59,7 +62,7 @@ def test_concat(device, height, width, dim, dtype):
     output = ttnn.concat([input_tensor_a, input_tensor_b], dim=dim)
     output = ttnn.to_torch(output)
 
-    assert torch.equal(torch_output_tensor, output)
+    assert_equal(torch_output_tensor, output)
 
 
 @pytest.mark.parametrize(
@@ -201,7 +204,7 @@ def test_sharded_concat(device, inputs, output_shard_shape, shard_grid, strategy
     torch_output_tensor = torch.concat([torch_tensor for torch_tensor, _ in input_tensors], dim=dim)
     output = ttnn.concat([tensor for _, tensor in input_tensors], dim=dim, memory_config=output_sharded_memory_config)
     output = ttnn.to_torch(output)
-    assert torch.equal(torch_output_tensor, output)
+    assert_equal(torch_output_tensor, output)
 
     # If cache mode is enabled, run the second set of input tensors to verify buffers are updated when cache hits.
     if not cache_mode:
@@ -213,7 +216,7 @@ def test_sharded_concat(device, inputs, output_shard_shape, shard_grid, strategy
         [tensor for _, tensor in input_tensors_2], dim=dim, memory_config=output_sharded_memory_config
     )
     output_2 = ttnn.to_torch(output_2)
-    assert torch.equal(torch_output_tensor_2, output_2)
+    assert_equal(torch_output_tensor_2, output_2)
 
 
 @pytest.mark.parametrize("dim", [3])
@@ -265,7 +268,7 @@ def test_sharded_concat_with_groups(device, input_shapes, output_shape, dim, gro
     if dtype == ttnn.bfloat8_b:
         assert_with_pcc(expected, actual, 0.99)
     else:
-        assert torch.equal(expected, actual)
+        assert_equal(expected, actual)
 
 
 @pytest.mark.parametrize("dim", [0, 1, 2, 3])
@@ -277,7 +280,7 @@ def test_concat_5d(device, dim, dtype):
     ttnn_input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=dtype)
     ttnn_result = ttnn.concat([ttnn_input_tensor, ttnn_input_tensor], dim=dim)
     ttnn_result = ttnn.to_torch(ttnn_result)
-    assert torch.equal(torch_result, ttnn_result)
+    assert_equal(torch_result, ttnn_result)
 
 
 @pytest.mark.parametrize(
@@ -331,4 +334,4 @@ def test_concat_sharded_pad(device, core_grid, hw, channels1, channels2, shard_h
         memory_config=output_memory_config,
     )
     expected = torch.concat([torch_input_tensor1, torch_input_tensor2], dim=-1)
-    assert torch.equal(expected, ttnn.to_torch(actual))
+    assert_equal(expected, ttnn.to_torch(actual))
