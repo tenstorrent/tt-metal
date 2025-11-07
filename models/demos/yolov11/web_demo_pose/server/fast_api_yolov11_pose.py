@@ -488,17 +488,27 @@ async def pose_estimation_v2(file: UploadFile = File(...)):
             pad_left = (640 - new_w) // 2
             pad_top = (640 - new_h) // 2
 
-            # Convert bbox from 640x640 coords back to original image coords, then normalize to 640x640 display space
-            x_orig = (x - pad_left) / scale
-            y_orig = (y - pad_top) / scale
+            # Convert bbox center coords from 640x640 back to original image coords
+            x_center_orig = (x - pad_left) / scale
+            y_center_orig = (y - pad_top) / scale
             w_orig = w / scale
             h_orig = h / scale
 
+            # Convert to top-left corner + width/height (normalized)
+            x1_orig = x_center_orig - (w_orig / 2.0)
+            y1_orig = y_center_orig - (h_orig / 2.0)
+
             # Normalize to [0,1] relative to original image dimensions (what client expects)
-            x_norm = x_orig / orig_w
-            y_norm = y_orig / orig_h
+            x_norm = x1_orig / orig_w
+            y_norm = y1_orig / orig_h
             w_norm = w_orig / orig_w
             h_norm = h_orig / orig_h
+
+            # Clamp to valid range
+            x_norm = float(torch.clamp(torch.tensor(x_norm), 0.0, 1.0).item())
+            y_norm = float(torch.clamp(torch.tensor(y_norm), 0.0, 1.0).item())
+            w_norm = float(torch.clamp(torch.tensor(w_norm), 0.0, 1.0).item())
+            h_norm = float(torch.clamp(torch.tensor(h_norm), 0.0, 1.0).item())
 
             # Convert keypoints from 640x640 coords back to original image coords, then normalize
             kpt_normalized = []
