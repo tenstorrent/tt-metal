@@ -3,159 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-import math
+
+from models.experimental.efficientdetd0.tt.utils import Conv2dDynamicSamePadding as TtConv2dDynamicSamePadding
 
 
-class EfficientNetb0Conv2D:
-    def __init__(
-        self,
-        parameters,
-        conv,
-        device,
-        cache={},
-        activation=None,
-        weights_dtype=ttnn.bfloat8_b,
-        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        groups=1,
-        output_layout=ttnn.TILE_LAYOUT,
-        dilation=1,
-        deallocate_activation=False,
-    ):
-        self.device = device
-        self.batch_size = 1
-        self.conv_params = conv
-        self.batch_size = conv.batch_size
-        self.input_height = conv.input_height
-        self.input_width = conv.input_width
-        self.in_channels = conv.in_channels
-        self.out_channels = conv.out_channels
-        self.kernel_size = conv.kernel_size
-        self.padding = conv.padding
-        self.stride = conv.stride
-        self.groups = conv.groups
-        self.deallocate_activation = deallocate_activation
-        self.cache = cache
-        self.parameters = parameters
-        self.shard_layout = shard_layout
-        self.output_layout = output_layout
-        self.shard_layout = shard_layout
-        self.dilation = dilation
-        self.conv_config = self._initialize_conv_config()
-        self.compute_config = self._initialize_compute_config()
-        self.weights, self.bias = self.parameters
-
-    def _initialize_conv_config(self):
-        conv_config = ttnn.Conv2dConfig(
-            weights_dtype=ttnn.bfloat8_b,
-            shard_layout=self.shard_layout,
-            deallocate_activation=self.deallocate_activation,
-            enable_act_double_buffer=True,
-            enable_weights_double_buffer=True if self.shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED else False,
-            reshard_if_not_optimal=True,
-        )
-
-        return conv_config
-
-    def _initialize_compute_config(self):
-        return ttnn.init_device_compute_kernel_config(
-            self.device.arch(),
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
-
-    def __call__(self, x):
-        import pdb
-
-        pdb.set_trace()
-        [x, [out_h, out_w], [self.weights, self.bias]] = ttnn.conv2d(
-            input_tensor=x,
-            weight_tensor=self.weights,
-            in_channels=self.in_channels,
-            out_channels=self.out_channels,
-            device=self.device,
-            bias_tensor=self.bias,
-            kernel_size=self.kernel_size,
-            stride=self.stride,
-            padding=self.padding,
-            dilation=(self.dilation, self.dilation),
-            batch_size=self.batch_size,
-            input_height=self.input_height,
-            input_width=self.input_width,
-            conv_config=self.conv_config,
-            compute_config=self.compute_config,
-            groups=self.groups,
-            return_weights_and_bias=True,
-            return_output_dim=True,
-            dtype=ttnn.bfloat8_b,
-            slice_config=ttnn.Conv2dL1FullSliceConfig,
-        )
-
-        return x
-
-
-class Conv2dDynamicSamePadding:
-    def __init__(
-        self,
-        device,
-        parameters,
-        shard_layout,
-        conv_params,
-        batch=1,
-        deallocate_activation=False,
-    ):
-        self.device = device
-        self.batch = batch
-        self.parameters = parameters
-        self.in_channels = conv_params.in_channels
-        self.kernel_size = conv_params.kernel_size
-        self.stride = conv_params.stride
-        self.dilation = conv_params.dilation
-        self.groups = conv_params.groups
-        self.input_height = conv_params.input_height
-        self.input_width = conv_params.input_width
-        self.shard_layout = shard_layout
-        ih, iw = self.input_height, self.input_width
-        kh, kw = self.kernel_size
-        sh, sw = self.stride
-        oh, ow = math.ceil(ih / sh), math.ceil(iw / sw)  # change the output size according to stride ! ! !
-        self.pad_h = max((oh - 1) * self.stride[0] + (kh - 1) * self.dilation[0] + 1 - ih, 0)
-        self.pad_w = max((ow - 1) * self.stride[1] + (kw - 1) * self.dilation[1] + 1 - iw, 0)
-        self.padding = (self.pad_h, self.pad_w)
-
-        if self.pad_h > 0 or self.pad_w > 0:
-            pad_offset_width = self.pad_w // 2 + self.pad_w - self.pad_w // 2
-            pad_offset_height = self.pad_h // 2 + self.pad_h - self.pad_h // 2
-            if pad_offset_width % 2 == 0 and pad_offset_height % 2 == 0:
-                conv_params.padding = (pad_offset_height // 2, pad_offset_width // 2)
-            else:
-                pad_top = pad_offset_height // 2
-                pad_bottom = pad_top + pad_offset_height % 2
-                pad_left = pad_offset_width // 2
-                pad_right = pad_left + pad_offset_width % 2
-                conv_params.padding = (pad_top, pad_bottom, pad_left, pad_right)
-
-        self.dynamic_conv = EfficientNetb0Conv2D(
-            parameters,
-            conv_params,
-            device=device,
-            shard_layout=self.shard_layout,
-            deallocate_activation=deallocate_activation,
-        )
-
-        self.parameters_conv = conv_params
-
-    def __call__(self, x):
-        if self.pad_h > 0 or self.pad_w > 0:
-            padded_shape = [self.batch, self.parameters_conv.input_height, self.parameters_conv.input_width, x.shape[3]]
-            input_height = int(math.sqrt((x.shape[2] // self.batch)))
-            input_width = int(math.sqrt((x.shape[2] // self.batch)))
-
-        return self.dynamic_conv(x)
-
-
-class MBConvBlock:
+class Efficientdetd0MBConvBlock:
     def __init__(
         self,
         device,
@@ -176,44 +28,49 @@ class MBConvBlock:
         self.is_height_sharded = is_height_sharded
         self.shard_layout = shard_layout
         if not is_depthwise_first:
-            self._expand_conv = Conv2dDynamicSamePadding(
+            self._expand_conv = TtConv2dDynamicSamePadding(
                 device=device,
                 parameters=parameters["_expand_conv"],
                 conv_params=conv_params._expand_conv,
                 shard_layout=self.shard_layout,
                 deallocate_activation=deallocate_activation,
+                dtype=ttnn.bfloat8_b,
             )
 
-        self._depthwise_conv = Conv2dDynamicSamePadding(
+        self._depthwise_conv = TtConv2dDynamicSamePadding(
             device=device,
             parameters=parameters["_depthwise_conv"],
             conv_params=conv_params._depthwise_conv,
             shard_layout=shard_layout_depthwise_conv,
             deallocate_activation=deallocate_activation,
+            dtype=ttnn.bfloat8_b,
         )
 
-        self._se_reduce = Conv2dDynamicSamePadding(
+        self._se_reduce = TtConv2dDynamicSamePadding(
             device=device,
             parameters=parameters["_se_reduce"],
             conv_params=conv_params._se_reduce,
             shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             deallocate_activation=deallocate_activation,
+            dtype=ttnn.bfloat8_b,
         )
 
-        self._se_expand = Conv2dDynamicSamePadding(
+        self._se_expand = TtConv2dDynamicSamePadding(
             device=device,
             parameters=parameters["_se_expand"],
             conv_params=conv_params._se_expand,
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             deallocate_activation=deallocate_activation,
+            dtype=ttnn.bfloat8_b,
         )
 
-        self._project_conv = Conv2dDynamicSamePadding(
+        self._project_conv = TtConv2dDynamicSamePadding(
             device,
             parameters=parameters["_project_conv"],
             conv_params=conv_params._project_conv,
             shard_layout=self.shard_layout,
             deallocate_activation=deallocate_activation,
+            dtype=ttnn.bfloat8_b,
         )
 
     def __call__(self, x):
@@ -256,19 +113,14 @@ class Efficientnetb0:
         self.batch = batch
         self.conv_cache = {}
         self.conv_params = conv_params
-        import pdb
-
-        pdb.set_trace()
-        print(f"parameters: {parameters=}")
-        print(".........................................................")
-        self._conv_stem = Conv2dDynamicSamePadding(
+        self._conv_stem = TtConv2dDynamicSamePadding(
             device=device,
             parameters=parameters["_conv_stem"],
             conv_params=conv_params._conv_stem,
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             deallocate_activation=True,
         )
-        self._blocks0 = MBConvBlock(
+        self._blocks0 = Efficientdetd0MBConvBlock(
             device,
             parameters["blocks"]["_blocks0"],
             is_depthwise_first=True,
@@ -276,7 +128,7 @@ class Efficientnetb0:
             deallocate_activation=True,
             shard_layout_depthwise_conv=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         )
-        self._blocks1 = MBConvBlock(
+        self._blocks1 = Efficientdetd0MBConvBlock(
             device,
             parameters["blocks"]["_blocks1"],
             is_depthwise_first=False,
@@ -284,27 +136,27 @@ class Efficientnetb0:
             deallocate_activation=True,
             shard_layout_depthwise_conv=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         )
-        self._blocks2 = MBConvBlock(
+        self._blocks2 = Efficientdetd0MBConvBlock(
             device,
             parameters["blocks"]["_blocks2"],
             is_depthwise_first=False,
             conv_params=conv_params._blocks2,
             shard_layout_depthwise_conv=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         )
-        self._blocks3 = MBConvBlock(
+        self._blocks3 = Efficientdetd0MBConvBlock(
             device,
             parameters["blocks"]["_blocks3"],
             is_depthwise_first=False,
             conv_params=conv_params._blocks3,
             deallocate_activation=True,
         )
-        self._blocks4 = MBConvBlock(
+        self._blocks4 = Efficientdetd0MBConvBlock(
             device,
             parameters["blocks"]["_blocks4"],
             is_depthwise_first=False,
             conv_params=conv_params._blocks4,
         )
-        self._blocks5 = MBConvBlock(
+        self._blocks5 = Efficientdetd0MBConvBlock(
             device,
             parameters["blocks"]["_blocks5"],
             is_depthwise_first=False,
@@ -312,21 +164,21 @@ class Efficientnetb0:
             id=5,
             deallocate_activation=True,
         )
-        self._blocks6 = MBConvBlock(
+        self._blocks6 = Efficientdetd0MBConvBlock(
             device,
             parameters["blocks"]["_blocks6"],
             is_depthwise_first=False,
             conv_params=conv_params._blocks6,
             id=6,
         )
-        self._blocks7 = MBConvBlock(
+        self._blocks7 = Efficientdetd0MBConvBlock(
             device,
             parameters["blocks"]["_blocks7"],
             is_depthwise_first=False,
             conv_params=conv_params._blocks7,
             id=7,
         )
-        self._blocks8 = MBConvBlock(
+        self._blocks8 = Efficientdetd0MBConvBlock(
             device,
             parameters["blocks"]["_blocks8"],
             is_depthwise_first=False,
@@ -335,7 +187,7 @@ class Efficientnetb0:
             id=8,
             deallocate_activation=True,
         )
-        self._blocks9 = MBConvBlock(
+        self._blocks9 = Efficientdetd0MBConvBlock(
             device,
             parameters["blocks"]["_blocks9"],
             is_depthwise_first=False,
@@ -343,7 +195,7 @@ class Efficientnetb0:
             shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             id=9,
         )
-        self._blocks10 = MBConvBlock(
+        self._blocks10 = Efficientdetd0MBConvBlock(
             device,
             parameters["blocks"]["_blocks10"],
             is_depthwise_first=False,
@@ -351,7 +203,7 @@ class Efficientnetb0:
             shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             id=10,
         )
-        self._blocks11 = MBConvBlock(
+        self._blocks11 = Efficientdetd0MBConvBlock(
             device,
             parameters["blocks"]["_blocks11"],
             is_depthwise_first=False,
@@ -360,7 +212,7 @@ class Efficientnetb0:
             id=11,
             deallocate_activation=True,
         )
-        self._blocks12 = MBConvBlock(
+        self._blocks12 = Efficientdetd0MBConvBlock(
             device,
             parameters["blocks"]["_blocks12"],
             is_depthwise_first=False,
@@ -368,7 +220,7 @@ class Efficientnetb0:
             shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             shard_layout_depthwise_conv=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         )
-        self._blocks13 = MBConvBlock(
+        self._blocks13 = Efficientdetd0MBConvBlock(
             device,
             parameters["blocks"]["_blocks13"],
             is_depthwise_first=False,
@@ -376,7 +228,7 @@ class Efficientnetb0:
             shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             shard_layout_depthwise_conv=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         )
-        self._blocks14 = MBConvBlock(
+        self._blocks14 = Efficientdetd0MBConvBlock(
             device,
             parameters["blocks"]["_blocks14"],
             is_depthwise_first=False,
@@ -384,7 +236,7 @@ class Efficientnetb0:
             shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             shard_layout_depthwise_conv=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         )
-        self._blocks15 = MBConvBlock(
+        self._blocks15 = Efficientdetd0MBConvBlock(
             device,
             parameters["blocks"]["_blocks15"],
             is_depthwise_first=False,
@@ -393,16 +245,6 @@ class Efficientnetb0:
             shard_layout_depthwise_conv=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             deallocate_activation=True,
         )
-        self._conv_head = Conv2dDynamicSamePadding(
-            device=device,
-            parameters=parameters["_conv_head"],
-            conv_params=conv_params._conv_head,
-            shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-            deallocate_activation=True,
-        )
-
-        self.l1_weight = parameters["l1"]["weight"]
-        self.l1_bias = parameters["l1"]["bias"]
 
     def __call__(self, x):
         N, C, H, W = x.shape
@@ -482,15 +324,4 @@ class Efficientnetb0:
 
         x = self._blocks15(x)
 
-        x = self._conv_head(x)
-
-        x = x * ttnn.sigmoid_accurate(x, True)
-
-        x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
-        x = ttnn.global_avg_pool2d(x)
-
-        x = ttnn.reshape(x, (1, -1))
-
-        x = ttnn.linear(x, self.l1_weight, bias=self.l1_bias)
-
-        return x
+        return x_3, x_8, x

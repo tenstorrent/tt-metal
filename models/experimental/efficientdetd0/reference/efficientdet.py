@@ -83,9 +83,9 @@ class EfficientDetBackbone(nn.Module):
 
     def forward(self, inputs):
         p3, p4, p5 = self.backbone_net(inputs)
+        return p3, p4, p5
         features = (p3, p4, p5)
         features = self.bifpn(features)
-
         regression = self.regressor(features)
         classification = self.classifier(features)
         anchors = self.anchors(inputs, inputs.dtype)

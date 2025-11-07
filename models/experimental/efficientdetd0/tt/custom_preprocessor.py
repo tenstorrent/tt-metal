@@ -26,13 +26,13 @@ def _preprocess_conv_bn_parameter(conv, bn, *, dtype=ttnn.float32):
     return parameters
 
 
-def _preprocess_conv_params(conv):
+def _preprocess_conv_params(conv, *, dtype=ttnn.float32):
+    parameters = {}
     weight = conv.weight
     bias = conv.bias
-    bias = torch.reshape(bias, (1, 1, 1, -1))
-    weight = ttnn.from_torch(weight, dtype=ttnn.float32)
-    bias = ttnn.from_torch(bias, dtype=ttnn.float32)
-    return weight, bias
+    parameters["weight"] = ttnn.from_torch(weight, dtype=dtype)
+    parameters["bias"] = ttnn.from_torch(bias.reshape((1, 1, 1, -1)), dtype=dtype)
+    return parameters
 
 
 def _extract_seperable_conv(model, bn=None):

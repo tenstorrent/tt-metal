@@ -481,4 +481,4 @@ class EfficientNet(nn.Module):
         x = self.model._blocks14(x_14_in)
         x = x_14_in + x
         x = self.model._blocks15(x)
-        return x_5, x_11, x
+        return x_3, x_8, x
