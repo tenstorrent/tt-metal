@@ -11,7 +11,7 @@ void kernel_main() {
     uint32_t output_address = get_arg_val<uint32_t>(runtime_args_counter++);
 
     // Circular buffer indices
-    constexpr uint32_t cb_output = tt::CBIndex::c_4;
+    constexpr uint32_t cb_output = tt::CBIndex::c_5;
 
     // Get tile size
     const uint32_t tile_bytes = get_tile_size(cb_output);
@@ -26,4 +26,6 @@ void kernel_main() {
     noc_async_write_tile(0, output_address_generator, l1_read_addr);
     noc_async_write_barrier();
     cb_pop_front(cb_output, onetile);
+
+    DPRINT << "RDCN_WRITER: Output written to address: " << output_address << ENDL();
 }

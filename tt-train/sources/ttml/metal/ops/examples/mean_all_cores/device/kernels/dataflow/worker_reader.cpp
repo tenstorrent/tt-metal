@@ -38,14 +38,24 @@ void kernel_main() {
     generate_tile_with_bfloat16_value(
         cb_reduction_scaler_idx, one);  // generate tile with bfloat16 value 1.0 for reduction scaler
 
-    for (uint32_t row = start_row; row < start_row + num_rows_to_process; ++row) {
+    DPRINT << "WORKER_READER: start_row: " << start_row << ", num_rows_to_process: " << num_rows_to_process << ENDL();
+    for (uint32_t row = 0; row < num_rows_to_process; ++row) {
         cb_reserve_back(cb_input_idx, Wt);
+        uint32_t idx = (start_row + row) * Wt;
         uint32_t l1_write_addr = get_write_ptr(cb_input_idx);
         for (uint32_t col = 0; col < Wt; ++col) {
-            noc_async_read_tile(col, input_address_generator, l1_write_addr);
+            noc_async_read_tile(idx + col, input_address_generator, l1_write_addr);
             l1_write_addr += tile_bytes;
         }
         noc_async_read_barrier();
         cb_push_back(cb_input_idx, Wt);
+
+        // if (start_row == 1) {
+        //     print_tile(cb_input_idx, 0);
+        //     print_tile(cb_input_idx, 1);
+        //     print_tile(cb_input_idx, 2);
+        //     print_tile(cb_input_idx, 3);
+        // }
     }
+    DPRINT << "WORKER_READER: Finished processing " << num_rows_to_process << " rows." << ENDL();
 }

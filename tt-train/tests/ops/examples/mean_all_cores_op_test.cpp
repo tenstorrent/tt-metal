@@ -21,6 +21,7 @@
 #include "ops/losses.hpp"
 #include "ops/unary_ops.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
+#include "xtensor/generators/xbuilder.hpp"
 
 class MeanAllCoresTest : public ::testing::Test {
 protected:
@@ -55,7 +56,13 @@ TEST_F(MeanAllCoresTest, MeanAllCoresTest_Small_Batch) {
         std::span{input_tensor.data(), input_tensor.size()},
         []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); },
         seed);
+    // xt::xarray<float> input_tensor = xt::ones<float>({B, H, S, W});
 
+    // for (uint32_t h = 0; h < S; ++h) {
+    //     for (uint32_t w = 0; w < W; ++w) {
+    //         input_tensor(0, 0, h, w) = 2.0F;
+    //     }
+    // }
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
     std::cout << "Input Logits:\n";
     input.print();
@@ -63,7 +70,14 @@ TEST_F(MeanAllCoresTest, MeanAllCoresTest_Small_Batch) {
     auto result = ttml::metal::mean_all_cores(input);
     xt::xarray<float> result_xtensor = core::to_xtensor(result);
 
+    fmt::print("Result Tensor Shape: {}\n", result_xtensor.shape());
+    fmt::print("Result Tensor Values:\n{}\n", result_xtensor(0, 0, 0, 0));
+
     xt::xarray<float> expected_result = compute_mean_all_dims(input_tensor);
+
+    fmt::print("Expected Result Shape: {}\n", expected_result.shape());
+    fmt::print("Expected Result Values:\n{}\n", expected_result(0, 0, 0, 0));
+
     assert((result_xtensor.shape() == expected_result.shape()));
     EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 1e-2F, 1e-2F));
 }

@@ -43,12 +43,10 @@ constexpr auto kReduceComputeKernelPath =
 constexpr auto kInputCbIndex = tt::CBIndex::c_0;
 constexpr auto kReductionScalerCbIndex = tt::CBIndex::c_1;
 constexpr auto kIntermOutputCbIndex = tt::CBIndex::c_2;
-constexpr auto kTransferBuffer = tt::CBIndex::c_3;
-constexpr auto kOutputCbIndex = tt::CBIndex::c_4;
+constexpr auto kTransferBuffer_01 = tt::CBIndex::c_3;
+constexpr auto kTransferBuffer_02 = tt::CBIndex::c_4;
+constexpr auto kOutputCbIndex = tt::CBIndex::c_5;
 
-constexpr uint32_t kNumInputTiles = 8U;
-constexpr uint32_t kNumIntermediateTiles = 2U;
-constexpr uint32_t kNumOutputTiles = 1U;
 constexpr uint32_t kSingleTileBuffer = 1U;
 
 }  // namespace
@@ -79,8 +77,12 @@ void assign_worker_core_runtime_args(
     const uint32_t semaphore) {
     for (uint32_t i = 0, num_rows_written = 0; i < num_worker_cores; i++) {
         CoreCoord core = {0, i};
-
-        // Reader kernel: (input_addr, target_addr, number_of_rows, offset_in_rows)
+        fmt::print("Assigning runtime args for worker core at coord: ({}, {})\n", core.x, core.y);
+        fmt::print(
+            "  num_rows_per_worker_core: {}, num_rows_written: {}\n",
+            num_rows_per_worker_core,
+            num_rows_written);
+        // Reader kernel: (input_addr, number_of_rows, offset_in_rows)
         SetRuntimeArgs(
             program,
             kernels.worker_reader,
@@ -93,6 +95,7 @@ void assign_worker_core_runtime_args(
             kernels.worker_writer,
             core,
             {num_rows_per_worker_core,
+             num_rows_written,
              static_cast<uint32_t>(reduction_core_physical_coord.x),
              static_cast<uint32_t>(reduction_core_physical_coord.y),
              semaphore});
@@ -112,7 +115,7 @@ void assign_reduction_core_runtime_args(
     TT_FATAL(reduction_cores.size() == 1, "Only one reduction core is supported");
     CoreCoord core = {0, 2U};  // only one reduction core at (0,2)
     TT_FATAL(reduction_cores.contains(core), "Reduction core coordinate mismatch");
-
+    fmt::print("Assigning runtime args for reduction core at coord: ({}, {})\n", core.x, core.y);
     // Reader kernel: (number_of_rows, worker0_core_x, worker0_core_y, worker1_core_x, worker1_core_y,
     // semaphore_addr)
     SetRuntimeArgs(
@@ -211,7 +214,7 @@ MeanAllCoresProgramFactory::cached_program_t MeanAllCoresProgramFactory::create(
 
     [[maybe_unused]] auto cb_reduction_scaler = create_circular_buffer(
         program,
-        reduction_cores,
+        worker_cores,
         kReductionScalerCbIndex,
         input_data_format,
         bfloat16_single_tile_size_bytes,
@@ -226,7 +229,10 @@ MeanAllCoresProgramFactory::cached_program_t MeanAllCoresProgramFactory::create(
         kSingleTileBuffer);
 
     [[maybe_unused]] auto cb_transfer_buffer = create_circular_buffer(
-        program, all_cores, kTransferBuffer, input_data_format, bfloat16_single_tile_size_bytes, kSingleTileBuffer);
+        program, all_cores, kTransferBuffer_01, input_data_format, bfloat16_single_tile_size_bytes, kSingleTileBuffer);
+
+    [[maybe_unused]] auto cb_transfer_buffer_2 = create_circular_buffer(
+        program, all_cores, kTransferBuffer_02, input_data_format, bfloat16_single_tile_size_bytes, kSingleTileBuffer);
 
     [[maybe_unused]] auto cb_output = create_circular_buffer(
         program,
@@ -308,7 +314,7 @@ MeanAllCoresProgramFactory::cached_program_t MeanAllCoresProgramFactory::create(
         sem_id);
 
     assign_reduction_core_runtime_args(
-        program, kernels, output_buffer, num_reduction_cores, worker_cores_physical_coords, reduction_cores, sem_id);
+        program, kernels, output_buffer, num_worker_cores, worker_cores_physical_coords, reduction_cores, sem_id);
 
     // -------------------------------------------------------------------------
     // 6) Return cached program
