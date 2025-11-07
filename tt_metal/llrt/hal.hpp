@@ -40,6 +40,8 @@ namespace tt {
 
 namespace tt_metal {
 
+enum class HalProcessorClassType : uint8_t { DM = 0, COMPUTE = 1 };
+
 // Struct of core type, processor class, and processor type to uniquely identify any processor.
 struct HalProcessorIdentifier {
     HalProgrammableCoreType core_type = HalProgrammableCoreType::TENSIX;
