@@ -838,7 +838,10 @@ def get_weight_config(
     mesh_device: ttnn.Device,
     force_recalculate: bool,
 ):
-    weight_cache_path = weight_cache_path / f"{hf_config.num_hidden_layers}_layers"
+    weight_cache_path = (
+        weight_cache_path / f"{hf_config.num_hidden_layers}_layers_embedding_dp_tracing" / str(mesh_device.shape)
+    )
+    # weight_cache_path = weight_cache_path / f"{hf_config.num_hidden_layers}_layers_embedding_dp"
     config_path = weight_cache_path / "config.json"
     weight_path = weight_cache_path / "weights"
     for _ in range(1):

@@ -13,7 +13,7 @@ import ttnn
 from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block_2d import DecoderBlock2D
 from models.demos.deepseek_v3.tt.decoder_block.moe_decoder_block_2d import MoEDecoderBlock2D
-from models.demos.deepseek_v3.tt.embedding.embedding2d import Embedding2D
+from models.demos.deepseek_v3.tt.embedding.embedding_dp import EmbeddingDP
 from models.demos.deepseek_v3.tt.lm_head1d import LMHead1D
 from models.demos.deepseek_v3.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
@@ -47,7 +47,7 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
         (state_dict,) = state_dicts
 
         return {
-            "embedding": Embedding2D.convert_weights(
+            "embedding": EmbeddingDP.convert_weights(
                 hf_config, (sub_state_dict(state_dict, "model.embed_tokens."),), output_path / "embedding", mesh_device
             ),
             "mlp_decoder_block": [
@@ -93,7 +93,7 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
     ) -> ModelPrefillConfig:
         """Create the model configuration for prefill mode."""
         return {
-            "embedding": Embedding2D.prefill_model_config(hf_config, mesh_device),
+            "embedding": EmbeddingDP.prefill_model_config(hf_config, mesh_device),
             "mlp_decoder_block": [
                 DecoderBlock2D.prefill_model_config(
                     hf_config,
@@ -119,7 +119,7 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
         """Create the model configuration for decode mode."""
         norm_config = DistributedRMSNorm.decode_model_config(hf_config, mesh_device)
         return {
-            "embedding": Embedding2D.decode_model_config(hf_config, mesh_device),
+            "embedding": EmbeddingDP.decode_model_config(hf_config, mesh_device),
             "mlp_decoder_block": [
                 DecoderBlock2D.decode_model_config(
                     hf_config,
@@ -178,7 +178,7 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
         )
 
         return {
-            "embedding": Embedding2D.create_state(hf_config, mesh_device, ccl),
+            "embedding": EmbeddingDP.create_state(hf_config, mesh_device, ccl),
             "mlp_decoder_block": [
                 DecoderBlock2D.create_state(
                     hf_config,
@@ -215,7 +215,8 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
         page_tables: Sequence[ttnn.Tensor],
     ) -> ttnn.Tensor:
         """Forward pass for decode mode."""
-        x = Embedding2D.forward_decode(x, cfg["embedding"])
+
+        x = EmbeddingDP.forward_decode(x, cfg["embedding"])
 
         for (block_cfg, BlockClass), page_table in zip(
             itertools.chain(
@@ -247,7 +248,7 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
     ) -> ttnn.Tensor:
         """Forward pass for prefill mode."""
 
-        x = Embedding2D.forward_prefill(x, cfg["embedding"])
+        x = EmbeddingDP.forward_prefill(x, cfg["embedding"])
 
         for (block_cfg, BlockClass), page_table in zip(
             itertools.chain(
