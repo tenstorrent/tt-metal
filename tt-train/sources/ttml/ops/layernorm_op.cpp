@@ -88,18 +88,24 @@ autograd::TensorPtr layernorm(
     auto rstd = ttnn::empty_like(mean);
     auto output = ttnn::empty_like(tensor->get_value());
 
+    ttml::autograd::ctx().get_profiler().read_results(&autograd::ctx().get_device(), "layernorm_fw");
     auto out_tensors =
         ttml::metal::layernorm_fw(tensor->get_value(), gamma->get_value(), beta->get_value(), 1e-6F, true);
+    ttml::autograd::ctx().get_profiler().read_results(&autograd::ctx().get_device(), "layernorm_fw_end");
 
     auto out = autograd::create_tensor();
     out->set_value(out_tensors[0].value());
     mean = out_tensors[1].value();
     rstd = out_tensors[2].value();
     autograd::GradFunction grad = [tensor, out, mean, rstd, gamma, beta]() {
+        ttml::autograd::ctx().get_profiler().read_results(&autograd::ctx().get_device(), "layernorm_bw");
         auto res = ttml::metal::layernorm_bw(tensor->get_value(), gamma->get_value(), mean, rstd, out->get_grad());
+        ttml::autograd::ctx().get_profiler().read_results(&autograd::ctx().get_device(), "layernorm_bw_end");
         tensor->add_grad(res[0].value());
         gamma->add_grad(res[1].value());
         beta->add_grad(res[2].value());
+        ttml::autograd::ctx().get_profiler().read_results(
+            &autograd::ctx().get_device(), "reductions after layernorm_bw");
     };
 
     auto links = autograd::get_links(tensor);
