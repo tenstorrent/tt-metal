@@ -132,7 +132,7 @@ ttnn/ttnn/operations/moreh.py @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @d
 ttnn/ttnn/operations/conv2d.py @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-codeowners-large-changes
 ttnn/ttnn/operations/pool.py @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-codeowners-large-changes
 ttnn/ttnn/operations/matmul.py @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-codeowners-large-changes
-ttnn/ttnn/operations/matmul_conv_common.py @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-codeowners-large-changes
+ttnn/ttnn/operations/activations.py @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-codeowners-large-changes
 ttnn/ttnn/operations/normalization.py @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-codeowners-large-changes
 ttnn/ttnn/operations/reduction.py @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-codeowners-large-changes
 ttnn/**/kernels/ @tenstorrent/metalium-codeowners-large-changes # Removes the owners above from owning kernels unless specified afterwards

@@ -5,7 +5,7 @@
 import pytest
 import torch
 import ttnn
-from ttnn.operations.matmul_conv_common import get_golden_function_for_activation
+from ttnn.operations.activations import get_golden_function_for_activation
 from loguru import logger
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc

@@ -8,7 +8,7 @@ from typing import Tuple, Union, Dict, Optional
 import warnings
 import math
 import ttnn
-from ttnn.operations.matmul_conv_common import get_golden_function_for_activation
+from ttnn.operations.activations import get_golden_function_for_activation
 
 SlidingWindowParallelConfig = ttnn._ttnn.operations.sliding_window.ParallelConfig
 Conv2dConfig = ttnn._ttnn.operations.conv.Conv2dConfig

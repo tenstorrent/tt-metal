@@ -7,7 +7,7 @@ from typing import Optional, Tuple
 
 import ttnn
 from ttnn.decorators import get_golden_function
-from ttnn.operations.matmul_conv_common import get_golden_function_for_activation
+from ttnn.operations.activations import get_golden_function_for_activation
 
 MatmulProgramConfig = ttnn._ttnn.operations.matmul.MatmulProgramConfig
 MatmulMultiCoreReuseProgramConfig = ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseProgramConfig
