@@ -24,17 +24,23 @@ def create_global_semaphores(mesh_device, num_devices, cores, initial_value):
 def run_strided_all_gather_impl(
     mesh_device,
     num_devices,
-    ag_output_shape,
+    M,
+    K,
+    N,
     dim,
     num_links,
     ag_input_dtype,
     layout,
     mem_config_input,
     mem_config_ag,
+    mem_config_mm,
     all_gather_topology,
     mm_cores_y,
-    mm_block_h,
-    mm_block_w,
+    mm_block_m,
+    mm_block_k,
+    mm_block_n,
+    subblock_h,
+    subblock_w,
     num_iters=1,
     enable_trace=True,
     cluster_axis=None,
@@ -44,10 +50,18 @@ def run_strided_all_gather_impl(
     allowed_pcc=1,
     skip_check=False,
     num_l1_banks=64,
+    use_bias=False,
+    activation=None,
+    math_fidelity=ttnn.MathFidelity.HiFi2,
+    fp32_acc=True,
+    mm_core_grid=None,
+    use_non_fused=True,
 ):
     torch.manual_seed(0)
 
     tile = (32, 32)
+
+    ag_output_shape = (1, 1, M, K)
 
     # Skip unsupported cases
     (is_known_failure, message) = is_unsupported_case(
@@ -94,33 +108,28 @@ def run_strided_all_gather_impl(
         ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
     ]
 
-    ### Create persistent output buffers
-    logger.info("Creating persistent buffers")
-    persistent_output_buffers = [
-        ttnn.from_torch(
-            torch.zeros(ag_output_shape),
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ag_input_dtype,
-            memory_config=mem_config_ag,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
-        for _ in range(num_iters)
-    ]
-
-    logger.info("Done creating persistent buffers")
-
     ##### All gather input setup #####
     logger.info(f"All gather output shape: {ag_output_shape}")
     logger.info(f"All gather dim: {dim}")
 
     input_tensor_mesh_list = []
+    weight_tensor_mesh_list = []
+    bias_tensor_mesh_list = []
     ag_output_tensor_goldens_list = []
-    _, _, _, hidden_dim = ag_output_shape
+    torch_matmul_output_list = []
 
     for i in range(num_iters):
-        ag_output_tensor = torch.rand(ag_output_shape).bfloat16()
+        torch_dtype = torch.float32
+        ag_output_tensor = torch.randn(ag_output_shape, dtype=torch_dtype)
         ag_output_tensor_goldens_list.append(ag_output_tensor)
+        weight_input = torch.randn((1, 1, K, N), dtype=torch_dtype)
+        if use_bias:
+            bias_input = torch.randn((1, N), dtype=torch_dtype)
+        activation_fn = None
+        if activation == "gelu":
+            activation_fn = (ttnn.UnaryOpType.GELU, False)
+        else:
+            assert activation is None, f"Unsupported activation: {activation}"
 
         input_tensor_mesh = ttnn.from_torch(
             ag_output_tensor,
@@ -130,33 +139,108 @@ def run_strided_all_gather_impl(
             memory_config=mem_config_input,
             mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=dim),
         )
+        weight_tensor_mesh = ttnn.from_torch(
+            weight_input,
+            device=mesh_device,
+            layout=layout,
+            dtype=ag_input_dtype,
+            memory_config=mem_config_input,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=dim),
+        )
+        if use_bias:
+            bias_tensor_mesh = ttnn.from_torch(
+                bias_input,
+                device=mesh_device,
+                layout=layout,
+                dtype=ag_input_dtype,
+                memory_config=mem_config_input,
+                mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=dim),
+            )
+        else:
+            bias_tensor_mesh = None
 
         input_tensor_mesh_list.append(input_tensor_mesh)
+        weight_tensor_mesh_list.append(weight_tensor_mesh)
+        bias_tensor_mesh_list.append(bias_tensor_mesh)
+
+        if use_bias:
+            matmul_output = torch.nn.functional.linear(
+                ag_output_tensor_goldens_list[i], weight_input.T.contiguous(), bias_input
+            )
+        else:
+            matmul_output = torch.matmul(ag_output_tensor_goldens_list[i], weight_input)
+        torch_matmul_output_list.append(matmul_output)
+
+    compute_config = ttnn.init_device_compute_kernel_config(
+        mesh_device.arch(),
+        math_fidelity=math_fidelity,
+        math_approx_mode=False,
+        fp32_dest_acc_en=fp32_acc,
+        packer_l1_acc=True,
+    )
+    matmul_config = ttnn.MinimalMatmulConfig(
+        M_block_size=mm_block_m // 32,
+        K_block_size=mm_block_k // 32,
+        N_block_size=mm_block_n // 32,
+        subblock_h=subblock_h,
+        subblock_w=subblock_w,
+        compute_with_storage_grid_size=mm_core_grid,
+    )
 
     ##### Perform the TT ops #####
     tt_all_gather_out_tensor_list = []
+    tt_matmul_out_tensor_list = []
 
     def run_op(i):
-        tt_all_gather_out_tensor = ttnn.experimental.strided_all_gather_async(
-            input_tensor_mesh_list[i],
-            persistent_output_buffer=None,
-            dim=dim,
-            multi_device_global_semaphore=ccl_semaphore_handles[i],
-            num_links=num_links,
-            memory_config=mem_config_ag,
-            topology=all_gather_topology,
-            subdevice_id=worker_sub_device_id,
-            barrier_semaphore=barrier_semaphore_handles[i],
-            cluster_axis=cluster_axis,
-            tiles_per_chunk=tiles_per_chunk,
-            num_workers_per_link=num_workers_per_link,
-            num_buffers_per_channel=num_buffers_per_channel,
-            mm_cores_y=mm_cores_y,
-            mm_block_h=mm_block_h,
-            mm_block_w=mm_block_w,
-        )
+        if use_non_fused:
+            tt_all_gather_out_tensor = ttnn.experimental.strided_all_gather_async(
+                input_tensor_mesh_list[i],
+                dim=dim,
+                multi_device_global_semaphore=ccl_semaphore_handles[i],
+                num_links=num_links,
+                memory_config=mem_config_ag,
+                topology=all_gather_topology,
+                subdevice_id=worker_sub_device_id,
+                cluster_axis=cluster_axis,
+                barrier_semaphore=barrier_semaphore_handles[i],
+                tiles_per_chunk=tiles_per_chunk,
+                num_workers_per_link=num_workers_per_link,
+                num_buffers_per_channel=num_buffers_per_channel,
+                mm_cores_y=mm_cores_y,
+                mm_block_h=mm_block_m // 32,
+                mm_block_w=mm_block_k // 32,
+            )
 
-        return tt_all_gather_out_tensor
+            tt_matmul_out_tensor = ttnn.experimental.minimal_matmul(
+                tt_all_gather_out_tensor,
+                weight_tensor_mesh_list[i],
+                bias_tensor=bias_tensor_mesh_list[i] if use_bias else None,
+                fused_activation=activation_fn,
+                compute_kernel_config=compute_config,
+                config=matmul_config,
+            )
+        else:
+            tt_all_gather_out_tensor, tt_matmul_out_tensor = ttnn.experimental.strided_all_gather_minimal_matmul_async(
+                input_tensor_mesh_list[i],
+                weight_tensor_mesh_list[i],
+                dim=dim,
+                multi_device_global_semaphore=ccl_semaphore_handles[i],
+                strided_all_gather_core_grid_offset=(0, 6),
+                num_links=num_links,
+                memory_config_ag=mem_config_ag,
+                topology=all_gather_topology,
+                barrier_semaphore=barrier_semaphore_handles[i],
+                subdevice_id=worker_sub_device_id,
+                bias=bias_tensor_mesh_list[i] if use_bias else None,
+                fused_activation=activation_fn,
+                config=matmul_config,
+                memory_config_mm=mem_config_mm,
+                compute_kernel_config=compute_config,
+                tiles_per_chunk=tiles_per_chunk,
+                num_workers_per_link=num_workers_per_link,
+                num_buffers_per_channel=num_buffers_per_channel,
+            )
+        return tt_all_gather_out_tensor, tt_matmul_out_tensor
 
     if enable_trace:
         # Compile the op
@@ -182,8 +266,9 @@ def run_strided_all_gather_impl(
     else:
         for i in range(num_iters):
             ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
-            tt_all_gather_out_tensor = run_op(i)
+            tt_all_gather_out_tensor, tt_matmul_out_tensor = run_op(i)
             tt_all_gather_out_tensor_list.append(tt_all_gather_out_tensor)
+            tt_matmul_out_tensor_list.append(tt_matmul_out_tensor)
 
             logger.info(f"Waiting for op")
             ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
@@ -202,8 +287,22 @@ def run_strided_all_gather_impl(
 
             tt_ag_out = tt_ag_out[:, :, :, 0 : expected_tensor.shape[3]]
             eq, output = comp_pcc(tt_ag_out, expected_tensor, allowed_pcc)
+
             logger.info(f"{output}, iteration {i}")
-            assert eq, f"{i} FAILED ag: {output}"
+            assert eq, f"{i} AG FAILED ag: {output}"
+
+            tt_mm_out_tensor = tt_matmul_out_tensor_list[i]
+            torch_mm_out_tensor = torch_matmul_output_list[i if not enable_trace else 0]
+
+            tt_mm_out = ttnn.from_device(tt_mm_out_tensor)
+            tt_mm_out = ttnn.to_torch(tt_mm_out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=3))
+
+            breakpoint()
+
+            eq, output = comp_pcc(tt_mm_out, torch_mm_out_tensor)
+
+            logger.info(f"{output}, iteration {i}")
+            assert eq, f"{i} MM FAILED ag: {output}"
 
     mesh_device.reset_sub_device_stall_group()
     mesh_device.clear_loaded_sub_device_manager()
@@ -217,52 +316,19 @@ def run_strided_all_gather_impl(
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
-    "ag_output_shape, dim, num_workers_per_link, tiles_per_chunk, layout, ag_input_dtype, mm_cores_y, mm_block_h, mm_block_w",
+    "M, K, N, dim, num_workers_per_link, tiles_per_chunk, layout, ag_input_dtype, mm_cores_y, mm_block_m, mm_block_k, mm_block_n, subblock_h, subblock_w, mm_core_grid",
     [
-        ([1, 1, 32, 256], 3, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 32),
-        ([1, 1, 32, 512], 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 64),
-        ([1, 1, 32, 512], 3, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 32),
-        ([1, 1, 32, 512], 3, 1, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 64),
-        ([1, 1, 32, 768], 3, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 32),
-        ([1, 1, 32, 1024], 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 64),
-        ([1, 1, 32, 768], 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 32),
-        # 2 row tests
-        ([1, 1, 64, 256], 3, 1, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 64, 32),
-        ([1, 1, 64, 256], 3, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 32),
-        ([1, 1, 64, 512], 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 64),
-        # 4 row tests
-        ([1, 1, 128, 256], 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 64, 32),
-        # Multiple y core tests
-        ([1, 1, 128, 256], 3, 1, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 2, 32, 32),
-        ([1, 1, 128, 256], 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 2, 32, 32),
-        # Full tests
-        ([1, 1, 4096, 2560], 3, 2, 1024, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 4096, 320),
+        (64, 512, 512, 3, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2)),
     ],
     ids=[
         "1tile1chunk1worker1row",
-        "1tile1chunk2worker1row",
-        "1tile2chunk1worker1row",
-        "2tile1chunk1worker1row",
-        "1tile3chunk1worker1row",
-        "2tile2chunk2worker1row",
-        "1tile3chunk2worker1row",
-        # 2 row tests
-        "2tile1chunk1worker2row",
-        "1tile2chunk1worker2row",
-        "2tile2chunk2worker2row",
-        # 4 row tests
-        "2tile2chunk2worker4row",
-        # Multiple y core tests
-        "2tile2chunk1worker4row2ycores",
-        "2tile2chunk2worker4row2ycores",
-        # Full tests
-        "4k4k",
     ],
 )
 @pytest.mark.parametrize(
-    "mem_config_input, mem_config_ag",
+    "mem_config_input, mem_config_ag, mem_config_mm",
     [
         (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         )
@@ -277,6 +343,14 @@ def run_strided_all_gather_impl(
     ids=["perf", "check"],
 )
 @pytest.mark.parametrize(
+    "use_non_fused",
+    [
+        True,
+        False,
+    ],
+    ids=["separate", "fused"],
+)
+@pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Ring),
@@ -287,38 +361,54 @@ def run_strided_all_gather_impl(
 )
 def test_strided_all_gather_async(
     mesh_device,
-    ag_output_shape,
+    M,
+    K,
+    N,
     dim,
     num_links,
     ag_input_dtype,
     layout,
     mem_config_input,
     mem_config_ag,
+    mem_config_mm,
     enable_trace,
     all_gather_topology,
     num_iters,
     num_workers_per_link,
     tiles_per_chunk,
     mm_cores_y,
-    mm_block_h,
-    mm_block_w,
+    mm_block_m,
+    mm_block_k,
+    mm_block_n,
+    subblock_h,
+    subblock_w,
+    mm_core_grid,
+    use_non_fused,
 ):
     run_strided_all_gather_impl(
         mesh_device,
         mesh_device.get_num_devices(),
-        ag_output_shape,
+        M,
+        K,
+        N,
         dim,
         num_links,
         ag_input_dtype,
         layout,
         mem_config_input,
         mem_config_ag,
+        mem_config_mm,
         all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
         num_workers_per_link=num_workers_per_link,
         tiles_per_chunk=tiles_per_chunk,
         mm_cores_y=mm_cores_y,
-        mm_block_h=mm_block_h,
-        mm_block_w=mm_block_w,
+        mm_block_m=mm_block_m,
+        mm_block_k=mm_block_k,
+        mm_block_n=mm_block_n,
+        subblock_h=subblock_h,
+        subblock_w=subblock_w,
+        mm_core_grid=mm_core_grid,
+        use_non_fused=use_non_fused,
     )
