@@ -28,9 +28,10 @@ void TilizeWithValPadding::validate(const std::vector<Tensor>& input_tensors) co
     TT_FATAL(input_shape.rank() >= 1, "Input tensor must be of rank >= 1, but its shape is {}", input_shape);
 
     if (input_shape.rank() == 1) {
-        // Special case: if input tensor is 1D row-major, output tiled tensor will be 2D
+        // Special case: if input tensor is 1D row-major, output tiled tensor will have 1D logical shape
+        // but 2D padded shape
         TT_FATAL(
-            input_shape[0] <= this->output_padded_shape[1],
+            input_shape[0] <= this->output_padded_shape[-1],
             "Output tensor shape {} must be greater than or equal to input shape {} in each dimension, but is "
             "smaller in dimension {}",
             this->output_padded_shape,
