@@ -497,14 +497,21 @@ void FabricTensixDatamoverMuxBuilder::append_upstream_routers_noc_xy(uint32_t no
 }
 
 void FabricTensixDatamoverMuxBuilder::create_and_compile(tt::tt_metal::Program& program) {
+    const auto& fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
+
     // Select processor and NOC based on core type
     tt::tt_metal::DataMovementProcessor processor = (core_id_ == FabricTensixCoreType::MUX)
                                                         ? tt::tt_metal::DataMovementProcessor::RISCV_0
                                                         : tt::tt_metal::DataMovementProcessor::RISCV_1;
 
-    tt::tt_metal::NOC noc = (core_id_ == FabricTensixCoreType::MUX) ? tt::tt_metal::NOC::RISCV_0_default
-                                                                    : tt::tt_metal::NOC::RISCV_1_default;
-
+    tt::tt_metal::NOC noc;
+    if (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::UDM) {
+        // In UDM mode, mux uses NOC selection from UdmNoCSelection enum
+        noc = static_cast<tt::tt_metal::NOC>(UdmNoCSelection::mux_noc);
+    } else {
+        noc = (core_id_ == FabricTensixCoreType::MUX) ? tt::tt_metal::NOC::RISCV_0_default
+                                                      : tt::tt_metal::NOC::RISCV_1_default;
+    }
     // Create the mux kernel
     auto mux_kernel = tt::tt_metal::CreateKernel(
         program,
@@ -697,8 +704,8 @@ void FabricTensixDatamoverRelayBuilder::create_and_compile(tt::tt_metal::Program
                                                         ? tt::tt_metal::DataMovementProcessor::RISCV_0
                                                         : tt::tt_metal::DataMovementProcessor::RISCV_1;
 
-    tt::tt_metal::NOC noc = (core_id_ == FabricTensixCoreType::MUX) ? tt::tt_metal::NOC::RISCV_0_default
-                                                                    : tt::tt_metal::NOC::RISCV_1_default;
+    // In UDM mode, relay uses NOC selection from UdmNoCSelection enum (NOC 1 = edm_to_local_chip_noc)
+    tt::tt_metal::NOC noc = static_cast<tt::tt_metal::NOC>(UdmNoCSelection::relay_noc);
 
     // Create the relay kernel
     auto relay_kernel = tt::tt_metal::CreateKernel(

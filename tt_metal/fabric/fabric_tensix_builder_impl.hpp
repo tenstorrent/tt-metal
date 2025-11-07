@@ -49,6 +49,15 @@ enum class UdmRelayChannelId : uint32_t {
 };
 
 /**
+ * NoC Assignment for mux and relay
+ */
+enum class UdmNoCSelection : uint32_t {
+    mux_noc = 0,
+    relay_noc = 1  // this should be the same as edm_to_local_chip_noc, need to have it in some common files between
+                   // host and device.
+};
+
+/**
  * FabricTensixDatamoverBaseConfig
  * - Base class for mux and relay kernel configurations
  * - Forked from FabricMuxConfig to provide common functionality

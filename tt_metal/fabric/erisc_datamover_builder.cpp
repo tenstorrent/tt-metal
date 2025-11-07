@@ -1004,8 +1004,11 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         ct_args.push_back(remote_worker_sender_channel);
     }
 
-    // Add UDM mode flag
+    // Add UDM mode flag and relay buffer count
     ct_args.push_back(this->udm_mode ? 1 : 0);
+    if (this->udm_mode) {
+        ct_args.push_back(this->local_tensix_relay_num_buffers);
+    }
 
     // special tag
     ct_args.push_back(0xabcd9876);
@@ -1441,8 +1444,9 @@ void FabricEriscDatamoverBuilder::connect_to_local_tensix_builder(FabricTensixDa
     eth_chan_directions local_tensix_dir = tensix_builder.get_direction();
     auto adapter_spec = tensix_builder.build_connection_to_relay_channel();
 
-    // Enable UDM mode
+    // Enable UDM mode and store relay buffer count
     this->udm_mode = true;
+    this->local_tensix_relay_num_buffers = adapter_spec.num_buffers_per_channel;
 
     // Only one local relay connection (we can consider the local relay connection as one ds tensix connection)
     this->num_downstream_tensix_connections = 1;
