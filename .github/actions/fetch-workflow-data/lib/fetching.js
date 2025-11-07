@@ -41,7 +41,7 @@ async function fetchAllWorkflowRuns(github, context, days, cachedRunIds = null, 
   core.info(`[FETCH] days: ${days}, cachedRunIds: ${cachedIds.size}, eventType: ${eventType || 'all'}, branch: ${branch || 'all'}, status: ${status || 'all'}`);
   core.info(`[FETCH] workflowIds: ${workflowIds ? workflowIds.length + ' workflows' : 'all workflows (backward compatibility)'}`);
 
-  const MAX_CONSECUTIVE_CACHED = 50; // Stop after 50 consecutive cached runs
+  const MAX_CONSECUTIVE_CACHED = 100; // Stop after 50 consecutive cached runs
   let totalSkippedOldRuns = 0;
   let totalSkippedCachedRuns = 0;
   let totalAddedNewRuns = 0;
