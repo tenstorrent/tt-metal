@@ -206,7 +206,6 @@ def run_max_pool2d_with_indices(
             dilation=dilation,
             applied_shard_scheme=sharding,
             ceil_mode=ceil_mode,
-            in_place_halo=in_place,
             deallocate_input=False,
             reallocate_halo_output=True,
             return_indices=True,
