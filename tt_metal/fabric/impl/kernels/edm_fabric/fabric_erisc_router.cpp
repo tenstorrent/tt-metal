@@ -1114,8 +1114,6 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
         }
     };
 
-    DPRINT << "Router hop_cmd " << (uint)hop_cmd << " my_direction " << (uint)my_direction << ENDL();
-
     switch (hop_cmd) {
         case LowLatencyMeshRoutingFields::NOOP: break;
         case LowLatencyMeshRoutingFields::FORWARD_EAST:

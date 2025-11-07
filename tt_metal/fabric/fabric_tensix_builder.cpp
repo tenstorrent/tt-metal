@@ -395,7 +395,20 @@ size_t FabricTensixDatamoverConfig::get_channel_credits_stream_id(
     uint32_t channel_id, FabricTensixCoreType core_id) const {
     auto config = get_config(core_id);
     auto channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
-    return config->get_channel_credits_stream_id(channel_type, channel_id);
+    size_t stream_id = config->get_channel_credits_stream_id(channel_type, channel_id);
+
+    // In UDM mode, relay stream IDs must come after mux stream IDs to avoid collisions
+    // Both mux and relay are on the same Tensix core, so they share the same stream ID space
+    if (core_id == FabricTensixCoreType::RELAY) {
+        auto mux_config = get_config(FabricTensixCoreType::MUX);
+        TT_FATAL(mux_config != nullptr, "Mux config cannot be null");
+        // Offset relay stream IDs by the total number of mux channels
+        size_t mux_channel_offset = mux_config->get_num_channels(FabricMuxChannelType::FULL_SIZE_CHANNEL) +
+                                    mux_config->get_num_channels(FabricMuxChannelType::HEADER_ONLY_CHANNEL);
+        stream_id += mux_channel_offset;
+    }
+
+    return stream_id;
 }
 
 std::pair<uint32_t, uint32_t> FabricTensixDatamoverConfig::get_termination_address_and_signal(
