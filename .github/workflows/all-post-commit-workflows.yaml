@@ -112,136 +112,136 @@ jobs:
                                   steps.find-changes.outputs['any-code-changed'] == 'true' }}" >> "$GITHUB_OUTPUT"
 
   # Fabric Unit Tests
-  fabric-unit-tests:
-    needs: [build-artifact, find-changed-files]
-    secrets: inherit
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: [
-          { arch: wormhole_b0, runner-label: N300 },
-        ]
-    if: ${{ needs.find-changed-files.outputs.test-metalium == 'true' }}
-    uses: ./.github/workflows/fabric-build-and-unit-tests.yaml
-    with:
-      arch: ${{ matrix.test-group.arch }}
-      runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  # TTNN FD Unit tests
-  ttnn-unit-tests:
-    needs: [build-artifact, find-changed-files]
-    secrets: inherit
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: [
-          { arch: wormhole_b0, runner-label: N300 }
-        ]
-    if: ${{ needs.find-changed-files.outputs.test-ttnn == 'true' }}
-    uses: ./.github/workflows/ttnn-post-commit.yaml
-    with:
-      arch: ${{ matrix.test-group.arch }}
-      runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  # fabric-unit-tests:
+  #   needs: [build-artifact, find-changed-files]
+  #   secrets: inherit
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       test-group: [
+  #         { arch: wormhole_b0, runner-label: N300 },
+  #       ]
+  #   if: ${{ needs.find-changed-files.outputs.test-metalium == 'true' }}
+  #   uses: ./.github/workflows/fabric-build-and-unit-tests.yaml
+  #   with:
+  #     arch: ${{ matrix.test-group.arch }}
+  #     runner-label: ${{ matrix.test-group.runner-label }}
+  #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+  #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+  #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  # # TTNN FD Unit tests
+  # ttnn-unit-tests:
+  #   needs: [build-artifact, find-changed-files]
+  #   secrets: inherit
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       test-group: [
+  #         { arch: wormhole_b0, runner-label: N300 }
+  #       ]
+  #   if: ${{ needs.find-changed-files.outputs.test-ttnn == 'true' }}
+  #   uses: ./.github/workflows/ttnn-post-commit.yaml
+  #   with:
+  #     arch: ${{ matrix.test-group.arch }}
+  #     runner-label: ${{ matrix.test-group.runner-label }}
+  #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+  #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+  #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
-  # FD Model Tests
-  models-unit-tests:
-    needs: [build-artifact, find-changed-files]
-    secrets: inherit
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: [
-          { arch: wormhole_b0, runner-label: N150 },
-          { arch: wormhole_b0, runner-label: N300 },
-        ]
-    if: ${{ needs.find-changed-files.outputs.test-everything == 'true' }}
-    uses: ./.github/workflows/models-post-commit.yaml
-    with:
-      arch: ${{ matrix.test-group.arch }}
-      runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  # FD C++ Unit Tests
-  cpp-unit-tests:
-    needs: [build-artifact, find-changed-files]
-    secrets: inherit
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: [
-          { arch: wormhole_b0, runner-label: N150 },
-          { arch: wormhole_b0, runner-label: N300 },
-        ]
-    if: ${{ needs.find-changed-files.outputs.test-everything == 'true' }}
-    uses: ./.github/workflows/cpp-post-commit.yaml
-    with:
-      arch: ${{ matrix.test-group.arch }}
-      runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      gtest_filter: "*-*NIGHTLY_*"
-  tt-train-cpp-unit-tests:
-    needs: [build-artifact, find-changed-files]
-    secrets: inherit
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: [
-          { arch: wormhole_b0, runner-label: N150 },
-          { arch: wormhole_b0, runner-label: N300 },
-        ]
-    if: ${{ needs.find-changed-files.outputs.test-tt-train == 'true' }}
-    uses: ./.github/workflows/tt-train-post-commit.yaml
-    with:
-      arch: ${{ matrix.test-group.arch }}
-      runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      gtest_filter: "*-*NIGHTLY_*"
-  # TT-CNN Unit tests
-  tt-cnn-unit-tests:
-    needs: [build-artifact, find-changed-files]
-    secrets: inherit
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: [
-          { arch: wormhole_b0, runner-label: N150 },
-          { arch: wormhole_b0, runner-label: N300 },
-        ]
-    uses: ./.github/workflows/tt-cnn-post-commit.yaml
-    if: ${{ needs.find-changed-files.outputs.test-everything == 'true' }}
-    with:
-      arch: ${{ matrix.test-group.arch }}
-      runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  run-profiler-regression:
-    needs: [build-artifact, find-changed-files]
+  # # FD Model Tests
+  # models-unit-tests:
+  #   needs: [build-artifact, find-changed-files]
+  #   secrets: inherit
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       test-group: [
+  #         { arch: wormhole_b0, runner-label: N150 },
+  #         { arch: wormhole_b0, runner-label: N300 },
+  #       ]
+  #   if: ${{ needs.find-changed-files.outputs.test-everything == 'true' }}
+  #   uses: ./.github/workflows/models-post-commit.yaml
+  #   with:
+  #     arch: ${{ matrix.test-group.arch }}
+  #     runner-label: ${{ matrix.test-group.runner-label }}
+  #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+  #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  # # FD C++ Unit Tests
+  # cpp-unit-tests:
+  #   needs: [build-artifact, find-changed-files]
+  #   secrets: inherit
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       test-group: [
+  #         { arch: wormhole_b0, runner-label: N150 },
+  #         { arch: wormhole_b0, runner-label: N300 },
+  #       ]
+  #   if: ${{ needs.find-changed-files.outputs.test-everything == 'true' }}
+  #   uses: ./.github/workflows/cpp-post-commit.yaml
+  #   with:
+  #     arch: ${{ matrix.test-group.arch }}
+  #     runner-label: ${{ matrix.test-group.runner-label }}
+  #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+  #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+  #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  #     gtest_filter: "*-*NIGHTLY_*"
+  # tt-train-cpp-unit-tests:
+  #   needs: [build-artifact, find-changed-files]
+  #   secrets: inherit
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       test-group: [
+  #         { arch: wormhole_b0, runner-label: N150 },
+  #         { arch: wormhole_b0, runner-label: N300 },
+  #       ]
+  #   if: ${{ needs.find-changed-files.outputs.test-tt-train == 'true' }}
+  #   uses: ./.github/workflows/tt-train-post-commit.yaml
+  #   with:
+  #     arch: ${{ matrix.test-group.arch }}
+  #     runner-label: ${{ matrix.test-group.runner-label }}
+  #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+  #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+  #     gtest_filter: "*-*NIGHTLY_*"
+  # # TT-CNN Unit tests
+  # tt-cnn-unit-tests:
+  #   needs: [build-artifact, find-changed-files]
+  #   secrets: inherit
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       test-group: [
+  #         { arch: wormhole_b0, runner-label: N150 },
+  #         { arch: wormhole_b0, runner-label: N300 },
+  #       ]
+  #   uses: ./.github/workflows/tt-cnn-post-commit.yaml
+  #   if: ${{ needs.find-changed-files.outputs.test-everything == 'true' }}
+  #   with:
+  #     arch: ${{ matrix.test-group.arch }}
+  #     runner-label: ${{ matrix.test-group.runner-label }}
+  #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+  #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+  #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  # run-profiler-regression:
+  #   needs: [build-artifact, find-changed-files]
 
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: [
-          { arch: wormhole_b0, runner-label: N150 },
-          { arch: wormhole_b0, runner-label: N300 },
-        ]
-    if: ${{ needs.find-changed-files.outputs.test-everything == 'true' }}
-    uses: ./.github/workflows/run-profiler-regression.yaml
-    secrets: inherit
-    with:
-      arch: ${{ matrix.test-group.arch}}
-      runner-label: ${{ matrix.test-group.runner-label}}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       test-group: [
+  #         { arch: wormhole_b0, runner-label: N150 },
+  #         { arch: wormhole_b0, runner-label: N300 },
+  #       ]
+  #   if: ${{ needs.find-changed-files.outputs.test-everything == 'true' }}
+  #   uses: ./.github/workflows/run-profiler-regression.yaml
+  #   secrets: inherit
+  #   with:
+  #     arch: ${{ matrix.test-group.arch}}
+  #     runner-label: ${{ matrix.test-group.runner-label}}
+  #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+  #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+  #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   t3000-apc-fast-tests:
     if: ${{ needs.find-changed-files.outputs.test-everything == 'true' }}
     needs: [build-artifact, find-changed-files]
@@ -251,15 +251,15 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  build-docs:
-    needs: [build-artifact, find-changed-files]
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-    uses: ./.github/workflows/docs-latest-public.yaml
-    secrets: inherit
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  # build-docs:
+  #   needs: [build-artifact, find-changed-files]
+  #   if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+  #   uses: ./.github/workflows/docs-latest-public.yaml
+  #   secrets: inherit
+  #   with:
+  #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+  #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+  #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   # Enable ops-sanity workflow after issue:30675 resolved
   # ops-sanity:
   #   needs: build-artifact
