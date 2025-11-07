@@ -14,7 +14,10 @@ from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.tt.tt_unet import TtUNet2DConditionModel
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_autoencoder_kl import TtAutoencoderKL
 from models.experimental.stable_diffusion_xl_base.tt.tt_euler_discrete_scheduler import TtEulerDiscreteScheduler
-from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
+from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs import (
+    ModelOptimisations,
+    RefinerModelOptimisations,
+)
 from transformers import CLIPTextModelWithProjection, CLIPTextModel
 from models.experimental.stable_diffusion_xl_base.tests.test_common import (
     create_tt_clip_text_encoders,
@@ -58,7 +61,9 @@ class TtSDXLPipeline(LightweightModule):
         assert isinstance(
             torch_pipeline, pipeline_config.pipeline_type
         ), f"torch_pipeline must be an instance of {pipeline_config.pipeline_type.__name__}, but got {type(torch_pipeline).__name__}"
-        assert isinstance(torch_pipeline.text_encoder, CLIPTextModel), "pipeline.text_encoder is not a CLIPTextModel"
+        assert (
+            isinstance(torch_pipeline.text_encoder, CLIPTextModel) or torch_pipeline.text_encoder is None
+        ), "pipeline.text_encoder is not a CLIPTextModel or None"
         assert isinstance(
             torch_pipeline.text_encoder_2, CLIPTextModelWithProjection
         ), "pipeline.text_encoder_2 is not a CLIPTextModelWithProjection"
@@ -305,7 +310,7 @@ class TtSDXLPipeline(LightweightModule):
         # Compilation of text encoders on the device.
         if not self.encoders_compiled:
             assert self.pipeline_config.encoders_on_device, "Host text encoders are used; compile is not needed"
-            assert self.tt_text_encoder is not None, "Text encoder is not loaded on the device"
+            assert self.tt_text_encoder_2 is not None, "Text encoder is not loaded on the device"
 
             warmup_tt_text_encoders(
                 self.tt_text_encoder,
@@ -630,19 +635,24 @@ class TtSDXLPipeline(LightweightModule):
         profiler.start("load_tt_componenets")
         with ttnn.distribute(ttnn.ReplicateTensorToMesh(self.ttnn_device)):
             # 2. Load tt_unet, tt_vae and tt_scheduler
-            self.tt_model_config = ModelOptimisations()
+            self.tt_unet_model_config = (
+                ModelOptimisations()
+                if not self.torch_pipeline.unet.state_dict()["conv_in.weight"].shape[0] == 384
+                else RefinerModelOptimisations()
+            )
+            self.tt_vae_model_config = ModelOptimisations()
             self.tt_unet = TtUNet2DConditionModel(
                 self.ttnn_device,
                 self.torch_pipeline.unet.state_dict(),
                 "unet",
-                model_config=self.tt_model_config,
+                model_config=self.tt_unet_model_config,
                 debug_mode=pipeline_config._debug_mode,
             )
             self.tt_vae = (
                 TtAutoencoderKL(
                     self.ttnn_device,
                     self.torch_pipeline.vae.state_dict(),
-                    self.tt_model_config,
+                    self.tt_vae_model_config,
                     debug_mode=pipeline_config._debug_mode,
                 )
                 if pipeline_config.vae_on_device

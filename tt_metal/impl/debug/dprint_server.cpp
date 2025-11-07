@@ -70,10 +70,13 @@ inline float bfloat16_to_float(uint16_t bfloat_val) {
     return f;
 }
 
-string GetRiscName(CoreType core_type, int risc_id, bool abbreviated = false) {
+string GetRiscName(ChipId device_id, const umd::CoreDescriptor& logical_core, int risc_id, bool abbreviated = false) {
+    CoreCoord virtual_core =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
+            device_id, logical_core.coord, logical_core.type);
+    auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    return hal.get_processor_class_name(
-        ::tt::tt_metal::hal_programmable_core_type_from_core_type(core_type), risc_id, abbreviated);
+    return hal.get_processor_class_name(programmable_core_type, risc_id, abbreviated);
 }
 
 void AssertSize(uint8_t sz, uint8_t expected_sz) {
@@ -846,7 +849,7 @@ void DPrintServer::Impl::clear_log_file() {
 }  // clear_log_file
 
 bool DPrintServer::Impl::peek_one_risc_non_blocking(
-    ChipId device_id, const umd::CoreDescriptor& logical_core, int risc_id, bool new_data_this_iter) {
+    ChipId device_id, const umd::CoreDescriptor& logical_core, int risc_id, bool /*new_data_this_iter*/) {
     // If init magic isn't cleared for this risc, then dprint isn't enabled on it, don't read it.
     CoreCoord virtual_core =
         tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
@@ -1193,7 +1196,7 @@ string DPrintServer::Impl::get_formatted_output_data(const RiscKey& risc_key, co
 
         const string& device_id_str = to_string(device_id);
         const string& core_coord_str = core_desc.coord.str();
-        const string& risc_name = GetRiscName(core_desc.type, risc_id, true);
+        const string& risc_name = GetRiscName(device_id, core_desc, risc_id, true);
         output += fmt::format("{}:{}:{}: ", device_id_str, core_coord_str, risc_name);
     }
 
@@ -1221,7 +1224,7 @@ ostream* DPrintServer::Impl::get_output_stream(const RiscKey& risc_key) {
                 tt::tt_metal::get_core_type_name(logical_core.type),
                 logical_core.coord.x,
                 logical_core.coord.y,
-                GetRiscName(logical_core.type, risc_id));
+                GetRiscName(chip_id, logical_core, risc_id));
             risc_to_file_stream_[risc_key] = new ofstream(filename);
         }
         output_stream = risc_to_file_stream_[risc_key];
