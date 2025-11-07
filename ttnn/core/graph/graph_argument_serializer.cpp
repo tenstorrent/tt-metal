@@ -69,6 +69,65 @@ std::string graph_demangle(const std::string_view name) {
     return ret_val;
 }
 
+// Generic helper to serialize any iterable container
+template <typename Container>
+std::string serialize_container(const Container& container) {
+    std::ostringstream oss;
+    oss << "[";
+    for (size_t i = 0; i < container.size(); ++i) {
+        if (i > 0) {
+            oss << ", ";
+        }
+        oss << container[i];
+    }
+    oss << "]";
+    return oss.str();
+}
+
+// Specialization for nested arrays (e.g., SmallVector<std::array<uint, 2>>)
+template <typename T, std::size_t N>
+std::string serialize_container(const std::vector<std::array<T, N>>& vec) {
+    std::ostringstream oss;
+    oss << "[";
+    for (size_t i = 0; i < vec.size(); ++i) {
+        if (i > 0) {
+            oss << ", ";
+        }
+        oss << "[";
+        for (size_t j = 0; j < N; ++j) {
+            if (j > 0) {
+                oss << ", ";
+            }
+            oss << vec[i][j];
+        }
+        oss << "]";
+    }
+    oss << "]";
+    return oss.str();
+}
+
+// Specialization for SmallVector with nested arrays
+template <typename T, std::size_t N, std::size_t M>
+std::string serialize_container(const ttsl::SmallVector<std::array<T, N>, M>& vec) {
+    std::ostringstream oss;
+    oss << "[";
+    for (size_t i = 0; i < vec.size(); ++i) {
+        if (i > 0) {
+            oss << ", ";
+        }
+        oss << "[";
+        for (size_t j = 0; j < N; ++j) {
+            if (j > 0) {
+                oss << ", ";
+            }
+            oss << vec[i][j];
+        }
+        oss << "]";
+    }
+    oss << "]";
+    return oss.str();
+}
+
 // Helper function to register both const and non-const reference wrappers
 // The lambda should use 'const T' for any_cast since it works for both const and non-const reference_wrappers
 template <typename T>
@@ -114,18 +173,7 @@ void GraphArgumentSerializer::register_small_vector() {
 
 template <typename T, std::size_t N>
 void GraphArgumentSerializer::register_array() {
-    register_reference_wrapper_pair<std::array<T, N>>(registry(), [](const std::array<T, N>& arr) -> std::string {
-        std::ostringstream oss;
-        oss << "[";
-        for (size_t i = 0; i < N; ++i) {
-            if (i > 0) {
-                oss << ", ";
-            }
-            oss << arr[i];
-        }
-        oss << "]";
-        return oss.str();
-    });
+    register_reference_wrapper_pair<std::array<T, N>>(registry(), serialize_container<std::array<T, N>>);
 }
 
 template <typename OptionalT>
@@ -245,67 +293,18 @@ void GraphArgumentSerializer::initialize() {
 
     // Register std::array types commonly used for pad operations
     // We register these directly without going through register_type to avoid recursive template expansion
-    // Generic lambda that works for any array size
-    auto serialize_unsigned_int_array = [](const auto& arr) -> std::string {
-        std::ostringstream oss;
-        oss << "[";
-        for (size_t i = 0; i < arr.size(); ++i) {
-            if (i > 0) {
-                oss << ", ";
-            }
-            oss << arr[i];
-        }
-        oss << "]";
-        return oss.str();
-    };
+    register_reference_wrapper_pair<std::array<unsigned int, 2>>(
+        registry(), serialize_container<std::array<unsigned int, 2>>);
+    register_reference_wrapper_pair<std::array<unsigned int, 4>>(
+        registry(), serialize_container<std::array<unsigned int, 4>>);
 
-    register_reference_wrapper_pair<std::array<unsigned int, 2>>(registry(), serialize_unsigned_int_array);
-    register_reference_wrapper_pair<std::array<unsigned int, 4>>(registry(), serialize_unsigned_int_array);
-
-    // Register SmallVector<std::array<unsigned int, 2>, 8> for pad operations
+    // Register SmallVector types for various operations using generic serialize_container
     register_reference_wrapper_pair<ttsl::SmallVector<std::array<unsigned int, 2>, 8>>(
-        registry(), [](const ttsl::SmallVector<std::array<unsigned int, 2>, 8>& vec) -> std::string {
-            std::ostringstream oss;
-            oss << "[";
-            for (size_t i = 0; i < vec.size(); ++i) {
-                if (i > 0) {
-                    oss << ", ";
-                }
-                oss << "[" << vec[i][0] << ", " << vec[i][1] << "]";
-            }
-            oss << "]";
-            return oss.str();
-        });
-
-    // Register SmallVector<long, 8> for permute operations (dims parameter)
+        registry(), serialize_container<unsigned int, 2, 8>);
     register_reference_wrapper_pair<ttsl::SmallVector<long, 8>>(
-        registry(), [](const ttsl::SmallVector<long, 8>& vec) -> std::string {
-            std::ostringstream oss;
-            oss << "[";
-            for (size_t i = 0; i < vec.size(); ++i) {
-                if (i > 0) {
-                    oss << ", ";
-                }
-                oss << vec[i];
-            }
-            oss << "]";
-            return oss.str();
-        });
-
-    // Register SmallVector<int, 8> for reshape operations (shape parameter)
+        registry(), serialize_container<ttsl::SmallVector<long, 8>>);
     register_reference_wrapper_pair<ttsl::SmallVector<int, 8>>(
-        registry(), [](const ttsl::SmallVector<int, 8>& vec) -> std::string {
-            std::ostringstream oss;
-            oss << "[";
-            for (size_t i = 0; i < vec.size(); ++i) {
-                if (i > 0) {
-                    oss << ", ";
-                }
-                oss << vec[i];
-            }
-            oss << "]";
-            return oss.str();
-        });
+        registry(), serialize_container<ttsl::SmallVector<int, 8>>);
 
     // Register std::variant<std::array<uint, 2>, std::array<uint, 4>> for conv2d stride/dilation
     register_reference_wrapper_pair<std::variant<std::array<unsigned int, 2>, std::array<unsigned int, 4>>>(
