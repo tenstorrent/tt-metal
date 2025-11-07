@@ -474,7 +474,7 @@ FORCE_INLINE constexpr size_t get_downstream_edm_interface_index() {
                  (downstream_direction == eth_chan_directions::EAST ||
                   downstream_direction == eth_chan_directions::WEST))) {
                 // stay on VC1
-                downstream_edm_interface_index = NUM_USED_RECEIVER_CHANNELS - 1;
+                downstream_edm_interface_index = NUM_DOWNSTREAM_CHANNELS - 1;
             }
         }
     }
@@ -498,7 +498,7 @@ FORCE_INLINE size_t get_downstream_edm_interface_index(eth_chan_directions downs
                  (downstream_direction == eth_chan_directions::EAST ||
                   downstream_direction == eth_chan_directions::WEST))) {
                 // stay on VC1
-                downstream_edm_interface_index = NUM_USED_RECEIVER_CHANNELS - 1;
+                downstream_edm_interface_index = NUM_DOWNSTREAM_CHANNELS - 1;
             }
         }
     }
@@ -509,11 +509,10 @@ FORCE_INLINE size_t get_downstream_edm_interface_index(eth_chan_directions downs
 template <typename DownstreamSenderVC0T, typename DownstreamSenderVC1T>
 FORCE_INLINE bool check_downstream_interface_has_space_runtime(
     size_t edm_index,
-    std::array<DownstreamSenderVC0T, NUM_USED_RECEIVER_CHANNELS_VC0>&
-        downstream_edm_interfaces_vc0,
+    std::array<DownstreamSenderVC0T, NUM_DOWNSTREAM_SENDERS_VC0>& downstream_edm_interfaces_vc0,
     DownstreamSenderVC1T& downstream_edm_interface_vc1) {
     if constexpr (enable_deadlock_avoidance) {
-        if (edm_index == NUM_USED_RECEIVER_CHANNELS - 1) {
+        if (edm_index == NUM_DOWNSTREAM_CHANNELS - 1) {
             return downstream_edm_interface_vc1.edm_has_space_for_packet();
         } else {
             return downstream_edm_interfaces_vc0[edm_index].edm_has_space_for_packet();
@@ -526,8 +525,7 @@ FORCE_INLINE bool check_downstream_interface_has_space_runtime(
 template <uint8_t rx_channel_id, typename DownstreamSenderVC0T, typename DownstreamSenderVC1T>
 FORCE_INLINE bool can_forward_packet_completely(
     tt_l1_ptr MeshPacketHeader* packet_header,
-    std::array<DownstreamSenderVC0T, NUM_USED_RECEIVER_CHANNELS_VC0>&
-        downstream_edm_interfaces_vc0,
+    std::array<DownstreamSenderVC0T, NUM_DOWNSTREAM_SENDERS_VC0>& downstream_edm_interfaces_vc0,
     DownstreamSenderVC1T& downstream_edm_interface_vc1,
     std::array<uint8_t, num_eth_ports>& port_direction_table) {
     invalidate_l1_cache();
@@ -599,15 +597,14 @@ template <
     typename DownstreamSenderVC1T,
     eth_chan_directions DIRECTION>
 FORCE_INLINE bool check_downstream_has_space(
-    std::array<DownstreamSenderVC0T, NUM_USED_RECEIVER_CHANNELS_VC0>&
-        downstream_edm_interfaces_vc0,
+    std::array<DownstreamSenderVC0T, NUM_DOWNSTREAM_SENDERS_VC0>& downstream_edm_interfaces_vc0,
     DownstreamSenderVC1T& downstream_edm_interface_vc1) {
     if constexpr (DIRECTION == my_direction) {
         return true;
     } else {
         constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, DIRECTION>();
         if constexpr (enable_deadlock_avoidance) {
-            if constexpr (edm_index == NUM_USED_RECEIVER_CHANNELS - 1) {
+            if constexpr (edm_index == NUM_DOWNSTREAM_CHANNELS - 1) {
                 return downstream_edm_interface_vc1.edm_has_space_for_packet();
             } else {
                 return downstream_edm_interfaces_vc0[edm_index].edm_has_space_for_packet();
@@ -624,8 +621,7 @@ template <
     typename DownstreamSenderVC1T,
     eth_chan_directions... DIRECTIONS>
 FORCE_INLINE bool downstreams_have_space(
-    std::array<DownstreamSenderVC0T, NUM_USED_RECEIVER_CHANNELS_VC0>&
-        downstream_edm_interfaces_vc0,
+    std::array<DownstreamSenderVC0T, NUM_DOWNSTREAM_SENDERS_VC0>& downstream_edm_interfaces_vc0,
     DownstreamSenderVC1T& downstream_edm_interface_vc1) {
     return (
         ... && check_downstream_has_space<rx_channel_id, DownstreamSenderVC0T, DownstreamSenderVC1T, DIRECTIONS>(
@@ -635,8 +631,7 @@ FORCE_INLINE bool downstreams_have_space(
 template <uint8_t rx_channel_id, typename DownstreamSenderVC0T, typename DownstreamSenderVC1T>
 FORCE_INLINE __attribute__((optimize("jump-tables"))) bool can_forward_packet_completely(
     uint32_t hop_cmd,
-    std::array<DownstreamSenderVC0T, NUM_USED_RECEIVER_CHANNELS_VC0>&
-        downstream_edm_interfaces_vc0,
+    std::array<DownstreamSenderVC0T, NUM_DOWNSTREAM_SENDERS_VC0>& downstream_edm_interfaces_vc0,
     DownstreamSenderVC1T& downstream_edm_interface_vc1) {
     bool ret_val = false;
 
@@ -800,8 +795,7 @@ template <uint8_t rx_channel_id, typename DownstreamSenderVC0T, typename Downstr
 FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_packet(
     tt_l1_ptr PACKET_HEADER_TYPE* packet_start,
     ROUTING_FIELDS_TYPE cached_routing_fields,
-    std::array<DownstreamSenderVC0T, NUM_USED_RECEIVER_CHANNELS_VC0>&
-        downstream_edm_interfaces_vc0,
+    std::array<DownstreamSenderVC0T, NUM_DOWNSTREAM_SENDERS_VC0>& downstream_edm_interfaces_vc0,
     DownstreamSenderVC1T& downstream_edm_interface_vc1,
     uint8_t transaction_id,
     std::array<uint8_t, num_eth_ports>& port_direction_table) {
@@ -821,7 +815,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
     // Template version for constexpr edm_index
     auto get_downstream_interface = [&]<size_t edm_index>() -> auto& {
         if constexpr (enable_deadlock_avoidance) {
-            if constexpr (edm_index == NUM_USED_RECEIVER_CHANNELS - 1) {
+            if constexpr (edm_index == NUM_DOWNSTREAM_CHANNELS - 1) {
                 return downstream_edm_interface_vc1;
             } else {
                 return downstream_edm_interfaces_vc0[edm_index];
@@ -834,7 +828,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
     // Runtime version for runtime edm_index
     auto get_downstream_interface_runtime = [&](size_t edm_index) -> auto& {
         if constexpr (enable_deadlock_avoidance) {
-            if (edm_index == NUM_USED_RECEIVER_CHANNELS - 1) {
+            if (edm_index == NUM_DOWNSTREAM_CHANNELS - 1) {
                 return downstream_edm_interface_vc1;
             } else {
                 return downstream_edm_interfaces_vc0[edm_index];
@@ -979,8 +973,7 @@ template <uint8_t rx_channel_id, typename DownstreamSenderVC0T, typename Downstr
 FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_packet(
     tt_l1_ptr PACKET_HEADER_TYPE* packet_start,
     ROUTING_FIELDS_TYPE cached_routing_fields,
-    std::array<DownstreamSenderVC0T, NUM_USED_RECEIVER_CHANNELS_VC0>&
-        downstream_edm_interfaces_vc0,
+    std::array<DownstreamSenderVC0T, NUM_DOWNSTREAM_SENDERS_VC0>& downstream_edm_interfaces_vc0,
     DownstreamSenderVC1T& downstream_edm_interface_vc1,
     uint8_t transaction_id,
     uint32_t hop_cmd) {
@@ -994,7 +987,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
     // Template version for constexpr edm_index
     auto get_downstream_interface = [&]<size_t edm_index>() -> auto& {
         if constexpr (enable_deadlock_avoidance) {
-            if constexpr (edm_index == NUM_USED_RECEIVER_CHANNELS - 1) {
+            if constexpr (edm_index == NUM_DOWNSTREAM_CHANNELS - 1) {
                 return downstream_edm_interface_vc1;
             } else {
                 return downstream_edm_interfaces_vc0[edm_index];
@@ -1653,7 +1646,7 @@ template <
     typename DownstreamSenderVC1T>
 FORCE_INLINE void run_receiver_channel_step_impl(
     ReceiverChannelBufferT& local_receiver_channel,
-    std::array<DownstreamSenderVC0T, NUM_USED_RECEIVER_CHANNELS_VC0>& downstream_edm_interfaces_vc0,
+    std::array<DownstreamSenderVC0T, NUM_DOWNSTREAM_SENDERS_VC0>& downstream_edm_interfaces_vc0,
     DownstreamSenderVC1T& downstream_edm_interface_vc1,
     ReceiverChannelPointersT& receiver_channel_pointers,
     WriteTridTracker& receiver_channel_trid_tracker,
@@ -1821,8 +1814,7 @@ template <
     typename ReceiverChannelPointersT>
 FORCE_INLINE void run_receiver_channel_step(
     EthReceiverChannels& local_receiver_channels,
-    std::array<DownstreamSenderVC0T, NUM_USED_RECEIVER_CHANNELS_VC0>&
-        downstream_edm_interfaces_vc0,
+    std::array<DownstreamSenderVC0T, NUM_DOWNSTREAM_SENDERS_VC0>& downstream_edm_interfaces_vc0,
     DownstreamSenderVC1T& downstream_edm_interface_vc1,
     ReceiverChannelPointersT& receiver_channel_pointers,
     WriteTridTracker& receiver_channel_trid_tracker,
@@ -1881,7 +1873,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     EthReceiverChannels& local_receiver_channels,
     EthSenderChannels& local_sender_channels,
     EdmChannelWorkerIFs& local_sender_channel_worker_interfaces,
-    std::array<DownstreamSenderVC0T, NUM_USED_RECEIVER_CHANNELS_VC0>& downstream_edm_noc_interfaces_vc0,
+    std::array<DownstreamSenderVC0T, NUM_DOWNSTREAM_SENDERS_VC0>& downstream_edm_noc_interfaces_vc0,
     DownstreamSenderVC1T& downstream_edm_noc_interface_vc1,
     RemoteEthReceiverChannels& remote_receiver_channels,
     volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr,
@@ -2546,7 +2538,7 @@ void kernel_main() {
                 local_sender_channel_4_connection_buffer_index_id});
 
     const auto& local_sem_for_teardown_from_downstream_edm =
-        take_first_n_elements<NUM_USED_RECEIVER_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(
+        take_first_n_elements<NUM_DOWNSTREAM_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(
             std::array<size_t, MAX_NUM_SENDER_CHANNELS>{
                 my_sem_for_teardown_from_edm_0,
                 my_sem_for_teardown_from_edm_1,
@@ -2611,7 +2603,7 @@ void kernel_main() {
             std::make_index_sequence<NUM_SENDER_CHANNELS>{});
 
     // TODO: change to TMP.
-    std::array<RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC0>, NUM_USED_RECEIVER_CHANNELS_VC0>
+    std::array<RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC0>, NUM_DOWNSTREAM_SENDERS_VC0>
         downstream_edm_noc_interfaces_vc0;
     RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC1> downstream_edm_noc_interface_vc1;
     populate_local_sender_channel_free_slots_stream_id_ordered_map(
@@ -2683,8 +2675,7 @@ void kernel_main() {
 
     if constexpr (enable_deadlock_avoidance && is_receiver_channel_serviced[0]) {
         if (has_downstream_edm_vc1_buffer_connection) {
-            const auto teardown_sem_address =
-                local_sem_for_teardown_from_downstream_edm[NUM_USED_RECEIVER_CHANNELS - 1];
+            const auto teardown_sem_address = local_sem_for_teardown_from_downstream_edm[NUM_DOWNSTREAM_CHANNELS - 1];
             // reset the handshake addresses to 0
             *reinterpret_cast<volatile uint32_t* const>(teardown_sem_address) = 0;
 
@@ -2702,7 +2693,7 @@ void kernel_main() {
                 downstream_edm_vc1_worker_registration_id,
                 downstream_edm_vc1_worker_location_info_address,
                 channel_buffer_size,
-                local_sender_channel_connection_buffer_index_id[NUM_USED_RECEIVER_CHANNELS - 1],
+                local_sender_channel_connection_buffer_index_id[NUM_DOWNSTREAM_CHANNELS - 1],
                 0,  // Unused for Router->Router connections. Router->Router always uses stream registers for
                     // credits. Used by Worker->Router connections. This is an address in the worker's L1. The
                     // Router that a Worker adapter is connected to writes its read counter to this address. The

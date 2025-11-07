@@ -77,7 +77,7 @@ constexpr size_t NUM_SENDER_CHANNELS = get_compile_time_arg_val(SENDER_CHANNEL_N
 constexpr size_t NUM_RECEIVER_CHANNELS_CT_ARG_IDX = SENDER_CHANNEL_NOC_CONFIG_START_IDX + 1;
 constexpr size_t NUM_RECEIVER_CHANNELS = get_compile_time_arg_val(NUM_RECEIVER_CHANNELS_CT_ARG_IDX);
 constexpr size_t NUM_FORWARDING_PATHS_CT_ARG_IDX = NUM_RECEIVER_CHANNELS_CT_ARG_IDX + 1;
-constexpr size_t NUM_FORWARDING_PATHS = get_compile_time_arg_val(NUM_FORWARDING_PATHS_CT_ARG_IDX);
+constexpr size_t NUM_DOWNSTREAM_CHANNELS = get_compile_time_arg_val(NUM_FORWARDING_PATHS_CT_ARG_IDX);
 constexpr size_t wait_for_host_signal_IDX = NUM_FORWARDING_PATHS_CT_ARG_IDX + 1;
 constexpr bool wait_for_host_signal = get_compile_time_arg_val(wait_for_host_signal_IDX);
 constexpr size_t MAIN_CT_ARGS_START_IDX = wait_for_host_signal_IDX + 1;
@@ -119,9 +119,9 @@ static_assert(
     !enable_deadlock_avoidance || NUM_RECEIVER_CHANNELS > 1,
     "Deadlock avoidance requires at least 2 receiver channels");
 // TODO: Pipe from host
-constexpr size_t NUM_USED_RECEIVER_CHANNELS = NUM_FORWARDING_PATHS;
-constexpr size_t NUM_USED_RECEIVER_CHANNELS_VC0 =
-    enable_deadlock_avoidance ? NUM_FORWARDING_PATHS - 1 : NUM_FORWARDING_PATHS;
+// constexpr size_t NUM_USED_RECEIVER_CHANNELS = NUM_FORWARDING_PATHS;
+// constexpr size_t NUM_USED_RECEIVER_CHANNELS_VC0 =
+//    enable_deadlock_avoidance ? NUM_FORWARDING_PATHS - 1 : NUM_FORWARDING_PATHS;
 
 constexpr size_t VC0_RECEIVER_CHANNEL = dateline_connection ? 1 : 0;
 // On a dateline connection, we would never forward through the dateline on VC1
@@ -228,8 +228,8 @@ static_assert(
     get_compile_time_arg_val(DOWNSTREAM_SENDER_NUM_BUFFERS_SPECIAL_TAG_IDX) == 0xabaddad7,
     "DOWNSTREAM_SENDER_NUM_BUFFERS_SPECIAL_TAG_IDX not found. This implies some arguments were misaligned between host and device. Double check the CT args.");
 
-constexpr size_t NUM_DOWNSTREAM_CHANNELS = NUM_FORWARDING_PATHS;
-// Downstream sender num buffers comes after channel mappings
+// constexpr size_t NUM_DOWNSTREAM_CHANNELS = NUM_FORWARDING_PATHS;
+//  Downstream sender num buffers comes after channel mappings
 constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_IDX = DOWNSTREAM_SENDER_NUM_BUFFERS_SPECIAL_TAG_IDX + 1;
 constexpr std::array<size_t, NUM_DOWNSTREAM_CHANNELS> DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY =
     fill_array_with_next_n_args<size_t, DOWNSTREAM_SENDER_NUM_BUFFERS_IDX, NUM_DOWNSTREAM_CHANNELS>();
@@ -492,6 +492,8 @@ constexpr size_t VC1_RECEIVER_CHANNEL = 1;
 
 constexpr size_t sender_channel_base_id = 0;
 constexpr size_t receiver_channel_base_id = NUM_SENDER_CHANNELS;
+
+constexpr size_t NUM_DOWNSTREAM_SENDERS_VC0 = is_2d_fabric ? 4 : 1;
 
 // TRANSACTION IDS
 // TODO: Pass this value from host
