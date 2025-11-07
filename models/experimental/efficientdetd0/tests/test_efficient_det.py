@@ -40,7 +40,7 @@ def test_efficient_det(batch, channels, height, width, device):
     # Run PyTorch forward pass
     torch_inputs = torch.randn(batch, channels, height, width)
     with torch.no_grad():
-        torch_outputs = torch_model(torch_inputs)
+        torch_features, torch_regression = torch_model(torch_inputs)
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: torch_model,
@@ -67,30 +67,44 @@ def test_efficient_det(batch, channels, height, width, device):
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    ttnn_outputs = ttnn_model(ttnn_input_tensor)
+    ttnn_features, ttnn_regression = ttnn_model(ttnn_input_tensor)
 
-    # Compare each output
+    # Compare features (tuple of P3, P4, P5, P6, P7 after BiFPN)
+    logger.info("Comparing BiFPN feature outputs...")
     all_passed = True
-    for i, (torch_output, ttnn_output) in enumerate(zip(torch_outputs, ttnn_outputs)):
-        ttnn_output_torch = ttnn.to_torch(ttnn_output)
+
+    # torch_features is a tuple of 5 feature maps after BiFPN
+    for i, (torch_feat, ttnn_feat) in enumerate(zip(torch_features, ttnn_features)):
+        ttnn_feat_torch = ttnn.to_torch(ttnn_feat)
 
         # Get expected dimensions from PyTorch output (NCHW format)
-        expected_batch, expected_channels, expected_h, expected_w = torch_output.shape
+        expected_batch, expected_channels, expected_h, expected_w = torch_feat.shape
 
         # TTNN output is in format [1, 1, H*W, C] (NHWC flattened)
         # Reshape to [batch, H, W, C]
-        ttnn_output_torch = ttnn_output_torch.reshape(expected_batch, expected_h, expected_w, expected_channels)
+        ttnn_feat_torch = ttnn_feat_torch.reshape(expected_batch, expected_h, expected_w, expected_channels)
 
         # Permute from NHWC to NCHW to match PyTorch
-        ttnn_output_torch = ttnn_output_torch.permute(0, 3, 1, 2)
+        ttnn_feat_torch = ttnn_feat_torch.permute(0, 3, 1, 2)
 
-        passing, pcc_message = check_with_pcc(torch_output, ttnn_output_torch, PCC_THRESHOLD)
-        logger.info(f"Output {i} PCC: {pcc_message}")
+        passing, pcc_message = check_with_pcc(torch_feat, ttnn_feat_torch, PCC_THRESHOLD)
+        logger.info(f"Feature {i} (P{i+3}) PCC: {pcc_message}")
         all_passed = all_passed and passing
 
+    # Compare regression outputs
+    # Compare regression outputs
+    logger.info("Comparing regression outputs...")
+    ttnn_regression_torch = ttnn.to_torch(ttnn_regression)
+
+    # Regression output is 3D: [batch, num_detections, 4]
+    # No need to reshape or permute - just compare directly
+    passing, pcc_message = check_with_pcc(torch_regression, ttnn_regression_torch, PCC_THRESHOLD)
+    logger.info(f"Regression PCC: {pcc_message}")
+    all_passed = all_passed and passing
+
     if all_passed:
-        logger.info("Efficient Det Test Passed!")
+        logger.info("EfficientDet Test Passed!")
     else:
-        logger.warning("Efficient Det Test Failed!")
+        logger.warning("EfficientDet Test Failed!")
 
     assert all_passed, f"PCC value is lower than {PCC_THRESHOLD}. Check implementation!"

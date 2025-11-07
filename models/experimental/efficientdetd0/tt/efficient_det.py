@@ -8,6 +8,44 @@ from typing import Tuple
 
 from models.experimental.efficientdetd0.tt.efficient_netb0 import Efficientnetb0 as TtEfficientnetb0
 from models.experimental.efficientdetd0.tt.bifpn import TtBiFPN
+from models.experimental.efficientdetd0.tt.regressor import Regressor as TtRegressor
+
+
+def dict_to_namespace(d):
+    """
+    Recursively convert a dictionary to an object that supports dot notation access.
+    Handles both string and integer keys.
+    """
+    if isinstance(d, dict):
+        # Create a SimpleNamespace-like object that supports both attribute and integer key access
+        class DictNamespace:
+            def __init__(self, data):
+                self._dict = data
+                # Set string keys as attributes
+                for k, v in data.items():
+                    if isinstance(k, str) and k.isidentifier():
+                        setattr(self, k, dict_to_namespace(v) if isinstance(v, dict) else v)
+
+            def __getitem__(self, key):
+                """Support dictionary-style access with integer keys"""
+                if key in self._dict:
+                    value = self._dict[key]
+                    return dict_to_namespace(value) if isinstance(value, dict) else value
+                raise KeyError(f"Key '{key}' not found")
+
+            def __getattr__(self, name):
+                """Support attribute access for string keys"""
+                if name in self._dict:
+                    value = self._dict[name]
+                    return dict_to_namespace(value) if isinstance(value, dict) else value
+                raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
+
+        return DictNamespace(d)
+    elif isinstance(d, list):
+        # Convert lists of dictionaries
+        return [dict_to_namespace(item) if isinstance(item, dict) else item for item in d]
+    else:
+        return d
 
 
 class TtEfficientDetBackbone:
@@ -91,17 +129,42 @@ class TtEfficientDetBackbone:
                 deallocate_activation=False,
             )
             self.bifpn_layers.append(bifpn)
+        # Convert conv_params.regressor structure to match parameters.regressor structure
+        regressor_conv_params = (
+            conv_params.regressor if hasattr(conv_params, "regressor") else conv_params.get("regressor", {})
+        )
 
-        # # Initialize Regressor
-        # self.regressor = TtRegressor(
-        #     device=device,
-        #     parameters=parameters.regressor if hasattr(parameters, "regressor") else parameters.get("regressor", {}),
-        #     conv_params=conv_params.regressor
-        #     if hasattr(conv_params, "regressor")
-        #     else conv_params.get("regressor", {}),
-        #     num_layers=self.box_class_repeats[compound_coef],
-        #     pyramid_levels=self.pyramid_levels[compound_coef],
-        # )
+        # Check if conversion is needed (if structure is already converted, it will have 'conv_list' key at top level)
+        if regressor_conv_params and "conv_list" not in regressor_conv_params:
+            converted_conv_params = {"conv_list": {}, "header": {}}
+
+            # Convert structure: extract conv_list and header from each pyramid level
+            # Input: {0: {'conv_list': {0: {...}, 1: {...}, 2: {...}}, 'header': {...}}, ...}
+            # Output: {'conv_list': {0: {0: {...}, 1: {...}, 2: {...}}, 1: {0: {...}, 1: {...}, 2: {...}}, ...}, 'header': {0: {...}, 1: {...}, ...}}
+            for pyramid_level in sorted(regressor_conv_params.keys()):
+                pyramid_level_int = int(pyramid_level) if isinstance(pyramid_level, (str, int)) else pyramid_level
+
+                if "conv_list" in regressor_conv_params[pyramid_level]:
+                    converted_conv_params["conv_list"][pyramid_level_int] = regressor_conv_params[pyramid_level][
+                        "conv_list"
+                    ]
+
+                if "header" in regressor_conv_params[pyramid_level]:
+                    converted_conv_params["header"][pyramid_level_int] = regressor_conv_params[pyramid_level]["header"]
+
+            regressor_conv_params = converted_conv_params
+
+        # Convert dictionary to namespace object to support dot notation access
+        regressor_conv_params = dict_to_namespace(regressor_conv_params)
+
+        # Initialize Regressor
+        self.regressor = TtRegressor(
+            device=device,
+            parameters=parameters.regressor if hasattr(parameters, "regressor") else parameters.get("regressor", {}),
+            conv_params=regressor_conv_params,
+            num_layers=self.box_class_repeats[compound_coef],
+            pyramid_levels=self.pyramid_levels[compound_coef],
+        )
 
         # # Initialize Classifier
         # self.classifier = TtClassifier(
@@ -144,10 +207,39 @@ class TtEfficientDetBackbone:
         # Process through BiFPN layers
         for bifpn in self.bifpn_layers:
             features = bifpn(features)
-        return features
+        features_end = features
+
+        # Reshape features from [1, 1, H*W, C] to [1, C, H, W] for regressor
+        spatial_dims = [
+            (64, 64),  # P3
+            (32, 32),  # P4
+            (16, 16),  # P5
+            (8, 8),  # P6
+            (4, 4),  # P7
+        ]
+
+        reshaped_features = []
+        for i, feat in enumerate(features):
+            h, w = spatial_dims[i]
+            c = feat.shape[-1]
+
+            # Convert to interleaved memory if sharded
+            if feat.is_sharded():
+                feat = ttnn.to_memory_config(feat, ttnn.DRAM_MEMORY_CONFIG)
+
+            # Reshape from [1, 1, H*W, C] to [1, H, W, C]
+            feat = ttnn.reshape(feat, (1, h, w, c))
+
+            # Permute from NHWC to NCHW
+            feat = ttnn.permute(feat, (0, 3, 1, 2))
+
+            reshaped_features.append(feat)
+
+        features = tuple(reshaped_features)
 
         # Generate regression predictions
         regression = self.regressor(features)
+        return features_end, regression
 
         # Generate classification predictions
         classification = self.classifier(features)
