@@ -53,6 +53,41 @@ on:
         required: false
         type: boolean
         default: false
+      galaxy-demo-model:
+        description: 'Model to test in galaxy-demo (only when galaxy-demo is enabled)'
+        required: false
+        type: choice
+        options:
+          - all
+          - llama3
+          - llama3_long_context
+          - llama3_evals
+          - llama3_8b_dp
+          - llama3_70b_dp
+          - falcon7b
+          - sentence_bert
+          - sd35
+          - flux1
+          - gpt-oss
+          - wan22
+          - mochi
+        default: 'all'
+      galaxy-model-perf-model:
+        description: 'Model to test in galaxy-model-perf (only when galaxy-model-perf is enabled)'
+        required: false
+        type: choice
+        options:
+          - all
+          - cnn
+          - llama70b
+          - llama_unit_tests
+          - llama70b_prefill
+          - sd35
+          - flux1-dev
+          - sentence_bert
+          - wan2-2
+          - mochi
+        default: 'all'
 run-name: ${{ inputs.description }}
 jobs:
   # Centralized logic to determine what should run
@@ -175,6 +210,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      model: ${{ inputs.galaxy-demo-model || 'all' }}
       topology: 'topology-6u'
   galaxy-model-perf-tests:
     if: ${{ needs.determine-tests.outputs.run-model-perf == 'true' }}
@@ -186,6 +222,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      model: ${{ inputs.galaxy-model-perf-model || 'all' }}
       topology: 'topology-6u'
   galaxy-stress-test:
     if: ${{ needs.determine-tests.outputs.run-stress == 'true' }}
