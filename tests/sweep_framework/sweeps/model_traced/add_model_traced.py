@@ -35,14 +35,9 @@ parameters = {
     },
 }
 
-# Add model_traced suite with limited configs for testing
-if model_traced_params and any(len(v) > 0 for v in model_traced_params.values() if isinstance(v, list)):
-    # Only include first configuration for testing
-    limited_params = {}
-    for key, values in model_traced_params.items():
-        if isinstance(values, list) and len(values) > 0:
-            limited_params[key] = [values[0]]  # Just first config
-    parameters["model_traced"] = limited_params
+# Only add model_traced suite if it has valid configurations
+if model_traced_params:
+    parameters["model_traced"] = model_traced_params
 
 
 def run(

@@ -545,28 +545,49 @@ class MasterConfigLoader:
                 input_a_layouts = []
                 input_a_memory_configs = []
                 output_memory_configs = []
+                traced_config_names = []
                 dims_list = [] if operation_name == "permute" else None
 
-                for cfg in paired_configs:
+                for idx, cfg in enumerate(paired_configs):
                     input_shapes.append(cfg["shape"])
                     input_a_dtypes.append(cfg["dtype"])
                     input_a_layouts.append(cfg["layout"])
                     input_a_memory_configs.append(cfg["memory_config"])
                     output_memory_configs.append(cfg["output_memory_config"])
+                    traced_config_names.append(f"{operation_name}_traced_{idx}")
                     if operation_name == "permute" and "dims" in cfg:
                         dims_list.append(cfg["dims"])
 
-                result = {
-                    "input_shape": input_shapes,
-                    "input_a_dtype": input_a_dtypes,
-                    "input_a_layout": input_a_layouts,
-                    "input_a_memory_config": input_a_memory_configs,
-                    "output_memory_config": output_memory_configs,
-                }
+                # Convert to exact configurations format (prevents Cartesian product)
+                # Use comma-separated parameter names to pass tuples of values together
+                param_names = [
+                    "input_shape",
+                    "input_a_dtype",
+                    "input_a_layout",
+                    "input_a_memory_config",
+                    "output_memory_config",
+                ]
+                param_lists = [
+                    input_shapes,
+                    input_a_dtypes,
+                    input_a_layouts,
+                    input_a_memory_configs,
+                    output_memory_configs,
+                ]
 
                 # Add operation-specific parameters
                 if operation_name == "permute" and dims_list:
-                    result["dims"] = dims_list
+                    param_names.append("dims")
+                    param_lists.append(dims_list)
+
+                param_names.append("traced_config_name")
+                param_lists.append(traced_config_names)
+
+                # Create tuples of exact configurations
+                exact_configs = list(zip(*param_lists))
+                param_key = ",".join(param_names)
+
+                result = {param_key: exact_configs}
 
                 print(f"✅ Loaded {len(paired_configs)} traced configurations for {operation_name} (model_traced suite)")
                 dedup_msg = " (unique inputs)" if deduplicate_inputs else " (all input/output pairs)"
@@ -730,8 +751,9 @@ class MasterConfigLoader:
                 input_a_memory_configs = []
                 input_b_memory_configs = []
                 output_memory_configs = []
+                traced_config_names = []
 
-                for cfg in paired_configs:
+                for idx, cfg in enumerate(paired_configs):
                     input_shapes.append({"self": cfg["shape_a"], "other": cfg["shape_b"]})
                     input_a_dtypes.append(cfg["dtype_a"])
                     input_b_dtypes.append(cfg["dtype_b"])
@@ -740,17 +762,38 @@ class MasterConfigLoader:
                     input_a_memory_configs.append(cfg["memory_config_a"])
                     input_b_memory_configs.append(cfg["memory_config_b"])
                     output_memory_configs.append(cfg["output_memory_config"])
+                    traced_config_names.append(f"{operation_name}_traced_{idx}")
 
-                result = {
-                    "input_shape": input_shapes,
-                    "input_a_dtype": input_a_dtypes,
-                    "input_b_dtype": input_b_dtypes,
-                    "input_a_layout": input_a_layouts,
-                    "input_b_layout": input_b_layouts,
-                    "input_a_memory_config": input_a_memory_configs,
-                    "input_b_memory_config": input_b_memory_configs,
-                    "output_memory_config": output_memory_configs,
-                }
+                # Convert to exact configurations format (prevents Cartesian product)
+                # Use comma-separated parameter names to pass tuples of values together
+                param_names = [
+                    "input_shape",
+                    "input_a_dtype",
+                    "input_b_dtype",
+                    "input_a_layout",
+                    "input_b_layout",
+                    "input_a_memory_config",
+                    "input_b_memory_config",
+                    "output_memory_config",
+                    "traced_config_name",
+                ]
+                param_lists = [
+                    input_shapes,
+                    input_a_dtypes,
+                    input_b_dtypes,
+                    input_a_layouts,
+                    input_b_layouts,
+                    input_a_memory_configs,
+                    input_b_memory_configs,
+                    output_memory_configs,
+                    traced_config_names,
+                ]
+
+                # Create tuples of exact configurations
+                exact_configs = list(zip(*param_lists))
+                param_key = ",".join(param_names)
+
+                result = {param_key: exact_configs}
 
                 print(f"✅ Loaded {len(paired_configs)} traced configurations for {operation_name} (model_traced suite)")
                 dedup_msg = " (unique input pairs)" if deduplicate_inputs else " (all input/output pairs)"
@@ -865,8 +908,9 @@ class MasterConfigLoader:
                 dtypes = [[] for _ in range(tensor_count)]
                 layouts = [[] for _ in range(tensor_count)]
                 memory_configs = [[] for _ in range(tensor_count)]
+                traced_config_names = []
 
-                for cfg in paired_configs:
+                for idx, cfg in enumerate(paired_configs):
                     # Build input_shape dict
                     input_shape = {f"input_{chr(97+i)}": cfg[f"shape_{chr(97+i)}"] for i in range(tensor_count)}
                     input_shapes.append(input_shape)
@@ -878,14 +922,29 @@ class MasterConfigLoader:
                         layouts[i].append(cfg[f"layout_{suffix}"])
                         memory_configs[i].append(cfg[f"memory_config_{suffix}"])
 
-                result = {"input_shape": input_shapes}
+                    traced_config_names.append(f"{operation_name}_traced_{idx}")
+
+                # Convert to exact configurations format (prevents Cartesian product)
+                # Use comma-separated parameter names to pass tuples of values together
+                param_names = ["input_shape"]
+                param_lists = [input_shapes]
 
                 # Add dtypes, layouts, and memory configs for each input
                 for i in range(tensor_count):
                     suffix = chr(97 + i)
-                    result[f"input_{suffix}_dtype"] = dtypes[i]
-                    result[f"input_{suffix}_layout"] = layouts[i]
-                    result[f"input_{suffix}_memory_config"] = memory_configs[i]
+                    param_names.extend(
+                        [f"input_{suffix}_dtype", f"input_{suffix}_layout", f"input_{suffix}_memory_config"]
+                    )
+                    param_lists.extend([dtypes[i], layouts[i], memory_configs[i]])
+
+                param_names.append("traced_config_name")
+                param_lists.append(traced_config_names)
+
+                # Create tuples of exact configurations
+                exact_configs = list(zip(*param_lists))
+                param_key = ",".join(param_names)
+
+                result = {param_key: exact_configs}
 
                 print(f"✅ Loaded {len(paired_configs)} traced configurations for {operation_name} (model_traced suite)")
                 print(f"   📊 Will generate {len(paired_configs)} test vectors")

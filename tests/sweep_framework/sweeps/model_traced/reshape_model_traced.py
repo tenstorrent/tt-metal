@@ -34,7 +34,7 @@ parameters = {
 }
 
 # Only add model_traced suite if it has valid configurations
-if model_traced_params and any(len(v) > 0 for v in model_traced_params.values() if isinstance(v, list)):
+if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
