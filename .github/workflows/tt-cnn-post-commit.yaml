@@ -69,12 +69,8 @@ jobs:
       matrix:
         os: ["ubuntu-22.04"]
         test-group:
-          - name: tt-cnn pipeline unit tests
-            cmd: pytest models/tt_cnn/tests/test_pipeline.py
-          - name: tt-cnn builder unit tests
-            cmd: pytest models/tt_cnn/tests/test_builder.py
-          - name: tt-cnn testing unit tests
-            cmd: pytest models/tt_cnn/tests/test_testing.py
+          - name: tt-cnn unit tests
+            cmd: pytest models/tt_cnn/tests
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
