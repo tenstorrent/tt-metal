@@ -279,7 +279,6 @@ void MAIN {
 #else
                     sub_tiles_bcast_scalar(cb_in0, cb_ex_global, tile_id, 0 + (g << 1), dst0);
 #endif
-                    // dprint_tensix_dest_reg(dst0);
                     tile_regs_commit();
                     tile_regs_wait();
                     pack_tile(dst0, cb_xmm);
