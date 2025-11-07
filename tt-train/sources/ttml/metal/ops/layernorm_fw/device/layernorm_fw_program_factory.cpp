@@ -352,8 +352,10 @@ LayerNormForwardProgramFactory::cached_program_t LayerNormForwardProgramFactory:
         tt::tt_metal::TensorAccessorArgs(rstd_buffer).append_to(writer_compile_time_args);
     } else {
         // Add dummy TensorAccessorArgs for mean and rstd (they won't be used)
-        tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_time_args);
-        tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_time_args);
+        auto dummy_buffer =
+            tt::tt_metal::CreateBuffer(tt::tt_metal::BufferConfig{device, 0, 0, tt::tt_metal::BufferType::DRAM});
+        tt::tt_metal::TensorAccessorArgs(dummy_buffer).append_to(writer_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(dummy_buffer).append_to(writer_compile_time_args);
     }
     kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, defines, kWriterKernelPath);
 
