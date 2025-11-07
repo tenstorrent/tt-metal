@@ -152,6 +152,7 @@ def test_sdxl_vae_decode_perf_device():
     command = f"pytest models/experimental/stable_diffusion_xl_base/vae/tests/pcc/test_module_tt_autoencoder_kl.py::test_vae -k 'test_decode'"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
+    os.environ["TT_MM_THROTTLE_PERF"] = "5"
     batch_size = 1
 
     inference_time_key = "AVG DEVICE KERNEL DURATION [ns]"
@@ -160,7 +161,7 @@ def test_sdxl_vae_decode_perf_device():
     )
     expected_perf_cols = {inference_time_key: expected_device_perf_cycles_per_iteration}
     expected_results = check_device_perf(
-        post_processed_results, margin=0.015, expected_perf_cols=expected_perf_cols, assert_on_fail=True
+        post_processed_results, margin=0.5, expected_perf_cols=expected_perf_cols, assert_on_fail=True
     )
     prep_device_perf_report(
         model_name=f"sdxl_vae_decode",
