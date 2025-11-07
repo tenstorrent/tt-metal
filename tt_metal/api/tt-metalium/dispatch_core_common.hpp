@@ -70,7 +70,6 @@ public:
 
 // Helper functions to get the dispatch core config/type
 DispatchCoreConfig get_dispatch_core_config();
-CoreType get_dispatch_core_type();
 
 }  // namespace tt::tt_metal
 

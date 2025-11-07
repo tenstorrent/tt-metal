@@ -24,8 +24,4 @@ DispatchCoreConfig get_dispatch_core_config() {
     return MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
 }
 
-CoreType get_dispatch_core_type() {
-    return MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
-};
-
 }  // namespace tt::tt_metal
