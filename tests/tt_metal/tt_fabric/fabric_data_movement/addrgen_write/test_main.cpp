@@ -3,12 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-#include "tt_metal/tt_fabric/benchmark/collectives/common/perf_helpers.hpp"
+#include "tests/tt_metal/tt_fabric/fabric_data_movement/addrgen_write/test_common.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
 // Forward declaration of test runner
 namespace tt::tt_fabric::test {
-void run_addrgen_write_test(tt::tt_fabric::bench::HelpersFixture* fixture, const tt::tt_fabric::bench::PerfParams& p);
+void run_addrgen_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, const AddrgenTestParams& p);
 }
 
 // Fixture for mesh device setup
@@ -22,7 +22,7 @@ struct Fixture : public ::tt::tt_metal::MeshDeviceFixtureBase {
 };
 
 // Parameterized test for all 6 addrgen API variants
-class AddrgenApiVariantTest : public ::testing::TestWithParam<tt::tt_fabric::bench::AddrgenApiVariant> {
+class AddrgenApiVariantTest : public ::testing::TestWithParam<tt::tt_fabric::test::AddrgenApiVariant> {
 protected:
     Fixture fixture;
 
@@ -35,7 +35,7 @@ TEST_P(AddrgenApiVariantTest, Write) {
     auto api_variant = GetParam();
 
     // Hardcoded parameters - minimal test case
-    tt::tt_fabric::bench::PerfParams p{
+    tt::tt_fabric::test::AddrgenTestParams p{
         .mesh_id = 0,
         .src_chip = 0,
         .dst_chip = 1,
@@ -44,7 +44,6 @@ TEST_P(AddrgenApiVariantTest, Write) {
         .page_size = 4096,
         .sender_core = {0, 0},
         .receiver_core = {1, 0},
-        .trace_iters = 1,
         .api_variant = api_variant  // Test parameter
     };
 
@@ -57,21 +56,21 @@ INSTANTIATE_TEST_SUITE_P(
     AddrgenOverloads,
     AddrgenApiVariantTest,
     ::testing::Values(
-        tt::tt_fabric::bench::AddrgenApiVariant::UnicastWrite,
-        tt::tt_fabric::bench::AddrgenApiVariant::UnicastWriteWithState,
-        tt::tt_fabric::bench::AddrgenApiVariant::UnicastWriteSetState,
-        tt::tt_fabric::bench::AddrgenApiVariant::FusedAtomicIncWrite,
-        tt::tt_fabric::bench::AddrgenApiVariant::FusedAtomicIncWriteWithState,
-        tt::tt_fabric::bench::AddrgenApiVariant::FusedAtomicIncWriteSetState),
+        tt::tt_fabric::test::AddrgenApiVariant::UnicastWrite,
+        tt::tt_fabric::test::AddrgenApiVariant::UnicastWriteWithState,
+        tt::tt_fabric::test::AddrgenApiVariant::UnicastWriteSetState,
+        tt::tt_fabric::test::AddrgenApiVariant::FusedAtomicIncWrite,
+        tt::tt_fabric::test::AddrgenApiVariant::FusedAtomicIncWriteWithState,
+        tt::tt_fabric::test::AddrgenApiVariant::FusedAtomicIncWriteSetState),
     [](const ::testing::TestParamInfo<AddrgenApiVariantTest::ParamType>& info) {
         switch (info.param) {
-            case tt::tt_fabric::bench::AddrgenApiVariant::UnicastWrite: return "UnicastWrite";
-            case tt::tt_fabric::bench::AddrgenApiVariant::UnicastWriteWithState: return "UnicastWriteWithState";
-            case tt::tt_fabric::bench::AddrgenApiVariant::UnicastWriteSetState: return "UnicastWriteSetState";
-            case tt::tt_fabric::bench::AddrgenApiVariant::FusedAtomicIncWrite: return "FusedAtomicIncWrite";
-            case tt::tt_fabric::bench::AddrgenApiVariant::FusedAtomicIncWriteWithState:
+            case tt::tt_fabric::test::AddrgenApiVariant::UnicastWrite: return "UnicastWrite";
+            case tt::tt_fabric::test::AddrgenApiVariant::UnicastWriteWithState: return "UnicastWriteWithState";
+            case tt::tt_fabric::test::AddrgenApiVariant::UnicastWriteSetState: return "UnicastWriteSetState";
+            case tt::tt_fabric::test::AddrgenApiVariant::FusedAtomicIncWrite: return "FusedAtomicIncWrite";
+            case tt::tt_fabric::test::AddrgenApiVariant::FusedAtomicIncWriteWithState:
                 return "FusedAtomicIncWriteWithState";
-            case tt::tt_fabric::bench::AddrgenApiVariant::FusedAtomicIncWriteSetState:
+            case tt::tt_fabric::test::AddrgenApiVariant::FusedAtomicIncWriteSetState:
                 return "FusedAtomicIncWriteSetState";
             default: return "UnknownVariant";
         }
