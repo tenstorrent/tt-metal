@@ -6,6 +6,9 @@
 
 namespace ttnn {
 
+using Tensor = tt::tt_metal::Tensor;
+using TensorSpec = tt::tt_metal::TensorSpec;
+
 std::string to_string(const Tensor& tensor);
 
 }  // namespace ttnn

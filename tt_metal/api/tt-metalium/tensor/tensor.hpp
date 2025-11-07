@@ -331,10 +331,3 @@ std::string to_string(const Tensor& tensor);
 }  // namespace tt_metal
 
 }  // namespace tt
-
-namespace ttnn {
-
-using Tensor = tt::tt_metal::Tensor;
-using TensorSpec = tt::tt_metal::TensorSpec;
-
-}  // namespace ttnn

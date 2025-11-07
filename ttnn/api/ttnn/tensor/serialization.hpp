@@ -8,5 +8,5 @@ namespace ttnn {
 // 1. Tensor metadata is serialized and stored as file "header", while the rest of the file is used as a data region for
 //    tensor data.
 // 2. Metadata includes data offsets and sizes for tensor / tensor shards (multi device context).
-void dump_tensor_flatbuffer(const std::string& file_name, const Tensor& tensor);
+void dump_tensor_flatbuffer(const std::string& file_name, const tt::tt_metal::Tensor& tensor);
 }  // namespace ttnn
