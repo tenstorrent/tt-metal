@@ -16,7 +16,7 @@ class EfficientDetBackbone(nn.Module):
         super(EfficientDetBackbone, self).__init__()
         self.compound_coef = compound_coef
 
-        self.backbone_compound_coef = [0, 1, 2, 3, 4, 5, 6, 6, 7]
+        self.backbone_compound_coef = [0]
         self.fpn_num_filters = [64, 88, 112, 160, 224, 288, 384, 384, 384]
         self.fpn_cell_repeats = [3, 4, 5, 6, 7, 7, 8, 8, 8]
         self.input_sizes = [512, 640, 768, 896, 1024, 1280, 1280, 1536, 1536]
@@ -84,9 +84,11 @@ class EfficientDetBackbone(nn.Module):
     def forward(self, inputs):
         max_size = inputs.shape[-1]
 
-        _, p3, p4, p5 = self.backbone_net(inputs)
+        p3, p4, p5 = self.backbone_net(inputs)
+        # x = self.backbone_net(inputs)
 
         features = (p3, p4, p5)
+        return p3, p4, p5
         features = self.bifpn(features)
 
         regression = self.regressor(features)
