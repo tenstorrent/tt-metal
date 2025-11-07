@@ -5,18 +5,17 @@
 
 """
 Usage:
-    dump_ops [--max-width=<width>] [--verbose] [--generate-test]
+    dump_ops [--generate-test] [--max-width=<width>]
 
 Options:
-    --max-width=<width>    Maximum column width for wrapping text [default: 120]
-    --verbose              Show full raw argument information (default: summary)
     --generate-test        Generate test files for hanging operations
+    --max-width=<width>    Maximum column width for table output. [default: 100]
 
 Description:
     Prints the current operation running on each core.
 
-    Use --verbose for full raw argument details.
     Use --generate-test to create test files for operations that could be causing hangs.
+    Use --max-width to control table column widths.
 
 """
 
@@ -1044,10 +1043,17 @@ def dump_ops(
                     else:
                         # Non-tensor argument - show compact representation
                         # Could be a scalar, enum, etc.
-                        if len(arg) <= 50:
-                            arguments.append(f"  {arg}")
+                        # Use max_width to determine truncation limit
+                        arg_with_indent = f"  {arg}"
+                        if len(arg_with_indent) <= max_width:
+                            arguments.append(arg_with_indent)
                         else:
-                            arguments.append(f"  {arg[:47]}...")
+                            # Truncate to fit within max_width, accounting for "..." and indent
+                            truncate_len = max_width - 5  # 2 for indent + 3 for "..."
+                            if truncate_len > 0:
+                                arguments.append(f"  {arg[:truncate_len]}...")
+                            else:
+                                arguments.append(f"  {arg[:max_width]}")
 
                 if arguments:
                     callstack_args_lines.append("Arguments:")
@@ -1066,34 +1072,28 @@ def dump_ops(
                             )
                             callstack_args_lines.append(wrapped)
                 else:
-                    fallback_text = f"Arguments: {args[:80]}..."
+                    # Use max_width to determine fallback truncation limit
+                    # Account for "Arguments: " (11 chars) and "..." (3 chars)
+                    truncate_len = max_width - 14
+                    if truncate_len > 0 and len(args) > truncate_len:
+                        fallback_text = f"Arguments: {args[:truncate_len]}..."
+                    else:
+                        fallback_text = f"Arguments: {args}"
+
                     if len(fallback_text) <= max_width:
                         callstack_args_lines.append(fallback_text)
                     else:
+                        # Note: "Arguments: " is 11 chars, but continuation should not get bullet
+                        # So we use more indentation for continuation
                         wrapped = textwrap.fill(
                             args,
                             width=max_width,
                             initial_indent="Arguments: ",
-                            subsequent_indent="           ",
+                            subsequent_indent="           ",  # 11 spaces - will be preserved as-is (>4)
                             break_long_words=False,
                             break_on_hyphens=False,
                         )
                         callstack_args_lines.append(wrapped)
-            else:
-                # Full mode: wrap long argument lines
-                if len(args) <= max_width - 11:  # 11 is length of "Arguments: "
-                    callstack_args_lines.append(f"Arguments: {args}")
-                else:
-                    # Wrap the arguments text
-                    wrapped = textwrap.fill(
-                        args,
-                        width=max_width - 11,  # Account for "Arguments: " prefix
-                        initial_indent="Arguments: ",
-                        subsequent_indent="           ",  # 11 spaces to align with "Arguments: "
-                        break_long_words=False,
-                        break_on_hyphens=False,
-                    )
-                    callstack_args_lines.append(wrapped)
 
         callstack_args_info = "\n".join(callstack_args_lines) if callstack_args_lines else "No details"
 
@@ -1131,11 +1131,11 @@ def dump_ops(
 def run(args, context: Context):
     """Run the dump_ops script."""
     max_width = int(args["--max-width"]) if args["--max-width"] else 100
-    verbose = args["--verbose"]
     # Check for generate-test flag - args returns None if not present
     generate_test = bool(args["--generate-test"])
-    # Default to summary mode unless verbose is requested
-    summary = not verbose
+    # Always use summary mode
+    summary = True
+    verbose_mode = False
     run_checks = get_run_checks(args, context)
     dispatcher_data = get_dispatcher_data(args, context)
     inspector_data = get_inspector_data(args, context)
@@ -1144,7 +1144,9 @@ def run(args, context: Context):
     all_ops_data = []
     all_host_id_op_names = []
     for device in run_checks.devices:
-        device_ops, host_id_op_names = dump_ops(device, dispatcher_data, max_width, verbose, summary, inspector_data)
+        device_ops, host_id_op_names = dump_ops(
+            device, dispatcher_data, max_width, verbose_mode, summary, inspector_data
+        )
         all_ops_data.extend(device_ops)
         all_host_id_op_names.extend(host_id_op_names)
 
