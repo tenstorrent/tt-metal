@@ -472,3 +472,36 @@ FORCE_INLINE void wait_write_done(volatile tt_l1_ptr uint32_t* semaphore_addr_pt
     noc_semaphore_wait(semaphore_addr_ptr, VALID);
     noc_semaphore_set(semaphore_addr_ptr, INVALID);
 }
+// Multicast activation data from the local circular buffer to multiple destinations.
+// This function sends a block of data (the activation block) using NOC multicast commands.
+//
+// Template parameters:
+//   act_mcast_num_cores: Number of core destinations in the multicast group.
+template <uint32_t act_mcast_num_cores>
+void multicast_act_data(
+    bool is_receiver_core,        // Whether this core is also a receiver of its own multicast (for loopback).
+    uint32_t src_l1_addr,         // SRC address in L1
+    uint32_t dst_l1_addr,         // DST address in L1
+    uint64_t multicast_noc_addr,  // Multicast NOC address
+    uint32_t total_bytes,         // Total bytes to send
+    bool last_packet)             // Whether this is the last packet in the block
+{
+    uint64_t multicast_write_addr = multicast_noc_addr | dst_l1_addr;
+    if (is_receiver_core) {
+        if constexpr (act_mcast_num_cores) {
+            // num_dests will source, since we are copying to a different local CB as well
+            noc_async_write_multicast_loopback_src(
+                src_l1_addr, multicast_write_addr, total_bytes, act_mcast_num_cores + 1, true);
+        } else {
+            // In this case sender core is the only reciever in the grid,
+            // we can't use the multicast_loopback_src (hang)
+            noc_async_write(get_noc_addr(src_l1_addr), get_noc_addr(dst_l1_addr), total_bytes);
+            if (last_packet) {
+                noc_async_write_barrier();
+            }
+        }
+    } else {
+        // If sender core is not the reciever core as well we can't use the loopback mcast. (hang)
+        noc_async_write_multicast(src_l1_addr, multicast_write_addr, total_bytes, act_mcast_num_cores + 1, true);
+    }
+}
