@@ -459,15 +459,20 @@ class MasterConfigLoader:
                                 continue  # Skip this config, we already have one with this input
                             seen_input_signatures.add(input_sig)
 
-                        paired_configs.append(
-                            {
-                                "shape": tensor_config.shape,
-                                "dtype": parsed_dtype,
-                                "layout": parsed_layout,
-                                "memory_config": parsed_mem_config,
-                                "output_memory_config": parsed_mem_config,  # For unary ops, output matches input
-                            }
-                        )
+                        config_dict = {
+                            "shape": tensor_config.shape,
+                            "dtype": parsed_dtype,
+                            "layout": parsed_layout,
+                            "memory_config": parsed_mem_config,
+                            "output_memory_config": parsed_mem_config,  # For unary ops, output matches input
+                        }
+
+                        # Extract operation-specific parameters for certain operations
+                        if operation_name == "permute":
+                            # For permute, add a default dims parameter (transpose H and W)
+                            config_dict["dims"] = [0, 1, 3, 2]  # N, C, W, H -> N, C, H, W
+
+                        paired_configs.append(config_dict)
                     else:
                         failed_configs += 1
                 except (AttributeError, Exception) as e:
@@ -533,23 +538,35 @@ class MasterConfigLoader:
                 if failed_configs > 0:
                     print(f"⚠️ Failed to parse {failed_configs} configurations")
             else:
-                # Return paired parameters as tuples to keep them together
-                # Use comma-separated parameter names to prevent Cartesian product
-                paired_param_tuples = []
+                # Return individual parameter lists to match sweep file expectations
+                # Extract each parameter type into separate lists
+                input_shapes = []
+                input_a_dtypes = []
+                input_a_layouts = []
+                input_a_memory_configs = []
+                output_memory_configs = []
+                dims_list = [] if operation_name == "permute" else None
+
                 for cfg in paired_configs:
-                    paired_param_tuples.append(
-                        (
-                            cfg["shape"],
-                            cfg["dtype"],
-                            cfg["layout"],
-                            cfg["memory_config"],
-                            cfg["output_memory_config"],
-                        )
-                    )
+                    input_shapes.append(cfg["shape"])
+                    input_a_dtypes.append(cfg["dtype"])
+                    input_a_layouts.append(cfg["layout"])
+                    input_a_memory_configs.append(cfg["memory_config"])
+                    output_memory_configs.append(cfg["output_memory_config"])
+                    if operation_name == "permute" and "dims" in cfg:
+                        dims_list.append(cfg["dims"])
 
                 result = {
-                    "input_shape,input_a_dtype,input_a_layout,input_a_memory_config,output_memory_config": paired_param_tuples,
+                    "input_shape": input_shapes,
+                    "input_a_dtype": input_a_dtypes,
+                    "input_a_layout": input_a_layouts,
+                    "input_a_memory_config": input_a_memory_configs,
+                    "output_memory_config": output_memory_configs,
                 }
+
+                # Add operation-specific parameters
+                if operation_name == "permute" and dims_list:
+                    result["dims"] = dims_list
 
                 print(f"✅ Loaded {len(paired_configs)} traced configurations for {operation_name} (model_traced suite)")
                 dedup_msg = " (unique inputs)" if deduplicate_inputs else " (all input/output pairs)"
@@ -703,26 +720,36 @@ class MasterConfigLoader:
                 if failed_configs > 0:
                     print(f"⚠️ Failed to parse {failed_configs} configurations")
             else:
-                # Return paired parameters as tuples to keep them together
-                # Use comma-separated parameter names to prevent Cartesian product
-                # For binary ops, we need to handle input_shape specially
-                paired_param_tuples = []
+                # Return individual parameter lists to match sweep file expectations
+                # Extract each parameter type into separate lists
+                input_shapes = []
+                input_a_dtypes = []
+                input_b_dtypes = []
+                input_a_layouts = []
+                input_b_layouts = []
+                input_a_memory_configs = []
+                input_b_memory_configs = []
+                output_memory_configs = []
+
                 for cfg in paired_configs:
-                    paired_param_tuples.append(
-                        (
-                            {"self": cfg["shape_a"], "other": cfg["shape_b"]},  # input_shape as dict
-                            cfg["dtype_a"],
-                            cfg["dtype_b"],
-                            cfg["layout_a"],
-                            cfg["layout_b"],
-                            cfg["memory_config_a"],
-                            cfg["memory_config_b"],
-                            cfg["output_memory_config"],
-                        )
-                    )
+                    input_shapes.append({"self": cfg["shape_a"], "other": cfg["shape_b"]})
+                    input_a_dtypes.append(cfg["dtype_a"])
+                    input_b_dtypes.append(cfg["dtype_b"])
+                    input_a_layouts.append(cfg["layout_a"])
+                    input_b_layouts.append(cfg["layout_b"])
+                    input_a_memory_configs.append(cfg["memory_config_a"])
+                    input_b_memory_configs.append(cfg["memory_config_b"])
+                    output_memory_configs.append(cfg["output_memory_config"])
 
                 result = {
-                    "input_shape,input_a_dtype,input_b_dtype,input_a_layout,input_b_layout,input_a_memory_config,input_b_memory_config,output_memory_config": paired_param_tuples,
+                    "input_shape": input_shapes,
+                    "input_a_dtype": input_a_dtypes,
+                    "input_b_dtype": input_b_dtypes,
+                    "input_a_layout": input_a_layouts,
+                    "input_b_layout": input_b_layouts,
+                    "input_a_memory_config": input_a_memory_configs,
+                    "input_b_memory_config": input_b_memory_configs,
+                    "output_memory_config": output_memory_configs,
                 }
 
                 print(f"✅ Loaded {len(paired_configs)} traced configurations for {operation_name} (model_traced suite)")
@@ -832,33 +859,33 @@ class MasterConfigLoader:
                 if failed_configs > 0:
                     print(f"⚠️ Failed to parse {failed_configs} configurations")
             else:
-                # Return paired parameters as tuples to keep them together
-                paired_param_tuples = []
+                # Return individual parameter lists to match sweep file expectations
+                # Extract each parameter type into separate lists
+                input_shapes = []
+                dtypes = [[] for _ in range(tensor_count)]
+                layouts = [[] for _ in range(tensor_count)]
+                memory_configs = [[] for _ in range(tensor_count)]
+
                 for cfg in paired_configs:
                     # Build input_shape dict
                     input_shape = {f"input_{chr(97+i)}": cfg[f"shape_{chr(97+i)}"] for i in range(tensor_count)}
+                    input_shapes.append(input_shape)
 
-                    # Build tuple with all parameters
-                    param_tuple = [input_shape]
+                    # Extract dtypes, layouts, and memory configs for each input
                     for i in range(tensor_count):
                         suffix = chr(97 + i)
-                        param_tuple.extend(
-                            [cfg[f"dtype_{suffix}"], cfg[f"layout_{suffix}"], cfg[f"memory_config_{suffix}"]]
-                        )
+                        dtypes[i].append(cfg[f"dtype_{suffix}"])
+                        layouts[i].append(cfg[f"layout_{suffix}"])
+                        memory_configs[i].append(cfg[f"memory_config_{suffix}"])
 
-                    paired_param_tuples.append(tuple(param_tuple))
+                result = {"input_shape": input_shapes}
 
-                # Build parameter name string
-                param_names = ["input_shape"]
+                # Add dtypes, layouts, and memory configs for each input
                 for i in range(tensor_count):
                     suffix = chr(97 + i)
-                    param_names.extend(
-                        [f"input_{suffix}_dtype", f"input_{suffix}_layout", f"input_{suffix}_memory_config"]
-                    )
-
-                result = {
-                    ",".join(param_names): paired_param_tuples,
-                }
+                    result[f"input_{suffix}_dtype"] = dtypes[i]
+                    result[f"input_{suffix}_layout"] = layouts[i]
+                    result[f"input_{suffix}_memory_config"] = memory_configs[i]
 
                 print(f"✅ Loaded {len(paired_configs)} traced configurations for {operation_name} (model_traced suite)")
                 print(f"   📊 Will generate {len(paired_configs)} test vectors")
@@ -913,6 +940,24 @@ class MasterConfigLoader:
                 return config
 
         return None
+
+    def _extract_permute_dims(self, config: List) -> Optional[List[int]]:
+        """Extract dims parameter from permute operation config"""
+        try:
+            # Look for arg1 which should contain the dims parameter
+            for arg in config:
+                if isinstance(arg, dict) and "arg1" in arg:
+                    dims_str = arg["arg1"]
+                    # The dims are in format '[0, 2, 3, 1]' or similar
+                    if isinstance(dims_str, str) and dims_str.startswith("[") and dims_str.endswith("]"):
+                        # Parse the list string
+                        dims_str = dims_str.strip("[]")
+                        if dims_str:
+                            dims = [int(x.strip()) for x in dims_str.split(",")]
+                            return dims
+            return None
+        except Exception as e:
+            return None
 
     def extract_tensor_config(self, arg_data: Dict) -> Optional[TensorConfig]:
         """Extract tensor configuration from argument data"""
