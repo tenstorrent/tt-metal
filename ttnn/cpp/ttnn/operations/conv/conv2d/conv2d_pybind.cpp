@@ -12,7 +12,6 @@
 #include <pybind11/cast.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
-
 #include "ttnn-pybind/decorators.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
@@ -40,8 +39,7 @@ void py_bind_conv2d(py::module& module) {
         :param int out_channels: Number of channels produced by the convolution.
         :param int batch_size: The batch size of the input tensor.
         :param int input_height: This is a Tenstorrent-specific parameter. The height of the input tensor.
-        :param int input_width: This is a Tenstorrent-specific parameter. The width of the i
-nput tensor.
+        :param int input_width: This is a Tenstorrent-specific parameter. The width of the input tensor.
         :param tuple[int, int] kernel_size: The size of the convolving kernel.
         :param tuple[int, int] stride: The stride of the convolution. Default: (1, 1).
         :param tuple[int, int], optional padding: Zero-padding added to both sides of the input. Default: (0, 0). [pad_height, pad_width] or [pad_top, pad_bottom, pad_left, pad_right].
@@ -62,6 +60,7 @@ nput tensor.
         :rtype: [ttnn.Tensor, Tuple[int, int], Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]]: If true, the op also returns the preprocessed weight and bias on the device. Weight and bias should be used for the same convolution next time it is called to avoid preparing weights and bias multiple times. Default: false.
 
         Note:
+
             The :attr: `input_tensor` supports the following data type and layout:
 
             .. list-table:: input_tensor
