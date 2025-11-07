@@ -7,8 +7,11 @@
 namespace tt::tt_fabric {
 
 StaticSizedChannelConnectionWriterAdapter::StaticSizedChannelConnectionWriterAdapter(
-    FabricStaticSizedChannelsAllocator& /*allocator*/, tt::tt_fabric::Topology topology) :
-    is_2D_routing(topology == tt::tt_fabric::Topology::Mesh || topology == tt::tt_fabric::Topology::Torus) {}
+    FabricStaticSizedChannelsAllocator& /*allocator*/,
+    tt::tt_fabric::Topology topology,
+    eth_chan_directions my_direction) :
+    is_2D_routing(topology == tt::tt_fabric::Topology::Mesh || topology == tt::tt_fabric::Topology::Torus),
+    my_direction(my_direction) {}
 
 void StaticSizedChannelConnectionWriterAdapter::add_downstream_connection(
     SenderWorkerAdapterSpec const& adapter_spec,
@@ -22,7 +25,22 @@ void StaticSizedChannelConnectionWriterAdapter::add_downstream_connection(
 
     if (is_2D_routing) {
         if (!is_vc1) {
-            this->downstream_edms_connected |= (1 << downstream_direction);
+            // Calculate compact index based on downstream_direction relative to my_direction
+            // The compact index excludes the router's own direction
+            // For EAST router (my_direction=0): WEST(1)→0, NORTH(2)→1, SOUTH(3)→2
+            // For WEST router (my_direction=1): EAST(0)→0, NORTH(2)→1, SOUTH(3)→2
+            // For NORTH router (my_direction=2): EAST(0)→0, WEST(1)→1, SOUTH(3)→2
+            // For SOUTH router (my_direction=3): EAST(0)→0, WEST(1)→1, NORTH(2)→2
+            size_t compact_index;
+            if (my_direction == 0) {
+                // EAST router: skip index 0, map 1→0, 2→1, 3→2
+                compact_index = downstream_direction - 1;
+            } else {
+                // For other directions: if downstream < my_direction, use as-is; else subtract 1
+                compact_index =
+                    (downstream_direction < my_direction) ? downstream_direction : (downstream_direction - 1);
+            }
+            this->downstream_edms_connected |= (1 << compact_index);
         }
     } else {
         this->downstream_edms_connected = 1;
@@ -85,7 +103,14 @@ uint32_t StaticSizedChannelConnectionWriterAdapter::encode_noc_ord_for_2d(
     } else {
         uint32_t ord = 0;
         for (const auto& [direction, noc_xy] : downstream_edms_connected_by_vc[vc_idx]) {
-            ord |= (get_noc_ord(noc_xy) << (direction * 8));
+            // Calculate compact index based on direction relative to my_direction
+            size_t compact_index;
+            if (my_direction == 0) {
+                compact_index = direction - 1;
+            } else {
+                compact_index = (direction < my_direction) ? direction : (direction - 1);
+            }
+            ord |= (get_noc_ord(noc_xy) << (compact_index * 8));
         }
         return ord;
     }

@@ -78,7 +78,9 @@ constexpr size_t NUM_RECEIVER_CHANNELS_CT_ARG_IDX = SENDER_CHANNEL_NOC_CONFIG_ST
 constexpr size_t NUM_RECEIVER_CHANNELS = get_compile_time_arg_val(NUM_RECEIVER_CHANNELS_CT_ARG_IDX);
 constexpr size_t NUM_FORWARDING_PATHS_CT_ARG_IDX = NUM_RECEIVER_CHANNELS_CT_ARG_IDX + 1;
 constexpr size_t NUM_DOWNSTREAM_CHANNELS = get_compile_time_arg_val(NUM_FORWARDING_PATHS_CT_ARG_IDX);
-constexpr size_t wait_for_host_signal_IDX = NUM_FORWARDING_PATHS_CT_ARG_IDX + 1;
+constexpr size_t NUM_DOWNSTREAM_SENDERS_VC0_CT_ARG_IDX = NUM_FORWARDING_PATHS_CT_ARG_IDX + 1;
+constexpr size_t NUM_DOWNSTREAM_SENDERS_VC0 = get_compile_time_arg_val(NUM_DOWNSTREAM_SENDERS_VC0_CT_ARG_IDX);
+constexpr size_t wait_for_host_signal_IDX = NUM_DOWNSTREAM_SENDERS_VC0_CT_ARG_IDX + 1;
 constexpr bool wait_for_host_signal = get_compile_time_arg_val(wait_for_host_signal_IDX);
 constexpr size_t MAIN_CT_ARGS_START_IDX = wait_for_host_signal_IDX + 1;
 
@@ -92,14 +94,14 @@ static_assert(
     NUM_SENDER_CHANNELS <= MAX_NUM_SENDER_CHANNELS,
     "NUM_SENDER_CHANNELS must be less than or equal to MAX_NUM_SENDER_CHANNELS");
 static_assert(
-    wait_for_host_signal_IDX == 28,
-    "wait_for_host_signal_IDX must be 28 (23 stream IDs + 1 marker + 1 tensix connections + 3 config args)");
+    wait_for_host_signal_IDX == 29,
+    "wait_for_host_signal_IDX must be 29 (23 stream IDs + 1 marker + 1 tensix connections + 4 config args)");
 static_assert(
     get_compile_time_arg_val(wait_for_host_signal_IDX) == 0 || get_compile_time_arg_val(wait_for_host_signal_IDX) == 1,
     "wait_for_host_signal must be 0 or 1");
 static_assert(
-    MAIN_CT_ARGS_START_IDX == 29,
-    "MAIN_CT_ARGS_START_IDX must be 29 (23 stream IDs + 1 marker + 1 tensix connections + 4 config args)");
+    MAIN_CT_ARGS_START_IDX == 30,
+    "MAIN_CT_ARGS_START_IDX must be 30 (23 stream IDs + 1 marker + 1 tensix connections + 5 config args)");
 
 constexpr uint32_t SWITCH_INTERVAL =
 #ifndef DEBUG_PRINT_ENABLED
@@ -493,7 +495,8 @@ constexpr size_t VC1_RECEIVER_CHANNEL = 1;
 constexpr size_t sender_channel_base_id = 0;
 constexpr size_t receiver_channel_base_id = NUM_SENDER_CHANNELS;
 
-constexpr size_t NUM_DOWNSTREAM_SENDERS_VC0 = is_2d_fabric ? 4 : 1;
+// NUM_DOWNSTREAM_SENDERS_VC0 now comes from compile-time args (passed from host as num_downstream_edms_vc0 or
+// num_downstream_edms_2d_vc0) For 1D: 1 downstream EDM, For 2D: 3 downstream EDMs (excluding router's own direction)
 
 // TRANSACTION IDS
 // TODO: Pass this value from host
