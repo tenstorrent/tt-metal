@@ -277,6 +277,8 @@ void build_tt_fabric_program(
                                            tt::tt_fabric::FabricTensixConfig::DISABLED;
     bool fabric_tensix_extension_mux_mode =
         tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() == tt::tt_fabric::FabricTensixConfig::MUX;
+    bool fabric_tensix_extension_udm_mode =
+        tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() == tt::tt_fabric::FabricTensixConfig::UDM;
 
     for (const auto& [direction, remote_fabric_node_id] : chip_neighbors) {
         const auto& [fabric_edm_type, fabric_edm_axis] = get_fabric_edm_type(
@@ -341,6 +343,12 @@ void build_tt_fabric_program(
                 if (!dispatch_link) {
                     auto tensix_builder = tt::tt_fabric::FabricTensixDatamoverBuilder::build(
                         device, *fabric_program_ptr, fabric_node_id, remote_fabric_node_id, eth_chan, eth_direction);
+
+                    if (fabric_tensix_extension_udm_mode) {
+                        // setup the local relay kernel connection
+                        edm_builder.connect_to_local_tensix_builder(tensix_builder);
+                    }
+
                     tensix_builders.emplace(eth_chan, std::move(tensix_builder));
                 }
             }
