@@ -150,8 +150,15 @@ constexpr uint32_t remote_vc1_sender_channel =
 constexpr size_t remote_worker_sender_channel =
     conditional_get_compile_time_arg<skip_src_ch_id_update, REMOTE_CHANNEL_INFO_START_IDX + 1>();
 
+constexpr size_t UDM_MODE_IDX = REMOTE_CHANNEL_INFO_START_IDX + (skip_src_ch_id_update ? 2 : 0);
+constexpr bool udm_mode = get_compile_time_arg_val(UDM_MODE_IDX) != 0;
+
+constexpr size_t LOCAL_TENSIX_RELAY_INFO_START_IDX = UDM_MODE_IDX + 1;
+constexpr uint32_t LOCAL_RELAY_NUM_BUFFERS =
+    conditional_get_compile_time_arg<udm_mode, LOCAL_TENSIX_RELAY_INFO_START_IDX>();
+
 constexpr size_t ANOTHER_SPECIAL_TAG = 0xabcd9876;
-constexpr size_t ANOTHER_SPECIAL_TAG_IDX = REMOTE_CHANNEL_INFO_START_IDX + (skip_src_ch_id_update ? 2 : 0);
+constexpr size_t ANOTHER_SPECIAL_TAG_IDX = LOCAL_TENSIX_RELAY_INFO_START_IDX + (udm_mode ? 1 : 0);
 static_assert(
     get_compile_time_arg_val(ANOTHER_SPECIAL_TAG_IDX) == ANOTHER_SPECIAL_TAG,
     "ANOTHER_SPECIAL_TAG not found. This implies some arguments were misaligned between host and device. Double check the CT args.");
