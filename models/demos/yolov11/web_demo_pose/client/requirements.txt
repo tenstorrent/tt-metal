@@ -1,0 +1,11 @@
+streamlit>=1.28.1
+streamlit-webrtc>=0.47.1
+opencv-python>=4.8.1
+numpy>=1.26.0  # Compatible with Python 3.13
+requests>=2.31.0
+orjson>=3.9.10
+av>=10.0.0
+Pillow>=10.1.0
+
+# Alternative: Use conda if pip fails
+# conda install numpy opencv pillow
