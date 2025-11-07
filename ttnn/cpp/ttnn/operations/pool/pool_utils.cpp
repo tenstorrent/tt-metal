@@ -147,9 +147,7 @@ FactoryParameters get_factory_parameters(
         !last_tile_is_partial ? tt::constants::TILE_HEIGHT : tt::constants::TILE_HEIGHT / 2;
     const bool is_large_kernel = kernel_size_hw > max_rows_for_reduction;
     if (return_indices) {
-        TT_FATAL(
-            !is_avg_pool && !is_large_kernel,
-            "Currently only small full width max pool is supported with return_indices");
+        TT_FATAL(!is_avg_pool, "Currently only small full width max pool is supported with return_indices");
     }
     const uint32_t MAX_TILES_PER_REDUCTION = return_indices ? 1 : (is_avg_pool && is_large_kernel) ? 4 : 8;
     const bool is_wide_reduction = in_ntiles_c > MAX_TILES_PER_REDUCTION;
