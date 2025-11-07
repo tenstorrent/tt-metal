@@ -16,6 +16,7 @@
 #include "tt-metalium/buffer_types.hpp"
 #include "tt-metalium/constants.hpp"
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/tensor/tensor.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -167,6 +168,8 @@ int main(int argc, char** argv) {
     // Construct the L1 configuration. The configuration is very detailed to enable maximum performance.
     // The cores that the buffer will be sharded across.
     const CoreRange cores(CoreCoord(0, 0), CoreCoord(config.num_cores_y - 1, config.num_cores_x - 1));
+    size_t num_tiles_per_core = n_tiles_x * n_tiles_y / CoreRangeSet(cores).num_cores();
+#ifdef FALSE
     // The sharing configuration for the buffer
     ShardSpecBuffer spec(
         // core_sets: The set of cores to shard the buffer across
@@ -199,7 +202,6 @@ int main(int argc, char** argv) {
         b_data[i] = bfloat16(dist(rng));
     }
 
-    size_t num_tiles_per_core = n_tiles_x * n_tiles_y / CoreRangeSet(cores).num_cores();
     // Create circular buffers so the compute APIs can access the data.
     // NOTE: These are special circular buffers that have explicitly set L1 buffer address. As data already fully
     // resides in L1, we can simply point the circular buffers to the L1 buffers and avoid any extra allocation or data
@@ -207,6 +209,30 @@ int main(int argc, char** argv) {
     MakeCircularBufferBFP16(program, cores, tt::CBIndex::c_0, num_tiles_per_core, a);
     MakeCircularBufferBFP16(program, cores, tt::CBIndex::c_1, num_tiles_per_core, b);
     MakeCircularBufferBFP16(program, cores, tt::CBIndex::c_2, num_tiles_per_core, c);
+#endif
+
+    // Data to fill the input buffers.
+    std::mt19937 rng(seed);
+    std::uniform_real_distribution<float> dist(0.0f, 10.0f);
+    const size_t num_elements = n_tiles_x * n_tiles_y * tt::constants::TILE_HW;
+    std::vector<bfloat16> a_data(num_elements);
+    std::vector<bfloat16> b_data(num_elements);
+    for (size_t i = 0; i < a_data.size(); ++i) {
+        a_data[i] = bfloat16(dist(rng));
+        b_data[i] = bfloat16(dist(rng));
+    }
+
+    auto shard_spec = ShardSpec(
+        cores,
+        {num_tiles_per_core_y * tt::constants::TILE_WIDTH, num_tiles_per_core_x * tt::constants::TILE_HEIGHT},
+        ShardOrientation::ROW_MAJOR);
+    MemoryConfig memory_config(TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, shard_spec);
+    TensorSpec tensor_spec(
+        Shape({n_tiles_x * tt::constants::TILE_WIDTH, n_tiles_y * tt::constants::TILE_HEIGHT}),
+        TensorLayout(DataType::BFLOAT16, Layout::ROW_MAJOR, memory_config));
+    Tensor a_tensor = Tensor::from_vector(a_data, tensor_spec, mesh_device.get());
+    Tensor b_tensor = Tensor::from_vector(b_data, tensor_spec, mesh_device.get());
+    Tensor c_tensor = allocate_tensor_on_device(tensor_spec, mesh_device.get());
 
     // Create the kernel
     auto compute = CreateKernel(
@@ -220,8 +246,10 @@ int main(int argc, char** argv) {
 
     // copy data from host to L1 directly
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+#ifdef FALSE
     EnqueueWriteMeshBuffer(cq, a, a_data, false);
     EnqueueWriteMeshBuffer(cq, b, b_data, false);
+#endif
 
     // Setup arguments and run the program.
     SetRuntimeArgs(program, compute, cores, {num_tiles_per_core});
@@ -230,10 +258,12 @@ int main(int argc, char** argv) {
 
     fmt::print("Kernel execution finished. Reading results...\n");
 
+    auto c_data = c_tensor.to_vector<bfloat16>();
+#ifdef FALSE
     // Read the output buffer.
     std::vector<bfloat16> c_data;
     distributed::EnqueueReadMeshBuffer(cq, c_data, c, true);
-
+#endif
     // Print partial results so we can see the output is correct (plus or minus
     // some error due to BFP16 precision)
     fmt::print("Partial results: (note we are running under BFP16. It's going to be less accurate)\n");

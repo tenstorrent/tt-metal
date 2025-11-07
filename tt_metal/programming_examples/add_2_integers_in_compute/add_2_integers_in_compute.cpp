@@ -8,6 +8,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include "tt-metalium/constants.hpp"
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/tensor/tensor.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -51,6 +52,7 @@ int main() {
     constexpr uint32_t n_elements_per_tile = tt::constants::TILE_WIDTH * tt::constants::TILE_WIDTH;
     constexpr uint32_t single_tile_size = sizeof(bfloat16) * n_elements_per_tile;
 
+#ifdef FALSE
     // MeshBuffer Creation:
     // To create a MeshBuffer, we need to specify the page size, the buffer type, and the size of the buffer.
     // For this example, we will be using a DRAM buffer.
@@ -68,6 +70,7 @@ int main() {
     auto src0_dram_buffer = distributed::MeshBuffer::create(distributed_buffer_config, dram_config, mesh_device.get());
     auto src1_dram_buffer = distributed::MeshBuffer::create(distributed_buffer_config, dram_config, mesh_device.get());
     auto dst_dram_buffer = distributed::MeshBuffer::create(distributed_buffer_config, dram_config, mesh_device.get());
+#endif
 
     // Create 3 circular buffers. Think them like pipes moving data from one core to another. cb_src0 and cb_src1 are
     // used to move data from the reader kernel to the compute kernel. cb_dst is used to move data from the compute
@@ -127,6 +130,7 @@ int main() {
         src1_vec[i] = bfloat16(dist2(rng));
     }
 
+#ifdef FALSE
     // Upload the data from host to the device. The last argument indicates if the operation is blocking or not.
     // Setting it to false allows the function to immediately return after queuing the operation, enabling
     // overlapping of data transfers with other operations. At the cost of user responsibility to ensure the data
@@ -135,6 +139,14 @@ int main() {
     // to false safely.
     EnqueueWriteMeshBuffer(cq, src0_dram_buffer, src0_vec, false);
     EnqueueWriteMeshBuffer(cq, src1_dram_buffer, src1_vec, false);
+#endif
+
+    TensorSpec tensor_spec(
+        Shape({tt::constants::TILE_WIDTH, tt::constants::TILE_HEIGHT}),
+        TensorLayout(DataType::BFLOAT16, Layout::TILE, MemoryConfig{}));
+    Tensor src0_dram_tensor = Tensor::from_vector(src0_vec, tensor_spec, mesh_device.get());
+    Tensor src1_dram_tensor = Tensor::from_vector(src1_vec, tensor_spec, mesh_device.get());
+    Tensor dst_dram_tensor = allocate_tensor_on_device(tensor_spec, mesh_device.get());
 
     // Setup arguments for the kernels in the program.
     // Unlike OpenCL/CUDA, every kernel can have its own set of arguments.
@@ -142,21 +154,24 @@ int main() {
         program,
         binary_reader_kernel_id,
         core,
-        {(uint32_t)src0_dram_buffer->address(), (uint32_t)src1_dram_buffer->address()});
+        {(uint32_t)src0_dram_tensor.mesh_buffer()->address(), (uint32_t)src1_dram_tensor.mesh_buffer()->address()});
     SetRuntimeArgs(program, eltwise_binary_kernel_id, core, {});
-    SetRuntimeArgs(program, unary_writer_kernel_id, core, {(uint32_t)dst_dram_buffer->address()});
+    SetRuntimeArgs(program, unary_writer_kernel_id, core, {(uint32_t)dst_dram_tensor.mesh_buffer()->address()});
 
     // Add the program to the workload and execute it.
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
     distributed::Finish(cq);
 
+#ifdef FALSE
     // Data can be read from a MeshBuffer using the ReadShard function. This function is used to read data from a
     // specific shard of a MeshBuffer. The shard is specified by the MeshCoordinate. The last argument indicates if the
     // operation is blocking or not.
     std::vector<bfloat16> result_vec;
     distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, true);
+#endif
 
+    auto result_vec = dst_dram_tensor.to_vector<bfloat16>();
     // compare the results with the expected values.
     bool success = true;
     for (size_t i = 0; i < n_elements_per_tile; ++i) {
