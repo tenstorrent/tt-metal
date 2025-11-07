@@ -11,7 +11,7 @@ ChipSpec: {
 
 Board: [
   { name: T3K,
-    type: Mesh,
+    type: TORUS_X,
     topology: [1, 8]}
 ]
 
