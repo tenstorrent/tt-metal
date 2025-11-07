@@ -15,14 +15,14 @@ std::string graph_demangle(std::string_view name);
 
 class GraphArgumentSerializer {
 public:
-    using ConvertionFunction = std::function<std::string(const std::any&)>;
+    using ConversionFunction = std::function<std::string(const std::any&)>;
     std::vector<std::string> to_list(const std::span<std::any>& span);
 
     static GraphArgumentSerializer& instance();
 
 private:
     GraphArgumentSerializer();
-    std::unordered_map<std::type_index, ConvertionFunction>& registry();
+    std::unordered_map<std::type_index, ConversionFunction>& registry();
 
     template <typename T, std::size_t N>
     void register_small_vector();
@@ -38,6 +38,6 @@ private:
 
     void initialize();
 
-    std::unordered_map<std::type_index, GraphArgumentSerializer::ConvertionFunction> map;
+    std::unordered_map<std::type_index, GraphArgumentSerializer::ConversionFunction> map;
 };
 }  // namespace ttnn::graph

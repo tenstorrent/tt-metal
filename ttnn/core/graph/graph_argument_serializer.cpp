@@ -73,7 +73,7 @@ std::string graph_demangle(const std::string_view name) {
 // The lambda should use 'const T' for any_cast since it works for both const and non-const reference_wrappers
 template <typename T>
 void register_reference_wrapper_pair(
-    std::unordered_map<std::type_index, GraphArgumentSerializer::ConvertionFunction>& registry,
+    std::unordered_map<std::type_index, GraphArgumentSerializer::ConversionFunction>& registry,
     std::function<std::string(const T&)> serializer_func) {
     auto wrapper = [serializer_func](const std::any& value) -> std::string {
         // Try non-const first
@@ -98,7 +98,7 @@ GraphArgumentSerializer& GraphArgumentSerializer::instance() {
     return new_instance;
 }
 
-std::unordered_map<std::type_index, GraphArgumentSerializer::ConvertionFunction>& GraphArgumentSerializer::registry() {
+std::unordered_map<std::type_index, GraphArgumentSerializer::ConversionFunction>& GraphArgumentSerializer::registry() {
     return map;
 }
 
@@ -114,10 +114,8 @@ void GraphArgumentSerializer::register_small_vector() {
 
 template <typename T, std::size_t N>
 void GraphArgumentSerializer::register_array() {
-    registry()[typeid(std::reference_wrapper<std::array<T, N>>)] = [](const std::any& value) -> std::string {
+    register_reference_wrapper_pair<std::array<T, N>>(registry(), [](const std::array<T, N>& arr) -> std::string {
         std::ostringstream oss;
-        auto referenced_value = std::any_cast<std::reference_wrapper<std::array<T, N>>>(value);
-        const auto& arr = referenced_value.get();
         oss << "[";
         for (size_t i = 0; i < N; ++i) {
             if (i > 0) {
@@ -127,22 +125,7 @@ void GraphArgumentSerializer::register_array() {
         }
         oss << "]";
         return oss.str();
-    };
-
-    registry()[typeid(std::reference_wrapper<const std::array<T, N>>)] = [](const std::any& value) -> std::string {
-        std::ostringstream oss;
-        auto referenced_value = std::any_cast<std::reference_wrapper<const std::array<T, N>>>(value);
-        const auto& arr = referenced_value.get();
-        oss << "[";
-        for (size_t i = 0; i < N; ++i) {
-            if (i > 0) {
-                oss << ", ";
-            }
-            oss << arr[i];
-        }
-        oss << "]";
-        return oss.str();
-    };
+    });
 }
 
 template <typename OptionalT>
@@ -163,7 +146,7 @@ void GraphArgumentSerializer::register_optional_type() {
 
 template <typename T>
 void GraphArgumentSerializer::register_type() {
-    GraphArgumentSerializer::ConvertionFunction regular_function = [](const std::any& value) -> std::string {
+    GraphArgumentSerializer::ConversionFunction regular_function = [](const std::any& value) -> std::string {
         std::ostringstream oss;
         if (value.type() == typeid(std::reference_wrapper<T>)) {
             auto referenced_value = std::any_cast<std::reference_wrapper<T>>(value);
@@ -262,33 +245,22 @@ void GraphArgumentSerializer::initialize() {
 
     // Register std::array types commonly used for pad operations
     // We register these directly without going through register_type to avoid recursive template expansion
-    register_reference_wrapper_pair<std::array<unsigned int, 2>>(
-        registry(), [](const std::array<unsigned int, 2>& arr) -> std::string {
-            std::ostringstream oss;
-            oss << "[";
-            for (size_t i = 0; i < 2; ++i) {
-                if (i > 0) {
-                    oss << ", ";
-                }
-                oss << arr[i];
+    // Generic lambda that works for any array size
+    auto serialize_unsigned_int_array = [](const auto& arr) -> std::string {
+        std::ostringstream oss;
+        oss << "[";
+        for (size_t i = 0; i < arr.size(); ++i) {
+            if (i > 0) {
+                oss << ", ";
             }
-            oss << "]";
-            return oss.str();
-        });
+            oss << arr[i];
+        }
+        oss << "]";
+        return oss.str();
+    };
 
-    register_reference_wrapper_pair<std::array<unsigned int, 4>>(
-        registry(), [](const std::array<unsigned int, 4>& arr) -> std::string {
-            std::ostringstream oss;
-            oss << "[";
-            for (size_t i = 0; i < 4; ++i) {
-                if (i > 0) {
-                    oss << ", ";
-                }
-                oss << arr[i];
-            }
-            oss << "]";
-            return oss.str();
-        });
+    register_reference_wrapper_pair<std::array<unsigned int, 2>>(registry(), serialize_unsigned_int_array);
+    register_reference_wrapper_pair<std::array<unsigned int, 4>>(registry(), serialize_unsigned_int_array);
 
     // Register SmallVector<std::array<unsigned int, 2>, 8> for pad operations
     register_reference_wrapper_pair<ttsl::SmallVector<std::array<unsigned int, 2>, 8>>(
