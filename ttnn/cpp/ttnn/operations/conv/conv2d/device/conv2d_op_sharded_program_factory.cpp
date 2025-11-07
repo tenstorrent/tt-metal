@@ -885,8 +885,16 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
         writer_defines["ACTIVATION_REUSE"] = "1";
     }
 
-    ttnn::operations::compute_throttle_utils::throttle_mm_perf(
-        device->arch(), total_num_cores, compute_defines, ttnn::get_throttle_level(compute_kernel_config));
+    if (out_subblock_w_ntiles != 1 || out_subblock_h_ntiles != 1) {
+        ttnn::operations::compute_throttle_utils::throttle_mm_perf(
+            device->arch(), total_num_cores, compute_defines, ttnn::get_throttle_level(compute_kernel_config));
+    } else {
+        log_warning(
+            tt::LogOp,
+            "Conv Throttle matmul perf not enabled for out_subblock_h = {} and out_subblock_w = {}",
+            out_subblock_h_ntiles,
+            out_subblock_w_ntiles);
+    }
 
     for (auto elem : compute_defines) {
         log_trace(tt::LogOp, "compute_defines: {} = {}", elem.first, elem.second);
