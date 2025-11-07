@@ -35,14 +35,12 @@ constexpr uint32_t cb_mean_idx = tt::CBIndex::c_7;    // mean (for backward pass
 constexpr uint32_t cb_rstd_idx = tt::CBIndex::c_8;    // rstd (for backward pass)
 
 // CBs with intermediate computations
-constexpr uint32_t cb_sum_idx = tt::CBIndex::c_10;                  // sum of inputs
-constexpr uint32_t cb_mean_bcast_idx = tt::CBIndex::c_12;           // broadcasted mean
-constexpr uint32_t cb_x_minus_mean_idx = tt::CBIndex::c_13;         // (x - mean)
-constexpr uint32_t cb_variance_sum_idx = tt::CBIndex::c_14;         // sum((x - mean)^2)
-constexpr uint32_t cb_variance_reduced_idx = tt::CBIndex::c_15;     // variance (1/N * sum((x - mean)^2))
-constexpr uint32_t cb_rstd_bcast_idx = tt::CBIndex::c_17;           // broadcasted rstd
-constexpr uint32_t cb_x_hat_idx = tt::CBIndex::c_18;                // normalized x_hat
-constexpr uint32_t cb_output_intermediate_idx = tt::CBIndex::c_19;  // intermediate for output
+constexpr uint32_t cb_sum_idx = tt::CBIndex::c_9;                   // sum of inputs
+constexpr uint32_t cb_mean_bcast_idx = tt::CBIndex::c_10;           // broadcasted mean
+constexpr uint32_t cb_variance_sum_idx = tt::CBIndex::c_11;         // sum((x - mean)^2)
+constexpr uint32_t cb_rstd_bcast_idx = tt::CBIndex::c_12;           // broadcasted rstd
+constexpr uint32_t cb_x_hat_idx = tt::CBIndex::c_13;                // normalized x_hat
+constexpr uint32_t cb_output_intermediate_idx = tt::CBIndex::c_14;  // intermediate for output
 
 constexpr uint32_t onetile = 1;
 
@@ -283,7 +281,7 @@ inline void compute_rstd() {
     tile_regs_acquire();
 
     // Reduce variance sum and scale by 1/N
-    mm_init(cb_variance_sum_idx, cb_scaler_idx, cb_variance_reduced_idx, 0);
+    mm_init(cb_variance_sum_idx, cb_scaler_idx, cb_variance_sum_idx, 0);
     matmul_tiles(
         cb_variance_sum_idx,
         cb_scaler_idx,

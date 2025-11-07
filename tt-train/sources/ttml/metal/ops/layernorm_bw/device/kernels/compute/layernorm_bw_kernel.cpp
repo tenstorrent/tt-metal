@@ -117,6 +117,7 @@ inline void compute_dy_gamma_sum(const uint32_t row) {
 
     reconfig_data_format(cb_dL_out_idx, cb_gamma_idx);
 
+    // Accumulate dy * gamma into sum_register
     for (uint32_t col = 0; col < Wt; ++col) {
         // Mask the tile if needed
         if constexpr (do_mask_w) {
@@ -185,6 +186,8 @@ inline void compute_dy_gamma_xnorm_sum(const uint32_t row) {
     zero_dst_reg(sum_register);
 
     reconfig_data_format(cb_dL_out_idx, cb_dL_out_idx);
+
+    // Accumulate dy * gamma * x_normalized into sum_register
     for (uint32_t col = 0; col < Wt; ++col) {
         const uint32_t target_register = (col == 0) ? sum_register : working_register;
 
@@ -193,7 +196,7 @@ inline void compute_dy_gamma_xnorm_sum(const uint32_t row) {
         mul_bcast_rows_init_short(cb_dL_out_idx, cb_gamma_idx);
         mul_tiles_bcast_rows(cb_dL_out_idx, cb_gamma_idx, col, col, target_register);
 
-        // Compute x_normalized for this tile
+        // Load x_normalized for this tile
         copy_tile_init(cb_x_hat_idx);
         copy_tile(cb_x_hat_idx, col, temp_register);
 
@@ -259,19 +262,18 @@ inline void compute_dy_gamma_sum(const uint32_t row) {
 
     tile_regs_acquire();
 
-    reconfig_data_format(cb_dL_out_idx, cb_gamma_idx);
-
     zero_dst_reg(sum_register);
 
+    reconfig_data_format(cb_dL_out_idx, cb_gamma_idx);
+
+    // Accumulate dy * gamma into sum_register
     for (uint32_t col = 0; col < Wt; col += block_size) {
         cb_wait_front(cb_dL_out_idx, block_size);
         cb_wait_front(cb_gamma_idx, block_size);
 
-        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+        const uint32_t current_block_size = std::min(block_size, Wt - col);
+        for (uint32_t block_idx = 0; block_idx < current_block_size; ++block_idx) {
             uint32_t global_col = col + block_idx;
-            if (global_col + 1 > Wt) {
-                break;
-            }
             // Mask the tile if needed
             if constexpr (do_mask_w) {
                 if (global_col + 1 == Wt) {
@@ -342,6 +344,8 @@ inline void compute_dy_gamma_xnorm_sum(const uint32_t row) {
     zero_dst_reg(sum_register);
 
     reconfig_data_format(cb_dL_out_idx, cb_dL_out_idx);
+
+    // Accumulate dy * gamma * x_normalized into sum_register
     for (uint32_t col = 0; col < Wt; col += block_size) {
         // Compute x_hat from input for this block
         cb_wait_front(cb_input_idx, block_size);
@@ -352,11 +356,9 @@ inline void compute_dy_gamma_xnorm_sum(const uint32_t row) {
         cb_wait_front(cb_dL_out_idx, block_size);
         cb_wait_front(cb_gamma_idx, block_size);
 
-        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+        const uint32_t current_block_size = std::min(block_size, Wt - col);
+        for (uint32_t block_idx = 0; block_idx < current_block_size; ++block_idx) {
             uint32_t global_col = col + block_idx;
-            if (global_col + 1 > Wt) {
-                break;
-            }
             const uint32_t target_register = (global_col == 0) ? sum_register : working_register;
 
             // Load x_normalized (x_hat)
@@ -548,7 +550,7 @@ inline void MAIN {
         // Process each block of tiles in the row
         for (uint32_t col = 0; col < Wt; col += block_size) {
             // Calculate actual number of tiles in this block (handles last block when Wt % block_size != 0)
-            const uint32_t current_block_size = (col + block_size > Wt) ? (Wt - col) : block_size;
+            const uint32_t current_block_size = std::min(block_size, Wt - col);
 
             // Compute dx
             {

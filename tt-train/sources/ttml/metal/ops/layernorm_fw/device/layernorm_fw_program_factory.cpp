@@ -45,17 +45,14 @@ constexpr auto kMeanCbIndex = tt::CBIndex::c_7;    // mean (for backward pass)
 constexpr auto kRstdCbIndex = tt::CBIndex::c_8;    // rstd (for backward pass)
 
 // CBs with intermediate computations
-constexpr auto kSumCbIndex = tt::CBIndex::c_10;                          // sum of inputs
-constexpr auto kMeanBcastCbIndex = tt::CBIndex::c_12;                    // broadcasted mean
-[[maybe_unused]] constexpr auto kXMinusMeanCbIndex = tt::CBIndex::c_13;  // (x - mean) - reserved for future use
-constexpr auto kVarianceSumCbIndex = tt::CBIndex::c_14;                  // sum((x - mean)^2)
-constexpr auto kVarianceReducedCbIndex = tt::CBIndex::c_15;              // variance (1/N * sum((x - mean)^2))
-constexpr auto kRstdBcastCbIndex = tt::CBIndex::c_17;                    // broadcasted rstd
-constexpr auto kXHatCbIndex = tt::CBIndex::c_18;                         // normalized x_hat
+constexpr auto kSumCbIndex = tt::CBIndex::c_9;           // sum of inputs
+constexpr auto kMeanBcastCbIndex = tt::CBIndex::c_10;    // broadcasted mean
+constexpr auto kVarianceSumCbIndex = tt::CBIndex::c_11;  // sum((x - mean)^2)
+constexpr auto kRstdBcastCbIndex = tt::CBIndex::c_12;    // broadcasted rstd
+constexpr auto kXHatCbIndex = tt::CBIndex::c_13;         // normalized x_hat
 [[maybe_unused]] constexpr auto kOutputIntermediateCbIndex =
-    tt::CBIndex::c_19;  // intermediate for output - reserved for future use
+    tt::CBIndex::c_14;  // intermediate for output - reserved for future use
 
-// CB sizes (some set to 2U for ping-pong)
 constexpr uint32_t kNumScalerTiles = 1U;
 constexpr uint32_t kNumMaskTiles = 1U;
 constexpr uint32_t kNumEpsTiles = 1U;
@@ -199,8 +196,8 @@ LayerNormForwardProgramFactory::cached_program_t LayerNormForwardProgramFactory:
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     tt::tt_metal::IDevice* device = input.device();
 
-    tt::DataFormat input_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    uint32_t bfloat16_single_tile_size_bytes = tt::tile_size(input_data_format);
+    tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
+    uint32_t bfloat16_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float16_b);
     uint32_t float32_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float32);
 
     // -------------------------------------------------------------------------
@@ -250,8 +247,6 @@ LayerNormForwardProgramFactory::cached_program_t LayerNormForwardProgramFactory:
     const uint32_t num_x_hat_tiles = (everything_fits_in_l1) ? Wt : twice_block_size;
     const uint32_t num_output_tiles = (everything_fits_in_l1) ? Wt : twice_block_size;
 
-    auto data_format = input_data_format;
-
     // Input data CBs
     [[maybe_unused]] auto cb_scaler = create_circular_buffer(
         program, all_cores, kScalerCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
@@ -281,13 +276,6 @@ LayerNormForwardProgramFactory::cached_program_t LayerNormForwardProgramFactory:
         program, all_cores, kMeanBcastCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumMeanBcastTiles);
     [[maybe_unused]] auto cb_variance_sum = create_circular_buffer(
         program, all_cores, kVarianceSumCbIndex, data_format, float32_single_tile_size_bytes, kNumSumTiles);
-    [[maybe_unused]] auto cb_variance_reduced = create_circular_buffer(
-        program,
-        all_cores,
-        kVarianceReducedCbIndex,
-        data_format,
-        bfloat16_single_tile_size_bytes,
-        kNumVarianceReducedTiles);
     [[maybe_unused]] auto cb_rstd_bcast = create_circular_buffer(
         program, all_cores, kRstdBcastCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumRstdBcastTiles);
     [[maybe_unused]] auto cb_x_hat = create_circular_buffer(

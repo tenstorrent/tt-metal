@@ -60,7 +60,11 @@ protected:
 
 // Helper function to compare metal kernel results against xtensor reference
 static void CompareKernelVsXArray(
-    uint32_t batch_size, uint32_t seq_len, uint32_t heads, uint32_t features, int num_iterations = 3) {
+    uint32_t batch_size,
+    const uint32_t seq_len,
+    const uint32_t heads,
+    const uint32_t features,
+    const int num_iterations = 3) {
     using namespace ttml;
 
     for (int iter = 0; iter < num_iterations; iter++) {
