@@ -705,6 +705,7 @@ def __validate_against(
             try:
                 if reference_output_map_fn:
                     impl_output = reference_output_map_fn(ref_output, impl_output)
+                    logs.append(f"reference_output_mapping_fn={reference_output_map_fn.__name__}")
             except Exception as e:
                 # If alignment fails, fall back to impl output
                 impl_output = backup_impl_output

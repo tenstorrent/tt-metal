@@ -485,7 +485,7 @@ class TransformerBlock:
             # Metric.MAX_ABS_ERROR: 2e-1,
             Metric.PCC: 0.99,
         },
-        enabled=True,
+        enabled=False,
         return_reference_output=False,
         raise_exceptions=True,
     )
@@ -616,7 +616,8 @@ class QwenModel:
             # Metric.MEAN_ABS_ERROR: 1e-2,
             Metric.PCC: 0.90,
         },
-        enabled=False,
+        enabled=True,
+        return_reference_output=True,
     )
     def forward(self, tokens: torch.Tensor, start_pos: int = 0):  # [batch, seq_len]
         batch_size, seq_len = tokens.shape
@@ -716,7 +717,9 @@ def generate(model: QwenModel, tokenizer, prompt: str, max_new_tokens: int = 50,
     logits = model.forward(tokens, start_pos=0)
 
     # Get last token logits
-    logits_torch = ttnn.to_torch(logits).squeeze(0)  # [batch, seq_len, vocab_size]
+    logits_torch = ttnn.to_torch(logits)
+    if len(logits.shape) > 3:
+        logits_torch = logits_torch.squeeze(0)  # [batch, seq_len, vocab_size]
     next_token_id = torch.argmax(logits_torch[:, -1, :], dim=-1).item()  # Take last position
 
     generated = [next_token_id]
@@ -727,7 +730,9 @@ def generate(model: QwenModel, tokenizer, prompt: str, max_new_tokens: int = 50,
     for i in range(max_new_tokens - 1):
         next_token = torch.tensor([[next_token_id]], dtype=torch.long)  # [1, 1]
         logits = model.forward(next_token, start_pos=current_pos)
-        logits_torch = ttnn.to_torch(logits).squeeze(0)  # [batch, 1, vocab_size]
+        logits_torch = ttnn.to_torch(logits)
+        if len(logits.shape) > 3:
+            logits_torch = logits_torch.squeeze(0)  # [batch, 1, vocab_size]
 
         # Sample next token
         if temperature > 0:
@@ -798,7 +803,7 @@ def main():
     # Print validation report if any validations were run
     registry = get_validation_registry()
     if registry.results:
-        registry.print_report()
+        registry.print_report(verbose=True)
 
     # Cleanup
     ttnn.close_mesh_device(mesh_device)
