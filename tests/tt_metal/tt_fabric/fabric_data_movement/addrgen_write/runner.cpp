@@ -13,6 +13,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "tests/tt_metal/tt_fabric/common/utils.hpp"
+#include "tests/tt_metal/tt_fabric/fabric_data_movement/addrgen_write/test_common.hpp"
 #include "tt_metal/tt_fabric/benchmark/collectives/common/perf_helpers.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include <tt-metalium/global_semaphore.hpp>
@@ -23,10 +24,10 @@
 
 namespace tt::tt_fabric::test {
 
-// Import needed types from bench namespace
-using tt::tt_fabric::bench::AddrgenApiVariant;
+// Import needed types from test and bench namespaces
 using tt::tt_fabric::bench::HelpersFixture;
-using tt::tt_fabric::bench::PerfParams;
+using tt::tt_fabric::test::AddrgenApiVariant;
+using tt::tt_fabric::test::AddrgenTestParams;
 
 // ---------- helpers (validation / utilities) ----------
 
@@ -44,7 +45,7 @@ inline tt::tt_metal::IDevice* find_device_by_id(ChipId phys_id) {
 }
 
 // Validate workload
-inline bool validate_workload_or_fail(const PerfParams& p) {
+inline bool validate_workload_or_fail(const AddrgenTestParams& p) {
     if ((p.tensor_bytes % 4) != 0) {
         ADD_FAILURE() << "tensor_bytes must be a multiple of 4 (word-aligned) for verification.";
         return false;
@@ -57,7 +58,7 @@ inline bool pick_forwarding_link_or_fail(
     const tt::tt_fabric::FabricNodeId& /*src*/,
     const tt::tt_fabric::FabricNodeId& /*dst*/,
     uint32_t& out_link_idx,
-    const PerfParams& p) {
+    const AddrgenTestParams& p) {
     auto links = tt::tt_fabric::get_forwarding_link_indices(
         tt::tt_fabric::FabricNodeId{tt::tt_fabric::MeshId{p.mesh_id}, p.src_chip},
         tt::tt_fabric::FabricNodeId{tt::tt_fabric::MeshId{p.mesh_id}, p.dst_chip});
@@ -111,7 +112,7 @@ inline void verify_payload_words(const std::vector<uint32_t>& rx, const std::vec
 }  // anonymous namespace
 
 // ----------------------------------- program -----------------------------------
-void run_addrgen_write_test(HelpersFixture* fixture, const PerfParams& p) {
+void run_addrgen_write_test(HelpersFixture* fixture, const AddrgenTestParams& p) {
     const auto& cp = tt::tt_metal::MetalContext::instance().get_control_plane();
     namespace Dist = tt::tt_metal::distributed;
 
