@@ -610,6 +610,11 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_an
                 }
             }
 
+            // Additional check for mm convs to ensure shard height is multiple of TILE_HEIGHT since tiling requires
+            // that
+            if (is_mm_conv && (input_shard_spec.shape[0] % tt::constants::TILE_HEIGHT != 0)) {
+                needs_shard_or_reshard = true;
+            }
             if (conv_config.override_sharding_config) {
                 TT_FATAL(
                     conv_config.core_grid.has_value(),
@@ -1543,22 +1548,36 @@ bool conv2d::determine_packer_l1_acc(bool packer_l1_acc, bool enable_bias, uint3
 }
 
 bool auto_enable_kernel_folding(
+    const ttnn::MemoryConfig& input_memory_config,
+    Layout input_layout,
+    const DataType& input_dtype,
     std::optional<bool> enable_folding_,
-    bool is_dram,
     uint32_t input_height,
     uint32_t input_width,
     std::array<uint32_t, 2>& kernel_size,
     std::array<uint32_t, 2>& stride,
+    std::array<uint32_t, 2>& dilation,
     std::array<uint32_t, 4>& padding_n4) {
     if (!enable_folding_.has_value()) {
-        if (stride[0] == kernel_size[0] && stride[1] == kernel_size[1] && (input_height % stride[0] == 0) &&
-            (input_width % stride[1] == 0) &&
-            (padding_n4[0] == 0 && padding_n4[1] == 0 && padding_n4[2] == 0 && padding_n4[3] == 0) && is_dram) {
-            log_debug(tt::LogOp, "Auto enabling kernel folding");
-            return true;
-        } else {
+        if (stride[0] != kernel_size[0] || stride[1] != kernel_size[1]) {
             return false;
         }
+        if (stride[0] == 1 && stride[1] == 1) {
+            return false;
+        }
+        if (dilation[0] != 1 || dilation[1] != 1) {
+            return false;
+        }
+        auto input_padded_height = input_height + padding_n4[0] + padding_n4[1];
+        auto input_padded_width = input_width + padding_n4[2] + padding_n4[3];
+
+        if (input_padded_height % stride[0] != 0 || input_padded_width % stride[1] != 0) {
+            return false;
+        }
+        auto is_zero_padding = padding_n4[0] == 0 && padding_n4[1] == 0 && padding_n4[2] == 0 && padding_n4[3] == 0;
+        return (
+            (input_memory_config.is_dram() && (input_layout == Layout::ROW_MAJOR || is_zero_padding)) ||
+            (input_memory_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED));
     } else {
         return enable_folding_.value();
     }
@@ -1571,18 +1590,22 @@ Tensor fold_input_tensor_if_required(
     uint32_t& in_channels,
     std::array<uint32_t, 2>& kernel_size,
     std::array<uint32_t, 2>& stride,
+    std::array<uint32_t, 2>& dilation,
     std::array<uint32_t, 4>& padding_n4,
     bool& mm_conv,
     Conv2dConfig& conv_config) {
     // Conv DRAM would fold the input tensor, but conv_config.enable_kernel_stride_folding would stil be true as weights
     // also need to be folded.
     conv_config.enable_kernel_stride_folding = auto_enable_kernel_folding(
+        input_tensor.memory_config(),
+        input_tensor.layout(),
+        input_tensor.dtype(),
         conv_config.enable_kernel_stride_folding,
-        input_tensor.memory_config().is_dram(),
         input_height,
         input_width,
         kernel_size,
         stride,
+        dilation,
         padding_n4);
 
     if (conv_config.enable_kernel_stride_folding.value() && (stride[0] > 1 || stride[1] > 1)) {
@@ -1615,12 +1638,6 @@ ttnn::Tensor fold_tensor(
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 4> padding_n4) {
     // Validation checks
-    TT_FATAL(
-        !tensor.memory_config().is_l1(),
-        "Conv2D kernel stride folding: Input tensor must not be in L1 memory for folding");
-    TT_FATAL(
-        tensor.dtype() != tt::tt_metal::DataType::BFLOAT8_B,
-        "Conv2D kernel stride folding: Currently doesn't support BFLOAT8_B");
     TT_FATAL(
         stride[0] <= kernel_size[0] && stride[1] <= kernel_size[1],
         "Conv2D kernel stride folding: Stride must be less than or equal to kernel size");

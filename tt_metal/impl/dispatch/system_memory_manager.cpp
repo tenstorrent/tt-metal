@@ -181,6 +181,12 @@ uint32_t SystemMemoryManager::get_next_event(const uint8_t cq_id) {
     return next_event;
 }
 
+// Get last issued event to Command Queue
+uint32_t SystemMemoryManager::get_last_event(const uint8_t cq_id) {
+    std::lock_guard<std::mutex> lock(cq_to_event_locks[cq_id]);
+    return this->cq_to_event[cq_id];
+}
+
 void SystemMemoryManager::reset_event_id(const uint8_t cq_id) {
     cq_to_event_locks[cq_id].lock();
     this->cq_to_event[cq_id] = 0;

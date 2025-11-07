@@ -119,7 +119,7 @@ void Inspector::program_destroyed(const detail::ProgramImpl* program) noexcept {
 }
 
 void Inspector::program_compile_started(
-    const detail::ProgramImpl* program, const IDevice* device, uint64_t build_key) noexcept {
+    const detail::ProgramImpl* program, const IDevice* /*device*/, uint64_t /*build_key*/) noexcept {
     if (!is_enabled()) {
         return;
     }
@@ -135,7 +135,7 @@ void Inspector::program_compile_started(
 }
 
 void Inspector::program_compile_already_exists(
-    const detail::ProgramImpl* program, const IDevice* device, uint64_t build_key) noexcept {
+    const detail::ProgramImpl* program, const IDevice* /*device*/, uint64_t /*build_key*/) noexcept {
     if (!is_enabled()) {
         return;
     }
@@ -151,7 +151,7 @@ void Inspector::program_compile_already_exists(
 
 void Inspector::program_kernel_compile_finished(
     const detail::ProgramImpl* program,
-    const IDevice* device,
+    const IDevice* /*device*/,
     const std::shared_ptr<Kernel>& kernel,
     const tt::tt_metal::JitBuildOptions& build_options) noexcept {
     if (!is_enabled()) {
@@ -175,7 +175,7 @@ void Inspector::program_kernel_compile_finished(
 }
 
 void Inspector::program_compile_finished(
-    const detail::ProgramImpl* program, const IDevice* device, uint64_t build_key) noexcept {
+    const detail::ProgramImpl* program, const IDevice* /*device*/, uint64_t /*build_key*/) noexcept {
     if (!is_enabled()) {
         return;
     }
@@ -315,6 +315,81 @@ void Inspector::mesh_workload_set_program_binary_status(
         data->logger.log_mesh_workload_set_program_binary_status(mesh_workload_data, mesh_id, status);
     } catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to log mesh workload set program binary status: {}", e.what());
+    }
+}
+
+// Set dispatch core info
+void Inspector::set_dispatch_core_info(
+    const tt_cxy_pair& virtual_core,
+    const tt::tt_metal::DispatchWorkerType& type,
+    const uint8_t cq_id,
+    const ChipId device_id,
+    const ChipId servicing_device_id) {
+    if (!is_enabled()) {
+        return;
+    }
+    try {
+        auto* data = get_inspector_data();
+        std::lock_guard<std::mutex> lock(data->dispatch_core_info_mutex);
+        data->dispatch_core_info[virtual_core] = {type, device_id, servicing_device_id, cq_id};
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to log dispatch core info: {}", e.what());
+    }
+}
+
+// Set dispatch_s core info
+void Inspector::set_dispatch_s_core_info(
+    const tt_cxy_pair& virtual_core,
+    const tt::tt_metal::DispatchWorkerType& type,
+    const uint8_t cq_id,
+    const ChipId device_id,
+    const ChipId servicing_device_id) {
+    if (!is_enabled()) {
+        return;
+    }
+    try {
+        auto* data = get_inspector_data();
+        std::lock_guard<std::mutex> lock(data->dispatch_s_core_info_mutex);
+        data->dispatch_s_core_info[virtual_core] = {type, device_id, servicing_device_id, cq_id};
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to log dispatch_s core info: {}", e.what());
+    }
+}
+
+// Set prefetcher core info
+void Inspector::set_prefetcher_core_info(
+    const tt_cxy_pair& virtual_core,
+    const tt::tt_metal::DispatchWorkerType& type,
+    const uint8_t cq_id,
+    const ChipId device_id,
+    const ChipId servicing_device_id) {
+    if (!is_enabled()) {
+        return;
+    }
+    try {
+        auto* data = get_inspector_data();
+        std::lock_guard<std::mutex> lock(data->prefetcher_core_info_mutex);
+        data->prefetcher_core_info[virtual_core] = {type, device_id, servicing_device_id, cq_id};
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to log prefetcher core info: {}", e.what());
+    }
+}
+
+// Clear dispatch core info to clear stale entries
+// Used in MetalContext::teardown() to clear stale entries
+void Inspector::clear_all_core_info() {
+    if (!is_enabled()) {
+        return;
+    }
+    try {
+        auto* data = get_inspector_data();
+        std::scoped_lock locks(
+            data->dispatch_core_info_mutex, data->dispatch_s_core_info_mutex, data->prefetcher_core_info_mutex);
+        data->dispatch_core_info.clear();
+        data->dispatch_s_core_info.clear();
+        data->prefetcher_core_info.clear();
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to clear all core infos: {}", e.what());
     }
 }
 
