@@ -11,7 +11,13 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 from models.common.utility_functions import skip_for_blackhole
 
 from ttnn import ShardTensorToMesh, ConcatMeshToTensor
-from tracy import signpost
+
+try:
+    from tracy import signpost
+except ImportError:
+    # Fallback implementation if tracy module is not available
+    def signpost(*args, **kwargs):
+        pass
 
 
 def is_unsupported_case(
@@ -1111,3 +1117,9 @@ def test_all_gather_async_2x4_non_flat_mesh(mesh_device, input_shape):
     torch_reference = torch_input.repeat([devices, 1, 1, 1])
     eq, output = comp_equal(torch_output, torch_reference)
     assert eq, f"Output mismatch between torch and ttnn all-gather: {output}"
+
+    output_placements = tt_output.tensor_topology().placements()
+    assert len(output_placements) == 1, f"Expected 1 placement, got {len(output_placements)}"
+    assert isinstance(
+        output_placements[0], ttnn.PlacementReplicate
+    ), f"Expected PlacementReplicate, got {type(output_placements[0])}"

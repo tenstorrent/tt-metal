@@ -12,6 +12,7 @@
 #include "ttnn_test_fixtures.hpp"
 #include <ttnn/distributed/types.hpp>
 #include <ttnn/distributed/distributed_tensor.hpp>
+#include "ttnn/operations/ccl/all_gather/all_gather.hpp"
 
 namespace ttnn::distributed::test {
 
@@ -242,5 +243,26 @@ TEST_F(TensorTopology2x4Test, CreateShardedTensorTopology) {
 
     EXPECT_EQ(tensor_topology, expected_topology);
 }
+
+// TEST_F(TensorTopology2x4Test, CreateAllGatherTensorTopology) {
+//     const int num_devices = mesh_device_->num_devices();
+//     std::vector<float> test_data;
+//     for (int i = 0; i < num_devices; i++) {
+//         test_data.insert(test_data.end(), {i * 1.F, i * 2.F, i * 3.F});
+//     }
+//     const auto tensor_spec = TensorSpec(
+//         ttnn::Shape{1, num_devices, 3, 1}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
+//     Tensor input_tensor = Tensor::from_vector(test_data, tensor_spec);
+
+//     auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, 1);
+//     Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
+
+//     const auto& input_topology = sharded_tensor.tensor_topology();
+//     EXPECT_EQ(input_topology, TensorTopology::create_sharded_tensor_topology(mesh_device_->shape(), 1));
+
+//     const auto& output_tensor = ttnn::all_gather(sharded_tensor, 1);
+//     const auto& output_topology = output_tensor.tensor_topology();
+//     EXPECT_EQ(output_topology, TensorTopology::create_fully_replicated_tensor_topology(mesh_device_->shape()));
+// }
 
 }  // namespace ttnn::distributed::test
