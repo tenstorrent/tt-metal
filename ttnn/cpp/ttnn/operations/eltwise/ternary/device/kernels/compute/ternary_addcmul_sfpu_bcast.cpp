@@ -26,13 +26,13 @@ ALWI void process_tile(
     const bool scalar_is_not_1 = scalar_arg != 1u;
     // 3-tensor broadcast-aware synchronization - wait for broadcast CBs outside loop
 #if BCAST_A
-    cb_wait_front(cb_in0, num_tiles_per_cycle);  // predicate_cb is broadcast
+    cb_wait_front(cb_in0, num_tiles_per_cycle);  // input_a is broadcast
 #endif
 #if BCAST_B
-    cb_wait_front(cb_in1, num_tiles_per_cycle);  // true_cb is broadcast
+    cb_wait_front(cb_in1, num_tiles_per_cycle);  // input_b is broadcast
 #endif
 #if BCAST_C
-    cb_wait_front(cb_in2, num_tiles_per_cycle);  // false_cb is broadcast
+    cb_wait_front(cb_in2, num_tiles_per_cycle);  // input_c is broadcast
 #endif
 
     for (uint32_t j = tile_start; j < freq; ++j) {
