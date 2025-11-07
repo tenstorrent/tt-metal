@@ -34,6 +34,8 @@ jobs:
             mesh-device: T3K,
             tt-llama-text-ver: tt_transformers,
             override-tt-config: "{\"fabric_config\": \"FABRIC_1D\"}",
+            use-vllm-v1: true,
+            structured-output: true,
             multimodal: false,
             co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
             co-owner-2-id: U08CEGF78ET, # Salar Hosseini Khorasgani
@@ -48,6 +50,8 @@ jobs:
             mesh-device: T3K,
             tt-llama-text-ver: tt_transformers,
             override-tt-config: "{\"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 28467200}",
+            use-vllm-v1: true,
+            structured-output: true,
             multimodal: true,
             additional-args: "--max_model_len 2048",
             co-owner-1-id: U07RY6B5FLJ, # Gongyu Wang
@@ -62,6 +66,9 @@ jobs:
             mesh-device: P150x2,
             tt-llama-text-ver: tt_transformers,
             override-tt-config: "{\"data_parallel\": 2}",
+            additional-args: "--data_parallel_size 2",
+            use-vllm-v1: true,
+            structured-output: true,
             multimodal: false,
             owner_id: U08GELBB1AP, # Ambrose Ling
           },
@@ -75,6 +82,9 @@ jobs:
             mesh-device: P150x4,
             tt-llama-text-ver: tt_transformers,
             override-tt-config: "{\"data_parallel\": 4}",
+            additional-args: "--data_parallel_size 4",
+            use-vllm-v1: true,
+            structured-output: true,
             multimodal: false,
             owner_id: U08CEGF78ET, # Salar Hosseini Khorasgani
           },
@@ -88,11 +98,14 @@ jobs:
             mesh-device: P150x8,
             tt-llama-text-ver: tt_transformers,
             override-tt-config: "{\"data_parallel\": 8}",
+            additional-args: "--data_parallel_size 8",
+            use-vllm-v1: true,
+            structured-output: true,
             multimodal: false,
             owner_id: U08GELBB1AP, # Ambrose Ling
           },
           {
-            name: "[WH-GLX] Llama-3.3-70B-Instruct",
+            name: "[WH-GLX] Llama-3.3-70B-Instruct device sampling",
             model: "meta-llama/Llama-3.3-70B-Instruct",
             server-timeout: 35,
             benchmark-timeout: 10,
@@ -101,6 +114,26 @@ jobs:
             mesh-device: TG,
             tt-llama-text-ver: llama3_70b_galaxy,
             override-tt-config: "{\"dispatch_core_axis\": \"col\", \"sample_on_device_mode\": \"all\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 184915840}",
+            additional-args: "--data_parallel_size 4 --max_num_seqs 8",
+            use-vllm-v1: true,
+            structured-output: true,
+            multimodal: false,
+            co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
+            co-owner-2-id: U08CEGF78ET, # Salar Hosseini Khorasgani
+          },
+          {
+            name: "[WH-GLX] Llama-3.3-70B-Instruct hostsample",
+            model: "meta-llama/Llama-3.3-70B-Instruct",
+            server-timeout: 35,
+            benchmark-timeout: 10,
+            runner-label: topology-6u,
+            arch: arch-wormhole_b0,
+            mesh-device: TG,
+            tt-llama-text-ver: llama3_70b_galaxy,
+            override-tt-config: "{\"dispatch_core_axis\": \"col\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 184915840}",
+            additional-args: "--data_parallel_size 4 --max_num_seqs 8",
+            use-vllm-v1: true,
+            structured-output: true,
             multimodal: false,
             co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
             co-owner-2-id: U08CEGF78ET, # Salar Hosseini Khorasgani
@@ -114,7 +147,10 @@ jobs:
             arch: arch-wormhole_b0,
             mesh-device: TG,
             override-tt-config: "{\"data_parallel\": 16, \"fabric_config\": \"FABRIC_1D_RING\"}",
+            additional-args: "--data_parallel_size 16",
             tt-llama-text-ver: tt_transformers,
+            use-vllm-v1: true,
+            structured-output: true,
             multimodal: false,
             co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
             co-owner-2-id: U08BH66EXAL, # Radoica Draskic
@@ -131,71 +167,72 @@ jobs:
             tt-llama-text-ver: tt_transformers,
             multimodal: true,
             use-vllm-v1: true,
+            structured-output: true,
             co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
             co-owner-2-id: U08BH66EXAL, # Radoica Draskic
           },
-          # structured output tests
-          {
-            name: "[WH-GLX] Llama-3.3-70B-Instruct v0 structured-output",
-            model: "meta-llama/Llama-3.3-70B-Instruct",
-            server-timeout: 35,
-            benchmark-timeout: 10,
-            runner-label: topology-6u,
-            arch: arch-wormhole_b0,
-            mesh-device: TG,
-            tt-llama-text-ver: llama3_70b_galaxy,
-            override-tt-config: "{\"dispatch_core_axis\": \"col\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 184915840}",
-            multimodal: false,
-            structured-output: true,
-            additional-args: "--num_scheduler_steps 1",
-            owner_id: U091SNDA4TS, # Tomasz Cheda
-          },
-          {
-            name: "[BH-LB] Llama-3.1-8B-Instruct v0 structured-output",
-            model: "meta-llama/Llama-3.1-8B-Instruct",
-            server-timeout: 35,
-            benchmark-timeout: 10,
-            runner-label: bh-loudbox,
-            arch: arch-blackhole,
-            mesh-device: P150x8,
-            tt-llama-text-ver: tt_transformers,
-            override-tt-config: "{\"data_parallel\": 8}",
-            multimodal: false,
-            structured-output: true,
-            additional-args: "--num_scheduler_steps 1",
-            owner_id: U091SNDA4TS, # Tomasz Cheda
-          },
-          # device sampling + structured output tests
-          {
-            name: "[WH-GLX] Llama-3.3-70B-Instruct v0 fallback structured-output",
-            model: "meta-llama/Llama-3.3-70B-Instruct",
-            server-timeout: 35,
-            benchmark-timeout: 10,
-            runner-label: topology-6u,
-            arch: arch-wormhole_b0,
-            mesh-device: TG,
-            tt-llama-text-ver: llama3_70b_galaxy,
-            override-tt-config: "{\"dispatch_core_axis\": \"col\", \"sample_on_device_mode\": \"all\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 184915840}",
-            multimodal: false,
-            structured-output: true,
-            additional-args: "--num_scheduler_steps 1",
-            owner_id: U091SNDA4TS, # Tomasz Cheda
-          },
-          {
-            name: "[BH-LB] Llama-3.1-8B-Instruct v0 fallback structured-output",
-            model: "meta-llama/Llama-3.1-8B-Instruct",
-            server-timeout: 35,
-            benchmark-timeout: 10,
-            runner-label: bh-loudbox,
-            arch: arch-blackhole,
-            mesh-device: P150x8,
-            tt-llama-text-ver: tt_transformers,
-            override-tt-config: "{\"data_parallel\": 8, \"sample_on_device_mode\": \"decode_only\"}",
-            multimodal: false,
-            structured-output: true,
-            additional-args: "--num_scheduler_steps 1",
-            owner_id: U091SNDA4TS, # Tomasz Cheda
-          },
+          # # structured output tests
+          # {
+          #   name: "[WH-GLX] Llama-3.3-70B-Instruct v0 structured-output",
+          #   model: "meta-llama/Llama-3.3-70B-Instruct",
+          #   server-timeout: 35,
+          #   benchmark-timeout: 10,
+          #   runner-label: topology-6u,
+          #   arch: arch-wormhole_b0,
+          #   mesh-device: TG,
+          #   tt-llama-text-ver: llama3_70b_galaxy,
+          #   override-tt-config: "{\"dispatch_core_axis\": \"col\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 184915840}",
+          #   multimodal: false,
+          #   structured-output: true,
+          #   additional-args: "--num_scheduler_steps 1",
+          #   owner_id: U091SNDA4TS, # Tomasz Cheda
+          # },
+          # {
+          #   name: "[BH-LB] Llama-3.1-8B-Instruct v0 structured-output",
+          #   model: "meta-llama/Llama-3.1-8B-Instruct",
+          #   server-timeout: 35,
+          #   benchmark-timeout: 10,
+          #   runner-label: bh-loudbox,
+          #   arch: arch-blackhole,
+          #   mesh-device: P150x8,
+          #   tt-llama-text-ver: tt_transformers,
+          #   override-tt-config: "{\"data_parallel\": 8}",
+          #   multimodal: false,
+          #   structured-output: true,
+          #   additional-args: "--num_scheduler_steps 1",
+          #   owner_id: U091SNDA4TS, # Tomasz Cheda
+          # },
+          # # device sampling + structured output tests
+          # {
+          #   name: "[WH-GLX] Llama-3.3-70B-Instruct v0 fallback structured-output",
+          #   model: "meta-llama/Llama-3.3-70B-Instruct",
+          #   server-timeout: 35,
+          #   benchmark-timeout: 10,
+          #   runner-label: topology-6u,
+          #   arch: arch-wormhole_b0,
+          #   mesh-device: TG,
+          #   tt-llama-text-ver: llama3_70b_galaxy,
+          #   override-tt-config: "{\"dispatch_core_axis\": \"col\", \"sample_on_device_mode\": \"all\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 184915840}",
+          #   multimodal: false,
+          #   structured-output: true,
+          #   additional-args: "--num_scheduler_steps 1",
+          #   owner_id: U091SNDA4TS, # Tomasz Cheda
+          # },
+          # {
+          #   name: "[BH-LB] Llama-3.1-8B-Instruct v0 fallback structured-output",
+          #   model: "meta-llama/Llama-3.1-8B-Instruct",
+          #   server-timeout: 35,
+          #   benchmark-timeout: 10,
+          #   runner-label: bh-loudbox,
+          #   arch: arch-blackhole,
+          #   mesh-device: P150x8,
+          #   tt-llama-text-ver: tt_transformers,
+          #   override-tt-config: "{\"data_parallel\": 8, \"sample_on_device_mode\": \"decode_only\"}",
+          #   multimodal: false,
+          #   structured-output: true,
+          #   additional-args: "--num_scheduler_steps 1",
+          #   owner_id: U091SNDA4TS, # Tomasz Cheda
+          # },
         ]
     runs-on:
       - ${{ matrix.test-group.runner-label }}
