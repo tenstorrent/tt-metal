@@ -297,6 +297,10 @@
 // Active ERISC memory map
 // TODO: These are added here to enable aerisc compilation but are replicated in eth_l1_address_map
 // eth_l1_address_map should be removed in favour of this file
+// These Dynamic NOC counter buffers are shared with Base FW
+#define MEM_AERISC_NOC_COUNTER_SIZE 4
+#define MEM_AERISC_NOC_COUNTER_BASE (0x7D040)
+
 #define MEM_AERISC_LOCAL_SIZE (MEM_ERISC_LOCAL_SIZE - MEM_ERISC_BASE_FW_LOCAL_SIZE)  // Minus the base FW local usage
 #define MEM_SUBORDINATE_AERISC_LOCAL_SIZE MEM_ERISC_LOCAL_SIZE
 #define MEM_AERISC_MAILBOX_BASE (MEM_ERISC_RESERVED1 + MEM_ERISC_RESERVED1_SIZE)
