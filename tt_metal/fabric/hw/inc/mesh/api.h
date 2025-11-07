@@ -1969,7 +1969,6 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc(
     uint32_t page_id,
     uint64_t semaphore_noc_address,
     uint16_t val,
-    uint16_t wrap,
     uint32_t offset = 0,
     bool flush = true) {
     auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
@@ -1982,7 +1981,7 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc(
         dst_mesh_id,
         src_addr,
         page_size,
-        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{noc_address, semaphore_noc_address, val, wrap, flush});
+        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{noc_address, semaphore_noc_address, val, flush});
 }
 
 template <typename AddrGenType>
@@ -1994,7 +1993,6 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc(
     uint32_t page_id,
     uint64_t semaphore_noc_address,
     uint16_t val,
-    uint16_t wrap,
     uint32_t offset = 0,
     bool flush = true) {
     auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
@@ -2005,7 +2003,7 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc(
         route_id,
         src_addr,
         page_size,
-        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{noc_address, semaphore_noc_address, val, wrap, flush});
+        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{noc_address, semaphore_noc_address, val, flush});
 }
 
 // Addrgen overload for _with_state variant
@@ -2025,7 +2023,6 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state(
     uint32_t page_id,
     uint64_t semaphore_noc_address,
     uint16_t val,
-    uint16_t wrap,
     uint32_t offset = 0,
     bool flush = true) {
     auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
@@ -2038,7 +2035,7 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state(
         client_interface,
         packet_header,
         src_addr,
-        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{noc_address, semaphore_noc_address, val, wrap, flush},
+        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{noc_address, semaphore_noc_address, val, flush},
         page_size);
 }
 
@@ -2046,8 +2043,8 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state(
 template <
     UnicastFusedAtomicIncUpdateMask UpdateMask =
         UnicastFusedAtomicIncUpdateMask::WriteDstAddr | UnicastFusedAtomicIncUpdateMask::SemaphoreAddr |
-        UnicastFusedAtomicIncUpdateMask::Wrap | UnicastFusedAtomicIncUpdateMask::Val |
-        UnicastFusedAtomicIncUpdateMask::Flush | UnicastFusedAtomicIncUpdateMask::PayloadSize,
+        UnicastFusedAtomicIncUpdateMask::Val | UnicastFusedAtomicIncUpdateMask::Flush |
+        UnicastFusedAtomicIncUpdateMask::PayloadSize,
     typename AddrGenType,
     typename = std::enable_if_t<is_addrgen<AddrGenType>::value>>
 FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state(
@@ -2058,7 +2055,6 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state(
     uint32_t page_id,
     uint64_t semaphore_noc_address,
     uint16_t val,
-    uint16_t wrap,
     uint32_t offset = 0,
     bool flush = true) {
     auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
@@ -2070,7 +2066,7 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state(
         packet_header,
         dst_dev_id,
         dst_mesh_id,
-        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{noc_address, semaphore_noc_address, val, wrap, flush},
+        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{noc_address, semaphore_noc_address, val, flush},
         page_size);
 }
 

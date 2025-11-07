@@ -76,7 +76,7 @@ void kernel_main() {
     // The _with_state calls will update the write destination and payload size for each page
     auto initial_noc_addr = tt::tt_fabric::addrgen_detail::get_noc_address(dst_acc, 0, 0);
     header->to_noc_fused_unicast_write_atomic_inc(
-        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{initial_noc_addr, sem_noc, 1, 0, true}, PAGE_SIZE);
+        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{initial_noc_addr, sem_noc, 1, true}, PAGE_SIZE);
 
     for (uint32_t i = 0; i < TOTAL_PAGES; ++i) {
         cb_wait_front(CB_ID, 1);
@@ -94,7 +94,6 @@ void kernel_main() {
             i,        // page_id
             sem_noc,  // semaphore NOC address
             1,        // val (increment by 1)
-            0,        // wrap (no wrap)
             0,        // offset
             true      // flush
         );

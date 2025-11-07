@@ -91,7 +91,6 @@ void kernel_main() {
             i,        // page_id
             sem_noc,  // semaphore NOC address
             1,        // val (increment by 1)
-            0,        // wrap (no wrap)
             0,        // offset
             true      // flush
         );

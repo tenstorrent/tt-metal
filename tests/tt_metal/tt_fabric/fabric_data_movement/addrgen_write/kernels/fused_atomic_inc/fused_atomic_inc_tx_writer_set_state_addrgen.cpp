@@ -74,7 +74,7 @@ void kernel_main() {
     const uint64_t sem_noc = safe_get_noc_addr(rx_noc_x, rx_noc_y, sem_l1_addr, /*NOC_INDEX=*/0);
 
     // Pre-configure packet header using _set_state with addrgen for page 0
-    // This sets up route, packet type, initial write dest, semaphore addr, val, wrap, flush, and payload size ONCE
+    // This sets up route, packet type, initial write dest, semaphore addr, val, flush, and payload size ONCE
     fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state(
         header,
         dst_dev_id,
@@ -83,7 +83,6 @@ void kernel_main() {
         0,        // page_id for initial configuration
         sem_noc,
         1,    // val (increment by 1)
-        0,    // wrap (no wrap)
         0,    // offset
         true  // flush
     );
@@ -104,7 +103,6 @@ void kernel_main() {
             i,        // page_id
             sem_noc,  // semaphore NOC address
             1,        // val (increment by 1)
-            0,        // wrap (no wrap)
             0,        // offset
             true      // flush
         );
