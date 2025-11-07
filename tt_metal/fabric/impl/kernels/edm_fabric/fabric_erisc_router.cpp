@@ -2193,9 +2193,6 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 }
             }
         }
-
-        local_heartbeat_counter++;
-        *heartbeat_addr = local_heartbeat_counter;
     }
 }
 
