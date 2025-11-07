@@ -114,15 +114,12 @@ FORCE_INLINE uint32_t get_tile_id(
     uint32_t channels_slice_i,
     uint32_t row_block_i,
     uint32_t column_block_i,
-    // uint32_t block_depth
     uint32_t generic_block_depth = 48) {
     const uint32_t tensor_face_block_size = channels_blocks_num * height_blocks_num;
     const uint32_t tensor_face_thickness = tensor_face_block_size * generic_block_depth;
     const uint32_t block_first_tile_id =
         tensor_face_thickness * column_block_i + row_block_i * channels_blocks_num + channels_slice_i;
     const uint32_t tile_id = block_first_tile_id + inner_tile_stride * tensor_face_block_size;
-    // DPRINT << "TENSOR_FACE_BLOCK_SIZE: " << tensor_face_block_size << ", BLOCK_FIRST_TILE_ID: " <<
-    // block_first_tile_id << ", TILE_ID: " << tile_id << ENDL(); DPRINT << "TILE_ID: " << tile_id << ENDL();
     return tile_id;
 }
 
@@ -134,23 +131,22 @@ FORCE_INLINE constexpr uint32_t block_depth_ceil(uint32_t value, uint32_t block_
 // block_size: 204, each tile: 4 KB, total: 808 KB for 4-byte types per core.
 template <typename InputAccessorArgs, typename OutputAccessorArgs>
 struct IntImgCTAs {
-    const uint32_t start_cb;            // 2 tiles
-    const uint32_t input_cb;            // 2 tiles
-    const uint32_t acc_cb;              // 2 tiles
-    const uint32_t cumsum_stage_0_cb;   // `block_size` tiles
-    const uint32_t cumsum_stage_1_cb;   // `block_size` tiles
-    const uint32_t cumsum_stage_2_cb;   // `block_size` tiles
-    // const uint32_t cumsum_stage_3_cb;   // `block_size` tiles
-    const uint32_t output_cb;           // 2 tiles
-    const uint32_t axis_2_buffer_cb;    // 2 tiles: covers entire propagation
-    const uint32_t axis_3_buffer_0_cb;  // `block_size` tiles: each tile is spawned from broadcasting the last row of
+    const uint32_t start_cb;
+    const uint32_t input_cb;
+    const uint32_t acc_cb;
+    const uint32_t cumsum_stage_0_cb;
+    const uint32_t cumsum_stage_1_cb;
+    const uint32_t cumsum_stage_2_cb;
+    const uint32_t output_cb;
+    const uint32_t axis_2_buffer_cb;    // covers entire propagation
+    const uint32_t axis_3_buffer_0_cb;  // each tile is spawned from broadcasting the last row of
                                         // upper block across all rows of a given tile - for the time being, their
                                         // spawning is forced to be done in the reader kernel.
     const uint32_t axis_3_buffer_1_cb;  // dual channel communication with the writer kernel is comprehensive and
                                         // properly synchronizes writer and compute kernels.
     const uint32_t tile_height;
     const uint32_t tile_width;
-    const uint32_t block_depth;   // usually 32
+    const uint32_t block_depth;
     const uint32_t num_channels;  // axis 4/4
     const uint32_t input_height;  // axis 3/4
     const uint32_t input_depth;   // axis 2/4

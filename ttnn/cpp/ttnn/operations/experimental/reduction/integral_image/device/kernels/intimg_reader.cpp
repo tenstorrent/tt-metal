@@ -6,8 +6,6 @@
 
 #include "common.hpp"
 
-#include "debug/dprint.h"
-
 namespace {
 
 FORCE_INLINE void zero_buffer(uint32_t write_addr, int bytes) {

@@ -20,8 +20,6 @@
 #define APPROX false
 #include "compute_kernel_api/common.h"
 #include "compute_kernel_api/eltwise_binary_sfpu.h"
-#include "debug/dprint.h"
-#include "debug/dprint_tensix.h"
 
 namespace {
 
