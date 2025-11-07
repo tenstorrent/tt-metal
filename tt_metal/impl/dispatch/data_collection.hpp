@@ -11,6 +11,7 @@
 #include "program/program_impl.hpp"
 
 #include <umd/device/types/core_coordinates.hpp>
+#pragma once
 
 namespace tt {
 namespace tt_metal {

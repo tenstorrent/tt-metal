@@ -36,6 +36,7 @@ namespace inspector {
 class Data;
 }
 
+class DataCollector;
 // A class to manage one-time initialization and teardown (FW, dispatch, fabric, cluster) and access to related state.
 // Dispatch-independent state (Cluster) is initialized with the creation of MetalContext and accessible right after.
 // Dispatch-dependent state (FW, dispatch, fabric) is initialized explicitly with a MetalContext::initialize() call, and
@@ -64,6 +65,7 @@ public:
     std::unique_ptr<WatcherServer>& watcher_server() { return watcher_server_; }
 
     std::unique_ptr<ProfilerStateManager>& profiler_state_manager() { return profiler_state_manager_; }
+    std::unique_ptr<DataCollector>& data_collector() { return data_collector_; }
 
     void initialize(
         const DispatchCoreConfig& dispatch_core_config,
@@ -176,6 +178,8 @@ private:
     std::unique_ptr<DPrintServer> dprint_server_;
     std::unique_ptr<WatcherServer> watcher_server_;
     std::unique_ptr<ProfilerStateManager> profiler_state_manager_;
+    std::unique_ptr<DataCollector> data_collector_;
+
     std::array<std::unique_ptr<DispatchMemMap>, static_cast<size_t>(CoreType::COUNT)> dispatch_mem_map_;
     std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane_;
     tt_fabric::FabricConfig fabric_config_ = tt_fabric::FabricConfig::DISABLED;

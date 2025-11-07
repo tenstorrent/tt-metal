@@ -32,6 +32,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
+#include "tt_metal/impl/dispatch/data_collector.hpp"
 
 namespace tt::tt_metal {
 
@@ -225,6 +226,7 @@ void MetalContext::teardown() {
 
     // Set internal routing to false to exit active ethernet FW & go back to base FW
     cluster_->set_internal_routing_info_for_ethernet_cores(false);
+    data_collector_->DumpData();
 
     if (dprint_server_) {
         dprint_server_->detach_devices();
@@ -250,6 +252,9 @@ void MetalContext::teardown() {
             mem_map.reset();
         }
     }
+
+    data_collector_.reset();
+
     dispatch_query_manager_.reset();
     dispatch_core_manager_.reset();
     tt::tt_metal::reset_topology_state();
@@ -280,6 +285,7 @@ MetalContext::MetalContext() {
     rtoptions_.ParseAllFeatureEnv(*hal_);
     cluster_ = std::make_unique<Cluster>(rtoptions_, *hal_);
     distributed_context_ = distributed::multihost::DistributedContext::get_current_world();
+    data_collector_ = std::make_unique<DataCollector>();
 
     // We do need to call Cluster teardown at the end of the program, use atexit temporarily until we have clarity on
     // how MetalContext lifetime will work through the API.
