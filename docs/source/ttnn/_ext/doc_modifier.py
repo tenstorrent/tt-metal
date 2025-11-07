@@ -46,7 +46,7 @@ def process_docstring(app, what, name, obj, options, lines):
         # Get the example function
         function = FUNCTION_TO_EXAMPLES_MAPPING_DICT.get(name, None)
         if function is None:
-            # No function found for example, skip modification
+            # No function found for example, skip modification - early exit
             return
 
         # Get example code as string
