@@ -441,33 +441,46 @@ KernelGroup::KernelGroup(
         }
         auto class_id = kernel->dispatch_class();
 
-        // Dynamic NOC assignment is supported on TENSIX cores and Eth cores which are shared with a base firmware
+        // Dynamic NOC assignment is only supported on certain core types
         const bool is_tensix_core =
             hal.get_programmable_core_type(programmable_core_type_index) == HalProgrammableCoreType::TENSIX;
         const bool is_supported_eth_core =
             hal.get_programmable_core_type(programmable_core_type_index) == HalProgrammableCoreType::ACTIVE_ETH &&
             !hal.get_eth_fw_is_cooperative();
         if (is_tensix_core || is_supported_eth_core) {
-            // The code below sets the brisc_noc_id for use by the device firmware
-            // Use 0 if neither brisc nor ncrisc specify a noc
-            if (class_id == ttsl::as_underlying_type<DataMovementProcessor>(DataMovementProcessor::RISCV_0)) {
-                noc_modes.insert(std::get<DataMovementConfig>(kernel->config()).noc_mode);
-                // Use brisc's noc if brisc specifies a noc
-                kernel_config.brisc_noc_id() = std::get<DataMovementConfig>(kernel->config()).noc;
-                // if noc mode is already set to DM_DYNAMIC_NOC then we can't change back to DM_DEDICATED_NOC
-                if (std::get<DataMovementConfig>(kernel->config()).noc_mode == NOC_MODE::DM_DYNAMIC_NOC) {
-                    kernel_config.brisc_noc_mode() = NOC_MODE::DM_DYNAMIC_NOC;
-                }
-            } else if (class_id == ttsl::as_underlying_type<DataMovementProcessor>(DataMovementProcessor::RISCV_1)) {
-                noc_modes.insert(std::get<DataMovementConfig>(kernel->config()).noc_mode);
-                // Use 1-ncrisc's noc (the other noc) if ncrisc specifies a noc
-                // If both brisc and ncrisc set the noc, then this is safe due to prior correctness validation
-                kernel_config.brisc_noc_id() = 1 - std::get<DataMovementConfig>(kernel->config()).noc;
-                // if noc mode is already set to DM_DYNAMIC_NOC then we can't change back to DM_DEDICATED_NOC
-                if (std::get<DataMovementConfig>(kernel->config()).noc_mode == NOC_MODE::DM_DYNAMIC_NOC) {
-                    kernel_config.brisc_noc_mode() = NOC_MODE::DM_DYNAMIC_NOC;
-                }
-            }
+            std::visit(
+                [&](auto&& arg) {
+                    using T = std::decay_t<decltype(arg)>;
+                    if constexpr (std::is_same_v<T, DataMovementConfig> || std::is_same_v<T, EthernetConfig>) {
+                        // The code below sets the brisc_noc_id for use by the device firmware
+                        // Use 0 if neither brisc nor ncrisc specify a noc
+                        if (class_id ==
+                            ttsl::as_underlying_type<DataMovementProcessor>(DataMovementProcessor::RISCV_0)) {
+                            noc_modes.insert(arg.noc_mode);
+                            // Use brisc's noc if brisc specifies a noc
+                            kernel_config.brisc_noc_id() = arg.noc;
+                            // if noc mode is already set to DM_DYNAMIC_NOC then we can't change back to
+                            // DM_DEDICATED_NOC
+                            if (arg.noc_mode == NOC_MODE::DM_DYNAMIC_NOC) {
+                                kernel_config.brisc_noc_mode() = NOC_MODE::DM_DYNAMIC_NOC;
+                            }
+                        } else if (
+                            class_id ==
+                            ttsl::as_underlying_type<DataMovementProcessor>(DataMovementProcessor::RISCV_1)) {
+                            noc_modes.insert(arg.noc_mode);
+                            // Use 1-ncrisc's noc (the other noc) if ncrisc specifies a noc
+                            // If both brisc and ncrisc set the noc, then this is safe due to prior correctness
+                            // validation
+                            kernel_config.brisc_noc_id() = 1 - arg.noc;
+                            // if noc mode is already set to DM_DYNAMIC_NOC then we can't change back to
+                            // DM_DEDICATED_NOC
+                            if (arg.noc_mode == NOC_MODE::DM_DYNAMIC_NOC) {
+                                kernel_config.brisc_noc_mode() = NOC_MODE::DM_DYNAMIC_NOC;
+                            }
+                        }
+                    }
+                },
+                kernel->config());
         }
     }
     TT_FATAL(noc_modes.size() <= 1, "KernelGroup must have the same noc mode for all kernels");
