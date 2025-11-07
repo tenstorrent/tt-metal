@@ -12,11 +12,11 @@ struct SGDFusedOptimizer {
     static ttnn::Tensor invoke(
         const ttnn::Tensor& param_in,
         const ttnn::Tensor& grad,
-        float lr,
-        float momentum,
-        float dampening,
-        float weight_decay,
-        bool nesterov,
+        const float lr,
+        const float momentum,
+        const float dampening,
+        const float weight_decay,
+        const bool nesterov,
         const std::optional<ttnn::Tensor>& momentum_buffer);
 };
 }  // namespace ttml::metal::optimizers::sgd_fused

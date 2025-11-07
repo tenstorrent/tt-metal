@@ -11,11 +11,11 @@ namespace ttml::metal::optimizers::sgd_fused {
 ttnn::Tensor SGDFusedOptimizer::invoke(
     const ttnn::Tensor& param,
     const ttnn::Tensor& grad,
-    float lr,
-    float momentum,
-    float dampening,
-    float weight_decay,
-    bool nesterov,
+    const float lr,
+    const float momentum,
+    const float dampening,
+    const float weight_decay,
+    const bool nesterov,
     const std::optional<ttnn::Tensor>& momentum_buffer) {
     return ttnn::prim::ttml_sgd_fused(param, grad, lr, momentum, dampening, weight_decay, nesterov, momentum_buffer);
 }
