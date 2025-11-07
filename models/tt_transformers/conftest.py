@@ -48,7 +48,7 @@ def get_data_parallel_device_name(request, num_devices, mesh_device_name):
     data_parallel = request.node.callspec.params.get("data_parallel", 1)
     num_devices = num_devices[0] * num_devices[1] if isinstance(num_devices, tuple) else num_devices
     num_devices_data_parallel = num_devices // data_parallel
-    return get_mesh_device_name(num_devices_data_parallel, os.getenv("MESH_DEVICE"))
+    return get_mesh_device_name(num_devices_data_parallel, mesh_device_name)
 
 
 def get_supported_trace_region_size(device_name):
