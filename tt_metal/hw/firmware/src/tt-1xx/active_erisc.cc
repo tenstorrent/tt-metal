@@ -278,6 +278,12 @@ int __attribute__((noinline)) main(void) {
 
             DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);
 
+            // Host side guarantees that if active_erisc is running on ERISC1 (single ERISC mode),
+            // the noc_index will be NOC_1 which ensures no conflict with base firmware running concurrently on ERISC0
+            //
+            // cmd_buf allocation is determined based on the physical ERISC index in tt_metal/hw/inc/dataflow_cmd_bufs.h
+            // ERISC0 is BRISC, ERISC1 is NCRISC.
+            //
             noc_mode = launch_msg_address->kernel_config.brisc_noc_mode;
             noc_index = launch_msg_address->kernel_config.brisc_noc_id;
             my_relative_x_ = my_logical_x_ - launch_msg_address->kernel_config.sub_device_origin_x;
