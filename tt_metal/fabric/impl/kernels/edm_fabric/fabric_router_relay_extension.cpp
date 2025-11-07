@@ -172,7 +172,6 @@ void forward_data(
     StreamId my_channel_free_slots_stream_id) {
     bool has_unsent_payload = get_ptr_val(my_channel_free_slots_stream_id.get()) != NUM_BUFFERS;
     if (has_unsent_payload) {
-        DPRINT << "Relay has_unsent_payload " << (uint)has_unsent_payload << ENDL();
         size_t buffer_address = channel.get_buffer_address(worker_interface.local_write_counter.get_buffer_index());
         invalidate_l1_cache();
         auto packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(buffer_address);
@@ -248,28 +247,22 @@ void kernel_main() {
         reinterpret_cast<volatile tt::tt_fabric::TerminationSignal*>(termination_signal_address);
 
     // before connecting to mux, wait for mux status to turn into READY_FOR_TRAFFIC
-    DPRINT << "Relay waiting for MUX READY_FOR_TRAFFIC" << ENDL();
     volatile auto mux_status_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_mux_status_address);
     while (*mux_status_ptr != tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC) {
         invalidate_l1_cache();
     }
-    DPRINT << "Relay waiting for MUX READY_FOR_TRAFFIC Done" << ENDL();
 
     // this is connecting to the local mux - (always non idle eth)
     mux_connection.open<false>();
 
     // signal the fabric router (this is the router that is connecting to the relay) the relay is ready
-    DPRINT << "Relay signal Router " << (uint)router_noc_x << " " << (uint)router_noc_y << ENDL();
     auto noc_addr = get_noc_addr(router_noc_x, router_noc_y, fabric_router_sync_address);
     noc_semaphore_inc(noc_addr, 1);
 
-    DPRINT << "Relay waiting for Router connection" << ENDL();
     wait_for_static_connection_to_ready<NUM_BUFFERS>(worker_interface);
-    DPRINT << "Relay waiting for Router connection Done" << ENDL();
 
     status_ptr[0] = tt::tt_fabric::FabricRelayStatus::READY_FOR_TRAFFIC;
 
-    DPRINT << "Relay starting Loop" << ENDL();
     while (!got_immediate_termination_signal(termination_signal_ptr)) {
         for (size_t i = 0; i < NUM_ITERS_BETWEEN_TEARDOWN_CHECKS; i++) {
             forward_data<NUM_BUFFERS, mux_num_buffers>(
