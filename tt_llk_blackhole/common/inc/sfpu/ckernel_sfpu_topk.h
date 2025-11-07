@@ -135,6 +135,7 @@ inline void bitonic_topk_store16(uint dist0, uint dist1)
     }
 }
 
+template <bool STABLE_SORT>
 inline void bitonic_topk_ph3_st4_to_1(bool dir, bool &init_replay, int replay_start)
 {
     if (dir == (bool)SortDir::ArgMin)
@@ -144,31 +145,58 @@ inline void bitonic_topk_ph3_st4_to_1(bool dir, bool &init_replay, int replay_st
         TTI_SFPNOP;
     }
 
+    constexpr int replay_count = STABLE_SORT ? 9 : 5;
+
     if (init_replay)
     {
-        load_replay_buf<Exec>(
-            replay_start,
-            5,
-            []
-            {
-                // Step 4
-                TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
-                TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+        if constexpr (STABLE_SORT)
+        {
+            load_replay_buf<Exec>(
+                replay_start,
+                replay_count,
+                []
+                {
+                    // Step 4
+                    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
+                    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
+                    TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+                    TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
 
-                // Step 3
-                TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
-                TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+                    // Step 3
+                    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+                    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+                    TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+                    TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
 
-                TTI_SFPTRANSP(0, 0, 0, 0);
-            });
+                    TTI_SFPTRANSP(0, 0, 0, 0);
+                });
+        }
+        else
+        {
+            load_replay_buf<Exec>(
+                replay_start,
+                replay_count,
+                []
+                {
+                    // Step 4
+                    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
+                    TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+
+                    // Step 3
+                    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+                    TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+
+                    TTI_SFPTRANSP(0, 0, 0, 0);
+                });
+        }
         init_replay = false;
     }
     else
     {
-        lltt::replay(replay_start, 5);
+        lltt::replay(replay_start, replay_count);
     }
 
-    lltt::replay(replay_start, 5);
+    lltt::replay(replay_start, replay_count);
 
     if (dir == (bool)SortDir::ArgMin)
     {
@@ -178,7 +206,37 @@ inline void bitonic_topk_ph3_st4_to_1(bool dir, bool &init_replay, int replay_st
     }
 }
 
-inline void bitonic_topk_ph2_st3_to_1()
+template <bool STABLE_SORT>
+inline void bitonic_topk_ph2_st3_to_1();
+
+template <>
+inline void bitonic_topk_ph2_st3_to_1<true>()
+{
+    // Step 3
+    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG3, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG3, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
+
+    TTI_SFPTRANSP(0, 0, 0, 0);
+
+    // Step 2
+    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ROWS_01_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ROWS_01_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ROWS_01_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ROWS_01_MAX);
+
+    // Step 1
+    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ROWS_01_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ROWS_01_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ROWS_01_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ROWS_01_MAX);
+
+    TTI_SFPTRANSP(0, 0, 0, 0);
+}
+
+template <>
+inline void bitonic_topk_ph2_st3_to_1<false>()
 {
     // Step 3
     TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
@@ -198,7 +256,31 @@ inline void bitonic_topk_ph2_st3_to_1()
     TTI_SFPTRANSP(0, 0, 0, 0);
 }
 
-inline void bitonic_topk_ph1_st2_to_1()
+template <bool STABLE_SORT>
+inline void bitonic_topk_ph1_st2_to_1();
+
+template <>
+inline void bitonic_topk_ph1_st2_to_1<true>()
+{
+    TTI_SFPTRANSP(0, 0, 0, 0);
+
+    // Step 2
+    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ROWS_02_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ROWS_02_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ROWS_02_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ROWS_02_MAX);
+
+    // Step 1
+    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ROWS_02_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ROWS_02_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ROWS_02_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ROWS_02_MAX);
+
+    TTI_SFPTRANSP(0, 0, 0, 0);
+}
+
+template <>
+inline void bitonic_topk_ph1_st2_to_1<false>()
 {
     TTI_SFPTRANSP(0, 0, 0, 0);
 
@@ -213,30 +295,73 @@ inline void bitonic_topk_ph1_st2_to_1()
     TTI_SFPTRANSP(0, 0, 0, 0);
 }
 
-inline void bitonic_topk_ph0_st1_to_1()
+template <bool STABLE_SORT>
+inline void bitonic_topk_ph0_st1_to_1();
+
+template <>
+inline void bitonic_topk_ph0_st1_to_1<true>()
 {
     TTI_SFPTRANSP(0, 0, 0, 0);
 
     // Step 1
     TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::UNCONDITIONALLY);
+    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG3, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG3, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
 
     TTI_SFPTRANSP(0, 0, 0, 0);
 }
 
-inline void bitonic_topk_step_N(bool dir)
+template <>
+inline void bitonic_topk_ph0_st1_to_1<false>()
+{
+    TTI_SFPTRANSP(0, 0, 0, 0);
+
+    // Step 1
+    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG3, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
+
+    TTI_SFPTRANSP(0, 0, 0, 0);
+}
+
+template <bool STABLE_SORT>
+inline void bitonic_topk_step_N(bool dir);
+
+template <>
+inline void bitonic_topk_step_N<true>(bool dir)
 {
     // Step N
-    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
-    if (dir == (bool)SortDir::ArgMin)
+    if (dir == (bool)SortDir::ArgMax)
+    {
+        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+    }
+    else
+    {
+        TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG0, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG0, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG3, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG3, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+    }
+}
+
+template <>
+inline void bitonic_topk_step_N<false>(bool dir)
+{
+    // Step N
+    if (dir == (bool)SortDir::ArgMax)
+    {
+        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+    }
+    else
     {
         // Min
-        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::UNCONDITIONALLY);
-        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::UNCONDITIONALLY);
+        TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG0, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG3, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
     }
-    // MT: Maybe there's a way to optimize out unconditional transpose at every step. Think about this
 }
 
 inline void bitonic_topk_inc_x8_dest(uint inc, bool cr)
@@ -271,7 +396,7 @@ inline void bitonic_topk_inc_x4_dest(uint inc, bool cr)
     }
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool STABLE_SORT = false>
 inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, const int i_start_phase, const int i_end_step, const int i_start_step)
 {
     // If more than 1 phase is requested, do all the steps from all phases
@@ -308,14 +433,15 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                             {
                                 lltt::replay(0, 8);
                             }
+                            constexpr int replay_count = STABLE_SORT ? 6 : 4;
                             if (init_phase)
                             {
-                                load_replay_buf<Exec>(16, 5, [] { bitonic_topk_ph0_st1_to_1(); });
+                                load_replay_buf<Exec>(16, replay_count, [] { bitonic_topk_ph0_st1_to_1<STABLE_SORT>(); });
                                 init_phase = false;
                             }
                             else
                             {
-                                lltt::replay(16, 5);
+                                lltt::replay(16, replay_count);
                             }
                             if (init_store)
                             {
@@ -329,18 +455,19 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                         }
                         break;
                     case 1:
+                        // Groups of 16 datums being sorted at the same time
                         for (int d = 0; d < 4; d++)
                         {
-                            // Groups of 16 datums being sorted at the same time
                             lltt::replay(0, 8);
+                            constexpr int replay_count = STABLE_SORT ? 10 : 6;
                             if (init_phase)
                             {
-                                load_replay_buf<Exec>(16, 6, [] { bitonic_topk_ph1_st2_to_1(); });
+                                load_replay_buf<Exec>(16, replay_count, [] { bitonic_topk_ph1_st2_to_1<STABLE_SORT>(); });
                                 init_phase = false;
                             }
                             else
                             {
-                                lltt::replay(16, 6);
+                                lltt::replay(16, replay_count);
                             }
                             lltt::replay(8, 8);
                         }
@@ -349,14 +476,15 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                         for (int d = 0; d < 4; d++)
                         {
                             lltt::replay(0, 8);
+                            constexpr int replay_count = STABLE_SORT ? 14 : 9;
                             if (init_phase)
                             {
-                                load_replay_buf<Exec>(16, 9, [] { bitonic_topk_ph2_st3_to_1(); });
+                                load_replay_buf<Exec>(16, replay_count, [] { bitonic_topk_ph2_st3_to_1<STABLE_SORT>(); });
                                 init_phase = false;
                             }
                             else
                             {
-                                lltt::replay(16, 9);
+                                lltt::replay(16, replay_count);
                             }
                             lltt::replay(8, 8);
                         }
@@ -365,7 +493,7 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                         for (int d = 0; d < 4; d++)
                         {
                             lltt::replay(0, 8);
-                            bitonic_topk_ph3_st4_to_1(dir, init_phase, 16);
+                            bitonic_topk_ph3_st4_to_1<STABLE_SORT>(dir, init_phase, 16);
                             lltt::replay(8, 8);
                             dir = !dir;
                         }
@@ -391,7 +519,7 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                                 for (uint ii = 0; ii < inner_d; ii++)
                                 {
                                     bitonic_topk_load16<is_fp32_dest_acc_en>(4, 2 * dist); // load/store with offset of face 1 (in row major face layout)
-                                    bitonic_topk_step_N(dir);
+                                    bitonic_topk_step_N<STABLE_SORT>(dir);
                                     bitonic_topk_store16<is_fp32_dest_acc_en, false>(
                                         4, 2 * dist); // load/store with offset of face 1 (in row major face layout)
                                     uint dst_inc = 8;
@@ -421,7 +549,7 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                         while (datums_compared < total_datums_to_compare)
                         {
                             lltt::replay(0, 8);
-                            bitonic_topk_ph3_st4_to_1(dir, init_phase, 16);
+                            bitonic_topk_ph3_st4_to_1<STABLE_SORT>(dir, init_phase, 16);
                             lltt::replay(8, 8);
                             datums_compared += 16;
                             dir = (datums_compared == sorted_seq_length) ? !dir : dir;
@@ -437,7 +565,7 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
     topk_replay_init = -1;
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool top_min, int ITERATIONS>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool top_min, bool STABLE_SORT = false>
 inline void _bitonic_topk_merge(const int m_iter, const int k)
 {
     uint dst_addr_offset = 0;
@@ -463,6 +591,10 @@ inline void _bitonic_topk_merge(const int m_iter, const int k)
                 {
                     bitonic_topk_load8<is_fp32_dest_acc_en>(dst_offset, ld_dist);
                     TTI_SFPSWAP(0, top_min ? p_sfpu::LREG1 : p_sfpu::LREG0, top_min ? p_sfpu::LREG0 : p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+                    if constexpr (STABLE_SORT)
+                    {
+                        TTI_SFPSWAP(0, top_min ? p_sfpu::LREG1 : p_sfpu::LREG0, top_min ? p_sfpu::LREG0 : p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+                    }
                     bitonic_topk_store8<is_fp32_dest_acc_en>(dst_offset, ld_dist);
                     datums_compared += 8;
                     if (ii == (inner_d - 1))
@@ -484,7 +616,7 @@ inline void _bitonic_topk_merge(const int m_iter, const int k)
     }
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool STABLE_SORT = false>
 inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k, const int logk, const int skip_second)
 {
     // init replay buffer for rebuild iteration 'm_iter' if uninitialized
@@ -519,23 +651,33 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
                         while (datums_compared < total_datums_to_compare)
                         {
                             // Groups of 8 datums being sorted at the same time
-                            if (init_rebuild)
+                            if constexpr (STABLE_SORT)
                             {
-                                load_replay_buf<Exec>(
-                                    0,
-                                    22,
-                                    [ld_offset]
-                                    {
-                                        bitonic_topk_load8<is_fp32_dest_acc_en>(0, ld_offset);
-                                        bitonic_topk_ph1_st2_to_1();
-                                        bitonic_topk_store8<is_fp32_dest_acc_en>(0, ld_offset);
-                                        bitonic_topk_inc_x8_dest(64, false);
-                                    });
-                                init_rebuild = false;
+                                bitonic_topk_load8<is_fp32_dest_acc_en>(0, ld_offset);
+                                bitonic_topk_ph1_st2_to_1<STABLE_SORT>();
+                                bitonic_topk_store8<is_fp32_dest_acc_en>(0, ld_offset);
+                                bitonic_topk_inc_x8_dest(64, false);
                             }
                             else
                             {
-                                lltt::replay(0, 22);
+                                if (init_rebuild)
+                                {
+                                    load_replay_buf<Exec>(
+                                        0,
+                                        22,
+                                        [ld_offset]
+                                        {
+                                            bitonic_topk_load8<is_fp32_dest_acc_en>(0, ld_offset);
+                                            bitonic_topk_ph1_st2_to_1<STABLE_SORT>();
+                                            bitonic_topk_store8<is_fp32_dest_acc_en>(0, ld_offset);
+                                            bitonic_topk_inc_x8_dest(64, false);
+                                        });
+                                    init_rebuild = false;
+                                }
+                                else
+                                {
+                                    lltt::replay(0, 22);
+                                }
                             }
                             datums_compared += 16;
                         }
@@ -546,17 +688,71 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
                         ld_dist = (ld_offset < 16) ? 4 * ld_offset : 2 * ld_offset;
                         while (datums_compared < total_datums_to_compare)
                         {
+                            if constexpr (STABLE_SORT)
+                            {
+                                bitonic_topk_load16<is_fp32_dest_acc_en>(ld_offset, ld_dist);
+                                bitonic_topk_ph1_st2_to_1<STABLE_SORT>();
+                                bitonic_topk_store16<is_fp32_dest_acc_en, true>(ld_offset, ld_dist);
+                                TTI_INCRWC(0, 8, 0, 0);
+                                TTI_INCRWC(0, 8, 0, 0);
+                                TTI_INCRWC(0, 8, 0, 0);
+                                TTI_INCRWC(0, 8, 0, 0);
+                            }
+                            else
+                            {
+                                // Groups of 16 datums being sorted at the same time
+                                if (init_rebuild)
+                                {
+                                    load_replay_buf<Exec>(
+                                        0,
+                                        26,
+                                        [ld_offset, ld_dist]
+                                        {
+                                            bitonic_topk_load16<is_fp32_dest_acc_en>(ld_offset, ld_dist);
+                                            bitonic_topk_ph1_st2_to_1<STABLE_SORT>();
+                                            bitonic_topk_store16<is_fp32_dest_acc_en, true>(ld_offset, ld_dist);
+                                            TTI_INCRWC(0, 8, 0, 0);
+                                            TTI_INCRWC(0, 8, 0, 0);
+                                            TTI_INCRWC(0, 8, 0, 0);
+                                            TTI_INCRWC(0, 8, 0, 0);
+                                        });
+                                    init_rebuild = false;
+                                }
+                                else
+                                {
+                                    lltt::replay(0, 26);
+                                }
+                            }
+                            datums_compared += 16;
+                        }
+                        break;
+                    }
+                case 2:
+                    while (datums_compared < total_datums_to_compare)
+                    {
+                        if constexpr (STABLE_SORT)
+                        {
+                            bitonic_topk_load16<is_fp32_dest_acc_en>(4, ld_offset);
+                            bitonic_topk_ph2_st3_to_1<STABLE_SORT>();
+                            bitonic_topk_store16<is_fp32_dest_acc_en, true>(4, ld_offset);
+                            TTI_INCRWC(0, 8, 0, 0);
+                            TTI_INCRWC(0, 8, 0, 0);
+                            TTI_INCRWC(0, 8, 0, 0);
+                            TTI_INCRWC(0, 8, 0, 0);
+                        }
+                        else
+                        {
                             // Groups of 16 datums being sorted at the same time
                             if (init_rebuild)
                             {
                                 load_replay_buf<Exec>(
                                     0,
-                                    26,
-                                    [ld_offset, ld_dist]
+                                    29,
+                                    [ld_offset]
                                     {
-                                        bitonic_topk_load16<is_fp32_dest_acc_en>(ld_offset, ld_dist);
-                                        bitonic_topk_ph1_st2_to_1();
-                                        bitonic_topk_store16<is_fp32_dest_acc_en, true>(ld_offset, ld_dist);
+                                        bitonic_topk_load16<is_fp32_dest_acc_en>(4, ld_offset);
+                                        bitonic_topk_ph2_st3_to_1<STABLE_SORT>();
+                                        bitonic_topk_store16<is_fp32_dest_acc_en, true>(4, ld_offset);
                                         TTI_INCRWC(0, 8, 0, 0);
                                         TTI_INCRWC(0, 8, 0, 0);
                                         TTI_INCRWC(0, 8, 0, 0);
@@ -566,36 +762,8 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
                             }
                             else
                             {
-                                lltt::replay(0, 26);
+                                lltt::replay(0, 29);
                             }
-                            datums_compared += 16;
-                        }
-                        break;
-                    }
-                case 2:
-                    while (datums_compared < total_datums_to_compare)
-                    {
-                        // Groups of 16 datums being sorted at the same time
-                        if (init_rebuild)
-                        {
-                            load_replay_buf<Exec>(
-                                0,
-                                29,
-                                [ld_offset]
-                                {
-                                    bitonic_topk_load16<is_fp32_dest_acc_en>(4, ld_offset);
-                                    bitonic_topk_ph2_st3_to_1();
-                                    bitonic_topk_store16<is_fp32_dest_acc_en, true>(4, ld_offset);
-                                    TTI_INCRWC(0, 8, 0, 0);
-                                    TTI_INCRWC(0, 8, 0, 0);
-                                    TTI_INCRWC(0, 8, 0, 0);
-                                    TTI_INCRWC(0, 8, 0, 0);
-                                });
-                            init_rebuild = false;
-                        }
-                        else
-                        {
-                            lltt::replay(0, 29);
                         }
                         datums_compared += 16;
                     }
@@ -603,28 +771,41 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
                 case 3:
                     while (datums_compared < total_datums_to_compare)
                     {
-                        // Groups of 16 datums being sorted at the same time
-                        if (init_rebuild)
+                        if constexpr (STABLE_SORT)
                         {
-                            load_replay_buf<Exec>(0, 8, [] { bitonic_topk_load16<is_fp32_dest_acc_en>(4, 8); });
-                            bitonic_topk_ph3_st4_to_1(dir, init_rebuild, 8);
-                            load_replay_buf<Exec>(
-                                13,
-                                12,
-                                []
-                                {
-                                    bitonic_topk_store16<is_fp32_dest_acc_en, true>(4, 8);
-                                    TTI_INCRWC(0, 8, 0, 0);
-                                    TTI_INCRWC(0, 8, 0, 0);
-                                    TTI_INCRWC(0, 8, 0, 0);
-                                    TTI_INCRWC(0, 8, 0, 0);
-                                });
+                            bitonic_topk_load16<is_fp32_dest_acc_en>(4, 8);
+                            bitonic_topk_ph3_st4_to_1<STABLE_SORT>(dir, init_rebuild, 8);
+                            bitonic_topk_store16<is_fp32_dest_acc_en, true>(4, 8);
+                            TTI_INCRWC(0, 8, 0, 0);
+                            TTI_INCRWC(0, 8, 0, 0);
+                            TTI_INCRWC(0, 8, 0, 0);
+                            TTI_INCRWC(0, 8, 0, 0);
                         }
                         else
                         {
-                            lltt::replay(0, 8);
-                            bitonic_topk_ph3_st4_to_1(dir, init_rebuild, 8);
-                            lltt::replay(13, 12);
+                            // Groups of 16 datums being sorted at the same time
+                            if (init_rebuild)
+                            {
+                                load_replay_buf<Exec>(0, 8, [] { bitonic_topk_load16<is_fp32_dest_acc_en>(4, 8); });
+                                bitonic_topk_ph3_st4_to_1<STABLE_SORT>(dir, init_rebuild, 8);
+                                load_replay_buf<Exec>(
+                                    13,
+                                    12,
+                                    []
+                                    {
+                                        bitonic_topk_store16<is_fp32_dest_acc_en, true>(4, 8);
+                                        TTI_INCRWC(0, 8, 0, 0);
+                                        TTI_INCRWC(0, 8, 0, 0);
+                                        TTI_INCRWC(0, 8, 0, 0);
+                                        TTI_INCRWC(0, 8, 0, 0);
+                                    });
+                            }
+                            else
+                            {
+                                lltt::replay(0, 8);
+                                bitonic_topk_ph3_st4_to_1<STABLE_SORT>(dir, init_rebuild, 8);
+                                lltt::replay(13, 12);
+                            }
                         }
                         datums_compared += 16;
                         dir = !dir;
@@ -650,7 +831,7 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
                             for (uint ii = 0; ii < inner_d; ii++)
                             {
                                 bitonic_topk_load16<is_fp32_dest_acc_en>(4, 2 * dist); // load/store with offset of face 1 (in row major face layout)
-                                bitonic_topk_step_N(dir);
+                                bitonic_topk_step_N<STABLE_SORT>(dir);
                                 bitonic_topk_store16<is_fp32_dest_acc_en, false>(4, 2 * dist); // load/store with offset of face 1 (in row major face layout)
                                 uint dst_inc = 8;
                                 dst_offset += dst_inc;
@@ -681,14 +862,14 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
                         if (init_rebuild)
                         {
                             load_replay_buf<Exec>(0, 8, [] { bitonic_topk_load16<is_fp32_dest_acc_en>(4, 8); });
-                            bitonic_topk_ph3_st4_to_1(dir, init_rebuild, 8);
-                            load_replay_buf<Exec>(13, 8, [] { bitonic_topk_store16<is_fp32_dest_acc_en, true>(4, 8); });
+                            bitonic_topk_ph3_st4_to_1<STABLE_SORT>(dir, init_rebuild, 8);
+                            load_replay_buf<Exec>(17, 8, [] { bitonic_topk_store16<is_fp32_dest_acc_en, true>(4, 8); });
                         }
                         else
                         {
                             lltt::replay(0, 8);
-                            bitonic_topk_ph3_st4_to_1(dir, init_rebuild, 8);
-                            lltt::replay(13, 8);
+                            bitonic_topk_ph3_st4_to_1<STABLE_SORT>(dir, init_rebuild, 8);
+                            lltt::replay(17, 8);
                         }
                         datums_compared += 16;
                         dir = (datums_compared == sorted_seq_length) ? !dir : dir;
