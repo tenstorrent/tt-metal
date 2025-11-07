@@ -302,7 +302,6 @@ void kernel_main() {
                             intermediate_pages_read_in_row -= slice_Wt;
                         }
 
-                        uint32_t payload_size;
                         if (num_pages_to_write == 1) {
                             fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
                                 mux_connection_handle,

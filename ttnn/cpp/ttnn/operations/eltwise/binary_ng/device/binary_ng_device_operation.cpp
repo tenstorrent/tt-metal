@@ -53,7 +53,7 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
         case MINIMUM:
         case XLOGY:
         case POWER: return true;
-        case DIV: return !fast_and_approximate_mode || (a == FLOAT32 && b == FLOAT32);
+        case DIV: return !fast_and_approximate_mode || (a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32);
         default: return false;
     }
     return false;

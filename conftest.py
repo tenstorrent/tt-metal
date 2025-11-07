@@ -356,11 +356,8 @@ def set_fabric(fabric_config, reliability_mode=None, fabric_tensix_config=None):
 def get_default_fabric_tensix_config():
     import ttnn
 
-    # Default to MUX for Blackhole when fabric is enabled, DISABLED otherwise
-    if ttnn.device.is_blackhole():
-        return ttnn.FabricTensixConfig.MUX
-    else:
-        return ttnn.FabricTensixConfig.DISABLED
+    # Default to DISABLED for all architectures
+    return ttnn.FabricTensixConfig.DISABLED
 
 
 @pytest.fixture(scope="function")

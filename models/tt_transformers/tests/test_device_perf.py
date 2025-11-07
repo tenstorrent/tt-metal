@@ -28,17 +28,11 @@ from tools.tracy.process_model_log import get_latest_ops_log_filename
 @pytest.mark.parametrize("batch_size", [1, 32])
 @pytest.mark.parametrize("data_parallel", [1, 2, 4, 8])
 @pytest.mark.parametrize("num_layers", [10])
+@pytest.mark.parametrize("num_runs", [2])
 @pytest.mark.parametrize("max_seq_len", [1024])
 @pytest.mark.parametrize("max_generated_tokens", [2])
 @pytest.mark.parametrize("model_name", ["llama3_70b", "llama3_8b"])  # Add more models here as needed
-@pytest.mark.parametrize(
-    "mode, num_runs",
-    [
-        ("prefill", 2),
-        ("decode", 4),
-    ],
-    ids=["prefill", "decode"],
-)
+@pytest.mark.parametrize("mode", ["prefill", "decode"])
 def test_device_perf_one_iter(
     num_layers,
     model_name,

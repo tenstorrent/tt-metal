@@ -1,0 +1,182 @@
+name: "Download Artifacts from Workflow Run"
+description: "Download and extract build artifacts from a specific workflow run to skip building"
+
+inputs:
+  workflow_run_id:
+    required: true
+    description: "GitHub Actions workflow run ID to download artifacts from"
+  working-directory:
+    required: false
+    default: "/work"
+    description: "Directory to extract artifacts to"
+  tracy:
+    required: false
+    default: "true"
+    description: "Whether to look for profiler-enabled artifacts"
+
+outputs:
+  build-artifact-name:
+    description: "Name of the downloaded build artifact"
+    value: ${{ steps.download.outputs.build-artifact-name }}
+  wheel-artifact-name:
+    description: "Name of the downloaded wheel artifact"
+    value: ${{ steps.download.outputs.wheel-artifact-name }}
+  packages-artifact-name:
+    description: "Name of the downloaded packages artifact"
+    value: ${{ steps.download.outputs.packages-artifact-name }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check required tools
+      shell: bash
+      run: |
+        if ! command -v gh >/dev/null 2>&1; then
+          echo "ERROR: GitHub CLI (gh) not found"
+          exit 1
+        fi
+        # Authenticate using GH_TOKEN if available (automatically used by gh CLI)
+        if [ -n "${GH_TOKEN:-}" ]; then
+          echo "GH_TOKEN found, GitHub CLI will use it automatically"
+        elif ! gh auth status >/dev/null 2>&1; then
+          echo "ERROR: GitHub CLI not authenticated and GH_TOKEN not set"
+          exit 1
+        fi
+
+    - name: Get workflow run info
+      id: run-info
+      shell: bash
+      run: |
+        WORKFLOW_RUN_ID="${{ inputs.workflow_run_id }}"
+        echo "Fetching artifacts from workflow run: $WORKFLOW_RUN_ID"
+
+        # Get workflow run details
+        RUN_INFO=$(gh run view "$WORKFLOW_RUN_ID" --repo "${{ github.repository }}" --json conclusion,workflowName 2>&1)
+        if [ $? -ne 0 ]; then
+          echo "ERROR: Failed to fetch workflow run $WORKFLOW_RUN_ID"
+          echo "$RUN_INFO"
+          exit 1
+        fi
+
+        CONCLUSION=$(echo "$RUN_INFO" | jq -r '.conclusion')
+        if [ "$CONCLUSION" != "success" ]; then
+          echo "WARNING: Workflow run $WORKFLOW_RUN_ID has conclusion: $CONCLUSION (expected: success)"
+        fi
+
+        echo "Workflow run conclusion: $CONCLUSION"
+
+    - name: List available artifacts
+      id: list-artifacts
+      shell: bash
+      run: |
+        WORKFLOW_RUN_ID="${{ inputs.workflow_run_id }}"
+        ARTIFACTS=$(gh api repos/${{ github.repository }}/actions/runs/"$WORKFLOW_RUN_ID"/artifacts --jq '.artifacts[].name' 2>&1)
+
+        if [ $? -ne 0 ]; then
+          echo "ERROR: Failed to list artifacts for run $WORKFLOW_RUN_ID"
+          echo "$ARTIFACTS"
+          exit 1
+        fi
+
+        echo "Available artifacts:"
+        echo "$ARTIFACTS"
+        echo "artifacts<<EOF" >> $GITHUB_OUTPUT
+        echo "$ARTIFACTS" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+
+    - name: Download artifacts
+      id: download
+      shell: bash
+      run: |
+        WORKFLOW_RUN_ID="${{ inputs.workflow_run_id }}"
+        WORK_DIR="${{ inputs.working-directory }}"
+        TRACY_ENABLED="${{ inputs.tracy }}"
+
+        mkdir -p "$WORK_DIR"
+        cd "$WORK_DIR"
+
+        # Parse artifact names from previous step
+        ARTIFACTS="${{ steps.list-artifacts.outputs.artifacts }}"
+
+        # Find build artifact (ttm_any.tar.zst)
+        BUILD_ARTIFACT=""
+        if [ "$TRACY_ENABLED" = "true" ]; then
+          BUILD_ARTIFACT=$(echo "$ARTIFACTS" | grep -E "TTMetal_build_any.*_profiler_" | head -1 || true)
+        else
+          BUILD_ARTIFACT=$(echo "$ARTIFACTS" | grep -E "TTMetal_build_any" | grep -v "_profiler_" | head -1 || true)
+        fi
+
+        # Find wheel artifact
+        WHEEL_ARTIFACT=$(echo "$ARTIFACTS" | grep -E "eager-dist|ttnn" | head -1 || true)
+
+        # Find packages artifact (optional)
+        PACKAGES_ARTIFACT=$(echo "$ARTIFACTS" | grep -E "packages-" | head -1 || true)
+
+        if [ -z "$BUILD_ARTIFACT" ]; then
+          echo "ERROR: Could not find build artifact matching pattern"
+          echo "Available artifacts:"
+          echo "$ARTIFACTS"
+          exit 1
+        fi
+
+        echo "Found build artifact: $BUILD_ARTIFACT"
+        echo "Found wheel artifact: ${WHEEL_ARTIFACT:-none}"
+        echo "Found packages artifact: ${PACKAGES_ARTIFACT:-none}"
+
+        # Download build artifact to a temp directory first
+        TEMP_DIR=$(mktemp -d)
+        echo "Downloading $BUILD_ARTIFACT to $TEMP_DIR..."
+        if ! gh run download "$WORKFLOW_RUN_ID" --repo "${{ github.repository }}" --name "$BUILD_ARTIFACT" --dir "$TEMP_DIR" 2>&1; then
+          echo "ERROR: Failed to download build artifact"
+          exit 1
+        fi
+
+        # Move ttm_any.tar.zst to work directory (keep it compressed for re-upload)
+        if [ -f "$TEMP_DIR/ttm_any.tar.zst" ]; then
+          mv "$TEMP_DIR/ttm_any.tar.zst" "$WORK_DIR/"
+          echo "Build artifact ready at $WORK_DIR/ttm_any.tar.zst"
+        elif [ -f "$TEMP_DIR/ttm_any.tar" ]; then
+          mv "$TEMP_DIR/ttm_any.tar" "$WORK_DIR/"
+          echo "Build artifact ready at $WORK_DIR/ttm_any.tar"
+        else
+          echo "ERROR: No ttm_any.tar.zst or ttm_any.tar found after download"
+          ls -la "$TEMP_DIR"
+          exit 1
+        fi
+        rm -rf "$TEMP_DIR"
+
+        # Download wheel artifact if found
+        if [ -n "$WHEEL_ARTIFACT" ]; then
+          TEMP_DIR=$(mktemp -d)
+          echo "Downloading $WHEEL_ARTIFACT to $TEMP_DIR..."
+          if gh run download "$WORKFLOW_RUN_ID" --repo "${{ github.repository }}" --name "$WHEEL_ARTIFACT" --dir "$TEMP_DIR" 2>&1; then
+            WHEEL_FILE=$(find "$TEMP_DIR" -name "*.whl" -type f | head -1)
+            if [ -n "$WHEEL_FILE" ]; then
+              mv "$WHEEL_FILE" "$WORK_DIR/"
+              echo "Wheel file ready at $WORK_DIR/$(basename "$WHEEL_FILE")"
+            fi
+          else
+            echo "WARNING: Failed to download wheel artifact (non-fatal)"
+          fi
+          rm -rf "$TEMP_DIR"
+        fi
+
+        # Download packages artifact if found
+        if [ -n "$PACKAGES_ARTIFACT" ]; then
+          TEMP_DIR=$(mktemp -d)
+          echo "Downloading $PACKAGES_ARTIFACT..."
+          if gh run download "$WORKFLOW_RUN_ID" --repo "${{ github.repository }}" --name "$PACKAGES_ARTIFACT" --dir "$TEMP_DIR" 2>&1; then
+            # Move any .deb files to work directory
+            find "$TEMP_DIR" -name "*.deb" -exec mv {} "$WORK_DIR/" \;
+          else
+            echo "WARNING: Failed to download packages artifact (non-fatal)"
+          fi
+          rm -rf "$TEMP_DIR"
+        fi
+
+        # Set outputs - use the original artifact names so downstream jobs can reference them
+        echo "build-artifact-name=$BUILD_ARTIFACT" >> $GITHUB_OUTPUT
+        echo "wheel-artifact-name=${WHEEL_ARTIFACT:-}" >> $GITHUB_OUTPUT
+        echo "packages-artifact-name=${PACKAGES_ARTIFACT:-}" >> $GITHUB_OUTPUT
+
+        echo "✓ Artifacts downloaded successfully to $WORK_DIR"

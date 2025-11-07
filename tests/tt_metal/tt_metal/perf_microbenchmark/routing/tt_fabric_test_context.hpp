@@ -351,7 +351,7 @@ public:
         }
     }
 
-    bool open_devices(const TestFabricSetup& fabric_setup) { return fixture_->open_devices(fabric_setup); }
+    void open_devices(const TestFabricSetup& fabric_setup) { fixture_->open_devices(fabric_setup); }
 
     void compile_programs() {
         fixture_->setup_workload();

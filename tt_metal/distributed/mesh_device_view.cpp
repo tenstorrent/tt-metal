@@ -10,6 +10,9 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
+#include <tt_stl/small_vector.hpp>
+#include <tt_stl/span.hpp>
+#include <climits>
 #include "device.hpp"
 #include "mesh_config.hpp"
 #include "mesh_coord.hpp"
@@ -281,6 +284,34 @@ std::vector<tt::tt_fabric::FabricNodeId> MeshDeviceView::get_ring_fabric_node_id
 bool MeshDeviceView::is_local(const MeshCoordinate& coord) const {
     TT_FATAL(contains(coord), "Coordinate {} not found in mesh {}", coord, devices_.shape());
     return devices_.at(coord).is_local();
+}
+
+MeshCoordinateRange MeshDeviceView::get_local_mesh_coord_range() const {
+    const MeshShape& mesh_shape = shape();
+    const size_t num_dims = mesh_shape.dims();
+
+    // Initialize min and max coordinates
+    tt::stl::SmallVector<uint32_t> min_coords(num_dims, UINT32_MAX);
+    tt::stl::SmallVector<uint32_t> max_coords(num_dims, 0);
+    bool found_local = false;
+
+    // Iterate through all coordinates in the mesh
+    for (const auto& coord : MeshCoordinateRange(mesh_shape)) {
+        if (is_local(coord)) {
+            found_local = true;
+            for (size_t dim = 0; dim < num_dims; ++dim) {
+                min_coords[dim] = std::min(min_coords[dim], coord[dim]);
+                max_coords[dim] = std::max(max_coords[dim], coord[dim]);
+            }
+        }
+    }
+
+    TT_FATAL(found_local, "No local devices found in mesh device");
+
+    MeshCoordinate start_coord(tt::stl::Span<const uint32_t>(min_coords.data(), num_dims));
+    MeshCoordinate end_coord(tt::stl::Span<const uint32_t>(max_coords.data(), num_dims));
+
+    return MeshCoordinateRange(start_coord, end_coord);
 }
 
 }  // namespace tt::tt_metal::distributed
