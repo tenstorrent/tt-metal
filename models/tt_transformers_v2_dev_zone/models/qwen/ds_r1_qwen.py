@@ -7,6 +7,9 @@ from typing import Optional
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers.cache_utils import DynamicCache
+from transformers.models.qwen2.modeling_qwen2 import Qwen2RotaryEmbedding as HFQwen2RotaryEmbedding
+from transformers.models.qwen2.modeling_qwen2 import apply_rotary_pos_emb as hf_apply_rotary_pos_emb
 
 # Validation framework
 from tt_transformers_v2.src.testing import Metric, compare_to_torch, get_validation_registry, to_torch_auto_compose
@@ -67,44 +70,13 @@ class RMSNorm:
 
 
 class RotaryEmbedding:
-    """Rotary Position Embedding"""
+    """Deprecated local RoPE helper (kept for reference). Use HFQwen2RotaryEmbedding instead."""
 
-    def __init__(self, dim: int, max_seq_len: int, base: float = 10000.0, device=None):
-        self.dim = dim
-        self.max_seq_len = max_seq_len
-        self.base = base
-
-        # Precompute frequencies
-        inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2).float() / dim))
-        t = torch.arange(max_seq_len, dtype=torch.float32)
-        freqs = torch.outer(t, inv_freq)
-
-        # Cache cos and sin
-        self.cos_cached = torch.cos(freqs).unsqueeze(0).unsqueeze(0)  # [1, 1, seq_len, dim//2]
-        self.sin_cached = torch.sin(freqs).unsqueeze(0).unsqueeze(0)
+    def __init__(self, *args, **kwargs):
+        pass
 
     def apply_rotary_emb(self, x: torch.Tensor, position: int) -> torch.Tensor:
-        """Apply rotary embeddings to input tensor (on CPU/torch)"""
-        # x: [batch, num_heads, seq_len, head_dim]
-        batch, num_heads, seq_len, head_dim = x.shape
-
-        # Get cos/sin for the current position range
-        cos = self.cos_cached[:, :, position : position + seq_len, :].to(x.device)
-        sin = self.sin_cached[:, :, position : position + seq_len, :].to(x.device)
-
-        # Split into even and odd dimensions
-        x1 = x[..., 0::2]  # Even indices
-        x2 = x[..., 1::2]  # Odd indices
-
-        # Apply rotation
-        rotated_x1 = x1 * cos - x2 * sin
-        rotated_x2 = x1 * sin + x2 * cos
-
-        # Interleave back
-        rotated = torch.stack([rotated_x1, rotated_x2], dim=-1)
-        rotated = rotated.flatten(-2)
-
-        return rotated
+        raise NotImplementedError("Use HFQwen2RotaryEmbedding via position_embeddings from QwenModel.forward")
 
 
 class Attention:
@@ -112,6 +84,7 @@ class Attention:
 
     def __init__(
         self,
+        device: ttnn.MeshDevice,
         layer_id: int,
         hidden_size: int,
         num_heads: int,
@@ -121,7 +94,9 @@ class Attention:
         wk: torch.Tensor,
         wv: torch.Tensor,
         wo: torch.Tensor,
-        device,
+        bq: Optional[torch.Tensor] = None,
+        bk: Optional[torch.Tensor] = None,
+        bv: Optional[torch.Tensor] = None,
         max_seq_len: int = 2048,
     ):
         self.layer_id = layer_id
@@ -146,11 +121,26 @@ class Attention:
             wo.T.unsqueeze(0).unsqueeze(0), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
         )
 
-        self.rotary_emb = RotaryEmbedding(head_dim, max_seq_len)
+        # Optional biases
+        self.bq = (
+            ttnn.from_torch(bq.unsqueeze(0).unsqueeze(0), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            if bq is not None
+            else None
+        )
+        self.bk = (
+            ttnn.from_torch(bk.unsqueeze(0).unsqueeze(0), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            if bk is not None
+            else None
+        )
+        self.bv = (
+            ttnn.from_torch(bv.unsqueeze(0).unsqueeze(0), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            if bv is not None
+            else None
+        )
 
         # KV cache storage (on CPU as torch tensors for now)
-        self.cache_k = torch.zeros((1, num_kv_heads, max_seq_len, head_dim))
-        self.cache_v = torch.zeros((1, num_kv_heads, max_seq_len, head_dim))
+        self.cache_k = torch.zeros((1, num_kv_heads, max_seq_len, head_dim), dtype=torch.bfloat16)
+        self.cache_v = torch.zeros((1, num_kv_heads, max_seq_len, head_dim), dtype=torch.bfloat16)
 
         # Optional HF attention module and past KV for validation
         self.hf_attn = None
@@ -173,16 +163,37 @@ class Attention:
         },
         enabled=False,
     )
-    def __call__(self, x, start_pos: int, mask: Optional[torch.Tensor] = None):  # TTNN tensor [1, seq_len, hidden_size]
-        # Project to Q, K, V
+    def __call__(
+        self,
+        x,
+        start_pos: int,
+        mask: Optional[torch.Tensor] = None,
+        position_embeddings: Optional[tuple[torch.Tensor, torch.Tensor]] = None,
+    ):  # TTNN tensor [1, seq_len, hidden_size]
+        # Project to Q, K, V (+ bias if available)
         xq = ttnn.matmul(x, self.wq)
         xk = ttnn.matmul(x, self.wk)
         xv = ttnn.matmul(x, self.wv)
+        if self.bq is not None:
+            xq = ttnn.add(xq, self.bq)
+        if self.bk is not None:
+            xk = ttnn.add(xk, self.bk)
+        if self.bv is not None:
+            xv = ttnn.add(xv, self.bv)
 
         # Convert to torch for reshaping and RoPE
-        xq_torch = ttnn.to_torch(xq).squeeze(0)  # [seq_len, hidden_size]
+        xq_torch = ttnn.to_torch(xq).squeeze(0)
         xk_torch = ttnn.to_torch(xk).squeeze(0)
         xv_torch = ttnn.to_torch(xv).squeeze(0)
+        # Ensure batch dim exists
+        if xq_torch.dim() == 3:
+            pass  # [batch, seq, hidden]
+        elif xq_torch.dim() == 2:
+            xq_torch = xq_torch.unsqueeze(0)
+            xk_torch = xk_torch.unsqueeze(0)
+            xv_torch = xv_torch.unsqueeze(0)
+        else:
+            raise RuntimeError(f"Unexpected xq_torch dim: {xq_torch.shape}")
 
         batch_size, seq_len, _ = xq_torch.shape
 
@@ -191,11 +202,16 @@ class Attention:
         xk_torch = xk_torch.view(batch_size, seq_len, self.num_kv_heads, self.head_dim).transpose(1, 2)
         xv_torch = xv_torch.view(batch_size, seq_len, self.num_kv_heads, self.head_dim).transpose(1, 2)
 
-        # Apply rotary embeddings
-        xq_torch = self.rotary_emb.apply_rotary_emb(xq_torch, start_pos)
-        xk_torch = self.rotary_emb.apply_rotary_emb(xk_torch, start_pos)
+        # Apply rotary embeddings from HF for exact parity
+        if position_embeddings is None:
+            raise RuntimeError("position_embeddings (cos,sin) must be provided from QwenModel.forward")
+        cos, sin = position_embeddings
+        xq_torch, xk_torch = hf_apply_rotary_pos_emb(xq_torch, xk_torch, cos, sin)
 
-        # Update KV cache
+        # Update KV cache (keep on CPU)
+        # Ensure dtype matches cache dtype
+        xk_torch = xk_torch.to(self.cache_k.dtype)
+        xv_torch = xv_torch.to(self.cache_v.dtype)
         self.cache_k[:, :, start_pos : start_pos + seq_len] = xk_torch
         self.cache_v[:, :, start_pos : start_pos + seq_len] = xv_torch
 
@@ -208,17 +224,18 @@ class Attention:
             keys = keys.repeat_interleave(self.num_queries_per_kv, dim=1)
             values = values.repeat_interleave(self.num_queries_per_kv, dim=1)
 
-        # Compute attention scores
-        scores = torch.matmul(xq_torch, keys.transpose(-2, -1)) / math.sqrt(self.head_dim)
+        # Compute attention scores (softmax in fp32)
+        scores = torch.matmul(xq_torch.to(torch.float32), keys.transpose(-2, -1).to(torch.float32))
+        scores = scores * (1.0 / math.sqrt(self.head_dim))
 
         # Apply mask if provided
         if mask is not None:
-            scores = scores + mask
+            scores = scores + mask.to(scores.dtype)
 
-        scores = torch.nn.functional.softmax(scores, dim=-1)
+        attn = torch.nn.functional.softmax(scores, dim=-1, dtype=torch.float32).to(xq_torch.dtype)
 
         # Apply attention to values
-        output = torch.matmul(scores, values)
+        output = torch.matmul(attn, values)
 
         # Reshape back to [batch, seq_len, hidden_size]
         output = output.transpose(1, 2).contiguous().view(batch_size, seq_len, -1)
@@ -337,6 +354,9 @@ class TransformerBlock:
             wk=layer_weights["self_attn.k_proj.weight"],
             wv=layer_weights["self_attn.v_proj.weight"],
             wo=layer_weights["self_attn.o_proj.weight"],
+            bq=layer_weights.get("self_attn.q_proj.bias"),
+            bk=layer_weights.get("self_attn.k_proj.bias"),
+            bv=layer_weights.get("self_attn.v_proj.bias"),
             device=device,
             max_seq_len=max_seq_len,
         )
@@ -360,6 +380,7 @@ class TransformerBlock:
         # Hook up HF reference submodules for validation if provided
         if hf_layer is not None:
             self.hf_layer = hf_layer
+            self._hf_past_kv = None  # HF DynamicCache for this layer
             try:
                 self.attention.hf_attn = hf_layer.self_attn
             except Exception:
@@ -384,34 +405,100 @@ class TransformerBlock:
             except Exception:
                 pass
 
-    def _ref_call(self, x_torch: torch.Tensor, start_pos: int, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        """Reference path using HF submodules wired into this block.
+    def _ref_call(
+        self,
+        x_torch: torch.Tensor,
+        start_pos: int,
+        mask: Optional[torch.Tensor] = None,
+        position_embeddings: Optional[tuple[torch.Tensor, torch.Tensor]] = None,
+    ) -> torch.Tensor:
+        """Reference path using the HF decoder layer with proper args.
 
-        Runs: x + Attn(RMSNorm(x)) then x + MLP(RMSNorm(x)).
+        Inputs are torch tensors; x_torch shape [batch, seq, hidden].
         """
-        out = self.hf_layer.forward(x_torch, start_pos, mask)
-        return out.logits
+        if not hasattr(self, "hf_layer") or self.hf_layer is None:
+            raise RuntimeError("HF decoder layer not set for validation")
+
+        x_t = x_torch
+        if x_t.dim() == 2:
+            x_t = x_t.unsqueeze(0)
+        bsz, seq_len, _ = x_t.shape
+
+        # Dtype match to HF module
+        # Prefer attention weights dtype if present, else norm weight
+        try:
+            mod_dtype = self.hf_layer.self_attn.q_proj.weight.dtype
+        except Exception:
+            mod_dtype = next(self.hf_layer.parameters()).dtype
+        x_cast = x_t.to(mod_dtype)
+
+        # Position ids / cache_position
+        device = x_cast.device
+        cache_position = torch.arange(start_pos, start_pos + seq_len, device=device)
+        position_ids = cache_position.unsqueeze(0).expand(bsz, -1)
+
+        # Position embeddings (cos, sin)
+        if position_embeddings is None:
+            if not hasattr(self.attention, "hf_rotary_emb") or self.attention.hf_rotary_emb is None:
+                raise RuntimeError("HF RotaryEmbedding module not set; cannot compute position embeddings")
+            cos, sin = self.attention.hf_rotary_emb(x_cast, position_ids)
+        else:
+            cos, sin = position_embeddings
+            cos = cos.to(x_cast.dtype)
+            sin = sin.to(x_cast.dtype)
+
+        # Maintain a dynamic cache across calls
+        if self._hf_past_kv is None:
+            self._hf_past_kv = DynamicCache()
+
+        # For prefill we need a causal mask; for decode we can skip
+        attn_mask = None
+        if mask is not None:
+            attn_mask = mask.to(x_cast.dtype)
+
+        out = self.hf_layer(
+            hidden_states=x_cast,
+            attention_mask=attn_mask,
+            position_ids=position_ids,
+            past_key_value=self._hf_past_kv,
+            output_attentions=False,
+            use_cache=True,
+            cache_position=cache_position,
+            position_embeddings=(cos, sin),
+        )
+        # Qwen2DecoderLayer returns (hidden_states, [attn_weights?])
+        hidden_states = out[0] if isinstance(out, tuple) else out
+        return hidden_states
 
     @compare_to_torch(
-        reference_fn=lambda self, x, start_pos, mask: self._ref_call(x, start_pos, mask),
-        # input_to_torch=lambda self, x, start_pos, mask: (
-        #     self,
-        #     to_torch_auto_compose(x).squeeze(0),
-        #     start_pos,
-        #     mask,
-        # ),
+        reference_fn=lambda self, x, start_pos, mask, position_embeddings: self._ref_call(
+            x, start_pos, mask, position_embeddings
+        ),
+        input_to_torch=lambda self, x, start_pos, mask, position_embeddings: (
+            self,
+            to_torch_auto_compose(x).squeeze(0),
+            start_pos,
+            mask,
+            position_embeddings,
+        ),
         metric_tolerances={
-            Metric.MAX_ABS_ERROR: 2e-1,
-            Metric.PCC: 0.95,
+            # Metric.MAX_ABS_ERROR: 2e-1,
+            Metric.PCC: 0.99,
         },
         enabled=True,
         return_reference_output=False,
         raise_exceptions=True,
     )
-    def __call__(self, x, start_pos: int, mask: Optional[torch.Tensor] = None):
+    def __call__(
+        self,
+        x,
+        start_pos: int,
+        mask: Optional[torch.Tensor] = None,
+        position_embeddings: Optional[tuple[torch.Tensor, torch.Tensor]] = None,
+    ):
         # Attention with residual
         h = self.input_layernorm(x)
-        h = self.attention(h, start_pos, mask)
+        h = self.attention(h, start_pos, mask, position_embeddings=position_embeddings)
         x = ttnn.add(x, h)
 
         # MLP with residual
@@ -438,6 +525,8 @@ class QwenModel:
         self.hf_model = hf_model.eval() if self._validate else None
         # HF cache for decode validation
         self._hf_past_kv = None
+        # HF rotary embedding for position embeddings parity
+        self.rotary_emb = HFQwen2RotaryEmbedding(self.config)
 
         print(f"Model config:")
         print(f"  Hidden size: {self.config.hidden_size}")
@@ -536,12 +625,18 @@ class QwenModel:
         h = self.embed_tokens[tokens]  # [batch, seq_len, hidden_size]
 
         # Create causal mask
-        if seq_len > 1:
-            mask = torch.full((seq_len, seq_len), float("-inf"))
+        if seq_len > 1 and start_pos == 0:
+            mask = torch.full((1, 1, seq_len, seq_len), float("-inf"), dtype=h.dtype)
             mask = torch.triu(mask, diagonal=1)
-            mask = mask.unsqueeze(0).unsqueeze(0)  # [1, 1, seq_len, seq_len]
         else:
+            # For decode and chunked cases, rely on KV length and skip mask here
             mask = None
+
+        # Build position ids and embeddings (shared across layers)
+        cache_position = torch.arange(start_pos, start_pos + seq_len, device=h.device)
+        position_ids = cache_position.unsqueeze(0).expand(batch_size, -1)
+        cos, sin = self.rotary_emb(h, position_ids)
+        position_embeddings = (cos, sin)
 
         # Convert to TTNN
         h_tt = ttnn.from_torch(h.unsqueeze(0), device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
@@ -549,7 +644,7 @@ class QwenModel:
         # Apply transformer layers
         # todo)) use non-decorated use of host_validate_against to validate the first layer layer!
         for layer in self.layers:
-            h_tt = layer(h_tt, start_pos, mask)
+            h_tt = layer(h_tt, start_pos, mask, position_embeddings=position_embeddings)
 
         # Final norm
         h_tt = self.norm(h_tt)
@@ -693,8 +788,8 @@ def main():
     print()
 
     # Generate
-    response = generate_hf_ref(model, tokenizer, prompt, max_new_tokens=50)
-    # response = generate(model, tokenizer, prompt, max_new_tokens=50)
+    # response = generate_hf_ref(model, tokenizer, prompt, max_new_tokens=50)
+    response = generate(model, tokenizer, prompt, max_new_tokens=50)
 
     print()
     print("Response:", response)
