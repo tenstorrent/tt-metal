@@ -252,8 +252,17 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
 
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
         device->arch(), num_cores, mm_kernel_defines);
-    ttnn::operations::compute_throttle_utils::throttle_mm_perf(
-        device->arch(), num_cores, mm_kernel_defines, throttle_level);
+
+    if (out_subblock_h != 1 || out_subblock_w != 1) {
+        ttnn::operations::compute_throttle_utils::throttle_mm_perf(
+            device->arch(), num_cores, mm_kernel_defines, throttle_level);
+    } else {
+        log_warning(
+            tt::LogOp,
+            "Throttle matmul perf not enabled for out_subblock_h = {} and out_subblock_w = {}",
+            out_subblock_h,
+            out_subblock_w);
+    }
 
     // Create compute kernel
     tt_metal::CreateKernel(

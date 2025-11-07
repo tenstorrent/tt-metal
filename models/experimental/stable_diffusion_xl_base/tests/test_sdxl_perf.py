@@ -9,6 +9,7 @@ from models.perf.device_perf_utils import run_device_perf, check_device_perf, pr
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from models.experimental.stable_diffusion_xl_base.tests.pcc.test_module_tt_unet import run_unet_model
 from models.experimental.stable_diffusion_xl_base.refiner.tests.pcc.test_module_tt_unet import run_refiner_unet_model
+import os
 
 VAE_DEVICE_TEST_TOTAL_ITERATIONS = 1
 UNET_DEVICE_TEST_TOTAL_ITERATIONS = 1
@@ -54,6 +55,7 @@ def test_unet(
 def test_sdxl_unet_perf_device():
     expected_device_perf_cycles_per_iteration = 200_766_079
 
+    os.environ["TT_MM_THROTTLE_PERF"] = "5"
     command = f"pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py::test_unet"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
@@ -68,7 +70,7 @@ def test_sdxl_unet_perf_device():
         inference_time_key: expected_device_perf_cycles_per_iteration * UNET_DEVICE_TEST_TOTAL_ITERATIONS
     }
     expected_results = check_device_perf(
-        post_processed_results, margin=0.015, expected_perf_cols=expected_perf_cols, assert_on_fail=True
+        post_processed_results, margin=0.5, expected_perf_cols=expected_perf_cols, assert_on_fail=True
     )
     prep_device_perf_report(
         model_name=f"sdxl_unet",

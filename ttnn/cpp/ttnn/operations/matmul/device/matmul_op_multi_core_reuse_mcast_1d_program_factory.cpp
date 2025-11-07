@@ -449,8 +449,16 @@ process_mcast_in0_program_and_create_override_variables(
 
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
         device->arch(), num_cores, mm_kernel_defines);
-    ttnn::operations::compute_throttle_utils::throttle_mm_perf(
-        device->arch(), num_cores, mm_kernel_defines, throttle_level);
+    if (out_subblock_h != 1 || out_subblock_w != 1) {
+        ttnn::operations::compute_throttle_utils::throttle_mm_perf(
+            device->arch(), num_cores, mm_kernel_defines, throttle_level);
+    } else {
+        log_warning(
+            tt::LogOp,
+            "Throttle matmul perf not enabled for out_subblock_h = {} and out_subblock_w = {}",
+            out_subblock_h,
+            out_subblock_w);
+    }
 
     if (in1_is_sharded) {
         mm_kernel_in1_sender_writer_defines["IN1_SHARDED"] = "1";
@@ -1288,8 +1296,16 @@ process_mcast_in1_program_and_create_override_variables(
 
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
         device->arch(), num_cores, mm_kernel_defines);
-    ttnn::operations::compute_throttle_utils::throttle_mm_perf(
-        device->arch(), num_cores, mm_kernel_defines, throttle_level);
+    if (out_subblock_h != 1 || out_subblock_w != 1) {
+        ttnn::operations::compute_throttle_utils::throttle_mm_perf(
+            device->arch(), num_cores, mm_kernel_defines, throttle_level);
+    } else {
+        log_warning(
+            tt::LogOp,
+            "Throttle matmul perf not enabled for out_subblock_h = {} and out_subblock_w = {}",
+            out_subblock_h,
+            out_subblock_w);
+    }
 
     if (in0_is_sharded) {
         mm_kernel_in0_sender_defines["IN0_SHARDED"] = "1";
@@ -2112,9 +2128,17 @@ process_gather_in0_program_and_create_override_variables(
     }
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
         device->arch(), num_cores, mm_kernel_defines);
-    ttnn::operations::compute_throttle_utils::throttle_mm_perf(
-        device->arch(), num_cores, mm_kernel_defines, throttle_level);
 
+    if (out_subblock_h != 1 || out_subblock_w != 1) {
+        ttnn::operations::compute_throttle_utils::throttle_mm_perf(
+            device->arch(), num_cores, mm_kernel_defines, throttle_level);
+    } else {
+        log_warning(
+            tt::LogOp,
+            "Throttle matmul perf not enabled for out_subblock_h = {} and out_subblock_w = {}",
+            out_subblock_h,
+            out_subblock_w);
+    }
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
     tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
     tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
@@ -3360,7 +3384,15 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
 
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
         device->arch(), num_cores, mm_kernel_defines);
-    ttnn::operations::compute_throttle_utils::throttle_mm_perf(device->arch(), num_cores, mm_kernel_defines);
+    if (out_subblock_h != 1 || out_subblock_w != 1) {
+        ttnn::operations::compute_throttle_utils::throttle_mm_perf(device->arch(), num_cores, mm_kernel_defines);
+    } else {
+        log_warning(
+            tt::LogOp,
+            "Throttle matmul perf not enabled for out_subblock_h = {} and out_subblock_w = {}",
+            out_subblock_h,
+            out_subblock_w);
+    }
 
     mm_kernel_in1_sender_writer_defines["SKIP_MCAST"] = "1";
 

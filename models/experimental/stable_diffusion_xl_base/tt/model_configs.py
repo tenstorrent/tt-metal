@@ -24,6 +24,8 @@ class ModelOptimisations:
         self.attention_weights_dtype = attention_weights_dtype
         self.ff_weights_dtype = ff_weights_dtype
 
+        force_subblock_1x1 = True
+
         # HEIGHT SHARDED
         self.conv_configs["ABH_1024_NO_ADB_HS"] = ttnn.Conv2dConfig(
             weights_dtype=self.conv_ws_dtype,
@@ -309,7 +311,7 @@ class ModelOptimisations:
             compute_with_storage_grid_size=(8, 8),
             in0_block_w=10,  # max is 20, 10 seems optimal
             out_subblock_h=1,
-            out_subblock_w=5,
+            out_subblock_w=5 if not force_subblock_1x1 else 1,
             per_core_M=4,
             per_core_N=5,
             transpose_mcast=False,
@@ -320,7 +322,7 @@ class ModelOptimisations:
             compute_with_storage_grid_size=(7, 8),
             in0_block_w=10,  # max is 10
             out_subblock_h=1,
-            out_subblock_w=3,
+            out_subblock_w=3 if not force_subblock_1x1 else 1,
             per_core_M=16,
             per_core_N=3,
             transpose_mcast=False,
@@ -344,6 +346,10 @@ class ModelOptimisations:
         per_core_N_geglu_640 = 10
         out_subblock_h_geglu_640 = 1
         out_subblock_w_geglu_640 = 5
+        if force_subblock_1x1:
+            out_subblock_h_geglu_640 = 1
+            out_subblock_w_geglu_640 = 1
+
         self.matmul_configs["2D_GEGLU_LINEAR_640_SPLIT"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(8, 8),
             in0_block_w=in_0_block_w_geglu_640,
@@ -371,6 +377,9 @@ class ModelOptimisations:
         per_core_N_geglu_1280 = 20
         out_subblock_h_geglu_1280 = 1
         out_subblock_w_geglu_1280 = 5
+        if force_subblock_1x1:
+            out_subblock_h_geglu_1280 = 1
+            out_subblock_w_geglu_1280 = 1
         self.matmul_configs["2D_GEGLU_LINEAR_1280_SPLIT"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(8, 8),
             in0_block_w=in_0_block_w_geglu_1280,
