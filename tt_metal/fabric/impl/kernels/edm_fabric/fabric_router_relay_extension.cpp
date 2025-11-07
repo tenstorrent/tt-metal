@@ -17,8 +17,9 @@
 #include <array>
 // clang-format on
 
+namespace tt::tt_fabric {
 template <uint8_t FABRIC_RELAY_CHANNEL_NUM_BUFFERS>
-using FabriRelaychannelBuffer = EthChannelBuffer<PACKET_HEADER_TYPE, FABRIC_RELAY_CHANNEL_NUM_BUFFERS>;
+using FabricRelayChannelBuffer = EthChannelBuffer<PACKET_HEADER_TYPE, FABRIC_RELAY_CHANNEL_NUM_BUFFERS>;
 
 template <uint8_t FABRIC_RELAY_CHANNEL_NUM_BUFFERS>
 using FabricRelayStaticSizedChannelWorkerInterface =
@@ -33,6 +34,7 @@ using FabricRelayStatus = EDMStatus;
 
 template <uint8_t NUM_EDM_BUFFERS>
 using FabricRelayToMuxSender = WorkerToFabricEdmSenderImpl<false, NUM_EDM_BUFFERS>;
+}  // namespace tt::tt_fabric
 
 constexpr uint8_t NUM_BUFFERS = get_compile_time_arg_val(0);
 constexpr size_t BUFFER_SIZE_BYTES = get_compile_time_arg_val(1);
@@ -99,10 +101,10 @@ void setup_channel(
 }
 
 __attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_noc_txn_to_local_chip(
-    tt_l1_ptr PACKET_HEADER_TYPE* const packet_header, uint16_t payload_size_bytes) {
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* const packet_header) {
     const auto& header = *packet_header;
-    uint16_t payload_size_bytes = header->payload_size_bytes;
-    uint32_t payload_start_address = reinterpret_cast<size_t>(header) + sizeof(PACKET_HEADER_TYPE);
+    uint16_t payload_size_bytes = header.payload_size_bytes;
+    uint32_t payload_start_address = reinterpret_cast<size_t>(packet_header) + sizeof(PACKET_HEADER_TYPE);
 
     tt::tt_fabric::NocSendType noc_send_type = header.noc_send_type;
     if (noc_send_type > tt::tt_fabric::NocSendType::NOC_SEND_TYPE_LAST) {
@@ -219,22 +221,28 @@ void kernel_main() {
         reinterpret_cast<volatile tt::tt_fabric::TerminationSignal*>(termination_signal_address);
 
     // before connecting to mux, wait for mux status to turn into READY_FOR_TRAFFIC
+    DPRINT << "Relay waiting for MUX READY_FOR_TRAFFIC" << ENDL();
     volatile auto mux_status_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_mux_status_address);
     while (*mux_status_ptr != tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC) {
         invalidate_l1_cache();
     }
+    DPRINT << "Relay waiting for MUX READY_FOR_TRAFFIC Done" << ENDL();
 
     // this is connecting to the local mux - (always non idle eth)
     mux_connection.open<false>();
 
-    wait_for_static_connection_to_ready<NUM_BUFFERS>(worker_interface);
-
-    status_ptr[0] = tt::tt_fabric::FabricRelayStatus::READY_FOR_TRAFFIC;
-
     // signal the fabric router (this is the router that is connecting to the relay) the relay is ready
+    DPRINT << "Relay signal Router " << (uint)router_noc_x << " " << (uint)router_noc_y << ENDL();
     auto noc_addr = get_noc_addr(router_noc_x, router_noc_y, fabric_router_sync_address);
     noc_semaphore_inc(noc_addr, 1);
 
+    DPRINT << "Relay waiting for Router connection" << ENDL();
+    wait_for_static_connection_to_ready<NUM_BUFFERS>(worker_interface);
+    DPRINT << "Relay waiting for Router connection Done" << ENDL();
+
+    status_ptr[0] = tt::tt_fabric::FabricRelayStatus::READY_FOR_TRAFFIC;
+
+    DPRINT << "Relay starting Loop" << ENDL();
     while (!got_immediate_termination_signal(termination_signal_ptr)) {
         for (size_t i = 0; i < NUM_ITERS_BETWEEN_TEARDOWN_CHECKS; i++) {
             forward_data<NUM_BUFFERS, mux_num_buffers>(
@@ -242,7 +250,6 @@ void kernel_main() {
         }
     }
 
-    mux_connection.close();
     noc_async_write_barrier();
     noc_async_atomic_barrier();
 
