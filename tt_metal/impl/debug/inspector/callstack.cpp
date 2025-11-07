@@ -108,17 +108,18 @@ std::string get_python_callstack() {
                                 // Get line number
                                 int lineno = dyn_PyFrame_GetLineNumber(frame);
 
-                                // Try to make path relative from tests/ or ttnn/ directory
+                                // Make path relative to current working directory
                                 std::filesystem::path filepath(filename_str);
-                                std::string relative_path = filepath.filename().string();
-
-                                auto tests_pos = filename_str.find("/tests/");
-                                auto ttnn_pos = filename_str.find("/ttnn/");
-                                if (tests_pos != std::string::npos) {
-                                    relative_path = filename_str.substr(tests_pos + 1);
-                                } else if (ttnn_pos != std::string::npos) {
-                                    relative_path = filename_str.substr(ttnn_pos + 1);
-                                } else {
+                                std::string relative_path;
+                                try {
+                                    std::filesystem::path cwd = std::filesystem::current_path();
+                                    if (filepath.is_absolute()) {
+                                        relative_path = std::filesystem::relative(filepath, cwd).string();
+                                    } else {
+                                        relative_path = filepath.string();
+                                    }
+                                } catch (...) {
+                                    // If relative path computation fails, fall back to just filename
                                     relative_path = filepath.filename().string();
                                 }
 
