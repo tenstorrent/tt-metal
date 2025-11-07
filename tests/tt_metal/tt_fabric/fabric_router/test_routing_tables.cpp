@@ -124,6 +124,36 @@ TEST_F(ControlPlaneFixture, TestT3kFabricRoutes) {
     }
 }
 
+TEST_F(ControlPlaneFixture, TestSingleGalaxyFabricRoutes) {
+    const std::filesystem::path galaxy_6u_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/single_galaxy_torus_xy_graph_descriptor.yaml";
+    auto control_plane = make_control_plane_1d_ring(galaxy_6u_mesh_graph_desc_path);
+
+    // Test routing from first chip (0) to last chip (31) in the 1x32 topology
+    auto valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(FabricNodeId(MeshId{0}, 0), 0);
+    EXPECT_GT(valid_chans.size(), 0);
+    for (auto chan : valid_chans) {
+        auto path = control_plane->get_fabric_route(FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 31), chan);
+        EXPECT_EQ(!path.empty(), true);
+    }
+
+    // Test routing on second routing plane
+    valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(FabricNodeId(MeshId{0}, 0), 1);
+    EXPECT_GT(valid_chans.size(), 0);
+    for (auto chan : valid_chans) {
+        auto path = control_plane->get_fabric_route(FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 31), chan);
+        EXPECT_EQ(!path.empty(), true);
+    }
+
+    // Check the forwarding direction from node 0 to nodes 1 through 31
+    for (ChipId dst_node = 1; dst_node <= 31; ++dst_node) {
+        auto forwarding_direction =
+            control_plane->get_forwarding_direction(FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, dst_node));
+        EXPECT_TRUE(forwarding_direction.has_value());
+    }
+}
+
 TEST_F(ControlPlaneFixture, TestSingleGalaxy1x32ControlPlaneInit) {
     const std::filesystem::path galaxy_6u_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
