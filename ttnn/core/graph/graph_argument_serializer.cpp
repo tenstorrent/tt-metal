@@ -271,11 +271,13 @@ void GraphArgumentSerializer::initialize() {
     // Register SmallVector types for various operations using generic serialize_container
     // Note: std::array<unsigned int, N> is already registered via register_type<uint>() above
     register_reference_wrapper_pair<ttsl::SmallVector<std::array<unsigned int, 2>, 8>>(
-        registry(), serialize_container<unsigned int, 2, 8>);
+        registry(), [](const ttsl::SmallVector<std::array<unsigned int, 2>, 8>& vec) -> std::string {
+            return serialize_container(vec);
+        });
     register_reference_wrapper_pair<ttsl::SmallVector<long, 8>>(
-        registry(), serialize_container<ttsl::SmallVector<long, 8>>);
+        registry(), [](const ttsl::SmallVector<long, 8>& vec) -> std::string { return serialize_container(vec); });
     register_reference_wrapper_pair<ttsl::SmallVector<int, 8>>(
-        registry(), serialize_container<ttsl::SmallVector<int, 8>>);
+        registry(), [](const ttsl::SmallVector<int, 8>& vec) -> std::string { return serialize_container(vec); });
 
     // Register std::variant<std::array<uint, 2>, std::array<uint, 4>> for conv2d stride/dilation
     register_reference_wrapper_pair<std::variant<std::array<unsigned int, 2>, std::array<unsigned int, 4>>>(
