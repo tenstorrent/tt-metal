@@ -132,6 +132,7 @@ def run_conv(
     config_tensors_in_dram=False,
     custom_pcc=None,
     force_split_reader=None,
+    force_subblock_1x1=False,
 ):
     if isinstance(device, ttnn.MeshDevice) and len(device.get_device_ids()) > 1:
         assert input_mesh_mapper is not None, "Expected mesh mapper for input tensor when running on multiple devices"
@@ -259,6 +260,7 @@ def run_conv(
         enable_activation_reuse=enable_activation_reuse,
         config_tensors_in_dram=config_tensors_in_dram,
         force_split_reader=force_split_reader,
+        force_subblock_1x1=force_subblock_1x1,
     )
 
     compute_config = ttnn.init_device_compute_kernel_config(
@@ -3349,6 +3351,7 @@ def test_conv2d_sdxl(
             input_layout=ttnn.TILE_LAYOUT if output_dtype == ttnn.bfloat8_b else None,
             enable_act_double_buffer=act_db,
             enable_weights_double_buffer=w_db,
+            force_subblock_1x1=True,
         )
 
 @pytest.mark.parametrize(

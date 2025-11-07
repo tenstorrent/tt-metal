@@ -1080,7 +1080,8 @@ static Conv2dBlockConfig get_opt_block_config(
         output_width,
         get_fp32_dest_acc_en(compute_config),
         conv_config.full_inner_dim,
-        conv_config.enable_activation_reuse);
+        conv_config.enable_activation_reuse,
+        conv_config.force_subblock_1x1);
 }
 
 static uint32_t calculate_out_channels_padded(uint32_t out_channels, const ParallelConfig& output_parallel_config) {
