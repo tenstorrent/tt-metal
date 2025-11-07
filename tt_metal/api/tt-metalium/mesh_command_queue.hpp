@@ -133,7 +133,7 @@ public:
     virtual void enqueue_trace(const MeshTraceId& trace_id, bool blocking) = 0;
 
     // Internal function.
-    virtual void wait_for_completion(bool reset_launch_msg_state) {}
+    virtual void wait_for_completion(bool) {}
     // May only be called after wait_for_completion has been called on both command queues on the device.
     virtual void finish_and_reset_in_use() {}
 };

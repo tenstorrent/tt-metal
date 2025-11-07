@@ -1032,7 +1032,7 @@ void MeshDevice::quiesce_internal() {
         "Cannot quiesce when non-default sub-device manager is active");
     for (const auto& submesh : submeshes_) {
         if (auto submesh_ptr = submesh.lock()) {
-            submesh_ptr->quiesce_submeshes();
+            submesh_ptr->quiesce_devices();
         }
     }
     bool have_reset_launch_msg_state = false;
@@ -1045,7 +1045,7 @@ void MeshDevice::quiesce_internal() {
     }
 }
 
-void MeshDevice::quiesce_submeshes() {
+void MeshDevice::quiesce_devices() {
     quiesce_internal();
     for (auto& command_queue : mesh_command_queues_) {
         for (auto& device : get_devices()) {

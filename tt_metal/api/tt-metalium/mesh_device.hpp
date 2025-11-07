@@ -302,16 +302,15 @@ public:
     std::vector<std::shared_ptr<MeshDevice>> get_submeshes() const;
 
     /**
-     * @brief Synchronize with all submeshes created from this mesh.
+     * @brief Synchronize with all devices derived from this mesh (including submeshes).
      *
-     * Blocks until all in-flight work enqueued on every submesh derived from this mesh has completed.  Use this to
-     * insert a barrier between phases that use overlapping submeshes on the same physical devices.  After this call
+     * Blocks until all in-flight work enqueued on every submesh derived from this mesh has completed. Use this to
+     * insert a barrier between phases that use overlapping submeshes on the same physical devices. After this call
      * returns, it is safe to enqueue new work on this mesh or any submesh derived from this mesh that may overlap with
      * submeshes that were previously active. All submeshes must be using the default subdevice manager when this is
      * called.
-     *
      */
-    void quiesce_submeshes();
+    void quiesce_devices();
 
     std::shared_ptr<MeshDevice> create_submesh(
         const MeshShape& submesh_shape, const std::optional<MeshCoordinate>& offset = std::nullopt);

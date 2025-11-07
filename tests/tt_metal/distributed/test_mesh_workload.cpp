@@ -230,13 +230,13 @@ TEST_P(MeshWorkloadTestSuiteSubmeshFixture, QuiesceSubmeshesAllowsAlternatingWor
     submesh->mesh_command_queue().enqueue_record_event();
 
     // 2) Quiesce all submeshes from the parent
-    mesh_device_->quiesce_submeshes();
+    mesh_device_->quiesce_devices();
 
     // 3) Run on parent (non-blocking)
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), parent_workload, /*blocking=*/false);
 
     // 4) Quiesce again
-    mesh_device_->quiesce_submeshes();
+    mesh_device_->quiesce_devices();
 
     // 5) Run again on the same submesh (non-blocking) and finish to ensure completion
     EnqueueMeshWorkload(submesh->mesh_command_queue(), submesh_workload, /*blocking=*/false);
