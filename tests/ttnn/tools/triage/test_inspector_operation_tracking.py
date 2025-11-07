@@ -17,6 +17,7 @@ from typing import Optional, Tuple, Callable
 
 OPERATION_TIMEOUT_SECONDS = 15
 LLK_HEADER_PATH = "tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_binary.h"
+WRITER_HWC_PATH = "ttnn/cpp/ttnn/operations/experimental/cnn/convert_to_hwc/device/kernels/writer_convert_to_hwc.cpp"
 INSPECTOR_LOG_PATH = "generated/inspector"
 CPP_OPERATION_CHAIN_SOURCE = "tests/ttnn/tools/triage/run_operation_chain.cpp"
 CPP_OPERATION_CHAIN_BINARY = "build/test/ttnn/tools/triage/run_operation_chain_cpp"
@@ -144,71 +145,124 @@ def reset_device() -> bool:
 
 
 @contextmanager
-def infinite_loop_context():
-    """Context manager for adding/removing infinite loop in LLK header"""
+def infinite_loop_context(hang_type="add"):
+    """Context manager for adding/removing infinite loop to simulate hangs
 
-    MARKER = "for (;;) {}  // Infinite loop to test timeout - only for ADD operations"
+    Args:
+        hang_type: Type of hang to inject - "add" for LLK math ADD operations,
+                   "writer_hwc" for writer_convert_to_hwc kernel
+    """
 
-    # Updated to match the actual file content
-    TARGET = """    if constexpr ((eltwise_binary_type == ELWADD) || (eltwise_binary_type == ELWSUB))
+    if hang_type == "add":
+        # LLK header hang for ADD operations
+        file_path = LLK_HEADER_PATH
+        MARKER = "for (;;) {}  // Infinite loop to test timeout - only for ADD operations"
+
+        TARGET = """    if constexpr ((eltwise_binary_type == ELWADD) || (eltwise_binary_type == ELWSUB))
     {
         if constexpr (src_b_bcast_type == BroadcastType::COL)"""
 
-    REPLACEMENT = """    if constexpr ((eltwise_binary_type == ELWADD) || (eltwise_binary_type == ELWSUB))
+        REPLACEMENT = """    if constexpr ((eltwise_binary_type == ELWADD) || (eltwise_binary_type == ELWSUB))
     {
         if constexpr (eltwise_binary_type == ELWADD) {
             for (;;) {}  // Infinite loop to test timeout - only for ADD operations
         }
         if constexpr (src_b_bcast_type == BroadcastType::COL)"""
 
-    REMOVAL = """        if constexpr (eltwise_binary_type == ELWADD) {
+        REMOVAL = """        if constexpr (eltwise_binary_type == ELWADD) {
             for (;;) {}  // Infinite loop to test timeout - only for ADD operations
         }
 """
+        success_msg = "Added infinite loop to LLK header for ADD operations"
+        cleanup_msg = "Removed infinite loop from LLK header"
+
+    elif hang_type == "writer_hwc":
+        # Writer HWC kernel hang in copy_padded_sticks
+        file_path = WRITER_HWC_PATH
+        MARKER = "for (;;) {}  // Infinite loop to test timeout - writer_hwc hang"
+
+        TARGET = """FORCE_INLINE void copy_padded_sticks(uint32_t l1_read_addr, uint32_t& l1_write_addr) {
+    noc_async_read_one_packet_set_state(get_noc_addr(l1_read_addr), StickSize);"""
+
+        REPLACEMENT = """FORCE_INLINE void copy_padded_sticks(uint32_t l1_read_addr, uint32_t& l1_write_addr) {
+    for (;;) {}  // Infinite loop to test timeout - writer_hwc hang
+    noc_async_read_one_packet_set_state(get_noc_addr(l1_read_addr), StickSize);"""
+
+        REMOVAL = """    for (;;) {}  // Infinite loop to test timeout - writer_hwc hang
+"""
+        success_msg = "Added infinite loop to writer_convert_to_hwc kernel"
+        cleanup_msg = "Removed infinite loop from writer_convert_to_hwc kernel"
+
+    else:
+        raise ValueError(f"Unknown hang_type: {hang_type}. Must be 'add' or 'writer_hwc'")
 
     # Add infinite loop
-    with open(LLK_HEADER_PATH, "r") as f:
+    with open(file_path, "r") as f:
         content = f.read()
 
     if MARKER not in content:
         modified = content.replace(TARGET, REPLACEMENT)
         if modified != content:
-            with open(LLK_HEADER_PATH, "w") as f:
+            with open(file_path, "w") as f:
                 f.write(modified)
-            log.success("Added infinite loop to LLK header for ADD operations")
+            log.success(success_msg)
         else:
-            raise RuntimeError("Failed to add infinite loop - target pattern not found")
+            raise RuntimeError(f"Failed to add infinite loop - target pattern not found in {file_path}")
     else:
-        log.substep("Infinite loop already present in LLK header")
+        log.substep(f"Infinite loop already present in {file_path}")
 
     try:
         yield
     finally:
         # Remove infinite loop
-        with open(LLK_HEADER_PATH, "r") as f:
+        with open(file_path, "r") as f:
             content = f.read()
 
         modified = content.replace(REMOVAL, "")
         if modified != content:
-            with open(LLK_HEADER_PATH, "w") as f:
+            with open(file_path, "w") as f:
                 f.write(modified)
-            log.success("Removed infinite loop from LLK header")
+            log.success(cleanup_msg)
 
 
 def ensure_llk_header_clean():
-    """Ensure LLK header has no infinite loop"""
-    REMOVAL = """        if constexpr (eltwise_binary_type == ELWADD) {
+    """Ensure LLK header has no infinite loop (legacy function, kept for compatibility)"""
+    ensure_test_files_clean()
+
+
+def ensure_test_files_clean():
+    """Ensure all test files (LLK header and writer_hwc) have no infinite loops"""
+    cleaned = False
+
+    # Clean LLK header (ADD hang)
+    ADD_REMOVAL = """        if constexpr (eltwise_binary_type == ELWADD) {
             for (;;) {}  // Infinite loop to test timeout - only for ADD operations
         }
 """
     with open(LLK_HEADER_PATH, "r") as f:
         content = f.read()
 
-    modified = content.replace(REMOVAL, "")
+    modified = content.replace(ADD_REMOVAL, "")
     if modified != content:
         with open(LLK_HEADER_PATH, "w") as f:
             f.write(modified)
         log.substep("Cleaned up LLK header")
+        cleaned = True
+
+    # Clean writer_hwc (writer_hwc hang)
+    WRITER_HWC_REMOVAL = """    for (;;) {}  // Infinite loop to test timeout - writer_hwc hang
+"""
+    with open(WRITER_HWC_PATH, "r") as f:
+        content = f.read()
+
+    modified = content.replace(WRITER_HWC_REMOVAL, "")
+    if modified != content:
+        with open(WRITER_HWC_PATH, "w") as f:
+            f.write(modified)
+        log.substep("Cleaned up writer_convert_to_hwc kernel")
+        cleaned = True
+
+    return cleaned
 
 
 # ============================================================================
@@ -817,7 +871,7 @@ def run_hang_detection_test(
     process = None
     try:
         log.step(1, "Adding infinite loop to simulate hang")
-        with infinite_loop_context():
+        with infinite_loop_context(hang_type="add"):
             log.step(2, f"Starting {test_name} operation chain")
             process = start_process_func()
             log.substep(f"Process PID: {process.pid}")
@@ -901,7 +955,7 @@ def run_timeout_serialization_test(
 
     try:
         log.step(1, "Adding infinite loop to simulate hang for timeout test")
-        with infinite_loop_context():
+        with infinite_loop_context(hang_type="add"):
             log.step(
                 2,
                 f"Starting {test_name} test with operation timeout {operation_timeout_seconds}s and process timeout {process_timeout_seconds}s",
@@ -961,6 +1015,84 @@ def run_timeout_serialization_test(
         log.success(f"{test_name} timeout serialization test passed")
 
     finally:
+        log.success("Cleanup completed")
+
+
+def run_external_test_hang_detection(
+    test_command: list,
+    hang_type: str = "add",
+    expected_operation: str = "add",
+    hang_timeout: float = 60,
+    callstack_type: str = "python",
+):
+    """
+    Generic external test hang detection with dump_ops.
+
+    Runs an external pytest test (like UNet model test) with a specified hang type,
+    then verifies dump_ops can identify the hanging operation.
+
+    Args:
+        test_command: pytest command to run (e.g., ["pytest", "path/to/test.py", "-k", "test_name"])
+        hang_type: Type of hang to inject ("add" or "writer_hwc")
+        expected_operation: Operation name to verify in dump_ops (e.g., "convert_to_hwc", "add")
+        hang_timeout: How long to wait for hang (default 60s for slower tests)
+        callstack_type: "python" or "cpp" for callstack validation
+
+    Tests that:
+    1. External test hangs when infinite loop is present
+    2. dump_ops can identify the hanging operation while test is running
+    3. Table output has proper format with device/core, operation, callstack, and arguments
+    """
+    test_name = " ".join(test_command)
+    log.test_header(f"External Test Hang Detection: {test_name}")
+
+    process = None
+    try:
+        log.step(1, f"Adding infinite loop to simulate hang (type: {hang_type})")
+        with infinite_loop_context(hang_type=hang_type):
+            log.step(2, f"Starting external test: {test_name}")
+            env = get_base_env()
+            env["PYTHONUNBUFFERED"] = "1"
+
+            process = subprocess.Popen(
+                test_command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=0,
+                env=env,
+            )
+            log.substep(f"Process PID: {process.pid}")
+
+            log.step(3, f"Monitoring output for hang (timeout: {hang_timeout}s)")
+            found_pattern, last_line = monitor_process_output(process, hang_timeout, None, "External Test")
+
+            if last_line:
+                log.substep(f"Last output: {last_line.strip()}")
+
+            if process.poll() is not None:
+                pytest.fail(f"Process should hang on {expected_operation} operation")
+
+            log.success("Process is hanging as expected")
+
+            log.step(4, "Running dump_ops.py on hanging process")
+            dump_output, success = run_dump_ops()
+
+            if not success:
+                pytest.fail("dump_ops failed to run")
+
+            # Use strict table validation
+            verify_dump_ops_table(
+                dump_output,
+                expected_operation=expected_operation,
+                callstack_type=callstack_type,
+            )
+
+        log.success(f"External test hang detection passed for {hang_type} hang")
+
+    finally:
+        log.step(5, "Cleaning up")
+        terminate_process(process)
         log.success("Cleanup completed")
 
 
@@ -1082,7 +1214,7 @@ def test_py_timeout_with_generate_test(clean_device):
     generated_files = []
     try:
         log.step(1, "Adding infinite loop to trigger timeout")
-        with infinite_loop_context():
+        with infinite_loop_context(hang_type="add"):
             log.step(2, "Starting Python operation chain with timeout (10s)")
 
             # Start with Inspector enabled and operation timeout
@@ -1158,7 +1290,7 @@ def test_py_hang_with_generate_test(clean_device):
     generated_files = []
     try:
         log.step(1, "Adding infinite loop to simulate hang")
-        with infinite_loop_context():
+        with infinite_loop_context(hang_type="add"):
             log.step(2, "Starting Python operation chain with Inspector")
             # Start with Inspector enabled to generate operations data
             env = get_base_env()
@@ -1206,6 +1338,24 @@ def test_py_hang_with_generate_test(clean_device):
             log.substep(f"Preserved {len(generated_files)} test file(s) for inspection")
 
         log.success("Cleanup completed")
+
+
+def test_unet_hang_detection_with_writer_hwc(clean_device):
+    """Test UNet model with writer_hwc hang detection using dump_ops"""
+    _ = clean_device  # Ensure device is reset before test
+
+    # Check if UNet test file exists
+    unet_test_path = "models/experimental/functional_unet/tests/test_unet_model.py"
+    if not os.path.exists(unet_test_path):
+        pytest.skip(f"UNet test not found at {unet_test_path}")
+
+    run_external_test_hang_detection(
+        test_command=["pytest", unet_test_path, "-k", "test_unet_model", "-xvs"],
+        hang_type="writer_hwc",
+        expected_operation="convert_to_hwc",
+        hang_timeout=120,  # UNet may take longer to initialize
+        callstack_type="python",
+    )
 
 
 if __name__ == "__main__":
