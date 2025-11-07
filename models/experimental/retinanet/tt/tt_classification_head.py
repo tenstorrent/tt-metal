@@ -20,16 +20,16 @@ class RetinaNetHeadOptimizer:
 retinanet_head_optimizations = {
     "optimized": RetinaNetHeadOptimizer(
         conv_blocks={
-            "enable_act_double_buffer": True,
-            "enable_weights_double_buffer": True,
+            # "enable_act_double_buffer": True,
+            # "enable_weights_double_buffer": True,
             "deallocate_activation": False,
             "reallocate_halo_output": True,
-            "act_block_h_override": 256,  # NEW: Tune this value
-            "act_block_w_div": 1,  # NEW: Tune this value
+            # "act_block_h_override": 32,  # NEW: Tune this value
+            # "act_block_w_div": 1,  # NEW: Tune this value
         },
         final_conv={
-            "enable_act_double_buffer": True,
-            "enable_weights_double_buffer": True,
+            # "enable_act_double_buffer": True,
+            # "enable_weights_double_buffer": True,
             "deallocate_activation": True,
             "reallocate_halo_output": True,
         },

@@ -59,7 +59,7 @@ class BackboneTestInfra:
             ]
         )
 
-        img = Image.open("models/experimental/retinanet/resources/dog.jpg").convert("RGB")
+        img = Image.open("models/experimental/retinanet/resources/dog_800x800.jpg").convert("RGB")
         self.torch_input_tensor = preprocess(img).unsqueeze(0)
 
         # Get backbone features
@@ -162,6 +162,8 @@ class BackboneTestInfra:
             model_config=model_config,
             optimization_profile="optimized",
         )
+
+        logger.debug("✅✅✅ REGRESSION HEAD Complete ✅✅✅")
         # Run classification head
         classification_output = ttnn_retinanet_classification_head(
             feature_maps=fpn_features,
@@ -174,6 +176,7 @@ class BackboneTestInfra:
             model_config=model_config,
             optimization_profile="optimized",
         )
+        logger.debug("✅✅✅ CLASSIFICATION HEAD Complete ✅✅✅")
 
         # Combine all outputs
         self.output_tensor = {
