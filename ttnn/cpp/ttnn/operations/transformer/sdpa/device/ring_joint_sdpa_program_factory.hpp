@@ -17,6 +17,8 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_joint_sdpa(
     const Tensor& input_tensor_q,
     const Tensor& input_tensor_k,
     const Tensor& input_tensor_v,
+    const Tensor& gathered_input_tensor_k,
+    const Tensor& gathered_input_tensor_v,
     const Tensor& joint_tensor_q,
     const Tensor& joint_tensor_k,
     const Tensor& joint_tensor_v,
