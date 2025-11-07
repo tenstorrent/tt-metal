@@ -35,16 +35,16 @@ sfpi_inline sfpi::vFloat _sfpu_sigmoid_(sfpi::vFloat x) {
 // sigmoid is anti-symmetric and offset by 1
 // sigmoid[-x] = 1 - sigmoid[x]
 sfpi_inline sfpi::vFloat _sfpu_sigmoid_legacy_(sfpi::vFloat val) {
-    vFloat result = 0.0f;
+    vFloat result = sfpi::vConst0;
 
-    vFloat x = sfpi::setsgn(val, 0);  // x = abs(val)
+    vFloat x = sfpi::abs(val);
 
-    // Polynomial approximation of sigmoid on [0; +inf[
+    // Polynomial approximation of sigmoid on [0; +inf]
     result = _sigmoid_piecewise_linear_positive_(x);
 
     // Sigmoid is anti-symmetric and offset by 1.
     // If input was negative then subtract result from 1.0f to get the correct result
-    v_if(val < 0.0f) { result = 1.0f - result; }
+    v_if(val < sfpi::vConst0) { result = sfpi::vConst1 - result; }
     v_endif;
 
     return result;
