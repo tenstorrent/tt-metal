@@ -61,7 +61,12 @@ def pytest_addoption(parser):
         type=bool,
         help="Whether to enable tracing",
     )
-    parser.addoption("--disable_trace", action="store_true", default=False)
+    parser.addoption(
+        "--disable_trace",
+        action="store_false",
+        dest="enable_trace",
+        help="Whether to disable tracing",
+    )
 
 
 @pytest.fixture(scope="function", autouse=True)

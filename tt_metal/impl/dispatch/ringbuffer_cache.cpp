@@ -234,4 +234,24 @@ RingbufferCacheManager::InternalManager& RingbufferCacheManager::InternalManager
     return *this;
 }
 
+RingbufferCacheManager::RingbufferStats RingbufferCacheManager::get_statistics() const {
+    RingbufferStats stats;
+    stats.total_size_bytes = get_cache_sizeB();
+    stats.used_bytes = 0;
+    stats.num_cached_programs = 0;
+
+    // Calculate used space by iterating through valid entries
+    for (size_t pgm_id = 0; pgm_id < valid_.size(); pgm_id++) {
+        int32_t idx = valid_[pgm_id];
+        if (idx != invalid_cache_entry_) {
+            // This program is cached
+            const auto& entry = manager_.entry[idx];
+            stats.used_bytes += entry.length * cache_block_sizeB_;
+            stats.num_cached_programs++;
+        }
+    }
+
+    return stats;
+}
+
 }  // namespace tt::tt_metal

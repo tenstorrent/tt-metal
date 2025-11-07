@@ -127,6 +127,13 @@ enum class ProgramBinaryStatus : uint8_t {
 
 namespace detail {
 
+// Kernel type classification for tracking purposes
+enum class ProgramKernelType : uint8_t {
+    APPLICATION = 0,  // User application kernels (default)
+    FABRIC = 1,       // Fabric routing/communication kernels
+    DISPATCH = 2      // Command queue dispatch kernels
+};
+
 struct ProgramOffsetsState {
     // Base offset for Program Configs across all core types, wrt kernel config slot start address
     uint32_t config_base_offset = 0;
@@ -198,6 +205,11 @@ public:
     void set_runtime_id(ProgramId id);
     ProgramId get_runtime_id() const;
     ProgramId get_id() const;
+    uint32_t get_kernel_bins_size() const { return kernel_bins_sizeB; }
+
+    // Kernel type classification for tracking
+    void set_kernel_type(ProgramKernelType type) { kernel_type_ = type; }
+    ProgramKernelType get_kernel_type() const { return kernel_type_; }
     std::size_t num_kernels() const;
     std::span<const std::shared_ptr<CircularBuffer>> circular_buffers() const;
     const std::vector<Semaphore>& semaphores() const;
@@ -219,6 +231,7 @@ public:
     // Always used in conjuction with validate_circular_buffer_region and compile
     void allocate_circular_buffers(const IDevice* device);
     void deallocate_circular_buffers();
+    void deallocate_kernel_buffers();
     bool is_finalized() const;
     void set_finalized();
     void allocate_kernel_bin_buf_on_device(IDevice* device);
@@ -308,6 +321,9 @@ private:
     // the same device
     std::optional<uint64_t> cached_device_hash_;
 
+    // Kernel type classification (for memory tracking purposes)
+    ProgramKernelType kernel_type_ = ProgramKernelType::APPLICATION;
+
     // TODO: Should map based on the hash of the configured sub-devices
     // This way we can cache it agnostic of the device
     std::unordered_map<ChipId, std::unordered_map<SubDeviceManagerId, std::vector<SubDeviceId>>> sub_device_ids_;
@@ -350,8 +366,8 @@ private:
     std::unordered_map<CoreCoord, std::bitset<NUM_CIRCULAR_BUFFERS>> per_core_cb_indices_;
     std::unordered_map<CoreCoord, std::bitset<NUM_CIRCULAR_BUFFERS>> per_core_local_cb_indices_;
     std::unordered_map<CoreCoord, std::bitset<NUM_CIRCULAR_BUFFERS>> per_core_remote_cb_indices_;
-    // Store device pointer for circular buffer deallocation tracking
-    const IDevice* cb_device_ = nullptr;
+    // Store device pointers for circular buffer deallocation tracking (supports multi-device programs)
+    std::unordered_set<const IDevice*> cb_devices_;
     std::unordered_map<ChipId, ProgramBinaryStatus> binaries_on_device_;
     // Used to generate circular buffer addresses. There is one CircularBufferAllocator per unique CoreRange
     std::vector<CircularBufferAllocator> cb_allocators_;

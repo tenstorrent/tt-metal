@@ -232,6 +232,7 @@ public:
     bool has_noc_mcast_txns(SubDeviceId sub_device_id) const override;
     uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const override;
     uint8_t noc_data_start_index(SubDeviceId sub_device_id, bool unicast_data = true) const override;
+    RingbufferUsage get_ringbuffer_usage(std::optional<uint8_t> cq_id = std::nullopt) const override;
     SubDeviceManagerId get_active_sub_device_manager_id() const override;
     SubDeviceManagerId get_default_sub_device_manager_id() const override;
     SubDeviceManagerId create_sub_device_manager(

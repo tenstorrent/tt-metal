@@ -120,6 +120,15 @@ target_sources(
         hal.cpp
         ${API_GENERATED_HEADERS}
 )
+
+# Enable kernel backtrace for tracking kernel origins
+set_source_files_properties(
+    graph/graph_tracking.cpp
+    PROPERTIES
+        COMPILE_FLAGS
+            "-DTT_METAL_KERNEL_BACKTRACE"
+)
+
 set_source_files_properties(
     api/tt-metalium/serialized_descriptors/mesh_coordinate.fbs
     PROPERTIES

@@ -6,6 +6,7 @@
 #include <circular_buffer.hpp>
 #include <circular_buffer_config.hpp>
 #include <device.hpp>
+#include <mesh_device.hpp>
 #include <graph_tracking.hpp>
 #include <enchantum/enchantum.hpp>
 #include <memory_reporter.hpp>
@@ -237,6 +238,10 @@ detail::ProgramImpl::~ProgramImpl() noexcept {
     // Deallocate circular buffers before program destruction
     // This ensures circular buffer deallocations are tracked properly
     deallocate_circular_buffers();
+
+    // Deallocate kernel buffers and track kernel unloads
+    deallocate_kernel_buffers();
+
     Inspector::program_destroyed(this);
 }
 
@@ -840,16 +845,69 @@ void detail::ProgramImpl::invalidate_circular_buffer_allocation() {
 
 void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
     // ZoneScoped;
-    if (not this->local_circular_buffer_allocation_needed_) {
-        return;
+
+    // If device is a MeshDevice, we need to track all its sub-devices
+    std::vector<const IDevice*> devices_to_track;
+    const tt::tt_metal::distributed::MeshDevice* mesh_device =
+        dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device);
+    if (mesh_device != nullptr) {
+        // Mesh device: track all sub-devices
+        for (IDevice* sub_device : mesh_device->get_devices()) {
+            devices_to_track.push_back(sub_device);
+        }
+    } else {
+        // Single device
+        devices_to_track.push_back(device);
     }
 
-    // Store device for later deallocation tracking
-    this->cb_device_ = device;
+    // Check if we've already allocated CBs on any of these devices
+    bool already_allocated_on_all_devices = true;
+    for (const IDevice* dev : devices_to_track) {
+        if (this->cb_devices_.find(dev) == this->cb_devices_.end()) {
+            already_allocated_on_all_devices = false;
+        }
+    }
+
+    // Track all devices for deallocation (even if CBs layout already calculated)
+    for (const IDevice* dev : devices_to_track) {
+        this->cb_devices_.insert(dev);
+    }
+
+    // If CB layout already calculated, skip allocation but report for new devices
+    if (not this->local_circular_buffer_allocation_needed_) {
+        // Report CB allocations for any NEW devices (using cached addresses)
+        if (!already_allocated_on_all_devices && !this->circular_buffers_.empty()) {
+            for (const IDevice* dev : devices_to_track) {
+                // Only report if this specific device wasn't already tracked
+                if (this->cb_devices_.count(dev) == 1) {  // Just inserted
+                    for (const auto& circular_buffer : this->circular_buffers_) {
+                        if (!circular_buffer->globally_allocated()) {
+                            tt::tt_metal::GraphTracker::instance().track_allocate_cb(
+                                circular_buffer->core_ranges(),
+                                circular_buffer->address(),
+                                circular_buffer->size(),
+                                circular_buffer->globally_allocated(),
+                                dev);
+                        }
+                    }
+                }
+            }
+        }
+        return;
+    }
 
     uint64_t base_cb_address = device->allocator()->get_base_allocator_addr(HalMemType::L1);
     for (const auto& circular_buffer : this->circular_buffers_) {
         if (circular_buffer->globally_allocated()) {
+            // Track globally allocated CBs too (they use L1 memory allocated via the allocator)
+            for (const IDevice* dev : devices_to_track) {
+                tt::tt_metal::GraphTracker::instance().track_allocate_cb(
+                    circular_buffer->core_ranges(),
+                    circular_buffer->address(),
+                    circular_buffer->size(),
+                    circular_buffer->globally_allocated(),
+                    dev);
+            }
             continue;
         }
 
@@ -877,12 +935,15 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
                 }
             }
         }
-        tt::tt_metal::GraphTracker::instance().track_allocate_cb(
-            circular_buffer->core_ranges(),
-            computed_addr,
-            circular_buffer->size(),
-            circular_buffer->globally_allocated(),
-            device);
+        // Report CB allocation for ALL devices being tracked
+        for (const IDevice* dev : devices_to_track) {
+            tt::tt_metal::GraphTracker::instance().track_allocate_cb(
+                circular_buffer->core_ranges(),
+                computed_addr,
+                circular_buffer->size(),
+                circular_buffer->globally_allocated(),
+                dev);
+        }
         circular_buffer->set_locally_allocated_address(computed_addr);
     }
     this->local_circular_buffer_allocation_needed_ = false;
@@ -890,11 +951,51 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
 
 void detail::ProgramImpl::deallocate_circular_buffers() {
     // ZoneScoped;
-    // Deallocate all circular buffers for this program
+    // Deallocate all circular buffers for this program on ALL devices
     // This notifies the GraphTracker to report deallocations to the allocation server
-    if (this->cb_device_ != nullptr && !this->circular_buffers_.empty()) {
-        tt::tt_metal::GraphTracker::instance().track_deallocate_cb(this->cb_device_);
-        this->cb_device_ = nullptr;  // Clear device pointer after deallocation
+    if (!this->cb_devices_.empty() && !this->circular_buffers_.empty()) {
+        for (const IDevice* device : this->cb_devices_) {
+            tt::tt_metal::GraphTracker::instance().track_deallocate_cb(device);
+        }
+        this->cb_devices_.clear();  // Clear device set after deallocation
+    }
+}
+
+void detail::ProgramImpl::deallocate_kernel_buffers() {
+    // Deallocate all kernel buffers for this program on ALL devices
+    // This notifies the GraphTracker to report kernel unloads to the allocation server
+    if (!this->kernels_buffer_.empty()) {
+        uint64_t kernel_id = reinterpret_cast<uint64_t>(this);
+
+        // For each device that has a kernel buffer allocated
+        for (const auto& [device_id, kernel_buffer] : this->kernels_buffer_) {
+            if (kernel_buffer) {
+                // Get the device pointer from the buffer
+                const IDevice* device = kernel_buffer->device();
+
+                // If device is a MeshDevice, track unload for all sub-devices
+                std::vector<const IDevice*> devices_to_track;
+                const tt::tt_metal::distributed::MeshDevice* mesh_device =
+                    dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device);
+                if (mesh_device != nullptr) {
+                    // Mesh device: track all sub-devices
+                    for (IDevice* sub_device : mesh_device->get_devices()) {
+                        devices_to_track.push_back(sub_device);
+                    }
+                } else {
+                    // Single device
+                    devices_to_track.push_back(device);
+                }
+
+                // Report kernel unload for all tracked devices
+                for (const IDevice* dev : devices_to_track) {
+                    tt::tt_metal::GraphTracker::instance().track_kernel_unload(kernel_id, dev);
+                }
+            }
+        }
+
+        // Clear kernel buffers (they will be automatically deallocated by shared_ptr)
+        this->kernels_buffer_.clear();
     }
 }
 
@@ -1304,6 +1405,9 @@ void detail::ProgramImpl::allocate_kernel_bin_buf_on_device(IDevice* device) {
             std::nullopt,
             false);
         this->kernels_buffer_[device->id()] = kernel_bin_buf;
+
+        // NOTE: Kernel tracking happens at dispatch time (track_kernel_dispatch)
+        // This allocation is just the DRAM buffer, not the actual L1 kernel memory
     }
 }
 
@@ -1336,6 +1440,44 @@ void ProgramImpl::generate_dispatch_commands(IDevice* device, bool use_prefetche
 
         program_command_sequence.kernel_bins_sizeB = this->kernel_bins_sizeB;
         program_command_sequence.prefetcher_cache_used = use_prefetcher_cache;
+
+        // Track kernel load for Fast Dispatch application programs (happens once when first generated)
+        // This is where program_transfer_info.binary_data is populated
+        uint64_t kernel_size = this->program_transfer_info.binary_data.size() * sizeof(uint32_t);
+        if (kernel_size > 0) {
+            // Calculate number of cores
+            uint32_t total_cores = 0;
+            std::vector<std::vector<CoreCoord>> logical_cores_list = this->logical_cores();
+            for (const auto& cores_for_type : logical_cores_list) {
+                total_cores += cores_for_type.size();
+            }
+
+            // Determine which devices to track
+            std::vector<const IDevice*> devices_to_track;
+            const tt::tt_metal::distributed::MeshDevice* mesh_device =
+                dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device);
+            if (mesh_device != nullptr) {
+                for (IDevice* sub_device : mesh_device->get_devices()) {
+                    devices_to_track.push_back(sub_device);
+                }
+            } else {
+                devices_to_track.push_back(device);
+            }
+
+            uint64_t kernel_id = reinterpret_cast<uint64_t>(this);
+            uint8_t kernel_type = static_cast<uint8_t>(this->kernel_type_);
+
+            // Debug output (DISABLED for cleaner logs)
+            // std::cout << "🔧 [DEBUG] generate_dispatch_commands: kernel_type=" << (int)kernel_type
+            //           << " binary_size=" << kernel_size << " bytes"
+            //           << " cores=" << total_cores
+            //           << " total_l1=" << (kernel_size * total_cores) << " bytes" << std::endl;
+
+            for (const IDevice* dev : devices_to_track) {
+                tt::tt_metal::GraphTracker::instance().track_kernel_load(
+                    kernel_size, kernel_id, dev, kernel_type, total_cores);
+            }
+        }
 
         // TODO: We currently do not have a mechanism of removing entries in the cache when a manager is removed
         // This means programs will contain stale entries in the cache until the program is deleted
@@ -1642,7 +1784,10 @@ using KernelGroupsGetter = std::function<std::vector<std::shared_ptr<KernelGroup
 using SemaphoresGetter = std::function<const std::vector<Semaphore>&()>;
 
 void detail::ProgramImpl::finalize_offsets(IDevice* device) {
-    if (is_finalized()) {
+    // Check if already finalized to avoid redundant work
+    bool was_already_finalized = is_finalized();
+
+    if (was_already_finalized) {
         return;
     }
 
@@ -1666,6 +1811,57 @@ void detail::ProgramImpl::finalize_offsets(IDevice* device) {
         device, kernels_getter, kernel_groups_getter, semaphores_getter, programs);
 
     set_finalized();
+
+    // Track kernel load for this program (happens once when first finalized)
+    // This tracks all kernel types: Application, Fabric, Dispatch
+    // Get actual kernel binary size (not config buffer size which is 0 for modern dispatch)
+    uint64_t kernel_size = this->program_transfer_info.binary_data.size() * sizeof(uint32_t);
+
+    // DEBUG: Log all finalize_offsets calls to understand when kernel data is available
+    std::cout << "🔧 [DEBUG] finalize_offsets called: kernel_type=" << (int)this->kernel_type_
+              << " binary_data.size=" << this->program_transfer_info.binary_data.size()
+              << " kernel_size=" << kernel_size << " bytes" << std::endl;
+
+    if (kernel_size > 0) {
+        // Determine which devices to track
+        std::vector<const IDevice*> devices_to_track;
+        const tt::tt_metal::distributed::MeshDevice* mesh_device =
+            dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device);
+
+        if (mesh_device != nullptr) {
+            // Mesh device: track all sub-devices
+            for (IDevice* sub_device : mesh_device->get_devices()) {
+                devices_to_track.push_back(sub_device);
+            }
+        } else {
+            // Single device
+            devices_to_track.push_back(device);
+        }
+
+        // Use program's compile-time ID as kernel identifier (reinterpret pointer as uint64_t)
+        // This uniquely identifies the program and persists across runs
+        uint64_t kernel_id = reinterpret_cast<uint64_t>(this);
+
+        // Get kernel type from program metadata
+        uint8_t kernel_type = static_cast<uint8_t>(this->kernel_type_);
+
+        // Calculate number of cores this program runs on
+        uint32_t total_cores = 0;
+        std::vector<std::vector<CoreCoord>> logical_cores_list = this->logical_cores();
+        for (const auto& cores_for_type : logical_cores_list) {
+            total_cores += cores_for_type.size();
+        }
+
+        std::cout << "🔧 [DEBUG] finalize_offsets: kernel_type=" << (int)kernel_type << " binary_size=" << kernel_size
+                  << " bytes"
+                  << " cores=" << total_cores << " total_l1=" << (kernel_size * total_cores) << " bytes" << std::endl;
+
+        // Report kernel load for all tracked devices
+        for (const IDevice* dev : devices_to_track) {
+            tt::tt_metal::GraphTracker::instance().track_kernel_load(
+                kernel_size, kernel_id, dev, kernel_type, total_cores);
+        }
+    }
 }
 
 // Compute relative offsets (wrt the start of the kernel config ring buffer) and sizes of all
@@ -1738,6 +1934,26 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
     for (auto& program : programs) {
         program->kernel_bins_sizeB = state.kernel_text_size;
         max_program_sizeB = std::max(max_program_sizeB, state.kernel_text_size);
+
+        // Track kernel load for Fast Dispatch (kernel_bins_sizeB now set)
+        // Determine which devices to track
+        std::vector<const IDevice*> devices_to_track;
+        const tt::tt_metal::distributed::MeshDevice* mesh_device =
+            dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device);
+
+        if (mesh_device != nullptr) {
+            // Mesh device: track all sub-devices
+            for (IDevice* sub_device : mesh_device->get_devices()) {
+                devices_to_track.push_back(sub_device);
+            }
+        } else {
+            // Single device
+            devices_to_track.push_back(device);
+        }
+
+        // NOTE: Kernel tracking is done in finalize_offsets(), not here
+        // finalize_program_offsets() is a helper called by finalize_offsets()
+        // Tracking here would cause double-counting
     }
     return max_program_sizeB;
 }

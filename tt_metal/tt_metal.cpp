@@ -785,15 +785,14 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
     // Track CB allocations per-device for distributed workloads
     // CBs are physically written to L1 on each device at this point
     // Track them here to show L1 usage on all devices, not just device 0
+    // ✅ FIXED: Track ALL CBs (including globally allocated ones)
     for (const auto& circular_buffer : program.impl().circular_buffers()) {
-        if (!circular_buffer->globally_allocated()) {
-            tt::tt_metal::GraphTracker::instance().track_allocate_cb(
-                circular_buffer->core_ranges(),
-                circular_buffer->address(),
-                circular_buffer->size(),
-                circular_buffer->globally_allocated(),
-                device);
-        }
+        tt::tt_metal::GraphTracker::instance().track_allocate_cb(
+            circular_buffer->core_ranges(),
+            circular_buffer->address(),
+            circular_buffer->size(),
+            circular_buffer->globally_allocated(),
+            device);
     }
 
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.impl().logical_cores();
@@ -925,6 +924,42 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
 void CompileProgram(IDevice* device, Program& program, bool force_slow_dispatch) {
     ZoneScoped;
     program.impl().compile(device, force_slow_dispatch);
+}
+
+void TrackKernelDispatch(IDevice* device, Program& program) {
+    // Track kernel dispatch - this is when kernels are actually loaded to L1
+    // Uses the actual L1 kernel text size (kernel_bins_sizeB)
+
+    // Get the actual L1 kernel size for this program
+    uint64_t kernel_l1_size = program.impl().get_kernel_bins_size();
+
+    if (kernel_l1_size == 0) {
+        // No kernels in this program
+        return;
+    }
+
+    // If device is a MeshDevice, track for all sub-devices
+    std::vector<const IDevice*> devices_to_track;
+    const tt::tt_metal::distributed::MeshDevice* mesh_device =
+        dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device);
+
+    if (mesh_device != nullptr) {
+        // Mesh device: track all sub-devices
+        for (IDevice* sub_device : mesh_device->get_devices()) {
+            devices_to_track.push_back(sub_device);
+        }
+    } else {
+        // Single device
+        devices_to_track.push_back(device);
+    }
+
+    // Use program ID as kernel identifier
+    uint64_t kernel_id = static_cast<uint64_t>(program.get_runtime_id());
+
+    // Report kernel load for all tracked devices at dispatch time
+    for (const IDevice* dev : devices_to_track) {
+        tt::tt_metal::GraphTracker::instance().track_kernel_load(kernel_l1_size, kernel_id, dev);
+    }
 }
 
 }  // namespace detail

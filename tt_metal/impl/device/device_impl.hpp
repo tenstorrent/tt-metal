@@ -177,6 +177,10 @@ public:
         this->mesh_device = mesh_device;
     };
 
+    // Query ring buffer statistics for kernel caching
+    // Returns statistics for the specified command queue (or current one if not specified)
+    RingbufferUsage get_ringbuffer_usage(std::optional<uint8_t> cq_id = std::nullopt) const override;
+
 private:
     static constexpr uint32_t DEFAULT_NUM_SUB_DEVICES = 1;
 

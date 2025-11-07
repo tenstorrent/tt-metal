@@ -25,7 +25,11 @@ struct __attribute__((packed)) AllocMessage {
         RESPONSE = 4,
         DUMP_REMAINING = 5,
         DEVICE_INFO_QUERY = 6,
-        DEVICE_INFO_RESPONSE = 7
+        DEVICE_INFO_RESPONSE = 7,
+        CB_ALLOC = 8,       // Circular buffer allocation
+        CB_FREE = 9,        // Circular buffer free
+        KERNEL_LOAD = 10,   // Kernel loaded
+        KERNEL_UNLOAD = 11  // Kernel unloaded
     };
 
     Type type;            // 1 byte
@@ -43,6 +47,8 @@ struct __attribute__((packed)) AllocMessage {
     uint64_t l1_allocated;
     uint64_t l1_small_allocated;
     uint64_t trace_allocated;
+    uint64_t cb_allocated;      // NEW: Circular buffer memory
+    uint64_t kernel_allocated;  // NEW: Kernel code memory
 
     // Device info fields (unused by client for alloc/free, used by server for device queries)
     uint64_t total_dram_size;
@@ -53,7 +59,13 @@ struct __attribute__((packed)) AllocMessage {
     uint32_t l1_size_per_core;
     uint32_t is_available;
     uint32_t num_devices;
-    // Total: 112 bytes
+
+    // Ring buffer stats (for real-time kernel L1 usage)
+    uint32_t ringbuffer_total_size;    // Total ring buffer capacity (~67KB)
+    uint32_t ringbuffer_used_bytes;    // Currently used by cached kernels
+    uint32_t ringbuffer_num_programs;  // Number of programs cached
+    uint32_t pad3;                     // Padding for alignment
+    // Total: 1+3+4+8+1+3+4+8+8+48+16+16 = 128 bytes
 };
 
 AllocationClient::AllocationClient() : socket_fd_(-1), enabled_(false), connected_(false) {
@@ -197,6 +209,123 @@ void AllocationClient::send_deallocation_message(int device_id, uint64_t buffer_
     }
 }
 
+// Circular buffer allocation/deallocation
+void AllocationClient::send_cb_allocation_message(int device_id, uint64_t size, uint64_t cb_id) {
+    if (!connect_to_server()) {
+        return;
+    }
+
+    AllocMessage msg;
+    memset(&msg, 0, sizeof(msg));
+    msg.type = AllocMessage::CB_ALLOC;
+    msg.device_id = device_id;
+    msg.size = size;
+    msg.buffer_id = cb_id;
+    msg.process_id = getpid();
+    msg.timestamp = std::chrono::system_clock::now().time_since_epoch().count();
+
+    std::lock_guard<std::mutex> lock(socket_mutex_);
+    size_t total_sent = 0;
+    while (total_sent < sizeof(msg)) {
+        ssize_t sent = send(socket_fd_, reinterpret_cast<const char*>(&msg) + total_sent, sizeof(msg) - total_sent, 0);
+        if (sent < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            connected_ = false;
+            return;
+        }
+        total_sent += sent;
+    }
+}
+
+void AllocationClient::send_cb_deallocation_message(int device_id, uint64_t size, uint64_t cb_id) {
+    if (!connect_to_server()) {
+        return;
+    }
+
+    AllocMessage msg;
+    memset(&msg, 0, sizeof(msg));
+    msg.type = AllocMessage::CB_FREE;
+    msg.device_id = device_id;
+    msg.size = size;  // Include size for proper deallocation tracking
+    msg.buffer_id = cb_id;
+    msg.process_id = getpid();
+
+    std::lock_guard<std::mutex> lock(socket_mutex_);
+    size_t total_sent = 0;
+    while (total_sent < sizeof(msg)) {
+        ssize_t sent = send(socket_fd_, reinterpret_cast<const char*>(&msg) + total_sent, sizeof(msg) - total_sent, 0);
+        if (sent < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            connected_ = false;
+            return;
+        }
+        total_sent += sent;
+    }
+}
+
+// Kernel load/unload
+void AllocationClient::send_kernel_load_message(int device_id, uint64_t size, uint64_t kernel_id, uint8_t kernel_type) {
+    if (!connect_to_server()) {
+        return;
+    }
+
+    AllocMessage msg;
+    memset(&msg, 0, sizeof(msg));
+    msg.type = AllocMessage::KERNEL_LOAD;
+    msg.device_id = device_id;
+    msg.size = size;
+    msg.buffer_id = kernel_id;
+    msg.buffer_type = kernel_type;  // 0=App, 1=Fabric, 2=Dispatch
+    msg.process_id = getpid();
+    msg.timestamp = std::chrono::system_clock::now().time_since_epoch().count();
+
+    std::lock_guard<std::mutex> lock(socket_mutex_);
+    size_t total_sent = 0;
+    while (total_sent < sizeof(msg)) {
+        ssize_t sent = send(socket_fd_, reinterpret_cast<const char*>(&msg) + total_sent, sizeof(msg) - total_sent, 0);
+        if (sent < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            connected_ = false;
+            return;
+        }
+        total_sent += sent;
+    }
+}
+
+void AllocationClient::send_kernel_unload_message(int device_id, uint64_t size, uint64_t kernel_id) {
+    if (!connect_to_server()) {
+        return;
+    }
+
+    AllocMessage msg;
+    memset(&msg, 0, sizeof(msg));
+    msg.type = AllocMessage::KERNEL_UNLOAD;
+    msg.device_id = device_id;
+    msg.size = size;  // CRITICAL: Pass size for proper deallocation tracking
+    msg.buffer_id = kernel_id;
+    msg.process_id = getpid();
+
+    std::lock_guard<std::mutex> lock(socket_mutex_);
+    size_t total_sent = 0;
+    while (total_sent < sizeof(msg)) {
+        ssize_t sent = send(socket_fd_, reinterpret_cast<const char*>(&msg) + total_sent, sizeof(msg) - total_sent, 0);
+        if (sent < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            connected_ = false;
+            return;
+        }
+        total_sent += sent;
+    }
+}
+
 // Static interface methods
 void AllocationClient::report_allocation(int device_id, uint64_t size, uint8_t buffer_type, uint64_t buffer_id) {
     auto& inst = instance();
@@ -209,6 +338,34 @@ void AllocationClient::report_deallocation(int device_id, uint64_t buffer_id) {
     auto& inst = instance();
     if (inst.enabled_) {
         inst.send_deallocation_message(device_id, buffer_id);
+    }
+}
+
+void AllocationClient::report_cb_allocation(int device_id, uint64_t size, uint64_t cb_id) {
+    auto& inst = instance();
+    if (inst.enabled_) {
+        inst.send_cb_allocation_message(device_id, size, cb_id);
+    }
+}
+
+void AllocationClient::report_cb_deallocation(int device_id, uint64_t size, uint64_t cb_id) {
+    auto& inst = instance();
+    if (inst.enabled_) {
+        inst.send_cb_deallocation_message(device_id, size, cb_id);
+    }
+}
+
+void AllocationClient::report_kernel_load(int device_id, uint64_t size, uint64_t kernel_id, uint8_t kernel_type) {
+    auto& inst = instance();
+    if (inst.enabled_) {
+        inst.send_kernel_load_message(device_id, size, kernel_id, kernel_type);
+    }
+}
+
+void AllocationClient::report_kernel_unload(int device_id, uint64_t size, uint64_t kernel_id) {
+    auto& inst = instance();
+    if (inst.enabled_) {
+        inst.send_kernel_unload_message(device_id, size, kernel_id);
     }
 }
 

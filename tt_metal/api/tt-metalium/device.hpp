@@ -198,6 +198,14 @@ public:
     virtual uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const = 0;
     virtual uint8_t noc_data_start_index(SubDeviceId sub_device_id, bool unicast_data = true) const = 0;
 
+    // Query ring buffer statistics for kernel caching (returns total_size, used_bytes, num_programs)
+    struct RingbufferUsage {
+        uint32_t total_size_bytes;
+        uint32_t used_bytes;
+        uint32_t num_cached_programs;
+    };
+    virtual RingbufferUsage get_ringbuffer_usage(std::optional<uint8_t> cq_id = std::nullopt) const = 0;
+
     virtual SubDeviceManagerId get_active_sub_device_manager_id() const = 0;
     virtual SubDeviceManagerId get_default_sub_device_manager_id() const = 0;
     virtual SubDeviceManagerId create_sub_device_manager(

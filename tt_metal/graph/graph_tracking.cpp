@@ -15,6 +15,11 @@
 #include <mutex>
 #include <unordered_map>
 
+// Optional backtrace support for kernel tracking
+#ifdef TT_METAL_KERNEL_BACKTRACE
+#include "tt_stl/assert.hpp"
+#endif
+
 namespace tt {
 namespace tt_metal {
 class Buffer;
@@ -218,10 +223,10 @@ void GraphTracker::track_allocate_cb(
         // CRITICAL: Serialize tracking calls to prevent race conditions
         std::lock_guard<std::mutex> tracking_lock(g_allocation_tracking_mutex);
 
-        // Report to legacy allocation server (if enabled)
+        // Report to allocation server using CB-specific message type (if enabled)
         if (AllocationClient::is_enabled()) {
-            // Circular buffers are always L1
-            AllocationClient::report_allocation(device->id(), size, static_cast<uint8_t>(BufferType::L1), addr);
+            // Use CB_ALLOC message type for proper tracking
+            AllocationClient::report_cb_allocation(device->id(), size, addr);
         }
 
         // Report to Tracy-based memory monitor (circular buffers are L1)
@@ -257,9 +262,10 @@ void GraphTracker::track_deallocate_cb(const IDevice* device) {
         std::lock_guard<std::mutex> tracking_lock(g_allocation_tracking_mutex);
 
         for (const auto& cb : cbs_to_deallocate) {
-            // Report to legacy allocation server (if enabled)
+            // Report to allocation server using CB-specific message type (if enabled)
             if (AllocationClient::is_enabled()) {
-                AllocationClient::report_deallocation(device->id(), cb.addr);
+                // Pass both address AND size for proper deallocation tracking
+                AllocationClient::report_cb_deallocation(device->id(), cb.size, cb.addr);
             }
 
             // Report to Tracy-based memory monitor
@@ -274,6 +280,84 @@ void GraphTracker::track_deallocate_cb(const IDevice* device) {
     }
     for (auto& it : processors) {
         it->track_deallocate_cb(device);
+    }
+}
+
+void GraphTracker::track_kernel_load(
+    uint64_t kernel_size, uint64_t kernel_id, const IDevice* device, uint8_t kernel_type, uint32_t num_cores) {
+    // Store kernel allocation for this device (for deallocation tracking)
+    // Store total L1 size (binary_size * num_cores) for accurate deallocation
+    uint64_t total_l1_size = kernel_size * num_cores;
+    {
+        std::lock_guard<std::mutex> lock(kernel_mutex);
+        device_kernel_allocations[device].push_back({kernel_id, total_l1_size});
+    }
+
+    // Optional: Log backtrace to identify kernel origin (DISABLED for cleaner logs)
+    // #ifdef TT_METAL_KERNEL_BACKTRACE
+    // if (device != nullptr) {
+    //     const char* type_names[] = {"Application", "Fabric", "Dispatch"};
+    //     const char* type_name = (kernel_type <= 2) ? type_names[kernel_type] : "Unknown";
+    //     std::string bt = tt::assert::backtrace_to_string(10, 2, "  ");
+    //     std::cout << "\n🔍 KERNEL_LOAD Backtrace (Device " << device->id()
+    //               << ", Type: " << type_name
+    //               << ", Binary Size: " << (kernel_size / 1024.0) << " KB"
+    //               << ", Cores: " << num_cores
+    //               << ", Total L1: " << (total_l1_size / 1024.0) << " KB"
+    //               << ", ID: 0x" << std::hex << kernel_id << std::dec << "):\n" << bt << std::endl;
+    // }
+    // #endif
+
+    // Report kernel load to tracking server
+    if (device != nullptr) {
+        // CRITICAL: Serialize tracking calls to prevent race conditions
+        std::lock_guard<std::mutex> tracking_lock(g_allocation_tracking_mutex);
+
+        // Report to allocation server using KERNEL-specific message type (if enabled)
+        // Report total_l1_size to accurately track actual L1 memory usage
+        if (AllocationClient::is_enabled()) {
+            AllocationClient::report_kernel_load(device->id(), total_l1_size, kernel_id, kernel_type);
+        }
+
+        // Report to Tracy-based memory monitor (kernel code is L1)
+        TracyMemoryMonitor::instance().track_allocation(
+            device->id(), kernel_id, kernel_size, TracyMemoryMonitor::BufferType::L1);
+    }
+}
+
+void GraphTracker::track_kernel_unload(uint64_t kernel_id, const IDevice* device) {
+    // Find and remove this specific kernel from tracking
+    std::vector<KernelAllocation> kernels_to_unload;
+    {
+        std::lock_guard<std::mutex> lock(kernel_mutex);
+        auto it = device_kernel_allocations.find(device);
+        if (it != device_kernel_allocations.end()) {
+            // Find and remove this specific kernel
+            auto& kernels = it->second;
+            for (auto kernel_it = kernels.begin(); kernel_it != kernels.end(); ++kernel_it) {
+                if (kernel_it->kernel_id == kernel_id) {
+                    kernels_to_unload.push_back(*kernel_it);
+                    kernels.erase(kernel_it);
+                    break;
+                }
+            }
+        }
+    }
+
+    // Report each kernel unload to the tracking server
+    if (device != nullptr) {
+        // CRITICAL: Serialize tracking calls to prevent race conditions
+        std::lock_guard<std::mutex> tracking_lock(g_allocation_tracking_mutex);
+
+        for (const auto& kernel : kernels_to_unload) {
+            // Report to allocation server using KERNEL-specific message type (if enabled)
+            if (AllocationClient::is_enabled()) {
+                AllocationClient::report_kernel_unload(device->id(), kernel.size, kernel.kernel_id);
+            }
+
+            // Report to Tracy-based memory monitor (L1 memory)
+            TracyMemoryMonitor::instance().track_deallocation(device->id(), kernel.kernel_id);
+        }
     }
 }
 

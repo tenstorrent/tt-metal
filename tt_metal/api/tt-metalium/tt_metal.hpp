@@ -178,6 +178,9 @@ void CompileProgram(IDevice* device, Program& program, bool force_slow_dispatch 
  */
 void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow_dispatch = false);
 
+// Track kernel dispatch (when kernels are loaded to L1 during program execution)
+void TrackKernelDispatch(IDevice* device, Program& program);
+
 // Configures a given device with a given program.
 // - Loads all kernel binaries into L1s of assigned Tensix cores
 // - Configures circular buffers (inits regs with buffer data)

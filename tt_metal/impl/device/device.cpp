@@ -15,6 +15,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt_align.hpp>
 #include <tt_metal.hpp>
+#include <graph_tracking.hpp>
 #include <tt_stl/span.hpp>
 #include <algorithm>
 #include <array>
@@ -258,7 +259,10 @@ void Device::configure_command_queue_programs() {
     // Write device-side cq pointers
     configure_dispatch_cores(this);
 
-    // Run the cq program
+    // Run the cq program (Mark as Dispatch type for kernel tracking)
+    command_queue_program.impl().set_kernel_type(tt::tt_metal::detail::ProgramKernelType::DISPATCH);
+    std::cout << "🔧 [DEBUG] Set Dispatch program kernel_type to "
+              << static_cast<int>(command_queue_program.impl().get_kernel_type()) << std::endl;
     command_queue_program.impl().finalize_offsets(this);
     detail::ConfigureDeviceWithProgram(this, command_queue_program, true);
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(this->id());
@@ -373,6 +377,8 @@ void Device::configure_fabric() {
 
     tt::tt_fabric::configure_fabric_cores(this);
 
+    // Mark program as Fabric type (for kernel tracking)
+    fabric_program_->impl().set_kernel_type(tt::tt_metal::detail::ProgramKernelType::FABRIC);
     fabric_program_->impl().finalize_offsets(this);
 
     detail::WriteRuntimeArgsToDevice(this, *fabric_program_, using_fast_dispatch_);
@@ -854,6 +860,24 @@ HalMemType Device::get_mem_type_of_core(CoreCoord virtual_core) const {
 }
 
 std::shared_ptr<distributed::MeshDevice> Device::get_mesh_device() { return mesh_device.lock(); }
+
+IDevice::RingbufferUsage Device::get_ringbuffer_usage(std::optional<uint8_t> cq_id) const {
+    if (!using_fast_dispatch_ || command_queues_.empty()) {
+        // No command queues or not using fast dispatch - return empty stats
+        return {0, 0, 0};
+    }
+
+    auto actual_cq_id = cq_id.value_or(GetCurrentCommandQueueIdForThread());
+    if (actual_cq_id >= command_queues_.size()) {
+        return {0, 0, 0};
+    }
+
+    // Get stats from the HWCommandQueue
+    const auto& cq = dynamic_cast<const HWCommandQueue&>(*command_queues_[actual_cq_id]);
+    auto stats = cq.get_ringbuffer_stats();
+
+    return {stats.total_size_bytes, stats.used_bytes, stats.num_cached_programs};
+}
 
 }  // namespace tt_metal
 

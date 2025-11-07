@@ -117,6 +117,9 @@ public:
 
     IDevice* device() override;
 
+    // Query ring buffer statistics for kernel caching
+    RingbufferCacheManager::RingbufferStats get_ringbuffer_stats() const;
+
 private:
     uint32_t id_;
     uint32_t size_B_;

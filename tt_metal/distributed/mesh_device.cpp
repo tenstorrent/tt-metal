@@ -1044,4 +1044,10 @@ const std::unique_ptr<Allocator>& MeshDevice::allocator(SubDeviceId sub_device_i
 
 std::shared_ptr<distributed::MeshDevice> MeshDevice::get_mesh_device() { return shared_from_this(); }
 
+IDevice::RingbufferUsage MeshDevice::get_ringbuffer_usage(std::optional<uint8_t> cq_id) const {
+    // For MeshDevice, return stats from the reference device
+    // (All devices in mesh should have similar ring buffer usage)
+    return reference_device()->get_ringbuffer_usage(cq_id);
+}
+
 }  // namespace tt::tt_metal::distributed
