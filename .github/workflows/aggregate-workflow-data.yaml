@@ -11,6 +11,11 @@ on:
         description: 'Number of days to look back for workflow runs'
         required: false
         default: '15'
+      force-fresh:
+        description: 'Force fresh fetch (skip using past artifacts and redownload everything)'
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   fetch-data:
@@ -38,6 +43,7 @@ jobs:
         with:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           days: ${{ github.event.inputs.days || 15 }}
+          force-fresh: ${{ github.event.inputs.force-fresh || false }}
           workflow_ids: |
             [
               ".github/workflows/all-post-commit-workflows.yaml",
