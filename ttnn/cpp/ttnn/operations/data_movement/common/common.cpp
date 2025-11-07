@@ -556,8 +556,7 @@ uint32_t pack_two_uint16_into_uint32(std::pair<uint16_t, uint16_t> two_uint16s) 
 }
 
 ttnn::Shape compute_padded_shape(ttnn::Shape logical_shape, const uint32_t tile_height, const uint32_t tile_width) {
-    // Special case: if input tensor is row-major 1D, after tiling output
-    // tensor will be 2D
+    // Special case: if input tensor is row-major 1D, after tiling output tensor will be 2D
     if (logical_shape.rank() == 1) {
         logical_shape = ttnn::Shape({1, logical_shape[0]});
     }

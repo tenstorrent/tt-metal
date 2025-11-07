@@ -27,7 +27,7 @@ def random_torch_tensor(dtype, shape):
     "concat_spec",
     [
         ([[1, 1, 4, 4], [1, 1, 4, 4]], -1),
-        ([[96], [96]], 0),  # tiled 1D tensors
+        ([[96], [96]], 0),  # 1D tiled tensors
     ],
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32, ttnn.uint32])
