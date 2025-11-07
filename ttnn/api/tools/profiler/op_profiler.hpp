@@ -468,7 +468,7 @@ inline std::string op_meta_data_serialized_json(
 
 template <typename device_operation_t>
 inline std::string op_meta_data_serialized_json(
-    const device_operation_t& operation,
+    [[maybe_unused]] const device_operation_t& operation,
     uint32_t operation_id,
     auto device_id,
     const auto& program,
@@ -531,6 +531,7 @@ inline std::string op_meta_data_serialized_json(
         return fmt::format("{}{}`", cached_ops.at(device_id).at(program_hash), operation_id);
     }
 #else
+    (void)operation;  // Suppress unused parameter warning when TRACY_ENABLE is not defined
     return {};
 #endif
 }

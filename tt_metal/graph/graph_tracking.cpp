@@ -318,10 +318,6 @@ void GraphTracker::track_kernel_load(
         if (AllocationClient::is_enabled()) {
             AllocationClient::report_kernel_load(device->id(), total_l1_size, kernel_id, kernel_type);
         }
-
-        // Report to Tracy-based memory monitor (kernel code is L1)
-        TracyMemoryMonitor::instance().track_allocation(
-            device->id(), kernel_id, kernel_size, TracyMemoryMonitor::BufferType::L1);
     }
 }
 
@@ -354,9 +350,6 @@ void GraphTracker::track_kernel_unload(uint64_t kernel_id, const IDevice* device
             if (AllocationClient::is_enabled()) {
                 AllocationClient::report_kernel_unload(device->id(), kernel.size, kernel.kernel_id);
             }
-
-            // Report to Tracy-based memory monitor (L1 memory)
-            TracyMemoryMonitor::instance().track_deallocation(device->id(), kernel.kernel_id);
         }
     }
 }

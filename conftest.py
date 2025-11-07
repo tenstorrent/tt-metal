@@ -297,7 +297,14 @@ def get_tt_cache_path():
 
 @pytest.fixture(scope="function")
 def device_params(request):
-    return getattr(request, "param", {})
+    params = getattr(request, "param", {}).copy() if hasattr(request, "param") else {}
+
+    # Allow overriding trace_region_size via command-line option
+    trace_region_size = request.config.getoption("--trace-region-size", default=None)
+    if trace_region_size is not None:
+        params["trace_region_size"] = trace_region_size
+
+    return params
 
 
 @pytest.fixture(scope="function")
@@ -726,6 +733,12 @@ def pytest_addoption(parser):
         action="store",
         default=None,
         help="Size of chip grid for the test to run on. Grid size is defined by number of cores in row x number of cores in column, e.g., 8x8",
+    )
+    parser.addoption(
+        "--trace-region-size",
+        type=int,
+        default=None,
+        help="Override trace region size in bytes (e.g., 35000000 for 35 MB)",
     )
 
 

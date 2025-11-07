@@ -26,4 +26,9 @@ def device_params(request, galaxy_type):
                 ttnn.FabricConfig.FABRIC_1D_RING if galaxy_type == "6U" else ttnn.FabricConfig.FABRIC_1D
             )
 
+    # Allow overriding trace_region_size via command-line option
+    trace_region_size = request.config.getoption("--trace-region-size", default=None)
+    if trace_region_size is not None:
+        params["trace_region_size"] = trace_region_size
+
     return params

@@ -24,7 +24,7 @@ Program CreateMultiTensixEltwiseAddProgram(
     uint32_t tiles_per_shard,
     uint32_t tensix_cores_per_device,
     const std::shared_ptr<MeshDevice>& mesh) {
-
+    (void)num_tiles;  // Suppress unused parameter warning
     auto program = CreateProgram();
     auto core_grid = mesh->compute_with_storage_grid_size();
 

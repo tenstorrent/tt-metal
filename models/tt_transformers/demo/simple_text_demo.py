@@ -679,6 +679,7 @@ def prepare_generator_args(
         "ci-token-matching",  # CI performs token accuracy matching with reference procomputed tokens
         "ci-eval-1",  # CI 6 repeat batches with output comparison
         "ci-eval-32",  # CI batch 32 with 3 repeat batches and output comparison
+        "device-perf",  # Device performance measurement for prefill or decode
     ],
 )
 @pytest.mark.parametrize(

@@ -141,7 +141,7 @@ struct MeshDeviceOperationAdapter {
     };
 
     static tt::stl::hash::hash_t compute_mesh_workload_hash(
-        tt::tt_metal::distributed::MeshDevice* mesh_device,
+        [[maybe_unused]] tt::tt_metal::distributed::MeshDevice* mesh_device,
         const operation_attributes_t& attrs,
         const tensor_args_t& tensor_args) {
         // Hash the program hash and the tensor coordinates the workload is targeting.

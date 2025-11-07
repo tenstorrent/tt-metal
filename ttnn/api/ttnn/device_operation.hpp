@@ -152,6 +152,9 @@ inline void log_operation(
     const typename device_operation_t::tensor_args_t& tensor_args,
     tt::stl::hash::hash_t program_hash,
     bool program_cache_hit) {
+    (void)device_id;          // May be unused in some build configurations
+    (void)program_hash;       // May be unused in some build configurations
+    (void)program_cache_hit;  // May be unused in some build configurations
     log_debug(
         tt::LogOp, "Launching Device Operation: \"{}\"", get_operation_name<device_operation_t>(operation_attributes));
 
@@ -166,7 +169,7 @@ inline void log_operation(
     log_debug(tt::LogOp, "Tensors Args:");
     auto index = 0;
     tt::stl::reflection::visit_object_of_type<Tensor>(
-        [&index](auto&& tensor) {
+        [&index]([[maybe_unused]] auto&& tensor) {
             log_debug(tt::LogOp, "\t{}: {}", index, tensor);
             index++;
         },
