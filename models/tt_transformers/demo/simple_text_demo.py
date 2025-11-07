@@ -8,6 +8,7 @@ import math
 import os
 from datetime import datetime
 from pathlib import Path
+from typing import List
 
 import pytest
 import requests
@@ -285,7 +286,7 @@ def prepare_generator_args(
             200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
             1,
@@ -304,7 +305,11 @@ def prepare_generator_args(
             200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {
+                "temperature": torch.linspace(0.0, 1.0, steps=32).tolist(),
+                "top_p": torch.linspace(0.08, 1.0, steps=32).tolist(),
+                "top_k": torch.arange(1, 33).tolist(),  # 1 to 32 inclusive
+            },  # sampling_params (non-uniform)
             True,  # stop_at_eos
             False,  # ci_only
             1,  # data_parallel
@@ -323,7 +328,7 @@ def prepare_generator_args(
             200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks_per_dp": 2048},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
             1,  # data_parallel
@@ -342,7 +347,7 @@ def prepare_generator_args(
             200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
             1,  # data_parallel
@@ -361,7 +366,7 @@ def prepare_generator_args(
             200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
             1,  # data_parallel
@@ -383,7 +388,7 @@ def prepare_generator_args(
                 "page_block_size": 32,
                 "page_max_num_blocks_per_dp": 1024,
             },  # page_params  # TODO This will be serviced by vLLM
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             False,  # stop_at_eos
             False,  # ci_only
             1,  # data_parallel
@@ -402,7 +407,7 @@ def prepare_generator_args(
             4096,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             False,  # stop_at_eos
             True,  # ci_only
             1,  # data_parallel
@@ -421,7 +426,7 @@ def prepare_generator_args(
             1024,  # max_generated_tokens  # TODO Update this to 4096, and make sure it fits in DRAM with correct page_params
             True,  # paged_attention  # TODO Find the correct paged_attn params to avoid hangs in this config with long context generation
             {"page_block_size": 64, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             False,  # stop_at_eos
             True,  # ci_only
             1,  # data_parallel
@@ -440,7 +445,7 @@ def prepare_generator_args(
             200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
             4,  # data_parallel
@@ -459,7 +464,7 @@ def prepare_generator_args(
             200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
             8,  # data_parallel
@@ -478,7 +483,7 @@ def prepare_generator_args(
             200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
             4,  # data_parallel
@@ -497,7 +502,7 @@ def prepare_generator_args(
             4096,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             False,  # stop_at_eos
             True,  # ci_only
             4,  # data_parallel
@@ -516,7 +521,7 @@ def prepare_generator_args(
             4096,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             False,  # stop_at_eos
             True,  # ci_only
             8,  # data_parallel
@@ -535,7 +540,7 @@ def prepare_generator_args(
             200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             True,  # stop_at_eos
             True,  # ci_only
             16,  # data_parallel
@@ -554,7 +559,7 @@ def prepare_generator_args(
             200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             True,  # stop_at_eos
             True,  # ci_only
             32,  # data_parallel
@@ -573,7 +578,7 @@ def prepare_generator_args(
             50000,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks_per_dp": 2048},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             False,  # stop_at_eos
             True,  # ci_only
             1,  # data_parallel
@@ -592,7 +597,7 @@ def prepare_generator_args(
             500,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             True,  # stop_at_eos
             True,  # ci_only
             1,  # data_parallel
@@ -611,7 +616,7 @@ def prepare_generator_args(
             200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             True,  # stop_at_eos
             True,  # ci_only
             1,  # data_parallel
@@ -630,7 +635,7 @@ def prepare_generator_args(
             200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             True,  # stop_at_eos
             True,  # ci_only
             1,  # data_parallel
@@ -649,7 +654,7 @@ def prepare_generator_args(
             2,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             True,  # stop_at_eos
             True,  # ci_only
             1,  # data_parallel
@@ -707,6 +712,7 @@ def prepare_generator_args(
             "P300": (1, 2),
             "P150x4": (1, 4),
             "P150x8": (1, 8),
+            "BHGLX": (8, 4),
         }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
     ],
     indirect=True,
@@ -982,12 +988,21 @@ def test_demo_text(
 
         user_done = [False] * global_batch_size  # Keeps track when a user reaches EoD token
 
-        # Currently only supporting greedy decoding (temperature=0) on device
-        argmax_on_device = sampling_params["temperature"] == 0
-        if argmax_on_device:
-            device_sampling_params = SamplingParams(temperature=0.0, top_k=-1, top_p=1.0)
-        else:
-            device_sampling_params = None
+        # Use device sampling for all cases when supported
+
+        device_sampling_params = (
+            SamplingParams(
+                temperature=sampling_params["temperature"],
+                top_k=sampling_params["top_k"],
+                top_p=sampling_params["top_p"],
+            )
+            if model[0]._supports_on_device_sampling
+            else None
+        )
+        if device_sampling_params is None and isinstance(sampling_params["temperature"], List):
+            # host sampling only supports single sample param for all users in a batch
+            sampling_params["temperature"] = sampling_params["temperature"][0]
+            sampling_params["top_p"] = sampling_params["top_p"][0]
 
         # Initial positions
         current_pos = torch.tensor([decoding_pos[b] if mode == "full" else 0 for b in range(global_batch_size)])
@@ -1054,7 +1069,7 @@ def test_demo_text(
             # Print perf after every iteration (skip in CI to avoid performance overhead)
             tokens_per_second_per_user = 1 / decode_iteration_time
             logger.debug(
-                f"Iteration {iteration}: {1000*decode_iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({global_batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"
+                f"Iteration {iteration}: {1000 * decode_iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({global_batch_size * tokens_per_second_per_user:.1f} tok/s throughput)"
             )
 
             if not stress_test:  # During stress test runs we will iterate over the same position for X iterations
@@ -1145,7 +1160,7 @@ def test_demo_text(
         if token_accuracy:
             acc = token_acc.compute_accuracy()
             logger.info(f"=== Top1 and Top5 Token Accuracy ===")
-            logger.info(f" Top1 Accuracy: {acc[0]*100:.2f}%, Top5 Accuracy: {acc[1]*100:.2f}%")
+            logger.info(f" Top1 Accuracy: {acc[0] * 100:.2f}%, Top5 Accuracy: {acc[1] * 100:.2f}%")
 
         profiler.end(f"inference_decode", iteration=batch_idx)
 
@@ -1213,19 +1228,19 @@ def test_demo_text(
     logger.info(f"=== Performance metrics ===")
     if tok_1_perf > 0:
         logger.info(
-            f"1st token decode time: {tok_1_perf*1000:.2f}ms [{round(1/tok_1_perf, 2)} t/s/u, {round((1/tok_1_perf)*global_batch_size, 2)} t/s]"
+            f"1st token decode time: {tok_1_perf * 1000:.2f}ms [{round(1 / tok_1_perf, 2)} t/s/u, {round((1 / tok_1_perf) * global_batch_size, 2)} t/s]"
         )
     if tok_128_perf > 0:
         logger.info(
-            f"128th token decode time: {tok_128_perf*1000:.2f}ms [{round(1/tok_128_perf, 2)} t/s/u, {round((1/tok_128_perf)*global_batch_size, 2)} t/s]"
+            f"128th token decode time: {tok_128_perf * 1000:.2f}ms [{round(1 / tok_128_perf, 2)} t/s/u, {round((1 / tok_128_perf) * global_batch_size, 2)} t/s]"
         )
     if tok_1024_perf > 0:
         logger.info(
-            f"1024th token decode time: {tok_1024_perf*1000:.2f}ms [{round(1/tok_1024_perf, 2)} t/s/u, {round((1/tok_1024_perf)*global_batch_size, 2)} t/s]"
+            f"1024th token decode time: {tok_1024_perf * 1000:.2f}ms [{round(1 / tok_1024_perf, 2)} t/s/u, {round((1 / tok_1024_perf) * global_batch_size, 2)} t/s]"
         )
     if tok_4096_perf > 0:
         logger.info(
-            f"4096th token decode time: {tok_4096_perf*1000:.2f}ms [{round(1/tok_4096_perf, 2)} t/s/u, {round((1/tok_4096_perf)*global_batch_size, 2)} t/s]"
+            f"4096th token decode time: {tok_4096_perf * 1000:.2f}ms [{round(1 / tok_4096_perf, 2)} t/s/u, {round((1 / tok_4096_perf) * global_batch_size, 2)} t/s]"
         )
 
     # Print some of the perf metrics
@@ -1240,7 +1255,7 @@ def test_demo_text(
 
     # Benchmark targets
     supported_models = ["Llama-3.2-1B", "Llama-3.2-3B", "Llama-3.1-8B", "Llama-3.2-11B", "Llama-3.1-70B", "Mistral-7B"]
-    supported_devices = ["N150", "P100", "P150", "P300", "N300", "P150x4", "P150x8", "T3K", "TG"]
+    supported_devices = ["N150", "P100", "P150", "P300", "N300", "P150x4", "P150x8", "BHGLX", "T3K", "TG"]
 
     tt_device_name = determine_device_name(mesh_device)  # submesh device should not decide performance target
     model_name = model_args[0].base_model_name
@@ -1364,6 +1379,7 @@ def test_demo_text(
             ml_model_type="llm",
             num_layers=model_args[0].n_layers,
             batch_size=global_batch_size,
+            config_params={"data_parallel": data_parallel, "tensor_parallel": num_devices // data_parallel},
             input_sequence_length=max(prefill_lens),
             output_sequence_length=num_tokens_generated_decode[0],
         )
@@ -1454,7 +1470,7 @@ def test_demo_text(
 
         # Compare paired batches (A<->A, B<->B, C<->C)
         comparisons = [(i, i + 1) for i in range(0, repeat_batches, 2)]
-        comparison_names = [f"Batch{i//2+1}<->Batch{i//2+1}" for i in range(0, repeat_batches, 2)]
+        comparison_names = [f"Batch{i // 2 + 1}<->Batch{i // 2 + 1}" for i in range(0, repeat_batches, 2)]
 
         all_matches = True
         for i, (batch1_idx, batch2_idx) in enumerate(comparisons):
@@ -1463,14 +1479,14 @@ def test_demo_text(
 
             if output1 == output2:
                 logger.info(
-                    f"{comparison_names[i]} comparison PASSED: Batches {batch1_idx+1} and {batch2_idx+1} outputs match"
+                    f"{comparison_names[i]} comparison PASSED: Batches {batch1_idx + 1} and {batch2_idx + 1} outputs match"
                 )
             else:
                 logger.warning(
-                    f"{comparison_names[i]} comparison FAILED: Batches {batch1_idx+1} and {batch2_idx+1} outputs differ"
+                    f"{comparison_names[i]} comparison FAILED: Batches {batch1_idx + 1} and {batch2_idx + 1} outputs differ"
                 )
-                logger.info(f"  Batch {batch1_idx+1} output: {output1[:100]}...")
-                logger.info(f"  Batch {batch2_idx+1} output: {output2[:100]}...")
+                logger.info(f"  Batch {batch1_idx + 1} output: {output1[:100]}...")
+                logger.info(f"  Batch {batch2_idx + 1} output: {output2[:100]}...")
                 all_matches = False
 
         assert all_matches, "Repeat batch outputs should be identical"
