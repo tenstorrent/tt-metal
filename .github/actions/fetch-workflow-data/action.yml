@@ -30,6 +30,10 @@ inputs:
   workflow_ids:
     description: 'JSON array of workflow file paths to fetch runs for (e.g., [".github/workflows/workflow.yaml"])'
     required: false
+  force-fresh:
+    description: 'If true, skip using past artifacts and redownload everything (default: false)'
+    required: false
+    default: 'false'
 
 outputs:
   total-runs:

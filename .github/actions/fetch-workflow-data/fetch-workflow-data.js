@@ -57,6 +57,7 @@ async function run() {
     // Get inputs
     const branch = core.getInput('branch') || 'main';
     const days = parseInt(core.getInput('days') || DEFAULT_DAYS);
+    const forceFresh = String(core.getInput('force-fresh') || 'false').toLowerCase() === 'true';
     const rawCachePath = core.getInput('cache-path', { required: false });
     const defaultOutputPath = path.join(process.env.GITHUB_WORKSPACE || process.cwd(), 'workflow-data.json');
     const outputPath = rawCachePath && rawCachePath.trim() ? rawCachePath : defaultOutputPath;
@@ -103,23 +104,27 @@ async function run() {
     let commitsPath = path.join(workspace, 'commits-main.json');
     let lastSuccessPath = path.join(workspace, 'last-success-timestamps.json');
 
-    // Find and restore artifacts from previous successful run
-    const previousRunId = await findPreviousAggregateRun(octokit, github.context, branch);
-    if (previousRunId) {
-      const restored = await restoreArtifactsFromPreviousRun(octokit, github.context, previousRunId, workspace, cutoffDate, days);
-      cachedGrouped = restored.cachedGrouped;
-      cachedAnnotationsIndex = restored.cachedAnnotationsIndex;
-      cachedGtestLogsIndex = restored.cachedGtestLogsIndex;
-      cachedOtherLogsIndex = restored.cachedOtherLogsIndex;
-      cachedCommits = restored.cachedCommits;
-      cachedLastSuccessTimestamps = restored.cachedLastSuccessTimestamps;
-      annotationsIndexPath = restored.annotationsIndexPath;
-      gtestLogsIndexPath = restored.gtestLogsIndexPath;
-      otherLogsIndexPath = restored.otherLogsIndexPath;
-      commitsPath = restored.commitsPath;
-      lastSuccessPath = restored.lastSuccessPath;
+    // Find and restore artifacts from previous successful run (unless force-fresh is enabled)
+    if (forceFresh) {
+      core.info('[CACHE] force-fresh enabled, skipping artifact restoration and starting fresh');
     } else {
-      core.info('[CACHE] No previous aggregate run found, starting fresh');
+      const previousRunId = await findPreviousAggregateRun(octokit, github.context, branch);
+      if (previousRunId) {
+        const restored = await restoreArtifactsFromPreviousRun(octokit, github.context, previousRunId, workspace, cutoffDate, days);
+        cachedGrouped = restored.cachedGrouped;
+        cachedAnnotationsIndex = restored.cachedAnnotationsIndex;
+        cachedGtestLogsIndex = restored.cachedGtestLogsIndex;
+        cachedOtherLogsIndex = restored.cachedOtherLogsIndex;
+        cachedCommits = restored.cachedCommits;
+        cachedLastSuccessTimestamps = restored.cachedLastSuccessTimestamps;
+        annotationsIndexPath = restored.annotationsIndexPath;
+        gtestLogsIndexPath = restored.gtestLogsIndexPath;
+        otherLogsIndexPath = restored.otherLogsIndexPath;
+        commitsPath = restored.commitsPath;
+        lastSuccessPath = restored.lastSuccessPath;
+      } else {
+        core.info('[CACHE] No previous aggregate run found, starting fresh');
+      }
     }
 
     // Convert cached grouped map to array of runs for merging
