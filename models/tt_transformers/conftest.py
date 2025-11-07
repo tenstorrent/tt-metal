@@ -21,7 +21,7 @@ def get_mesh_device_name(num_devices, mesh_device_name):
 
     if is_blackhole():
         dict_device_names = {
-            1: "P150",  # We don't need to check for P150, because using DP would not use the P100 device config (7x1)
+            1: "P150",  # We don't need to check for P100, because using DP would not use the P100 device config (7x1)
             2: "P300",
             4: "P150x4",
             8: "P150x8",
