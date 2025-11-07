@@ -94,6 +94,10 @@ class DeepseekGenerator:
         )
         # self._ensure_max_seq_len(self.hf_config)
         self.hf_config.max_seq_len = 1024  # TODO: Change this when needed?
+        self.hf_config.num_hidden_layers = 5
+        logger.info("================================================")
+        logger.info(f"hf_config.num_hidden_layers: {self.hf_config.num_hidden_layers}")
+        logger.info("================================================")
         # Optional overrides for layer counts before building states
         if override_num_layers is not None:
             try:
@@ -371,11 +375,22 @@ class DeepseekGenerator:
     def _tt_from_tokens_step(self, tokens_step: torch.Tensor) -> ttnn.Tensor:
         """Tokens step: [B] -> TTNN tensor [1, 1, B] uint32, replicated to mesh."""
         assert tokens_step.dim() == 1
+        logger.info(f"_tt_from_tokens_step tokens_step shape: {tokens_step.shape}")
         x = tokens_step.view(1, 1, -1).to(torch.int32)
+        logger.info(f"_tt_from_tokens_step x: {x}")
+        # return ttnn.from_torch(
+        #     x,
+        #     device=self.mesh_device,
+        #     mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        #     dtype=ttnn.uint32,
+        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        #     layout=ttnn.ROW_MAJOR_LAYOUT,
+        # )
+
         return ttnn.from_torch(
             x,
             device=self.mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, self.mesh_device.shape, (-1, None)),
             dtype=ttnn.uint32,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -452,7 +467,8 @@ class DeepseekGenerator:
         assert len(tokens_list) > 0 and len(tokens_list) <= batch_size
         max_len = max(len(t) for t in tokens_list)
         # Round up to nearest multiple of TILE_SIZE
-        max_len = ((max_len + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+        block_size = ttnn.TILE_SIZE
+        max_len = ((max_len + block_size - 1) // block_size) * block_size
         out = torch.full((batch_size, max_len), self.tokenizer.pad_token_id, dtype=torch.long)
         lengths = torch.zeros((batch_size,), dtype=torch.int32)
         for i, seq in enumerate(tokens_list):
@@ -530,7 +546,9 @@ class DeepseekGenerator:
 
         # First sampled token after prompt
         last_logits = last_logits.squeeze(0).squeeze(0)
+        logger.info(f"last_logits shape: {last_logits.shape}")
         next_tokens = self._sample_greedy(last_logits)
+        logger.info(f"next_tokens shape: {next_tokens.shape}")
         token_value = int(next_tokens[0].item())
         logger.info(f"First sampled token: {self.tokenizer.decode(token_value, skip_special_tokens=True)}")
 
@@ -650,10 +668,19 @@ class DeepseekGenerator:
         seq_len = tokens.shape[-1]
 
         # Prepare TT inputs for prefill - reshape to [1, 1, actual_seq_len]
+        # tt_tokens = ttnn.from_torch(
+        #     tokens,
+        #     device=self.mesh_device,
+        #     mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        #     dtype=ttnn.uint32,
+        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        #     layout=ttnn.ROW_MAJOR_LAYOUT,
+        # )
+
         tt_tokens = ttnn.from_torch(
             tokens,
             device=self.mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, self.mesh_device.shape, (-1, None)),
             dtype=ttnn.uint32,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -759,6 +786,15 @@ class DeepseekGenerator:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
             )
+
+            # host_tokens = ttnn.from_torch(
+            #     torch_input,
+            #     device=None,
+            #     mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, self.mesh_device.shape, (-1, None)),
+            #     dtype=ttnn.uint32,
+            #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            #     layout=ttnn.ROW_MAJOR_LAYOUT,
+            # )
 
             ttnn.copy_host_to_device_tensor(host_tokens, self._trace_tokens)
             host_positions = ttnn.from_torch(

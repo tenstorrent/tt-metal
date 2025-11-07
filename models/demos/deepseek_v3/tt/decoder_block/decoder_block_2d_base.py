@@ -5,6 +5,7 @@ from abc import abstractmethod
 from pathlib import Path
 
 import torch
+from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
@@ -118,12 +119,14 @@ class DecoderBlock2DBase(DecoderBlockBase):
         page_table: ttnn.Tensor,
     ) -> ttnn.Tensor:
         # MLA norm
+        logger.info(f"decoder_block_2d_base forward_decode x shape: {x.shape}")
         mla_norm_in = ttnn.to_memory_config(x, **cfg["mla_norm_reshard"])
         mla_norm_out = DistributedRMSNorm.forward_decode(mla_norm_in, cfg["mla_norm"])
         ttnn.deallocate(mla_norm_in)
 
         # MLA
         mla_norm_out = ttnn.to_memory_config(mla_norm_out, **cfg["mla_reshard"])
+        logger.info(f"decoder_block_2d_base forward_decode mla_norm_out shape: {mla_norm_out.shape}")
         mla_out = MLA2D.forward_decode(mla_norm_out, position_idxs, cfg["mla"], rope_tensors, page_table)
         ttnn.deallocate(mla_norm_out)
 
@@ -137,6 +140,7 @@ class DecoderBlock2DBase(DecoderBlockBase):
         ttnn.deallocate(mlp_norm_in)
 
         # MLP
+        logger.info(f"decoder_block_2d_base forward_decode mlp_norm_out shape: {mlp_norm_out.shape}")
         mlp_norm_out = ttnn.to_memory_config(mlp_norm_out, **cfg["mlp_reshard"])
         mlp_out = cls.forward_mlp_decode(mlp_norm_out, cfg["mlp"])
         ttnn.deallocate(mlp_norm_out)
@@ -145,6 +149,7 @@ class DecoderBlock2DBase(DecoderBlockBase):
         x += mlp_out
         ttnn.deallocate(mlp_out)
 
+        logger.info(f"decoder_block_2d_base forward_decode return x shape: {x.shape}")
         return x
 
     @classmethod

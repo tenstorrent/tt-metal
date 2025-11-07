@@ -34,7 +34,7 @@ from models.demos.deepseek_v3.utils.test_utils import (
     "EmbeddingClass,mode,batch_size_or_seq_len",
     [
         # (Embedding1D, "decode", 32),
-        (EmbeddingDP, "decode", 128),
+        (EmbeddingDP, "decode", 256),
     ]
     # + [
     #     (EmbeddingClass, "prefill", seq_len)
@@ -44,7 +44,7 @@ from models.demos.deepseek_v3.utils.test_utils import (
 )
 @pytest.mark.parametrize(
     "generate_reference_io",
-    [False],
+    [True],
 )
 def test_embedding_forward_pass(
     EmbeddingClass,
@@ -80,6 +80,7 @@ def test_embedding_forward_pass(
             mode, module_path, batch_size_or_seq_len, 1
         )
 
+    # breakpoint()
     # Generate module configs and state
     logger.info("Setting up TTNN configs")
     weight_config = get_test_weight_config(
@@ -91,29 +92,34 @@ def test_embedding_forward_pass(
 
     # Convert input to TTNN
     logger.info("Preparing TTNN inputs")
+    logger.info(f"torch_input = {torch_input.shape}")
     tt_input_ids = ttnn.from_torch(
         torch_input,
         device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, (-1, None)),
         dtype=ttnn.uint32,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.ROW_MAJOR_LAYOUT,
     )
 
+    logger.info(f"tt_input_ids = {tt_input_ids}")
+
     # TTNN forward pass
     logger.info("Running TTNN forward pass")
     tt_output = run_module_forward(EmbeddingClass, mode, tt_input_ids, run_config)
-
+    logger.info(f"tt_output = {tt_output}")
     # Convert output back to torch
     logger.info("Validating output")
+    # breakpoint()
     tt_output_torch = ttnn.to_torch(
         tt_output,
         mesh_composer=ttnn.ConcatMesh2dToTensor(
             mesh_device,
-            dims=(0, -1),
+            dims=(-2, -1),
             mesh_shape=tuple(mesh_device.shape),
         ),
     )
+    logger.info(f"tt_output_torch = {tt_output_torch.shape}")
     if EmbeddingClass is Embedding1D:
         tt_output_torch = tt_output_torch[:1]
     else:

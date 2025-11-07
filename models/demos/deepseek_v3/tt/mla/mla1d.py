@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Sequence
 
 import torch
+from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
@@ -880,6 +881,7 @@ class MLA1D(AbstractModule):
             mesh_coords=set(get_mesh_coords(mesh_shape, row_idx)),
         )
 
+        logger.info(f"mla1d forward_decode after paged_update_cache tt_q shape: {tt_q.shape}")
         # FlashMLA
         tt_q = ttnn.to_memory_config(tt_q, **cfg["flash_mla_reshard"])
         attn_out = ttnn.transformer.paged_flash_multi_latent_attention_decode(
@@ -893,7 +895,7 @@ class MLA1D(AbstractModule):
         attn_out = ttnn.to_memory_config(attn_out, **cfg["flash_mla_out_reshard"])
 
         attn_out = ttnn.experimental.all_to_all_async_generic(attn_out, **cfg["flash_mla_a2a_decode"])
-
+        logger.info(f"mla1d forward_decode after all_to_all_async_generic attn_out shape: {attn_out.shape}")
         # wkv_b2
         attn_out = ttnn.permute(attn_out, (0, 2, 1, 3))  # [1, num_heads_local, bsz, kv_lora_rank]
         v_out = ttnn.linear(attn_out, **cfg["wkv_b2"])  # [1, num_heads_local, bsz, v_head_dim]
@@ -906,6 +908,8 @@ class MLA1D(AbstractModule):
         v_out = ttnn.reshape(v_out, (1, 1, bsz, num_heads * v_head_dim))
 
         out = ttnn.linear(v_out, **cfg["wo"])  # [1, 1, bsz, dim]
+
+        logger.info(f"mla1d forward_decode return out shape: {out.shape}")
 
         return out
 

@@ -5,6 +5,7 @@
 from pathlib import Path
 
 import torch
+from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
@@ -172,16 +173,17 @@ class DistributedRMSNorm(RMSNormBase):
         Returns:
             Output tensor after embedding lookup
         """
-
+        logger.info(f"distributed_rms_norm forward x shape: {x.shape}")
         program_config = cls._get_pc(x.memory_config())
         # Run distributed rmsnorm part 1
         tt_stats = ttnn.rms_norm_pre_all_gather(x, program_config=program_config, **cfg["rms_norm_pre_all_gather"])
-
+        logger.info(f"distributed_rms_norm forward tt_stats shape: {tt_stats.shape}")
         # AllGather stats
         ccl = cfg["ccl"]
         tt_gathered_stats = ttnn.experimental.all_gather_async(
             tt_stats, **ccl.populate_all_gather_runtime_args(cfg["all_gather"])
         )
+        logger.info(f"distributed_rms_norm forward tt_gathered_stats shape: {tt_gathered_stats.shape}")
         ttnn.deallocate(tt_stats)
 
         # Run distributed rmsnorm part 2
@@ -193,4 +195,5 @@ class DistributedRMSNorm(RMSNormBase):
         )
         ttnn.deallocate(tt_gathered_stats)
 
+        logger.info(f"distributed_rms_norm forward return tt_out shape: {tt_out.shape}")
         return tt_out
