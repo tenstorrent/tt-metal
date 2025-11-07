@@ -5,7 +5,6 @@
 #include "groupnorm_pybind.hpp"
 
 #include <pybind11/pybind11.h>
-#include <pybind11/numpy.h>
 #include <pybind11/stl.h>
 
 #include "ttnn-pybind/decorators.hpp"
@@ -264,9 +263,7 @@ void bind_normalization_group_norm_operation(pybind11::module& module) {
             py::arg("compute_kernel_config") = std::nullopt,
             py::arg("negative_mask") = std::nullopt,
             py::arg("use_welford") = false});
-
-    auto ttnn_module = py::module_::import("ttnn");
-    ttnn_module.def(
+    module.def(
         "create_group_norm_input_mask",
         [](int64_t num_channel, int64_t num_groups, int64_t num_cores_across_channel, DataType data_type = DataType::BFLOAT16) {
             return create_group_norm_input_mask(num_channel, num_groups, num_cores_across_channel, data_type);
@@ -280,7 +277,7 @@ void bind_normalization_group_norm_operation(pybind11::module& module) {
             Returns a ttnn.Tensor of shape [1, num_groups, 32, 32*block_wt], dtype=ttnn.DataType.BFLOAT16.
         )doc"
     );
-    ttnn_module.def(
+    module.def(
         "create_group_norm_input_negative_mask",
         [](int64_t num_channel, int64_t num_groups, int64_t num_cores_across_channel, DataType data_type = DataType::BFLOAT16) {
             return create_group_norm_input_negative_mask(num_channel, num_groups, num_cores_across_channel, data_type);
