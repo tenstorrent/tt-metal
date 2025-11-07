@@ -28,11 +28,16 @@ inline __attribute__((always_inline)) void risc_context_switch() {
     rtos_context_switch_ptr();
     ncrisc_noc_counters_init();
 #elif defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
-    // Only NoC0
-    ncrisc_noc_full_sync<1>();
+    // Sync is only needed when running on ERISC0 and DM_DEDICATED_NOC
+    // With Dynamic NOC, the counters are shared in L1
+    if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
+        ncrisc_noc_full_sync<1>();
+    }
     service_eth_msg();
     update_boot_results_eth_link_status_check();
-    ncrisc_noc_counters_init<1>();
+    if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
+        ncrisc_noc_counters_init<1>();
+    }
 #endif
 #endif
 }
