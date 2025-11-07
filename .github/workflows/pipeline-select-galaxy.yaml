@@ -88,6 +88,20 @@ on:
           - wan2-2
           - mochi
         default: 'all'
+      galaxy-frequent-model:
+        description: 'Model to test in galaxy-frequent (only when galaxy-frequent is enabled)'
+        required: false
+        type: choice
+        options:
+          - all
+          - llama3
+          - resnet50
+          - unit
+          - sd35
+          - wan22
+          - mochi
+          - flux1
+        default: 'all'
 run-name: ${{ inputs.description }}
 jobs:
   # Centralized logic to determine what should run
@@ -199,6 +213,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      model: ${{ inputs.galaxy-frequent-model || 'all' }}
       topology: 'topology-6u'
   galaxy-demo-tests:
     if: ${{ needs.determine-tests.outputs.run-demo == 'true' }}

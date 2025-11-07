@@ -12,6 +12,10 @@ on:
       build-artifact-name:
         required: true
         type: string
+      model:
+        required: false
+        type: string
+        default: "all"
       extra-tag:
         required: false
         type: string
@@ -22,19 +26,81 @@ on:
         default: "topology-6u"
 
 jobs:
+  generate-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Generate Matrix
+        id: set-matrix
+        run: |
+          # Create full matrix with jq for readability
+          FULL_MATRIX=$(jq -n '[
+            {
+              "name": "Galaxy Llama3 frequent tests",
+              "arch": "wormhole_b0",
+              "model": "llama3",
+              "timeout": 90,
+              "owner_id": "U053W15B6JF"
+            },
+            {
+              "name": "Galaxy resnet50 frequent tests",
+              "arch": "wormhole_b0",
+              "model": "resnet50",
+              "timeout": 90,
+              "owner_id": "U052J2QDDKQ"
+            },
+            {
+              "name": "Galaxy unit/distributed frequent tests",
+              "arch": "wormhole_b0",
+              "model": "unit",
+              "timeout": 90,
+              "owner_id": "UBHPP2NDP"
+            },
+            {
+              "name": "Galaxy SD3.5 frequent tests",
+              "arch": "wormhole_b0",
+              "model": "sd35",
+              "timeout": 90,
+              "owner_id": "U03FJB5TM5Y"
+            },
+            {
+              "name": "Galaxy Wan2.2 frequent tests",
+              "arch": "wormhole_b0",
+              "model": "wan22",
+              "timeout": 40,
+              "owner_id": "U03FJB5TM5Y"
+            },
+            {
+              "name": "Galaxy mochi frequent tests",
+              "arch": "wormhole_b0",
+              "model": "mochi",
+              "timeout": 90,
+              "owner_id": "U09ELB03XRU"
+            },
+            {
+              "name": "Galaxy Flux.1 frequent tests",
+              "arch": "wormhole_b0",
+              "model": "flux1",
+              "timeout": 90,
+              "owner_id": "U08TED0JM9D"
+            }
+          ]' --compact-output)
+          
+          # Filter matrix based on model selection
+          if [ "${{ inputs.model }}" = "all" ]; then
+            echo "matrix=$FULL_MATRIX" >> $GITHUB_OUTPUT
+          else
+            FILTERED_MATRIX=$(echo "$FULL_MATRIX" | jq --arg model "${{ inputs.model }}" '[.[] | select(.model == $model)]' --compact-output)
+            echo "matrix=$FILTERED_MATRIX" >> $GITHUB_OUTPUT
+          fi
+
   galaxy-frequent-tests:
+    needs: generate-matrix
     strategy:
       fail-fast: false
       matrix:
-        test-group: [
-          { name: "Galaxy Llama3 frequent tests", arch: wormhole_b0, model: llama3, timeout: 90, owner_id: U053W15B6JF}, # Djordje Ivanovic
-          { name: "Galaxy resnet50 frequent tests", arch: wormhole_b0, model: resnet50, timeout: 90, owner_id: U052J2QDDKQ}, # Pavle Josipovic
-          { name: "Galaxy unit/distributed frequent tests", arch: wormhole_b0, model: unit, timeout: 90, owner_id: UBHPP2NDP}, # Joseph Chu #See issue #30017
-          { name: "Galaxy SD3.5 frequent tests", arch: wormhole_b0, model: sd35, timeout: 90, owner_id: U03FJB5TM5Y}, # Colman Glagovich
-          { name: "Galaxy Wan2.2 frequent tests", arch: wormhole_b0, model: wan22, timeout: 40, owner_id: U03FJB5TM5Y}, # Colman Glagovich
-          { name: "Galaxy mochi frequent tests", arch: wormhole_b0, model: mochi, timeout: 90, owner_id: U09ELB03XRU}, # Stephen Osborne
-          { name: "Galaxy Flux.1 frequent tests", arch: wormhole_b0, model: flux1, timeout: 90, owner_id: U08TED0JM9D}, # Samuel Adesoye
-        ]
+        test-group: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
     name: ${{ matrix.test-group.name }}
     runs-on:
       - arch-wormhole_b0
