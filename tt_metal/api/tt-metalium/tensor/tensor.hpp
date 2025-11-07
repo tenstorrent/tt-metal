@@ -184,7 +184,6 @@ public:
     [[nodiscard]] Tensor unpad_from_tile(const tt::tt_metal::Shape& output_tensor_shape) const;
 
     [[nodiscard]] std::string write_to_string() const;
-    void print() const;
 
     // Deallocates device-side Tensor storage.
     // If the tensor is on host, does nothing.

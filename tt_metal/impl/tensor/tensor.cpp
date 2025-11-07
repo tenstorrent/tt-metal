@@ -404,12 +404,6 @@ Tensor Tensor::to_layout(Layout target_layout) const { return tensor_ops::tensor
 
 std::string Tensor::write_to_string() const { return tensor_impl::to_string_wrapper(*this); }
 
-void Tensor::print() const {
-    GraphTracker::instance().track_function_start("Tensor::print", *this);
-    tensor_ops::tensor_print(*this);
-    GraphTracker::instance().track_function_end();
-}
-
 Tensor Tensor::pad(
     const tt::tt_metal::Shape& output_padded_shape,
     const tt::tt_metal::Shape& input_tensor_start,
