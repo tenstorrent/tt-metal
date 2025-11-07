@@ -345,8 +345,10 @@ void build_tt_fabric_program(
                         device, *fabric_program_ptr, fabric_node_id, remote_fabric_node_id, eth_chan, eth_direction);
 
                     if (fabric_tensix_extension_udm_mode) {
-                        // setup the local relay kernel connection
-                        edm_builder.connect_to_local_tensix_builder(tensix_builder);
+                        // Get reference to the builder stored in the map
+                        auto& edm_builder_in_map = edm_builders.at(eth_chan);
+                        // setup the local relay kernel connection - must be called on the builder in the map!
+                        edm_builder_in_map.connect_to_local_tensix_builder(tensix_builder);
                     }
 
                     tensix_builders.emplace(eth_chan, std::move(tensix_builder));

@@ -1114,6 +1114,8 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
         }
     };
 
+    DPRINT << "Router hop_cmd " << (uint)hop_cmd << " my_direction " << (uint)my_direction << ENDL();
+
     switch (hop_cmd) {
         case LowLatencyMeshRoutingFields::NOOP: break;
         case LowLatencyMeshRoutingFields::FORWARD_EAST:
@@ -2963,7 +2965,6 @@ void kernel_main() {
     RouterToRouterSender<LOCAL_RELAY_NUM_BUFFERS> local_relay_interface;
     if constexpr (udm_mode) {
         if (has_local_tensix_relay_connection) {
-            DPRINT << "creating local_relay_interface" << ENDL();
             // Reuse RouterToRouterSender for relay connection
             // Relay is just another sender interface, but pointing to local tensix instead of remote router
             // Relay connection is ALWAYS 2D (direction-based), use my_direction for all indexing
@@ -3111,7 +3112,6 @@ void kernel_main() {
     // if enable the tensix extension, then before open downstream connection, need to wait for downstream tensix ready
     // for connection.
     if constexpr (num_downstream_tensix_connections) {
-        DPRINT << "wait_for_notification " << num_downstream_tensix_connections << ENDL();
         wait_for_notification((uint32_t)edm_local_tensix_sync_ptr_addr, num_downstream_tensix_connections);
     }
 
@@ -3140,7 +3140,6 @@ void kernel_main() {
         }
         if constexpr (udm_mode) {
             if (has_local_tensix_relay_connection) {
-                DPRINT << "open local_relay_interface" << ENDL();
                 // open connection here to relay kernel
                 local_relay_interface
                     .template open<false, use_posted_writes_for_connection_open, tt::tt_fabric::worker_handshake_noc>();
