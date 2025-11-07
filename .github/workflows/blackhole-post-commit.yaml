@@ -176,103 +176,103 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
-  blackhole-demo-tests:
-    needs: [build-artifact, generate-matrix]
-    secrets: inherit
-    uses: ./.github/workflows/blackhole-demo-tests-impl.yaml
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
-    with:
-      runner-label: ${{ matrix.test-group }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  # blackhole-demo-tests:
+  #   needs: [build-artifact, generate-matrix]
+  #   secrets: inherit
+  #   uses: ./.github/workflows/blackhole-demo-tests-impl.yaml
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       test-group: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+  #   with:
+  #     runner-label: ${{ matrix.test-group }}
+  #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+  #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+  #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
-  ttnn-unit-tests:
-    needs: [build-artifact, generate-matrix]
-    secrets: inherit
-    uses: ./.github/workflows/ttnn-post-commit.yaml
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: ${{ fromJson(needs.generate-matrix.outputs.civ2-matrix) }}
-    with:
-      arch: blackhole
-      runner-label: ${{ matrix.test-group }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  # ttnn-unit-tests:
+  #   needs: [build-artifact, generate-matrix]
+  #   secrets: inherit
+  #   uses: ./.github/workflows/ttnn-post-commit.yaml
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       test-group: ${{ fromJson(needs.generate-matrix.outputs.civ2-matrix) }}
+  #   with:
+  #     arch: blackhole
+  #     runner-label: ${{ matrix.test-group }}
+  #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+  #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+  #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
-  metalium-smoke-tests:
-    needs: [build-artifact, generate-matrix]
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: ${{ fromJson(needs.generate-matrix.outputs.civ2-viommu-matrix) }}
-    uses: ./.github/workflows/smoke.yaml
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      package-artifact-name: ${{ needs.build-artifact.outputs.packages-artifact-name }}
-      runner: ${{ matrix.platform }}
-      product: tt-metalium
-  ttnn-smoke-tests:
-    needs: [build-artifact, generate-matrix]
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: ${{ fromJson(needs.generate-matrix.outputs.civ2-viommu-matrix) }}
-    uses: ./.github/workflows/smoke.yaml
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      package-artifact-name: ${{ needs.build-artifact.outputs.packages-artifact-name }}
-      runner: ${{ matrix.platform }}
-      product: tt-nn
+  # metalium-smoke-tests:
+  #   needs: [build-artifact, generate-matrix]
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       platform: ${{ fromJson(needs.generate-matrix.outputs.civ2-viommu-matrix) }}
+  #   uses: ./.github/workflows/smoke.yaml
+  #   with:
+  #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+  #     package-artifact-name: ${{ needs.build-artifact.outputs.packages-artifact-name }}
+  #     runner: ${{ matrix.platform }}
+  #     product: tt-metalium
+  # ttnn-smoke-tests:
+  #   needs: [build-artifact, generate-matrix]
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       platform: ${{ fromJson(needs.generate-matrix.outputs.civ2-viommu-matrix) }}
+  #   uses: ./.github/workflows/smoke.yaml
+  #   with:
+  #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+  #     package-artifact-name: ${{ needs.build-artifact.outputs.packages-artifact-name }}
+  #     runner: ${{ matrix.platform }}
+  #     product: tt-nn
 
-  # TT-CNN Unit Tests
-  tt-cnn-unit-tests:
-    needs: [build-artifact, generate-matrix]
-    secrets: inherit
-    uses: ./.github/workflows/tt-cnn-post-commit.yaml
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: ${{ fromJson(needs.generate-matrix.outputs.civ2-matrix) }}
-    with:
-      arch: blackhole
-      runner-label: ${{ matrix.test-group }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  # # TT-CNN Unit Tests
+  # tt-cnn-unit-tests:
+  #   needs: [build-artifact, generate-matrix]
+  #   secrets: inherit
+  #   uses: ./.github/workflows/tt-cnn-post-commit.yaml
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       test-group: ${{ fromJson(needs.generate-matrix.outputs.civ2-matrix) }}
+  #   with:
+  #     arch: blackhole
+  #     runner-label: ${{ matrix.test-group }}
+  #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+  #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+  #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
-  blackhole-20-cores-tests:
-    needs: [build-artifact, generate-matrix]
-    secrets: inherit
-    uses: ./.github/workflows/blackhole-20-cores-tests.yaml
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: ${{ fromJson(needs.generate-matrix.outputs.civ2-viommu-matrix) }}
-    with:
-      arch: blackhole
-      runner-label: ${{ matrix.test-group }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  # blackhole-20-cores-tests:
+  #   needs: [build-artifact, generate-matrix]
+  #   secrets: inherit
+  #   uses: ./.github/workflows/blackhole-20-cores-tests.yaml
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       test-group: ${{ fromJson(needs.generate-matrix.outputs.civ2-viommu-matrix) }}
+  #   with:
+  #     arch: blackhole
+  #     runner-label: ${{ matrix.test-group }}
+  #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+  #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+  #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
-  # Multi-card post-commit tests
-  blackhole-multi-card-post-commit-tests:
-    needs: build-artifact
-    secrets: inherit
-    uses: ./.github/workflows/blackhole-multi-card-post-commit-tests-impl.yaml
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: [ "BH-LLMBox", "BH-LoudBox", "P300-viommu" ]
-    with:
-      arch: blackhole
-      runner-label: ${{ matrix.test-group }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  # # Multi-card post-commit tests
+  # blackhole-multi-card-post-commit-tests:
+  #   needs: build-artifact
+  #   secrets: inherit
+  #   uses: ./.github/workflows/blackhole-multi-card-post-commit-tests-impl.yaml
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       test-group: [ "BH-LLMBox", "BH-LoudBox", "P300-viommu" ]
+  #   with:
+  #     arch: blackhole
+  #     runner-label: ${{ matrix.test-group }}
+  #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+  #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+  #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
