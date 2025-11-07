@@ -89,20 +89,16 @@ void reduce_c_transposed(uint32_t out_cb) {
 
     constexpr uint32_t num_tiles = k_chunk_size * q_chunk_size;
 
-    max_tile_init();
+    // Use LLK SFPU SDPA reduce (MAX over columns) per column of the block
     constexpr uint32_t reduce_dst_idx = 0;
-    reduce_init<PoolType::MAX, ReduceDim::REDUCE_COL>(in0_cb, scale_cb, out_cb);
+    sfpu_reduce_max_sdpa_init(q_chunk_size);
     for (uint32_t j = 0; j < q_chunk_size; j++) {
         acquire_dst();
-
-        for (uint32_t i = 0; i < k_chunk_size; i++) {
-            reduce_tile<PoolType::MAX, ReduceDim::REDUCE_COL>(
-                in0_cb, scale_cb, i * q_chunk_size + j, 0, reduce_dst_idx);
-        }
+        // Reduce k_chunk_size rows for column j into first row at reduce_dst_idx
+        sfpu_reduce_max_sdpa(reduce_dst_idx, k_chunk_size, (int)VectorMode::RC_custom);
         pack_tile(reduce_dst_idx, out_cb);
         release_dst();
     }
-    reduce_uninit();
 }
 
 namespace NAMESPACE {
