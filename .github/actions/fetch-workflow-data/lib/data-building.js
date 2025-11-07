@@ -191,7 +191,7 @@ async function buildCommitsIndex(cachedCommits, days, branch, octokit, context, 
   let newCommitsCount = 0;
   let skippedCachedCommits = 0;
   let consecutiveCachedCommits = 0;
-  const MAX_CONSECUTIVE_CACHED = 50; // Stop after 50 consecutive cached commits
+  const MAX_CONSECUTIVE_CACHED = 100; // Stop after 100 consecutive cached commits (unified with runs threshold in fetching.js)
   try {
     const sinceIso = getCutoffDate(days).toISOString();
     core.info(`[COMMITS] Fetching commits since ${sinceIso}`);
