@@ -302,17 +302,67 @@ def from_torch(
         if memory_config.shard_spec is None and memory_config.nd_shard_spec is None:
             raise RuntimeError("ttnn.from_torch: Shard spec must not be None for sharded tensors")
 
-    return ttnn.Tensor(
-        tensor=tensor,
-        data_type=dtype,
-        device=device,
-        layout=layout,
-        mem_config=memory_config,
-        tile=tile,
-        cq_id=cq_id,
-        pad_value=pad_value,
-        mesh_mapper=mesh_mapper.unwrap() if isinstance(mesh_mapper, ttnn.ReplicateTensorToMeshWrapper) else mesh_mapper,
-    )
+    def get_result(with_device: bool):
+        return ttnn.Tensor(
+            tensor=tensor,
+            data_type=dtype,
+            device=device if with_device else None,
+            layout=layout,
+            mem_config=memory_config,
+            tile=tile,
+            cq_id=cq_id,
+            pad_value=pad_value,
+            mesh_mapper=mesh_mapper.unwrap()
+            if isinstance(mesh_mapper, ttnn.ReplicateTensorToMeshWrapper)
+            else mesh_mapper,
+        )
+
+    if device:
+        print("USING DEVICE for FROM TORCH", flush=True)
+        no_device = get_result(False)
+        no_device = ttnn.to_device(no_device, device=device, memory_config=memory_config)
+        with_device = get_result(True)
+        assert (
+            no_device.memory_config() == with_device.memory_config()
+        ), f"mismatch:\n from_torch.memory_config:{memory_config}\n  no_device.memory_config:{no_device.memory_config()}\nwith_device.memory_config:{with_device.memory_config()}"
+        assert (
+            no_device.shape == with_device.shape
+        ), f"mismatch:\nno_device.shape:{no_device.shape}\nwith_device.shape:{with_device.shape}"
+        assert (
+            no_device.padded_shape == with_device.padded_shape
+        ), f"mismatch:\nno_device.padded_shape:{no_device.padded_shape}\nwith_device.padded_shape:{with_device.padded_shape}"
+        assert no_device == with_device
+        # assert ttnn.
+        import torch
+
+        torch.testing.assert_close(
+            torch.tensor(no_device.to_list()),
+            torch.tensor(with_device.to_list()),
+            rtol=1e-10,
+            atol=1e-10,
+            msg=lambda generated_message: f"""
+{generated_message}
+from_torch.memory_config :{memory_config}
+no_device.memory_config  :{no_device.memory_config()}
+with_device.memory_config:{with_device.memory_config()}
+no_device.shape  :{no_device.shape}
+with_device.shape:{with_device.shape}
+no_device.padded_shape  :{no_device.padded_shape}
+with_device.padded_shape:{with_device.padded_shape}
+        """,
+        )
+        assert torch.allclose(
+            torch.tensor(no_device.to_list()), torch.tensor(with_device.to_list()), rtol=1e-10, atol=1e-10
+        )
+        assert ttnn.is_tensor_storage_on_device(with_device)
+        assert ttnn.is_tensor_storage_on_device(no_device)
+        return with_device
+    else:
+        result = get_result(False)
+        if device:
+            result = ttnn.to_device(result, device, memory_config=memory_config)
+
+        return result
 
 
 def _golden_function(tensor, *, torch_rank=None, **kwargs):

@@ -255,6 +255,7 @@ def test_slice_write_block_sharded(device, dims, slice_dim, slice_size, core_x, 
         [[2, 8, 8, 32], 2, 4],
         [[2, 8, 16, 2], 2, 8],
         [[2, 981, 39, 63], 63, 41],
+        [[2, 981, 39, 64], 63, 41],
         [[1, 1024, 1024, 128], 37, 64],
     ],
 )
@@ -302,6 +303,10 @@ def test_slice_height_sharded_for_conv2d(device, dims, slice_dim, slice_size, co
         memory_config = ttnn._ttnn.operations.conv.create_sharded_memory_config_from_parallel_config(
             output_shape, parallel_config, 1
         )
+        print(f"BEGINS {begins}", flush=True)
+        print(f"ENDS {ends}", flush=True)
+        print(f"STRIDES {strides}", flush=True)
+        print(f"MEMORY_CONFIG {memory_config}", flush=True)
         this_ttnn_output = ttnn.padded_slice(ttnn_input, begins, ends, strides, memory_config=memory_config)
         output = ttnn.to_torch(this_ttnn_output)
         output = torch.reshape(output, this_torch_output.shape)

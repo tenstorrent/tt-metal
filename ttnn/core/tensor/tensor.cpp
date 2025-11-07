@@ -1149,8 +1149,7 @@ Tensor tt::tt_metal::convert_python_tensor_to_tt_tensor(
         auto tensor_layout = TensorLayout(
             strategy->construct_with_data_type,
             PageConfig(strategy->construct_with_layout, optional_tile),
-            memory_config,
-            PageConfig(layout, optional_tile).create_default_alignment(data_type, memory_config));
+            memory_config);
 
         output = create_tt_tensor_from_host_data(
             host_data, tensor_shape, tensor_layout, device, cq_id, pad_value, mesh_mapper);
