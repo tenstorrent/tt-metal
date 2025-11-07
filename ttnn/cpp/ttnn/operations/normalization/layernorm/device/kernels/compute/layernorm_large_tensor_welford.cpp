@@ -42,7 +42,7 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
 
     tile_regs_acquire();
     welford_init();
-    welford_save_state(mean_dst);
+    welford_store_mean_m2_to_dst(mean_dst);
     tile_regs_commit();
 
     cb_reserve_back(cb_ex, 1);
@@ -91,7 +91,7 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
         reconfig_data_format_srca(cb_ex, cb_ex2);
         copy_tile_to_dst_init_short_with_dt(cb_ex, cb_ex2);
         copy_tile(cb_ex2, 0, var_dst);
-        welford_restore_state(mean_dst);
+        welford_load_mean_m2_from_dst(mean_dst);
 
         reconfig_data_format_srca(cb_ex2, cb_interm_pre_add);
         transpose_wh_init_short(cb_interm_pre_add);
@@ -101,18 +101,18 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
 
             if constexpr (is_last_tile_full) {
                 // All tiles can go through the faster call which does 32 rows
-                welford_update<W>(input_dst, sample_idx, reciprocal_lut);
+                welford_tile<W>(input_dst, sample_idx, reciprocal_lut);
             } else {
                 // If it is the end tile, do it differently
                 if ((wt + j) == (Wt - 1)) {
-                    welford_update<W>(input_dst, sample_idx, reciprocal_lut);
+                    welford_tile<W>(input_dst, sample_idx, reciprocal_lut);
                 } else {
-                    welford_update_rows<W>(input_dst, sample_idx, 0, last_tile_rows, reciprocal_lut);
+                    welford_partial_tile<W>(input_dst, sample_idx, 0, last_tile_rows, reciprocal_lut);
                 }
             }
             sample_idx += tile_width;
         }
-        welford_save_state(mean_dst);
+        welford_store_mean_m2_to_dst(mean_dst);
         tile_regs_commit();
         cb_pop_front(cb_interm_pre_add, blk);
         cb_pop_front(cb_ex, 1);
@@ -136,9 +136,9 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     copy_tile(cb_ex, 0, mean_dst);
     copy_tile_to_dst_init_short_with_dt(cb_ex, cb_ex2);
     copy_tile(cb_ex2, 0, var_dst);
-    welford_restore_state(mean_dst);
+    welford_load_mean_m2_from_dst(mean_dst);
     // Store the mean and variance to the destination registers
-    welford_finalize_to_row<W>(mean_dst, W - 1, reciprocal_lut);
+    welford_store_mean_var_to_dst_row<W>(mean_dst, W - 1, reciprocal_lut);
     tile_regs_commit();
     cb_pop_front(cb_ex, 1);
     cb_pop_front(cb_ex2, 1);
@@ -170,7 +170,7 @@ void welford_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
         cb_wait_front(cb_in, 1);
         // Welford's needs transposed input tile
         transpose_wh_tile(cb_in, 0, input_dst);
-        welford_update<W>(input_dst, sample_idx, reciprocal_lut);
+        welford_tile<W>(input_dst, sample_idx, reciprocal_lut);
 
         // Pop the input
         cb_pop_front(cb_in, 1);
@@ -182,13 +182,13 @@ void welford_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     transpose_wh_tile(cb_in, 0, input_dst);
 
     if constexpr (is_last_tile_full) {
-        welford_update<W>(input_dst, sample_idx, reciprocal_lut);
+        welford_tile<W>(input_dst, sample_idx, reciprocal_lut);
     } else {
-        welford_update_rows<W>(input_dst, sample_idx, 0, last_tile_rows, reciprocal_lut);
+        welford_partial_tile<W>(input_dst, sample_idx, 0, last_tile_rows, reciprocal_lut);
     }
 
     // Store the mean and variance to the destination registers
-    welford_finalize_to_row<W>(mean_dst, W - 1, reciprocal_lut);
+    welford_store_mean_var_to_dst_row<W>(mean_dst, W - 1, reciprocal_lut);
 
     tile_regs_commit();
     cb_pop_front(cb_in, 1);
@@ -247,104 +247,27 @@ void MAIN {
     auto p_reciprocals = kutil::compute::memory::get_pointer_to_cb_data<recip_lut_t>(cb_reciprocals, 0);
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
-        // =====================================
-        // First pass over the input.
-        // Calculate E[x] and Var[x]
-        // =====================================
-        uint32_t num_cols_processed = 0;
-        for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            if constexpr (fuse_pre_add) {
-                // Fused pre-add
-                reconfig_data_format(cb_in, cb_inb);
-                add_tiles_init(cb_in, cb_inb);
-                tile_regs_acquire();
-                for (uint32_t j = 0; j < blk; j++) {
-                    cb_wait_front(cb_in, j + 1);
-                    cb_wait_front(cb_inb, j + 1);
-                    add_tiles(cb_in, cb_inb, j, j, j);
-                }
-                tile_regs_commit();
-
-                cb_pop_front(cb_inb, blk);
-
-                // Pack to intermediate CB (needed
-                // to workaround transpose_wh_dest bug)
-                pack_reconfig_data_format(cb_interm_pre_add);
-                cb_reserve_back(cb_interm_pre_add, blk);
-                tile_regs_wait();
-                for (uint32_t j = 0; j < blk; j++) {
-                    pack_tile(j, cb_interm_pre_add);
-                }
-                tile_regs_release();
-                cb_push_back(cb_interm_pre_add, blk);
-            }
-
-            tile_regs_acquire();
-            if (wt > 0) {
-                // Copy previous accumulated (row tiles)
-                // mean and variance to dest regs
-                cb_wait_front(cb_welford.read(), twotiles);
-
-                reconfig_data_format_srca(cb_welford.read());
-                copy_tile_to_dst_init_short(cb_welford.read());
-                copy_tile(cb_welford.read(), 0, dst1);
-                copy_tile(cb_welford.read(), 1, dst2);
-
-                cb_pop_front(cb_welford.read(), twotiles);
-                welford_load_mean_m2_from_dst(dst1);
-            } else {
-                welford_clear_previous_mean_and_m2();
-            }
-
-            // Process block of Welford's
-            reconfig_data_format_srca(cb_result_or_input);
-            transpose_wh_init_short(cb_result_or_input);
-            welford_init();
-            for (uint32_t j = 0; j < blk; j++) {
-                cb_wait_front(cb_result_or_input, j + 1);
-                transpose_wh_tile(cb_result_or_input, j, dst0);
-                auto num_cols_in_tile = std::min(tile_width, W - num_cols_processed);
-                welford_partial_tile<W>(dst0, num_cols_processed, 0, num_cols_in_tile, *p_reciprocals);
-                num_cols_processed += num_cols_in_tile;
-            }
-            welford_store_mean_m2_to_dst(dst1);
-            tile_regs_commit();
-
-            // Pop the input or result CB
-            if constexpr (fuse_pre_add) {
-                cb_pop_front(cb_in, blk);
-                cb_pop_front(cb_interm_pre_add, blk);
-            } else {
-                cb_pop_front(cb_in, blk);
-            }
-
-            // Pack dst1 and dst2 into CBs
-            // Leave as row tiles
-            tile_regs_wait();
-            cb_reserve_back(cb_welford.write(), twotiles);
-            pack_reconfig_data_format(cb_welford.write());
-            pack_tile_block(dst1, cb_welford.write(), twotiles);
-            tile_regs_release();
-
-            cb_push_back(cb_welford.write(), twotiles);
-
-            cb_welford.swap();
+        // Depending on whether we need to fuse pre-add, the approach for welford is different.
+        // So we move it to a separate function.
+        if constexpr (fuse_pre_add) {
+            welford_fuse_pre_add<
+                cb_in,
+                cb_inb,
+                cb_interm_pre_add,
+                cb_ex,
+                cb_ex2,
+                input_dst,
+                mean_dst,
+                var_dst,
+                Wt,
+                tile_width,
+                W,
+                blk>(*p_reciprocals);
+        } else {
+            welford_no_fuse_pre_add<cb_in, input_dst, mean_dst, Wt, tile_width, W>(*p_reciprocals);
         }
-
-        // Transpose mean and variance back to
-        // columns and pack back to CBs
-        cb_wait_front(cb_welford.read(), twotiles);
-        transpose_wh_init_short(cb_welford.read());
-        reconfig_data_format_srca(cb_welford.read());
-        tile_regs_acquire();
-        transpose_wh_tile(cb_welford.read(), 0, dst1);
-        transpose_wh_tile(cb_welford.read(), 1, dst2);
-
-        welford_load_mean_m2_from_dst(dst1);
-        welford_store_mean_var_to_dst_row<W>(dst1, W - 1, *p_reciprocals);
-
-        tile_regs_commit();
-        tile_regs_wait();
+        // We should expect that either of the two would have have populated dst regs with mean and
+        // variance in mean_dst and var_dst respectively.
 
         cb_reserve_back(cb_ex, onetile);
         cb_reserve_back(cb_ex2, onetile);
