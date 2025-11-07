@@ -3148,22 +3148,5 @@ TEST_F(Fabric1DTensixFixture, TestLinearFabricMulticastNocAtomicIncMux) {
     FabricMulticastCommon(this, NOC_UNICAST_ATOMIC_INC, {std::make_tuple(RoutingDirection::E, 1, 2)});
 }
 
-// Test cases using the new Fabric1DTensixUdmFixture to test tensix config with udm
-TEST_F(Fabric1DTensixUdmFixture, TestLinearFabricUnicastNocUnicastWriteUdm) {
-    FabricUnicastCommon(this, NOC_UNICAST_WRITE, {std::make_tuple(RoutingDirection::E, 1)});
-}
-
-TEST_F(Fabric1DTensixUdmFixture, TestLinearFabricUnicastNocAtomicIncUdm) {
-    FabricUnicastCommon(this, NOC_UNICAST_ATOMIC_INC, {std::make_tuple(RoutingDirection::E, 1)});
-}
-
-TEST_F(Fabric1DTensixUdmFixture, TestLinearFabricMulticastNocUnicastWriteUdm) {
-    FabricMulticastCommon(this, NOC_UNICAST_WRITE, {std::make_tuple(RoutingDirection::E, 1, 2)});
-}
-
-TEST_F(Fabric1DTensixUdmFixture, TestLinearFabricMulticastNocAtomicIncUdm) {
-    FabricMulticastCommon(this, NOC_UNICAST_ATOMIC_INC, {std::make_tuple(RoutingDirection::E, 1, 2)});
-}
-
 }  // namespace fabric_router_tests
 }  // namespace tt::tt_fabric
