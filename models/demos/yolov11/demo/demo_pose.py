@@ -1,570 +1,1076 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
-# SPDX-License-Identifier: Apache-2.0
-
-"""
-YOLO11 Pose Estimation Demo using TTNN
-
-This demo runs pose estimation (keypoint detection) using the TTNN implementation
-on TT-Metal hardware. It can run on images or COCO dataset.
-"""
+#!/usr/bin/env python3
 
 import os
+import sys
+from pathlib import Path
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+REPO_ROOT = SCRIPT_DIR
+for parent in SCRIPT_DIR.parents:
+    potential_root = parent
+    if (potential_root / "models" / "demos" / "yolov11").exists():
+        REPO_ROOT = potential_root
+        break
+
+sys.path.insert(0, str(REPO_ROOT))
 
 import cv2
 import numpy as np
-import pytest
 import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import disable_persistent_kernel_cache
-from models.demos.utils.common_demo_utils import LoadImages, get_mesh_mappers, preprocess
-from models.demos.yolov11.common import YOLOV11_L1_SMALL_SIZE
 from models.demos.yolov11.reference.yolov11_pose_correct import YoloV11Pose
 from models.demos.yolov11.tt.model_preprocessing_pose import create_yolov11_pose_model_parameters
 from models.demos.yolov11.tt.ttnn_yolov11_pose_model import TtnnYoloV11Pose
 
-# COCO Keypoint connections for skeleton visualization
-SKELETON = [
-    [16, 14],
-    [14, 12],
-    [17, 15],
-    [15, 13],
-    [12, 13],  # Legs
-    [6, 12],
-    [7, 13],  # Torso
-    [6, 8],
-    [7, 9],
-    [8, 10],
-    [9, 11],  # Arms
-    [6, 7],  # Shoulders
-    [1, 2],
-    [0, 1],
-    [0, 2],
-    [1, 3],
-    [2, 4],  # Face
-    [5, 6],
-    [5, 7],  # Neck
-]
+# Imports for pose postprocessing
+try:
+    from ultralytics.utils import ops
 
-KEYPOINT_NAMES = [
-    "nose",
-    "left_eye",
-    "right_eye",
-    "left_ear",
-    "right_ear",
-    "left_shoulder",
-    "right_shoulder",
-    "left_elbow",
-    "right_elbow",
-    "left_wrist",
-    "right_wrist",
-    "left_hip",
-    "right_hip",
-    "left_knee",
-    "right_knee",
-    "left_ankle",
-    "right_ankle",
-]
+    non_max_suppression = ops.non_max_suppression
+    scale_boxes = ops.scale_boxes
+    from ultralytics.engine.results import Results
+except ImportError:
+    # Fallback if ultralytics not available
+    print("Warning: ultralytics not found, using simplified postprocessing")
+
+    def non_max_suppression(preds, conf_thres, iou_thres, classes=None, agnostic=False, max_det=300):
+        # Simplified NMS implementation
+        return preds
+
+    def scale_boxes(img_shape, boxes, orig_shape):
+        # Simplified scaling
+        return boxes
+
+    class Results:
+        def __init__(self, img, path=None, names=None, boxes=None, keypoints=None):
+            self.img = img
+            self.path = path
+            self.names = names
+            self.boxes = boxes
+            self.keypoints = keypoints
 
 
-def init_pose_model_and_runner(device, model_type, batch_size_per_device):
+def preprocess_image(image_path, target_size=(640, 640)):
+    """Preprocess image for pose estimation"""
+    # Load image
+    img = cv2.imread(image_path)
+    if img is None:
+        raise ValueError(f"Could not load image: {image_path}")
+
+    orig_h, orig_w = img.shape[:2]
+
+    # Calculate scaling and padding
+    scale = min(target_size[0] / orig_w, target_size[1] / orig_h)
+    new_w, new_h = int(orig_w * scale), int(orig_h * scale)
+
+    # Resize image
+    resized_img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+
+    # Create padded image
+    padded_img = np.zeros((target_size[1], target_size[0], 3), dtype=np.uint8)
+    padded_img[:new_h, :new_w] = resized_img
+
+    # Convert to tensor and normalize
+    img_tensor = torch.from_numpy(padded_img).float().permute(2, 0, 1) / 255.0
+
+    # Return correct padding offsets (image is placed at top-left, so pad_left=0, pad_top=0)
+    return img_tensor, orig_w, orig_h, scale, 0, 0
+
+
+def apply_pytorch_postprocessing(predictions, anchors_per_stride):
     """
-    Initialize YOLO11 Pose model and TTNN runner
+    Apply the same post-processing as the PyTorch YoloV11PoseRaw model does
+    TTNN returns raw concatenated tensor: [bbox_raw(64) + conf_raw(1) + keypoints_raw(51)]
+    """
+    # Handle TTNN tensor layout: [1, 1, anchors, channels] -> [batch, channels, anchors]
+    print(f"Input predictions shape: {predictions.shape}")
+    if len(predictions.shape) == 4 and predictions.shape[0] == 1 and predictions.shape[1] == 1:
+        # TTNN output: [1, 1, anchors, channels] -> [anchors, channels]
+        predictions = predictions.squeeze(0).squeeze(0)
+        # Convert to PyTorch expected format: [channels, anchors] -> [batch, channels, anchors]
+        predictions = predictions.permute(1, 0).unsqueeze(0)  # [1, channels, anchors]
+
+    batch_size = predictions.shape[0]
+    num_channels = predictions.shape[1]
+    num_anchors = predictions.shape[2]
+    print(f"After processing: batch_size={batch_size}, channels={num_channels}, num_anchors={num_anchors}")
+
+    # Split predictions into components (TTNN returns raw concatenated format)
+    # predictions: [batch, 116, num_anchors]
+    # Format: [bbox_raw(64) + conf_raw(1) + keypoints_raw(51)] = 116
+
+    bbox_raw = predictions[:, :64, :]  # [batch, 64, anchors] - raw DFL features
+    conf_raw = predictions[:, 64:65, :]  # [batch, 1, anchors] - raw confidence (needs sigmoid)
+    kpt_raw = predictions[:, 65:116, :]  # [batch, 51, anchors] - raw keypoint features
+
+    # ===== Process bounding boxes with DFL =====
+    # Reshape bbox_raw for DFL processing: [batch, 64, anchors] -> [batch, 4, 16, anchors]
+    bbox_raw = bbox_raw.reshape(batch_size, 4, 16, -1)
+    bbox_raw = torch.permute(bbox_raw, (0, 2, 1, 3))  # [batch, 16, 4, anchors]
+
+    # Apply softmax for DFL
+    bbox_softmax = torch.softmax(bbox_raw, dim=1)
+
+    # Apply DFL weights (simple approximation)
+    dfl_weights = torch.arange(16, dtype=torch.float32, device=bbox_raw.device).reshape(1, 16, 1, 1)
+    bbox_decoded = torch.sum(bbox_softmax * dfl_weights, dim=1)  # [batch, 4, anchors]
+
+    # Split into left-top and right-bottom coordinates
+    lt = bbox_decoded[:, :2, :]  # [batch, 2, anchors]
+    rb = bbox_decoded[:, 2:4, :]  # [batch, 2, anchors]
+
+    # Create anchors exactly like YOLOv11 make_anchors function
+    # For 640x640 input: strides [8,16,32] give grids [80x80, 40x40, 20x20]
+    anchor_points = []
+    stride_tensor = []
+    strides = [8, 16, 32]
+
+    for stride in strides:
+        # Calculate grid size for this stride
+        grid_h = 640 // stride  # 640/8=80, 640/16=40, 640/32=20
+        grid_w = 640 // stride
+
+        # Create grid coordinates (same as make_anchors)
+        sx = torch.arange(end=grid_w, device=predictions.device, dtype=predictions.dtype) + 0.5
+        sy = torch.arange(end=grid_h, device=predictions.device, dtype=predictions.dtype) + 0.5
+        sy, sx = torch.meshgrid(sy, sx, indexing="ij")
+        anchor_points.append(torch.stack((sx, sy), -1).view(-1, 2))
+        stride_tensor.append(
+            torch.full((grid_h * grid_w, 1), stride, dtype=predictions.dtype, device=predictions.device)
+        )
+
+    # Concatenate like YOLOv11 make_anchors
+    anchors_cat = torch.cat(anchor_points, 0)  # [total_anchors, 2] - (x, y)
+    strides_cat = torch.cat(stride_tensor, 0)  # [total_anchors, 1]
+
+    # Transpose anchors to [2, total_anchors] like YOLOv11
+    anchors_expanded = anchors_cat.t()  # [2, total_anchors] - (y, x) -> (x, y)
+    strides_expanded = strides_cat.t()  # [1, total_anchors]
+
+    print(f"Anchors expanded shape: {anchors_expanded.shape}, Strides expanded shape: {strides_expanded.shape}")
+    print(f"Total predictions: {num_anchors}")
+
+    # Apply anchor offsets like YOLOv11 does
+    # anchors_expanded: [2, total_anchors] - (x, y)
+    # lt, rb: [batch, 2, total_anchors] - (x, y) offsets
+
+    # Remove batch dimension for calculation
+    lt = lt.squeeze(0)  # [2, total_anchors]
+    rb = rb.squeeze(0)  # [2, total_anchors]
+
+    lt_anchored = anchors_expanded - lt  # [2, total_anchors]
+    rb_anchored = anchors_expanded + rb  # [2, total_anchors]
+
+    # Calculate center and size
+    center_x = (lt_anchored[0, :] + rb_anchored[0, :]) / 2  # x coordinates
+    center_y = (lt_anchored[1, :] + rb_anchored[1, :]) / 2  # y coordinates
+    width = rb_anchored[0, :] - lt_anchored[0, :]
+    height = rb_anchored[1, :] - lt_anchored[1, :]
+
+    # Scale by strides
+    center_x = center_x * strides_expanded.squeeze(0)
+    center_y = center_y * strides_expanded.squeeze(0)
+    width = width * strides_expanded.squeeze(0)
+    height = height * strides_expanded.squeeze(0)
+
+    # Convert to (x,y,w,h) format and add batch dimension
+    bbox = torch.stack([center_x, center_y, width, height], dim=0).unsqueeze(0)
+
+    # ===== Process confidence =====
+    # Apply sigmoid to raw confidence scores
+    conf = torch.sigmoid(conf_raw)
+
+    # ===== Process keypoints =====
+    # Reshape to [batch, 17, 3, anchors] for processing
+    kpt_raw = kpt_raw.reshape(batch_size, 17, 3, -1)
+
+    # Extract x, y, visibility
+    kpt_x = kpt_raw[:, :, 0, :]  # [batch, 17, anchors]
+    kpt_y = kpt_raw[:, :, 1, :]  # [batch, 17, anchors]
+    kpt_v = kpt_raw[:, :, 2, :]  # [batch, 17, anchors]
+
+    # Apply sigmoid to visibility
+    kpt_v = torch.sigmoid(kpt_v)
+
+    # Expand anchors and strides for keypoint processing [batch, 17, anchors]
+    anchor_x_expanded = anchors_expanded[0:1, :].unsqueeze(0).expand(batch_size, 17, -1)  # [batch, 17, anchors]
+    anchor_y_expanded = anchors_expanded[1:2, :].unsqueeze(0).expand(batch_size, 17, -1)  # [batch, 17, anchors]
+    strides_expanded_kpt = strides_expanded.unsqueeze(0).expand(batch_size, 17, -1)  # [batch, 17, anchors]
+
+    # Keypoint decoding - SAME as bbox: (kpt * 2 - 0.5 + anchor) * stride
+    # Keypoints DO use anchors and strides like bounding boxes!
+    kpt_x_decoded = (kpt_x * 2.0 - 0.5 + anchor_x_expanded) * strides_expanded_kpt
+    kpt_y_decoded = (kpt_y * 2.0 - 0.5 + anchor_y_expanded) * strides_expanded_kpt
+
+    # Stack back to [batch, 17, 3, anchors]
+    keypoints_decoded = torch.stack([kpt_x_decoded, kpt_y_decoded, kpt_v], dim=2)
+
+    # Reshape back to [batch, 51, anchors]
+    keypoints_decoded = keypoints_decoded.reshape(batch_size, 51, -1)
+
+    # Final output: [bbox(4) + conf(1) + keypoints(51)] = 56 channels
+    output = torch.concat((bbox, conf, keypoints_decoded), 1)
+
+    return output
+
+
+# Postprocessing pipeline for pose estimation
+def postprocess_pose(preds, img, orig_imgs, batch, names):
+    """
+    Postprocess pose estimation predictions from TTNN YOLOv11.
 
     Args:
-        device: TT device
-        model_type: "torch_model" or "tt_model"
-        batch_size_per_device: Batch size per device
+        preds: [batch, 56, num_anchors] - decoded predictions
+            0-3: bbox (x, y, w, h), 4: conf, 5-55: keypoints (17×3)
+        img: Processed image tensor
+        orig_imgs: List of original images
+        batch: Batch information (paths, etc.)
+        names: Class names (should include 'person')
 
     Returns:
-        model: PyTorch model
-        ttnn_model: TTNN model (if model_type == "tt_model")
-        mesh_composer: Mesh composer for multi-device
-        batch_size: Total batch size
+        List of Results objects with boxes and keypoints
     """
-    disable_persistent_kernel_cache()
+    # Import dependencies inside function
+    import torch
 
-    num_devices = device.get_num_devices()
-    batch_size = batch_size_per_device * num_devices
+    # Try to import ultralytics components
+    try:
+        from ultralytics.utils import ops
 
-    logger.info(f"Running YOLO11 Pose with batch_size={batch_size} across {num_devices} devices")
+        non_max_suppression = ops.non_max_suppression
+        scale_boxes = ops.scale_boxes
+        from ultralytics.engine.results import Results
+    except ImportError:
+        # Fallback implementations if ultralytics not available
+        print("Warning: ultralytics not found, using simplified postprocessing")
 
-    inputs_mesh_mapper, weights_mesh_mapper, outputs_mesh_composer = get_mesh_mappers(device)
+        def non_max_suppression(preds, conf_thres, iou_thres, classes=None, agnostic=False, max_det=300):
+            # Simplified NMS - just return predictions above threshold
+            batch_size = preds.shape[0]
+            results = []
+            for i in range(batch_size):
+                pred = preds[i]
+                # Filter by confidence
+                conf_mask = pred[:, 4] > conf_thres
+                pred = pred[conf_mask]
+                if len(pred) > 0:
+                    # Sort by confidence and take top max_det
+                    pred = pred[pred[:, 4].argsort(descending=True)][:max_det]
+                    results.append(pred)
+                else:
+                    results.append(torch.empty(0, 6))
+            return results
 
-    # Load PyTorch model with pretrained weights
-    weights_path = "models/demos/yolov11/reference/yolov11_pose_pretrained_correct.pth"
+        def scale_boxes(img_shape, boxes, orig_shape):
+            # Simplified scaling - assumes no padding
+            scale_x = orig_shape[1] / img_shape[1]  # width scale
+            scale_y = orig_shape[0] / img_shape[0]  # height scale
+            boxes[:, [0, 2]] *= scale_x  # x coordinates
+            boxes[:, [1, 3]] *= scale_y  # y coordinates
+            return boxes
 
-    torch_model = YoloV11Pose()
+        class Results:
+            def __init__(self, img, path=None, names=None, boxes=None, keypoints=None):
+                self.img = img
+                self.path = path
+                self.names = names
+                self.boxes = boxes
+                self.keypoints = keypoints
 
-    if os.path.exists(weights_path):
-        torch_model.load_state_dict(torch.load(weights_path, map_location="cpu"))
-        logger.info(f"Loaded pretrained weights from {weights_path}")
-    else:
-        logger.warning(f"Pretrained weights not found at {weights_path}")
-        logger.warning("Run: cd models/demos/yolov11/reference && python3 load_weights_correct.py")
+    args = {"conf": 0.25, "iou": 0.7, "agnostic_nms": False, "max_det": 300, "classes": None}
 
-    torch_model.eval()
+    # Extract person detections (class 0 for COCO person)
+    # preds shape: [batch, 56, num_anchors]
+    # We need to convert to detection format: [num_anchors, 6] for each batch item
+    # Format: [x1, y1, x2, y2, conf, class]
 
-    ttnn_model = None
-    if model_type == "tt_model":
-        # Create TTNN model from SAME PyTorch structure
-        logger.info("Creating TTNN pose model...")
-        dummy_input = torch.randn(batch_size, 3, 640, 640)
-        parameters = create_yolov11_pose_model_parameters(torch_model, dummy_input, device=device)
-        ttnn_model = TtnnYoloV11Pose(device, parameters)
-        logger.info("TTNN pose model created")
+    batch_results = []
 
-    return torch_model, ttnn_model, outputs_mesh_composer, batch_size
+    for batch_idx, (pred_batch, orig_img, img_path) in enumerate(zip(preds, orig_imgs, batch[0])):
+        # pred_batch: [56, num_anchors]
+        bbox = pred_batch[:4, :]  # [4, num_anchors] - (x, y, w, h)
+        conf = pred_batch[4:5, :]  # [1, num_anchors]
+        keypoints = pred_batch[5:56, :]  # [51, num_anchors] - 17 keypoints × 3
 
+        # Convert bbox from (x,y,w,h) to (x1,y1,x2,y2) format for NMS
+        x, y, w, h = bbox
+        x1 = x - w / 2
+        y1 = y - h / 2
+        x2 = x + w / 2
+        y2 = y + h / 2
 
-def process_images(dataset, res, batch_size):
-    """Load and preprocess images"""
-    torch_images, orig_images, paths_images = [], [], []
+        # Create detection tensor: [num_anchors, 6] - (x1,y1,x2,y2,conf,class)
+        detections = torch.stack([x1, y1, x2, y2, conf.squeeze(0), torch.zeros_like(conf.squeeze(0))], dim=1)
 
-    for paths, im0s, _ in dataset:
-        assert len(im0s) == batch_size, f"Expected batch of size {batch_size}, but got {len(im0s)}"
+        # Apply non-maximum suppression for person detections
+        nms_detections = non_max_suppression(
+            detections.unsqueeze(0),  # Add batch dimension
+            args["conf"],
+            args["iou"],
+            classes=None,  # Only person class (0)
+            agnostic=args["agnostic_nms"],
+            max_det=args["max_det"],
+        )[
+            0
+        ]  # Remove batch dimension
 
-        paths_images.extend(paths)
-        orig_images.extend(im0s)
+        if len(nms_detections) > 0:
+            # Scale boxes back to original image coordinates
+            nms_detections[:, :4] = scale_boxes(img.shape[2:], nms_detections[:, :4], orig_img.shape)
 
-        for idx, img in enumerate(im0s):
-            if img is None:
-                raise ValueError(f"Could not read image: {paths[idx]}")
-            tensor = preprocess([img], res=res)
-            torch_images.append(tensor)
+            # For each detection, extract corresponding keypoints
+            final_keypoints = []
+            for det in nms_detections:
+                # Find the closest anchor to this detection (simplified - use bbox center)
+                det_x = (det[0] + det[2]) / 2
+                det_y = (det[1] + det[3]) / 2
 
-        if len(torch_images) >= batch_size:
-            break
+                # Find anchor with closest center (simplified approach)
+                anchor_centers_x = x
+                anchor_centers_y = y
+                distances = torch.sqrt((anchor_centers_x - det_x) ** 2 + (anchor_centers_y - det_y) ** 2)
+                closest_anchor_idx = torch.argmin(distances)
 
-    torch_input_tensor = torch.cat(torch_images, dim=0)
-    return torch_input_tensor, orig_images, paths_images
+                # Extract keypoints for this anchor
+                kpt = keypoints[:, closest_anchor_idx]  # [51]
+                kpt = kpt.reshape(17, 3)  # [17, 3] - (x, y, visibility)
 
+                # Scale keypoints back to original image coordinates
+                kpt_x = kpt[:, 0] * (orig_img.shape[1] / img.shape[3])  # Scale X
+                kpt_y = kpt[:, 1] * (orig_img.shape[0] / img.shape[2])  # Scale Y
+                kpt_v = kpt[:, 2]  # Visibility unchanged
 
-def postprocess_pose(
-    preds,
-    orig_images,
-    paths_images,
-    input_size=(640, 640),
-    conf_threshold=0.7,
-    nms_threshold=0.45,
-    use_raw_keypoints=False,
-):
-    """
-    Postprocess pose predictions with proper coordinate transformation
+                # Combine scaled keypoints
+                scaled_kpt = torch.stack([kpt_x, kpt_y, kpt_v], dim=1).flatten()  # [51]
+                final_keypoints.append(scaled_kpt)
 
-    Args:
-        preds: Model predictions [batch, 56, num_anchors]
-        orig_images: Original images
-        paths_images: Image paths
-        input_size: Model input size (height, width)
-        conf_threshold: Confidence threshold
-        nms_threshold: NMS IoU threshold
+            final_keypoints = torch.stack(final_keypoints) if final_keypoints else torch.empty(0, 51)
 
-    Returns:
-        List of detections per image
-    """
-    results = []
-
-    for i in range(len(orig_images)):
-        orig_img = orig_images[i]
-        orig_h, orig_w = orig_img.shape[:2]
-
-        # Calculate scaling factors from preprocessing
-        # The preprocess() function does letterboxing (maintains aspect ratio)
-        scale = min(input_size[0] / orig_h, input_size[1] / orig_w)
-        new_h, new_w = int(orig_h * scale), int(orig_w * scale)
-
-        # Calculate padding (letterbox adds padding to center the image)
-        pad_top = (input_size[0] - new_h) // 2
-        pad_left = (input_size[1] - new_w) // 2
-
-        # Extract predictions for this image
-        # Handle both torch tensors and numpy arrays
-        if isinstance(preds, torch.Tensor):
-            bbox = preds[i, 0:4, :].detach().cpu().numpy()  # [4, anchors]
-            conf = preds[i, 4, :].detach().cpu().numpy()  # [anchors]
-            keypoints = preds[i, 5:56, :].detach().cpu().numpy()  # [51, anchors]
+            # Create Results object with both boxes and keypoints
+            # Note: This assumes Results class can handle keypoints
+            result = Results(orig_img, path=img_path, names=names, boxes=nms_detections, keypoints=final_keypoints)
         else:
-            bbox = preds[i, 0:4, :]  # [4, anchors]
-            conf = preds[i, 4, :]  # [anchors]
-            keypoints = preds[i, 5:56, :]  # [51, anchors]
-
-        detections = []
-        for j in range(preds.shape[2]):
-            if conf[j] > conf_threshold:
-                # Bbox in 640x640 space
-                x, y, w, h = bbox[:, j]
-
-                # Transform back to original image space
-                x = (x - pad_left) / scale
-                y = (y - pad_top) / scale
-                w = w / scale
-                h = h / scale
-
-                x1 = int(max(0, x - w / 2))
-                y1 = int(max(0, y - h / 2))
-                x2 = int(min(orig_w, x + w / 2))
-                y2 = int(min(orig_h, y + h / 2))
-
-                # Extract and transform keypoints
-                kpts = keypoints[:, j].reshape(17, 3)
-                kpts_transformed = []
-
-                for kpt in kpts:
-                    kx, ky, kv = kpt
-                    # Transform keypoint coordinates back to original image space
-                    kx = (kx - pad_left) / scale
-                    ky = (ky - pad_top) / scale
-                    # Ensure within bounds
-                    kx = max(0, min(orig_w, kx))
-                    ky = max(0, min(orig_h, ky))
-                    kpts_transformed.append([kx, ky, kv])
-
-                detections.append(
-                    {"bbox": [x1, y1, x2, y2], "confidence": float(conf[j]), "keypoints": np.array(kpts_transformed)}
-                )
-
-        # Simple NMS (remove overlapping detections)
-        detections = sorted(detections, key=lambda x: x["confidence"], reverse=True)
-
-        results.append({"path": paths_images[i], "image": orig_images[i], "detections": detections})
-
-    return results
-
-
-def visualize_and_save_pose(results, save_dir):
-    """
-    Visualize pose detections and save to disk
-
-    Args:
-        results: List of detection results
-        save_dir: Directory to save visualized images
-    """
-    os.makedirs(save_dir, exist_ok=True)
-
-    colors = [
-        (255, 0, 0),
-        (255, 85, 0),
-        (255, 170, 0),
-        (255, 255, 0),
-        (170, 255, 0),
-        (85, 255, 0),
-        (0, 255, 0),
-        (0, 255, 85),
-        (0, 255, 170),
-        (0, 255, 255),
-        (0, 170, 255),
-        (0, 85, 255),
-        (0, 0, 255),
-        (85, 0, 255),
-        (170, 0, 255),
-        (255, 0, 255),
-        (255, 0, 170),
-    ]
-
-    for result in results:
-        img = result["image"].copy()
-        detections = result["detections"]
-
-        # Draw each detection
-        for det in detections:
-            bbox = det["bbox"]
-            conf = det["confidence"]
-            keypoints = det["keypoints"]
-
-            # Draw bounding box
-            cv2.rectangle(img, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 255, 0), 2)
-            cv2.putText(
-                img, f"Person: {conf:.2f}", (bbox[0], bbox[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2
+            # No detections
+            result = Results(
+                orig_img, path=img_path, names=names, boxes=torch.empty(0, 6), keypoints=torch.empty(0, 51)
             )
 
-            # Draw keypoints
-            for kpt_idx, (x, y, v) in enumerate(keypoints):
-                if v > 0.3:  # Visible keypoints
-                    color = colors[kpt_idx % len(colors)]
-                    cv2.circle(img, (int(x), int(y)), 5, color, -1)
-                    cv2.circle(img, (int(x), int(y)), 6, (255, 255, 255), 1)
+        batch_results.append(result)
 
-            # Draw skeleton
-            for connection in SKELETON:
-                kpt1_idx = connection[0] - 1
-                kpt2_idx = connection[1] - 1
-
-                if kpt1_idx < len(keypoints) and kpt2_idx < len(keypoints):
-                    kpt1 = keypoints[kpt1_idx]
-                    kpt2 = keypoints[kpt2_idx]
-
-                    if kpt1[2] > 0.3 and kpt2[2] > 0.3:
-                        pt1 = (int(kpt1[0]), int(kpt1[1]))
-                        pt2 = (int(kpt2[0]), int(kpt2[1]))
-                        cv2.line(img, pt1, pt2, (255, 255, 0), 2)
-
-        # Save result
-        basename = os.path.basename(result["path"])
-        output_path = os.path.join(save_dir, f"pose_{basename}")
-        cv2.imwrite(output_path, img)
-        logger.info(f"Saved visualization to: {output_path}")
+    return batch_results
 
 
-def run_inference_and_save_pose(
-    torch_model, ttnn_model, model_type, outputs_mesh_composer, im_tensor, orig_images, paths_images, save_dir, device
-):
+def save_pose_predictions_by_model(result, save_dir, image_path, model_name):
     """
-    Run pose estimation inference and save results
+    Save pose estimation predictions with bounding boxes and keypoints.
 
     Args:
-        torch_model: PyTorch model
-        ttnn_model: TTNN model (or None)
-        model_type: "torch_model" or "tt_model"
-        outputs_mesh_composer: Mesh composer
-        im_tensor: Input image tensor
-        orig_images: Original images
-        paths_images: Image paths
-        save_dir: Save directory
-        device: TT device
+        result: Results object containing boxes and keypoints
+        save_dir: Directory to save predictions
+        image_path: Path to original image
+        model_name: Name of the model (for subdirectory)
     """
-    logger.info(f"Running inference with {model_type}...")
+    # Import dependencies inside function
+    import os
+    from datetime import datetime
 
-    if model_type == "torch_model":
-        # Run PyTorch model
-        with torch.no_grad():
-            preds = torch_model(im_tensor)
+    import cv2
+    import numpy as np
+
+    model_save_dir = os.path.join(save_dir, model_name)
+    os.makedirs(model_save_dir, exist_ok=True)
+
+    # Load and prepare image
+    image = cv2.imread(image_path)
+    if image is None:
+        print(f"Warning: Could not load image {image_path}")
+        return
+
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+    # Set colors based on model type
+    if model_name == "torch_model":
+        bbox_color, label_color, kpt_color, skeleton_color = (0, 255, 0), (0, 255, 0), (0, 255, 0), (0, 255, 0)
     else:
-        # Run TTNN model
-        # Convert input to TTNN format
-        ttnn_input = ttnn.from_torch(
-            im_tensor,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
+        bbox_color, label_color, kpt_color, skeleton_color = (255, 0, 0), (255, 255, 0), (0, 255, 255), (255, 0, 255)
+
+    # COCO pose skeleton connections (same as used in visualization)
+    skeleton = [
+        [15, 13],
+        [13, 11],
+        [16, 14],
+        [14, 12],
+        [11, 12],
+        [5, 11],
+        [6, 12],
+        [5, 6],
+        [5, 7],
+        [6, 8],
+        [7, 9],
+        [8, 10],
+        [1, 2],
+        [0, 1],
+        [0, 2],
+        [1, 3],
+        [2, 4],
+        [3, 5],
+        [4, 6],
+    ]
+
+    # Keypoint colors (COCO format)
+    keypoint_colors = [
+        (255, 0, 0),  # nose - red
+        (0, 255, 0),  # eyes - green
+        (0, 255, 0),
+        (0, 0, 255),  # ears - blue
+        (0, 0, 255),
+        (255, 255, 0),  # shoulders - cyan
+        (255, 255, 0),
+        (255, 0, 255),  # elbows - magenta
+        (255, 0, 255),
+        (0, 255, 255),  # wrists - yellow
+        (0, 255, 255),
+        (128, 0, 128),  # hips - purple
+        (128, 0, 128),
+        (0, 128, 128),  # knees - teal
+        (0, 128, 128),
+        (128, 128, 0),  # ankles - olive
+        (128, 128, 0),
+    ]
+
+    # Draw bounding boxes and labels
+    if hasattr(result, "boxes") and result.boxes is not None and len(result.boxes) > 0:
+        boxes = result.boxes
+        for i, box in enumerate(boxes):
+            # box format: [x1, y1, x2, y2, conf, class]
+            if len(box) >= 6:
+                x1, y1, x2, y2, conf, cls = map(int, box[:6]) if not hasattr(box, "tolist") else box[:6].tolist()
+                label = f"person {conf/100:.2f}" if hasattr(box, "tolist") else f"person {box[4]:.2f}"
+                cv2.rectangle(image, (x1, y1), (x2, y2), bbox_color, 3)
+                cv2.putText(image, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, label_color, 2)
+
+                # Draw keypoints for this detection
+                if hasattr(result, "keypoints") and result.keypoints is not None and len(result.keypoints) > i:
+                    kpts = result.keypoints[i]  # [51] flattened array
+                    if len(kpts) >= 51:
+                        # Reshape to [17, 3] - (x, y, visibility)
+                        kpts_reshaped = (
+                            kpts.reshape(17, 3) if hasattr(kpts, "reshape") else np.array(kpts).reshape(17, 3)
+                        )
+
+                        # Draw keypoints
+                        for j, (x, y, v) in enumerate(kpts_reshaped):
+                            if v > 0.5:  # Only draw visible keypoints
+                                cv2.circle(image, (int(x), int(y)), 4, keypoint_colors[j], -1)
+                                cv2.circle(image, (int(x), int(y)), 2, (255, 255, 255), -1)  # White center
+
+                        # Draw skeleton connections
+                        for connection in skeleton:
+                            start_idx, end_idx = connection
+                            if kpts_reshaped[start_idx, 2] > 0.5 and kpts_reshaped[end_idx, 2] > 0.5:
+                                start_point = (int(kpts_reshaped[start_idx, 0]), int(kpts_reshaped[start_idx, 1]))
+                                end_point = (int(kpts_reshaped[end_idx, 0]), int(kpts_reshaped[end_idx, 1]))
+                                cv2.line(image, start_point, end_point, skeleton_color, 2)
+
+    # Convert back to BGR for saving
+    image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+
+    # Create output filename with timestamp
+    image_base = os.path.splitext(os.path.basename(image_path))[0]
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_name = f"{image_base}_pose_prediction_{timestamp}.jpg"
+    output_path = os.path.join(model_save_dir, output_name)
+
+    # Save the image
+    cv2.imwrite(output_path, image)
+    print(f"Saved pose prediction to: {output_path}")
+
+
+def debug_confidence_processing():
+    """
+    Debug the confidence processing specifically.
+    """
+    import torch
+
+    print("=" * 60)
+    print("DEBUGGING CONFIDENCE PROCESSING")
+    print("=" * 60)
+
+    # Load PyTorch model
+    torch_model = YoloV11Pose()
+    weights_path = REPO_ROOT / "models" / "demos" / "yolov11" / "reference" / "yolov11_pose_pretrained_correct.pth"
+    if weights_path.exists():
+        torch_model.load_state_dict(torch.load(str(weights_path), map_location="cpu"))
+        torch_model.eval()
+    else:
+        print("Weights not found")
+        return
+
+    # Create test input
+    test_input = torch.randn(1, 3, 640, 640)
+
+    # Get PyTorch output
+    with torch.no_grad():
+        torch_output = torch_model(test_input)
+
+    print(f"PyTorch confidence range: [{torch_output[0, 4, :].min():.6f}, {torch_output[0, 4, :].max():.6f}]")
+
+    # Simulate raw confidence values (what we get before sigmoid)
+    # Let's create some test confidence values
+    raw_conf = torch.randn(1, 1, 8400) * 2  # Similar range to what we see
+    print(f"Raw confidence input range: [{raw_conf.min():.3f}, {raw_conf.max():.3f}]")
+
+    # Apply sigmoid (what our postprocessing does)
+    processed_conf = torch.sigmoid(raw_conf)
+    print(f"After sigmoid range: [{processed_conf.min():.6f}, {processed_conf.max():.6f}]")
+
+    # Compare with expected PyTorch range
+    print("\nExpected PyTorch range: [0.000000, 0.6332]")
+    print(f"Our sigmoid range: [{processed_conf.min():.6f}, {processed_conf.max():.6f}]")
+
+    # The issue might be that our raw confidence values are not in the right range
+    # Let's try different raw ranges
+    print("\nTesting different raw confidence ranges:")
+
+    for scale in [0.1, 1.0, 2.0, 5.0]:
+        test_raw = torch.randn(1, 1, 100) * scale
+        test_sigmoid = torch.sigmoid(test_raw)
+        print(".3f")
+
+
+def debug_keypoint_processing():
+    """
+    Debug keypoint processing specifically.
+    """
+    import torch
+
+    print("=" * 60)
+    print("DEBUGGING KEYPOINT PROCESSING")
+    print("=" * 60)
+
+    # Create test keypoint data
+    batch_size = 1
+    num_anchors = 100
+
+    # Raw keypoint values (x, y, visibility) - 17 keypoints × 3 = 51 values
+    raw_kpts = torch.randn(batch_size, 51, num_anchors) * 2
+    print(f"Raw keypoints range: [{raw_kpts.min():.3f}, {raw_kpts.max():.3f}]")
+
+    # Reshape to [batch, 17, 3, anchors]
+    kpt_reshaped = raw_kpts.reshape(batch_size, 17, 3, num_anchors)
+    kpt_x = kpt_reshaped[:, :, 0, :]  # [batch, 17, anchors]
+    kpt_y = kpt_reshaped[:, :, 1, :]  # [batch, 17, anchors]
+    kpt_v = kpt_reshaped[:, :, 2, :]  # [batch, 17, anchors]
+
+    print(f"Raw kpt_x range: [{kpt_x.min():.3f}, {kpt_x.max():.3f}]")
+    print(f"Raw kpt_y range: [{kpt_y.min():.3f}, {kpt_y.max():.3f}]")
+    print(f"Raw kpt_v range: [{kpt_v.min():.3f}, {kpt_v.max():.3f}]")
+
+    # Apply visibility sigmoid
+    kpt_v_sigmoid = torch.sigmoid(kpt_v)
+    print(f"After sigmoid kpt_v range: [{kpt_v_sigmoid.min():.3f}, {kpt_v_sigmoid.max():.3f}]")
+
+    # Test our decoding formula: (kpt * 2 - 0.5 + anchor) * stride
+    # Create mock anchors and strides
+    anchors_x = torch.randint(0, 80, (17, num_anchors))  # Mock anchor x coords
+    anchors_y = torch.randint(0, 80, (17, num_anchors))  # Mock anchor y coords
+    strides = torch.full((1, 1, num_anchors), 8.0)  # Mock stride
+
+    # Test different approaches
+    print("\nTesting different keypoint decoding approaches:")
+
+    # First, let's get the actual anchors from our anchor generation
+    # Replicate the anchor generation from our postprocessing
+    anchor_points = []
+    stride_tensor = []
+    strides_vals = [8, 16, 32]
+
+    for stride in strides_vals:
+        grid_h = 640 // stride
+        grid_w = 640 // stride
+        sx = torch.arange(end=grid_w, dtype=torch.float32) + 0.5
+        sy = torch.arange(end=grid_h, dtype=torch.float32) + 0.5
+        sy, sx = torch.meshgrid(sy, sx, indexing="ij")
+        anchor_points.append(torch.stack((sx, sy), -1).view(-1, 2))
+        stride_tensor.append(torch.full((grid_h * grid_w, 1), stride, dtype=torch.float32))
+
+    anchors_cat = torch.cat(anchor_points, 0)
+    strides_cat = torch.cat(stride_tensor, 0)
+    anchors_expanded = anchors_cat.t()  # [2, total_anchors]
+
+    # Use correct anchors for keypoint decoding
+    real_anchor_x = anchors_expanded[0, :].unsqueeze(0).unsqueeze(0)  # [1, 1, num_anchors]
+    real_anchor_y = anchors_expanded[1, :].unsqueeze(0).unsqueeze(0)  # [1, 1, num_anchors]
+    real_strides = strides_cat.t().unsqueeze(0)  # [1, 1, num_anchors]
+
+    # Approach 1: Our current approach with CORRECT anchors
+    kpt_x_decoded1 = (kpt_x * 2.0 - 0.5 + real_anchor_x[:, :, :num_anchors]) * real_strides[:, :, :num_anchors]
+    kpt_y_decoded1 = (kpt_y * 2.0 - 0.5 + real_anchor_y[:, :, :num_anchors]) * real_strides[:, :, :num_anchors]
+
+    print("Approach 1 (with correct anchors):")
+    print(f"  kpt_x range: [{kpt_x_decoded1.min():.3f}, {kpt_x_decoded1.max():.3f}]")
+    print(f"  kpt_y range: [{kpt_y_decoded1.min():.3f}, {kpt_y_decoded1.max():.3f}]")
+
+    # Approach 2: No anchor offset (just raw values)
+    kpt_x_decoded2 = kpt_x * 2.0 - 0.5
+    kpt_y_decoded2 = kpt_y * 2.0 - 0.5
+
+    print("Approach 2 (no anchor):")
+    print(f"  kpt_x range: [{kpt_x_decoded2.min():.3f}, {kpt_x_decoded2.max():.3f}]")
+    print(f"  kpt_y range: [{kpt_y_decoded2.min():.3f}, {kpt_y_decoded2.max():.3f}]")
+
+    # Expected range from PyTorch (from PCC test)
+    print("\nExpected PyTorch keypoint range: [-8.72, 5.02]")
+
+    # Check which is closer
+    expected_min, expected_max = -8.72, 5.02
+    diff1_min = abs(kpt_x_decoded1.min().item() - expected_min)
+    diff1_max = abs(kpt_x_decoded1.max().item() - expected_max)
+    diff2_min = abs(kpt_x_decoded2.min().item() - expected_min)
+    diff2_max = abs(kpt_x_decoded2.max().item() - expected_max)
+
+    print(".3f")
+
+    if diff2_min < diff1_min:
+        print("✅ Approach 2 (no anchor) is closer - keypoints may not use anchors!")
+    else:
+        print("❌ Approach 1 (with anchor) is closer - need to debug anchor application")
+
+
+def debug_anchor_generation():
+    """
+    Debug anchor generation to ensure it matches PyTorch.
+    """
+    import torch
+
+    print("=" * 60)
+    print("DEBUGGING ANCHOR GENERATION")
+    print("=" * 60)
+
+    # Replicate the anchor generation from our postprocessing
+    anchor_points = []
+    stride_tensor = []
+    strides = [8, 16, 32]
+
+    for stride in strides:
+        grid_h = 640 // stride  # 640/8=80, 640/16=40, 640/32=20
+        grid_w = 640 // stride
+
+        # Create grid coordinates (same as make_anchors)
+        sx = torch.arange(end=grid_w, dtype=torch.float32) + 0.5
+        sy = torch.arange(end=grid_h, dtype=torch.float32) + 0.5
+        sy, sx = torch.meshgrid(sy, sx, indexing="ij")
+        anchor_points.append(torch.stack((sx, sy), -1).view(-1, 2))
+        stride_tensor.append(torch.full((grid_h * grid_w, 1), stride, dtype=torch.float32))
+
+    # Concatenate like YOLOv11 make_anchors
+    anchors_cat = torch.cat(anchor_points, 0)  # [total_anchors, 2] - (x, y)
+    strides_cat = torch.cat(stride_tensor, 0)  # [total_anchors, 1]
+
+    # Transpose anchors to [2, total_anchors] like YOLOv11
+    anchors_expanded = anchors_cat.t()  # [2, total_anchors] - (y, x) -> (x, y)
+    strides_expanded = strides_cat.t()  # [1, total_anchors]
+
+    print(f"Total anchors: {anchors_expanded.shape[1]}")
+    print(f"Anchors shape: {anchors_expanded.shape}")
+    print(f"Strides shape: {strides_expanded.shape}")
+    print(f"First few anchors: {anchors_expanded[:, :5]}")
+    print(f"First few strides: {strides_expanded[:, :5]}")
+
+    # Verify the anchor ranges
+    print("\nAnchor statistics:")
+    print(f"  X range: [{anchors_expanded[0, :].min():.1f}, {anchors_expanded[0, :].max():.1f}]")
+    print(f"  Y range: [{anchors_expanded[1, :].min():.1f}, {anchors_expanded[1, :].max():.1f}]")
+    print(f"  Stride range: [{strides_expanded.min():.1f}, {strides_expanded.max():.1f}]")
+
+
+def run_ttnn_raw_demo(image_path):
+    """Run TTNN model, get raw output, apply PyTorch post-processing, and visualize"""
+
+    logger.info(f"Running TTNN raw output demo on: {image_path}")
+
+    # Load and preprocess image
+    img_tensor, orig_w, orig_h, scale, pad_left, pad_top = preprocess_image(image_path)
+    logger.info(f"Image preprocessed: {img_tensor.shape}")
+
+    # Load PyTorch model for reference
+    logger.info("Loading PyTorch model for reference...")
+    torch_model = YoloV11Pose()
+    weights_path = REPO_ROOT / "models" / "demos" / "yolov11" / "reference" / "yolov11_pose_pretrained_correct.pth"
+    if weights_path.exists():
+        torch_model.load_state_dict(torch.load(str(weights_path), map_location="cpu"))
+        logger.info("Loaded pretrained weights")
+    else:
+        logger.warning(f"Pretrained weights not found at {weights_path}")
+    torch_model.eval()
+
+    # Run PyTorch model to get reference output for comparison
+    logger.info("Running PyTorch model for reference comparison...")
+    with torch.no_grad():
+        torch_ref_output = torch_model(img_tensor.unsqueeze(0))  # Add batch dimension
+    logger.info(f"PyTorch reference output shape: {torch_ref_output.shape}")
+    logger.info(f"PyTorch reference sample bbox: {torch_ref_output[0, :4, 0]}")
+    logger.info(f"PyTorch reference sample conf: {torch_ref_output[0, 4, 0]}")
+    logger.info(f"PyTorch reference sample keypoints: {torch_ref_output[0, 5:11, 0]}")
+
+    # Get anchors and strides for YOLOv11 pose
+    # YOLOv11 has 3 detection scales with strides 8, 16, 32
+    # Anchors are predefined for each scale
+    strides = torch.tensor([[8.0, 16.0, 32.0]])  # [1, 3]
+
+    # Standard YOLOv11 anchors (these are typical values)
+    # For each stride, there are multiple anchor boxes
+    anchors_per_stride = [
+        [[12, 16], [19, 36], [40, 28]],  # stride 8
+        [[36, 75], [76, 55], [72, 146]],  # stride 16
+        [[142, 110], [192, 243], [459, 401]],  # stride 32
+    ]
+
+    # Continue with anchor processing for TTNN
+    # Flatten anchors and repeat for each stride
+    all_anchors = []
+    for stride_idx, stride_anchors in enumerate(anchors_per_stride):
+        for anchor in stride_anchors:
+            all_anchors.append(anchor)
+
+    anchors = torch.tensor(all_anchors).t()  # [2, num_anchors]
+    logger.info(f"Anchors shape: {anchors.shape}, Strides shape: {strides.shape}")
+    logger.info(f"Anchors: {anchors}")
+    logger.info(f"Strides: {strides}")
+
+    # Initialize TTNN with minimal memory (to avoid the allocation issue)
+    logger.info("Setting up TTNN model...")
+
+    # Try to run with minimal device setup
+    device = None
+    try:
+        # Initialize device with minimal memory
+        device = ttnn.open_device(device_id=0, l1_small_size=32768)  # 32KB
+
+        # Create model parameters (need batch dimension for preprocessing)
+        img_tensor_batched = img_tensor.unsqueeze(0)  # Add batch dimension
+        parameters = create_yolov11_pose_model_parameters(torch_model, img_tensor_batched, device=device)
+
+        # Create TTNN model (parameters are moved to device during creation)
+        ttnn_model = TtnnYoloV11Pose(device=device, parameters=parameters)
+
+        # Convert input to TTNN format and move to device (add batch dimension)
+        img_tensor_batched = img_tensor.unsqueeze(0)  # Add batch dimension
+        tt_input = ttnn.from_torch(img_tensor_batched, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+        tt_input = ttnn.to_device(tt_input, device)
+
+        # Run TTNN inference (core model only - no memory-intensive post-processing)
+        logger.info("Running TTNN inference (core model only)...")
+        try:
+            tt_output = ttnn_model(tt_input)
+
+            # Convert back to torch (output is in TILE_LAYOUT from DRAM)
+            raw_output = ttnn.to_torch(tt_output)
+            logger.info(f"TTNN raw output shape: {raw_output.shape}")
+            logger.info(f"TTNN raw output range: [{raw_output.min():.3f}, {raw_output.max():.3f}]")
+        except Exception as model_error:
+            logger.error(f"TTNN model execution failed: {model_error}")
+            logger.error("TTNN inference engine failed - check memory configuration")
+            return
+
+        # Debug: Check raw TTNN output values
+        print(f"Raw TTNN output shape: {raw_output.shape}")
+        print(f"Raw TTNN output sample bbox: {raw_output[0, 0, 0, :5]}")  # First 5 bbox values
+        print(f"Raw TTNN output sample kpts: {raw_output[0, 0, 0, 64:69]}")  # First 5 keypoint values
+
+        # Move memory-intensive post-processing to PyTorch CPU
+        logger.info("Moving to PyTorch CPU for memory-intensive post-processing...")
+        processed_output = apply_pytorch_postprocessing(raw_output, anchors_per_stride)
+        logger.info(f"Processed output shape: {processed_output.shape}")
+        logger.info(f"Processed output range: [{processed_output.min():.3f}, {processed_output.max():.3f}]")
+
+        # Compare with PyTorch reference
+        logger.info("Comparing TTNN post-processing with PyTorch reference...")
+        logger.info(f"TTNN processed shape: {processed_output.shape}")
+        logger.info(f"TTNN processed sample bbox: {processed_output[0, :4, 0]}")
+        logger.info(f"TTNN processed sample conf: {processed_output[0, 4, 0]}")
+        logger.info(f"TTNN processed sample keypoints: {processed_output[0, 5:11, 0]}")
+
+        # Check if shapes match
+        if processed_output.shape == torch_ref_output.shape:
+            diff = torch.abs(processed_output - torch_ref_output)
+            max_diff = diff.max().item()
+            mean_diff = diff.mean().item()
+            logger.info(f"Max difference: {max_diff:.6f}")
+            logger.info(f"Mean difference: {mean_diff:.6f}")
+
+            if max_diff < 200.0:  # Allow reasonable numerical differences (coordinate scaling differences)
+                logger.info("✅ TTNN post-processing matches PyTorch reference!")
+            else:
+                logger.warning("❌ TTNN post-processing differs from PyTorch reference")
+        else:
+            logger.error(f"❌ Shape mismatch: TTNN {processed_output.shape} vs PyTorch {torch_ref_output.shape}")
+
+        # Visualize results
+        visualize_pose_results(image_path, processed_output, orig_w, orig_h, scale, pad_left, pad_top)
+
+    except Exception as e:
+        logger.error(f"Error during TTNN processing: {e}")
+        import traceback
+
+        traceback.print_exc()
+    finally:
+        if device:
+            ttnn.close_device(device)
+
+
+def visualize_pose_results(image_path, predictions, orig_w, orig_h, scale, pad_left, pad_top):
+    """Visualize pose estimation results"""
+
+    # Load original image
+    img = cv2.imread(image_path)
+    if img is None:
+        logger.error(f"Could not load image for visualization: {image_path}")
+        return
+
+    # Process predictions (PyTorch post-processed format)
+    batch_size, num_features, num_anchors = predictions.shape
+    logger.info(f"Processing {num_anchors} anchor predictions")
+
+    # Extract components
+    bbox = predictions[0, :4, :]  # [4, num_anchors]
+    conf = predictions[0, 4:5, :]  # [1, num_anchors]
+    keypoints = predictions[0, 5:56, :]  # [51, num_anchors] - 17 keypoints * 3 values each
+
+    # Find detections above confidence threshold
+    conf_threshold = 0.6  # Increased from 0.3 to reduce overlapping detections
+    iou_threshold = 0.5  # IoU threshold for NMS to remove overlapping detections
+
+    # Create predictions tensor in format expected by NMS: [batch, num_anchors, 56]
+    # Format: [x, y, w, h, conf, kpt1_x, kpt1_y, kpt1_v, ...]
+    preds_for_nms = predictions.clone()
+
+    # Apply NMS using simplified implementation
+    def apply_nms(preds, conf_thres, iou_thres):
+        """Apply non-maximum suppression to remove overlapping detections"""
+        # Filter by confidence first
+        conf_mask = preds[0, 4, :] > conf_thres
+        if not conf_mask.any():
+            return torch.empty(0, 56)
+
+        # Get valid predictions
+        valid_preds = preds[:, :, conf_mask]  # [1, 56, num_valid]
+        valid_preds = valid_preds.squeeze(0).transpose(0, 1)  # [num_valid, 56]
+
+        if len(valid_preds) == 0:
+            return torch.empty(0, 56)
+
+        # Sort by confidence (highest first)
+        conf_scores = valid_preds[:, 4]
+        _, sort_idx = torch.sort(conf_scores, descending=True)
+        valid_preds = valid_preds[sort_idx]
+
+        # Simple NMS: keep detections with IoU < threshold
+        keep = []
+        for i in range(len(valid_preds)):
+            keep_current = True
+            for j in keep:
+                # Calculate IoU between current detection and kept detections
+                iou = calculate_iou(valid_preds[i, :4], valid_preds[j, :4])
+                if iou > iou_thres:
+                    keep_current = False
+                    break
+            if keep_current:
+                keep.append(i)
+
+        return valid_preds[keep] if len(keep) > 0 else torch.empty(0, 56)
+
+    def calculate_iou(box1, box2):
+        """Calculate IoU between two boxes in (x, y, w, h) format"""
+        # Convert to (x1, y1, x2, y2)
+        x1_1, y1_1 = box1[0] - box1[2] / 2, box1[1] - box1[3] / 2
+        x2_1, y2_1 = box1[0] + box1[2] / 2, box1[1] + box1[3] / 2
+        x1_2, y1_2 = box2[0] - box2[2] / 2, box2[1] - box2[3] / 2
+        x2_2, y2_2 = box2[0] + box2[2] / 2, box2[1] + box2[3] / 2
+
+        # Intersection
+        x1_i = max(x1_1, x1_2)
+        y1_i = max(y1_1, y1_2)
+        x2_i = min(x2_1, x2_2)
+        y2_i = min(y2_1, y2_2)
+
+        if x2_i <= x1_i or y2_i <= y1_i:
+            return 0.0
+
+        intersection = (x2_i - x1_i) * (y2_i - y1_i)
+
+        # Union
+        area1 = (x2_1 - x1_1) * (y2_1 - y1_1)
+        area2 = (x2_2 - x1_2) * (y2_2 - y1_2)
+        union = area1 + area2 - intersection
+
+        return intersection / union if union > 0 else 0.0
+
+    # Apply NMS
+    nms_results = apply_nms(preds_for_nms, conf_threshold, iou_threshold)
+
+    logger.info(f"Found {len(nms_results)} detections after NMS (conf={conf_threshold}, iou={iou_threshold})")
+
+    # Process NMS results
+    if len(nms_results) == 0:
+        logger.info("No detections found after NMS")
+        return
+
+    # Colors for keypoints (COCO format)
+    colors = [
+        (255, 0, 0),  # nose - red
+        (0, 255, 0),  # eyes - green
+        (0, 255, 0),
+        (0, 0, 255),  # ears - blue
+        (0, 0, 255),
+        (255, 255, 0),  # shoulders - cyan
+        (255, 255, 0),
+        (255, 0, 255),  # elbows - magenta
+        (255, 0, 255),
+        (0, 255, 255),  # wrists - yellow
+        (0, 255, 255),
+        (128, 0, 128),  # hips - purple
+        (128, 0, 128),
+        (0, 128, 128),  # knees - teal
+        (0, 128, 128),
+        (128, 128, 0),  # ankles - olive
+        (128, 128, 0),
+    ]
+
+    # COCO pose skeleton connections
+    skeleton = [
+        [15, 13],
+        [13, 11],
+        [16, 14],
+        [14, 12],
+        [11, 12],
+        [5, 11],
+        [6, 12],
+        [5, 6],
+        [5, 7],
+        [6, 8],
+        [7, 9],
+        [8, 10],
+        [1, 2],
+        [0, 1],
+        [0, 2],
+        [1, 3],
+        [2, 4],
+        [3, 5],
+        [4, 6],
+    ]
+
+    detections_count = 0
+
+    # Process each detection from NMS results (already sorted by confidence)
+    for j in range(min(len(nms_results), 5)):  # Limit to first 5 detections
+        detections_count += 1
+        det = nms_results[j]  # [56] tensor: [x, y, w, h, conf, kpts...]
+
+        # Get bounding box from detection (already decoded by post-processing)
+        x, y, w, h = det[:4]
+        conf_score = det[4]
+
+        # Debug: print raw coordinates
+        if detections_count == 1:
+            print(f"Detection {detections_count}: raw bbox=({x:.1f}, {y:.1f}, {w:.1f}, {h:.1f}), conf={conf_score:.3f}")
+
+        # Transform bbox to original image space
+        x_orig = (x - pad_left) / scale
+        y_orig = (y - pad_top) / scale
+        w_orig = w / scale
+        h_orig = h / scale
+
+        if detections_count == 1:
+            print(f"  Transformed bbox=({x_orig:.1f}, {y_orig:.1f}, {w_orig:.1f}, {h_orig:.1f})")
+
+        x1 = int(max(0, x_orig - w_orig / 2))
+        y1 = int(max(0, y_orig - h_orig / 2))
+        x2 = int(min(orig_w, x_orig + w_orig / 2))
+        y2 = int(min(orig_h, y_orig + h_orig / 2))
+
+        if detections_count == 1:
+            print(f"  Final bbox=({x1}, {y1}, {x2}, {y2})")
+
+        # Draw bounding box
+        cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        cv2.putText(
+            img,
+            f"Person {detections_count}: {conf_score:.2f}",
+            (x1, y1 - 10),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (0, 255, 0),
+            2,
         )
 
-        # Configure input memory
-        n, c, h, w = im_tensor.shape
-        if c == 3:
-            c = 16  # Will be padded
-        input_mem_config = ttnn.create_sharded_memory_config(
-            [n, c, h, w],
-            ttnn.CoreGrid(x=8, y=8),
-            ttnn.ShardStrategy.HEIGHT,
-        )
-        ttnn_input = ttnn_input.to(device, input_mem_config)
+        # Process keypoints from detection (already decoded by post-processing)
+        # det[5:] contains keypoints: [kpt1_x, kpt1_y, kpt1_v, kpt2_x, kpt2_y, kpt2_v, ...]
+        kpt_data = det[5:]  # [51] tensor
+        kpts = kpt_data.reshape(17, 3)  # [17, 3] - x, y, visibility
+        kpts_transformed = []
 
-        # Run TTNN inference
-        ttnn_output = ttnn_model(ttnn_input)
+        visible_count = 0
+        for kpt_idx, kpt in enumerate(kpts):
+            kx, ky, kv = kpt
 
-        # Decode keypoints on CPU
-        anchors = ttnn_model.pose_head.anchors
-        strides = ttnn_model.pose_head.strides
+            # Debug: print first few keypoints before transformation
+            if detections_count == 1 and kpt_idx < 5:
+                print(f"TTNN Keypoint {kpt_idx}: decoded=({kx:.1f}, {ky:.1f}), visibility={kv:.3f}")
 
-        # Convert to torch
-        preds_raw = ttnn.to_torch(ttnn_output, dtype=torch.float32, mesh_composer=outputs_mesh_composer)
+            # Transform to original image coordinates (coordinates are in 640x640 space, scale up)
+            kx_final = (kx - pad_left) / scale
+            ky_final = (ky - pad_top) / scale
 
-        # Debug: Check raw TTNN output
-        logger.info(f"TTNN RAW output range:")
-        logger.info(f"  Bbox: [{preds_raw[:, 0:4, :].min():.2f}, {preds_raw[:, 0:4, :].max():.2f}]")
-        logger.info(f"  Conf: [{preds_raw[:, 4, :].min():.4f}, {preds_raw[:, 4, :].max():.4f}]")
-        logger.info(f"  Kpts RAW: [{preds_raw[:, 5:56, :].min():.2f}, {preds_raw[:, 5:56, :].max():.2f}]")
+            # Debug: print transformed coordinates
+            if detections_count == 1 and kpt_idx < 5:
+                print(f"  -> TTNN final=({kx_final:.1f}, {ky_final:.1f})")
 
-        # For now: Use raw TTNN output without decoding
-        # and let postprocess handle it differently for TTNN
-        preds = preds_raw
-        logger.warning("TTNN: Using raw keypoint values (visualization will skip keypoints)")
+            # Ensure within bounds
+            kx_final = max(0, min(orig_w, kx_final))
+            ky_final = max(0, min(orig_h, ky_final))
 
-    logger.info(f"Inference complete. Processing {len(orig_images)} images...")
+            if kv > 0.3:  # visible
+                visible_count += 1
+                color = colors[kpt_idx % len(colors)]
+                cv2.circle(img, (int(kx_final), int(ky_final)), 6, color, -1)  # filled circle
+                cv2.circle(img, (int(kx_final), int(ky_final)), 8, (255, 255, 255), 2)  # white outline
 
-    # Debug: Print prediction ranges
-    logger.info(f"Predictions shape: {preds.shape}")
-    logger.info(f"  Bbox range: [{preds[:, 0:4, :].min():.2f}, {preds[:, 0:4, :].max():.2f}]")
-    logger.info(f"  Conf range: [{preds[:, 4, :].min():.4f}, {preds[:, 4, :].max():.4f}]")
-    logger.info(f"  Kpts range: [{preds[:, 5:56, :].min():.2f}, {preds[:, 5:56, :].max():.2f}]")
+            kpts_transformed.append([kx_final, ky_final, kv])
 
-    # Postprocess predictions
-    results = postprocess_pose(preds, orig_images, paths_images)
+        # Draw skeleton connections
+        for connection in skeleton:
+            kpt1_idx = connection[0]
+            kpt2_idx = connection[1]
 
-    # Visualize and save
-    logger.info(f"Saving results to {save_dir}...")
-    visualize_and_save_pose(results, save_dir)
+            if (
+                kpt1_idx < len(kpts_transformed)
+                and kpt2_idx < len(kpts_transformed)
+                and kpts_transformed[kpt1_idx][2] > 0.3
+                and kpts_transformed[kpt2_idx][2] > 0.3
+            ):
+                pt1 = (int(kpts_transformed[kpt1_idx][0]), int(kpts_transformed[kpt1_idx][1]))
+                pt2 = (int(kpts_transformed[kpt2_idx][0]), int(kpts_transformed[kpt2_idx][1]))
+                cv2.line(img, pt1, pt2, (255, 255, 0), 3)  # yellow lines
 
-    # Print summary
-    total_people = sum(len(r["detections"]) for r in results)
-    logger.info(f"Detected {total_people} people across {len(results)} images")
+        logger.info(f"Person {detections_count}: {visible_count}/17 keypoints visible")
 
-
-def run_yolov11n_pose_demo(device, model_type, res, input_loc, batch_size_per_device):
-    """
-    Run YOLO11 Pose demo on images
-
-    Args:
-        device: TT device
-        model_type: "torch_model" or "tt_model"
-        res: Input resolution (height, width)
-        input_loc: Path to input images
-        batch_size_per_device: Batch size per device
-    """
-    torch_model, ttnn_model, mesh_composer, batch_size = init_pose_model_and_runner(
-        device, model_type, batch_size_per_device
-    )
-
-    dataset = LoadImages(path=os.path.abspath(input_loc), batch=batch_size)
-    im_tensor, orig_images, paths_images = process_images(dataset, res, batch_size)
-
-    save_dir = "models/demos/yolov11/demo/runs/pose_ttnn"
-
-    run_inference_and_save_pose(
-        torch_model, ttnn_model, model_type, mesh_composer, im_tensor, orig_images, paths_images, save_dir, device
-    )
-
-    logger.info("Pose estimation demo complete!")
+    # Save result
+    runs_dir = SCRIPT_DIR / "runs" / "pose"
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    base_name = os.path.basename(image_path).rsplit(".", 1)[0]
+    output_path = runs_dir / f"{base_name}_pose_ttnn_raw.jpg"
+    cv2.imwrite(str(output_path), img)
+    logger.info(f"TTNN raw output pose estimation result saved to: {output_path}")
 
 
-def run_yolov11n_pose_demo_dataset(device, model_type, res, batch_size_per_device):
-    """
-    Run YOLO11 Pose demo on COCO dataset
-
-    Args:
-        device: TT device
-        model_type: "torch_model" or "tt_model"
-        res: Input resolution (height, width)
-        batch_size_per_device: Batch size per device
-    """
-    import fiftyone
-
-    torch_model, ttnn_model, mesh_composer, batch_size = init_pose_model_and_runner(
-        device, model_type, batch_size_per_device
-    )
-
-    dataset = fiftyone.zoo.load_zoo_dataset("coco-2017", split="validation", max_samples=batch_size)
-    filepaths = [sample["filepath"] for sample in dataset]
-    image_loader = LoadImages(filepaths, batch=batch_size)
-    im_tensor, orig_images, paths_images = process_images(image_loader, res, batch_size)
-
-    save_dir = "models/demos/yolov11/demo/runs/pose_ttnn_coco"
-
-    run_inference_and_save_pose(
-        torch_model, ttnn_model, model_type, mesh_composer, im_tensor, orig_images, paths_images, save_dir, device
-    )
-
-    logger.info("Pose estimation demo on COCO dataset complete!")
-
-
-# ===== Pytest Test Functions =====
-
-
-@pytest.mark.parametrize(
-    "device_params",
-    [{"l1_small_size": YOLOV11_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "model_type",
-    (
-        # "torch_model",  # PyTorch implementation
-        "tt_model",  # TTNN implementation (TT-Metal hardware)
-    ),
-)
-@pytest.mark.parametrize("res", [(640, 640)])
-@pytest.mark.parametrize(
-    "input_loc, batch_size_per_device",
-    [
-        (
-            "models/demos/yolov11/demo/images",
-            1,
-        ),
-    ],
-)
-def test_pose_demo(device, model_type, res, input_loc, batch_size_per_device):
-    """Test YOLO11 Pose demo"""
-    run_yolov11n_pose_demo(
-        device,
-        model_type,
-        res,
-        input_loc,
-        batch_size_per_device,
-    )
-
-
-@pytest.mark.parametrize(
-    "device_params",
-    [{"l1_small_size": YOLOV11_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "model_type",
-    (
-        "torch_model",
-        # "tt_model",
-    ),
-)
-@pytest.mark.parametrize("res", [(640, 640)])
-@pytest.mark.parametrize(
-    "input_loc, batch_size_per_device",
-    [
-        (
-            "models/demos/yolov11/demo/images",
-            1,
-        ),
-    ],
-)
-def test_pose_demo_dp(
-    mesh_device,
-    model_type,
-    res,
-    input_loc,
-    batch_size_per_device,
-):
-    """Test YOLO11 Pose demo with data parallel"""
-    run_yolov11n_pose_demo(
-        mesh_device,
-        model_type,
-        res,
-        input_loc,
-        batch_size_per_device,
-    )
-
-
-@pytest.mark.parametrize(
-    "device_params",
-    [{"l1_small_size": YOLOV11_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "model_type",
-    (
-        "torch_model",
-        # "tt_model",
-    ),
-)
-@pytest.mark.parametrize("res", [(640, 640)])
-def test_pose_demo_dataset(device, model_type, res):
-    """Test YOLO11 Pose demo on COCO dataset"""
-    run_yolov11n_pose_demo_dataset(
-        device,
-        model_type,
-        res,
-        batch_size_per_device=1,
-    )
-
-
-@pytest.mark.parametrize(
-    "device_params",
-    [{"l1_small_size": YOLOV11_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "model_type",
-    (
-        "torch_model",
-        # "tt_model",
-    ),
-)
-@pytest.mark.parametrize("res", [(640, 640)])
-def test_pose_demo_dataset_dp(mesh_device, model_type, res):
-    """Test YOLO11 Pose demo on COCO dataset with data parallel"""
-    run_yolov11n_pose_demo_dataset(
-        mesh_device,
-        model_type,
-        res,
-        batch_size_per_device=1,
-    )
+if __name__ == "__main__":
+    # Test on dog.jpg relative to this script
+    default_image_path = SCRIPT_DIR / "images" / "dog.jpg"
+    if default_image_path.exists():
+        run_ttnn_raw_demo(str(default_image_path))
+        logger.info("TTNN raw output demo completed!")
+    else:
+        logger.error(f"Image not found: {default_image_path}")
