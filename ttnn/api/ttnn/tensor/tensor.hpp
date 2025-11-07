@@ -267,15 +267,15 @@ public:
             this->tensor_attributes->get_storage(), this->tensor_attributes->get_tensor_spec());
     }
 
-    static std::uint64_t get_tensor_id_counter() { return tensor_id_counter.load(std::memory_order_relaxed); }
+    static std::uint64_t get_tensor_id_counter();
 
-    static void set_tensor_id_counter(std::uint64_t id) { tensor_id_counter.store(id, std::memory_order_relaxed); }
+    static void set_tensor_id_counter(std::uint64_t id);
 
     // TODO #32045: Remove this function since IDs are assigned in the constructor.
-    static std::uint64_t next_tensor_id() { return tensor_id_counter.fetch_add(1, std::memory_order_relaxed); }
+    static std::uint64_t next_tensor_id();
 
 private:
-    inline static std::atomic<std::uint64_t> tensor_id_counter{0};
+    static std::atomic<std::uint64_t> tensor_id_counter;
 
     void init(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
     void deallocate_impl(bool force);
