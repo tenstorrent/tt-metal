@@ -1,0 +1,17 @@
+graph_templates {
+  key: "qbge"
+  value {
+    children {
+      name: "node1"
+      node_ref { node_descriptor: "P300_QB_GE" }
+    }
+  }
+}
+
+root_instance {
+  template_name: "qbge"
+  child_mappings {
+    key: "node1"
+    value { host_id: 0 }
+  }
+}

@@ -1,0 +1,8 @@
+hosts: {
+  hall: "SC_Floor_5"
+  aisle: "A"
+  rack: 0
+  shelf_u: 0
+  node_type: "P300_QB_GE"
+  host: "qbge-metal-02"
+}
