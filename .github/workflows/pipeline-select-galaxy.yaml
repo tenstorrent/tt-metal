@@ -32,20 +32,7 @@ on:
         required: false
         type: boolean
         default: false
-      galaxy-demo:
-        required: false
-        type: boolean
-        default: false
       galaxy-unit:
-        required: false
-        type: boolean
-        default: false
-      galaxy-frequent:
-        required: false
-        type: boolean
-        default: false
-      galaxy-model-perf:
-        description: "galaxy-model-perf (Requires tracy build)"
         required: false
         type: boolean
         default: false
@@ -53,11 +40,12 @@ on:
         required: false
         type: boolean
         default: false
-      galaxy-demo-model:
-        description: 'Model to test in galaxy-demo (only when galaxy-demo is enabled)'
+      galaxy-demo:
+        description: 'Galaxy demo tests - select model or disable'
         required: false
         type: choice
         options:
+          - disabled
           - all
           - llama3
           - llama3_long_context
@@ -71,12 +59,28 @@ on:
           - gpt-oss
           - wan22
           - mochi
-        default: 'all'
-      galaxy-model-perf-model:
-        description: 'Model to test in galaxy-model-perf (only when galaxy-model-perf is enabled)'
+        default: 'disabled'
+      galaxy-frequent:
+        description: 'Galaxy frequent tests - select model or disable'
         required: false
         type: choice
         options:
+          - disabled
+          - all
+          - llama3
+          - resnet50
+          - unit
+          - sd35
+          - wan22
+          - mochi
+          - flux1
+        default: 'disabled'
+      galaxy-model-perf:
+        description: 'Galaxy model-perf tests (requires tracy build) - select model or disable'
+        required: false
+        type: choice
+        options:
+          - disabled
           - all
           - cnn
           - llama70b
@@ -87,21 +91,7 @@ on:
           - sentence_bert
           - wan2-2
           - mochi
-        default: 'all'
-      galaxy-frequent-model:
-        description: 'Model to test in galaxy-frequent (only when galaxy-frequent is enabled)'
-        required: false
-        type: choice
-        options:
-          - all
-          - llama3
-          - resnet50
-          - unit
-          - sd35
-          - wan22
-          - mochi
-          - flux1
-        default: 'all'
+        default: 'disabled'
 run-name: ${{ inputs.description }}
 jobs:
   # Centralized logic to determine what should run
@@ -123,9 +113,9 @@ jobs:
             "manual")
               echo "run-quick=${{ inputs.galaxy-quick }}" >> $GITHUB_OUTPUT
               echo "run-unit=${{ inputs.galaxy-unit }}" >> $GITHUB_OUTPUT
-              echo "run-frequent=${{ inputs.galaxy-frequent }}" >> $GITHUB_OUTPUT
-              echo "run-demo=${{ inputs.galaxy-demo }}" >> $GITHUB_OUTPUT
-              echo "run-model-perf=${{ inputs.galaxy-model-perf }}" >> $GITHUB_OUTPUT
+              echo "run-frequent=${{ inputs.galaxy-frequent != 'disabled' }}" >> $GITHUB_OUTPUT
+              echo "run-demo=${{ inputs.galaxy-demo != 'disabled' }}" >> $GITHUB_OUTPUT
+              echo "run-model-perf=${{ inputs.galaxy-model-perf != 'disabled' }}" >> $GITHUB_OUTPUT
               echo "run-stress=${{ inputs.galaxy-stress }}" >> $GITHUB_OUTPUT
               ;;
             "model-pr")
@@ -213,7 +203,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      model: ${{ inputs.galaxy-frequent-model || 'all' }}
+      model: ${{ inputs.trigger_type == 'manual' && inputs.galaxy-frequent || 'all' }}
       topology: 'topology-6u'
   galaxy-demo-tests:
     if: ${{ needs.determine-tests.outputs.run-demo == 'true' }}
@@ -225,7 +215,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      model: ${{ inputs.galaxy-demo-model || 'all' }}
+      model: ${{ inputs.trigger_type == 'manual' && inputs.galaxy-demo || 'all' }}
       topology: 'topology-6u'
   galaxy-model-perf-tests:
     if: ${{ needs.determine-tests.outputs.run-model-perf == 'true' }}
@@ -237,7 +227,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      model: ${{ inputs.galaxy-model-perf-model || 'all' }}
+      model: ${{ inputs.trigger_type == 'manual' && inputs.galaxy-model-perf || 'all' }}
       topology: 'topology-6u'
   galaxy-stress-test:
     if: ${{ needs.determine-tests.outputs.run-stress == 'true' }}
