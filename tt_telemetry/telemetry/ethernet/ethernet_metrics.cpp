@@ -740,21 +740,6 @@ void FabricDeviceIDMetric::update(
  Fabric direction from static info.
 **************************************************************************************************/
 
-static std::string direction_to_lowercase_string(tt::tt_fabric::eth_chan_directions direction) {
-    switch (direction) {
-        case tt::tt_fabric::eth_chan_directions::EAST:
-            return "east";
-        case tt::tt_fabric::eth_chan_directions::WEST:
-            return "west";
-        case tt::tt_fabric::eth_chan_directions::NORTH:
-            return "north";
-        case tt::tt_fabric::eth_chan_directions::SOUTH:
-            return "south";
-        default:
-            return "unknown (" + std::to_string(static_cast<uint8_t>(direction)) + ")";
-    }
-}
-
 FabricDirectionMetric::FabricDirectionMetric(
     tt::tt_metal::TrayID tray_id,
     tt::tt_metal::ASICLocation asic_location,
@@ -764,8 +749,9 @@ FabricDirectionMetric::FabricDirectionMetric(
     tray_id_(tray_id),
     asic_location_(asic_location),
     channel_(channel),
-    telemetry_reader_(telemetry_reader) {
-    value_ = "";
+    telemetry_reader_(telemetry_reader),
+    raw_value_(0) {
+    value_ = tt::tt_fabric::eth_chan_direction_to_string(static_cast<tt::tt_fabric::eth_chan_directions>(raw_value_));
 }
 
 const std::vector<std::string> FabricDirectionMetric::telemetry_path() const {
@@ -774,12 +760,17 @@ const std::vector<std::string> FabricDirectionMetric::telemetry_path() const {
 
 void FabricDirectionMetric::update(
     const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
-    std::string new_value;
+    uint8_t new_raw_value = 0;
     const FabricTelemetryContainer& telemetry = telemetry_reader_->get_fabric_telemetry(cluster, start_of_update_cycle);
     std::visit([&](auto&& tel) {
-        new_value = direction_to_lowercase_string(tel.static_info.direction);
+        new_raw_value = static_cast<uint8_t>(tel.static_info.direction);
     }, telemetry);
-    changed_since_transmission_ = new_value != value_;
-    value_ = new_value;
+    
+    // Only convert to string if the raw value changed
+    changed_since_transmission_ = new_raw_value != raw_value_;
+    raw_value_ = new_raw_value;
+    if (changed_since_transmission_) {
+        value_ = tt::tt_fabric::eth_chan_direction_to_string(static_cast<tt::tt_fabric::eth_chan_directions>(new_raw_value));
+    }
     set_timestamp_now();
 }

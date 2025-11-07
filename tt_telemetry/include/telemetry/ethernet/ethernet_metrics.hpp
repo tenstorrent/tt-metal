@@ -377,6 +377,7 @@ private:
     tt::tt_metal::ASICLocation asic_location_;
     uint32_t channel_;
     std::shared_ptr<FabricTelemetryReader> telemetry_reader_;
+    uint8_t raw_value_;
 };
 
 void create_ethernet_metrics(
