@@ -95,7 +95,7 @@ jobs:
           # filter them out
           # if [[ "$merge-gate-call" == "true" ]]; then
           # requested_ttnn_tests=$(jq '[.[] | select(.merge_gate == $merge-gate-call)]' <<< "$requested_ttnn_tests")
-          requested_ttnn_tests=$(jq --argjson merge_gate_call "$MERGE_GATE_CALL" '[.[] | select(.merge_gate == $merge_gate_call)]' <<< "$requested_ttnn_tests")
+          requested_ttnn_tests=$(jq --argjson merge_gate_call "${{ inputs.merge-gate-call }}" '[.[] | select(.merge_gate == $merge_gate_call)]' <<< "$requested_ttnn_tests")
           echo "[info] after filtering filtering out perf tests: $requested_ttnn_tests"
           # fi
 
