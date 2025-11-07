@@ -4,19 +4,18 @@
 
 #include "tensor/tensor_ops.hpp"
 
-#include "tt_stl/overloaded.hpp"
-#include "tt-metalium/queue_id.hpp"
-#include "tt-metalium/tensor/storage.hpp"
-#include "tt-metalium/tensor/tensor.hpp"
+#include <tt_stl/overloaded.hpp>
+#include <tt-metalium/queue_id.hpp>
+#include <tt-metalium/tensor/storage.hpp>
+#include <tt-metalium/tensor/tensor.hpp>
 
 #include <cstdint>
-#include <memory>
 
 #include <tt-metalium/bfloat16.hpp>
-#include "tt-metalium/tensor/tensor_impl.hpp"
-#include "tt-metalium/tensor/tensor_impl_wrapper.hpp"
-#include "tt-metalium/tensor/tensor_utils.hpp"
-#include "tt-metalium/tensor/types.hpp"
+#include <tt-metalium/tensor/tensor_impl.hpp>
+#include <tt-metalium/tensor/tensor_impl_wrapper.hpp>
+#include <tt-metalium/tensor/tensor_utils.hpp>
+#include <tt-metalium/tensor/types.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
 #include <tracy/Tracy.hpp>
