@@ -164,14 +164,24 @@ def export_suite_vectors(module_name, suite_name, vectors):
 
 
 # Generate one or more sets of test vectors depending on module_name
-def generate_tests(module_name, skip_modules=None):
+def generate_tests(module_name, skip_modules=None, model_traced_only=False):
     skip_modules_set = set()
     if skip_modules:
         skip_modules_set = {name.strip() for name in skip_modules.split(",")}
         logger.info(f"Skipping modules: {', '.join(skip_modules_set)}")
 
     if not module_name:
-        for file_name in sorted(SWEEP_SOURCES_DIR.glob("**/*.py")):
+        # Determine which directory to search based on model_traced_only flag
+        if model_traced_only:
+            search_dir = SWEEP_SOURCES_DIR / "model_traced"
+            logger.info("Generating test vectors for model_traced operations only.")
+            # Only search directly in model_traced directory, not subdirectories
+            glob_pattern = "*.py"
+        else:
+            search_dir = SWEEP_SOURCES_DIR
+            glob_pattern = "**/*.py"
+
+        for file_name in sorted(search_dir.glob(glob_pattern)):
             module_name = str(pathlib.Path(file_name).relative_to(SWEEP_SOURCES_DIR))[:-3].replace("/", ".")
             if module_name in skip_modules_set:
                 logger.info(f"Skipping module {module_name} (in skip list).")
@@ -258,6 +268,12 @@ if __name__ == "__main__":
         required=False,
         help="Comma-separated list of module names to skip during generation",
     )
+    parser.add_argument(
+        "--model-traced",
+        required=False,
+        action="store_true",
+        help="If set, only generate test vectors for operations in sweeps/model_traced directory",
+    )
 
     args = parser.parse_args(sys.argv[1:])
 
@@ -296,4 +312,4 @@ if __name__ == "__main__":
     elif args.clean:
         clean_module(args.module_name)
 
-    generate_tests(args.module_name, args.skip_modules)
+    generate_tests(args.module_name, args.skip_modules, args.model_traced)
