@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #pragma once
 
 constexpr uint32_t ONE_TILE{1};
@@ -156,7 +160,6 @@ struct IntImgCTAs {
 };
 
 FORCE_INLINE constexpr auto get_ctas() {
-    // constexpr auto input_args = TensorAccessorArgs<18>();
     constexpr auto input_args = TensorAccessorArgs<17>();
     constexpr auto output_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     return IntImgCTAs<decltype(input_args), decltype(output_args)>{
