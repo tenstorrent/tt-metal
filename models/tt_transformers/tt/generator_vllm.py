@@ -46,11 +46,14 @@ def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Tra
         kv_tt = []
         for layer_num in tqdm(range(num_layers), desc=f"Allocating TT kv caches for each layer (submesh {mesh_idx+1})"):
             # Get the dtype for the kv cache based on the configured optimizations in the model
-            kv_cache_dtype = ttnn.bfloat8_b  # Set default to bfloat8_b when no optimizations are configured
             if dp_model[mesh_idx].args.optimizations is not None:
                 kv_cache_dtype = dp_model[mesh_idx].args.optimizations.get_tensor_dtype(
                     decoder_id=layer_num, tensor=TensorGroup.KV_CACHE
                 )
+            else:
+                kv_cache_dtype = None
+            # Set default to bfloat8_b when no optimizations are configured
+            kv_cache_dtype = ttnn.bfloat8_b if kv_cache_dtype is None else kv_cache_dtype
             kv_tt_i = [
                 ttnn.as_tensor(
                     cache_kv,
@@ -418,7 +421,7 @@ class QwenForCausalLM(Generator):
         max_seq_len,
         n_layers=None,
         tt_data_parallel=1,
-        optimizations: str = "performance",
+        optimizations: str = "accuracy",
     ):
         tt_model, model_args = initialize_vllm_text_transformer(
             hf_config,
