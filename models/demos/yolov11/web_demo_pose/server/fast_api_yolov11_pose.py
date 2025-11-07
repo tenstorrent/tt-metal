@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import logging
+import os
 from io import BytesIO
 
 import numpy as np
@@ -239,22 +240,55 @@ async def root():
 
 @app.on_event("startup")
 async def startup():
-    global model
+    global model, device_global
     print("=== FASTAPI SERVER STARTUP ===")
-    print("TTNN model will be loaded on first pose request")
-    print("✓ Server ready to accept requests")
-    model = None  # Will be loaded lazily
+    print("Loading TTNN YOLOv11 pose model...")
+    try:
+        from models.demos.yolov11.reference.yolov11_pose_correct import YoloV11Pose
+        from models.demos.yolov11.tt.model_preprocessing_pose import create_yolov11_pose_model_parameters
+        from models.demos.yolov11.tt.ttnn_yolov11_pose_model import TtnnYoloV11Pose
+
+        device_id = 0
+        device_global = ttnn.CreateDevice(device_id, l1_small_size=32768)  # Increased for pose model
+
+        # Load PyTorch model for parameter creation
+        torch_model = YoloV11Pose()
+        weights_path = "models/demos/yolov11/reference/yolov11_pose_pretrained_correct.pth"
+        if os.path.exists(weights_path):
+            torch_model.load_state_dict(torch.load(weights_path, map_location="cpu"))
+            print("✓ Loaded pretrained weights")
+
+        # Create TTNN model parameters
+        img_tensor_batched = torch.randn(1, 3, 640, 640)  # Dummy tensor for parameter creation
+        parameters = create_yolov11_pose_model_parameters(torch_model, img_tensor_batched, device=device_global)
+
+        # Create TTNN model
+        model = TtnnYoloV11Pose(device=device_global, parameters=parameters)
+        print("✓ TTNN pose model loaded successfully")
+    except Exception as e:
+        print(f"✗ Failed to load TTNN pose model: {e}")
+        import traceback
+
+        traceback.print_exc()
+        model = None
+        device_global = None
 
 
 @app.on_event("shutdown")
 async def shutdown():
-    global device_global
-    if "device_global" in globals():
+    global model, device_global
+    if model:
         try:
-            device_global.disable_and_close()
+            model.release()
+            print("✓ Model released")
+        except Exception as e:
+            print(f"Warning: Failed to release model: {e}")
+    if device_global:
+        try:
+            ttnn.close_device(device_global)
             print("✓ Device closed")
-        except:
-            pass
+        except Exception as e:
+            print(f"Warning: Failed to close device: {e}")
 
 
 @app.post("/pose_estimation_v2")
@@ -359,40 +393,39 @@ async def pose_estimation_v2(file: UploadFile = File(...)):
         print("DEBUG: Starting TTNN model inference...")
         print(f"DEBUG: Model type: {type(model)}")
 
-        # Convert input to TTNN format (same as working demo: add batch dimension)
-        image_tensor_batched = image_tensor.unsqueeze(0)  # Add batch dimension
-        print(f"DEBUG: Input tensor shape: {image_tensor_batched.shape}")
-        tt_input = ttnn.from_torch(image_tensor_batched, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-        print(f"DEBUG: TTNN input created")
-        tt_input = ttnn.to_device(tt_input, device_global)
-        print(f"DEBUG: TTNN input moved to device")
-
-        # Run TTNN inference - returns raw predictions [batch, 116, num_anchors]
+        # Run TTNN pose inference
         try:
-            response = model(tt_input)
-            print("DEBUG: TTNN inference completed successfully")
+            # Convert to TTNN tensor
+            tt_input = ttnn.from_torch(image_tensor.unsqueeze(0), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+            tt_input = ttnn.to_device(tt_input, device_global)
+
+            # Run inference
+            tt_output = model(tt_input)
+
+            # Convert back to torch
+            processed_output = ttnn.to_torch(tt_output)
+
+            # Decode raw TTNN outputs to match PyTorch pose head format
+            processed_output = processed_output.cpu()
+            processed_output = apply_pytorch_postprocessing(processed_output, anchors_per_stride)
+
+            # Clean up TTNN tensors
+            ttnn.deallocate(tt_input)
+            ttnn.deallocate(tt_output)
+            print("DEBUG: TTNN pose inference completed successfully")
         except Exception as e:
-            print(f"DEBUG: TTNN inference failed: {e}")
+            print(f"DEBUG: TTNN pose inference failed: {e}")
             import traceback
 
             traceback.print_exc()
-            return {"error": f"TTNN inference failed: {str(e)}"}
+            return {"error": f"TTNN pose inference failed: {str(e)}"}
 
-        # Convert back to torch - TTNN model returns raw predictions [batch, 116, num_anchors]
-        raw_output = ttnn.to_torch(response)
-        print(f"DEBUG: TTNN raw output shape: {raw_output.shape}")
-        print(f"DEBUG: Raw output range: [{raw_output.min():.6f}, {raw_output.max():.6f}]")
-        print(f"DEBUG: Raw output sample [0,:5,0]: {raw_output[0,:5,0].tolist()}")
-
-        # Apply PyTorch post-processing to convert raw output to processed format
-        processed_output = apply_pytorch_postprocessing(raw_output, anchors_per_stride)
-        print(f"DEBUG: TTNN model output shape: {processed_output.shape}")
+        print(f"DEBUG: TTNN model output shape after decoding: {processed_output.shape}")
         print(f"DEBUG: Model output range: [{processed_output.min():.6f}, {processed_output.max():.6f}]")
-        print(f"DEBUG: Model output sample [0,:5,0]: {processed_output[0,:5,0].tolist()}")
-
-        # Deallocate TTNN tensors to prevent memory/state issues
-        ttnn.deallocate(response)
-        ttnn.deallocate(tt_input)
+        if processed_output.shape[-1] > 0:
+            print(f"DEBUG: Model output sample [0,:5,0]: {processed_output[0,:5,0].tolist()}")
+        else:
+            print("DEBUG: No detections returned!")
 
         # Extract components from processed output
         bbox = processed_output[0, :4, :]  # [4, num_anchors] - center_x, center_y, w, h
@@ -411,7 +444,7 @@ async def pose_estimation_v2(file: UploadFile = File(...)):
         print(f"DEBUG: Confidence stats - Max: {max_conf:.6f}, Mean: {mean_conf:.6f}")
 
         # Apply confidence threshold
-        conf_threshold = 0.1
+        conf_threshold = 0.01
         conf_mask = conf[0, :] > conf_threshold
         valid_indices = torch.where(conf_mask)[0]
 
@@ -471,6 +504,11 @@ async def pose_estimation_v2(file: UploadFile = File(...)):
             kpt_normalized = []
             for i in range(17):  # 17 keypoints
                 base_idx = i * 3
+                if base_idx + 2 >= len(kpt_data):
+                    print(
+                        f"DEBUG: Warning - not enough keypoint data. base_idx={base_idx}, len(kpt_data)={len(kpt_data)}"
+                    )
+                    break
                 kx_640 = float(kpt_data[base_idx])
                 ky_640 = float(kpt_data[base_idx + 1])
                 kv = float(kpt_data[base_idx + 2])
