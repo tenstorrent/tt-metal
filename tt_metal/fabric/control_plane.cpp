@@ -1472,7 +1472,7 @@ static void write_to_all_cores(
                 tt::tt_metal::MetalContext::instance().get_cluster().write_core(
                     data,
                     size,
-                    tt_cxy_pair(physical_chip_id, tensix_core),
+                    tt_cxy_pair(physical_chip_id, CoreCoord(tensix_core.x, tensix_core.y)),
                     tt::tt_metal::MetalContext::instance().hal().get_dev_addr(core_type, addr_type));
             }
             break;
@@ -1491,7 +1491,7 @@ static void write_to_all_cores(
                 tt::tt_metal::MetalContext::instance().get_cluster().write_core(
                     data,
                     size,
-                    tt_cxy_pair(physical_chip_id, virtual_eth_core),
+                    tt_cxy_pair(physical_chip_id, CoreCoord(virtual_eth_core.x, virtual_eth_core.y)),
                     tt::tt_metal::MetalContext::instance().hal().get_dev_addr(core_type, addr_type));
             }
             break;
