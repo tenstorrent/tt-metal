@@ -11,7 +11,7 @@ class ModelOptimisations:
         self,
         conv_act_dtype=ttnn.bfloat16,
         conv_w_dtype=ttnn.bfloat16,
-        attention_weights_dtype=ttnn.bfloat16,
+        attention_weights_dtype=ttnn.bfloat8_b,
         ff_weights_dtype=ttnn.bfloat8_b,
     ):
         self.conv_configs = {}
