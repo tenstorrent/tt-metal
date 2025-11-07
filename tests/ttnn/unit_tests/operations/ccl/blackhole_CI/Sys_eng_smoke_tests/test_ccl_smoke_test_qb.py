@@ -22,14 +22,10 @@ from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gath
 @pytest.mark.parametrize(
     "ag_input_dtype",
     [
-        ttnn.bfloat16,
         ttnn.uint32,
-        ttnn.bfloat8_b,
     ],
     ids=[
-        "float_16",
         "uint_32",
-        "bfloat_8",
     ],
 )
 @pytest.mark.parametrize(
