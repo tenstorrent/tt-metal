@@ -222,14 +222,6 @@ class ModelOptimisations:
             sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=128),  # 4 tiles
         )
 
-        # Conv3: 1x1 bottleneck convolutions (matmul path with width slicing)
-        for i in range(3):
-            self.register_layer_override(
-                f"res2.{i}.conv3",
-                slice_strategy=WidthSliceStrategyConfiguration(num_slices=2),
-                sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=32),  # 1 tile
-            )
-
     def _setup_res3_stage(self):
         """
         Res3 (128x256->64x128): 4 bottleneck blocks, 512 output channels
@@ -252,18 +244,11 @@ class ModelOptimisations:
             start_idx=1,
         )
 
-        # Conv3: 1x1 bottleneck with width slicing
-        self.register_layer_override(
-            "res3.0.conv3",
-            slice_strategy=WidthSliceStrategyConfiguration(num_slices=2),
-            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=32),
-        )
-
         # Shortcut: Downsample layer in first block
         self.register_layer_override(
             "res3.0.shortcut",
-            slice_strategy=WidthSliceStrategyConfiguration(num_slices=2),
-            sharding_strategy=BlockShardedStrategyConfiguration(),
+            slice_strategy=WidthSliceStrategyConfiguration(num_slices=0),
+            sharding_strategy=HeightShardedStrategyConfiguration(),
         )
 
     def _setup_res4_stage(self):
@@ -290,6 +275,7 @@ class ModelOptimisations:
         self.register_layer_override(
             "res4.0.shortcut",
             sharding_strategy=BlockShardedStrategyConfiguration(),
+            enable_weights_double_buffer=True,
         )
 
     def _setup_res5_stage(self):
@@ -302,6 +288,7 @@ class ModelOptimisations:
                 f"res5.{i}.conv2",
                 sharding_strategy=BlockShardedStrategyConfiguration(),
                 slice_strategy=WidthSliceStrategyConfiguration(num_slices=2),
+                enable_weights_double_buffer=True,
             )
 
     def _setup_resnet_activation_fusion(self):
@@ -351,7 +338,6 @@ class ModelOptimisations:
         no_slice_branches = ["aspp.convs.0", "aspp.convs.4", "aspp.project"]
         self._register_multiple_layers(
             no_slice_branches,
-            slice_strategy=None,
             deallocate_activation=False,
         )
 
@@ -369,6 +355,7 @@ class ModelOptimisations:
                 sharding_strategy=BlockShardedStrategyConfiguration(act_block_h_override=act_block_h),
                 deallocate_activation=False,
                 activation=None,
+                enable_weights_double_buffer=True,
             )
 
     # -------------------------------------------------------------------------
@@ -389,7 +376,6 @@ class ModelOptimisations:
         projection_layers = [f"decoder.{stage}.project_conv" for stage in ["res5", "res4", "res3", "res2"]]
         self._register_multiple_layers(
             projection_layers,
-            slice_strategy=None,
             deallocate_activation=False,
         )
 
@@ -409,13 +395,10 @@ class ModelOptimisations:
         path = f"decoder.{stage}.fuse_conv.0"
 
         if iteration_index == 0 and stage in ["res3", "res2"]:
-            num_slices = 2 if stage == "res3" else 4
-            act_block_h = 32 if stage == "res3" else 64
-
             self.register_layer_override(
                 path,
-                slice_strategy=ChannelSliceStrategyConfiguration(num_slices=num_slices),
-                sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=act_block_h),
+                slice_strategy=None,
+                sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=0),
                 deallocate_activation=False,
                 activation=None,
             )
