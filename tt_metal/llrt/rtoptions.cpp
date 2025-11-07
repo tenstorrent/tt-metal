@@ -68,10 +68,6 @@ RunTimeOptions::RunTimeOptions() :
 
     // ENV Can Override
     const char* root_dir_str = std::getenv(TT_METAL_RUNTIME_ROOT_ENV_VAR);
-    if (root_dir_str == nullptr) {
-        // Fallback to TT_METAL_HOME for backwards compatibility
-        root_dir_str = std::getenv("TT_METAL_HOME");
-    }
     if (root_dir_str != nullptr) {
         this->root_dir = std::string(root_dir_str);
         log_debug(tt::LogMetal, "ENV override root_dir: {}", this->root_dir);
@@ -95,7 +91,7 @@ RunTimeOptions::RunTimeOptions() :
             "Failed to determine TT-Metal root directory. "
             "Root directory must be set via one of the following methods:\n"
             "1. Automatically determined when using a package install\n"
-            "2. Set TT_METAL_RUNTIME_ROOT (or TT_METAL_HOME) environment variable to the path containing tt_metal/\n"
+            "2. Set TT_METAL_RUNTIME_ROOT environment variable to the path containing tt_metal/\n"
             "3. Call RunTimeOptions::set_root_dir() API before creating RunTimeOptions\n"
             "4. Run from the root of the repository\n"
             "Current working directory: {}",
