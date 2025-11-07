@@ -84,48 +84,25 @@ std::string serialize_container(const Container& container) {
     return oss.str();
 }
 
-// Specialization for nested arrays (e.g., SmallVector<std::array<uint, 2>>)
-template <typename T, std::size_t N>
-std::string serialize_container(const std::vector<std::array<T, N>>& vec) {
+// Helper for serializing containers of arrays (nested structure)
+template <typename Container, typename T, std::size_t N>
+std::string serialize_nested_array_container(const Container& vec) {
     std::ostringstream oss;
     oss << "[";
     for (size_t i = 0; i < vec.size(); ++i) {
         if (i > 0) {
             oss << ", ";
         }
-        oss << "[";
-        for (size_t j = 0; j < N; ++j) {
-            if (j > 0) {
-                oss << ", ";
-            }
-            oss << vec[i][j];
-        }
-        oss << "]";
+        oss << serialize_container(vec[i]);
     }
     oss << "]";
     return oss.str();
 }
 
-// Specialization for SmallVector with nested arrays
+// Specialization for SmallVector with nested arrays (e.g., SmallVector<std::array<uint, 2>, 8>)
 template <typename T, std::size_t N, std::size_t M>
 std::string serialize_container(const ttsl::SmallVector<std::array<T, N>, M>& vec) {
-    std::ostringstream oss;
-    oss << "[";
-    for (size_t i = 0; i < vec.size(); ++i) {
-        if (i > 0) {
-            oss << ", ";
-        }
-        oss << "[";
-        for (size_t j = 0; j < N; ++j) {
-            if (j > 0) {
-                oss << ", ";
-            }
-            oss << vec[i][j];
-        }
-        oss << "]";
-    }
-    oss << "]";
-    return oss.str();
+    return serialize_nested_array_container<ttsl::SmallVector<std::array<T, N>, M>, T, N>(vec);
 }
 
 // Helper function to register both const and non-const reference wrappers
@@ -291,14 +268,8 @@ void GraphArgumentSerializer::initialize() {
     GraphArgumentSerializer::register_type<std::variant<unsigned int, float>>();
     GraphArgumentSerializer::register_type<std::variant<float, unsigned int>>();
 
-    // Register std::array types commonly used for pad operations
-    // We register these directly without going through register_type to avoid recursive template expansion
-    register_reference_wrapper_pair<std::array<unsigned int, 2>>(
-        registry(), serialize_container<std::array<unsigned int, 2>>);
-    register_reference_wrapper_pair<std::array<unsigned int, 4>>(
-        registry(), serialize_container<std::array<unsigned int, 4>>);
-
     // Register SmallVector types for various operations using generic serialize_container
+    // Note: std::array<unsigned int, N> is already registered via register_type<uint>() above
     register_reference_wrapper_pair<ttsl::SmallVector<std::array<unsigned int, 2>, 8>>(
         registry(), serialize_container<unsigned int, 2, 8>);
     register_reference_wrapper_pair<ttsl::SmallVector<long, 8>>(
@@ -310,15 +281,9 @@ void GraphArgumentSerializer::initialize() {
     register_reference_wrapper_pair<std::variant<std::array<unsigned int, 2>, std::array<unsigned int, 4>>>(
         registry(),
         [](const std::variant<std::array<unsigned int, 2>, std::array<unsigned int, 4>>& var) -> std::string {
-            std::ostringstream oss;
-            if (std::holds_alternative<std::array<unsigned int, 2>>(var)) {
-                const auto& arr = std::get<std::array<unsigned int, 2>>(var);
-                oss << "[" << arr[0] << ", " << arr[1] << "]";
-            } else {
-                const auto& arr = std::get<std::array<unsigned int, 4>>(var);
-                oss << "[" << arr[0] << ", " << arr[1] << ", " << arr[2] << ", " << arr[3] << "]";
-            }
-            return oss.str();
+            return std::holds_alternative<std::array<unsigned int, 2>>(var)
+                       ? serialize_container(std::get<std::array<unsigned int, 2>>(var))
+                       : serialize_container(std::get<std::array<unsigned int, 4>>(var));
         });
 
     // Register std::nullopt_t for optional parameters
