@@ -22,8 +22,8 @@ training_config:
     intermediate_dim: 8192
     dropout_prob: 0.0
     num_blocks: 16
-    weight_tying: "disabled"
-    vocab_size: 32000
+    weight_tying: "enabled"
+    vocab_size: 128256
     max_sequence_length: 2048
     runner_type: memory_efficient
     theta: 500000.0
