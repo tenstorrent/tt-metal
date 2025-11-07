@@ -606,24 +606,9 @@ nb::object convert_tt_tensor_to_torch_tensor(const RowMajorHostBuffer& row_major
             auto pytorch_empty = torch.attr("empty");
             return pytorch_empty(row_major_host_buffer.shape, nb::arg("dtype") = torch_dtype);
         }
-        // Nanobind path: HostBuffer doesn't expose Python buffer protocol; build a Python buffer.
+        // Nanobind path: HostBuffer doesn't expose Python buffer protocol; build a Python bytearray and
+        // construct a torch tensor using the correct dtype (including BFLOAT16).
         auto bytes_view = row_major_host_buffer.buffer.view_bytes();
-        // Special-case BFLOAT16 to avoid endianness/caster pitfalls: convert to float32 explicitly.
-        if (row_major_host_buffer.data_type == DataType::BFLOAT16) {
-            const size_t num_vals = bytes_view.size() / 2;
-            std::vector<float> f32(num_vals);
-            for (size_t i = 0; i < num_vals; ++i) {
-                uint16_t bf16_bits;
-                std::memcpy(&bf16_bits, reinterpret_cast<const char*>(bytes_view.data()) + 2 * i, sizeof(uint16_t));
-                uint32_t f32_bits = static_cast<uint32_t>(bf16_bits) << 16;
-                std::memcpy(&f32[i], &f32_bits, sizeof(uint32_t));
-            }
-            nb::bytes py_bytes(reinterpret_cast<const char*>(f32.data()), f32.size() * sizeof(float));
-            nb::object py_bytearray = nb::module_::import_("builtins").attr("bytearray")(py_bytes);
-            nb::object torch_f32 = torch.attr("float32");
-            return frombuffer(py_bytearray, nb::arg("dtype") = torch_f32);
-        }
-        // Default path: copy raw bytes into a Python bytearray and construct tensor from buffer.
         const char* raw_ptr = reinterpret_cast<const char*>(bytes_view.data());
         const size_t raw_size = bytes_view.size();
         nb::bytes py_bytes(raw_ptr, raw_size);
