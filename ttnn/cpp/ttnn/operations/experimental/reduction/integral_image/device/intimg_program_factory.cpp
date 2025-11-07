@@ -14,8 +14,6 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-#include <iostream>
-
 namespace ttnn::operations::experimental::reduction {
 
 IntImgProgramFactory::cached_program_t IntImgProgramFactory::create(
@@ -33,8 +31,6 @@ IntImgProgramFactory::cached_program_t IntImgProgramFactory::create(
 
     Program program{};
 
-    // IDevice* device{input_tensor.device()};
-
     auto src_buffer{input_tensor.buffer()};
     auto dst_buffer{output_tensor.buffer()};
 
@@ -46,20 +42,14 @@ IntImgProgramFactory::cached_program_t IntImgProgramFactory::create(
     const auto tile_spec = input_tensor.tensor_spec().tile();
 
     const auto core_range_set = CoreRangeSet{{{0, 0}, {1, 3}}};
-    create_cb(program, input_tensor.dtype(), IntImgCB::START, core_range_set, 4);
-    create_cb(program, input_tensor.dtype(), IntImgCB::INPUT, core_range_set, 4);
-    create_cb(program, input_tensor.dtype(), IntImgCB::ACC, core_range_set, 4);
+    create_cb(program, input_tensor.dtype(), IntImgCB::START, core_range_set, 48);
+    create_cb(program, input_tensor.dtype(), IntImgCB::INPUT, core_range_set, 48);
+    create_cb(program, input_tensor.dtype(), IntImgCB::ACC, core_range_set, 48);
     create_cb(program, input_tensor.dtype(), IntImgCB::CUMSUM_STAGE_0, core_range_set, 48);
     create_cb(program, input_tensor.dtype(), IntImgCB::CUMSUM_STAGE_1, core_range_set, 48);
     create_cb(program, input_tensor.dtype(), IntImgCB::CUMSUM_STAGE_2, core_range_set, 48);
-    // create_cb(program, input_tensor.dtype(), IntImgCB::CUMSUM_STAGE_3, core_range_set, 32);
-    create_cb(
-        program,
-        input_tensor.dtype(),
-        IntImgCB::OUTPUT,
-        core_range_set,
-        48);  // TODO(jbbieniekTT): temporary change from 2t to 32t
-    create_cb(program, input_tensor.dtype(), IntImgCB::AXIS_2_BUFFER, core_range_set, 4);
+    create_cb(program, input_tensor.dtype(), IntImgCB::OUTPUT, core_range_set, 48);
+    create_cb(program, input_tensor.dtype(), IntImgCB::AXIS_2_BUFFER, core_range_set, 48);
     create_cb(program, input_tensor.dtype(), IntImgCB::AXIS_3_BUFFER_0, core_range_set, 48);
     create_cb(program, input_tensor.dtype(), IntImgCB::AXIS_3_BUFFER_1, core_range_set, 48);
 
@@ -70,7 +60,6 @@ IntImgProgramFactory::cached_program_t IntImgProgramFactory::create(
         static_cast<uint32_t>(IntImgCB::CUMSUM_STAGE_0),
         static_cast<uint32_t>(IntImgCB::CUMSUM_STAGE_1),
         static_cast<uint32_t>(IntImgCB::CUMSUM_STAGE_2),
-        // static_cast<uint32_t>(IntImgCB::CUMSUM_STAGE_3),
         static_cast<uint32_t>(IntImgCB::OUTPUT),
         static_cast<uint32_t>(IntImgCB::AXIS_2_BUFFER),
         static_cast<uint32_t>(IntImgCB::AXIS_3_BUFFER_0),
@@ -129,11 +118,6 @@ void IntImgProgramFactory::override_runtime_arguments(
             writer_runtime_args[0] = output_buffer_address;
         }
     }
-    // const auto core = CoreCoord{0, 0};
-    // auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-    // auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-    // reader_runtime_args[0] = input_buffer_address;
-    // writer_runtime_args[0] = output_buffer_address;
 }
 
 CBHandle IntImgProgramFactory::create_cb(

@@ -177,7 +177,6 @@ FORCE_INLINE constexpr auto get_ctas() {
         get_compile_time_arg_val(14),
         get_compile_time_arg_val(15),
         get_compile_time_arg_val(16),
-        // get_compile_time_arg_val(17),
         input_args,
         output_args,
     };

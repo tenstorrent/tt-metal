@@ -61,16 +61,6 @@ public:
     operator any_type_t() = delete;
 };
 
-// FORCE_INLINE uint32_t portable_ilogb(uint32_t x) {
-//     using std::frexp;
-
-//     int exp = 0;
-//     // frexp: x = m * 2^(exp), with 0.5 <= |m| < 1 (if x!=0)
-//     // ilogb (base 2) = exp - 1
-//     (void)frexp(x > uint32_t(0) ? x : -x, &exp);
-//     return exp - 1;
-// }
-
 FORCE_INLINE uint32_t get_coord_from_tile_xy(uint32_t read_i, uint32_t write_i) {
     return ((write_i & 0x10) << 5)    // y_hi * 512
            | ((read_i & 0x10) << 4)   // x_hi * 256
@@ -78,8 +68,6 @@ FORCE_INLINE uint32_t get_coord_from_tile_xy(uint32_t read_i, uint32_t write_i) 
            | (read_i & 0x0F);
 }
 
-// const uint32_t read_tile_id = get_tile_id(num_blocks_in_row, num_blocks_in_column, num_slices_along_channels,
-// inner_tile_stride, channels_slice_i, row_chunk_i, column_block_i);
 FORCE_INLINE uint32_t get_tile_id(
     uint32_t depth_blocks_num,
     uint32_t height_blocks_num,
@@ -100,19 +88,16 @@ FORCE_INLINE constexpr uint32_t block_depth_ceil(uint32_t value, uint32_t block_
     return (value + block_depth - 1) / block_depth;
 }
 
-// total tiles with double buffering (apart from 32t CBs, not enough memory) and default 32 block_depth: 204, each tile:
-// 4 KB, total: 816 KB for 4-byte types per core.
 struct IntImgComputeCTAs {
-    const uint32_t start_cb;            // 2 tiles
-    const uint32_t input_cb;            // 2 tiles
-    const uint32_t acc_cb;              // 2 tiles
-    const uint32_t cumsum_stage_0_cb;   // `block_size` tiles
-    const uint32_t cumsum_stage_1_cb;   // `block_size` tiles
-    const uint32_t cumsum_stage_2_cb;   // `block_size` tiles
-    // const uint32_t cumsum_stage_3_cb;   // `block_size` tiles
-    const uint32_t output_cb;           // 2 tiles
-    const uint32_t axis_2_buffer_cb;    // 2 tiles: covers entire propagation
-    const uint32_t axis_3_buffer_0_cb;  // `block_size` tiles: each tile is spawned from broadcasting the last row of
+    const uint32_t start_cb;
+    const uint32_t input_cb;
+    const uint32_t acc_cb;
+    const uint32_t cumsum_stage_0_cb;
+    const uint32_t cumsum_stage_1_cb;
+    const uint32_t cumsum_stage_2_cb;
+    const uint32_t output_cb;
+    const uint32_t axis_2_buffer_cb;    // covers entire propagation
+    const uint32_t axis_3_buffer_0_cb;  // each tile is spawned from broadcasting the last row of
                                         // upper block across all rows of a given tile - for the time being, their
                                         // spawning is forced to be done in the writer kernel.
     const uint32_t axis_3_buffer_1_cb;  // dual channel communication with the writer kernel is comprehensive and
@@ -145,7 +130,6 @@ FORCE_INLINE constexpr IntImgComputeCTAs get_ctas() {
         get_compile_time_arg_val(14),
         get_compile_time_arg_val(15),
         get_compile_time_arg_val(16),
-        // get_compile_time_arg_val(17),
     };
 }
 
@@ -157,18 +141,16 @@ FORCE_INLINE void cumsum_cube_axis_2(
     uint32_t cb_axis_2_buffer,
     bool save_last_tile,
     uint32_t block_depth = 32) {
-    ReadCBGuard start_cb_read_guard{cb_start, ONE_TILE};  // consume cb_start 1t
+    ReadCBGuard start_cb_read_guard{cb_start, ONE_TILE};
 
     bool enable_reload = false;
 
+    binary_op_init_common(cb_input, cb_acc, cb_cumsum_stage_0);
     for (uint32_t tile_i = 0; tile_i < block_depth; ++tile_i) {
-        WriteCBGuard cumsum_stage_cb_write_guard{cb_cumsum_stage_0, ONE_TILE};  // produce cb_cumsum_stage_0 1-32t
+        WriteCBGuard cumsum_stage_cb_write_guard{cb_cumsum_stage_0, ONE_TILE};
         tile_regs_acquire();
         const uint32_t cb_op = enable_reload ? cb_acc : cb_start;
         cb_wait_front(cb_input, ONE_TILE);
-
-        // copy_tile_init(cb_op);
-        // copy_tile(cb_op, FIRST_TILE, WORKING_REG + 1);
 
         add_tiles_init(cb_input, cb_op);
         add_tiles(cb_input, cb_op, FIRST_TILE, FIRST_TILE, WORKING_REG);
@@ -236,7 +218,6 @@ FORCE_INLINE void cumsum_cube_axis_3(
     }
 }
 
-// TODO(jbbieniek): finish
 FORCE_INLINE void propagate_tile_into_cube(
     uint32_t cb_axis_2_buffer,
     uint32_t cb_cumsum_stage_a,
@@ -249,7 +230,6 @@ FORCE_INLINE void propagate_tile_into_cube(
         WriteCBGuard cb_cumsum_stage_1_guard{cb_cumsum_stage_b, ONE_TILE};
         tile_regs_acquire();
 
-        // binary_op_init_common(cb_axis_2_buffer, cb_cumsum_stage_a, cb_cumsum_stage_b);
         add_tiles_init(cb_axis_2_buffer, cb_cumsum_stage_a);
         add_tiles(cb_axis_2_buffer, cb_cumsum_stage_a, FIRST_TILE, FIRST_TILE, WORKING_REG);
 
@@ -300,8 +280,6 @@ template <typename ctas_t>
 FORCE_INLINE void perform_intimg_along_row_chunk(
     const ctas_t& ctas, uint32_t num_blocks_in_row, uint32_t rows_block_i) {
     for (uint32_t column_block_i = 0; column_block_i < num_blocks_in_row; ++column_block_i) {  // go along a row
-        // consume: cb_start 1t, cb_acc 1t, cb_input 1t x32
-        // produce: cb_cumsum_stage_0 32t
         const uint32_t block_depth = std::min(ctas.input_depth - column_block_i * ctas.block_depth, ctas.block_depth);
         const bool save_last_tile_after_cumsum_cube_axis_2 = (column_block_i == 0) && (num_blocks_in_row > 1);
         const bool save_last_tile_after_tile_into_cube_propagation =
@@ -313,47 +291,31 @@ FORCE_INLINE void perform_intimg_along_row_chunk(
             ctas.cumsum_stage_0_cb,
             ctas.axis_2_buffer_cb,
             save_last_tile_after_cumsum_cube_axis_2,
-            // (column_block_i == 0) && (num_blocks_in_row > 1),
             block_depth);
         if (column_block_i > 0) {
-            // axis 2/4's propagation...
-            // consume: cb_axis_2_buffer 1t, cb_cumsum_stage_0 32t
-            // produce: cb_cumsum_stage_1 32t
+            // axis 2/4's propagation
             propagate_tile_into_cube(
                 ctas.axis_2_buffer_cb,
                 ctas.cumsum_stage_0_cb,
                 ctas.cumsum_stage_1_cb,
                 save_last_tile_after_tile_into_cube_propagation,
-                // (column_block_i != (num_blocks_in_row - 1)),
-                block_depth);  // working with cb_axis_2_buffer and cb_cumsum
+                block_depth);  // working with cb_axis_2_buffer
             if (rows_block_i > 0) {
-                // axis 3/4's propagation...
-                // consume: cb_cumsum_stage_1 32t
-                // produce: cb_cumsum_stage_2 32t
+                // axis 3/4's propagation
                 cumsum_cube_axis_3(ctas.cumsum_stage_1_cb, ctas.cumsum_stage_2_cb, block_depth);
-                // consume: cb_cumsum_stage_2 32tm axis_3_buffer_1_cb 32t
-                // produce: cb_output 1t x32
                 get_and_propagate_adder_cube(
                     ctas.cumsum_stage_2_cb, ctas.axis_3_buffer_1_cb, ctas.output_cb, block_depth);
             } else {
-                // consume: cb_cumsum_stage_1 32t
                 // produce: cb_output 1t x32
                 cumsum_cube_axis_3(ctas.cumsum_stage_1_cb, ctas.output_cb, block_depth);
             }
         } else {
-            // !!!! DIFFERENT PARAMS THAN THE CONDITION ABOVE !!!! (!!!!!!!!one stage less!!!!!!!!!)
             if (rows_block_i > 0) {
-                // axis 3/4's propagation...
-                // consume: cb_cumsum_stage_0 32t
-                // produce: cumsummed down cube (cb_cumsum_stage_1 32t)
+                // axis 3/4's propagation
                 cumsum_cube_axis_3(ctas.cumsum_stage_0_cb, ctas.cumsum_stage_1_cb, block_depth);
-                // consume: cb_cumsum_stage_1 32t, axis_3_buffer_1_cb 32t
-                // produce: cb_output 1t x32
                 get_and_propagate_adder_cube(
                     ctas.cumsum_stage_1_cb, ctas.axis_3_buffer_1_cb, ctas.output_cb, block_depth);
             } else {
-                // consume: cb_cumsum_stage_0 32t
-                // produce: cumsummed down cube (cb_output 1t x32)
                 cumsum_cube_axis_3(ctas.cumsum_stage_0_cb, ctas.output_cb, block_depth);
             }
         }
@@ -367,19 +329,12 @@ namespace NAMESPACE {
 void MAIN {
     constexpr auto ctas{get_ctas()};
 
-    // constexpr uint32_t num_slices_along_channels = block_depth_ceil(
-    //     ctas.num_channels, ctas.block_depth);  // block_depth is expected to be a power of 2 (the default is the
-    //     regular
-    //                                            // 32x32 tile's width/height size)
     constexpr uint32_t num_blocks_in_row = 1;
-    // constexpr uint32_t num_blocks_in_row = block_depth_ceil(ctas.input_depth, ctas.block_depth);
     constexpr uint32_t num_blocks_in_column = block_depth_ceil(ctas.input_height, 32);
 
-    // for (uint32_t channels_block_i = 0; channels_block_i < num_slices_along_channels; ++channels_block_i) {
     for (uint32_t rows_block_i = 0; rows_block_i < num_blocks_in_column; ++rows_block_i) {
         perform_intimg_along_row_chunk(ctas, num_blocks_in_row, rows_block_i);
     }
-    // }
 }
 
 }  // namespace NAMESPACE
