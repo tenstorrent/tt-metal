@@ -10,6 +10,7 @@
 
 #include <fmt/format.h>
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/vector.h>
 #include <nanobind/stl/optional.h>
 
 #include "ttnn-nanobind/decorators.hpp"

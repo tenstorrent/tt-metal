@@ -284,20 +284,13 @@ struct PreprocessedPyTensor {
     std::size_t py_data_ptr = 0;
 };
 
-// TODO_NANOBIND: rather than a py_tensor handle, importing each library, and manually checking,
-// use a nb::ndarray. Does this function still need to exist?
-/*
-PreprocessedPyTensor parse_py_tensor(const nb::handle& py_tensor, std::optional<DataType> optional_data_type)
-{
+// Parse a Python tensor (torch or numpy), enforcing dtype if requested
+PreprocessedPyTensor<> parse_py_tensor(const nb::handle& py_tensor, std::optional<DataType> optional_data_type) {
     const auto py_dtype = py_tensor.attr("dtype");
-    if (nb::object torch = nb::module_::import_("torch");
-        nb::isinstance(py_tensor, torch.attr("Tensor")))
-    {
+    if (nb::object torch = nb::module_::import_("torch"); nb::isinstance(py_tensor, torch.attr("Tensor"))) {
         nb::object contiguous_py_tensor = py_tensor.attr("contiguous")();
         DataType data_type = DataType::INVALID;
 
-        // Override the data type if there is a user-provided one
-        // Otherwise, figure it out from torch dtype
         if (optional_data_type.has_value()) {
             data_type = optional_data_type.value();
         } else if (py_dtype.equal(torch.attr("float32"))) {
@@ -322,62 +315,35 @@ PreprocessedPyTensor parse_py_tensor(const nb::handle& py_tensor, std::optional<
             }
         };
         switch (data_type) {
-            case DataType::UINT8: {
-                maybe_convert_pytorch_tensor("uint8");
-                break;
-            }
-            case DataType::UINT16: {
-                maybe_convert_pytorch_tensor("int16");
-                break;
-            }
+            case DataType::UINT8: maybe_convert_pytorch_tensor("uint8"); break;
+            case DataType::UINT16: maybe_convert_pytorch_tensor("int16"); break;
             case DataType::INT32:
-            case DataType::UINT32: {
-                maybe_convert_pytorch_tensor("int32");
-                break;
-            }
+            case DataType::UINT32: maybe_convert_pytorch_tensor("int32"); break;
             case DataType::BFLOAT4_B:
             case DataType::BFLOAT8_B:
-            case DataType::FLOAT32: {
-                maybe_convert_pytorch_tensor("float32");
-                break;
-            }
-            case DataType::BFLOAT16: {
-                maybe_convert_pytorch_tensor("bfloat16");
-                break;
-            }
-            default: {
-                TT_THROW("Unsupported DataType: {}", data_type);
-                break;
-            }
+            case DataType::FLOAT32: maybe_convert_pytorch_tensor("float32"); break;
+            case DataType::BFLOAT16: maybe_convert_pytorch_tensor("bfloat16"); break;
+            default: TT_THROW("Unsupported DataType: {}", data_type);
         }
 
-        return PreprocessedPyTensor{
+        return PreprocessedPyTensor<>{
             .data_type = data_type,
-            .contiguous_py_tensor = contiguous_py_tensor,
+            .contiguous_py_tensor = nb::cast<nb::ndarray<>>(contiguous_py_tensor),
             .num_elements = nb::cast<std::size_t>(contiguous_py_tensor.attr("numel")()),
             .py_data_ptr = nb::cast<std::size_t>(contiguous_py_tensor.attr("data_ptr")()),
         };
-    }
-    else if (nb::object np = nb::module_::import_("numpy");
-             nb::isinstance(py_tensor, np.attr("ndarray")))
-    {
+    } else if (nb::object np = nb::module_::import_("numpy"); nb::isinstance(py_tensor, np.attr("ndarray"))) {
         nb::object contiguous_py_tensor = np.attr("ascontiguousarray")(py_tensor);
         DataType data_type = DataType::INVALID;
-
-        // Override the data type if there is a user-provided one
-        // Otherwise, figure it out from numpy dtype
         if (optional_data_type.has_value()) {
             data_type = optional_data_type.value();
         } else if (py_dtype.equal(np.attr("float32"))) {
             data_type = DataType::FLOAT32;
         } else if (py_dtype.equal(np.attr("int64"))) {
-            // TODO: add DataType::INT64?
             data_type = DataType::UINT32;
-            // TODO: add np.float16 support?
         } else if (py_dtype.equal(np.attr("int32"))) {
             data_type = DataType::INT32;
         } else if (py_dtype.equal(np.attr("int16"))) {
-            // TODO: add DataType::INT16?
             data_type = DataType::UINT16;
         } else if (py_dtype.equal(np.attr("ubyte"))) {
             data_type = DataType::UINT8;
@@ -391,34 +357,19 @@ PreprocessedPyTensor parse_py_tensor(const nb::handle& py_tensor, std::optional<
             }
         };
         switch (data_type) {
-            case DataType::UINT8: {
-                maybe_convert_numpy_tensor("ubyte");
-                break;
-            }
-            case DataType::UINT16: {
-                maybe_convert_numpy_tensor("int16");
-                break;
-            }
+            case DataType::UINT8: maybe_convert_numpy_tensor("ubyte"); break;
+            case DataType::UINT16: maybe_convert_numpy_tensor("int16"); break;
             case DataType::INT32:
-            case DataType::UINT32: {
-                maybe_convert_numpy_tensor("int32");
-                break;
-            }
+            case DataType::UINT32: maybe_convert_numpy_tensor("int32"); break;
             case DataType::BFLOAT4_B:
             case DataType::BFLOAT8_B:
-            case DataType::FLOAT32: {
-                maybe_convert_numpy_tensor("float32");
-                break;
-            }
-            default: {
-                TT_THROW("Unsupported DataType: {}", data_type);
-                break;
-            }
+            case DataType::FLOAT32: maybe_convert_numpy_tensor("float32"); break;
+            default: TT_THROW("Unsupported DataType: {}", data_type);
         }
 
-        return PreprocessedPyTensor{
+        return PreprocessedPyTensor<>{
             .data_type = data_type,
-            .contiguous_py_tensor = contiguous_py_tensor,
+            .contiguous_py_tensor = nb::cast<nb::ndarray<>>(contiguous_py_tensor),
             .num_elements = nb::cast<std::size_t>(contiguous_py_tensor.attr("size")),
             .py_data_ptr = nb::cast<std::size_t>(nb::cast<nb::tuple>(
                 nb::cast<nb::dict>(contiguous_py_tensor.attr("__array_interface__"))[nb::str("data")])[0]),
@@ -427,11 +378,9 @@ PreprocessedPyTensor parse_py_tensor(const nb::handle& py_tensor, std::optional<
         TT_THROW("The argument must be of type torch.Tensor or numpy.ndarray!");
     }
 }
-*/
 
-template <typename... Ts>
 Tensor convert_python_tensor_to_tt_tensor(
-    nb::ndarray<Ts...> py_tensor,
+    const nb::object& py_tensor,
     std::optional<DataType> optional_data_type,
     std::optional<Layout> optional_layout,
     const std::optional<Tile>& optional_tile,
@@ -452,17 +401,8 @@ Tensor convert_python_tensor_to_tt_tensor(
         pad_value,
         mesh_mapper);
 
-    // auto preprocessed_py_tensor = parse_py_tensor(py_tensor, optional_data_type);
-    // const auto shape = ttnn::Shape(nb::cast<ttnn::SmallVector<uint32_t>>(py_tensor.attr("shape")));
-
-    auto preprocessed_py_tensor = PreprocessedPyTensor{
-        .data_type = ndarray_dtype_to_ttnn(py_tensor),
-        .contiguous_py_tensor = py_tensor,
-        .num_elements = py_tensor.size(),
-        .py_data_ptr = std::bit_cast<size_t>(py_tensor.data()),
-    };
-
-    const ttnn::Shape shape = ndarray_shape_to_ttnn(py_tensor);
+    auto preprocessed_py_tensor = parse_py_tensor(py_tensor, optional_data_type);
+    const ttnn::Shape shape = ttnn::Shape(nb::cast<ttnn::SmallVector<uint32_t>>(py_tensor.attr("shape")));
 
     // TT_FATAL(
     //     preprocessed_py_tensor.num_elements == shape.volume(),
@@ -666,7 +606,29 @@ nb::object convert_tt_tensor_to_torch_tensor(const RowMajorHostBuffer& row_major
             auto pytorch_empty = torch.attr("empty");
             return pytorch_empty(row_major_host_buffer.shape, nb::arg("dtype") = torch_dtype);
         }
-        return frombuffer(row_major_host_buffer.buffer, nb::arg("dtype") = torch_dtype);
+        // Nanobind path: HostBuffer doesn't expose Python buffer protocol; build a Python buffer.
+        auto bytes_view = row_major_host_buffer.buffer.view_bytes();
+        // Special-case BFLOAT16 to avoid endianness/caster pitfalls: convert to float32 explicitly.
+        if (row_major_host_buffer.data_type == DataType::BFLOAT16) {
+            const size_t num_vals = bytes_view.size() / 2;
+            std::vector<float> f32(num_vals);
+            for (size_t i = 0; i < num_vals; ++i) {
+                uint16_t bf16_bits;
+                std::memcpy(&bf16_bits, reinterpret_cast<const char*>(bytes_view.data()) + 2 * i, sizeof(uint16_t));
+                uint32_t f32_bits = static_cast<uint32_t>(bf16_bits) << 16;
+                std::memcpy(&f32[i], &f32_bits, sizeof(uint32_t));
+            }
+            nb::bytes py_bytes(reinterpret_cast<const char*>(f32.data()), f32.size() * sizeof(float));
+            nb::object py_bytearray = nb::module_::import_("builtins").attr("bytearray")(py_bytes);
+            nb::object torch_f32 = torch.attr("float32");
+            return frombuffer(py_bytearray, nb::arg("dtype") = torch_f32);
+        }
+        // Default path: copy raw bytes into a Python bytearray and construct tensor from buffer.
+        const char* raw_ptr = reinterpret_cast<const char*>(bytes_view.data());
+        const size_t raw_size = bytes_view.size();
+        nb::bytes py_bytes(raw_ptr, raw_size);
+        nb::object py_bytearray = nb::module_::import_("builtins").attr("bytearray")(py_bytes);
+        return frombuffer(py_bytearray, nb::arg("dtype") = torch_dtype);
     }();
 
     tensor = tensor.attr("reshape")(row_major_host_buffer.shape);
@@ -1019,7 +981,7 @@ void pytensor_module(nb::module_& mod) {
         .def(
             "__init__",
             [](Tensor* t,
-               nb::ndarray<> python_tensor,  // TODO_NANOBIND: CONVERT
+               nb::object python_tensor,
                std::optional<DataType> data_type,
                std::optional<MeshDevice*> device,
                std::optional<Layout> layout,

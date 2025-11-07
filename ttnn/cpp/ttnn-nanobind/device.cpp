@@ -281,6 +281,7 @@ void device_module(nb::module_& m_device) {
     m_device.def(
         "SetDefaultDevice",
         [](MeshDevice* device) { ttnn::operations::experimental::auto_format::AutoFormat::SetDefaultDevice(device); },
+        nb::arg("device") = nb::none(),
         R"doc(
             Sets the default device to use for operations when inputs are not on the device.
 
