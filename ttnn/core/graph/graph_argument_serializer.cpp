@@ -90,6 +90,39 @@ void GraphArgumentSerializer::register_small_vector() {
     };
 }
 
+template <typename T, std::size_t N>
+void GraphArgumentSerializer::register_array() {
+    registry()[typeid(std::reference_wrapper<std::array<T, N>>)] = [](const std::any& value) -> std::string {
+        std::ostringstream oss;
+        auto referenced_value = std::any_cast<std::reference_wrapper<std::array<T, N>>>(value);
+        const auto& arr = referenced_value.get();
+        oss << "[";
+        for (size_t i = 0; i < N; ++i) {
+            if (i > 0) {
+                oss << ", ";
+            }
+            oss << arr[i];
+        }
+        oss << "]";
+        return oss.str();
+    };
+
+    registry()[typeid(std::reference_wrapper<const std::array<T, N>>)] = [](const std::any& value) -> std::string {
+        std::ostringstream oss;
+        auto referenced_value = std::any_cast<std::reference_wrapper<const std::array<T, N>>>(value);
+        const auto& arr = referenced_value.get();
+        oss << "[";
+        for (size_t i = 0; i < N; ++i) {
+            if (i > 0) {
+                oss << ", ";
+            }
+            oss << arr[i];
+        }
+        oss << "]";
+        return oss.str();
+    };
+}
+
 template <typename OptionalT>
 void GraphArgumentSerializer::register_optional_type() {
     registry()[typeid(std::reference_wrapper<OptionalT>)] = [](const std::any& value) -> std::string {
@@ -139,6 +172,11 @@ void GraphArgumentSerializer::register_type() {
     register_small_vector<T, 4>();
     register_small_vector<T, 8>();
     register_small_vector<T, 16>();
+    // std::array
+    register_array<T, 2>();
+    register_array<T, 4>();
+    register_array<T, 8>();
+    register_array<T, 16>();
 }
 
 std::vector<std::string> GraphArgumentSerializer::to_list(const std::span<std::any>& span) {
@@ -199,5 +237,195 @@ void GraphArgumentSerializer::initialize() {
     GraphArgumentSerializer::register_type<std::variant<int, float>>();
     GraphArgumentSerializer::register_type<std::variant<unsigned int, float>>();
     GraphArgumentSerializer::register_type<std::variant<float, unsigned int>>();
+
+    // Register std::array types commonly used for pad operations
+    // We register these directly without going through register_type to avoid recursive template expansion
+    registry()[typeid(std::reference_wrapper<std::array<unsigned int, 2>>)] = [](const std::any& value) -> std::string {
+        std::ostringstream oss;
+        auto referenced_value = std::any_cast<std::reference_wrapper<std::array<unsigned int, 2>>>(value);
+        const auto& arr = referenced_value.get();
+        oss << "[";
+        for (size_t i = 0; i < 2; ++i) {
+            if (i > 0) {
+                oss << ", ";
+            }
+            oss << arr[i];
+        }
+        oss << "]";
+        return oss.str();
+    };
+
+    registry()[typeid(std::reference_wrapper<const std::array<unsigned int, 2>>)] =
+        [](const std::any& value) -> std::string {
+        std::ostringstream oss;
+        auto referenced_value = std::any_cast<std::reference_wrapper<const std::array<unsigned int, 2>>>(value);
+        const auto& arr = referenced_value.get();
+        oss << "[";
+        for (size_t i = 0; i < 2; ++i) {
+            if (i > 0) {
+                oss << ", ";
+            }
+            oss << arr[i];
+        }
+        oss << "]";
+        return oss.str();
+    };
+
+    registry()[typeid(std::reference_wrapper<std::array<unsigned int, 4>>)] = [](const std::any& value) -> std::string {
+        std::ostringstream oss;
+        auto referenced_value = std::any_cast<std::reference_wrapper<std::array<unsigned int, 4>>>(value);
+        const auto& arr = referenced_value.get();
+        oss << "[";
+        for (size_t i = 0; i < 4; ++i) {
+            if (i > 0) {
+                oss << ", ";
+            }
+            oss << arr[i];
+        }
+        oss << "]";
+        return oss.str();
+    };
+
+    registry()[typeid(std::reference_wrapper<const std::array<unsigned int, 4>>)] =
+        [](const std::any& value) -> std::string {
+        std::ostringstream oss;
+        auto referenced_value = std::any_cast<std::reference_wrapper<const std::array<unsigned int, 4>>>(value);
+        const auto& arr = referenced_value.get();
+        oss << "[";
+        for (size_t i = 0; i < 4; ++i) {
+            if (i > 0) {
+                oss << ", ";
+            }
+            oss << arr[i];
+        }
+        oss << "]";
+        return oss.str();
+    };
+
+    // Register SmallVector<std::array<unsigned int, 2>, 8> for pad operations
+    registry()[typeid(std::reference_wrapper<ttsl::SmallVector<std::array<unsigned int, 2>, 8>>)] =
+        [](const std::any& value) -> std::string {
+        std::ostringstream oss;
+        auto referenced_value =
+            std::any_cast<std::reference_wrapper<ttsl::SmallVector<std::array<unsigned int, 2>, 8>>>(value);
+        const auto& vec = referenced_value.get();
+        oss << "[";
+        for (size_t i = 0; i < vec.size(); ++i) {
+            if (i > 0) {
+                oss << ", ";
+            }
+            oss << "[" << vec[i][0] << ", " << vec[i][1] << "]";
+        }
+        oss << "]";
+        return oss.str();
+    };
+
+    registry()[typeid(std::reference_wrapper<const ttsl::SmallVector<std::array<unsigned int, 2>, 8>>)] =
+        [](const std::any& value) -> std::string {
+        std::ostringstream oss;
+        auto referenced_value =
+            std::any_cast<std::reference_wrapper<const ttsl::SmallVector<std::array<unsigned int, 2>, 8>>>(value);
+        const auto& vec = referenced_value.get();
+        oss << "[";
+        for (size_t i = 0; i < vec.size(); ++i) {
+            if (i > 0) {
+                oss << ", ";
+            }
+            oss << "[" << vec[i][0] << ", " << vec[i][1] << "]";
+        }
+        oss << "]";
+        return oss.str();
+    };
+
+    // Register SmallVector<long, 8> for permute operations (dims parameter)
+    registry()[typeid(std::reference_wrapper<ttsl::SmallVector<long, 8>>)] = [](const std::any& value) -> std::string {
+        std::ostringstream oss;
+        auto referenced_value = std::any_cast<std::reference_wrapper<ttsl::SmallVector<long, 8>>>(value);
+        const auto& vec = referenced_value.get();
+        oss << "[";
+        for (size_t i = 0; i < vec.size(); ++i) {
+            if (i > 0) {
+                oss << ", ";
+            }
+            oss << vec[i];
+        }
+        oss << "]";
+        return oss.str();
+    };
+
+    registry()[typeid(std::reference_wrapper<const ttsl::SmallVector<long, 8>>)] =
+        [](const std::any& value) -> std::string {
+        std::ostringstream oss;
+        auto referenced_value = std::any_cast<std::reference_wrapper<const ttsl::SmallVector<long, 8>>>(value);
+        const auto& vec = referenced_value.get();
+        oss << "[";
+        for (size_t i = 0; i < vec.size(); ++i) {
+            if (i > 0) {
+                oss << ", ";
+            }
+            oss << vec[i];
+        }
+        oss << "]";
+        return oss.str();
+    };
+
+    // Register SmallVector<int, 8> for reshape operations (shape parameter)
+    registry()[typeid(std::reference_wrapper<ttsl::SmallVector<int, 8>>)] = [](const std::any& value) -> std::string {
+        std::ostringstream oss;
+        auto referenced_value = std::any_cast<std::reference_wrapper<ttsl::SmallVector<int, 8>>>(value);
+        const auto& vec = referenced_value.get();
+        oss << "[";
+        for (size_t i = 0; i < vec.size(); ++i) {
+            if (i > 0) {
+                oss << ", ";
+            }
+            oss << vec[i];
+        }
+        oss << "]";
+        return oss.str();
+    };
+
+    registry()[typeid(std::reference_wrapper<const ttsl::SmallVector<int, 8>>)] =
+        [](const std::any& value) -> std::string {
+        std::ostringstream oss;
+        auto referenced_value = std::any_cast<std::reference_wrapper<const ttsl::SmallVector<int, 8>>>(value);
+        const auto& vec = referenced_value.get();
+        oss << "[";
+        for (size_t i = 0; i < vec.size(); ++i) {
+            if (i > 0) {
+                oss << ", ";
+            }
+            oss << vec[i];
+        }
+        oss << "]";
+        return oss.str();
+    };
+
+    // Register std::variant<std::array<uint, 2>, std::array<uint, 4>> for conv2d stride/dilation
+    registry()[typeid(std::reference_wrapper<std::variant<std::array<unsigned int, 2>, std::array<unsigned int, 4>>>)] =
+        [](const std::any& value) -> std::string {
+        std::ostringstream oss;
+        auto referenced_value = std::any_cast<
+            std::reference_wrapper<std::variant<std::array<unsigned int, 2>, std::array<unsigned int, 4>>>>(value);
+        const auto& var = referenced_value.get();
+
+        if (std::holds_alternative<std::array<unsigned int, 2>>(var)) {
+            const auto& arr = std::get<std::array<unsigned int, 2>>(var);
+            oss << "[" << arr[0] << ", " << arr[1] << "]";
+        } else {
+            const auto& arr = std::get<std::array<unsigned int, 4>>(var);
+            oss << "[" << arr[0] << ", " << arr[1] << ", " << arr[2] << ", " << arr[3] << "]";
+        }
+        return oss.str();
+    };
+
+    // Register std::nullopt_t for optional parameters
+    registry()[typeid(std::reference_wrapper<std::nullopt_t>)] = [](const std::any&) -> std::string {
+        return "nullopt";
+    };
+
+    registry()[typeid(std::reference_wrapper<const std::nullopt_t>)] = [](const std::any&) -> std::string {
+        return "nullopt";
+    };
 }
 }  // namespace ttnn::graph

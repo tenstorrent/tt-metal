@@ -27,6 +27,9 @@ private:
     template <typename T, std::size_t N>
     void register_small_vector();
 
+    template <typename T, std::size_t N>
+    void register_array();
+
     template <typename T>
     void register_type();
 
