@@ -16,16 +16,17 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
+#include "common/core_coord.hpp"
 
 namespace tt {
 
 struct core_descriptor_t {
     CoreCoord compute_grid_size;
-    std::vector<RelativeCoreCoord> relative_compute_cores;
-    std::vector<RelativeCoreCoord> relative_storage_cores;
+    std::vector<tt_metal::RelativeCoreCoord> relative_compute_cores;
+    std::vector<tt_metal::RelativeCoreCoord> relative_storage_cores;
     std::optional<uint32_t> storage_core_bank_size = std::nullopt;
-    std::vector<RelativeCoreCoord> relative_dispatch_cores;
-    std::vector<RelativeCoreCoord> relative_fabric_mux_cores;
+    std::vector<tt_metal::RelativeCoreCoord> relative_dispatch_cores;
+    std::vector<tt_metal::RelativeCoreCoord> relative_fabric_mux_cores;
 
     std::vector<CoreCoord> logical_compute_cores;
     std::vector<CoreCoord> logical_storage_cores;
