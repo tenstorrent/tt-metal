@@ -20,7 +20,6 @@ const reporting = require('./lib/reporting');
 // Import constants used in this file
 const {
   DEFAULT_LOOKBACK_DAYS,
-  SHA_SHORT_LENGTH,
   EMPTY_VALUE,
   DEFAULT_INFRA_OWNER,
 } = dataLoading;
@@ -91,7 +90,6 @@ async function run() {
     // Get inputs
     const cachePath = core.getInput('cache-path', { required: true }); // get the workflow data cache made by the fetch-workflow-data action
     const previousCachePath = core.getInput('previous-cache-path', { required: false }); // get the previous workflow data cache made by the fetch-workflow-data action from the most recent previous run on main branch
-    const workflowConfigs = JSON.parse(core.getInput('workflow_configs', { required: true })); // get the json of pipelines that we want to analyze
     const days = parseInt(core.getInput('days') || DEFAULT_LOOKBACK_DAYS, 10); // get the number of days to look back for workflow data
     const alertAll = String(core.getInput('alert-all') || 'false').toLowerCase() === 'true'; // get the alert-all input from the action inputs
     const annotationsIndexPath = core.getInput('annotations-index-path', { required: false }); // optional: path to JSON mapping runId -> annotations dir
@@ -103,9 +101,6 @@ async function run() {
     // Validate inputs
     if (!fs.existsSync(cachePath)) {
       throw new Error(`Cache file not found at ${cachePath}`); // throw an error if the cache file does not exist (no data was fetched)
-    }
-    if (!Array.isArray(workflowConfigs)) {
-      throw new Error('Workflow configs must be a JSON array'); // throw an error if the workflow configs are not a JSON array
     }
     if (isNaN(days) || days <= 0) {
       throw new Error('Days must be a positive number'); // throw an error if the days is not a positive number
@@ -162,11 +157,10 @@ async function run() {
     setCommitsIndex(commitsIndex);
     core.info(`Loaded commits index entries: ${Array.isArray(commitsIndex) ? commitsIndex.length : 0}`);
 
-    // Filter and process each workflow configuration
+    // Filter and process workflows (process all workflows since we only fetched runs for workflows we care about)
     const { filteredGrouped, filteredPreviousGrouped, failedWorkflows } = filterWorkflowsByConfig(
       grouped,
       previousGrouped,
-      workflowConfigs,
       days
     );
 

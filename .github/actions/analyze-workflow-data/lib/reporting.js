@@ -253,69 +253,60 @@ function filterRunsByDate(runs, days) {
 }
 
 /**
- * Filters workflows by configuration and tracks failed workflows
+ * Filters workflows by date and tracks failed workflows
+ * Processes all workflows since we only fetch runs for workflows we care about
  * @param {Map} grouped - Map of workflow names to their runs
  * @param {Map} previousGrouped - Map of previous workflow names to their runs (can be null)
- * @param {Array} workflowConfigs - Array of workflow configuration objects
  * @param {number} days - Number of days to look back
  * @returns {Object} Object containing filteredGrouped, filteredPreviousGrouped, and failedWorkflows
  */
-function filterWorkflowsByConfig(grouped, previousGrouped, workflowConfigs, days) {
+function filterWorkflowsByConfig(grouped, previousGrouped, days) {
   const filteredGrouped = new Map();
   const filteredPreviousGrouped = new Map();
   const failedWorkflows = [];
   const hasPrevious = previousGrouped && Array.isArray(previousGrouped);
 
-  for (const config of workflowConfigs) {
-    core.info(`Processing config: ${JSON.stringify(config)}`);
-    for (const [name, runs] of grouped) {
-      if ((config.wkflw_name && name === config.wkflw_name) ||
-          (config.wkflw_prefix && name.startsWith(config.wkflw_prefix))) {
-        core.info(`Matched workflow: ${name} with config: ${JSON.stringify(config)}`);
-        // Filter runs by date range
-        const filteredRuns = filterRunsByDate(runs, days);
-        if (filteredRuns.length > 0) {
-          filteredGrouped.set(name, filteredRuns);
+  // Process all workflows (we only fetched runs for workflows we care about)
+  for (const [name, runs] of grouped) {
+    // Filter runs by date range
+    const filteredRuns = filterRunsByDate(runs, days);
+    if (filteredRuns.length > 0) {
+      filteredGrouped.set(name, filteredRuns);
 
-          // Check if latest run on main is failing
-          // First deduplicate by run ID, keeping highest attempt
-          const runsByID = new Map();
-          for (const run of filteredRuns.filter(r => r.head_branch === 'main')) {
-            const runId = run.id;
-            const currentAttempt = run.run_attempt || 1;
-            const existingRun = runsByID.get(runId);
-            const existingAttempt = existingRun ? (existingRun.run_attempt || 1) : 0;
-            if (!existingRun || currentAttempt > existingAttempt) {
-              runsByID.set(runId, run);
-            }
-          }
-          const mainBranchRuns = Array.from(runsByID.values())
-            .sort((a, b) => {
-              // Sort by date (newest first), then by run_attempt (highest first) as tiebreaker
-              const dateDiff = new Date(b.created_at) - new Date(a.created_at);
-              if (dateDiff !== 0) {
-                return dateDiff;
-              }
-              const attemptA = a.run_attempt || 1;
-              const attemptB = b.run_attempt || 1;
-              return attemptB - attemptA; // Prefer higher attempt number
-            });
-          if (mainBranchRuns[0]?.conclusion !== 'success') {
-            failedWorkflows.push(name);
-          }
+      // Check if latest run on main is failing
+      // First deduplicate by run ID, keeping highest attempt
+      const runsByID = new Map();
+      for (const run of filteredRuns.filter(r => r.head_branch === 'main')) {
+        const runId = run.id;
+        const currentAttempt = run.run_attempt || 1;
+        const existingRun = runsByID.get(runId);
+        const existingAttempt = existingRun ? (existingRun.run_attempt || 1) : 0;
+        if (!existingRun || currentAttempt > existingAttempt) {
+          runsByID.set(runId, run);
         }
       }
-    }
-
-    if (hasPrevious) {
-      for (const [name, runs] of previousGrouped) {
-        if ((config.wkflw_name && name === config.wkflw_name) ||
-            (config.wkflw_prefix && name.startsWith(config.wkflw_prefix))) {
-          const filteredRuns = filterRunsByDate(runs, days);
-          if (filteredRuns.length > 0) {
-            filteredPreviousGrouped.set(name, filteredRuns);
+      const mainBranchRuns = Array.from(runsByID.values())
+        .sort((a, b) => {
+          // Sort by date (newest first), then by run_attempt (highest first) as tiebreaker
+          const dateDiff = new Date(b.created_at) - new Date(a.created_at);
+          if (dateDiff !== 0) {
+            return dateDiff;
           }
-        }
+          const attemptA = a.run_attempt || 1;
+          const attemptB = b.run_attempt || 1;
+          return attemptB - attemptA; // Prefer higher attempt number
+        });
+      if (mainBranchRuns[0]?.conclusion !== 'success') {
+        failedWorkflows.push(name);
+      }
+    }
+  }
+
+  if (hasPrevious) {
+    for (const [name, runs] of previousGrouped) {
+      const filteredRuns = filterRunsByDate(runs, days);
+      if (filteredRuns.length > 0) {
+        filteredPreviousGrouped.set(name, filteredRuns);
       }
     }
   }

@@ -2,7 +2,6 @@
 // Handles constants, index loading, and commit loading
 
 const fs = require('fs');
-const path = require('path');
 
 // Constants
 const DEFAULT_LOOKBACK_DAYS = 15;
