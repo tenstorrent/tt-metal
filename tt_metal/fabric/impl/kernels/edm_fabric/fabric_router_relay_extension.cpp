@@ -12,6 +12,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/compile_time_arg_tmp.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
+#include "tt_metal/fabric/hw/inc/noc_addr.h"
 
 #include <cstddef>
 #include <array>
@@ -112,24 +113,49 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_noc_txn_to_lo
     }
     switch (noc_send_type) {
         case tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE: {
-            const auto dest_address = header.command_fields.unicast_write.noc_address;
-            noc_async_write_one_packet(payload_start_address, dest_address, payload_size_bytes);
+            const auto noc_addr = header.command_fields.unicast_write.noc_address;
+            auto noc_addr_components = get_noc_address_components(noc_addr);
+            const auto dest_noc_x = noc_addr_components.first.x;
+            const auto dest_noc_y = noc_addr_components.first.y;
+            const auto dest_address = noc_addr_components.second;
+            DPRINT << "Relay Send NOC_UNICAST_WRITE to noc_x:" << (uint)dest_noc_x << " noc_y:" << (uint)dest_noc_y
+                   << " addr:" << dest_address << " payload_size_bytes:" << payload_size_bytes << ENDL();
+            noc_async_write_one_packet(payload_start_address, noc_addr, payload_size_bytes);
+            // temporily place here until we have txn id support
+            noc_async_writes_flushed();
+            DPRINT << "Relay Send NOC_UNICAST_WRITE Done" << ENDL();
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_UNICAST_ATOMIC_INC: {
-            const uint64_t dest_address = header.command_fields.unicast_seminc.noc_address;
+            const auto noc_addr = header.command_fields.unicast_seminc.noc_address;
+            auto noc_addr_components = get_noc_address_components(noc_addr);
+            const auto dest_noc_x = noc_addr_components.first.x;
+            const auto dest_noc_y = noc_addr_components.first.y;
+            const auto dest_address = noc_addr_components.second;
             const auto increment = header.command_fields.unicast_seminc.val;
+            DPRINT << "Relay Send NOC_UNICAST_ATOMIC_INC to noc_x:" << (uint)dest_noc_x << " noc_y:" << (uint)dest_noc_y
+                   << " addr:" << dest_address << " increment:" << increment << ENDL();
             if (header.command_fields.unicast_seminc.flush) {
                 noc_async_write_barrier();
             }
-            noc_semaphore_inc<true>(dest_address, increment);
+            noc_semaphore_inc<true>(noc_addr, increment);
+            // temporily place here until we have txn id support
+            noc_async_atomic_barrier();
 
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_UNICAST_INLINE_WRITE: {
-            const auto dest_address = header.command_fields.unicast_inline_write.noc_address;
+            const auto noc_addr = header.command_fields.unicast_inline_write.noc_address;
+            auto noc_addr_components = get_noc_address_components(noc_addr);
+            const auto dest_noc_x = noc_addr_components.first.x;
+            const auto dest_noc_y = noc_addr_components.first.y;
+            const auto dest_address = noc_addr_components.second;
             const auto value = header.command_fields.unicast_inline_write.value;
-            noc_inline_dw_write<InlineWriteDst::DEFAULT, true>(dest_address, value);
+            DPRINT << "Relay Send NOC_UNICAST_INLINE_WRITE to noc_x:" << (uint)dest_noc_x
+                   << " noc_y:" << (uint)dest_noc_y << " addr:" << dest_address << " value:" << value << ENDL();
+            noc_inline_dw_write<InlineWriteDst::DEFAULT, true>(noc_addr, value);
+            // temporily place here until we have txn id support
+            noc_async_writes_flushed();
         } break;
         default: {
             ASSERT(false);
@@ -146,6 +172,7 @@ void forward_data(
     StreamId my_channel_free_slots_stream_id) {
     bool has_unsent_payload = get_ptr_val(my_channel_free_slots_stream_id.get()) != NUM_BUFFERS;
     if (has_unsent_payload) {
+        DPRINT << "Relay has_unsent_payload " << (uint)has_unsent_payload << ENDL();
         size_t buffer_address = channel.get_buffer_address(worker_interface.local_write_counter.get_buffer_index());
         invalidate_l1_cache();
         auto packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(buffer_address);

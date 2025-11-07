@@ -320,6 +320,8 @@ private:
         ASSERT(tt::tt_fabric::is_valid(
             *const_cast<PACKET_HEADER_TYPE*>(reinterpret_cast<volatile PACKET_HEADER_TYPE*>(source_address))));
 
+        DPRINT << "Router send to " << (uint)this->edm_noc_x << " " << (uint)this->edm_noc_y << " "
+               << (uint)this->edm_buffer_slot_addrs[this->get_buffer_slot_index()] << ENDL();
         send_chunk_from_address_with_trid<stateful_api, vc1_has_different_downstream_dest>(
             source_address,
             1,
