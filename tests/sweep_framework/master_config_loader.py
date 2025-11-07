@@ -580,8 +580,9 @@ class MasterConfigLoader:
                     param_names.append("dims")
                     param_lists.append(dims_list)
 
-                param_names.append("traced_config_name")
-                param_lists.append(traced_config_names)
+                # NOTE: traced_config_name is metadata only, not passed to run()
+                # param_names.append("traced_config_name")
+                # param_lists.append(traced_config_names)
 
                 # Create tuples of exact configurations
                 exact_configs = list(zip(*param_lists))
@@ -775,7 +776,8 @@ class MasterConfigLoader:
                     "input_a_memory_config",
                     "input_b_memory_config",
                     "output_memory_config",
-                    "traced_config_name",
+                    # NOTE: traced_config_name is metadata only, not passed to run()
+                    # "traced_config_name",
                 ]
                 param_lists = [
                     input_shapes,
@@ -786,7 +788,7 @@ class MasterConfigLoader:
                     input_a_memory_configs,
                     input_b_memory_configs,
                     output_memory_configs,
-                    traced_config_names,
+                    # traced_config_names,
                 ]
 
                 # Create tuples of exact configurations
@@ -937,8 +939,9 @@ class MasterConfigLoader:
                     )
                     param_lists.extend([dtypes[i], layouts[i], memory_configs[i]])
 
-                param_names.append("traced_config_name")
-                param_lists.append(traced_config_names)
+                # NOTE: traced_config_name is metadata only, not passed to run()
+                # param_names.append("traced_config_name")
+                # param_lists.append(traced_config_names)
 
                 # Create tuples of exact configurations
                 exact_configs = list(zip(*param_lists))
