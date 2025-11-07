@@ -2320,7 +2320,7 @@ void py_module(nb::module_& mod) {
         ". ",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
 
-    detail::bind_binary_operation(
+    detail::bind_binary_operation_with_fast_approx(
         mod,
         ttnn::divide,
         R"doc(Divides :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
