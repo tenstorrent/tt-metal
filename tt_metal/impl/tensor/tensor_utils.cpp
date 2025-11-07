@@ -17,7 +17,7 @@
 namespace tt {
 namespace tt_metal {
 
-Shape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Span<const int32_t> shape) {
+tt::tt_metal::Shape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Span<const int32_t> shape) {
     int64_t old_volume = tensor.logical_volume();
     int64_t new_volume = 1;
     int64_t index_of_negative_1 = -1;
@@ -49,7 +49,7 @@ Shape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Span<const int32_t> 
         TT_THROW("{}", error_msg);
     }
 
-    ttnn::SmallVector<uint32_t> new_shape(shape.size());
+    ttsl::SmallVector<uint32_t> new_shape(shape.size());
     std::copy(shape.begin(), shape.end(), new_shape.begin());
     if (index_of_negative_1 == -1) {
         TT_FATAL(new_volume == old_volume, "Invalid arguments to reshape");
@@ -58,7 +58,7 @@ Shape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Span<const int32_t> 
         new_shape[index_of_negative_1] = old_volume / new_volume;
     }
 
-    return Shape(std::move(new_shape));
+    return tt::tt_metal::Shape(std::move(new_shape));
 }
 
 int compute_flat_indices(tt::stl::Span<const int> indices, tt::stl::Span<const uint64_t> strides) {
@@ -69,7 +69,7 @@ int compute_flat_indices(tt::stl::Span<const int> indices, tt::stl::Span<const u
     return flat_index;
 };
 
-std::size_t compute_buffer_size(const Shape& shape, DataType data_type, const Tile& tile) {
+std::size_t compute_buffer_size(const tt::tt_metal::Shape& shape, DataType data_type, const Tile& tile) {
     const size_t volume = shape.volume();
     auto tile_hw = tile.get_tile_hw();
     if (data_type == DataType::BFLOAT8_B) {

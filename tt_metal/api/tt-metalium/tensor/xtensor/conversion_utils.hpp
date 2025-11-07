@@ -10,12 +10,12 @@
 #include <tt-metalium/tensor/tensor.hpp>
 #include <tt-metalium/tensor/xtensor/xtensor_all_includes.hpp>
 
-namespace ttnn::experimental::xtensor {
+namespace tt::tt_metal::experimental::xtensor {
 
-// Returns the shape of the xtensor as `ttnn::Shape`.
+// Returns the shape of the xtensor as `tt::tt_metal::Shape`.
 template <typename E>
 tt::tt_metal::Shape get_shape_from_xarray(const E& xarr) {
-    std::vector<uint32_t> shape_dims;
+    ttsl::SmallVector<uint32_t> shape_dims;
     for (size_t i = 0; i < xarr.shape().size(); ++i) {
         shape_dims.push_back(xarr.shape()[i]);
     }
@@ -106,7 +106,7 @@ auto xtensor_to_span(const xt::xarray<T>& xtensor) {
 // Converts an xtensor to a Tensor.
 // IMPORTANT: this copies the data into the returned Tensor, which can be an expensive operation.
 template <typename T>
-tt::tt_metal::Tensor from_xtensor(const xt::xarray<T>& buffer, const tt::tt_metal::TensorSpec& spec) {
+tt::tt_metal::Tensor from_xtensor(const xt::xarray<T>& buffer, const TensorSpec& spec) {
     auto shape = get_shape_from_xarray(buffer);
     TT_FATAL(shape == spec.logical_shape(), "xtensor has a different shape than the supplied TensorSpec");
     auto buffer_view = xtensor_to_span(buffer);
@@ -122,4 +122,4 @@ xt::xarray<T> to_xtensor(const tt::tt_metal::Tensor& tensor) {
     return xt::xarray<T>(span_to_xtensor_view(tt::stl::Span<T>(vec.data(), vec.size()), shape));
 }
 
-}  // namespace ttnn::experimental::xtensor
+}  // namespace tt::tt_metal::experimental::xtensor

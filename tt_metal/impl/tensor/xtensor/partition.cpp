@@ -19,11 +19,11 @@
 #include <xtensor/core/xtensor_forward.hpp>
 #include <xtensor/views/xview.hpp>
 
-namespace ttnn::experimental::xtensor {
+namespace tt::tt_metal::experimental::xtensor {
 namespace {
 
-tt::stl::SmallVector<int> normalize_dims(const tt::stl::SmallVector<int>& dims, size_t tensor_dims) {
-    tt::stl::SmallVector<int> normalized_dims;
+ttsl::SmallVector<int> normalize_dims(const ttsl::SmallVector<int>& dims, size_t tensor_dims) {
+    ttsl::SmallVector<int> normalized_dims;
     std::transform(dims.begin(), dims.end(), std::back_inserter(normalized_dims), [tensor_dims](int dim) {
         return dim < 0 ? dim + static_cast<int>(tensor_dims) : dim;
     });
@@ -43,8 +43,8 @@ tt::stl::SmallVector<int> normalize_dims(const tt::stl::SmallVector<int>& dims, 
 template <typename Expression>
 StridedViews<Expression> chunk_ndim(
     const xt::xexpression<Expression>& expr_base,
-    const tt::stl::SmallVector<int>& num_chunks,
-    const tt::stl::SmallVector<int>& dims) {
+    const ttsl::SmallVector<int>& num_chunks,
+    const ttsl::SmallVector<int>& dims) {
     const auto& expr = expr_base.derived_cast();
     TT_FATAL(num_chunks.size() == dims.size(), "num_chunks and dims must have the same size");
 
@@ -64,8 +64,8 @@ StridedViews<Expression> chunk_ndim(
         num_chunks);
 
     const size_t dims_size = normalized_dims.size();
-    tt::stl::SmallVector<std::vector<std::pair<int, int>>> dim_ranges;
-    tt::stl::SmallVector<size_t> num_chunks_per_dim;
+    ttsl::SmallVector<std::vector<std::pair<int, int>>> dim_ranges;
+    ttsl::SmallVector<size_t> num_chunks_per_dim;
     for (size_t i = 0; i < dims_size; ++i) {
         const int dim = normalized_dims[i];
         const int num_chunks_along_dim = num_chunks[i];
@@ -90,7 +90,7 @@ StridedViews<Expression> chunk_ndim(
         num_chunks_per_dim.begin(), num_chunks_per_dim.end(), static_cast<size_t>(1), std::multiplies<size_t>());
 
     StridedViews<Expression> chunk_views;
-    tt::stl::SmallVector<size_t> current_indices(dims_size, 0);
+    ttsl::SmallVector<size_t> current_indices(dims_size, 0);
     for (size_t chunk_idx = 0; chunk_idx < total_chunks; ++chunk_idx) {
         xt::xstrided_slice_vector indices(expr.dimension(), xt::all());
         for (size_t i = 0; i < dims_size; ++i) {
@@ -120,8 +120,8 @@ StridedViews<Expression> chunk(const xt::xexpression<Expression>& expr, int num_
 template <typename Expression>
 XtensorAdapter<typename Expression::value_type> concat_ndim(
     const std::vector<Expression>& expressions,
-    const tt::stl::SmallVector<int>& num_chunks,
-    const tt::stl::SmallVector<int>& dims) {
+    const ttsl::SmallVector<int>& num_chunks,
+    const ttsl::SmallVector<int>& dims) {
     using DataType = typename Expression::value_type;
 
     TT_FATAL(num_chunks.size() == dims.size(), "num_chunks and dims must have the same size");
@@ -195,13 +195,13 @@ XtensorAdapter<typename Expression::value_type> concat_ndim(
     }
 
     // Get the size of each piece along concatenation dimensions
-    tt::stl::SmallVector<size_t> piece_sizes(dims.size());
+    ttsl::SmallVector<size_t> piece_sizes(dims.size());
     for (size_t i = 0; i < dims.size(); ++i) {
         piece_sizes[i] = expected_shape[normalized_dims[i]];
     }
 
     // Copy pieces into result in row-major order
-    tt::stl::SmallVector<size_t> current_indices(dims.size(), 0);
+    ttsl::SmallVector<size_t> current_indices(dims.size(), 0);
     for (size_t expr_idx = 0; expr_idx < expressions.size(); ++expr_idx) {
         const auto& expr = expressions[expr_idx];
 
@@ -230,7 +230,7 @@ XtensorAdapter<typename Expression::value_type> concat(const std::vector<Express
     return concat_ndim<Expression>(v, {v.size()}, {dim});
 }
 
-// Adaptor APIs from xtensor to ttnn::Tensor.
+// Adaptor APIs from xtensor to tt::tt_metal::Tensor.
 namespace adaptor {
 namespace {
 
@@ -269,30 +269,28 @@ Tensor concat(const std::vector<Tensor>& tensors, int dim) {
 #define EXPLICIT_INSTANTIATIONS_FOR_TYPE(T)                                                                          \
     template StridedViews<xt::xarray<T>> chunk(const xt::xexpression<xt::xarray<T>>&, int, int);                     \
     template StridedViews<xt::xarray<T>> chunk_ndim(                                                                 \
-        const xt::xexpression<xt::xarray<T>>&, const tt::stl::SmallVector<int>&, const tt::stl::SmallVector<int>&);  \
+        const xt::xexpression<xt::xarray<T>>&, const ttsl::SmallVector<int>&, const ttsl::SmallVector<int>&);        \
     template StridedViews<AdaptedView<T>> chunk(const xt::xexpression<AdaptedView<T>>&, int, int);                   \
     template StridedViews<AdaptedView<T>> chunk_ndim(                                                                \
-        const xt::xexpression<AdaptedView<T>>&, const tt::stl::SmallVector<int>&, const tt::stl::SmallVector<int>&); \
+        const xt::xexpression<AdaptedView<T>>&, const ttsl::SmallVector<int>&, const ttsl::SmallVector<int>&);       \
     template StridedViews<AdaptedView<const T>> chunk(const xt::xexpression<AdaptedView<const T>>&, int, int);       \
     template StridedViews<AdaptedView<const T>> chunk_ndim(                                                          \
-        const xt::xexpression<AdaptedView<const T>>&,                                                                \
-        const tt::stl::SmallVector<int>&,                                                                            \
-        const tt::stl::SmallVector<int>&);                                                                           \
+        const xt::xexpression<AdaptedView<const T>>&, const ttsl::SmallVector<int>&, const ttsl::SmallVector<int>&); \
     template XtensorAdapter<T> concat(const std::vector<xt::xarray<T>>& v, int dim);                                 \
     template XtensorAdapter<T> concat_ndim(                                                                          \
         const std::vector<xt::xarray<T>>& v,                                                                         \
-        const tt::stl::SmallVector<int>& num_chunks,                                                                 \
-        const tt::stl::SmallVector<int>& dims);                                                                      \
+        const ttsl::SmallVector<int>& num_chunks,                                                                    \
+        const ttsl::SmallVector<int>& dims);                                                                         \
     template XtensorAdapter<T> concat(const std::vector<AdaptedView<T>>& v, int dim);                                \
     template XtensorAdapter<T> concat_ndim(                                                                          \
         const std::vector<AdaptedView<T>>& v,                                                                        \
-        const tt::stl::SmallVector<int>& num_chunks,                                                                 \
-        const tt::stl::SmallVector<int>& dims);                                                                      \
+        const ttsl::SmallVector<int>& num_chunks,                                                                    \
+        const ttsl::SmallVector<int>& dims);                                                                         \
     template XtensorAdapter<T> concat(const std::vector<AdaptedView<const T>>& v, int dim);                          \
     template XtensorAdapter<T> concat_ndim(                                                                          \
         const std::vector<AdaptedView<const T>>& v,                                                                  \
-        const tt::stl::SmallVector<int>& num_chunks,                                                                 \
-        const tt::stl::SmallVector<int>& dims);
+        const ttsl::SmallVector<int>& num_chunks,                                                                    \
+        const ttsl::SmallVector<int>& dims);
 
 EXPLICIT_INSTANTIATIONS_FOR_TYPE(bfloat16)
 EXPLICIT_INSTANTIATIONS_FOR_TYPE(float)
@@ -305,4 +303,4 @@ EXPLICIT_INSTANTIATIONS_FOR_TYPE(uint32_t)
 
 #undef EXPLICIT_INSTANTIATIONS_FOR_TYPE
 
-}  // namespace ttnn::experimental::xtensor
+}  // namespace tt::tt_metal::experimental::xtensor

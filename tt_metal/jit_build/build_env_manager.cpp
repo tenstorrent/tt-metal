@@ -19,12 +19,10 @@
 #include "core_coord.hpp"
 #include "core_descriptor.hpp"
 #include "dispatch_core_common.hpp"
-#include "hal.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "jit_build/build.hpp"
 #include "metal_soc_descriptor.h"
-#include "dispatch/system_memory_manager.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
@@ -102,7 +100,7 @@ std::map<std::string, std::string> initialize_device_kernel_defines(ChipId devic
     return device_kernel_defines;
 }
 
-uint32_t compute_build_key(ChipId device_id, uint8_t num_hw_cqs) {
+uint64_t compute_build_key(ChipId device_id, uint8_t num_hw_cqs) {
     const auto& dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
 
     // Collect all the parameters that affect the build configuration
@@ -130,12 +128,10 @@ uint32_t compute_build_key(ChipId device_id, uint8_t num_hw_cqs) {
         hash ^= uint32_hasher(harvested_core_count) << 4;
     }
 
-    // Convert the hash to a 32-bit value
-    return static_cast<uint32_t>(hash);
+    return static_cast<uint64_t>(hash);
 }
 
-std::vector<JitBuildState> create_build_state(
-    JitBuildEnv& build_env, ChipId /*device_id*/, uint8_t num_hw_cqs, bool is_fw) {
+std::vector<JitBuildState> create_build_state(JitBuildEnv& build_env, ChipId /*device_id*/, bool is_fw) {
     // Get the dispatch message address for this device
     uint32_t dispatch_message_addr = MetalContext::instance().dispatch_mem_map().get_dispatch_message_addr_start();
 
@@ -173,18 +169,16 @@ std::vector<JitBuildState> create_build_state(
 
 void BuildEnvManager::add_build_env(ChipId device_id, uint8_t num_hw_cqs) {
     const std::lock_guard<std::mutex> lock(this->lock);
-    uint32_t build_key = compute_build_key(device_id, num_hw_cqs);
+    uint64_t build_key = compute_build_key(device_id, num_hw_cqs);
     auto device_kernel_defines = initialize_device_kernel_defines(device_id, num_hw_cqs);
     const size_t fw_compile_hash =
         std::hash<std::string>{}(tt::tt_metal::MetalContext::instance().rtoptions().get_compile_hash_string());
-
-    device_id_to_build_env_[device_id].build_key = build_key;
     device_id_to_build_env_[device_id].build_env.init(
         build_key, fw_compile_hash, tt::tt_metal::MetalContext::instance().get_cluster().arch(), device_kernel_defines);
     device_id_to_build_env_[device_id].firmware_build_states =
-        create_build_state(device_id_to_build_env_[device_id].build_env, device_id, num_hw_cqs, true);
+        create_build_state(device_id_to_build_env_[device_id].build_env, device_id, true);
     device_id_to_build_env_[device_id].kernel_build_states =
-        create_build_state(device_id_to_build_env_[device_id].build_env, device_id, num_hw_cqs, false);
+        create_build_state(device_id_to_build_env_[device_id].build_env, device_id, false);
 }
 
 const DeviceBuildEnv& BuildEnvManager::get_device_build_env(ChipId device_id) {
@@ -237,7 +231,7 @@ std::vector<BuildEnvInfo> BuildEnvManager::get_all_build_envs_info() {
     std::vector<BuildEnvInfo> build_env_info;
     build_env_info.reserve(device_id_to_build_env_.size());
     for (const auto& [device_id, build_env] : device_id_to_build_env_) {
-        build_env_info.emplace_back(device_id, build_env.build_key, build_env.build_env.get_out_firmware_root_path());
+        build_env_info.emplace_back(device_id, build_env.build_key(), build_env.build_env.get_out_firmware_root_path());
     }
     return build_env_info;
 }

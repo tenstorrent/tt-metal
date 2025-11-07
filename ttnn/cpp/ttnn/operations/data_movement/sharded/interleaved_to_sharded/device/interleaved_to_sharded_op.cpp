@@ -27,8 +27,8 @@ void InterleavedToShardedDeviceOperation::validate_with_output_tensors(const std
         TT_FATAL(output_tensor.device() == input_tensor.device(), "Operands to shard need to be on the same device!");
     }
 
-    TT_FATAL(input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
-    TT_FATAL(this->output_mem_config.is_sharded(), "Error");
+    TT_FATAL(input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED, "Input tensor memory layout must be INTERLEAVED but got {}", input_tensor.memory_config().memory_layout());
+    TT_FATAL(this->output_mem_config.is_sharded(), "Output memory config must be sharded");
     if (this->output_mem_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
         TT_FATAL(this->output_mem_config.buffer_type() == BufferType::L1, "We don't support DRAM block sharding");
     }
@@ -36,7 +36,7 @@ void InterleavedToShardedDeviceOperation::validate_with_output_tensors(const std
         TT_FATAL((*this->output_mem_config.shard_spec()).shape[1] * input_tensor.element_size() % hal::get_l1_alignment() == 0, "Shard page size must currently have L1 aligned page size");
     }
     if (input_tensor.dtype() != this->output_dtype) {
-        TT_FATAL(input_tensor.layout() == Layout::TILE, "Error");
+        TT_FATAL(input_tensor.layout() == Layout::TILE, "Input tensor layout must be TILE when dtype conversion is needed but got {}", input_tensor.layout());
     }
 }
 

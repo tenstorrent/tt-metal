@@ -221,7 +221,8 @@ Cluster::Cluster(llrt::RunTimeOptions& rtoptions, const tt_metal::Hal& hal) : rt
 
     this->initialize_ethernet_sockets();
 
-    this->tunnels_from_mmio_device = llrt::discover_tunnels_from_mmio_device(this->driver_);
+    TT_FATAL(this->driver_, "UMD cluster object must be initialized and available");
+    this->tunnels_from_mmio_device = llrt::discover_tunnels_from_mmio_device(*this->driver_);
 
     if (this->target_type_ != tt::TargetDevice::Mock){
         this->assert_risc_reset();
@@ -351,7 +352,7 @@ const std::unordered_map<CoreCoord, int32_t>& Cluster::get_virtual_routing_to_pr
     return this->virtual_routing_to_profiler_flat_id_.at(this->get_board_type(chip_id));
 }
 
-void Cluster::open_driver(const bool &skip_driver_allocs) {
+void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
     std::unique_ptr<tt::umd::Cluster> device_driver;
     std::string sdesc_path = get_soc_description_file(this->arch_, this->target_type_, rtoptions_);
     if (this->target_type_ == TargetDevice::Silicon) {
@@ -372,7 +373,6 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
             device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
                 .chip_type = tt::umd::ChipType::SIMULATION,
                 .sdesc_path = sdesc_path,
-                .target_devices = mock_cluster_desc->get_all_chips(),
                 .cluster_descriptor = mock_cluster_desc.get(),
                 .simulator_directory = rtoptions_.get_simulator_path(),
             });
@@ -568,20 +568,20 @@ const std::unordered_set<CoreCoord>& Cluster::get_virtual_eth_cores(ChipId chip_
 
 CoreCoord Cluster::get_virtual_coordinate_from_logical_coordinates(
     ChipId chip_id, CoreCoord logical_coord, const CoreType& core_type) const {
+    // TBD: Remove when all WORKER are rewritten to TENSIX
+    CoreType core_type_to_use = core_type;
+    if (core_type_to_use == CoreType::WORKER) {
+        core_type_to_use = CoreType::TENSIX;
+    }
+
     // Keeping the old behavior, although UMD does define translation for other cores as well.
-    if (core_type != CoreType::WORKER && core_type != CoreType::DRAM && core_type != CoreType::ETH) {
+    if (core_type_to_use != CoreType::TENSIX && core_type != CoreType::DRAM && core_type != CoreType::ETH) {
         TT_THROW("Undefined conversion for core type.");
     }
 
     auto& soc_desc = this->get_soc_desc(chip_id);
     if (core_type == CoreType::DRAM) {
         return soc_desc.get_physical_dram_core_from_logical(logical_coord);
-    }
-
-    // TBD: Remove when all WORKER are rewritten to TENSIX
-    CoreType core_type_to_use = core_type;
-    if (core_type_to_use == CoreType::WORKER) {
-        core_type_to_use = CoreType::TENSIX;
     }
 
     tt::umd::CoreCoord translated_coord =
@@ -643,8 +643,8 @@ int Cluster::get_device_aiclk(const ChipId& chip_id) const { return this->driver
 uint16_t Cluster::get_bus_id(ChipId chip) const { return this->cluster_desc_->get_bus_id(chip); }
 
 std::optional<int> Cluster::get_physical_slot(ChipId chip) const {
-    if (this->target_type_ == tt::TargetDevice::Mock) {
-        log_warning(tt::LogDevice, "get_physical_slot is not supported for mock devices");
+    if (this->target_type_ != tt::TargetDevice::Silicon) {
+        log_warning(tt::LogDevice, "get_physical_slot is not supported for non-silicon devices");
         return std::nullopt;
     }
     return this->driver_->get_chip(chip)->get_tt_device()->get_pci_device()->get_device_info().physical_slot;
@@ -865,7 +865,7 @@ void Cluster::verify_eth_fw_capability() const {
     if (rtoptions_.get_simulator_enabled()) {
         return;
     }
-    const auto fw_version = this->driver_->get_ethernet_fw_version();
+    const auto fw_version = this->driver_->get_ethernet_firmware_version();
     if (fw_version) {
         hal_.verify_eth_fw_version(fw_version.value());
     }
@@ -912,7 +912,8 @@ uint64_t Cluster::get_pcie_base_addr_from_device(ChipId chip_id) const {
 }
 
 const std::unordered_set<ChipId>& Cluster::get_devices_controlled_by_mmio_device(ChipId mmio_device_id) const {
-    return llrt::get_devices_controlled_by_mmio_device(driver_, mmio_device_id);
+    TT_FATAL(driver_, "UMD cluster object must be initialized and available");
+    return llrt::get_devices_controlled_by_mmio_device(*driver_, mmio_device_id);
 }
 
 std::unordered_map<ChipId, std::vector<CoreCoord>> Cluster::get_ethernet_cores_grouped_by_connected_chips(

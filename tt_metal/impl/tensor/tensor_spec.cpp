@@ -124,7 +124,7 @@ void validate_dtype_and_layout(DataType dtype, Layout layout) {
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
-TensorSpec::TensorSpec(Shape logical_shape, TensorLayout tensor_layout) :
+TensorSpec::TensorSpec(tt::tt_metal::Shape logical_shape, TensorLayout tensor_layout) :
     logical_shape_(std::move(logical_shape)),
     tensor_layout_(std::move(tensor_layout)),
     cached_padded_shape_(tensor_layout_.compute_padded_shape(logical_shape_)),

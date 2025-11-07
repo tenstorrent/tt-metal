@@ -32,10 +32,10 @@ namespace ttnn {
 namespace {
 
 using ::testing::SizeIs;
-using ::ttnn::experimental::xtensor::chunk;
-using ::ttnn::experimental::xtensor::chunk_ndim;
-using ::ttnn::experimental::xtensor::concat;
-using ::ttnn::experimental::xtensor::concat_ndim;
+using ::tt::tt_metal::experimental::xtensor::chunk;
+using ::tt::tt_metal::experimental::xtensor::chunk_ndim;
+using ::tt::tt_metal::experimental::xtensor::concat;
+using ::tt::tt_metal::experimental::xtensor::concat_ndim;
 
 TEST(PartitionTest, ChunkBasicNonDivisible3) {
     // Create a 1D tensor: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
@@ -262,7 +262,8 @@ TEST(PartitionTest, ChunkDoesNotAccessData) {
         for (const auto& chunked_xexpr : chunks) {
             EXPECT_THAT(chunked_xexpr, SizeIs(kDim0Size * page_size));
             EXPECT_EQ(
-                experimental::xtensor::get_shape_from_xarray(chunked_xexpr), ttnn::Shape({kDim0Size, 1, page_size}));
+                tt::tt_metal::experimental::xtensor::get_shape_from_xarray(chunked_xexpr),
+                ttnn::Shape({kDim0Size, 1, page_size}));
         }
     } else {
         FAIL() << "segfault occurred when calling `chunk`";

@@ -131,7 +131,7 @@ tt::tt_metal::TensorTopology from_flatbuffer(const flatbuffer::TensorTopology* f
     TT_FATAL(fb_dist_shape != nullptr, "distribution_shape is required in TensorTopology");
     auto dist_shape = from_flatbuffer(fb_dist_shape);
 
-    tt::stl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> placements;
+    ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> placements;
     if (const auto* fb_placements = fb_topology->placements()) {
         placements.reserve(fb_placements->size());
         for (const auto* p : *fb_placements) {

@@ -79,32 +79,14 @@ CPMAddPackage(
 
 CPMAddPackage(NAME nlohmann_json GITHUB_REPOSITORY nlohmann/json GIT_TAG v3.11.3 OPTIONS "JSON_BuildTests OFF")
 
-CPMAddPackage(
-    NAME xtl
-    GITHUB_REPOSITORY xtensor-stack/xtl
-    GIT_TAG 0.8.0
-    PATCHES
-        xtl.patch
-    OPTIONS
-        "XTL_ENABLE_TESTS OFF"
-)
+CPMAddPackage(NAME xtl GITHUB_REPOSITORY xtensor-stack/xtl GIT_TAG 0.8.0 OPTIONS "XTL_ENABLE_TESTS OFF")
 
-CPMAddPackage(
-    NAME xtensor
-    GITHUB_REPOSITORY xtensor-stack/xtensor
-    GIT_TAG 0.26.0
-    PATCHES
-        xtensor.patch
-    OPTIONS
-        "XTENSOR_ENABLE_TESTS OFF"
-)
+CPMAddPackage(NAME xtensor GITHUB_REPOSITORY xtensor-stack/xtensor GIT_TAG 0.26.0 OPTIONS "XTENSOR_ENABLE_TESTS OFF")
 
 CPMAddPackage(
     NAME xtensor-blas
     GITHUB_REPOSITORY xtensor-stack/xtensor-blas
     GIT_TAG 0.22.0
-    PATCHES
-        xtensor-blas.patch
     OPTIONS
         "XTENSOR_ENABLE_TESTS OFF"
 )
@@ -192,3 +174,13 @@ CPMAddPackage(
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "NB_USE_SUBMODULE_DEPS ON"
 )
+
+####################################################################################################################
+# simd-everywhere
+####################################################################################################################
+CPMAddPackage(NAME simd-everywhere GITHUB_REPOSITORY simd-everywhere/simde GIT_TAG v0.8.2)
+if(simd-everywhere_ADDED)
+    add_library(simde INTERFACE)
+    add_library(simde::simde ALIAS simde)
+    target_include_directories(simde SYSTEM INTERFACE ${simd-everywhere_SOURCE_DIR})
+endif()

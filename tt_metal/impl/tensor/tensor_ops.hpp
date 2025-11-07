@@ -4,7 +4,7 @@
 
 #pragma once
 #include "tt-metalium/tensor/types.hpp"
-#include <tt-metalium/common/queue_id.hpp>  //  TODO: Do we need this here?
+#include <tt-metalium/queue_id.hpp>
 #include <tt_stl/optional_reference.hpp>
 #include <tt-metalium/tensor/layout/layout.hpp>
 
@@ -50,5 +50,12 @@ Tensor tensor_reshape(
     const Tensor& input_tensor,
     const tt::tt_metal::Shape& new_logical_shape,
     const tt::tt_metal::Shape& new_padded_shape);
+
+Tensor tensor_view(const Tensor& input_tensor, const tt::tt_metal::Shape& new_shape);
+Tensor tensor_view(
+    const Tensor& input_tensor,
+    const tt::tt_metal::Shape& new_logical_shape,
+    const tt::tt_metal::Shape& new_padded_shape);
+Tensor tensor_to_dtype(const Tensor& input_tensor, DataType dtype);
 
 }  // namespace tt::tt_metal::tensor_ops

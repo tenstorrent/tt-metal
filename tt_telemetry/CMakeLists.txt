@@ -76,12 +76,14 @@ target_sources(
         telemetry/watchdog.cpp
         telemetry/metric.cpp
         server/web_server.cpp
+        server/prom_formatter.cpp
         server/collection_endpoint.cpp
         server/collection_clients.cpp
         topology/topology.cpp
         telemetry/ethernet/ethernet_helpers.cpp
         telemetry/ethernet/ethernet_metrics.cpp
         telemetry/arc/arc_metrics.cpp
+        telemetry/system/system_metrics.cpp
         telemetry/hal/hal.cpp
 )
 target_include_directories(
@@ -105,3 +107,8 @@ target_link_libraries(
         TT::ScaleoutTools # Add scaleout tools for protobuf headers
         protobuf::libprotobuf # Add protobuf library for compatibility
 )
+
+# Add tests subdirectory
+if(TT_METAL_BUILD_TESTS)
+    add_subdirectory(tests)
+endif()

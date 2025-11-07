@@ -19,7 +19,7 @@ from inspector_data import run as get_inspector_data, InspectorData
 from elfs_cache import run as get_elfs_cache, ElfsCache
 from triage import triage_singleton, ScriptConfig, run_script, log_check
 from ttexalens.coordinate import OnChipCoordinate
-from ttexalens.firmware import ELF
+from ttexalens.elf import MemoryAccess
 from ttexalens.context import Context
 from triage import TTTriageError, triage_field, hex_serializer
 from run_checks import run as get_run_checks
@@ -180,7 +180,7 @@ class DispatcherData:
         raise TTTriageError(f"Kernel {watcher_kernel_id} not found in inspector data.")
 
     def get_core_data(self, location: OnChipCoordinate, risc_name: str) -> DispatcherCoreData:
-        loc_mem_reader = ELF.get_mem_reader(location)
+        loc_mem_access = MemoryAccess.get(location.noc_block.get_risc_debug(risc_name))
         if location._device.get_block_type(location) == "functional_workers":
             # For tensix, use the brisc elf
             fw_elf = self._brisc_elf
@@ -205,10 +205,10 @@ class DispatcherData:
         build_env = self._get_build_env_for_device(device_id)
         proc_name = risc_name.upper()
         proc_type = enum_values["ProcessorTypes"][proc_name]
-        mailboxes = fw_elf.read_global("mailboxes", loc_mem_reader)
+        mailboxes = fw_elf.read_global("mailboxes", loc_mem_access)
 
         # Refer to tt_metal/api/tt-metalium/dev_msgs.h for struct kernel_config_msg_t
-        launch_msg_rd_ptr = mailboxes.launch_msg_rd_ptr.value()
+        launch_msg_rd_ptr = mailboxes.launch_msg_rd_ptr
 
         log_check(
             launch_msg_rd_ptr < self._launch_msg_buffer_num_entries,
@@ -230,25 +230,25 @@ class DispatcherData:
         host_assigned_id = None
         try:
             # Indexed with enum ProgrammableCoreType - tt_metal/hw/inc/*/core_config.h
-            kernel_config_base = (
-                mailboxes.launch[launch_msg_rd_ptr].kernel_config.kernel_config_base[programmable_core_type].value()
-            )
+            kernel_config_base = mailboxes.launch[launch_msg_rd_ptr].kernel_config.kernel_config_base[
+                programmable_core_type
+            ]
         except:
             pass
         try:
             # Size 5 (NUM_PROCESSORS_PER_CORE_TYPE) - seems to be DM0,DM1,MATH0,MATH1,MATH2
-            kernel_text_offset = mailboxes.launch[launch_msg_rd_ptr].kernel_config.kernel_text_offset[proc_type].value()
+            kernel_text_offset = mailboxes.launch[launch_msg_rd_ptr].kernel_config.kernel_text_offset[proc_type]
         except:
             pass
         try:
             # enum dispatch_core_processor_classes
-            watcher_kernel_id = mailboxes.launch[launch_msg_rd_ptr].kernel_config.watcher_kernel_ids[proc_type].value()
+            watcher_kernel_id = mailboxes.launch[launch_msg_rd_ptr].kernel_config.watcher_kernel_ids[proc_type]
         except:
             pass
         try:
-            watcher_previous_kernel_id = (
-                mailboxes.launch[previous_launch_msg_rd_ptr].kernel_config.watcher_kernel_ids[proc_type].value()
-            )
+            watcher_previous_kernel_id = mailboxes.launch[previous_launch_msg_rd_ptr].kernel_config.watcher_kernel_ids[
+                proc_type
+            ]
         except:
             pass
         try:
@@ -260,21 +260,21 @@ class DispatcherData:
         except:
             pass
         try:
-            go_message_index = mailboxes.go_message_index.value()
-            go_data = mailboxes.go_messages[go_message_index].signal.value()
+            go_message_index = mailboxes.go_message_index
+            go_data = mailboxes.go_messages[go_message_index].signal
         except:
             pass
         try:
-            preload = mailboxes.launch[launch_msg_rd_ptr].kernel_config.preload.value() != 0
+            preload = mailboxes.launch[launch_msg_rd_ptr].kernel_config.preload != 0
         except:
             pass
         try:
-            host_assigned_id = mailboxes.launch[launch_msg_rd_ptr].kernel_config.host_assigned_id.value()
+            host_assigned_id = mailboxes.launch[launch_msg_rd_ptr].kernel_config.host_assigned_id
         except:
             pass
         try:
-            waypoint_int = mailboxes.watcher.debug_waypoint[proc_type].value()
-            waypoint = waypoint_int.to_bytes(4, "little").rstrip(b"\x00").decode("utf-8", errors="replace")
+            waypoint_bytes = mailboxes.watcher.debug_waypoint[proc_type].waypoint.read_bytes()
+            waypoint = waypoint_bytes.rstrip(b"\x00").decode("utf-8", errors="replace")
         except:
             pass
 

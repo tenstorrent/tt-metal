@@ -10,7 +10,7 @@
 #include <xtensor/views/xstrided_view.hpp>
 #include <tt-metalium/tensor/tensor.hpp>
 
-namespace ttnn::experimental::xtensor {
+namespace tt::tt_metal::experimental::xtensor {
 namespace detail {
 
 // Helper to compute the type of an unowned strided view over an `xt::xexpression`.
@@ -40,8 +40,8 @@ StridedViews<Expression> chunk(const xt::xexpression<Expression>& expr, int num_
 template <typename Expression>
 StridedViews<Expression> chunk_ndim(
     const xt::xexpression<Expression>& expr,
-    const tt::stl::SmallVector<int>& num_chunks,
-    const tt::stl::SmallVector<int>& dims);
+    const ttsl::SmallVector<int>& num_chunks,
+    const ttsl::SmallVector<int>& dims);
 
 // Concatenates a list of tensors along the specified dimension.
 template <typename Expression>
@@ -52,11 +52,11 @@ XtensorAdapter<typename Expression::value_type> concat(const std::vector<Express
 template <typename Expression>
 XtensorAdapter<typename Expression::value_type> concat_ndim(
     const std::vector<Expression>& expressions,
-    const tt::stl::SmallVector<int>& num_chunks,
-    const tt::stl::SmallVector<int>& dims);
+    const ttsl::SmallVector<int>& num_chunks,
+    const ttsl::SmallVector<int>& dims);
 
 // Overload in terms of `Tensor`.
 // Deprecated: Use high-level APIs defined in distributed_tensor.hpp
 tt::tt_metal::Tensor concat(const std::vector<tt::tt_metal::Tensor>& tensors, int dim = 0);
 
-}  // namespace ttnn::experimental::xtensor
+}  // namespace tt::tt_metal::experimental::xtensor

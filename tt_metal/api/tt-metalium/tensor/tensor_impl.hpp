@@ -78,8 +78,6 @@ constexpr size_t packed_buffer_size_bytes<bfloat4_b>(size_t volume_unpacked_data
     return packed_buffer_size_bytes<uint32_t>(volume_unpacked_data);
 }
 
-Tensor to_dtype_metal(const Tensor& tensor, DataType dtype);
-
 // ======================================================================================
 //                                  Layout converters
 // ======================================================================================
@@ -214,10 +212,15 @@ Tensor to_layout_bfloat(const Tensor& tensor, Layout target_layout);
 //                                  .pad() and .unpad()
 // ======================================================================================
 template <typename T>
-Tensor pad(const Tensor& tensor, const Shape& output_padded_shape, const Shape& input_tensor_start, float pad_value);
+Tensor pad(
+    const Tensor& tensor,
+    const tt::tt_metal::Shape& output_padded_shape,
+    const tt::tt_metal::Shape& input_tensor_start,
+    float pad_value);
 
 template <typename T>
-Tensor unpad(const Tensor& tensor, const Shape& output_tensor_start, const Shape& output_tensor_end);
+Tensor unpad(
+    const Tensor& tensor, const tt::tt_metal::Shape& output_tensor_start, const tt::tt_metal::Shape& output_tensor_end);
 
 // ======================================================================================
 //                                         Print

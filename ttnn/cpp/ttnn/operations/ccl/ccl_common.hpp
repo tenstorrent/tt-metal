@@ -21,12 +21,16 @@
 namespace ttnn {
 namespace ccl {
 
+bool is_fabric_2d();
+
 uint32_t get_topological_dimension(const Tensor& tensor, const std::optional<uint32_t>& cluster_axis);
 
 tt::tt_fabric::Topology get_usable_topology(
     const Tensor& tensor,
-    tt::tt_fabric::Topology whole_device_topology,
+    const std::optional<tt::tt_fabric::Topology>& topology,
     const std::optional<uint32_t>& cluster_axis = std::nullopt);
+
+tt::tt_fabric::Topology convert_2d_to_1d_topology(tt::tt_fabric::Topology topology);
 
 uint32_t get_linearized_index_from_physical_coord(
     const Tensor& tensor, const MeshCoordinate& physical_coord, const std::optional<uint32_t>& cluster_axis);
@@ -185,7 +189,6 @@ public:
     const tt::tt_metal::ShardSpec& get_shard_spec() const;
 
 private:
-    uint32_t page_size{};
     const tt::tt_metal::ShardSpec shard_spec;
 };
 
@@ -524,8 +527,7 @@ class InterleavedRingAllGatherTensorSlicer : public LegacyCclTensorSlicer {
 public:
     ~InterleavedRingAllGatherTensorSlicer() override = default;
     InterleavedRingAllGatherTensorSlicer(
-        const Tensor& input_tensor, const Tensor& output_tensor, int slice_dim, uint32_t slice_idx) :
-        LegacyCclTensorSlicer() {
+        const Tensor& input_tensor, const Tensor& output_tensor, int slice_dim, uint32_t slice_idx) {
         this->row_major = input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR;
         this->slice_dim_is_width = input_tensor.padded_shape().rank() - 1 == slice_dim;
         this->is_sharded = input_tensor.is_sharded();
@@ -599,7 +601,7 @@ public:
         }
         this->input_start_page_idx += num_pages /*pages_per_worker*/;
     }
-};
+};  // namespace ccl
 
 tt::tt_metal::KernelHandle generate_edm_kernel(
     tt::tt_metal::Program& program,

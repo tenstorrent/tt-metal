@@ -15,6 +15,7 @@
 #include <string>
 #include <string_view>
 
+#include <enchantum/enchantum.hpp>
 #include <fmt/base.h>
 #include <fmt/format.h>
 #include <fmt/ranges.h>
@@ -80,7 +81,7 @@ void check_built_dir(const std::filesystem::path& dir_path, const std::filesyste
 }  // namespace
 
 std::string get_default_root_path() {
-    const std::string emptyString("");
+    const std::string emptyString;
     const std::string home_path = parse_env<std::string>("HOME", emptyString);
     if (!home_path.empty() && std::filesystem::exists(home_path)) {
         return home_path + "/.cache/tt-metal-cache/";
@@ -92,7 +93,7 @@ std::string get_default_root_path() {
 JitBuildEnv::JitBuildEnv() = default;
 
 void JitBuildEnv::init(
-    uint32_t build_key,
+    uint64_t build_key,
     size_t fw_compile_hash,
     tt::ARCH arch,
     const std::map<std::string, std::string>& device_kernel_defines) {
@@ -120,15 +121,6 @@ void JitBuildEnv::init(
 
     this->out_root_ = this->out_root_  + git_hash + "/";
 #endif
-    // Firmware build path is a combination of build_key and fw_compile_hash
-    // If either change, the firmware build path will change and FW will be rebuilt
-    // if it's not already in MetalContext::firmware_built_keys_
-    const std::filesystem::path firmware_path = std::filesystem::path(this->out_root_) / std::to_string(build_key) /
-                                                std::to_string(fw_compile_hash) / "firmware/";
-    this->out_firmware_root_ = firmware_path.string();
-    const std::filesystem::path kernel_path =
-        std::filesystem::path(this->out_root_) / std::to_string(build_key) / "kernels/";
-    this->out_kernel_root_ = kernel_path.string();
 
     // Tools
     const static bool use_ccache = std::getenv("TT_METAL_CCACHE_KERNEL_SUPPORT") != nullptr;
@@ -275,12 +267,27 @@ void JitBuildEnv::init(
 
     this->lflags_ = common_flags;
     this->lflags_ += "-Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles ";
+
+    // Need to capture more info in build key to prevent stale binaries from being reused.
+    jit_build::utils::FNV1a hasher;
+    hasher.update(build_key);
+    hasher.update(enchantum::to_underlying(this->arch_));
+    hasher.update(cflags_.begin(), cflags_.end());
+    hasher.update(lflags_.begin(), lflags_.end());
+    hasher.update(defines_.begin(), defines_.end());
+    build_key_ = hasher.digest();
+
+    // Firmware build path is a combination of build_key and fw_compile_hash
+    // If either change, the firmware build path will change and FW will be rebuilt
+    // if it's not already in MetalContext::firmware_built_keys_
+    this->out_firmware_root_ = fmt::format("{}{}/firmware/{}/", this->out_root_, build_key_, fw_compile_hash);
+    this->out_kernel_root_ = fmt::format("{}{}/kernels/", this->out_root_, build_key_);
 }
 
 JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& build_config) :
     env_(env),
-    core_id_(build_config.processor_id),
     is_fw_(build_config.is_fw),
+    process_defines_at_compile_(true),
     dispatch_message_addr_(build_config.dispatch_message_addr),
     out_path_(build_config.is_fw ? env_.out_firmware_root_ : env_.out_kernel_root_),
     cflags_(env.cflags_),
@@ -288,8 +295,7 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
     includes_(env.includes_),
     lflags_(env.lflags_),
     default_compile_opt_level_("Os"),
-    default_linker_opt_level_("Os"),
-    process_defines_at_compile_(true) {
+    default_linker_opt_level_("Os") {
     // Anything that is arch-specific should be added to HalJitBuildQueryInterface instead of here.
     if (build_config.core_type == HalProgrammableCoreType::TENSIX &&
         build_config.processor_class == HalProcessorClassType::COMPUTE) {
@@ -305,7 +311,7 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
     }
 
     HalJitBuildQueryInterface::Params params{
-        this->is_fw_, build_config.core_type, build_config.processor_class, this->core_id_};
+        this->is_fw_, build_config.core_type, build_config.processor_class, build_config.processor_id};
     const auto& jit_build_query = tt_metal::MetalContext::instance().hal().get_jit_build_query();
 
     this->target_name_ = jit_build_query.target_name(params);

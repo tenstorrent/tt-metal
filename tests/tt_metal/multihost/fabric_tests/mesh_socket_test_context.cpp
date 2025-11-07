@@ -16,7 +16,7 @@
 namespace tt::tt_fabric::mesh_socket_tests {
 
 MeshSocketTestContext::MeshSocketTestContext(const MeshSocketTestConfiguration& config) :
-    config_(config), expanded_tests_(), mesh_device_(nullptr), control_plane_ptr_(nullptr) {
+    config_(config), mesh_device_(nullptr), control_plane_ptr_(nullptr) {
     log_info(tt::LogTest, "MeshSocketTestContext created with {} tests", config_.tests.size());
 }
 

@@ -22,8 +22,8 @@ size_t round_up(size_t value, size_t multiple) {
 };
 
 Alignment legacyShapeToAlignment(
-    const Shape& logical_shape,
-    const Shape& legacy_padded_shape,
+    const tt::tt_metal::Shape& logical_shape,
+    const tt::tt_metal::Shape& legacy_padded_shape,
     const PageConfig& page_config,
     const MemoryConfig& memory_config) {
     if (logical_shape == legacy_padded_shape) {
@@ -52,7 +52,7 @@ Alignment legacyShapeToAlignment(
 
     // INTERLEAVED with only height/width padding
     if (alignment_can_be_2D) {
-        ttnn::SmallVector<uint32_t> values(std::min((int)padded_rank, 2));
+        ttsl::SmallVector<uint32_t> values(std::min((int)padded_rank, 2));
         const auto alignment_size = values.size();
         if (alignment_size >= 1) {
             values[alignment_size - 1] = legacy_padded_shape[-1];
@@ -66,7 +66,7 @@ Alignment legacyShapeToAlignment(
 
     // INTERLEAVED with (deprecated) non-height/width padding
     // NOTE: Rank > 2 is guaranteed in this case
-    ttnn::SmallVector<uint32_t> values(padded_rank);
+    ttsl::SmallVector<uint32_t> values(padded_rank);
     values[padded_rank - 1] = legacy_padded_shape[-1];
     values[padded_rank - 2] = legacy_padded_shape[-2];
 
@@ -135,8 +135,8 @@ TensorLayout TensorLayout::fromPaddedShape(
     DataType dtype,
     const PageConfig& page_config,
     const MemoryConfig& memory_config,
-    const Shape& logical_shape,
-    const Shape& padded_shape) {
+    const tt::tt_metal::Shape& logical_shape,
+    const tt::tt_metal::Shape& padded_shape) {
     return TensorLayout(
         dtype,
         page_config,
@@ -156,7 +156,7 @@ void TensorLayout::initialize_alignment() {
         return;
     }
 
-    ttnn::SmallVector<uint32_t> result(std::max(alignment_.size(), default_alignment.size()), 1);
+    ttsl::SmallVector<uint32_t> result(std::max(alignment_.size(), default_alignment.size()), 1);
     for (size_t i = 0; i < alignment_.size(); i++) {
         result[i + result.size() - alignment_.size()] = alignment_[i];
     }
@@ -167,7 +167,7 @@ void TensorLayout::initialize_alignment() {
     alignment_ = Alignment(std::move(result));
 }
 
-BufferShardingArgs TensorLayout::compute_buffer_sharding_args(const Shape& shape) const {
+BufferShardingArgs TensorLayout::compute_buffer_sharding_args(const tt::tt_metal::Shape& shape) const {
     if (!memory_config_.is_sharded()) {
         return {};
     }
@@ -214,7 +214,7 @@ BufferShardingArgs TensorLayout::compute_buffer_sharding_args(const Shape& shape
         std::move(distribution_spec), std::move(shard_spec_buffer), memory_config_.memory_layout());
 }
 
-size_t TensorLayout::compute_packed_buffer_size_bytes(const Shape& shape) const {
+size_t TensorLayout::compute_packed_buffer_size_bytes(const tt::tt_metal::Shape& shape) const {
     const Shape2D physical_size = compute_physical_shape(shape);
     const Shape2D page_shape = compute_page_shape(physical_size);
     const auto width_remainder = physical_size.width() % page_shape.width();
@@ -234,7 +234,7 @@ size_t TensorLayout::compute_packed_buffer_size_bytes(const Shape& shape) const 
     return page_count * page_size_bytes;
 }
 
-size_t TensorLayout::compute_page_size_bytes(const Shape& shape) const {
+size_t TensorLayout::compute_page_size_bytes(const tt::tt_metal::Shape& shape) const {
     const auto physical_size = compute_physical_shape(shape);
     const auto page_shape = compute_page_shape(physical_size);
     return compute_page_size_bytes(page_shape);
@@ -245,7 +245,7 @@ size_t TensorLayout::compute_page_size_bytes(const Shape2D& page_size) const {
 }
 
 size_t TensorLayout::compute_consumed_memory_bytes_per_bank(
-    const Shape& shape, size_t page_alignment, size_t num_banks) const {
+    const tt::tt_metal::Shape& shape, size_t page_alignment, size_t num_banks) const {
     const Shape2D physical_shape = compute_physical_shape(shape);
     const Shape2D page_shape = compute_page_shape(physical_shape);
 
@@ -268,7 +268,8 @@ size_t TensorLayout::compute_consumed_memory_bytes_per_bank(
     return num_pages_per_bank * aligned_page_size;
 }
 
-size_t TensorLayout::compute_consumed_memory_bytes_per_bank(const Shape& shape, const IDevice& device) const {
+size_t TensorLayout::compute_consumed_memory_bytes_per_bank(
+    const tt::tt_metal::Shape& shape, const IDevice& device) const {
     const size_t page_alignment = device.allocator()->get_alignment(memory_config_.buffer_type());
     size_t num_banks = 0;
     if (memory_config_.is_l1()) {
@@ -297,7 +298,7 @@ Shape2D TensorLayout::get_physical_shard_shape() const {
     return shard_spec.shape;
 }
 
-Shape2D TensorLayout::compute_logical_2d_shape(const Shape& shape) const {
+Shape2D TensorLayout::compute_logical_2d_shape(const tt::tt_metal::Shape& shape) const {
     if (shape.rank() < 2) {
         return Shape2D{1, shape[-1]};
     }
@@ -309,7 +310,7 @@ Shape2D TensorLayout::compute_logical_2d_shape(const Shape& shape) const {
     return Shape2D{height, width};
 }
 
-Shape2D TensorLayout::compute_physical_shape(const Shape& shape) const {
+Shape2D TensorLayout::compute_physical_shape(const tt::tt_metal::Shape& shape) const {
     const int rank = static_cast<int>(shape.rank());
     const int alignment_rank = static_cast<int>(alignment_.size());
 
@@ -345,7 +346,7 @@ Shape2D TensorLayout::compute_page_shape(const Shape2D& physical_size) const {
     return page_config_.get_page_shape(physical_size, dtype_, memory_config_, physical_shard_shape);
 }
 
-Strides TensorLayout::compute_strides(const Shape& logical_shape) const {
+Strides TensorLayout::compute_strides(const tt::tt_metal::Shape& logical_shape) const {
     const int rank = static_cast<int>(logical_shape.rank());
     const int alignment_rank = static_cast<int>(alignment_.size());
     Strides strides(rank, 1);
@@ -359,8 +360,8 @@ Strides TensorLayout::compute_strides(const Shape& logical_shape) const {
     return strides;
 }
 
-Shape TensorLayout::compute_padded_shape(const Shape& shape) const {
-    ttnn::SmallVector<uint32_t> padded_shape(std::max(shape.rank(), alignment_.size()));
+tt::tt_metal::Shape TensorLayout::compute_padded_shape(const tt::tt_metal::Shape& shape) const {
+    ttsl::SmallVector<uint32_t> padded_shape(std::max(shape.rank(), alignment_.size()));
     int rank_index = static_cast<int>(shape.rank()) - 1;
     int alignment_index = static_cast<int>(alignment_.size()) - 1;
     int padded_shape_index = static_cast<int>(padded_shape.size() - 1);
@@ -393,7 +394,7 @@ Shape TensorLayout::compute_padded_shape(const Shape& shape) const {
     for (; rank_index >= 0; rank_index--, padded_shape_index--) {
         padded_shape[padded_shape_index] = shape[rank_index];
     }
-    return Shape(std::move(padded_shape));
+    return tt::tt_metal::Shape(std::move(padded_shape));
 }
 
 }  // namespace tt::tt_metal

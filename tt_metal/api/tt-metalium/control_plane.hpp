@@ -25,14 +25,24 @@ class PhysicalSystemDescriptor;
 
 }  // namespace tt::tt_metal
 
+namespace tt::umd {
+
+class Cluster;
+
+}   // namespace tt::umd
+
 namespace tt::tt_fabric {
-// TODO: remove this once UMD provides API for UBB ID
+
+class TopologyMapper;
+
+// TODO: remove this once UMD provides API for UBB ID and bus ID
  struct UbbId {
      std::uint32_t tray_id;
      std::uint32_t asic_id;
  };
 
- UbbId get_ubb_id(ChipId chip_id);
+ uint16_t get_bus_id(tt::umd::Cluster& cluster, ChipId chip_id);
+ UbbId get_ubb_id(tt::umd::Cluster& cluster, ChipId chip_id);
 
  class FabricContext;
 
@@ -243,13 +253,6 @@ private:
     routing_plane_id_t get_routing_plane_id(
         chan_id_t eth_chan_id, const std::vector<chan_id_t>& eth_chans_in_direction) const;
 
-    std::vector<ChipId> get_mesh_physical_chip_ids(
-        const tt::tt_metal::distributed::MeshContainer<ChipId>& mesh_container,
-        std::optional<ChipId> nw_corner_chip_id = std::nullopt,
-        std::optional<ChipId> ne_corner_chip_id = std::nullopt) const;
-
-    std::map<FabricNodeId, ChipId> get_logical_chip_to_physical_chip_mapping(const std::string& mesh_graph_desc_file);
-
     // Tries to get a valid downstream channel from the candidate_target_chans
     // First along same routing plane, but if not available, take round robin from candidates
     chan_id_t get_downstream_eth_chan_id(
@@ -367,6 +370,7 @@ private:
 
     std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> host_local_context_;
     std::unique_ptr<tt::tt_metal::PhysicalSystemDescriptor> physical_system_descriptor_;
+    std::unique_ptr<tt::tt_fabric::TopologyMapper> topology_mapper_;
 };
 
 }  // namespace tt::tt_fabric
