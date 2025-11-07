@@ -60,11 +60,12 @@ class VideoProcessor(VideoProcessorBase):
             # Extract bbox and keypoints
             bbox = detection[:4]  # x, y, w, h (normalized 0-1) - should be corner coordinates
             confidence = detection[4]
-            keypoints = detection[5:]  # 51 values (17 keypoints x 3)
+            class_id = detection[5] if len(detection) > 5 else 0
+            keypoints = detection[6:]  # 51 values (17 keypoints x 3)
 
             # Debug: print received coordinates
             if detections.index(detection) == 0:  # Only print first detection
-                print(f"DEBUG: Client received bbox: {bbox} conf={confidence:.3f}")
+                print(f"DEBUG: Client received bbox: {bbox} conf={confidence:.3f} class_id={class_id}")
 
             # Draw bounding box
             x, y, w, h = bbox
@@ -78,6 +79,9 @@ class VideoProcessor(VideoProcessorBase):
             cv2.rectangle(img, (x1, y1), (x2, y2), (255, 0, 0), 2)
 
             # Reshape keypoints to (17, 3) - x, y, confidence
+            if len(keypoints) != 51:
+                print(f"DEBUG: Unexpected keypoint length {len(keypoints)}, skipping pose drawing for this detection")
+                continue
             keypoints = np.array(keypoints).reshape(17, 3)
 
             # Draw keypoints
