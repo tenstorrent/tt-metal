@@ -2910,15 +2910,25 @@ struct noc_traits_t<UnicastEndpoint> {
     };
     template <Noc::AddressType address_type>
     static auto src_addr(const UnicastEndpoint& src, const Noc& noc, const src_args_type& args) {
-        static_assert(address_type == Noc::AddressType::NOC);
-        uint64_t noc_addr = src.get_noc_unicast_addr(args.noc_x, args.noc_y, args.addr, noc.get_noc_id());
-        return noc_addr;
+        if constexpr (address_type == Noc::AddressType::LOCAL_L1) {
+            uint64_t noc_addr = src.get_noc_unicast_addr(args.noc_x, args.noc_y, args.addr, noc.get_noc_id());
+            ASSERT(noc.is_local_addr(noc_addr));
+            return static_cast<uint32_t>(noc_addr);
+        } else {
+            uint64_t noc_addr = src.get_noc_unicast_addr(args.noc_x, args.noc_y, args.addr, noc.get_noc_id());
+            return noc_addr;
+        }
     }
     template <Noc::AddressType address_type>
     static auto dst_addr(const UnicastEndpoint& dst, const Noc& noc, const dst_args_type& args) {
-        static_assert(address_type == Noc::AddressType::NOC);
-        uint64_t noc_addr = dst.get_noc_unicast_addr(args.noc_x, args.noc_y, args.addr, noc.get_noc_id());
-        return noc_addr;
+        if constexpr (address_type == Noc::AddressType::LOCAL_L1) {
+            uint64_t noc_addr = dst.get_noc_unicast_addr(args.noc_x, args.noc_y, args.addr, noc.get_noc_id());
+            ASSERT(noc.is_local_addr(noc_addr));
+            return static_cast<uint32_t>(noc_addr);
+        } else {
+            uint64_t noc_addr = dst.get_noc_unicast_addr(args.noc_x, args.noc_y, args.addr, noc.get_noc_id());
+            return noc_addr;
+        }
     }
 };
 
