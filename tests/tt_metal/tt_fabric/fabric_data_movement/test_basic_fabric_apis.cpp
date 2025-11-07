@@ -441,6 +441,20 @@ TEST_F(Fabric2DFixture, Test2DMCastConnAPI_1N1E1W) { RunTest2DMCastConnAPI(this,
 
 TEST_F(Fabric2DFixture, Test2DMCastConnAPI_7N3E) { RunTest2DMCastConnAPI(this, 7, 0, 3, 0); }
 
+// Fabric Tensix Config UDM Mode Tests
+TEST_F(Fabric2DTensixUdmFixture, TestTensixUDMFabricUnicastWriteEast) {
+    FabricUnicastCommon(this, NOC_UNICAST_WRITE, {std::make_tuple(RoutingDirection::E, 1)}, FabricApiType::Mesh);
+}
+TEST_F(Fabric2DTensixUdmFixture, TestTensixUDMFabricUnicastWriteWest) {
+    FabricUnicastCommon(this, NOC_UNICAST_WRITE, {std::make_tuple(RoutingDirection::W, 1)}, FabricApiType::Mesh);
+}
+TEST_F(Fabric2DTensixUdmFixture, TestTensixUDMFabricUnicastWriteNorth) {
+    FabricUnicastCommon(this, NOC_UNICAST_WRITE, {std::make_tuple(RoutingDirection::N, 1)}, FabricApiType::Mesh);
+}
+TEST_F(Fabric2DTensixUdmFixture, TestTensixUDMFabricUnicastWriteSouth) {
+    FabricUnicastCommon(this, NOC_UNICAST_WRITE, {std::make_tuple(RoutingDirection::S, 1)}, FabricApiType::Mesh);
+}
+
 TEST_F(NightlyFabric2DFixture, Test2DMCast) {
     auto valid_combinations = GenerateAllValidCombinations(this);
     for (const auto& [north, south, east, west] : valid_combinations) {
