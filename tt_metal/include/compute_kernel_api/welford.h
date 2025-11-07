@@ -58,13 +58,14 @@ ALWI void welford_tile(
     MATH((llk_math_welfords_sfpu_calculate_welfords_tile_<reciprocal_size>(input_dst_idx, start_idx, reciprocal_lut)));
 }
 
-/* ----------------------------------------------------------------------------
- *  The below function is a flavor of *welford_tile* to use with row_offset argument. Refer to the
- *  docstring of *welford_tile* for more details.
- *  @param row_offset The offset of the row to start from. Only rows starting from this offset are
- *                    processed in the tile. Should be 0 <= row_offset <= 31. row_offset should be a
- *                    multiple of 4. *num_rows* should be a multiple of 4.
- * -----------------------------------------------------------------------------
+/* -------------------------------------------------------------------------------------------------
+ *  The below function is a flavor of *welford_tile* that processes a subset of rows in the tile.
+ *  Refer to the docstring of *welford_tile* for more details.
+ *  @param start_row The offset of the row to start from. Only rows starting from this offset are
+ *                    processed in the tile. Should be 0 <= start_row <= 31.
+ *  @param num_rows The number of rows to process. Should be 0 <= num_rows <= 32. Also,
+ *                  0 <= start_row + num_rows <= 32.
+ * -------------------------------------------------------------------------------------------------
  */
 template <uint32_t reciprocal_size>
 ALWI void welford_partial_tile(

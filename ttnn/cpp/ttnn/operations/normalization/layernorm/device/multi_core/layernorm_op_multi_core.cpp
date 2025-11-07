@@ -444,17 +444,6 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     CircularBufferConfig cb_in3_config =
         CircularBufferConfig(in3_t * bfloat16_tile_size, {{tt::CBIndex::c_3, tt::DataFormat::Float16_b}})
             .set_page_size(tt::CBIndex::c_3, bfloat16_tile_size);
-    if (large_tensor_needed && use_welford_and_not_rms_norm) {
-        // The two ping-pong buffers for Welford's mean/var
-        CircularBufferConfig cb_welford_ping_config =
-            CircularBufferConfig(im4_t * single_tile_size, {{tt::CBIndex::c_4, cb_data_format}})
-                .set_page_size(tt::CBIndex::c_4, single_tile_size);
-        CreateCircularBuffer(program, all_cores, cb_welford_ping_config);
-        CircularBufferConfig cb_welford_pong_config =
-            CircularBufferConfig(im4_t * single_tile_size, {{tt::CBIndex::c_7, cb_data_format}})
-                .set_page_size(tt::CBIndex::c_7, single_tile_size);
-        CreateCircularBuffer(program, all_cores, cb_welford_pong_config);
-    }
     CreateCircularBuffer(program, all_cores, cb_in3_config);
     CircularBufferConfig cb_intermed2_config =
         CircularBufferConfig(im2_t * single_tile_size, {{tt::CBIndex::c_19, cb_data_format}})
