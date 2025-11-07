@@ -236,6 +236,18 @@ def test_log(device, h, w):
     run_unary_test(device, h, w, ttnn.log)
 
 
+def test_log_edge_cases(device):
+    in_data = torch.tensor(
+        [-10.0, 0.0, -float("inf"), +float("inf"), +float("nan"), -float("nan")], dtype=torch.float32
+    )
+    input_tensor = ttnn.from_torch(in_data, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.log(input_tensor)
+    golden_function = ttnn.get_golden_function(ttnn.log)
+    golden_tensor = golden_function(in_data, device=device)
+    assert torch.allclose(ttnn.to_torch(output_tensor), golden_tensor, equal_nan=True)
+
+
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -249,8 +261,8 @@ def test_log(device, h, w):
     [
         # for negative input values torch output is nan
         # for ttnn bfloat8_b due to shared exponent inf/nan values will result in incorrect results due to flushing
-        # Hence ignoring the negative input for bfloat8_b
         (ttnn.log, torch.bfloat16, ttnn.bfloat8_b, 1, 100),
+        # Hence ignoring the negative input for bfloat8_b
         (ttnn.log2, torch.bfloat16, ttnn.bfloat8_b, 1, 100),
         (ttnn.log10, torch.bfloat16, ttnn.bfloat8_b, 1, 100),
         # for ttnn bfloat16 nan is packed as inf (doesn't match with torch behavior).
