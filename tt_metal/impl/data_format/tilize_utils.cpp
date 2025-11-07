@@ -21,22 +21,6 @@ std::ostream& operator<<(std::ostream& os, TensorLayoutType layout) {
     return os;
 }
 
-TensAddr::TensAddr(const std::vector<std::uint32_t>& shape) : sh(shape) {}
-
-std::uint32_t TensAddr::numel() const {
-    std::uint32_t prod = 1;
-    for (int j = 0; j < sh.size(); j++) {
-        prod *= sh[j];
-    }
-    return prod;
-}
-
-int TensAddr::offs(int n, int c, int h, int w) {
-    TT_ASSERT(
-        std::uint32_t(n) < sh[0] && std::uint32_t(c) < sh[1] && std::uint32_t(h) < sh[2] && std::uint32_t(w) < sh[3]);
-    return w + (sh[3] * h) + (sh[2] * sh[3] * c) + (sh[1] * sh[2] * sh[3] * n);
-}
-
 std::uint32_t round_up_to_mul16(std::uint32_t val) { return ((val & 15) == 0) ? val : (val | 15) + 1; }
 
 std::uint32_t round_up_to_mul32(std::uint32_t val) { return ((val & 31) == 0) ? val : (val | 31) + 1; }
