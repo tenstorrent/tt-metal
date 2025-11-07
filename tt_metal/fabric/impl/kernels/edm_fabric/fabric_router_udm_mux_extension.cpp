@@ -285,10 +285,12 @@ void kernel_main() {
         }
     }
 
+    // wait for relay close connection
+
     // Signal relay to terminate (mux and relay are on the same core, so just write to L1 directly)
     volatile auto relay_termination_signal_ptr =
         reinterpret_cast<volatile tt::tt_fabric::TerminationSignal*>(relay_termination_signal_address);
-    *relay_termination_signal_ptr = tt::tt_fabric::termination_interface::immediate_terminate_value;
+    *relay_termination_signal_ptr = tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE;
 
     fabric_connection.close();
     noc_async_write_barrier();
