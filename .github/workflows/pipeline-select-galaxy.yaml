@@ -4,10 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       trigger_type:
-        description: >
-          Select trigger type: 'manual' allows full control of test selection below,
-          while other options (model-pr, op-pr, nightly, hw-self-test) use predefined test configurations.
-          ⚠️ Note: This workflow can consume significant resources - please select options carefully.
+        description: "'manual' = custom selection below; other options = predefined configs. ⚠️ Resource intensive!"
         required: true
         type: choice
         options:
