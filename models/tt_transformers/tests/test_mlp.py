@@ -43,7 +43,7 @@ from models.tt_transformers.tt.prefetcher import Prefetcher
 def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds, ensure_gc, use_prefetcher):
     dtype = ttnn.bfloat8_b
     mode = "decode" if seq_len <= 32 else "prefill"
-
+    breakpoint()
     prefetcher = (
         Prefetcher(mesh_device, num_tensors=3, num_layers=1, num_receiver_cores=2, mode=mode)
         if use_prefetcher
