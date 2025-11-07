@@ -4,14 +4,7 @@
 import ttnn
 
 from .config import AttentionConfig, ProgramConfig
-from .operations import (
-    apply_allreduce,
-    apply_output_projection,
-    apply_qkv_projection,
-    apply_rope,
-    concat_heads,
-    split_qkv_heads_decode,
-)
+from .operations import apply_allreduce, apply_rope
 from .weights import AttentionWeights
 
 
@@ -60,22 +53,28 @@ def decode_forward(
         raise ValueError(f"Decode mode requires seq_len=1, got {seq_len}")
 
     # QKV projection
-    xqkv_fused = apply_qkv_projection(hidden_states, weights)
+    xqkv_fused = ttnn.matmul(
+        hidden_states, weights.wqkv, dtype=ttnn.bfloat16, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+    )
+    xqkv_fused = ttnn.add(xqkv_fused, weights.wqkv_bias, output_tensor=xqkv_fused)
 
     # Split into Q, K, V heads
     num_local_heads = mesh_config.shard_size(config.num_heads)
     num_local_kv_heads = mesh_config.shard_size(config.num_kv_heads)
+    head_dim = config.head_dim
 
-    tt_q, tt_k, tt_v = split_qkv_heads_decode(xqkv_fused, num_local_heads, num_local_kv_heads)
+    tt_q, tt_k, tt_v = ttnn.experimental.nlp_create_qkv_heads_decode(
+        xqkv_fused,
+        num_heads=num_local_heads,
+        num_kv_heads=num_local_kv_heads,
+        memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+    )
+
     xqkv_fused.deallocate(True)
 
     # Apply RoPE
     tt_q = apply_rope(tt_q, rope_mats, transformation_mat, is_decode_mode=True)
     tt_k = apply_rope(tt_k, rope_mats, transformation_mat, is_decode_mode=True)
-
-    # Convert to DRAM for KV cache update
-    tt_q = ttnn.to_memory_config(tt_q, ttnn.DRAM_MEMORY_CONFIG)
-    tt_k = ttnn.to_memory_config(tt_k, ttnn.DRAM_MEMORY_CONFIG)
 
     # Update KV cache
     k_cache, v_cache = kv_cache
@@ -97,7 +96,20 @@ def decode_forward(
 
     tt_k.deallocate(True)
     tt_v.deallocate(True)
+    grid_size = mesh_device.compute_with_storage_grid_size()
+    batch_grid = ttnn.num_cores_to_corerangeset(batch_size, grid_size, row_wise=True)
 
+    # Calculate padded heads (must be tile-aligned, e.g., 32)
+    # Use local heads per device, not global heads
+    padded_heads = ((num_local_heads + 31) // 32) * 32
+
+    height_sharded_mem_config = ttnn.create_sharded_memory_config(
+        shape=(padded_heads, head_dim),  # Shape per shard (tile-aligned)
+        core_grid=batch_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
     # Scaled dot-product attention
     if page_table is not None:
         tt_sdpa_tensor = ttnn.transformer.paged_scaled_dot_product_attention_decode(
@@ -111,7 +123,7 @@ def decode_forward(
             scale=config.scaling,
             program_config=program_config.get_decode_sdpa_config(mesh_device),
             compute_kernel_config=program_config.get_compute_kernel_config(),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=height_sharded_mem_config,
         )
     else:
         tt_sdpa_tensor = ttnn.transformer.scaled_dot_product_attention_decode(
@@ -124,16 +136,26 @@ def decode_forward(
             scale=config.scaling,
             program_config=program_config.get_decode_sdpa_config(mesh_device),
             compute_kernel_config=program_config.get_compute_kernel_config(),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=height_sharded_mem_config,
         )
     tt_q.deallocate(True)
 
     # Concat heads and apply output projection
-    tt_sdpa_out = concat_heads(tt_sdpa_tensor, is_decode_mode=True)
+
+    tt_sdpa_out = ttnn.experimental.nlp_concat_heads_decode(tt_sdpa_tensor, num_heads=num_local_heads)
     tt_sdpa_tensor.deallocate(True)
 
-    tt_out = apply_output_projection(tt_sdpa_out, weights, activation_dtype)
-    tt_out = ttnn.reshape(tt_out, (batch_size, seq_len, hidden_size))
+    tt_out = ttnn.linear(
+        tt_sdpa_out, weights.o_proj, dtype=ttnn.bfloat16, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+    )
+    tt_sdpa_out.deallocate(True)
+    tt_out = ttnn.add(tt_out, weights.o_proj_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
+    tt_out = ttnn.typecast(tt_out, ttnn.bfloat8_b)
+    tt_out = ttnn.reshape(
+        tt_out,
+        (batch_size, seq_len, hidden_size),
+        (batch_size, 32, hidden_size),
+    )
 
     # Tensor parallel allreduce
     tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, batch_size, seq_len, hidden_size)
