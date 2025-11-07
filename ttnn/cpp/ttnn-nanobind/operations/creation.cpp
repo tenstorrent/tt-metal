@@ -222,6 +222,23 @@ void bind_full_operation_with_hard_coded_value(
             nb::arg("dtype") = nb::none(),
             nb::arg("layout") = nb::none(),
             nb::arg("device") = nb::none(),
+            nb::arg("memory_config") = nb::none()},
+        // Accept MeshDevice* directly (Python MeshDevice maps to pointer; None maps to nullptr)
+        ttnn::nanobind_overload_t{
+            [](const creation_operation_t& self,
+               const std::vector<uint32_t>& shape,
+               const std::optional<DataType>& dtype,
+               const std::optional<Layout>& layout,
+               MeshDevice* device,
+               const std::optional<MemoryConfig>& memory_config) -> ttnn::Tensor {
+                std::optional<std::reference_wrapper<MeshDevice>> device_ref =
+                    device ? std::optional<std::reference_wrapper<MeshDevice>>(std::ref(*device)) : std::nullopt;
+                return self(ttnn::Shape{shape}, dtype, layout, device_ref, memory_config);
+            },
+            nb::arg("shape"),
+            nb::arg("dtype") = nb::none(),
+            nb::arg("layout") = nb::none(),
+            nb::arg("device") = nb::none(),
             nb::arg("memory_config") = nb::none()});
 }
 
