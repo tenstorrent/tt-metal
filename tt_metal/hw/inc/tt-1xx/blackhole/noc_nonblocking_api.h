@@ -81,11 +81,17 @@ template <uint8_t proc_t, NocBarrierType barrier_type>
 inline __attribute__((always_inline)) uint32_t get_noc_counter_address(uint32_t noc) {
     static_assert(proc_t < MaxDMProcessorsPerCoreType);
     static_assert(static_cast<std::underlying_type_t<NocBarrierType>>(barrier_type) < NUM_BARRIER_TYPES);
+#if defined(COMPILE_FOR_AERISC)
+    constexpr uint32_t base = MEM_AERISC_NOC_COUNTER_BASE;
+    constexpr uint32_t size = MEM_AERISC_NOC_COUNTER_SIZE;
+#else
+    constexpr uint32_t base = MEM_NOC_COUNTER_BASE;
+    constexpr uint32_t size = MEM_NOC_COUNTER_SIZE;
+#endif
     constexpr uint32_t offset =
-        MEM_NOC_COUNTER_BASE +
-        (proc_t * NUM_BARRIER_TYPES + static_cast<std::underlying_type_t<NocBarrierType>>(barrier_type)) * NUM_NOCS *
-            MEM_NOC_COUNTER_SIZE;
-    return offset + noc * MEM_NOC_COUNTER_SIZE;
+        base + (proc_t * NUM_BARRIER_TYPES + static_cast<std::underlying_type_t<NocBarrierType>>(barrier_type)) *
+                   NUM_NOCS * size;
+    return offset + noc * size;
 }
 
 // noc_nonposted_writes_acked
