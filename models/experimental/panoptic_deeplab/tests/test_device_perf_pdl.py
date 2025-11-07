@@ -4,23 +4,22 @@
 
 import pytest
 from models.perf.device_perf_utils import run_model_device_perf_test
-from models.experimental.panoptic_deeplab.reference.pytorch_model import DEEPLAB_V3_PLUS
+from models.experimental.panoptic_deeplab.reference.pytorch_model import DEEPLAB_V3_PLUS, PANOPTIC_DEEPLAB
 
 
 @pytest.mark.parametrize(
     "command, expected_device_perf_ns_per_iteration, subdir, model_name, num_iterations, batch_size, margin, comments",
     [
-        # Skip panotpic test, currently broken
-        # (
-        #     "pytest models/experimental/panoptic_deeplab/tests/pcc/test_tt_model.py::test_model_panoptic_deeplab -k test_panoptic_deeplab",
-        #     51_749_520,
-        #     PANOPTIC_DEEPLAB,
-        #     PANOPTIC_DEEPLAB,
-        #     1,
-        #     1,
-        #     0.015,
-        #     "",
-        # ),
+        (
+            "pytest models/experimental/panoptic_deeplab/tests/pcc/test_tt_model.py::test_model_panoptic_deeplab -k test_panoptic_deeplab",
+            51_749_520,
+            PANOPTIC_DEEPLAB,
+            PANOPTIC_DEEPLAB,
+            1,
+            1,
+            0.015,
+            "",
+        ),
         (
             "pytest models/experimental/panoptic_deeplab/tests/pcc/test_tt_model.py::test_model_panoptic_deeplab -k test_deeplab_v3_plus",
             23_648_515,
@@ -32,12 +31,14 @@ from models.experimental.panoptic_deeplab.reference.pytorch_model import DEEPLAB
             "",
         ),
     ],
-    ids=["test_deeplab_v3_plus"],
+    ids=["test_panoptic_deeplab", "test_deeplab_v3_plus"],
 )
 @pytest.mark.models_device_performance_bare_metal
 def test_device_perf_pdl(
     command, expected_device_perf_ns_per_iteration, subdir, model_name, num_iterations, batch_size, margin, comments
 ):
+    if model_name == PANOPTIC_DEEPLAB:
+        pytest.skip("PANOPTIC_DEEPLAB is currently not supported")
     run_model_device_perf_test(
         command=command,
         expected_device_perf_ns_per_iteration=expected_device_perf_ns_per_iteration,

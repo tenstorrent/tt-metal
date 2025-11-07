@@ -8,6 +8,7 @@ from loguru import logger
 
 from models.tt_cnn.tt.builder import TtConv2d
 from models.common.lightweightmodule import LightweightModule
+from models.experimental.panoptic_deeplab.tt.common import reshape_flattened_conv_output
 
 
 class TtASPP(LightweightModule):
@@ -132,18 +133,7 @@ class TtASPP(LightweightModule):
 
                 # Reshape logic for aspp.convs.0 that now outputs flattened format [1,1,NHW,C] -> [N,H,W,C]
                 if i == 0:
-                    if branch_out.shape[1] == 1 and branch_out.shape[2] > 1:
-                        # Flattened format: [1, 1, NHW, C] -> [1, H, W, C]
-                        NHW = branch_out.shape[2]
-                        C_out = branch_out.shape[3]  # Use different variable name to avoid overwriting C
-                        # W = 2*H, so NHW = N*H*W = 1*H*2*H = 2*H^2, therefore H = sqrt(NHW/2)
-                        H_out = int((NHW // 2) ** 0.5)
-                        W_out = 2 * H_out
-                        if H_out * W_out == NHW:
-                            branch_out = ttnn.reshape(branch_out, (N, H_out, W_out, C_out))
-                            logger.debug(
-                                f"aspp.convs.0 reshaped output from [1, 1, {NHW}, {C_out}] to [{N}, {H_out}, {W_out}, {C_out}]"
-                            )
+                    branch_out = reshape_flattened_conv_output(branch_out, batch_size=N, layer_name="aspp.convs.0")
                 elif branch_out.shape[1] == 1 and branch_out.shape[2] == H * W:
                     branch_out = ttnn.reshape(branch_out, (N, H, W, branch_out.shape[3]))
 
@@ -184,18 +174,7 @@ class TtASPP(LightweightModule):
         logger.info(f"🔷 Executing conv: aspp.convs.4")
         pooled = self.pool_conv(pooled)
         # Reshape logic for aspp.convs.4 that now outputs flattened format [1,1,NHW,C] -> [N,H,W,C]
-        if pooled.shape[1] == 1 and pooled.shape[2] > 1:
-            # Flattened format: [1, 1, NHW, C] -> [1, H, W, C]
-            NHW = pooled.shape[2]
-            C_pooled = pooled.shape[3]  # Use different variable name to avoid overwriting C
-            # W = 2*H, so NHW = N*H*W = 1*H*2*H = 2*H^2, therefore H = sqrt(NHW/2)
-            H_out = int((NHW // 2) ** 0.5)
-            W_out = 2 * H_out
-            if H_out * W_out == NHW:
-                pooled = ttnn.reshape(pooled, (N, H_out, W_out, C_pooled))
-                logger.debug(
-                    f"aspp.convs.4 reshaped output from [1, 1, {NHW}, {C_pooled}] to [{N}, {H_out}, {W_out}, {C_pooled}]"
-                )
+        pooled = reshape_flattened_conv_output(pooled, batch_size=N, layer_name="aspp.convs.4")
 
         # Upsample pooled branch to match input spatial dimensions
         current_h, current_w = pooled.shape[1], pooled.shape[2]
@@ -234,18 +213,7 @@ class TtASPP(LightweightModule):
         logger.info(f"🔷 Executing conv: aspp.project")
         res = self.project_conv(res)
         # Reshape logic for aspp.project that now outputs flattened format [1,1,NHW,C] -> [N,H,W,C]
-        if res.shape[1] == 1 and res.shape[2] > 1:
-            # Flattened format: [1, 1, NHW, C] -> [1, H, W, C]
-            NHW = res.shape[2]
-            C_project = res.shape[3]  # Use different variable name to avoid overwriting C
-            # W = 2*H, so NHW = N*H*W = 1*H*2*H = 2*H^2, therefore H = sqrt(NHW/2)
-            H_out = int((NHW // 2) ** 0.5)
-            W_out = 2 * H_out
-            if H_out * W_out == NHW:
-                res = ttnn.reshape(res, (N, H_out, W_out, C_project))
-                logger.debug(
-                    f"aspp.project reshaped output from [1, 1, {NHW}, {C_project}] to [{N}, {H_out}, {W_out}, {C_project}]"
-                )
+        res = reshape_flattened_conv_output(res, batch_size=N, layer_name="aspp.project")
         logger.debug(f"TtASPP forward pass complete - output shape: {res.shape}")
 
         return res

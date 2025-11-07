@@ -8,6 +8,7 @@ from loguru import logger
 from models.experimental.panoptic_deeplab.tt.tt_stem import TtStem
 from models.experimental.panoptic_deeplab.tt.tt_bottleneck import TtBottleneck
 from models.common.lightweightmodule import LightweightModule
+from models.experimental.panoptic_deeplab.tt.common import reshape_flattened_conv_output
 
 
 class TtResNet(LightweightModule):
@@ -158,14 +159,7 @@ class TtResNet(LightweightModule):
                     x = ttnn.reshape(x, (1, expected_h, expected_w, x.shape[3]))
                 elif layer_name in ["res2", "res3"]:
                     # For res2 and res3, handle flattened format [1,1,NHW,C] where W=2*H
-                    NHW = x.shape[2]
-                    C = x.shape[3]
-                    # W = 2*H, so NHW = N*H*W = 1*H*2*H = 2*H^2, therefore H = sqrt(NHW/2)
-                    H = int((NHW // 2) ** 0.5)
-                    W = 2 * H
-                    if H * W == NHW:
-                        logger.debug(f"{layer_name}: Reshaping from {x.shape} to [1, {H}, {W}, {C}]")
-                        x = ttnn.reshape(x, (1, H, W, C))
+                    x = reshape_flattened_conv_output(x, batch_size=1, layer_name=layer_name)
 
             # Clone the output to store independently (backbone outputs are shared between heads)
             # This prevents deallocation in subsequent stages from affecting stored outputs

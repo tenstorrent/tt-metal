@@ -10,6 +10,7 @@ from models.experimental.panoptic_deeplab.tt.tt_upsample import BilinearUpsample
 from models.tt_cnn.tt.builder import TtConv2d
 from models.experimental.panoptic_deeplab.reference.pytorch_semseg import ShapeSpec
 from models.common.lightweightmodule import LightweightModule
+from models.experimental.panoptic_deeplab.tt.common import reshape_flattened_conv_output
 
 
 class TtDeepLabV3PlusHead(LightweightModule):
@@ -186,17 +187,7 @@ class TtDeepLabV3PlusHead(LightweightModule):
         y = stage["project_conv"](x)
         # Reshape logic for decoder.res5.project_conv (ASPP) - ASPP already handles its own reshape internally
         # But add safety check in case it's flattened
-        if y.shape[1] == 1 and y.shape[2] > 1:
-            NHW = y.shape[2]
-            C = y.shape[3]
-            # W = 2*H, so NHW = N*H*W = 1*H*2*H = 2*H^2, therefore H = sqrt(NHW/2)
-            H_out = int((NHW // 2) ** 0.5)
-            W_out = 2 * H_out
-            if H_out * W_out == NHW:
-                y = ttnn.reshape(y, (1, H_out, W_out, C))
-                logger.debug(
-                    f"decoder.{aspp_feature_key}.project_conv reshaped output from [1, 1, {NHW}, {C}] to [1, {H_out}, {W_out}, {C}]"
-                )
+        y = reshape_flattened_conv_output(y, batch_size=1, layer_name=f"decoder.{aspp_feature_key}.project_conv")
         y = ttnn.to_memory_config(y, ttnn.DRAM_MEMORY_CONFIG)
         logger.debug(f"TtDeepLabV3PlusHead ASPP stage complete, output shape: {y.shape}")
 
@@ -209,18 +200,7 @@ class TtDeepLabV3PlusHead(LightweightModule):
             logger.info(f"🔷 Executing conv: decoder.{f_key}.project_conv")
             proj_x = stage["project_conv"](x)
             # Reshape logic for decoder.{res2,res3,res4}.project_conv that now outputs flattened format [1,1,NHW,C] -> [N,H,W,C]
-            if proj_x.shape[1] == 1 and proj_x.shape[2] > 1:
-                # Flattened format: [1, 1, NHW, C] -> [1, H, W, C]
-                NHW = proj_x.shape[2]
-                C = proj_x.shape[3]
-                # W = 2*H, so NHW = N*H*W = 1*H*2*H = 2*H^2, therefore H = sqrt(NHW/2)
-                H_out = int((NHW // 2) ** 0.5)
-                W_out = 2 * H_out
-                if H_out * W_out == NHW:
-                    proj_x = ttnn.reshape(proj_x, (1, H_out, W_out, C))
-                    logger.debug(
-                        f"decoder.{f_key}.project_conv reshaped output from [1, 1, {NHW}, {C}] to [1, {H_out}, {W_out}, {C}]"
-                    )
+            proj_x = reshape_flattened_conv_output(proj_x, batch_size=1, layer_name=f"decoder.{f_key}.project_conv")
             proj_x = ttnn.to_memory_config(proj_x, ttnn.DRAM_MEMORY_CONFIG)
             logger.debug(f"TtDeepLabV3PlusHead fusion stage {i+1} projection complete, shape: {proj_x.shape}")
 
