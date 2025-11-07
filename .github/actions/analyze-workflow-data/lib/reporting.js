@@ -395,8 +395,8 @@ async function buildAlertMessage(filteredGrouped, failedWorkflows, alertAll, err
             ownerSet.set(k, o);
           }
         }
-        // Capture original pipeline owners when infra override occurred
-        if (sn.owner_source && String(sn.owner_source).startsWith('infra_due_to_missing_test') && Array.isArray(sn.original_owners)) {
+        // Always include original pipeline owners if they exist (even when infra is assigned)
+        if (Array.isArray(sn.original_owners)) {
           for (const oo of sn.original_owners) {
             const nm = (oo && (oo.name || oo.id)) || '';
             if (nm) genericExitOrigOwners.set(nm, true);
