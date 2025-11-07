@@ -230,8 +230,6 @@ LayerNormForwardProgramFactory::cached_program_t LayerNormForwardProgramFactory:
     // Compile arguments
     uint32_t block_size = get_block_size(Wt, 2U);  // Need 2 extra registers for layernorm forward
 
-    std::cout << "Block total_rows_to_process: " << total_rows_to_process << std::endl;
-
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_rows_to_process);
 
@@ -245,8 +243,6 @@ LayerNormForwardProgramFactory::cached_program_t LayerNormForwardProgramFactory:
 
     const bool everything_fits_in_l1 =
         fits_in_l1_check(Wt, block_size, bfloat16_single_tile_size_bytes, float32_single_tile_size_bytes, device);
-
-    std::cout << "Everything fits in L1: " << everything_fits_in_l1 << std::endl;
 
     const uint32_t num_input_tiles = (everything_fits_in_l1) ? Wt : twice_block_size;
     const uint32_t num_gamma_tiles = (everything_fits_in_l1) ? Wt : twice_block_size;

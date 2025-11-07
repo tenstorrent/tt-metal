@@ -4,6 +4,7 @@
 
 #include "layernorm_bw.hpp"
 
+#include "autograd/auto_context.hpp"
 #include "core/compute_kernel_config.hpp"
 #include "device/layernorm_bw_device_operation.hpp"
 
@@ -21,21 +22,35 @@ std::vector<std::optional<ttnn::Tensor>> LayerNormBackwardOperation::invoke(
 
     // dL_dgamma and dL_dbeta require sum over batches so we cannot perform this sum in the kernel.
     // Instead we return the components and reduce them here.
+    ttml::autograd::ctx().get_profiler().read_results(
+        &autograd::ctx().get_device(), "dgamma and dbeta reductions started");
+
     return {
         result[0],  // dx - already complete
-        ttnn::sum(
-            result[1],  // dgamma_components
-            /* dim_arg */ ttnn::SmallVector<int>{0, 1, 2},
-            /* keep_dim */ true,
-            /* output_mem_config */ std::nullopt,
-            /*compute_kernel_config */ core::ComputeKernelConfig::precise()),  // [B,H,S,C] -> [1,1,1,C]
-        ttnn::sum(
-            result[2],  // dbeta_components
-            /* dim_arg */ ttnn::SmallVector<int>{0, 1, 2},
-            /* keep_dim */ true,
-            /* output_mem_config */ std::nullopt,
-            /*compute_kernel_config */ core::ComputeKernelConfig::precise())  // [B,H,S,C] -> [1,1,1,C]
-    };
+        ttnn::reshape(
+            ttnn::sum(
+                ttnn::reshape(
+                    result[1],
+                    ttnn::Shape(
+                        {result[1].logical_shape()[0] * result[1].logical_shape()[1] * result[1].logical_shape()[2],
+                         result[1].logical_shape()[3]})),  // dgamma_components
+                /* dim_arg */ ttnn::SmallVector<int>{0},
+                /* keep_dim */ true,
+                /* output_mem_config */ std::nullopt,
+                /*compute_kernel_config */ core::ComputeKernelConfig::precise()),
+            ttnn::Shape({1, 1, 1, result[1].logical_shape()[3]})),
+        ttnn::reshape(
+            ttnn::sum(
+                ttnn::reshape(
+                    result[2],
+                    ttnn::Shape(
+                        {result[2].logical_shape()[0] * result[2].logical_shape()[1] * result[2].logical_shape()[2],
+                         result[2].logical_shape()[3]})),  // dbeta_components
+                /* dim_arg */ ttnn::SmallVector<int>{0},
+                /* keep_dim */ true,
+                /* output_mem_config */ std::nullopt,
+                /*compute_kernel_config */ core::ComputeKernelConfig::precise()),
+            ttnn::Shape({1, 1, 1, result[2].logical_shape()[3]}))};
 }
 
 }  // namespace ttml::metal::ops::layernorm_bw
