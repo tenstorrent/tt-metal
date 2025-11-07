@@ -222,8 +222,7 @@ void kernel_main() {
                 pkt_hdr_sem_inc,
                 out_ready_sem_noc_addr_in_pkt,
                 direction,
-                true,
-                fuse_op);
+                true);
 
             if constexpr (fuse_op && direction == 1) {
                 // Synchronize and signal that the local tensor slice is available
@@ -260,8 +259,7 @@ void kernel_main() {
                     pkt_hdr_sem_inc,
                     out_ready_sem_noc_addr_in_pkt,
                     direction,
-                    false,
-                    fuse_op);
+                    false);
                 slice_writes++;
             }
             global_tile_index = chunk_start_tile_index;
