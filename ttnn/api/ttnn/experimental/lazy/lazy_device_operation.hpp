@@ -5,14 +5,26 @@
 #pragma once
 
 #include "ttnn/experimental/lazy/lazy_operation.hpp"
-#include "ttnn/experimental/lazy/lazy_utils.hpp"
 #include "ttnn/device_operation.hpp"
 #include <tt_stl/reflection.hpp>
 #include <vector>
 #include <memory>
-#include <utility>
 
 namespace ttnn::experimental::lazy {
+
+template <typename operation_t>
+class LazyDeviceOperationInputs : public LazyOperationInputs {
+public:
+    using tensor_args_t = typename operation_t::tensor_args_t;
+    LazyDeviceOperationInputs(const tensor_args_t& tensor_args) : tensor_args_(tensor_args) {}
+    void for_each(const std::function<void(const std::shared_ptr<LazyTensor>&)>& fn) const override {
+        tt::stl::reflection::visit_object_of_type<Tensor>([&](const Tensor& t) { fn(t.lazy()); }, tensor_args_);
+    }
+    std::any inputs() const override { return tensor_args_; }
+
+private:
+    tensor_args_t tensor_args_;
+};
 
 // Generic wrapper that adapts any device operation to LazyOperation
 template <typename operation_t>
@@ -25,19 +37,7 @@ public:
 
     LazyDeviceOperation(operation_attributes_t attributes, const tensor_args_t& tensor_args, const std::string& name) :
         attributes_(attributes),  // Copy first to use in compute_and_convert_specs
-        tensor_args_meta_(collect_tensor_args_meta(tensor_args)),
         cached_output_specs_(compute_and_convert_specs(attributes, tensor_args)),
-        name_(name) {}
-
-    // Constructor for creating operations with explicit metadata (useful for graph transformations)
-    LazyDeviceOperation(
-        operation_attributes_t attributes,
-        TensorArgsMetadata tensor_args_meta,
-        const std::vector<ttnn::TensorSpec>& output_specs,
-        const std::string& name) :
-        attributes_(std::move(attributes)),
-        tensor_args_meta_(std::move(tensor_args_meta)),
-        cached_output_specs_(output_specs),
         name_(name) {}
 
     static std::vector<ttnn::TensorSpec> compute_and_convert_specs(
@@ -57,22 +57,18 @@ public:
 
     std::string_view name() const override { return std::string_view(name_.c_str()); }
 
-    std::vector<tt::tt_metal::metal_tensor::Tensor> invoke(
-        const std::vector<tt::tt_metal::metal_tensor::Tensor>& input_tensors) override {
+    std::vector<tt::tt_metal::metal_tensor::Tensor> invoke(const LazyOperationInputs& inputs) override {
         // Reconstruct tensor_args from input tensors using stored metadata
-        TensorReconstructionContext ctx(input_tensors, tensor_args_meta_);
-        tensor_args_t reconstructed_tensor_args = reconstruct_tensor_args_impl<tensor_args_t>(ctx);
+        auto tensor_args = std::any_cast<tensor_args_t>(inputs.inputs());
 
         // Use the standard device operation eager execution path
-        auto result = ttnn::device_operation::detail::invoke<operation_t>(attributes_, reconstructed_tensor_args);
+        auto result = ttnn::device_operation::detail::invoke<operation_t>(attributes_, tensor_args);
 
         // Convert result to vector
         return convert_result_to_vector(result);
     }
 
     const operation_attributes_t& attributes() const { return attributes_; }
-
-    const TensorArgsMetadata& tensor_args_metadata() const { return tensor_args_meta_; }
 
     tt::stl::hash::hash_t operation_type_id() const override { return tt::stl::hash::type_hash<operation_t>; }
 
@@ -89,8 +85,6 @@ public:
 
 private:
     operation_attributes_t attributes_;
-    // TODO: In case tensor structure actually changes, graph updates might be quite complex.
-    TensorArgsMetadata tensor_args_meta_;
     std::vector<ttnn::TensorSpec> cached_output_specs_;
     std::string name_;
 
@@ -139,4 +133,9 @@ std::shared_ptr<LazyDeviceOperation<operation_t>> make_lazy_device_operation(
     return std::make_shared<LazyDeviceOperation<operation_t>>(attributes, tensor_args, name);
 }
 
+template <typename operation_t>
+std::shared_ptr<LazyOperationInputs> make_lazy_device_operation_inputs(
+    const typename operation_t::tensor_args_t& tensor_args) {
+    return std::make_shared<LazyDeviceOperationInputs<operation_t>>(tensor_args);
+}
 }  // namespace ttnn::experimental::lazy

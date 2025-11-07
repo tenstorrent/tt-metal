@@ -199,11 +199,11 @@ public:
     std::shared_ptr<TensorAttributes> tensor_attributes() const;
 
     static Tensor make_lazy_tensor(
-        const std::vector<Tensor>& op_inputs,
+        const std::shared_ptr<ttnn::experimental::lazy::LazyOperationInputs>& op_inputs,
         const std::shared_ptr<ttnn::experimental::lazy::LazyOperation>& op,
         TensorSpec tensor_spec);
     static std::vector<Tensor> make_lazy_tensors(
-        const std::vector<Tensor>& op_inputs,
+        const std::shared_ptr<ttnn::experimental::lazy::LazyOperationInputs>& op_inputs,
         const std::shared_ptr<ttnn::experimental::lazy::LazyOperation>& op,
         const std::vector<TensorSpec>& tensor_specs);
 
