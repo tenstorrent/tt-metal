@@ -224,7 +224,10 @@ Notes:
         (p.api_variant == AddrgenApiVariant::FusedAtomicIncWrite ||
          p.api_variant == AddrgenApiVariant::FusedAtomicIncWriteWithState ||
          p.api_variant == AddrgenApiVariant::FusedAtomicIncWriteSetState);
-    const bool is_scatter = (p.api_variant == AddrgenApiVariant::ScatterWrite);
+    const bool is_scatter =
+        (p.api_variant == AddrgenApiVariant::ScatterWrite ||
+         p.api_variant == AddrgenApiVariant::ScatterWriteWithState ||
+         p.api_variant == AddrgenApiVariant::ScatterWriteSetState);
 
     std::string KDIR;
     if (is_fused_atomic_inc) {
@@ -242,6 +245,8 @@ Notes:
             case AddrgenApiVariant::UnicastWriteWithState: return KDIR + "unicast_tx_writer_with_state_addrgen.cpp";
             case AddrgenApiVariant::UnicastWriteSetState: return KDIR + "unicast_tx_writer_set_state_addrgen.cpp";
             case AddrgenApiVariant::ScatterWrite: return KDIR + "scatter_tx_writer_addrgen.cpp";
+            case AddrgenApiVariant::ScatterWriteWithState: return KDIR + "scatter_tx_writer_with_state_addrgen.cpp";
+            case AddrgenApiVariant::ScatterWriteSetState: return KDIR + "scatter_tx_writer_set_state_addrgen.cpp";
             case AddrgenApiVariant::FusedAtomicIncWrite: return KDIR + "fused_atomic_inc_tx_writer_addrgen.cpp";
             case AddrgenApiVariant::FusedAtomicIncWriteWithState:
                 return KDIR + "fused_atomic_inc_tx_writer_with_state_addrgen.cpp";

@@ -19,6 +19,8 @@ enum class AddrgenApiVariant {
     UnicastWriteWithState,         // fabric_unicast_noc_unicast_write_with_state
     UnicastWriteSetState,          // fabric_unicast_noc_unicast_write_set_state + _with_state
     ScatterWrite,                  // fabric_unicast_noc_scatter_write
+    ScatterWriteWithState,         // fabric_unicast_noc_scatter_write_with_state
+    ScatterWriteSetState,          // fabric_unicast_noc_scatter_write_set_state + _with_state
     FusedAtomicIncWrite,           // fabric_unicast_noc_fused_unicast_with_atomic_inc
     FusedAtomicIncWriteWithState,  // fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state
     FusedAtomicIncWriteSetState    // fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state + _with_state
