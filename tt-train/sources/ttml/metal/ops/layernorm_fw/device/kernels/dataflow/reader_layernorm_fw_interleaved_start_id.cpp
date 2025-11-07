@@ -40,7 +40,7 @@ inline void read_tiles(
         noc_async_read_tile(start_tile + k, addr_gen, l1_write_addr);
         l1_write_addr += tile_bytes;
     }
-    if constexpr (wait_for_read_barrier) {
+    if (wait_for_read_barrier) {
         noc_async_read_barrier();
     }
 }
