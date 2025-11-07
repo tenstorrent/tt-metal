@@ -11,6 +11,7 @@ on:
         options:
           - ALL SWEEPS (Nightly)
           - ALL SWEEPS (Comprehensive)
+          - ALL SWEEPS (Model Traced)
           - add
           - ccl.generality.all_broadcast
           - ccl.generality.all_gather
@@ -555,6 +556,7 @@ on:
       suite_name:
         description: "Which sweep suite to run?"
         type: string
+        default: "nightly"
       skip_on_timeout:
         description: "Skip remaining tests in running suite after first timeout?"
         type: boolean
@@ -870,13 +872,18 @@ jobs:
             DEVICE_PERF_FLAG="--device-perf"
           fi
 
+          SUITE_NAME="${{ github.event.inputs.suite_name }}"
+          if [[ -z "$SUITE_NAME" ]]; then
+            SUITE_NAME="nightly"
+          fi
+
           python3 tests/sweep_framework/sweeps_runner.py \
           --module-name ${{ github.event.inputs.sweep_name }} \
           --vector-source vectors_export \
           --result-dest results_export \
           --tag ci-main \
           --summary $SKIP_ON_TIMEOUT_FLAG $DEVICE_PERF_FLAG \
-          --suite-name ${{ github.event.inputs.suite_name }} \
+          --suite-name "$SUITE_NAME" \
       - name: Upload sweep results
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
@@ -993,12 +1000,16 @@ jobs:
             # Suite-specific execution doesn't need nightly restriction
             python3 tests/sweep_framework/sweeps_runner.py --module-name "$MODULE_NAME" --suite-name "$SUITE_NAME" --vector-source vectors_export --result-dest results_export --tag ci-main --summary $SKIP_ON_TIMEOUT_FLAG $DEVICE_PERF_FLAG
           else
-            # Regular batch execution
-            if [[ "${{ github.event.schedule }}" == "0 4 * * 3" ]] || [[ "${{ github.event.schedule }}" == "0 5 * * 6" ]] || [[ "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Comprehensive)" ]]; then
-              python3 tests/sweep_framework/sweeps_runner.py --module-name "$BATCH" --vector-source vectors_export --result-dest results_export --tag ci-main --summary $SKIP_ON_TIMEOUT_FLAG $DEVICE_PERF_FLAG
+            # Regular batch execution - determine suite based on sweep type
+            if [[ "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Model Traced)" ]]; then
+              SUITE_FLAG="--suite-name model_traced"
+            elif [[ "${{ github.event.schedule }}" == "0 4 * * 3" ]] || [[ "${{ github.event.schedule }}" == "0 5 * * 6" ]] || [[ "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Comprehensive)" ]]; then
+              SUITE_FLAG=""
             else
-              python3 tests/sweep_framework/sweeps_runner.py --module-name "$BATCH" --vector-source vectors_export --result-dest results_export --tag ci-main --suite-name nightly --summary $SKIP_ON_TIMEOUT_FLAG $DEVICE_PERF_FLAG
+              SUITE_FLAG="--suite-name nightly"
             fi
+
+            python3 tests/sweep_framework/sweeps_runner.py --module-name "$BATCH" --vector-source vectors_export --result-dest results_export --tag ci-main $SUITE_FLAG --summary $SKIP_ON_TIMEOUT_FLAG $DEVICE_PERF_FLAG
           fi
       - name: Compute artifact suffix
         shell: bash
@@ -1049,7 +1060,9 @@ jobs:
         run: |
           # Determine run type based on schedule or input
           RUN_TYPE="nightly"
-          if [[ "${{ github.event.schedule }}" == "0 4 * * 3" ]] || [[ "${{ github.event.schedule }}" == "0 5 * * 6" ]] || [[ "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Comprehensive)" ]]; then
+          if [[ "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Model Traced)" ]]; then
+            RUN_TYPE="model_traced"
+          elif [[ "${{ github.event.schedule }}" == "0 4 * * 3" ]] || [[ "${{ github.event.schedule }}" == "0 5 * * 6" ]] || [[ "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Comprehensive)" ]]; then
             RUN_TYPE="comprehensive"
           fi
           python3 tests/sweep_framework/run_collective_update.py --run-type "$RUN_TYPE"
