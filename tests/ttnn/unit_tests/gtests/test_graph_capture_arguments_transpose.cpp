@@ -13,7 +13,6 @@
 #include "ttnn/graph/graph_trace_utils.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 
-#include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"

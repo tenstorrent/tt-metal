@@ -21,7 +21,7 @@
 #include "common_test_utils.hpp"
 #include "ttnn/async_runtime.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/layout/tensor_layout.hpp"
+
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"

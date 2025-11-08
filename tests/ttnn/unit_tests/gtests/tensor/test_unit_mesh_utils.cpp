@@ -13,7 +13,7 @@
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/memory_config/memory_config.hpp"
+
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <tt-metalium/tensor/unit_mesh/unit_mesh_utils.hpp>
 

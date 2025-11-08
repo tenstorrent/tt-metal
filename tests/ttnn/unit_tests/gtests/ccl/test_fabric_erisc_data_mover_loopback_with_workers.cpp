@@ -50,7 +50,6 @@
 #include "ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 
-#include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor.hpp"
 

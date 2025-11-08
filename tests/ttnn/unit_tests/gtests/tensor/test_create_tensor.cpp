@@ -23,7 +23,6 @@
 #include "ttnn/async_runtime.hpp"
 #include "ttnn/common/queue_id.hpp"
 
-#include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 
 #include "ttnn/tensor/tensor.hpp"

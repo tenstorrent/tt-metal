@@ -76,7 +76,6 @@
 #include <ttnn/operations/reduction/argmax/argmax.hpp>                                                     // NOLINT
 #include <ttnn/operations/reduction/generic/generic_reductions.hpp>                                        // NOLINT
 #include <ttnn/tensor/host_buffer/functions.hpp>                                                           // NOLINT
-#include <ttnn/tensor/memory_config/memory_config.hpp>                                                     // NOLINT
 #include <ttnn/tensor/tensor.hpp>                                                                          // NOLINT
 #include <ttnn/tensor/types.hpp>                                                                           // NOLINT
 #include <ttnn/tensor/xtensor/conversion_utils.hpp>                                                        // NOLINT
