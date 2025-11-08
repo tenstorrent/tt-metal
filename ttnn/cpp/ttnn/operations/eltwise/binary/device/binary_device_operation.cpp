@@ -26,7 +26,8 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
         case BinaryOpType::NE:
             return (
                 (a == DataType::FLOAT32 && b == DataType::FLOAT32) || (a == DataType::INT32 && b == DataType::INT32) ||
-                (a == DataType::UINT32 && b == DataType::UINT32) || (a == DataType::UINT16 && b == DataType::UINT16));
+                (a == DataType::UINT32 && b == DataType::UINT32) || (a == DataType::UINT16 && b == DataType::UINT16) ||
+                (a == DataType::UINT8 && b == DataType::UINT8));
         case BinaryOpType::LOGICAL_AND:
         case BinaryOpType::LOGICAL_OR:
         case BinaryOpType::LOGICAL_XOR:
