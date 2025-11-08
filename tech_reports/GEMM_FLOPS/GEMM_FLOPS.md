@@ -42,7 +42,7 @@ For more details please refer to the tech reports [Matrix Engine](../matrix_engi
 For example, when changing the precision of the matrix, for a given size of matrix the output performance is expected to be different.
 
 
-## MicroBenchmarks
+## Benchmarks
 
 ### Matrix Multiplication TFLOPS on Wormhole/Blackhole (WH/BH)
 
@@ -58,14 +58,6 @@ MATH_FIDELITY is used for higher precision, and TFLOPS are calculated by dividin
 - HiFi2 -> ~2 TFLOPS
 - HiFi3 -> ~1.33 TFLOPS
 - HiFi4 -> ~1 TFLOPS
-
-
-### Utilization Derivation Formula
-```
-Utilization = ideal cycles / actual cycles. tile_width * tile_height) * (cycle_per_tile / num_cores)
-```
-- Cycle_per_tile is the ideal compute cycle for each tile, which depends on math fidelity (LoFi: 16, HiFi2: 32, HiFi3: 48, HiFi4: 64).
-- For utilization of full grid size, num_cores is the maximum number of cores available for compute. Currently the max for Wormhole is 8x8 with Blackhole supporting up to 13x10.
 
 ### Manually Tuned Performance
 Here we show the peak results we can get from manually selected matmul configurations, including packer L1 enablement, math fidelity, input/output sharding, and input/output L1/DRAM selection.
@@ -96,25 +88,19 @@ Note : Performance multipliers are calculated relative to N150 BFLOAT16-HiFi4 as
 
 ### Utilization
 
-#### Utilization plot across all matrix sizes and configurations, based on the chip TFLOPS calculated per each Math Fidelity
 
-### Utilization
+```
+Utilization = ideal cycles / actual cycles. tile_width * tile_height) * (cycle_per_tile / num_cores)
+```
+- Cycle_per_tile is the ideal compute cycle for each tile, which depends on math fidelity (LoFi: 16, HiFi2: 32, HiFi3: 48, HiFi4: 64).
+- For utilization of full grid size, num_cores is the maximum number of cores available for compute. Currently the max for Wormhole is 8x8 with Blackhole supporting up to 13x10.
 
 Device utilization measures how efficiently the hardware's compute cores are being used, calculated as the ratio of ideal compute cycles to actual execution cycles. Higher utilization indicates better use of available hardware resources.
 
+#### Utilization plot across all matrix sizes and configurations, based on the chip TFLOPS calculated per each Math Fidelity
 ![](images/utilization_comparison.png)
 
-**Key observations:**
-
-- **P150 (Blackhole) achieves superior utilization**, reaching up to **~100%** for BFLOAT4_B workloads, while N150 (Wormhole) peaks at **~70%**
-- **Utilization scales with matrix size**: Smaller matrices (<10¹⁵ elements) struggle to saturate cores (10-40% utilization), while larger workloads (>10¹⁷ elements) achieve full saturation (70-100%)
-- **Lower precision datatypes achieve higher utilization**: BFLOAT4_B (LoFi) consistently outperforms BFLOAT8_B (HiFi2) and BFLOAT16 (HiFi4) because fewer compute cycles per tile make it easier to keep cores busy
-- **P150's architectural advantages shine**: Despite having 2× more cores (130 vs 64), P150 maintains higher absolute utilization across all workloads, demonstrating superior memory bandwidth and core efficiency
-
-These results are based on device-side profiling (TRISC1 kernel duration) for non-traced configurations, roviding an accurate measure of computational efficiency.
-Blackhole (P150) achieves excellent utilization across the board, with peak utilization reaching 94.88% and 61% of configurations exceeding 80% utilization. This represents a significant improvement over Wormhole (N150), which peaks at 92.38% with only 32% of configurations above 80%.
-
-![](images/utilization_vs_matrix_elements_comparison.png)
+Blackhole(P150) achieves excellent utilization across the board, with peak utilization reaching 97% and 61% of configurations exceeding 80% utilization. This represents a significant improvement over Wormhole (N150), which peaks at 92.38% with only 32% of configurations above 80%.
 
 ### Understanding Device Scaling: SRAM vs DRAM
 
@@ -157,9 +143,8 @@ Both architectures perform most ideally when the input tensors are closest to sq
 
 
 #### Out of Box Performance
-In this tech report, we fine-tuned the parameters of each matrix multiplication kernel to extract the maximum possible performance. However, here, we will compare the performance loss with the default configuration to demonstrate the hardware’s ability to perform well without significant hand tuning.
-
-As shown here, on both Wormhole and Blackhole, hand tuned configs helps recover more lost performance on smaller tensor matrix multiplications compared to larger ones. Similar to tracing, the configuration matters more for smaller tensors, as it is harder to saturate the core grid with smaller workloads compared to larger ones.
+We also show the peak results we can get based on auto-selected matmul configurations.
+On both Wormhole and Blackhole, hand tuned configs helps recover more lost performance on smaller tensor matrix multiplications compared to larger ones. Similar to tracing, the configuration matters more for smaller tensors, as it is harder to saturate the core grid with smaller workloads compared to larger ones.
 
 
 <details>
