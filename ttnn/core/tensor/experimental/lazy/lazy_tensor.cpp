@@ -66,8 +66,8 @@ std::vector<std::shared_ptr<LazyTensor>> LazyTensor::make_lazy_tensors(
 }
 
 LazyTensor::LazyTensor(const tt::tt_metal::metal_tensor::Tensor& metal_tensor) :
-    op_inputs_({}),
-    op_(nullptr),
+    op_inputs_(std::make_shared<EmptyLazyOperationInputs>()),
+    op_(std::make_shared<MaterializedLazyOperation>()),
     tensor_metadata_(metal_tensor.tensor_spec(), metal_tensor.device(), metal_tensor.storage_type()),
     siblings_({}),
     materialized_outputs_({metal_tensor}),

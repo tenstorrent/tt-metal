@@ -22,6 +22,11 @@ struct LazyOperationInputs {
     virtual ~LazyOperationInputs() = default;
 };
 
+struct EmptyLazyOperationInputs : public LazyOperationInputs {
+    void for_each(const std::function<void(const std::shared_ptr<LazyTensor>&)>& fn) const override {}
+    std::any inputs() const override { return std::any(); }
+};
+
 struct LazyOperation {
     LazyOperation() = default;
     virtual std::vector<tt::tt_metal::metal_tensor::Tensor> invoke(const LazyOperationInputs& inputs) = 0;
@@ -29,6 +34,14 @@ struct LazyOperation {
     virtual tt::stl::hash::hash_t operation_type_id() const = 0;
     // TODO: Do we need some attributes for serialization purposes?
     virtual ~LazyOperation() = default;
+};
+
+struct MaterializedLazyOperation : public LazyOperation {
+    std::vector<tt::tt_metal::metal_tensor::Tensor> invoke(const LazyOperationInputs& inputs) override {
+        return {};
+    }
+    std::string_view name() const override { return "MaterializedLazyOperation"; }
+    tt::stl::hash::hash_t operation_type_id() const override { return tt::stl::hash::type_hash<MaterializedLazyOperation>; }
 };
 
 }  // namespace ttnn::experimental::lazy
