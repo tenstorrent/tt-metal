@@ -141,11 +141,11 @@ private:
         if (ttnn::experimental::lazy::is_lazy_enabled()) {
             // Get output specs to create placeholder tensors
             auto output_specs = operation.compute_output_specs(inputs);
-            
+
             // Create lazy operation wrapper
             auto lazy_op = ttnn::experimental::lazy::make_lazy_composite_operation<operation_t>(
                 operation, std::string(cpp_fully_qualified_name.data, cpp_fully_qualified_name.size()));
-                
+
             auto lazy_inputs = ttnn::experimental::lazy::make_lazy_composite_operation_inputs<operation_t>(inputs);
             // TODO: Support other return types for lazy execution
             if constexpr (std::same_as<typename operation_t::tensor_return_value_t, Tensor>) {
@@ -190,7 +190,7 @@ private:
             operation_attributes,
             tensor_args,
             std::string(cpp_fully_qualified_name.data, cpp_fully_qualified_name.size()));
-        
+
         auto lazy_inputs = ttnn::experimental::lazy::make_lazy_device_operation_inputs<operation_t>(tensor_args);
 
         // Get output specs to create placeholder tensors

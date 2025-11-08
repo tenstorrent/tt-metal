@@ -4,7 +4,6 @@
 #include "ttnn/operations/eltwise/unary/device/unary_device_operation.hpp"
 #include "ttnn/experimental/lazy/graph_utils.hpp"
 #include <enchantum/enchantum.hpp>
-#include "ttnn/experimental/lazy/lazy_operation_inputs_utils.hpp"
 
 namespace ttnn::experimental::lazy {
 
@@ -36,12 +35,12 @@ void UnaryOperationsFusionPass::run(const ttnn::Tensor& tensor) {
 
         // Check if this unary operation has exactly one input
         const auto& inputs = current_tensor->op_inputs();
-        if (count(inputs) != 1) {
+        if (inputs->size() != 1) {
             continue;
         }
 
         // Check if the input is also a unary operation
-        auto input_tensor = get(inputs, 0);
+        auto input_tensor = inputs->at(0);
         auto input_op = input_tensor->op();
         if (!input_op) {
             continue;
@@ -74,11 +73,11 @@ void UnaryOperationsFusionPass::run(const ttnn::Tensor& tensor) {
             chain_tensors.push_back(current);
 
             const auto& curr_inputs = current->op_inputs();
-            if (count(curr_inputs) != 1) {
+            if (curr_inputs->size() != 1) {
                 break;
             }
 
-            current = get(curr_inputs, 0);
+            current = curr_inputs->at(0);
         }
 
         // If we have more than one unary op in the chain, fuse them

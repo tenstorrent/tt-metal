@@ -4,6 +4,7 @@
 
 #include "ttnn/experimental/lazy/graph_utils.hpp"
 #include "ttnn/experimental/lazy/lazy_operation.hpp"
+#include "ttnn/experimental/lazy/lazy_operation_inputs.hpp"
 
 namespace ttnn::experimental::lazy {
 
