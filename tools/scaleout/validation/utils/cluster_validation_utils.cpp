@@ -576,6 +576,7 @@ LinkMetricsResult send_traffic_and_validate_links(
     std::unordered_map<EthChannelIdentifier, std::vector<LinkStatus>> statuses_per_link;
     bool fwd = true;
     for (int i = 0; i < num_iterations; i++) {
+        std::cout << "Generating traffic configs for iteration: " << i << std::endl;
         for (const auto& traffic_config : traffic_configs) {
             std::size_t pkt_size_bytes = traffic_config.packet_size_bytes;
             std::size_t pkt_size_words = pkt_size_bytes >> 4;
