@@ -182,7 +182,7 @@ def test_transformer_block_flux(
 )
 @pytest.mark.parametrize("is_last_block", [False, True])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_motif(
+def test_transformer_block_motif(
     *,
     mesh_device: ttnn.MeshDevice,
     submesh_shape: tuple[int, int],

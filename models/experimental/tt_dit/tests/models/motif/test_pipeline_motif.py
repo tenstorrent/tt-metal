@@ -35,6 +35,7 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
     ids=[
         "2x4cfg0sp0tp1",
         "2x4cfg1sp0tp1",
+        "4x8cfg1sp0tp1",
     ],
     indirect=["mesh_device"],
 )

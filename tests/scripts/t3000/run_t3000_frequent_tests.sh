@@ -383,6 +383,12 @@ run_t3000_flux1_tests() {
     "models/experimental/tt_dit/tests/blocks/test_transformer_block.py::test_transformer_block_flux"
 }
 
+run_t3000_motif_tests() {
+  run_t3000_dit_tests \
+    "models/experimental/tt_dit/tests/blocks/test_attention.py::test_attention_motif" \
+    "models/experimental/tt_dit/tests/models/motif/test_transformer_motif.py"
+}
+
 run_t3000_wan22_tests() {
   # Record the start time
   fail=0
@@ -476,6 +482,9 @@ run_t3000_tests() {
 
   # Run flux1 tests
   run_t3000_flux1_tests
+
+  # Run motif tests
+  run_t3000_motif_tests
 
   # Run trace tests
   run_t3000_trace_stress_tests

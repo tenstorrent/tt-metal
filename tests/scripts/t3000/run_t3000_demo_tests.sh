@@ -331,7 +331,7 @@ run_t3000_flux1_tests() {
 }
 
 run_t3000_motif_tests() {
-  run_t3000_dit_tests "models/experimental/tt_dit/tests/models/motif/test_pipeline_motif.py -k 2x4cfg1sp0tp1"
+  run_t3000_dit_tests "models/experimental/tt_dit/tests/models/motif/test_pipeline_motif.py -k 2x4cfg0sp0tp1"
 }
 
 run_t3000_llama3_load_checkpoints_tests() {
