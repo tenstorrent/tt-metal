@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
 #include "ttnn/tensor/serialization.hpp"
 
 #include <ttnn/distributed/host_ccl.hpp>
