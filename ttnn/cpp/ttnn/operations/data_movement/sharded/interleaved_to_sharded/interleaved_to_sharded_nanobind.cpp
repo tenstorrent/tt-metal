@@ -47,6 +47,35 @@ void bind_interleaved_to_sharded(
             nb::arg("keep_l1_aligned") = false,
 
         },
+        // Explicit CoreCoord overload to avoid nanobind alias/variant ambiguity (CoreCoord vs tt::xy_pair)
+        ttnn::nanobind_overload_t{
+            [](const data_movement_sharded_operation_t& self,
+               const ttnn::Tensor& input_tensor,
+               const CoreCoord& grid,
+               const std::array<uint32_t, 2>& shard_shape,
+               tt::tt_metal::TensorMemoryLayout shard_scheme,
+               tt::tt_metal::ShardOrientation shard_orientation,
+               const std::optional<ttnn::DataType>& output_dtype,
+               const std::optional<bool>& keep_l1_aligned) -> ttnn::Tensor {
+                return self(
+                    input_tensor,
+                    std::variant<CoreCoord, CoreRangeSet>(grid),
+                    shard_shape,
+                    shard_scheme,
+                    shard_orientation,
+                    output_dtype,
+                    keep_l1_aligned);
+            },
+            nb::arg("input_tensor").noconvert(),
+            nb::arg("grid"),
+            nb::arg("shard_shape"),
+            nb::arg("shard_scheme"),
+            nb::arg("shard_orientation"),
+            nb::arg("output_dtype") = nb::none(),
+            nb::kw_only(),
+            nb::arg("keep_l1_aligned") = false,
+
+        },
         ttnn::nanobind_overload_t{
             [](const data_movement_sharded_operation_t& self,
                const ttnn::Tensor& input_tensor,
