@@ -363,24 +363,13 @@ void WatcherDeviceReader::Dump(FILE* file) {
 
     DumpData dump_data;
 
-    // Ignore storage-only cores
-    std::unordered_set<CoreCoord> storage_only_cores;
-    uint8_t num_hw_cqs = tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_num_hw_cqs();
-    DispatchCoreConfig dispatch_core_config =
-        tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
-    for (auto core_coord : tt::get_logical_storage_cores(device_id, num_hw_cqs, dispatch_core_config)) {
-        storage_only_cores.insert(core_coord);
-    }
-
     // Dump worker cores
     CoreCoord grid_size =
         tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
     for (uint32_t y = 0; y < grid_size.y; y++) {
         for (uint32_t x = 0; x < grid_size.x; x++) {
             CoreCoord coord = {x, y};
-            if (storage_only_cores.find(coord) == storage_only_cores.end()) {
-                Core::Create(coord, HalProgrammableCoreType::TENSIX, *this, dump_data).Dump();
-            }
+            Core::Create(coord, HalProgrammableCoreType::TENSIX, *this, dump_data).Dump();
         }
     }
 
