@@ -18,6 +18,7 @@
 #include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "ttnn/tensor/to_string.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
 // used for moreh softmax

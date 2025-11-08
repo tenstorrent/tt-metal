@@ -20,6 +20,7 @@
 #include "metal/operations.hpp"
 #include "ops/losses.hpp"
 #include "ops/unary_ops.hpp"
+#include "ttnn/tensor/to_string.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
 class CrossEntropyBackwardTest : public ::testing::Test {

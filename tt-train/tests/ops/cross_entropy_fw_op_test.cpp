@@ -18,6 +18,7 @@
 #include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "ttnn/tensor/to_string.hpp"
 
 class CrossEntropyForwardTest : public ::testing::Test {
 protected:

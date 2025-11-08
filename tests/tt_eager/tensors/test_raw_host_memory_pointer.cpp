@@ -20,6 +20,7 @@
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/tensor/to_string.hpp"
 
 // NOLINTBEGIN(cppcoreguidelines-no-malloc)
 
