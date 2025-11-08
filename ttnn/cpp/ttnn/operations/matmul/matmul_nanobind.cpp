@@ -9,6 +9,7 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/variant.h>
 
 #include <tt-metalium/core_coord.hpp>
 #include "ttnn-nanobind/decorators.hpp"
@@ -639,12 +640,24 @@ void py_module(nb::module_& mod) {
                const std::optional<const DataType> dtype,
                const std::optional<const MatmulProgramConfig>& program_config,
                const std::optional<const std::string>& activation,
-               const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
-               const std::optional<const ttnn::CoreGrid> core_grid,
-               const std::optional<const tt::tt_metal::Tile>& output_tile,
-               std::optional<Tensor>& optional_output_tensor,
-               const std::optional<const GlobalCircularBuffer>& global_cb,
-               const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) -> ttnn::Tensor {
+               nb::object compute_kernel_config_obj,
+               std::optional<ttnn::CoreGrid> core_grid,
+               std::optional<const tt::tt_metal::Tile> output_tile,
+               std::optional<Tensor> optional_output_tensor,
+               std::optional<const GlobalCircularBuffer> global_cb,
+               std::optional<tt::tt_metal::SubDeviceId> sub_device_id) -> ttnn::Tensor {
+                std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt;
+                if (!compute_kernel_config_obj.is_none()) {
+                    if (nb::isinstance<GrayskullComputeKernelConfig>(compute_kernel_config_obj)) {
+                        compute_kernel_config = nb::cast<GrayskullComputeKernelConfig>(compute_kernel_config_obj);
+                    } else if (nb::isinstance<WormholeComputeKernelConfig>(compute_kernel_config_obj)) {
+                        compute_kernel_config = nb::cast<WormholeComputeKernelConfig>(compute_kernel_config_obj);
+                    } else {
+                        nb::raise_type_error(
+                            "compute_kernel_config must be WormholeComputeKernelConfig or "
+                            "GrayskullComputeKernelConfig");
+                    }
+                }
                 return self(
                     input_tensor_a,
                     input_tensor_b,

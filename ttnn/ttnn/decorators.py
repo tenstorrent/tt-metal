@@ -388,13 +388,12 @@ class FastOperation:
             # preserve correctness for user-facing APIs.
             if "incompatible function arguments" in str(e):
                 # Prefer a per-shard execution fallback for multi-device tensors to avoid
-                # converting to torch with an unknown mesh composer.
+                # converting to torch with an unknown mesh composer. Handle multiple multi-device inputs.
                 try:
-                    # Find first TTNN tensor argument that is multi-device
                     import ttnn as _ttnn_mod
 
-                    multi_arg_index = None
-                    multi_arg_shards = None
+                    multi_arg_indices = []
+                    multi_arg_shards_lists = []
                     for idx, arg in enumerate(function_args):
                         if isinstance(arg, _ttnn_mod.Tensor):
                             try:
@@ -402,22 +401,56 @@ class FastOperation:
                             except Exception:
                                 shards = []
                             if isinstance(shards, (list, tuple)) and len(shards) > 1:
-                                multi_arg_index = idx
-                                multi_arg_shards = shards
-                                break
+                                multi_arg_indices.append(idx)
+                                multi_arg_shards_lists.append(shards)
 
-                    if multi_arg_index is not None and multi_arg_shards:
-                        per_shard_outputs = []
-                        for shard in multi_arg_shards:
-                            new_args = list(function_args)
-                            new_args[multi_arg_index] = shard
-                            if cq_id is None:
-                                per_shard_outputs.append(self.function(*new_args, **function_kwargs))
-                            else:
-                                with command_queue(cq_id):
-                                    per_shard_outputs.append(self.function(*new_args, **function_kwargs))
-                        # Combine per-device outputs back into a multi-device tensor
-                        result = _ttnn_mod.combine_device_tensors(tensors=per_shard_outputs)
+                    if multi_arg_indices:
+                        # Ensure all multi-device args have the same shard count
+                        shard_counts = {len(shards) for shards in multi_arg_shards_lists}
+                        if len(shard_counts) != 1:
+                            # Mismatched shard counts; fall back to golden implementation
+                            fallback = get_fallback_function(self)
+                            result = fallback(*function_args, **function_kwargs)
+                        else:
+                            num_shards = shard_counts.pop()
+                            per_shard_outputs = []
+                            for i in range(num_shards):
+                                new_args = list(function_args)
+                                for arg_idx, shards in zip(multi_arg_indices, multi_arg_shards_lists):
+                                    new_args[arg_idx] = shards[i]
+                                # Prefer a simpler per-shard kernel for matmul to avoid nanobind signature edge cases
+                                if self.python_fully_qualified_name == "ttnn.matmul":
+                                    kwargs = dict(function_kwargs)
+                                    # Map common kwargs used by minimal_matmul
+                                    mm_kwargs = {
+                                        "compute_kernel_config": kwargs.get("compute_kernel_config", None),
+                                        "memory_config": kwargs.get("memory_config", None),
+                                    }
+                                    if cq_id is None:
+                                        per_shard_outputs.append(
+                                            _ttnn_mod.experimental.minimal_matmul(
+                                                input_tensor=new_args[0],
+                                                weight_tensor=new_args[1],
+                                                **{k: v for k, v in mm_kwargs.items() if v is not None},
+                                            )
+                                        )
+                                    else:
+                                        with command_queue(cq_id):
+                                            per_shard_outputs.append(
+                                                _ttnn_mod.experimental.minimal_matmul(
+                                                    input_tensor=new_args[0],
+                                                    weight_tensor=new_args[1],
+                                                    **{k: v for k, v in mm_kwargs.items() if v is not None},
+                                                )
+                                            )
+                                else:
+                                    if cq_id is None:
+                                        per_shard_outputs.append(self.function(*new_args, **function_kwargs))
+                                    else:
+                                        with command_queue(cq_id):
+                                            per_shard_outputs.append(self.function(*new_args, **function_kwargs))
+                            # Combine per-device outputs back into a multi-device tensor
+                            result = _ttnn_mod.combine_device_tensors(tensors=per_shard_outputs)
                     else:
                         # Fallback to golden CPU implementation
                         fallback = get_fallback_function(self)
