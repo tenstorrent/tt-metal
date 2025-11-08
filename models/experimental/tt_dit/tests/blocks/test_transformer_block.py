@@ -10,8 +10,9 @@ import torch
 import ttnn
 from loguru import logger
 
+from ...blocks.attention import Attention
 from ...blocks.transformer_block import TransformerBlock
-from ...models.transformers.transformer_motif import convert_motif_transformer_block_state
+from ...models.transformers.transformer_motif import MotifTransformer, convert_motif_transformer_block_state
 from ...parallel.config import DiTParallelConfig, ParallelFactor
 from ...parallel.manager import CCLManager
 from ...reference.motif.modeling_dit import MotifDiTBlock as MotifDiTBlockReference
@@ -103,9 +104,9 @@ def test_transformer_block_flux(
     rope_cos = torch.randn([spatial_seq_len + prompt_seq_len, head_dim])
     rope_sin = torch.randn([spatial_seq_len + prompt_seq_len, head_dim])
 
-    spatial_padded = tt_model.pad_spatial_sequence(spatial, sp_factor=sp_factor)
-    spatial_rope_cos_padded = tt_model.pad_spatial_sequence(rope_cos[prompt_seq_len:], sp_factor=sp_factor)
-    spatial_rope_sin_padded = tt_model.pad_spatial_sequence(rope_sin[prompt_seq_len:], sp_factor=sp_factor)
+    spatial_padded = Attention.pad_spatial_sequence(spatial, sp_factor=sp_factor)
+    spatial_rope_cos_padded = Attention.pad_spatial_sequence(rope_cos[prompt_seq_len:], sp_factor=sp_factor)
+    spatial_rope_sin_padded = Attention.pad_spatial_sequence(rope_sin[prompt_seq_len:], sp_factor=sp_factor)
 
     tt_spatial = bf16_tensor_2dshard(spatial_padded, device=submesh_device, shard_mapping={sp_axis: 1, tp_axis: 2})
     tt_prompt = bf16_tensor(prompt, device=submesh_device, mesh_axis=tp_axis, shard_dim=2)
@@ -168,7 +169,7 @@ def test_transformer_block_flux(
         pytest.param((2, 4), (2, 2), 0, 1, 1, id="2x2sp0tp1"),
         pytest.param((2, 4), (2, 2), 1, 0, 1, id="2x2sp1tp0"),
         pytest.param((2, 4), (2, 4), 0, 1, 1, id="2x4sp0tp1"),
-        # pytest.param((2, 4), (2, 4), 1, 0, 1, id="2x4sp1tp0"),  # hangs
+        pytest.param((2, 4), (2, 4), 1, 0, 1, id="2x4sp1tp0"),
         pytest.param((4, 8), (4, 4), 0, 1, 4, id="4x4sp0tp1"),
     ],
     indirect=["mesh_device"],
@@ -249,6 +250,7 @@ def test_motif(
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
         padding_config=padding_config,
+        attention_k_chunk_size=MotifTransformer.get_k_chunk_size(sp_factor),
     )
     converted_state_dict = dict(torch_model.state_dict())
     convert_motif_transformer_block_state(converted_state_dict, is_last_block=is_last_block)
@@ -258,7 +260,9 @@ def test_motif(
     prompt = torch.randn([batch_size, prompt_seq_len, inner_dim])
     time_embed = torch.randn([batch_size, modulation_dim])
 
-    spatial_padded = tt_model.pad_spatial_sequence(spatial, sp_factor=sp_factor)
+    spatial_padded = Attention.pad_spatial_sequence(
+        spatial, sp_factor=sp_factor, k_chunk_size=MotifTransformer.get_k_chunk_size(sp_factor)
+    )
 
     tt_spatial = bf16_tensor_2dshard(spatial_padded, device=submesh_device, shard_mapping={sp_axis: 1, tp_axis: 2})
     tt_prompt = bf16_tensor(prompt, device=submesh_device, mesh_axis=tp_axis, shard_dim=2)
