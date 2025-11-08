@@ -8,7 +8,7 @@ import torch
 import ttnn
 
 from ...blocks.attention import Attention
-from ...models.transformers.transformer_motif import convert_motif_attention_state
+from ...models.transformers.transformer_motif import MotifTransformer, convert_motif_attention_state
 from ...parallel.config import DiTParallelConfig, ParallelFactor
 from ...parallel.manager import CCLManager
 from ...reference.motif.modeling_dit import JointAttn as MotifAttentionReference
@@ -165,7 +165,7 @@ def test_attention_flux(
         pytest.param((2, 2), 0, 1, 1, id="2x2sp0tp1"),
         pytest.param((2, 2), 1, 0, 1, id="2x2sp1tp0"),
         pytest.param((2, 4), 0, 1, 1, id="2x4sp0tp1"),
-        # pytest.param((2, 4), 1, 0, 1, id="2x4sp1tp0"),  # hangs
+        pytest.param((2, 4), 1, 0, 1, id="2x4sp1tp0"),  # hangs
         pytest.param((4, 4), 0, 1, 4, id="4x4sp0tp1"),
     ],
     indirect=["mesh_device"],
@@ -255,6 +255,7 @@ def test_attention_motif(
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
         padding_config=padding_config,
+        k_chunk_size=MotifTransformer.get_k_chunk_size(sp_factor),
     )
 
     converted_state_dict = dict(torch_model.state_dict())
@@ -271,7 +272,9 @@ def test_attention_motif(
     spatial = torch.randn((batch_size, spatial_seq_len, query_dim))
     prompt = torch.randn((batch_size, prompt_seq_len, query_dim))
 
-    spatial_padded = tt_model.pad_spatial_sequence(spatial, sp_factor=sp_factor)
+    spatial_padded = tt_model.pad_spatial_sequence(
+        spatial, sp_factor=sp_factor, k_chunk_size=MotifTransformer.get_k_chunk_size(sp_factor)
+    )
 
     tt_spatial = bf16_tensor(spatial_padded, device=mesh_device, mesh_axis=sp_axis, shard_dim=-2)
     tt_prompt = bf16_tensor(prompt, device=mesh_device) if prompt is not None else None

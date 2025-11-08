@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 import torch
 import ttnn
 
+from ...blocks.attention import Attention
 from ...blocks.transformer_block import TransformerBlock
 from ...layers.embeddings import PatchEmbed
 from ...layers.feedforward import FeedForward
@@ -101,6 +102,8 @@ class TimeTextProjection(Module):
 class MotifTransformer(Module):
     ENCODED_TEXT_DIM = 4096
     LATENT_CHANNELS = 16
+    K_CHUNK_SIZE_BASE = 1024
+    Q_CHUNK_SIZE = 128
 
     def __init__(
         self,
@@ -144,8 +147,8 @@ class MotifTransformer(Module):
         raw_spatial_sequence_length = (latents_height // patch_size) * (latents_width // patch_size)
 
         self.spatial_sequence_length = raw_spatial_sequence_length + register_token_num
-        self.spatial_sequence_padding = TransformerBlock.spatial_sequence_padding_length(
-            length=self.spatial_sequence_length, sp_factor=sp_factor
+        self.spatial_sequence_padding = Attention.spatial_sequence_padding_length(
+            length=self.spatial_sequence_length, sp_factor=sp_factor, k_chunk_size=self.get_k_chunk_size(sp_factor)
         )
         self.padded_spatial_sequence_length = self.spatial_sequence_length + self.spatial_sequence_padding
 
@@ -190,6 +193,8 @@ class MotifTransformer(Module):
                 parallel_config=parallel_config,
                 padding_config=padding_config,
                 mesh_device=mesh_device,
+                attention_k_chunk_size=self.get_k_chunk_size(sp_factor),
+                attention_q_chunk_size=self.Q_CHUNK_SIZE,
             )
             for i in range(num_layers)
         )
@@ -225,6 +230,13 @@ class MotifTransformer(Module):
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
         )
+
+    @classmethod
+    def get_k_chunk_size(cls, sp_factor: int) -> int:
+        """
+        Get the k chunk size for the attention block based on the sequence parallelism factor for the transformer.
+        """
+        return cls.K_CHUNK_SIZE_BASE // sp_factor
 
     # We do not shard the last dimension of spatial, because its dimension is less than the tile
     # size for a device count of four and more. This requires padding, which is not currently
