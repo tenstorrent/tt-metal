@@ -117,7 +117,7 @@ def test_mochi_attention(
     parallel_config = DiTParallelConfig(
         tensor_parallel=ParallelFactor(mesh_axis=tp_axis, factor=tp_factor),
         sequence_parallel=ParallelFactor(mesh_axis=sp_axis, factor=sp_factor),
-        cfg_parallel=None,
+        cfg_parallel=ParallelFactor(factor=1, mesh_axis=0),
     )
 
     # Create TT model
