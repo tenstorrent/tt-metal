@@ -18,6 +18,7 @@
 #include "ttnn/experimental/lazy/graph_utils.hpp"
 #include "ttnn/experimental/lazy/lazy_device_operation.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_device_operation.hpp"
+#include "ttnn/experimental/lazy/lazy_operation_inputs.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn_test_fixtures.hpp"
 #include "ttnn/operations/rand/rand.hpp"
@@ -37,7 +38,6 @@
 #include "ttnn/operations/data_movement/fill_rm/fill_rm.hpp"
 #include "ttnn/operations/data_movement/gather/gather.hpp"
 #include "ttnn/operations/data_movement/sort/sort.hpp"
-#include "ttnn/experimental/lazy/lazy_operation_inputs_utils.hpp"
 
 namespace ttnn {
 namespace test {
@@ -109,11 +109,10 @@ TEST_F(LazyModeFixture, LazyTensorCreation) {
     ASSERT_EQ(random_eager.lazy()->op()->name(), "MaterializedLazyOperation")
         << "Lazy tensor created from materialized tensor should have MaterializedLazyOperation operation";
     ASSERT_EQ(
-        random_eager.lazy()->op()->operation_type_id(),
-        lazy::get_operation_type_id<lazy::MaterializedLazyOperation>())
+        random_eager.lazy()->op()->operation_type_id(), lazy::get_operation_type_id<lazy::MaterializedLazyOperation>())
         << "Lazy tensor created from materialized tensor should have MaterializedLazyOperation operation";
     ASSERT_TRUE(random_eager.lazy()->is_materialized()) << "Lazy tensor should be materialized";
-    ASSERT_EQ(lazy::count(random_eager.lazy()->op_inputs()), 0) << "Lazy tensor should have no op inputs";
+    ASSERT_EQ(random_eager.lazy()->op_inputs()->size(), 0) << "Lazy tensor should have no op inputs";
     ASSERT_EQ(random_eager.lazy()->siblings().size(), 0) << "Lazy tensor should have no siblings";
     ASSERT_EQ(random_eager.lazy()->materialized_tensors().size(), 1)
         << "Lazy tensor should have one materialized tensor";
@@ -142,13 +141,13 @@ TEST_F(LazyModeFixture, LazyTensorCreation) {
         << "Lazy tensor should have the typecast operation";
 
     // One input - typecast takes rand's output as input
-    ASSERT_EQ(lazy::count(random_lazy.lazy()->op_inputs()), 1) << "Lazy tensor should have op input";
+    ASSERT_EQ(random_lazy.lazy()->op_inputs()->size(), 1) << "Lazy tensor should have op input";
     ASSERT_EQ(random_lazy.lazy()->siblings().size(), 0) << "Lazy tensor should have no siblings";
     ASSERT_EQ(random_lazy.lazy()->materialized_tensors().size(), 0)
         << "Lazy tensor should have no materialized tensors";
 
     // Check that parent of typecast is rand
-    auto parent = lazy::get(random_lazy.lazy()->op_inputs(), 0);
+    auto parent = random_lazy.lazy()->op_inputs()->at(0);
     ASSERT_EQ(parent->op()->name(), "ttnn::prim::rand") << "Lazy tensor should have the rand operation";
     ASSERT_EQ(
         parent->op()->operation_type_id(), lazy::get_operation_type_id<ttnn::operations::rand::RandDeviceOperation>())
@@ -617,7 +616,7 @@ TEST_F(LazyModeFixture, UnaryOperationsFusion) {
                     i,
                     node->id(),
                     attrs.op_chain.size(),
-                    lazy::count(node->op_inputs()));
+                    node->op_inputs()->size());
                 for (const auto& op_in_chain : attrs.op_chain) {
                     log_info(tt::LogTest, "    - {}", enchantum::to_string(op_in_chain.type()));
                 }
@@ -638,8 +637,8 @@ TEST_F(LazyModeFixture, UnaryOperationsFusion) {
     auto* sqrt_op_before = dynamic_cast<UnaryLazyOp*>(sqrt_lazy.lazy()->op().get());
     ASSERT_NE(sqrt_op_before, nullptr) << "Sqrt operation should be a unary op";
     ASSERT_EQ(sqrt_op_before->attributes().op_chain.size(), 1) << "Sqrt op_chain should have 1 element before fusion";
-    ASSERT_EQ(lazy::count(sqrt_lazy.lazy()->op_inputs()), 1) << "Sqrt should have 1 input";
-    ASSERT_EQ(lazy::get(sqrt_lazy.lazy()->op_inputs(), 0)->id(), exp_lazy.lazy()->id()) << "Sqrt input should be exp output";
+    ASSERT_EQ(sqrt_lazy.lazy()->op_inputs()->size(), 1) << "Sqrt should have 1 input";
+    ASSERT_EQ(sqrt_lazy.lazy()->op_inputs()->at(0)->id(), exp_lazy.lazy()->id()) << "Sqrt input should be exp output";
 
     // Run the fusion pass
     log_info(tt::LogTest, "\n==== Running UnaryOperationsFusionPass ====");
@@ -668,7 +667,7 @@ TEST_F(LazyModeFixture, UnaryOperationsFusion) {
                     i,
                     node->id(),
                     attrs.op_chain.size(),
-                    lazy::count(node->op_inputs()));
+                    node->op_inputs()->size());
                 for (const auto& op_in_chain : attrs.op_chain) {
                     log_info(tt::LogTest, "    - {}", enchantum::to_string(op_in_chain.type()));
                 }
@@ -699,8 +698,8 @@ TEST_F(LazyModeFixture, UnaryOperationsFusion) {
     ASSERT_EQ(fused_chain[2].type(), ttnn::operations::unary::UnaryOpType::SQRT) << "Third op should be SQRT";
 
     // Verify the graph structure: sqrt should now take input directly from the original input
-    ASSERT_EQ(lazy::count(sqrt_lazy.lazy()->op_inputs()), 1) << "Sqrt should have 1 input after fusion";
-    ASSERT_EQ(lazy::get(sqrt_lazy.lazy()->op_inputs(), 0)->id(), input_lazy.lazy()->id())
+    ASSERT_EQ(sqrt_lazy.lazy()->op_inputs()->size(), 1) << "Sqrt should have 1 input after fusion";
+    ASSERT_EQ(sqrt_lazy.lazy()->op_inputs()->at(0)->id(), input_lazy.lazy()->id())
         << "Sqrt should now take input directly from original input (bypassing relu and exp)";
 
     log_info(tt::LogTest, "\n✓ Fusion verification complete!");

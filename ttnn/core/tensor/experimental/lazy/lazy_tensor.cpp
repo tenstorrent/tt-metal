@@ -6,6 +6,7 @@
 #include "ttnn/experimental/lazy/lazy_tensor.hpp"
 #include "ttnn/experimental/lazy/graph_utils.hpp"
 #include "ttnn/experimental/lazy/lazy_operation.hpp"
+#include "ttnn/experimental/lazy/lazy_operation_inputs.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
@@ -66,7 +67,7 @@ std::vector<std::shared_ptr<LazyTensor>> LazyTensor::make_lazy_tensors(
 }
 
 LazyTensor::LazyTensor(const tt::tt_metal::metal_tensor::Tensor& metal_tensor) :
-    op_inputs_(std::make_shared<EmptyLazyOperationInputs>()),
+    op_inputs_(std::make_shared<LazyOperationInputs>()),
     op_(std::make_shared<MaterializedLazyOperation>()),
     tensor_metadata_(metal_tensor.tensor_spec(), metal_tensor.device(), metal_tensor.storage_type()),
     siblings_({}),

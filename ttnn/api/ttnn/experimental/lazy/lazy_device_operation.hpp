@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ttnn/experimental/lazy/lazy_operation.hpp"
+#include "ttnn/experimental/lazy/lazy_operation_inputs.hpp"
 #include "ttnn/device_operation.hpp"
 #include <tt_stl/reflection.hpp>
 #include <vector>
