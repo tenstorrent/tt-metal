@@ -1,0 +1,10 @@
+transformer_config:
+  num_heads: 6
+  embedding_dim: 384
+  dropout_prob: 0.2
+  num_blocks: 6
+  vocab_size: 50257
+  max_sequence_length: 256
+  positional_embedding_type: trainable
+  experimental:
+    use_composite_layernorm: false

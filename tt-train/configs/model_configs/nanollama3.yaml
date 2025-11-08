@@ -1,0 +1,10 @@
+transformer_config:
+  num_heads: 6
+  num_groups: 3
+  embedding_dim: 384
+  dropout_prob: 0.0
+  num_blocks: 6
+  vocab_size: 32000
+  max_sequence_length: 256
+  runner_type: default
+  theta: 500000.0

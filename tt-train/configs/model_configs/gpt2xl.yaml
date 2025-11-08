@@ -1,0 +1,11 @@
+transformer_config:
+  runner_type: memory_efficient
+  num_heads: 32    # original is 25, but tensor parallel requires a multiple of #num_devices
+  embedding_dim: 2048  # original is 1600, but tensor parallel heads creation are broken somewhy (returns padded tensor as result)
+  dropout_prob: 0.2
+  num_blocks: 48
+  vocab_size: 50257
+  max_sequence_length: 1024
+  experimental:
+    use_composite_layernorm: false
+

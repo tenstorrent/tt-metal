@@ -1,0 +1,4 @@
+mlp_config:
+    input_features: 784
+    hidden_features: [128, 128]
+    output_features: 10

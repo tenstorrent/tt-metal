@@ -1,0 +1,4 @@
+multihost_config:
+  enabled: true
+  num_workers: 4
+  socket_type: fabric

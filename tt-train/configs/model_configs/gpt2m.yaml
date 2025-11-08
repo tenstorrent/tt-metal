@@ -1,0 +1,10 @@
+transformer_config:
+  runner_type: memory_efficient
+  num_heads: 16
+  embedding_dim: 1024
+  dropout_prob: 0.2
+  num_blocks: 24
+  vocab_size: 50257
+  max_sequence_length: 1024
+  experimental:
+    use_composite_layernorm: false
