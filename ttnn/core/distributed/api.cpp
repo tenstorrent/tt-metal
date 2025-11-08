@@ -12,7 +12,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 
 #include <ttnn/tensor/tensor.hpp>
-#include <ttnn/tensor/host_buffer/functions.hpp>
+#include <tt-metalium/tensor/host_buffer/functions.hpp>
 #include <ttnn/tensor/tensor_utils.hpp>
 #include <ttnn/distributed/host_ccl.hpp>
 #include <tt-metalium/mesh_device.hpp>

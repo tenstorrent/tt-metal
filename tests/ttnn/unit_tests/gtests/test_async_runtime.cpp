@@ -30,7 +30,7 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
-#include "ttnn/tensor/layout/page_config.hpp"
+
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 

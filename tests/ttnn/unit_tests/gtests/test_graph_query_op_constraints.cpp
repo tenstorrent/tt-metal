@@ -36,7 +36,7 @@
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/normalization/softmax/softmax.hpp"
-#include "ttnn/tensor/layout/page_config.hpp"
+
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor.hpp"

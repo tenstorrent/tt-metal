@@ -22,7 +22,7 @@
 #include <tt-metalium/shape.hpp>
 #include "ttnn/async_runtime.hpp"
 #include "ttnn/common/queue_id.hpp"
-#include "ttnn/tensor/layout/page_config.hpp"
+
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 
