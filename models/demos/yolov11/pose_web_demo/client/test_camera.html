@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Camera Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        video { border: 2px solid #333; margin: 10px 0; }
+        .status { padding: 10px; margin: 10px 0; border-radius: 5px; }
+        .success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        button { padding: 10px 20px; margin: 5px; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <h1>Camera Access Test</h1>
+    <div id="status"></div>
+
+    <button onclick="testCamera()">Test Camera Access</button>
+    <button onclick="startVideo()">Start Video</button>
+    <button onclick="stopVideo()">Stop Video</button>
+
+    <video id="video" width="640" height="480" autoplay muted></video>
+
+    <script>
+        let stream = null;
+
+        function showStatus(message, isSuccess = false) {
+            const statusDiv = document.getElementById('status');
+            statusDiv.className = isSuccess ? 'status success' : 'status error';
+            statusDiv.textContent = message;
+        }
+
+        async function testCamera() {
+            try {
+                showStatus('Testing camera access...');
+
+                if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                    throw new Error('navigator.mediaDevices.getUserMedia is not supported');
+                }
+
+                const testStream = await navigator.mediaDevices.getUserMedia({ video: true });
+                testStream.getTracks().forEach(track => track.stop());
+
+                showStatus('✅ Camera access successful!', true);
+
+            } catch (error) {
+                let errorMsg = '❌ Camera access failed: ' + error.message;
+
+                if (error.name === 'NotAllowedError') {
+                    errorMsg += ' (Permission denied - click "Allow" when prompted)';
+                } else if (error.name === 'NotFoundError') {
+                    errorMsg += ' (No camera found)';
+                } else if (error.name === 'NotReadableError') {
+                    errorMsg += ' (Camera is already in use by another application)';
+                } else if (location.protocol !== 'https:' && location.hostname !== 'localhost') {
+                    errorMsg += ' (HTTPS required for camera access)';
+                }
+
+                showStatus(errorMsg);
+            }
+        }
+
+        async function startVideo() {
+            try {
+                if (stream) {
+                    stopVideo();
+                }
+
+                showStatus('Starting video stream...');
+                stream = await navigator.mediaDevices.getUserMedia({ video: true });
+
+                const video = document.getElementById('video');
+                video.srcObject = stream;
+
+                showStatus('✅ Video stream started!', true);
+
+            } catch (error) {
+                showStatus('❌ Failed to start video: ' + error.message);
+            }
+        }
+
+        function stopVideo() {
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+                stream = null;
+                document.getElementById('video').srcObject = null;
+                showStatus('Video stopped');
+            }
+        }
+
+        // Auto-test on page load
+        window.addEventListener('load', () => {
+            setTimeout(testCamera, 1000);
+        });
+    </script>
+</body>
+</html>

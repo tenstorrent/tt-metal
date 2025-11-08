@@ -221,6 +221,95 @@ def sharded_concat_2(
     return output
 
 
+def sharded_concat_3(
+    input_tensor_1, input_tensor_2, input_tensor_3, num_cores=64, shard_grid_coord_min=0, shard_grid_coord_max=7, dim=-1
+):
+    """
+    Efficient concatenation of 3 tensors in sharded memory layout.
+    Used for pose head: bbox + conf + keypoints concatenation.
+    Follows the exact same pattern as sharded_concat_2 but for 3 tensors.
+    """
+    # Ensure all tensors are in ROW_MAJOR layout
+    if input_tensor_1.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+        input_tensor_1 = ttnn.to_layout(input_tensor_1, ttnn.ROW_MAJOR_LAYOUT)
+
+    if input_tensor_2.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+        input_tensor_2 = ttnn.to_layout(input_tensor_2, ttnn.ROW_MAJOR_LAYOUT)
+
+    if input_tensor_3.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+        input_tensor_3 = ttnn.to_layout(input_tensor_3, ttnn.ROW_MAJOR_LAYOUT)
+
+    # Calculate shard height (same as sharded_concat_2)
+    shard_height = (input_tensor_1.shape[2] + num_cores - 1) // num_cores
+
+    # Create separate sharded memory configs for each input tensor (like sharded_concat_2)
+    input_sharded_memory_config_1 = ttnn.create_sharded_memory_config(
+        (shard_height, input_tensor_1.shape[-1]),
+        core_grid=ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(shard_grid_coord_min, shard_grid_coord_min),
+                    ttnn.CoreCoord(shard_grid_coord_max, shard_grid_coord_max),
+                )
+            }
+        ),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    input_sharded_memory_config_2 = ttnn.create_sharded_memory_config(
+        (shard_height, input_tensor_2.shape[-1]),
+        core_grid=ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(shard_grid_coord_min, shard_grid_coord_min),
+                    ttnn.CoreCoord(shard_grid_coord_max, shard_grid_coord_max),
+                )
+            }
+        ),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    input_sharded_memory_config_3 = ttnn.create_sharded_memory_config(
+        (shard_height, input_tensor_3.shape[-1]),
+        core_grid=ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(shard_grid_coord_min, shard_grid_coord_min),
+                    ttnn.CoreCoord(shard_grid_coord_max, shard_grid_coord_max),
+                )
+            }
+        ),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    # Convert each tensor to its own sharded memory config
+    input_tensor_1 = ttnn.to_memory_config(input_tensor_1, input_sharded_memory_config_1)
+    input_tensor_2 = ttnn.to_memory_config(input_tensor_2, input_sharded_memory_config_2)
+    input_tensor_3 = ttnn.to_memory_config(input_tensor_3, input_sharded_memory_config_3)
+
+    # Create output sharded memory config for the concatenated result
+    out_sharded_memory_config = ttnn.create_sharded_memory_config(
+        (shard_height, input_tensor_1.shape[-1] + input_tensor_2.shape[-1] + input_tensor_3.shape[-1]),
+        core_grid=ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(shard_grid_coord_min, shard_grid_coord_min),
+                    ttnn.CoreCoord(shard_grid_coord_max, shard_grid_coord_max),
+                )
+            }
+        ),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    # Concatenate in sharded layout
+    output = ttnn.concat((input_tensor_1, input_tensor_2, input_tensor_3), dim, memory_config=out_sharded_memory_config)
+    return output
+
+
 class TtnnConv:
     def __init__(
         self,
