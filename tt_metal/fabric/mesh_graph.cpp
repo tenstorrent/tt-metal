@@ -1009,28 +1009,14 @@ std::filesystem::path MeshGraph::get_mesh_graph_descriptor_path_for_cluster_type
         }
     }
 
-    // Fallback: if a torus fabric config was requested but not found, try MESH fabric configs.
-    // Check FABRIC_1D, FABRIC_2D, or FABRIC_2D_DYNAMIC as fallback
-    auto mesh_fabric_configs = {
-        tt::tt_fabric::FabricConfig::FABRIC_1D,
-        tt::tt_fabric::FabricConfig::FABRIC_2D,
-        tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC};
-    for (auto fallback_config : mesh_fabric_configs) {
-        auto mesh_fabric_it = fabric_to_cluster_map.find(fallback_config);
-        if (mesh_fabric_it != fabric_to_cluster_map.end()) {
-            const auto& cluster_to_descriptor_map = mesh_fabric_it->second;
-            auto cluster_it = cluster_to_descriptor_map.find(cluster_type);
-            if (cluster_it != cluster_to_descriptor_map.end()) {
-                log_warning(
-                    tt::LogFabric,
-                    "Mesh Graph Descriptor for fabric config {} and cluster type {} not found. Picking mesh graph "
-                    "descriptor "
-                    "for {} fabric config.",
-                    enchantum::to_string(fabric_config),
-                    enchantum::to_string(cluster_type),
-                    enchantum::to_string(fallback_config));
-                return std::filesystem::path(root_dir) / MESH_GRAPH_DESCRIPTOR_DIR / cluster_it->second;
-            }
+    // Fallback: if a torus fabric config was requested but not found, try FABRIC_2D config
+    auto mesh_fabric_configs = tt::tt_fabric::FabricConfig::FABRIC_2D;
+    auto mesh_fabric_it = fabric_to_cluster_map.find(mesh_fabric_configs);
+    if (mesh_fabric_it != fabric_to_cluster_map.end()) {
+        const auto& cluster_to_descriptor_map = mesh_fabric_it->second;
+        auto cluster_it = cluster_to_descriptor_map.find(cluster_type);
+        if (cluster_it != cluster_to_descriptor_map.end()) {
+            return std::filesystem::path(root_dir) / MESH_GRAPH_DESCRIPTOR_DIR / cluster_it->second;
         }
     }
 
