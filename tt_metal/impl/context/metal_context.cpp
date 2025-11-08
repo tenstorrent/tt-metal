@@ -599,7 +599,7 @@ void MetalContext::initialize_control_plane() {
 
     if (this->fabric_config_ == tt::tt_fabric::FabricConfig::FABRIC_1D_RING &&
         cluster_type == tt::tt_metal::ClusterType::GALAXY) {
-        fabric_type = tt::tt_fabric::FabricType::TORUS_XY;
+        fabric_type = tt::tt_fabric::FabricType::TORUS_X;
     }
 
     std::filesystem::path mesh_graph_desc_path =
