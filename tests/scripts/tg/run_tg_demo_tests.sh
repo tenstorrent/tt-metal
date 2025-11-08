@@ -150,6 +150,10 @@ run_tg_flux1_tests() {
   run_tg_dit_tests "models/experimental/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k 4x8sp0tp1-dev"
 }
 
+run_tg_motif_tests() {
+  run_tg_dit_tests "models/experimental/tt_dit/tests/models/motif/test_pipeline_motif.py -k 4x8cfg1sp0tp1"
+}
+
 run_tg_gpt_oss_tests() {
   fail=0
 
