@@ -146,7 +146,9 @@ public:
     // core.x represents connectivity to one other chip, i.e. cores with <x> all connect to same chip
     // core.y represents different channels along one <x>
     virtual const std::set<CoreCoord>& ethernet_cores() const = 0;
-    virtual const std::set<CoreCoord>& storage_only_cores() const = 0;
+    [[deprecated(
+        "Storage-only cores do not exist. Cleanup code that calls this API.")]] virtual const std::set<CoreCoord>&
+    storage_only_cores() const = 0;
 
     virtual uint32_t get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const = 0;
     virtual uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const = 0;
