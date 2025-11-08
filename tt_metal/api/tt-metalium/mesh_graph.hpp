@@ -140,7 +140,7 @@ public:
         tt::tt_metal::ClusterType cluster_type,
         const std::string& root_dir,
         bool version_2 = true,
-        tt::tt_fabric::FabricType fabric_type = tt::tt_fabric::FabricType::MESH);
+        tt::tt_fabric::FabricConfig fabric_config = tt::tt_fabric::FabricConfig::FABRIC_2D);
 
     // Get the number of active channels the user has requested between meshes
     const RequestedIntermeshConnections& get_requested_intermesh_connections() const;

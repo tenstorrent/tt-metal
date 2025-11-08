@@ -1756,12 +1756,6 @@ void ControlPlane::write_all_to_all_routing_fields<2, true>(MeshId mesh_id) cons
     uint16_t num_chips = mesh_shape[0] * mesh_shape[1];
     uint16_t ew_dim = mesh_shape[1];  // east-west dimension
     TT_ASSERT(num_chips <= 256, "Number of chips exceeds 256 for mesh {}", *mesh_id);
-    TT_ASSERT(
-        mesh_shape[0] <= 16 && mesh_shape[1] <= 16,
-        "One or both of mesh axis exceed 16 for mesh {}: {}x{}",
-        *mesh_id,
-        mesh_shape[0],
-        mesh_shape[1]);
 
     for (const auto& [_, src_chip_id] : local_mesh_chip_id_container) {
         intra_mesh_routing_path_t<2, true> routing_path;
