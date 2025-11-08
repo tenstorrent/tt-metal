@@ -315,6 +315,7 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd, std::optiona
 
             if (fabric_config.value() == FabricConfig::FABRIC_1D_RING && num_devices == 32) {
                 requested_fabric_type = FabricType::TORUS_XY;
+                log_critical(tt::LogFabric, "Requested fabric type: {}", enchantum::to_string(requested_fabric_type));
             }
 
             // Validate that FabricConfig doesn't try to create connections that don't exist
@@ -568,6 +569,16 @@ void MeshGraph::initialize_from_yaml(
 
         if (fabric_config.has_value()) {
             FabricType requested_fabric_type = get_fabric_type(*fabric_config);
+
+            auto num_devices = mesh_shape[0] * mesh_shape[1];
+
+            log_critical(tt::LogFabric, "Num devices: {}", num_devices);
+            log_critical(tt::LogFabric, "Fabric config: {}", enchantum::to_string(fabric_config.value()));
+
+            if (fabric_config.value() == FabricConfig::FABRIC_1D_RING && num_devices == 32) {
+                requested_fabric_type = FabricType::TORUS_XY;
+                log_critical(tt::LogFabric, "Requested fabric type: {}", enchantum::to_string(requested_fabric_type));
+            }
             // Validate that FabricConfig doesn't try to create connections that don't exist
             if (requires_more_connectivity(requested_fabric_type, board_fabric_type, mesh_shape)) {
                 TT_THROW(
