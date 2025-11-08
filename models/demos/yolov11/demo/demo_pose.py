@@ -774,6 +774,11 @@ def run_ttnn_raw_demo(image_path):
     try:
         # Initialize device with minimal memory
         device = ttnn.open_device(device_id=0, l1_small_size=32768)  # 32KB
+        try:
+            device.enable_program_cache()
+            logger.info("Enabled TTNN program cache")
+        except AttributeError:
+            logger.debug("Program cache not supported on this device handle")
 
         # Create model parameters (need batch dimension for preprocessing)
         img_tensor_batched = img_tensor.unsqueeze(0)  # Add batch dimension
