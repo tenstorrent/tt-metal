@@ -23,19 +23,6 @@ add_library(TTNN::Core ALIAS ttnn_core)
 target_compile_definitions(ttnn_core PUBLIC "$<$<CXX_COMPILER_ID:GNU>:DISABLE_NAMESPACE_STATIC_ASSERT>")
 target_precompile_headers(ttnn_core REUSE_FROM TT::CommonPCH)
 
-# set(TENSOR_FLATBUFFER_SCHEMAS
-#     ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/mesh_shape.fbs
-#     ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/tensor_spec.fbs
-#     ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/tensor_topology.fbs
-#     ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/tensor.fbs
-# )
-
-# set(TENSOR_FLATBUFFER_GENERATED_HEADERS)
-# foreach(FBS_FILE ${TENSOR_FLATBUFFER_SCHEMAS})
-#     GENERATE_FBS_HEADER(${FBS_FILE} TARGET TTNN::Core)
-#     list(APPEND TENSOR_FLATBUFFER_GENERATED_HEADERS ${FBS_GENERATED_HEADER_FILE})
-# endforeach()
-
 set_target_properties(
     ttnn_core
     PROPERTIES
@@ -54,7 +41,6 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES cpp/ttnn/kernel/kernel_common_utils.hpp cpp/ttnn/kernel/kernel_utils.hpp
     PRIVATE
-        #${TENSOR_FLATBUFFER_GENERATED_HEADERS}
         core/async_runtime.cpp
         core/cluster.cpp
         core/config.cpp
