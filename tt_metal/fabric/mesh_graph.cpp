@@ -118,6 +118,7 @@ const tt::stl::Indestructible<FabricToClusterDescriptorMap>& cluster_type_to_mes
          }}});
 
 MeshGraph::MeshGraph(const std::string& mesh_graph_desc_file_path, std::optional<FabricConfig> fabric_config) {
+    log_critical(tt::LogFabric, "Mesh graph descriptor file path: {}", mesh_graph_desc_file_path);
     if (mesh_graph_desc_file_path.ends_with(".textproto")) {
         auto filepath = std::filesystem::path(mesh_graph_desc_file_path);
         MeshGraphDescriptor mgd(filepath, true);
@@ -309,6 +310,13 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd, std::optiona
 
         if (fabric_config.has_value()) {
             FabricType requested_fabric_type = get_fabric_type(*fabric_config);
+
+            auto num_devices = mesh_shape[0] * mesh_shape[1];
+
+            if (fabric_config.value() == FabricConfig::FABRIC_1D_RING && num_devices == 32) {
+                requested_fabric_type = FabricType::TORUS_XY;
+            }
+
             // Validate that FabricConfig doesn't try to create connections that don't exist
             if (requires_more_connectivity(requested_fabric_type, mgd_fabric_type, mesh_shape)) {
                 TT_THROW(
