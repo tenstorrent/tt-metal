@@ -9,8 +9,6 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/experimental/bcast_to/device/bcast_to_device_operation.hpp"
 
-#include "ttnn/tensor/tensor_impl_wrapper.hpp"
-
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 auto check_shape(const ttnn::Tensor& input, const ttnn::Shape& output_shape) {
