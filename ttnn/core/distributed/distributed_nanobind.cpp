@@ -124,8 +124,9 @@ void py_module(nb::module_& mod) {
             })
         .def(
             "__iter__",
-            [](const MeshShape& ms) {  // TODO_NANOBIND: double check type here
-                return nb::make_iterator(nb::type<MeshShape>(), "iterator", ms.view().begin(), ms.view().end());
+            [](const MeshShape& ms) {
+                return nb::make_iterator<nb::rv_policy::reference_internal>(
+                    nb::type<MeshShape>(), "iterator", ms.view().begin(), ms.view().end());
             },
             nb::keep_alive<0, 1>())
         .def(
@@ -161,11 +162,8 @@ void py_module(nb::module_& mod) {
         .def(
             "__iter__",
             [](const MeshCoordinate& mc) {
-                return nb::make_iterator(  // TODO_NANOBIND: double check type here
-                    nb::type<MeshCoordinate>(),
-                    "iterator",
-                    mc.coords().begin(),
-                    mc.coords().end());
+                return nb::make_iterator<nb::rv_policy::reference_internal>(
+                    nb::type<MeshCoordinate>(), "iterator", mc.coords().begin(), mc.coords().end());
             },
             nb::keep_alive<0, 1>())
         .def(
@@ -190,8 +188,9 @@ void py_module(nb::module_& mod) {
             })
         .def(
             "__iter__",
-            [](const MeshCoordinateRange& mcr) {  // TODO_NANOBIND: double check type here
-                return nb::make_iterator(nb::type<MeshCoordinateRange>(), "iterator", mcr.begin(), mcr.end());
+            [](const MeshCoordinateRange& mcr) {
+                return nb::make_iterator<nb::rv_policy::reference_internal>(
+                    nb::type<MeshCoordinateRange>(), "iterator", mcr.begin(), mcr.end());
             },
             nb::keep_alive<0, 1>());
 
@@ -455,7 +454,7 @@ void py_module(nb::module_& mod) {
         nb::arg("offset") = nb::none(),
         nb::arg("physical_device_ids") = std::vector<int>{},
         nb::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE);
-    mod.def("close_mesh_device", &close_mesh_device, nb::kw_only(), nb::arg("mesh_device"));
+    mod.def("close_mesh_device", &close_mesh_device, nb::arg("mesh_device"));
 
     auto py_placement_shard = static_cast<nb::class_<MeshMapperConfig::Shard>>(mod.attr("PlacementShard"));
     py_placement_shard.def(nb::init<int>())
