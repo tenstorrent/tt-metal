@@ -6,6 +6,7 @@ import contextlib
 from typing import Callable, Union
 from loguru import logger
 import pathlib
+import shutil
 import graphviz
 
 from ttnn._ttnn.graph import RunMode, begin_graph_capture, end_graph_capture, extract_calltrace
@@ -163,6 +164,9 @@ def visualize(
     visualize_node: Callable = visualize_node,
     visualize_edge: Callable = visualize_edge,
 ) -> graphviz.Digraph:
+    if shutil.which("dot") is None:
+        logger.warning("Graphviz is not installed. Skipping visualization.")
+        return
     if isinstance(file_name, str):
         file_name = pathlib.Path(file_name)
 
