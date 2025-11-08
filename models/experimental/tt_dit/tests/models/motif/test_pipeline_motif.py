@@ -51,6 +51,13 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
         pytest.param(False, id="not_traced"),
     ],
 )
+@pytest.mark.parametrize(
+    "use_cache",
+    [
+        pytest.param(True, id="yes_use_cache"),
+        pytest.param(False, id="no_use_cache"),
+    ],
+)
 def test_motif_pipeline(
     *,
     mesh_device: ttnn.MeshDevice,
@@ -70,6 +77,7 @@ def test_motif_pipeline(
     use_torch_clip_text_encoder: bool,
     traced: bool,
     mesh_test_id: str,
+    use_cache: bool,
     is_ci_env: bool,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
