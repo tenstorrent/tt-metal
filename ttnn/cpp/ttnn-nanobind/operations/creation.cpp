@@ -163,7 +163,50 @@ void bind_full_operation(nb::module_& mod, const creation_operation_t& operation
         operation,
         doc,
         create_nanobind_full_overload<creation_operation_t, float>(),
-        create_nanobind_full_overload<creation_operation_t, int>());
+        create_nanobind_full_overload<creation_operation_t, int>(),
+        // Accept MeshDevice* directly (Python MeshDevice maps to pointer; None maps to nullptr)
+        ttnn::nanobind_overload_t{
+            [](const creation_operation_t& self,
+               const std::vector<uint32_t>& shape,
+               const float fill_value,
+               const std::optional<DataType>& dtype,
+               const std::optional<Layout>& layout,
+               MeshDevice* device,
+               const std::optional<MemoryConfig>& memory_config,
+               std::optional<ttnn::Tensor>& optional_output_tensor) -> ttnn::Tensor {
+                std::optional<std::reference_wrapper<MeshDevice>> device_ref =
+                    device ? std::optional<std::reference_wrapper<MeshDevice>>(std::ref(*device)) : std::nullopt;
+                return self(
+                    ttnn::Shape(shape), fill_value, dtype, layout, device_ref, memory_config, optional_output_tensor);
+            },
+            nb::arg("shape"),
+            nb::arg("fill_value"),
+            nb::arg("dtype") = nb::none(),
+            nb::arg("layout") = nb::none(),
+            nb::arg("device") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("optional_tensor") = nb::none()},
+        ttnn::nanobind_overload_t{
+            [](const creation_operation_t& self,
+               const std::vector<uint32_t>& shape,
+               const int fill_value,
+               const std::optional<DataType>& dtype,
+               const std::optional<Layout>& layout,
+               MeshDevice* device,
+               const std::optional<MemoryConfig>& memory_config,
+               std::optional<ttnn::Tensor>& optional_output_tensor) -> ttnn::Tensor {
+                std::optional<std::reference_wrapper<MeshDevice>> device_ref =
+                    device ? std::optional<std::reference_wrapper<MeshDevice>>(std::ref(*device)) : std::nullopt;
+                return self(
+                    ttnn::Shape(shape), fill_value, dtype, layout, device_ref, memory_config, optional_output_tensor);
+            },
+            nb::arg("shape"),
+            nb::arg("fill_value"),
+            nb::arg("dtype") = nb::none(),
+            nb::arg("layout") = nb::none(),
+            nb::arg("device") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("optional_tensor") = nb::none()});
 }
 
 template <typename creation_operation_t>
