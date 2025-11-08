@@ -27,7 +27,7 @@ TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_DEVICE_PROFILER=1 pytest tests/ttnn/un
 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_DEVICE_PROFILER=1 pytest tests/ttnn/unit_tests/benchmarks/test_benchmark.py::test_matmul_2d_host_perf_out_of_box
 ```
 
-Alternatively, to test on an N300 card, use WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml before each command.
+Alternatively, to test on an N300 card, use ```bash WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml``` before each command.
 Python scripts for reproducing the plots are included in this directory.
 
 ## Design of Experiments
@@ -111,7 +111,7 @@ Device utilization measures how efficiently the hardware's compute cores are bei
 - **Lower precision datatypes achieve higher utilization**: BFLOAT4_B (LoFi) consistently outperforms BFLOAT8_B (HiFi2) and BFLOAT16 (HiFi4) because fewer compute cycles per tile make it easier to keep cores busy
 - **P150's architectural advantages shine**: Despite having 2× more cores (130 vs 64), P150 maintains higher absolute utilization across all workloads, demonstrating superior memory bandwidth and core efficiency
 
-These results are based on device-side profiling (TRISC1 kernel duration) for non-traced configurations, providing an accurate measure of computational efficiency.
+These results are based on device-side profiling (TRISC1 kernel duration) for non-traced configurations, roviding an accurate measure of computational efficiency.
 Blackhole (P150) achieves excellent utilization across the board, with peak utilization reaching 94.88% and 61% of configurations exceeding 80% utilization. This represents a significant improvement over Wormhole (N150), which peaks at 92.38% with only 32% of configurations above 80%.
 
 ![](images/utilization_vs_matrix_elements_comparison.png)
@@ -142,10 +142,6 @@ Tracing in the TT-Metallium stack is a performance optimization that records com
 As shown here, on both Wormhole and Blackhole, Trace helps recover more lost performance on smaller tensor matrix multiplications compared to larger ones. This is likely because smaller matrix operations take less time to execute than larger ones, meaning that host overhead is, percentage-wise, more harmful to overall runtime and maximum throughput compared to larger tensors.
 
 
-### Out of the Box Performance
-
-In this tech report, we fine-tuned the parameters of each matrix multiplication kernel to extract the maximum possible performance. However, here, we will compare the performance loss with the default configuration to demonstrate the hardware’s ability to perform well without significant hand tuning.
-
 ### Rectangular Matrix
 
 Both architectures perform most ideally when the input tensors are closest to square shapes, but they still perform well on rectangular matrices. However, as the tensors become more rectangular, performance takes a larger hit.
@@ -161,21 +157,23 @@ Both architectures perform most ideally when the input tensors are closest to sq
 
 
 #### Out of Box Performance
+In this tech report, we fine-tuned the parameters of each matrix multiplication kernel to extract the maximum possible performance. However, here, we will compare the performance loss with the default configuration to demonstrate the hardware’s ability to perform well without significant hand tuning.
 
 As shown here, on both Wormhole and Blackhole, hand tuned configs helps recover more lost performance on smaller tensor matrix multiplications compared to larger ones. Similar to tracing, the configuration matters more for smaller tensors, as it is harder to saturate the core grid with smaller workloads compared to larger ones.
 
 
+<details>
+<summary><strong>N150 Out of Box Results</strong> (click to expand)</summary>
 
-
+<details>
+<summary><strong>P150 Out of Box Results</strong> (click to expand)</summary>
 
 
 ### All Data
 
-This section contains the best performing configurations for each tensor size. For each unique matrix dimension (M×K×N), only the configuration achieving the highest TFLOPS is shown.
-
 
 <details>
-<summary><strong>N150 Best Configurations</strong> (click to expand)</summary>
+<summary><strong>N150 Manually Tuned Configurations</strong> (click to expand)</summary>
 
 | M | K | N | Aspect Ratio M | Aspect Ratio K | Aspect Ratio N | Use Trace | Grid Size | Dtype | Math Fidelity | Tflops | In0 Sharded | Out Sharded | In0 Block W Div | Num Out Blocks H | Num Out Blocks W | In0 Block W | Out Subblock H | Out Subblock W | Out Block H | Out Block W | Per Core M | Per Core N | Inference Time Avg | Host Based Utilization (Vs User Selected Grid 8X8) | Host Based Utilization (Vs Full Available Grid 8X8) | Device Based Utilization (Vs User Selected Grid 8X8) | Device Based Utilization (Vs Full Available Grid 8X8) |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -222,7 +220,7 @@ _Best configurations only: 36 unique tensor sizes (highest TFLOPS per size)._
 
 
 <details>
-<summary><strong>P150 Best Configurations</strong> (click to expand)</summary>
+<summary><strong>P150  Manually Tuned Configurations</strong> (click to expand)</summary>
 
 | M | K | N | Aspect Ratio M | Aspect Ratio K | Aspect Ratio N | Use Trace | Grid Size | Dtype | Math Fidelity | Tflops | In0 Sharded | Out Sharded | In0 Block W Div | Num Out Blocks H | Num Out Blocks W | In0 Block W | Out Subblock H | Out Subblock W | Out Block H | Out Block W | Per Core M | Per Core N | Inference Time Avg | Host Based Utilization (Vs User Selected Grid 13X10) | Host Based Utilization (Vs Full Available Grid 13X10) | Device Based Utilization (Vs User Selected Grid 13X10) | Device Based Utilization (Vs Full Available Grid 13X10) |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
