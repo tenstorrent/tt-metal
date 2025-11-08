@@ -118,9 +118,7 @@ void fabric_set_mcast_route(
         reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(ROUTING_TABLE_BASE);
     uint16_t my_mesh_id = routing_table->my_mesh_id;
     if (my_mesh_id != dst_mesh_id) {
-        tt_l1_ptr exit_node_table_t* exit_node_table =
-            reinterpret_cast<tt_l1_ptr exit_node_table_t*>(EXIT_NODE_TABLE_BASE);
-        dst_dev_id = exit_node_table->nodes[dst_mesh_id];
+        dst_dev_id = routing_table->exit_node_table.nodes[dst_mesh_id];
         // fabric_set_unicast_route(packet_header, dst_dev_id, dst_mesh_id);
         // TODO: refactoring
         packet_header->mcast_params_16 = ((uint64_t)s_num_hops << 48) | ((uint64_t)n_num_hops << 32) |

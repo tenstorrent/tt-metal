@@ -187,14 +187,17 @@ struct exit_node_table_t {
 struct tensix_routing_l1_info_t {
     // TODO: https://github.com/tenstorrent/tt-metal/issues/28534
     //       these fabric node ids should be another struct as really commonly used data
-    uint16_t my_mesh_id;    // Current mesh ID
-    uint16_t my_device_id;  // Current chip ID
+    uint16_t my_mesh_id = 0;    // Current mesh ID
+    uint16_t my_device_id = 0;  // Current chip ID
     // NOTE: Compressed version has additional overhead (2x slower) to read values,
     //       but raw data is too huge (2048 bytes) to fit in L1 memory.
     //       Need to evaluate once actual workloads are available
-    compressed_routing_table_t<MAX_MESH_SIZE> intra_mesh_routing_table;   // 96 bytes
-    compressed_routing_table_t<MAX_NUM_MESHES> inter_mesh_routing_table;  // 384 bytes
-    uint8_t padding[12];                                                  // pad to 16-byte alignment
+    compressed_routing_table_t<MAX_MESH_SIZE> intra_mesh_routing_table{};   // 96 bytes
+    compressed_routing_table_t<MAX_NUM_MESHES> inter_mesh_routing_table{};  // 384 bytes
+    intra_mesh_routing_path_t<1, false> routing_path_table_1d{};            // 64 bytes
+    intra_mesh_routing_path_t<2, true> routing_path_table_2d{};             // 512 bytes
+    exit_node_table_t exit_node_table{};                                    // 1024 bytes
+    uint8_t padding[12] = {};                                               // pad to 16-byte alignment
 } __attribute__((packed));
 
 struct fabric_connection_info_t {
@@ -235,10 +238,10 @@ struct tensix_fabric_connections_l1_info_t {
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
 
 #if defined(COMPILE_FOR_ERISC)
-#define ROUTING_PATH_BASE_1D MEM_AERISC_FABRIC_ROUTING_PATH_BASE_1D
-#define ROUTING_PATH_BASE_2D MEM_AERISC_FABRIC_ROUTING_PATH_BASE_2D
-#define ROUTING_TABLE_BASE MEM_AERISC_FABRIC_ROUTING_TABLE_BASE
-#define EXIT_NODE_TABLE_BASE MEM_AERISC_FABRIC_EXIT_NODE_TABLE_BASE
+#define ROUTING_PATH_BASE_1D (MEM_AERISC_ROUTING_TABLE_BASE + MEM_OFFSET_OF_ROUTING_PATHS)
+#define ROUTING_PATH_BASE_2D (ROUTING_PATH_BASE_1D + MEM_ERISC_FABRIC_ROUTING_PATH_SIZE_1D)
+#define ROUTING_TABLE_BASE (MEM_AERISC_ROUTING_TABLE_BASE)
+#define EXIT_NODE_TABLE_BASE (ROUTING_PATH_BASE_2D + MEM_ERISC_FABRIC_ROUTING_PATH_SIZE_2D)
 #elif defined(COMPILE_FOR_IDLE_ERISC)
 #define ROUTING_PATH_BASE_1D MEM_IERISC_FABRIC_ROUTING_PATH_BASE_1D
 #define ROUTING_PATH_BASE_2D MEM_IERISC_FABRIC_ROUTING_PATH_BASE_2D
