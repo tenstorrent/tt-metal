@@ -21,7 +21,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
-#include "ttnn/tensor/storage.hpp"
+
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -325,39 +325,38 @@ Tensor to_weight_tile_layout(
     }
     const ttnn::Shape output_shape{1, 1, weight_matrix_rows, weight_matrix_cols};
 
-    auto compute =
-        [&w_shape, weight_matrix_cols, &output_shape, output_dtype](const tt::tt_metal::HostBuffer& input_host_buffer) {
-            auto input_buffer = tt::tt_metal::host_buffer::get_as<T>(input_host_buffer);
+    auto compute = [&w_shape, weight_matrix_cols, &output_shape, output_dtype](
+                       const tt::tt_metal::HostBuffer& input_host_buffer) {
+        auto input_buffer = tt::tt_metal::host_buffer::get_as<T>(input_host_buffer);
 
-            auto output_buffer = std::vector<T>(output_shape.volume());
-            WeightLayoutThreader::parallel_for_channels(
-                w_shape[0],
-                w_shape[1],
-                16,  // Minimum work per thread
-                [&](uint32_t out_t,
-                    uint32_t in_t,
-                    uint32_t out_start,
-                    uint32_t out_end,
-                    uint32_t in_start,
-                    uint32_t in_end) {
-                    for (auto r = 0; r < w_shape[2]; r++) {
-                        for (auto s = 0; s < w_shape[3]; s++) {
-                            for (auto c = in_start; c < in_end; c++) {
-                                for (auto k = out_start; k < out_end; k++) {
-                                    auto matrix_idx = k + (c * weight_matrix_cols) +
-                                                      (s * w_shape[1] * weight_matrix_cols) +
-                                                      (r * w_shape[3] * w_shape[1] * weight_matrix_cols);
-                                    auto idx = (k * w_shape[1] * w_shape[2] * w_shape[3]) +
-                                               (c * w_shape[2] * w_shape[3]) + (r * w_shape[3]) + s;
-                                    output_buffer[matrix_idx] = input_buffer[idx];
-                                }
+        auto output_buffer = std::vector<T>(output_shape.volume());
+        WeightLayoutThreader::parallel_for_channels(
+            w_shape[0],
+            w_shape[1],
+            16,  // Minimum work per thread
+            [&](uint32_t out_t,
+                uint32_t in_t,
+                uint32_t out_start,
+                uint32_t out_end,
+                uint32_t in_start,
+                uint32_t in_end) {
+                for (auto r = 0; r < w_shape[2]; r++) {
+                    for (auto s = 0; s < w_shape[3]; s++) {
+                        for (auto c = in_start; c < in_end; c++) {
+                            for (auto k = out_start; k < out_end; k++) {
+                                auto matrix_idx = k + (c * weight_matrix_cols) + (s * w_shape[1] * weight_matrix_cols) +
+                                                  (r * w_shape[3] * w_shape[1] * weight_matrix_cols);
+                                auto idx = (k * w_shape[1] * w_shape[2] * w_shape[3]) + (c * w_shape[2] * w_shape[3]) +
+                                           (r * w_shape[3]) + s;
+                                output_buffer[matrix_idx] = input_buffer[idx];
                             }
                         }
                     }
-                });
-            return create_host_buffer_for_conv_weight<T>(
-                tt::tt_metal::HostBuffer(std::move(output_buffer)), output_dtype, output_shape);
-        };
+                }
+            });
+        return create_host_buffer_for_conv_weight<T>(
+            tt::tt_metal::HostBuffer(std::move(output_buffer)), output_dtype, output_shape);
+    };
 
     const TensorSpec output_spec(
         output_shape, tt::tt_metal::TensorLayout(output_dtype, tt::tt_metal::PageConfig(Layout::TILE), MemoryConfig{}));

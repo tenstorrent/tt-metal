@@ -12,7 +12,6 @@
 #include <tt_stl/overloaded.hpp>
 
 #include "tensor/host_buffer/functions.hpp"
-#include "tensor/storage.hpp"
 #include "tensor/tensor_impl.hpp"
 #include <algorithm>
 #include "ttnn/core.hpp"

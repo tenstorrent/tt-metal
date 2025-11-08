@@ -10,7 +10,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/system_mesh.hpp>
-#include <ttnn/tensor/storage.hpp>
+
 #include <ttnn/tensor/tensor.hpp>
 
 #include "tt_stl/span.hpp"
