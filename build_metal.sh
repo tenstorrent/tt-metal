@@ -64,7 +64,7 @@ clean() {
 
 # Parse CLI options
 export_compile_commands="OFF"
-enable_ccache="OFF"
+enable_ccache="ON"
 enable_time_trace="OFF"
 build_type="Release"
 disable_profiler="OFF"

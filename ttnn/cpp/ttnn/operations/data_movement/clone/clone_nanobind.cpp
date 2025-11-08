@@ -8,6 +8,7 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/variant.h>
 
 #include "clone.hpp"
 #include "ttnn-nanobind/decorators.hpp"
@@ -42,7 +43,26 @@ void bind_clone_operation(nb::module_& mod) {
         mod,
         ttnn::clone,
         doc,
-        ttnn::nanobind_arguments_t{
+        ttnn::nanobind_overload_t{
+            [](const std::decay_t<decltype(ttnn::clone)> self,
+               const ttnn::Tensor& input,
+               const std::optional<ttnn::DataType>& dtype,
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               nb::object compute_kernel_config_obj) -> ttnn::Tensor {
+                std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt;
+                if (!compute_kernel_config_obj.is_none()) {
+                    if (nb::isinstance<ttnn::WormholeComputeKernelConfig>(compute_kernel_config_obj)) {
+                        compute_kernel_config = nb::cast<ttnn::WormholeComputeKernelConfig>(compute_kernel_config_obj);
+                    } else if (nb::isinstance<ttnn::GrayskullComputeKernelConfig>(compute_kernel_config_obj)) {
+                        compute_kernel_config = nb::cast<ttnn::GrayskullComputeKernelConfig>(compute_kernel_config_obj);
+                    } else {
+                        throw nb::type_error(
+                            "compute_kernel_config must be WormholeComputeKernelConfig or "
+                            "GrayskullComputeKernelConfig");
+                    }
+                }
+                return self(input, dtype, memory_config, compute_kernel_config);
+            },
             nb::arg("input"),
             nb::kw_only(),
             nb::arg("dtype") = nb::none(),

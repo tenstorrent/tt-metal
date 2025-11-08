@@ -13,6 +13,8 @@
 #include "ttnn-nanobind/decorators.hpp"
 #include "softmax.hpp"
 
+NB_MAKE_OPAQUE(ttnn::operations::normalization::SoftmaxProgramConfig);
+
 namespace ttnn::operations::normalization::detail {
 
 /**

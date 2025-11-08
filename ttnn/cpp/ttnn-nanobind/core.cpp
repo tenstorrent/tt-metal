@@ -12,6 +12,7 @@
 
 #include <fmt/format.h>
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/optional.h>
 #include <nanobind/stl/filesystem.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/unique_ptr.h>

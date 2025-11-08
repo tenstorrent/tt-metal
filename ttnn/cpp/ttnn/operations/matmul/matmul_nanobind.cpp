@@ -16,6 +16,8 @@
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/types.hpp"
 
+NB_MAKE_OPAQUE(ttnn::operations::matmul::MatmulProgramConfig);
+
 namespace ttnn::operations::matmul {
 
 using ttnn::operations::unary::UnaryWithParam;

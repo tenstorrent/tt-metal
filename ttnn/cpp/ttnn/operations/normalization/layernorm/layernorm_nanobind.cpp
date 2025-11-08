@@ -13,6 +13,8 @@
 #include "ttnn-nanobind/decorators.hpp"
 #include "layernorm.hpp"
 
+NB_MAKE_OPAQUE(ttnn::operations::normalization::LayerNormProgramConfig);
+
 namespace ttnn::operations::normalization::detail {
 
 void bind_normalization_layernorm_program_config(nb::module_& mod) {

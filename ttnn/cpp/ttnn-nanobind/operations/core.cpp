@@ -9,7 +9,6 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
-#include <nanobind/stl/variant.h>  // needed for DeviceComputerKernelConfig
 
 #include "ttnn-nanobind/decorators.hpp"
 #include "ttnn/operations/core/core.hpp"
