@@ -319,7 +319,7 @@ TEST_F(ControlPlaneFixture, TestSingleGalaxyMeshAPIs) {
     auto user_meshes = control_plane.get_user_physical_mesh_ids();
     EXPECT_EQ(user_meshes.size(), 1);
     EXPECT_EQ(user_meshes[0], MeshId{0});
-    EXPECT_EQ(control_plane.get_physical_mesh_shape(MeshId{0}), tt::tt_metal::distributed::MeshShape(1, 32));
+    EXPECT_EQ(control_plane.get_physical_mesh_shape(MeshId{0}), tt::tt_metal::distributed::MeshShape(8, 4));
 }
 
 TEST(MeshGraphValidation, TestT3kDualHostMeshGraph) {
