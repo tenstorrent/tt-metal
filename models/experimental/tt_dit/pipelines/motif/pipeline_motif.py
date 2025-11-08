@@ -102,7 +102,14 @@ class MotifPipeline:
         ]
 
         self.encoder_device = self._submesh_devices[0]
-        self.encoder_mesh_shape = ttnn.MeshShape(1, self._encoder_parallel_config.tensor_parallel.factor)
+        original_encoder_mesh_shape = list(self.encoder_device.shape)
+        original_encoder_mesh_shape[
+            self._encoder_parallel_config.tensor_parallel.mesh_axis
+        ] = self._encoder_parallel_config.tensor_parallel.factor
+        original_encoder_mesh_shape[1 - self._encoder_parallel_config.tensor_parallel.mesh_axis] = (
+            self.encoder_device.shape.mesh_size() // self._encoder_parallel_config.tensor_parallel.factor
+        )
+        self.encoder_mesh_shape = ttnn.MeshShape(*original_encoder_mesh_shape)
         self.vae_device = self._submesh_devices[0]
         self.encoder_submesh_idx = 0  # Use submesh 0 for encoder
         self.vae_submesh_idx = 0  # Use submesh 0 for VAE
@@ -301,7 +308,7 @@ class MotifPipeline:
         self.run_single_prompt(
             prompt="", negative_prompt=None, num_inference_steps=2, cfg_scale=3.5, seed=0, traced=False
         )
-        self._sync_devices()
+        self.synchronize_devices()
 
     def run_single_prompt(
         self, prompt, negative_prompt=None, num_inference_steps=40, cfg_scale=5.0, seed=None, traced=True
@@ -563,7 +570,7 @@ class MotifPipeline:
             timestep=timestep,
         )
 
-    def _sync_devices(self):
+    def synchronize_devices(self):
         for device in self._submesh_devices:
             ttnn.synchronize_device(device)
 

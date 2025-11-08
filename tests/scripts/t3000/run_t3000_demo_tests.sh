@@ -330,6 +330,9 @@ run_t3000_flux1_tests() {
   run_t3000_dit_tests "models/experimental/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k 2x4sp0tp1-dev"
 }
 
+run_t3000_motif_tests() {
+  run_t3000_dit_tests "models/experimental/tt_dit/tests/models/motif/test_pipeline_motif.py -k 2x4cfg1sp0tp1"
+}
 
 run_t3000_llama3_load_checkpoints_tests() {
   # Record the start time
@@ -458,6 +461,9 @@ run_t3000_tests() {
 
   # Run flux1 tests
   run_t3000_flux1_tests
+
+  # Run motif tests
+  run_t3000_motif_tests
 
   # Run gemma3 tests
   run_t3000_gemma3_tests
