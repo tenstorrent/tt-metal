@@ -289,6 +289,12 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
             num_groups);
     }
 
+    TT_FATAL(
+        (!use_welford) || (num_groups_per_core <= 16),
+        "num_groups_per_core ({}) must be <= 16 when use_welfords is true. Increase the width of shard spec to address "
+        "this.",
+        num_groups_per_core);
+
     // subblock
     uint32_t num_rows_per_batch_per_core = per_core_M / num_batches_per_core;
     auto [block_wt, num_groups_per_reset] = find_max_tile_span(per_core_N, group_size);
@@ -1276,6 +1282,12 @@ operation::ProgramWithCallbacks groupnorm_multi_core_no_mcast(
     uint32_t num_batches_per_core_group_1 = num_batches > num_shards_r ? num_batches / num_shards_r : 1;
     uint32_t num_batches_per_core_group_2 = num_batches_per_core_group_1;  // need this to be non-zero even if unused
     uint32_t num_groups_per_core = num_groups > num_shards_c ? num_groups / num_shards_c : 1;
+
+    TT_FATAL(
+        (!use_welford) || (num_groups_per_core <= 16),
+        "num_groups_per_core ({}) must be <= 16 when use_welfords is true. Increase the width of core grid to address "
+        "this.",
+        num_groups_per_core);
 
     // Compute num_out_blocks if not provided. If this does not provide the best result, num_out_blocks should be
     // computed by testing different powers of 2. This is a heuristic.
@@ -2531,6 +2543,12 @@ operation::ProgramWithCallbacks groupnorm_multi_core_mcast(
     // each core contains multiple batches
     uint32_t num_batches_per_core_group_1 = num_batches > num_shards_r ? num_batches / num_shards_r : 1;
     uint32_t num_groups_per_core = num_groups > num_shards_c ? num_groups / num_shards_c : 1;
+
+    TT_FATAL(
+        (!use_welford) || (num_groups_per_core <= 16),
+        "num_groups_per_core ({}) must be <= 16 when use_welfords is true. Increase the width of core grid to address "
+        "this.",
+        num_groups_per_core);
 
     // Compute num_out_blocks if not provided. If this does not provide the best result, num_out_blocks should be
     // computed by testing different powers of 2. This is a heuristic.

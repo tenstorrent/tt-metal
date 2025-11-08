@@ -21,9 +21,76 @@
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/transpose_wh.h"
 #include "compute_kernel_api/welford.h"
+#include "ttnn/operations/normalization/kernel_util/compute/memory.h"
 
 namespace NAMESPACE {
 void MAIN {
+    /*
+     * Definitions
+     * block_h: This the length of the row we wish to processes in terms of tiles
+     *
+     * out_block_...: This is the length of our Circular Buffer, sometimes the length of out
+     *                tensors(block_h) are larger than L1 space, so we have to process chunks of
+     *                this data at a time. This chunk is called an out_block.
+     *
+     * num_out_blocks: This is the number of chunks specified by the use, such that a CBs
+     *                (length defined by out_block) fit in L1.
+     *                Users should minimize the number of num_out_blocks for better perf.
+     *
+     * ...normal:  If num_out_blocks evenly divides block_h, then all chunks are the size normal.
+     * ...last: If num_out_blocks does not divides block_h, the leftovers are put into a chunk of
+     *          length last.
+     *
+     * This is a high level desciption of the stages of this kernel, tags will be added to show
+     * where in the code each stage starts and ends.
+     *
+     * Welford's Online Algorithm for Group Normalization:
+     * This kernel implements Welford's online algorithm for numerically stable computation of
+     * mean and variance across groups in a single pass through the data.
+     *
+     * Welford's algorithm maintains running statistics:
+     * - Count: number of elements processed
+     * - Mean: running average μ = Σ(x_i) / count
+     * - M2: sum of squared differences from current mean = Σ((x_i - μ)^2)
+     * - Variance: M2 / count (for population)
+     *
+     * Batch Loop:
+     *   Input tiles:
+     *       For each group, we accumulate Welford statistics across all channels in that group
+     *       Welford Partial Tile Updates:
+     *           Process input tiles incrementally, updating running mean and M2 for each group
+     *           Uses welford_partial_tile()
+     *           Intermediate results stored in dst registers between tiles
+     *   Statistics Aggregation:
+     *       Local aggregation per core:
+     *           Convert accumulated M2 to variance using welford_store_mean_var_to_dst_raw()
+     *           Store per-group statistics in cb_ex_partial for inter-core communication
+     *       Global reduction across cores:
+     *           Reader kernels aggregate local statistics from all cores into cb_ex_global
+     *           Designated sender core produces final global mean and variance per group
+     *   Normalization Factor Calculation:
+     *       Add epsilon to variance: Var + eps
+     *       Compute reciprocal square root: 1/sqrt(Var + eps)
+     *       Store normalization factor in cb_ex2pe for use in final calculation
+     *   Final Normalization:
+     *       Center inputs: x - μ (mean subtraction)
+     *       Apply input mask to handle padding/ignored elements
+     *       Scale by normalization factor: (x - μ) * (1/sqrt(Var + eps))
+     *       Optional affine transform:
+     *         Gamma scaling: result * γ
+     *         Beta shift: result + β
+     *
+     * Key Welford operations:
+     * - welford_init(): Initialize algorithm state
+     * - welford_partial_tile(): Update running statistics for partial tile data
+     * - welford_store_mean_m2_to_dst(): Save intermediate statistics to dst registers
+     * - welford_load_mean_m2_from_dst(): Restore statistics for continued processing
+     * - welford_store_mean_var_to_dst_raw(): Convert M2 to final variance
+     *
+     * To find code sections, search for "Start LABEL" or "End LABEL" comments
+     * Examples: "Start Welford Partial Tile" or "End Statistics Aggregation"
+     */
+
     constexpr uint32_t do_gamma = get_named_compile_time_arg_val("do_gamma");
     constexpr uint32_t do_beta = get_named_compile_time_arg_val("do_beta");
     constexpr uint32_t num_cores_per_mcast_group = get_named_compile_time_arg_val("num_cores_per_mcast_group");
@@ -125,16 +192,13 @@ void MAIN {
 #endif
 
     constexpr uint32_t out_block_h_normal = block_h / num_out_blocks;
-    constexpr uint32_t out_block_hw_normal = out_block_h_normal * block_w;
     uint32_t num_out_blocks_padded = num_out_blocks;
     uint32_t extra_out_block = false;
     uint32_t out_block_h_last = out_block_h_normal;
-    uint32_t out_block_hw_last = out_block_hw_normal;
     if constexpr (block_h % num_out_blocks != 0) {
         extra_out_block = true;
         num_out_blocks_padded++;
         out_block_h_last = (block_h % num_out_blocks);
-        out_block_hw_last = out_block_h_last * block_w;
     }
     uint32_t cb_ex_external_tiles_required =
         num_out_blocks_padded * num_cores_per_mcast_group * 16 / single_tile_size_bytes;
@@ -142,15 +206,10 @@ void MAIN {
         cb_ex_external_tiles_required++;
     }
 
-    std::array<uint32_t, reciprocal_size>* p_reciprocal = nullptr;
-    if constexpr (reciprocal_size > 0) {
-        uint32_t* p_cb = nullptr;
-        // The reciprocals are already sharded to this CB, get the pointer to the first value
-        cb_get_tile(cb_reciprocals, /*tile_idx=*/0, &p_cb);
-        // The first 4 entries have metadata, so we ignore them
-        p_cb += 4;
-        p_reciprocal = reinterpret_cast<std::array<uint32_t, reciprocal_size>*>(p_cb);
-    }
+    // Get pointer to the reciprocal LUT
+    using recip_lut_t = std::array<uint32_t, reciprocal_size>;
+    auto p_reciprocal =
+        norm::kernel_util::compute::memory::get_pointer_to_cb_data<recip_lut_t>(cb_reciprocals, /*tile_idx=*/0);
 
     cb_wait_front(cb_eps, 1);
     cb_wait_front(cb_input_mask, num_tiles_input_mask);
@@ -164,26 +223,19 @@ void MAIN {
 
     for (uint32_t b = 0; b < num_batches; ++b) {
         cb_reserve_back(cb_ex_partial, 2);
-        reconfig_data_format_srcb(cb_in0);
-        transpose_wh_init(cb_in0, cb_ex_partial);
         tile_regs_acquire();
         welford_init();
 
         uint32_t block_xy_coord = 0;
-        uint32_t block_xy_limit = num_channels_per_group;
 
         for (uint32_t g = 0; g < num_groups; ++g) {
             welford_store_mean_m2_to_dst(mean_dst, g);
         }
 
         for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
-            uint32_t out_block_h_actual, out_block_hw_actual;
+            uint32_t out_block_h_actual = out_block_h_normal;
             if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                 out_block_h_actual = out_block_h_last;
-                out_block_hw_actual = out_block_hw_last;
-            } else {
-                out_block_h_actual = out_block_h_normal;
-                out_block_hw_actual = out_block_hw_normal;
             }
 
             for (uint32_t mt = 0; mt < out_block_h_actual; ++mt) {
@@ -216,7 +268,7 @@ void MAIN {
 
                     uint32_t group_offset = 0;
                     for (uint32_t g = min_group; g < num_groups; ++g) {
-                        // Start Welford's Calculation
+                        // Start Welford Partial Tile Updates
                         uint32_t cols_available = tt::constants::TILE_WIDTH - group_offset;
                         uint32_t cols_consumed = std::min(cols_available, channels_left);
 
@@ -224,6 +276,7 @@ void MAIN {
                         welford_partial_tile<reciprocal_size>(
                             input_dst, curr_xy_coord, group_offset, cols_consumed, *p_reciprocal);
                         welford_store_mean_m2_to_dst(mean_dst, g);
+                        // End Welford Partial Tile Updates
 
                         channels_left -= cols_consumed;
                         group_offset += cols_consumed;
@@ -252,10 +305,10 @@ void MAIN {
                     cb_pop_front(cb_in0, 1);
                 }
                 block_xy_coord += num_channels_per_group;
-                block_xy_limit += num_channels_per_group;
             }
         }
 
+        // Start Statistics Aggregation
         for (uint32_t g = 0; g < num_groups; ++g) {
             // Convert M2 to variance
             welford_load_mean_m2_from_dst(mean_dst, g);
@@ -267,14 +320,15 @@ void MAIN {
         pack_tile_block(mean_dst, cb_ex_partial, 2);
         tile_regs_release();
         cb_push_back(cb_ex_partial, 2);
+        // End Statistics Aggregation
 
-        // Start Variance Calc
+        // Start Normalization Factor Calculation
         // Wait for final welford values in cb_ex_global
         cb_wait_front(cb_ex_global, 2 * num_groups);
         cb_reserve_back(cb_ex2pe, num_groups);
         // (Var + eps)
         add_tiles_init(cb_ex_global, cb_eps);
-        reconfig_data_format_srcb(cb_in0, cb_eps);
+        reconfig_data_format_srcb(cb_eps);
         for (uint32_t g = 0; g < num_groups; ++g) {
             tile_regs_acquire();
             add_tiles(cb_ex_global, cb_eps, 1 + (g << 1), 0, dst0);
@@ -288,19 +342,15 @@ void MAIN {
             tile_regs_release();
         }
         cb_push_back(cb_ex2pe, num_groups);
-        // End Variance Calc
+        // End Normalization Factor Calculation
 
         cb_wait_front(cb_ex2pe, num_groups);
 
-        // Start Final Val Calc
+        // Start Final Normalization
         for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
-            uint32_t out_block_h_actual, out_block_hw_actual;
+            uint32_t out_block_h_actual = out_block_h_normal;
             if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                 out_block_h_actual = out_block_h_last;
-                out_block_hw_actual = out_block_hw_last;
-            } else {
-                out_block_h_actual = out_block_h_normal;
-                out_block_hw_actual = out_block_hw_normal;
             }
 
             for (uint32_t mt = 0; mt < out_block_h_actual; ++mt) {
@@ -448,7 +498,7 @@ void MAIN {
 
                     if constexpr (do_beta) {
                         add_bcast_rows_init_short(cb_x, cb_beta);
-                        reconfig_data_format_srcb(cb_gamma, cb_beta);
+                        reconfig_data_format_srcb(do_gamma ? cb_gamma : cb_xmm, cb_beta);
 
                         cb_wait_front(cb_x, 1);
                         tile_regs_acquire();
@@ -464,7 +514,7 @@ void MAIN {
 
                     // Write out the final output
                     copy_tile_init(cb_x);
-                    reconfig_data_format_srcb(cb_beta, cb_x);
+                    reconfig_data_format_srcb(do_beta ? cb_beta : cb_xmm, cb_x);
 
                     cb_wait_front(cb_x, 1);
                     tile_regs_acquire();
@@ -492,7 +542,7 @@ void MAIN {
             untilize_uninit(cb_untilize_in);
 #endif
         }
-        // End Final Val Calc
+        // End Final Normalization
 
         cb_pop_front(cb_ex_global, 2 * num_groups);
         cb_pop_front(cb_ex2pe, num_groups);
