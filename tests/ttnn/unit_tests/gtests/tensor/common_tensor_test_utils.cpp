@@ -15,7 +15,6 @@
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/tensor_spec.hpp"
 
 namespace tt {
 namespace tt_metal {

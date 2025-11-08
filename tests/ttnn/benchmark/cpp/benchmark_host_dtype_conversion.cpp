@@ -10,7 +10,7 @@
 #include "constants.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/distributed/types.hpp"
-#include "ttnn/tensor/tensor_spec.hpp"
+
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/distributed/api.hpp"
 

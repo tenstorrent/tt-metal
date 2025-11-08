@@ -32,7 +32,7 @@
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
-#include "ttnn/tensor/tensor_spec.hpp"
+
 #include "ttnn/tensor/types.hpp"
 #include "ttnn_test_fixtures.hpp"
 #include <umd/device/types/arch.hpp>

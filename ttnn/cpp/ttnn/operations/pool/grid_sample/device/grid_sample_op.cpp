@@ -5,7 +5,7 @@
 #include "grid_sample_op.hpp"
 
 #include "ttnn/tensor/types.hpp"
-#include "ttnn/tensor/tensor_spec.hpp"
+
 #include <tt-metalium/constants.hpp>
 
 namespace ttnn::operations::grid_sample {
@@ -191,7 +191,8 @@ std::vector<TensorSpec> GridSample::compute_output_specs(const std::vector<Tenso
             grid_shard_spec.shape[0] * (batch_output_channels_ ? 1 : grid_batching_factor);  // Output height
         const uint32_t input_padded_channel_width = input_tensor.padded_shape()[-1];
         const uint32_t output_shard_width =
-            input_padded_channel_width * (batch_output_channels_ ? grid_batching_factor : 1);  // Input channels * channel extend factor
+            input_padded_channel_width *
+            (batch_output_channels_ ? grid_batching_factor : 1);  // Input channels * channel extend factor
 
         // Use the same core grid and orientation as the grid tensor
         const CoreRangeSet output_core_range_set = grid_shard_spec.grid;
