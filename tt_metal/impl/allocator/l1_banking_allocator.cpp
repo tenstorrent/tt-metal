@@ -113,13 +113,6 @@ void Allocator::init_compute_and_storage_l1_bank_manager() {
     TT_ASSERT(bank_id == shuffled_bank_id.size());
     TT_ASSERT(bank_id_to_bank_offset.size() == num_l1_banks);
     TT_ASSERT(small_bank_id_to_bank_offset.size() == num_l1_small_banks);
-    TT_ASSERT(
-        (bank_id_to_bank_offset.size() + small_bank_id_to_bank_offset.size()) == num_l1_banks,
-        "init_compute_and_storage_l1_bank_manager() -- banks setup={} must be equal to the number of banks "
-        "expected={}",
-        bank_id_to_bank_offset.size(),
-        small_bank_id_to_bank_offset.size(),
-        num_l1_banks);
 
     // There is only l1_bank_size bytes available for L1 buffers to be allocated in
     uint64_t l1_bank_size = config_->worker_l1_size - config_->l1_unreserved_base;
