@@ -387,8 +387,44 @@ class FastOperation:
             # the signature appears correct. Fall back to golden implementation to
             # preserve correctness for user-facing APIs.
             if "incompatible function arguments" in str(e):
-                fallback = get_fallback_function(self)
-                result = fallback(*function_args, **function_kwargs)
+                # Prefer a per-shard execution fallback for multi-device tensors to avoid
+                # converting to torch with an unknown mesh composer.
+                try:
+                    # Find first TTNN tensor argument that is multi-device
+                    import ttnn as _ttnn_mod
+
+                    multi_arg_index = None
+                    multi_arg_shards = None
+                    for idx, arg in enumerate(function_args):
+                        if isinstance(arg, _ttnn_mod.Tensor):
+                            try:
+                                shards = _ttnn_mod.get_device_tensors(arg)
+                            except Exception:
+                                shards = []
+                            if isinstance(shards, (list, tuple)) and len(shards) > 1:
+                                multi_arg_index = idx
+                                multi_arg_shards = shards
+                                break
+
+                    if multi_arg_index is not None and multi_arg_shards:
+                        per_shard_outputs = []
+                        for shard in multi_arg_shards:
+                            new_args = list(function_args)
+                            new_args[multi_arg_index] = shard
+                            if cq_id is None:
+                                per_shard_outputs.append(self.function(*new_args, **function_kwargs))
+                            else:
+                                with command_queue(cq_id):
+                                    per_shard_outputs.append(self.function(*new_args, **function_kwargs))
+                        # Combine per-device outputs back into a multi-device tensor
+                        result = _ttnn_mod.combine_device_tensors(tensors=per_shard_outputs)
+                    else:
+                        # Fallback to golden CPU implementation
+                        fallback = get_fallback_function(self)
+                        result = fallback(*function_args, **function_kwargs)
+                except Exception:
+                    # If per-shard or golden fallback fails, re-raise original error for visibility
+                    raise
             else:
                 raise
 
