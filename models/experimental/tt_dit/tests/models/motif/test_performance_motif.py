@@ -251,12 +251,12 @@ def test_motif_pipeline_performance(
         }
     elif tuple(mesh_device.shape) == (4, 8):
         expected_metrics = {
-            "clip_encoding_time": 0.1,
-            "t5_encoding_time": 0.21,
-            "total_encoding_time": 0.3,
-            "denoising_steps_time": 0.3 * num_inference_steps,
+            "clip_encoding_time": 0.21,
+            "t5_encoding_time": 0.15,
+            "total_encoding_time": 0.6,
+            "denoising_steps_time": 0.2 * num_inference_steps,
             "vae_decoding_time": 1.4,
-            "total_time": 9.0,
+            "total_time": 6.8,
         }
     else:
         assert False, f"Unknown mesh device for performance comparison: {mesh_device}"
