@@ -242,6 +242,7 @@ def test_classification_head_full(device, pcc, reset_seeds):
         batch_size=batch_size,
         input_shapes=input_shapes,
         model_config=model_config,
+        optimization_profile="optimized",
     )
 
     logger.info(f"TTNN output shape: {ttnn_output.shape}")

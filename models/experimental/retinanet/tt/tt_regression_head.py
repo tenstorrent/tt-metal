@@ -1,4 +1,5 @@
-# models/experimental/retinanet/tt/regressionhead.py
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-License-Identifier: Apache-2.0
 import ttnn
 from typing import List
 from typing import Optional
@@ -11,28 +12,117 @@ from loguru import logger
 class RetinaNetHeadOptimizer:
     """Optimization configuration for RetinaNet head conv blocks"""
 
-    conv_blocks: dict
-    final_conv: dict
-    groupnorm_config: dict  # NEW: Add GroupNorm-specific config
+    fpn0_conv_blocks: dict
+    fpn1_conv_blocks: dict
+    fpn2_conv_blocks: dict
+    fpn3_conv_blocks: dict
+    fpn4_conv_blocks: dict
+
+    # cls_logits configs (one per FPN level)
+    fpn0_final_conv: dict
+    fpn1_final_conv: dict
+    fpn2_final_conv: dict
+    fpn3_final_conv: dict
+    fpn4_final_conv: dict
 
 
 retinanet_head_optimizations = {
     "optimized": RetinaNetHeadOptimizer(
-        conv_blocks={
-            # "enable_act_double_buffer": True,
-            # "enable_weights_double_buffer": True,
+        # Conv block 0 - First convolution in the sequence
+        # FPN Level 0: Largest spatial (64x64)
+        fpn0_conv_blocks={
+            "act_block_h_override": 1024,
+            "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             "deallocate_activation": False,
             "reallocate_halo_output": True,
-            # "act_block_h_override": 256,
-            # "act_block_w_div": 1,
+            # "reshard_if_not_optimal": True,
+            "enable_act_double_buffer": True,
+            "enable_weights_double_buffer": True,
         },
-        final_conv={
-            # "enable_act_double_buffer": True,
-            # "enable_weights_double_buffer": True,
+        fpn0_final_conv={
+            "act_block_h_override": 1024,
+            "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            "deallocate_activation": False,
+            "reallocate_halo_output": True,
+            # "reshard_if_not_optimal": True,
+            "enable_act_double_buffer": True,
+            "enable_weights_double_buffer": True,
         },
-        groupnorm_config={
-            "use_sharded_memory": True,
-            "adaptive_grid_size": True,
+        # FPN Level 1: Medium-large spatial (32x32)
+        fpn1_conv_blocks={
+            "act_block_h_override": 256,
+            "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            "deallocate_activation": False,
+            "reallocate_halo_output": True,
+            # "reshard_if_not_optimal": True,
+            "enable_act_double_buffer": True,
+            "enable_weights_double_buffer": True,
+        },
+        fpn1_final_conv={
+            "act_block_h_override": 256,
+            "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            "deallocate_activation": False,
+            "reallocate_halo_output": True,
+            # "reshard_if_not_optimal": True,
+            "enable_act_double_buffer": True,
+            "enable_weights_double_buffer": True,
+        },
+        # FPN Level 2: Medium spatial (16x16)
+        fpn2_conv_blocks={
+            "act_block_h_override": 256,
+            "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            "deallocate_activation": False,
+            "reallocate_halo_output": True,
+            # "reshard_if_not_optimal": True,
+            "enable_act_double_buffer": True,
+            "enable_weights_double_buffer": True,
+        },
+        fpn2_final_conv={
+            "act_block_h_override": 256,
+            "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            "deallocate_activation": False,
+            "reallocate_halo_output": True,
+            # "reshard_if_not_optimal": True,
+            "enable_act_double_buffer": True,
+            "enable_weights_double_buffer": True,
+        },
+        # FPN Level 3: Small spatial (8x8)
+        fpn3_conv_blocks={
+            "act_block_h_override": 256,
+            "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            "deallocate_activation": False,
+            "reallocate_halo_output": True,
+            # "reshard_if_not_optimal": True,
+            "enable_act_double_buffer": True,
+            "enable_weights_double_buffer": True,
+        },
+        fpn3_final_conv={
+            "act_block_h_override": 256,
+            "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            "deallocate_activation": False,
+            "reallocate_halo_output": True,
+            # "reshard_if_not_optimal": True,
+            "enable_act_double_buffer": True,
+            "enable_weights_double_buffer": True,
+        },
+        # FPN Level 4: Smallest spatial (4x4)
+        fpn4_conv_blocks={
+            "act_block_h_override": 32,
+            "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            "deallocate_activation": False,
+            "reallocate_halo_output": True,
+            # "reshard_if_not_optimal": True,
+            "enable_act_double_buffer": True,
+            "enable_weights_double_buffer": True,
+        },
+        fpn4_final_conv={
+            "act_block_h_override": 32,
+            "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            "deallocate_activation": False,
+            "reallocate_halo_output": True,
+            # "reshard_if_not_optimal": True,
+            "enable_act_double_buffer": True,
+            "enable_weights_double_buffer": True,
         },
     ),
 }
@@ -244,33 +334,32 @@ def ttnn_retinanet_regression_head(
     batch_size: int = 1,
     input_shapes: List[tuple] = None,
     model_config: dict = None,
-    optimization_profile: str = "optimized",  # ADD THIS
+    optimization_profile: str = "optimized",
 ) -> ttnn.Tensor:
     # Get optimization config
     opt_config = retinanet_head_optimizations[optimization_profile]
-    # Create Conv2dConfig objects using the optimizer settings
-    conv_blocks_config = ttnn.Conv2dConfig(**opt_config.conv_blocks)
-    final_conv_config = ttnn.Conv2dConfig(**opt_config.final_conv)
 
-    """
-    TTNN implementation of RetinaNet regression head with all 4 conv layers + GroupNorm + ReLU.
+    # Map FPN level index to config attributes
+    fpn_conv_configs = [
+        opt_config.fpn0_conv_blocks,
+        opt_config.fpn1_conv_blocks,
+        opt_config.fpn2_conv_blocks,
+        opt_config.fpn3_conv_blocks,
+        opt_config.fpn4_conv_blocks,
+    ]
 
-    Args:
-        feature_maps: List of FPN feature tensors in NHWC format
-        parameters: Dict containing 'conv' (list of 4 Conv2dNormActivation params) and 'bbox_reg'
-        device: TTNN device
-        in_channels: Number of input channels (256 for RetinaNet)
-        num_anchors: Number of anchors per location (9 for RetinaNet)
-        batch_size: Batch size
-        input_shapes: List of (H, W) tuples for each FPN level
+    fpn_final_configs = [
+        opt_config.fpn0_final_conv,
+        opt_config.fpn1_final_conv,
+        opt_config.fpn2_final_conv,
+        opt_config.fpn3_final_conv,
+        opt_config.fpn4_final_conv,
+    ]
 
-    Returns:
-        Concatenated bbox regressions in shape (N, total_anchors, 4)
-    """
     all_bbox_regression = []
 
+    # Setup shared resources
     grid_size = ttnn.CoreGrid(y=8, x=8)
-
     input_mask_tensor = ttnn.create_group_norm_input_mask(in_channels, 32, grid_size.y)
     input_mask_tensor = ttnn.from_torch(
         input_mask_tensor,
@@ -286,38 +375,63 @@ def ttnn_retinanet_regression_head(
         fp32_dest_acc_en=model_config.get("FP32_DEST_ACC_EN", True),
         packer_l1_acc=model_config.get("PACKER_L1_ACC", False),
     )
-    # Initialize 4 Conv2dNormActivation blocks
-    conv_blocks = []
-    for conv_idx in range(4):
-        conv_block = Conv2dNormActivation(
-            parameters=parameters["conv"][conv_idx],
-            device=device,
-            in_channels=in_channels,
-            out_channels=in_channels,
-            kernel_size=(3, 3),
-            stride=(1, 1),
-            padding=(1, 1),
-            num_groups=32,
-            grid_size=grid_size,
-            input_mask=input_mask_tensor,
-            model_config=model_config,
-            compute_config=compute_config,
-            conv_config=conv_blocks_config,
-        )
-        conv_blocks.append(conv_block)
 
-    for level_idx, x in enumerate(feature_maps):
-        H, W = input_shapes[level_idx]
-        logger.info(f"\n{'='*60}")
-        logger.info(f"Processing FPN Level {level_idx}: H={H}, W={W}")
-        logger.info(f"{'='*60}")
-        # Apply 4 conv blocks
+    # Process each FPN level
+    for fpn_idx, feature_map in enumerate(feature_maps):
+        N, H, W, C = feature_map.shape
+        logger.info(f"Processing FPN Level {fpn_idx}: H={H}, W={W}")
+
+        # Get configs for THIS FPN level
+        conv_blocks_config = fpn_conv_configs[fpn_idx]
+        final_conv_config = fpn_final_configs[fpn_idx]
+
+        # Create Conv2dConfig for this FPN's conv blocks
+        if conv_blocks_config is not None:
+            conv_config = ttnn.Conv2dConfig(**conv_blocks_config)
+            logger.info(
+                f"[FPN{fpn_idx}] ✓ Conv blocks config: act_block_h={conv_blocks_config.get('act_block_h_override', 'default')}, shard={conv_blocks_config.get('shard_layout', 'auto')}"
+            )
+        else:
+            conv_config = None
+            logger.info(f"[FPN{fpn_idx}] ⚠ No conv blocks config (using defaults)")
+
+        # Create 4 Conv2dNormActivation blocks for THIS FPN level
+        conv_blocks = []
+        for conv_idx in range(4):
+            conv_block = Conv2dNormActivation(
+                parameters=parameters["conv"][conv_idx],
+                device=device,
+                in_channels=in_channels,
+                out_channels=in_channels,
+                kernel_size=(3, 3),
+                stride=(1, 1),
+                padding=(1, 1),
+                num_groups=32,
+                grid_size=grid_size,
+                input_mask=input_mask_tensor,
+                model_config=model_config,
+                compute_config=compute_config,
+                conv_config=conv_config,  # Use THIS FPN's config
+            )
+            conv_blocks.append(conv_block)
+
+        # Apply 4 conv blocks to this FPN's feature map
+        x = feature_map
         for conv_idx, conv_block in enumerate(conv_blocks):
             x = conv_block(
-                x, batch_size=batch_size, input_height=H, input_width=W, fpn_level=level_idx, conv_block_idx=conv_idx
+                x, batch_size=batch_size, input_height=H, input_width=W, fpn_level=fpn_idx, conv_block_idx=conv_idx
             )
-        # Final bbox_reg conv layer
+
+        # Final bbox_reg conv layer with THIS FPN's config
         bbox_reg_slice_config = ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=4)
+        if final_conv_config is not None:
+            bbox_reg_config = ttnn.Conv2dConfig(**final_conv_config)
+            logger.info(
+                f"[FPN{fpn_idx}][BBoxReg] ✓ Config: act_block_h={final_conv_config.get('act_block_h_override', 'default')}, shard={final_conv_config.get('shard_layout', 'auto')}"
+            )
+        else:
+            bbox_reg_config = None
+            logger.info(f"[FPN{fpn_idx}][BBoxReg] ⚠ No config (using defaults)")
 
         bbox_regression = ttnn.conv2d(
             input_tensor=x,
@@ -334,7 +448,7 @@ def ttnn_retinanet_regression_head(
             input_width=W,
             slice_config=bbox_reg_slice_config,
             compute_config=compute_config,
-            conv_config=final_conv_config,
+            conv_config=bbox_reg_config,
         )
 
         # Reshape to (N, H*W*num_anchors, 4)

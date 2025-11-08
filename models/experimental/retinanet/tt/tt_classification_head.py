@@ -9,29 +9,120 @@ from dataclasses import dataclass
 
 
 @dataclass
-class RetinaNetHeadOptimizer:
-    """Optimization configuration for RetinaNet head conv blocks"""
+class RetinaNetClassificationHeadOptimizer:
+    """Optimization configuration for RetinaNet classification head conv blocks"""
 
-    conv_blocks: dict  # Config for 4 conv blocks
-    final_conv: dict  # Config for cls_logits
+    fpn0_conv_blocks: dict
+    fpn1_conv_blocks: dict
+    fpn2_conv_blocks: dict
+    fpn3_conv_blocks: dict
+    fpn4_conv_blocks: dict
+
+    # Final cls_logits configs (one per FPN level)
+    fpn0_final_conv: dict
+    fpn1_final_conv: dict
+    fpn2_final_conv: dict
+    fpn3_final_conv: dict
+    fpn4_final_conv: dict
 
 
 # Define optimization profiles
-retinanet_head_optimizations = {
-    "optimized": RetinaNetHeadOptimizer(
-        conv_blocks={
-            # "enable_act_double_buffer": True,
-            # "enable_weights_double_buffer": True,
+retinanet_classification_head_optimizations = {
+    "optimized": RetinaNetClassificationHeadOptimizer(
+        # FPN Level 0: Largest spatial (64x64)
+        fpn0_conv_blocks={
+            "act_block_h_override": 1024,
+            "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             "deallocate_activation": False,
             "reallocate_halo_output": True,
-            # "act_block_h_override": 32,  # NEW: Tune this value
-            # "act_block_w_div": 1,  # NEW: Tune this value
+            # "reshard_if_not_optimal": True,
+            "enable_act_double_buffer": True,
+            "enable_weights_double_buffer": True,
         },
-        final_conv={
-            # "enable_act_double_buffer": True,
-            # "enable_weights_double_buffer": True,
-            "deallocate_activation": True,
+        fpn0_final_conv={
+            "act_block_h_override": 1024,
+            "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            "deallocate_activation": False,
             "reallocate_halo_output": True,
+            # "reshard_if_not_optimal": True,
+            "enable_act_double_buffer": True,
+            "enable_weights_double_buffer": True,
+        },
+        # FPN Level 1: Medium-large spatial (32x32)
+        fpn1_conv_blocks={
+            "act_block_h_override": 256,
+            "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            "deallocate_activation": False,
+            "reallocate_halo_output": True,
+            # "reshard_if_not_optimal": True,
+            "enable_act_double_buffer": True,
+            "enable_weights_double_buffer": True,
+        },
+        fpn1_final_conv={
+            "act_block_h_override": 256,
+            "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            "deallocate_activation": False,
+            "reallocate_halo_output": True,
+            # "reshard_if_not_optimal": True,
+            "enable_act_double_buffer": True,
+            "enable_weights_double_buffer": True,
+        },
+        # FPN Level 2: Medium spatial (16x16)
+        fpn2_conv_blocks={
+            "act_block_h_override": 256,
+            "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            "deallocate_activation": False,
+            "reallocate_halo_output": True,
+            # "reshard_if_not_optimal": True,
+            "enable_act_double_buffer": True,
+            "enable_weights_double_buffer": True,
+        },
+        fpn2_final_conv={
+            "act_block_h_override": 256,
+            "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            "deallocate_activation": False,
+            "reallocate_halo_output": True,
+            # "reshard_if_not_optimal": True,
+            "enable_act_double_buffer": True,
+            "enable_weights_double_buffer": True,
+        },
+        # FPN Level 3: Small spatial (8x8)
+        fpn3_conv_blocks={
+            "act_block_h_override": 256,
+            "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            "deallocate_activation": False,
+            "reallocate_halo_output": True,
+            # "reshard_if_not_optimal": True,
+            "enable_act_double_buffer": True,
+            "enable_weights_double_buffer": True,
+        },
+        fpn3_final_conv={
+            "act_block_h_override": 256,
+            "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            "deallocate_activation": False,
+            "reallocate_halo_output": True,
+            # "reshard_if_not_optimal": True,
+            "enable_act_double_buffer": True,
+            "enable_weights_double_buffer": True,
+        },
+        # FPN Level 4: Smallest spatial (4x4)
+        fpn4_conv_blocks={
+            "act_block_h_override": 32,
+            "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            "deallocate_activation": False,
+            "reallocate_halo_output": True,
+            # "reshard_if_not_optimal": True,
+            "enable_act_double_buffer": True,
+            "enable_weights_double_buffer": True,
+        },
+        fpn4_final_conv={
+            "act_block_h_override": 32,
+            "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            "deallocate_activation": False,
+            "reallocate_halo_output": True,
+            # "reshard_if_not_optimal": True,
+            "enable_act_double_buffer": True,
+            "enable_weights_double_buffer": True,
         },
     ),
 }
@@ -68,14 +159,9 @@ def ttnn_retinanet_classification_head(
     if input_shapes is None:
         input_shapes = [(fm.shape[1], fm.shape[2]) for fm in feature_maps]
 
-    # Get optimization config from the optimizer class
-    opt_config = retinanet_head_optimizations[optimization_profile]
+    # Get optimization config
+    opt_config = retinanet_classification_head_optimizations[optimization_profile]
 
-    # Create Conv2dConfig for conv blocks using optimizer class settings
-    conv_blocks_config = ttnn.Conv2dConfig(**opt_config.conv_blocks)  # Unpack double buffering flags from optimizer
-
-    # Create Conv2dConfig for final cls_logits conv using optimizer class settings
-    final_conv_config = ttnn.Conv2dConfig(**opt_config.final_conv)  # Unpack double buffering flags from optimizer
     # Grid size for GroupNorm
     grid_size = ttnn.CoreGrid(y=8, x=8)
 
@@ -83,11 +169,12 @@ def ttnn_retinanet_classification_head(
     input_mask_tensor = ttnn.create_group_norm_input_mask(in_channels, 32, grid_size.y)
     input_mask_tensor = ttnn.from_torch(
         input_mask_tensor,
-        dtype=model_config["ACTIVATIONS_DTYPE"],  # was ttnn.DataType.BFLOAT8_B
+        dtype=model_config["ACTIVATIONS_DTYPE"],
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
         math_fidelity=model_config.get("MATH_FIDELITY", ttnn.MathFidelity.HiFi4),
@@ -95,44 +182,60 @@ def ttnn_retinanet_classification_head(
         fp32_dest_acc_en=model_config.get("FP32_DEST_ACC_EN", True),
         packer_l1_acc=model_config.get("PACKER_L1_ACC", False),
     )
-    # Create 4 Conv2dNormActivation blocks
-    conv_blocks = []
-    for i in range(4):
-        conv_block = Conv2dNormActivation(
-            parameters=parameters["conv"][i],
-            device=device,
-            in_channels=in_channels,
-            out_channels=in_channels,
-            kernel_size=(3, 3),
-            stride=(1, 1),
-            padding=(1, 1),
-            num_groups=32,
-            grid_size=grid_size,
-            input_mask=input_mask_tensor,
-            model_config=model_config,
-            compute_config=compute_config,
-            conv_config=conv_blocks_config,
-        )
-        conv_blocks.append(conv_block)
 
     # Process each FPN level
     all_cls_logits = []
-    for level_idx, (feature_map, (H, W)) in enumerate(zip(feature_maps, input_shapes)):
+    for fpn_idx, (feature_map, (H, W)) in enumerate(zip(feature_maps, input_shapes)):
         logger.info(f"\n{'='*60}")
-        logger.info(f"Processing FPN Level {level_idx}: H={H}, W={W}")
+        logger.info(f"Processing FPN Level {fpn_idx}: H={H}, W={W}")
         logger.info(f"{'='*60}")
 
-        x = feature_map
+        # Get per-FPN configurations
+        fpn_conv_config_dict = getattr(opt_config, f"fpn{fpn_idx}_conv_blocks")
+        fpn_final_config_dict = getattr(opt_config, f"fpn{fpn_idx}_final_conv")
 
-        # Apply 4 conv blocks sequentially
-        for i, conv_block in enumerate(conv_blocks):
+        # Create Conv2dConfig objects for this FPN level
+        fpn_conv_config = ttnn.Conv2dConfig(**fpn_conv_config_dict) if fpn_conv_config_dict else None
+        fpn_final_config = ttnn.Conv2dConfig(**fpn_final_config_dict) if fpn_final_config_dict else None
+
+        # Log applied configurations
+        if fpn_conv_config:
+            logger.info(
+                f"[FPN{fpn_idx}] ✓ Conv blocks config: act_block_h={fpn_conv_config_dict.get('act_block_h_override', 'auto')}, shard={fpn_conv_config_dict.get('shard_layout', 'auto')}"
+            )
+        else:
+            logger.info(f"[FPN{fpn_idx}] ⚠ Conv blocks config: None (using defaults)")
+
+        if fpn_final_config:
+            logger.info(
+                f"[FPN{fpn_idx}] ✓ Final conv config: act_block_h={fpn_final_config_dict.get('act_block_h_override', 'auto')}, shard={fpn_final_config_dict.get('shard_layout', 'auto')}"
+            )
+        else:
+            logger.info(f"[FPN{fpn_idx}] ⚠ Final conv config: None (using defaults)")
+
+        # Create 4 Conv2dNormActivation blocks for this FPN level
+        x = feature_map
+        for conv_idx in range(4):
+            conv_block = Conv2dNormActivation(
+                parameters=parameters["conv"][conv_idx],
+                device=device,
+                in_channels=in_channels,
+                out_channels=in_channels,
+                kernel_size=(3, 3),
+                stride=(1, 1),
+                padding=(1, 1),
+                num_groups=32,
+                grid_size=grid_size,
+                input_mask=input_mask_tensor,
+                model_config=model_config,
+                compute_config=compute_config,
+                conv_config=fpn_conv_config,
+            )
             x = conv_block(
-                x, batch_size=batch_size, input_height=H, input_width=W, fpn_level=level_idx, conv_block_idx=i
+                x, batch_size=batch_size, input_height=H, input_width=W, fpn_level=fpn_idx, conv_block_idx=conv_idx
             )
 
         # Apply final cls_logits convolution
-        # Input: (N, H, W, 256) NHWC
-        # Output: (N, H, W, 819) NHWC
         cls_logits = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=parameters["cls_logits"]["weight"],
@@ -147,7 +250,7 @@ def ttnn_retinanet_classification_head(
             input_height=H,
             input_width=W,
             compute_config=compute_config,
-            conv_config=final_conv_config,
+            conv_config=fpn_final_config,
         )
         logger.info(f"After cls_logits conv: {cls_logits.shape}")
 
