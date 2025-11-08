@@ -190,7 +190,6 @@ class MoE(SharedStateAddOn, AbstractModule):
 
     @classmethod
     def forward(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
-        ttnn.synchronize_device(cfg["mesh_device"])
         # CCL runtime initialization in execution order
         ccl = cfg["ccl"]
 
