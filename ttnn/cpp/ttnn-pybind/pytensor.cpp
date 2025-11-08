@@ -34,7 +34,7 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
-#include "ttnn/tensor/tensor_utils.hpp"
+#include "tt-metalium/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 
 #include <tt-metalium/graph_tracking.hpp>

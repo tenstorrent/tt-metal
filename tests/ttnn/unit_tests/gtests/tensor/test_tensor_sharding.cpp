@@ -30,7 +30,7 @@
 #include <tt-metalium/tile.hpp>
 #include "ttnn/tensor/host_buffer/functions.hpp"
 
-#include "ttnn/tensor/tensor_utils.hpp"
+#include "tt-metalium/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn_test_fixtures.hpp"
 

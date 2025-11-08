@@ -23,7 +23,7 @@
 #include "ttnn/tensor/host_buffer/functions.hpp"
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
+#include "tt-metalium/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 namespace ttnn {
 namespace operations::conv {

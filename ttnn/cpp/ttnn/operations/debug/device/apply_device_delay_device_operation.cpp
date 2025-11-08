@@ -14,7 +14,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
+#include "tt-metalium/tensor/tensor_utils.hpp"
 #include "ttnn/operations/creation.hpp"
 
 namespace ttnn::operations::debug {

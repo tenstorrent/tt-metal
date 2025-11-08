@@ -4,7 +4,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include "ttnn/operations/math.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
+#include "tt-metalium/tensor/tensor_utils.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_matmul_async/device/all_gather_matmul_async_op.hpp"
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 
@@ -74,7 +74,8 @@ void AllGatherMatmulAsync::validate_with_output_tensors(
         auto& all_gather_output_tensor = output_tensors.at(0).value();
         const auto& all_gather_output_tensor_shard_spec = all_gather_output_tensor.shard_spec();
         if (all_gather_output_tensor_shard_spec.has_value()) {
-            const uint32_t num_all_gather_output_shards = shard_builder::get_sharding_core_count(all_gather_output_tensor);
+            const uint32_t num_all_gather_output_shards =
+                shard_builder::get_sharding_core_count(all_gather_output_tensor);
             TT_FATAL(
                 this->all_gather_async_struct.ring_size == num_all_gather_output_shards,
                 "AllGatherMatmulAsync requires number of tensor slices to equal the number of output shards of the "

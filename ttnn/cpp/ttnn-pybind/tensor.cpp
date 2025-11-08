@@ -25,7 +25,7 @@
 #include <tt-metalium/host_buffer.hpp>
 #include "ttnn/tensor/serialization.hpp"
 
-#include "ttnn/tensor/tensor_utils.hpp"
+#include "tt-metalium/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/distributed/types.hpp"
 #include <tt-metalium/base_types.hpp>

@@ -5,7 +5,7 @@
 #include "reshape_op.hpp"
 #include <tt-metalium/constants.hpp>
 
-#include "ttnn/tensor/tensor_utils.hpp"
+#include "tt-metalium/tensor/tensor_utils.hpp"
 #include "reshape_program_factory.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 

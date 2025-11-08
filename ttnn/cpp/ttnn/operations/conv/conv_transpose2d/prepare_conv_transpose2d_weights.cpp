@@ -10,7 +10,7 @@
 #include "tt-metalium/mesh_device.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/distributed/api.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
+#include "tt-metalium/tensor/tensor_utils.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/operations/conv/conv_transpose2d/prepare_conv_transpose2d_weights.hpp"
 #include "ttnn/operations/core/core.hpp"

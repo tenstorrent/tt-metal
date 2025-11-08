@@ -13,7 +13,7 @@
 #include "ttnn/operations/data_movement/view/view.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/run_operation.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
+#include "tt-metalium/tensor/tensor_utils.hpp"
 #include "device/repeat_device_operation.hpp"
 #include "repeat.hpp"
 

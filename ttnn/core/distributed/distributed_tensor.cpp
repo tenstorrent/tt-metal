@@ -24,7 +24,8 @@
 #include <xtensor/core/xtensor_forward.hpp>
 #include "ttnn/distributed/types.hpp"
 #include <tt-metalium/tensor/xtensor/conversion_utils.hpp>
-#include "tt-metalium/tensor/xtensor/partition.hpp"
+
+#include <tt-metalium/tensor/xtensor/partition.hpp>
 #include <tt-metalium/distributed/tensor_topology.hpp>
 #include "ttnn/distributed/host_ccl.hpp"
 #include "distribution_mode.hpp"
