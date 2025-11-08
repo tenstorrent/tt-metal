@@ -13,6 +13,8 @@
 #include "export_enum.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
+// NOLINTBEGIN(bugprone-unused-raii)
+
 namespace ttnn::activation {
 
 void py_module_types(nb::module_& mod) {
@@ -83,5 +85,7 @@ void py_module(nb::module_& mod) {
     nb::implicitly_convertible<std::pair<UnaryOpType, uint32_t>, EltwiseUnaryWithParam>();
     nb::implicitly_convertible<UnaryWithParam, EltwiseUnaryWithParam>();
 }
+
+// NOLINTEND(bugprone-unused-raii)
 
 }  // namespace ttnn::activation

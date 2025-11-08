@@ -7,6 +7,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <set>
 #include <string>
@@ -36,6 +37,8 @@
 #include <tt-metalium/host_buffer.hpp>
 
 using namespace tt::tt_metal;
+
+// NOLINTBEGIN(bugprone-unused-raii)
 
 namespace ttnn::tensor {
 
@@ -142,13 +145,16 @@ void tensor_mem_config_module_types(nb::module_& m_tensor) {
     // https://github.com/wjakob/nanobind/blob/master/docs/ndarray.rst
     // TODO_NANOBIND: THIS WAS A PYBUFFER. MAKE INTO NDARRAY
     nb::class_<tt::tt_metal::HostBuffer>(m_tensor, "HostBuffer")
-        //.def(nb::init<nb::ndarray<>>())
+        .def(nb::init<>())
+        .def(nb::init<const std::shared_ptr<std::vector<std::byte>>>())
+        .def(nb::init<std::vector<std::byte>&&>())
+        .def(nb::init<const std::vector<std::byte>&>())
         .def("__getitem__", [](const HostBuffer& self, std::size_t index) { return self.view_bytes()[index]; })
         .def("__len__", [](const HostBuffer& self) { return self.view_bytes().size(); })
         .def(
             "__iter__",
             [](const HostBuffer& self) {
-                return nb::make_iterator(
+                return nb::make_iterator<nb::rv_policy::reference_internal>(
                     nb::type<tt::tt_metal::HostBuffer>(),
                     "iterator",
                     self.view_bytes().begin(),
@@ -156,16 +162,28 @@ void tensor_mem_config_module_types(nb::module_& m_tensor) {
             },
             nb::keep_alive<0, 1>())
         .def(
-            "__array__",            // TODO_NANOBIND: what is the interface/function name here? try __array__
-            [](HostBuffer& self) {  // nb::ndarray<> {
-                return nb::ndarray(self.view_bytes().data(), {self.view_bytes().size()}).cast();
-            })
-        .def(
-            "__dlpack__",
-            [](HostBuffer& self, const nb::kwargs& kwargs) {  //-> nb::ndarray<> {
-                return nb::ndarray(self.view_bytes().data(), {self.view_bytes().size()}).cast();
-            })
-        .def("__dlpack_device__", []() { return std::make_pair(nb::device::cpu::value, 0); });
+            "__array__",
+            [](HostBuffer& self) {
+                return nb::ndarray<nb::array_api, nb::device::cpu, nb::shape<-1>, nb::c_contig>(
+                    self.view_bytes().data(), {self.view_bytes().size()});
+            },
+            nb::rv_policy::reference_internal)
+        .def("__dlpack_device__", [](nb::handle) { return std::make_pair(nb::device::cpu::value, 0); })
+        .def("__dlpack__", [](nb::pointer_and_handle<tt::tt_metal::HostBuffer> self, nb::kwargs kwargs) {
+            using array_api_t = nb::ndarray<nb::array_api>;
+            nb::object aa = nb::cast(
+                array_api_t(self.p->view_bytes().data(), {self.p->view_bytes().size()}),
+                nb::rv_policy::reference_internal,
+                self.h);
+            return aa.attr("__dlpack__")(**kwargs);
+        });
+    //.def(
+    //    "__dlpack__",
+    //    [](HostBuffer& self, const nb::kwargs& kwargs) {  //-> nb::ndarray<> {
+    //        return nb::ndarray<nb::array_api, nb::device::cpu, nb::shape<-1>, nb::c_contig>(
+    //            self.view_bytes().data(),
+    //            {self.view_bytes().size()});
+    //    }, nb::rv_policy::reference_internal)
 }
 
 void tensor_mem_config_module(nb::module_& m_tensor) {
@@ -551,3 +569,5 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
 }
 
 }  // namespace ttnn::tensor
+
+// NOLINTEND(bugprone-unused-raii)

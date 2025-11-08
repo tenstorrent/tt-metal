@@ -11,7 +11,6 @@
 #include <optional>
 #include <string>
 #include <string_view>
-#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -23,7 +22,6 @@
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/string_view.h>
-#include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
 
 #include "small_vector_caster.hpp"
@@ -42,6 +40,8 @@
 using namespace tt::tt_metal;
 namespace nb = nanobind;
 
+// NOLINTBEGIN(bugprone-unused-raii)
+
 namespace {
 
 void ttnn_device(nb::module_& mod) {
@@ -54,7 +54,7 @@ void ttnn_device(nb::module_& mod) {
         nb::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE,
         nb::arg("dispatch_core_config") = tt::tt_metal::DispatchCoreConfig{},
         nb::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE,
-        nb::rv_policy::reference,
+        nb::rv_policy::reference,  // cleanup has to happen in c++ land
         R"doc(
             Open a device with the given device_id. If the device is already open, return the existing device.
 
@@ -357,7 +357,7 @@ void device_module(nb::module_& m_device) {
     m_device.def(
         "format_output_tensor",
         [](const Tensor& output,
-           const ttnn::SmallVector<uint32_t>& shape,
+           const ttsl::SmallVector<uint32_t>& shape,
            MeshDevice* device,
            Layout target_layout,
            std::optional<MemoryConfig> target_mem_config) {
@@ -549,3 +549,5 @@ void py_device_module(nb::module_& mod) {
 }
 
 }  // namespace ttnn::device
+
+// NOLINTEND(bugprone-unused-raii)

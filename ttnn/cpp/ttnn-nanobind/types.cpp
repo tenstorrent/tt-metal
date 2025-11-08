@@ -24,6 +24,9 @@
 
 #include <umd/device/types/core_coordinates.hpp>
 
+// NOLINTBEGIN(bugprone-unused-raii)
+// NOLINTBEGIN(misc-redundant-expression)
+
 namespace ttnn::types {
 
 void py_module_types(nb::module_& mod) {
@@ -35,19 +38,19 @@ void py_module_types(nb::module_& mod) {
         .def(
             "__repr__",
             [](const ttnn::QueueId& self) { return "QueueId(" + std::to_string(static_cast<int>(*self)) + ")"; })
-        .def(nb::self == nb::self,
-             nb::sig("def __eq__(self, arg: object, /) -> bool")) // see Typing in nb docs for explanation
-        .def("__init__",
+        .def(
+            nb::self == nb::self,
+            nb::sig("def __eq__(self, arg: object, /) -> bool"))  // see Typing in nb docs for explanation
+        .def(
+            "__init__",
             [](ttnn::QueueId* t, nb::int_ arg) {
                 // QueueId uses a strong alias so we have to do this manually
                 new (t) ttnn::QueueId(static_cast<uint8_t>(arg));
             })
-        .def("__init__",
-            [](ttnn::QueueId* t, unsigned char arg) {
-                // ttnn::maximum's binding wasn't working so this had to be added
-                new (t) ttnn::QueueId(static_cast<uint8_t>(arg));
-            })
-        ;
+        .def("__init__", [](ttnn::QueueId* t, unsigned char arg) {
+            // ttnn::maximum's binding wasn't working so this had to be added
+            new (t) ttnn::QueueId(static_cast<uint8_t>(arg));
+        });
 
     export_enum<ttnn::BcastOpMath>(mod, "BcastOpMath");
     export_enum<ttnn::BcastOpDim>(mod, "BcastOpDim");
@@ -81,13 +84,14 @@ void py_module(nb::module_& mod) {
         });
 
     auto PyShape = static_cast<nb::class_<ttnn::Shape>>(mod.attr("Shape"));
-    PyShape.def(nb::init<const ttnn::SmallVector<uint32_t>&>(), nb::arg("shape"))
+    PyShape.def(nb::init<const ttsl::SmallVector<uint32_t>&>(), nb::arg("shape"))
         .def("__len__", [](const Shape& self) { return self.rank(); })
         .def("__getitem__", [](const Shape& self, std::int64_t index) { return self[index]; })
         .def(
             "__iter__",  // TODO_NANOBIND: make sure there doesn't need to be an additional cast to SmallVector
             [](const Shape& self) {
-                return nb::make_iterator(nb::type<ttnn::Shape>(), "iterator", self.cbegin(), self.cend());
+                return nb::make_iterator<nb::rv_policy::reference_internal>(
+                    nb::type<ttnn::Shape>(), "iterator", self.cbegin(), self.cend());
             },
             nb::keep_alive<0, 1>())
         .def(
@@ -104,7 +108,7 @@ void py_module(nb::module_& mod) {
         .def(
             "to_rank",
             [](const Shape& self, std::size_t new_rank) {
-                SmallVector<uint32_t> new_shape(new_rank, 1);
+                ttsl::SmallVector<uint32_t> new_shape(new_rank, 1);
 
                 int cur_idx = static_cast<int>(self.rank()) - 1;
                 int new_idx = static_cast<int>(new_rank) - 1;
@@ -117,9 +121,12 @@ void py_module(nb::module_& mod) {
 
                 return ttnn::Shape(std::move(new_shape));
             })
-        .def(nb::init_implicit<ttnn::SmallVector<uint32_t>>());
+        .def(nb::init_implicit<ttsl::SmallVector<uint32_t>>());
 
-    nb::implicitly_convertible<ttnn::SmallVector<uint32_t>, ttnn::Shape>();
+    nb::implicitly_convertible<ttsl::SmallVector<uint32_t>, ttnn::Shape>();
 }
 
 }  // namespace ttnn::types
+
+// NOLINTEND(misc-redundant-expression)
+// NOLINTEND(bugprone-unused-raii)

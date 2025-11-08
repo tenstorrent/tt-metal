@@ -4,9 +4,8 @@
 
 #include "events.hpp"
 
-#include <memory>
 #include <optional>
-#include <ostream>
+#include <sstream>
 #include <vector>
 
 #include <nanobind/nanobind.h>
@@ -20,6 +19,8 @@
 #include <tt-metalium/event.hpp>
 
 using namespace tt::tt_metal;
+
+// NOLINTBEGIN(bugprone-unused-raii)
 
 namespace ttnn::events {
 
@@ -86,3 +87,5 @@ void py_module(nb::module_& mod) {
 }
 
 }  // namespace ttnn::events
+
+// NOLINTEND(bugprone-unused-raii)

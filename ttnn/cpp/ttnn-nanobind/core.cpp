@@ -5,7 +5,6 @@
 #include "core.hpp"
 
 #include <cstdint>
-#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -20,12 +19,11 @@
 
 #include "tt-metalium/lightmetal_binary.hpp"
 #include "tt-metalium/lightmetal_replay.hpp"
-#include "tt-metalium/mesh_device.hpp"
 #include "tt_stl/caseless_comparison.hpp"
 #include "ttnn-nanobind/nanobind_helpers.hpp"
 #include "ttnn/config.hpp"
 #include "ttnn/core.hpp"
-#include "ttnn/common/guard.hpp"
+#include "ttnn/distributed/types.hpp"
 
 namespace ttnn::core {
 
@@ -37,6 +35,7 @@ void py_module(nb::module_& mod) {
     using tt::tt_metal::LightMetalBeginCapture;
     using tt::tt_metal::LightMetalBinary;
     using tt::tt_metal::LightMetalEndCapture;
+
     auto py_config = static_cast<nb::class_<ttnn::Config>>(mod.attr("Config"));
     py_config
         .def(nb::init<const ttnn::Config&>())

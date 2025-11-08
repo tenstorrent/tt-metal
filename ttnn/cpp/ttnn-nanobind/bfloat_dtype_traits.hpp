@@ -12,8 +12,6 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <ttnn/tensor/tensor_impl.hpp>
 
-// TODO_NANOBIND: move to the dedicated caster header(s)
-// TODO_NANOBIND: use the namespace macros (see small_vector_caster.hpp)
 NAMESPACE_BEGIN(NB_NAMESPACE)
 NAMESPACE_BEGIN(detail)
 

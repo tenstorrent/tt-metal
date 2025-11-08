@@ -16,9 +16,6 @@
 #include <nanobind/stl/optional.h>
 
 #include "ttnn/decorators.hpp"
-#include "small_vector_caster.hpp"  // NOLINT - for nanobind11 SmallVector binding support.
-#include "ttnn/types.hpp"
-#include "types.hpp"
 
 namespace ttnn {
 namespace decorators {

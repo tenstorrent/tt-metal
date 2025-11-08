@@ -17,7 +17,7 @@ void py_module_types(nb::module_& mod) { nb::class_<tt::tt_metal::TensorAccessor
 
 void py_module(nb::module_& mod) {
     static_cast<nb::class_<tt::tt_metal::TensorAccessorArgs>>(mod.attr("TensorAccessorArgs"))
-        .def(  // TODO_NANOBIND placement new
+        .def(
             "__init__",
             [](tt::tt_metal::TensorAccessorArgs* t, const ttnn::Tensor& tensor) {
                 new (t) tt::tt_metal::TensorAccessorArgs(*tensor.buffer());

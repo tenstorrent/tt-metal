@@ -642,6 +642,8 @@ nb::object convert_tt_tensor_to_torch_tensor(const RowMajorHostBuffer& row_major
         "tt::tt_metal::detail::convert_tt_tensor_to_torch_tensor", row_major_host_buffer);
 
     nb::object torch = nb::module_::import_("torch");
+
+    // pytorch frombuffer functions as a reinterpret_cast
     auto frombuffer = torch.attr("frombuffer");
 
     nb::object torch_dtype = [&]() {

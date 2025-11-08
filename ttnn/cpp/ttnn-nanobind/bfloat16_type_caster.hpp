@@ -19,23 +19,23 @@ NAMESPACE_BEGIN(NB_NAMESPACE)
 NAMESPACE_BEGIN(detail)
 
 template <>
-struct type_caster<bfloat16> {
-    NB_TYPE_CASTER(bfloat16, const_name("bfloat16"));
+struct type_caster<::bfloat16> {
+    NB_TYPE_CASTER(::bfloat16, const_name("bfloat16"));
 
-    bool from_python(handle src, uint8_t, cleanup_list*) {
+    bool from_python(handle src, std::uint8_t, cleanup_list*) {
         if (isinstance<nanobind::float_>(src)) {
             this->value = bfloat16(nanobind::cast<float>(src));
             return true;
         } else if (isinstance<nanobind::int_>(src)) {
-            int32_t int_value = nanobind::cast<int32_t>(src);
-            this->value = bfloat16(int_value);
+            std::int32_t int_value = nanobind::cast<std::int32_t>(src);
+            this->value = ::bfloat16(int_value);
             return true;
         }
 
         return false;
     }
 
-    static handle from_cpp(const bfloat16& src, rv_policy, cleanup_list*) {
+    static handle from_cpp(const ::bfloat16& src, rv_policy, cleanup_list*) {
         return nanobind::float_(static_cast<float>(src)).release();
     }
 };

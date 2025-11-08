@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "global_avg_pool_nanobind.hpp"
+
 #include <optional>
 
 #include <fmt/format.h>
