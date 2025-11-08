@@ -24,8 +24,8 @@
 #include <signal.h>
 #include <setjmp.h>
 
-#include "ttnn/tensor/xtensor/partition.hpp"
-#include "ttnn/tensor/xtensor/conversion_utils.hpp"
+#include <tt-metalium/tensor/xtensor/partition.hpp>
+#include <tt-metalium/tensor/xtensor/conversion_utils.hpp>
 #include "ttnn/tensor/shape/shape.hpp"
 
 namespace ttnn {

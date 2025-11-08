@@ -9,9 +9,9 @@
 #include <core/ttnn_all_includes.hpp>
 #include <span>
 #include <sstream>
+#include <tt-metalium/tensor/xtensor/conversion_utils.hpp>
+#include <tt-metalium/tensor/xtensor/partition.hpp>
 #include <ttnn/tensor/shape/shape.hpp>
-#include <ttnn/tensor/xtensor/conversion_utils.hpp>
-#include <ttnn/tensor/xtensor/partition.hpp>
 #include <xtensor/containers/xarray.hpp>
 #include <xtensor/core/xshape.hpp>
 #include <xtensor/io/xio.hpp>
