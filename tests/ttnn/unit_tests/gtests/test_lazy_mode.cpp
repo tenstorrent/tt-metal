@@ -106,8 +106,12 @@ TEST_F(LazyModeFixture, LazyTensorCreation) {
         << "Lazy tensor should be in materialized state";
     ASSERT_EQ(random_eager.lazy()->tensor_spec(), random_eager.tensor_spec())
         << "Lazy tensor should have the same tensor spec as the materialized tensor";
-    ASSERT_EQ(random_eager.lazy()->op().get(), nullptr)
-        << "Lazy tensor created from materialized tensor should have no operation";
+    ASSERT_EQ(random_eager.lazy()->op()->name(), "MaterializedLazyOperation")
+        << "Lazy tensor created from materialized tensor should have MaterializedLazyOperation operation";
+    ASSERT_EQ(
+        random_eager.lazy()->op()->operation_type_id(),
+        lazy::get_operation_type_id<lazy::MaterializedLazyOperation>())
+        << "Lazy tensor created from materialized tensor should have MaterializedLazyOperation operation";
     ASSERT_TRUE(random_eager.lazy()->is_materialized()) << "Lazy tensor should be materialized";
     ASSERT_EQ(lazy::count(random_eager.lazy()->op_inputs()), 0) << "Lazy tensor should have no op inputs";
     ASSERT_EQ(random_eager.lazy()->siblings().size(), 0) << "Lazy tensor should have no siblings";
