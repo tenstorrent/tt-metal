@@ -14,7 +14,7 @@
 #include <ttnn/tensor/tensor.hpp>
 
 #include "tt_stl/span.hpp"
-#include "ttnn/tensor/tensor_impl.hpp"
+#include <tt-metalium/tensor/tensor_impl.hpp>
 
 namespace ttnn::distributed::host_ccl {
 

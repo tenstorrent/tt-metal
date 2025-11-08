@@ -11,7 +11,7 @@
 #include <utility>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/tensor_impl.hpp"  // TTNN_TENSOR_PRINT_PROFILE
+#include <tt-metalium/tensor/tensor_impl.hpp>  // TTNN_TENSOR_PRINT_PROFILE
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/config.hpp"
 #include "ttnn/types.hpp"

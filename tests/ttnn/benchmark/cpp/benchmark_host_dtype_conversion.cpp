@@ -8,7 +8,7 @@
 #include <ttnn/cpp/ttnn/operations/core/core.hpp>
 #include "bfloat16.hpp"
 #include "constants.hpp"
-#include "ttnn/tensor/tensor_impl.hpp"
+
 #include "ttnn/distributed/types.hpp"
 
 #include "ttnn/distributed/api.hpp"

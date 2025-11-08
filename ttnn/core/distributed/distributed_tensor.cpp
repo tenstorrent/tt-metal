@@ -12,7 +12,7 @@
 #include <tt_stl/overloaded.hpp>
 
 #include "tensor/host_buffer/functions.hpp"
-#include "tensor/tensor_impl.hpp"
+
 #include <algorithm>
 #include "ttnn/core.hpp"
 #include "ttnn/distributed/api.hpp"

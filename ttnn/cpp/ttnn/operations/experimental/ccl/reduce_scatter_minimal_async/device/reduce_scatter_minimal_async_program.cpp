@@ -8,7 +8,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/hal.hpp>
-#include "ttnn/tensor/tensor_impl.hpp"
+
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
@@ -1155,16 +1155,12 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                     sender_writer_compile_args);
                 if (dir) {
                     sender_writer_compile_args.insert(
-                        sender_writer_compile_args.end(),
-                        unicast_forward_args.begin(),
-                        unicast_forward_args.end());
+                        sender_writer_compile_args.end(), unicast_forward_args.begin(), unicast_forward_args.end());
                     sender_writer_compile_args.insert(
                         sender_writer_compile_args.end(), mcast_forward_args.begin(), mcast_forward_args.end());
                 } else {
                     sender_writer_compile_args.insert(
-                        sender_writer_compile_args.end(),
-                        unicast_backward_args.begin(),
-                        unicast_backward_args.end());
+                        sender_writer_compile_args.end(), unicast_backward_args.begin(), unicast_backward_args.end());
                     sender_writer_compile_args.insert(
                         sender_writer_compile_args.end(), mcast_backward_args.begin(), mcast_backward_args.end());
                 }
@@ -1401,7 +1397,6 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
                 input,
                 intermed,
                 output);
-
         };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
@@ -1892,16 +1887,12 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
                     sender_writer_compile_args);
                 if (is_forward) {
                     sender_writer_compile_args.insert(
-                        sender_writer_compile_args.end(),
-                        unicast_forward_args.begin(),
-                        unicast_forward_args.end());
+                        sender_writer_compile_args.end(), unicast_forward_args.begin(), unicast_forward_args.end());
                     sender_writer_compile_args.insert(
                         sender_writer_compile_args.end(), mcast_forward_args.begin(), mcast_forward_args.end());
                 } else {
                     sender_writer_compile_args.insert(
-                        sender_writer_compile_args.end(),
-                        unicast_backward_args.begin(),
-                        unicast_backward_args.end());
+                        sender_writer_compile_args.end(), unicast_backward_args.begin(), unicast_backward_args.end());
                     sender_writer_compile_args.insert(
                         sender_writer_compile_args.end(), mcast_backward_args.begin(), mcast_backward_args.end());
                 }

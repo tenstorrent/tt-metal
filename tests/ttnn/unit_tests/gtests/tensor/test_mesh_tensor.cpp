@@ -10,7 +10,7 @@
 #include "ttnn/distributed/api.hpp"
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/tensor_impl.hpp"
+
 #include "ttnn/tensor/tensor_impl_wrapper.hpp"
 #include "ttnn_test_fixtures.hpp"
 #include <ttnn/distributed/types.hpp>

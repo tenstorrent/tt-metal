@@ -26,7 +26,7 @@
 #include "ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
-#include "ttnn/tensor/tensor_impl.hpp"
+
 #include "ttnn/distributed/types.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"

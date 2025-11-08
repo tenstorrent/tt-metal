@@ -7,7 +7,6 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/bfloat16.hpp>
-#include "ttnn/tensor/tensor_impl.hpp"
 
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
@@ -81,8 +80,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     tt::DataFormat stats_data_format = tt::tt_metal::datatype_to_dataformat_converter(stats.value().dtype());
     tt::DataFormat residual_data_format = in_data_format;
-    if (b)
-    {
+    if (b) {
         residual_data_format = tt::tt_metal::datatype_to_dataformat_converter(b.value().dtype());
     }
     if (output.layout() == Layout::TILE) {
@@ -839,8 +837,8 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     // Runtime Args
     std::vector<KernelHandle> writer_kernel_ids;
     writer_kernel_ids.reserve(cores.size());
-    float winv = 1.0f / block_w;                                                               // bcast-w scaler
-    float cinv_pre = (1.0f / num_blocks);                                                      // bcast-cores scaler
+    float winv = 1.0f / block_w;           // bcast-w scaler
+    float cinv_pre = (1.0f / num_blocks);  // bcast-cores scaler
     float cinv = (1.0f / num_distributed_devices);
     float cinv_one = 1.0f;  // bcast-cores scaler for all-to-all cores not on first row/col
     auto bfloat_cinv_value = bfloat16(cinv);
