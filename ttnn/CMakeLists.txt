@@ -64,7 +64,6 @@ target_sources(
         core/reports.cpp
         core/run_operation.cpp
         core/tensor/serialization.cpp
-        core/tensor/tensor_impl.cpp
         core/tensor/tensor.cpp
 )
 target_include_directories(

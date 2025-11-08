@@ -7,7 +7,6 @@
 #include <tt_stl/overloaded.hpp>
 
 #include "tt-metalium/distributed_host_buffer.hpp"
-// #include <tt-metalium/distributed/api.hpp>  // TODO: How to handle this?
 #include "tt-metalium/tensor/host_buffer/functions.hpp"
 #include "tt-metalium/tensor/storage.hpp"
 #include "tt-metalium/tensor/types.hpp"
