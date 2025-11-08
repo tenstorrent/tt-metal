@@ -50,6 +50,18 @@ void py_module(nb::module_& mod) {
             &ttnn::Config::get<I>,
             &ttnn::Config::set<I>);
     });
+    // Override report_name to accept None (std::optional) in addition to str/PathLike
+    py_config.def_prop_rw(
+        "report_name",
+        [](const ttnn::Config& cfg) { return cfg.get<"report_name">(); },
+        [](ttnn::Config& cfg, nb::object obj) {
+            if (obj.is_none()) {
+                cfg.set<"report_name">(std::optional<std::filesystem::path>{});
+            } else {
+                auto p = nb::cast<std::filesystem::path>(obj);
+                cfg.set<"report_name">(std::optional<std::filesystem::path>{p});
+            }
+        });
     py_config.def_prop_ro("report_path", &ttnn::Config::get<"report_path">);
 
     nb::class_<LightMetalBinary>(mod, "LightMetalBinary")

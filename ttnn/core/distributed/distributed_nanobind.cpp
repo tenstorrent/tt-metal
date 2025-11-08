@@ -455,7 +455,7 @@ void py_module(nb::module_& mod) {
         nb::arg("offset") = nb::none(),
         nb::arg("physical_device_ids") = std::vector<int>{},
         nb::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE);
-    mod.def("close_mesh_device", &close_mesh_device, nb::kw_only(), nb::arg("mesh_device"));
+    mod.def("close_mesh_device", &close_mesh_device, nb::arg("mesh_device"));
 
     auto py_placement_shard = static_cast<nb::class_<MeshMapperConfig::Shard>>(mod.attr("PlacementShard"));
     py_placement_shard.def(nb::init<int>())
@@ -585,7 +585,6 @@ void py_module(nb::module_& mod) {
     mod.def(
         "get_device_tensors",
         &get_device_tensors,
-        nb::kw_only(),
         nb::arg("tensor"),
         R"doc(
        Get a list of tensor shards from a multidevice tensor.
