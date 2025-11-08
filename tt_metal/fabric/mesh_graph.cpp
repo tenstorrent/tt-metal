@@ -72,6 +72,7 @@ const tt::stl::Indestructible<FabricToClusterDescriptorMap>& cluster_type_to_mes
         {tt::tt_fabric::FabricType::TORUS_X,
          ClusterToDescriptorMap{
              {tt::tt_metal::ClusterType::GALAXY, "single_galaxy_torus_x_graph_descriptor.yaml"},
+             {tt::tt_metal::ClusterType::T3K, "t3k_1x8_mesh_graph_descriptor.yaml"},
          }},
         {tt::tt_fabric::FabricType::TORUS_Y,
          ClusterToDescriptorMap{
@@ -107,6 +108,7 @@ const tt::stl::Indestructible<FabricToClusterDescriptorMap>& cluster_type_to_mes
         {tt::tt_fabric::FabricType::TORUS_X,
          ClusterToDescriptorMap{
              {tt::tt_metal::ClusterType::GALAXY, "single_galaxy_torus_x_graph_descriptor.textproto"},
+             {tt::tt_metal::ClusterType::T3K, "t3k_1x8_mesh_graph_descriptor.textproto"},
          }},
         {tt::tt_fabric::FabricType::TORUS_Y,
          ClusterToDescriptorMap{

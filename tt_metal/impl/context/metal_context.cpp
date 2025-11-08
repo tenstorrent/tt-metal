@@ -596,6 +596,8 @@ void MetalContext::initialize_control_plane() {
 
     auto cluster_type = cluster_->get_cluster_type();
     auto fabric_type = tt::tt_fabric::get_fabric_type(this->fabric_config_);
+    log_critical(tt::LogMetal, "Fabric config: {}", this->fabric_config_);
+    log_critical(tt::LogMetal, "Fabric type: {}", fabric_type);
     std::filesystem::path mesh_graph_desc_path =
         tt::tt_fabric::MeshGraph::get_mesh_graph_descriptor_path_for_cluster_type(
             cluster_type,
@@ -604,6 +606,7 @@ void MetalContext::initialize_control_plane() {
             fabric_type);
 
     log_debug(tt::LogMetal, "Using mesh graph descriptor: {}", mesh_graph_desc_path);
+    log_critical(tt::LogMetal, "Mesh graph descriptor path: {}", mesh_graph_desc_path.string());
 
     TT_FATAL(!mesh_graph_desc_path.empty(), "No mesh graph descriptor found for cluster type");
     TT_FATAL(

@@ -1,0 +1,5090 @@
+hosts {
+  hostname: "metal-wh-18"
+  hall: "SC_Floor_5"
+  aisle: "A"
+  rack: 1
+  shelf_u: 32
+  motherboard: "X12DPG-QT6"
+}
+hosts {
+  hostname: "metal-wh-08"
+  hall: "SC_Floor_5"
+  aisle: "A"
+  rack: 1
+  shelf_u: 28
+  motherboard: "X12DPG-QT6"
+}
+hosts {
+  hostname: "metal-wh-01"
+  hall: "SC_Floor_5"
+  aisle: "A"
+  rack: 1
+  shelf_u: 22
+  motherboard: "X12DPG-QT6"
+}
+hosts {
+  hostname: "metal-wh-02"
+  hall: "SC_Floor_5"
+  aisle: "A"
+  rack: 1
+  shelf_u: 18
+  motherboard: "X12DPG-QT6"
+}
+hosts {
+  hostname: "metal-wh-03"
+  hall: "SC_Floor_5"
+  aisle: "A"
+  rack: 1
+  shelf_u: 12
+  motherboard: "X12DPG-QT6"
+}
+hosts {
+  hostname: "metal-wh-04"
+  hall: "SC_Floor_5"
+  aisle: "A"
+  rack: 1
+  shelf_u: 8
+  motherboard: "X12DPG-QT6"
+}
+hosts {
+  hostname: "metal-wh-05"
+  hall: "SC_Floor_5"
+  aisle: "A"
+  rack: 1
+  shelf_u: 4
+  motherboard: "X12DPG-QT6"
+}
+hosts {
+  hostname: "metal-wh-06"
+  hall: "SC_Floor_5"
+  aisle: "A"
+  rack: 1
+  motherboard: "X12DPG-QT6"
+}
+hosts {
+  hostname: "metal-wh-09"
+  hall: "SC_Floor_5"
+  aisle: "A"
+  rack: 2
+  shelf_u: 32
+  motherboard: "X12DPG-QT6"
+}
+hosts {
+  hostname: "metal-wh-10"
+  hall: "SC_Floor_5"
+  aisle: "A"
+  rack: 2
+  shelf_u: 28
+  motherboard: "X12DPG-QT6"
+}
+hosts {
+  hostname: "metal-wh-11"
+  hall: "SC_Floor_5"
+  aisle: "A"
+  rack: 2
+  shelf_u: 22
+  motherboard: "X12DPG-QT6"
+}
+hosts {
+  hostname: "metal-wh-12"
+  hall: "SC_Floor_5"
+  aisle: "A"
+  rack: 2
+  shelf_u: 18
+  motherboard: "X12DPG-QT6"
+}
+hosts {
+  hostname: "metal-wh-13"
+  hall: "SC_Floor_5"
+  aisle: "A"
+  rack: 2
+  shelf_u: 12
+  motherboard: "X12DPG-QT6"
+}
+hosts {
+  hostname: "metal-wh-14"
+  hall: "SC_Floor_5"
+  aisle: "A"
+  rack: 2
+  shelf_u: 8
+  motherboard: "X12DPG-QT6"
+}
+hosts {
+  hostname: "metal-wh-15"
+  hall: "SC_Floor_5"
+  aisle: "A"
+  rack: 2
+  shelf_u: 4
+  motherboard: "X12DPG-QT6"
+}
+hosts {
+  hostname: "metal-wh-16"
+  hall: "SC_Floor_5"
+  aisle: "A"
+  rack: 2
+  motherboard: "X12DPG-QT6"
+}
+board_types {
+  board_locations {
+    tray_id: 1
+    board_type: "N300"
+  }
+  board_locations {
+    tray_id: 2
+    board_type: "N300"
+  }
+  board_locations {
+    tray_id: 3
+    board_type: "N300"
+  }
+  board_locations {
+    tray_id: 4
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 1
+    tray_id: 1
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 1
+    tray_id: 2
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 1
+    tray_id: 3
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 1
+    tray_id: 4
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 2
+    tray_id: 1
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 2
+    tray_id: 2
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 2
+    tray_id: 3
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 2
+    tray_id: 4
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 3
+    tray_id: 1
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 3
+    tray_id: 2
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 3
+    tray_id: 3
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 3
+    tray_id: 4
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 4
+    tray_id: 1
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 4
+    tray_id: 2
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 4
+    tray_id: 3
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 4
+    tray_id: 4
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 5
+    tray_id: 1
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 5
+    tray_id: 2
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 5
+    tray_id: 3
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 5
+    tray_id: 4
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 6
+    tray_id: 1
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 6
+    tray_id: 2
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 6
+    tray_id: 3
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 6
+    tray_id: 4
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 7
+    tray_id: 1
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 7
+    tray_id: 2
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 7
+    tray_id: 3
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 7
+    tray_id: 4
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 8
+    tray_id: 1
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 8
+    tray_id: 2
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 8
+    tray_id: 3
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 8
+    tray_id: 4
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 9
+    tray_id: 1
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 9
+    tray_id: 2
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 9
+    tray_id: 3
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 9
+    tray_id: 4
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 10
+    tray_id: 1
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 10
+    tray_id: 2
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 10
+    tray_id: 3
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 10
+    tray_id: 4
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 11
+    tray_id: 1
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 11
+    tray_id: 2
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 11
+    tray_id: 3
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 11
+    tray_id: 4
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 12
+    tray_id: 1
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 12
+    tray_id: 2
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 12
+    tray_id: 3
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 12
+    tray_id: 4
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 13
+    tray_id: 1
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 13
+    tray_id: 2
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 13
+    tray_id: 3
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 13
+    tray_id: 4
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 14
+    tray_id: 1
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 14
+    tray_id: 2
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 14
+    tray_id: 3
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 14
+    tray_id: 4
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 15
+    tray_id: 1
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 15
+    tray_id: 2
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 15
+    tray_id: 3
+    board_type: "N300"
+  }
+  board_locations {
+    host_id: 15
+    tray_id: 4
+    board_type: "N300"
+  }
+}
+eth_connections {
+  connection {
+    endpoint_a {
+      tray_id: 1
+    }
+    endpoint_b {
+      host_id: 3
+      tray_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      tray_id: 1
+      chan_id: 1
+    }
+    endpoint_b {
+      host_id: 3
+      tray_id: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      tray_id: 1
+      chan_id: 6
+    }
+    endpoint_b {
+      tray_id: 4
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      tray_id: 1
+      chan_id: 7
+    }
+    endpoint_b {
+      tray_id: 4
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      tray_id: 1
+      chan_id: 8
+    }
+    endpoint_b {
+      tray_id: 1
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      tray_id: 1
+      chan_id: 9
+    }
+    endpoint_b {
+      tray_id: 1
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      tray_id: 1
+      chan_id: 14
+    }
+    endpoint_b {
+      tray_id: 2
+      chan_id: 14
+    }
+  }
+  connection {
+    endpoint_a {
+      tray_id: 1
+      chan_id: 15
+    }
+    endpoint_b {
+      tray_id: 2
+      chan_id: 15
+    }
+  }
+  connection {
+    endpoint_a {
+      tray_id: 1
+      asic_location: 1
+      chan_id: 6
+    }
+    endpoint_b {
+      tray_id: 2
+      asic_location: 1
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      tray_id: 1
+      asic_location: 1
+      chan_id: 7
+    }
+    endpoint_b {
+      tray_id: 2
+      asic_location: 1
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      tray_id: 2
+    }
+    endpoint_b {
+      tray_id: 3
+    }
+  }
+  connection {
+    endpoint_a {
+      tray_id: 2
+      chan_id: 1
+    }
+    endpoint_b {
+      tray_id: 3
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      tray_id: 2
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 8
+      tray_id: 2
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      tray_id: 2
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 8
+      tray_id: 2
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      tray_id: 2
+      chan_id: 8
+    }
+    endpoint_b {
+      tray_id: 2
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      tray_id: 2
+      chan_id: 9
+    }
+    endpoint_b {
+      tray_id: 2
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      tray_id: 3
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 1
+      tray_id: 3
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      tray_id: 3
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 1
+      tray_id: 3
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      tray_id: 3
+      chan_id: 8
+    }
+    endpoint_b {
+      tray_id: 3
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      tray_id: 3
+      chan_id: 9
+    }
+    endpoint_b {
+      tray_id: 3
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      tray_id: 3
+      chan_id: 14
+    }
+    endpoint_b {
+      tray_id: 4
+      chan_id: 14
+    }
+  }
+  connection {
+    endpoint_a {
+      tray_id: 3
+      chan_id: 15
+    }
+    endpoint_b {
+      tray_id: 4
+      chan_id: 15
+    }
+  }
+  connection {
+    endpoint_a {
+      tray_id: 3
+      asic_location: 1
+      chan_id: 6
+    }
+    endpoint_b {
+      tray_id: 4
+      asic_location: 1
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      tray_id: 3
+      asic_location: 1
+      chan_id: 7
+    }
+    endpoint_b {
+      tray_id: 4
+      asic_location: 1
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      tray_id: 4
+    }
+    endpoint_b {
+      host_id: 2
+      tray_id: 4
+    }
+  }
+  connection {
+    endpoint_a {
+      tray_id: 4
+      chan_id: 1
+    }
+    endpoint_b {
+      host_id: 2
+      tray_id: 4
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      tray_id: 4
+      chan_id: 8
+    }
+    endpoint_b {
+      tray_id: 4
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      tray_id: 4
+      chan_id: 9
+    }
+    endpoint_b {
+      tray_id: 4
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 1
+      tray_id: 1
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 1
+      tray_id: 4
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 1
+      tray_id: 1
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 1
+      tray_id: 4
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 1
+      tray_id: 1
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 1
+      tray_id: 1
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 1
+      tray_id: 1
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 1
+      tray_id: 1
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 1
+      tray_id: 1
+      chan_id: 14
+    }
+    endpoint_b {
+      host_id: 1
+      tray_id: 2
+      chan_id: 14
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 1
+      tray_id: 1
+      chan_id: 15
+    }
+    endpoint_b {
+      host_id: 1
+      tray_id: 2
+      chan_id: 15
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 1
+      tray_id: 1
+      asic_location: 1
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 1
+      tray_id: 2
+      asic_location: 1
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 1
+      tray_id: 1
+      asic_location: 1
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 1
+      tray_id: 2
+      asic_location: 1
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 1
+      tray_id: 2
+    }
+    endpoint_b {
+      host_id: 1
+      tray_id: 3
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 1
+      tray_id: 2
+      chan_id: 1
+    }
+    endpoint_b {
+      host_id: 1
+      tray_id: 3
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 1
+      tray_id: 2
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 2
+      tray_id: 2
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 1
+      tray_id: 2
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 2
+      tray_id: 2
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 1
+      tray_id: 2
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 1
+      tray_id: 2
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 1
+      tray_id: 2
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 1
+      tray_id: 2
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 1
+      tray_id: 3
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 1
+      tray_id: 3
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 1
+      tray_id: 3
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 1
+      tray_id: 3
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 1
+      tray_id: 3
+      chan_id: 14
+    }
+    endpoint_b {
+      host_id: 1
+      tray_id: 4
+      chan_id: 14
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 1
+      tray_id: 3
+      chan_id: 15
+    }
+    endpoint_b {
+      host_id: 1
+      tray_id: 4
+      chan_id: 15
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 1
+      tray_id: 3
+      asic_location: 1
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 1
+      tray_id: 4
+      asic_location: 1
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 1
+      tray_id: 3
+      asic_location: 1
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 1
+      tray_id: 4
+      asic_location: 1
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 1
+      tray_id: 4
+    }
+    endpoint_b {
+      host_id: 3
+      tray_id: 2
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 1
+      tray_id: 4
+      chan_id: 1
+    }
+    endpoint_b {
+      host_id: 3
+      tray_id: 2
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 1
+      tray_id: 4
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 1
+      tray_id: 4
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 1
+      tray_id: 4
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 1
+      tray_id: 4
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 2
+      tray_id: 1
+    }
+    endpoint_b {
+      host_id: 5
+      tray_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 2
+      tray_id: 1
+      chan_id: 1
+    }
+    endpoint_b {
+      host_id: 5
+      tray_id: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 2
+      tray_id: 1
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 2
+      tray_id: 4
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 2
+      tray_id: 1
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 2
+      tray_id: 4
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 2
+      tray_id: 1
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 2
+      tray_id: 1
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 2
+      tray_id: 1
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 2
+      tray_id: 1
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 2
+      tray_id: 1
+      chan_id: 14
+    }
+    endpoint_b {
+      host_id: 2
+      tray_id: 2
+      chan_id: 14
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 2
+      tray_id: 1
+      chan_id: 15
+    }
+    endpoint_b {
+      host_id: 2
+      tray_id: 2
+      chan_id: 15
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 2
+      tray_id: 1
+      asic_location: 1
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 2
+      tray_id: 2
+      asic_location: 1
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 2
+      tray_id: 1
+      asic_location: 1
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 2
+      tray_id: 2
+      asic_location: 1
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 2
+      tray_id: 2
+    }
+    endpoint_b {
+      host_id: 2
+      tray_id: 3
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 2
+      tray_id: 2
+      chan_id: 1
+    }
+    endpoint_b {
+      host_id: 2
+      tray_id: 3
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 2
+      tray_id: 2
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 2
+      tray_id: 2
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 2
+      tray_id: 2
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 2
+      tray_id: 2
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 2
+      tray_id: 3
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 3
+      tray_id: 3
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 2
+      tray_id: 3
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 3
+      tray_id: 3
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 2
+      tray_id: 3
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 2
+      tray_id: 3
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 2
+      tray_id: 3
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 2
+      tray_id: 3
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 2
+      tray_id: 3
+      chan_id: 14
+    }
+    endpoint_b {
+      host_id: 2
+      tray_id: 4
+      chan_id: 14
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 2
+      tray_id: 3
+      chan_id: 15
+    }
+    endpoint_b {
+      host_id: 2
+      tray_id: 4
+      chan_id: 15
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 2
+      tray_id: 3
+      asic_location: 1
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 2
+      tray_id: 4
+      asic_location: 1
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 2
+      tray_id: 3
+      asic_location: 1
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 2
+      tray_id: 4
+      asic_location: 1
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 2
+      tray_id: 4
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 2
+      tray_id: 4
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 2
+      tray_id: 4
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 2
+      tray_id: 4
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 3
+      tray_id: 1
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 3
+      tray_id: 4
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 3
+      tray_id: 1
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 3
+      tray_id: 4
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 3
+      tray_id: 1
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 3
+      tray_id: 1
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 3
+      tray_id: 1
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 3
+      tray_id: 1
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 3
+      tray_id: 1
+      chan_id: 14
+    }
+    endpoint_b {
+      host_id: 3
+      tray_id: 2
+      chan_id: 14
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 3
+      tray_id: 1
+      chan_id: 15
+    }
+    endpoint_b {
+      host_id: 3
+      tray_id: 2
+      chan_id: 15
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 3
+      tray_id: 1
+      asic_location: 1
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 3
+      tray_id: 2
+      asic_location: 1
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 3
+      tray_id: 1
+      asic_location: 1
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 3
+      tray_id: 2
+      asic_location: 1
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 3
+      tray_id: 2
+    }
+    endpoint_b {
+      host_id: 3
+      tray_id: 3
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 3
+      tray_id: 2
+      chan_id: 1
+    }
+    endpoint_b {
+      host_id: 3
+      tray_id: 3
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 3
+      tray_id: 2
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 3
+      tray_id: 2
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 3
+      tray_id: 2
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 3
+      tray_id: 2
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 3
+      tray_id: 3
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 3
+      tray_id: 3
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 3
+      tray_id: 3
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 3
+      tray_id: 3
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 3
+      tray_id: 3
+      chan_id: 14
+    }
+    endpoint_b {
+      host_id: 3
+      tray_id: 4
+      chan_id: 14
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 3
+      tray_id: 3
+      chan_id: 15
+    }
+    endpoint_b {
+      host_id: 3
+      tray_id: 4
+      chan_id: 15
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 3
+      tray_id: 3
+      asic_location: 1
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 3
+      tray_id: 4
+      asic_location: 1
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 3
+      tray_id: 3
+      asic_location: 1
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 3
+      tray_id: 4
+      asic_location: 1
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 3
+      tray_id: 4
+    }
+    endpoint_b {
+      host_id: 12
+      tray_id: 2
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 3
+      tray_id: 4
+      chan_id: 1
+    }
+    endpoint_b {
+      host_id: 12
+      tray_id: 2
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 3
+      tray_id: 4
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 3
+      tray_id: 4
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 3
+      tray_id: 4
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 3
+      tray_id: 4
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 4
+      tray_id: 1
+    }
+    endpoint_b {
+      host_id: 7
+      tray_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 4
+      tray_id: 1
+      chan_id: 1
+    }
+    endpoint_b {
+      host_id: 7
+      tray_id: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 4
+      tray_id: 1
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 4
+      tray_id: 4
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 4
+      tray_id: 1
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 4
+      tray_id: 4
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 4
+      tray_id: 1
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 4
+      tray_id: 1
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 4
+      tray_id: 1
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 4
+      tray_id: 1
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 4
+      tray_id: 1
+      chan_id: 14
+    }
+    endpoint_b {
+      host_id: 4
+      tray_id: 2
+      chan_id: 14
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 4
+      tray_id: 1
+      chan_id: 15
+    }
+    endpoint_b {
+      host_id: 4
+      tray_id: 2
+      chan_id: 15
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 4
+      tray_id: 1
+      asic_location: 1
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 4
+      tray_id: 2
+      asic_location: 1
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 4
+      tray_id: 1
+      asic_location: 1
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 4
+      tray_id: 2
+      asic_location: 1
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 4
+      tray_id: 2
+    }
+    endpoint_b {
+      host_id: 4
+      tray_id: 3
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 4
+      tray_id: 2
+      chan_id: 1
+    }
+    endpoint_b {
+      host_id: 4
+      tray_id: 3
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 4
+      tray_id: 2
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 4
+      tray_id: 2
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 4
+      tray_id: 2
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 4
+      tray_id: 2
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 4
+      tray_id: 3
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 5
+      tray_id: 3
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 4
+      tray_id: 3
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 5
+      tray_id: 3
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 4
+      tray_id: 3
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 4
+      tray_id: 3
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 4
+      tray_id: 3
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 4
+      tray_id: 3
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 4
+      tray_id: 3
+      chan_id: 14
+    }
+    endpoint_b {
+      host_id: 4
+      tray_id: 4
+      chan_id: 14
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 4
+      tray_id: 3
+      chan_id: 15
+    }
+    endpoint_b {
+      host_id: 4
+      tray_id: 4
+      chan_id: 15
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 4
+      tray_id: 3
+      asic_location: 1
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 4
+      tray_id: 4
+      asic_location: 1
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 4
+      tray_id: 3
+      asic_location: 1
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 4
+      tray_id: 4
+      asic_location: 1
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 4
+      tray_id: 4
+    }
+    endpoint_b {
+      host_id: 6
+      tray_id: 4
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 4
+      tray_id: 4
+      chan_id: 1
+    }
+    endpoint_b {
+      host_id: 6
+      tray_id: 4
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 4
+      tray_id: 4
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 4
+      tray_id: 4
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 4
+      tray_id: 4
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 4
+      tray_id: 4
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 5
+      tray_id: 1
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 5
+      tray_id: 4
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 5
+      tray_id: 1
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 5
+      tray_id: 4
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 5
+      tray_id: 1
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 5
+      tray_id: 1
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 5
+      tray_id: 1
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 5
+      tray_id: 1
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 5
+      tray_id: 1
+      chan_id: 14
+    }
+    endpoint_b {
+      host_id: 5
+      tray_id: 2
+      chan_id: 14
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 5
+      tray_id: 1
+      chan_id: 15
+    }
+    endpoint_b {
+      host_id: 5
+      tray_id: 2
+      chan_id: 15
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 5
+      tray_id: 1
+      asic_location: 1
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 5
+      tray_id: 2
+      asic_location: 1
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 5
+      tray_id: 1
+      asic_location: 1
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 5
+      tray_id: 2
+      asic_location: 1
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 5
+      tray_id: 2
+    }
+    endpoint_b {
+      host_id: 5
+      tray_id: 3
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 5
+      tray_id: 2
+      chan_id: 1
+    }
+    endpoint_b {
+      host_id: 5
+      tray_id: 3
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 5
+      tray_id: 2
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 6
+      tray_id: 2
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 5
+      tray_id: 2
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 6
+      tray_id: 2
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 5
+      tray_id: 2
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 5
+      tray_id: 2
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 5
+      tray_id: 2
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 5
+      tray_id: 2
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 5
+      tray_id: 3
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 5
+      tray_id: 3
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 5
+      tray_id: 3
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 5
+      tray_id: 3
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 5
+      tray_id: 3
+      chan_id: 14
+    }
+    endpoint_b {
+      host_id: 5
+      tray_id: 4
+      chan_id: 14
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 5
+      tray_id: 3
+      chan_id: 15
+    }
+    endpoint_b {
+      host_id: 5
+      tray_id: 4
+      chan_id: 15
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 5
+      tray_id: 3
+      asic_location: 1
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 5
+      tray_id: 4
+      asic_location: 1
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 5
+      tray_id: 3
+      asic_location: 1
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 5
+      tray_id: 4
+      asic_location: 1
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 5
+      tray_id: 4
+    }
+    endpoint_b {
+      host_id: 7
+      tray_id: 2
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 5
+      tray_id: 4
+      chan_id: 1
+    }
+    endpoint_b {
+      host_id: 7
+      tray_id: 2
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 5
+      tray_id: 4
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 5
+      tray_id: 4
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 5
+      tray_id: 4
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 5
+      tray_id: 4
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 6
+      tray_id: 1
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 6
+      tray_id: 4
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 6
+      tray_id: 1
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 6
+      tray_id: 4
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 6
+      tray_id: 1
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 6
+      tray_id: 1
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 6
+      tray_id: 1
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 6
+      tray_id: 1
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 6
+      tray_id: 1
+      chan_id: 14
+    }
+    endpoint_b {
+      host_id: 6
+      tray_id: 2
+      chan_id: 14
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 6
+      tray_id: 1
+      chan_id: 15
+    }
+    endpoint_b {
+      host_id: 6
+      tray_id: 2
+      chan_id: 15
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 6
+      tray_id: 1
+      asic_location: 1
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 6
+      tray_id: 2
+      asic_location: 1
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 6
+      tray_id: 1
+      asic_location: 1
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 6
+      tray_id: 2
+      asic_location: 1
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 6
+      tray_id: 2
+    }
+    endpoint_b {
+      host_id: 6
+      tray_id: 3
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 6
+      tray_id: 2
+      chan_id: 1
+    }
+    endpoint_b {
+      host_id: 6
+      tray_id: 3
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 6
+      tray_id: 2
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 6
+      tray_id: 2
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 6
+      tray_id: 2
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 6
+      tray_id: 2
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 6
+      tray_id: 3
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 7
+      tray_id: 3
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 6
+      tray_id: 3
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 7
+      tray_id: 3
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 6
+      tray_id: 3
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 6
+      tray_id: 3
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 6
+      tray_id: 3
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 6
+      tray_id: 3
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 6
+      tray_id: 3
+      chan_id: 14
+    }
+    endpoint_b {
+      host_id: 6
+      tray_id: 4
+      chan_id: 14
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 6
+      tray_id: 3
+      chan_id: 15
+    }
+    endpoint_b {
+      host_id: 6
+      tray_id: 4
+      chan_id: 15
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 6
+      tray_id: 3
+      asic_location: 1
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 6
+      tray_id: 4
+      asic_location: 1
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 6
+      tray_id: 3
+      asic_location: 1
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 6
+      tray_id: 4
+      asic_location: 1
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 6
+      tray_id: 4
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 6
+      tray_id: 4
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 6
+      tray_id: 4
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 6
+      tray_id: 4
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 7
+      tray_id: 1
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 7
+      tray_id: 4
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 7
+      tray_id: 1
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 7
+      tray_id: 4
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 7
+      tray_id: 1
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 7
+      tray_id: 1
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 7
+      tray_id: 1
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 7
+      tray_id: 1
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 7
+      tray_id: 1
+      chan_id: 14
+    }
+    endpoint_b {
+      host_id: 7
+      tray_id: 2
+      chan_id: 14
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 7
+      tray_id: 1
+      chan_id: 15
+    }
+    endpoint_b {
+      host_id: 7
+      tray_id: 2
+      chan_id: 15
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 7
+      tray_id: 1
+      asic_location: 1
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 7
+      tray_id: 2
+      asic_location: 1
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 7
+      tray_id: 1
+      asic_location: 1
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 7
+      tray_id: 2
+      asic_location: 1
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 7
+      tray_id: 2
+    }
+    endpoint_b {
+      host_id: 7
+      tray_id: 3
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 7
+      tray_id: 2
+      chan_id: 1
+    }
+    endpoint_b {
+      host_id: 7
+      tray_id: 3
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 7
+      tray_id: 2
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 7
+      tray_id: 2
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 7
+      tray_id: 2
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 7
+      tray_id: 2
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 7
+      tray_id: 3
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 7
+      tray_id: 3
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 7
+      tray_id: 3
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 7
+      tray_id: 3
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 7
+      tray_id: 3
+      chan_id: 14
+    }
+    endpoint_b {
+      host_id: 7
+      tray_id: 4
+      chan_id: 14
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 7
+      tray_id: 3
+      chan_id: 15
+    }
+    endpoint_b {
+      host_id: 7
+      tray_id: 4
+      chan_id: 15
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 7
+      tray_id: 3
+      asic_location: 1
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 7
+      tray_id: 4
+      asic_location: 1
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 7
+      tray_id: 3
+      asic_location: 1
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 7
+      tray_id: 4
+      asic_location: 1
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 7
+      tray_id: 4
+    }
+    endpoint_b {
+      host_id: 15
+      tray_id: 4
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 7
+      tray_id: 4
+      chan_id: 1
+    }
+    endpoint_b {
+      host_id: 15
+      tray_id: 4
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 7
+      tray_id: 4
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 7
+      tray_id: 4
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 7
+      tray_id: 4
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 7
+      tray_id: 4
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 8
+      tray_id: 1
+    }
+    endpoint_b {
+      host_id: 11
+      tray_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 8
+      tray_id: 1
+      chan_id: 1
+    }
+    endpoint_b {
+      host_id: 11
+      tray_id: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 8
+      tray_id: 1
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 8
+      tray_id: 4
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 8
+      tray_id: 1
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 8
+      tray_id: 4
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 8
+      tray_id: 1
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 8
+      tray_id: 1
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 8
+      tray_id: 1
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 8
+      tray_id: 1
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 8
+      tray_id: 1
+      chan_id: 14
+    }
+    endpoint_b {
+      host_id: 8
+      tray_id: 2
+      chan_id: 14
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 8
+      tray_id: 1
+      chan_id: 15
+    }
+    endpoint_b {
+      host_id: 8
+      tray_id: 2
+      chan_id: 15
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 8
+      tray_id: 1
+      asic_location: 1
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 8
+      tray_id: 2
+      asic_location: 1
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 8
+      tray_id: 1
+      asic_location: 1
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 8
+      tray_id: 2
+      asic_location: 1
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 8
+      tray_id: 2
+    }
+    endpoint_b {
+      host_id: 8
+      tray_id: 3
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 8
+      tray_id: 2
+      chan_id: 1
+    }
+    endpoint_b {
+      host_id: 8
+      tray_id: 3
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 8
+      tray_id: 2
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 8
+      tray_id: 2
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 8
+      tray_id: 2
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 8
+      tray_id: 2
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 8
+      tray_id: 3
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 9
+      tray_id: 3
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 8
+      tray_id: 3
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 9
+      tray_id: 3
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 8
+      tray_id: 3
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 8
+      tray_id: 3
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 8
+      tray_id: 3
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 8
+      tray_id: 3
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 8
+      tray_id: 3
+      chan_id: 14
+    }
+    endpoint_b {
+      host_id: 8
+      tray_id: 4
+      chan_id: 14
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 8
+      tray_id: 3
+      chan_id: 15
+    }
+    endpoint_b {
+      host_id: 8
+      tray_id: 4
+      chan_id: 15
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 8
+      tray_id: 3
+      asic_location: 1
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 8
+      tray_id: 4
+      asic_location: 1
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 8
+      tray_id: 3
+      asic_location: 1
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 8
+      tray_id: 4
+      asic_location: 1
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 8
+      tray_id: 4
+    }
+    endpoint_b {
+      host_id: 10
+      tray_id: 4
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 8
+      tray_id: 4
+      chan_id: 1
+    }
+    endpoint_b {
+      host_id: 10
+      tray_id: 4
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 8
+      tray_id: 4
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 8
+      tray_id: 4
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 8
+      tray_id: 4
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 8
+      tray_id: 4
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 9
+      tray_id: 1
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 9
+      tray_id: 4
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 9
+      tray_id: 1
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 9
+      tray_id: 4
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 9
+      tray_id: 1
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 9
+      tray_id: 1
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 9
+      tray_id: 1
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 9
+      tray_id: 1
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 9
+      tray_id: 1
+      chan_id: 14
+    }
+    endpoint_b {
+      host_id: 9
+      tray_id: 2
+      chan_id: 14
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 9
+      tray_id: 1
+      chan_id: 15
+    }
+    endpoint_b {
+      host_id: 9
+      tray_id: 2
+      chan_id: 15
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 9
+      tray_id: 1
+      asic_location: 1
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 9
+      tray_id: 2
+      asic_location: 1
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 9
+      tray_id: 1
+      asic_location: 1
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 9
+      tray_id: 2
+      asic_location: 1
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 9
+      tray_id: 2
+    }
+    endpoint_b {
+      host_id: 9
+      tray_id: 3
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 9
+      tray_id: 2
+      chan_id: 1
+    }
+    endpoint_b {
+      host_id: 9
+      tray_id: 3
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 9
+      tray_id: 2
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 10
+      tray_id: 2
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 9
+      tray_id: 2
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 10
+      tray_id: 2
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 9
+      tray_id: 2
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 9
+      tray_id: 2
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 9
+      tray_id: 2
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 9
+      tray_id: 2
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 9
+      tray_id: 3
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 9
+      tray_id: 3
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 9
+      tray_id: 3
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 9
+      tray_id: 3
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 9
+      tray_id: 3
+      chan_id: 14
+    }
+    endpoint_b {
+      host_id: 9
+      tray_id: 4
+      chan_id: 14
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 9
+      tray_id: 3
+      chan_id: 15
+    }
+    endpoint_b {
+      host_id: 9
+      tray_id: 4
+      chan_id: 15
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 9
+      tray_id: 3
+      asic_location: 1
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 9
+      tray_id: 4
+      asic_location: 1
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 9
+      tray_id: 3
+      asic_location: 1
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 9
+      tray_id: 4
+      asic_location: 1
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 9
+      tray_id: 4
+    }
+    endpoint_b {
+      host_id: 11
+      tray_id: 2
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 9
+      tray_id: 4
+      chan_id: 1
+    }
+    endpoint_b {
+      host_id: 11
+      tray_id: 2
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 9
+      tray_id: 4
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 9
+      tray_id: 4
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 9
+      tray_id: 4
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 9
+      tray_id: 4
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 10
+      tray_id: 1
+    }
+    endpoint_b {
+      host_id: 13
+      tray_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 10
+      tray_id: 1
+      chan_id: 1
+    }
+    endpoint_b {
+      host_id: 13
+      tray_id: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 10
+      tray_id: 1
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 10
+      tray_id: 4
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 10
+      tray_id: 1
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 10
+      tray_id: 4
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 10
+      tray_id: 1
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 10
+      tray_id: 1
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 10
+      tray_id: 1
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 10
+      tray_id: 1
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 10
+      tray_id: 1
+      chan_id: 14
+    }
+    endpoint_b {
+      host_id: 10
+      tray_id: 2
+      chan_id: 14
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 10
+      tray_id: 1
+      chan_id: 15
+    }
+    endpoint_b {
+      host_id: 10
+      tray_id: 2
+      chan_id: 15
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 10
+      tray_id: 1
+      asic_location: 1
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 10
+      tray_id: 2
+      asic_location: 1
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 10
+      tray_id: 1
+      asic_location: 1
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 10
+      tray_id: 2
+      asic_location: 1
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 10
+      tray_id: 2
+    }
+    endpoint_b {
+      host_id: 10
+      tray_id: 3
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 10
+      tray_id: 2
+      chan_id: 1
+    }
+    endpoint_b {
+      host_id: 10
+      tray_id: 3
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 10
+      tray_id: 2
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 10
+      tray_id: 2
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 10
+      tray_id: 2
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 10
+      tray_id: 2
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 10
+      tray_id: 3
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 11
+      tray_id: 3
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 10
+      tray_id: 3
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 11
+      tray_id: 3
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 10
+      tray_id: 3
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 10
+      tray_id: 3
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 10
+      tray_id: 3
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 10
+      tray_id: 3
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 10
+      tray_id: 3
+      chan_id: 14
+    }
+    endpoint_b {
+      host_id: 10
+      tray_id: 4
+      chan_id: 14
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 10
+      tray_id: 3
+      chan_id: 15
+    }
+    endpoint_b {
+      host_id: 10
+      tray_id: 4
+      chan_id: 15
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 10
+      tray_id: 3
+      asic_location: 1
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 10
+      tray_id: 4
+      asic_location: 1
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 10
+      tray_id: 3
+      asic_location: 1
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 10
+      tray_id: 4
+      asic_location: 1
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 10
+      tray_id: 4
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 10
+      tray_id: 4
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 10
+      tray_id: 4
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 10
+      tray_id: 4
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 11
+      tray_id: 1
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 11
+      tray_id: 4
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 11
+      tray_id: 1
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 11
+      tray_id: 4
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 11
+      tray_id: 1
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 11
+      tray_id: 1
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 11
+      tray_id: 1
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 11
+      tray_id: 1
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 11
+      tray_id: 1
+      chan_id: 14
+    }
+    endpoint_b {
+      host_id: 11
+      tray_id: 2
+      chan_id: 14
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 11
+      tray_id: 1
+      chan_id: 15
+    }
+    endpoint_b {
+      host_id: 11
+      tray_id: 2
+      chan_id: 15
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 11
+      tray_id: 1
+      asic_location: 1
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 11
+      tray_id: 2
+      asic_location: 1
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 11
+      tray_id: 1
+      asic_location: 1
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 11
+      tray_id: 2
+      asic_location: 1
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 11
+      tray_id: 2
+    }
+    endpoint_b {
+      host_id: 11
+      tray_id: 3
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 11
+      tray_id: 2
+      chan_id: 1
+    }
+    endpoint_b {
+      host_id: 11
+      tray_id: 3
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 11
+      tray_id: 2
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 11
+      tray_id: 2
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 11
+      tray_id: 2
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 11
+      tray_id: 2
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 11
+      tray_id: 3
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 11
+      tray_id: 3
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 11
+      tray_id: 3
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 11
+      tray_id: 3
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 11
+      tray_id: 3
+      chan_id: 14
+    }
+    endpoint_b {
+      host_id: 11
+      tray_id: 4
+      chan_id: 14
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 11
+      tray_id: 3
+      chan_id: 15
+    }
+    endpoint_b {
+      host_id: 11
+      tray_id: 4
+      chan_id: 15
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 11
+      tray_id: 3
+      asic_location: 1
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 11
+      tray_id: 4
+      asic_location: 1
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 11
+      tray_id: 3
+      asic_location: 1
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 11
+      tray_id: 4
+      asic_location: 1
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 11
+      tray_id: 4
+    }
+    endpoint_b {
+      host_id: 4
+      tray_id: 2
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 11
+      tray_id: 4
+      chan_id: 1
+    }
+    endpoint_b {
+      host_id: 4
+      tray_id: 2
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 11
+      tray_id: 4
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 11
+      tray_id: 4
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 11
+      tray_id: 4
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 11
+      tray_id: 4
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 12
+      tray_id: 1
+    }
+    endpoint_b {
+      host_id: 15
+      tray_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 12
+      tray_id: 1
+      chan_id: 1
+    }
+    endpoint_b {
+      host_id: 15
+      tray_id: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 12
+      tray_id: 1
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 12
+      tray_id: 4
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 12
+      tray_id: 1
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 12
+      tray_id: 4
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 12
+      tray_id: 1
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 12
+      tray_id: 1
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 12
+      tray_id: 1
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 12
+      tray_id: 1
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 12
+      tray_id: 1
+      chan_id: 14
+    }
+    endpoint_b {
+      host_id: 12
+      tray_id: 2
+      chan_id: 14
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 12
+      tray_id: 1
+      chan_id: 15
+    }
+    endpoint_b {
+      host_id: 12
+      tray_id: 2
+      chan_id: 15
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 12
+      tray_id: 1
+      asic_location: 1
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 12
+      tray_id: 2
+      asic_location: 1
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 12
+      tray_id: 1
+      asic_location: 1
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 12
+      tray_id: 2
+      asic_location: 1
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 12
+      tray_id: 2
+    }
+    endpoint_b {
+      host_id: 12
+      tray_id: 3
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 12
+      tray_id: 2
+      chan_id: 1
+    }
+    endpoint_b {
+      host_id: 12
+      tray_id: 3
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 12
+      tray_id: 2
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 12
+      tray_id: 2
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 12
+      tray_id: 2
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 12
+      tray_id: 2
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 12
+      tray_id: 3
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 13
+      tray_id: 3
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 12
+      tray_id: 3
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 13
+      tray_id: 3
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 12
+      tray_id: 3
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 12
+      tray_id: 3
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 12
+      tray_id: 3
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 12
+      tray_id: 3
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 12
+      tray_id: 3
+      chan_id: 14
+    }
+    endpoint_b {
+      host_id: 12
+      tray_id: 4
+      chan_id: 14
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 12
+      tray_id: 3
+      chan_id: 15
+    }
+    endpoint_b {
+      host_id: 12
+      tray_id: 4
+      chan_id: 15
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 12
+      tray_id: 3
+      asic_location: 1
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 12
+      tray_id: 4
+      asic_location: 1
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 12
+      tray_id: 3
+      asic_location: 1
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 12
+      tray_id: 4
+      asic_location: 1
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 12
+      tray_id: 4
+    }
+    endpoint_b {
+      host_id: 14
+      tray_id: 4
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 12
+      tray_id: 4
+      chan_id: 1
+    }
+    endpoint_b {
+      host_id: 14
+      tray_id: 4
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 12
+      tray_id: 4
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 12
+      tray_id: 4
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 12
+      tray_id: 4
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 12
+      tray_id: 4
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 13
+      tray_id: 1
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 13
+      tray_id: 4
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 13
+      tray_id: 1
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 13
+      tray_id: 4
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 13
+      tray_id: 1
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 13
+      tray_id: 1
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 13
+      tray_id: 1
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 13
+      tray_id: 1
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 13
+      tray_id: 1
+      chan_id: 14
+    }
+    endpoint_b {
+      host_id: 13
+      tray_id: 2
+      chan_id: 14
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 13
+      tray_id: 1
+      chan_id: 15
+    }
+    endpoint_b {
+      host_id: 13
+      tray_id: 2
+      chan_id: 15
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 13
+      tray_id: 1
+      asic_location: 1
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 13
+      tray_id: 2
+      asic_location: 1
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 13
+      tray_id: 1
+      asic_location: 1
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 13
+      tray_id: 2
+      asic_location: 1
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 13
+      tray_id: 2
+    }
+    endpoint_b {
+      host_id: 13
+      tray_id: 3
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 13
+      tray_id: 2
+      chan_id: 1
+    }
+    endpoint_b {
+      host_id: 13
+      tray_id: 3
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 13
+      tray_id: 2
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 14
+      tray_id: 2
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 13
+      tray_id: 2
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 14
+      tray_id: 2
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 13
+      tray_id: 2
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 13
+      tray_id: 2
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 13
+      tray_id: 2
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 13
+      tray_id: 2
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 13
+      tray_id: 3
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 13
+      tray_id: 3
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 13
+      tray_id: 3
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 13
+      tray_id: 3
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 13
+      tray_id: 3
+      chan_id: 14
+    }
+    endpoint_b {
+      host_id: 13
+      tray_id: 4
+      chan_id: 14
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 13
+      tray_id: 3
+      chan_id: 15
+    }
+    endpoint_b {
+      host_id: 13
+      tray_id: 4
+      chan_id: 15
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 13
+      tray_id: 3
+      asic_location: 1
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 13
+      tray_id: 4
+      asic_location: 1
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 13
+      tray_id: 3
+      asic_location: 1
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 13
+      tray_id: 4
+      asic_location: 1
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 13
+      tray_id: 4
+    }
+    endpoint_b {
+      host_id: 15
+      tray_id: 2
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 13
+      tray_id: 4
+      chan_id: 1
+    }
+    endpoint_b {
+      host_id: 15
+      tray_id: 2
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 13
+      tray_id: 4
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 13
+      tray_id: 4
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 13
+      tray_id: 4
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 13
+      tray_id: 4
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 14
+      tray_id: 1
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 14
+      tray_id: 4
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 14
+      tray_id: 1
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 14
+      tray_id: 4
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 14
+      tray_id: 1
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 14
+      tray_id: 1
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 14
+      tray_id: 1
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 14
+      tray_id: 1
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 14
+      tray_id: 1
+      chan_id: 14
+    }
+    endpoint_b {
+      host_id: 14
+      tray_id: 2
+      chan_id: 14
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 14
+      tray_id: 1
+      chan_id: 15
+    }
+    endpoint_b {
+      host_id: 14
+      tray_id: 2
+      chan_id: 15
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 14
+      tray_id: 1
+      asic_location: 1
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 14
+      tray_id: 2
+      asic_location: 1
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 14
+      tray_id: 1
+      asic_location: 1
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 14
+      tray_id: 2
+      asic_location: 1
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 14
+      tray_id: 2
+    }
+    endpoint_b {
+      host_id: 14
+      tray_id: 3
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 14
+      tray_id: 2
+      chan_id: 1
+    }
+    endpoint_b {
+      host_id: 14
+      tray_id: 3
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 14
+      tray_id: 2
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 14
+      tray_id: 2
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 14
+      tray_id: 2
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 14
+      tray_id: 2
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 14
+      tray_id: 3
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 15
+      tray_id: 3
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 14
+      tray_id: 3
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 15
+      tray_id: 3
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 14
+      tray_id: 3
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 14
+      tray_id: 3
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 14
+      tray_id: 3
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 14
+      tray_id: 3
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 14
+      tray_id: 3
+      chan_id: 14
+    }
+    endpoint_b {
+      host_id: 14
+      tray_id: 4
+      chan_id: 14
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 14
+      tray_id: 3
+      chan_id: 15
+    }
+    endpoint_b {
+      host_id: 14
+      tray_id: 4
+      chan_id: 15
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 14
+      tray_id: 3
+      asic_location: 1
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 14
+      tray_id: 4
+      asic_location: 1
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 14
+      tray_id: 3
+      asic_location: 1
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 14
+      tray_id: 4
+      asic_location: 1
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 14
+      tray_id: 4
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 14
+      tray_id: 4
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 14
+      tray_id: 4
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 14
+      tray_id: 4
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 15
+      tray_id: 1
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 15
+      tray_id: 4
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 15
+      tray_id: 1
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 15
+      tray_id: 4
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 15
+      tray_id: 1
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 15
+      tray_id: 1
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 15
+      tray_id: 1
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 15
+      tray_id: 1
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 15
+      tray_id: 1
+      chan_id: 14
+    }
+    endpoint_b {
+      host_id: 15
+      tray_id: 2
+      chan_id: 14
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 15
+      tray_id: 1
+      chan_id: 15
+    }
+    endpoint_b {
+      host_id: 15
+      tray_id: 2
+      chan_id: 15
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 15
+      tray_id: 1
+      asic_location: 1
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 15
+      tray_id: 2
+      asic_location: 1
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 15
+      tray_id: 1
+      asic_location: 1
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 15
+      tray_id: 2
+      asic_location: 1
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 15
+      tray_id: 2
+    }
+    endpoint_b {
+      host_id: 15
+      tray_id: 3
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 15
+      tray_id: 2
+      chan_id: 1
+    }
+    endpoint_b {
+      host_id: 15
+      tray_id: 3
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 15
+      tray_id: 2
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 15
+      tray_id: 2
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 15
+      tray_id: 2
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 15
+      tray_id: 2
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 15
+      tray_id: 3
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 15
+      tray_id: 3
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 15
+      tray_id: 3
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 15
+      tray_id: 3
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 15
+      tray_id: 3
+      chan_id: 14
+    }
+    endpoint_b {
+      host_id: 15
+      tray_id: 4
+      chan_id: 14
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 15
+      tray_id: 3
+      chan_id: 15
+    }
+    endpoint_b {
+      host_id: 15
+      tray_id: 4
+      chan_id: 15
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 15
+      tray_id: 3
+      asic_location: 1
+      chan_id: 6
+    }
+    endpoint_b {
+      host_id: 15
+      tray_id: 4
+      asic_location: 1
+      chan_id: 6
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 15
+      tray_id: 3
+      asic_location: 1
+      chan_id: 7
+    }
+    endpoint_b {
+      host_id: 15
+      tray_id: 4
+      asic_location: 1
+      chan_id: 7
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 15
+      tray_id: 4
+      chan_id: 8
+    }
+    endpoint_b {
+      host_id: 15
+      tray_id: 4
+      asic_location: 1
+    }
+  }
+  connection {
+    endpoint_a {
+      host_id: 15
+      tray_id: 4
+      chan_id: 9
+    }
+    endpoint_b {
+      host_id: 15
+      tray_id: 4
+      asic_location: 1
+      chan_id: 1
+    }
+  }
+}
