@@ -145,7 +145,10 @@ auto bind_registered_operation(
         }(std::forward<overload_t>(overloads)),
         ...);
 
-    mod.attr(operation.base_name().c_str()) = operation;  // Bind an instance of the operation to the module
+    // Bind an instance of the operation to the module (not the class type).
+    // Using a reference ensures Python gets an instance, avoiding passing the class
+    // object as 'self' to __call__ (which leads to signature errors).
+    mod.attr(operation.base_name().c_str()) = nb::cast(&operation, nb::rv_policy::reference);
 
     return py_operation;
 }

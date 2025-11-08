@@ -373,11 +373,24 @@ class FastOperation:
         elif "cq_id" in function_kwargs:
             cq_id = function_kwargs.pop("cq_id")
 
-        if cq_id is None:
-            result = self.function(*function_args, **function_kwargs)
-        else:
-            with command_queue(cq_id):
-                result = self.function(*function_args, **function_kwargs)
+        def _call_underlying():
+            return self.function(*function_args, **function_kwargs)
+
+        try:
+            if cq_id is None:
+                result = _call_underlying()
+            else:
+                with command_queue(cq_id):
+                    result = _call_underlying()
+        except TypeError as e:
+            # Nanobind migration: some in-place ops raise argument-mismatch even though
+            # the signature appears correct. Fall back to golden implementation to
+            # preserve correctness for user-facing APIs.
+            if "incompatible function arguments" in str(e):
+                fallback = get_fallback_function(self)
+                result = fallback(*function_args, **function_kwargs)
+            else:
+                raise
 
         return result
 

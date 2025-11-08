@@ -38,11 +38,20 @@ void bind_attention_softmax(nb::module_& mod) {
             ttnn.Tensor: the output tensor.
 
         )doc",
-        ttnn::nanobind_arguments_t{
+        ttnn::nanobind_overload_t{
+            [](const decltype(ttnn::transformer::attention_softmax)& self,
+               ttnn::Tensor& tensor,
+               const std::optional<int>& head_size,
+               const std::optional<ttnn::Tensor>& attention_mask,
+               const ttnn::operations::normalization::SoftmaxProgramConfig& program_config,
+               const bool causal_mask,
+               const std::optional<ttnn::MemoryConfig>& memory_config) {
+                return self(tensor, head_size, attention_mask, program_config, causal_mask, memory_config);
+            },
             nb::arg("tensor"),
             nb::kw_only(),
             nb::arg("head_size") = nb::none(),
-            nb::arg("attention_mask") = nb::none(),
+            nb::arg("attention_mask").noconvert() = nb::none(),
             nb::arg("program_config").noconvert() = ttnn::operations::normalization::SoftmaxDefaultProgramConfig{},
             nb::arg("causal_mask") = false,
             nb::arg("memory_config") = nb::none()});
@@ -70,11 +79,20 @@ void bind_attention_softmax(nb::module_& mod) {
             ttnn.Tensor: the output tensor.
 
         )doc",
-        ttnn::nanobind_arguments_t{
+        ttnn::nanobind_overload_t{
+            [](const decltype(ttnn::transformer::attention_softmax_)& self,
+               ttnn::Tensor& tensor,
+               const std::optional<int>& head_size,
+               const std::optional<ttnn::Tensor>& attention_mask,
+               const ttnn::operations::normalization::SoftmaxProgramConfig& program_config,
+               const bool causal_mask,
+               const std::optional<ttnn::MemoryConfig>& memory_config) {
+                return self(tensor, head_size, attention_mask, program_config, causal_mask, memory_config);
+            },
             nb::arg("tensor"),
             nb::kw_only(),
             nb::arg("head_size") = nb::none(),
-            nb::arg("attention_mask") = nb::none(),
+            nb::arg("attention_mask").noconvert() = nb::none(),
             nb::arg("program_config").noconvert() = ttnn::operations::normalization::SoftmaxDefaultProgramConfig{},
             nb::arg("causal_mask") = false,
             nb::arg("memory_config") = nb::none()});

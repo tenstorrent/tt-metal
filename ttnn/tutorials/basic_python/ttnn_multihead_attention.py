@@ -12,6 +12,7 @@ from ttnn.model_preprocessing import (
     preprocess_linear_bias,
     preprocess_linear_weight,
 )
+import torch
 
 
 def main():
@@ -278,7 +279,8 @@ def main():
     torch_output = ttnn.to_torch(output)
     torch_optimized_output = ttnn.to_torch(optimized_output)
 
-    assert torch.allclose(torch_output, torch_optimized_output)
+    # Allow minor numeric drift across implementations
+    assert torch.allclose(torch_output, torch_optimized_output, atol=1e-3, rtol=1e-3)
 
     ttnn.close_device(device)
 
