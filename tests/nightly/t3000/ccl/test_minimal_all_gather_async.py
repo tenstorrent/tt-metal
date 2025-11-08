@@ -1075,6 +1075,38 @@ def test_nd(mesh_device, input_shape, dim, cluster_axis, dtype, memory_config, t
         assert eq, mess
 
 
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("input_shape", [[2, 2, 32, 32]])
+@pytest.mark.parametrize("topology", [ttnn.Topology.Linear, ttnn.Topology.Ring])
+def test_non_flat_ring(mesh_device, input_shape, topology):
+    CLUSTER_AXIS = 1
+    DIM = 2
+
+    tt_input, torch_reference = _get_tensors(
+        input_shape,
+        tuple(mesh_device.shape),
+        DIM,
+        CLUSTER_AXIS,
+        ttnn.bfloat16,
+        ttnn.DRAM_MEMORY_CONFIG,
+        ttnn.TILE_LAYOUT,
+        mesh_device,
+    )
+
+    tt_out_tensor = ttnn.all_gather(
+        tt_input,
+        DIM,
+        cluster_axis=CLUSTER_AXIS,
+        topology=topology,
+    )
+
+    tt_output_tensor = torch.cat([ttnn.to_torch(t) for t in ttnn.get_device_tensors(tt_out_tensor)])
+
+    eq, mess = comp_pcc(torch_reference, tt_output_tensor)
+    assert eq, mess
+
+
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}, {"fabric_config": ttnn.FabricConfig.FABRIC_2D_DYNAMIC}],

@@ -85,13 +85,25 @@ tt::tt_fabric::Topology get_usable_topology(
     if (topology_ == tt::tt_fabric::Topology::Ring || topology_ == tt::tt_fabric::Topology::Torus) {
         auto boundary_mode = get_boundary_mode(tensor, topology_, cluster_axis);
         if (boundary_mode == tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP) {
+            std::cout << "Return OG topology" << std::endl;
             return topology_;
         } else if (topology_ == tt::tt_fabric::Topology::Torus) {
+            log_debug(
+                tt::LogOp,
+                "Requested topology: {} is unsupported by mesh configuration, falling back to: {}",
+                topology_,
+                tt::tt_fabric::Topology::Mesh);
             return tt::tt_fabric::Topology::Mesh;
         } else {
+            log_debug(
+                tt::LogOp,
+                "Requested topology: {} is unsupported by mesh configuration, falling back to: {}",
+                topology_,
+                tt::tt_fabric::Topology::Mesh);
             return tt::tt_fabric::Topology::Linear;
         }
     }
+    std::cout << "Return OG topology" << std::endl;
     return topology_;
 }
 
