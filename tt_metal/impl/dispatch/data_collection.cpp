@@ -5,14 +5,8 @@
 #include "data_collection.hpp"
 
 #include <cstdint>
-#include <core_coord.hpp>
-#include "impl/program/program_impl.hpp"
-#include <umd/device/types/core_coordinates.hpp>
-#include "hal_types.hpp"
-
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel_impl.hpp"
-#include "program/program_impl.hpp"
 #include "tt-metalium/program.hpp"
 #include "data_collector.hpp"
 

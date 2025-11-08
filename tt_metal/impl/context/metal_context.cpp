@@ -226,7 +226,11 @@ void MetalContext::teardown() {
 
     // Set internal routing to false to exit active ethernet FW & go back to base FW
     cluster_->set_internal_routing_info_for_ethernet_cores(false);
-    data_collector_->DumpData();
+
+    if (data_collector_) {
+        data_collector_->DumpData();
+        data_collector_.reset();
+    }
 
     if (dprint_server_) {
         dprint_server_->detach_devices();
@@ -252,8 +256,6 @@ void MetalContext::teardown() {
             mem_map.reset();
         }
     }
-
-    data_collector_.reset();
 
     dispatch_query_manager_.reset();
     dispatch_core_manager_.reset();

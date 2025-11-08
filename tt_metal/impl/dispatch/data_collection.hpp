@@ -6,11 +6,8 @@
 #include <host_api.hpp>
 #include <stdint.h>
 #include <optional>
-
-#include "hal_types.hpp"
 #include "program/program_impl.hpp"
 
-#include <umd/device/types/core_coordinates.hpp>
 #pragma once
 
 namespace tt {

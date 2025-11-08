@@ -3,22 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "data_collector.hpp"
-
-#include <algorithm>
-#include <array>
-#include <cstdint>
-#include <map>
-#include <utility>
-
 #include <enchantum/enchantum.hpp>
 #include <enchantum/generators.hpp>
 #include <enchantum/iostream.hpp>
-#include "impl/program/program_impl.hpp"
-#include <umd/device/types/core_coordinates.hpp>
-
-#include "hal_types.hpp"
 #include "impl/kernels/kernel_impl.hpp"
-#include "program/program_impl.hpp"
 #include "tt-metalium/program.hpp"
 
 using tt::tt_metal::detail::ProgramImpl;

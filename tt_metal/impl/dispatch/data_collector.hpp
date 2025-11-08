@@ -4,10 +4,9 @@
 
 #include <cstdint>
 #include <map>
-
 #include "data_collection.hpp"
-#include <umd/device/types/core_coordinates.hpp>
-#include "hal_types.hpp"
+
+#pragma once
 
 namespace tt::tt_metal {
 
