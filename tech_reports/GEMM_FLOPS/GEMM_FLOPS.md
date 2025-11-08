@@ -164,9 +164,11 @@ As shown here, on both Wormhole and Blackhole, hand tuned configs helps recover 
 
 <details>
 <summary><strong>N150 Out of Box Results</strong> (click to expand)</summary>
+</details>
 
 <details>
 <summary><strong>P150 Out of Box Results</strong> (click to expand)</summary>
+</details>
 
 
 ### All Data
