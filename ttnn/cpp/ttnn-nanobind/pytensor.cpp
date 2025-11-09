@@ -1735,14 +1735,18 @@ void pytensor_module(nb::module_& mod) {
                     // since to_vector will pull the data back from device->host implicitly, the extra copy here
                     // is the more streamlined way of marshalling the data.
 
+                    auto np = nb::module_::import_("numpy");
                     if constexpr (
                         std::is_same_v<T, bfloat8_b> || std::is_same_v<T, bfloat4_b> || std::is_same_v<T, bfloat16>) {
-                        return nb::cast(self.to_vector<float>()).attr("reshape")(nb::cast(shape)).attr("tolist");
-
-                        // return nb::ndarray(shape, self.to_vector<float>().data()).attr("tolist")();
+                        nb::object list_obj = np.attr("array")(nb::cast(self.to_vector<float>()))
+                                                  .attr("reshape")(nb::cast(shape))
+                                                  .attr("tolist")();
+                        return nb::cast<nb::list>(list_obj);
                     } else {
-                        return nb::cast(self.to_vector<T>()).attr("reshape")(nb::cast(shape)).attr("tolist");
-                        // return nb::ndarray(self.to_vector<T>().data(), shape).attr("tolist")();
+                        nb::object list_obj = np.attr("array")(nb::cast(self.to_vector<T>()))
+                                                  .attr("reshape")(nb::cast(shape))
+                                                  .attr("tolist")();
+                        return nb::cast<nb::list>(list_obj);
                     }
                 });
             },
