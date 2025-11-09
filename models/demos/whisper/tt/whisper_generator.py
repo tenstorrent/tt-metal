@@ -8,7 +8,8 @@ Whisper generation functions using the functional whisper implementation from tt
 
 import time
 import zlib
-from typing import List, Optional, Tuple
+from dataclasses import dataclass
+from typing import List, Optional, Tuple, Union
 
 import torch
 from loguru import logger
@@ -18,6 +19,20 @@ import ttnn
 from models.common.generation_utils import get_logits_processor
 
 from . import ttnn_optimized_functional_whisper
+
+
+@dataclass
+class GenerationParams:
+    """Dataclass for Whisper generation parameters."""
+
+    temperatures: Union[float, Tuple[float, ...]] = 0.0
+    compression_ratio_threshold: Optional[float] = 2.4
+    logprob_threshold: Optional[float] = -2.0
+    no_speech_threshold: Optional[float] = 0.6
+    return_timestamps: bool = False
+    language: str = "en"
+    task: str = "transcribe"
+
 
 # Default values for quality metrics
 DEFAULT_AVG_LOGPROB = -0.5
@@ -50,16 +65,22 @@ def generate(
     output_mesh_composer,
     weights_mesh_mapper,
     kv_cache=None,
-    temperatures=(0.0,),
-    compression_ratio_threshold=None,
-    logprob_threshold=None,
-    no_speech_threshold=None,
-    return_timestamps=False,
+    generation_params: Optional[GenerationParams] = None,
     stream_generation=False,
     return_perf_metrics=False,
-    language="en",
-    task="transcribe",
 ):
+    # Unpack generation parameters
+    if generation_params is None:
+        generation_params = GenerationParams()
+
+    temperatures = generation_params.temperatures
+    compression_ratio_threshold = generation_params.compression_ratio_threshold
+    logprob_threshold = generation_params.logprob_threshold
+    no_speech_threshold = generation_params.no_speech_threshold
+    return_timestamps = generation_params.return_timestamps
+    language = generation_params.language
+    task = generation_params.task
+
     # Process input features
     all_input_features = []
     start_encode = time.time()
@@ -662,32 +683,3 @@ def _calculate_audio_duration(current_batch) -> List[float]:
         duration = len(audio_array) / sampling_rate
         durations.append(duration)
     return durations
-
-
-# Re-export constants and functions for backward compatibility
-WHISPER_L1_SMALL_SIZE = ttnn_optimized_functional_whisper.WHISPER_L1_SMALL_SIZE
-WHISPER_MEMORY_CONFIG = ttnn_optimized_functional_whisper.WHISPER_MEMORY_CONFIG
-
-# Re-export all functions for backward compatibility
-gelu = ttnn_optimized_functional_whisper.gelu
-dropout = ttnn_optimized_functional_whisper.dropout
-calculate_key_values = ttnn_optimized_functional_whisper.calculate_key_values
-get_decode_sdpa_configs = ttnn_optimized_functional_whisper.get_decode_sdpa_configs
-functional_sdpa = ttnn_optimized_functional_whisper.functional_sdpa
-whisper_attention = ttnn_optimized_functional_whisper.whisper_attention
-encoder_layer = ttnn_optimized_functional_whisper.encoder_layer
-encoder = ttnn_optimized_functional_whisper.encoder
-make_causal_mask = ttnn_optimized_functional_whisper.make_causal_mask
-expand_mask = ttnn_optimized_functional_whisper.expand_mask
-decoder_layer = ttnn_optimized_functional_whisper.decoder_layer
-prepare_decoder_attention_mask = ttnn_optimized_functional_whisper.prepare_decoder_attention_mask
-decoder = ttnn_optimized_functional_whisper.decoder
-get_conv_configs = ttnn_optimized_functional_whisper.get_conv_configs
-prepare_conv_weights = ttnn_optimized_functional_whisper.prepare_conv_weights
-preprocess_encoder_inputs = ttnn_optimized_functional_whisper.preprocess_encoder_inputs
-preprocess_decoder_inputs = ttnn_optimized_functional_whisper.preprocess_decoder_inputs
-preprocess_inputs = ttnn_optimized_functional_whisper.preprocess_inputs
-custom_preprocessor = ttnn_optimized_functional_whisper.custom_preprocessor
-convert_to_ttnn = ttnn_optimized_functional_whisper.convert_to_ttnn
-create_custom_mesh_preprocessor = ttnn_optimized_functional_whisper.create_custom_mesh_preprocessor
-init_kv_cache = ttnn_optimized_functional_whisper.init_kv_cache

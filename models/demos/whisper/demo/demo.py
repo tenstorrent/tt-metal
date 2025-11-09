@@ -3,10 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
-from dataclasses import dataclass
 from os import listdir
 from os.path import isfile, join
-from typing import Optional, Tuple, Union
+from typing import Optional
 
 import jiwer
 import pytest
@@ -28,22 +27,16 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.utils.common_demo_utils import get_mesh_mappers
 from models.demos.utils.llm_demo_utils import verify_perf
-from models.demos.whisper.tt import ttnn_whisper
-from models.demos.whisper.tt.ttnn_whisper import WHISPER_L1_SMALL_SIZE
-
-
-@dataclass
-class GenerationParams:
-    """Dataclass for Whisper generation parameters."""
-
-    temperatures: Union[float, Tuple[float, ...]] = (0.0, 0.2, 0.4, 0.6, 0.8, 1.0)
-    compression_ratio_threshold: Optional[float] = 2.4
-    logprob_threshold: Optional[float] = -2.0
-    no_speech_threshold: Optional[float] = 0.6
-    return_timestamps: bool = False
-    language: str = "en"
-    task: str = "transcribe"
-
+from models.demos.whisper.tt import whisper_generator
+from models.demos.whisper.tt.ttnn_optimized_functional_whisper import (
+    WHISPER_L1_SMALL_SIZE,
+    convert_to_ttnn,
+    create_custom_mesh_preprocessor,
+    encoder,
+    init_kv_cache,
+    preprocess_encoder_inputs,
+)
+from models.demos.whisper.tt.whisper_generator import GenerationParams
 
 available_devices = len(ttnn.get_device_ids()) if ttnn.get_device_ids() else 1
 
@@ -127,12 +120,12 @@ def init_conditional_generation_tt_model(
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
-        convert_to_ttnn=ttnn_whisper.convert_to_ttnn,
-        custom_preprocessor=ttnn_whisper.create_custom_mesh_preprocessor(weights_mesh_mapper),
+        convert_to_ttnn=convert_to_ttnn,
+        custom_preprocessor=create_custom_mesh_preprocessor(weights_mesh_mapper),
         device=mesh_device,
     )
     # Note: config.max_length is typically 448 for whisper large models
-    kv_cache = ttnn_whisper.init_kv_cache(
+    kv_cache = init_kv_cache(
         config, mesh_device, max_batch_size, max_seq_len=max_seq_len, weights_mesh_mapper=weights_mesh_mapper
     )
 
@@ -179,7 +172,7 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(
             f"Running model on batch of {len(current_batch)} samples with durations: {['{:.3f}s'.format(d) for d in durations]}"
         )
 
-        return ttnn_whisper.generate(
+        return whisper_generator.generate(
             config,
             mesh_device,
             (input_mesh_mapper, weights_mesh_mapper),
@@ -194,15 +187,9 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(
             output_mesh_composer=output_mesh_composer,
             weights_mesh_mapper=weights_mesh_mapper,
             kv_cache=kv_cache,
-            temperatures=params.temperatures,
-            compression_ratio_threshold=params.compression_ratio_threshold,
-            logprob_threshold=params.logprob_threshold,
-            no_speech_threshold=params.no_speech_threshold,
-            return_timestamps=params.return_timestamps,
+            generation_params=params,
             stream_generation=stream,
             return_perf_metrics=return_perf_metrics,
-            language=params.language,
-            task=params.task,
         )
 
     return _model_pipeline
@@ -229,8 +216,8 @@ def run_demo_whisper_for_audio_classification_inference(
     inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer = get_mesh_mappers(mesh_device)
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
-        convert_to_ttnn=ttnn_whisper.convert_to_ttnn,
-        custom_preprocessor=ttnn_whisper.create_custom_mesh_preprocessor(weights_mesh_mapper),
+        convert_to_ttnn=convert_to_ttnn,
+        custom_preprocessor=create_custom_mesh_preprocessor(weights_mesh_mapper),
         device=mesh_device,
     )
     batch_size = batch_size_per_device * mesh_device.get_num_devices()
@@ -269,7 +256,7 @@ def run_demo_whisper_for_audio_classification_inference(
         input_features = torch.cat(all_input_features, dim=0)  # Shape: [current_batch_size, x, y]
         del all_input_features
         # Encode inputs
-        input_embedding = ttnn_whisper.preprocess_encoder_inputs(
+        input_embedding = preprocess_encoder_inputs(
             config=config,
             input_features=input_features,
             parameters=parameters.encoder,
@@ -278,9 +265,7 @@ def run_demo_whisper_for_audio_classification_inference(
             weights_mesh_mapper=weights_mesh_mapper,
         )
 
-        encoder_outputs = ttnn_whisper.encoder(
-            config=config, inputs_embeds=input_embedding, parameters=parameters.encoder
-        )
+        encoder_outputs = encoder(config=config, inputs_embeds=input_embedding, parameters=parameters.encoder)
 
         hidden_states = ttnn.matmul(encoder_outputs, parameters.projector.weight)
         hidden_states = ttnn.add(hidden_states, parameters.projector.bias)
