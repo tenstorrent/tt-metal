@@ -1,34 +1,36 @@
 brisck.o: \
  /localdev/prybicki/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc \
  /localdev/prybicki/tt-metal/tt_metal/hw/inc/tt-1xx/risc_common.h \
- /localdev/prybicki/tt-metal/tt_metal/hw/inc/tt-1xx/wormhole/eth_l1_address_map.h \
- /localdev/prybicki/tt-metal/tt_metal/hw/inc/tt-1xx/wormhole/noc/noc_parameters.h \
- /localdev/prybicki/tt-metal/tt_metal/hw/inc/tt-1xx/wormhole/dev_mem_map.h \
+ /localdev/prybicki/tt-metal/tt_metal/hw/inc/tt-1xx/blackhole/eth_l1_address_map.h \
+ /localdev/prybicki/tt-metal/tt_metal/hw/inc/tt-1xx/blackhole/dev_mem_map.h \
  /localdev/prybicki/tt-metal/tt_metal/hw/inc/mod_div_lib.h \
- /localdev/prybicki/tt-metal/tt_metal/hw/inc/tt-1xx/wormhole/noc/noc_overlay_parameters.h \
- /localdev/prybicki/tt-metal/tt_metal/hw/inc/tt-1xx/wormhole/noc/noc_parameters.h \
- /localdev/prybicki/tt-metal/tt_metal/hw/inc/tt-1xx/wormhole/stream_io_map.h \
+ /localdev/prybicki/tt-metal/tt_metal/hw/inc/tt-1xx/blackhole/noc/noc_overlay_parameters.h \
+ /localdev/prybicki/tt-metal/tt_metal/hw/inc/tt-1xx/blackhole/noc/noc_parameters.h \
+ /localdev/prybicki/tt-metal/tt_metal/hw/inc/tt-1xx/blackhole/stream_io_map.h \
  /localdev/prybicki/tt-metal/tt_metal/hw/inc/risc_attribs.h \
- /localdev/prybicki/tt-metal/tt_metal/hw/inc/tt-1xx/wormhole/tensix.h \
- /localdev/prybicki/tt-metal/tt_metal/hw/inc/tt-1xx/wormhole/wormhole_b0_defines/tensix_types.h \
- /localdev/prybicki/tt-metal/tt_metal/hw/inc/tt-1xx/wormhole/wormhole_b0_defines/cfg_defines.h \
- /localdev/prybicki/tt-metal/tt_metal/hw/inc/tt-1xx/wormhole/noc_nonblocking_api.h \
+ /localdev/prybicki/tt-metal/tt_metal/hw/inc/tt-1xx/blackhole/tensix.h \
+ /localdev/prybicki/tt-metal/tt_metal/hw/inc/tt-1xx/blackhole/tensix_types.h \
+ /localdev/prybicki/tt-metal/tt_metal/hw/inc/tt-1xx/blackhole/cfg_defines.h \
+ /localdev/prybicki/tt-metal/tt_metal/hw/inc/tt-1xx/blackhole/tensix_dev_map.h \
+ /localdev/prybicki/tt-metal/tt_metal/hw/inc/tt-1xx/blackhole/noc_nonblocking_api.h \
  /localdev/prybicki/tt-metal/tt_metal/hw/inc/dev_msgs.h \
  /localdev/prybicki/tt-metal/tt_metal/hostdevcommon/api/hostdevcommon/profiler_common.h \
  /localdev/prybicki/tt-metal/tt_metal/hostdevcommon/api/hostdevcommon/dprint_common.h \
- /localdev/prybicki/tt-metal/tt_metal/hw/inc/tt-1xx/wormhole/core_config.h \
- /localdev/prybicki/tt-metal/tt_metal/hw/inc/tt-1xx/wormhole/noc/noc_parameters.h \
- /localdev/prybicki/tt-metal/tt_metal/hw/inc/tt-1xx/wormhole/noc/noc.h \
- /localdev/prybicki/tt-metal/tt_metal/hw/inc/tt-1xx/wormhole/noc/noc_parameters.h \
- /localdev/prybicki/tt-metal/tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/ckernel_structs.h \
- /localdev/prybicki/tt-metal/tt_metal/hw/inc/tt-1xx/wormhole/c_tensix_core.h \
- /localdev/prybicki/tt-metal/tt_metal/hw/inc/debug/fw_debug.h \
- /localdev/prybicki/tt-metal/tt_metal/hw/inc/tt-1xx/wormhole/tensix.h \
+ /localdev/prybicki/tt-metal/tt_metal/hw/inc/tt-1xx/blackhole/core_config.h \
+ /localdev/prybicki/tt-metal/tt_metal/hw/inc/tt-1xx/blackhole/noc/noc_parameters.h \
+ /localdev/prybicki/tt-metal/tt_metal/hw/inc/debug/assert.h \
+ /localdev/prybicki/tt-metal/tt_metal/hw/inc/debug/watcher_common.h \
+ /localdev/prybicki/tt-metal/tt_metal/hw/inc/tt-1xx/blackhole/noc/noc.h \
+ /localdev/prybicki/tt-metal/tt_metal/hw/inc/tt-1xx/blackhole/noc/noc_parameters.h \
+ /localdev/prybicki/tt-metal/tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel_structs.h \
+ /localdev/prybicki/tt-metal/tt_metal/hw/inc/tt-1xx/blackhole/c_tensix_core.h \
+ /localdev/prybicki/tt-metal/tt_metal/hw/inc/atomic_rwptr.h \
  /localdev/prybicki/tt-metal/tt_metal/hw/inc/tensix_functions.h \
  /localdev/prybicki/tt-metal/tt_metal/hw/inc/vptr_uint.h \
- /localdev/prybicki/tt-metal/tt_metal/hw/inc/tt-1xx/wormhole/tensix_dev_map.h \
+ /localdev/prybicki/tt-metal/tt_metal/hw/inc/debug/fw_debug.h \
+ /localdev/prybicki/tt-metal/tt_metal/hw/inc/tt-1xx/blackhole/tensix.h \
  /localdev/prybicki/tt-metal/tt_metal/hw/inc/firmware_common.h \
- /localdev/prybicki/tt-metal/tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/ckernel_globals.h \
+ /localdev/prybicki/tt-metal/tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel_globals.h \
  /localdev/prybicki/tt-metal/tt_metal/hw/inc/risc_attribs.h \
  /localdev/prybicki/tt-metal/tt_metal/hw/inc/compile_time_args.h \
  /localdev/prybicki/tt-metal/tt_metal/hostdevcommon/api/hostdevcommon/kernel_structs.h \
@@ -36,7 +38,7 @@ brisck.o: \
  /localdev/prybicki/tt-metal/tt_metal/hw/inc/debug/dprint_buffer.h \
  /localdev/prybicki/tt-metal/tt_metal/hw/inc/debug/waypoint.h \
  /localdev/prybicki/tt-metal/tt_metal/hw/inc/debug/dprint_tile.h \
- /localdev/prybicki/tt-metal/tt_metal/hw/ckernels/wormhole_b0/metal/llk_io/llk_io.h \
+ /localdev/prybicki/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io.h \
  /localdev/prybicki/tt-metal/tt_metal/hw/inc/circular_buffer.h \
  /localdev/prybicki/tt-metal/tt_metal/api/tt-metalium/circular_buffer_constants.h \
  /localdev/prybicki/tt-metal/tt_metal/hw/inc/debug/ring_buffer.h \
@@ -46,8 +48,6 @@ brisck.o: \
  /localdev/prybicki/tt-metal/tt_metal/hw/inc/dataflow_api_addrgen.h \
  /localdev/prybicki/tt-metal/tt_metal/hw/inc/dataflow_api_common.h \
  /localdev/prybicki/tt-metal/tt_metal/hw/inc/dataflow_cmd_bufs.h \
- /localdev/prybicki/tt-metal/tt_metal/hw/inc/debug/assert.h \
- /localdev/prybicki/tt-metal/tt_metal/hw/inc/debug/watcher_common.h \
  /localdev/prybicki/tt-metal/tt_metal/hw/inc/debug/sanitize_noc.h \
  /localdev/prybicki/tt-metal/tt_metal/hw/inc/debug/noc_logging.h \
  /localdev/prybicki/tt-metal/tt_metal/hw/inc/utils/utils.h \
