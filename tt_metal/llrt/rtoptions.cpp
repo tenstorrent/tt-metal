@@ -336,6 +336,10 @@ RunTimeOptions::RunTimeOptions() {
         this->use_mesh_graph_descriptor_1_0 = true;
     }
 
+    if (getenv("TT_METAL_FORCE_JIT_COMPILE")) {
+        this->force_jit_compile = true;
+    }
+
     const char* timeout_duration_for_operations_value = std::getenv("TT_METAL_OPERATION_TIMEOUT_SECONDS");
     float timeout_duration_for_operations =
         timeout_duration_for_operations_value ? std::stof(timeout_duration_for_operations_value) : 0.f;

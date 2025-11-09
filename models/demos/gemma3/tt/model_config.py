@@ -1787,7 +1787,18 @@ class ModelArgs:
                 config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
                 config.num_layers = self.n_layers
                 config.num_hidden_layers = self.n_layers
-                model = AutoModelForCausalLM.from_config(config)
+
+                try:
+                    # .from_pretrained + _init_weights works faster than .from_config
+                    model = AutoModelForCausalLM.from_pretrained(
+                        self.CKPT_DIR, config=config, torch_dtype="auto", local_files_only=True
+                    )
+                    model.apply(model._init_weights)
+                except Exception as e:
+                    logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
+                    model = AutoModelForCausalLM.from_config(config)
+
+                # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
                 state_dict = model.state_dict()
             else:
                 reference_model = Transformer(self)
@@ -2297,7 +2308,17 @@ class ModelArgs:
                 config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
                 config.num_layers = self.n_layers
                 config.num_hidden_layers = self.n_layers
-                model = AutoModel.from_config(config)
+
+                try:
+                    # .from_pretrained + _init_weights works faster than .from_config
+                    model = AutoModel.from_pretrained(
+                        self.CKPT_DIR, config=config, torch_dtype="auto", local_files_only=True
+                    )
+                    model.apply(model._init_weights)
+                except Exception as e:
+                    logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
+                    model = AutoModel.from_config(config)
+                # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
             else:
                 if self.cache_hf_flag and self.cached_hf_model is None:
                     model = AutoModel.from_pretrained(self.CKPT_DIR)
@@ -2352,7 +2373,17 @@ class ModelArgs:
                 config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
                 config.num_layers = self.n_layers
                 config.num_hidden_layers = self.n_layers
-                model = AutoModelForCausalLM.from_config(config)
+
+                try:
+                    # .from_pretrained + _init_weights works faster than .from_config
+                    model = AutoModelForCausalLM.from_pretrained(
+                        self.CKPT_DIR, config=config, torch_dtype="auto", local_files_only=True
+                    )
+                    model.apply(model._init_weights)
+                except Exception as e:
+                    logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
+                    model = AutoModelForCausalLM.from_config(config)
+                # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
             else:
                 if self.is_gemma:
                     from transformers import Gemma3ForConditionalGeneration
