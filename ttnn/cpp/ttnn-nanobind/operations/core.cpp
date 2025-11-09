@@ -18,7 +18,9 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/base_types.hpp>
 
-NB_MAKE_OPAQUE(ttnn::DeviceComputeKernelConfig);
+// Do NOT make DeviceComputeKernelConfig opaque: it is an alias (variant)
+// of specific arch kernel configs, and nanobind's variant caster should
+// handle implicit conversions when those alternatives are bound.
 
 namespace ttnn::operations::core {
 
@@ -42,8 +44,8 @@ void py_module_types(nb::module_& mod) {
         .value("LEVEL_4", compute_throttle_utils::ThrottleLevel::LEVEL_4)
         .value("LEVEL_5", compute_throttle_utils::ThrottleLevel::LEVEL_5);
 
-    nb::class_<DeviceComputeKernelConfig>(mod, "DeviceComputeKernelConfig");
-
+    // Bind arch-specific kernel config types; the DeviceComputeKernelConfig
+    // alias (std::variant<...>) will be handled by nanobind's variant caster.
     nb::class_<GrayskullComputeKernelConfig>(mod, "GrayskullComputeKernelConfig")
         .def(
             nb::init<MathFidelity, bool, bool>(),
@@ -71,6 +73,10 @@ void py_module_types(nb::module_& mod) {
         .def_rw("packer_l1_acc", &WormholeComputeKernelConfig::packer_l1_acc)
         .def_rw("dst_full_sync_en", &WormholeComputeKernelConfig::dst_full_sync_en)
         .def_rw("throttle_level", &WormholeComputeKernelConfig::throttle_level);
+
+    // Provide a Python alias so existing imports of DeviceComputeKernelConfig keep working.
+    // The underlying C++ APIs still use std::variant-based casting for arguments.
+    mod.attr("DeviceComputeKernelConfig") = mod.attr("WormholeComputeKernelConfig");
 }
 
 void py_module(nb::module_& mod) {

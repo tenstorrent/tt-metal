@@ -28,18 +28,28 @@ void bind_fast_reduce_nc(nb::module_& mod) {
         ttnn::nanobind_overload_t{
             [](const OperationType& self,
                const ttnn::Tensor& input,
-               const ttnn::SmallVector<int32_t>& dims,
+               nb::object dims_obj,
                const std::optional<const Tensor>& output,
                const ttnn::MemoryConfig& memory_config,
-               std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
+               const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+                ttnn::SmallVector<int32_t> dims;
+                if (!dims_obj.is_none()) {
+                    if (nb::isinstance<nb::int_>(dims_obj)) {
+                        dims.push_back(nb::cast<int32_t>(dims_obj));
+                    } else {
+                        for (nb::handle h : nb::iter(dims_obj)) {
+                            dims.push_back(nb::cast<int32_t>(h));
+                        }
+                    }
+                }
                 return self(input, dims, output, memory_config, compute_kernel_config);
             },
-            nb::arg("input").noconvert(),
+            nb::arg("input"),
             nb::kw_only(),
-            nb::arg("dims").noconvert() = ttnn::SmallVector<int32_t>(),
-            nb::arg("output").noconvert() = nb::none(),
-            nb::arg("memory_config").noconvert() = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            nb::arg("compute_kernel_config").noconvert() = nb::none()});
+            nb::arg("dims") = nb::none(),
+            nb::arg("output") = nb::none(),
+            nb::arg("memory_config") = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+            nb::arg("compute_kernel_config") = nb::none()});
 }
 
 }  // namespace ttnn::operations::experimental::reduction::detail

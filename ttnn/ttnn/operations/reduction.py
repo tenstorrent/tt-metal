@@ -47,6 +47,22 @@ ttnn.attach_golden_function(ttnn.argmax, golden_function=_create_golden_function
 ttnn.attach_golden_function(ttnn.topk, golden_function=_create_golden_function_topk())
 
 
+# Experimental reductions
+def _golden_fast_reduce_nc(
+    input_tensor: ttnn.Tensor, dims=None, output=None, memory_config=None, compute_kernel_config=None
+):
+    import torch
+
+    if dims is None:
+        dims = []
+    if isinstance(dims, int):
+        dims = [dims]
+    return torch.sum(input_tensor, dims, True)
+
+
+ttnn.attach_golden_function(ttnn.experimental.fast_reduce_nc, golden_function=_golden_fast_reduce_nc)
+
+
 __all__ = []
 
 ReduceType = ttnn._ttnn.operations.reduction.ReduceType
