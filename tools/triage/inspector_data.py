@@ -172,7 +172,8 @@ def run(args, context) -> InspectorData:
     # Check for Inspector log directory
     log_directory = get_log_directory(log_directory)
     if not os.path.exists(log_directory):
-        raise ValueError(f"Log directory {log_directory} does not exist. Please provide a valid path.")
+        print(f"Log directory {log_directory} does not exist. Creating it.")
+        os.makedirs(log_directory, exist_ok=True)
 
     # Try to load serialized RPC data
     try:

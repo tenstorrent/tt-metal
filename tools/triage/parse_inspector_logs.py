@@ -470,7 +470,9 @@ def get_data(log_directory: str | None = None) -> InspectorLogsData:
     if os.path.exists(log_directory):
         return InspectorLogsData(log_directory)
     else:
-        raise ValueError(f"Log directory {log_directory} does not exist. Please provide a valid path.")
+        print(f"Log directory {log_directory} does not exist. Creating it.")
+        os.makedirs(log_directory, exist_ok=True)
+        return InspectorLogsData(log_directory)
 
 
 def main():
