@@ -1,7 +1,16 @@
-sentencepiece
-diffusers
-transformers
-open_clip_torch
-loguru
+# core dependencies
+torch
 numpy
 scipy
+loguru
+pytest
+
+# model + tokenizer
+sentencepiece
+transformers==4.46.2
+# latest dev version required for SD3.5 model architecture (qk_norm, norm_added_k, etc.)
+git+https://github.com/huggingface/diffusers.git
+open_clip_torch
+
+# vision + utilities
+Pillow>=9.1.0

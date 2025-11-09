@@ -6,20 +6,19 @@ import csv
 
 # must be the very first lines!
 import os
-
-# os.environ["TRANSFORMERS_NO_TF"] = "1"     # block tensorflow backend
-# os.environ["TRANSFORMERS_NO_FLAX"] = "1"   # block flax/jax backend
-# os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"   # silence tf if it somehow loads
 import urllib
 import torch
 import time
 from loguru import logger
 import statistics
 import json
+import sys
 
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from clip_encoder import CLIPEncoder
 from fid_score import calculate_fid_score
-from diffusers import FluxPipeline
+
+from diffusers import StableDiffusion3Pipeline
 
 
 class SimpleProfiler:
@@ -46,9 +45,8 @@ class SimpleProfiler:
 
 profiler = SimpleProfiler()
 
-# currently same as sdxl
 COCO_CAPTIONS_DOWNLOAD_PATH = "https://github.com/mlcommons/inference/raw/4b1d1156c23965172ae56eacdd8372f8897eb771/text_to_image/coco2014/captions/captions_source.tsv"
-OUT_ROOT, RESULTS_FILE_NAME = "test_reports", "flux_test_results.json"
+OUT_ROOT, RESULTS_FILE_NAME = "test_reports", "sd35_test_results.json"
 
 
 @pytest.mark.parametrize(
@@ -57,27 +55,27 @@ OUT_ROOT, RESULTS_FILE_NAME = "test_reports", "flux_test_results.json"
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "model_name, image_w, image_h, guidance_scale, num_inference_steps",
+    "model_name, image_w, image_h, guidance_scale, num_inference_steps, max_sequence_length",
     [
-        # ("dev", 1024, 1024, 3.5, 28),  # Full resolution on H100
-        ("schnell", 1024, 1024, 1.0, 4)
+        ("stable-diffusion-3.5-large", 1024, 1024, 3.5, 40, 256),
     ],
 )
 @pytest.mark.parametrize("captions_path", ["captions.tsv"])
 @pytest.mark.parametrize("coco_statistics_path", ["val2014.npz"])
-def test_accuracy_model(
+def test_accuracy_sd35(
     device_params,
     model_name,
     image_w,
     image_h,
     guidance_scale,
     num_inference_steps,
+    max_sequence_length,
     captions_path,
     coco_statistics_path,
     evaluation_range,
 ):
     start_from, num_prompts = evaluation_range
-    prompts = flux_get_prompts(captions_path, start_from, num_prompts)
+    prompts = sd35_get_prompts(captions_path, start_from, num_prompts)
     logger.info(f"start inference from prompt index: {start_from} to {start_from + num_prompts}")
 
     device = device_params.get("device", "cuda" if torch.cuda.is_available() else "cpu")
@@ -87,29 +85,28 @@ def test_accuracy_model(
         logger.info(f"GPU: {torch.cuda.get_device_name(0)}")
         logger.info(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f}GB")
 
-    # Initialize Diffusers pipeline
-    model_id = f"black-forest-labs/FLUX.1-{model_name}"
+    model_id = "./sd35_large"
     logger.info(f"Loading model: {model_id}")
+    logger.info(f"T5 text encoder enabled with max_sequence_length={max_sequence_length}")
 
-    pipeline = FluxPipeline.from_pretrained(
+    pipeline = StableDiffusion3Pipeline.from_pretrained(
         model_id,
-        dtype=torch.bfloat16 if device == "cuda" else torch.float32,  # Use bfloat16 for H100
+        torch_dtype=torch.bfloat16 if device == "cuda" else torch.float32,  # Use bfloat16 for H100
         use_safetensors=True,
     )
 
-    # Move to device manually
     pipeline = pipeline.to(device)
     logger.info(f"Pipeline loaded on {device}")
 
     if device == "cuda":
-        # Enable optimizations for H100
+        # enable optimizations for H100
         try:
             pipeline.enable_attention_slicing()
             logger.info("✓ Attention slicing enabled")
         except Exception as e:
             logger.warning(f"Could not enable attention slicing: {e}")
 
-        # Optional: Enable VAE slicing for memory efficiency
+        # enable VAE slicing for memory efficiency
         try:
             if hasattr(pipeline, "enable_vae_slicing"):
                 pipeline.enable_vae_slicing()
@@ -117,14 +114,7 @@ def test_accuracy_model(
         except Exception as e:
             logger.warning(f"Could not enable VAE slicing: {e}")
 
-        # Enable memory efficient attention for Flux
-        try:
-            pipeline.enable_memory_efficient_attention()
-            logger.info("✓ Memory efficient attention enabled")
-        except Exception as e:
-            logger.warning(f"Could not enable memory efficient attention: {e}")
-
-    # Set generator for reproducibility
+    # set generator for reproducibility
     generator = torch.Generator(device=device).manual_seed(0)
 
     images = []
@@ -134,20 +124,24 @@ def test_accuracy_model(
 
     for i, prompt in enumerate(prompts):
         logger.info(f"Generating image {i+1}/{len(prompts)}: {prompt[:50]}...")
-        negative_prompt = ""
 
         start_total = time.time()
         profiler.start("denoising_loop")
 
-        # Generate image
+        # generate image with triple prompt (SD3.5 uses 3 text encoders)
         with torch.no_grad():
             generated_images = pipeline(
                 prompt=prompt,
-                negative_prompt=negative_prompt,
+                prompt_2=prompt,
+                prompt_3=prompt,
+                negative_prompt="",
+                negative_prompt_2="",
+                negative_prompt_3="",
                 height=image_h,
                 width=image_w,
                 num_inference_steps=num_inference_steps,
                 guidance_scale=guidance_scale,
+                max_sequence_length=max_sequence_length,
                 generator=generator,
                 output_type="pil",
             ).images
@@ -161,13 +155,13 @@ def test_accuracy_model(
         images.append(generated_images[0])
         logger.info(f"Image {i+1} completed in {total_time:.2f}s")
 
-        # Optional: Save image for inspection
+        # optional: save image
         os.makedirs("generated_images", exist_ok=True)
         generated_images[0].save(f"generated_images/image_{i+1}.png")
 
-    # Calculate metrics
+    # calculate metrics
     logger.info("Calculating CLIP scores...")
-    clip = CLIPEncoder()  # Remove device parameter, it auto-detects
+    clip = CLIPEncoder()
     clip_scores = [100 * clip.get_clip_score(prompts[i], img).item() for i, img in enumerate(images)]
     average_clip_score = sum(clip_scores) / len(clip_scores)
 
@@ -186,16 +180,17 @@ def test_accuracy_model(
     elif num_prompts >= 2 and not os.path.isfile(coco_statistics_path):
         logger.warning(f"FID calculation skipped: COCO stats file not found at {coco_statistics_path}")
         logger.info("To enable FID calculation, download COCO validation statistics:")
-        logger.info("wget http://bioinf.jku.at/research/ttur/ttur_stats/fid_stats_imagenet_256_hdf5.npz -O val2014.npz")
+        logger.info(
+            "wget https://github.com/mlcommons/inference/raw/4b1d1156c23965172ae56eacdd8372f8897eb771/text_to_image/tools/val2014.npz"
+        )
     elif num_prompts < 2:
         logger.info("FID calculation requires at least 2 images")
 
-    # Performance metrics
     average_inference_time = sum(total_times) / len(total_times) if total_times else 0
     min_inference_time = min(total_times) if total_times else 0
     max_inference_time = max(total_times) if total_times else 0
 
-    # Results
+    # results
     logger.info("=== RESULTS ===")
     logger.info(f"Average CLIP Score: {average_clip_score:.2f}")
     logger.info(f"CLIP Score Std Dev: {deviation_clip_score}")
@@ -207,12 +202,16 @@ def test_accuracy_model(
     print(f"Average CLIP Score: {average_clip_score}")
     print(f"Standard Deviation of CLIP Scores: {deviation_clip_score}")
 
-    # Ensure values are JSON serializable
+    # check if T5 encoder is being used
+    t5_enabled = hasattr(pipeline, "text_encoder_3") and pipeline.text_encoder_3 is not None
+    logger.info(f"T5 text encoder enabled: {t5_enabled}")
+
+    # ensure values are JSON serializable
     clip_std_serializable = float(deviation_clip_score) if deviation_clip_score != "N/A" else "N/A"
     fid_serializable = float(fid_score) if fid_score != "N/A" else "N/A"
 
     data = {
-        "model": "flux",
+        "model": model_name,
         "metadata": {
             "device": device.upper(),
             "model_name": model_name,
@@ -223,14 +222,16 @@ def test_accuracy_model(
             "image_height": image_h,
             "guidance_scale": guidance_scale,
             "num_inference_steps": num_inference_steps,
+            "max_sequence_length": max_sequence_length,
+            "t5_enabled": t5_enabled,
             "backend": "diffusers",
             "dtype": str(torch.bfloat16 if device == "cuda" else torch.float32),
-            "optimizations": ["attention_slicing", "vae_slicing", "memory_efficient_attention"],
+            "optimizations": ["attention_slicing", "vae_slicing"],
         },
         "benchmarks_summary": [
             {
                 "device": device.upper(),
-                "model": "flux",
+                "model": model_name,
                 "average_denoising_time": profiler.get("denoising_loop"),
                 "average_vae_time": 0.0,  # VAE time is included in denoising for diffusers
                 "average_inference_time": average_inference_time,
@@ -239,7 +240,7 @@ def test_accuracy_model(
                 "average_clip": average_clip_score,
                 "deviation_clip": clip_std_serializable,
                 "fid_score": fid_serializable,
-                "individual_clip_scores": [float(score) for score in clip_scores],  # Add individual scores
+                "individual_clip_scores": [float(score) for score in clip_scores],
             }
         ],
     }
@@ -249,7 +250,7 @@ def test_accuracy_model(
         json.dump(data, f, indent=4)
     logger.info(f"test results saved to {OUT_ROOT}/{RESULTS_FILE_NAME}")
 
-    # Cleanup
+    # cleanup
     if device == "cuda":
         torch.cuda.empty_cache()
 
@@ -259,7 +260,7 @@ def test_accuracy_model(
     print(f"🖼️  Images saved to: generated_images/")
 
 
-def flux_get_prompts(captions_path, start_from, num_prompts):
+def sd35_get_prompts(captions_path, start_from, num_prompts):
     assert (
         0 <= start_from < 5000 and start_from + num_prompts <= 5000
     ), "start_from must be between 0 and 4999, and start_from + num_prompts must not exceed 5000."
@@ -283,14 +284,10 @@ def flux_get_prompts(captions_path, start_from, num_prompts):
     return prompts
 
 
-# Fixture for device parameters
+# fixture for device parameters
 @pytest.fixture
 def device_params(request):
     return request.param
 
 
-# Fixture for evaluation range
-# @pytest.fixture
-# def evaluation_range():
-#     # Default evaluation range - can be overridden
-#     return (0, 5)  # start_from=0, num_prompts=5 for better statistics
+# python -m pytest model.py::test_accuracy_sd35 -v --start-from=0 --num-prompts=5 -s
