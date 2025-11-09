@@ -54,6 +54,7 @@ target_sources(
         test_add_int.cpp
         test_broadcast_to.cpp
         test_convert_to_hwc.cpp
+        test_gather.cpp
         test_generic_op.cpp
         test_graph_add.cpp
         test_graph_basic.cpp
