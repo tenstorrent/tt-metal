@@ -260,12 +260,14 @@ Tensor AddcmulOperation::invoke(
         input_a.logical_shape(), input_b.logical_shape(), input_c.logical_shape());
 
     if (is_sharded(input_a) || is_sharded(input_b) || is_sharded(input_c) || is_sharded(memory_config) ||
-        is_sharded(output) || broadcast_type != ttnn::operations::ternary::TernaryBroadcastType::NONE) {
-        // Fall back to composite implementation for all broadcast cases
+        is_sharded(output) || is_invalid_bcast(broadcast_type)) {
+        log_debug(tt::LogOp, "Addcmul Fallback - TTT");
+        // Fall back to composite implementation for unsupported cases
         return _addcmul(input_a, input_b, input_c, value, memory_config);
     }
 
-    // Use LLK implementation - pass value as scalar parameter
+    // Use HLK implementation - pass value as scalar parameter
+    log_debug(tt::LogOp, "Addcmul HLK - TTT");
     return ttnn::prim::ternary(
         TernaryOpType::ADDCMUL,
         input_a,
