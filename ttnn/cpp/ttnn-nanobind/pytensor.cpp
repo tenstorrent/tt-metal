@@ -645,7 +645,20 @@ nb::object convert_tt_tensor_to_numpy_tensor(const RowMajorHostBuffer& row_major
         TT_THROW("Unreachable");
     }();
 
-    auto tensor = frombuffer(row_major_host_buffer.buffer, nb::arg("dtype") = np_dtype);
+    // Nanobind path: HostBuffer doesn't expose Python buffer protocol; build a Python bytearray from raw bytes
+    // and construct a numpy ndarray using the correct dtype.
+    nb::object tensor = [&]() {
+        auto bytes_view = row_major_host_buffer.buffer.view_bytes();
+        if (bytes_view.empty()) {
+            // Create an empty array of the desired shape and dtype
+            return np.attr("empty")(row_major_host_buffer.shape, nb::arg("dtype") = np_dtype);
+        }
+        const char* raw_ptr = reinterpret_cast<const char*>(bytes_view.data());
+        const size_t raw_size = bytes_view.size();
+        nb::bytes py_bytes(raw_ptr, raw_size);
+        nb::object py_bytearray = nb::module_::import_("builtins").attr("bytearray")(py_bytes);
+        return frombuffer(py_bytearray, nb::arg("dtype") = np_dtype);
+    }();
     tensor = tensor.attr("reshape")(row_major_host_buffer.shape);
     tensor = np.attr("ascontiguousarray")(tensor);
     GraphTracker::instance().track_function_end(tensor);
