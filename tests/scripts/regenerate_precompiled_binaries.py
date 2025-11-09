@@ -9,7 +9,7 @@ Tests using pre-compiled binaries:
 - tests/ttnn/unit_tests/gtests/test_generic_op.cpp::TestGenericOpMatmulFromBinary
 
 Usage:
-    python3 scripts/regenerate_precompiled_binaries.py
+    python3 tests/scripts/regenerate_precompiled_binaries.py  # from repo root
 """
 
 import os
@@ -19,8 +19,14 @@ from pathlib import Path
 
 
 def get_repo_root():
-    """Get the repository root directory."""
-    return Path(__file__).resolve().parent.parent
+    """Get the repository root directory by finding .git."""
+    current = Path.cwd()
+    while current != current.parent:
+        if (current / ".git").exists():
+            return current
+        current = current.parent
+    # Fallback: assume we're in repo if .git not found
+    return Path.cwd()
 
 
 def get_cache_dir():

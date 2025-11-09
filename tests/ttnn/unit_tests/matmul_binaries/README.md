@@ -9,4 +9,4 @@ Sources:
 
 Note: `bmm` has 2 hash variants (different compile-time args for different core groups)
 
-Regenerate: `python3 scripts/regenerate_precompiled_binaries.py`
+Regenerate: `python3 tests/scripts/regenerate_precompiled_binaries.py`
