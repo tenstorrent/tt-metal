@@ -40,7 +40,7 @@ def test_efficient_det(batch, channels, height, width, device):
     # Run PyTorch forward pass
     torch_inputs = torch.randn(batch, channels, height, width)
     with torch.no_grad():
-        torch_features, torch_regression = torch_model(torch_inputs)
+        torch_features, torch_regression, torch_classification = torch_model(torch_inputs)
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: torch_model,
@@ -67,7 +67,7 @@ def test_efficient_det(batch, channels, height, width, device):
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    ttnn_features, ttnn_regression = ttnn_model(ttnn_input_tensor)
+    ttnn_features, ttnn_regression, ttnn_classification = ttnn_model(ttnn_input_tensor)
 
     # Compare features (tuple of P3, P4, P5, P6, P7 after BiFPN)
     logger.info("Comparing BiFPN feature outputs...")
@@ -100,6 +100,14 @@ def test_efficient_det(batch, channels, height, width, device):
     # No need to reshape or permute - just compare directly
     passing, pcc_message = check_with_pcc(torch_regression, ttnn_regression_torch, PCC_THRESHOLD)
     logger.info(f"Regression PCC: {pcc_message}")
+    all_passed = all_passed and passing
+
+    # Compare classification output (3D tensor: [batch, num_anchors, num_classes])
+    logger.info("Comparing classification outputs...")
+    ttnn_classification_torch = ttnn.to_torch(ttnn_classification)
+
+    passing, pcc_message = check_with_pcc(torch_classification, ttnn_classification_torch, PCC_THRESHOLD)
+    logger.info(f"Classification PCC: {pcc_message}")
     all_passed = all_passed and passing
 
     if all_passed:

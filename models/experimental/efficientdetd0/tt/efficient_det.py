@@ -9,6 +9,7 @@ from typing import Tuple
 from models.experimental.efficientdetd0.tt.efficient_netb0 import Efficientnetb0 as TtEfficientnetb0
 from models.experimental.efficientdetd0.tt.bifpn import TtBiFPN
 from models.experimental.efficientdetd0.tt.regressor import Regressor as TtRegressor
+from models.experimental.efficientdetd0.tt.classifier import Classifier as TtClassifier
 
 
 def dict_to_namespace(d):
@@ -166,17 +167,45 @@ class TtEfficientDetBackbone:
             pyramid_levels=self.pyramid_levels[compound_coef],
         )
 
-        # # Initialize Classifier
-        # self.classifier = TtClassifier(
-        #     device=device,
-        #     parameters=parameters.classifier if hasattr(parameters, "classifier") else parameters.get("classifier", {}),
-        #     conv_params=conv_params.classifier
-        #     if hasattr(conv_params, "classifier")
-        #     else conv_params.get("classifier", {}),
-        #     num_classes=num_classes,
-        #     num_layers=self.box_class_repeats[compound_coef],
-        #     pyramid_levels=self.pyramid_levels[compound_coef],
-        # )
+        # Convert conv_params.classifier structure to match parameters.classifier structure
+        # Same conversion as regressor: From {pyramid_level: {'conv_list': {layer_idx: {...}}, 'header': {...}}}
+        # To: {'conv_list': {pyramid_level: {layer_idx: {...}}}, 'header': {pyramid_level: {...}}}
+        classifier_conv_params = (
+            conv_params.classifier if hasattr(conv_params, "classifier") else conv_params.get("classifier", {})
+        )
+
+        # Check if conversion is needed (if structure is already converted, it will have 'conv_list' key at top level)
+        if classifier_conv_params and "conv_list" not in classifier_conv_params:
+            converted_conv_params = {"conv_list": {}, "header": {}}
+
+            # Convert structure: extract conv_list and header from each pyramid level
+            # Input: {0: {'conv_list': {0: {...}, 1: {...}, 2: {...}}, 'header': {...}}, ...}
+            # Output: {'conv_list': {0: {0: {...}, 1: {...}, 2: {...}}, 1: {0: {...}, 1: {...}, 2: {...}}, ...}, 'header': {0: {...}, 1: {...}, ...}}
+            for pyramid_level in sorted(classifier_conv_params.keys()):
+                pyramid_level_int = int(pyramid_level) if isinstance(pyramid_level, (str, int)) else pyramid_level
+
+                if "conv_list" in classifier_conv_params[pyramid_level]:
+                    converted_conv_params["conv_list"][pyramid_level_int] = classifier_conv_params[pyramid_level][
+                        "conv_list"
+                    ]
+
+                if "header" in classifier_conv_params[pyramid_level]:
+                    converted_conv_params["header"][pyramid_level_int] = classifier_conv_params[pyramid_level]["header"]
+
+            classifier_conv_params = converted_conv_params
+
+        # Convert dictionary to namespace object to support dot notation access
+        classifier_conv_params = dict_to_namespace(classifier_conv_params)
+
+        # Initialize Classifier
+        self.classifier = TtClassifier(
+            device=device,
+            parameters=parameters.classifier if hasattr(parameters, "classifier") else parameters.get("classifier", {}),
+            conv_params=classifier_conv_params,
+            num_classes=num_classes,
+            num_layers=self.box_class_repeats[compound_coef],
+            pyramid_levels=self.pyramid_levels[compound_coef],
+        )
 
         # # Initialize Anchors (CPU-based, no TTNN implementation needed)
         # self.anchors = Anchors(
@@ -239,10 +268,10 @@ class TtEfficientDetBackbone:
 
         # Generate regression predictions
         regression = self.regressor(features)
-        return features_end, regression
 
         # Generate classification predictions
         classification = self.classifier(features)
+        return features_end, regression, classification
 
         # Generate anchors (CPU-based)
         # Convert input to torch for anchor generation
