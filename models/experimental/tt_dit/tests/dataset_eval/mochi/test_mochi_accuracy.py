@@ -6,7 +6,8 @@ import os
 from loguru import logger
 import statistics
 import json
-
+from ....pipelines.mochi.pipeline_mochi import MochiPipeline as TTMochiPipeline
+from ....parallel.config import DiTParallelConfig, MochiVAEParallelConfig, ParallelFactor
 from models.experimental.tt_dit.tests.dataset_eval.utils.clip_encoder import CLIPEncoder
 import ttnn
 import models.experimental.tt_dit.tests.dataset_eval.utils.data_helper as data_helper
@@ -56,11 +57,24 @@ def test_accuracy_mochi(
     evaluation_range,
 ):
     start_from, num_prompts = evaluation_range
-    prompts = data_helper.flux_get_prompts(captions_path, start_from, num_prompts)
+    prompts = data_helper.get_prompts(captions_path, start_from, num_prompts)
     logger.info(f"start inference from prompt index: {start_from} to {start_from + num_prompts}")
 
     sp_factor = mesh_device.shape[sp_axis]
     tp_factor = mesh_device.shape[tp_axis]
+
+    # Create parallel config
+    parallel_config = DiTParallelConfig(
+        cfg_parallel=ParallelFactor(factor=1, mesh_axis=0),
+        tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
+        sequence_parallel=ParallelFactor(factor=sp_factor, mesh_axis=sp_axis),
+    )
+    h_parallel_factor = 4
+    vae_parallel_config = MochiVAEParallelConfig(
+        time_parallel=ParallelFactor(factor=mesh_device.shape[0], mesh_axis=0),
+        h_parallel=ParallelFactor(factor=h_parallel_factor, mesh_axis=1),
+        w_parallel=ParallelFactor(factor=mesh_device.shape[1] // h_parallel_factor, mesh_axis=1),
+    )
 
     # Create the TT Mochi pipeline
     pipeline = TTMochiPipeline(
