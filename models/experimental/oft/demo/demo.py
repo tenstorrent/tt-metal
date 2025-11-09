@@ -54,7 +54,7 @@ from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import s
     "model_dtype, fallback_feedforward, fallback_lateral, fallback_oft, use_host_decoder, pcc_scores_oft, pcc_positions_oft, pcc_dimensions_oft, pcc_angles_oft",
     # fmt: off
     [
-       ( torch.float32, False, False, False, False, 0.905, 0.978, 0.999, 0.926),
+       ( torch.float32, False, False, False, False, 0.918, 0.977, 0.999, 0.927),
     ],
     # fmt: on
 )
@@ -243,7 +243,7 @@ def test_demo_inference(
 
         all_passed.append(passed)
         special_char = "✅" if passed else "❌"
-        logger.warning(f"{special_char} Output {i} {layer_name}: {passed=}, {pcc=}, {abs=:.3f}, {rel=:.3f}")
+        logger.warning(f"{special_char} Output {i} {layer_name}: {passed=}, {pcc=}, {exp_pcc=} {abs=:.3f}, {rel=:.3f}")
 
     # =======================================================
     # Visualization

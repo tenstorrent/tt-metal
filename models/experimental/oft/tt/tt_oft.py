@@ -203,7 +203,7 @@ class OFT:
         # None - no quantization
         # "to_uint32" - quantize to uint32 before integral image, dequantize after
         # "to_float32" - quantize to float32 before integral image, dequantize after
-        self.integral_image_quantization_strategy = "to_uint32"
+        self.integral_image_quantization_strategy = None
         logger.info(f"Integral image quantization strategy: {self.integral_image_quantization_strategy}")
         if self.integral_image_quantization_strategy == "to_uint32":
             self.prescaler = ttnn.from_torch(torch.tensor(1024 * 1024), device=device, dtype=ttnn.bfloat16)
@@ -479,7 +479,4 @@ class OFT:
 def ttnn_integral_image_channel_last(features_nhwc):
     assert len(features_nhwc.shape) == 4, "Input tensor must be 4D"
     assert features_nhwc.shape[0] == 1, "Batch size must be 1"
-    tmp = ttnn.cumsum(features_nhwc, dim=1, dtype=features_nhwc.dtype)
-    # ttnn.deallocate(features_nhwc) remove if needed, for now it work without move
-    # tmp = ttnn.move(tmp)
-    return ttnn.cumsum(tmp, dim=2, dtype=features_nhwc.dtype)
+    return ttnn.experimental.intimg(features_nhwc)
