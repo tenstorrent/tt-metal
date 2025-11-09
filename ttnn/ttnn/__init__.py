@@ -379,29 +379,31 @@ try:
         scalar: float = 1.0,
         correction: bool = True,
     ) -> Tensor:
-        # If dim is specified, emulate max via topk to avoid nanobind signature mismatch.
+        # If dim is specified, emulate max via topk when supported; otherwise call the bound impl.
         if dim is not None:
-            topk_outputs = ttnn.topk(
-                input_tensor, k=1, dim=dim, largest=True, sorted=False, memory_config=memory_config
-            )
+            # Prefer calling the bound implementation; if it fails (nanobind args issue), fall back to topk.
+            try:
+                return _nb_max_impl(
+                    input_tensor,
+                    dim,
+                    keepdim,
+                    memory_config=memory_config,
+                    compute_kernel_config=compute_kernel_config,
+                    scalar=scalar,
+                    correction=correction,
+                )
+            except Exception:
+                topk_outputs = ttnn.topk(
+                    input_tensor, k=1, dim=dim, largest=True, sorted=False, memory_config=memory_config
+                )
             # topk returns [values, indices]
             values = topk_outputs[0] if isinstance(topk_outputs, (list, tuple)) else topk_outputs
-            # Preserve keepdim=False by attempting a cheap squeeze on the reduced dim if needed.
+            # Preserve keepdim=False by removing the reduced dimension cleanly.
             if not keepdim:
                 try:
-                    # Build a slice that removes the reduced dimension
-                    # Assume 4D tensors as per TTNN conventions
-                    if dim < 0:
-                        dim = len(values.shape) + dim
-                    slices = [slice(None)] * len(values.shape)
-                    slices[dim] = slice(0, 1)
-                    # Select the first element along dim, then reshape to drop that axis
-                    squeezed = values[tuple(slices)]
-                    # Use Shape to drop axis dim
-                    new_shape = [int(s) for idx, s in enumerate(squeezed.shape) if idx != dim]
-                    values = ttnn.reshape(squeezed, ttnn.Shape(new_shape)) if new_shape else squeezed
+                    values = ttnn.squeeze(values, dim=dim)
                 except Exception:
-                    # Best effort; if reshape fails, return values with dim retained
+                    # If squeeze fails (e.g., unexpected dim semantics), fall back without dropping dim.
                     pass
             return values
 
