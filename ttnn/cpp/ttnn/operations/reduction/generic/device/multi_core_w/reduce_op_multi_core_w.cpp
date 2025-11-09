@@ -87,12 +87,16 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
     tt_metal::CreateCircularBuffer(program, all_cores, cb_acc_config);
 
     // Changing file size from dst_ to src0_ does not help ...
-    uint32_t ineg_cb_index = tt::CBIndex::c_5;
-    uint32_t num_ineg_tiles = 1;
-    tt_metal::CircularBufferConfig cb_ineg_config =
-        tt_metal::CircularBufferConfig(num_ineg_tiles * dst_single_tile_size, {{ineg_cb_index, dst_cb_data_format}})
-            .set_page_size(ineg_cb_index, dst_single_tile_size);
-    tt_metal::CreateCircularBuffer(program, all_cores, cb_ineg_config);
+    // uint32_t inv_cb_index = tt::CBIndex::c_5;
+    // tt_metal::CircularBufferConfig cb_inv_config =
+    //     tt_metal::CircularBufferConfig(num_input_tiles * dst_single_tile_size, {{inv_cb_index,
+    //     scaler_cb_data_format}})
+    //         .set_page_size(inv_cb_index, scaler_single_tile_size);
+    // tt_metal::CreateCircularBuffer(program, all_cores, cb_inv_config);
+    //
+    // bfloat16 bfloat_inv_value = bfloat16::truncate(1.0f);
+    // uint32_t packed_inv_value = pack_two_bfloat16_into_uint32({bfloat_inv_value, bfloat_inv_value});
+    // tt_metal::Buffer* inv_buffer = a.buffer();
 
     std::map<std::string, std::string> reduce_defines = reduce_op_utils::get_defines(reduce_op, ReduceOpDim::W);
     if (do_negate) {

@@ -10,6 +10,8 @@
 #include "compute_kernel_api/matmul.h"
 #endif
 
+#include "compute_kernel_api/eltwise_binary.h"
+#include "compute_kernel_api/eltwise_unary/fill.h"
 #include "compute_kernel_api/eltwise_unary/negative.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "debug/dprint.h"
@@ -66,16 +68,36 @@ void MAIN {
 
                 tile_regs_acquire();
                 cb_wait_front(cb_input, onetile);
+
+                // Generate tile filled with -1  --> DST
+                fill_tile_init();
+                fill_tile(0, -1.0f);  // TBD this will be slow, allocate some buffer and fill a tile
+
+                // Multiply tile from cb_input by -1  --> DST
+                binary_dest_reuse_tiles_init(cb_input);
+                binary_dest_reuse_tiles<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
+                    cb_input, 0, 0);
+
+                // This is really stupid way to copy input back to SrcA
+                binary_dest_reuse_tiles_init(cb_input);
+                binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
+                    cb_input, 0, 0);
+
                 if (wt > 0) {
                     cb_wait_front(cb_acc, onetile);
                     copy_tile_init(cb_acc);
                     copy_tile(cb_acc, 0, 0);
+                } else {
+                    fill_tile_init();  // TBD replace it with prefilled (zeroed) cb_acc
+                    fill_tile(0, 0.0f);
                 }
-                // REDUCE_OP is expected to come from add_define
+                // REDUCE_OP is expected to come from add_define EltwiseBinaryReuseDestType
 
                 // #ifndef REDUCE_ROW_SUM_VIA_MM
                 reduce_init(cb_input, cb_scaler, cb_acc);
-                reduce_tile(cb_input, cb_scaler, 0, 0, reduce_dst_idx);
+                // reduce_tile(cb_input, cb_scaler, 0, 0, reduce_dst_idx);
+                // MATH(llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, DST_ACCUM_MODE, MATH_FIDELITY, false>());
+                reduce_tile_math(0);
                 reduce_uninit();
                 // #else
                 //                 matmul_tiles(cb_input, cb_scaler, 0, 0, 0, false);
