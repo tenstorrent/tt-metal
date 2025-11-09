@@ -408,7 +408,10 @@ class FastOperation:
                         # Ensure all multi-device args have the same shard count
                         shard_counts = {len(shards) for shards in multi_arg_shards_lists}
                         if len(shard_counts) != 1:
-                            # Mismatched shard counts; fall back to golden implementation
+                            # Mismatched shard counts; fall back to golden implementation if available,
+                            # otherwise propagate the original TypeError.
+                            if self.golden_function is None:
+                                raise e
                             fallback = get_fallback_function(self)
                             result = fallback(*function_args, **function_kwargs)
                         else:
@@ -452,7 +455,9 @@ class FastOperation:
                             # Combine per-device outputs back into a multi-device tensor
                             result = _ttnn_mod.combine_device_tensors(tensors=per_shard_outputs)
                     else:
-                        # Fallback to golden CPU implementation
+                        # Fallback to golden CPU implementation if available; otherwise, propagate original TypeError.
+                        if self.golden_function is None:
+                            raise e
                         fallback = get_fallback_function(self)
                         result = fallback(*function_args, **function_kwargs)
                 except Exception:
