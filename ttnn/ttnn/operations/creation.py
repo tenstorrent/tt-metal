@@ -34,6 +34,9 @@ def _golden_function(input_tensor: ttnn.Tensor, *, fill_value: float, **_):
 
 ttnn.attach_golden_function(ttnn.full_like, golden_function=_golden_function)
 
+# Nanobind exposes additional 'moreh_' variants; attach the same golden.
+ttnn.attach_golden_function(ttnn.moreh_full_like, golden_function=_golden_function)
+
 
 def _golden_function(input_tensor: ttnn.Tensor, *, fill_value: float, **_):
     import torch
