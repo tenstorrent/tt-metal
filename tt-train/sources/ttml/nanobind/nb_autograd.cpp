@@ -218,6 +218,8 @@ void py_module(nb::module_& m) {
             "Open a mesh device");
         py_auto_context.def("close_device", &AutoContext::close_device, "Close mesh device");
         py_auto_context.def("get_device", &AutoContext::get_device, nb::rv_policy::reference, "Get mesh device");
+        py_auto_context.def(
+            "synchronize_device", &AutoContext::synchronize_device, "Synchronize mesh device with host");
         // TODO: argv's char** not supported
         py_auto_context.def(
             "initialize_distributed_context",
