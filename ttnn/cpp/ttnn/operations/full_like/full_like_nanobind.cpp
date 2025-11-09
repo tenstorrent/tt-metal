@@ -8,6 +8,8 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+// Required for binding std::variant<float, int> fill_value
+#include <nanobind/stl/variant.h>
 
 #include "full_like.hpp"
 #include "ttnn-nanobind/decorators.hpp"
