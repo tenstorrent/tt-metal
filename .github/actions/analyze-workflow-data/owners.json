@@ -178,8 +178,7 @@
 
     { "job-name-component": "galaxy-nightly-tests / Galaxy CCL tests", "owner": { "id": "U05ACKAJTHS", "name": "Naif Tarafdar" } },
     { "job-name-component": "1_galaxy-nightly-tests _ Galaxy CCL tests", "owner": { "id": "U05ACKAJTHS", "name": "Naif Tarafdar" } },
-    { "job-name-component": "Galaxy CCL tests", "owner": { "id": "U05ACKAJTHS", "name": "Naif Tarafdar" } },
-    { "job-name-component": "Galaxy CCL tests", "owner": { "id": "S09QQRK1CF8", "name": "ops-data-movement" } },
+    { "job-name-component": "Galaxy CCL tests", "owner": [{ "id": "U05ACKAJTHS", "name": "Naif Tarafdar" }, { "id": "S09QQRK1CF8", "name": "ops-data-movement" }] },
 
     { "job-name-component": "galaxy-nightly-tests / Galaxy Fabric unit tests", "owner": { "id": "U08UBDUKH6Z", "name": "Neel Nyamagoudar" } },
     { "job-name-component": "Galaxy Fabric unit tests", "owner": { "id": "U08UBDUKH6Z", "name": "Neel Nyamagoudar" } },
@@ -244,16 +243,13 @@
     { "job-name-component": "galaxy-demo-tests / Galaxy Stable Diffusion 3.5 Large demo tests", "owner": { "id": "U03FJB5TM5Y", "name": "Colman Glagovich" } },
     { "job-name-component": "Galaxy Stable Diffusion 3.5 Large demo tests", "owner": { "id": "U03FJB5TM5Y", "name": "Colman Glagovich" } },
 
-    { "job-name-component": "blackhole-multi-card-post-commit-tests / CCL APC test", "owner": { "id": "U0883RN6CRE", "name": "William Ly" } },
-    { "job-name-component": "blackhole-multi-card-post-commit-tests / CCL APC test", "owner": { "id": "S09QQRK1CF8", "name": "ops-data-movement" } },
+    { "job-name-component": "blackhole-multi-card-post-commit-tests / CCL APC test", "owner": [{ "id": "U0883RN6CRE", "name": "William Ly" }, { "id": "S09QQRK1CF8", "name": "ops-data-movement" }] },
     { "job-name-component": "CCL APC test", "owner": { "id": "S09QQRK1CF8", "name": "ops-data-movement" } },
 
     { "job-name-component": "t3000-fast-tests / t3k fabric tests", "owner": { "id": "UJ45FEC7M", "name": "Allan Liu" } },
 
-    { "job-name-component": "t3000-nightly-tests / t3k_ccl_tests", "owner": { "id": "U05ACKAJTHS", "name": "Naif Tarafdar" } },
-    { "job-name-component": "t3000-nightly-tests / t3k_ccl_2d_tests", "owner": { "id": "U013121KDH9", "name": "Austin Ho" } },
-    { "job-name-component": "t3000-nightly-tests / t3k_ccl_tests", "owner": { "id": "S09QQRK1CF8", "name": "ops-data-movement" } },
-    { "job-name-component": "t3000-nightly-tests / t3k_ccl_2d_tests", "owner": { "id": "S09QQRK1CF8", "name": "ops-data-movement" } },
+    { "job-name-component": "t3000-nightly-tests / t3k_ccl_tests", "owner": [{ "id": "U05ACKAJTHS", "name": "Naif Tarafdar" }, { "id": "S09QQRK1CF8", "name": "ops-data-movement" }] },
+    { "job-name-component": "t3000-nightly-tests / t3k_ccl_2d_tests", "owner": [{ "id": "U013121KDH9", "name": "Austin Ho" }, { "id": "S09QQRK1CF8", "name": "ops-data-movement" }] },
     { "job-name-component": "t3k_ccl_tests", "owner": { "id": "S09QQRK1CF8", "name": "ops-data-movement" } },
     { "job-name-component": "t3k_ccl_2d_tests", "owner": { "id": "S09QQRK1CF8", "name": "ops-data-movement" } },
     { "job-name-component": "t3000-nightly-tests / t3k_fabric_unit_tests", "owner": { "id": "U08UBDUKH6Z", "name": "Neel Nyamagoudar" } },
@@ -407,12 +403,9 @@
     { "job-name-component": "ttnn eltwise group 7", "owner": { "id": "U08411R54Q2", "name": "Chris Maryan" } },
     { "job-name-component": "ttnn eltwise group 8", "owner": { "id": "U08411R54Q2", "name": "Chris Maryan" } },
 
-    { "job-name-component": "ttnn data_movement/ccl group 1", "owner": { "id": "U05ACKAJTHS", "name": "Naif Tarafdar" } },
-    { "job-name-component": "ttnn data_movement/ccl group 2", "owner": { "id": "U05ACKAJTHS", "name": "Naif Tarafdar" } },
-    { "job-name-component": "ttnn data_movement/ccl group 3", "owner": { "id": "U05ACKAJTHS", "name": "Naif Tarafdar" } },
-    { "job-name-component": "ttnn data_movement/ccl group 1", "owner": { "id": "S09QQRK1CF8", "name": "ops-data-movement" } },
-    { "job-name-component": "ttnn data_movement/ccl group 2", "owner": { "id": "S09QQRK1CF8", "name": "ops-data-movement" } },
-    { "job-name-component": "ttnn data_movement/ccl group 3", "owner": { "id": "S09QQRK1CF8", "name": "ops-data-movement" } },
+    { "job-name-component": "ttnn data_movement/ccl group 1", "owner": [{ "id": "U05ACKAJTHS", "name": "Naif Tarafdar" }, { "id": "S09QQRK1CF8", "name": "ops-data-movement" }] },
+    { "job-name-component": "ttnn data_movement/ccl group 2", "owner": [{ "id": "U05ACKAJTHS", "name": "Naif Tarafdar" }, { "id": "S09QQRK1CF8", "name": "ops-data-movement" }] },
+    { "job-name-component": "ttnn data_movement/ccl group 3", "owner": [{ "id": "U05ACKAJTHS", "name": "Naif Tarafdar" }, { "id": "S09QQRK1CF8", "name": "ops-data-movement" }] },
     { "job-name-component": "ttnn-post-commit / ttnn data_movement/ccl group 1", "owner": { "id": "S09QQRK1CF8", "name": "ops-data-movement" } },
     { "job-name-component": "ttnn-post-commit / ttnn data_movement/ccl group 2", "owner": { "id": "S09QQRK1CF8", "name": "ops-data-movement" } },
     { "job-name-component": "ttnn-post-commit / ttnn data_movement/ccl group 3", "owner": { "id": "S09QQRK1CF8", "name": "ops-data-movement" } },
