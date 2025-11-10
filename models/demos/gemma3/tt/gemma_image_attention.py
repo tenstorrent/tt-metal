@@ -227,8 +227,9 @@ class TtGemmaImageAttention(LightweightModule):
         seq_len = x_11SH.shape[-2]
         batch_size = x_11SH.shape[0]
 
+        # Reason this line is needed - ttnn.embedding will return [b, s, d] and nlp_create_qkv_heads expects [b, 1, s, d]
         if len(x_11SH.shape) == 3:
-            x_11SH = ttnn.unsqueeze(x_11SH, 1)
+            x_11SH = ttnn.reshape(x_11SH, (batch_size, 1, seq_len, -1))
 
         MAX_MM_SEQ_LEN = seq_len if self.configuration.is_gemma else self.configuration.VISION_MAX_MM_SEQ
 
@@ -244,6 +245,7 @@ class TtGemmaImageAttention(LightweightModule):
             compute_kernel_config=self.compute_kernel_config_hifi4,
             program_config=self.qkv_program_config(seq_len, MAX_MM_SEQ_LEN),
         )
+        ttnn.deallocate(x_11SH)
 
         q_heads_1QSD, k_heads_1KSD, v_heads_1VSD = ttnn.experimental.nlp_create_qkv_heads(
             xqkv_fused,
@@ -309,9 +311,9 @@ class TtGemmaImageAttention(LightweightModule):
 
         if self.bo is not None:
             output_after_bias = ttnn.add(output_all_reduce, self.bo)
+            ttnn.deallocate(output_all_reduce)
         else:
             output_after_bias = output_all_reduce
-        ttnn.deallocate(output_all_reduce)
 
         return output_after_bias
 
