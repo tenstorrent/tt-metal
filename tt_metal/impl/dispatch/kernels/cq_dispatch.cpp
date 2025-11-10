@@ -391,6 +391,7 @@ void relay_to_next_cb(uint32_t data_ptr, uint64_t wlength) {
                 xfer_size = length;
                 not_end_of_cmd = false;
             }
+            length -= xfer_size;
 
             if constexpr (preamble_size > 0) {
                 uint32_t flag;
@@ -407,7 +408,6 @@ void relay_to_next_cb(uint32_t data_ptr, uint64_t wlength) {
                     if (orphan_size != 0) {
                         relay_client.write<my_noc_index, true, NCRISC_WR_CMD_BUF>(
                             data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_cb_data_ptr), orphan_size);
-                        length -= orphan_size;
                         xfer_size -= orphan_size;
                         downstream_cb_data_ptr += orphan_size;
                         if (downstream_cb_data_ptr == downstream_cb_end) {
@@ -428,7 +428,6 @@ void relay_to_next_cb(uint32_t data_ptr, uint64_t wlength) {
                 NCRISC_WR_CMD_BUF>(
                 data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_cb_data_ptr), xfer_size, 1);
 
-            length -= xfer_size;
             data_ptr += xfer_size;
             downstream_cb_data_ptr += xfer_size;
             if (downstream_cb_data_ptr == downstream_cb_end) {
