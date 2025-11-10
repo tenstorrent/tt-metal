@@ -11,7 +11,7 @@ from typing import Optional, Dict
 import ttml
 import os
 import hashlib
-
+import logging
 
 # -----------------------------
 # Checkpoint helpers (MODEL ONLY)
@@ -177,7 +177,9 @@ def _set_param_array_autotensor(param, arr: np.ndarray):
                 f"[load] shape mismatch for param: {cur.shape} (model) vs {arr.shape} (ckpt). Assigning anyway."
             )
     except Exception:
-        pass
+        logging.warning(
+            f"Could not fetch current shape for param during load. Assigning anyway."
+        )
 
     # Create source tensor in the required layout + dtype, then assign
     src = ttml.autograd.Tensor.from_numpy(
@@ -190,8 +192,9 @@ def _set_param_array_autotensor(param, arr: np.ndarray):
     # Clean up graph refs (best-effort)
     try:
         ttml.autograd.AutoContext.get_instance().reset_graph()
-    except Exception:
-        pass
+     except Exception as e:
+         # Non-critical: errors while cleaning up graph refs are ignored (best-effort)
+         logging.warning(f"Failed to reset TTML graph during param assignment: {e}")
 
 
 def _load_model_from_npz(model, ckpt_path: str, strict: bool = False):

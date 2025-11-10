@@ -28,8 +28,6 @@ from ttml.common.model_factory import TransformerModelFactory
 from ttml.common.utils import round_up_to_tile, create_optimizer, initialize_device
 from ttml.common.data import build_causal_mask
 
-import tt_serialization  # noqa: F401
-
 # Configuration
 CONFIG = "training_gsm8k_tinyllama.yaml"
 
@@ -554,10 +552,10 @@ def train():
     sched = SpeedrunScheduler(scheduler_config)
     setter = OptimParamSetter(optim)
 
-    f = open("validation.txt", "w")
-    f.write("Validation log\n")
-    f.write("===============\n")
-    f.close()
+    with open("validation.txt", "w") as f:
+        f.write("Validation log\n")
+        f.write("===============\n")
+        f.close()
 
     print(
         f"Starting training for {training_config.epochs} epochs, max {training_config.steps} steps..."
