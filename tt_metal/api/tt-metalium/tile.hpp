@@ -54,7 +54,7 @@ private:
     uint32_t num_faces = constants::TILE_HW / constants::FACE_HW;
     uint32_t partial_face = 0;
     uint32_t narrow_tile = 0;
-    bool transpose_within_face = false;  // tranpose datums within each face
+    bool transpose_within_face = false;  // transpose datums within each face
     bool transpose_of_faces = false;     // transpose the face order
 };
 

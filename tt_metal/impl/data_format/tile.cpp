@@ -20,12 +20,12 @@ constexpr std::array<std::array<std::array<uint32_t, 2>, 2>, 12> TILE_FACE_HW_CH
      {{{16, 32}, {16, 16}}},
      {{{32, 16}, {16, 16}}},
      {{{16, 16}, {16, 16}}},
-     // this shapes are not supported yet on llk, just for host loopback
+     // these shapes are not supported yet on llk, just for host loopback
      {{{8, 32}, {8, 16}}},
      {{{4, 32}, {4, 16}}},
      {{{2, 32}, {2, 16}}},
      {{{1, 32}, {1, 16}}},
-     // this shapes are not supported yet on llk, just for host loopback
+     // these shapes are not supported yet on llk, just for host loopback
      {{{8, 16}, {8, 16}}},
      {{{4, 16}, {4, 16}}},
      {{{2, 16}, {2, 16}}},
