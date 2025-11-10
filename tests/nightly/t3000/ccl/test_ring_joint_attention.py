@@ -313,8 +313,9 @@ def run_ring_joint_sdpa(
     [
         (1, 40, 4096, 333, 64, 128, 512, 1, False),  # SD3.5, no_trace
         (1, 10, 4096, 333, 64, 128, 512, 10, True),  # SD3.5 TG, yes_trace
+        (1, 40, 8192, 128, 128, 256, 256, 1, False),
     ],
-    ids=["sd35_full-no_trace", "sd35_tg-yes_trace"],
+    ids=["sd35_full-no_trace", "sd35_tg-yes_trace", "small_wan_no_trace"],
 )
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize(
@@ -375,6 +376,7 @@ def test_ring_joint_sdpa(
     up_axis,
     up_factor,
     all_gather_topology,
+    reset_seeds,
 ):
     if nh % up_factor != 0:
         pytest.skip("nh must be divisible by up_factor")

@@ -12,6 +12,7 @@
 #include "device/ternary_device_operation.hpp"
 #include "device/ternary_op_utils.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
+#include "ternary_composite_op.hpp"
 
 namespace ttnn {
 namespace operations {
@@ -206,12 +207,7 @@ Tensor invoke_impl(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
     log_debug(tt::LogOp, "Where LLK - TSS");
-    unary::UnaryOpType op_type = unary::UnaryOpType::WHERE_TSS;
-    return ttnn::operations::unary::Unary_chain::invoke(
-        condition,
-        {unary::UnaryWithParam{op_type, {static_cast<float>(t_true), static_cast<float>(t_false)}}},
-        memory_config,
-        output);
+    return ttnn::where_tss(condition, t_true, t_false, memory_config, output);
 }
 
 }  // namespace
@@ -228,6 +224,59 @@ Tensor WhereOperation::invoke(
         },
         value_true,
         value_false);
+}
+template <typename T>
+    requires std::same_as<T, int32_t> || std::same_as<T, uint32_t>
+Tensor WhereOperation::invoke(
+    const Tensor& predicate,
+    const T& value_true,
+    const T& value_false,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output) {
+    return ttnn::where_tss(predicate, value_true, value_false, memory_config, output);
+}
+
+template Tensor WhereOperation::invoke<int32_t>(
+    const Tensor&, const int32_t&, const int32_t&, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
+template Tensor WhereOperation::invoke<uint32_t>(
+    const Tensor&, const uint32_t&, const uint32_t&, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
+
+Tensor AddcmulOperation::invoke(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const Tensor& input_c,
+    float value,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output) {
+    log_debug(tt::LogOp, "Addcmul LLK - TTT");
+
+    TT_FATAL(
+        input_a.storage_type() == StorageType::DEVICE && input_b.storage_type() == StorageType::DEVICE &&
+            input_c.storage_type() == StorageType::DEVICE,
+        "Addcmul operation requires all input tensors to be on Device.");
+
+    // Only TTT variant is supported for addcmul
+    auto broadcast_type = ttnn::operations::ternary::get_broadcast_type(
+        input_a.logical_shape(), input_b.logical_shape(), input_c.logical_shape());
+
+    if (is_sharded(input_a) || is_sharded(input_b) || is_sharded(input_c) || is_sharded(memory_config) ||
+        is_sharded(output) || is_invalid_bcast(broadcast_type)) {
+        log_debug(tt::LogOp, "Addcmul Fallback - TTT");
+        // Fall back to composite implementation for unsupported cases
+        return _addcmul(input_a, input_b, input_c, value, memory_config);
+    }
+
+    // Use HLK implementation - pass value as scalar parameter
+    log_debug(tt::LogOp, "Addcmul HLK - TTT");
+    return ttnn::prim::ternary(
+        TernaryOpType::ADDCMUL,
+        input_a,
+        input_b,
+        input_c,
+        value,
+        ternary_utils::determine_output_dtype(output, input_a.dtype()),
+        ternary_utils::determine_memory_config(memory_config, input_a.memory_config()),
+        output);
 }
 
 }  // namespace ternary

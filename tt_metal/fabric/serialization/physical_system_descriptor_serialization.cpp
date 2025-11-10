@@ -14,6 +14,7 @@
 #include <google/protobuf/io/zero_copy_stream_impl.h>
 #include <fstream>
 #include <sstream>
+#include <enchantum/enchantum.hpp>
 
 namespace tt::tt_metal {
 
@@ -192,18 +193,26 @@ void physical_system_descriptor_to_proto(
         }
     }
 
-    // Set mock cluster flag
-    proto_desc->set_mock_cluster(descriptor.is_using_mock_cluster());
+    // Set target device type
+    proto_desc->set_target_device_type(static_cast<uint32_t>(descriptor.get_target_device_type()));
+    // Set ethernet firmware version
+    proto_desc->mutable_ethernet_firmware_version()->set_major(descriptor.get_ethernet_firmware_version().major);
+    proto_desc->mutable_ethernet_firmware_version()->set_minor(descriptor.get_ethernet_firmware_version().minor);
+    proto_desc->mutable_ethernet_firmware_version()->set_patch(descriptor.get_ethernet_firmware_version().patch);
 }
 
 // Convert protobuf to PhysicalSystemDescriptor
 std::unique_ptr<PhysicalSystemDescriptor> proto_to_physical_system_descriptor(
     const tt::fabric::proto::PhysicalSystemDescriptor& proto_desc) {
+    auto target_device_type = enchantum::cast<TargetDevice>(proto_desc.target_device_type());
+    if (!target_device_type.has_value()) {
+        throw std::runtime_error("Invalid target device type: " + std::to_string(proto_desc.target_device_type()));
+    }
     auto descriptor = std::make_unique<PhysicalSystemDescriptor>(
         PhysicalSystemDescriptor::null_cluster,
         nullptr,
         nullptr,
-        proto_desc.mock_cluster() ? TargetDevice::Mock : TargetDevice::Silicon,
+        *target_device_type,
         false);  // Don't run discovery
 
     // Convert system graph
@@ -257,6 +266,11 @@ std::unique_ptr<PhysicalSystemDescriptor> proto_to_physical_system_descriptor(
 
         exit_node_connection_table[proto_table.host_name()] = std::move(exit_connections);
     }
+
+    // Set ethernet firmware version
+    descriptor->get_ethernet_firmware_version().major = proto_desc.ethernet_firmware_version().major();
+    descriptor->get_ethernet_firmware_version().minor = proto_desc.ethernet_firmware_version().minor();
+    descriptor->get_ethernet_firmware_version().patch = proto_desc.ethernet_firmware_version().patch();
 
     return descriptor;
 }

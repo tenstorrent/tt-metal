@@ -181,6 +181,10 @@ def run_ring_attention_all_gather_impl(
     output_dims = [None, None]
     output_dims[rp_axis] = sequence_index
     output_dims[1 - rp_axis] = head_index
+
+    seq_len = ag_output_shape[sequence_index]
+    seq_len_per_device = seq_len // mesh_device.shape[rp_axis]
+
     for i in range(num_iters):
         tt_ag_out_tensors = tt_all_gather_out_tensor_list[i]
         torch_ag_out_tensors = ag_output_tensor_list[i if not enable_trace else 0]
@@ -194,13 +198,25 @@ def run_ring_attention_all_gather_impl(
                     dims=output_dims,
                 ),
             )
-            tt_ag_out = torch.narrow(tt_ag_out, sequence_index, 0, torch_ag_out_tensors[j].shape[sequence_index])
-            if ag_input_dtype == ttnn.bfloat16:
-                eq, output = comp_equal(tt_ag_out, torch_ag_out_tensors[j])
-            else:
-                eq, output = comp_pcc(tt_ag_out, torch_ag_out_tensors[j], pcc_threshold)
-            logger.info(f"{output}, iteration {i}, tensor {j}")
-            assert eq, f"{i}{j} FAILED ag: {output}"
+            tt_ag_tensors = torch.chunk(tt_ag_out, mesh_device.shape[rp_axis], dim=sequence_index)
+            for ring_idx, tt_ag_tensor in enumerate(tt_ag_tensors):
+                # AG does not write local slice to output, so compare all other datums by zeroing out the local slice
+                tt_ag_tensor_check = tt_ag_tensor.clone()
+                tt_ag_tensor_zero = torch.narrow(
+                    tt_ag_tensor, sequence_index, ring_idx * seq_len_per_device, seq_len_per_device
+                )
+                tt_ag_tensor_zero.zero_()
+                torch_ag_tensor_check = torch_ag_out_tensors[j].clone()
+                torch_ag_tensor_zero = torch.narrow(
+                    torch_ag_tensor_check, sequence_index, ring_idx * seq_len_per_device, seq_len_per_device
+                )
+                torch_ag_tensor_zero.zero_()
+
+                if ag_input_dtype == ttnn.bfloat16:
+                    eq, output = comp_equal(tt_ag_tensor_check, torch_ag_tensor_check)
+                else:
+                    eq, output = comp_pcc(tt_ag_tensor_check, torch_ag_tensor_check, pcc_threshold)
+                assert eq, f"{i}{j} FAILED ag: {output}, iteration {i}, tensor {j}, ring {ring_idx}"
 
     mesh_device.reset_sub_device_stall_group()
     mesh_device.clear_loaded_sub_device_manager()
@@ -250,10 +266,9 @@ def run_ring_attention_all_gather_impl(
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
     ],
-    ids=["ring ", "line"],
+    ids=["line"],
     indirect=["device_params"],
 )
 def test_ring_attention_all_gather(
@@ -273,9 +288,6 @@ def test_ring_attention_all_gather(
     mem_config_ag,
     all_gather_topology,
 ):
-    if all_gather_topology == ttnn.Topology.Ring:
-        pytest.skip("Ring topology not supported on T3K - requires 2D torus")
-
     submesh_device = create_ring_attention_submesh(mesh_device, rp_axis, rp_factor, up_factor)
 
     run_ring_attention_all_gather_impl(
