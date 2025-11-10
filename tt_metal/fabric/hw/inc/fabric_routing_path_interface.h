@@ -128,8 +128,7 @@ inline bool decode_route_to_buffer_by_hops(uint16_t hops, volatile uint8_t* out_
 
 // Device-side compressed decoder function for 1D routing
 inline bool decode_route_to_buffer_by_dev(uint16_t dst_chip_id, volatile uint8_t* out_route_buffer) {
-    tt_l1_ptr tensix_routing_l1_info_t* routing_table =
-        reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(ROUTING_TABLE_BASE);
+    tt_l1_ptr routing_l1_info_t* routing_table = reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(ROUTING_TABLE_BASE);
     uint16_t my_device_id = routing_table->my_device_id;
     uint16_t hops = my_device_id > dst_chip_id ? my_device_id - dst_chip_id : dst_chip_id - my_device_id;
 

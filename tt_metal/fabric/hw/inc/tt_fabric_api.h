@@ -20,14 +20,14 @@ using namespace tt::tt_fabric;
 namespace tt::tt_fabric {
 
 inline eth_chan_directions get_next_hop_router_direction(uint32_t dst_mesh_id, uint32_t dst_dev_id) {
-    tt_l1_ptr tensix_routing_l1_info_t* routing_table =
-        reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
+    tt_l1_ptr routing_l1_info_t* routing_table =
+        reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
     if (dst_mesh_id == routing_table->my_mesh_id) {
         return static_cast<eth_chan_directions>(
-            routing_table->intra_mesh_routing_table.get_original_direction(dst_dev_id));
+            routing_table->intra_mesh_direction_table.get_original_direction(dst_dev_id));
     } else {
         return static_cast<eth_chan_directions>(
-            routing_table->inter_mesh_routing_table.get_original_direction(dst_mesh_id));
+            routing_table->inter_mesh_direction_table.get_original_direction(dst_mesh_id));
     }
 }
 
@@ -134,8 +134,8 @@ void fabric_set_unicast_route(
     uint32_t target_dev = dst_dev_id;
     uint32_t target_col = 0;
 
-    tt_l1_ptr tensix_routing_l1_info_t* routing_table =
-        reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
+    tt_l1_ptr routing_l1_info_t* routing_table =
+        reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
     uint16_t my_mesh_id = routing_table->my_mesh_id;
     packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
     packet_header->routing_fields.value = 0;
@@ -206,8 +206,8 @@ void fabric_set_mcast_route(
     uint32_t spine_hops = 0;
     uint32_t mcast_branch = 0;
 
-    tt_l1_ptr tensix_routing_l1_info_t* routing_table =
-        reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
+    tt_l1_ptr routing_l1_info_t* routing_table =
+        reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
     uint16_t my_mesh_id = routing_table->my_mesh_id;
     packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
     packet_header->routing_fields.value = 0;
@@ -268,12 +268,11 @@ bool fabric_set_unicast_route(
     // ACTIVE_ETH doesn't have information yet
     static_assert(dst_mesh_id < MAX_NUM_MESHES, "ACTIVE_ETH doesn't support inter-mesh routing");
 #endif
-    auto* routing_table = reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(ROUTING_TABLE_BASE);
+    auto* routing_table = reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(ROUTING_TABLE_BASE);
     if (dst_mesh_id < MAX_NUM_MESHES && routing_table->my_mesh_id != dst_mesh_id) {
         // TODO: https://github.com/tenstorrent/tt-metal/issues/27881
-        tt_l1_ptr exit_node_table_t* exit_node_table =
-            reinterpret_cast<tt_l1_ptr exit_node_table_t*>(MEM_TENSIX_EXIT_NODE_TABLE_BASE);
-        dst_dev_id = exit_node_table->nodes[dst_mesh_id];
+        auto exit_node_table = reinterpret_cast<tt_l1_ptr std::uint8_t*>(MEM_TENSIX_EXIT_NODE_TABLE_BASE);
+        dst_dev_id = exit_node_table[dst_mesh_id];
         while (true) {
         }  // not fully supported yet
     }
@@ -327,7 +326,7 @@ bool fabric_set_unicast_route(volatile tt_l1_ptr LowLatencyPacketHeader* packet_
 #endif
         auto* routing_info =
             reinterpret_cast<tt_l1_ptr intra_mesh_routing_path_t<1, compressed>*>(ROUTING_PATH_BASE_1D);
-        auto* routing_table = reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(ROUTING_TABLE_BASE);
+        auto* routing_table = reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(ROUTING_TABLE_BASE);
         if constexpr (target_as_dev) {
             uint16_t my_device_id = routing_table->my_device_id;
             uint16_t hops = my_device_id > target_num ? my_device_id - target_num : target_num - my_device_id;

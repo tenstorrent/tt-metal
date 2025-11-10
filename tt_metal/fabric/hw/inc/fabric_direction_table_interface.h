@@ -8,11 +8,11 @@
 
 namespace tt::tt_fabric {
 
-// Device-side (HW) inline implementations for compressed_routing_table_t
-// Host-side functionality is implemented in tt_metal/fabric/compressed_routing_table.cpp
+// Device-side (HW) inline implementations for direction_table_t
+// Host-side functionality is implemented in tt_metal/fabric/compressed_direction_table.cpp
 
 template <std::uint32_t ArraySize>
-inline std::uint8_t compressed_routing_table_t<ArraySize>::get_direction(std::uint16_t index) const {
+inline std::uint8_t direction_table_t<ArraySize>::get_direction(std::uint16_t index) const {
     std::uint32_t bit_index = index * BITS_PER_COMPRESSED_ENTRY;
     std::uint32_t byte_index = bit_index / BITS_PER_BYTE;
     std::uint32_t bit_offset = bit_index % BITS_PER_BYTE;
@@ -32,7 +32,7 @@ inline std::uint8_t compressed_routing_table_t<ArraySize>::get_direction(std::ui
 }
 
 template <std::uint32_t ArraySize>
-inline std::uint8_t compressed_routing_table_t<ArraySize>::decompress_value(std::uint8_t compressed_value) const {
+inline std::uint8_t direction_table_t<ArraySize>::decompress_value(std::uint8_t compressed_value) const {
     switch (static_cast<compressed_routing_values>(compressed_value)) {
         case compressed_routing_values::COMPRESSED_EAST: return eth_chan_directions::EAST;
         case compressed_routing_values::COMPRESSED_WEST: return eth_chan_directions::WEST;
@@ -46,7 +46,7 @@ inline std::uint8_t compressed_routing_table_t<ArraySize>::decompress_value(std:
 }
 
 template <std::uint32_t ArraySize>
-inline std::uint8_t compressed_routing_table_t<ArraySize>::get_original_direction(std::uint16_t index) const {
+inline std::uint8_t direction_table_t<ArraySize>::get_original_direction(std::uint16_t index) const {
     return decompress_value(get_direction(index));
 }
 

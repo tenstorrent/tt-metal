@@ -75,7 +75,7 @@ enum class compressed_routing_values : std::uint8_t {
 
 // Compressed routing table base structure using 3 bits
 template <std::uint32_t ArraySize>
-struct __attribute__((packed)) compressed_routing_table_t {
+struct __attribute__((packed)) direction_table_t {
     static constexpr std::uint32_t BITS_PER_COMPRESSED_ENTRY = 3;
     static constexpr std::uint8_t COMPRESSED_ENTRY_MASK = 0x7;                // 3-bit mask (2^3 - 1)
     static constexpr std::uint32_t BITS_PER_BYTE = sizeof(std::uint8_t) * 8;  // 8 bits in a byte
@@ -88,12 +88,12 @@ struct __attribute__((packed)) compressed_routing_table_t {
     std::uint8_t packed_directions[ArraySize * BITS_PER_COMPRESSED_ENTRY / BITS_PER_BYTE];
 
 #if !defined(KERNEL_BUILD) && !defined(FW_BUILD)
-    // Host-side methods (declared here, implemented in compressed_routing_table.cpp):
+    // Host-side methods (declared here, implemented in compressed_direction_table.cpp):
     void set_direction(std::uint16_t index, std::uint8_t direction);
     std::uint8_t compress_value(std::uint8_t original_value) const;
     void set_original_direction(std::uint16_t index, std::uint8_t original_direction);
 #else
-    // Device-side methods (declared here, implemented in fabric_routing_table_interface.h):
+    // Device-side methods (declared here, implemented in fabric_direction_table_interface.h):
     inline std::uint8_t get_direction(std::uint16_t index) const;
     inline std::uint8_t decompress_value(std::uint8_t compressed_value) const;
     inline std::uint8_t get_original_direction(std::uint16_t index) const;
@@ -181,32 +181,6 @@ static_assert(sizeof(intra_mesh_routing_path_t<1, true>) == 0, "1D compressed ro
 // 256 chips * 2 bytes = 512
 static_assert(sizeof(intra_mesh_routing_path_t<2, true>) == 512, "2D compressed routing path must be 512 bytes");
 
-struct exit_node_table_t {
-    // Lookup table: nodes[mesh_id] returns the exit chip_id for that mesh
-    std::uint8_t nodes[MAX_NUM_MESHES];  // 1024 meshes * 1 byte = 1024 bytes
-};
-
-struct tensix_routing_l1_info_t {
-    // TODO: https://github.com/tenstorrent/tt-metal/issues/28534
-    //       these fabric node ids should be another struct as really commonly used data
-    uint16_t my_mesh_id = 0;    // Current mesh ID
-    uint16_t my_device_id = 0;  // Current chip ID
-    // NOTE: Compressed version has additional overhead (2x slower) to read values,
-    //       but raw data is too huge (2048 bytes) to fit in L1 memory.
-    //       Need to evaluate once actual workloads are available
-    compressed_routing_table_t<MAX_MESH_SIZE> intra_mesh_routing_table{};   // 96 bytes
-    compressed_routing_table_t<MAX_NUM_MESHES> inter_mesh_routing_table{};  // 384 bytes
-    intra_mesh_routing_path_t<1, false> routing_path_table_1d{};            // 64 bytes
-    intra_mesh_routing_path_t<2, true> routing_path_table_2d{};             // 512 bytes
-#if !defined(ARCH_WORMHOLE) || (defined(ARCH_WORMHOLE) && !defined(COMPILE_FOR_ERISC))
-    // TODO: enable once hybrid routing is supported.
-    //       Currently no enough space on ACTIVE ETH
-    //       https://github.com/tenstorrent/tt-metal/issues/27881
-    exit_node_table_t exit_node_table{};  // 1024 bytes
-#endif
-    uint8_t padding[12] = {};  // pad to 16-byte alignment
-} __attribute__((packed));
-
 struct fabric_connection_info_t {
     uint32_t edm_buffer_base_addr;
     uint32_t edm_connection_handshake_addr;
@@ -240,6 +214,36 @@ struct tensix_fabric_connections_l1_info_t {
     fabric_aligned_connection_info_t read_write[MAX_FABRIC_ENDPOINTS];
 };
 
+struct routing_l1_info_t {
+    // TODO: https://github.com/tenstorrent/tt-metal/issues/28534
+    //       these fabric node ids should be another struct as really commonly used data
+    uint16_t my_mesh_id = 0;    // Current mesh ID
+    uint16_t my_device_id = 0;  // Current chip ID
+    // NOTE: Compressed version has additional overhead (2x slower) to read values,
+    //       but raw data is too huge (2048 bytes) to fit in L1 memory.
+    //       Need to evaluate once actual workloads are available
+    direction_table_t<MAX_MESH_SIZE> intra_mesh_direction_table{};          // 96 bytes
+    direction_table_t<MAX_NUM_MESHES> inter_mesh_direction_table{};         // 384 bytes
+    intra_mesh_routing_path_t<1, false> routing_path_table_1d{};            // 64 bytes
+    intra_mesh_routing_path_t<2, true> routing_path_table_2d{};             // 512 bytes
+#if !defined(ARCH_WORMHOLE) || (defined(ARCH_WORMHOLE) && !defined(COMPILE_FOR_ERISC))
+    // TODO: enable once hybrid routing is supported.
+    //       Currently no enough space on ACTIVE ETH
+    //       https://github.com/tenstorrent/tt-metal/issues/27881
+    std::uint8_t exit_node_table[MAX_NUM_MESHES];  // 1024 bytes
+#endif
+    uint8_t padding[12] = {};  // pad to 16-byte alignment
+} __attribute__((packed));
+
+struct worker_routing_l1_info_t {
+    routing_l1_info_t routing_info;
+    tensix_fabric_connections_l1_info_t fabric_connections;
+};
+
+struct fabric_routing_l1_info_t {
+    routing_l1_info_t routing_info;
+};
+
 }  // namespace tt::tt_fabric
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
@@ -259,6 +263,6 @@ struct tensix_fabric_connections_l1_info_t {
 #define ROUTING_TABLE_BASE MEM_TENSIX_ROUTING_TABLE_BASE
 #endif
 
-#include "fabric/hw/inc/fabric_routing_table_interface.h"
+#include "fabric/hw/inc/fabric_direction_table_interface.h"
 #include "fabric/hw/inc/fabric_routing_path_interface.h"
 #endif
