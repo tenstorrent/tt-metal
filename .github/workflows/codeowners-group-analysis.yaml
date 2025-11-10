@@ -712,6 +712,7 @@ jobs:
           APPROVED_REVIEWERS="${{ needs.get-reviews.outputs.approved-reviewers }}"
           TOTAL_ADDITIONS="${{ needs.analyze-codeowners.outputs.total-additions || 0 }}"
           TOTAL_DELETIONS="${{ needs.analyze-codeowners.outputs.total-deletions || 0 }}"
+          CHANGED_FILES_COUNT="${{ needs.analyze-codeowners.outputs.changed-files-count || 0 }}"
 
           # Determine parameters based on trigger type
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
@@ -1054,9 +1055,12 @@ jobs:
           # Get the most recent one by sorting by created_at descending
           EXISTING_COMMENT_ID=$(echo "$ALL_COMMENTS" | jq -r "[.[] | select(.body | contains(\"CodeOwners-Workflow-Bot\"))] | sort_by(.created_at) | reverse | .[0].id")
 
-          # Use jq to properly escape the comment for JSON
+          # Use jq to properly escape the comment for JSON (use temp file for large comments)
           TEMP_JSON_FILE=$(mktemp)
-          jq -n --arg body "$COMMENT" '{"body": $body}' > "$TEMP_JSON_FILE"
+          COMMENT_FILE=$(mktemp)
+          echo "$COMMENT" > "$COMMENT_FILE"
+          jq -n --rawfile body "$COMMENT_FILE" '{"body": $body}' > "$TEMP_JSON_FILE"
+          rm -f "$COMMENT_FILE"
 
           if [ "$CREATE_NEW" = "true" ]; then
             # Create new comment
@@ -1529,10 +1533,11 @@ jobs:
 
           SLACK_MESSAGE="$SLACK_MESSAGE"$'\n\n'"Please review when you have a moment. Thank you! 🚀"
 
-          # Send to Slack
+          # Send to Slack (use temp file for large messages)
+          echo "$SLACK_MESSAGE" > /tmp/slack_message.txt
           SLACK_PAYLOAD=$(jq -n \
             --arg channel "$SLACK_CHANNEL" \
-            --arg text "$SLACK_MESSAGE" \
+            --rawfile text /tmp/slack_message.txt \
             '{
               channel: $channel,
               text: $text
