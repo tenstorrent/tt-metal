@@ -65,13 +65,21 @@ class TtTransformer2DModel(LightweightModule):
 
     def forward(self, input_tensor, input_shape, attention_mask=None, encoder_hidden_states=None):
         B, C, H, W = input_shape
+        if C != 640 and C != 1280:
+            hidden_states = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
+            orientation = ttnn.ShardOrientation.COL_MAJOR
+            rm_gn = True
+        else:
+            hidden_states = input_tensor
+            rm_gn = False
+            orientation = ttnn.ShardOrientation.ROW_MAJOR
         sharded_mem_config = ttnn.create_sharded_memory_config(
             input_tensor.shape,
             core_grid=self.norm_core_grid,
             strategy=ttnn.ShardStrategy.BLOCK,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            orientation=orientation,
         )
-        hidden_states = ttnn.to_memory_config(input_tensor, sharded_mem_config)
+        hidden_states = ttnn.to_memory_config(hidden_states, sharded_mem_config)
 
         hidden_states = ttnn.group_norm(
             hidden_states,
@@ -82,8 +90,12 @@ class TtTransformer2DModel(LightweightModule):
             memory_config=sharded_mem_config,
             core_grid=self.norm_core_grid,
             epsilon=self.norm_eps,
-            inplace=False,
+            inplace=rm_gn,
         )
+
+        if rm_gn:
+            hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
+            hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
 
         hidden_states = ttnn.linear(
             hidden_states,

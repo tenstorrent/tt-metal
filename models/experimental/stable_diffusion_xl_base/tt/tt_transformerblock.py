@@ -91,7 +91,8 @@ class TtBasicTransformerBlock(LightweightModule):
                 legacy_reduction=True,
                 legacy_rsqrt=True,
             )
-        else:
+            is_base = True
+        elif C == 1280:
             ln_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
                 compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
                 subblock_w=5,
@@ -101,14 +102,18 @@ class TtBasicTransformerBlock(LightweightModule):
                 legacy_reduction=True,
                 legacy_rsqrt=True,
             )
+            is_base = True
+        else:
+            is_base = False
+        legacy_program_config = ttnn.LayerNormDefaultProgramConfig(legacy_reduction=True, legacy_rsqrt=True)
         attn_hidden_states = ttnn.layer_norm(
             input_tensor,
             weight=self.tt_norm1_weights,
             bias=self.tt_norm1_bias,
             epsilon=self.ln_eps,
             compute_kernel_config=self.ln_compute_kernel_config,
-            memory_config=input_tensor.memory_config(),
-            program_config=ln_program_config if input_tensor.is_sharded() else None,
+            memory_config=input_tensor.memory_config() if is_base else ttnn.L1_MEMORY_CONFIG,
+            program_config=ln_program_config if input_tensor.is_sharded() and is_base else legacy_program_config,
         )
 
         attn_hidden_states = self.attn1(attn_hidden_states, attention_mask, None)
@@ -121,8 +126,8 @@ class TtBasicTransformerBlock(LightweightModule):
             bias=self.tt_norm2_bias,
             epsilon=self.ln_eps,
             compute_kernel_config=self.ln_compute_kernel_config,
-            memory_config=hidden_states.memory_config(),
-            program_config=ln_program_config if hidden_states.is_sharded() else None,
+            memory_config=hidden_states.memory_config() if is_base else ttnn.L1_MEMORY_CONFIG,
+            program_config=ln_program_config if hidden_states.is_sharded() and is_base else legacy_program_config,
         )
 
         attn_hidden_states = self.attn2(attn_hidden_states, attention_mask, encoder_hidden_states)
@@ -134,8 +139,8 @@ class TtBasicTransformerBlock(LightweightModule):
             bias=self.tt_norm3_bias,
             epsilon=self.ln_eps,
             compute_kernel_config=self.ln_compute_kernel_config,
-            memory_config=hidden_states.memory_config(),
-            program_config=ln_program_config if hidden_states.is_sharded() else None,
+            memory_config=hidden_states.memory_config() if is_base else ttnn.DRAM_MEMORY_CONFIG,
+            program_config=ln_program_config if hidden_states.is_sharded() and is_base else legacy_program_config,
         )
 
         attn_hidden_states = self.ff(attn_hidden_states)
