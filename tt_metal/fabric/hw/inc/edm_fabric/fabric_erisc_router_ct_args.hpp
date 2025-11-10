@@ -68,11 +68,12 @@ static_assert(
     "check the CT args.");
 
 // Downstream tensix connections argument (after stream IDs and marker)
-constexpr size_t NUM_DOWNSTREAM_TENSIX_CONNECTIONS_IDX = STREAM_IDS_END_MARKER_IDX + 1;
-constexpr uint32_t num_downstream_tensix_connections = get_compile_time_arg_val(NUM_DOWNSTREAM_TENSIX_CONNECTIONS_IDX);
+constexpr size_t NUM_DS_OR_LOCAL_TENSIX_CONNECTIONS_IDX = STREAM_IDS_END_MARKER_IDX + 1;
+constexpr uint32_t num_ds_or_local_tensix_connections =
+    get_compile_time_arg_val(NUM_DS_OR_LOCAL_TENSIX_CONNECTIONS_IDX);
 
 // Main configuration arguments (after stream IDs, marker, and downstream tensix connections)
-constexpr size_t SENDER_CHANNEL_NOC_CONFIG_START_IDX = NUM_DOWNSTREAM_TENSIX_CONNECTIONS_IDX + 1;
+constexpr size_t SENDER_CHANNEL_NOC_CONFIG_START_IDX = NUM_DS_OR_LOCAL_TENSIX_CONNECTIONS_IDX + 1;
 constexpr size_t NUM_SENDER_CHANNELS = get_compile_time_arg_val(SENDER_CHANNEL_NOC_CONFIG_START_IDX);
 constexpr size_t NUM_RECEIVER_CHANNELS_CT_ARG_IDX = SENDER_CHANNEL_NOC_CONFIG_START_IDX + 1;
 constexpr size_t NUM_RECEIVER_CHANNELS = get_compile_time_arg_val(NUM_RECEIVER_CHANNELS_CT_ARG_IDX);
@@ -141,8 +142,8 @@ constexpr size_t worker_info_offset_past_connection_semaphore = 32;
 //   "is it the payload size or does it include the packet header size?"
 constexpr size_t channel_buffer_size = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 7);
 constexpr bool vc1_has_different_downstream_dest = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 8);
-constexpr bool has_tensix_extension = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 9);
-constexpr bool skip_src_ch_id_update = has_tensix_extension;
+constexpr bool fabric_tensix_extension_mux_mode = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 9);
+constexpr bool skip_src_ch_id_update = fabric_tensix_extension_mux_mode;
 
 constexpr size_t REMOTE_CHANNEL_INFO_START_IDX = MAIN_CT_ARGS_START_IDX + 10;
 constexpr uint32_t remote_vc1_sender_channel =
