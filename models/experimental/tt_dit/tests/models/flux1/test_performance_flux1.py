@@ -7,6 +7,7 @@ import pytest
 import ttnn
 from loguru import logger
 from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
+from models.common.utility_functions import is_blackhole
 from ....pipelines.flux1.pipeline_flux1 import Flux1Pipeline
 from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large import TimingCollector
 
@@ -263,14 +264,27 @@ def test_flux1_pipeline_performance(
             "vae_decoding_time": 1.4,
             "total_time": 9.0,
         }
+    elif tuple(mesh_device.shape) == (2, 2):
+        assert is_blackhole(), "2x2 is only supported for blackhole"
+        expected_metrics = {
+            "clip_encoding_time": 0.1,
+            "t5_encoding_time": 0.4,
+            "total_encoding_time": 0.5,
+            "denoising_steps_time": 0.8 * num_inference_steps,
+            "vae_decoding_time": 2.6,
+            "total_time": 25.0,
+        }
     else:
         assert False, f"Unknown mesh device for performance comparison: {mesh_device}"
 
     if is_ci_env:
         # In CI, dump a performance report
-        profiler_model_name = (
-            f"flux1_dev_{'t3k' if tuple(mesh_device.shape) == (2, 4) else 'tg'}_sp{sp_factor}_tp{tp_factor}"
-        )
+        device_name_map = {
+            (2, 2): "bh_qb",
+            (2, 4): "wh_t3k",
+            (4, 8): "wh_glx",
+        }
+        profiler_model_name = f"flux1_dev_{device_name_map[tuple(mesh_device.shape)]}_sp{sp_factor}_tp{tp_factor}"
         benchmark_data = BenchmarkData()
         benchmark_data.save_partial_run_json(
             benchmark_profiler,
