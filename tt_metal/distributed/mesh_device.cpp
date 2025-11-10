@@ -251,19 +251,15 @@ MeshDevice::MeshDevice(
     if (!iommu_enabled) {
         memory_pinning_params_ = experimental::MemoryPinningParameters{0u, 0u, false};
     } else {
+        auto& hal = MetalContext::instance().hal();
         const auto device_arch = this->arch();
+        memory_pinning_params_.max_pins = hal.get_max_pinned_memory_count();
+        memory_pinning_params_.max_total_pin_size = hal.get_total_pinned_memory_size();
         if (device_arch == tt::ARCH::BLACKHOLE) {
-            memory_pinning_params_ = experimental::MemoryPinningParameters{
-                std::numeric_limits<uint32_t>::max(), std::numeric_limits<uint64_t>::max(), true};
-        } else if (device_arch == tt::ARCH::WORMHOLE_B0) {
-            // Disable NOC mapping for until this is tested.
-            const bool map_to_noc_supported = false;
-            const uint64_t four_gb = 4ULL * 1024ULL * 1024ULL * 1024ULL;
-            const uint64_t hugepage_size = static_cast<uint64_t>(tt::tt_metal::DispatchSettings::MAX_HUGEPAGE_SIZE);
-            memory_pinning_params_ =
-                experimental::MemoryPinningParameters{12u, four_gb - hugepage_size, map_to_noc_supported};
+            memory_pinning_params_.can_map_to_noc = true;
         } else {
-            memory_pinning_params_ = experimental::MemoryPinningParameters{0u, 0u, false};
+            // Disable NOC mapping for until this is tested.
+            memory_pinning_params_.can_map_to_noc = false;
         }
     }
 }
