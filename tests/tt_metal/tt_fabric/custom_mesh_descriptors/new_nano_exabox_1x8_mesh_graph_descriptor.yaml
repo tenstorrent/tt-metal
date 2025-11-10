@@ -10,7 +10,7 @@ ChipSpec: {
 
 Board: [
   { name: 2x4,
-    type: Mesh,
+    type: TORUS_XY,
     topology: [1, 8]}
 ]
 

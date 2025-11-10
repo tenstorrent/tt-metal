@@ -10,7 +10,7 @@ ChipSpec: {
 
 Board: [
   { name: Galaxy,
-    type: TORUS_X,
+    type: TORUS_XY,
     topology: [1, 32]}
 ]
 
