@@ -91,7 +91,42 @@ def logsoftmax_backward(
 
 matmul = ttnn._ttnn.operations.moreh.moreh_matmul
 matmul_backward = ttnn._ttnn.operations.moreh.moreh_matmul_backward
-mean = ttnn._ttnn.operations.moreh.moreh_mean
+
+
+def mean(
+    input_tensor,
+    *,
+    dim=None,
+    keepdim=False,
+    divisor=None,
+    output=None,
+    memory_config=None,
+    compute_kernel_config=None,
+):
+    # Nanobind does not accept dim=None, but tests expect dim=None to mean
+    # reduction over all dimensions (matching torch semantics).
+    if dim is None:
+        dims = tuple(range(len(input_tensor.shape)))
+        return ttnn._ttnn.operations.moreh.moreh_mean(
+            input_tensor,
+            dim=dims,
+            keepdim=keepdim,
+            divisor=divisor,
+            output=output,
+            memory_config=memory_config,
+            compute_kernel_config=compute_kernel_config,
+        )
+    return ttnn._ttnn.operations.moreh.moreh_mean(
+        input_tensor,
+        dim=dim,
+        keepdim=keepdim,
+        divisor=divisor,
+        output=output,
+        memory_config=memory_config,
+        compute_kernel_config=compute_kernel_config,
+    )
+
+
 mean_backward = ttnn._ttnn.operations.moreh.moreh_mean_backward
 nll_loss = ttnn._ttnn.operations.moreh.moreh_nll_loss
 nll_loss_backward = ttnn._ttnn.operations.moreh.moreh_nll_loss_backward
