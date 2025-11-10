@@ -86,7 +86,7 @@ jobs:
               "owner_id": "U08TED0JM9D"
             }
           ]' --compact-output)
-          
+
           # Filter matrix based on model selection
           if [ "${{ inputs.model }}" = "all" ]; then
             echo "matrix=$FULL_MATRIX" >> $GITHUB_OUTPUT
