@@ -81,7 +81,7 @@ class TtBasicTransformerBlock(LightweightModule):
 
     def forward(self, input_tensor, attention_mask=None, encoder_hidden_states=None):
         N, C, H, W = list(input_tensor.shape)
-        if C == 640:
+        if W == 640:
             ln_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
                 compute_with_storage_grid_size=ttnn.CoreCoord(5, 8),
                 subblock_w=4,
@@ -92,7 +92,7 @@ class TtBasicTransformerBlock(LightweightModule):
                 legacy_rsqrt=True,
             )
             is_base = True
-        elif C == 1280:
+        elif W == 1280:
             ln_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
                 compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
                 subblock_w=5,
