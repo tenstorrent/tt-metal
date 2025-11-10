@@ -43,7 +43,6 @@ def run_strided_all_gather_impl(
     num_iters=1,
     enable_trace=True,
     cluster_axis=None,
-    tiles_per_chunk=None,
     num_workers_per_link=None,
     num_buffers_per_channel=None,
     allowed_pcc=1,
@@ -192,6 +191,9 @@ def run_strided_all_gather_impl(
 
     def run_op(i):
         if use_non_fused:
+            tiles_per_chunk_across_cores = mm_core_grid.y * mm_block_h * mm_block_w
+            global_worker_count = num_links * num_workers_per_link
+            tiles_per_chunk_val = (tiles_per_chunk_across_cores + global_worker_count - 1) // global_worker_count
             tt_all_gather_out_tensor = ttnn.experimental.strided_all_gather_async(
                 input_tensor_mesh_list[i],
                 dim=dim,
@@ -202,7 +204,7 @@ def run_strided_all_gather_impl(
                 subdevice_id=worker_sub_device_id,
                 cluster_axis=cluster_axis,
                 barrier_semaphore=barrier_semaphore_handles[i],
-                tiles_per_chunk=tiles_per_chunk,
+                tiles_per_chunk=tiles_per_chunk_val,
                 num_workers_per_link=num_workers_per_link,
                 num_buffers_per_channel=num_buffers_per_channel,
                 mm_cores_y=mm_core_grid.y,
@@ -235,7 +237,6 @@ def run_strided_all_gather_impl(
                 config=matmul_config,
                 memory_config_mm=mem_config_mm,
                 compute_kernel_config=compute_config,
-                tiles_per_chunk=tiles_per_chunk,
                 num_workers_per_link=num_workers_per_link,
                 num_buffers_per_channel=num_buffers_per_channel,
             )
@@ -315,18 +316,22 @@ def run_strided_all_gather_impl(
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
-    "M, K, N, dim, num_workers_per_link, tiles_per_chunk, layout, ag_input_dtype, mm_block_m, mm_block_k, mm_block_n, subblock_h, subblock_w, mm_core_grid",
+    "M, K, N, dim, num_workers_per_link, layout, ag_input_dtype, mm_block_m, mm_block_k, mm_block_n, subblock_h, subblock_w, mm_core_grid",
     [
-        (64, 512, 512, 3, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2)),
-        (64, 512, 1024, 3, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2)),
-        (64, 512, 2048, 3, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2)),
-        (4096, 4096, 4096, 3, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2)),
+        (64, 512, 512, 3, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2)),
+        (64, 512, 1024, 3, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2)),
+        (64, 512, 2048, 3, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2)),
+        (64, 512, 512, 3, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2)),
+        (4096, 4096, 4096, 3, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2)),
+        (4096, 4096, 4096, 3, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(4, 4)),
     ],
     ids=[
         "base",  # 1 forward pass through K
         "forwardbackwardK",  # 1 forward, 1 backward (special because it's not reusing on the first backward)
         "twiceforwardbackwardK",  # 2 forward, 2 backward (both the non reuse and reuse branches hit)
+        "2workercores",  # test two worker cores on the AG side
         "4k4k4k",
+        "4x4mmcores",
     ],
 )
 @pytest.mark.parametrize(
@@ -380,7 +385,6 @@ def test_strided_all_gather_async(
     all_gather_topology,
     num_iters,
     num_workers_per_link,
-    tiles_per_chunk,
     mm_block_m,
     mm_block_k,
     mm_block_n,
@@ -391,6 +395,7 @@ def test_strided_all_gather_async(
 ):
     assert not (M % mm_block_m), f"M must be divisible by mm_block_m"
     assert not ((M // mm_block_m) % mm_core_grid.y), f"num M blocks must divide evenly into mm_core_grid.y"
+    assert not ((M // 32) % num_workers_per_link), f"worker must be divisible by num workers per link"
 
     run_strided_all_gather_impl(
         mesh_device,
@@ -409,7 +414,6 @@ def test_strided_all_gather_async(
         enable_trace=enable_trace,
         num_iters=num_iters,
         num_workers_per_link=num_workers_per_link,
-        tiles_per_chunk=tiles_per_chunk,
         mm_block_m=mm_block_m,
         mm_block_k=mm_block_k,
         mm_block_n=mm_block_n,

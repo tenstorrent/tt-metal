@@ -143,7 +143,6 @@ tt::tt_metal::operation::ProgramWithCallbacks StridedAllGatherMinimalMatmulAsync
         this->strided_all_gather_async_struct.semaphore,
         this->strided_all_gather_async_struct.barrier_semaphore,
         this->strided_all_gather_async_struct.sub_device_id,
-        this->strided_all_gather_async_struct.tiles_per_chunk,
         this->strided_all_gather_async_struct.num_workers_per_link,
         this->strided_all_gather_async_struct.num_buffers_per_channel,
         this->all_gather_core_grid_offset,
@@ -178,7 +177,6 @@ tt::tt_metal::operation::Hash StridedAllGatherMinimalMatmulAsync::compute_progra
             : CoreRangeSet(CoreRange({0, 0}, {0, 0})),
         this->strided_all_gather_async_struct.cluster_axis,
         this->strided_all_gather_async_struct.barrier_semaphore.has_value(),
-        this->strided_all_gather_async_struct.tiles_per_chunk,
         this->strided_all_gather_async_struct.num_workers_per_link,
         this->strided_all_gather_async_struct.num_buffers_per_channel,
         this->all_gather_core_grid_offset,
@@ -208,7 +206,6 @@ std::vector<ttnn::Tensor> strided_all_gather_minimal_matmul_async(
     std::optional<operations::unary::UnaryWithParam> fused_activation,
     const std::optional<const minimal_matmul::MinimalMatmulConfig> config,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-    std::optional<uint32_t> tiles_per_chunk,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel) {
     std::vector<std::optional<const Tensor>> optional_input_tensors = {};
@@ -232,7 +229,7 @@ std::vector<ttnn::Tensor> strided_all_gather_minimal_matmul_async(
         sub_device_id,
         /*cluster_axis=*/std::nullopt,
         barrier_semaphore,
-        tiles_per_chunk,
+        /*tiles_per_chunk=*/std::nullopt,
         num_workers_per_link,
         num_buffers_per_channel,
         config->compute_with_storage_grid_size.y,
