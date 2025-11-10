@@ -675,7 +675,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         a.element_size(),
         block_size_width);
 
-    const auto blocked_gather_transfers = std::move(blocked_result.blocked_transfers);
+    auto blocked_gather_transfers = std::move(blocked_result.blocked_transfers);
     const uint32_t num_blocks = blocked_result.num_logical_blocks;
     log_info(
         tt::LogType::LogAlways,
@@ -683,6 +683,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         num_blocks,
         block_size_width,
         blocked_gather_transfers.size());
+
+    // Apply transfer coalescing optimization to reduce NOC operations
+    blocked_gather_transfers = convert_to_hwc::detail::coalesce_contiguous_transfers(blocked_gather_transfers);
 
     const auto per_core_blocked_gather_transfers =
         convert_to_hwc::detail::split_by_destination_core(blocked_gather_transfers, config.l1_input_cores.size());
