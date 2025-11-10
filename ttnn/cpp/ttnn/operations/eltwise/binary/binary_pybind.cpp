@@ -16,6 +16,19 @@ namespace binary {
 
 namespace detail {
 
+// Common broadcasting and performance documentation for binary operations
+constexpr auto BINARY_BROADCAST_DOC = R"doc(
+        Binary elementwise operations, C=op(A,B), support input tensors A and B in row major and tile layout, in interleaved or sharded format (height, width or block sharded), in DRAM or L1. A and B are completely independent, and can have different tensor specs.
+
+        Broadcast of A and B operands is supported up to dimension 5 (DNCHW). Any dimensions of size 1 in either A or B will be expanded to match the other input, and data will be duplicated along that dimension. For example, if the shape of A is [2,1,1,32] and B is [1,16,8,1], the output shape will be [2,16,8,32]. The size of dimensions higher than 5 must match between A and B.
+
+        The output C also supports row major and tile layout, interleaved or sharded format (height, width or block sharded), in DRAM or L1. The tensor spec of C is independent of A and B, and can be explicitly set using the optional output tensor input; if not provided, the operation will attempt a best decision at an appropriate tensor spec. The dimensions of C, or equivalently the optional output tensor, must match the broadcast-matched size of A and B.
+
+        Performance considerations:
+        Elementwise operations operate natively in tile format, tiled tensors are preferred as an input, and row-major tensors are tilized and untilized during the operation.
+        L1 sharded layout is preferred, with no broadcast and matching tensor specs for A, B and C.
+)doc";
+
 template <typename binary_operation_t>
 void bind_primitive_binary_operation(
     py::module& module, const binary_operation_t& operation, const std::string& description) {
@@ -23,7 +36,7 @@ void bind_primitive_binary_operation(
         R"doc(
         {2}
 
-        Supports broadcasting (except with scalar)
+        {3}
 
         Args:
             * :attr:`input_tensor_a`
@@ -43,7 +56,8 @@ void bind_primitive_binary_operation(
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
-        description);
+        description,
+        BINARY_BROADCAST_DOC);
 
     bind_registered_operation(
         module,
@@ -110,7 +124,7 @@ void bind_binary_operation(
         Returns:
             ttnn.Tensor: the output tensor.
 
-        Supports broadcasting.
+        {7}
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -138,7 +152,8 @@ void bind_binary_operation(
         math,
         info,
         supported_dtype,
-        note);
+        note,
+        BINARY_BROADCAST_DOC);
 
     bind_registered_operation(
         module,
@@ -248,6 +263,8 @@ void bind_binary_gcd_lcm_operation(
         Returns:
             ttnn.Tensor: the output tensor.
 
+        {9}
+
         Note:
             Supported dtypes, layouts, and ranks:
 
@@ -277,7 +294,8 @@ void bind_binary_gcd_lcm_operation(
         supported_rank,
         example_tensor1,
         example_tensor2,
-        note);
+        note,
+        BINARY_BROADCAST_DOC);
 
     bind_registered_operation(
         module,
@@ -343,6 +361,7 @@ void bind_binary_unary_max_operation(
         Returns:
             ttnn.Tensor: the output tensor.
 
+        {5}
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -368,7 +387,8 @@ void bind_binary_unary_max_operation(
         operation.python_fully_qualified_name(),
         description,
         supported_dtype,
-        note);
+        note,
+        BINARY_BROADCAST_DOC);
 
     bind_registered_operation(
         module,
@@ -475,6 +495,7 @@ void bind_binary_unary_operation(
         Returns:
             ttnn.Tensor: the output tensor.
 
+        {7}
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -502,7 +523,8 @@ void bind_binary_unary_operation(
         math,
         info,
         supported_dtype,
-        note);
+        note,
+        BINARY_BROADCAST_DOC);
 
     bind_registered_operation(
         module,
@@ -607,7 +629,7 @@ void bind_binary_with_float_param(
         Returns:
             ttnn.Tensor: the output tensor.
 
-        Supports broadcasting.
+        {6}
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -635,7 +657,8 @@ void bind_binary_with_float_param(
         description,
         math,
         supported_dtype,
-        note);
+        note,
+        BINARY_BROADCAST_DOC);
 
     bind_registered_operation(
         module,
@@ -687,6 +710,7 @@ void bind_bitwise_binary_ops_operation(
         Returns:
             ttnn.Tensor: the output tensor.
 
+        {7}
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -714,7 +738,8 @@ void bind_bitwise_binary_ops_operation(
         math,
         info,
         supported_dtype,
-        note);
+        note,
+        BINARY_BROADCAST_DOC);
 
     bind_registered_operation(
         module,
@@ -813,6 +838,7 @@ void bind_logical_binary_ops_operation(
         Returns:
             ttnn.Tensor: the output tensor.
 
+        {7}
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -840,7 +866,8 @@ void bind_logical_binary_ops_operation(
         math,
         info,
         supported_dtype,
-        note);
+        note,
+        BINARY_BROADCAST_DOC);
 
     bind_registered_operation(
         module,
@@ -905,6 +932,8 @@ void bind_binary_composite(
         Returns:
             ttnn.Tensor: the output tensor.
 
+        {9}
+
         Note:
             Supported dtypes, layouts, and ranks:
 
@@ -934,7 +963,8 @@ void bind_binary_composite(
         supported_rank,
         example_tensor1,
         example_tensor2,
-        note);
+        note,
+        BINARY_BROADCAST_DOC);
 
     bind_registered_operation(
         module,
@@ -976,6 +1006,8 @@ void bind_binary_composite_with_rtol_atol(
         Returns:
             ttnn.Tensor: the output tensor.
 
+        {4}
+
         Note:
             Supported dtypes, layouts, and ranks:
 
@@ -1001,7 +1033,8 @@ void bind_binary_composite_with_rtol_atol(
         operation.base_name(),
         operation.python_fully_qualified_name(),
         description,
-        math);
+        math,
+        BINARY_BROADCAST_DOC);
 
     bind_registered_operation(
         module,
@@ -1055,6 +1088,8 @@ void bind_binary_composite_overload(
         Returns:
             ttnn.Tensor: the output tensor.
 
+        {8}
+
         Note:
             Supported dtypes, layouts, and ranks:
 
@@ -1082,7 +1117,8 @@ void bind_binary_composite_overload(
         supported_rank,
         example_tensor1,
         example_tensor2,
-        note);
+        note,
+        BINARY_BROADCAST_DOC);
 
     bind_registered_operation(
         module,
@@ -1140,6 +1176,8 @@ void bind_prelu(
         Returns:
             ttnn.Tensor: the output tensor.
 
+        {8}
+
         Note:
             Supported dtypes, layouts, and ranks:
 
@@ -1167,7 +1205,8 @@ void bind_prelu(
         supported_rank,
         example_tensor1,
         example_tensor2,
-        note);
+        note,
+        BINARY_BROADCAST_DOC);
 
     bind_registered_operation(
         module,
@@ -1232,6 +1271,8 @@ void bind_div(
         Returns:
             ttnn.Tensor: the output tensor.
 
+        {4}
+
         Note:
             Supported dtypes, layouts, and ranks:
 
@@ -1258,7 +1299,8 @@ void bind_div(
         operation.base_name(),
         operation.python_fully_qualified_name(),
         description,
-        math);
+        math,
+        BINARY_BROADCAST_DOC);
 
     bind_registered_operation(
         module,
@@ -1372,6 +1414,8 @@ void bind_binary_operation_with_fast_approx(
         Returns:
             ttnn.Tensor: the output tensor.
 
+        {6}
+
         Note:
             Supported dtypes, layouts, and ranks:
 
@@ -1401,7 +1445,8 @@ void bind_binary_operation_with_fast_approx(
         description,
         math,
         supported_dtype,
-        note);
+        note,
+        BINARY_BROADCAST_DOC);
 
     bind_registered_operation(
         module,
@@ -1505,6 +1550,8 @@ void bind_polyval(
         Returns:
             ttnn.Tensor: the output tensor.
 
+        {6}
+
         Note:
             Supported dtypes, layouts, and ranks:
 
@@ -1531,7 +1578,8 @@ void bind_polyval(
         description,
         math,
         supported_dtype,
-        note);
+        note,
+        BINARY_BROADCAST_DOC);
 
     bind_registered_operation(
         module,
@@ -1575,6 +1623,8 @@ void bind_binary_overload_operation(
         Returns:
             ttnn.Tensor: the output tensor.
 
+        {6}
+
         Note:
             Supported dtypes, layouts, and ranks:
 
@@ -1601,7 +1651,8 @@ void bind_binary_overload_operation(
         description,
         math,
         supported_dtype,
-        note);
+        note,
+        BINARY_BROADCAST_DOC);
 
     bind_registered_operation(
         module,
@@ -1655,6 +1706,8 @@ void bind_inplace_operation(
         Returns:
             ttnn.Tensor: the output tensor.
 
+        {6}
+
         Note:
             Supported dtypes, layouts, and ranks:
 
@@ -1680,7 +1733,8 @@ void bind_inplace_operation(
         description,
         math,
         supported_dtype,
-        note);
+        note,
+        BINARY_BROADCAST_DOC);
 
     bind_registered_operation(
         module,
@@ -1764,6 +1818,8 @@ void bind_inplace_operation_with_fast_approx(
         Returns:
             ttnn.Tensor: the output tensor.
 
+        {6}
+
         Note:
             Supported dtypes, layouts, and ranks:
 
@@ -1789,7 +1845,8 @@ void bind_inplace_operation_with_fast_approx(
         description,
         math,
         supported_dtype,
-        note);
+        note,
+        BINARY_BROADCAST_DOC);
 
     bind_registered_operation(
         module,
@@ -1874,6 +1931,8 @@ void bind_logical_inplace_operation(
         Returns:
             ttnn.Tensor: the output tensor.
 
+        {6}
+
         Note:
             Supported dtypes, layouts, and ranks:
 
@@ -1899,7 +1958,8 @@ void bind_logical_inplace_operation(
         description,
         math,
         supported_dtype,
-        note);
+        note,
+        BINARY_BROADCAST_DOC);
 
     bind_registered_operation(
         module,
@@ -1938,6 +1998,8 @@ void bind_binary_inplace_operation(
         R"doc(
             {2}
 
+            {3}
+
             Args:
                 * :attr:`input_a` (ttnn.Tensor)
                 * :attr:`input_b` (ttnn.Tensor or Number)
@@ -1949,7 +2011,8 @@ void bind_binary_inplace_operation(
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
-        description);
+        description,
+        BINARY_BROADCAST_DOC);
 
     bind_registered_operation(
         module,
@@ -2030,6 +2093,8 @@ void bind_power(py::module& module, const binary_operation_t& operation, const s
         Returns:
             ttnn.Tensor: the output tensor.
 
+        {3}
+
         Note:
             Supported dtypes, layouts, and ranks:
 
@@ -2052,7 +2117,8 @@ void bind_power(py::module& module, const binary_operation_t& operation, const s
         )doc",
         ttnn::pow.base_name(),
         ttnn::pow.python_fully_qualified_name(),
-        note);
+        note,
+        BINARY_BROADCAST_DOC);
 
     bind_registered_operation(
         module,
