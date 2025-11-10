@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 import torch
+from tqdm.auto import tqdm
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
@@ -13,7 +14,7 @@ from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block_2d import DecoderBlock2D
 from models.demos.deepseek_v3.tt.decoder_block.moe_decoder_block_2d import MoEDecoderBlock2D
 from models.demos.deepseek_v3.tt.embedding.embedding2d import Embedding2D
-from models.demos.deepseek_v3.tt.lm_head import LMHead
+from models.demos.deepseek_v3.tt.lm_head1d import LMHead1D
 from models.demos.deepseek_v3.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import ReshardConfig
@@ -56,7 +57,10 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                     output_path / f"mlp_decoder_block_{layer_idx}",
                     mesh_device,
                 )
-                for layer_idx in range(hf_config.first_k_dense_replace)
+                for layer_idx in tqdm(
+                    range(hf_config.first_k_dense_replace),
+                    desc="Converting MLP layers",
+                )
             ],
             "moe_decoder_block": [
                 MoEDecoderBlock2D.convert_weights(
@@ -65,7 +69,10 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                     output_path / f"moe_decoder_block_{layer_idx}",
                     mesh_device,
                 )
-                for layer_idx in range(hf_config.first_k_dense_replace, hf_config.num_hidden_layers)
+                for layer_idx in tqdm(
+                    range(hf_config.first_k_dense_replace, hf_config.num_hidden_layers),
+                    desc="Converting MoE layers",
+                )
             ],
             "norm": DistributedRMSNorm.convert_weights(
                 hf_config,
@@ -73,7 +80,7 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                 output_path / "norm",
                 mesh_device,
             ),
-            "lm_head": LMHead.convert_weights(
+            "lm_head": LMHead1D.convert_weights(
                 hf_config, [sub_state_dict(state_dict, "lm_head.")], output_path / "lm_head", mesh_device
             ),
         }
@@ -100,7 +107,7 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                 )
             ],
             "norm": DistributedRMSNorm.prefill_model_config(hf_config, mesh_device),
-            "lm_head": LMHead.prefill_model_config(hf_config, mesh_device, input_row_idx=0),
+            "lm_head": LMHead1D.prefill_model_config(mesh_device),
         }
 
     @classmethod
@@ -127,7 +134,7 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
             ],
             "norm_reshard": ReshardConfig(memory_config=norm_config["input_memory_config"]),
             "norm": norm_config,
-            "lm_head": LMHead.decode_model_config(hf_config, mesh_device, input_row_idx=0),
+            "lm_head": LMHead1D.decode_model_config(mesh_device),
         }
 
     @classmethod
@@ -195,7 +202,7 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                 )
             ],
             "norm": DistributedRMSNorm.create_state(hf_config, mesh_device, ccl),
-            "lm_head": LMHead.create_state(hf_config, mesh_device, ccl),
+            "lm_head": LMHead1D.create_state(mesh_device, ccl),
         }
 
     @classmethod
@@ -226,8 +233,7 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
         ccl = cfg["lm_head"]["ccl"]
 
         x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["lm_head"]["all_gather"]))
-        x = ttnn.to_memory_config(x, cfg["lm_head"]["input_memory_config"])
-        x = LMHead.forward_decode(x, cfg["lm_head"])
+        x = LMHead1D.forward_decode(x, cfg["lm_head"])
         return x
 
     @classmethod
@@ -258,5 +264,5 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
         ccl = cfg["lm_head"]["ccl"]
 
         x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["lm_head"]["all_gather"]))
-        x = LMHead.forward_prefill(x, cfg["lm_head"])
+        x = LMHead1D.forward_prefill(x, cfg["lm_head"])
         return x

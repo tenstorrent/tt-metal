@@ -27,7 +27,7 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { name: "(Galaxy) DeepSeek tests", arch: wormhole_b0, model: deepseek, timeout: 130, owner_id: U03HY7MK4BT}, # Mark O'Connor
+          { name: "(Galaxy) DeepSeek tests", arch: wormhole_b0, model: deepseek, timeout: 95, owner_id: U03HY7MK4BT}, # Mark O'Connor
         ]
     runs-on:
       - arch-wormhole_b0
@@ -56,7 +56,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -84,11 +84,18 @@ jobs:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: ${{ matrix.test-group.owner_id }}
       # - name: Save environment data
-      #   if: ${{ (matrix.test-group.name == 'Galaxy Falcon7b demo tests' || matrix.test-group.name == 'Galaxy DeepSeek tests') && !cancelled() }}
+      #   id: save-environment-data
+      #   if: ${{ !cancelled() }}
       #   run: |
-      #     python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
+      #     if [ -d "generated/benchmark_data" ]; then
+      #       echo "has_benchmark_data=true" >> $GITHUB_OUTPUT
+      #       python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
+      #     else
+      #       echo "::warning::Benchmark data directory 'generated/benchmark_data' does not exist"
+      #       echo "has_benchmark_data=false" >> $GITHUB_OUTPUT
+      #     fi
       # - name: Upload benchmark data
-      #   if: ${{ (matrix.test-group.name == 'Galaxy Falcon7b demo tests' || matrix.test-group.name == 'Galaxy DeepSeek tests') && !cancelled() }}
+      #   if: ${{ !cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
       #   uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
       #   with:
       #     ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}

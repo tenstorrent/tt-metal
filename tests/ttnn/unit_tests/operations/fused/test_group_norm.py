@@ -11,20 +11,11 @@ from loguru import logger
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import comp_pcc, is_blackhole, run_for_blackhole
-from tests.ttnn.unit_tests.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
+from models.common.utility_functions import comp_pcc, run_for_blackhole
+from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 
 
-# Helper function to get welford parameters based on device type
-def get_welford_params():
-    """Return welford parameters - only legacy mode for Blackhole, both modes for other devices"""
-    if is_blackhole():
-        return (False,), ("legacy",)
-    else:
-        return (True, False), ("welford", "legacy")
-
-
-welford_flavors, welford_ids = get_welford_params()
+welford_flavors, welford_ids = (True, False), ("welford", "legacy")
 
 
 # for debug purpose
@@ -151,8 +142,8 @@ def test_group_norm_with_block_sharded_v2_8x4_grid(device, N, C, H, W, num_group
 
     # torch input tensor
     torch_input_tensor = torch.rand((N, C, H, W), dtype=torch.bfloat16)
-    torch_weight = torch.ones((C,), dtype=torch.bfloat16)
-    torch_bias = torch.zeros((C,), dtype=torch.bfloat16)
+    torch_weight = torch.rand((C,), dtype=torch.bfloat16)
+    torch_bias = torch.rand((C,), dtype=torch.bfloat16)
     torch_output_tensor = torch.nn.functional.group_norm(
         torch_input_tensor, num_groups, weight=torch_weight, bias=torch_bias
     )
@@ -256,8 +247,8 @@ def test_group_norm_with_block_sharded_v2_8x8_grid(device, N, C, H, W, num_group
 
     # torch input tensor
     torch_input_tensor = torch.rand((N, C, H, W), dtype=torch.bfloat16)
-    torch_weight = torch.ones((C,), dtype=torch.bfloat16)
-    torch_bias = torch.zeros((C,), dtype=torch.bfloat16)
+    torch_weight = torch.rand((C,), dtype=torch.bfloat16)
+    torch_bias = torch.rand((C,), dtype=torch.bfloat16)
     torch_output_tensor = torch.nn.functional.group_norm(
         torch_input_tensor, num_groups, weight=torch_weight, bias=torch_bias
     )
@@ -351,7 +342,7 @@ def test_group_norm_with_block_sharded_v2_8x8_grid_tile_layout(device, N, C, H, 
 
     # torch input tensor
     torch_input_tensor = torch.rand((N, C, H, W), dtype=torch.bfloat16)
-    torch_weight = torch.ones((C,), dtype=torch.bfloat16)
+    torch_weight = torch.rand((C,), dtype=torch.bfloat16)
     torch_bias = torch.rand((C,), dtype=torch.bfloat16)
     torch_output_tensor = torch.nn.functional.group_norm(
         torch_input_tensor, num_groups, weight=torch_weight, bias=torch_bias
@@ -709,7 +700,8 @@ def test_group_norm_compute_config(device, N, C, H, W, num_groups):
         return tt_output_tensor_host
 
     # Execute low-accuracy groupnorm
-    config_low = ttnn.WormholeComputeKernelConfig(
+    config_low = ttnn.init_device_compute_kernel_config(
+        device.arch(),
         math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=True,
         fp32_dest_acc_en=False,
@@ -719,7 +711,8 @@ def test_group_norm_compute_config(device, N, C, H, W, num_groups):
     _, pcc_low = comp_pcc(torch_output_tensor, tt_output_low)
 
     # Execute high-accuracy groupnorm
-    config_high = ttnn.WormholeComputeKernelConfig(
+    config_high = ttnn.init_device_compute_kernel_config(
+        device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=False,
         fp32_dest_acc_en=True,
@@ -733,18 +726,19 @@ def test_group_norm_compute_config(device, N, C, H, W, num_groups):
 
 
 @pytest.mark.parametrize(
-    "N, C, H, W, num_groups, shard, eps",
+    "N, C, H, W, num_groups, shard, eps, use_negative_mask",
     [
-        (1, 256, 12, 40, 16, "BS", 1e-5),
-        (1, 256, 24, 80, 16, "HS", 1e-5),
-        (1, 256, 48, 160, 16, "HS", 1e-5),
-        (1, 512, 12, 40, 16, "BS", 1e-5),
-        (1, 64, 96, 320, 16, "HS", 1e-5),
+        (1, 256, 12, 40, 16, "BS", 1e-5, False),
+        (1, 256, 24, 80, 16, "HS", 1e-5, False),
+        (1, 256, 48, 160, 16, "HS", 1e-5, False),
+        (1, 512, 12, 40, 16, "BS", 1e-5, False),
+        (1, 64, 96, 320, 16, "HS", 1e-5, False),
+        (1, 32, 192, 640, 8, "HS", 1e-5, True),  # half of (1, 64, 192, 640, 16, 10, 2, 4, 1e-5),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 @run_for_blackhole("blackhole specific tests")
-def test_group_norm_oft(device, N, C, H, W, num_groups, shard, eps):
+def test_group_norm_oft(device, N, C, H, W, num_groups, shard, eps, use_negative_mask):
     assert C % num_groups == 0, "Number of channels must be divisible by number of groups"
 
     skip_if_not_blackhole_20_cores(device)
@@ -784,6 +778,17 @@ def test_group_norm_oft(device, N, C, H, W, num_groups, shard, eps):
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+    if use_negative_mask:
+        input_nmask_tensor = ttnn.create_group_norm_input_negative_mask(C, num_groups, grid_y)
+        input_nmask_tensor = ttnn.from_torch(
+            input_nmask_tensor,
+            dtype=ttnn.DataType.BFLOAT16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+    else:
+        input_nmask_tensor = None
     # Generate gamma/beta tensors
     gamma = ttnn.create_group_norm_weight_bias_rm(torch_weight, C, grid_y)
     beta = ttnn.create_group_norm_weight_bias_rm(torch_bias, C, grid_y)
@@ -823,6 +828,7 @@ def test_group_norm_oft(device, N, C, H, W, num_groups, shard, eps):
         input_tensor,
         num_groups=num_groups,
         input_mask=input_mask_tensor,
+        negative_mask=input_nmask_tensor,
         weight=gamma_t,
         bias=beta_t,
         memory_config=sharded_mem_config,

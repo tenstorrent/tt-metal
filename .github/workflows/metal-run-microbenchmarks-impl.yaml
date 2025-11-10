@@ -23,12 +23,6 @@ jobs:
         test-group: [
           {
             arch: wormhole_b0,
-            runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"],
-            name: "N300 Moreh ubench",
-            cmd: "./tests/scripts/run_moreh_microbenchmark.sh",
-          },  # Yu Gao
-          {
-            arch: wormhole_b0,
             runs-on: ["arch-wormhole_b0", "pipeline-perf", "config-t3000", "in-service"],
             name: "T3K ubench - Fabric BW",
             cmd: "TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_ubench_at_least_2x2_mesh.yaml",
@@ -96,7 +90,7 @@ jobs:
     runs-on: ${{ matrix.test-group.runs-on }}
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -105,9 +99,16 @@ jobs:
         timeout-minutes: 45
         run: ${{ matrix.test-group.cmd }}
       - name: Upload microbenchmark report csvs
-        uses: actions/upload-artifact@v4
+        uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
+        if: ${{ !cancelled() }}
         with:
-          name: microbenchmark-report-csv-${{ join(matrix.test-group.name) }}
+          prefix: microbenchmark-report-csv-${{ join(matrix.test-group.name) }}
           path: /work/generated/profiler/.logs
+      - name: Upload generated test reports
+        uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "test_reports_"
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main

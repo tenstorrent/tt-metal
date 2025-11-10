@@ -73,6 +73,11 @@ on:
         type: string
         default: ""
         description: 'Commit SHA to test (default: HEAD)'
+      use-artifacts-from-run:
+        required: false
+        type: string
+        default: ""
+        description: "Workflow run ID to download artifacts from (skips build)"
     outputs:
       ci-build-docker-image:
         description: "Docker tag for the CI Build Docker image for building TT-Metalium et al"
@@ -91,13 +96,13 @@ on:
         value: ${{ jobs.build-docker-image.outputs.basic-ttnn-runtime-tag }}
       packages-artifact-name:
         description: "Name to give download-artifact to get the packages"
-        value: ${{ jobs.build-artifact.outputs.packages-artifact-name }}
+        value: ${{ jobs.build-artifact.result == 'success' && jobs.build-artifact.outputs.packages-artifact-name || (jobs.download-artifacts.result == 'success' && jobs.download-artifacts.outputs.packages-artifact-name || '') }}
       build-artifact-name:
         description: "Name of the published build artifact"
-        value: ${{ jobs.build-artifact.outputs.build_artifact_name }}
+        value: ${{ jobs.build-artifact.result == 'success' && jobs.build-artifact.outputs.build_artifact_name || (jobs.download-artifacts.result == 'success' && jobs.download-artifacts.outputs.build_artifact_name || '') }}
       wheel-artifact-name:
         description: "Name of the published wheel artifact"
-        value: ${{ jobs.build-wheel.outputs.wheel_artifact_name }}
+        value: ${{ jobs.build-wheel.result == 'success' && jobs.build-wheel.outputs.wheel_artifact_name || (jobs.download-artifacts.result == 'success' && jobs.download-artifacts.outputs.wheel_artifact_name || '') }}
 
   workflow_dispatch:
     inputs:
@@ -158,7 +163,55 @@ jobs:
       version: ${{ inputs.version }}
       architecture: ${{ inputs.architecture }}
 
+  download-artifacts:
+    if: ${{ inputs.use-artifacts-from-run != '' }}
+    runs-on: ubuntu-latest
+    outputs:
+      build_artifact_name: ${{ steps.download.outputs.build-artifact-name }}
+      wheel_artifact_name: ${{ steps.download.outputs.wheel-artifact-name }}
+      packages-artifact-name: ${{ steps.download.outputs.packages-artifact-name }}
+    steps:
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+
+      - name: Download artifacts from workflow run
+        id: download
+        env:
+          GH_TOKEN: ${{ github.token }}
+        uses: ./.github/actions/download-artifacts-from-run
+        with:
+          workflow_run_id: ${{ inputs.use-artifacts-from-run }}
+          working-directory: ${{ github.workspace }}/artifacts
+          tracy: ${{ inputs.tracy }}
+
+      - name: Upload build artifact for downstream jobs
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.download.outputs.build-artifact-name }}
+          path: ${{ github.workspace }}/artifacts/ttm_any.tar.zst
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Upload wheel artifact
+        if: ${{ steps.download.outputs.wheel-artifact-name != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.download.outputs.wheel-artifact-name }}
+          path: ${{ github.workspace }}/artifacts/*.whl
+          if-no-files-found: ignore
+          retention-days: 1
+
+      - name: Upload packages artifact
+        if: ${{ steps.download.outputs.packages-artifact-name != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.download.outputs.packages-artifact-name }}
+          path: ${{ github.workspace }}/artifacts/*.deb
+          if-no-files-found: ignore
+          retention-days: 1
+
   build-artifact:
+    if: ${{ inputs.use-artifacts-from-run == '' }}
     name: "🛠️ Build ${{ inputs.build-type }} ${{ inputs.distro }} ${{ inputs.version }}"
     needs: build-docker-image
     timeout-minutes: 100
@@ -246,8 +299,8 @@ jobs:
           echo "Args: ${args_fixme}"
           build_command="./build_metal.sh --build-dir build --build-type ${{ inputs.build-type }} --toolchain-path ${{ inputs.toolchain }} ${args_fixme} --enable-ccache --configure-only"
           echo "Build tracy: ${{ inputs.tracy }}"
-          if [ "${{ inputs.tracy }}" = "true" ]; then
-            build_command="$build_command --enable-profiler"
+          if [ "${{ inputs.tracy }}" = "false" ]; then
+            build_command="$build_command --disable-profiler"
           fi
           echo "Build distributed: ${{ inputs.distributed }}"
           if [ "${{ inputs.distributed }}" = "false" ]; then
@@ -300,11 +353,11 @@ jobs:
       - name: 'Tar files'
         if: ${{ inputs.publish-artifact }}
         run: |
-          ARTIFACT_PATHS="ttnn/ttnn/*.so build/lib ttnn/ttnn/*.so build/programming_examples build/test build/tools runtime"
+          ARTIFACT_PATHS="ttnn/ttnn/*.so build/lib build/programming_examples build/test build/tools runtime"
           if [[ "${{ inputs.skip-tt-train }}" != "true" ]]; then
             ARTIFACT_PATHS="$ARTIFACT_PATHS build/tt-train data"
           fi
-          tar -cvhf /work/ttm_any.tar $ARTIFACT_PATHS
+          tar -I 'zstd --adapt=min=9 -T0' -cvhf /work/ttm_any.tar.zst $ARTIFACT_PATHS
 
       - name: Set build artifact name
         id: set_build_artifact_name
@@ -324,11 +377,12 @@ jobs:
         timeout-minutes: 10
         with:
           name: ${{ env.build_artifact_name }}
-          path: /work/ttm_any.tar
+          path: /work/ttm_any.tar.zst
           if-no-files-found: error
+          compression-level: 0
 
   build-wheel:
-    if: ${{ inputs.build-wheel }}
+    if: ${{ inputs.build-wheel && inputs.use-artifacts-from-run == '' }}
     name: 🐍 Build wheel (Python ${{ inputs.version == '22.04' && '3.10' || '3.12' }})
     needs: build-docker-image
     timeout-minutes: 30
@@ -382,11 +436,9 @@ jobs:
         run: |
           if [ "${{ inputs.tracy }}" = "true" ]; then
             echo "ENABLE_TRACY_BUILD=ON" >> $GITHUB_ENV
-            echo "CIBW_TEST_CMD=echo 'Skipping import test for profiler build'" >> $GITHUB_ENV
             echo "Building with Tracy profiler enabled"
           else
             echo "ENABLE_TRACY_BUILD=OFF" >> $GITHUB_ENV
-            echo "CIBW_TEST_CMD=python -c \"import ttnn\"" >> $GITHUB_ENV
             echo "Building without Tracy profiler"
           fi
 
@@ -401,9 +453,10 @@ jobs:
             CCACHE_TEMPDIR=/tmp/ccache
             CCACHE_REMOTE_STORAGE="${{ env.CCACHE_REMOTE_STORAGE }}"
             CIBW_ENABLE_TRACY="${{ env.ENABLE_TRACY_BUILD }}"
+            CIBW_BUILD_TYPE="${{ inputs.build-type }}"
           CIBW_BEFORE_BUILD: "mkdir -p /tmp/ccache && ccache -z && ccache -p"
           CIBW_BEFORE_TEST: ccache -s
-          CIBW_TEST_COMMAND: ${{ env.CIBW_TEST_CMD }}
+          CIBW_TEST_COMMAND: 'python -c "import ttnn"'
           CIBW_MANYLINUX_X86_64_IMAGE: harbor.ci.tenstorrent.net/${{ needs.build-docker-image.outputs.manylinux-tag || 'docker-image-unresolved!' }}
 
       - name: Set wheel artifact name

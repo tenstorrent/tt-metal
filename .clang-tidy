@@ -154,7 +154,6 @@ Checks: >
   -portability-template-virtual-member-function,
   -readability-avoid-nested-conditional-operator,
   -readability-avoid-unconditional-preprocessor-if,
-  -readability-braces-around-statements,
   -readability-container-contains,
   -readability-container-data-pointer,
   -readability-convert-member-functions-to-static,
@@ -172,15 +171,11 @@ Checks: >
   -readability-non-const-parameter,
   -readability-qualified-auto,
   -readability-redundant-casting,
-  -readability-redundant-member-init,
-  -readability-redundant-string-cstr,
-  -readability-redundant-string-init,
   -readability-reference-to-constructed-temporary,
   -readability-static-accessed-through-instance,
   -readability-suspicious-call-argument,
   -readability-uppercase-literal-suffix,
-  -readability-use-anyofallof,
-  -readability-use-std-min-max
+  -readability-use-anyofallof
 
 CheckOptions:
   - key: readability-function-cognitive-complexity.IgnoreMacros

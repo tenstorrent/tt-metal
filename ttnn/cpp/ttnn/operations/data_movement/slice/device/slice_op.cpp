@@ -86,20 +86,38 @@ void SliceDeviceOperation::validate_with_output_tensors(
     const auto& input_tensor_a = input_tensors.at(0);
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to unpad need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to unpad need to be allocated in buffers on device!");
-    TT_FATAL(input_tensor_a.layout() == Layout::TILE || input_tensor_a.layout() == Layout::ROW_MAJOR, "Error");
+    TT_FATAL(
+        input_tensor_a.layout() == Layout::TILE || input_tensor_a.layout() == Layout::ROW_MAJOR,
+        "Input tensor layout must be TILE or ROW_MAJOR but got {}",
+        input_tensor_a.layout());
     TT_FATAL(
         input_tensor_a.padded_shape().rank() == this->slice_start.rank() &&
             this->slice_start.rank() == this->slice_end.rank(),
-        "Error");
+        "Input tensor rank ({}), slice start rank ({}), and slice end rank ({}) must all be equal",
+        input_tensor_a.padded_shape().rank(),
+        this->slice_start.rank(),
+        this->slice_end.rank());
     for (uint32_t i = 0; i < input_tensor_a.padded_shape().rank(); i++) {
-        TT_FATAL(this->slice_start[i] < input_tensor_a.padded_shape()[i], "Error");
+        TT_FATAL(
+            this->slice_start[i] < input_tensor_a.padded_shape()[i],
+            "Slice start[{}] ({}) must be less than input tensor shape[{}] ({})",
+            i,
+            this->slice_start[i],
+            i,
+            input_tensor_a.padded_shape()[i]);
         TT_FATAL(
             this->slice_end[i] <= input_tensor_a.padded_shape()[i],
             "Ends {} must be less than or equal to the shape of the tensor {}",
             this->slice_end[i],
             input_tensor_a.padded_shape()[i]);
         // Check if start shape is <= end shape
-        TT_FATAL(this->slice_start[i] <= this->slice_end[i], "Error");
+        TT_FATAL(
+            this->slice_start[i] <= this->slice_end[i],
+            "Slice start[{}] ({}) must be <= slice end[{}] ({})",
+            i,
+            this->slice_start[i],
+            i,
+            this->slice_end[i]);
     }
     if (!output_tensors.empty() && output_tensors[0].has_value()) {
         const auto output_shape_required = compute_output_specs(input_tensors)[0].logical_shape();
@@ -121,7 +139,11 @@ void SliceDeviceOperation::validate_with_output_tensors(
             this->slice_end.rank());
     }
     if (input_tensor_a.layout() == Layout::TILE) {
-        TT_FATAL(input_tensor_a.physical_volume() % TILE_HW == 0, "Error");
+        TT_FATAL(
+            input_tensor_a.physical_volume() % TILE_HW == 0,
+            "Input tensor physical volume ({}) must be divisible by TILE_HW ({})",
+            input_tensor_a.physical_volume(),
+            TILE_HW);
         TT_FATAL(
             (output_tensor_shape[-2] % TILE_HEIGHT == 0) && (this->slice_start[-2] % TILE_HEIGHT == 0),
             "Can only slice tilized tensor with height begin index aligned to tiles");
@@ -142,11 +164,42 @@ std::vector<ttnn::TensorSpec> SliceDeviceOperation::compute_output_specs(
     const auto& input_tensor = input_tensors[0];
     SmallVector<uint32_t> out_shape(input_tensor.logical_shape().rank());
 
-    auto output_dim_i = [this](size_t i) {
-        return (this->slice_end[i] - this->slice_start[i] + this->step[i] - 1) / this->step[i];
-    };
-    for (uint32_t i = 0; i < out_shape.size(); i++) {
-        out_shape[i] = output_dim_i(i);
+    if (this->use_tensor_args) {
+        TT_FATAL(
+            this->slice_dim.has_value() && this->num_devices.has_value(),
+            "slice_dim and num_devices must be provided for tensor args path");
+
+        uint32_t slice_dimension = this->slice_dim.value();
+        uint32_t num_parts = this->num_devices.value();
+
+        for (uint32_t i = 0; i < out_shape.size(); i++) {
+            out_shape[i] = input_tensor.logical_shape()[i];
+        }
+        TT_FATAL(
+            slice_dimension < out_shape.size(),
+            "slice_dim ({}) must be less than tensor rank ({})",
+            slice_dimension,
+            out_shape.size());
+
+        uint32_t original_size = out_shape[slice_dimension];
+        uint32_t slice_size = original_size / num_parts;
+
+        TT_FATAL(
+            original_size % num_parts == 0,
+            "Input dimension {} (size={}) must be evenly divisible by num_devices ({})",
+            slice_dimension,
+            original_size,
+            num_parts);
+
+        out_shape[slice_dimension] = slice_size;
+    } else {
+        // Regular path using slice_start, slice_end, step
+        auto output_dim_i = [this](size_t i) {
+            return (this->slice_end[i] - this->slice_start[i] + this->step[i] - 1) / this->step[i];
+        };
+        for (uint32_t i = 0; i < out_shape.size(); i++) {
+            out_shape[i] = output_dim_i(i);
+        }
     }
     ttnn::Shape output_tensor_shape(std::move(out_shape));
     return {ttnn::TensorSpec(
@@ -171,7 +224,13 @@ operation::ProgramWithCallbacks SliceDeviceOperation::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
-    return detail::slice_multi_core(input_tensor_a, output_tensor, this->slice_start, this->slice_end, this->step);
+    if (this->use_tensor_args) {
+        // Use tensor args device path
+        return detail::slice_multi_core_with_tensor_args(input_tensors, output_tensors);
+    } else {
+        // Use regular path with Shape args
+        return detail::slice_multi_core(input_tensor_a, output_tensor, this->slice_start, this->slice_end, this->step);
+    }
 }
 
 }  // namespace ttnn::operations::data_movement

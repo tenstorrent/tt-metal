@@ -471,11 +471,13 @@ ALWI void silu_tile_init() { MATH((llk_math_eltwise_unary_sfpu_silu_init<APPROX>
  * | i_start_phase   | The start phase of the local sort (should be set to 0)                     | int32    | 0 to 5                                                | False    |
  * | i_end_step      | The end step to perform if i_start_phase == i_end_phase                    | int32    | 4 to 6                                                | False    |
  * | i_start_step    | The start step to perform if i_start_phase == i_end_phase                  | int32    | 4 to 6                                                | False    |
+ * | stable_sort     | Maintain order of indices for equal values                                 | bool     | true, false                                           | False    |
  */
 // clang-format on
+template <bool stable_sort = false>
 ALWI void topk_local_sort(
     uint32_t idst, int idir, int i_end_phase, int i_start_phase = 0, int i_end_step = 0, int i_start_step = 0) {
-    MATH((llk_math_eltwise_unary_sfpu_topk_local_sort<true, DST_ACCUM_MODE>(
+    MATH((llk_math_eltwise_unary_sfpu_topk_local_sort<true, DST_ACCUM_MODE, stable_sort>(
         idst, idir, i_end_phase, i_start_phase, i_end_step, i_start_step)));
 }
 
@@ -507,11 +509,12 @@ ALWI void topk_local_sort(
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | m_iter          | The index of the merge & rebuild iteration of the algorithm                | int32    | 0 to 9                                                | True     |
  * | k               | The number of sorted values to return                                      | int32    | {4, 8, 16, 32, 64}                                    | True     |
+ * | stable_sort     | Maintain order of indices for equal values                                 | bool     | true, false                                           | False    |
  */
 // clang-format on
-template <bool idir = false>
+template <bool idir = false, bool stable_sort = false>
 ALWI void topk_merge(uint32_t idst, int m_iter, int k) {
-    MATH((llk_math_eltwise_unary_sfpu_topk_merge<true, DST_ACCUM_MODE, idir>(idst, m_iter, k)));
+    MATH((llk_math_eltwise_unary_sfpu_topk_merge<true, DST_ACCUM_MODE, idir, stable_sort>(idst, m_iter, k)));
 }
 
 // topK rebuild
@@ -544,10 +547,13 @@ ALWI void topk_merge(uint32_t idst, int m_iter, int k) {
  * | k               | The number of sorted values to return                                      | int32    | {4, 8, 16, 32, 64}                                    | True     |
  * | logk            | The log of K                                                               | int32    | 2 to 6                                                | True     |
  * | skip_second     | Whether or not to skip second tile                                         | int32    | 0 to 1                                                | True     |
+ * | stable_sort     | Maintain order of indices for equal values                                 | bool     | true, false                                           | False    |
  */
 // clang-format on
+template <bool stable_sort = false>
 ALWI void topk_rebuild(uint32_t idst, bool idir, int m_iter, int k, int logk, int skip_second) {
-    MATH((llk_math_eltwise_unary_sfpu_topk_rebuild<true, DST_ACCUM_MODE>(idst, idir, m_iter, k, logk, skip_second)));
+    MATH((llk_math_eltwise_unary_sfpu_topk_rebuild<true, DST_ACCUM_MODE, stable_sort>(
+        idst, idir, m_iter, k, logk, skip_second)));
 }
 
 /**
@@ -564,24 +570,71 @@ ALWI void topk_tile_init() { MATH((llk_math_eltwise_unary_sfpu_topk_init<true>()
  *
  * Only a reduction of 9 rows is supported at this time.
  *
- * | Argument        | Description                                                              | Type     | Valid Range                                           | Required |
- * |-----------------|--------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst            | The index of the tile in DST register containing the data to be reduced  | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | idst_idx        | The index of the tile in DST register containing the indices of the data | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | num_rows        | The number of rows to use for the MaxPool operation                      | uint32_t | {9}                                                   | True     |
+ * | Argument        | Description                                                              | Type       | Valid Range                                           | Required |
+ * |-----------------|--------------------------------------------------------------------------|------------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register containing the data to be reduced  | uint32_t   | Must be less than the size of the DST register buffer | True     |
+ * | idst_idx        | The index of the tile in DST register containing the indices of the data | uint32_t   | Must be less than the size of the DST register buffer | True     |
+ * | num_rows        | The number of rows to use for the MaxPool operation                      | uint32_t   | {9}                                                   | True     |
+ * | layout          | The data layout of the data in DST                                       | DataLayout | TILE or ROW_MAJOR                                     | False    |
+ * | ITERATIONS      | The number of iterations to perform (unused)                             | int        | 1 to 8                                                | False    |
  */
 // clang-format on
-template <int num_rows = 9>
+template <int num_rows = 9, ckernel::DataLayout layout = ckernel::DataLayout::TILE, int ITERATIONS = 8>
 ALWI void max_reduce_with_indices(uint32_t idst, uint32_t idst_idx) {
     // support for num_rows != 9 is tracked here: https://github.com/tenstorrent/tt-metal/issues/17202
-    static_assert(num_rows == 9, "num_rows must be one of: {9}");
-    MATH((llk_math_eltwise_binary_sfpu_max_pool_with_indices<true, DST_ACCUM_MODE, num_rows>(idst, idst_idx)));
+    static_assert(num_rows <= 9, "num_rows must be <= 9");
+    MATH((llk_math_eltwise_binary_sfpu_max_pool_with_indices<true, DST_ACCUM_MODE, num_rows, ITERATIONS, layout>(
+        idst, idst_idx)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void max_reduce_with_indices_init() { MATH((llk_math_eltwise_binary_sfpu_max_pool_with_indices_init<true>())); }
+template <ckernel::DataLayout layout = ckernel::DataLayout::TILE>
+ALWI void max_reduce_with_indices_init() {
+    MATH((llk_math_eltwise_binary_sfpu_max_pool_with_indices_init<true, layout>()));
+}
+
+// clang-format off
+/**
+ * Performs reduce operation (sum or average) on a 32x32 tile, placing output values into the first row.
+ * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Only 32x32 tile dimensions are supported.
+ *  - This kernel is optimized for 32x32 tile dimensions and uses VectorMode::RC_custom for customized reduction
+ * Only column-wise reduction is supported at this time.
+ *
+ * | Argument        | Description                                                              | Type      | Valid Range                                           | Required |
+ * |-----------------|--------------------------------------------------------------------------|-----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register containing the data to be reduced  | uint32_t  | Must be less than the size of the DST register buffer | True     |
+ * | pool_type       | The type of reduction operation, SUM or AVG (MAX not supported)          | PoolType  | SUM, AVG                                              | True     |
+ * | format          | The data format for the reduction operation                              | DataFormat| Float32, Int32, UInt32                                | True     |
+ * | reduce_dim      | The reduction dimension, set to column for column reduce                 | ReduceDim | REDUCE_COL                                            | False    |
+ */
+// clang-format on
+template <PoolType pool_type, DataFormat format, ReduceDim reduce_dim = ReduceDim::REDUCE_COL>
+ALWI void sfpu_reduce(uint32_t idst) {
+    static_assert(reduce_dim == ReduceDim::REDUCE_COL, "Only column reduction (REDUCE_COL) is currently supported");
+    static_assert(pool_type != PoolType::MAX, "MAX pool type is not supported for reduce operations");
+    static_assert(
+        format == DataFormat::Float32 || format == DataFormat::Int32 || format == DataFormat::UInt32,
+        "Unsupported data format. Supported formats: Float32, Int32, UInt32");
+
+    // This kernel is optimized for 32x32 tiles and uses RC_custom vector mode for custom reduction
+    MATH((llk_math_eltwise_unary_sfpu_reduce<true, pool_type, reduce_dim, format>(idst, VectorMode::RC_custom)));
+}
+
+/**
+ * Please refer to documentation for any_init.
+ */
+template <DataFormat format>
+ALWI void sfpu_reduce_init() {
+    static_assert(
+        format == DataFormat::Float32 || format == DataFormat::Int32 || format == DataFormat::UInt32,
+        "Unsupported data format. Supported formats: Float32, Int32, UInt32");
+    MATH((llk_math_eltwise_unary_sfpu_reduce_init<true, format>()));
+}
 
 /**
  * Pauses the cores so that the debug interface can be used to inspect the value of the registers.

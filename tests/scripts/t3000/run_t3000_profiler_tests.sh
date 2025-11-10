@@ -10,9 +10,10 @@ run_mid_run_data_dump() {
     echo "Smoke test, checking mid-run device data dump for hangs"
     remove_default_log_locations
     mkdir -p $PROFILER_ARTIFACTS_DIR
-    python -m tracy -v -r -p --sync-host-device --dump-device-data-mid-run -m pytest tests/ttnn/tracy/test_profiler_sync.py::test_all_devices
+    python -m tracy -v -r -p --cpp-post-process --sync-host-device --dump-device-data-mid-run -m pytest tests/ttnn/tracy/test_profiler_sync.py::test_mesh_device
     runDate=$(ls $PROFILER_OUTPUT_DIR/)
     cat $PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv
+    python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py
 }
 
 run_async_test() {
@@ -20,7 +21,7 @@ run_async_test() {
     if [ "$ARCH_NAME" == "wormhole_b0" ]; then
         remove_default_log_locations
         mkdir -p $PROFILER_ARTIFACTS_DIR
-        ./tools/tracy/profile_this.py -c "pytest -svv models/demos/ttnn_falcon7b/tests/multi_chip/test_falcon_causallm.py::test_falcon_causal_lm[wormhole_b0-20-2-BFLOAT16-L1-falcon_7b-layers_2-decode_batch32]" | tee $PROFILER_ARTIFACTS_DIR/test_out.log
+        python -m tracy -v -r -p --cpp-post-process -m "pytest -svv models/demos/ttnn_falcon7b/tests/multi_chip/test_falcon_causallm.py::test_falcon_causal_lm[wormhole_b0-20-2-BFLOAT16-L1-falcon_7b-layers_2-decode_batch32]" | tee $PROFILER_ARTIFACTS_DIR/test_out.log
 
         if cat $PROFILER_ARTIFACTS_DIR/test_out.log | grep "SKIPPED"
         then
@@ -31,6 +32,7 @@ run_async_test() {
             LINE_COUNT=1000 # Smoke test to see at least 1000 ops are reported
             res=$(verify_perf_line_count_floor "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv" "$LINE_COUNT")
             echo $res
+            python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py
         fi
     fi
 }
@@ -41,7 +43,7 @@ run_async_tracing_T3000_test() {
         remove_default_log_locations
         mkdir -p $PROFILER_ARTIFACTS_DIR
 
-        ./tools/tracy/profile_this.py -c "pytest models/demos/ttnn_resnet/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-act_dtype0-weight_dtype0-math_fidelity0-device_params0]" | tee $PROFILER_ARTIFACTS_DIR/test_out.log
+        python -m tracy -v -r -p --cpp-post-process -m "pytest models/demos/ttnn_resnet/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-act_dtype0-weight_dtype0-math_fidelity0-device_params0]" | tee $PROFILER_ARTIFACTS_DIR/test_out.log
 
         if cat $PROFILER_ARTIFACTS_DIR/test_out.log | grep "SKIPPED"
         then
@@ -50,24 +52,54 @@ run_async_tracing_T3000_test() {
             echo "Verifying test results"
             runDate=$(ls $PROFILER_OUTPUT_DIR/)
             echo $runDate
-            LINE_COUNT=2700
+            LINE_COUNT=2600
             res=$(verify_perf_line_count_floor "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv" "$LINE_COUNT")
             echo $res
+            python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py
 
             # Testing device only report on the same artifacts
-            rm -rf $PROFILER_OUTPUT_DIR/
+            rm -rf $PROFILER_OUTPUT_DIR/$runDate
             ./tools/tracy/process_ops_logs.py --device-only --date
             echo "Verifying device-only results"
             runDate=$(ls $PROFILER_OUTPUT_DIR/)
             echo $runDate
-            LINE_COUNT=1800
+            LINE_COUNT=1700
             res=$(verify_perf_line_count_floor "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv" "$LINE_COUNT")
             echo $res
-
-            LINE_COUNT=1800
+            LINE_COUNT=1700
             res=$(verify_perf_line_count_floor "$PROFILER_OUTPUT_DIR/$runDate/per_core_op_to_op_times_$runDate.csv" "$LINE_COUNT")
             echo $res
         fi
+    fi
+}
+
+run_async_tracing_mid_run_dump_T3000_test() {
+    #Some tests here do not skip grayskull
+    if [ "$ARCH_NAME" == "wormhole_b0" ]; then
+        remove_default_log_locations
+        mkdir -p $PROFILER_ARTIFACTS_DIR
+
+        python -m tracy -v -r -p --cpp-post-process --dump-device-data-mid-run -m pytest models/demos/ttnn_resnet/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-act_dtype0-weight_dtype0-math_fidelity0-device_params0] | tee $PROFILER_ARTIFACTS_DIR/test_out.log
+
+        if cat $PROFILER_ARTIFACTS_DIR/test_out.log | grep "SKIPPED"
+        then
+            echo "No verification as test was skipped"
+            return
+        fi
+
+        midRunDumpRunDate=$(ls $PROFILER_OUTPUT_DIR/)
+        mv $PROFILER_ARTIFACTS_DIR/.logs/cpp_ops_device_perf_report.csv $PROFILER_OUTPUT_DIR/$midRunDumpRunDate/cpp_ops_device_perf_report.csv
+
+        python -m tracy -v -r -p --cpp-post-process -m pytest models/demos/ttnn_resnet/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-act_dtype0-weight_dtype0-math_fidelity0-device_params0]
+
+        nonMidRunDumpRunDate=$(ls $PROFILER_OUTPUT_DIR/ | grep -v $midRunDumpRunDate)
+        mv $PROFILER_ARTIFACTS_DIR/.logs/cpp_ops_device_perf_report.csv $PROFILER_OUTPUT_DIR/$nonMidRunDumpRunDate/cpp_ops_device_perf_report.csv
+
+        python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py $PROFILER_OUTPUT_DIR/$midRunDumpRunDate/ops_perf_results_$midRunDumpRunDate.csv $PROFILER_OUTPUT_DIR/$midRunDumpRunDate/cpp_ops_device_perf_report.csv
+        python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py $PROFILER_OUTPUT_DIR/$nonMidRunDumpRunDate/ops_perf_results_$nonMidRunDumpRunDate.csv $PROFILER_OUTPUT_DIR/$nonMidRunDumpRunDate/cpp_ops_device_perf_report.csv
+
+        python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py --only-compare-op-ids $PROFILER_OUTPUT_DIR/$midRunDumpRunDate/ops_perf_results_$midRunDumpRunDate.csv $PROFILER_OUTPUT_DIR/$nonMidRunDumpRunDate/cpp_ops_device_perf_report.csv
+        python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py --only-compare-op-ids $PROFILER_OUTPUT_DIR/$nonMidRunDumpRunDate/ops_perf_results_$nonMidRunDumpRunDate.csv $PROFILER_OUTPUT_DIR/$midRunDumpRunDate/cpp_ops_device_perf_report.csv
     fi
 }
 
@@ -75,7 +107,8 @@ run_ccl_T3000_test() {
     remove_default_log_locations
     mkdir -p $PROFILER_ARTIFACTS_DIR
 
-    ./tools/tracy/profile_this.py -c "'pytest tests/ttnn/unit_tests/operations/ccl/test_all_gather.py::test_all_gather_on_t3000_post_commit_for_profiler_regression'" | tee $PROFILER_ARTIFACTS_DIR/test_out.log
+    python -m tracy -v -r -p --cpp-post-process -m "pytest tests/nightly/t3000/ccl/test_minimal_all_gather_async.py::test_ttnn_all_gather[wormhole_b0-fabric_ring-mem_config_input0-mem_config_ag0-sd35_prompt-check-1link-mesh_device0]" | tee $PROFILER_ARTIFACTS_DIR/test_out.log
+
 
     if cat $PROFILER_ARTIFACTS_DIR/test_out.log | grep "SKIPPED"
     then
@@ -84,26 +117,9 @@ run_ccl_T3000_test() {
         echo "Verifying test results"
         runDate=$(ls $PROFILER_OUTPUT_DIR/)
         LINE_COUNT=8 #8 devices
-        res=$(verify_perf_line_count "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv" "$LINE_COUNT" "AllGather")
+        res=$(verify_perf_line_count "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv" "$LINE_COUNT" "AllGatherDeviceOperation")
         echo $res
-    fi
-}
-
-run_async_ccl_T3000_test() {
-    remove_default_log_locations
-    mkdir -p $PROFILER_ARTIFACTS_DIR
-
-    ./tools/tracy/profile_this.py -c "'pytest tests/ttnn/unit_tests/operations/ccl/test_new_all_gather.py::test_all_gather_sharded_ring'" | tee $PROFILER_ARTIFACTS_DIR/test_out.log
-
-    if cat $PROFILER_ARTIFACTS_DIR/test_out.log | grep "SKIPPED"
-    then
-        echo "No verification as test was skipped"
-    else
-        echo "Verifying test results"
-        runDate=$(ls $PROFILER_OUTPUT_DIR/)
-        LINE_COUNT=128 #8 devices x 16 iterations
-        res=$(verify_perf_line_count "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv" "$LINE_COUNT" "AllGatherCommandProcessorAsync")
-        echo $res
+        python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py
     fi
 }
 
@@ -112,9 +128,9 @@ run_profiling_test() {
 
     run_ccl_T3000_test
 
-    run_async_ccl_T3000_test
-
     run_async_tracing_T3000_test
+
+    run_async_tracing_mid_run_dump_T3000_test
 
     run_mid_run_data_dump
 

@@ -5,6 +5,8 @@
 #include "physical_system_descriptor_serialization.hpp"
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include "protobuf/physical_system_descriptor.pb.h"
+#include <tt-metalium/fabric_types.hpp>
+#include <tt_metal/llrt/tt_target_device.hpp>
 
 #include <umd/device/cluster.hpp>
 
@@ -12,6 +14,7 @@
 #include <google/protobuf/io/zero_copy_stream_impl.h>
 #include <fstream>
 #include <sstream>
+#include <enchantum/enchantum.hpp>
 
 namespace tt::tt_metal {
 
@@ -54,24 +57,6 @@ ExitNodeConnection proto_to_exit_node_connection(const tt::fabric::proto::ExitNo
     exit_conn.dst_exit_node = AsicID{proto_conn.dst_exit_node()};
     exit_conn.eth_conn = proto_to_eth_connection(proto_conn.eth_conn());
     return exit_conn;
-}
-
-// Convert EthernetMetrics to protobuf
-void ethernet_metrics_to_proto(const EthernetMetrics& metrics, tt::fabric::proto::EthernetMetrics* proto_metrics) {
-    proto_metrics->set_retrain_count(metrics.retrain_count);
-    proto_metrics->set_crc_error_count(metrics.crc_error_count);
-    proto_metrics->set_corrected_codeword_count(metrics.corrected_codeword_count);
-    proto_metrics->set_uncorrected_codeword_count(metrics.uncorrected_codeword_count);
-}
-
-// Convert protobuf to EthernetMetrics
-EthernetMetrics proto_to_ethernet_metrics(const tt::fabric::proto::EthernetMetrics& proto_metrics) {
-    EthernetMetrics metrics;
-    metrics.retrain_count = proto_metrics.retrain_count();
-    metrics.crc_error_count = proto_metrics.crc_error_count();
-    metrics.corrected_codeword_count = proto_metrics.corrected_codeword_count();
-    metrics.uncorrected_codeword_count = proto_metrics.uncorrected_codeword_count();
-    return metrics;
 }
 
 // Convert AsicTopology to protobuf
@@ -208,30 +193,26 @@ void physical_system_descriptor_to_proto(
         }
     }
 
-    // Set mock cluster flag
-    proto_desc->set_mock_cluster(descriptor.is_using_mock_cluster());
-
-    // Convert ethernet metrics
-    for (const auto& [asic_id, channel_metrics] : descriptor.get_ethernet_metrics()) {
-        auto* proto_asic_metrics = proto_desc->add_ethernet_metrics();
-        proto_asic_metrics->set_asic_id(*asic_id);
-
-        for (const auto& [channel, metrics] : channel_metrics) {
-            auto* proto_channel_metrics = proto_asic_metrics->add_channel_metrics();
-            proto_channel_metrics->set_channel(channel);
-            ethernet_metrics_to_proto(metrics, proto_channel_metrics->mutable_metrics());
-        }
-    }
+    // Set target device type
+    proto_desc->set_target_device_type(static_cast<uint32_t>(descriptor.get_target_device_type()));
+    // Set ethernet firmware version
+    proto_desc->mutable_ethernet_firmware_version()->set_major(descriptor.get_ethernet_firmware_version().major);
+    proto_desc->mutable_ethernet_firmware_version()->set_minor(descriptor.get_ethernet_firmware_version().minor);
+    proto_desc->mutable_ethernet_firmware_version()->set_patch(descriptor.get_ethernet_firmware_version().patch);
 }
 
 // Convert protobuf to PhysicalSystemDescriptor
 std::unique_ptr<PhysicalSystemDescriptor> proto_to_physical_system_descriptor(
     const tt::fabric::proto::PhysicalSystemDescriptor& proto_desc) {
+    auto target_device_type = enchantum::cast<TargetDevice>(proto_desc.target_device_type());
+    if (!target_device_type.has_value()) {
+        throw std::runtime_error("Invalid target device type: " + std::to_string(proto_desc.target_device_type()));
+    }
     auto descriptor = std::make_unique<PhysicalSystemDescriptor>(
         PhysicalSystemDescriptor::null_cluster,
         nullptr,
         nullptr,
-        proto_desc.mock_cluster(),
+        *target_device_type,
         false);  // Don't run discovery
 
     // Convert system graph
@@ -286,19 +267,10 @@ std::unique_ptr<PhysicalSystemDescriptor> proto_to_physical_system_descriptor(
         exit_node_connection_table[proto_table.host_name()] = std::move(exit_connections);
     }
 
-    // Convert ethernet metrics
-    auto& ethernet_metrics = descriptor->get_ethernet_metrics();
-    for (const auto& proto_asic_metrics : proto_desc.ethernet_metrics()) {
-        AsicID asic_id{proto_asic_metrics.asic_id()};
-        std::unordered_map<uint8_t, EthernetMetrics> channel_metrics;
-
-        for (const auto& proto_channel_metrics : proto_asic_metrics.channel_metrics()) {
-            uint8_t channel = static_cast<uint8_t>(proto_channel_metrics.channel());
-            channel_metrics[channel] = proto_to_ethernet_metrics(proto_channel_metrics.metrics());
-        }
-
-        ethernet_metrics[asic_id] = std::move(channel_metrics);
-    }
+    // Set ethernet firmware version
+    descriptor->get_ethernet_firmware_version().major = proto_desc.ethernet_firmware_version().major();
+    descriptor->get_ethernet_firmware_version().minor = proto_desc.ethernet_firmware_version().minor();
+    descriptor->get_ethernet_firmware_version().patch = proto_desc.ethernet_firmware_version().patch();
 
     return descriptor;
 }
@@ -347,7 +319,7 @@ PhysicalSystemDescriptor deserialize_physical_system_descriptor_from_bytes(const
         throw std::runtime_error("Failed to parse PhysicalSystemDescriptor from protobuf binary format");
     }
 
-    return *proto_to_physical_system_descriptor(proto_desc);
+    return std::move(*proto_to_physical_system_descriptor(proto_desc));
 }
 
 PhysicalSystemDescriptor deserialize_physical_system_descriptor_from_text_proto_file(
@@ -364,6 +336,6 @@ PhysicalSystemDescriptor deserialize_physical_system_descriptor_from_text_proto_
         throw std::runtime_error("Failed to parse PhysicalSystemDescriptor from text proto file: " + text_proto_file);
     }
 
-    return *proto_to_physical_system_descriptor(physical_system_descriptor);
+    return std::move(*proto_to_physical_system_descriptor(physical_system_descriptor));
 }
 }  // namespace tt::tt_metal

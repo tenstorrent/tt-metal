@@ -168,7 +168,6 @@ void train_test(bool use_tensor_parallel = false, bool use_ddp = false) {
 
     std::function<BatchType(std::vector<DatasetSample> && samples)> collate_fn =
         [sequence_length, device, &cached_data, use_ddp](std::vector<DatasetSample> &&samples) {
-            auto start_timer = std::chrono::high_resolution_clock::now();
             const uint32_t batch_size = samples.size();
             std::vector<uint32_t> &data = cached_data.data;
             std::vector<uint32_t> &targets = cached_data.targets;
@@ -182,8 +181,6 @@ void train_test(bool use_tensor_parallel = false, bool use_ddp = false) {
                 std::copy(features.begin(), features.end(), std::back_inserter(data));
                 std::copy(target_span.begin(), target_span.end(), std::back_inserter(targets));
             }
-            auto end_timer = std::chrono::high_resolution_clock::now();
-            auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_timer - start_timer).count();
 
             auto create_data_and_targets = [&]() -> std::tuple<TensorPtr, TensorPtr> {
                 if (use_ddp) {
@@ -220,8 +217,6 @@ void train_test(bool use_tensor_parallel = false, bool use_ddp = false) {
             };
 
             auto [data_tensor, targets_tensor] = create_data_and_targets();
-            end_timer = std::chrono::high_resolution_clock::now();
-            duration = std::chrono::duration_cast<std::chrono::microseconds>(end_timer - start_timer).count();
             return std::make_tuple(data_tensor, targets_tensor, cached_data.masks_tensor);
         };
     auto train_dataloader = DataLoader(dataset, /* batch_size */ config.batch_size, /* shuffle */ true, collate_fn);
@@ -250,7 +245,7 @@ void train_test(bool use_tensor_parallel = false, bool use_ddp = false) {
 
     auto optimizer = std::make_shared<ttml::optimizers::MorehAdamW>(model->parameters(), adamw_params);
 
-    auto get_loss_value = [device](const TensorPtr &loss) {
+    auto get_loss_value = [](const TensorPtr &loss) {
         auto loss_xtensors = ttml::core::to_xtensor(loss->get_value(), ttml::core::IdentityComposer{});
         // sum of loss xtensors
         float loss_float =

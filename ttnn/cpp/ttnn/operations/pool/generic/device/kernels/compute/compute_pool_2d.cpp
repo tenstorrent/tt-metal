@@ -10,7 +10,7 @@
 #include "compute_kernel_api/pack.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
+#include "compute_kernel_api/add_int_sfpu.h"
 
 #define DEBUG_PRINT 0
 
@@ -18,7 +18,10 @@
 #include "debug/dprint.h"
 #include "debug/dprint_pages.h"
 #include "debug/dprint_tensix.h"
+#include "tools/profiler/kernel_profiler.hpp"
 #endif
+
+#define ALWI inline __attribute__((always_inline))
 
 #define FACE_HEIGHT 16
 #define FACE_WIDTH 16
@@ -42,24 +45,37 @@ void MAIN {
 
     constexpr uint32_t in_cb_id_0 = get_compile_time_arg_val(7);
     constexpr uint32_t in_cb_id_1 = get_compile_time_arg_val(8);  // for split reader
-    constexpr uint32_t in_idx_cb_id_0 = get_compile_time_arg_val(9);
-    constexpr uint32_t in_idx_cb_id_1 = get_compile_time_arg_val(10);  // for split reader
-    constexpr uint32_t in_scalar_cb_id_0 = get_compile_time_arg_val(11);
-    constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(12);
-    constexpr uint32_t tile_tmp_cb_id = get_compile_time_arg_val(13);
-    constexpr uint32_t tile_idx_tmp_cb_id = get_compile_time_arg_val(14);
-    constexpr uint32_t out_cb_id = get_compile_time_arg_val(15);
-    constexpr uint32_t out_idx_cb_id = get_compile_time_arg_val(16);
-    constexpr bool one_scalar_per_core = get_compile_time_arg_val(17);
-    constexpr bool return_indices = (bool)get_compile_time_arg_val(18);
-    constexpr uint32_t pre_tilize_cb_id = get_compile_time_arg_val(19);
-    constexpr bool is_output_tiled = get_compile_time_arg_val(20);  // 1 = TILED, 0 = ROW_MAJOR
-    constexpr bool is_output_block_format = (bool)get_compile_time_arg_val(21);
+    constexpr uint32_t in_scalar_cb_id_0 = get_compile_time_arg_val(9);
+    constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(10);
+    constexpr uint32_t in_idx_cb_id = get_compile_time_arg_val(11);
+    constexpr uint32_t pack_tmp_cb_id = get_compile_time_arg_val(12);
+    constexpr uint32_t pack_idx_tmp_cb_id = get_compile_time_arg_val(13);
+    constexpr uint32_t right_inc_cb_id = get_compile_time_arg_val(14);
+    constexpr uint32_t down_left_wrap_inc_cb_id = get_compile_time_arg_val(15);
+    constexpr uint32_t up_left_wrap_inc_cb_id = get_compile_time_arg_val(16);
+    constexpr uint32_t out_cb_id = get_compile_time_arg_val(17);
+    constexpr uint32_t out_idx_cb_id = get_compile_time_arg_val(18);
+    constexpr bool one_scalar_per_core = get_compile_time_arg_val(19);
+    constexpr uint32_t pre_tilize_cb_id = get_compile_time_arg_val(20);
+    constexpr bool is_output_tiled = get_compile_time_arg_val(21);  // 1 = TILED, 0 = ROW_MAJOR
+    constexpr bool is_output_block_format = (bool)get_compile_time_arg_val(22);
+    constexpr bool return_indices = (bool)get_compile_time_arg_val(23);
+    constexpr uint32_t stride_h = get_compile_time_arg_val(24);
+    constexpr uint32_t stride_w = get_compile_time_arg_val(25);
+    constexpr uint32_t in_h_padded = get_compile_time_arg_val(26);
+    constexpr uint32_t in_w_padded = get_compile_time_arg_val(27);
+    constexpr uint32_t eff_kernel_h = get_compile_time_arg_val(28);
+    constexpr uint32_t eff_kernel_w = get_compile_time_arg_val(29);
+    constexpr uint32_t pad_l = get_compile_time_arg_val(30);
 
-    constexpr uint32_t topk_output_tiles = 1;
-    constexpr uint32_t topk_cb_tile_idx = 0;
+    constexpr bool use_split_reader = split_reader && !return_indices;
+
+    constexpr uint32_t mpwi_cb_tile_idx = 0;
     constexpr uint32_t data_dst_idx = 0;
     constexpr uint32_t index_dst_idx = 2;
+    constexpr uint32_t inc_dst_idx = 4;
+    constexpr uint32_t index_scratch_in_dst_idx = 5;
+    constexpr uint32_t index_scratch_out_dst_idx = 6;
 
     constexpr uint32_t face_r_dim = window_size_hw < FACE_HEIGHT && !return_indices ? window_size_hw : FACE_HEIGHT;
     constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0;
@@ -89,7 +105,7 @@ void MAIN {
     // data which is much slower than just untilizing the entire MAX_TILES_PER_REDUCTION
     constexpr bool tilize_reconfig = in_nblocks_c > 1 && in_ntiles_c % MAX_TILES_PER_REDUCTION != 0 &&
                                      window_size_hw <= FACE_HEIGHT && !last_tile_is_partial;
-    constexpr bool pack_untilize_reinit = last_tile_is_partial && in_ntiles_c > 1;
+
     if constexpr (!return_indices) {
         constexpr uint32_t tilize_untilize_cb = is_output_tiled ? pre_tilize_cb_id : out_cb_id;
         tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
@@ -97,16 +113,7 @@ void MAIN {
         pack_untilize_dest_init<max_tiles_per_iter>(tilize_untilize_cb, num_out_sticks, num_faces_in_output_tile);
     } else {
         unary_op_init_common(in_cb_id_0, in_cb_id_0);
-        tilize_init_no_pack(in_cb_id_0, topk_output_tiles);
-        if constexpr (!pack_untilize_reinit) {
-            const uint32_t output_faces =
-                last_tile_is_partial ? num_faces_in_last_output_tile : num_faces_in_output_tile;
-            pack_untilize_dest_init<topk_output_tiles>(out_cb_id, num_out_sticks, output_faces);
-        }
-
-        // this can be done here because we do not use the SFPU for anything else so it does not get reprogrammed
-        // if you use the sfpu for other operations, you need to call this to reprogram the sfpu
-        max_reduce_with_indices_init();
+        copy_tile_to_dst_init_short(in_cb_id_0);
     }
 
     constexpr uint32_t remaining_elems = window_size_hw % max_sticks_for_reduction;
@@ -117,13 +124,28 @@ void MAIN {
     if constexpr (one_scalar_per_core) {
         cb_wait_front(in_scalar_cb_id_0, 1);
     }
+    uint32_t current_idx_col;
+    uint32_t current_idx_row;
+    if constexpr (return_indices) {
+        const uint16_t start_row = (uint16_t)get_arg_val<uint32_t>(0);
+        const uint16_t start_col = (uint16_t)get_arg_val<uint32_t>(1);
+        current_idx_col = start_col;
+        current_idx_row = start_row;
+
+        cb_wait_front(right_inc_cb_id, 1);
+        cb_wait_front(down_left_wrap_inc_cb_id, 1);
+        cb_wait_front(up_left_wrap_inc_cb_id, 1);
+        // in_idx_cb_id is populated by the reader, but this happens after the inc CBs are populated
+        // so idx_tmp is protected here, and we intend to have PACK act as the sole producer, hence
+        // why the reader cannot push_back here
+        cb_push_back(in_idx_cb_id, 1);
+    }
 
     uint32_t tilize_stick_counter = 0;
     for (uint32_t n = 0; n < nsticks_per_core_by_nblocks; ++n) {
-        const bool reader0 = !(split_reader && (n & 0x1));
+        const bool reader0 = !(use_split_reader && (n & 0x1));
         const uint32_t curr_scalar_cb_id = (!reader0 && !one_scalar_per_core) ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
         const uint32_t curr_in_cb_id = !reader0 ? in_cb_id_1 : in_cb_id_0;
-        const uint32_t curr_in_idx_cb_id = !reader0 ? in_idx_cb_id_1 : in_idx_cb_id_0;
         if constexpr (!one_scalar_per_core) {
             cb_wait_front(curr_scalar_cb_id, 1);
         }
@@ -140,10 +162,10 @@ void MAIN {
                 (last_tile_is_partial && last_c_block)
                     ? (number_of_tiles - 1) * num_faces_in_output_tile + num_faces_in_last_output_tile
                     : number_of_tiles * num_faces_in_output_tile;
-            if constexpr (!is_output_tiled) {
+            if constexpr (!is_output_tiled && !return_indices) {
                 cb_reserve_back(out_cb_id, output_faces);
             }
-            if constexpr (tilize_reconfig || is_output_tiled) {
+            if constexpr (tilize_reconfig) {
                 if (first_c_block || last_c_block) {
                     UNPACK((llk_unpack_tilizeA_B_init<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
                         in_cb_id_0, in_scalar_cb_id_0, tiles_to_reduce, num_faces_in_input_tile, face_r_dim, 1)));
@@ -153,18 +175,54 @@ void MAIN {
             for (uint32_t chunk = 0; chunk < interm_reduction_chunks; chunk++) {
                 cb_wait_front(curr_in_cb_id, 1);
                 if constexpr (return_indices) {
-                    cb_wait_front(curr_in_idx_cb_id, 1);
+                    reconfig_data_format_srca(curr_in_cb_id);
+                    copy_tile(curr_in_cb_id, mpwi_cb_tile_idx, data_dst_idx);
 
-                    tilize_init_short_with_dt_no_pack(curr_in_cb_id, curr_in_idx_cb_id, topk_output_tiles);
-                    tilize_block_no_pack(curr_in_idx_cb_id, topk_output_tiles, index_dst_idx, topk_cb_tile_idx);
-                    tilize_uninit_with_dt_no_pack(curr_in_idx_cb_id, curr_in_cb_id);
-                    tilize_init_short_with_dt_no_pack(curr_in_idx_cb_id, curr_in_cb_id, topk_output_tiles);
-                    tilize_block_no_pack(curr_in_cb_id, topk_output_tiles, data_dst_idx, topk_cb_tile_idx);
-                    tilize_uninit_with_dt_no_pack(curr_in_cb_id, curr_in_idx_cb_id);
+                    if (first_c_block) {
+                        cb_wait_front(in_idx_cb_id, 1);
+                    }
+                    reconfig_data_format_srca(in_idx_cb_id);
+                    copy_tile(in_idx_cb_id, mpwi_cb_tile_idx, index_dst_idx);
+                    copy_tile(in_idx_cb_id, mpwi_cb_tile_idx, index_scratch_in_dst_idx);
+                    if (last_c_block) {
+                        cb_pop_front(in_idx_cb_id, 1);
+                    }
 
-                    max_reduce_with_indices<window_size_hw>(data_dst_idx, index_dst_idx);
+                    if (first_c_block) {
+                        max_reduce_with_indices_init<ckernel::DataLayout::ROW_MAJOR>();
+                    }
+                    // the max_reduce_with_indices LLK function only supports kernel_size=9, pending
+                    // https://github.com/tenstorrent/tt-metal/issues/28141 but, since for return_indices the in_cb is
+                    // oversized (equal to 1 tile), and since this CB is filled with padding values in the beginning of
+                    // the data movement kernel, it is possible to still use max_reduce_with_indices with kernel sizes
+                    // smaller than 9 as the excess sticks are just filled with padding values
+                    constexpr uint32_t max_mpwi_kernel_size = 9;
+                    max_reduce_with_indices<max_mpwi_kernel_size, ckernel::DataLayout::ROW_MAJOR>(
+                        data_dst_idx, index_dst_idx);
 
-                    cb_pop_front(curr_in_idx_cb_id, 1);
+                    // update the current index column
+                    if (last_c_block) {
+                        if (current_idx_col + stride_w + eff_kernel_w > in_w_padded) {
+                            // we reached the right edge, wrap down and to the left
+                            current_idx_col = 0;
+                            if (current_idx_row + stride_h + eff_kernel_h > in_h_padded) {
+                                // we reached the bottom right corner, wrap to the top and to the left
+                                current_idx_row = 0;
+                                copy_tile(up_left_wrap_inc_cb_id, mpwi_cb_tile_idx, inc_dst_idx);
+                            } else {
+                                current_idx_row += stride_h;
+                                copy_tile(down_left_wrap_inc_cb_id, mpwi_cb_tile_idx, inc_dst_idx);
+                            }
+                        } else {
+                            // we are still in the same row, move to the right
+                            current_idx_col += stride_w;
+                            copy_tile(right_inc_cb_id, mpwi_cb_tile_idx, inc_dst_idx);
+                        }
+
+                        // we allow overflow here for negative values as this only occurs in padding regions
+                        add_int_tile_init();
+                        add_uint16_tile(index_scratch_in_dst_idx, inc_dst_idx, index_scratch_out_dst_idx);
+                    }
                 } else {
                     unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
                         curr_in_cb_id,
@@ -182,27 +240,32 @@ void MAIN {
             tile_regs_commit();
             tile_regs_wait();
             if constexpr (!return_indices) {
-                 if constexpr (is_output_tiled) {
-                     // TILED output: accumulate sticks and perform tilization when needed
-                     if (last_c_block) {
-                         pack_untilize_dest<partial_iter_output_tiles>(
-                             pre_tilize_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
-                         cb_push_back(pre_tilize_cb_id, partial_iter_output_tiles);
-                         tilize_stick_counter++;
-                     } else {
-                         pack_untilize_dest<max_tiles_per_iter>(
-                             pre_tilize_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
-                         cb_push_back(pre_tilize_cb_id, max_tiles_per_iter);
-                     }
+                if constexpr (is_output_tiled) {
+                    // TILED output: accumulate sticks and perform tilization when needed
+                    if (last_c_block) {
+                        pack_untilize_dest<partial_iter_output_tiles>(
+                            pre_tilize_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
+                        cb_push_back(pre_tilize_cb_id, partial_iter_output_tiles);
+                        tilize_stick_counter++;
+                    } else {
+                        pack_untilize_dest<max_tiles_per_iter>(
+                            pre_tilize_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
+                        cb_push_back(pre_tilize_cb_id, max_tiles_per_iter);
+                    }
                     tile_regs_release();
 
                     if (tilize_stick_counter == TILE_HEIGHT) {
                         PACK((pack_untilize_uninit(pre_tilize_cb_id)));
 
                         // Workaround until #27504 is not closed
+                        // We should be calling tilizeA_B_uninit and for BFP4 output may be a reconfig_data_format
+                        // and also remove the tensix_syncs. Currently they are incomplete and hence the full call
+                        // to unpack_A_hw_configure.
                         tensix_sync();
-                        unary_op_init_common(pre_tilize_cb_id, out_cb_id);
+                        UNPACK((llk_unpack_A_hw_configure_disaggregated<DST_ACCUM_MODE, StochRndType::None, false>(
+                            pre_tilize_cb_id)));
                         tensix_sync();
+                        pack_reconfig_data_format(out_cb_id);
 
                         fast_tilize_init(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
                         fast_tilize_block(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
@@ -211,12 +274,13 @@ void MAIN {
                         cb_push_back(out_cb_id, in_ntiles_c);
 
                         if constexpr (is_output_block_format) {
-                            tensix_sync();
-                            unary_op_init_common(in_cb_id_0, pre_tilize_cb_id);
-                            tensix_sync();
+                            pack_reconfig_data_format(pre_tilize_cb_id);
                         }
 
                         tilize_stick_counter = 0;
+
+                        UNPACK((llk_unpack_tilizeA_B_init<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
+                            in_cb_id_0, in_scalar_cb_id_0, tiles_to_reduce, num_faces_in_input_tile, face_r_dim, 1)));
                         // init math for reduction again since FPU gets reprogrammed by tilize
                         MATH((llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, DST_ACCUM_MODE, MATH_FIDELITY>()));
 #ifdef ARCH_BLACKHOLE
@@ -232,33 +296,27 @@ void MAIN {
                         pack_untilize_dest<partial_iter_output_tiles>(
                             out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
                     } else {
-                        pack_untilize_dest<max_tiles_per_iter>(out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
+                        pack_untilize_dest<max_tiles_per_iter>(
+                            out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
                     }
                     cb_push_back(out_cb_id, output_faces);
                     tile_regs_release();
                 }
             } else {
-                if constexpr (pack_untilize_reinit) {
-                    tensix_sync();
-                    pack_untilize_dest_init<topk_output_tiles>(out_cb_id, num_out_sticks, output_faces);
-                    tensix_sync();
-                }
+                cb_reserve_back(pack_tmp_cb_id, 1);
+                pack_reconfig_data_format(pack_tmp_cb_id);
+                pack_tile<true>(data_dst_idx, pack_tmp_cb_id, mpwi_cb_tile_idx);
+                cb_push_back(pack_tmp_cb_id, 1);
 
-                pack_reconfig_data_format(out_cb_id);
-                pack_untilize_dest<topk_output_tiles, topk_output_tiles, false, false, TILE_C_DIM, data_dst_idx>(
-                    out_cb_id, 1, 0, num_out_sticks, output_faces);
-                pack_reconfig_data_format(out_idx_cb_id);
-                pack_untilize_dest<topk_output_tiles, topk_output_tiles, false, false, TILE_C_DIM, index_dst_idx>(
-                    out_idx_cb_id, 1, 0, num_out_sticks, output_faces);
+                cb_reserve_back(pack_idx_tmp_cb_id, 1);
+                pack_reconfig_data_format(pack_idx_tmp_cb_id);
+                pack_tile<true>(index_dst_idx, pack_idx_tmp_cb_id, mpwi_cb_tile_idx);
+                cb_push_back(pack_idx_tmp_cb_id, 1);
 
-                if constexpr (pack_untilize_reinit) {
-                    tensix_sync();
-                    pack_untilize_uninit(out_cb_id);
-                    tensix_sync();
-                }
-                cb_push_back(out_cb_id, output_faces);
-                if constexpr (return_indices) {
-                    cb_push_back(out_idx_cb_id, output_faces);
+                if (last_c_block) {
+                    cb_reserve_back(in_idx_cb_id, 1);
+                    pack_tile<true>(index_scratch_out_dst_idx, in_idx_cb_id, mpwi_cb_tile_idx);
+                    cb_push_back(in_idx_cb_id, 1);
                 }
                 tile_regs_release();
             }

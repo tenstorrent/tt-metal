@@ -16,18 +16,29 @@ on:
         required: false
         type: boolean
         default: false
+      timeout:
+        required: false
+        type: number
+        default: 20
+      run-fabric-tests:
+        required: false
+        type: string
+        default: 'true'
+        description: "Run t3k fabric tests"
+      run-multiprocess-tests:
+        required: false
+        type: string
+        default: 'true'
+        description: "Run t3k ttnn multiprocess tests"
+      run-ccl-tests:
+        required: false
+        type: string
+        default: 'true'
+        description: "Run t3k ttnn ccl tests"
 
 jobs:
-  t3000-unit-tests:
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: [
-          { name: "t3k fabric tests", arch: wormhole_b0, cmd: run_t3000_ttfabric_tests, timeout: 15, owner_id: UJ45FEC7M}, # Allan Liu
-          { name: "t3k ttnn multiprocess tests", arch: wormhole_b0, cmd: run_t3000_ttnn_multiprocess_tests, timeout: 5, owner_id: U013121KDH9}, #Austin Ho
-          { name: "t3k ttnn ccl tests", arch: wormhole_b0, cmd: run_t3000_ccl_tests, timeout: 9, owner_id: U06LRK6JDGB}, #Saad Jameel
-        ]
-    name: ${{ matrix.test-group.name }}
+  t3000-fast-tests:
+    name: T3000 fast tests
     runs-on:
       - tt-ubuntu-2204-N300-llmbox-stable
     container:
@@ -36,7 +47,7 @@ jobs:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
-        ARCH_NAME: ${{ matrix.test-group.arch }}
+        ARCH_NAME: wormhole_b0
         LOGURU_LEVEL: INFO
         GTEST_OUTPUT: xml:/work/generated/test_reports/
       volumes:
@@ -49,22 +60,51 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher || false }}
-      - name: Run unit regression tests
-        timeout-minutes: ${{ matrix.test-group.timeout }}
+      - name: Run t3k fabric tests
+        id: t3k-fabric-tests
+        timeout-minutes: 20
+        if: ${{ inputs.run-fabric-tests == 'true' }}
         run: |
           mkdir -p generated/test_reports
           source tests/scripts/t3000/run_t3000_unit_tests.sh
-          ${{ matrix.test-group.cmd }}
+          run_t3000_ttfabric_tests
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
+        if: ${{ failure() && steps.t3k-fabric-tests.outcome == 'failure' }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: ${{ matrix.test-group.owner_id }}
+          owner: UJ45FEC7M #Allan Liu
+      - name: Run t3k ttnn multiprocess tests
+        id: t3k-ttnn-multiprocess-tests
+        timeout-minutes: 15
+        if: ${{ inputs.run-multiprocess-tests == 'true' }}
+        run: |
+          mkdir -p generated/test_reports
+          source tests/scripts/t3000/run_t3000_unit_tests.sh
+          run_t3000_ttnn_multiprocess_tests
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() && steps.t3k-ttnn-multiprocess-tests.outcome == 'failure' }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: UBHPP2NDP #Joseph Chu
+
+      - name: Run t3k ttnn ccl tests
+        id: t3k-ttnn-ccl-tests
+        timeout-minutes: 10
+        if: ${{ inputs.run-ccl-tests == 'true' }}
+        run: |
+          mkdir -p generated/test_reports
+          source tests/scripts/t3000/run_t3000_unit_tests.sh
+          run_t3000_ccl_tests
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() && steps.t3k-ttnn-ccl-tests.outcome == 'failure' }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: U06LRK6JDGB #Saad Jameel
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 17
         if: ${{ !cancelled() }}

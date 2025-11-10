@@ -14,6 +14,7 @@ import ttnn
 # Import from local reference files instead of HuggingFace
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MLP as ReferenceExpert
 from models.demos.deepseek_v3.tt.experts import Experts as TTExperts
+from models.demos.deepseek_v3.utils.config_helpers import SPARSITY_BLOCK_SIZE, even_int_div, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     add_inv_scale_to_state_dict,
@@ -21,7 +22,6 @@ from models.demos.deepseek_v3.utils.test_utils import (
     dequantize_state_dict,
     get_model_config,
     get_test_weight_config,
-    load_state_dict,
     run_module_forward,
 )
 
@@ -51,7 +51,7 @@ class DeepseekV3MoEExperts(nn.Module):
         return torch.cat(outputs, dim=0)
 
 
-def create_combined_state_dict(module_path: str, model_path: Path) -> dict:
+def create_combined_state_dict(module_path: str, model_path: Path, state_dict: dict[str, torch.Tensor]) -> dict:
     """
     Create a combined state_dict from multiple experts state_dicts.
     """
@@ -60,15 +60,15 @@ def create_combined_state_dict(module_path: str, model_path: Path) -> dict:
     base_path = ".".join(parts[:-1])
     s, e = module_path.split(".")[-1].split("-")
     s, e = int(s), int(e)
-    state_dict = {}
+    out_state_dict = {}
     for i in range(s, e + 1):
         module_path_i = f"{base_path}.{i}"
-        state_dict_i = load_state_dict(model_path, module_path_i)
+        state_dict_i = sub_state_dict(state_dict, module_path_i + ".")
         for k, v in state_dict_i.items():
             k_ = f"{base_path.split('.')[-1]}.{i}.{k}"
-            state_dict[k_] = v
+            out_state_dict[k_] = v
 
-    return state_dict
+    return out_state_dict
 
 
 @pytest.mark.parametrize(
@@ -90,7 +90,6 @@ def test_forward_pass(
     mode: str,
     seq_len: int,
     hf_config: Any,
-    tmp_path: Path,
     cache_path: Path,
     mesh_device: Any,
     weight_type: str,
@@ -98,22 +97,22 @@ def test_forward_pass(
     model_path: Path,
     force_recalculate_weight_config,
     set_deterministic_env,
+    state_dict: dict[str, torch.Tensor],
 ):
     batch_size = 1
+    num_experts_per_device = even_int_div(hf_config.n_routed_experts, mesh_device.get_num_devices())
 
     reference_model = DeepseekV3MoEExperts(hf_config).eval()
     torch_input = torch.randn(batch_size, 1, seq_len, hf_config.hidden_size)
+    sparsity = torch.ones(1, 1, even_int_div(seq_len, SPARSITY_BLOCK_SIZE), num_experts_per_device)
     if weight_type == "random":
         state_dict = add_inv_scale_to_state_dict(
             reference_model.state_dict(), block_shape=hf_config.quantization_config["weight_block_size"]
         )
 
-        # Do not cache random weights
-        cache_path = tmp_path
-        force_recalculate_weight_config = True
     else:
         assert weight_type == "real"
-        state_dict = create_combined_state_dict(module_path, model_path)
+        state_dict = create_combined_state_dict(module_path, model_path, state_dict)
         reference_model.load_state_dict(dequantize_state_dict(state_dict, hf_config))
     reference_output = reference_model(torch_input)
 
@@ -127,17 +126,25 @@ def test_forward_pass(
 
     # Convert input to TTNN
     tt_input = ttnn.from_torch(
-        torch_input.repeat(1, run_config["num_experts_per_device"], 1, 1),  # repeating activations for each expert
+        torch_input,
         device=mesh_device,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         dtype=ttnn.bfloat16,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
     )
+    tt_sparsity = ttnn.from_torch(
+        sparsity,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
 
     # TTNN forward pass
     tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
-    tt_output = run_module_forward(TTExperts, mode, tt_input, run_config)
+    tt_output = run_module_forward(TTExperts, mode, tt_input, tt_sparsity, run_config)
     expected_output_memory_config = run_config["output_memory_config"]
 
     # Verify output memory config matches expected

@@ -17,6 +17,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sdpa_multi_core(
     const Tensor& output_tensor,
     const std::optional<const Tensor>& attn_mask,
     const std::optional<const Tensor>& page_table,
+    const std::optional<const Tensor>& attention_sink,
     const std::optional<int64_t>& chunk_start_idx,
     std::optional<float> scale,
     bool is_causal,
@@ -25,6 +26,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sdpa_multi_core(
     DeviceComputeKernelConfig compute_kernel_config,
     std::optional<SDPAProgramConfig> program_config,
     bool use_mla,
-    uint32_t head_dim_v = 0);
+    uint32_t head_dim_v = 0,
+    std::optional<uint32_t> sliding_window_size = std::nullopt);
 
 }  // namespace ttnn::operations::transformer::detail
