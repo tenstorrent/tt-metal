@@ -278,8 +278,7 @@ Tensor create_tt_tensor_from_py_data(
 template <typename... Ts>
 struct PreprocessedPyTensor {
     DataType data_type = DataType::INVALID;
-    // nb::object contiguous_py_tensor;
-    nb::ndarray<Ts...> contiguous_py_tensor;
+    nb::object contiguous_py_tensor;
     std::size_t num_elements = 0;
     std::size_t py_data_ptr = 0;
 };
@@ -328,7 +327,7 @@ PreprocessedPyTensor<> parse_py_tensor(const nb::handle& py_tensor, std::optiona
 
         return PreprocessedPyTensor<>{
             .data_type = data_type,
-            .contiguous_py_tensor = nb::cast<nb::ndarray<>>(contiguous_py_tensor),
+            .contiguous_py_tensor = contiguous_py_tensor,
             .num_elements = nb::cast<std::size_t>(contiguous_py_tensor.attr("numel")()),
             .py_data_ptr = nb::cast<std::size_t>(contiguous_py_tensor.attr("data_ptr")()),
         };
@@ -369,7 +368,7 @@ PreprocessedPyTensor<> parse_py_tensor(const nb::handle& py_tensor, std::optiona
 
         return PreprocessedPyTensor<>{
             .data_type = data_type,
-            .contiguous_py_tensor = nb::cast<nb::ndarray<>>(contiguous_py_tensor),
+            .contiguous_py_tensor = contiguous_py_tensor,
             .num_elements = nb::cast<std::size_t>(contiguous_py_tensor.attr("size")),
             .py_data_ptr = nb::cast<std::size_t>(nb::cast<nb::tuple>(
                 nb::cast<nb::dict>(contiguous_py_tensor.attr("__array_interface__"))[nb::str("data")])[0]),
@@ -432,7 +431,7 @@ Tensor convert_python_tensor_to_tt_tensor(
     // increments / decrements the reference count on the memory pin; the last decrement to the pin should be triggered
     // from the nanobind caller thread, which will correctly decrement the `nb::object` reference count while hodling
     // GIL.
-    tt::tt_metal::MemoryPin pydata_pin(std::make_shared<nb::ndarray<>>(preprocessed_py_tensor.contiguous_py_tensor));
+    tt::tt_metal::MemoryPin pydata_pin(std::make_shared<nb::object>(preprocessed_py_tensor.contiguous_py_tensor));
 
     auto output = create_tt_tensor_from_py_data(
         preprocessed_py_tensor.py_data_ptr,
