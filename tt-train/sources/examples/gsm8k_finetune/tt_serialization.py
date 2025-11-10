@@ -192,9 +192,9 @@ def _set_param_array_autotensor(param, arr: np.ndarray):
     # Clean up graph refs (best-effort)
     try:
         ttml.autograd.AutoContext.get_instance().reset_graph()
-     except Exception as e:
-         # Non-critical: errors while cleaning up graph refs are ignored (best-effort)
-         logging.warning(f"Failed to reset TTML graph during param assignment: {e}")
+    except Exception as e:
+        # Non-critical: errors while cleaning up graph refs are ignored (best-effort)
+        logging.warning(f"Failed to reset TTML graph during param assignment: {e}")
 
 
 def _load_model_from_npz(model, ckpt_path: str, strict: bool = False):
