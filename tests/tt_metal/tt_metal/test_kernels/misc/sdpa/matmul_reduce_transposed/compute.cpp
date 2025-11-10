@@ -19,6 +19,9 @@
 #include "tools/profiler/kernel_profiler.hpp"
 // #include "ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp"
 
+#include "debug/dprint_pages.h"
+#include "debug/dprint_tensix.h"
+
 void matmul_blocks(
     const uint32_t& in0_cb,
     const uint32_t& in1_cb,
@@ -89,16 +92,41 @@ void reduce_c_transposed(uint32_t out_cb) {
 
     constexpr uint32_t num_tiles = k_chunk_size * q_chunk_size;
 
-    // Use LLK SFPU SDPA reduce (MAX over columns) per column of the block
-    constexpr uint32_t reduce_dst_idx = 0;
-    sfpu_reduce_max_sdpa_init(q_chunk_size);
-    for (uint32_t j = 0; j < q_chunk_size; j++) {
-        acquire_dst();
-        // Reduce k_chunk_size rows for column j into first row at reduce_dst_idx
-        sfpu_reduce_max_sdpa(reduce_dst_idx, k_chunk_size, (int)VectorMode::RC_custom);
-        pack_tile(reduce_dst_idx, out_cb);
-        release_dst();
+    // max_tile_init();
+    // constexpr uint32_t reduce_dst_idx = 0;
+    // reduce_init<PoolType::MAX, ReduceDim::REDUCE_COL>(in0_cb, scale_cb, out_cb);
+    // for (uint32_t j = 0; j < q_chunk_size; j++) {
+    //     acquire_dst();
+
+    //     for (uint32_t i = 0; i < k_chunk_size; i++) {
+    //         reduce_tile<PoolType::MAX, ReduceDim::REDUCE_COL>(
+    //             in0_cb, scale_cb, i * q_chunk_size + j, 0, reduce_dst_idx);
+    //     }
+    //     pack_tile(reduce_dst_idx, out_cb);
+    //     release_dst();
+    // }
+    // reduce_uninit();
+
+    // We need to copy tiles to dest then do a reduce on sfpu from packer thread.
+
+    // TODO: not num tiles but use cols and rows instead.
+
+    acquire_dst();
+    copy_tile_to_dst_init_short(in0_cb);
+    for (uint32_t i = 0; i < num_tiles; i++) {
+        copy_tile(in0_cb, i, i);
     }
+
+    tile_regs_wait();  // pack thread waits for math thread to finish
+
+    sfpu_reduce_max_sdpa_init(q_chunk_size);
+    sfpu_reduce_max_sdpa(0, k_chunk_size, (int)VectorMode::RC_custom);
+
+    for (uint32_t i = 0; i < num_tiles; i++) {
+        pack_tile(i, out_cb, i);
+    }
+
+    release_dst();
 }
 
 namespace NAMESPACE {

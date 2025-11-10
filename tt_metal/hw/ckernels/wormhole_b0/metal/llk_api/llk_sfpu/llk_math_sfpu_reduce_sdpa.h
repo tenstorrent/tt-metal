@@ -12,7 +12,7 @@ namespace ckernel {
 
 inline void llk_math_sfpu_reduce_max_sdpa_init(uint32_t num_cols) {
     llk_math_eltwise_unary_sfpu_init<SfpuType::reduce, false>(
-        sfpu::_init_reduce_<PoolType::MAX, ReduceDim::REDUCE_COL, DataFormat::Float16_b>, num_cols);
+        sfpu::_init_reduce_<PoolType::MAX, DataFormat::Float16_b>, num_cols);
 }
 
 inline void llk_math_sfpu_reduce_max_sdpa(
