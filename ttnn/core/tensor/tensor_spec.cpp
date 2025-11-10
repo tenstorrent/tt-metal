@@ -4,7 +4,6 @@
 
 #include "ttnn/tensor/tensor_spec.hpp"
 #include "ttnn/tensor/types.hpp"
-
 namespace tt::tt_metal {
 
 namespace {

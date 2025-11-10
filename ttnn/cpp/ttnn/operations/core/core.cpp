@@ -50,7 +50,7 @@ ttnn::Tensor to_device(
     std::optional<QueueId> queue_id) {
     auto mem_config = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
 
-    auto to_device_operation = std::make_shared<ToDeviceOperation>(mesh_device, mem_config, queue_id);
+    auto to_device_operation = std::make_shared<ToDeviceOperation>(mesh_device, std::move(mem_config), queue_id);
     auto lazy_inputs = ttnn::experimental::lazy::make_lazy_device_operation_inputs<ToDeviceOperation>(tensor);
     return tt::tt_metal::Tensor::make_lazy_tensor(lazy_inputs, to_device_operation, tensor.tensor_spec());
 }
