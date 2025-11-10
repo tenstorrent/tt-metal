@@ -16,6 +16,15 @@ namespace ttnn::operations::experimental::cnn::detail {
 
 using namespace tt::constants;
 
+// Helper function to calculate effective HW dimension for sharding calculations
+uint32_t calculate_effective_hw_for_sharding(
+    uint32_t hw_total, uint32_t batch_size, uint32_t padded_shard_width, uint32_t num_cores) {
+    // Always use the full padded capacity for all batch sizes
+    // For even sharding: hw_total == num_cores * padded_shard_width (same result)
+    // For uneven sharding (B=1 only): hw_total < num_cores * padded_shard_width (handles padding correctly)
+    return num_cores * padded_shard_width;
+}
+
 // Helper struct to hold circular buffer handles
 struct CircularBufferHandles {
     tt::tt_metal::CBHandle cb_in;
@@ -124,18 +133,22 @@ ConvertToHwcConfig ConvertToHwcConfig::create_from_tensors(const Tensor& input, 
 
     // Gather output shard specifications (for the intermediate gather result)
     // The gather operation transforms from [B, C, HW] to [C, B, HW] layout
-    // So the gather output has height=C and width=B*HW/num_output_cores
+    // So the gather output has height=C and width=B*HW_effective/num_output_cores
     config.gather_l1_output_shard_height = config.input_channels;
-    config.gather_l1_output_shard_width = config.batch_size * config.hw_total / config.l1_input_cores.size();
+
+    // For uneven sharding with B=1, use padded capacity instead of logical HW
+    uint32_t effective_hw = calculate_effective_hw_for_sharding(
+        config.hw_total, config.batch_size, config.l1_input_shard_width, config.l1_input_cores.size());
+    config.gather_l1_output_shard_width = config.batch_size * effective_hw / config.l1_input_cores.size();
 
     log_info(
         tt::LogType::LogAlways,
-        "Gather shard specs: gather_l1_output_shard=[{}x{}] (C={}, B*HW/num_cores={}*{}/{})",
+        "Gather shard specs: gather_l1_output_shard=[{}x{}] (C={}, B*HW_effective/num_cores={}*{}/{})",
         config.gather_l1_output_shard_height,
         config.gather_l1_output_shard_width,
         config.input_channels,
         config.batch_size,
-        config.hw_total,
+        effective_hw,
         config.l1_input_cores.size());
 
     // Alignment requirements
@@ -237,8 +250,7 @@ CircularBufferHandles setup_circular_buffers(
 
     // CB in tiled
     const uint32_t cb_in_tiled_page_size = intermediary_tile_size;
-    const uint32_t cb_in_tiled_total_size =
-        tt::div_up(block_size_width, TILE_WIDTH) * intermediary_tile_size;
+    const uint32_t cb_in_tiled_total_size = tt::div_up(block_size_width, TILE_WIDTH) * intermediary_tile_size;
     log_info(
         tt::LogType::LogAlways,
         "CB_IN_TILED: page_size={}, total_size={}",
@@ -249,8 +261,7 @@ CircularBufferHandles setup_circular_buffers(
 
     // CB in transpose buffers
     const uint32_t cb_in_transpose_page_size = intermediary_tile_size;
-    const uint32_t cb_in_transpose_total_size =
-        tt::div_up(block_size_width, TILE_WIDTH) * intermediary_tile_size;
+    const uint32_t cb_in_transpose_total_size = tt::div_up(block_size_width, TILE_WIDTH) * intermediary_tile_size;
     log_info(
         tt::LogType::LogAlways,
         "CB_IN_TRANSPOSE_0/1: page_size={}, total_size={}",
@@ -657,14 +668,16 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
     auto config = ConvertToHwcConfig::create_from_tensors(a, output);
     config.validate();
 
+    // Use effective HW for gather transfers in uneven sharding cases
+    uint32_t effective_hw_for_gather = calculate_effective_hw_for_sharding(
+        config.hw_total, config.batch_size, config.l1_input_shard_width, config.l1_input_cores.size());
     const auto gather_transfers = convert_to_hwc::detail::precompute_gather_transfers(
         config.batch_size,
         config.input_channels,
-        config.hw_total,
+        effective_hw_for_gather,
         config.l1_input_cores,
         config.l1_input_cores);  // TODO: L1 input grid can be different if resharding
-    const uint32_t block_size_width =
-        config.l1_input_shard_width * config.batch_size;  // One block per batch (investigating CB dependencies)
+    const uint32_t block_size_width = config.l1_input_shard_width * config.batch_size;  // Back to working configuration
 
     // Setup circular buffers after block_size_width is calculated
     auto cb_handles = setup_circular_buffers(program, config.l1_input_core_grid, config, a, output, block_size_width);
@@ -672,7 +685,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         gather_transfers,
         config.batch_size,
         config.input_channels,
-        config.hw_total,
+        effective_hw_for_gather,
         config.l1_input_cores,
         config.l1_input_cores.size(),
         a.element_size(),
@@ -727,19 +740,20 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
             per_core_serialized_transfers[core_idx]);
     }
 
-    // Generate transfer instructions
+    // Generate transfer instructions using effective HW for uneven sharding
+    uint32_t effective_hw_for_transfers = calculate_effective_hw_for_sharding(
+        config.hw_total, config.batch_size, config.l1_input_shard_width, config.l1_input_cores.size());
     auto transfers = generate_batch_redistribution_transfers(
         config.batch_size,
         config.input_channels,
-        config.hw_total,
+        effective_hw_for_transfers,
         config.l1_input_cores,
         config.l1_input_cores,
         config.element_size_bytes,
         config.l1_input_shard_width);
 
     // Calculate tiles based on block width (which becomes input to compute pipeline)
-    const uint32_t total_tiles_per_block =
-        tt::div_up(block_size_width, TILE_HEIGHT);  // assumes C < 32
+    const uint32_t total_tiles_per_block = tt::div_up(block_size_width, TILE_HEIGHT);  // assumes C < 32
     const uint32_t total_tiles_per_core = total_tiles_per_block * num_blocks;
     const uint32_t total_tiles_writer0 =
         tt::div_up(total_tiles_per_core, 2);  // each writer should process half of the output tiles
@@ -762,9 +776,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
 
     // If there is only one HW tile we shouldn't stride the output copies because only one writer is working
     const uint32_t output_addr_stride =
-        block_size_width != TILE_HEIGHT
-            ? output_stride_sticks * config.output_shard_width * config.element_size_bytes
-            : 0;
+        block_size_width != TILE_HEIGHT ? output_stride_sticks * config.output_shard_width * config.element_size_bytes
+                                        : 0;
 
     // Writer kernel processes gather output blocks - height is the number of sticks per block
     const uint32_t num_sticks_block_size_kernel_0 = config.gather_l1_output_shard_height;
@@ -772,7 +785,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
 
     // block_size_bytes should be exactly the same as CB_IN_BATCH total size
     // Using the block-aligned dimensions for consistency
-    const uint32_t block_size_bytes = config.gather_l1_output_shard_height * block_size_width * config.element_size_bytes;
+    const uint32_t block_size_bytes =
+        config.gather_l1_output_shard_height * block_size_width * config.element_size_bytes;
 
     log_info(tt::LogType::LogAlways, "=== KERNEL COMPILE TIME ARGS ===");
     log_info(

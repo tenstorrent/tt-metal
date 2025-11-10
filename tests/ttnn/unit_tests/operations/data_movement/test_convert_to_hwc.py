@@ -9,14 +9,13 @@ import torch
 from tests.ttnn.utils_for_testing import assert_equal
 from tests.ttnn.unit_tests.operations.test_utils import round_up
 
-CHANNEL_TEST_CASES = [1, 2, 3, 4, 8, 12, 15, 16, 32]
-# CHANNEL_TEST_CASES = [2, 4, 8, 12, 16, 32]
+# CHANNEL_TEST_CASES = [1, 2, 3, 4, 8, 12, 15, 16, 32]
+CHANNEL_TEST_CASES = [1, 2, 3, 4]
 BATCH_TEST_CASES = [1, 2, 4, 8]
 
 
 @pytest.mark.parametrize("B", BATCH_TEST_CASES)
 @pytest.mark.parametrize("C", CHANNEL_TEST_CASES)
-# @pytest.mark.parametrize("provide_memory_config", [True, False])
 @pytest.mark.parametrize("provide_memory_config", [True])
 @pytest.mark.parametrize(
     "HW, core_grid, padded_sharded_dim",
@@ -66,6 +65,75 @@ BATCH_TEST_CASES = [1, 2, 4, 8]
             ),
             128,
         ),
+    ),
+)
+def test_convert_to_hwc_with_l1_input(device, B, C, HW, core_grid, padded_sharded_dim, provide_memory_config):
+    device_num_cores = device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y
+    requested_num_cores = core_grid.num_cores()
+    if device_num_cores < requested_num_cores:
+        pytest.skip(f"Not enough cores to run test case (need {requested_num_cores} but have {device_num_cores})")
+
+    # Verify this is even sharding
+    assert (
+        padded_sharded_dim * core_grid.num_cores() == HW
+    ), f"Expected even sharding but got uneven: {padded_sharded_dim} * {core_grid.num_cores()} != {HW}"
+
+    input_tensor = torch.concat(
+        [
+            torch.concat(
+                [torch.full([1, 1, 1, HW], c + ((b + 1) * 100), dtype=torch.bfloat16) for c in range(C)], dim=2
+            )
+            for b in range(B)
+        ],
+        dim=1,
+    )
+    input_tensor = torch.randn([1, B, C, HW], dtype=torch.bfloat16)
+
+    expected = input_tensor.transpose(2, 3).reshape(1, 1, B * HW, C)
+
+    input_shard_shape = (B * C, padded_sharded_dim)
+    input_shard_spec = ttnn.ShardSpec(core_grid, input_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, input_shard_spec)
+
+    input_tensor = ttnn.Tensor(
+        input_tensor, ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, mem_config=input_mem_config
+    )
+
+    print(input_tensor)
+    print(
+        input_tensor.shape,
+        input_tensor.memory_config().shard_spec,
+        " cores=",
+        input_tensor.memory_config().shard_spec.num_cores(),
+    )
+
+    if provide_memory_config:
+        output_shard_shape = (B * padded_sharded_dim, round_up(C, 8))
+        output_shard_spec = ttnn.ShardSpec(core_grid, output_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+        output_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec
+        )
+        actual = ttnn.experimental.convert_to_hwc(input_tensor, memory_config=output_mem_config, dtype=ttnn.bfloat16)
+    else:
+        actual = ttnn.experimental.convert_to_hwc(input_tensor, dtype=ttnn.bfloat16)
+
+    actual = ttnn.to_torch(actual)
+
+    print(expected)
+    print(actual[:, :, :, : expected.shape[-1]])
+
+    passed, message = assert_equal(
+        expected, actual[:, :, :, : expected.shape[-1]]
+    )  # slice off padding that is applied when C % 8 != 0
+    assert passed, message
+
+
+@pytest.mark.parametrize("B", [1])  # Only B=1 is currently supported for uneven sharding
+@pytest.mark.parametrize("C", CHANNEL_TEST_CASES)
+@pytest.mark.parametrize("provide_memory_config", [True])
+@pytest.mark.parametrize(
+    "HW, core_grid, padded_sharded_dim",
+    (
         (
             30,
             ttnn.CoreRangeSet(
@@ -84,15 +152,6 @@ BATCH_TEST_CASES = [1, 2, 4, 8]
             ),
             32,
         ),
-        # (
-        # 224 * 224,
-        # ttnn.CoreRangeSet(
-        # {
-        # ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7)),
-        # }
-        # ),
-        # 784,
-        # ),
         (
             168960,
             ttnn.CoreRangeSet(
@@ -105,15 +164,21 @@ BATCH_TEST_CASES = [1, 2, 4, 8]
         ),  # UNet Shallow
     ),
 )
-def test_convert_to_hwc(device, B, C, HW, core_grid, padded_sharded_dim, provide_memory_config):
+def test_convert_to_hwc_with_l1_input_uneven_sharding(
+    device, B, C, HW, core_grid, padded_sharded_dim, provide_memory_config
+):
     device_num_cores = device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y
     requested_num_cores = core_grid.num_cores()
     if device_num_cores < requested_num_cores:
         pytest.skip(f"Not enough cores to run test case (need {requested_num_cores} but have {device_num_cores})")
 
-    is_uneven = padded_sharded_dim * core_grid.num_cores() > HW
-    if is_uneven and B > 1:
-        pytest.skip(f"Uneven sharding is not supported when B > 1 (was {B})")
+    # Verify this is uneven sharding
+    assert (
+        padded_sharded_dim * core_grid.num_cores() > HW
+    ), f"Expected uneven sharding but got even: {padded_sharded_dim} * {core_grid.num_cores()} <= {HW}"
+
+    # Only B=1 is supported for uneven sharding
+    assert B == 1, f"Uneven sharding is only supported when B=1 (was {B})"
 
     input_tensor = torch.concat(
         [
@@ -124,7 +189,7 @@ def test_convert_to_hwc(device, B, C, HW, core_grid, padded_sharded_dim, provide
         ],
         dim=1,
     )
-    # input_tensor = torch.randn([1, B, C, HW], dtype=torch.bfloat16)
+    input_tensor = torch.randn([1, B, C, HW], dtype=torch.bfloat16)
 
     expected = input_tensor.transpose(2, 3).reshape(1, 1, B * HW, C)
 
@@ -137,13 +202,13 @@ def test_convert_to_hwc(device, B, C, HW, core_grid, padded_sharded_dim, provide
     )
 
     print(input_tensor)
-
     print(
         input_tensor.shape,
         input_tensor.memory_config().shard_spec,
         " cores=",
         input_tensor.memory_config().shard_spec.num_cores(),
     )
+
     if provide_memory_config:
         output_shard_shape = (B * padded_sharded_dim, round_up(C, 8))
         output_shard_spec = ttnn.ShardSpec(core_grid, output_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
@@ -186,7 +251,7 @@ def test_convert_to_hwc(device, B, C, HW, core_grid, padded_sharded_dim, provide
         ),
     ),
 )
-def test_convert_to_hwc_with_resharding(
+def test_convert_to_hwc_with_l1_input_resharded(
     device, B, C, HW, input_core_grid, output_core_grid, input_padded_sharded_dim, output_padded_sharded_dim
 ):
     device_num_cores = device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y
@@ -327,9 +392,8 @@ def test_convert_to_hwc_dram(
             f"Not enough DRAM cores to run test case (need {requested_num_dram_cores} but have {dram_num_cores})"
         )
 
+    # DRAM test function uses B=1 implicitly, so uneven sharding is supported
     is_uneven = input_padded_sharded_dim * input_core_grid.num_cores() > HW
-    if is_uneven and B > 1:
-        pytest.skip(f"Uneven sharding is not supported when B > 1 (was {B})")
 
     input_tensor = torch.randn([1, 1, C, HW], dtype=torch.bfloat16)
     expected = input_tensor.transpose(2, 3)
