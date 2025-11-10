@@ -17,15 +17,24 @@
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/types.hpp"
 
-NB_MAKE_OPAQUE(ttnn::operations::matmul::MatmulProgramConfig);
+// NB_MAKE_OPAQUE removed to allow nanobind to use variant caster for MatmulProgramConfig
 
 namespace ttnn::operations::matmul {
+
+namespace {
+// Placeholder Python-visible type to preserve API: MatmulProgramConfig is a C++ std::variant.
+// We expose an empty class named MatmulProgramConfig for import compatibility in Python.
+struct MatmulProgramConfigPlaceholder {};
+}  // namespace
 
 using ttnn::operations::unary::UnaryWithParam;
 
 void py_module(nb::module_& mod) {
-    auto matmul_program_config = tt_serializable_class<MatmulProgramConfig>(mod, "MatmulProgramConfig", R"doc(
-        Class defining matmul program config
+    // Do not bind MatmulProgramConfig as a class; it is a std::variant of concrete configs.
+    // Nanobind's variant caster will handle converting concrete configs passed from Python.
+    nb::class_<MatmulProgramConfigPlaceholder>(mod, "MatmulProgramConfig", R"doc(
+        Placeholder base type for Matmul program configs.
+        Note: Actual program configs are concrete classes exposed in this module.
     )doc");
 
     auto matmul_multi_core_reuse_program_config =
@@ -638,7 +647,7 @@ void py_module(nb::module_& mod) {
                const bool transpose_b,
                const std::optional<const ttnn::MemoryConfig>& memory_config,
                const std::optional<const DataType> dtype,
-               const std::optional<const MatmulProgramConfig>& program_config,
+               nb::object program_config_obj,
                const std::optional<const std::string>& activation,
                nb::object compute_kernel_config_obj,
                std::optional<ttnn::CoreGrid> core_grid,
@@ -646,6 +655,25 @@ void py_module(nb::module_& mod) {
                std::optional<Tensor> optional_output_tensor,
                std::optional<const GlobalCircularBuffer> global_cb,
                std::optional<tt::tt_metal::SubDeviceId> sub_device_id) -> ttnn::Tensor {
+                // Convert program_config object into MatmulProgramConfig variant
+                std::optional<MatmulProgramConfig> program_config = std::nullopt;
+                if (!program_config_obj.is_none()) {
+                    if (nb::isinstance<MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config_obj)) {
+                        program_config = nb::cast<MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config_obj);
+                    } else if (nb::isinstance<MatmulMultiCoreReuseMultiCastProgramConfig>(program_config_obj)) {
+                        program_config = nb::cast<MatmulMultiCoreReuseMultiCastProgramConfig>(program_config_obj);
+                    } else if (nb::isinstance<MatmulMultiCoreReuseProgramConfig>(program_config_obj)) {
+                        program_config = nb::cast<MatmulMultiCoreReuseProgramConfig>(program_config_obj);
+                    } else if (nb::isinstance<MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>(
+                                   program_config_obj)) {
+                        program_config =
+                            nb::cast<MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>(program_config_obj);
+                    } else if (nb::isinstance<MatmulMultiCoreProgramConfig>(program_config_obj)) {
+                        program_config = nb::cast<MatmulMultiCoreProgramConfig>(program_config_obj);
+                    } else {
+                        nb::raise_type_error("program_config must be one of the Matmul*ProgramConfig types or None");
+                    }
+                }
                 std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt;
                 if (!compute_kernel_config_obj.is_none()) {
                     if (nb::isinstance<GrayskullComputeKernelConfig>(compute_kernel_config_obj)) {

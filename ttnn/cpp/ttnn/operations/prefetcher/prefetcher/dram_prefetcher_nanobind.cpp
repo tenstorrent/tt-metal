@@ -5,6 +5,7 @@
 #include "dram_prefetcher_nanobind.hpp"
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/vector.h>
 
 #include "ttnn-nanobind/decorators.hpp"
 #include "dram_prefetcher.hpp"
