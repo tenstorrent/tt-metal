@@ -1227,6 +1227,9 @@ jobs:
               "@tenstorrent/metalium-developers-convolutions")
                 echo "S09DNR6NAG4"
                 ;;
+              "@tenstorrent/metalium-developers-ops-data-movement")
+                echo "S09QQRK1CF8"
+                ;;
               *)
                 echo ""  # No Slack group available
                 ;;
@@ -1709,6 +1712,9 @@ jobs:
               "@tenstorrent/metalium-developers-convolutions")
                 echo "S09DNR6NAG4"
                 ;;
+              "@tenstorrent/metalium-developers-ops-data-movement")
+                echo "S09QQRK1CF8"
+                ;;
               *)
                 echo ""  # No Slack group available
                 ;;
@@ -1727,6 +1733,9 @@ jobs:
                 ;;
               "@tenstorrent/metalium-developers-convolutions")
                 echo "metalium-developers-convolutions"
+                ;;
+              "@tenstorrent/metalium-developers-ops-data-movement")
+                echo "metalium-developers-ops-data-movement"
                 ;;
               *)
                 echo ""
@@ -2174,6 +2183,9 @@ jobs:
                 ;;
               "@tenstorrent/metalium-developers-convolutions")
                 echo "S09DNR6NAG4"
+                ;;
+              "@tenstorrent/metalium-developers-ops-data-movement")
+                echo "S09QQRK1CF8"
                 ;;
               *)
                 echo ""  # No Slack group available
