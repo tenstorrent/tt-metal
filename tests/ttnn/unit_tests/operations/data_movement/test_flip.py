@@ -50,8 +50,8 @@ def test_flip_tiled(device, n, c, h, w, dims, dtype):
     tt_output = ttnn.flip(tt_tensor, dims)
 
     if dtype == ttnn.float32:
-        # float32 permute internally truncates to tf32 at the moment
-        # https://github.com/tenstorrent/tt-metal/issues/23663
+        # Looks like untilize -> tilize logic introduces small error for float32
+        # TODO: investigate
         assert_with_pcc(torch_output, ttnn.to_torch(tt_output), 0.9999)
     else:
         assert_equal(torch_output, ttnn.to_torch(tt_output))
@@ -72,11 +72,7 @@ def test_flip_5d_rm(device, b, n, c, h, w, dims, dtype):
 
     tt_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     tt_output = ttnn.flip(tt_tensor, dims)
-
-    if dtype == ttnn.float32:
-        assert_with_pcc(torch_output, ttnn.to_torch(tt_output), 0.9999)
-    else:
-        assert_equal(torch_output, ttnn.to_torch(tt_output))
+    assert_equal(torch_output, ttnn.to_torch(tt_output))
 
 
 @pytest.mark.parametrize("b", [1, 2])
@@ -96,6 +92,8 @@ def test_flip_5d_tiled(device, b, n, c, h, w, dims, dtype):
     tt_output = ttnn.flip(tt_tensor, dims)
 
     if dtype == ttnn.float32:
+        # Looks like untilize -> tilize logic introduces small error for float32
+        # TODO: investigate
         assert_with_pcc(torch_output, ttnn.to_torch(tt_output), 0.9999)
     else:
         assert_equal(torch_output, ttnn.to_torch(tt_output))
@@ -111,7 +109,7 @@ def test_flip_5d_tiled(device, b, n, c, h, w, dims, dtype):
     ],
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32])
-def test_flip_small_tensors(device, shape, dims, dtype):
+def test_flip_small_tensors_rm(device, shape, dims, dtype):
     torch.manual_seed(123)
     torch_tensor = random_torch_tensor(dtype, shape)
     torch_output = torch.flip(torch_tensor, dims)
@@ -120,3 +118,20 @@ def test_flip_small_tensors(device, shape, dims, dtype):
     tt_output = ttnn.flip(tt_tensor, dims)
 
     assert_equal(torch_output, ttnn.to_torch(tt_output))
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32])
+def test_flip_small_tensors_tiled(device, shape, dims, dtype):
+    torch.manual_seed(123)
+    torch_tensor = random_torch_tensor(dtype, shape)
+    torch_output = torch.flip(torch_tensor, dims)
+
+    tt_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_output = ttnn.flip(tt_tensor, dims)
+
+    if dtype == ttnn.float32:
+        # Looks like untilize -> tilize logic introduces small error for float32
+        # TODO: investigate
+        assert_with_pcc(torch_output, ttnn.to_torch(tt_output), 0.9999)
+    else:
+        assert_equal(torch_output, ttnn.to_torch(tt_output))
