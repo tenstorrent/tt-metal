@@ -99,7 +99,7 @@ def test_bifpn(
         attention=attention,
         use_p8=False,
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        deallocate_activation=False,
+        deallocate_activation=True,
     )
 
     # Convert inputs to TTNN format
@@ -120,12 +120,12 @@ def test_bifpn(
     # Compare each output pyramid level
     output_names = ["P3", "P4", "P5", "P6", "P7"]
     for i, (torch_output, ttnn_output) in enumerate(zip(torch_outputs, ttnn_outputs)):
-        ttnn_output_torch = ttnn.to_torch(ttnn_output)
+        B, C, H, W = torch_output.shape
+        ttnn_output_torch = ttnn.to_torch(ttnn_output)  # 1, 1, NHW, C
+        ttnn_output_torch = torch.reshape(ttnn_output_torch, (B, H, W, C))
 
         # Permute back to NCHW format
-        batch, h, w, channels = ttnn_output_torch.shape
-        ttnn_output_torch = ttnn_output_torch.reshape(batch, h, w, channels)
-        ttnn_output_torch = torch.permute(ttnn_output_torch, (0, 3, 1, 2))
+        ttnn_output_torch = torch.permute(ttnn_output_torch, (0, 3, 1, 2))  # N, C, H, W
 
         passing, pcc_message = comp_pcc(torch_output, ttnn_output_torch, PCC_THRESHOLD)
         logger.info(f"{output_names[i]} PCC: {pcc_message}")

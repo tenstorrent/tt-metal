@@ -259,6 +259,7 @@ class Efficientnetb0:
         ttnn.deallocate(x)
         nhwc = ttnn.reallocate(nhwc)
         x = ttnn.reshape(nhwc, [1, 1, nhwc.shape[0] * nhwc.shape[1] * nhwc.shape[2], nhwc.shape[-1]])
+        ttnn.deallocate(nhwc)
 
         x = self._conv_stem(x)
 

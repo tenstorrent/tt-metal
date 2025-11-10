@@ -213,18 +213,31 @@ def _expand_dotted_keys(flat_dict):
     return result
 
 
-def _make_dot_accessible_args(layer_info):
-    structured_args = {}
+def _fix_layername(layer_info):
+    structured_info = {}
     for layer_name, instances in layer_info.items():
         if len(instances) > 1:
+            # Cases where same layer is called multiple times in model's forward call
+            op_name = layer_name[layer_name.rfind(".") + 1 :]
+            layer_tree = layer_name[: layer_name.rfind(".")]
             for idx, instance in instances.items():
-                updated_layer_name = (
-                    layer_name[: layer_name.find(".") + 1] + str(idx) + layer_name[layer_name.find(".") :]
-                )
-                structured_args[updated_layer_name] = instance
+                if "conv_list" in layer_tree:
+                    # Fix for nested loop in forward call, we need the instance index to be right after "conv_list" in params
+                    updated_layer_tree = (
+                        layer_tree[: layer_tree.rfind(".") + 1] + str(idx) + layer_tree[layer_tree.rfind(".") :]
+                    )
+                    updated_layer_name = updated_layer_tree + "." + op_name
+                else:
+                    updated_layer_name = layer_tree + f".{idx}." + op_name
+                structured_info[updated_layer_name] = instance
         else:
-            structured_args[layer_name] = instances[0]
-    structured_args = _expand_dotted_keys(structured_args)
+            structured_info[layer_name] = instances[0]
+    return structured_info
+
+
+def _make_dot_accessible_args(layer_info):
+    structured_info = _fix_layername(layer_info)
+    structured_args = _expand_dotted_keys(structured_info)
     return make_dot_access_dict(structured_args, ignore_types=(ModuleArgs,))
 
 
