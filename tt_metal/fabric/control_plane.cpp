@@ -46,6 +46,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/cluster.hpp>
 #include "tt_metal/fabric/fabric_context.hpp"
+#include "tt_metal/fabric/fabric_tensix_builder_impl.hpp"
 #include "tt_metal/fabric/serialization/router_port_directions.hpp"
 #include "tt_stl/small_vector.hpp"
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
@@ -2159,9 +2160,11 @@ void ControlPlane::populate_fabric_connection_info(
             physical_chip_id, mux_core_logical, CoreType::WORKER);
         // Get the RISC ID that handles this ethernet channel
         auto core_id = tensix_config.get_core_id_for_channel(physical_chip_id, eth_channel_id);
-        // In UDM mode, MUX only has 1 channel (worker channel = 0) for now
-        uint32_t tensix_sender_channel =
-            (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::UDM) ? 0 : sender_channel;
+        // In UDM mode, get the first channel for worker connection for now.
+        // TODO: have a vector of worker channels based on the current core and connected eth_channel_id
+        uint32_t tensix_sender_channel = (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::UDM)
+                                             ? static_cast<uint32_t>(UdmMuxChannelId::WORKER_CHANNEL_BASE)
+                                             : sender_channel;
 
         fill_tensix_connection_info_fields(
             tensix_connection_info, mux_core_virtual, tensix_config, tensix_sender_channel, core_id);
