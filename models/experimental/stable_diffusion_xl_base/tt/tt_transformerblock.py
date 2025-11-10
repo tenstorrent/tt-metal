@@ -80,7 +80,6 @@ class TtBasicTransformerBlock(LightweightModule):
         )
 
     def forward(self, input_tensor, attention_mask=None, encoder_hidden_states=None):
-        # legacy_config = ttnn.LayerNormDefaultProgramConfig(legacy_reduction=True, legacy_rsqrt=True)
         N, C, H, W = list(input_tensor.shape)
         if C == 640:
             ln_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
@@ -108,12 +107,10 @@ class TtBasicTransformerBlock(LightweightModule):
             bias=self.tt_norm1_bias,
             epsilon=self.ln_eps,
             compute_kernel_config=self.ln_compute_kernel_config,
-            # memory_config=ttnn.L1_MEMORY_CONFIG,
-            # program_config=legacy_config,
             memory_config=input_tensor.memory_config(),
             program_config=ln_program_config if input_tensor.is_sharded() else None,
         )
-        print(f"before attn1 cfg: {attn_hidden_states.memory_config()}, shape: {attn_hidden_states.shape}")
+
         attn_hidden_states = self.attn1(attn_hidden_states, attention_mask, None)
         hidden_states = ttnn.add(input_tensor, attn_hidden_states, use_legacy=False)
         ttnn.deallocate(input_tensor)
@@ -124,12 +121,10 @@ class TtBasicTransformerBlock(LightweightModule):
             bias=self.tt_norm2_bias,
             epsilon=self.ln_eps,
             compute_kernel_config=self.ln_compute_kernel_config,
-            # memory_config=ttnn.L1_MEMORY_CONFIG,
-            # program_config=legacy_config,
             memory_config=hidden_states.memory_config(),
             program_config=ln_program_config if hidden_states.is_sharded() else None,
         )
-        print(f"before attn2 cfg: {attn_hidden_states.memory_config()}, shape: {attn_hidden_states.shape}")
+
         attn_hidden_states = self.attn2(attn_hidden_states, attention_mask, encoder_hidden_states)
         hidden_states = ttnn.add(hidden_states, attn_hidden_states, use_legacy=False)
 
@@ -139,11 +134,10 @@ class TtBasicTransformerBlock(LightweightModule):
             bias=self.tt_norm3_bias,
             epsilon=self.ln_eps,
             compute_kernel_config=self.ln_compute_kernel_config,
-            # program_config=legacy_config,
             memory_config=hidden_states.memory_config(),
             program_config=ln_program_config if hidden_states.is_sharded() else None,
         )
-        print(f"before FF cfg: {attn_hidden_states.memory_config()}, shape: {attn_hidden_states.shape}")
+
         attn_hidden_states = self.ff(attn_hidden_states)
         hidden_states = ttnn.add(hidden_states, attn_hidden_states, use_legacy=False)
 

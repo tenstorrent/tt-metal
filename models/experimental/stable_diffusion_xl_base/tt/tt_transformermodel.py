@@ -93,8 +93,6 @@ class TtTransformer2DModel(LightweightModule):
             compute_kernel_config=self.compute_config_in,
             memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG if C == 1280 else ttnn.L1_MEMORY_CONFIG,
         )
-        print(f"after proj_in cfg: {hidden_states.memory_config()}, shape: {hidden_states.shape}")
-        print(f"{B}, {C}, {H}, {W}")
 
         for i, transformer_block in enumerate(self.transformer_blocks):
             hidden_states = transformer_block(hidden_states, attention_mask, encoder_hidden_states)

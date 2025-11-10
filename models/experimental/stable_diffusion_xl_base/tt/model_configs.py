@@ -318,7 +318,7 @@ class ModelOptimisations:
 
         self.matmul_configs["2D_FF2_SEQ_LEN_4096"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(7, 8),
-            in0_block_w=10,  # max is 10
+            in0_block_w=5,  # max is 10
             out_subblock_h=1,
             out_subblock_w=3,
             per_core_M=16,
