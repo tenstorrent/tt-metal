@@ -2,6 +2,23 @@ name: "(Galaxy) model perf tests"
 
 on:
   workflow_dispatch:
+    inputs:
+      model:
+        description: 'Select model to test'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+#          - cnn
+#          - llama70b
+#          - llama_unit_tests
+#          - llama70b_prefill
+          - sd35
+          - flux1-dev
+          - sentence_bert
+#         - wan2-2
+#         - mochi
   schedule:
     - cron: "0 10 * * *"  # Every day at 10:00 UTC
 
@@ -24,4 +41,5 @@ jobs:
       docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+      model: ${{ inputs.model || 'all' }}
       topology: topology-6u

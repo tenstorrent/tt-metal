@@ -12,6 +12,16 @@ on:
         required: false
         default: "dev"
         type: string
+      force-bump-type:
+        description: "Force a specific bump type instead of auto-detecting from commits. Options: 'major', 'minor', 'patch', 'none'."
+        required: false
+        default: ""
+        type: string
+      ignore-commits:
+        description: "Comma-separated list of commit SHAs to ignore when analyzing version bumps"
+        required: false
+        default: "72e9419a1be562889e1f008cf3e2db495f9e0aa9" # Ignore the commit that bumps to v0.65.0
+        type: string
 
   schedule:
     # Create dev every day at EOD of PST Mon-Fri + night of Sunday to kick off
@@ -91,13 +101,15 @@ jobs:
 
   create-tag:
     needs: release-precheck
-    uses: ./.github/workflows/release-verify-or-create-tag.yaml
+    uses: tenstorrent/tt-metal/.github/workflows/release-verify-or-create-tag.yaml@main
     secrets: inherit
     with:
       fetch_depth: 0
       bump_each_commit: false
       # tag-type is now set in release-precheck and passed as output
       tag-type: ${{ needs.release-precheck.outputs.tag-type }}
+      force-bump-type: ${{ inputs.force-bump-type }}
+      ignore-commits: ${{ inputs.ignore-commits }}
       dry-run: ${{ inputs.dry-run || false }}
 
 
@@ -204,7 +216,7 @@ jobs:
 
   # Candidate for breaking up
   create-and-upload-draft-release:
-    needs: [create-tag, create-release-notes]
+    needs: [create-tag, create-release-notes, build-test-publish]
     # May accidentally create two releases without restricting to 1 job
     concurrency: create_upload_draft_release
     runs-on: ubuntu-latest
@@ -228,6 +240,45 @@ jobs:
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         with:
           name: changelog
+      - name: Download Debian packages (all Ubuntu versions)
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        with:
+          pattern: packages-*
+          path: debian-packages
+          merge-multiple: true
+      - name: Verify files for release (dry-run)
+        if: ${{ inputs.dry-run }}
+        run: |
+          echo "=== Verifying files that would be included in the release ==="
+          echo ""
+          echo "Checking for required files:"
+          required_files=(
+            "VERSION"
+            "CHANGELOG.txt"
+            "README.md"
+            "INSTALLING.md"
+            "models/docs/MODEL_UPDATES.md"
+            "tt-metalium.tar.gz"
+          )
+          for file in "${required_files[@]}"; do
+            if [ -f "$file" ]; then
+              echo "✓ $file ($(du -h "$file" | cut -f1))"
+            else
+              echo "✗ $file (MISSING)"
+            fi
+          done
+          echo ""
+          echo "Checking for Debian packages:"
+          if [ -d "debian-packages" ]; then
+            deb_count=$(find debian-packages -name "*.deb" | wc -l)
+            echo "Found $deb_count Debian package(s):"
+            find debian-packages -name "*.deb" -exec bash -c 'for f in "$@"; do size=$(du -h "$f" | cut -f1); echo "  ✓ $f ($size)"; done' _ {} +
+          else
+            echo "✗ debian-packages directory not found"
+          fi
+          echo ""
+          echo "=== All files that would be uploaded to release ==="
+          ls -lh "${required_files[@]}" debian-packages/*.deb 2>/dev/null || echo "Some files are missing!"
       - name: Release (skipped for dry run)
         if: ${{ !inputs.dry-run }}
         uses: softprops/action-gh-release@4634c16e79c963813287e889244c50009e7f0981
@@ -244,6 +295,7 @@ jobs:
             INSTALLING.md
             models/docs/MODEL_UPDATES.md
             tt-metalium.tar.gz
+            debian-packages/*.deb
           fail_on_unmatched_files: true
 
   check-stable-for-new-commits:
