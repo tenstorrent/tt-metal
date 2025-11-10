@@ -42,16 +42,9 @@ void reduce_scatter_common_validates(
     TT_FATAL(rank > 1, "reduce_scatter currently supports rank 2 tensors at minimum");
     TT_FATAL(dim < rank, "Invalid scatter dim {} for rank {} tensor", dim, rank);
 
-    if (rank > 2) {
-        TT_FATAL(
-            dim != 0,
-            "reduce_scatter_minimal_async does not support scattering on 0th dimension (unless rank 2), got: {}",
-            dim);
-    }
-
     const uint32_t normalized_dim = std::get<0>(composite_common::normalize_dim_4d(dim, rank));
+    const auto& input_shape = input_tensor.padded_shape();
     if (normalized_dim == 2 || normalized_dim == 3) {
-        const auto& input_shape = input_tensor.padded_shape();
         uint32_t tile_size = normalized_dim == 2 ? tt::constants::TILE_HEIGHT : tt::constants::TILE_WIDTH;
         TT_FATAL(
             (input_shape[dim] / tile_size) % ring_size == 0,
@@ -59,6 +52,13 @@ void reduce_scatter_common_validates(
             "of tiles is {} and the ring_size is {}",
             dim,
             input_shape[dim] / tile_size,
+            ring_size);
+    } else {
+        TT_FATAL(
+            input_shape[dim] % ring_size == 0,
+            "Error, input tensor dimension {} should be divisible by ring_size but is {} and the ring_size is {}",
+            dim,
+            input_shape[dim],
             ring_size);
     }
 
@@ -109,7 +109,6 @@ void reduce_scatter_common_validates(
 
         // check the output tensor size
         auto output_shape = output_tensor.padded_shape();
-        auto input_shape = input_tensor.padded_shape();
         TT_FATAL(
             output_shape.size() == input_shape.size(),
             "Error, Output tensor shape should have same number of dimensions as input tensor but has {}",
@@ -348,10 +347,6 @@ Tensor reduce_scatter_minimal_async_impl(
     const std::optional<uint32_t>& chunks_per_sync,
     const std::optional<uint32_t>& num_workers_per_link,
     const std::optional<uint32_t>& num_buffers_per_channel) {
-    TT_FATAL(
-        std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
-        "reduce_scatter_minimal_async op is only supported for Fast Dispatch");
-
     int32_t rank = input_tensor.logical_shape().rank();
     int32_t scatter_dim = (dim < 0) ? rank + dim : dim;
 
@@ -360,17 +355,8 @@ Tensor reduce_scatter_minimal_async_impl(
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
     TT_FATAL(
         num_devices > 1, "reduce_scatter_minimal_async op will only work for num_devices > 1, but has {}", num_devices);
-    ttnn::ccl::Topology ccl_topology = topology;
-
-    if (num_devices == 2) {
-        ccl_topology = ttnn::ccl::Topology::Linear;
-    }
 
     log_debug(tt::LogOp, "DEBUG: line_fabric is created");
-
-    // create this semaphore for all cores since we don't know which core will be used for teardown draining
-    CoreCoord grid_size = input_tensor.device()->compute_with_storage_grid_size();
-    auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
 
     bool using_persistent_buffers = persistent_output_buffers.has_value();
 
@@ -386,7 +372,7 @@ Tensor reduce_scatter_minimal_async_impl(
                    num_devices,
                    memory_config.value_or(input_tensor.memory_config()),
                    optional_intermediate_memory_config,
-                   ccl_topology,
+                   topology,
                    multi_device_global_semaphore,
                    barrier_semaphore,
                    using_persistent_buffers,

@@ -12,7 +12,7 @@ on:
       timeout:
         required: false
         type: number
-        default: 70
+        default: 45
       docker-image:
         required: true
         type: string
@@ -59,12 +59,13 @@ jobs:
       - name: Ensure BH Eth links online
         if: ${{ contains(inputs.runner-label, 'BH-') }}
         uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
+        timeout-minutes: 10
         with:
           runner-label: ${{ inputs.runner-label }}
 
       - name: Run Stress Tests
         timeout-minutes: ${{ inputs.timeout }}
-        run: pytest tests/ttnn/stress_tests/ --ignore=tests/ttnn/stress_tests/test_ccl.py
+        run: pytest tests/ttnn/stress_tests/
 
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()

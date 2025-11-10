@@ -4,7 +4,6 @@
 
 import ttnn
 import torch
-from dataclasses import replace, fields
 from loguru import logger
 from typing import List
 from collections import defaultdict
@@ -23,7 +22,7 @@ from models.tt_transformers.tt.common import (
     num_blocks_in_seq,
     get_block_size,
 )
-
+from models.common.tt_sampling import format_sampling_params
 from models.tt_transformers.tt.generator import SamplingParams
 
 
@@ -67,6 +66,9 @@ class Generator:
         self.trace_output_prefill = defaultdict(lambda: None)
         self.prev_page_table = None
         self.prefill_traces_warmup = False
+        self.trace_ids_decode = defaultdict(lambda: None)  # {return_logits: {device_id: trace_id}}
+        self.trace_inputs_decode = defaultdict(lambda: None)
+        self.trace_output_decode = defaultdict(lambda: None)
 
     def warmup_prefill_traces(
         self,
@@ -117,14 +119,6 @@ class Generator:
                 )
         # trace_id_prefill dict check
         logger.info("Prefill traces warmup completed")
-
-    @staticmethod
-    def _clamp(value, min_value, max_value):
-        if value < min_value:
-            return min_value
-        elif value > max_value:
-            return max_value
-        return value
 
     def prefill_forward_text(
         self,
@@ -255,7 +249,11 @@ class Generator:
                 tt_out_logits_all_users[id] = tt_out_logits_saved
 
         if return_logits:
+            # TODO: the current solution runs the argmax even if we are returning logits
+            # This is inefficient and should be fixed
             # Return logits instead of tokens
+            # batch x seq x padded_vocab_size -> batch x seq x vocab_size
+            tt_out_logits_all_users = tt_out_logits_all_users[:, :, : self.model.vocab_size]
             return tt_out_logits_all_users
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
@@ -303,6 +301,8 @@ class Generator:
         """
         Tracing is easy! Just call this method and we'll handle tracing for you.
         """
+        # Trace is independent of whether we are returning logits or sampling on device
+        # The difference happens outside of the trace, in process_output_prefill
         trace_key = f"{prefill_seq_len}_{batch_size}"
         if self.trace_id_prefill[trace_key] is None:
             trace_id, tt_out_trace, *device_inputs = self._capture_trace_prefill(
@@ -337,7 +337,7 @@ class Generator:
         batch_size=1,
     ):
         """
-        Captures a trace for the decode_forward method.
+        Captures a trace for the prefill_forward method.
         """
 
         # Compile run
@@ -376,7 +376,7 @@ class Generator:
         batch_size=1,
     ):
         """
-        Executes the trace for the decode_forward method but does not read back outputs.
+        Executes the trace for the prefill_forward method but does not read back outputs.
         """
         host_inputs = self.model.prepare_prefill_inputs_host(tokens, user_id, page_table, batch_size=batch_size)
 
@@ -406,7 +406,6 @@ class Generator:
     ):
         if sampling_params is None:
             return_logits = True
-            read_from_device = False
             reset_inputs = True
         else:
             return_logits = False
@@ -430,39 +429,7 @@ class Generator:
             "is_page_table_sharded": is_page_table_sharded,
         }
         if reset_inputs and sampling_params is not None:
-            if not isinstance(sampling_params.temperature, List):
-                # convert all sampling_params to lists
-                update_dict = {field.name: [getattr(sampling_params, field.name)] for field in fields(sampling_params)}
-                sampling_params = replace(sampling_params, **update_dict)
-
-            # must pad sampling_params to max_batch_size
-            default_params = {"temp": 0.0, "p": 1.0, "k": 0.0}
-            target_len = self.model_args.max_batch_size
-            for name, tensor in zip(
-                ("temp", "p", "k"), (sampling_params.temperature, sampling_params.top_p, sampling_params.top_k)
-            ):
-                current_len = len(tensor)
-                if current_len < target_len:
-                    tensor.extend([default_params[name]] * (target_len - current_len))
-
-            # we must clamp top-p in range [0.0, 1.0]
-            # cannot rely on external SamplingParams to be clamped
-            TOP_P_MIN = 0.0
-            TOP_P_MAX = 1.0
-
-            for i, (top_p, temp) in enumerate(zip(sampling_params.top_p, sampling_params.temperature)):
-                # Clamp top-p
-                clamped_top_p = self._clamp(top_p, TOP_P_MIN, TOP_P_MAX)
-                if clamped_top_p != top_p:
-                    logger.warning(f"Clamped Top-P value of {top_p} to {clamped_top_p}")
-                    sampling_params.top_p[i] = clamped_top_p
-
-                # Process temperature
-                if temp == 0:
-                    sampling_params.temperature[i] = 1.0
-                    sampling_params.top_k[i] = 1
-                else:
-                    sampling_params.temperature[i] = 1 / temp
+            sampling_params = format_sampling_params(sampling_params, self.model_args.max_batch_size)
 
             self.model.tt_sampling.reset_params(
                 k=sampling_params.top_k,
@@ -473,7 +440,9 @@ class Generator:
         if tt_out_logits_saved is not None:
             decode_kwargs["tt_out_logits_saved"] = tt_out_logits_saved
         if enable_trace:
-            tt_tok = self._easy_trace_text(**decode_kwargs, reset_inputs=reset_inputs, return_logits=return_logits)
+            tt_tok = self._decode_easy_trace_text(
+                **decode_kwargs, reset_inputs=reset_inputs, return_logits=return_logits
+            )
         else:
             tt_tok = self._decode_forward_no_trace_text(**decode_kwargs, return_logits=return_logits)
 
@@ -581,7 +550,7 @@ class Generator:
 
         return tt_out_trace
 
-    def _easy_trace_text(
+    def _decode_easy_trace_text(
         self,
         tokens,
         current_pos,
@@ -593,11 +562,11 @@ class Generator:
         return_logits=False,
     ):
         """
-        Tracing is easy! Just call this method and we'll handle tracing for you.
+        Run decode forward text with tracing
         """
         tokens = tokens.view(-1, 1)
-
-        if not hasattr(self, "trace_id_text"):
+        # The trace is different depending on whether we are returning logits or sampling on device
+        if not self.trace_ids_decode[return_logits]:
             trace_id, tt_out_tok, *device_inputs = self._capture_trace_text(
                 tokens,
                 current_pos,
@@ -607,9 +576,9 @@ class Generator:
                 is_page_table_sharded=is_page_table_sharded,
                 return_logits=return_logits,
             )
-            self.trace_id_text = trace_id
-            self.trace_inputs_text = device_inputs
-            self.trace_output_text = tt_out_tok
+            self.trace_ids_decode[return_logits] = trace_id
+            self.trace_inputs_decode[return_logits] = device_inputs
+            self.trace_output_decode[return_logits] = tt_out_tok
         if reset_inputs:
             host_inputs = self.model.prepare_decode_inputs_host(
                 tokens, current_pos, page_table, is_cur_pos_sharded, is_page_table_sharded
@@ -617,13 +586,13 @@ class Generator:
             shard_specs = self.model.prepare_decode_shard_configs(is_cur_pos_sharded, is_page_table_sharded)
             device_inputs = copy_host_to_device(
                 host_tensors=host_inputs,
-                device_tensors=self.trace_inputs_text,
+                device_tensors=self.trace_inputs_decode[return_logits],
                 shard_specs=shard_specs,
             )
         trace_tok_rm = self._decode_forward_trace_text(
-            self.trace_id_text,
-            self.trace_inputs_text,
-            self.trace_output_text,
+            self.trace_ids_decode[return_logits],
+            self.trace_inputs_decode[return_logits],
+            self.trace_output_decode[return_logits],
             tokens,
             current_pos,
             page_table=page_table,

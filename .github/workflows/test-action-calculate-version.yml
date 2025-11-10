@@ -1,0 +1,625 @@
+name: Test Calculate Version Action
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/actions/calculate-version/**'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - '.github/actions/calculate-version/**'
+  workflow_dispatch:
+
+jobs:
+  test-calculate-version:
+    name: Test Calculate Version Action
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history for git tag operations
+
+      # Clean up existing tags to simulate a repository with no tags
+      - name: Remove all existing tags for clean test
+        run: |
+          echo "Removing all existing tags to simulate clean repository"
+          git tag -d $(git tag -l) || echo "No tags to delete"
+          echo "Remaining tags after cleanup:"
+          git tag -l
+
+      # Test 1: Normal release with no previous tags
+      - name: Test 1 - No previous tags (should create v0.0.0)
+        id: test-no-tags
+        uses: ./.github/actions/calculate-version
+        with:
+          tag-type: ""
+
+      - name: Verify Test 1 Results
+        run: |
+          echo "Test 1 Results:"
+          echo "  Latest semver: ${{ steps.test-no-tags.outputs.latest_semver }}"
+          echo "  Bump type: ${{ steps.test-no-tags.outputs.bump_type }}"
+          echo "  New version: ${{ steps.test-no-tags.outputs.new_version }}"
+          echo "  Final version: ${{ steps.test-no-tags.outputs.final_version }}"
+
+          # Verify outputs
+          if [ "${{ steps.test-no-tags.outputs.latest_semver }}" != "v0.0.0" ]; then
+            echo "FAIL: Expected latest_semver to be v0.0.0"
+            exit 1
+          fi
+          echo "PASS: Test 1 passed"
+
+      # Create some test tags for subsequent tests
+      - name: Setup test tags
+        run: |
+          git config user.name "Test User"
+          git config user.email "test@example.com"
+          git tag v1.0.0
+          git tag v1.1.0
+          git tag v1.1.1
+          git tag v2.0.0-rc1  # This should be ignored by semver logic
+          git tag v2.1.0
+          echo "Created test tags"
+          git tag -l | sort -V
+
+      # Test 2: Normal release with existing tags
+      - name: Test 2 - With existing tags
+        id: test-with-tags
+        uses: ./.github/actions/calculate-version
+        with:
+          tag-type: ""
+
+      - name: Verify Test 2 Results
+        run: |
+          echo "Test 2 Results:"
+          echo "  Latest semver: ${{ steps.test-with-tags.outputs.latest_semver }}"
+          echo "  Bump type: ${{ steps.test-with-tags.outputs.bump_type }}"
+          echo "  New version: ${{ steps.test-with-tags.outputs.new_version }}"
+          echo "  Final version: ${{ steps.test-with-tags.outputs.final_version }}"
+
+          # Verify latest tag detection
+          if [ "${{ steps.test-with-tags.outputs.latest_semver }}" != "v2.1.0" ]; then
+            echo "FAIL: Expected latest_semver to be v2.1.0, got ${{ steps.test-with-tags.outputs.latest_semver }}"
+            exit 1
+          fi
+          echo "PASS: Test 2 passed"
+
+      # Test 3: RC (Release Candidate) tag type
+      - name: Test 3 - RC tag type
+        id: test-rc
+        uses: ./.github/actions/calculate-version
+        with:
+          tag-type: "rc"
+
+      - name: Verify Test 3 Results
+        run: |
+          echo "Test 3 Results:"
+          echo "  Final version: ${{ steps.test-rc.outputs.final_version }}"
+
+          # RC version should have -rc suffix
+          if [[ "${{ steps.test-rc.outputs.final_version }}" != *"-rc"* ]]; then
+            echo "FAIL: Expected final_version to contain -rc suffix"
+            exit 1
+          fi
+          echo "PASS: Test 3 passed"
+
+      # Test 4: Dev tag type
+      - name: Test 4 - Dev tag type
+        id: test-dev
+        uses: ./.github/actions/calculate-version
+        with:
+          tag-type: "dev"
+
+      - name: Verify Test 4 Results
+        run: |
+          echo "Test 4 Results:"
+          echo "  Final version: ${{ steps.test-dev.outputs.final_version }}"
+
+          # Dev version should have -dev suffix with date
+          if [[ "${{ steps.test-dev.outputs.final_version }}" != *"-dev"* ]]; then
+            echo "FAIL: Expected final_version to contain -dev suffix"
+            exit 1
+          fi
+          echo "PASS: Test 4 passed"
+
+  test-version-bumping:
+    name: Test Version Bumping Logic
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup git
+        run: |
+          git config user.name "Test User"
+          git config user.email "test@example.com"
+          git tag v1.0.0
+
+      # Test MAJOR version bump
+      - name: Create commit with MAJOR indicator
+        run: |
+          echo "test change" > test-major.txt
+          git add test-major.txt
+          git commit -m "Breaking change (MAJOR): Updated API"
+
+      - name: Test MAJOR version bump
+        id: test-major
+        uses: ./.github/actions/calculate-version
+        with:
+          tag-type: ""
+
+      - name: Verify MAJOR bump
+        run: |
+          echo "MAJOR test results:"
+          echo "  Bump type: ${{ steps.test-major.outputs.bump_type }}"
+          echo "  New version: ${{ steps.test-major.outputs.new_version }}"
+
+          if [ "${{ steps.test-major.outputs.bump_type }}" != "major" ]; then
+            echo "FAIL: Expected bump_type to be major"
+            exit 1
+          fi
+
+          if [ "${{ steps.test-major.outputs.new_version }}" != "v2.0.0" ]; then
+            echo "FAIL: Expected new_version to be v2.0.0, got ${{ steps.test-major.outputs.new_version }}"
+            exit 1
+          fi
+          echo "PASS: MAJOR bump test passed"
+
+      # Reset and test MINOR version bump
+      - name: Reset to v1.0.0 and create MINOR commit
+        run: |
+          git reset --hard v1.0.0
+          echo "new feature" > test-minor.txt
+          git add test-minor.txt
+          git commit -m "Add new feature (MINOR): User dashboard"
+
+      - name: Test MINOR version bump
+        id: test-minor
+        uses: ./.github/actions/calculate-version
+        with:
+          tag-type: ""
+
+      - name: Verify MINOR bump
+        run: |
+          echo "MINOR test results:"
+          echo "  Bump type: ${{ steps.test-minor.outputs.bump_type }}"
+          echo "  New version: ${{ steps.test-minor.outputs.new_version }}"
+
+          if [ "${{ steps.test-minor.outputs.bump_type }}" != "minor" ]; then
+            echo "FAIL: Expected bump_type to be minor"
+            exit 1
+          fi
+
+          if [ "${{ steps.test-minor.outputs.new_version }}" != "v1.1.0" ]; then
+            echo "FAIL: Expected new_version to be v1.1.0, got ${{ steps.test-minor.outputs.new_version }}"
+            exit 1
+          fi
+          echo "PASS: MINOR bump test passed"
+
+      # Reset and test PATCH version bump
+      - name: Reset to v1.0.0 and create PATCH commit
+        run: |
+          git reset --hard v1.0.0
+          echo "bug fix" > test-patch.txt
+          git add test-patch.txt
+          git commit -m "Fix critical bug (PATCH): Memory leak resolved"
+
+      - name: Test PATCH version bump
+        id: test-patch
+        uses: ./.github/actions/calculate-version
+        with:
+          tag-type: ""
+
+      - name: Verify PATCH bump
+        run: |
+          echo "PATCH test results:"
+          echo "  Bump type: ${{ steps.test-patch.outputs.bump_type }}"
+          echo "  New version: ${{ steps.test-patch.outputs.new_version }}"
+
+          if [ "${{ steps.test-patch.outputs.bump_type }}" != "patch" ]; then
+            echo "FAIL: Expected bump_type to be patch"
+            exit 1
+          fi
+
+          if [ "${{ steps.test-patch.outputs.new_version }}" != "v1.0.1" ]; then
+            echo "FAIL: Expected new_version to be v1.0.1, got ${{ steps.test-patch.outputs.new_version }}"
+            exit 1
+          fi
+          echo "PASS: PATCH bump test passed"
+
+  test-edge-cases:
+    name: Test Edge Cases
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup git
+        run: |
+          git config user.name "Test User"
+          git config user.email "test@example.com"
+
+      # Test with no commit indicators
+      - name: Create commit without version indicators
+        run: |
+          echo "regular change" > test-regular.txt
+          git add test-regular.txt
+          git commit -m "Regular commit without version indicators"
+
+      - name: Test no version bump
+        id: test-no-bump
+        uses: ./.github/actions/calculate-version
+        with:
+          tag-type: ""
+
+      - name: Verify no bump
+        run: |
+          echo "No bump test results:"
+          echo "  Bump type: ${{ steps.test-no-bump.outputs.bump_type }}"
+
+          if [ "${{ steps.test-no-bump.outputs.bump_type }}" != "none" ]; then
+            echo "FAIL: Expected bump_type to be none"
+            exit 1
+          fi
+          echo "PASS: No bump test passed"
+
+      # Test multiple RC tags
+      - name: Test multiple RC tags
+        run: |
+          git tag v1.0.0
+          echo "new feature" > test-minor.txt
+          git add test-minor.txt
+          git commit -m "Add new feature (MINOR): User dashboard"
+          git tag v1.1.0-rc1
+          git tag v1.1.0-rc2
+          echo "Created multiple RC tags and one MINOR commit"
+
+      - name: Test RC increment
+        id: test-rc-increment
+        uses: ./.github/actions/calculate-version
+        with:
+          tag-type: "rc"
+
+      - name: Verify RC increment
+        run: |
+          echo "RC increment test results:"
+          echo "  Final version: ${{ steps.test-rc-increment.outputs.final_version }}"
+
+          # Should create rc3 since rc1 and rc2 already exist for v1.1.0
+          expected_pattern="v.*-rc3"
+          if [[ ! "${{ steps.test-rc-increment.outputs.final_version }}" =~ $expected_pattern ]]; then
+            echo "FAIL: Expected final_version to match RC pattern"
+            exit 1
+          fi
+          echo "PASS: RC increment test passed"
+
+  integration-test:
+    name: Integration Test
+    runs-on: ubuntu-latest
+    needs: [test-calculate-version, test-version-bumping, test-edge-cases]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup git
+        run: |
+          git config user.name "Test User"
+          git config user.email "test@example.com"
+          git tag v1.0.0
+
+      - name: Simulate realistic workflow
+        run: |
+          # Create a series of realistic commits
+          echo "feature1" > feature1.txt
+          git add feature1.txt
+          git commit -m "Add user authentication (MINOR)"
+
+          echo "bugfix1" > bugfix1.txt
+          git add bugfix1.txt
+          git commit -m "Fix login validation (PATCH)"
+
+          echo "breaking" > breaking.txt
+          git add breaking.txt
+          git commit -m "Refactor API endpoints (MAJOR)"
+
+      - name: Run integration test
+        id: integration
+        uses: ./.github/actions/calculate-version
+        with:
+          tag-type: ""
+
+      - name: Verify integration results
+        run: |
+          echo "Integration test results:"
+          echo "  Latest semver: ${{ steps.integration.outputs.latest_semver }}"
+          echo "  Bump type: ${{ steps.integration.outputs.bump_type }}"
+          echo "  New version: ${{ steps.integration.outputs.new_version }}"
+          echo "  Final version: ${{ steps.integration.outputs.final_version }}"
+
+          # Should detect MAJOR bump (highest priority)
+          if [ "${{ steps.integration.outputs.bump_type }}" != "major" ]; then
+            echo "FAIL: Expected bump_type to be major (highest priority)"
+            exit 1
+          fi
+
+          if [ "${{ steps.integration.outputs.new_version }}" != "v2.0.0" ]; then
+            echo "FAIL: Expected new_version to be v2.0.0"
+            exit 1
+          fi
+
+          echo "PASS: Integration test passed"
+
+  test-force-bump-and-ignore-commits:
+    name: Test Force Bump and Ignore Commits
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup git
+        run: |
+          git config user.name "Test User"
+          git config user.email "test@example.com"
+          git tag v1.0.0
+
+      # Test force-bump-type functionality
+      - name: Create commit with MINOR indicator
+        run: |
+          echo "feature" > feature.txt
+          git add feature.txt
+          git commit -m "Add new feature (MINOR)"
+
+      - name: Test force-bump-type overrides commit analysis
+        id: test-force-major
+        uses: ./.github/actions/calculate-version
+        with:
+          tag-type: ""
+          force-bump-type: "major"
+
+      - name: Verify force-bump-type works
+        run: |
+          echo "Force bump test results:"
+          echo "  Bump type: ${{ steps.test-force-major.outputs.bump_type }}"
+          echo "  New version: ${{ steps.test-force-major.outputs.new_version }}"
+
+          if [ "${{ steps.test-force-major.outputs.bump_type }}" != "major" ]; then
+            echo "FAIL: Expected forced bump_type to be major, got ${{ steps.test-force-major.outputs.bump_type }}"
+            exit 1
+          fi
+
+          if [ "${{ steps.test-force-major.outputs.new_version }}" != "v2.0.0" ]; then
+            echo "FAIL: Expected new_version to be v2.0.0, got ${{ steps.test-force-major.outputs.new_version }}"
+            exit 1
+          fi
+          echo "PASS: Force bump type test passed"
+
+      # Test ignore-commits functionality
+      - name: Reset and create multiple commits
+        id: setup-ignore-test
+        run: |
+          git reset --hard v1.0.0
+
+          # Create commit with MAJOR indicator
+          echo "breaking change" > breaking.txt
+          git add breaking.txt
+          git commit -m "Breaking API change (MAJOR)"
+          MAJOR_SHA=$(git rev-parse HEAD)
+          echo "major-sha=$MAJOR_SHA" >> $GITHUB_OUTPUT
+
+          # Create commit with MINOR indicator
+          echo "new feature" > feature.txt
+          git add feature.txt
+          git commit -m "Add dashboard (MINOR)"
+
+      - name: Test ignore-commits with MAJOR commit ignored
+        id: test-ignore-major
+        uses: ./.github/actions/calculate-version
+        with:
+          tag-type: ""
+          ignore-commits: ${{ steps.setup-ignore-test.outputs.major-sha }}
+
+      - name: Verify ignore-commits works
+        run: |
+          echo "Ignore commits test results:"
+          echo "  Bump type: ${{ steps.test-ignore-major.outputs.bump_type }}"
+          echo "  New version: ${{ steps.test-ignore-major.outputs.new_version }}"
+          echo "  Ignored SHA: ${{ steps.setup-ignore-test.outputs.major-sha }}"
+
+          # Should be minor since we ignored the major commit
+          if [ "${{ steps.test-ignore-major.outputs.bump_type }}" != "minor" ]; then
+            echo "FAIL: Expected bump_type to be minor after ignoring major commit, got ${{ steps.test-ignore-major.outputs.bump_type }}"
+            exit 1
+          fi
+
+          if [ "${{ steps.test-ignore-major.outputs.new_version }}" != "v1.1.0" ]; then
+            echo "FAIL: Expected new_version to be v1.1.0, got ${{ steps.test-ignore-major.outputs.new_version }}"
+            exit 1
+          fi
+          echo "PASS: Ignore commits test passed"
+
+      # Test multiple ignored commits
+      - name: Reset and create multiple commits to ignore
+        run: |
+          git reset --hard v1.0.0
+
+          # Create first commit to ignore
+          echo "fixing1" > fixing1.txt
+          git add fixing1.txt
+          git commit -m "Fix bug 1 (PATCH)"
+          PATCH_SHA1=$(git rev-parse HEAD)
+
+          # Create second commit to ignore
+          echo "fixing2" > fixing2.txt
+          git add fixing2.txt
+          git commit -m "Fix bug 2 (PATCH)"
+          PATCH_SHA2=$(git rev-parse HEAD)
+
+          # Create commit to keep
+          echo "patch fix" > patch.txt
+          git add patch.txt
+          git commit -m "Fix bug"
+
+          echo "PATCH_SHA1=$PATCH_SHA1" >> $GITHUB_ENV
+          echo "PATCH_SHA2=$PATCH_SHA2" >> $GITHUB_ENV
+
+            # Test multiple ignored commits
+      - name: Create additional commits for multiple ignore test
+        id: setup-multiple-ignore
+        run: |
+          # Create another MAJOR commit
+          echo "another breaking change" > breaking2.txt
+          git add breaking2.txt
+          git commit -m "Another API break (MAJOR)"
+          MAJOR_SHA1=$(git rev-parse HEAD)
+          echo "major-sha1=$MAJOR_SHA1" >> $GITHUB_OUTPUT
+
+          # Create another MAJOR commit
+          echo "yet another breaking change" > breaking3.txt
+          git add breaking3.txt
+          git commit -m "Yet another break (MAJOR)"
+          MAJOR_SHA2=$(git rev-parse HEAD)
+          echo "major-sha2=$MAJOR_SHA2" >> $GITHUB_OUTPUT
+
+      - name: Test multiple ignore-commits
+        id: test-ignore-multiple
+        uses: ./.github/actions/calculate-version
+        with:
+          tag-type: ""
+          ignore-commits: "${{ steps.setup-multiple-ignore.outputs.major-sha1 }},${{ steps.setup-multiple-ignore.outputs.major-sha2 }}"
+
+      - name: Verify multiple ignored commits
+        run: |
+          echo "Multiple ignore test results:"
+          echo "  Bump type: ${{ steps.test-ignore-multiple.outputs.bump_type }}"
+          echo "  New version: ${{ steps.test-ignore-multiple.outputs.new_version }}"
+
+          # Should be patch since we ignored both major commits
+          if [ "${{ steps.test-ignore-multiple.outputs.bump_type }}" != "patch" ]; then
+            echo "FAIL: Expected bump_type to be patch after ignoring major commits, got ${{ steps.test-ignore-multiple.outputs.bump_type }}"
+            exit 1
+          fi
+
+          if [ "${{ steps.test-ignore-multiple.outputs.new_version }}" != "v1.0.1" ]; then
+            echo "FAIL: Expected new_version to be v1.0.1, got ${{ steps.test-ignore-multiple.outputs.new_version }}"
+            exit 1
+          fi
+          echo "PASS: Multiple ignore commits test passed"
+
+      # Test force-bump-type with none
+      - name: Test force-bump-type none
+        id: test-force-none
+        uses: ./.github/actions/calculate-version
+        with:
+          tag-type: ""
+          force-bump-type: "none"
+
+      - name: Verify force none bump
+        run: |
+          echo "Force none test results:"
+          echo "  Bump type: ${{ steps.test-force-none.outputs.bump_type }}"
+          echo "  New version: ${{ steps.test-force-none.outputs.new_version }}"
+
+          if [ "${{ steps.test-force-none.outputs.bump_type }}" != "none" ]; then
+            echo "FAIL: Expected forced bump_type to be none"
+            exit 1
+          fi
+
+          if [ "${{ steps.test-force-none.outputs.new_version }}" != "v1.0.0" ]; then
+            echo "FAIL: Expected new_version to stay v1.0.0 with no bump"
+            exit 1
+          fi
+          echo "PASS: Force none bump test passed"
+
+      # Test ignore with short SHA
+      - name: Test ignore with short SHA
+        id: setup-short-sha-test
+        run: |
+          git reset --hard v1.0.0
+          echo "major change" > major.txt
+          git add major.txt
+          git commit -m "API breaking change (MAJOR)"
+          FULL_SHA=$(git rev-parse HEAD)
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          echo "short-sha=$SHORT_SHA" >> $GITHUB_OUTPUT
+          echo "full-sha=$FULL_SHA" >> $GITHUB_OUTPUT
+
+      - name: Test ignore-commits with short SHA
+        id: test-ignore-short-sha
+        uses: ./.github/actions/calculate-version
+        with:
+          tag-type: ""
+          ignore-commits: ${{ steps.setup-short-sha-test.outputs.short-sha }}
+
+      - name: Verify short SHA ignore works
+        run: |
+          echo "Short SHA ignore test results:"
+          echo "  Bump type: ${{ steps.test-ignore-short-sha.outputs.bump_type }}"
+          echo "  Short SHA used: ${{ steps.setup-short-sha-test.outputs.short-sha }}"
+          echo "  Full SHA: ${{ steps.setup-short-sha-test.outputs.full-sha }}"
+
+          # Should be none since we ignored the only commit
+          if [ "${{ steps.test-ignore-short-sha.outputs.bump_type }}" != "none" ]; then
+            echo "FAIL: Expected bump_type to be none after ignoring commit with short SHA"
+            exit 1
+          fi
+          echo "PASS: Short SHA ignore test passed"
+
+      - name: New features test summary
+        run: |
+          echo "All new feature tests passed!"
+          echo ""
+          echo "New feature test coverage includes:"
+          echo "  - Force bump type overrides commit analysis"
+          echo "  - Ignore specific commits by full SHA"
+          echo "  - Ignore multiple commits"
+          echo "  - Force bump type to none"
+          echo "  - Ignore commits using short SHA"
+
+  final-test-summary:
+    name: Final Test Summary
+    runs-on: ubuntu-latest
+    needs: [test-calculate-version, test-version-bumping, test-edge-cases, integration-test, test-force-bump-and-ignore-commits]
+    steps:
+      - name: Test summary
+        run: |
+          echo "🎉 ALL TESTS PASSED SUCCESSFULLY! 🎉"
+          echo ""
+          echo "Complete test coverage includes:"
+          echo ""
+          echo "Basic Functionality:"
+          echo "  ✅ No previous tags scenario"
+          echo "  ✅ Existing tags detection"
+          echo "  ✅ RC tag generation"
+          echo "  ✅ Dev tag generation"
+          echo ""
+          echo "Version Bumping:"
+          echo "  ✅ MAJOR version bumping"
+          echo "  ✅ MINOR version bumping"
+          echo "  ✅ PATCH version bumping"
+          echo "  ✅ No bump scenario"
+          echo ""
+          echo "Advanced Features:"
+          echo "  ✅ RC increment logic"
+          echo "  ✅ Integration scenario"
+          echo "  ✅ Force bump type overrides"
+          echo "  ✅ Ignore commits by SHA"
+          echo "  ✅ Multiple ignored commits"
+          echo "  ✅ Force no bump"
+          echo "  ✅ Short SHA support"
+          echo ""
+          echo "The calculate-version action is working correctly! 🚀"

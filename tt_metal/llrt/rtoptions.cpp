@@ -129,6 +129,7 @@ RunTimeOptions::RunTimeOptions() {
     profiler_buffer_usage_enabled = false;
     profiler_trace_profiler = false;
     profiler_trace_tracking = false;
+    profiler_cpp_post_process = false;
 
     const char* profiler_enabled_str = std::getenv("TT_METAL_DEVICE_PROFILER");
 #if defined(TRACY_ENABLE)
@@ -153,6 +154,10 @@ RunTimeOptions::RunTimeOptions() {
         const char* profiler_mid_run_dump_str = std::getenv("TT_METAL_PROFILER_MID_RUN_DUMP");
         if (profiler_mid_run_dump_str != nullptr && profiler_mid_run_dump_str[0] == '1') {
             profiler_mid_run_dump = true;
+        }
+        const char* profiler_cpp_post_process_str = std::getenv("TT_METAL_PROFILER_CPP_POST_PROCESS");
+        if (profiler_cpp_post_process_str != nullptr && profiler_cpp_post_process_str[0] == '1') {
+            profiler_cpp_post_process = true;
         }
     }
 
@@ -329,6 +334,10 @@ RunTimeOptions::RunTimeOptions() {
 
     if (getenv("TT_METAL_USE_MGD_1_0")) {
         this->use_mesh_graph_descriptor_1_0 = true;
+    }
+
+    if (getenv("TT_METAL_FORCE_JIT_COMPILE")) {
+        this->force_jit_compile = true;
     }
 
     const char* timeout_duration_for_operations_value = std::getenv("TT_METAL_OPERATION_TIMEOUT_SECONDS");

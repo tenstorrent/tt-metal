@@ -15,6 +15,7 @@
 #include <atomic>
 
 #include <tt_stl/assert.hpp>
+#include <tt-metalium/fabric_types.hpp>
 
 // Forward declaration
 namespace tt::tt_fabric {
@@ -149,8 +150,10 @@ public:
     proto::Architecture get_arch() const;
     uint32_t get_num_eth_ports_per_direction() const;
 
+    // Helper to infer FabricType from MGD dim_types
+    static FabricType infer_fabric_type_from_dim_types(const proto::MeshDescriptor* mesh_desc);
+
 private:
-    bool backwards_compatible_;
 
     // Descriptor fast lookup
     std::unique_ptr<const proto::MeshGraphDescriptor> proto_;

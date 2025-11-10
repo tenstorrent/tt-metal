@@ -35,7 +35,7 @@ void py_bind_minimal_matmul(py::module& module) {
             - Layout: TILE (required).
             - Device: must be on device and allocated in a device buffer.
             - DType: one of {DataType::BFLOAT16, DataType::BFLOAT8_B, DataType::BFLOAT4_B}.
-            - Shape: [..., M, K] with no batching; all leading dimensions (dims < -2) must be 1.
+            - Shape: [..., M, K]. Upper (leading) dimensions are broadcast over rows (folded into M).
 
         weight_tensor : ttnn.Tensor
             Weight matrix B.
@@ -106,10 +106,11 @@ void py_bind_minimal_matmul(py::module& module) {
         --------------------------
         - All tensors must be on the same device and allocated in device buffers.
         - All tensors must be in TILE layout (sharded tensors must be tile-aligned at shard boundaries).
-        - Supported dtypes for inputs: BF16, BF8_B, BF4_B. Bias (if present)
+        - Supported dtypes for inputs: BF16, BF8_B, BF4_B, FLOAT32. Bias (if present)
           must be one of the supported dtypes. The dtype of the output is the same as the dtype of the inputs.
         - No implicit transpose flags are supported; provide `weight_tensor` with logical shape [..., K, N].
-        - No batching: all leading dimensions for inputs and bias must be 1.
+        - Weight and bias must have 1 in all leading dimensions (dims < -2). Activation may have arbitrary
+          upper dimensions; these are broadcast across rows (internally folded into M for execution).
         - Performance and memory footprint are sensitive to block sizes and subblock shapes. Providing non-sensible
           values in `config` may degrade performance. Defaults are generally a good starting point.
 

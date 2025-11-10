@@ -4,11 +4,6 @@
 
 #pragma once
 
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wundefined-inline"
-#pragma GCC diagnostic ignored "-Wdeprecated-volatile"
-#pragma GCC diagnostic ignored "-Wdeprecated-this-capture"
-
 #include <hostdevcommon/common_values.hpp>                                                                 // NOLINT
 #include <tt-metalium/base_types.hpp>                                                                      // NOLINT
 #include <tt-metalium/bfloat16.hpp>                                                                        // NOLINT
@@ -50,6 +45,10 @@
 #include <ttnn/operations/eltwise/unary_backward/unary_backward.hpp>                                       // NOLINT
 #include <ttnn/operations/embedding/embedding.hpp>                                                         // NOLINT
 #include <ttnn/operations/embedding_backward/embedding_backward.hpp>                                       // NOLINT
+#include <ttnn/operations/ccl/common/host/moe_utils.hpp>                                                   // NOLINT
+#include <ttnn/operations/ccl/all_gather/all_gather.hpp>                                                   // NOLINT
+#include <ttnn/operations/ccl/all_reduce/all_reduce.hpp>                                                   // NOLINT
+#include <ttnn/operations/ccl/reduce_scatter/reduce_scatter.hpp>                                           // NOLINT
 #include <ttnn/operations/experimental/ccl/all_gather_async/all_gather_async.hpp>                          // NOLINT
 #include <ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async.hpp>                          // NOLINT
 #include <ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/reduce_scatter_minimal_async.hpp>  // NOLINT
@@ -85,4 +84,3 @@
 #include <ttnn/tensor/xtensor/conversion_utils.hpp>                                                        // NOLINT
 #include <ttnn/tensor/xtensor/xtensor_all_includes.hpp>                                                    // NOLINT
 #include <ttnn/types.hpp>                                                                                  // NOLINT
-#pragma GCC diagnostic pop

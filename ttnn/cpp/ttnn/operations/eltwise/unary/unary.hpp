@@ -7,6 +7,7 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
+
 namespace ttnn {
 namespace operations::unary {
 
@@ -58,12 +59,12 @@ struct ExecuteUnaryWithTwoFloatParameter {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
+// Tensor - scalar variant with scalars of float/int32_t/uint32_t
 template <UnaryOpType unary_op_type>
-struct ExecuteUnaryWithVariantFloatIntParameter {
-    template <typename T>
+struct ExecuteUnaryTSVariant {
     static Tensor invoke(
         const Tensor& input_tensor,
-        T parameter,
+        ScalarVariant parameter,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
@@ -326,6 +327,15 @@ struct Rsub {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
+struct Where {
+    static Tensor invoke(
+        const Tensor& condition,
+        const ScalarVariant& value_true,
+        const ScalarVariant& value_false,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
 }  // namespace operations::unary
 
 // NOLINTBEGIN(bugprone-macro-parentheses)
@@ -405,8 +415,6 @@ REGISTER_UNARY_OPERATION(sign, SIGN);
 REGISTER_UNARY_OPERATION(signbit, SIGNBIT);
 REGISTER_UNARY_OPERATION(silu, SILU);
 REGISTER_UNARY_OPERATION(sin, SIN);
-REGISTER_UNARY_OPERATION(sqrt, SQRT);
-REGISTER_UNARY_OPERATION(rsqrt, RSQRT);
 REGISTER_UNARY_OPERATION(square, SQUARE);
 REGISTER_UNARY_OPERATION(tan, TAN);
 REGISTER_UNARY_OPERATION(tiled_prod, TILED_PROD);
@@ -430,6 +438,8 @@ REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(log, LOG);
 REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(log10, LOG10);
 REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(log2, LOG2);
 REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(log1p, LOG1P);
+REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(rsqrt, RSQRT);
+REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(sqrt, SQRT);
 
 // Unaries with vector mode and fast and approximate mode
 REGISTER_UNARY_OPERATION_WITH_VECTOR_AND_FAST_AND_APPROXIMATE_MODE(sigmoid, SIGMOID);
@@ -440,12 +450,6 @@ REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(leaky_relu, LEAKY_RELU);
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(relu_max, RELU_MAX);
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(relu_min, RELU_MIN);
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(unary_remainder, REMAINDER);
-REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(gt_unary, UNARY_GT);
-REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(lt_unary, UNARY_LT);
-REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(ne_unary, UNARY_NE);
-REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(eq_unary, UNARY_EQ);
-REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(ge_unary, UNARY_GE);
-REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(le_unary, UNARY_LE);
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(celu, CELU);
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(rpow, RPOW);
 
@@ -475,11 +479,29 @@ constexpr auto softplus = ttnn::register_operation<"ttnn::softplus", ttnn::opera
 constexpr auto tanh = ttnn::register_operation<"ttnn::tanh", ttnn::operations::unary::Tanh>();
 constexpr auto tanhshrink = ttnn::register_operation<"ttnn::tanhshrink", ttnn::operations::unary::Tanhshrink>();
 constexpr auto prelu_sfpu = ttnn::register_operation<"ttnn::prelu_sfpu", ttnn::operations::unary::Prelu>();
-
+constexpr auto where_tss = ttnn::register_operation<"ttnn::where_tss", ttnn::operations::unary::Where>();
 constexpr auto selu = ttnn::register_operation<"ttnn::selu", ttnn::operations::unary::Selu>();
 constexpr auto fill = ttnn::register_operation<
     "ttnn::fill",
-    ttnn::operations::unary::ExecuteUnaryWithVariantFloatIntParameter<ttnn::operations::unary::UnaryOpType::FILL>>();
+    ttnn::operations::unary::ExecuteUnaryTSVariant<ttnn::operations::unary::UnaryOpType::FILL>>();
+constexpr auto gt_unary = ttnn::register_operation<
+    "ttnn::gt_unary",
+    ttnn::operations::unary::ExecuteUnaryTSVariant<ttnn::operations::unary::UnaryOpType::UNARY_GT>>();
+constexpr auto lt_unary = ttnn::register_operation<
+    "ttnn::lt_unary",
+    ttnn::operations::unary::ExecuteUnaryTSVariant<ttnn::operations::unary::UnaryOpType::UNARY_LT>>();
+constexpr auto ne_unary = ttnn::register_operation<
+    "ttnn::ne_unary",
+    ttnn::operations::unary::ExecuteUnaryTSVariant<ttnn::operations::unary::UnaryOpType::UNARY_NE>>();
+constexpr auto eq_unary = ttnn::register_operation<
+    "ttnn::eq_unary",
+    ttnn::operations::unary::ExecuteUnaryTSVariant<ttnn::operations::unary::UnaryOpType::UNARY_EQ>>();
+constexpr auto ge_unary = ttnn::register_operation<
+    "ttnn::ge_unary",
+    ttnn::operations::unary::ExecuteUnaryTSVariant<ttnn::operations::unary::UnaryOpType::UNARY_GE>>();
+constexpr auto le_unary = ttnn::register_operation<
+    "ttnn::le_unary",
+    ttnn::operations::unary::ExecuteUnaryTSVariant<ttnn::operations::unary::UnaryOpType::UNARY_LE>>();
 constexpr auto sigmoid_accurate =
     ttnn::register_operation<"ttnn::sigmoid_accurate", ttnn::operations::unary::Sigmoid_accurate>();
 constexpr auto log_sigmoid = ttnn::register_operation<"ttnn::log_sigmoid", ttnn::operations::unary::LogSigmoid>();
