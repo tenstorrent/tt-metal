@@ -317,6 +317,8 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_welford_m
         gamma_stick_size = gamma.value().padded_shape()[-1] * gamma.value().element_size();
         bool gamma_stick_size_is_power_of_two = tt::tt_metal::is_power_of_two_at_least_32(gamma_stick_size);
         TT_FATAL(gamma_stick_size_is_power_of_two, "Only power of 2 gammas are supported");
+    } else if (gamma.has_value() and gamma.value().layout() == Layout::TILE) {
+        gamma_stick_size = 2048;  // size of tile in bytes bf16
     }
     reader_compile_time_args.push_back((std::uint32_t)gamma_stick_size);
 
@@ -339,11 +341,11 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_welford_m
         reader_defines["FUSE_BETA"] = "1";
     }
 
-    auto use_row_major_kernel = (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) or
-                                (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR);
-    TT_FATAL(
-        use_row_major_kernel || (!gamma.has_value() && !beta.has_value()),
-        "Only row major gamma and beta are supported");
+    // auto use_row_major_kernel = (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) or
+    //                             (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR);
+    // TT_FATAL(
+    //     use_row_major_kernel || (!gamma.has_value() && !beta.has_value()),
+    //     "Only row major gamma and beta are supported");
     auto reader_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"

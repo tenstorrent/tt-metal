@@ -42,6 +42,42 @@ inline uint32_t pack_two_bfloat16_into_uint32(std::pair<uint16_t, uint16_t> two_
     return (uint32_t)two_bfloats.first | ((uint32_t)two_bfloats.second << 16);
 }
 }  // namespace CMAKE_UNIQUE_NAMESPACE
+std::pair<std::optional<Tensor>, uint32_t> create_reciprocal_tensor_if_needed(
+    IDevice* device, uint32_t W, const CoreRangeSet& cores, const bool use_welford) {
+    const auto num_cores = cores.num_cores();
+    std::optional<Tensor> recip_tensor = std::nullopt;
+    uint32_t reciprocal_CB_size_bytes = 0;
+    if (use_welford) {
+        const auto recip_dtype = tt::tt_metal::DataType::FLOAT32;
+        const tt::tt_metal::ShardSpec shard_spec(cores, {1, W}, ShardOrientation::ROW_MAJOR);
+        const MemoryConfig mem_config =
+            MemoryConfig{tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, shard_spec};
+        const tt::tt_metal::TensorLayout tensor_layout(
+            tt::tt_metal::TensorLayout(recip_dtype, Layout::ROW_MAJOR, mem_config));
+        const Shape tensor_shape{num_cores, W};
+        const TensorSpec tensor_spec(tensor_shape, tensor_layout);
+        // Compute the reciprocals of an ascending sequence of integers
+        std::vector<float> reciprocals(num_cores * W);
+        for (uint32_t i = 0; i < W; i++) {
+            // Compute for first row
+            reciprocals[i] = 1.0f / (i + 1);
+        }
+        for (uint32_t i = 1; i < num_cores; i++) {
+            // Copy to other rows
+            std::copy(reciprocals.begin(), reciprocals.begin() + W, reciprocals.begin() + i * W);
+        }
+
+        if (auto p_mesh_device = dynamic_cast<distributed::MeshDevice*>(device)) {
+            recip_tensor = Tensor::from_vector(std::move(reciprocals), tensor_spec, p_mesh_device);
+        } else {
+            TT_THROW("Cannot cast to MeshDevice");
+        }
+
+        reciprocal_CB_size_bytes = recip_tensor->buffer()->aligned_size_per_bank();
+    }
+
+    return std::make_pair(recip_tensor, reciprocal_CB_size_bytes);
+}
 }  // namespace
 
 namespace operation = tt::tt_metal::operation;
@@ -103,7 +139,6 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_welford_multi_core(
     uint32_t in_single_tile_size = tt::tile_size(in_data_format);
     uint32_t out_single_tile_size = tt::tile_size(out_data_format);
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
-    uint32_t bfloat16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
 
     log_debug(tt::LogOp, "in_data_format: {}", in_data_format);
     log_debug(tt::LogOp, "out_data_format: {}", out_data_format);
@@ -126,32 +161,12 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_welford_multi_core(
     out0_cb: [sum(xˆ2)]  # RMSNorm
 
     */
-    const uint32_t double_buffer_constant = 2;
-    const uint32_t in0_tiles = Wt * double_buffer_constant;
-    const uint32_t in1_tiles = 1;  // reduce scalar
+    const uint32_t in0_tiles = 2;
 
-    const uint32_t intermed0_tiles = Wt * double_buffer_constant;  // xˆ2
     uint32_t out0_tiles = 1;
     if (!is_rmsnorm) {
         out0_tiles = 2;
     }
-
-    TT_FATAL(
-        W <= TILE_WIDTH * in0_tiles,
-        "W ({}) exceeds the maximum supported size of tile buffer ({} * {}, kernel limitation right now).",
-        W,
-        TILE_WIDTH,
-        in0_tiles);
-    TT_FATAL(
-        in0_tiles % block_size == 0,
-        "Size of buffer ({}) must be divisible by the size of block ({}) used by the reader and compute kernel.",
-        in0_tiles,
-        block_size);
-    TT_FATAL(
-        intermed0_tiles % block_size == 0,
-        "Size of buffer ({}) must be divisible by the size of block ({}) used by the reader and compute kernel.",
-        intermed0_tiles,
-        block_size);
 
     auto
         [num_cores,
@@ -219,23 +234,27 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_welford_multi_core(
         tt::tt_metal::CircularBufferConfig(in0_tiles * in_single_tile_size, {{tt::CBIndex::c_0, in_data_format}})
             .set_page_size(tt::CBIndex::c_0, in_single_tile_size);
     CreateCircularBuffer(program, all_cores, cb_src0_config);
-    // c_in1 -> reduce scalar
-    auto cb_reduce_config =
-        tt::tt_metal::CircularBufferConfig(in1_tiles * bfloat16_tile_size, {{tt::CBIndex::c_1, cb_data_format}})
-            .set_page_size(tt::CBIndex::c_1, bfloat16_tile_size);
-    CreateCircularBuffer(program, all_cores, cb_reduce_config);
 
     // LN and RMS shared intermediates //
     // c_intermed0 -> xˆ2
     auto cb_intermed0_config =
-        tt::tt_metal::CircularBufferConfig(intermed0_tiles * single_tile_size, {{tt::CBIndex::c_6, cb_data_format}})
-            .set_page_size(tt::CBIndex::c_6, single_tile_size);
+        tt::tt_metal::CircularBufferConfig(in0_tiles * single_tile_size, {{tt::CBIndex::c_1, cb_data_format}})
+            .set_page_size(tt::CBIndex::c_1, single_tile_size);
     CreateCircularBuffer(program, all_cores, cb_intermed0_config);
 
     auto cb_out0_config =
-        tt::tt_metal::CircularBufferConfig(out0_tiles * out_single_tile_size, {{tt::CBIndex::c_14, out_data_format}})
+        tt::tt_metal::CircularBufferConfig(in0_tiles * out_single_tile_size, {{tt::CBIndex::c_14, out_data_format}})
             .set_page_size(tt::CBIndex::c_14, out_single_tile_size);
     CreateCircularBuffer(program, all_cores, cb_out0_config);
+
+    auto [recip_tensor, reciprocal_CB_size_bytes] = create_reciprocal_tensor_if_needed(device, W, all_cores, true);
+
+    constexpr tt::DataFormat reciprocal_cb_data_format = tt::DataFormat::Float32;
+    auto c_recip_config =
+        tt::tt_metal::CircularBufferConfig(reciprocal_CB_size_bytes, {{tt::CBIndex::c_2, reciprocal_cb_data_format}})
+            .set_page_size(tt::CBIndex::c_2, reciprocal_CB_size_bytes)
+            .set_globally_allocated_address(*recip_tensor.value().buffer());
+    CreateCircularBuffer(program, all_cores, c_recip_config);
 
     // Log all circular buffers with program.circular_buffers(), which returns
     // std::vector<std::shared_ptr<CircularBuffer>>

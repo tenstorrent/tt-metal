@@ -61,10 +61,10 @@ void LayerNormPostAllGather::validate(
     if (gamma.has_value()) {
         const auto& gamma_tensor = gamma.value();
 
-        TT_FATAL(
-            gamma_tensor.layout() == Layout::ROW_MAJOR,
-            "Gamma tensor must have ROW_MAJOR layout (only packed RM supported), got: {}",
-            gamma_tensor.layout());
+        // TT_FATAL(
+        //     gamma_tensor.layout() == Layout::ROW_MAJOR,
+        //     "Gamma tensor must have ROW_MAJOR layout (only packed RM supported), got: {}",
+        //     gamma_tensor.layout());
         if (gamma_tensor.layout() == Layout::TILE) {
             TT_FATAL(
                 a.padded_shape()[-1] == gamma.value().padded_shape()[-1],
@@ -111,10 +111,10 @@ void LayerNormPostAllGather::validate(
                 "Gamma and beta must have the same layout, got gamma: {} vs beta: {}",
                 gamma_tensor.layout(),
                 beta_tensor.layout());
-            TT_FATAL(
-                beta_tensor.layout() == Layout::ROW_MAJOR,
-                "Beta tensor must have ROW_MAJOR layout, got: {}",
-                beta_tensor.layout());
+            // TT_FATAL(
+            //     beta_tensor.layout() == Layout::ROW_MAJOR,
+            //     "Beta tensor must have ROW_MAJOR layout, got: {}",
+            //     beta_tensor.layout());
             if (beta_tensor.layout() == Layout::TILE) {
                 TT_FATAL(
                     a.padded_shape()[-1] == beta_tensor.padded_shape()[-1],
@@ -179,7 +179,7 @@ tt::tt_metal::operation::ProgramWithCallbacks LayerNormPostAllGather::create_pro
             if constexpr (std::is_same_v<ProgramConfigType, LayerNormDefaultProgramConfig>) {
                 if (program_config.use_welford == true) {
                     TT_FATAL(
-                        this->norm_type == ttnn::operations::normalization::LayerNormDistributedType::RMSNORM,
+                        this->norm_type != ttnn::operations::normalization::LayerNormDistributedType::RMSNORM,
                         "Welford is not compatable with RMSNORM ");
                     return layernorm_post_allgather_welford_multi_core(
                         a,
