@@ -120,7 +120,7 @@ def test_extras_backbone(device, pcc, size, reset_seeds):
         torch_input,
         layers_with_weights,
         device=device,
-        dtype=ttnn.bfloat16,
+        dtype=ttnn.bfloat8_b,
     )
 
     tt_output = ttnn.to_torch(tt_output_ttnn)

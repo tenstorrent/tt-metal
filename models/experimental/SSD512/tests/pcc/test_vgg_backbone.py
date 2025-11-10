@@ -23,7 +23,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     "size",
     ((512,)),
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 98304}], indirect=True)
 def test_vgg_backbone(device, pcc, size, reset_seeds):
     """
     Test VGG backbone implementation.
@@ -108,7 +108,8 @@ def test_vgg_backbone(device, pcc, size, reset_seeds):
         torch_input,
         layers_with_weights,
         device=device,
-        dtype=ttnn.bfloat16,
+        dtype=ttnn.bfloat8_b,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
     tt_output = ttnn.to_torch(tt_output_ttnn)

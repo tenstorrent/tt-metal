@@ -29,7 +29,7 @@ def build_extras(cfg, in_channels=1024, device=None):
     Build extra layers configuration for SSD.
     """
     layers = []
-    flag = False  # Alternates between 1x1 and 3x3 kernels
+    flag = False
 
     for k, v in enumerate(cfg):
         if in_channels != "S":
@@ -210,7 +210,7 @@ def load_multibox_weights_from_torch(
             weight_ttnn = ttnn.from_torch(
                 weight,
                 device=weight_device_placement,
-                dtype=dtype,
+                dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
             )
 
@@ -219,7 +219,7 @@ def load_multibox_weights_from_torch(
                 bias_ttnn = ttnn.from_torch(
                     bias_reshaped,
                     device=weight_device_placement,
-                    dtype=dtype,
+                    dtype=ttnn.bfloat16,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                 )
             else:
@@ -246,7 +246,7 @@ def load_multibox_weights_from_torch(
             weight_ttnn = ttnn.from_torch(
                 weight,
                 device=weight_device_placement,
-                dtype=dtype,
+                dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
             )
 
@@ -255,7 +255,7 @@ def load_multibox_weights_from_torch(
                 bias_ttnn = ttnn.from_torch(
                     bias_reshaped,
                     device=weight_device_placement,
-                    dtype=dtype,
+                    dtype=ttnn.bfloat16,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                 )
             else:
@@ -269,13 +269,13 @@ def load_multibox_weights_from_torch(
 
 
 def forward_extras(
-    x, extras_config, batch_size, input_height, input_width, device, dtype=ttnn.bfloat16, memory_config=None
+    x, extras_config, batch_size, input_height, input_width, device, dtype=ttnn.bfloat8_b, memory_config=None
 ):
     """
     Forward pass through extra layers.
     """
     if memory_config is None:
-        memory_config = ttnn.DRAM_MEMORY_CONFIG
+        memory_config = ttnn.L1_MEMORY_CONFIG
 
     sources = []
     current_h = input_height
@@ -308,7 +308,7 @@ def forward_extras(
             weight = ttnn.from_torch(
                 weight_torch,
                 device=None,
-                dtype=dtype,
+                dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
             )
 
@@ -321,7 +321,7 @@ def forward_extras(
                 bias = ttnn.from_torch(
                     bias_reshaped,
                     device=None,
-                    dtype=dtype,
+                    dtype=ttnn.bfloat16,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                 )
 
@@ -352,7 +352,7 @@ def forward_extras(
                 input_width=current_w,
                 device=device,
                 return_output_dim=True,
-                dtype=dtype,
+                dtype=ttnn.bfloat8_b,
                 memory_config=memory_config,
                 compute_config=compute_config,
             )
@@ -366,7 +366,8 @@ def forward_extras(
             conv_count += 1
 
         elif layer["type"] == "relu":
-            x = ttnn.relu(x, memory_config=memory_config)
+            x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
+            x = ttnn.relu(x)
 
             should_extract = conv_count >= 2 and conv_count % 2 == 0
             if should_extract:
@@ -412,8 +413,8 @@ class SSD512Network:
         self.l2norm.weight = ttnn.from_torch(
             l2norm_weight.reshape(1, -1, 1, 1),
             device=weight_device_placement,
-            dtype=dtype,
-            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
         )
 
         # Load extras weights
@@ -428,15 +429,15 @@ class SSD512Network:
             torch_model.loc,
             torch_model.conf,
             self.device,
-            dtype,
+            dtype=ttnn.bfloat16,
             weight_device=weight_device_placement,
         )
 
-    def forward(self, x, dtype=ttnn.bfloat16, memory_config=None, debug=False):
+    def forward(self, x, dtype=ttnn.bfloat8_b, memory_config=None, debug=False):
         """
         Forward pass of SSD512 network.
         """
-        memory_config = ttnn.DRAM_MEMORY_CONFIG
+        memory_config = ttnn.L1_MEMORY_CONFIG
 
         batch_size = x.shape[0]
 
@@ -521,7 +522,7 @@ class SSD512Network:
             source_channels = source.shape[1]
             tensor_size_estimate = batch_size * source_h * source_w * source_channels
             use_l1_for_this_layer = source_h <= 128 and source_w <= 128 and tensor_size_estimate <= 2 * 1024 * 1024
-            source_memory_config = ttnn.L1_MEMORY_CONFIG if use_l1_for_this_layer else ttnn.DRAM_MEMORY_CONFIG
+            source_memory_config = ttnn.L1_MEMORY_CONFIG
 
             if idx < len(self.loc_config):
                 actual_weight_channels = None

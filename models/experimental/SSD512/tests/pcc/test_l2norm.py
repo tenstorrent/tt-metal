@@ -21,7 +21,7 @@ def test_l2norm(device):
     shape = (2, n_channels, 32, 32)
     torch_input = torch.randn(shape)
     ttnn_input = ttnn.from_torch(
-        torch_input.permute(0, 2, 3, 1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        torch_input.permute(0, 2, 3, 1), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
     )
 
     # Create L2Norm layers

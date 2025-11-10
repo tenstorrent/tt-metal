@@ -219,7 +219,7 @@ def test_multibox_heads(device, pcc, size, reset_seeds):
         loc_layers_with_weights,
         conf_layers_with_weights,
         device=device,
-        dtype=ttnn.bfloat16,
+        dtype=ttnn.bfloat8_b,
     )
 
     for source_idx in range(len(sources)):

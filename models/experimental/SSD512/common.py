@@ -32,7 +32,7 @@ def setup_seeds_and_deterministic(reset_seeds=True, seed=0):
         pass
 
 
-def build_and_init_torch_model(phase="train", size=512, num_classes=21):
+def build_and_init_torch_model(phase="test", size=512, num_classes=21):
     """
     Build PyTorch SSD model and initialize with random weights.
     """

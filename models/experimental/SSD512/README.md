@@ -79,7 +79,7 @@ pytest models/experimental/SSD512/tests/pcc/test_ssd.py
 
 ### Performance
 ### Single Device (BS=1):
-- end-2-end perf is `47.1` FPS
+- end-2-end perf is `49.9` FPS
 
 ### Run Device Performance Test
 ```bash

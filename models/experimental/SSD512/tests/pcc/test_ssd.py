@@ -34,7 +34,7 @@ def test_ssd512_network(device, pcc, size, reset_seeds):
     batch_size = 1
 
     # Build PyTorch reference model
-    torch_model = build_and_init_torch_model(phase="train", size=size, num_classes=num_classes)
+    torch_model = build_and_init_torch_model(phase="test", size=size, num_classes=num_classes)
 
     # Build TTNN model and load weights
     ttnn_model = build_and_load_ttnn_model(torch_model, device, num_classes=num_classes)

@@ -12,6 +12,7 @@ class TtL2Norm:
         self.n_channels = n_channels
         self.eps = eps
         self.device = device
+        self.dtype = ttnn.bfloat8_b
         self.weight = ttnn.full([1, n_channels, 1, 1], scale, device=device)
 
     def __call__(self, x, memory_config=None):
@@ -24,9 +25,9 @@ class TtL2Norm:
 
         batch_size, channels, height, width = x_nchw.shape
         tensor_size_estimate = batch_size * height * width * channels
-        use_l1_for_this_layer = height <= 128 and width <= 128 and tensor_size_estimate <= 2 * 1024 * 1024
+
         if memory_config is None:
-            layer_memory_config = ttnn.L1_MEMORY_CONFIG if use_l1_for_this_layer else ttnn.DRAM_MEMORY_CONFIG
+            layer_memory_config = ttnn.L1_MEMORY_CONFIG
         else:
             layer_memory_config = memory_config
 
@@ -34,8 +35,8 @@ class TtL2Norm:
             x_nchw_ttnn = ttnn.from_torch(
                 x_nchw,
                 device=self.device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=self.dtype,
+                layout=ttnn.TILE_LAYOUT,
                 memory_config=layer_memory_config,
             )
         else:

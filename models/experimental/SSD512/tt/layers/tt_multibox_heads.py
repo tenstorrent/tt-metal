@@ -181,13 +181,13 @@ def create_multibox_layers_with_weights(loc_layers_config, conf_layers_config, d
 
 
 def apply_multibox_heads(
-    sources, loc_layers_with_weights, conf_layers_with_weights, device=None, dtype=ttnn.bfloat16, memory_config=None
+    sources, loc_layers_with_weights, conf_layers_with_weights, device=None, dtype=ttnn.bfloat8_b, memory_config=None
 ):
     """
     Apply multibox heads to source feature maps using TTNN operations.
     """
     if memory_config is None:
-        memory_config = ttnn.DRAM_MEMORY_CONFIG
+        memory_config = ttnn.L1_MEMORY_CONFIG
 
     loc_preds = []
     conf_preds = []
@@ -234,8 +234,9 @@ def apply_multibox_head(input_tensor, layer_with_weights, device=None, dtype=ttn
     # Use L1 for smaller feature maps (<=128x128), DRAM for larger ones
     tensor_size_estimate = batch_size * input_height * input_width * in_channels
     use_l1_for_this_layer = input_height <= 128 and input_width <= 128 and tensor_size_estimate <= 2 * 1024 * 1024
+
     if memory_config is None:
-        memory_config = ttnn.L1_MEMORY_CONFIG if use_l1_for_this_layer else ttnn.DRAM_MEMORY_CONFIG
+        memory_config = ttnn.L1_MEMORY_CONFIG
 
     if isinstance(input_tensor, torch.Tensor):
         x_torch = input_tensor.permute(0, 2, 3, 1)
@@ -300,7 +301,7 @@ def apply_multibox_head(input_tensor, layer_with_weights, device=None, dtype=ttn
     weight = ttnn.from_torch(
         weight_torch,
         device=None,
-        dtype=dtype,
+        dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
     )
 
@@ -313,7 +314,7 @@ def apply_multibox_head(input_tensor, layer_with_weights, device=None, dtype=ttn
         bias = ttnn.from_torch(
             bias_reshaped,
             device=None,
-            dtype=dtype,
+            dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
 
@@ -340,6 +341,7 @@ def apply_multibox_head(input_tensor, layer_with_weights, device=None, dtype=ttn
         slice_config = ttnn.Conv2dL1FullSliceConfig
 
     if use_dram_slicing and x.layout != ttnn.ROW_MAJOR_LAYOUT:
+        x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
         x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
     if device is not None:
         x = ttnn.to_device(x, device, memory_config=memory_config)
@@ -358,8 +360,8 @@ def apply_multibox_head(input_tensor, layer_with_weights, device=None, dtype=ttn
 
     if use_l1_for_this_layer and not use_dram_slicing and estimated_memory_bytes < 1024 * 1024:
         if in_channels > 256 or out_channels > 512:
-            use_l1_for_this_layer = False
-            memory_config = ttnn.DRAM_MEMORY_CONFIG
+            use_l1_for_this_layer = True
+            memory_config = ttnn.L1_MEMORY_CONFIG
             conv_config = ttnn.Conv2dConfig(
                 weights_dtype=dtype,
                 shard_layout=None,
@@ -373,7 +375,7 @@ def apply_multibox_head(input_tensor, layer_with_weights, device=None, dtype=ttn
             enable_double_buffer = True
             conv_config = ttnn.Conv2dConfig(
                 weights_dtype=dtype,
-                shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                 deallocate_activation=False,
                 enable_act_double_buffer=enable_double_buffer,
                 enable_weights_double_buffer=False,
@@ -387,7 +389,7 @@ def apply_multibox_head(input_tensor, layer_with_weights, device=None, dtype=ttn
                 enable_double_buffer = False
                 conv_config = ttnn.Conv2dConfig(
                     weights_dtype=dtype,
-                    shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                    shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                     deallocate_activation=False,
                     enable_act_double_buffer=enable_double_buffer,
                     enable_weights_double_buffer=False,
@@ -397,8 +399,8 @@ def apply_multibox_head(input_tensor, layer_with_weights, device=None, dtype=ttn
                 )
             else:
                 # Too large for L1, fall back to DRAM
-                use_l1_for_this_layer = False
-                memory_config = ttnn.DRAM_MEMORY_CONFIG
+                use_l1_for_this_layer = True
+                memory_config = ttnn.L1_MEMORY_CONFIG
                 conv_config = ttnn.Conv2dConfig(
                     weights_dtype=dtype,
                     shard_layout=None,
@@ -408,9 +410,8 @@ def apply_multibox_head(input_tensor, layer_with_weights, device=None, dtype=ttn
                     reshard_if_not_optimal=False,
                 )
     else:
-        # For DRAM, DRAM slicing, or too large for L1, use default config
-        use_l1_for_this_layer = False
-        memory_config = ttnn.DRAM_MEMORY_CONFIG
+        use_l1_for_this_layer = True
+        memory_config = ttnn.L1_MEMORY_CONFIG
         conv_config = ttnn.Conv2dConfig(
             weights_dtype=dtype,
             shard_layout=None,
@@ -438,18 +439,20 @@ def apply_multibox_head(input_tensor, layer_with_weights, device=None, dtype=ttn
         device=device,
         return_output_dim=True,
         dtype=dtype,
-        memory_config=memory_config,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
         slice_config=slice_config,
         conv_config=conv_config,
         compute_config=compute_config,
     )
 
+    output_tensor = ttnn.to_memory_config(output_tensor, ttnn.L1_MEMORY_CONFIG)
     if slice_config != ttnn.Conv2dL1FullSliceConfig and output_tensor.layout != ttnn.TILE_LAYOUT:
         output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
 
     if bias is not None and use_dram_slicing:
+        output_tensor = ttnn.to_memory_config(output_tensor, ttnn.L1_MEMORY_CONFIG)
         output_tensor = output_tensor.reshape([batch_size, output_height, output_width, out_channels])
-
+        bias = ttnn.to_memory_config(bias, ttnn.L1_MEMORY_CONFIG)
         bias_torch = ttnn.to_torch(bias)
         bias_expanded = bias_torch.expand(batch_size, output_height, output_width, out_channels)
 
@@ -473,7 +476,6 @@ def apply_multibox_head(input_tensor, layer_with_weights, device=None, dtype=ttn
 
 # configuration dictionaries matching torch_reference_ssd.py
 mbox = {
-    "300": [4, 6, 6, 6, 4, 4],
     "512": [4, 6, 6, 6, 4, 4, 4],
 }
 
