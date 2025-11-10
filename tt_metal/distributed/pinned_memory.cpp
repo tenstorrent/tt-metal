@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/pinned_memory.hpp>
+#include <tt-metalium/experimental/pinned_memory.hpp>
 #include "pinned_memory_impl.hpp"
 
 #include <stdexcept>
@@ -21,7 +21,7 @@
 #include <umd/device/chip_helpers/sysmem_buffer.hpp>
 #include "impl/dispatch/system_memory_manager.hpp"
 
-namespace tt::tt_metal {
+namespace tt::tt_metal::experimental {
 
 // PinnedMemoryImpl implementation
 PinnedMemoryImpl::PinnedMemoryImpl(
@@ -302,4 +302,16 @@ void* PinnedMemory::lock() { return pImpl->lock(); }
 
 void PinnedMemory::unlock() { pImpl->unlock(); }
 
-}  // namespace tt::tt_metal
+std::unique_ptr<PinnedMemory> PinnedMemory::PinMemory(
+    distributed::MeshDevice& mesh_device,
+    const distributed::MeshCoordinateRangeSet& coordinate_range_set,
+    HostBuffer& host_buffer,
+    bool map_to_noc) {
+    return mesh_device.pin_memory(coordinate_range_set, host_buffer, map_to_noc);
+}
+
+experimental::MemoryPinningParameters PinnedMemory::GetMemoryPinningParameters(distributed::MeshDevice& mesh_device) {
+    return mesh_device.get_memory_pinning_parameters();
+}
+
+}  // namespace tt::tt_metal::experimental

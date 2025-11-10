@@ -9,7 +9,6 @@
 #include <mesh_device.hpp>
 #include <mesh_device_view.hpp>
 #include <tt_stl/small_vector.hpp>
-#include <tt-metalium/pinned_memory.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <sub_device.hpp>
 #include <system_mesh.hpp>
@@ -249,20 +248,21 @@ MeshDevice::MeshDevice(
     }
 
     if (!iommu_enabled) {
-        memory_pinning_params_ = MemoryPinningParameters{0u, 0u, false};
+        memory_pinning_params_ = experimental::MemoryPinningParameters{0u, 0u, false};
     } else {
         const auto device_arch = this->arch();
         if (device_arch == tt::ARCH::BLACKHOLE) {
-            memory_pinning_params_ = MemoryPinningParameters{
+            memory_pinning_params_ = experimental::MemoryPinningParameters{
                 std::numeric_limits<uint32_t>::max(), std::numeric_limits<uint64_t>::max(), true};
         } else if (device_arch == tt::ARCH::WORMHOLE_B0) {
             // Disable NOC mapping for until this is tested.
             const bool map_to_noc_supported = false;
             const uint64_t four_gb = 4ULL * 1024ULL * 1024ULL * 1024ULL;
             const uint64_t hugepage_size = static_cast<uint64_t>(tt::tt_metal::DispatchSettings::MAX_HUGEPAGE_SIZE);
-            memory_pinning_params_ = MemoryPinningParameters{12u, four_gb - hugepage_size, map_to_noc_supported};
+            memory_pinning_params_ =
+                experimental::MemoryPinningParameters{12u, four_gb - hugepage_size, map_to_noc_supported};
         } else {
-            memory_pinning_params_ = MemoryPinningParameters{0u, 0u, false};
+            memory_pinning_params_ = experimental::MemoryPinningParameters{0u, 0u, false};
         }
     }
 }
@@ -1116,7 +1116,7 @@ const std::unique_ptr<Allocator>& MeshDevice::allocator(SubDeviceId sub_device_i
 
 std::shared_ptr<distributed::MeshDevice> MeshDevice::get_mesh_device() { return shared_from_this(); }
 
-std::unique_ptr<PinnedMemory> MeshDevice::pin_memory(
+std::unique_ptr<experimental::PinnedMemory> MeshDevice::pin_memory(
     const MeshCoordinateRangeSet& coordinate_range_set, HostBuffer& host_buffer, bool map_to_noc) {
     // Extract all coordinates from the range set
     std::vector<MeshCoordinate> coordinates = coordinate_range_set.coords();
@@ -1141,9 +1141,12 @@ std::unique_ptr<PinnedMemory> MeshDevice::pin_memory(
     void* host_ptr = static_cast<void*>(bytes.data());
     size_t buffer_size = bytes.size();
 
-    return std::unique_ptr<PinnedMemory>(new PinnedMemory(devices, host_ptr, buffer_size, map_to_noc));
+    return std::unique_ptr<experimental::PinnedMemory>(
+        new experimental::PinnedMemory(devices, host_ptr, buffer_size, map_to_noc));
 }
 
-MeshDevice::MemoryPinningParameters MeshDevice::get_memory_pinning_parameters() const { return memory_pinning_params_; }
+experimental::MemoryPinningParameters MeshDevice::get_memory_pinning_parameters() const {
+    return memory_pinning_params_;
+}
 
 }  // namespace tt::tt_metal::distributed
