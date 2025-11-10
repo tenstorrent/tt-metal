@@ -5,10 +5,11 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include "ttnn/tensor/tensor.hpp"
 namespace ttnn::operations::op_slicing {
 
-struct Op2DSliceConfig {
+struct Op2dSliceConfig {
     // Determines the dimension along which the input & output tensors are sliced.
     // Slices based on [N, H, W, C] shape.
     // Using width slicing is more efficient as it reduces memory usage. This is because the overlap of data between
@@ -29,6 +30,9 @@ struct Op2DSliceConfig {
 
 class OpSliceAttr {
 public:
+    using OptionalRefTensor = std::optional<std::reference_wrapper<ttnn::Tensor>>;
+    using RefTensor = std::reference_wrapper<ttnn::Tensor>;
+
     virtual ~OpSliceAttr() = default;
     using IOShape = std::tuple<uint32_t, uint32_t>;
     virtual std::tuple<IOShape, IOShape> get_input_slice(IOShape output_slice_start, IOShape output_slice_end) = 0;
@@ -36,14 +40,15 @@ public:
     virtual uint32_t get_L1_usage() = 0;
     virtual tt::tt_metal::MemoryConfig get_input_memory_config(
         IOShape output_slice_start, IOShape output_slice_end) = 0;
-    virtual ttnn::Tensor run_L1_op(
+    virtual std::vector<ttnn::Tensor> run_L1_op(
         const ttnn::Tensor& sliced_input_tensor, IOShape output_slice_start, IOShape output_slice_end) = 0;
     virtual std::string name() = 0;
 };
+
 void run_sliced_op(
     const ttnn::Tensor& input_tensor,
-    ttnn::Tensor& output_tensor,
+    std::vector<OpSliceAttr::RefTensor>& output_tensor,
     OpSliceAttr* op_slice_attr,
-    Op2DSliceConfig dram_slice_config);
+    Op2dSliceConfig dram_slice_config);
 
 }  // namespace ttnn::operations::op_slicing
