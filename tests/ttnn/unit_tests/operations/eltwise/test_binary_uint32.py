@@ -26,92 +26,38 @@ def create_full_range_tensor(input_shape, dtype, value_ranges):
     return in_data
 
 
-@pytest.mark.parametrize(
-    "ttnn_op, value_ranges_a, value_ranges_b",
-    [
-        # --- Addition op ---
-        (
-            ttnn.add,
-            [
-                (0, 100),
-                (1e3, 1e4),
-                (1e6, 1e8),
-                (1e9, 2e9),
-            ],
-            [
-                (0, 500),
-                (1e4, 1e6),
-                (1e7, 1e9),
-                (1e7, 1e8),
-            ],
-        ),
-        # --- Subtraction op ---
-        (
-            ttnn.sub,
-            [
-                (100, 500),
-                (1e5, 1e7),
-                (1e7, 2e9),
-                (2e9, 2147483647),
-            ],
-            [
-                (0, 100),
-                (1e3, 1e5),
-                (1e7, 1e9),
-                (1e9, 2e9),
-            ],
-        ),
-        # --- Multiplication op ---
-        (
-            ttnn.mul,
-            [
-                (0, 100),
-                (500, 1e3),
-                (1e4, 1e5),
-                (1e6, 1e7),
-                (2e9, 2147483647),
-            ],
-            [
-                (0, 500),
-                (1e3, 1e4),
-                (1e2, 1e4),
-                (1, 1e2),
-                (1, 1),
-            ],
-        ),
-        # --- Comparison ops ---
-        (
-            ttnn.eq,
-            [
-                (0, 1000),
-                (1e3, 1e6),
-                (1e6, 1e8),
-                (1e9, 2147483647),
-            ],
-            [
-                (0, 1500),
-                (1e4, 1e7),
-                (1e7, 1e9),
-                (2e9, 2147483647),
-            ],
-        ),
-        (
-            ttnn.ne,
-            [
-                (0, 1000),
-                (1e3, 1e6),
-                (1e6, 1e8),
-                (1e9, 2147483647),
-            ],
-            [
-                (0, 1500),
-                (1e4, 1e7),
-                (1e7, 1e9),
-                (2e9, 2147483647),
-            ],
-        ),
+# Common test range for comparison and logical operations
+COMMON_RANGE_A = [
+    (0, 1000),
+    (1e3, 1e6),
+    (1e6, 1e8),
+    (1e9, 2147483647),
+]
+COMMON_RANGE_B = [
+    (0, 1500),
+    (1e4, 1e7),
+    (1e7, 1e9),
+    (2e9, 2147483647),
+]
+
+BINARY_OP_TEST_CASES = [
+    # Arithmetic ops
+    (ttnn.add, [(0, 100), (1e3, 1e4), (1e6, 1e8), (1e9, 2e9)], [(0, 500), (1e4, 1e6), (1e7, 1e9), (1e7, 1e8)]),
+    (ttnn.sub, [(100, 500), (1e5, 1e7), (1e7, 2e9), (2e9, 2147483647)], [(0, 100), (1e3, 1e5), (1e7, 1e9), (1e9, 2e9)]),
+    (
+        ttnn.mul,
+        [(0, 100), (500, 1e3), (1e4, 1e5), (1e6, 1e7), (2e9, 2147483647)],
+        [(0, 500), (1e3, 1e4), (1e2, 1e4), (1, 1e2), (1, 1)],
+    ),
+    # Comparison and logical ops
+    *[
+        (op, COMMON_RANGE_A, COMMON_RANGE_B)
+        for op in (ttnn.eq, ttnn.ne, ttnn.logical_and, ttnn.logical_or, ttnn.logical_xor)
     ],
-)
+]
+
+
+@pytest.mark.parametrize("ttnn_op, value_ranges_a, value_ranges_b", BINARY_OP_TEST_CASES)
 @pytest.mark.parametrize(
     "input_shapes",
     ((torch.Size([1, 2, 32, 128])),),
@@ -123,6 +69,10 @@ def test_binary_uint32_full_range(ttnn_op, value_ranges_a, value_ranges_b, input
     torch_input_tensor_b = create_full_range_tensor(
         input_shape=input_shapes, dtype=torch.int32, value_ranges=value_ranges_b
     )
+
+    if ttnn_op in {ttnn.logical_or, ttnn.logical_xor, ttnn.logical_and}:
+        torch_input_tensor_a[..., ::5] = 0  # every 5th element across the last dim
+        torch_input_tensor_b[..., ::10] = 0  # every 10th element across the last dim
 
     golden_function = ttnn.get_golden_function(ttnn_op)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
@@ -154,9 +104,10 @@ def test_binary_uint32_full_range(ttnn_op, value_ranges_a, value_ranges_b, input
     [
         (ttnn.add, 0, 1e4, 1e4, 1e8),
         (ttnn.sub, 50000, 100000, 0, 40000),
+        (ttnn.mul, 0, 46340, 0, 46340),
         (ttnn.eq, 0, 1e8, 1e5, 1e9),
         (ttnn.ne, 0, 1e8, 1e5, 1e9),
-        (ttnn.mul, 0, 46340, 0, 46340),
+        (ttnn.logical_and, 0, 1e8, 1e5, 1e9),
     ],
 )
 @pytest.mark.parametrize(
@@ -231,9 +182,12 @@ block_sharded_memory_config = ttnn.create_sharded_memory_config(
     [
         (ttnn.add, 0, 100, 100, 200),
         (ttnn.sub, 50000, 100000, 0, 40000),  # Subtraction: ensure a > b for valid results
+        (ttnn.mul, 0, 23170, 23170, 46340),
         (ttnn.eq, 0, 1610612735, 536870911, 2147483647),
         (ttnn.ne, 0, 1610612735, 536870911, 2147483647),
-        (ttnn.mul, 0, 23170, 23170, 46340),
+        (ttnn.logical_and, 0, 1073741824, 1073741824, 2147483647),
+        (ttnn.logical_or, 0, 1073741824, 1073741824, 2147483647),
+        (ttnn.logical_xor, 0, 1073741824, 1073741824, 2147483647),
     ],
 )
 @pytest.mark.parametrize(
@@ -516,11 +470,14 @@ def test_bitwise_uint32_full_range(device, ttnn_function, use_legacy):
     [
         ttnn.eq,
         ttnn.ne,
+        ttnn.logical_and,
+        ttnn.logical_or,
+        ttnn.logical_xor,
     ],
 )
-def test_binary_comp_ops_uint32_edge_cases(ttnn_op, device):
+def test_binary_comp_logical_ops_uint32_edge_cases(ttnn_op, device):
     torch_input_tensor_a = torch.tensor(
-        [0, 1, 0, 2147483647, 2147483647, 2147483647, 1073741823, 1073741823, 4294967295, 4294967294]
+        [0, 1, 0, 2147483647, 2147483647, 2147483647, 1073741823, 1073741823, 4294967295, 4294967294, 4294967295]
     )
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -530,7 +487,9 @@ def test_binary_comp_ops_uint32_edge_cases(ttnn_op, device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    torch_input_tensor_b = torch.tensor([0, 0, 1, 2147483647, 2147483646, 0, 1000, 1073741823, 4294967295, 4294967295])
+    torch_input_tensor_b = torch.tensor(
+        [0, 0, 1, 2147483647, 2147483646, 0, 1000, 1073741823, 4294967295, 4294967295, 0]
+    )
     input_tensor_b = ttnn.from_torch(
         torch_input_tensor_b,
         dtype=ttnn.uint32,
