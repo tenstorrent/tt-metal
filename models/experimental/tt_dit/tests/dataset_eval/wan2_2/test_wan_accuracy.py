@@ -5,6 +5,7 @@ import json
 import os
 import pytest
 import statistics
+import torch
 import ttnn
 from loguru import logger
 from models.experimental.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
@@ -98,8 +99,10 @@ def test_accuracy_wan(
     start_from, num_prompts = evaluation_range
     prompts = data_helper.get_prompts(captions_path, start_from, num_prompts)
     logger.info(f"start inference from prompt index: {start_from} to {start_from + num_prompts}")
+    negative_prompt = "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
 
     videos = []
+    all_timings = []
     for prompt in prompts:
         logger.info(f"Processing prompt: {prompt}")
         logger.info(f"Prompt number: {start_from + len(videos) + 1}")
@@ -113,9 +116,11 @@ def test_accuracy_wan(
             num_inference_steps=num_inference_steps,
             guidance_scale=guidance_scale,
             guidance_scale_2=guidance_scale_2,
+            output_type="pil",
         ).frames[0]
 
         videos.append(frames)
+        all_timings.append(pipeline.timing_data)
 
     clip = CLIPEncoder()
     clip_scores = [
@@ -123,21 +128,25 @@ def test_accuracy_wan(
     ]
     clip_score_stats = [(min(c), max(c), statistics.mean(c), statistics.stdev(c)) for c in clip_scores]
 
-    for p, c in zip(prompt, clip_score_stats):
-        print(f"PROMPT: {p} STATISTICS: {c}")
-    # average_clip_score = sum(clip_scores) / len(clip_scores)
+    for p, c in zip(prompts, clip_score_stats):
+        logger.info(f"Prompt: {p}, CLIP statistics (min, max, mean, stddev): {c}")
 
-    # fvd_score = calculate_fvd_score(videos, coco_statistics_path)
+    video_mean_scores = [c[2] for c in clip_score_stats]
+    min_clip = min(video_mean_scores)
+    max_clip = max(video_mean_scores)
+    mean_clip = statistics.mean(video_mean_scores)
+    stddev_clip = statistics.stdev(video_mean_scores)
 
-    # print(f"FID score: {fid_score}")
-    # print(f"Average CLIP Score: {average_clip_score}")
-    # print(f"Standard Deviation of CLIP Scores: {deviation_clip_score}")
+    mean_text_encoder_time = statistics.mean([t["text_encoder"] for t in all_timings])
+    mean_denoising_time = statistics.mean([t["denoising"] for t in all_timings])
+    mean_vae_time = statistics.mean([t["vae"] for t in all_timings])
+    mean_total_time = statistics.mean([t["total"] for t in all_timings])
 
     data = {
         "model": "wan",
         "metadata": {
             "device": os.environ.get("MESH_DEVICE", "unknown"),
-            "mesh_shape": mesh_device.shape,
+            "mesh_shape": tuple(mesh_device.shape),
             "start_from": start_from,
             "num_prompts": num_prompts,
             "image_width": width,
@@ -151,18 +160,14 @@ def test_accuracy_wan(
         },
         "benchmarks_summary": [
             {
-                # "average_denoising_time": profiler.get("denoising_loop"),
-                # "average_vae_time": profiler.get("vae_decode"),
-                # "average_inference_time": profiler.get("denoising_loop") + profiler.get("vae_decode"),
-                # "min_inference_time": min(
-                #    i + j for i, j in zip(profiler.times["denoising_loop"], profiler.times["vae_decode"])
-                # ),
-                # "max_inference_time": max(
-                #    i + j for i, j in zip(profiler.times["denoising_loop"], profiler.times["vae_decode"])
-                # ),
-                # "average_clip": average_clip_score,
-                # "deviation_clip": deviation_clip_score,
-                # "fvd_score": fvd_score,
+                "min_clip": min_clip,
+                "max_clip": max_clip,
+                "mean_clip": mean_clip,
+                "stddev_clip": stddev_clip,
+                "mean_text_encoder_time": mean_text_encoder_time,
+                "mean_denoising_time": mean_denoising_time,
+                "mean_vae_time": mean_vae_time,
+                "mean_total_time": mean_total_time,
             }
         ],
     }

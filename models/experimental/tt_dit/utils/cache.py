@@ -13,7 +13,8 @@ CACHE_DICT_FILE = "cache_dict.json"
 def config_id(parallel_config):
     config_id = ""
     for n, v in parallel_config._asdict().items():
-        config_id += f"{''.join([w[0].upper() for w in n.split('_')])}{v.factor}_{v.mesh_axis}_"
+        if v is not None:
+            config_id += f"{''.join([w[0].upper() for w in n.split('_')])}{v.factor}_{v.mesh_axis}_"
     return config_id
 
 
@@ -28,7 +29,6 @@ def get_cache_path(model_name, subfolder, parallel_config, mesh_shape, dtype="bf
     model_path = os.path.join(cache_dir, model_name)
     model_path = os.path.join(model_path, subfolder)
     parallel_name = f"{config_id(parallel_config)}mesh{mesh_shape[0]}x{mesh_shape[1]}_{dtype}"
-    # parallel_name =f"{config_id(parallel_config)}_{dtype}"
     cache_path = os.path.join(model_path, parallel_name) + os.sep
 
     return cache_path
@@ -70,7 +70,7 @@ def initialize_from_cache(tt_model, torch_model, model_name, subfolder, parallel
             logger.info(
                 f"Cache does not exist. Creating cache: {cache_path} and loading {subfolder} from PyTorch state dict"
             )
-            tt_model.load_state_dict(torch_model.state_dict())
+            tt_model.load_torch_state_dict(torch_model.state_dict())
             save_cache_dict(tt_model.to_cached_state_dict(cache_path), cache_path)
         return True
     return False

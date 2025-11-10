@@ -31,9 +31,23 @@ def bf16_tensor_host(
     return from_torch(x, device=device, layout=layout, mesh_mapping={mesh_axis: shard_dim}, to_host=True)
 
 
-def bf16_tensor_2dshard(x: torch.Tensor, device: ttnn.Device, shard_mapping: dict[int, int]) -> ttnn.Tensor:
+def bf16_tensor_2dshard(
+    x: torch.Tensor, device: ttnn.Device, shard_mapping: dict[int, int], layout=ttnn.TILE_LAYOUT
+) -> ttnn.Tensor:
     assert len(shard_mapping) == 2
-    return from_torch(x, device=device, layout=ttnn.Layout.TILE, mesh_mapping=shard_mapping)
+    assert all(0 <= k <= 1 and 0 <= v < len(x.shape) for k, v in shard_mapping.items())
+    mapper_dims = [None, None]
+    for k, v in shard_mapping.items():
+        mapper_dims[k] = v
+    mesh_mapper = ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=mapper_dims)
+    return ttnn.from_torch(
+        x,
+        layout=layout,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        device=device,
+        mesh_mapper=mesh_mapper,
+    )
 
 
 def from_torch(
