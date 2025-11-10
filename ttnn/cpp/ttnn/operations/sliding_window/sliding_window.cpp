@@ -82,29 +82,15 @@ ttnn::Shape SlidingWindowConfig::get_output_shape() const {
 
     uint32_t output_h;
     uint32_t output_w;
-    float output_h_float;
-    float output_w_float;
 
     // Note Pytorch doesn't support dilation for average pool, but TTNN may in the future
     // thus output size calculation is the same for average and max pool
-    output_h_float =
-        (float)(input_hw.first + get_pad_h() - (dilation_hw.first * (window_hw.first - 1)) - 1) / stride_hw.first;
-    output_w_float =
-        (float)(input_hw.second + get_pad_w() - (dilation_hw.second * (window_hw.second - 1)) - 1) / stride_hw.second;
-    if (ceil_mode) {
-        output_h = std::ceil(output_h_float) + 1;
-        output_w = std::ceil(output_w_float) + 1;
-        // adjust the output shape if the last kernel position is in the padding region
-        if (((output_h - 1) * stride_hw.first) >= (input_hw.first + padding[0])) {
-            output_h--;
-        }
-        if (((output_w - 1) * stride_hw.second) >= (input_hw.second + padding[2])) {
-            output_w--;
-        }
-    } else {
-        output_h = std::floor(output_h_float) + 1;
-        output_w = std::floor(output_w_float) + 1;
-    }
+    output_h = ((input_hw.first + get_pad_h() + get_ceil_pad_h() - (dilation_hw.first * (window_hw.first - 1)) - 1) /
+                stride_hw.first) +
+               1;
+    output_w = ((input_hw.second + get_pad_w() + get_ceil_pad_w() - (dilation_hw.second * (window_hw.second - 1)) - 1) /
+                stride_hw.second) +
+               1;
 
     if (is_bilinear) {
         TT_FATAL(!ceil_mode, "ceil_mode is not supported for bilinear operation");
@@ -130,44 +116,44 @@ uint32_t SlidingWindowConfig::get_pad_right() const { return padding[3]; }
 uint32_t SlidingWindowConfig::get_pad_h() const { return padding[0] + padding[1]; }
 uint32_t SlidingWindowConfig::get_pad_w() const { return padding[2] + padding[3]; }
 
-uint32_t SlidingWindowConfig::get_ceil_pad_h() const {
-    uint32_t ceil_padding_h = 0;
-    if (ceil_mode) {
-        // Calculate the output size using the original ceil formula (before adjustment)
-        float output_h_float =
-            (float)(input_hw.first + get_pad_h() - (dilation_hw.first * (window_hw.first - 1)) - 1) / stride_hw.first;
-        uint32_t output_h = std::ceil(output_h_float) + 1;
+uint32_pair_t SlidingWindowConfig::get_ceil_pad_hw() const {
+    if (!ceil_mode) {
+        return {0, 0};
+    }
+    if (ceil_pad_hw.has_value()) {
+        return ceil_pad_hw.value();
+    }
+    float output_h_float =
+        (float)(input_hw.first + get_pad_h() - (dilation_hw.first * (window_hw.first - 1)) - 1) / stride_hw.first;
+    float output_w_float =
+        (float)(input_hw.second + get_pad_w() - (dilation_hw.second * (window_hw.second - 1)) - 1) / stride_hw.second;
 
-        // Calculate effective kernel size with dilation
-        uint32_t effective_kernel_h = (dilation_hw.first * (window_hw.first - 1)) + 1;
+    uint32_t output_h = std::ceil(output_h_float) + 1;
+    uint32_t output_w = std::ceil(output_w_float) + 1;
 
-        // extra_padding = ceil size - non ceil size
-        int32_t padding_calc = (stride_hw.first * (output_h - 1)) + effective_kernel_h - input_hw.first - get_pad_h();
-        ceil_padding_h = (padding_calc > 0) ? static_cast<uint32_t>(padding_calc) : 0;
+    // adjust the output shape if the last kernel position is in the padding region
+    if (((output_h - 1) * stride_hw.first) >= (input_hw.first + padding[0])) {
+        output_h--;
+    }
+    if (((output_w - 1) * stride_hw.second) >= (input_hw.second + padding[2])) {
+        output_w--;
     }
 
-    return ceil_padding_h;
+    // Calculate effective kernel size with dilation
+    uint32_t effective_kernel_h = (dilation_hw.first * (window_hw.first - 1)) + 1;
+    uint32_t effective_kernel_w = (dilation_hw.second * (window_hw.second - 1)) + 1;
+
+    // extra_padding = ceil size - non ceil size
+    int32_t padding_calc_h = (stride_hw.first * (output_h - 1)) + effective_kernel_h - input_hw.first - get_pad_h();
+    uint32_t ceil_padding_h = (padding_calc_h > 0) ? static_cast<uint32_t>(padding_calc_h) : 0;
+
+    int32_t padding_calc_w = (stride_hw.second * (output_w - 1)) + effective_kernel_w - input_hw.second - get_pad_w();
+    uint32_t ceil_padding_w = (padding_calc_w > 0) ? static_cast<uint32_t>(padding_calc_w) : 0;
+    return {ceil_padding_h, ceil_padding_w};
 }
+uint32_t SlidingWindowConfig::get_ceil_pad_h() const { return get_ceil_pad_hw().first; }
 
-uint32_t SlidingWindowConfig::get_ceil_pad_w() const {
-    uint32_t ceil_padding_w = 0;
-    if (ceil_mode) {
-        // Calculate the output size using the original ceil formula (before adjustment)
-        float output_w_float =
-            (float)(input_hw.second + get_pad_w() - (dilation_hw.second * (window_hw.second - 1)) - 1) /
-            stride_hw.second;
-        uint32_t output_w = std::ceil(output_w_float) + 1;
-
-        // Calculate effective kernel size with dilation
-        uint32_t effective_kernel_w = (dilation_hw.second * (window_hw.second - 1)) + 1;
-
-        // extra_padding = ceil size - non ceil size
-        int32_t padding_calc = (stride_hw.second * (output_w - 1)) + effective_kernel_w - input_hw.second - get_pad_w();
-        ceil_padding_w = (padding_calc > 0) ? static_cast<uint32_t>(padding_calc) : 0;
-    }
-
-    return ceil_padding_w;
-}
+uint32_t SlidingWindowConfig::get_ceil_pad_w() const { return get_ceil_pad_hw().second; }
 
 ttnn::Shape SlidingWindowConfig::get_transposed_full_input_shape() const {
     TT_FATAL(
@@ -1241,7 +1227,7 @@ auto fmt::formatter<ttnn::operations::sliding_window::SlidingWindowConfig>::form
     -> format_context::iterator {
     std::string str = fmt::format(
         "SlidingWindowConfig(batch_size={}, input_hw=({},{}), window_hw=({},{}), stride_hw=({},{}), padding=(({}, {}), "
-        "({}, {})), output_padding = ({}, {}), "
+        "({}, {})), output_padding = ({}, {}), ceil_pad_hw=({},{}), "
         "dilation_hw=({},{}), scale_h={}, scale_w={}, num_cores_nhw={}, num_cores_c={}, core_range_set_={}, "
         "is_transpose={})",
         t.batch_size,
@@ -1257,6 +1243,8 @@ auto fmt::formatter<ttnn::operations::sliding_window::SlidingWindowConfig>::form
         t.padding[3],
         t.output_pad_hw.first,
         t.output_pad_hw.second,
+        t.get_ceil_pad_h(),
+        t.get_ceil_pad_w(),
         t.dilation_hw.first,
         t.dilation_hw.second,
         t.scale_h,

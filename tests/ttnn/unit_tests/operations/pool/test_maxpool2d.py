@@ -16,7 +16,30 @@ def tensor_map(request):
     return tensor_map
 
 
+HS = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+BS = ttnn.TensorMemoryLayout.BLOCK_SHARDED
+WS = ttnn.TensorMemoryLayout.WIDTH_SHARDED
+SliceWidth = ttnn.Op2DDRAMSliceWidth
+SliceHeight = ttnn.Op2DDRAMSliceHeight
+
 parameters = {
+    "dram_slice_tests": {
+        "in_specs": [[ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT], [ttnn.bfloat8_b, ttnn.TILE_LAYOUT]],
+        "input_specs": [
+            # Contains following parameters
+            # [in_n, in_c, in_h, in_w, kernel_h, kernel_w, stride_h, stride_w, pad_h, pad_w, dilation_h, dilation_w, ceil_mode, num_slices, shard_layout, slice_type]
+            [1, 128, 1024, 1024, 2, 2, 2, 2, 0, 0, 1, 1, False, 8, HS, SliceWidth],
+            [1, 480, 256, 256, 3, 3, 2, 2, 1, 1, 1, 1, False, 8, BS, SliceWidth],
+            [1, 32768, 32, 32, 2, 2, 1, 1, 0, 0, 1, 1, False, 4, WS, SliceHeight],
+            [1, 128, 1024, 1024, 2, 2, 2, 2, 0, 0, 1, 1, True, 8, HS, SliceWidth],
+            [1, 480, 256, 256, 3, 3, 2, 2, 1, 1, 1, 1, True, 8, BS, SliceWidth],
+            [1, 256, 81, 81, 2, 2, 2, 2, 0, 0, 1, 1, True, 2, HS, SliceHeight],
+            # Pooling dimension has been changed from width to height. Otherwise, with tile layout, the output width of 1 gets rounded up to 32.
+            [1, 256, 64, 1024, 64, 1, 1, 1, 0, 0, 1, 1, False, 8, BS, SliceWidth],
+            [1, 256, 32, 1024, 32, 1, 1, 1, 0, 0, 1, 1, False, 8, BS, SliceWidth],
+            [1, 256, 64, 2048, 64, 1, 1, 1, 0, 0, 1, 1, False, 8, BS, SliceWidth],
+        ],
+    },
     "height_shard_tests": {
         "in_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_specs": [
@@ -84,6 +107,48 @@ parameters = {
         ],
     },
 }
+
+
+@pytest.mark.parametrize("input_spec", parameters["dram_slice_tests"]["input_specs"])
+@pytest.mark.parametrize("in_specs", parameters["dram_slice_tests"]["in_specs"])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_max_pool2d_dram_slice(device, in_specs, input_spec):
+    (
+        in_n,
+        in_c,
+        in_h,
+        in_w,
+        kernel_h,
+        kernel_w,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        dilation_h,
+        dilation_w,
+        ceil_mode,
+        num_slices,
+        shard_scheme,
+        slice_type,
+    ) = input_spec
+    [in_dtype, output_layout] = in_specs
+    dram_slice_config = ttnn.Op2DSliceConfig(num_slices=num_slices, slice_type=slice_type)
+    torch_tensor_map = {}
+    run_max_pool2d(
+        [in_n, in_c, in_h, in_w],
+        [kernel_h, kernel_w],
+        [pad_h, pad_w],
+        [stride_h, stride_w],
+        [dilation_h, dilation_w],
+        device,
+        torch_tensor_map,
+        in_dtype,
+        shard_scheme=shard_scheme,
+        ceil_mode=ceil_mode,
+        nightly_skips=False,
+        dram_slice_config=dram_slice_config,
+        output_layout=output_layout,
+    )
 
 
 @pytest.mark.parametrize("input_spec", parameters["height_shard_tests"]["input_specs"])
