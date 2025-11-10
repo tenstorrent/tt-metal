@@ -151,9 +151,13 @@ jobs:
 
               # Extract author notes from /codeowners ping command if provided
               if [ -z "$AUTHOR_NOTES" ]; then
-                if echo "$COMMENT_BODY" | grep -E "^/codeowners?\s+ping\s+" > /dev/null; then
-                  # Extract everything after /codeowners ping
-                  RAW_TEXT=$(echo "$COMMENT_BODY" | sed -n 's/^\/codeowners\?\s\+ping\s\+\(.*\)$/\1/p')
+                if echo "$COMMENT_BODY" | grep -E "^/codeowners?\s+ping" > /dev/null; then
+                  # Extract everything after /codeowners ping (handle both same line and new line)
+                  RAW_TEXT=$(echo "$COMMENT_BODY" | sed -n 's/^\/codeowners\?\s\+ping\s*\(.*\)$/\1/p' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+                  # If no content on same line, check for content after removing the command line entirely
+                  if [ -z "$RAW_TEXT" ]; then
+                    RAW_TEXT=$(echo "$COMMENT_BODY" | sed '0,/^\/codeowners\?\s\+ping\s*$/d' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+                  fi
                   if [ -n "$RAW_TEXT" ]; then
                     # Strip leading and trailing quotes (handles both complete and incomplete quoting)
                     AUTHOR_NOTES=$(echo "$RAW_TEXT" | sed -e 's/^["'"'"']\+//' -e 's/["'"'"']\+$//')
