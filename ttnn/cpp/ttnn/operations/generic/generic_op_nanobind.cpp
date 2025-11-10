@@ -7,6 +7,7 @@
 #include <string>
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/vector.h>
 #include <nanobind/stl/string.h>
 
 #include "generic_op.hpp"
@@ -36,7 +37,7 @@ void bind_generic_operation(nb::module_& mod) {
         )doc";
 
     bind_registered_operation(
-        mod, ttnn::generic_op, doc, ttnn::nanobind_arguments_t{nb::arg("io_tensors"), nb::arg("program_descriptors")});
+        mod, ttnn::generic_op, doc, ttnn::nanobind_arguments_t{nb::arg("io_tensors"), nb::arg("program_descriptor")});
 }
 
 }  // namespace ttnn::operations::generic
