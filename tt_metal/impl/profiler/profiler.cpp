@@ -267,7 +267,7 @@ std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> getSortedDevice
     return device_markers_vec;
 }
 
-std::set<ProgramAnalysisData> processProgramsPerfResults(const ProgramsPerfResults& programs_perf_results) {
+std::set<ProgramAnalysisData> translateProgramsPerfResults(const ProgramsPerfResults& programs_perf_results) {
     ZoneScoped;
 
     std::set<ProgramAnalysisData> programs_analyses_data;
@@ -1756,7 +1756,7 @@ void DeviceProfiler::generateAnalysesForDeviceMarkers(
     std::vector<std::set<ProgramAnalysisData>>& device_programs_perf_analyses =
         tt::tt_metal::MetalContext::instance().profiler_state_manager()->device_programs_perf_analyses_map.at(
             this->device_id);
-    device_programs_perf_analyses.push_back(processProgramsPerfResults(programs_perf_results));
+    device_programs_perf_analyses.push_back(translateProgramsPerfResults(programs_perf_results));
 
     writeProgramsPerfResultsToCSV(
         programs_perf_results, this->device_logs_output_dir / PROFILER_DEVICE_PERF_REPORT_NAME);
