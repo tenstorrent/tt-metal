@@ -13,6 +13,16 @@
 
 namespace tt::tt_fabric {
 
+// Local tensix (relay) connection info for UDM mode
+struct LocalTensixRelayConnectionInfo {
+    CoreCoord noc_xy = {0, 0};
+    size_t buffer_base_address = 0;
+    size_t worker_registration_address = 0;
+    size_t worker_location_info_address = 0;
+    size_t free_slots_stream_id = 0;
+    bool is_connected = false;
+};
+
 struct SenderWorkerAdapterSpec {
     size_t edm_noc_x = 0;
     size_t edm_noc_y = 0;
@@ -58,13 +68,8 @@ public:
     virtual void pack_adaptor_to_relay_rt_args(std::vector<uint32_t>& args_out) const = 0;
     virtual void emit_ct_args(std::vector<uint32_t>& ct_args_out, size_t num_fwd_paths) const = 0;
 
-    // Add connection to local tensix (relay in UDM mode) - only implemented for static-sized channels
-    virtual void add_local_tensix_connection(
-        const SenderWorkerAdapterSpec& /*adapter_spec*/,
-        eth_chan_directions /*tensix_direction*/,
-        CoreCoord /*tensix_noc_xy*/) {
-        // Default no-op for adapters that don't support local tensix connections
-    }
+    // Add connection to local tensix (relay in UDM mode)
+    virtual void add_local_tensix_connection(const SenderWorkerAdapterSpec&, eth_chan_directions, CoreCoord) = 0;
 
 protected:
     ~ChannelConnectionWriterAdapter() = default;
@@ -141,12 +146,7 @@ private:
     bool is_2D_routing = false;
 
     // Local tensix (relay) connection info for UDM mode
-    CoreCoord local_tensix_noc_xy = {0, 0};
-    size_t local_tensix_buffer_base_address = 0;
-    size_t local_tensix_worker_registration_address = 0;
-    size_t local_tensix_worker_location_info_address = 0;
-    size_t local_tensix_free_slots_stream_id = 0;
-    bool local_tensix_connected_set = false;
+    LocalTensixRelayConnectionInfo relay_connection_info;
 };
 
 

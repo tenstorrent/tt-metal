@@ -40,21 +40,21 @@ void StaticSizedChannelConnectionWriterAdapter::add_downstream_connection(
 
 void StaticSizedChannelConnectionWriterAdapter::add_local_tensix_connection(
     const SenderWorkerAdapterSpec& adapter_spec, eth_chan_directions /*tensix_direction*/, CoreCoord tensix_noc_xy) {
-    this->local_tensix_noc_xy = tensix_noc_xy;
-    this->local_tensix_buffer_base_address = adapter_spec.edm_buffer_base_addr;
-    this->local_tensix_worker_registration_address = adapter_spec.edm_connection_handshake_addr;
-    this->local_tensix_worker_location_info_address = adapter_spec.edm_worker_location_info_addr;
+    this->relay_connection_info.noc_xy = tensix_noc_xy;
+    this->relay_connection_info.buffer_base_address = adapter_spec.edm_buffer_base_addr;
+    this->relay_connection_info.worker_registration_address = adapter_spec.edm_connection_handshake_addr;
+    this->relay_connection_info.worker_location_info_address = adapter_spec.edm_worker_location_info_addr;
 
     // Get relay-specific info from fabric context
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
     const auto& tensix_config = fabric_context.get_tensix_config();
 
-    // Store free slots stream ID (no teardown semaphore needed - router doesn't call close)
+    // Store free slots stream ID
     constexpr uint32_t relay_channel_id = static_cast<uint32_t>(UdmRelayChannelId::ROUTER_CHANNEL);
-    this->local_tensix_free_slots_stream_id =
+    this->relay_connection_info.free_slots_stream_id =
         tensix_config.get_channel_credits_stream_id(relay_channel_id, FabricTensixCoreType::RELAY);
 
-    this->local_tensix_connected_set = true;
+    this->relay_connection_info.is_connected = true;
 }
 
 void StaticSizedChannelConnectionWriterAdapter::pack_inbound_channel_rt_args(uint32_t vc_idx, std::vector<uint32_t>& args_out) const {
@@ -79,18 +79,18 @@ void StaticSizedChannelConnectionWriterAdapter::pack_inbound_channel_rt_args(uin
 void StaticSizedChannelConnectionWriterAdapter::pack_adaptor_to_relay_rt_args(std::vector<uint32_t>& args_out) const {
     // Pack local tensix (relay) connection info at the end of runtime args
     // If no relay connection, just pack the flag (0)
-    if (!this->local_tensix_connected_set) {
+    if (!this->relay_connection_info.is_connected) {
         args_out.push_back(0u);  // has_local_tensix_relay_connection = false
     } else {
         // Pack full relay connection info
         auto relay_rt_args = std::initializer_list<uint32_t>{
-            1u,                                               // has_local_tensix_relay_connection = true
-            this->local_tensix_buffer_base_address,           // relay_buffer_base_addr
-            this->local_tensix_noc_xy.x,                      // relay_noc_x
-            this->local_tensix_noc_xy.y,                      // relay_noc_y
-            this->local_tensix_worker_registration_address,   // relay_connection_handshake_addr
-            this->local_tensix_worker_location_info_address,  // relay_worker_location_info_addr
-            this->local_tensix_free_slots_stream_id,          // relay_free_slots_stream_id
+            1u,                                                        // has_local_tensix_relay_connection = true
+            this->relay_connection_info.buffer_base_address,           // relay_buffer_base_addr
+            this->relay_connection_info.noc_xy.x,                      // relay_noc_x
+            this->relay_connection_info.noc_xy.y,                      // relay_noc_y
+            this->relay_connection_info.worker_registration_address,   // relay_connection_handshake_addr
+            this->relay_connection_info.worker_location_info_address,  // relay_worker_location_info_addr
+            this->relay_connection_info.free_slots_stream_id,          // relay_free_slots_stream_id
         };
 
         args_out.reserve(args_out.size() + relay_rt_args.size());
