@@ -104,6 +104,7 @@ def run_avg_pool2d(
     output_layout=ttnn.ROW_MAJOR_LAYOUT,
     compute_kernel_config=None,
     use_reshaped_tensor=True,
+    dram_slice_config=None,
 ):
     in_n, in_c, in_h, in_w = input_shape
     kernel_h, kernel_w = kernel_size
@@ -205,6 +206,7 @@ def run_avg_pool2d(
         dtype=out_dtype,
         output_layout=output_layout,
         compute_kernel_config=compute_kernel_config,
+        dram_slice_config=dram_slice_config,
     )
 
     if run_twice:
@@ -514,4 +516,100 @@ def test_avg_pool2d_compute_kernel_config(
         shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         in_dtype=ttnn.bfloat16,
         compute_kernel_config=compute_kernel_config,
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize(
+    "input_shape, num_slices",  # NCHW
+    (
+        # Normal reduction cases are when channels <= 8 * 32 and kernel_hw <= 16
+        # Wide reduction cases channels > 8 * 32
+        # Large reduction cases (channels < 32 and kernel_hw > 16) or (channels > 32 and kernel_hw > 32)
+        ([2, 32, 1024, 1024], 8),
+        ([1, 512, 256, 256], 8),
+        ([1, 320, 384, 384], 6),
+        ([1, 64, 96, 96], 4),
+    ),
+)
+@pytest.mark.parametrize(
+    "kernel_size",
+    (
+        # Wide and normal reductions go to normal kernels
+        # Large reductions go to large kernels
+        # Reductions which are large and wide at the same time
+        # go to large kernels
+        (3, 3),
+        (5, 5),
+    ),
+)
+@pytest.mark.parametrize(
+    "stride",
+    ((2, 2),),
+)
+@pytest.mark.parametrize(
+    "padding",
+    ((1, 1),),
+)
+@pytest.mark.parametrize(
+    "ceil_mode",
+    [True, False],
+)
+@pytest.mark.parametrize(
+    "divisor_override",
+    [
+        None,
+    ],
+)
+@pytest.mark.parametrize(
+    "count_include_pad",
+    [True, False],
+)
+@pytest.mark.parametrize(
+    "shard_scheme",
+    [
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+    ],
+)
+@pytest.mark.parametrize(
+    "in_dtype",
+    [ttnn.bfloat16, ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize(
+    "slice_type",
+    [ttnn.Op2dDRAMSliceWidth, ttnn.Op2dDRAMSliceHeight],
+)
+def test_avg_pool2d_dram(
+    device,
+    tensor_map,
+    input_shape,
+    num_slices,
+    kernel_size,
+    stride,
+    padding,
+    divisor_override,
+    ceil_mode,
+    count_include_pad,
+    shard_scheme,
+    in_dtype,
+    slice_type,
+):
+    if slice_type == ttnn.Op2dDRAMSliceHeight and input_shape[3] >= 256:
+        pytest.skip("Skip height slice for inputs with large width")
+    dram_slice_config = ttnn.Op2DSliceConfig(num_slices=num_slices, slice_type=slice_type)
+
+    run_avg_pool2d(
+        device=device,
+        tensor_map=tensor_map,
+        input_shape=input_shape,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=padding,
+        ceil_mode=ceil_mode,
+        divisor_override=divisor_override,
+        count_include_pad=count_include_pad,
+        shard_scheme=shard_scheme,
+        in_dtype=in_dtype,
+        nightly_skips=False,
+        dram_slice_config=dram_slice_config,
     )
