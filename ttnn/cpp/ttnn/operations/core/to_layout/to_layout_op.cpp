@@ -123,7 +123,7 @@ Tensor to_layout_impl(
                 "dtype cannot be different from tensor dtype when converting to ROW_MAJOR_LAYOUT on device!");
 
             if (tensor.is_sharded()) {
-                auto output_memory_config =
+                output_memory_config =
                     memory_config.value_or(ttnn::get_memory_config(tensor).value_or(ttnn::DRAM_MEMORY_CONFIG));
             }
             Shape output_tensor_end(SmallVector<uint32_t>(tensor.logical_shape().rank(), 0));
