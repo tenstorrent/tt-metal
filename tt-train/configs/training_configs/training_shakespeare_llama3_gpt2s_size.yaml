@@ -12,6 +12,3 @@ training_config:
   use_moreh_adamw: true
   use_kahan_summation: false
   use_clip_grad_norm: false
-
-
-

@@ -8,4 +8,3 @@ training_config:
   is_eval: false
   model_save_interval: 500
   model_path: "/tmp/mnist_mlp.msgpack"
-  

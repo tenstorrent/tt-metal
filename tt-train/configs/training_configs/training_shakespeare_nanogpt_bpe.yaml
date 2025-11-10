@@ -9,5 +9,3 @@ training_config:
   learning_rate: 0.0003
   weight_decay: 0.01
   tokenizer_type: bpe
-
-  

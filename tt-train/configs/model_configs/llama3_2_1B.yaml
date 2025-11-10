@@ -16,4 +16,3 @@ transformer_config:
     high_freq_factor: 4.0
     low_freq_factor: 1.0
     original_context_length: 8192
-
