@@ -56,7 +56,7 @@ std::ostream& operator<<(std::ostream& os, const tt::tt_metal::NdShardSpec& spec
     }
     os << "\",";
 
-    os << "\"shard_distribution_strategy\":\"";
+    os << R"("shard_distribution_strategy":")";
     switch (spec.shard_distribution_strategy) {
         case ShardDistributionStrategy::ROUND_ROBIN_1D: os << "ShardDistributionStrategy::ROUND_ROBIN_1D"; break;
         case ShardDistributionStrategy::GRID_2D: os << "ShardDistributionStrategy::GRID_2D"; break;
