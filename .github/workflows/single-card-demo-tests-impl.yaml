@@ -47,7 +47,7 @@ jobs:
             { name: "stable_diffusion", runner-label: "N150", performance: false, cmd: run_stable_diffusion_func, owner_id: U045U3DEKM4}, # Mohamed Bahnas
             { name: "segformer", runner-label: "N150", performance: false, cmd: run_segformer_func, owner_id: U045U3DEKM4, civ2-compatible: true}, # Mohamed Bahnas (vguduruTT)
             { name: "sentence_bert", runner-label: "N150", performance: false, cmd: run_sentencebert_func, owner_id: U045U3DEKM4, civ2-compatible: true}, # Mohamed Bahnas
-            { name: "yolov11", runner-label: "N150", performance: false, cmd: run_yolov11_func, owner_id: U045U3DEKM4, civ2-compatible: true}, # Mohamed Bahnas
+            # { name: "yolov11", runner-label: "N150", performance: false, cmd: run_yolov11_func, owner_id: U045U3DEKM4, civ2-compatible: true}, # Mohamed Bahnas - disable until issue #32151 is closed
             { name: "yolov11m", runner-label: "N150", performance: false, cmd: run_yolov11m_func, owner_id: U04B9QAMM4N, civ2-compatible: true}, # Dimitri Gnidash
             { name: "yolov9c", runner-label: "N150", performance: false, cmd: run_yolov9c_perf, owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
             { name: "mobilenetv2", runner-label: "N150", performance: false, cmd: run_mobilenetv2_perf, owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
