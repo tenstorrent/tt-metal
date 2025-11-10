@@ -11,7 +11,8 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
+#include "llrt/hal.hpp"
 
 namespace tt::tt_metal {
 

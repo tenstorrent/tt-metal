@@ -135,7 +135,6 @@ struct KernelMeta {
     std::string_view name, source;
 
     // Core identifiers:
-    HalProcessorClassType processor_class;
     HalProgrammableCoreType programmable_core_type;
 
     // Core configuration:

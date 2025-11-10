@@ -12,8 +12,9 @@
 #include <string>
 #include <vector>
 
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include "jit_build_options.hpp"
+#include "llrt/hal.hpp"
 
 namespace tt::tt_metal {
 
