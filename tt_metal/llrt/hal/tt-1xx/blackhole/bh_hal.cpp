@@ -423,6 +423,9 @@ void Hal::initialize_bh(bool enable_2_erisc_mode) {
         }
         return true;
     };
+
+    this->max_pinned_memory_count_ = std::numeric_limits<size_t>::max();
+    this->total_pinned_memory_size_ = std::numeric_limits<size_t>::max();
 }
 
 }  // namespace tt_metal

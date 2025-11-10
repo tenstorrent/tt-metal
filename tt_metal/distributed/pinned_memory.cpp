@@ -231,6 +231,7 @@ bool PinnedMemoryImpl::usable_from_noc(ChipId device_id) const {
 void PinnedMemoryImpl::add_barrier_event(const distributed::MeshEvent& event) {
     barrier_events_.push_back(event);
 
+    // Clear completed barrier events to avoid unbounded growth of the barrier queue.
     while (!barrier_events_.empty()) {
         auto& event = barrier_events_.front();
         if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
