@@ -279,8 +279,7 @@ private:
 
 Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device);
 
-[[deprecated]]
-Tensor create_device_tensor(
+[[deprecated]] Tensor create_device_tensor(
     const tt::tt_metal::Shape& shape,
     DataType dtype,
     Layout layout,
@@ -353,6 +352,16 @@ Tensor convert_python_tensor_to_tt_tensor(
     std::optional<ttnn::QueueId> cq_id,
     float pad_value,
     const ttnn::distributed::TensorToMesh* mesh_mapper);
+
+namespace ops {
+Tensor view(
+    const Tensor& input_tensor, const tt::tt_metal::Shape& new_shape, const tt::tt_metal::Shape& new_padded_shape);
+Tensor view(const Tensor& input_tensor, const tt::tt_metal::Shape& new_shape);
+Tensor to_dtype(const Tensor& tensor, DataType dtype);
+
+std::string to_string(const Tensor& tensor);
+}  // namespace ops
+
 }  // namespace tt_metal
 
 }  // namespace tt

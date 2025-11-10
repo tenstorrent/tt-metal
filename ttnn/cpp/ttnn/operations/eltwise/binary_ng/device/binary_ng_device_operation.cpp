@@ -16,17 +16,13 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
     switch (val) {
         case ADD:
         case SUB:
+        case MUL:
         case EQ:
         case NE:
-            return (
-                (a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32) || (a == UINT32 && b == UINT32) ||
-                (a == UINT16 && b == UINT16));
-        case MUL:
         case LOGICAL_AND:
         case LOGICAL_OR:
-        case LOGICAL_XOR:
-        case SQUARED_DIFFERENCE:
-            return ((a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32) || (a == UINT16 && b == UINT16));
+        case LOGICAL_XOR: return a == b && (a == FLOAT32 || a == INT32 || a == UINT32 || a == UINT16);
+        case SQUARED_DIFFERENCE: return a == b && (a == FLOAT32 || a == INT32 || a == UINT16);
         case LOGADDEXP:
         case LOGADDEXP2:
         case LDEXP:
@@ -44,8 +40,7 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
         case LOGICAL_RIGHT_SHIFT: return ((a == INT32 || a == UINT32) && (b == INT32 || b == UINT32));
         case BITWISE_XOR:
         case BITWISE_OR:
-        case BITWISE_AND:
-            return ((a == INT32 && b == INT32) || (a == UINT16 && b == UINT16) || (a == UINT32 && b == UINT32));
+        case BITWISE_AND: return a == b && (a == INT32 || a == UINT32 || a == UINT16);
         case QUANT:
         case REQUANT:
         case DEQUANT:
@@ -53,7 +48,7 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
         case MINIMUM:
         case XLOGY:
         case POWER: return true;
-        case DIV: return !fast_and_approximate_mode || (a == FLOAT32 && b == FLOAT32);
+        case DIV: return !fast_and_approximate_mode || (a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32);
         default: return false;
     }
     return false;

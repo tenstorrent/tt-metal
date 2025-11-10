@@ -23,8 +23,8 @@ from models.demos.llama3_70b_galaxy.demo.demo_decode import LlamaOptimizations
 
 
 DECODER_OP_START_INDEX = 4
-DECODER_OP_END_INDEX = -22
-NUM_OPS_IN_SAMPLING = 12
+DECODER_OP_END_INDEX = -21
+NUM_OPS_IN_SAMPLING = 11
 
 DECODER_PREFIX = "model"
 MODEL_TAIL_PREFIX = "model_tail"
@@ -371,6 +371,9 @@ def load_perf_targets(galaxy_type):
     return perf_targets
 
 
+# This pytest flag is necessary to ensure that we do NOT open the device in the main process for device perf tests that run
+# the test inside a subprocess since UMD does not allow multiple subprocesses opening the device at the same time.
+@pytest.mark.no_reset_device
 @pytest.mark.timeout(900)
 @pytest.mark.models_device_performance_bare_metal
 # To update:
@@ -778,6 +781,7 @@ def test_llama_TG_perf_device(
     assert all_passing
 
 
+@pytest.mark.no_reset_device
 @pytest.mark.timeout(900)
 @pytest.mark.models_device_performance_bare_metal
 # To update:

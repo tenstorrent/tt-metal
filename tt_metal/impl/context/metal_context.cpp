@@ -152,6 +152,7 @@ void MetalContext::initialize(
         [[maybe_unused]] int ai_clk = cluster_->get_device_aiclk(device_id);
         log_debug(tt::LogMetal, "AI CLK for device {} is:   {} MHz", device_id, ai_clk);
         generate_device_bank_to_noc_tables(device_id);
+        generate_worker_logical_to_virtual_map(device_id);
 
         // Create build env for this device, and build FW if it's not built already
         BuildEnvManager::get_instance().add_build_env(device_id, num_hw_cqs_);
@@ -253,6 +254,8 @@ void MetalContext::teardown() {
     dispatch_core_manager_.reset();
     tt::tt_metal::reset_topology_state();
 
+    // Clear dispatch, dispatch_s and prefetcher core info in inspector data
+    tt::tt_metal::Inspector::clear_all_core_info();
     // Deinitialize inspector
     inspector_data_.reset();
 
@@ -667,18 +670,14 @@ void MetalContext::reset_cores(ChipId device_id) {
         }
     }
 
-    // Reset Tensix cores, ignore storage only cores
+    // Reset Tensix cores
     CoreCoord grid_size = cluster_->get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
-    const auto& storage_only_cores = tt::get_logical_storage_cores(device_id, num_hw_cqs_, dispatch_core_config_);
-    auto storage_only_cores_set = std::unordered_set<CoreCoord>(storage_only_cores.begin(), storage_only_cores.end());
     for (uint32_t y = 0; y < grid_size.y; y++) {
         for (uint32_t x = 0; x < grid_size.x; x++) {
             CoreCoord logical_core(x, y);
             CoreCoord worker_core =
                 cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::WORKER);
-            if (!storage_only_cores_set.contains(logical_core)) {
-                cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core), tt::umd::RiscType::ALL);
-            }
+            cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core), tt::umd::RiscType::ALL);
         }
     }
 
@@ -696,10 +695,8 @@ void MetalContext::assert_cores(ChipId device_id) {
     auto dispatch_cores = tt::tt_metal::get_virtual_dispatch_cores(device_id);
     auto routing_cores = tt::tt_metal::get_virtual_dispatch_routing_cores(device_id);
 
-    // Assert riscs on Tensix, minus storage cores
+    // Assert riscs on Tensix
     CoreCoord grid_size = cluster_->get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
-    const auto& storage_only_cores = tt::get_logical_storage_cores(device_id, num_hw_cqs_, dispatch_core_config_);
-    auto storage_only_cores_set = std::unordered_set<CoreCoord>(storage_only_cores.begin(), storage_only_cores.end());
     for (uint32_t y = 0; y < grid_size.y; y++) {
         for (uint32_t x = 0; x < grid_size.x; x++) {
             CoreCoord logical_core(x, y);
@@ -707,15 +704,13 @@ void MetalContext::assert_cores(ChipId device_id) {
                 cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::WORKER);
 
             if (!dispatch_cores.contains(worker_core) && !routing_cores.contains(worker_core)) {
-                if (!storage_only_cores_set.contains(logical_core)) {
-                    if (!tt::tt_metal::MetalContext::instance().hal().get_eth_fw_is_cooperative() &&
-                        this->get_control_plane().get_active_ethernet_cores(device_id, false).contains(logical_core)) {
-                        // Cannot put these cores into reset because they are running base FW
-                        // Below will return to base FW
-                        continue;
-                    }
-                    cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core), tt::umd::RiscType::ALL);
+                if (!tt::tt_metal::MetalContext::instance().hal().get_eth_fw_is_cooperative() &&
+                    this->get_control_plane().get_active_ethernet_cores(device_id, false).contains(logical_core)) {
+                    // Cannot put these cores into reset because they are running base FW
+                    // Below will return to base FW
+                    continue;
                 }
+                cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core), tt::umd::RiscType::ALL);
             } else {
                 log_debug(tt::LogMetal, "{} will not be Reset when closing Device {}", worker_core.str(), device_id);
             }
@@ -821,6 +816,30 @@ void MetalContext::generate_device_bank_to_noc_tables(ChipId device_id) {
     }
 }
 
+void MetalContext::generate_worker_logical_to_virtual_map(ChipId device_id) {
+    // Generate logical to virtual map for DRAM and L1 banks
+    const auto& soc_desc = cluster_->get_soc_desc(device_id);
+    auto tensix_grid_size = soc_desc.get_grid_size(CoreType::TENSIX);
+
+    worker_logical_col_to_virtual_col_[device_id].clear();
+    worker_logical_row_to_virtual_row_[device_id].clear();
+    worker_logical_col_to_virtual_col_[device_id].reserve(tensix_grid_size.x);
+    worker_logical_row_to_virtual_row_[device_id].reserve(tensix_grid_size.y);
+
+    for (size_t x = 0; x < tensix_grid_size.x; x++) {
+        worker_logical_col_to_virtual_col_[device_id].push_back(
+            soc_desc
+                .translate_coord_to({tt_xy_pair{x, 0}, CoreType::TENSIX, CoordSystem::LOGICAL}, CoordSystem::TRANSLATED)
+                .x);
+    }
+    for (size_t y = 0; y < tensix_grid_size.y; y++) {
+        worker_logical_row_to_virtual_row_[device_id].push_back(
+            soc_desc
+                .translate_coord_to({tt_xy_pair{0, y}, CoreType::TENSIX, CoordSystem::LOGICAL}, CoordSystem::TRANSLATED)
+                .y);
+    }
+}
+
 void MetalContext::initialize_device_bank_to_noc_tables(
     ChipId device_id, const HalProgrammableCoreType& core_type, CoreCoord virtual_core) {
     const uint32_t dram_to_noc_sz_in_bytes = dram_bank_to_noc_xy_[device_id].size() * sizeof(uint16_t);
@@ -859,6 +878,42 @@ void MetalContext::initialize_device_bank_to_noc_tables(
         l1_offset_addr);
 }
 
+void MetalContext::initialize_worker_logical_to_virtual_tables(
+    ChipId device_id, const HalProgrammableCoreType& core_type, CoreCoord virtual_core) {
+    // Generate logical to virtual map for DRAM and L1 banks
+    const auto& soc_desc = cluster_->get_soc_desc(device_id);
+    const uint32_t logical_col_to_virtual_col_sz_in_bytes =
+        worker_logical_col_to_virtual_col_[device_id].size() * sizeof(uint8_t);
+    const uint8_t firmware_grid_size_x =
+        tt::round_up(soc_desc.grid_size.x, 4);  // Ensure multiple of 4 for uint32_t alignment
+    const uint32_t logical_row_to_virtual_row_sz_in_bytes =
+        worker_logical_row_to_virtual_row_[device_id].size() * sizeof(uint8_t);
+    const uint64_t logical_to_virtual_map_addr =
+        hal_->get_dev_addr(core_type, HalL1MemAddrType::LOGICAL_TO_VIRTUAL_SCRATCH);
+    const uint32_t logical_to_virtual_map_size =
+        hal_->get_dev_size(core_type, HalL1MemAddrType::LOGICAL_TO_VIRTUAL_SCRATCH);
+
+    TT_ASSERT(
+        (firmware_grid_size_x + logical_row_to_virtual_row_sz_in_bytes) <= logical_to_virtual_map_size,
+        "Size of logical to virtual map is greater than available space");
+
+    uint64_t logical_col_to_virtual_col_addr = logical_to_virtual_map_addr;
+    cluster_->write_core(
+        &worker_logical_col_to_virtual_col_[device_id][0],
+        logical_col_to_virtual_col_sz_in_bytes,
+        tt_cxy_pair(device_id, virtual_core),
+        logical_col_to_virtual_col_addr);
+
+    // Size of the data in the firmware is the full size of the grid, not the harvested size.
+    // Therefore, we must adjust the address to account for the full grid size.
+    uint64_t logical_row_to_virtual_row_addr = logical_to_virtual_map_addr + (firmware_grid_size_x * sizeof(uint8_t));
+    cluster_->write_core(
+        &worker_logical_row_to_virtual_row_[device_id][0],
+        logical_row_to_virtual_row_sz_in_bytes,
+        tt_cxy_pair(device_id, virtual_core),
+        logical_row_to_virtual_row_addr);
+}
+
 void MetalContext::initialize_firmware(
     ChipId device_id,
     const HalProgrammableCoreType& core_type,
@@ -868,6 +923,13 @@ void MetalContext::initialize_firmware(
     ZoneScoped;
 
     initialize_device_bank_to_noc_tables(device_id, core_type, virtual_core);
+
+    if (core_type == HalProgrammableCoreType::TENSIX) {
+        // Only need to generate logical to virtual tables for Tensix cores, as only they run the firmware that
+        // requires it.
+        initialize_worker_logical_to_virtual_tables(device_id, core_type, virtual_core);
+    }
+
     uint32_t core_type_idx = hal_->get_programmable_core_type_index(core_type);
     uint32_t processor_class_count = hal_->get_processor_classes_count(core_type);
     auto jit_build_config =
@@ -1224,29 +1286,25 @@ void MetalContext::initialize_and_launch_firmware(ChipId device_id) {
     auto go_msg = dev_msgs_factory.create<dev_msgs::go_msg_t>();
     go_msg.view().signal() = dev_msgs::RUN_MSG_INIT;
 
-    const auto& storage_only_cores = tt::get_logical_storage_cores(device_id, num_hw_cqs_, dispatch_core_config_);
-    auto storage_only_cores_set = std::unordered_set<CoreCoord>(storage_only_cores.begin(), storage_only_cores.end());
     for (uint32_t y = 0; y < logical_grid_size.y; y++) {
         for (uint32_t x = 0; x < logical_grid_size.x; x++) {
             CoreCoord logical_core(x, y);
-            if (!storage_only_cores_set.count(logical_core)) {
-                CoreCoord worker_core = cluster_->get_virtual_coordinate_from_logical_coordinates(
-                    device_id, logical_core, CoreType::WORKER);
-                // Setup the absolute logical coordinates of this worker which are relative to true origin. not the sub
-                // device. When running the user kernel, which potentially is on a sub device, send that info using the
-                // launch message using dispatch.
-                core_info.view().absolute_logical_x() = logical_core.x;
-                core_info.view().absolute_logical_y() = logical_core.y;
-                // Must write to core before starting it
-                cluster_->write_core_immediate(
-                    core_info.data(),
-                    core_info.size(),
-                    {device_id, worker_core},
-                    hal_->get_dev_addr(llrt::get_core_type(device_id, worker_core), HalL1MemAddrType::CORE_INFO));
-                initialize_firmware(
-                    device_id, HalProgrammableCoreType::TENSIX, worker_core, launch_msg.view(), go_msg.view());
-                not_done_cores.insert(worker_core);
-            }
+            CoreCoord worker_core =
+                cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::WORKER);
+            // Setup the absolute logical coordinates of this worker which are relative to true origin. not the sub
+            // device. When running the user kernel, which potentially is on a sub device, send that info using the
+            // launch message using dispatch.
+            core_info.view().absolute_logical_x() = logical_core.x;
+            core_info.view().absolute_logical_y() = logical_core.y;
+            // Must write to core before starting it
+            cluster_->write_core_immediate(
+                core_info.data(),
+                core_info.size(),
+                {device_id, worker_core},
+                hal_->get_dev_addr(llrt::get_core_type(device_id, worker_core), HalL1MemAddrType::CORE_INFO));
+            initialize_firmware(
+                device_id, HalProgrammableCoreType::TENSIX, worker_core, launch_msg.view(), go_msg.view());
+            not_done_cores.insert(worker_core);
         }
     }
 

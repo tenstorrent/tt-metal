@@ -104,30 +104,16 @@ size_t get_ringbuffer_size(IDevice* device, HalProgrammableCoreType programmable
     }
 }
 
-void validate_kernel_placement(IDevice* device, bool force_slow_dispatch, std::shared_ptr<Kernel> kernel) {
+void validate_kernel_placement(bool force_slow_dispatch, std::shared_ptr<Kernel> kernel) {
     // Placement rules:
-    //  Slow dispatch:
-    //      - kernels cannot be on storage only cores
     //  Fast dispatch (tensix):
-    //      - kernels cannot be on storage only cores an
     //      - tensix kernels cannot be on dispatch cores
     //  Fast dispatch (ethernet):
-    //      - kernels cannot be on storage only cores
     //      - eth kernels cannot be on idle eth cores
     bool slow_dispatch = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr;
 
     const auto& dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
     tt::CoreType dispatch_core_type = dispatch_core_config.get_core_type();
-    const std::vector<CoreCoord>& storage_cores =
-        MetalContext::instance().get_dispatch_query_manager().get_logical_storage_cores_on_user_chips();
-    bool on_storage_only_core =
-        std::any_of(storage_cores.begin(), storage_cores.end(), [&kernel](const CoreCoord& storage_core) {
-            return kernel->is_on_logical_core(storage_core);
-        });
-    TT_FATAL(
-        not on_storage_only_core,
-        "Illegal kernel placement for {}. Kernels cannot be placed on storage only cores!",
-        kernel->name());
 
     // Kernels used to implement fast dispatch can be placed on dispatch cores
     if (not slow_dispatch and not force_slow_dispatch) {
@@ -1397,7 +1383,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 
     for (auto& kernels : kernels_) {
         for (auto& [id, kernel] : kernels) {
-            validate_kernel_placement(device, force_slow_dispatch, kernel);
+            validate_kernel_placement(force_slow_dispatch, kernel);
             launch_build_step(
                 [kernel, device, this, &build_env] {
                     JitBuildOptions build_options(build_env.build_env);
