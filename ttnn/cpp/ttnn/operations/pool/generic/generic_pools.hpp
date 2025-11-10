@@ -8,16 +8,22 @@
 #include <optional>
 #include <variant>
 #include <vector>
+#include "tt-metalium/buffer_types.hpp"
+#include "ttnn/operations/pool/pool_utils.hpp"
 #include "ttnn/core.hpp"
+#include "ttnn/operations/sliding_window/sliding_window.hpp"
+#include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/decorators.hpp"
-
+#include "ttnn/operations/sliding_window/op_slicing/op_slicing.hpp"
 namespace ttnn {
 namespace operations::pool {
+
+using op_slicing::Op2DSliceConfig;
 
 struct MaxPoolWithIndicesResult {
     Tensor output;
@@ -37,6 +43,7 @@ struct MaxPool2DOp {
         std::array<uint32_t, 2> dilation,
         bool ceil_mode = false,
         const std::optional<const MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Op2DSliceConfig>& dram_slice_config = std::nullopt,
         std::optional<const TensorMemoryLayout> applied_shard_scheme = std::nullopt,
         bool deallocate_input = false,
         bool reallocate_halo_output = true,
@@ -58,12 +65,64 @@ struct AvgPool2DOp {
         bool count_include_pad = true,
         std::optional<int32_t> divisor_override = std::nullopt,
         const std::optional<const MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Op2DSliceConfig>& dram_slice_config = std::nullopt,
         std::optional<const TensorMemoryLayout> applied_shard_scheme = std::nullopt,
         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
         bool deallocate_input = false,
         bool reallocate_halo_output = true,
         DataType dtype = DataType::BFLOAT16,
         Layout output_layout = Layout::ROW_MAJOR);
+};
+
+class Pool2dSliceAttr : public ttnn::operations::op_slicing::OpSliceAttr {
+    using OptionalRefTensor = std::optional<std::reference_wrapper<ttnn::Tensor>>;
+    using RefTensor = std::reference_wrapper<ttnn::Tensor>;
+
+    uint32_t batch_size;
+    IOShape input_shape;
+    uint32_t channels;
+    std::array<uint32_t, 2> kernel_size;
+    std::array<uint32_t, 2> stride;
+    std::array<uint32_t, 4> padding_n4;
+    std::array<uint32_t, 2> dilation;
+    sliding_window::SlidingWindowConfig sliding_window_config;
+    IOShape output_shape;
+    bool ceil_mode;
+    bool count_include_pad;
+    std::optional<int32_t> divisor_override;
+    bool return_indices;
+    Pool2DType pool_type;
+    DataType dtype;
+    TensorMemoryLayout shard_layout;
+    Layout output_layout;
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config;
+    MeshDevice* device;
+
+public:
+    Pool2dSliceAttr(
+        uint32_t batch_size,
+        IOShape input_shape,
+        uint32_t channels,
+        std::array<uint32_t, 2> kernel_size,
+        std::array<uint32_t, 2> stride,
+        std::array<uint32_t, 4> padding_n4,
+        std::array<uint32_t, 2> dilation,
+        bool ceil_mode,
+        bool count_include_pad,
+        std::optional<int32_t> divisor_override,
+        std::optional<const TensorMemoryLayout> applied_shard_scheme,
+        Pool2DType pool_type,
+        DataType dtype,
+        Layout output_layout,
+        std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+        MeshDevice* device);
+
+    std::tuple<IOShape, IOShape> get_input_slice(IOShape output_slice_start, IOShape output_slice_end) override;
+    uint32_t get_L1_usage() override;
+    tt::tt_metal::MemoryConfig get_input_memory_config(IOShape output_slice_start, IOShape output_slice_end) override;
+    ttnn::Tensor run_L1_op(
+        const ttnn::Tensor& sliced_input_tensor, IOShape output_slice_start, IOShape output_slice_end) override;
+    std::string name() override;
 };
 
 }  // namespace operations::pool
