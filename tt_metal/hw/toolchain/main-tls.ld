@@ -147,6 +147,7 @@ SECTIONS {
   .tbss
   : IF_KERNEL(LOAD_AFTER(.tdata))
   {
+    *(.tbss.start) /* define __tbss_start as TLS symbol) */
     *(.tbss .tbss.* .gnu.linkonce.tb.* .tcommon)
     . = ALIGN(4);
     *(.tbss.end)
@@ -163,8 +164,6 @@ SECTIONS {
     *object.o(.data .bss)
   } :firmdata
 #endif
-   /* TODO: We do not need this offset, it can be computed as __ldm_tdata_end - __ldm_tdata_start.  */
-   IF_KERNEL(__data_lma_offset = SIZEOF(.tdata) - ABSOLUTE(__ldm_tdata_init - ADDR(.tdata));)
   .data IF_TLS(DATA_START)IF_NOT_TLS(ADDR(.tbss) + SIZEOF(.tbss))
   : IF_KERNEL(LOAD_AFTER(.tdata))
   {
@@ -205,6 +204,7 @@ SECTIONS {
   .bss
   : LOAD_AFTER(.empty.init_array.fini_array)
   {
+    __ldm_bss_start = .;
     *(.sbss2 .sbss2.* .gnu.linkonce.sb2.*)
     *(.dynsbss)
     *(.sbss .sbss.* .gnu.linkonce.sb.*)

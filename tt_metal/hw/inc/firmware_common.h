@@ -44,7 +44,22 @@ inline void do_crt1(uint32_t tt_l1_ptr* data_image) {
     // Copy initialized data.
     extern uint32_t __ldm_data_start[];
     extern uint32_t __ldm_data_end[];
-    l1_to_local_mem_copy(__ldm_data_start, data_image, __ldm_data_end - __ldm_data_start);
+    if (__ldm_data_start != data_image) {
+        l1_to_local_mem_copy(__ldm_data_start, data_image, __ldm_data_end - __ldm_data_start);
+    }
+}
+
+inline void do_thread_crt1(uint32_t tt_l1_ptr* data_image) {
+    // Clear thread bss.
+    extern thread_local uint32_t __ldm_tbss_start[];
+    extern thread_local uint32_t __ldm_tbss_end[];
+    wzerorange(__ldm_tbss_start, __ldm_tbss_end);
+
+    // Copy thread initialized data.
+    extern thread_local uint32_t __ldm_tdata_start[];
+    extern thread_local uint32_t __ldm_tdata_end[];
+    extern uint32_t __tdata_lma[];
+    l1_to_local_mem_copy(__ldm_tdata_start, data_image, __ldm_tdata_end - __ldm_tdata_start);
 }
 
 inline void noc_bank_table_init(uint64_t mem_bank_to_noc_addr) {
