@@ -217,14 +217,18 @@ std::vector<std::string> MeshGraphDescriptor::static_validate(const proto::MeshG
     // Run validation groups with early exit checkpoints
     {
         validate_basic_structure(proto, all_errors);
-        if (!all_errors.empty()) return all_errors;
+        if (!all_errors.empty()) {
+            return all_errors;
+        }
     }
 
     {
         validate_names(proto, all_errors);
         validate_channels(proto, all_errors);
         validate_architecture_consistency(proto, all_errors);
-        if (!all_errors.empty()) return all_errors;
+        if (!all_errors.empty()) {
+            return all_errors;
+        }
     }
 
     {
@@ -232,14 +236,18 @@ std::vector<std::string> MeshGraphDescriptor::static_validate(const proto::MeshG
         validate_express_connections(proto, all_errors);
         validate_graph_descriptors(proto, all_errors);
         validate_graph_topology_and_connections(proto, all_errors);
-        if (!all_errors.empty()) return all_errors;
+        if (!all_errors.empty()) {
+            return all_errors;
+        }
     }
 
     {
         if (backwards_compatible) {
             validate_legacy_requirements(proto, all_errors);
         }
-        if (!all_errors.empty()) return all_errors;
+        if (!all_errors.empty()) {
+            return all_errors;
+        }
     }
 
     return all_errors;
@@ -1150,13 +1158,17 @@ void MeshGraphDescriptor::print_node(GlobalNodeId id, int indent_level) {
         const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(inst.desc);
         ss << indent << "Device Topology Dimensions: [";
         for (int i = 0; i < mesh_desc->device_topology().dims_size(); ++i) {
-            if (i > 0) ss << ", ";
+            if (i > 0) {
+                ss << ", ";
+            }
             ss << mesh_desc->device_topology().dims(i);
         }
         ss << "]" << std::endl;
         ss << indent << "Host Topology Dimensions: [";
         for (int i = 0; i < mesh_desc->host_topology().dims_size(); ++i) {
-            if (i > 0) ss << ", ";
+            if (i > 0) {
+                ss << ", ";
+            }
             ss << mesh_desc->host_topology().dims(i);
         }
         ss << "]" << std::endl;

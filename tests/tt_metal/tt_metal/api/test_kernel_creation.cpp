@@ -52,36 +52,6 @@ TEST_F(MeshDispatchFixture, TensixCreateKernelsOnComputeCores) {
     }
 }
 
-TEST_F(MeshDispatchFixture, DISABLED_TensixCreateKernelsOnStorageCores) {
-    for (unsigned int id = 0; id < this->devices_.size(); id++) {
-        auto mesh_device = this->devices_.at(id);
-        if (mesh_device->storage_only_cores().empty()) {
-            GTEST_SKIP() << "This test only runs on devices with storage only cores";
-        }
-
-        distributed::MeshWorkload workload;
-        auto zero_coord = distributed::MeshCoordinate(0, 0);
-        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        tt_metal::Program program = CreateProgram();
-        workload.add_program(device_range, std::move(program));
-        auto& program_ = workload.get_programs().at(device_range);
-
-        const std::set<CoreCoord>& storage_only_cores = mesh_device->storage_only_cores();
-        std::set<CoreRange> storage_only_core_ranges;
-        for (CoreCoord core : storage_only_cores) {
-            storage_only_core_ranges.emplace(core);
-        }
-        CoreRangeSet storage_core_range_set(storage_only_core_ranges);
-        EXPECT_ANY_THROW(
-            tt_metal::CreateKernel(
-                program_,
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp",
-                storage_core_range_set,
-                DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default}););
-    }
-}
-
 TEST_F(MeshDispatchFixture, DISABLED_TensixIdleEthCreateKernelsOnDispatchCores) {
     if (this->IsSlowDispatch()) {
         GTEST_SKIP() << "This test is only supported in fast dispatch mode";
