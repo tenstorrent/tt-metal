@@ -50,7 +50,7 @@ def split_list(lst, n):
     start = 0
     for i in range(n):
         chunks.append(list(lst[start : start + chunk_size]))  # Convert to list explicitly
-        start = end
+        start += chunk_size
     return chunks
 
 
@@ -577,8 +577,10 @@ class Generator:
         if self.prev_page_table is None or any(
             not torch.equal(prev, curr) for prev, curr in zip(self.prev_page_table, page_table)
         ):
+            # If the page table has changed, it means that the inputs have shuffled, so we need to copy them from host again
             reset_inputs = True
-            self.prev_page_table = page_table
+            if page_table is not None:
+                self.prev_page_table = tuple(pt.clone() for pt in page_table)
 
         if reset_inputs:
             for i in range(self.data_parallel):
