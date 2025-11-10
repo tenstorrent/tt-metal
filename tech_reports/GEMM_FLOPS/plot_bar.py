@@ -1,16 +1,24 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+"""
+Usage:
+1. Generate performance data using manually selected GEMM configurations
+2. Rename output files to n150-manual.csv and p150-manual.csv
+3. Place the CSV files in tech_reports/GEMM_FLOPS/
+4. Run this script from the tt-metal root directory
+"""
+
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 import matplotlib.colors as mcolors
 
 # Load N150 and P150 data
-df_n150 = pd.read_csv("tech_reports/GEMM_FLOPS/n150-sweep.csv")
+df_n150 = pd.read_csv("tech_reports/GEMM_FLOPS/n150-manual.csv")
 df_n150["source"] = "N150"
 
-df_p150 = pd.read_csv("tech_reports/GEMM_FLOPS/p150-sweep.csv")
+df_p150 = pd.read_csv("tech_reports/GEMM_FLOPS/p150-manual.csv")
 df_p150["source"] = "P150"
 
 # Standardize column names
@@ -46,9 +54,9 @@ for (m_val, source, dtype_fidelity), group in df_square.groupby(["m", "source", 
 df_best = pd.DataFrame(best_data)
 
 dtype_configs = [
-    ("BFLOAT16_HiFi4", "BFLOAT16-HiFi4"),
-    ("BFLOAT8_B_HiFi2", "BFLOAT8_B-HiFi2"),
-    ("BFLOAT4_B_LoFi", "BFLOAT4_B-LoFi"),
+    ("BFLOAT16_HiFi4", "BFLOAT16 (HiFi4)"),
+    ("BFLOAT8_B_HiFi2", "BFLOAT8_B (HiFi2)"),
+    ("BFLOAT4_B_LoFi", "BFLOAT4_B (LoFi)"),
 ]
 
 # Pair N150 and P150 M values for x-axis labels
@@ -172,26 +180,26 @@ from matplotlib.lines import Line2D
 legend_elements = []
 
 # Dtype section header
-legend_elements.append(Line2D([0], [0], color="none", label=r"$\mathbf{Dtype\ (Math\ Fidelity):}$"))
+legend_elements.append(Line2D([0], [0], color="none", label=r"$\mathbf{Dtype\ (Math\ Fidelity)}$"))
 
 # Add each dtype with its color
 for dtype_fidelity, label in dtype_configs:
-    legend_elements.append(Line2D([0], [0], color=dtype_color_map[dtype_fidelity], linewidth=4, label=f"  {label}"))
+    legend_elements.append(Line2D([0], [0], color=dtype_color_map[dtype_fidelity], linewidth=4, label=label))
 
 # Spacer
 legend_elements.append(Line2D([0], [0], color="none", label=""))
 
 # Device section header
-legend_elements.append(Line2D([0], [0], color="none", label=r"$\mathbf{Device:}$"))
+legend_elements.append(Line2D([0], [0], color="none", label=r"$\mathbf{Device}$"))
 
 # N150 (lighter)
 legend_elements.append(
-    Rectangle((0, 0), 1, 1, facecolor="gray", alpha=0.7, edgecolor="black", linewidth=1, label="  N150")
+    Rectangle((0, 0), 1, 1, facecolor="gray", alpha=0.7, edgecolor="black", linewidth=1, label="N150")
 )
 
 # P150 (darker)
 legend_elements.append(
-    Rectangle((0, 0), 1, 1, facecolor="gray", alpha=1.0, edgecolor="black", linewidth=1, label="  P150")
+    Rectangle((0, 0), 1, 1, facecolor="gray", alpha=1.0, edgecolor="black", linewidth=1, label="P150")
 )
 
 ax.legend(

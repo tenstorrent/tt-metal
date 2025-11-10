@@ -1,6 +1,14 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+"""
+Usage:
+1. Generate performance data using manually selected GEMM configurations
+2. Rename output files to n150-manual.csv and p150-manual.csv
+3. Place the CSV files in tech_reports/GEMM_FLOPS/
+4. Run this script from the tt-metal root directory
+"""
+
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
@@ -12,9 +20,9 @@ dtype_configs = [
     ("BFLOAT16_HiFi4", "BFLOAT16 (HiFi4)", "#1f77b4"),  # Blue
 ]
 
-df_n150 = pd.read_csv("tech_reports/GEMM_FLOPS/n150-sweep.csv")
+df_n150 = pd.read_csv("tech_reports/GEMM_FLOPS/n150-manual.csv")
 df_n150["source"] = "n150"
-df_p150 = pd.read_csv("tech_reports/GEMM_FLOPS/p150-sweep.csv")
+df_p150 = pd.read_csv("tech_reports/GEMM_FLOPS/p150-manual.csv")
 df_p150["source"] = "p150"
 
 if "TFLOPs (avg)" in df_n150.columns:
@@ -143,17 +151,17 @@ for source in ["n150", "p150"]:
     legend_elements = []
 
     # Dtype section header
-    legend_elements.append(Line2D([0], [0], color="none", label=r"$\mathbf{Dtype\ (Math\ Fidelity):}$"))
+    legend_elements.append(Line2D([0], [0], color="none", label=r"$\mathbf{Dtype\ (Math\ Fidelity)}$"))
 
     # Add each dtype with its color
     for dtype_fidelity, dtype_label, color in dtype_configs:
-        legend_elements.append(Line2D([0], [0], color=color, linewidth=4, label=f"  {dtype_label}"))
+        legend_elements.append(Line2D([0], [0], color=color, linewidth=4, label=dtype_label))
 
     # Spacer
     legend_elements.append(Line2D([0], [0], color="none", label=""))
 
     # Execution type section header
-    legend_elements.append(Line2D([0], [0], color="none", label=r"$\mathbf{Execution\ Type:}$"))
+    legend_elements.append(Line2D([0], [0], color="none", label=r"$\mathbf{Execution\ Type}$"))
 
     # Traced (solid line, filled triangles)
     legend_elements.append(
@@ -168,7 +176,7 @@ for source in ["n150", "p150"]:
             markerfacecolor="gray",
             markeredgecolor="black",
             markeredgewidth=1.5,
-            label="  Traced",
+            label="Traced",
         )
     )
 
@@ -185,7 +193,7 @@ for source in ["n150", "p150"]:
             markerfacecolor="none",
             markeredgecolor="gray",
             markeredgewidth=2.5,
-            label="  Non-traced",
+            label="Non-traced",
         )
     )
 

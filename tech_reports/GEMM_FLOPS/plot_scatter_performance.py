@@ -1,15 +1,23 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+"""
+Usage:
+1. Generate performance data using manually selected GEMM configurations
+2. Rename output files to n150-manual.csv and p150-manual.csv
+3. Place the CSV files in tech_reports/GEMM_FLOPS/
+4. Run this script from the tt-metal root directory
+"""
+
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 
 # Load N150 and P150 data
-df_n150 = pd.read_csv("tech_reports/GEMM_FLOPS/n150-sweep.csv")
+df_n150 = pd.read_csv("tech_reports/GEMM_FLOPS/n150-manual.csv")
 df_n150["source"] = "N150"
 
-df_p150 = pd.read_csv("tech_reports/GEMM_FLOPS/p150-sweep.csv")
+df_p150 = pd.read_csv("tech_reports/GEMM_FLOPS/p150-manual.csv")
 df_p150["source"] = "P150"
 
 # Standardize column names
@@ -142,14 +150,14 @@ ax.set_title(
 legend_elements = []
 
 # Dtype section
-legend_elements.append(Line2D([0], [0], color="none", label=r"$\mathbf{Dtype\ (Math\ Fidelity):}$"))
+legend_elements.append(Line2D([0], [0], color="none", label=r"$\mathbf{Dtype\ (Math\ Fidelity)}$"))
 for dtype_fidelity, color, label_short in dtype_configs:
-    legend_elements.append(Line2D([0], [0], color=color, linewidth=4, label=f"  {label_short}"))
+    legend_elements.append(Line2D([0], [0], color=color, linewidth=4, label=label_short))
 
 legend_elements.append(Line2D([0], [0], color="none", label=""))
 
 # Device section
-legend_elements.append(Line2D([0], [0], color="none", label=r"$\mathbf{Device:}$"))
+legend_elements.append(Line2D([0], [0], color="none", label=r"$\mathbf{Device}$"))
 legend_elements.append(
     Line2D(
         [0],
@@ -162,7 +170,7 @@ legend_elements.append(
         markerfacecolor="gray",
         markeredgecolor="black",
         markeredgewidth=1.5,
-        label="  P150",
+        label="P150",
     )
 )
 legend_elements.append(
@@ -177,7 +185,7 @@ legend_elements.append(
         markerfacecolor="none",
         markeredgecolor="gray",
         markeredgewidth=2.5,
-        label="  N150",
+        label="N150",
     )
 )
 

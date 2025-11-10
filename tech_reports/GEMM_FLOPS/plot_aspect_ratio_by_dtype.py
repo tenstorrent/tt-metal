@@ -1,6 +1,14 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+"""
+Usage:
+1. Generate performance data using manually selected GEMM configurations
+2. Rename output files to n150-manual.csv and p150-manual.csv
+3. Place the CSV files in tech_reports/GEMM_FLOPS/
+4. Run this script from the tt-metal root directory
+"""
+
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
@@ -28,12 +36,12 @@ def calculate_aspect_ratio(m, k, n, grid_x, grid_y):
 
 
 # Load N150 and P150 data
-df_n150 = pd.read_csv("tech_reports/GEMM_FLOPS/n150-sweep.csv")
+df_n150 = pd.read_csv("tech_reports/GEMM_FLOPS/n150-manual.csv")
 df_n150["source"] = "N150"
 df_n150["grid_x"] = 8
 df_n150["grid_y"] = 8
 
-df_p150 = pd.read_csv("tech_reports/GEMM_FLOPS/p150-sweep.csv")
+df_p150 = pd.read_csv("tech_reports/GEMM_FLOPS/p150-manual.csv")
 df_p150["source"] = "P150"
 df_p150["grid_x"] = 13
 df_p150["grid_y"] = 10
@@ -72,9 +80,9 @@ df = pd.concat([df_n150, df_p150], ignore_index=True)
 
 # Define dtype-fidelity pairs and aspect ratios (colors match scatter/bar plots)
 dtype_configs = [
-    ("BFLOAT4_B_LoFi", "BFLOAT4_B-LoFi", "#2ca02c"),  # Green
-    ("BFLOAT8_B_HiFi2", "BFLOAT8_B-HiFi2", "#ff7f0e"),  # Orange
-    ("BFLOAT16_HiFi4", "BFLOAT16-HiFi4", "#1f77b4"),  # Blue
+    ("BFLOAT4_B_LoFi", "BFLOAT4_B (LoFi)", "#2ca02c"),  # Green
+    ("BFLOAT8_B_HiFi2", "BFLOAT8_B (HiFi2)", "#ff7f0e"),  # Orange
+    ("BFLOAT16_HiFi4", "BFLOAT16 (HiFi4)", "#1f77b4"),  # Blue
 ]
 
 aspect_ratios = ["1:1:1", "1:2:4"]

@@ -1,6 +1,15 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-License-Identifier: Apache-2.0
+
 """
 Utilization Scatter Plot - Device-based utilization comparison between N150 and P150
+
+Usage:
+1. Generate performance data using manually selected GEMM configurations
+2. Rename output files to n150-manual.csv and p150-manual.csv
+3. Place the CSV files in tech_reports/GEMM_FLOPS/
+4. Run this script from the tt-metal root directory
 """
 
 import pandas as pd
@@ -21,8 +30,8 @@ device_configs = [
 ]
 
 # Load data
-df_n150 = pd.read_csv("tech_reports/GEMM_FLOPS/n150-sweep.csv")
-df_p150 = pd.read_csv("tech_reports/GEMM_FLOPS/p150-sweep.csv")
+df_n150 = pd.read_csv("tech_reports/GEMM_FLOPS/n150-manual.csv")
+df_p150 = pd.read_csv("tech_reports/GEMM_FLOPS/p150-manual.csv")
 
 # Add device column
 df_n150["device"] = "N150"
@@ -133,7 +142,7 @@ ax.set_ylim(0, 110)
 legend_elements = []
 
 # Dtype section header (bold)
-legend_elements.append(Line2D([0], [0], color="none", marker="", linestyle="", label="Dtype (Math Fidelity):"))
+legend_elements.append(Line2D([0], [0], color="none", marker="", linestyle="", label="Dtype (Math Fidelity)"))
 
 # Dtype entries (just colored lines, no markers)
 for dtype_label, color in dtype_configs:
@@ -147,7 +156,7 @@ for dtype_label, color in dtype_configs:
 legend_elements.append(Line2D([0], [0], color="none", marker="", linestyle="", label=""))
 
 # Device section header (bold)
-legend_elements.append(Line2D([0], [0], color="none", marker="", linestyle="", label="Device:"))
+legend_elements.append(Line2D([0], [0], color="none", marker="", linestyle="", label="Device"))
 
 # Device entries with markers and line styles
 legend_elements.append(
