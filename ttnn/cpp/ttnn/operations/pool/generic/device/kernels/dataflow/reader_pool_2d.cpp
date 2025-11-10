@@ -503,15 +503,18 @@ void kernel_main() {
     constexpr uint32_t total_elems_to_reduce = kernel_h * kernel_w;
 
     volatile tt_l1_ptr uint16_t* config_ptr;
+    uint32_t scalar_index = 0;
+    uint32_t scalar_start;
+    uint32_t scalar_value;
+    uint32_t scalar_end;
+    uint32_t counter = reader_id;
     if constexpr (!one_scalar_per_core) {
         uint32_t config_l1_addr = get_read_ptr(config_cb_id);
         config_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(config_l1_addr);
+        scalar_start = config_ptr[0];
+        scalar_value = config_ptr[1];
+        scalar_end = config_ptr[2];
     }
-    uint32_t scalar_index = 0;
-    uint32_t scalar_start = config_ptr[0];
-    uint32_t scalar_value = config_ptr[1];
-    uint32_t scalar_end = config_ptr[2];
-    uint32_t counter = reader_id;
 
     uint16_t num_segments = reader_indices_ptr[0] & 0xffff;
     bool first_row_value = reader_id == 0;
