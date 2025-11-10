@@ -41,15 +41,15 @@ std::ostream& operator<<(std::ostream& os, const tt::tt_metal::NdShardSpec& spec
     const auto& ranges = spec.grid.ranges();
     for (size_t i = 0; i < ranges.size(); ++i) {
         const auto& range = ranges[i];
-        os << "{\"start\":{\"x\":" << range.start_coord.x << ",\"y\":" << range.start_coord.y << "},";
-        os << "\"end\":{\"x\":" << range.end_coord.x << ",\"y\":" << range.end_coord.y << "}}";
+        os << R"({"start":{"x":)" << range.start_coord.x << ",\"y\":" << range.start_coord.y << "},";
+        os << R"("end":{"x":)" << range.end_coord.x << ",\"y\":" << range.end_coord.y << "}}";
         if (i < ranges.size() - 1) {
             os << ", ";
         }
     }
     os << "],";
 
-    os << "\"orientation\":\"";
+    os << R"("orientation":")";
     switch (spec.orientation) {
         case ShardOrientation::ROW_MAJOR: os << "ShardOrientation::ROW_MAJOR"; break;
         case ShardOrientation::COL_MAJOR: os << "ShardOrientation::COL_MAJOR"; break;
