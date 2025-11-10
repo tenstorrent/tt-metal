@@ -376,6 +376,7 @@ private:
     uint32_t next_cb_id = tt::CBIndex::c_0;
 };
 
+<<<<<<< HEAD
 operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
     Program& program,
     const Tensor& input_tensor,
@@ -725,4 +726,6 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
+=======
+>>>>>>> f5964193d6 (Remove In Place Halo (#31516))
 }  // namespace ttnn::operations::data_movement::detail
