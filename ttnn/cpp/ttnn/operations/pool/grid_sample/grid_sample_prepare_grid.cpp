@@ -75,8 +75,8 @@ tt::tt_metal::HostBuffer create_host_buffer_for_grid_preprocessing(
                 float y_coord = static_cast<float>(input_buffer[y_idx]);
 
                 // Transform to image coordinates - use consistent formula
-                float h_coord_image = (y_coord + 1.0f) * height_scale + height_offset;
-                float w_coord_image = (x_coord + 1.0f) * width_scale + width_offset;
+                float h_coord_image = ((y_coord + 1.0f) * height_scale) + height_offset;
+                float w_coord_image = ((x_coord + 1.0f) * width_scale) + width_offset;
 
                 if (mode == "nearest") {
                     // For nearest neighbor: use round() for align_corners=True, floor(coord + 0.5) for

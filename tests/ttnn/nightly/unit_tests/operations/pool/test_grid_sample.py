@@ -387,7 +387,7 @@ def prepare_sharded_ttnn_grid(
 )
 def test_grid_sample_near_uniform_grid(device, input_shape, mode, align_corners, grid_shape, use_precomputed_grid):
     torch.manual_seed(0)
-    if not (grid_shape == (1, 1, 1408, 2) and mode == "nearest"):
+    if grid_shape != (1, 1, 1408, 2) and mode == "nearest":
         pytest.skip("Tensors too large for sharded output which nearest mode supports")
 
     batch_size, grid_h, grid_w, _ = grid_shape

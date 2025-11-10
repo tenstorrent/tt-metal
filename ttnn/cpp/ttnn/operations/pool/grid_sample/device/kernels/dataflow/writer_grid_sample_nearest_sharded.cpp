@@ -27,13 +27,17 @@ ALWI void process_grid_point_nearest(
     const TensorAccessor& input_tensor_accessor,
     uint32_t batch_offset,
     uint32_t l1_write_output_addr) {
-    // Compute scaling factors as constexpr (same as in common utilities)
+    // Compute scaling factors to match prepare_grid.cpp
     constexpr float input_height_f = float(input_height);
     constexpr float input_width_f = float(input_width);
-    constexpr float height_scale = input_height_f * 0.5f;
-    constexpr float height_offset = height_scale - 0.5f;
-    constexpr float width_scale = input_width_f * 0.5f;
-    constexpr float width_offset = width_scale - 0.5f;
+
+    // Scale factors for coordinate transformation based on align_corners mode
+    constexpr float height_scale =
+        align_corners ? ((input_height > 1) ? (input_height_f - 1.0f) * 0.5f : 0.0f) : input_height_f * 0.5f;
+    constexpr float width_scale =
+        align_corners ? ((input_width > 1) ? (input_width_f - 1.0f) * 0.5f : 0.0f) : input_width_f * 0.5f;
+    constexpr float height_offset = align_corners ? 0.0f : -0.5f;
+    constexpr float width_offset = align_corners ? 0.0f : -0.5f;
 
     int32_t nearest_h, nearest_w;
 
@@ -63,12 +67,13 @@ ALWI void process_grid_point_nearest(
             w_coord_rel = bfloat16_to_float(w_coord_raw);
         }
 
-        const float h_coord_image = h_coord_rel * height_scale + height_offset;
-        const float w_coord_image = w_coord_rel * width_scale + width_offset;
+        // Transform to image coordinates using the same formula as prepare_grid.cpp
+        const float h_coord_image = ((h_coord_rel + 1.0f) * height_scale) + height_offset;
+        const float w_coord_image = ((w_coord_rel + 1.0f) * width_scale) + width_offset;
         if constexpr (align_corners) {
             // For align_corners=True, use floor(coord) directly
-            nearest_h = static_cast<int32_t>(floor(h_coord_image));
-            nearest_w = static_cast<int32_t>(floor(w_coord_image));
+            nearest_h = static_cast<int32_t>(round(h_coord_image));
+            nearest_w = static_cast<int32_t>(round(w_coord_image));
         } else {
             // For nearest neighbor, use floor(coord + 0.5) to match preprocessing
             nearest_h = static_cast<int32_t>(floor(h_coord_image + 0.5f));
