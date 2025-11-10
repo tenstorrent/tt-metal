@@ -22,6 +22,7 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/distributed.hpp>
+#include "common/tt_backend_api_types.hpp"
 
 namespace tt {
 namespace tt_metal {

@@ -31,6 +31,7 @@
 
 #include <tt_stl/overloaded.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/arch.hpp>
 
 enum class AddressableCoreType : uint8_t;
 
