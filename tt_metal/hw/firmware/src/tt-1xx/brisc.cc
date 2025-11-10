@@ -477,13 +477,6 @@ int main() {
                 auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
                 record_stack_usage(stack_free);
             } else {
-#if defined(PROFILE_KERNEL)
-                // This was not initialized in the kernel
-                // Currently FW does not issue a barrier except when using profiler
-                if (noc_mode == DM_DEDICATED_NOC) {
-                    noc_local_state_init(noc_index);
-                }
-#endif
                 // Brisc is responsible for issuing any noc cmds needed when initializing remote cbs
                 // So have brisc setup remote cb interfaces even when brisc is not in use
                 if (launch_msg_address->kernel_config.enables) {
@@ -519,13 +512,6 @@ int main() {
                     WAYPOINT("NKFD");
                 }
             }
-
-#if defined(PROFILE_KERNEL)
-            if (noc_mode == DM_DYNAMIC_NOC) {
-                // re-init for profiler to able to run barrier in dedicated noc mode
-                noc_local_state_init(noc_index);
-            }
-#endif
 
             uint32_t go_message_index = mailboxes->go_message_index;
             mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
