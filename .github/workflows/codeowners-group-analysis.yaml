@@ -732,6 +732,11 @@ jobs:
 
           echo "Using parameters: CREATE_NEW=$CREATE_NEW, PING_OWNERS=$PING_OWNERS, SEND_SLACK=$SEND_SLACK, SLACK_CHANNEL=$SLACK_CHANNEL"
 
+          # Check for large PRs that might cause processing issues
+          if [ "$CHANGED_FILES_COUNT" -gt 200 ]; then
+            echo "⚠️  WARNING: Large PR detected ($CHANGED_FILES_COUNT files). Comment generation may be slow."
+          fi
+
           TEAM_MEMBERS=""
           if [ -n "$TEAMS" ]; then
             IFS='§' read -ra TEAM_ARRAY <<< "$TEAMS"
@@ -946,21 +951,42 @@ jobs:
           [ "$NO_OWNERS_AVAILABLE" = "true" ] && COMMENT="$COMMENT\n\n**Note:** Only the PR author is available as a codeowner for this PR. No external review notifications will be sent."
           [ "${{ github.event_name }}" = "issue_comment" ] && [ "$PING_OWNERS" = "false" ] && [ "$SEND_SLACK" = "false" ] && COMMENT="$COMMENT\n\n---\n💡 **Tip:** Use \\\`/codeowners ping\\\` to notify pending owners via Slack, or \\\`/ping @username1 @username2 @team/subteam\\\` to ping specific users and teams."
           if [ -n "$FILES_WITHOUT_OWNERS" ]; then
-            COMMENT="$COMMENT\n\n---\n\n### ⚠️ Files Without CodeOwners\n\nThe following files have no designated code owners:"
-            FILES_WITHOUT_OWNERS_LIST=""
-            IFS=$'\n' read -ra FILES_ARRAY <<< "$FILES_WITHOUT_OWNERS"
-            for file in "${FILES_ARRAY[@]}"; do
-              [ -n "$file" ] && FILES_WITHOUT_OWNERS_LIST="$FILES_WITHOUT_OWNERS_LIST\n- [<code>$(echo "$file" | sed 's/\*/\\*/g' | sed 's/_/\\_/g')</code>](${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER/files#diff-$(echo -n "$file" | sha256sum | cut -d' ' -f1))"
-            done
-            COMMENT="$COMMENT$FILES_WITHOUT_OWNERS_LIST\n\n💡 **Suggestion:** Consider adding these files to the CODEOWNERS file for better review coverage."
+            FILE_COUNT=$(echo "$FILES_WITHOUT_OWNERS" | wc -l)
+            COMMENT="$COMMENT\n\n---\n\n### ⚠️ Files Without CodeOwners\n\n$FILE_COUNT files have no designated code owners."
+
+            # Limit the number of files shown to avoid comment size limits
+            if [ "$FILE_COUNT" -le 20 ]; then
+              FILES_WITHOUT_OWNERS_LIST=""
+              IFS=$'\n' read -ra FILES_ARRAY <<< "$FILES_WITHOUT_OWNERS"
+              for file in "${FILES_ARRAY[@]}"; do
+                [ -n "$file" ] && FILES_WITHOUT_OWNERS_LIST="$FILES_WITHOUT_OWNERS_LIST\n- [<code>$(echo "$file" | sed 's/\*/\\*/g' | sed 's/_/\\_/g')</code>](${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER/files#diff-$(echo -n "$file" | sha256sum | cut -d' ' -f1))"
+              done
+              COMMENT="$COMMENT$FILES_WITHOUT_OWNERS_LIST"
+            else
+              COMMENT="$COMMENT\n\n*(Showing first 20 files only)*"
+              FILES_WITHOUT_OWNERS_LIST=""
+              i=0
+              IFS=$'\n' read -ra FILES_ARRAY <<< "$FILES_WITHOUT_OWNERS"
+              for file in "${FILES_ARRAY[@]}"; do
+                if [ $i -ge 20 ]; then break; fi
+                [ -n "$file" ] && FILES_WITHOUT_OWNERS_LIST="$FILES_WITHOUT_OWNERS_LIST\n- [<code>$(echo "$file" | sed 's/\*/\\*/g' | sed 's/_/\\_/g')</code>](${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER/files#diff-$(echo -n "$file" | sha256sum | cut -d' ' -f1))"
+                i=$((i + 1))
+              done
+              COMMENT="$COMMENT$FILES_WITHOUT_OWNERS_LIST"
+            fi
+
+            COMMENT="$COMMENT\n\n💡 **Suggestion:** Consider adding these files to the CODEOWNERS file for better review coverage."
           fi
 
-            # Output comment for next step
+            # Output comment for next step (use temp file for large comments)
+            COMMENT_FILE=$(mktemp)
+            printf '%b\n' "$COMMENT" > "$COMMENT_FILE"
             {
               echo "comment<<EOF"
-              printf '%b\n' "$COMMENT"
+              cat "$COMMENT_FILE"
               echo "EOF"
             } >> $GITHUB_OUTPUT
+            rm -f "$COMMENT_FILE"
 
             # Output other data for next steps
             {
@@ -1260,6 +1286,18 @@ jobs:
             local github_username="$2"
             local ALL_USERS="$3"  # Pre-fetched user list passed as parameter
 
+            # Hardcoded mappings for users where fuzzy matching fails
+            case "$github_username" in
+              "mradosavljevicTT")
+                echo "U0837MYG788"
+                return 0
+                ;;
+              "nsextonTT")
+                echo "U08TVGQGGAE"
+                return 0
+                ;;
+            esac
+
             # Try exact matching first
             USER_ID=$(echo "$ALL_USERS" | jq -r --arg name "$full_name" '.[] | select(.real_name == $name or .profile.real_name == $name) | .id' | head -n1)
 
@@ -1526,6 +1564,11 @@ jobs:
           if [ -z "$PR_NUMBER" ] || [ "$PR_NUMBER" = "null" ]; then
             echo "ERROR: PR_NUMBER is not set or is null"
             exit 1
+          fi
+
+          # Check for large PRs that might cause issues
+          if [ "$CHANGED_FILES_COUNT" -gt 200 ]; then
+            echo "⚠️  WARNING: Large PR detected ($CHANGED_FILES_COUNT files). Processing may be slow or fail."
           fi
 
           echo "Generating ping message for pending owners..."
@@ -2064,9 +2107,13 @@ jobs:
                 exit 1
               fi
             else
-              # Just output the ping message to workflow logs
+              # Just output the ping message to workflow logs (truncated for large messages)
               echo "Ping message (not sent):"
-              echo "$PING_MESSAGE"
+              if [ ${#PING_MESSAGE} -gt 2000 ]; then
+                echo "${PING_MESSAGE:0:2000}... (truncated)"
+              else
+                echo "$PING_MESSAGE"
+              fi
             fi
           else
             echo "No pending owners to ping"
@@ -2138,6 +2185,18 @@ jobs:
               local full_name="$1"
               local github_username="$2"
               local ALL_USERS="$3"  # Pre-fetched user list passed as parameter
+
+              # Hardcoded mappings for users where fuzzy matching fails
+              case "$github_username" in
+                "mradosavljevicTT")
+                  echo "U0837MYG788"
+                  return 0
+                  ;;
+                "nsextonTT")
+                  echo "U08TVGQGGAE"
+                  return 0
+                  ;;
+              esac
 
               # Try exact matching first
               USER_ID=$(echo "$ALL_USERS" | jq -r --arg name "$full_name" '.[] | select(.real_name == $name or .profile.real_name == $name) | .id' | head -n1)
@@ -2402,10 +2461,14 @@ jobs:
 
             SLACK_MESSAGE="$SLACK_MESSAGE"$'\n\n'"Please review when you have a moment. Thank you! 🚀"
 
-            # Debug: Show the final message being sent
+            # Debug: Show the final message being sent (truncated for large messages)
             echo "🔍 Final Slack message:"
             echo "================================"
-            echo "$SLACK_MESSAGE"
+            if [ ${#SLACK_MESSAGE} -gt 2000 ]; then
+              echo "${SLACK_MESSAGE:0:2000}... (truncated)"
+            else
+              echo "$SLACK_MESSAGE"
+            fi
             echo "================================"
 
             # Send message to Slack
