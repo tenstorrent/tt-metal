@@ -184,7 +184,7 @@ class TtSDXLCombinedPipeline:
 
         # 3. Compile base image processing
         logger.info("Compiling base pipeline image processing...")
-        self.base_pipeline.compile_image_processing()
+        self.base_pipeline.compile_image_processing(force_no_trace=True)
 
         # 4. Compile refiner if enabled
         if self.config.use_refiner:
@@ -202,6 +202,9 @@ class TtSDXLCombinedPipeline:
 
             logger.info("Compiling refiner pipeline image processing...")
             self.refiner_pipeline.compile_image_processing()
+
+        if self.config.base_config.capture_trace:
+            self.base_pipeline._TtSDXLPipeline__trace_image_processing()
 
         self._compiled = True
         logger.info("=" * 80)

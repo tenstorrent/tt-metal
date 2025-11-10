@@ -40,7 +40,7 @@ def test_refiner(mesh_device):
             use_cfg_parallel=False,
             encoders_on_device=True,
             vae_on_device=False,
-            capture_trace=False,
+            capture_trace=True,
         ),
         refiner_config=TtSDXLImg2ImgPipelineConfig(
             num_inference_steps=10,
