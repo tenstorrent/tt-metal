@@ -409,13 +409,6 @@ if(ENABLE_LIBCXX)
             ${LIBC++}
             ${LIBC++ABI}
     )
-    target_compile_options(PUBLIC -stdlib=libc++)
-
-    target_link_libraries(
-        PUBLIC
-            ${LIBC++}
-            ${LIBC++ABI}
-    )
 endif()
 
 add_definitions(-DTOKENIZERS_DATA_PATH="${CMAKE_SOURCE_DIR}/data")

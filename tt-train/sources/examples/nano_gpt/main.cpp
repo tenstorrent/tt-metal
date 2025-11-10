@@ -320,7 +320,6 @@ int main(int argc, char **argv) {
 
     auto yaml_config = YAML::LoadFile(config_name);
     TrainingConfig config = parse_config(yaml_config);
-    EvalConfig eval_config = parse_eval_config(yaml_config);
     DeviceConfig device_config = parse_device_config(yaml_config);
 
     if (config.enable_mpi) {
@@ -377,7 +376,7 @@ int main(int argc, char **argv) {
         tokens_vector = ttml::datasets::load_tokens_from_space_separated_file(config.data_path);
     } catch (const std::exception &e) {
         std::cerr << e.what() << std::endl;
-        std::cerr << "\nDid you tokenize the dataset?" << std::endl;
+        std::cerr << "\nDid you tokenize the dataset? See the README for details." << std::endl;
         return -1;
     }
 
@@ -404,7 +403,6 @@ int main(int argc, char **argv) {
     };
     CachedHostData cached_data;
     std::vector<float> mask;
-    auto num_heads = std::visit([](auto &&arg) { return arg.num_heads; }, config.transformer_config);
     mask.reserve(sequence_length * sequence_length);
     for (int i = 0; i < sequence_length; ++i) {
         for (int j = 0; j < sequence_length; ++j) {
