@@ -729,6 +729,10 @@ def test_grid_sample_oft(
         pytest.skip("Precomputed grid only supports bfloat16")
 
     torch.manual_seed(0)
+    compute_grid_size = device.compute_with_storage_grid_size()
+    # Check if device has enough cores for the specified core grid
+    if core_grid.y > compute_grid_size.y or core_grid.x > compute_grid_size.x:
+        core_grid = ttnn.CoreGrid(x=compute_grid_size.x, y=compute_grid_size.y)
 
     batch_size, channels, height, width = input_shape
     grid_n, grid_h, grid_w, grid_coords = grid_shape
