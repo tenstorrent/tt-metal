@@ -6,10 +6,12 @@
 
 #include <cstdint>
 #include <optional>
+#include <set>
 #include <vector>
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/set.h>
 #include <nanobind/stl/vector.h>
 
 #include "ttnn-nanobind/decorators.hpp"
