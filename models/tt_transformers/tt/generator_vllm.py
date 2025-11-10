@@ -576,10 +576,13 @@ class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
         max_seq_len=131072,
         n_layers=None,
         tt_data_parallel=1,
-        optimizations: str = None,
+        optimizations: str = "performance",
     ):
-        assert optimizations is None, "Custom optimizations are not supported for this model"
         from models.demos.gemma3.demo.vision_demo import create_multimodal_model
+
+        optimizations = (
+            DecodersPrecision.from_string(optimizations) if optimizations is not None else DecodersPrecision.performance
+        )
 
         submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
 
@@ -594,6 +597,7 @@ class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
                 max_seq_len=max_seq_len,
                 use_paged_kv_cache=True,
                 checkpoint=state_dict,
+                optimizations=lambda model_args: optimizations(model_args.n_layers, model_args.model_name),
             )
             model_args.append(model_args_i)
             model.append(model_i)
