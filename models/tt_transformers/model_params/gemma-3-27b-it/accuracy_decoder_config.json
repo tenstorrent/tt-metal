@@ -1,0 +1,134 @@
+{
+    "decoders": {
+        "0": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "1": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "2": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "3": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "4": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "5": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "6": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "7": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "8": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "9": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "10": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "11": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "12": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "13": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "14": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "15": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "16": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "17": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "18": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "19": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "20": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "21": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "22": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "23": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "24": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "25": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        }
+    }
+}
