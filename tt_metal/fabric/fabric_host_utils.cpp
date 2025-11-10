@@ -35,7 +35,8 @@ FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config) {
         // WH T3K currently do not support Torus_XY fabric type, because they do not have wrapping connections.
         // If you want to use 1D Ring on t3k please use 1x8 MGD.
         case tt::tt_fabric::FabricConfig::FABRIC_1D_RING: {
-            if (cluster_type == tt::tt_metal::ClusterType::T3K) {
+            if ((cluster_type == tt::tt_metal::ClusterType::T3K) ||
+                (cluster_type == tt::tt_metal::ClusterType::P150_X8)) {
                 return FabricType::MESH;
             }
             return FabricType::TORUS_XY;
