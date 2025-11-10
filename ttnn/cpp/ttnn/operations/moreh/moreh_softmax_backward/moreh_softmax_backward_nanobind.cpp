@@ -8,6 +8,7 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/variant.h>
 
 #include "moreh_softmax_backward.hpp"
 #include "ttnn-nanobind/decorators.hpp"
@@ -34,7 +35,7 @@ void bind_moreh_softmax_backward_operation(nb::module_& mod) {
             nb::arg("op") = op_enum,                                                   \
             nb::arg("strategy") = MorehSoftmaxBackwardOpParallelizationStrategy::NONE, \
             nb::arg("memory_config") = nb::none(),                                     \
-            nb::arg("compute_kernel_config") = nb::none()});
+            nb::arg("compute_kernel_config").noconvert() = nb::none()});
     // NOLINTEND(bugprone-macro-parentheses)
 
     BIND_MOREH_SOFT_BACKWARD_OP(

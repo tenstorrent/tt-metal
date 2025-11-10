@@ -24,7 +24,38 @@ layer_norm = ttnn._ttnn.operations.moreh.moreh_layer_norm
 layer_norm_backward = ttnn._ttnn.operations.moreh.moreh_layer_norm_backward
 linear = ttnn._ttnn.operations.moreh.moreh_linear
 linear_backward = ttnn._ttnn.operations.moreh.moreh_linear_backward
-logsoftmax = ttnn._ttnn.operations.moreh.moreh_logsoftmax
+
+
+# Temporary nanobind migration shim: route logsoftmax through normalization.softmax + log
+# when compute_kernel_config is provided, to avoid nanobind argument mismatch.
+def logsoftmax(
+    input_tensor,
+    dim,
+    *,
+    output_tensor=None,
+    strategy=None,
+    memory_config=None,
+    compute_kernel_config=None,
+):
+    # Fast path: if no compute_kernel_config provided, delegate to bound op
+    if compute_kernel_config is None:
+        return ttnn._ttnn.operations.moreh.moreh_logsoftmax(
+            input_tensor,
+            dim,
+            output_tensor=output_tensor,
+            strategy=strategy,
+            memory_config=memory_config,
+        )
+    # Fallback path for nanobind: use normalization softmax, then log
+    softmax_out = ttnn.softmax(
+        input_tensor,
+        dim=dim,
+        memory_config=memory_config,
+        compute_kernel_config=compute_kernel_config,
+    )
+    return ttnn.log(softmax_out)
+
+
 logsoftmax_backward = ttnn._ttnn.operations.moreh.moreh_logsoftmax_backward
 matmul = ttnn._ttnn.operations.moreh.moreh_matmul
 matmul_backward = ttnn._ttnn.operations.moreh.moreh_matmul_backward
