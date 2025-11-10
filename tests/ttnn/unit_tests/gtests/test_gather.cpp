@@ -4,6 +4,8 @@
 
 #include <gtest/gtest.h>
 #include <algorithm>
+#include <cstdint>
+#include <cstring>
 #include <numeric>
 #include <set>
 #include <tt-metalium/core_coord.hpp>
@@ -124,6 +126,207 @@ protected:
         return shards;
     }
 };
+
+// CPU execution functions moved from production code for testing purposes
+
+/**
+ * @brief Reference implementation of blocked gather operation
+ *
+ * This is a software reference implementation that demonstrates the blocked
+ * transfer approach. It's used for testing and validation, not for hardware execution.
+ *
+ * @param B Batch size
+ * @param C Number of channels
+ * @param HW Total spatial dimension
+ * @param input_cores Vector of input core coordinates
+ * @param output_cores Vector of output core coordinates
+ * @param input_shards Input data organized as shards (vector of flattened arrays)
+ * @param block_size Width of each column block (default 4)
+ * @return Output shards after gather operation
+ */
+std::vector<std::vector<float>> gather_with_blocked_transfers(
+    uint32_t B,
+    uint32_t C,
+    uint32_t HW,
+    const std::vector<CoreCoord>& input_cores,
+    const std::vector<CoreCoord>& output_cores,
+    const std::vector<std::vector<float>>& input_shards,
+    uint32_t block_size) {
+    uint32_t num_input_cores = input_cores.size();
+    uint32_t num_output_cores = output_cores.size();
+
+    // Input validation
+    TT_FATAL(HW % num_input_cores == 0, "HW={} must be divisible by num_input_cores={}", HW, num_input_cores);
+    TT_FATAL(
+        (B * HW) % num_output_cores == 0, "B*HW={} must be divisible by num_output_cores={}", B * HW, num_output_cores);
+
+    // First, precompute the high-level transfer list
+    auto transfers = precompute_gather_transfers(B, C, HW, input_cores, output_cores);
+
+    // Calculate output dimensions
+    uint32_t output_shard_height = C;
+    uint32_t output_shard_width = B * HW / num_output_cores;
+
+    // Group transfers by output column blocks
+    auto blocked_groups =
+        group_transfers_by_output_column_blocks(transfers, B, C, HW, num_input_cores, num_output_cores, block_size);
+
+    // Flatten input shards for C-style access
+    std::vector<std::vector<float>> input_shards_flat;
+    for (const auto& shard : input_shards) {
+        input_shards_flat.push_back(shard);  // Already flattened in this implementation
+    }
+
+    // Initialize output shards
+    std::vector<std::vector<float>> output_shards(num_output_cores);
+    for (uint32_t i = 0; i < num_output_cores; i++) {
+        output_shards[i].resize(output_shard_height * output_shard_width, -1.0f);
+    }
+
+    // Process each column block
+    for (const auto& group : blocked_groups) {
+        // Calculate column range for this block
+        uint32_t col_start = group.dst_block_idx * block_size;
+        uint32_t col_end = std::min(col_start + block_size, output_shard_width);
+        uint32_t actual_block_width = col_end - col_start;
+
+        // Allocate temporary buffer for this column block (all rows, block_size columns)
+        // In real hardware, this could be in local memory
+        std::vector<float> block_buffer(output_shard_height * actual_block_width, 0.0f);
+
+        // Execute all transfers for this column block
+        for (const auto& transfer : group.transfers) {
+            // Get source data
+            const auto& src_flat = input_shards_flat[transfer.src_shard_idx];
+
+            // For each element in the transfer
+            for (uint32_t i = 0; i < transfer.length; i++) {
+                uint32_t src_idx = transfer.src_offset + i;
+                uint32_t dst_idx = transfer.dst_offset + i;
+
+                // Calculate 2D position in output shard
+                uint32_t dst_row = dst_idx / output_shard_width;
+                uint32_t dst_col = dst_idx % output_shard_width;
+
+                // Skip if this element is outside the current column block
+                if (dst_col < col_start || dst_col >= col_end) {
+                    continue;
+                }
+
+                // Calculate position within the column block
+                uint32_t block_col = dst_col - col_start;
+
+                // Write to block buffer
+                block_buffer[dst_row * actual_block_width + block_col] = src_flat[src_idx];
+            }
+        }
+
+        // Write the complete column block to the output shard
+        auto& output_shard = output_shards[group.dst_shard_idx];
+        for (uint32_t row = 0; row < output_shard_height; row++) {
+            std::memcpy(
+                &output_shard[row * output_shard_width + col_start],
+                &block_buffer[row * actual_block_width],
+                actual_block_width * sizeof(float));
+        }
+    }
+
+    return output_shards;
+}
+
+/**
+ * @brief Generic implementation of blocked gather operation for arbitrary element types
+ *
+ * This function performs the gather operation on any data type by working with
+ * raw bytes and element sizes, making it suitable for different precision formats.
+ *
+ * The implementation follows a blocked transfer approach where transfers are grouped
+ * by output column blocks to improve memory access patterns and enable efficient
+ * hardware implementation.
+ *
+ * This implementation keeps all offset calculations in elements and uses
+ * element_size only for memory operations. This design is more aligned
+ * with hardware DMA operations which work with byte counts.
+ *
+ * Memory efficiency:
+ * - Block buffer size = C × block_size × element_size bytes
+ * - For C=16, block_size=4:
+ *   - float32 (element_size=4): 16 × 4 × 4 = 256 bytes
+ *   - bfloat16 (element_size=2): 16 × 4 × 2 = 128 bytes
+ */
+void gather_with_blocked_transfers_generic(
+    const void* input_data,
+    void* output_data,
+    uint32_t element_size,
+    uint32_t B,
+    uint32_t C,
+    uint32_t HW,
+    const std::vector<CoreCoord>& input_cores,
+    const std::vector<CoreCoord>& output_cores,
+    uint32_t block_size) {
+    // First, precompute transfers (element-based, size-agnostic)
+    auto transfers = precompute_gather_transfers(B, C, HW, input_cores, output_cores);
+
+    // Group transfers by output column blocks
+    auto blocked_groups = group_transfers_by_output_column_blocks(
+        transfers, B, C, HW, input_cores.size(), output_cores.size(), block_size);
+
+    uint32_t input_shard_width = HW / input_cores.size();
+    uint32_t output_shard_width = B * HW / output_cores.size();
+    uint32_t output_shard_height = C;
+
+    // Cast to byte pointers for arithmetic
+    const uint8_t* input_bytes = static_cast<const uint8_t*>(input_data);
+    uint8_t* output_bytes = static_cast<uint8_t*>(output_data);
+
+    // Process each block group
+    for (const auto& group : blocked_groups) {
+        uint32_t col_start = group.dst_block_idx * block_size;
+        uint32_t col_end = std::min(col_start + block_size, output_shard_width);
+        uint32_t actual_block_width = col_end - col_start;
+
+        // Allocate block buffer in bytes
+        uint32_t block_buffer_elements = output_shard_height * actual_block_width;
+        std::vector<uint8_t> block_buffer(block_buffer_elements * element_size);
+
+        // Execute transfers into block buffer
+        for (const auto& transfer : group.transfers) {
+            // Calculate source pointer for this shard
+            const uint8_t* src_shard_base =
+                input_bytes + (transfer.src_shard_idx * B * C * input_shard_width * element_size);
+
+            const uint8_t* src_ptr = src_shard_base + (transfer.src_offset * element_size);
+
+            // Process the transfer - copy elements that belong to this block
+            for (uint32_t i = 0; i < transfer.length; i++) {
+                uint32_t dst_idx = transfer.dst_offset + i;
+                uint32_t dst_row = dst_idx / output_shard_width;
+                uint32_t dst_col = dst_idx % output_shard_width;
+
+                // Check if this element belongs in the current block
+                if (dst_col >= col_start && dst_col < col_end) {
+                    uint32_t block_col = dst_col - col_start;
+                    uint32_t block_idx = dst_row * actual_block_width + block_col;
+
+                    // Copy element_size bytes
+                    std::memcpy(&block_buffer[block_idx * element_size], &src_ptr[i * element_size], element_size);
+                }
+            }
+        }
+
+        // Copy block buffer to output shard
+        uint8_t* output_shard_base =
+            output_bytes + (group.dst_shard_idx * output_shard_height * output_shard_width * element_size);
+
+        for (uint32_t row = 0; row < output_shard_height; row++) {
+            // Copy entire row of the block
+            std::memcpy(
+                &output_shard_base[(row * output_shard_width + col_start) * element_size],
+                &block_buffer[row * actual_block_width * element_size],
+                actual_block_width * element_size);
+        }
+    }
+}
 
 TEST_F(GatherTransferTest, BasicTransferGeneration) {
     // Test simple single core to single core case: B=1, C=2, HW=8

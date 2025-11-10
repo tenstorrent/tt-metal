@@ -154,30 +154,6 @@ std::vector<BlockedTransferGroup> group_transfers_by_output_column_blocks(
     uint32_t block_size = 4);
 
 /**
- * @brief Reference implementation of blocked gather operation
- *
- * This is a software reference implementation that demonstrates the blocked
- * transfer approach. It's used for testing and validation, not for hardware execution.
- *
- * @param B Batch size
- * @param C Number of channels
- * @param HW Total spatial dimension
- * @param input_cores Vector of input core coordinates
- * @param output_cores Vector of output core coordinates
- * @param input_shards Input data organized as shards (vector of flattened arrays)
- * @param block_size Width of each column block (default 4)
- * @return Output shards after gather operation
- */
-std::vector<std::vector<float>> gather_with_blocked_transfers(
-    uint32_t B,
-    uint32_t C,
-    uint32_t HW,
-    const std::vector<CoreCoord>& input_cores,
-    const std::vector<CoreCoord>& output_cores,
-    const std::vector<std::vector<float>>& input_shards,
-    uint32_t block_size = 4);
-
-/**
  * @brief Tensor-based interface for gather transfers precomputation
  *
  * This function analyzes the input tensor's sharding and generates transfers
@@ -204,33 +180,6 @@ std::vector<GatherTransfer> precompute_gather_transfers(
  */
 std::vector<BlockedTransferGroup> group_transfers_by_output_column_blocks(
     const Tensor& input, const Tensor& output, const std::vector<GatherTransfer>& transfers, uint32_t block_size = 4);
-
-/**
- * @brief Generic gather operation with configurable element size
- *
- * Supports different data types by specifying element size in bytes.
- * All internal calculations remain in elements; element size only affects memory copying.
- *
- * @param input_data Input data as raw bytes
- * @param output_data Output data as raw bytes
- * @param element_size Size of each element in bytes (e.g., 4 for float32, 2 for bfloat16)
- * @param B Batch size
- * @param C Number of channels
- * @param HW Spatial dimension
- * @param input_cores Vector of input core coordinates
- * @param output_cores Vector of output core coordinates
- * @param block_size Width of each column block for memory efficiency
- */
-void gather_with_blocked_transfers_generic(
-    const void* input_data,
-    void* output_data,
-    uint32_t element_size,
-    uint32_t B,
-    uint32_t C,
-    uint32_t HW,
-    const std::vector<CoreCoord>& input_cores,
-    const std::vector<CoreCoord>& output_cores,
-    uint32_t block_size = 4);
 
 /**
  * @brief Convert element count to byte count
