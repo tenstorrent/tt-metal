@@ -68,7 +68,8 @@ models/
         │   ├── demo.py
         └── tests/
           ├── perf/
-          │   ├── test_ttnn_perf.py
+          │   ├── test_ttnn_petr.py
+          │   ├── test_ttnn_petr_perf.py
           └── pcc/
               └── test_ttnn_cp_fpn.py
               └── test_ttnn_petr_head.py
@@ -113,10 +114,11 @@ Note: In the current demo, the calibration needs to be corrected. Since we do no
 
 ## Performance
 ### Single Device (BS=1):
-- end-2-end perf is `2.1` FPS
+- end-2-end perf is `2.26` FPS
+
 To run perf test:
 ```
-pytest models/experimental/petr/tests/perf/test_ttnn_perf.py
+pytest models/experimental/petr/test/perf/test_ttnn_petr_perf.py
 ```
 To collect perf reports with the profiler, build with `--enable-profiler`
 ## Configuration Notes

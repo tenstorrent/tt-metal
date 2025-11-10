@@ -71,4 +71,4 @@ def test_petr(device, reset_seeds):
 
     tracy.signpost("start")
     ttnn_output = ttnn_model.predict(ttnn_inputs, ttnn_batch_img_metas, skip_post_processing=True)
-    tracy.signpost("end")
+    tracy.signpost("stop")
