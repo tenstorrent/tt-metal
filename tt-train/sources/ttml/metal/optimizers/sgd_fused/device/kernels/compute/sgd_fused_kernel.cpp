@@ -40,23 +40,6 @@ constexpr auto cb_output_idx = tt::CBIndex::c_16;
 constexpr uint32_t num_tiles_per_core = get_compile_time_arg_val(0);
 constexpr uint32_t block_size = get_compile_time_arg_val(1);
 
-void pack_and_push_two_blocks(uint32_t cb_output_1, uint32_t cb_output_2, uint32_t block_size) {
-    cb_reserve_back(cb_output_1, block_size);
-    cb_reserve_back(cb_output_2, block_size);
-    tile_regs_wait();
-    pack_reconfig_data_format(cb_output_1);
-    for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-        pack_tile(block_idx, cb_output_1);
-    }
-    pack_reconfig_data_format(cb_output_2);
-    for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-        pack_tile(block_idx, cb_output_2);
-    }
-    tile_regs_release();
-    cb_push_back(cb_output_1, block_size);
-    cb_push_back(cb_output_2, block_size);
-}
-
 void MAIN {
     uint32_t runtime_args_counter = 0;
     const bool use_weight_decay = get_arg_val<uint32_t>(runtime_args_counter++);
