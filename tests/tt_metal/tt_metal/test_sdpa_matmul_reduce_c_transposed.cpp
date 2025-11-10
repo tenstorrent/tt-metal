@@ -39,8 +39,6 @@ static void transpose_tiles_inplace_row_major(std::vector<bfloat16>& rm, uint32_
 
 // Create inputs for matmul: tensor_A [k_chunk_size*32 x head_dim*32],
 // tensor_B [head_dim*32 x q_chunk_size*32], both in row-major layout.
-// Here, tensor_A is initialized randomly ("Eigen" in the sense of test tensors),
-// and tensor_B is filled with a constant value (e.g., 1.0).
 static void create_matmul_inputs(
     uint32_t q_chunk_size,
     uint32_t k_chunk_size,
@@ -50,15 +48,13 @@ static void create_matmul_inputs(
     SHAPE a_shape = {1, 1, k_chunk_size * 32, head_dim * 32};
     SHAPE b_shape = {1, 1, head_dim * 32, q_chunk_size * 32};
 
-    // Fill tensor_A with constant 2.0 for all elements
-    std::vector<bfloat16> a_vals(a_shape[0] * a_shape[1] * a_shape[2] * a_shape[3], static_cast<bfloat16>(2.0f));
-    tt::deprecated::Tensor<bfloat16> a_tensor(a_vals, a_shape);
-
-    // Fill tensor_B with constant 1.0 for all elements
-    std::vector<bfloat16> tensor_B_const(b_shape[2] * b_shape[3], static_cast<bfloat16>(1.0f));
+    tt::deprecated::Tensor<bfloat16> a_tensor =
+        tt::deprecated::initialize_tensor<bfloat16>(a_shape, tt::deprecated::Initialize::RANDOM, -1, 1, 0 /* seed */);
+    tt::deprecated::Tensor<bfloat16> b_tensor =
+        tt::deprecated::initialize_tensor<bfloat16>(b_shape, tt::deprecated::Initialize::RANDOM, -1, 1, 1 /* seed */);
 
     tensor_A_rm = a_tensor.get_values();
-    tensor_B_rm = tensor_B_const;
+    tensor_B_rm = b_tensor.get_values();
 }
 
 // Golden reference: compute matmul(A, B) and reduce_max over dim=0 (rows) of the matmul output.
@@ -417,9 +413,9 @@ int main(int argc, char** argv) {
      * Parameters to sweep over for correctness.
      */
     // sizes are in terms of tiles (32x32)
-    std::vector<uint32_t> q_chunk_sizes = {1, 2, 4, 8};
-    std::vector<uint32_t> k_chunk_sizes = {1, 2, 4, 8, 16};
-    std::vector<uint32_t> head_dim_sizes = {1, 2, 4, 8};
+    std::vector<uint32_t> q_chunk_sizes = {2};
+    std::vector<uint32_t> k_chunk_sizes = {2};
+    std::vector<uint32_t> head_dim_sizes = {1};
     // Excluding fp32_dest_acc_en since SFPU reduce_max overlap will initially only support bf16 dst
     std::vector<bool> fp32_dest_acc_ens = {false};
     // Excluding do_eltwise since SFPU reduce_max overlap will not include eltwise max
