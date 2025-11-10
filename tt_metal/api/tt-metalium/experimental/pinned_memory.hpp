@@ -20,12 +20,22 @@ class SysmemBuffer;
 namespace tt::tt_metal {
 
 class IDevice;
-class PinnedMemoryImpl;
+class HostBuffer;
 
 namespace distributed {
 class MeshDevice;
 class MeshEvent;
+class MeshCoordinateRangeSet;
 }  // namespace distributed
+
+namespace experimental {
+class PinnedMemoryImpl;
+
+struct MemoryPinningParameters {
+    uint32_t max_pins;
+    uint64_t max_total_pin_size;
+    bool can_map_to_noc;
+};
 
 /**
  * @brief PinnedMemory manages system memory buffers across multiple devices.
@@ -134,6 +144,23 @@ public:
      */
     void unlock();
 
+    /**
+     * @brief Pin existing host memory for a specific set of mesh coordinates
+     * @param mesh_device The mesh device to pin memory for
+     * @param coordinate_range_set Set of mesh coordinates to pin memory for
+     * @param host_buffer Existing host memory to map (must not be null)
+     * @param buffer_size Size of buffer to map to each device
+     * @param map_to_noc Whether to map the buffer to the NOC
+     * @return Unique pointer to the created PinnedMemory instance
+     */
+    static std::unique_ptr<PinnedMemory> PinMemory(
+        distributed::MeshDevice& mesh_device,
+        const distributed::MeshCoordinateRangeSet& coordinate_range_set,
+        HostBuffer& host_buffer,
+        bool map_to_noc = false);
+
+    static experimental::MemoryPinningParameters GetMemoryPinningParameters(distributed::MeshDevice& mesh_device);
+
 private:
     friend class distributed::MeshDevice;
 
@@ -148,5 +175,7 @@ private:
 
     std::unique_ptr<PinnedMemoryImpl> pImpl;
 };
+
+}  // namespace experimental
 
 }  // namespace tt::tt_metal

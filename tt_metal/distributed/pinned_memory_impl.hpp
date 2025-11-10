@@ -12,7 +12,7 @@
 #include <vector>
 #include <deque>
 
-#include <tt-metalium/pinned_memory.hpp>
+#include <tt-metalium/experimental/pinned_memory.hpp>
 
 namespace tt::umd {
 class SysmemBuffer;
@@ -22,6 +22,8 @@ namespace tt::tt_metal {
 
 class IDevice;
 using ChipId = int;
+
+namespace experimental {
 
 /**
  * @brief Implementation class for PinnedMemory using pimpl pattern
@@ -95,5 +97,7 @@ private:
 
     std::deque<distributed::MeshEvent> barrier_events_;
 };
+
+}  // namespace experimental
 
 }  // namespace tt::tt_metal
