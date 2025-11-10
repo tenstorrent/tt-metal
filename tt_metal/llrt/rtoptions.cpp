@@ -33,6 +33,131 @@ const char* RunTimeDebugFeatureNames[RunTimeDebugFeatureCount] = {
 
 const char* RunTimeDebugClassNames[RunTimeDebugClassCount] = {"N/A", "worker", "dispatch", "all"};
 
+// ============================================================================
+// ENVIRONMENT VARIABLE IDs
+// ============================================================================
+// Full definition of EnvVarID enum (forward-declared in rtoptions.hpp)
+enum class EnvVarID {
+    // ========================================
+    // PATH CONFIGURATION
+    // ========================================
+
+    TT_METAL_CACHE,                           // Cache directory for compiled kernels
+    TT_METAL_KERNEL_PATH,                     // Path to kernel source files
+    TT_METAL_SIMULATOR,                       // Path to simulator executable
+    TT_METAL_MOCK_CLUSTER_DESC_PATH,          // Mock cluster descriptor path
+    TT_METAL_VISIBLE_DEVICES,                 // Comma-separated list of visible device IDs
+    ARCH_NAME,                                // Architecture name (simulation mode)
+    TT_MESH_GRAPH_DESC_PATH,                  // Custom fabric mesh graph descriptor
+    TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE,  // Core grid override
+
+    // ========================================
+    // KERNEL EXECUTION CONTROL
+    // ========================================
+    TT_METAL_NULL_KERNELS,          // Skip kernel execution (testing)
+    TT_METAL_KERNELS_EARLY_RETURN,  // Kernels return early
+
+    // ========================================
+    // MEMORY INITIALIZATION
+    // ========================================
+    TT_METAL_CLEAR_L1,    // Clear L1 memory on device init
+    TT_METAL_CLEAR_DRAM,  // Clear DRAM on device init
+
+    // ========================================
+    // DEBUG & TESTING
+    // ========================================
+    TT_METAL_WATCHER_TEST_MODE,          // Enable watcher test mode
+    TT_METAL_KERNEL_MAP,                 // Enable kernel build mapping
+    TT_METAL_DISPATCH_DATA_COLLECTION,   // Enable dispatch debug data collection
+    TT_METAL_GTEST_ETH_DISPATCH,         // Use Ethernet cores for dispatch in tests
+    TT_METAL_SKIP_LOADING_FW,            // Skip firmware loading
+    TT_METAL_SKIP_DELETING_BUILT_CACHE,  // Skip cache deletion on cleanup
+
+    // ========================================
+    // HARDWARE CONFIGURATION
+    // ========================================
+    TT_METAL_ENABLE_HW_CACHE_INVALIDATION,  // Enable HW cache invalidation
+    TT_METAL_DISABLE_RELAXED_MEM_ORDERING,  // Disable relaxed memory ordering
+    TT_METAL_ENABLE_GATHERING,              // Enable instruction gathering
+    TT_METAL_FABRIC_TELEMETRY,              // Enable fabric telemetry
+    TT_FABRIC_PROFILE_RX_CH_FWD,            // Enable fabric RX channel forwarding profiling
+    TT_METAL_FORCE_REINIT,                  // Force context reinitialization
+    TT_METAL_FABRIC_BLACKHOLE_TWO_ERISC,    // Enable 2-ERISC mode with fabric
+    TT_METAL_LOG_KERNELS_COMPILE_COMMANDS,  // Log kernel compilation commands
+    TT_METAL_SLOW_DISPATCH_MODE,            // Use slow dispatch mode
+    TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN,   // Skip Ethernet cores during retrain
+    TT_METAL_VALIDATE_PROGRAM_BINARIES,     // Validate kernel binary integrity
+    TT_METAL_DISABLE_DMA_OPS,               // Disable DMA operations
+    TT_METAL_ENABLE_ERISC_IRAM,             // Enable ERISC IRAM (inverted logic)
+    RELIABILITY_MODE,                       // Fabric reliability mode (strict/relaxed)
+    TT_METAL_MULTI_AERISC,                  // Enable experimental multi-erisc mode
+    TT_METAL_USE_MGD_1_0,                   // Use mesh graph descriptor 1.0
+    TT_METAL_USE_MGD_2_0,                   // Use mesh graph descriptor 2.0
+    TT_METAL_FORCE_JIT_COMPILE,             // Force JIT compilation
+
+    // ========================================
+    // PROFILING & PERFORMANCE
+    // ========================================
+    TT_METAL_DEVICE_PROFILER,                      // Enable device profiling
+    TT_METAL_DEVICE_PROFILER_DISPATCH,             // Enable dispatch core profiling
+    TT_METAL_PROFILER_SYNC,                        // Enable synchronous profiling
+    TT_METAL_DEVICE_PROFILER_NOC_EVENTS,           // Enable NoC events profiling
+    TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH,  // NoC events report path
+    TT_METAL_MEM_PROFILER,                         // Enable memory/buffer profiling
+    TT_METAL_TRACE_PROFILER,                       // Enable trace profiling
+    TT_METAL_PROFILER_TRACE_TRACKING,              // Enable trace tracking
+    TT_METAL_PROFILER_MID_RUN_DUMP,                // Force mid-run profiler dumps
+    TT_METAL_PROFILER_CPP_POST_PROCESS,            // Enable C++ post-processing for profiler
+    TT_METAL_TRACY_MID_RUN_PUSH,                   // Force Tracy mid-run pushes
+    TT_METAL_GTEST_NUM_HW_CQS,                     // Number of HW command queues in tests
+    TT_METAL_ARC_DEBUG_BUFFER_SIZE,                // ARC processor debug buffer size
+    TT_METAL_OPERATION_TIMEOUT_SECONDS,            // Operation timeout duration
+
+    // ========================================
+    // WATCHER SYSTEM
+    // ========================================
+    TT_METAL_WATCHER,                                         // Enable watcher system
+    TT_METAL_WATCHER_DUMP_ALL,                                // Dump all watcher data
+    TT_METAL_WATCHER_APPEND,                                  // Append mode for watcher output
+    TT_METAL_WATCHER_NOINLINE,                                // Disable watcher function inlining
+    TT_METAL_WATCHER_PHYS_COORDS,                             // Use physical coordinates in watcher
+    TT_METAL_WATCHER_TEXT_START,                              // Include text start info in watcher
+    TT_METAL_WATCHER_SKIP_LOGGING,                            // Disable watcher logging
+    TT_METAL_WATCHER_DISABLE_ASSERT,                          // Disable watcher assert feature
+    TT_METAL_WATCHER_DISABLE_PAUSE,                           // Disable watcher pause feature
+    TT_METAL_WATCHER_DISABLE_RING_BUFFER,                     // Disable watcher ring buffer
+    TT_METAL_WATCHER_DISABLE_STACK_USAGE,                     // Disable watcher stack usage tracking
+    TT_METAL_WATCHER_DISABLE_SANITIZE_NOC,                    // Disable watcher NoC sanitization
+    TT_METAL_WATCHER_DISABLE_SANITIZE_READ_ONLY_L1,           // Disable read-only L1 sanitization
+    TT_METAL_WATCHER_DISABLE_SANITIZE_WRITE_ONLY_L1,          // Disable write-only L1 sanitization
+    TT_METAL_WATCHER_DISABLE_WAYPOINT,                        // Disable watcher waypoint feature
+    TT_METAL_WATCHER_DISABLE_DISPATCH,                        // Disable watcher dispatch feature
+    TT_METAL_WATCHER_ENABLE_NOC_SANITIZE_LINKED_TRANSACTION,  // Enable NoC linked transaction sanitization
+
+    // ========================================
+    // INSPECTOR
+    // ========================================
+    TT_METAL_INSPECTOR,                              // Enable/disable inspector
+    TT_METAL_INSPECTOR_LOG_PATH,                     // Inspector log output path
+    TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT,  // Track initialization closely
+    TT_METAL_INSPECTOR_WARN_ON_WRITE_EXCEPTIONS,     // Warn on write exceptions
+    TT_METAL_RISCV_DEBUG_INFO,                       // Enable RISC-V debug info
+    TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS,           // Inspector RPC server address (host:port)
+    TT_METAL_INSPECTOR_RPC,                          // Enable/disable inspector RPC server
+
+    // ========================================
+    // DEBUG PRINTING (DPRINT)
+    // ========================================
+    TT_METAL_DPRINT_CORES,                     // Worker cores for debug printing
+    TT_METAL_DPRINT_ETH_CORES,                 // Ethernet cores for debug printing
+    TT_METAL_DPRINT_CHIPS,                     // Chip IDs for debug printing
+    TT_METAL_DPRINT_RISCVS,                    // RISC-V processors for debug printing
+    TT_METAL_DPRINT_FILE,                      // Debug print output file
+    TT_METAL_DPRINT_ONE_FILE_PER_RISC,         // Separate file per RISC-V processor
+    TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC,  // Prepend device/core/RISC info
+
+};
+
 // Environment variable name for TT-Metal root directory
 constexpr auto TT_METAL_RUNTIME_ROOT_ENV_VAR = "TT_METAL_RUNTIME_ROOT";
 
@@ -149,6 +274,10 @@ const std::string& RunTimeOptions::get_system_kernel_dir() const { return this->
 // ============================================================================
 // Central handler that processes environment variables based on their ID
 // Uses switch statement for efficient dispatch
+//
+// IMPORTANT: Most cases assume 'value' is non-null (enforced by InitializeFromEnvVars loop guard).
+// Only TT_METAL_INSPECTOR_LOG_PATH and TT_METAL_RISCV_DEBUG_INFO explicitly handle nullptr
+// for default value initialization.
 
 void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
     switch (id) {
@@ -336,42 +465,42 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Sets the fabric reliability mode (STRICT, RELAXED, or DYNAMIC).
         // Default: nullopt (uses system default)
         // Usage: export RELIABILITY_MODE=STRICT (or strict/0), RELAXED (or relaxed/1), DYNAMIC (or dynamic/2)
-        case EnvVarID::RELIABILITY_MODE:
-            if (value) {
-                std::string mode_str(value);
-                // Convert to lowercase for case-insensitive comparison
-                std::transform(mode_str.begin(), mode_str.end(), mode_str.begin(), [](unsigned char c) {
-                    return std::tolower(c);
-                });
-                if (mode_str == "strict" || mode_str == "0") {
-                    this->reliability_mode = tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
-                } else if (mode_str == "relaxed" || mode_str == "1") {
-                    this->reliability_mode = tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE;
-                } else if (mode_str == "dynamic" || mode_str == "2") {
-                    this->reliability_mode = tt::tt_fabric::FabricReliabilityMode::DYNAMIC_RECONFIGURATION_SETUP_MODE;
-                }
+        case EnvVarID::RELIABILITY_MODE: {
+            std::string mode_str(value);
+            // Convert to lowercase for case-insensitive comparison
+            std::transform(
+                mode_str.begin(), mode_str.end(), mode_str.begin(), [](unsigned char c) { return std::tolower(c); });
+            if (mode_str == "strict" || mode_str == "0") {
+                this->reliability_mode = tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
+            } else if (mode_str == "relaxed" || mode_str == "1") {
+                this->reliability_mode = tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE;
+            } else if (mode_str == "dynamic" || mode_str == "2") {
+                this->reliability_mode = tt::tt_fabric::FabricReliabilityMode::DYNAMIC_RECONFIGURATION_SETUP_MODE;
             }
             break;
+        }
 
         // TT_METAL_MULTI_AERISC
         // Experimental multi-ERISC mode flag that enables 2-ERISC mode.
         // Default: false (single ERISC mode)
         // Usage: export TT_METAL_MULTI_AERISC=1
         case EnvVarID::TT_METAL_MULTI_AERISC:
-            if (value) {
-                log_info(tt::LogMetal, "Enabling experimental multi-erisc mode");
-                this->enable_2_erisc_mode = true;
-            }
+            log_info(tt::LogMetal, "Enabling experimental multi-erisc mode");
+            this->enable_2_erisc_mode = true;
             break;
+
+        // TT_METAL_USE_MGD_1_0
+        // Enables use of Mesh Graph Descriptor 1.0 format (deprecated, will be removed).
+        // Default: false
+        // Usage: export TT_METAL_USE_MGD_1_0=1
+        case EnvVarID::TT_METAL_USE_MGD_1_0: this->use_mesh_graph_descriptor_1_0 = true; break;
 
         // TT_METAL_USE_MGD_2_0
         // Enables use of Mesh Graph Descriptor 2.0 format for fabric configuration.
-        // Default: false
+        // Default: false (uses MGD 1.0)
         // Usage: export TT_METAL_USE_MGD_2_0=1
         case EnvVarID::TT_METAL_USE_MGD_2_0:
-            if (value) {
-                this->use_mesh_graph_descriptor_2_0 = (std::strncmp(value, "0", 1) != 0);
-            }
+            this->use_mesh_graph_descriptor_2_0 = (std::strncmp(value, "0", 1) != 0);
             break;
 
         // TT_METAL_FORCE_JIT_COMPILE
@@ -379,11 +508,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // This overrides the dependency tracking optimization.
         // Default: false (uses dependency tracking)
         // Usage: export TT_METAL_FORCE_JIT_COMPILE=1
-        case EnvVarID::TT_METAL_FORCE_JIT_COMPILE:
-            if (value) {
-                this->force_jit_compile = true;
-            }
-            break;
+        case EnvVarID::TT_METAL_FORCE_JIT_COMPILE: this->force_jit_compile = true; break;
 
         // TT_METAL_FORCE_REINIT
         // Force context reinitialization on each run.
@@ -606,17 +731,16 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Enables the watcher system for debugging. When set, enables watcher on all features.
         // Default: disabled
         // Usage: export TT_METAL_WATCHER=1
-        case EnvVarID::TT_METAL_WATCHER:
-            if (value) {
-                int sleep_val = 0;
-                sscanf(value, "%d", &sleep_val);
-                if (strstr(value, "ms") == nullptr) {
-                    sleep_val *= 1000;
-                }
-                this->watcher_settings.enabled = true;
-                this->watcher_settings.interval_ms = sleep_val;
+        case EnvVarID::TT_METAL_WATCHER: {
+            int sleep_val = 0;
+            sscanf(value, "%d", &sleep_val);
+            if (strstr(value, "ms") == nullptr) {
+                sleep_val *= 1000;
             }
+            this->watcher_settings.enabled = true;
+            this->watcher_settings.interval_ms = sleep_val;
             break;
+        }
 
         // TT_METAL_WATCHER_DUMP_ALL
         // Enables dumping all watcher data, including potentially unsafe state information.
@@ -743,11 +867,9 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: true (enabled)
         // Usage: export TT_METAL_INSPECTOR=1
         case EnvVarID::TT_METAL_INSPECTOR:
-            if (value) {
-                this->inspector_settings.enabled = true;
-                if (strcmp(value, "0") == 0) {
-                    this->inspector_settings.enabled = false;
-                }
+            this->inspector_settings.enabled = true;
+            if (strcmp(value, "0") == 0) {
+                this->inspector_settings.enabled = false;
             }
             break;
 
@@ -768,11 +890,9 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (not important)
         // Usage: export TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT=1
         case EnvVarID::TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT:
-            if (value) {
-                this->inspector_settings.initialization_is_important = true;
-                if (strcmp(value, "0") == 0) {
-                    this->inspector_settings.initialization_is_important = false;
-                }
+            this->inspector_settings.initialization_is_important = true;
+            if (strcmp(value, "0") == 0) {
+                this->inspector_settings.initialization_is_important = false;
             }
             break;
 
@@ -781,11 +901,9 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: true (warnings enabled)
         // Usage: export TT_METAL_INSPECTOR_WARN_ON_WRITE_EXCEPTIONS=0
         case EnvVarID::TT_METAL_INSPECTOR_WARN_ON_WRITE_EXCEPTIONS:
-            if (value) {
-                this->inspector_settings.warn_on_write_exceptions = true;
-                if (strcmp(value, "0") == 0) {
-                    this->inspector_settings.warn_on_write_exceptions = false;
-                }
+            this->inspector_settings.warn_on_write_exceptions = true;
+            if (strcmp(value, "0") == 0) {
+                this->inspector_settings.warn_on_write_exceptions = false;
             }
             break;
 
@@ -809,36 +927,33 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Sets the RPC server address for the inspector. Format: "host:port" or just "host" (uses default port).
         // Default: localhost:50051
         // Usage: export TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS=127.0.0.1:8080
-        case EnvVarID::TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS:
-            if (value) {
-                // Parse address into host and port
-                std::string addr(value);
-                size_t colon_pos = addr.find(':');
-                if (colon_pos != std::string::npos) {
-                    this->inspector_settings.rpc_server_host = addr.substr(0, colon_pos);
-                    try {
-                        this->inspector_settings.rpc_server_port = std::stoi(addr.substr(colon_pos + 1));
-                    } catch (const std::invalid_argument&) {
-                        TT_THROW("Invalid port in TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS: {}", value);
-                    } catch (const std::out_of_range&) {
-                        TT_THROW("Port out of range in TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS: {}", value);
-                    }
-                } else {
-                    this->inspector_settings.rpc_server_host = addr;
+        case EnvVarID::TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS: {
+            // Parse address into host and port
+            std::string addr(value);
+            size_t colon_pos = addr.find(':');
+            if (colon_pos != std::string::npos) {
+                this->inspector_settings.rpc_server_host = addr.substr(0, colon_pos);
+                try {
+                    this->inspector_settings.rpc_server_port = std::stoi(addr.substr(colon_pos + 1));
+                } catch (const std::invalid_argument&) {
+                    TT_THROW("Invalid port in TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS: {}", value);
+                } catch (const std::out_of_range&) {
+                    TT_THROW("Port out of range in TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS: {}", value);
                 }
+            } else {
+                this->inspector_settings.rpc_server_host = addr;
             }
             break;
+        }
 
         // TT_METAL_INSPECTOR_RPC
         // Enables or disables the inspector RPC server. Set to '0' to disable, any other value enables it.
         // Default: true (enabled)
         // Usage: export TT_METAL_INSPECTOR_RPC=1
         case EnvVarID::TT_METAL_INSPECTOR_RPC:
-            if (value) {
-                this->inspector_settings.rpc_server_enabled = true;
-                if (std::strncmp(value, "0", 1) == 0) {
-                    this->inspector_settings.rpc_server_enabled = false;
-                }
+            this->inspector_settings.rpc_server_enabled = true;
+            if (std::strncmp(value, "0", 1) == 0) {
+                this->inspector_settings.rpc_server_enabled = false;
             }
             break;
 
@@ -909,7 +1024,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
 void RunTimeOptions::InitializeFromEnvVars() {
     // Use enchantum to automatically iterate over all EnvVarID enum values
     for (const auto [id, name] : enchantum::entries_generator<EnvVarID>) {
-        const char* value = std::getenv(std::string(name).c_str());
+        const char* value = std::getenv(name.data());
 
         // Only process if the environment variable is set
         if (value) {
