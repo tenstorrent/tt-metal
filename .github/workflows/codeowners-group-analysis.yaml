@@ -823,7 +823,9 @@ jobs:
               GROUP_MEMBERS_LIST["$KEY"]="$team_members_list"
               file_list_html=""
               if [ -n "$team_files" ] && [ "$team_files" != "null" ]; then
-                file_list_html="\n  <details><summary>&#128193; Files owned by this team</summary>\n\n"
+                # Count total files for this team
+                team_file_count=$(echo "$team_files" | tr ',' '\n' | wc -l)
+                file_list_html="\n  <details><summary>&#128193; Files owned by this team ($team_file_count files)</summary>\n\n"
                 IFS=',' read -ra TEAM_FILES_ARRAY <<< "$team_files"
                 for file in "${TEAM_FILES_ARRAY[@]}"; do
                   if [ -n "$file" ]; then
@@ -865,7 +867,9 @@ jobs:
               GROUP_MEMBERS_LIST["$KEY"]="$(echo "$usernames_list" | sed 's/,$//')"
               file_list_html=""
               if [ -n "$files" ] && [ "$files" != "null" ]; then
-                file_list_html="\n  <details><summary>&#128193; Files owned by this group</summary>\n\n"
+                # Count total files for this group
+                group_file_count=$(echo "$files" | tr ',' '\n' | wc -l)
+                file_list_html="\n  <details><summary>&#128193; Files owned by this group ($group_file_count files)</summary>\n\n"
                 IFS=',' read -ra FILES_ARRAY <<< "$files"
                 for file in "${FILES_ARRAY[@]}"; do
                   [ -n "$file" ] && file_list_html="$file_list_html  - [<code>$(echo "$file" | sed 's/\*/\\*/g' | sed 's/_/\\_/g')</code>](${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER/files#diff-$(echo -n "$file" | sha256sum | cut -d' ' -f1))\n"
