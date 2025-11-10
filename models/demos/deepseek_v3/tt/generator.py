@@ -552,7 +552,7 @@ class DeepseekGenerator:
             logger.info(f"Decoding step {gen_idx} for {num_of_prompts} user(s)...")
             profiler.start(f"decode_time_{gen_idx}")
             logits = self.decode_forward(
-                next_tokens, positions, self.batch_size_per_row, enable_trace=self.enable_trace
+                next_tokens, positions, self.batch_size_per_row, profiler, gen_idx, enable_trace=self.enable_trace
             )
             profiler.end(f"decode_time_{gen_idx}")
             self.ccl.reset_sem_counters()
@@ -601,6 +601,12 @@ class DeepseekGenerator:
         decode_tokens_per_sec = decode_tokens_per_sec_per_user * num_of_prompts
         avg_time_to_first_token = prefill_time / num_of_prompts if num_of_prompts > 0 else 0
 
+        if self.enable_trace and max_new_tokens >= 128:
+            trace_execution_time_for_128th_token = profiler.get_duration("execute_trace_127")
+            trace_execution_tokens_per_sec_per_user_128th_token = 1 / trace_execution_time_for_128th_token
+        else:
+            trace_execution_tokens_per_sec_per_user_128th_token = None
+
         statistics = {
             "preparing_prefill_config": prefill_config_time,
             "preparing_decode_config": decode_config_time,
@@ -609,6 +615,7 @@ class DeepseekGenerator:
             "prefill_time_to_token": avg_time_to_first_token,
             "prefill_t/s": prefill_tokens_per_sec,
             "decode_t/s/u": decode_tokens_per_sec_per_user,
+            "trace_execution_t/s/u @128th token": trace_execution_tokens_per_sec_per_user_128th_token,
             "decode_t/s": decode_tokens_per_sec,
             "Full demo runtime": profiler.get_duration("run"),
         }
@@ -711,12 +718,12 @@ class DeepseekGenerator:
             mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
             dtype=ttnn.int32,
         )
-        rope_tensors = get_rope_tensors(self.hf_config, batch_size_per_row, 1, positions, self.mesh_device)
 
         # 3) Capture decode graph
         self.ccl.reset_sem_counters()
         logger.info("Begin capturing decode trace...")
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+        rope_tensors = get_rope_tensors(self.hf_config, batch_size_per_row, 1, positions, self.mesh_device)
         self._trace_output = RowBatchedModel.forward_decode(
             x=self._trace_tokens,
             position_idxs=self._trace_positions,
@@ -729,7 +736,13 @@ class DeepseekGenerator:
         self._trace_id = trace_id
 
     def decode_forward(
-        self, tokens: torch.Tensor, positions: torch.Tensor, batch_size_per_row: int, enable_trace: bool = False
+        self,
+        tokens: torch.Tensor,
+        positions: torch.Tensor,
+        batch_size_per_row: int,
+        profiler: BenchmarkProfiler,
+        gen_idx: int,
+        enable_trace: bool = False,
     ) -> torch.Tensor:
         if not enable_trace:
             return self._decode_step(tokens, positions, batch_size_per_row).squeeze(0).squeeze(0)
@@ -770,7 +783,9 @@ class DeepseekGenerator:
 
             ttnn.copy_host_to_device_tensor(host_positions, self._trace_positions)
             self.ccl.reset_sem_counters()
-            ttnn.execute_trace(self.mesh_device, self._trace_id, cq_id=0, blocking=False)
+            profiler.start(f"trace_execution_{gen_idx}")
+            ttnn.execute_trace(self.mesh_device, self._trace_id, cq_id=0, blocking=True)
+            profiler.end(f"trace_execution_{gen_idx}")
             assert self._trace_output is not None
             logits = ttnn.to_torch(
                 self._trace_output,
