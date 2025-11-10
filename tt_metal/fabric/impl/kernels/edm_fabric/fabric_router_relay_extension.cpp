@@ -121,7 +121,7 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_noc_txn_to_lo
             DPRINT << "Relay Send NOC_UNICAST_WRITE to noc_x:" << (uint)dest_noc_x << " noc_y:" << (uint)dest_noc_y
                    << " addr:" << dest_address << " payload_size_bytes:" << payload_size_bytes << ENDL();
             noc_async_write_one_packet(payload_start_address, noc_addr, payload_size_bytes);
-            // temporily place here until we have txn id support
+            // temporarily place here until we have txn id support
             noc_async_writes_flushed();
             DPRINT << "Relay Send NOC_UNICAST_WRITE Done" << ENDL();
         } break;
@@ -139,7 +139,7 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_noc_txn_to_lo
                 noc_async_write_barrier();
             }
             noc_semaphore_inc<true>(noc_addr, increment);
-            // temporily place here until we have txn id support
+            // temporarily place here until we have txn id support
             noc_async_atomic_barrier();
 
         } break;
@@ -154,7 +154,7 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_noc_txn_to_lo
             DPRINT << "Relay Send NOC_UNICAST_INLINE_WRITE to noc_x:" << (uint)dest_noc_x
                    << " noc_y:" << (uint)dest_noc_y << " addr:" << dest_address << " value:" << value << ENDL();
             noc_inline_dw_write<InlineWriteDst::DEFAULT, true>(noc_addr, value);
-            // temporily place here until we have txn id support
+            // temporarily place here until we have txn id support
             noc_async_writes_flushed();
         } break;
         default: {

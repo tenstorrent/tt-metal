@@ -228,7 +228,7 @@ void FabricTensixDatamoverConfig::calculate_buffer_allocations() {
 
     // Determine num_channels_for_mux based on mode
     if (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::UDM) {
-        // UDM mode: MUX temporarily has 3 channel (one for worker, one for relay, one for forwarding channel between
+        // UDM mode: MUX temporarily has 3 channels (one for worker, one for relay, one for forwarding channel between
         // mux)
         // TODO: later need to calculate the number of channels based on the number of worker served, plus one relay
         // channel, plus one forwarding channel between mux. RELAY permanently has 1 channel (configured separately in
