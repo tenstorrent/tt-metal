@@ -613,27 +613,12 @@ FORCE_INLINE bool check_downstream_has_space(
         constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, DIRECTION>();
         if constexpr (enable_deadlock_avoidance) {
             if constexpr (edm_index == NUM_USED_RECEIVER_CHANNELS - 1) {
-                if constexpr (udm_mode) {
-                    return downstream_edm_interface_vc1.edm_has_space_for_packet() &&
-                           local_relay_interface.edm_has_space_for_packet();
-                } else {
-                    return downstream_edm_interface_vc1.edm_has_space_for_packet();
-                }
-            } else {
-                if constexpr (udm_mode) {
-                    return downstream_edm_interfaces_vc0[edm_index].edm_has_space_for_packet() &&
-                           local_relay_interface.edm_has_space_for_packet();
-                } else {
-                    return downstream_edm_interfaces_vc0[edm_index].edm_has_space_for_packet();
-                }
-            }
-        } else {
-            if constexpr (udm_mode) {
-                return downstream_edm_interfaces_vc0[edm_index].edm_has_space_for_packet() &&
-                       local_relay_interface.edm_has_space_for_packet();
+                return downstream_edm_interface_vc1.edm_has_space_for_packet();
             } else {
                 return downstream_edm_interfaces_vc0[edm_index].edm_has_space_for_packet();
             }
+        } else {
+            return downstream_edm_interfaces_vc0[edm_index].edm_has_space_for_packet();
         }
     }
 }
