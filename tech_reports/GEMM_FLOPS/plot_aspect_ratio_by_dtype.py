@@ -204,10 +204,20 @@ for source in ["N150", "P150"]:
 
     ax.set_ylabel("Average TFLOPs", fontsize=14, fontweight="bold", labelpad=10)
     ax.set_xlabel(
-        "Matrix Aspect Ratio (M:K:N)\n(M=input rows, K=inner dim, N=output cols)",
+        "Matrix Aspect Ratio (M:K:N)",
         fontsize=13,
         fontweight="bold",
         labelpad=10,
+    )
+    # Add explanation below x-axis (smaller, non-bold)
+    ax.text(
+        0.5,
+        -0.12,
+        "(M=input rows, K=inner dim, N=output cols)",
+        transform=ax.transAxes,
+        ha="center",
+        va="top",
+        fontsize=10,
     )
 
     # Title matching our other plots

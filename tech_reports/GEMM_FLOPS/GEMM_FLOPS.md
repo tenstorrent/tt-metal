@@ -5,13 +5,12 @@
 
 Across many families of neural networks and applications, the common denominator is the use of the generalized matrix multiply operation. Depending on the size and the precision of the input and output matrices, different underlying effects, and more importantly performance metrics, can be observed. Classically, this comes down to the hardware's ability to execute an operation, and its ability to fetch the data for that operation intercept.
 
-If the data is small and already in registers, the cost to operate on that data is negligible. If the data is in cache, performance is dictated by how quickly the data can be funnelled thought caches to the compute units. In there worst case scenarios, the data needed is in device memory, host memory, or stored on a disk.
+If the data is small and already in registers, the cost to operate on that data is negligible. If the data is in cache, performance is dictated by how quickly the data can be funnelled through caches to the compute units. In the worst case scenarios, the data needed is in device memory, host memory, or stored on a disk.
 
-Thankfully, matrix multiplication requires more compute operations (2N^3) than memory operations (3n^2). As such, for a given device, there will always be points at which a device is limited by the underlying compute units, not the underlying memory system. We call this point the roofline.
+Thankfully, matrix multiplication requires more compute operations (2N^3) than memory operations (3N^2). As such, for a given device, there will always be points at which a device is limited by the underlying compute units, not the underlying memory system. We call this point the roofline.
 However, said inversion point depends on the size and crossover point of each cache level/memory technology and the datatype in use. The amount of 8 bit elements that can be moved per unit time is nearly an order of magnitude more than 64 bit elements.
 
 Therefore, the peak achieved flops changes based on the datatype, the size of the data, and the layout of the data.
-
 
 ### Running Benchmarks
 
@@ -32,9 +31,9 @@ Python scripts for reproducing the plots are included in this directory.
 
 ## Design of Experiments
 The parameters of interest are 3 fold:
-1. **Dimensions**: The sizes of the matrices along each axis, denoted as m , n and k . (m, k) represents the size of the input tensor, while (k, n) is the size of the activation tensor.
-Larger tensors require more computation since the number of operations needed to perform matrix multiplication increases as O(m*k*n).
-2. **Computation Fidelity**: Referred to as LoFi, HiFi2, HiFi3 and HiFi4. Internally, the matrix engine can adjust the number of bits being processed, which affects both the precision of the results and the computation speed.
+1. **Dimensions**: The sizes of the matrices along each axis, denoted as M, K, and N. (M, K) represents the size of the input tensor, while (K, N) is the size of the weight matrix.
+Larger tensors require more computation since the number of operations needed to perform matrix multiplication increases as O(MKN).
+2. **Computation Fidelity**: Referred to as LoFi, HiFi2, HiFi3, and HiFi4. Internally, the matrix engine can adjust the number of bits being processed, which affects both the precision of the results and the computation speed.
 3. **Input/Output Datatype**: Larger datatypes require more memory for storage. As a result, more precise datatypes can become bottlenecked if stored in DRAM.
 
 For more details please refer to the tech reports [Matrix Engine](../matrix_engine/matrix_engine.md) and [Data Formats](../data_formats/data_formats.md)
@@ -42,18 +41,19 @@ For more details please refer to the tech reports [Matrix Engine](../matrix_engi
 For example, when changing the precision of the matrix, for a given size of matrix the output performance is expected to be different.
 
 
-## Benchmarks
+## MicroBenchmarks
 
 ### Matrix Multiplication TFLOPS on Wormhole/Blackhole (WH/BH)
 
 The WH matrix engine performs 8x16 x 16x16 = 8x16 in a single cycle.
 - This is 2*8\*16\*16 = 4096 multiply-adds in a single cycle.
-- At 1GHz, this is 4 TFLOPS per matrix engine.fed into in0, and 16x16 is the smallest matrix that can be fed into in1.
+- At 1GHz, this is 4 TFLOPS per matrix engine.
+- The 8x16 is the smallest matrix that can be fed into in0, and 16x16 is the smallest matrix that can be fed into in1.
 
 If the input matrices fed into the engine are "shorter" than 8x16, for example 1x16, the engine will still perform 8x16 x 16x16 = 8x16, but the effective throughput will be 1/8.
 Thus, for 1x16 x 16x16 matrices, the effective throughput is 0.5 TFLOPS per matrix engine.
-MATH_FIDELITY is used for higher precision, and TFLOPS are calculated by dividing by the MATH_FIDELITY value.
 
+MATH_FIDELITY is used for higher precision, and TFLOPS are calculated by dividing by the MATH_FIDELITY value.
 - LoFi ->  ~4 TFLOPS
 - HiFi2 -> ~2 TFLOPS
 - HiFi3 -> ~1.33 TFLOPS
@@ -65,15 +65,15 @@ Here we show the peak results we can get from manually selected matmul configura
 
 Depending on the fidelity, datatype, and matrix shape chosen, different peak teraflop values can be achieved.
 
-Below are the results generated from running the benchmark script, showcasing the performance of matrix multiplication (matmul) operations using matrices of sizes ranging from 512x512x512 / 640,832,832 to 16384x16384x16384 / 20480,26624,26624 . The results include evaluations across various data formats, paired with different levels of math fidelity (bfloat16-HiFi2, bfloat16-HiFi4,  bfloat8_b-HiFi2, bfloat8_b-LoFi, and bfloat4_b-LoFi).
+Below are the results generated from running the benchmark script, showcasing the performance of matrix multiplication (matmul) operations using matrices of sizes ranging from 512x512x512 / 640x832x832 to 16384x16384x16384 / 20480x26624x26624 . The results include evaluations across various data formats, paired with different levels of math fidelity (BFLOAT16 (HiFi4),  BFLOAT8_B (HiFi2), and BFLOAT4_B (LoFi)).
 
 We also show the results with and without trace (see [AdvancedPerformanceOptimizationsForModels](../AdvancedPerformanceOptimizationsForModels/AdvancedPerformanceOptimizationsForModels.md) for details of trace). With trace, we can minimize the overhead of host which can reflect the actual device performance better.
 
 
-Finally, we present the results in terms of device time, device throughput in TFLOPS, device utilization compared to the user-specified grid size and device utilization compared to the full grid size (8x8 in Wormhole/13x10 in Blackhole).
+Finally, we present the results in terms of device time, device throughput in TFLOPS, device utilization compared to the full grid size (8×8 in Wormhole and 13x10 in Blackhole).
 
 
-As seen below, while Wormhole cards can perform matrix multiplications at around 180TFlops, Blackhole cards have even more impressive throughput at 560TFlops. Lower fidelity computations with less precise datatypes computations complete faster than "full fidelity" Float16 computations. HiFi2/BFloat8 is roughly **1.5x to 1.8x faster** than HiFi4/Float16, with LoFi/Float4 coming in at **2x to 3.5x** faster without tracing.
+As seen below, while Wormhole cards can perform matrix multiplications at around 190 TFLOPs, Blackhole cards have even more impressive throughput at 580 TFLOPs. Lower fidelity computations with less precise datatypes complete faster than "full fidelity" computations. BFLOAT8_B (HiFi2) is roughly **1.5x to 1.8x faster** than BFLOAT16 (HiFi4), with BFLOAT4_B (LoFi) coming in at **2x to 3.5x** faster without tracing.
 
 
 #### Performance scatter plot across all matrix sizes and configurations
@@ -82,25 +82,25 @@ As seen below, while Wormhole cards can perform matrix multiplications at around
 
 
 #### Performance bar plot across all matrix sizes and configurations
-Note : Performance multipliers are calculated relative to N150 BFLOAT16-HiFi4 as the baseline (1.00×) for each matrix size, showing how much faster or slower each configuration performs compared to that baseline.
+Note : Performance multipliers are calculated relative to N150 BFLOAT16 (HiFi4) as the baseline (1.00×) for each matrix size, showing how much faster or slower each configuration performs compared to that baseline.
 
 ![](images/flops_by_matrix_size_and_type_sorted.png)
 
 ### Utilization
 
+#### Utilization derivation formula
 
 ```
-Utilization = ideal cycles / actual cycles. tile_width * tile_height) * (cycle_per_tile / num_cores)
+Utilization = ideal cycles / actual cycles.
+Ideal cycles = (M x K x N) / (tile_height * tile_width * tile_height) * (cycle_per_tile / num_cores)
 ```
 - Cycle_per_tile is the ideal compute cycle for each tile, which depends on math fidelity (LoFi: 16, HiFi2: 32, HiFi3: 48, HiFi4: 64).
 - For utilization of full grid size, num_cores is the maximum number of cores available for compute. Currently the max for Wormhole is 8x8 with Blackhole supporting up to 13x10.
 
-Device utilization measures how efficiently the hardware's compute cores are being used, calculated as the ratio of ideal compute cycles to actual execution cycles. Higher utilization indicates better use of available hardware resources.
-
 #### Utilization plot across all matrix sizes and configurations, based on the chip TFLOPS calculated per each Math Fidelity
 ![](images/utilization_comparison.png)
 
-Blackhole(P150) achieves excellent utilization across the board, with peak utilization reaching 97% and 61% of configurations exceeding 80% utilization. This represents a significant improvement over Wormhole (N150), which peaks at 92.38% with only 32% of configurations above 80%.
+Blackhole (P150) achieves excellent utilization across the board, with peak utilization reaching 96% and 61% of configurations exceeding 80% utilization. This represents a significant improvement over Wormhole (N150), which peaks at ~93% with only 32% of configurations above 80%.
 
 ### Understanding Device Scaling: SRAM vs DRAM
 
@@ -144,7 +144,7 @@ Both architectures perform most ideally when the input tensors are closest to sq
 
 #### Out of Box Performance
 We also show the peak results we can get based on auto-selected matmul configurations.
-On both Wormhole and Blackhole, hand tuned configs helps recover more lost performance on smaller tensor matrix multiplications compared to larger ones. Similar to tracing, the configuration matters more for smaller tensors, as it is harder to saturate the core grid with smaller workloads compared to larger ones.
+On both Wormhole and Blackhole, hand-tuned configs helps recover more lost performance on smaller tensor matrix multiplications compared to larger ones. Similar to tracing, the configuration matters more for smaller tensors, as it is harder to saturate the core grid with smaller workloads compared to larger ones.
 
 
 <details>
