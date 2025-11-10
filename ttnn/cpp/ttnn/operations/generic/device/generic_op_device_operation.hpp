@@ -27,8 +27,10 @@ struct GenericOpDeviceOperation {
     };
 
     struct GenericProgram {
-        // to refactor this when we implement caching
-        struct shared_variables_t {};
+        struct shared_variables_t {
+            std::vector<tt::tt_metal::KernelHandle> kernel_handles;
+            std::vector<tt::tt_metal::CBHandle> cb_handles;
+        };
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
         static cached_program_t create(
