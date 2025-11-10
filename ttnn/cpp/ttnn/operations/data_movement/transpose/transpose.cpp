@@ -122,6 +122,8 @@ bool shard_not_supported(const ttnn::Tensor& input_tensor, int64_t dim1, int64_t
     return not_supported;
 }
 
+// transpose::hc does not use the shard spec of the output memory config
+// massage the op to use the output memory config properly
 MassagedTranspose build_memory_config_transpose(BaseTransposeType base_transpose) {
     auto target_memory_config = std::make_shared<std::optional<MemoryConfig>>();
     return MassagedTranspose(MassagedTransposeParams{
@@ -135,8 +137,10 @@ MassagedTranspose build_memory_config_transpose(BaseTransposeType base_transpose
             if (!memory_config.has_value()) {
                 return false;
             }
+            auto input_mem_config_sharded = input_tensor.memory_config().is_sharded();
             auto output_mem_config_sharded = memory_config.value().is_sharded();
-            bool massage_op = input_tensor.memory_config() != memory_config.value() && output_mem_config_sharded;
+            bool massage_op = input_tensor.memory_config() != memory_config.value() && output_mem_config_sharded &&
+                              input_mem_config_sharded;
             massage_op = massage_op && shard_not_supported(input_tensor, dim1, dim2);
             return massage_op;
         },
