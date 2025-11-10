@@ -156,7 +156,9 @@ protected:
     static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
 };
 
-class Fabric1DTensixFixture : public BaseFabricFixture {
+// Template base class for Tensix fixtures with Galaxy skip logic
+template <tt::tt_fabric::FabricConfig FabricConfigValue, tt::tt_fabric::FabricTensixConfig TensixConfigValue>
+class FabricTensixFixtureTemplate : public BaseFabricFixture {
 private:
     inline static bool should_skip_ = false;
 
@@ -167,48 +169,32 @@ protected:
             should_skip_ = true;
             return;
         }
-        BaseFabricFixture::DoSetUpTestSuite(
-            tt::tt_fabric::FabricConfig::FABRIC_1D, std::nullopt, tt::tt_fabric::FabricTensixConfig::MUX);
+        BaseFabricFixture::DoSetUpTestSuite(FabricConfigValue, std::nullopt, TensixConfigValue);
     }
+
     static void TearDownTestSuite() {
         if (!should_skip_) {
             BaseFabricFixture::DoTearDownTestSuite();
         }
     }
+
     void SetUp() override {
         if (should_skip_) {
-            GTEST_SKIP() << "Fabric1DTensixFixture tests are not supported on Galaxy systems";
+            GTEST_SKIP() << "Tensix fixture tests are not supported on Galaxy systems";
         }
         BaseFabricFixture::SetUp();
     }
 };
 
-class Fabric2DTensixUdmFixture : public BaseFabricFixture {
-private:
-    inline static bool should_skip_ = false;
+// Concrete fixture types using the template
+using Fabric1DTensixFixture =
+    FabricTensixFixtureTemplate<tt::tt_fabric::FabricConfig::FABRIC_1D, tt::tt_fabric::FabricTensixConfig::MUX>;
 
-protected:
-    static void SetUpTestSuite() {
-        if (tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy() ||
-            tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
-            should_skip_ = true;
-            return;
-        }
-        BaseFabricFixture::DoSetUpTestSuite(
-            tt::tt_fabric::FabricConfig::FABRIC_2D, std::nullopt, tt::tt_fabric::FabricTensixConfig::UDM);
-    }
-    static void TearDownTestSuite() {
-        if (!should_skip_) {
-            BaseFabricFixture::DoTearDownTestSuite();
-        }
-    }
-    void SetUp() override {
-        if (should_skip_) {
-            GTEST_SKIP() << "Fabric1DTensixUdmFixture tests are not supported on Galaxy systems";
-        }
-        BaseFabricFixture::SetUp();
-    }
-};
+using Fabric2DTensixUdmFixture =
+    FabricTensixFixtureTemplate<tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricTensixConfig::UDM>;
+
+using NightlyFabric2DTensixUdmFixture =
+    FabricTensixFixtureTemplate<tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricTensixConfig::UDM>;
 
 class NightlyFabric1DFixture : public BaseFabricFixture {
 protected:
