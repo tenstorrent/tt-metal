@@ -12,7 +12,6 @@
 #include "ttnn_test_fixtures.hpp"
 #include <ttnn/distributed/types.hpp>
 #include <ttnn/distributed/distributed_tensor.hpp>
-#include "ttnn/operations/ccl/all_gather/all_gather.hpp"
 
 namespace ttnn::distributed::test {
 
