@@ -91,26 +91,6 @@ using DataLoader = ttml::datasets::DataLoader<
     std::function<BatchType(std::vector<DatasetSample> &&samples)>,
     BatchType>;
 
-struct EvalConfig {
-    float repetition_penalty = 1.0F;
-    float temperature = 1.0F;
-    int top_k = -1;
-    float top_p = 1.0F;
-};
-
-EvalConfig parse_eval_config(const YAML::Node &yaml_config) {
-    EvalConfig config;
-    if (!yaml_config["eval_config"]) {
-        return config;
-    }
-    auto eval_config = yaml_config["eval_config"];
-    config.repetition_penalty = eval_config["repetition_penalty"].as<float>(config.repetition_penalty);
-    config.temperature = eval_config["temperature"].as<float>(config.temperature);
-    config.top_k = eval_config["top_k"].as<int>(config.top_k);
-    config.top_p = eval_config["top_p"].as<float>(config.top_p);
-    return config;
-}
-
 struct TrainingConfig {
     std::string project_name;
     std::string model_type;  // one of "gpt2", "llama"
@@ -134,13 +114,7 @@ struct TrainingConfig {
     std::string tokenizer_path = std::string(DATA_FOLDER) + gpt2_tokenizer_file_name;
     bool use_clip_grad_norm = false;
     float clip_grad_norm_max_norm = 1.0F;
-    std::variant<ttml::models::gpt2::TransformerConfig, ttml::models::llama::LlamaConfig> transformer_config;
 
-    // mpi config
-    bool enable_mpi = false;
-    uint32_t num_mh_workers = 0U;
-    SocketType socket_type = SocketType::MPI;
-    std::optional<ttml::models::distributed::pipeline_parallel_llama::PipelineParallelConfig> pipeline_parallel_config;
 };
 
 TrainingConfig parse_config(const YAML::Node &yaml_config) {
@@ -169,34 +143,39 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.clip_grad_norm_max_norm =
         training_config["clip_grad_norm_max_norm"].as<float>(config.clip_grad_norm_max_norm);
 
-    if (config.model_type == "gpt2") {
-        config.transformer_config = ttml::models::gpt2::read_config(training_config["transformer_config"]);
-    } else if (config.model_type == "llama") {
-        config.transformer_config = ttml::models::llama::read_config(training_config["transformer_config"]);
+    return config;
+}
+
+struct MultihostConfig {
+    bool enable_mpi = false;
+    uint32_t num_mh_workers = 0U;
+    SocketType socket_type = SocketType::MPI;
+    std::optional<ttml::models::distributed::pipeline_parallel_llama::PipelineParallelConfig> pipeline_parallel_config;
+    
+};
+
+MultihostConfig parse_multihost_config(const YAML::Node &yaml_config) {
+    MultihostConfig config;
+    auto multihost_config = yaml_config["multihost_config"];
+    config.enable_mpi= multihost_config["enabled"].as<bool>(false);
+    config.num_mh_workers = multihost_config["num_workers"].as<uint32_t>(0U);
+
+    auto socket_type_str = multihost_config["socket_type"].as<std::string>("mpi");
+    if (socket_type_str == "mpi") {
+        config.socket_type = SocketType::MPI;
+    } else if (socket_type_str == "fabric") {
+        config.socket_type = SocketType::FABRIC;
     } else {
-        throw std::runtime_error("Unknown model type: " + config.model_type);
+        throw std::runtime_error("Unknown socket type: " + socket_type_str);
     }
 
-    if (auto multihost_config = yaml_config["multihost_config"]) {
-        config.enable_mpi = multihost_config["enabled"].as<bool>(false);
-        config.num_mh_workers = multihost_config["num_workers"].as<uint32_t>(0U);
+   ttml::autograd::ctx().initialize_socket_manager(config.socket_type);
 
-        auto socket_type_str = multihost_config["socket_type"].as<std::string>("mpi");
-        if (socket_type_str == "mpi") {
-            config.socket_type = SocketType::MPI;
-        } else if (socket_type_str == "fabric") {
-            config.socket_type = SocketType::FABRIC;
-        } else {
-            throw std::runtime_error("Unknown socket type: " + socket_type_str);
-        }
-
-        ttml::autograd::ctx().initialize_socket_manager(config.socket_type);
-
-        if (auto pipeline_parallel_config = multihost_config["pipeline_parallel_config"]) {
-            config.pipeline_parallel_config =
-                ttml::models::distributed::pipeline_parallel_llama::read_config(pipeline_parallel_config);
-        }
+    if (auto pipeline_parallel_config = multihost_config["pipeline_parallel_config"]) {
+        config.pipeline_parallel_config =
+            ttml::models::distributed::pipeline_parallel_llama::read_config(pipeline_parallel_config);
     }
+
     return config;
 }
 
@@ -243,6 +222,34 @@ DeviceConfig parse_device_config(const YAML::Node &yaml_config) {
     return config;
 }
 
+struct ModelConfig{
+    std::string model_type = "gpt2";
+    std::string model_path = "";
+    std::variant<ttml::models::gpt2::TransformerConfig, ttml::models::llama::LlamaConfig> transformer_config;
+
+};
+
+ModelConfig parse_model_config(const YAML::Node &yaml_config) {
+    ModelConfig config;
+    config.model_type = yaml_config["model_type"].as<std::string>();
+    config.model_path = yaml_config["model_path"].as<std::string>("");
+
+    if(config.model_type == "gpt2")
+    {
+        config.transformer_config = ttml::models::gpt2::read_config(yaml_config);
+    }
+    else if(config.model_type == "llama")
+    {
+        config.transformer_config = ttml::models::llama::read_config(yaml_config);
+    }
+    else 
+    {
+        throw std::runtime_error("Unknown model type: " + config.model_type);
+    }
+
+    return config;
+}
+
 const std::unordered_map<
     std::string,
     std::function<std::unique_ptr<ttml::schedulers::LRSchedulerBase>(ttml::optimizers::OptimizerBase *, size_t)>>
@@ -250,7 +257,7 @@ const std::unordered_map<
 
 namespace {
 
-inline bool is_pipeline_parallel_enabled(const TrainingConfig &config) {
+inline bool is_pipeline_parallel_enabled(const MultihostConfig &config) {
     return config.pipeline_parallel_config.has_value();
 }
 
@@ -260,22 +267,22 @@ inline int get_mpi_rank_or_zero() {
     return distributed_ctx ? *distributed_ctx->rank() : 0;
 }
 
-inline bool is_three_tier_training(const TrainingConfig &config) {
+inline bool is_three_tier_training(const MultihostConfig &config) {
     return config.enable_mpi && !is_pipeline_parallel_enabled(config);
 }
 
-inline bool is_last_pipeline_stage(const TrainingConfig &config) {
+inline bool is_last_pipeline_stage(const MultihostConfig &config) {
     if (!is_pipeline_parallel_enabled(config)) {
         return true;
     }
     return static_cast<unsigned>(get_mpi_rank_or_zero()) == (config.num_mh_workers - 1U);
 }
 
-inline bool pipeline_needs_to_call_loss(const TrainingConfig &config) {
+inline bool pipeline_needs_to_call_loss(const MultihostConfig &config) {
     return !is_pipeline_parallel_enabled(config) || is_last_pipeline_stage(config);
 }
 
-inline void pipeline_transfer_targets_if_needed(const TrainingConfig &config, const TensorPtr &target) {
+inline void pipeline_transfer_targets_if_needed(const MultihostConfig &config, const TensorPtr &target) {
     if (!is_pipeline_parallel_enabled(config)) {
         return;
     }
@@ -303,13 +310,21 @@ int main(int argc, char **argv) {
 
     const char *tt_metal_home = std::getenv("TT_METAL_HOME");
     TT_FATAL(tt_metal_home != nullptr, "TT_METAL_HOME environment variable is not set");
-    std::string config_name = std::string(tt_metal_home) + "/tt-train/configs/training_shakespeare_nanogpt.yaml";
+    std::string training_config_name = std::string(tt_metal_home) + "/tt-train/training_configs/training_shakespeare_gpt2s.yaml";
+    std::string device_config_name = std::string(tt_metal_home) + "/tt-train/device_configs/n150.yaml";
+    std::string model_config_name = std::string(tt_metal_home) + "/tt-train/model_configs/gpt2s.yaml";
+    std::string multihost_config_name = "";
 
     std::string run_name = "";
     bool add_time_to_name = true;
     std::string safetensors_path = "";
     std::string save_and_exit_path = "";
-    app.add_option("-c,--config", config_name, "Yaml Config name")->default_val(config_name);
+
+    app.add_option("--training", training_config_name, "Training Config name")->default_val(training_config_name);
+    app.add_option("--device", device_config_name, "Device Config name")->default_val(device_config_name);
+    app.add_option("--model", model_config_name, "Model Config name")->default_val(model_config_name);
+    app.add_option("--multihost", multihost_config_name, "Multihost Config name")->default_val(multihost_config_name);
+
     app.add_option("-t,--add_time_to_name", add_time_to_name, "Add time to run name")->default_val(add_time_to_name);
     app.add_option("-n,--name", run_name, "Run name")->default_val(run_name);
     app.add_option("-s,--save_and_exit", save_and_exit_path, "Save and exit (path to dumped msgpack)")
@@ -318,11 +333,17 @@ int main(int argc, char **argv) {
         ->default_val(safetensors_path);
     CLI11_PARSE(app, argc, argv);
 
-    auto yaml_config = YAML::LoadFile(config_name);
-    TrainingConfig config = parse_config(yaml_config);
-    DeviceConfig device_config = parse_device_config(yaml_config);
+    TrainingConfig training_config = parse_config(YAML::LoadFile(training_config_name));
+    DeviceConfig device_config = parse_device_config(YAML::LoadFile(device_config_name));
+    ModelConfig model_config = parse_model_config(YAML::LoadFile(model_config_name));
 
-    if (config.enable_mpi) {
+    MultihostConfig multihost_config;
+    if (!multihost_config_name.empty())
+    {
+        multihost_config = parse_multihost_config(YAML::LoadFile(multihost_config_name));
+    }
+
+    if (multihost_config.enable_mpi) {
         auto &ctx = ttml::autograd::ctx();
         ctx.initialize_distributed_context(argc, argv);
 
@@ -338,42 +359,42 @@ int main(int argc, char **argv) {
         fmt::println("  Device IDs: {}", device_config.device_ids);
     }
 
-    if (config.enable_mpi) {
+    if (multihost_config.enable_mpi) {
         fmt::print("MPI config:\n");
-        fmt::print("  enable_mpi: {}\n", config.enable_mpi);
-        fmt::print("  num_mh_workers: {}\n", config.num_mh_workers);
-        fmt::print("  socket_type: {}\n", config.socket_type == SocketType::MPI ? "MPI" : "FABRIC");
+        fmt::print("  enable_mpi: {}\n", multihost_config.enable_mpi);
+        fmt::print("  num_mh_workers: {}\n", multihost_config.num_mh_workers);
+        fmt::print("  socket_type: {}\n", multihost_config.socket_type == SocketType::MPI ? "MPI" : "FABRIC");
     }
 
     if (device_config.enable_tp) {
-        if (!config.model_path.empty()) {
+        if (!training_config.model_path.empty()) {
             throw std::runtime_error("Save and load is not supported with Tensor Parallel model");
         }
 
     }
 
     // set seed
-    ttml::autograd::ctx().set_seed(config.seed);
-    if (config.enable_mpi) {
+    ttml::autograd::ctx().set_seed(training_config.seed);
+    if (multihost_config.enable_mpi) {
         int rank = *ttml::autograd::ctx().get_distributed_context()->rank();
-        auto seed = config.seed + static_cast<uint32_t>(rank);
+        auto seed = training_config.seed + static_cast<uint32_t>(rank);
         ttml::autograd::ctx().set_seed(seed);
     }
-    auto schedule_func = schedulers.at(config.scheduler_type);
+    auto schedule_func = schedulers.at(training_config.scheduler_type);
 
-    fmt::print("Max steps {}\n", config.max_steps);
-    fmt::print("Batch size {}\n", config.batch_size);
-    fmt::print("Gradient accumulation steps {}\n", config.gradient_accumulation_steps);
-    fmt::print("Total batch size {}\n", config.batch_size * config.gradient_accumulation_steps);
-    fmt::print("Scheduler type {}\n", config.scheduler_type);
+    fmt::print("Max steps {}\n", training_config.max_steps);
+    fmt::print("Batch size {}\n", training_config.batch_size);
+    fmt::print("Gradient accumulation steps {}\n", training_config.gradient_accumulation_steps);
+    fmt::print("Total batch size {}\n", training_config.batch_size * training_config.gradient_accumulation_steps);
+    fmt::print("Scheduler type {}\n", training_config.scheduler_type);
     fmt::print("Seed {}\n", ttml::autograd::ctx().get_seed());
-    auto sequence_length = std::visit([](auto &&arg) { return arg.max_sequence_length; }, config.transformer_config);
+    auto sequence_length = std::visit([](auto &&arg) { return arg.max_sequence_length; }, model_config.transformer_config);
 
     std::vector<uint32_t> tokens_vector;
 
     try
     {
-        tokens_vector = ttml::datasets::load_tokens_from_space_separated_file(config.data_path);
+        tokens_vector = ttml::datasets::load_tokens_from_space_separated_file(training_config.data_path);
     } catch (const std::exception &e) {
         std::cerr << e.what() << std::endl;
         std::cerr << "\nDid you tokenize the dataset? See the README for details." << std::endl;
@@ -383,13 +404,11 @@ int main(int argc, char **argv) {
     auto dataset = ttml::datasets::InMemoryTokenDataset(
         std::move(tokens_vector), sequence_length);
 
-    fmt::print("Tokenizer path: {}\n", config.tokenizer_path);
     fmt::print("Dataset size: {}\n", dataset.get_size());
-    fmt::print("Tokenizer type: {}\n", config.tokenizer_type);
 
     auto num_devices = device_config.mesh_shape[0] * device_config.mesh_shape[1];
     // enable fabric config for 3-tier architecture, tp, ddp
-    if (config.socket_type == SocketType::FABRIC || device_config.enable_tp || device_config.enable_ddp) {
+    if (multihost_config.socket_type == SocketType::FABRIC || device_config.enable_tp || device_config.enable_ddp) {
         ttml::ttnn_fixed::distributed::enable_fabric(num_devices);
     }
 
@@ -471,7 +490,7 @@ int main(int argc, char **argv) {
         };
 
     LossAverageMeter loss_meter;
-    auto train_dataloader = DataLoader(dataset, /* batch_size */ config.batch_size, /* shuffle */ true, collate_fn);
+    auto train_dataloader = DataLoader(dataset, /* batch_size */ training_config.batch_size, /* shuffle */ true, collate_fn);
 
     fmt::print("Overriding vocab size to be divisible by 32\n");
     // this is workaround for tensor parallel case, we need to have vocab size divisible by 32 per device
@@ -485,14 +504,14 @@ int main(int argc, char **argv) {
                     "Unsupported transformer configuration type: " + std::string(typeid(arg).name()));
             }
         },
-        config.transformer_config);
+        model_config.transformer_config);
 
     Model model = std::visit(
-        [&device_config, &config](auto &&arg) -> Model {
+        [&device_config, &training_config, &multihost_config](auto &&arg) -> Model {
             if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, ttml::models::llama::LlamaConfig>) {
-                if (config.pipeline_parallel_config) {
+                if (multihost_config.pipeline_parallel_config) {
                     return ttml::models::distributed::pipeline_parallel_llama::create(
-                        arg, *config.pipeline_parallel_config, device_config.enable_tp);
+                        arg, *multihost_config.pipeline_parallel_config, device_config.enable_tp);
                 } else if (device_config.enable_tp) {
                     return ttml::models::distributed::llama::create(arg);
                 } else {
@@ -509,7 +528,7 @@ int main(int argc, char **argv) {
                     "Unsupported transformer configuration type: " + std::string(typeid(arg).name()));
             }
         },
-        config.transformer_config);
+        model_config.transformer_config);
 
     if (!safetensors_path.empty()) {
         fmt::print("Loading model from safetensors path: {}\n", safetensors_path);
@@ -522,7 +541,7 @@ int main(int argc, char **argv) {
         }
         fmt::println("Saving model and exiting");
         ttml::serialization::MsgPackFile serializer;
-        std::string model_prefix = (config.model_type == "llama") ? "llama" : "transformer";
+        std::string model_prefix = (model_config.model_type == "llama") ? "llama" : "transformer";
         ttml::serialization::write_module(serializer, model_prefix, model.get());
         serializer.serialize(save_and_exit_path);
         fmt::println("Model saved to {}", save_and_exit_path);
@@ -530,22 +549,21 @@ int main(int argc, char **argv) {
     }
 
     // Load model parameters if in eval mode and model path exists
-    if (!safetensors_path.empty() && !config.model_path.empty() && std::filesystem::exists(config.model_path)) {
-        fmt::print("Loading model from {}\n", config.model_path);
-        std::string model_name = (config.model_type == "llama") ? "llama" : "transformer";
+    if (!safetensors_path.empty() && !training_config.model_path.empty() && std::filesystem::exists(training_config.model_path)) {
+        std::string model_name = (model_config.model_type == "llama") ? "llama" : "transformer";
         fmt::print("Loading model parameters\n");
-        load_model_parameters(config.model_path, model, model_name);
+        load_model_parameters(model_config.model_path, model, model_name);
         fmt::print("Model loaded\n");
     }
 
     auto adamw_params = ttml::optimizers::AdamWConfig();
-    adamw_params.lr = config.learning_rate;
-    adamw_params.weight_decay = config.weight_decay;
-    adamw_params.use_kahan_summation = config.use_kahan_summation;
+    adamw_params.lr = training_config.learning_rate;
+    adamw_params.weight_decay = training_config.weight_decay;
+    adamw_params.use_kahan_summation = training_config.use_kahan_summation;
 
-    if (config.use_no_op) {
+    if (training_config.use_no_op) {
         fmt::print("WARNING: Using NoOp optimizer - parameters will NOT be updated.\n");
-    } else if (!is_three_tier_training(config)) {
+    } else if (!is_three_tier_training(multihost_config)) {
         fmt::print("AdamW configuration:\n");
         fmt::print("    Learning rate: {}\n", adamw_params.lr);
         fmt::print("    Weight decay: {}\n", adamw_params.weight_decay);
@@ -556,13 +574,13 @@ int main(int argc, char **argv) {
 
     fmt::print("Number of parameters: {}\n", get_number_of_parameters(model, device_config.enable_tp));
 
-    auto select_optimizer = [&model, &adamw_params, &config]() -> std::unique_ptr<ttml::optimizers::OptimizerBase> {
-        if (is_three_tier_training(config)) {
+    auto select_optimizer = [&model, &adamw_params, &training_config, &multihost_config]() -> std::unique_ptr<ttml::optimizers::OptimizerBase> {
+        if (is_three_tier_training(multihost_config)) {
             return std::make_unique<ttml::optimizers::RemoteOptimizer>(
-                get_model_parameters(model), config.num_mh_workers);
-        } else if (config.use_no_op) {
+                get_model_parameters(model), multihost_config.num_mh_workers);
+        } else if (training_config.use_no_op) {
             return std::make_unique<ttml::optimizers::NoOp>(get_model_parameters(model));
-        } else if (config.use_moreh_adamw) {
+        } else if (training_config.use_moreh_adamw) {
             return std::make_unique<ttml::optimizers::MorehAdamW>(get_model_parameters(model), adamw_params);
         } else {
             return std::make_unique<ttml::optimizers::AdamW>(get_model_parameters(model), adamw_params);
@@ -570,40 +588,40 @@ int main(int argc, char **argv) {
     };
 
     auto optimizer = select_optimizer();
-    auto scheduler = schedule_func(optimizer.get(), config.max_steps);
+    auto scheduler = schedule_func(optimizer.get(), training_config.max_steps);
 
-    if (is_three_tier_training(config)) {
+    if (is_three_tier_training(multihost_config)) {
         auto *optimizer_ptr = dynamic_cast<ttml::optimizers::RemoteOptimizer *>(optimizer.get());
         if (!optimizer_ptr) {
             throw std::runtime_error("Optimizer is not RemoteOptimizer");
         }
-        fmt::println("[worker] Remote optimizer receiving weights from rank {}", config.num_mh_workers);
+        fmt::println("[worker] Remote optimizer receiving weights from rank {}", multihost_config.num_mh_workers);
         optimizer_ptr->receive_weights();
-        fmt::println("[worker] Remote optimizer received weights from rank {}", config.num_mh_workers);
-    } else if (config.use_no_op) {
+        fmt::println("[worker] Remote optimizer received weights from rank {}", multihost_config.num_mh_workers);
+    } else if (training_config.use_no_op) {
         fmt::print("Skipping training state load (NoOp optimizer)\n");
     } else {
         // otherwise proceed with normal loading training state if necessary
-        if (!config.model_path.empty() && std::filesystem::exists(config.model_path)) {
-            fmt::print("Loading model from {}\n", config.model_path);
-            std::string model_name = (config.model_type == "llama") ? "llama" : "transformer";
+        if (!model_config.model_path.empty() && std::filesystem::exists(model_config.model_path)) {
+            fmt::print("Loading model from {}\n", model_config.model_path);
+            std::string model_name = (model_config.model_type == "llama") ? "llama" : "transformer";
             fmt::print("Loading training state\n");
             std::string optimizer_name = "adamw";
-            load_training_state(config.model_path, model, scheduler, model_name, optimizer_name);
+            load_training_state(model_config.model_path, model, scheduler, model_name, optimizer_name);
             fmt::print("Model loaded after {} steps\n", optimizer->get_steps());
         }
     }
 
-    if (config.enable_mpi && config.use_clip_grad_norm) {
+    if (multihost_config.enable_mpi && training_config.use_clip_grad_norm) {
         throw std::logic_error("Clip grad norm is not supported with 3 tier training");
     }
 
     if (device_config.enable_ddp) {
         auto num_devices = static_cast<uint32_t>(device->num_devices());
-        if (config.batch_size % num_devices != 0) {
+        if (training_config.batch_size % num_devices != 0) {
             throw std::logic_error(fmt::format(
                 "Batch size must be divisible by the number of devices. Batch size = {}, devices = {}",
-                config.batch_size,
+                training_config.batch_size,
                 num_devices));
         }
     }
@@ -619,12 +637,12 @@ int main(int argc, char **argv) {
         return loss_float / static_cast<float>(loss_xtensors.size());
     };
 
-    const uint32_t num_epochs = config.num_epochs;
-    auto gradient_accumulator_helper = GradientAccumulator(config.gradient_accumulation_steps);
+    const uint32_t num_epochs = training_config.num_epochs;
+    auto gradient_accumulator_helper = GradientAccumulator(training_config.gradient_accumulation_steps);
 
     bool is_everything_compiled = false;
 
-    const bool needs_to_call_loss = pipeline_needs_to_call_loss(config);
+    const bool needs_to_call_loss = pipeline_needs_to_call_loss(multihost_config);
 
     // Training loop
     for (uint32_t epoch = 0; epoch < num_epochs; ++epoch) {
@@ -632,7 +650,7 @@ int main(int argc, char **argv) {
             ttml::autograd::ctx().get_profiler().read_results(device, "dataloader_step_done");
 
             // TODO(rfurko): add mask sending, once mask becomes non-constant
-            pipeline_transfer_targets_if_needed(config, target);
+            pipeline_transfer_targets_if_needed(multihost_config, target);
 
             auto start_timer = std::chrono::high_resolution_clock::now();
             if (gradient_accumulator_helper.should_zero_grad()) {
@@ -659,37 +677,37 @@ int main(int argc, char **argv) {
             if (gradient_accumulator_helper.should_step()) {
                 // synchronize gradients for multi-device case, no-op if single device
                 auto parameters = get_model_parameters(model);
-                if (device_config.enable_ddp && !is_three_tier_training(config)) {
+                if (device_config.enable_ddp && !is_three_tier_training(multihost_config)) {
                     ttml::core::distributed::synchronize_parameters(parameters);
                 }
 
-                if (config.use_clip_grad_norm) {
+                if (training_config.use_clip_grad_norm) {
                     if (device_config.enable_tp) {
                         throw std::logic_error("Clip grad norm is not supported with TP");
                     }
-                    ttml::core::clip_grad_norm(parameters, config.clip_grad_norm_max_norm);
+                    ttml::core::clip_grad_norm(parameters, training_config.clip_grad_norm_max_norm);
                 }
                 optimizer->step();
                 scheduler->step();
                 auto global_step = optimizer->get_steps();
                 if (needs_to_call_loss) {
-                    if (config.enable_mpi) {
+                    if (multihost_config.enable_mpi) {
                         fmt::print("[Rank {}] ", *ttml::autograd::ctx().get_distributed_context()->rank());
                     }
                     fmt::print("Step: {}, Loss: {}\n", global_step, gradient_accumulator_helper.average_loss());
                 }
                 loss_meter.update(gradient_accumulator_helper.average_loss());
 
-                if (!config.enable_mpi) {
+                if (!multihost_config.enable_mpi) {
                     // save training state if it's not 3 tier training
-                    if (!config.model_path.empty() && global_step % config.model_save_interval == 0) {
-                        save_training_state(config.model_path, model, scheduler, "transformer", "adamw");
+                    if (!model_config.model_path.empty() && global_step % training_config.model_save_interval == 0) {
+                        save_training_state(model_config.model_path, model, scheduler, "transformer", "adamw");
                     }
                 }
 
                 ttml::autograd::ctx().get_profiler().read_results(device, fmt::format("iteration_{}", global_step));
 
-                if (global_step >= config.max_steps) {
+                if (global_step >= training_config.max_steps) {
                     break;
                 }
 
@@ -709,15 +727,15 @@ int main(int argc, char **argv) {
                     device->num_program_cache_entries());
             }
         }
-        if (optimizer->get_steps() >= config.max_steps) {
+        if (optimizer->get_steps() >= training_config.max_steps) {
             break;
         }
     }
 
-    if (!config.enable_mpi) {
+    if (!multihost_config.enable_mpi) {
         // save training state if it's not 3 tier training
-        if (!config.model_path.empty()) {
-            save_training_state(config.model_path, model, scheduler, "transformer", "adamw");
+        if (!model_config.model_path.empty()) {
+            save_training_state(model_config.model_path, model, scheduler, "transformer", "adamw");
         }
     }
 
@@ -725,11 +743,11 @@ int main(int argc, char **argv) {
     auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_timer - start_timer).count();
     fmt::print(
         "{} Steps training time: {} s, cache entries: {}\n",
-        config.max_steps,
+        training_config.max_steps,
         (double)duration / 1000000.,
         device->num_program_cache_entries());
 
-    if (config.enable_mpi) {
+    if (multihost_config.enable_mpi) {
         auto &ctx = ttml::autograd::ctx();
         auto distributed_ctx = ctx.get_distributed_context();
         distributed_ctx->barrier();
