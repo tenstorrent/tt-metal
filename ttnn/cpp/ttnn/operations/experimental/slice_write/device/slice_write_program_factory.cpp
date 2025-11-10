@@ -102,7 +102,6 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_rm(
         rev_stride_str += std::to_string(i) + ", ";
     }
 
-    using namespace tt::tt_metal::experimental;
     auto src_buffer_alignment = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? hal::get_dram_alignment()
                                     : hal::get_l1_alignment();
@@ -262,7 +261,6 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
     log_debug(tt::LogOp, "Slice Write Padded Sticks: {}", padded_sticks_str);
     log_debug(tt::LogOp, "Accumulated Input : {}", accumulated_input_total_per_dim);
 
-    using namespace tt::tt_metal::experimental;
     auto src_buffer_alignment = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? hal::get_dram_alignment()
                                     : hal::get_l1_alignment();
@@ -572,7 +570,6 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
         accumulated_total_tiles_per_dim,
         accumulated_input_total_tiles_per_dim);
 
-    using namespace tt::tt_metal::experimental;
     TT_FATAL(
         output_tensor_start[-1] == 0,
         "slice_write expects output start for the last dimension to be 0. Got {}",

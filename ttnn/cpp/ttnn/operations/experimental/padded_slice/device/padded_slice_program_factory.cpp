@@ -116,7 +116,6 @@ get_padded_slice_runtime_args_rm_sharded_output(
             num_input_sticks_per_dim[i],
             accumulated_total_per_dim[i]);
     }
-    using namespace tt::tt_metal::experimental;
     auto src_buffer_alignment = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? hal::get_dram_alignment()
                                     : hal::get_l1_alignment();

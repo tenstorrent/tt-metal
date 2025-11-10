@@ -5,6 +5,8 @@
 #include "flatbuffer/buffer_types_from_flatbuffer.hpp"
 #include "flatbuffer/program_types_from_flatbuffer.hpp"
 
+#include "impl/buffers/circular_buffer_config.hpp"
+
 namespace tt::tt_metal {
 
 BufferType from_flatbuffer(flatbuffer::BufferType type) {
@@ -68,7 +70,7 @@ CircularBufferConfig from_flatbuffer(
     };
 
     // Constructor supports being able to specify all private members. shadow_global_buffer is public.
-    CircularBufferConfig config(
+    CircularBufferConfig config(CircularBufferConfigImpl(
         config_fb->total_size(),
         globally_allocated_address,
         data_formats,
@@ -79,9 +81,9 @@ CircularBufferConfig from_flatbuffer(
         create_uint8_set(config_fb->remote_buffer_indices()),
         config_fb->dynamic_cb(),
         config_fb->max_size(),
-        config_fb->buffer_size());
+        config_fb->buffer_size()));
 
-    config.shadow_global_buffer = shadow_global_buffer;
+    config.impl()->shadow_global_buffer = shadow_global_buffer;
 
     return config;
 }
