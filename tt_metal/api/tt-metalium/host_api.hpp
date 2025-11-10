@@ -642,25 +642,25 @@ void ReadMeshDeviceProfilerResults(
 
 // clang-format off
 /**
- * Get performance results for all ops that were read in the most recent call to `ReadMeshDeviceProfilerResults`.
+ * Get performance results for all programs that were read in the most recent call to `ReadMeshDeviceProfilerResults`.
  *
  * This function only works in PROFILER builds. Please refer to the "Device Program Profiler" section for more information.
  *
- * Return value: std::map<ChipId, std::set<OpAnalysisData>>
+ * Return value: std::map<ChipId, std::set<ProgramAnalysisData>>
  */
 // clang-format on
-std::map<ChipId, std::set<OpAnalysisData>> GetLatestOpsPerfData();
+std::map<ChipId, std::set<ProgramAnalysisData>> GetLatestProgramsPerfData();
 
 // clang-format off
 /**
- * Get performance results for all ops that have been read so far across all calls to `ReadMeshDeviceProfilerResults`.
+ * Get performance results for all programs that have been read so far across all calls to `ReadMeshDeviceProfilerResults`.
  *
  * This function only works in PROFILER builds. Please refer to the "Device Program Profiler" section for more information.
  *
- * Return value: std::map<ChipId, std::set<OpAnalysisData>>
+ * Return value: std::map<ChipId, std::set<ProgramAnalysisData>>
  */
 // clang-format on
-std::map<ChipId, std::set<OpAnalysisData>> GetAllOpsPerfData();
+std::map<ChipId, std::set<ProgramAnalysisData>> GetAllProgramsPerfData();
 
 // clang-format off
 /**

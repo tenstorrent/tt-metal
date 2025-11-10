@@ -87,7 +87,7 @@ public:
 
     std::unordered_map<ChipId, DeviceProfiler> device_profiler_map;
 
-    std::map<ChipId, std::vector<std::set<OpAnalysisData>>> device_ops_perf_analyses_map;
+    std::map<ChipId, std::vector<std::set<ProgramAnalysisData>>> device_programs_perf_analyses_map;
 
     std::unordered_map<ChipId, std::vector<std::pair<uint64_t, uint64_t>>> device_host_time_pair;
     std::unordered_map<ChipId, std::unordered_map<ChipId, std::vector<std::pair<uint64_t, uint64_t>>>>
@@ -99,7 +99,7 @@ public:
     std::unordered_set<ChipId> sync_set_devices;
 
     std::mutex log_file_write_mutex;
-    std::mutex ops_perf_report_write_mutex;
+    std::mutex programs_perf_report_write_mutex;
 };
 
 }  // namespace tt_metal

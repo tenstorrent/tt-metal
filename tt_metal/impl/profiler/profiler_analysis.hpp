@@ -19,9 +19,9 @@ namespace tt {
 
 namespace tt_metal {
 
-enum class AnalysisType { OP_FIRST_TO_LAST_MARKER };
+enum class AnalysisType { PROGRAM_FIRST_TO_LAST_MARKER };
 
-enum class AnalysisDimension { OP };
+enum class AnalysisDimension { PROGRAM };
 
 using AnalysisRiscTypes = std::unordered_set<tracy::RiscType>;
 inline const AnalysisRiscTypes AnalysisRiscTypesAny = {
@@ -51,7 +51,7 @@ struct AnalysisResultsConfig {
 
 struct AnalysisResults {
     AnalysisResultsConfig results_config;
-    std::unordered_map<OpId, OpSingleAnalysisResult> results_per_op_id;
+    std::unordered_map<ProgramExecutionUID, ProgramSingleAnalysisResult> results_per_program_execution_uid;
 };
 
 struct AnalysisStartEndConfig {
@@ -61,36 +61,37 @@ struct AnalysisStartEndConfig {
 };
 
 struct AnalysisConfig {
-    AnalysisType type = AnalysisType::OP_FIRST_TO_LAST_MARKER;
-    AnalysisDimension dimension = AnalysisDimension::OP;
+    AnalysisType type = AnalysisType::PROGRAM_FIRST_TO_LAST_MARKER;
+    AnalysisDimension dimension = AnalysisDimension::PROGRAM;
     AnalysisResultsConfig results_config{};
     AnalysisStartEndConfig start_config{};
     AnalysisStartEndConfig end_config{};
 };
 
-struct OpsPerfResults {
-    struct SingleOpPerfResults {
-        struct OpMetaData {
+struct ProgramsPerfResults {
+    struct SingleProgramPerfResults {
+        struct ProgramMetaData {
             ChipId device_id = 0;
             ARCH device_arch = ARCH::Invalid;
-            std::string op_name;
+            std::string program_name;
             uint32_t num_fw_cores = 0;
             uint32_t num_available_worker_cores = 0;
         };
-        OpMetaData op_meta_data;
-        std::vector<OpSingleAnalysisResult> analysis_results;
+        ProgramMetaData program_meta_data;
+        std::vector<ProgramSingleAnalysisResult> analysis_results;
     };
 
     std::vector<AnalysisResultsConfig> analysis_results_configs;
-    std::map<OpId, SingleOpPerfResults> op_id_to_perf_results;
+    std::map<ProgramExecutionUID, SingleProgramPerfResults> program_execution_uid_to_perf_results;
 };
 
-OpsPerfResults generatePerfResultsForOps(
+ProgramsPerfResults generatePerfResultsForPrograms(
     const std::vector<AnalysisConfig>& analysis_configs,
     const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers,
     ThreadPool& thread_pool);
 
-void writeOpsPerfResultsToCSV(const OpsPerfResults& ops_perf_results, const std::filesystem::path& report_path);
+void writeProgramsPerfResultsToCSV(
+    const ProgramsPerfResults& programs_perf_results, const std::filesystem::path& report_path);
 
 std::vector<AnalysisConfig> loadAnalysisConfigsFromJSON(const std::filesystem::path& json_path);
 }  // namespace tt_metal

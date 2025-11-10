@@ -266,21 +266,24 @@ std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> getSortedDevice
     return device_markers_vec;
 }
 
-std::set<OpAnalysisData> processOpsPerfResults(const OpsPerfResults& ops_perf_results) {
+std::set<ProgramAnalysisData> processProgramsPerfResults(const ProgramsPerfResults& programs_perf_results) {
     ZoneScoped;
 
-    std::set<OpAnalysisData> ops_analyses_data;
-    for (const auto& [op_id, op_perf_results] : ops_perf_results.op_id_to_perf_results) {
-        OpAnalysisData op_analysis_data;
-        op_analysis_data.op_id = op_id;
-        TT_ASSERT(op_perf_results.analysis_results.size() == ops_perf_results.analysis_results_configs.size());
-        for (uint32_t i = 0; i < op_perf_results.analysis_results.size(); ++i) {
-            const AnalysisResultsConfig results_config = ops_perf_results.analysis_results_configs[i];
-            op_analysis_data.op_analyses_results[results_config.analysis_name] = op_perf_results.analysis_results[i];
+    std::set<ProgramAnalysisData> programs_analyses_data;
+    for (const auto& [program_execution_uid, program_perf_results] :
+         programs_perf_results.program_execution_uid_to_perf_results) {
+        ProgramAnalysisData program_analysis_data;
+        program_analysis_data.program_execution_uid = program_execution_uid;
+        TT_ASSERT(
+            program_perf_results.analysis_results.size() == programs_perf_results.analysis_results_configs.size());
+        for (uint32_t i = 0; i < program_perf_results.analysis_results.size(); ++i) {
+            const AnalysisResultsConfig results_config = programs_perf_results.analysis_results_configs[i];
+            program_analysis_data.program_analyses_results[results_config.analysis_name] =
+                program_perf_results.analysis_results[i];
         }
-        ops_analyses_data.insert(op_analysis_data);
+        programs_analyses_data.insert(program_analysis_data);
     }
-    return ops_analyses_data;
+    return programs_analyses_data;
 }
 
 bool doAllDispatchCoresComeAfterNonDispatchCores(const IDevice* device, const std::vector<CoreCoord>& virtual_cores) {
@@ -1714,11 +1717,13 @@ DeviceProfiler::DeviceProfiler(const IDevice* device, const bool new_logs [[mayb
         std::filesystem::path log_path = this->device_logs_output_dir / DEVICE_SIDE_LOG;
         std::filesystem::remove(log_path);
 
-        std::filesystem::path ops_perf_report_path = this->device_logs_output_dir / PROFILER_OPS_PERF_REPORT_NAME;
-        std::filesystem::remove(ops_perf_report_path);
+        std::filesystem::path device_perf_report_path = this->device_logs_output_dir / PROFILER_DEVICE_PERF_REPORT_NAME;
+        std::filesystem::remove(device_perf_report_path);
     }
 
-    tt::tt_metal::MetalContext::instance().profiler_state_manager()->device_ops_perf_analyses_map[this->device_id] = {};
+    tt::tt_metal::MetalContext::instance()
+        .profiler_state_manager()
+        ->device_programs_perf_analyses_map[this->device_id] = {};
 
     const std::string noc_events_report_path =
         tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_noc_events_report_path();
@@ -1744,15 +1749,16 @@ void DeviceProfiler::generateAnalysesForDeviceMarkers(
         "tt_metal/tools/profiler/cpp_device_analyses.json";
     const std::vector<AnalysisConfig> analysis_configs = loadAnalysisConfigsFromJSON(analysis_configs_path);
 
-    const OpsPerfResults ops_perf_results =
-        generatePerfResultsForOps(analysis_configs, device_markers, *this->thread_pool);
+    const ProgramsPerfResults programs_perf_results =
+        generatePerfResultsForPrograms(analysis_configs, device_markers, *this->thread_pool);
 
-    std::vector<std::set<OpAnalysisData>>& device_ops_perf_analyses =
-        tt::tt_metal::MetalContext::instance().profiler_state_manager()->device_ops_perf_analyses_map.at(
+    std::vector<std::set<ProgramAnalysisData>>& device_programs_perf_analyses =
+        tt::tt_metal::MetalContext::instance().profiler_state_manager()->device_programs_perf_analyses_map.at(
             this->device_id);
-    device_ops_perf_analyses.push_back(processOpsPerfResults(ops_perf_results));
+    device_programs_perf_analyses.push_back(processProgramsPerfResults(programs_perf_results));
 
-    writeOpsPerfResultsToCSV(ops_perf_results, this->device_logs_output_dir / PROFILER_OPS_PERF_REPORT_NAME);
+    writeProgramsPerfResultsToCSV(
+        programs_perf_results, this->device_logs_output_dir / PROFILER_DEVICE_PERF_REPORT_NAME);
 #endif
 }
 
@@ -1809,8 +1815,8 @@ void DeviceProfiler::freshDeviceLog() {
     std::filesystem::path log_path = device_logs_output_dir / DEVICE_SIDE_LOG;
     std::filesystem::remove(log_path);
 
-    std::filesystem::path ops_perf_report_path = device_logs_output_dir / PROFILER_OPS_PERF_REPORT_NAME;
-    std::filesystem::remove(ops_perf_report_path);
+    std::filesystem::path device_perf_report_path = device_logs_output_dir / PROFILER_DEVICE_PERF_REPORT_NAME;
+    std::filesystem::remove(device_perf_report_path);
 #endif
 }
 

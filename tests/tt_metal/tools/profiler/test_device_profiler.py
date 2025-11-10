@@ -895,18 +895,18 @@ def test_sub_device_profiler():
     )
 
 
-def validate_ops_perf_durations(perf_data):
+def validate_programs_perf_durations(perf_data):
     cpp_ops_perf_report = pd.read_csv(PROFILER_LOGS_DIR / PROFILER_CPP_DEVICE_OPS_PERF_REPORT).reset_index(drop=True)
 
     for snapshot in perf_data:
         for device in snapshot:
             device_id = device["device"]
-            device_ops_analysis_data = device["ops_analysis_data"]
-            for op_analysis_data in device_ops_analysis_data:
-                runtime_id = op_analysis_data["op_id"]["runtime_id"]
-                op_analyses_results = op_analysis_data["op_analyses_results"]
-                for analysis_type in op_analyses_results:
-                    analysis_result = op_analyses_results[analysis_type]
+            device_programs_analysis_data = device["programs_analysis_data"]
+            for program_analysis_data in device_programs_analysis_data:
+                runtime_id = program_analysis_data["program_execution_uid"]["runtime_id"]
+                program_analyses_results = program_analysis_data["program_analyses_results"]
+                for analysis_type in program_analyses_results:
+                    analysis_result = program_analyses_results[analysis_type]
                     if analysis_result["duration"] == 0:
                         continue
 
@@ -918,34 +918,34 @@ def validate_ops_perf_durations(perf_data):
                     assert row[analysis_type].values[0] == analysis_result["duration"]
 
 
-def test_get_ops_perf_data():
-    # Op IDs and the number of ops are validated in the test_get_ops_perf_data gtests
-    # In this file, we validate the durations of the ops
-    test_get_ops_perf_data_binary = "./build/test/ttnn/tracy/test_get_ops_perf_data"
+def test_get_programs_perf_data():
+    # Program execution UIDs and the number of programs are validated in the test_get_programs_perf_data gtests
+    # In this file, we validate the durations of the programs
+    test_get_programs_perf_data_binary = "./build/test/ttnn/tracy/test_get_programs_perf_data"
 
     run_gtest_profiler_test(
-        test_get_ops_perf_data_binary,
-        "GetOpsPerfDataFixture.TestGetOpsPerfDataBeforeReadMeshDeviceProfilerResultsCall",
+        test_get_programs_perf_data_binary,
+        "GetProgramsPerfDataFixture.TestGetProgramsPerfDataBeforeReadMeshDeviceProfilerResultsCall",
         do_mid_run_dump=True,
         do_cpp_post_process=True,
     )
-    validate_ops_perf_durations(json.load(open(PROFILER_LOGS_DIR / "test_get_ops_perf_data_latest.json")))
-    validate_ops_perf_durations(json.load(open(PROFILER_LOGS_DIR / "test_get_ops_perf_data_all.json")))
+    validate_programs_perf_durations(json.load(open(PROFILER_LOGS_DIR / "test_get_programs_perf_data_latest.json")))
+    validate_programs_perf_durations(json.load(open(PROFILER_LOGS_DIR / "test_get_programs_perf_data_all.json")))
 
     run_gtest_profiler_test(
-        test_get_ops_perf_data_binary,
-        "GetOpsPerfDataFixture.TestGetOpsPerfDataAfterSingleReadMeshDeviceProfilerResultsCall",
+        test_get_programs_perf_data_binary,
+        "GetProgramsPerfDataFixture.TestGetProgramsPerfDataAfterSingleReadMeshDeviceProfilerResultsCall",
         do_mid_run_dump=True,
         do_cpp_post_process=True,
     )
-    validate_ops_perf_durations(json.load(open(PROFILER_LOGS_DIR / "test_get_ops_perf_data_latest.json")))
-    validate_ops_perf_durations(json.load(open(PROFILER_LOGS_DIR / "test_get_ops_perf_data_all.json")))
+    validate_programs_perf_durations(json.load(open(PROFILER_LOGS_DIR / "test_get_programs_perf_data_latest.json")))
+    validate_programs_perf_durations(json.load(open(PROFILER_LOGS_DIR / "test_get_programs_perf_data_all.json")))
 
     run_gtest_profiler_test(
-        test_get_ops_perf_data_binary,
-        "GetOpsPerfDataFixture.TestGetOpsPerfDataAfterMultipleReadMeshDeviceProfilerResultsCalls",
+        test_get_programs_perf_data_binary,
+        "GetProgramsPerfDataFixture.TestGetProgramsPerfDataAfterMultipleReadMeshDeviceProfilerResultsCalls",
         do_mid_run_dump=True,
         do_cpp_post_process=True,
     )
-    validate_ops_perf_durations(json.load(open(PROFILER_LOGS_DIR / "test_get_ops_perf_data_latest.json")))
-    validate_ops_perf_durations(json.load(open(PROFILER_LOGS_DIR / "test_get_ops_perf_data_all.json")))
+    validate_programs_perf_durations(json.load(open(PROFILER_LOGS_DIR / "test_get_programs_perf_data_latest.json")))
+    validate_programs_perf_durations(json.load(open(PROFILER_LOGS_DIR / "test_get_programs_perf_data_all.json")))
