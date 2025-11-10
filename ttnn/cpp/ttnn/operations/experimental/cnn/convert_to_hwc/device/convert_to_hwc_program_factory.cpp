@@ -38,7 +38,8 @@ CircularBufferHandles setup_circular_buffers(
     const CoreRangeSet& core_grid,
     const ConvertToHwcConfig& config,
     const Tensor& input,
-    const Tensor& output);
+    const Tensor& output,
+    uint32_t block_size_width);
 
 ConvertToHwcConfig ConvertToHwcConfig::create_from_tensors(const Tensor& input, const Tensor& output) {
     ConvertToHwcConfig config;
@@ -191,7 +192,8 @@ CircularBufferHandles setup_circular_buffers(
     const CoreRangeSet& core_grid,
     const ConvertToHwcConfig& config,
     const Tensor& input,
-    const Tensor& output) {
+    const Tensor& output,
+    uint32_t block_size_width) {
     const tt::DataFormat intermediary_format = tt::DataFormat::Float16_b;
     const uint32_t intermediary_tile_size = tt::tile_size(intermediary_format);
 
@@ -220,23 +222,23 @@ CircularBufferHandles setup_circular_buffers(
         config.input_format,
         config.is_input_in_dram ? nullptr : input.buffer());
 
-    // CB in batch - using gather output shard specifications
-    const uint32_t cb_in_batch_page_size = config.gather_l1_output_shard_width * config.element_size_bytes;
+    // CB in batch - using block_size_width to ensure alignment with transfer blocks
+    const uint32_t cb_in_batch_page_size = block_size_width * config.element_size_bytes;
     const uint32_t cb_in_batch_total_size = config.gather_l1_output_shard_height * cb_in_batch_page_size;
     log_info(
         tt::LogType::LogAlways,
-        "CB_IN_BATCH: page_size={}, total_size={} (using gather_l1_output_shard=[{}x{}])",
+        "CB_IN_BATCH: page_size={}, total_size={} (using block_size_width={}, height={})",
         cb_in_batch_page_size,
         cb_in_batch_total_size,
-        config.gather_l1_output_shard_height,
-        config.gather_l1_output_shard_width);
+        block_size_width,
+        config.gather_l1_output_shard_height);
     create_circular_buffer(
         program, core_grid, CBIndex::CB_IN_BATCH, cb_in_batch_total_size, cb_in_batch_page_size, config.input_format);
 
     // CB in tiled
     const uint32_t cb_in_tiled_page_size = intermediary_tile_size;
     const uint32_t cb_in_tiled_total_size =
-        tt::div_up(config.gather_l1_output_shard_width, TILE_WIDTH) * intermediary_tile_size;
+        tt::div_up(block_size_width, TILE_WIDTH) * intermediary_tile_size;
     log_info(
         tt::LogType::LogAlways,
         "CB_IN_TILED: page_size={}, total_size={}",
@@ -248,7 +250,7 @@ CircularBufferHandles setup_circular_buffers(
     // CB in transpose buffers
     const uint32_t cb_in_transpose_page_size = intermediary_tile_size;
     const uint32_t cb_in_transpose_total_size =
-        tt::div_up(config.gather_l1_output_shard_width, TILE_WIDTH) * intermediary_tile_size;
+        tt::div_up(block_size_width, TILE_WIDTH) * intermediary_tile_size;
     log_info(
         tt::LogType::LogAlways,
         "CB_IN_TRANSPOSE_0/1: page_size={}, total_size={}",
@@ -655,9 +657,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
     auto config = ConvertToHwcConfig::create_from_tensors(a, output);
     config.validate();
 
-    // Setup circular buffers
-    auto cb_handles = setup_circular_buffers(program, config.l1_input_core_grid, config, a, output);
-
     const auto gather_transfers = convert_to_hwc::detail::precompute_gather_transfers(
         config.batch_size,
         config.input_channels,
@@ -666,6 +665,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         config.l1_input_cores);  // TODO: L1 input grid can be different if resharding
     const uint32_t block_size_width =
         config.l1_input_shard_width * config.batch_size;  // One block per batch (investigating CB dependencies)
+
+    // Setup circular buffers after block_size_width is calculated
+    auto cb_handles = setup_circular_buffers(program, config.l1_input_core_grid, config, a, output, block_size_width);
     const auto blocked_result = convert_to_hwc::detail::group_transfers_by_output_column_blocks_with_count(
         gather_transfers,
         config.batch_size,
@@ -685,11 +687,14 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         block_size_width,
         blocked_gather_transfers.size());
 
-    // Apply transfer coalescing optimization to reduce NOC operations
-    blocked_gather_transfers = convert_to_hwc::detail::coalesce_contiguous_transfers(blocked_gather_transfers);
-
-    const auto per_core_blocked_gather_transfers =
+    // Split transfers by destination core first, then apply coalescing per-core
+    auto per_core_blocked_gather_transfers =
         convert_to_hwc::detail::split_by_destination_core(blocked_gather_transfers, config.l1_input_cores.size());
+
+    // Apply transfer coalescing optimization to reduce NOC operations per-core
+    for (auto& core_transfers : per_core_blocked_gather_transfers) {
+        core_transfers = convert_to_hwc::detail::coalesce_contiguous_transfers(core_transfers);
+    }
 
     // Create lambda for logical to worker core conversion
     auto logical_to_worker_core = [&a](const CoreCoord& logical_core) {
@@ -732,9 +737,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         config.element_size_bytes,
         config.l1_input_shard_width);
 
-    // Calculate tiles based on gather output width (which becomes input to compute pipeline)
+    // Calculate tiles based on block width (which becomes input to compute pipeline)
     const uint32_t total_tiles_per_block =
-        tt::div_up(config.gather_l1_output_shard_width, TILE_HEIGHT);  // assumes C < 32
+        tt::div_up(block_size_width, TILE_HEIGHT);  // assumes C < 32
     const uint32_t total_tiles_per_core = total_tiles_per_block * num_blocks;
     const uint32_t total_tiles_writer0 =
         tt::div_up(total_tiles_per_core, 2);  // each writer should process half of the output tiles
@@ -757,7 +762,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
 
     // If there is only one HW tile we shouldn't stride the output copies because only one writer is working
     const uint32_t output_addr_stride =
-        config.gather_l1_output_shard_width != TILE_HEIGHT
+        block_size_width != TILE_HEIGHT
             ? output_stride_sticks * config.output_shard_width * config.element_size_bytes
             : 0;
 
@@ -766,16 +771,15 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
     // const uint32_t channel_size = config.output_shard_width * config.element_size_bytes;
 
     // block_size_bytes should be exactly the same as CB_IN_BATCH total size
-    // Using the gather output shard dimensions for consistency
-    const uint32_t block_size_bytes =
-        config.gather_l1_output_shard_height * config.gather_l1_output_shard_width * config.element_size_bytes;
+    // Using the block-aligned dimensions for consistency
+    const uint32_t block_size_bytes = config.gather_l1_output_shard_height * block_size_width * config.element_size_bytes;
 
     log_info(tt::LogType::LogAlways, "=== KERNEL COMPILE TIME ARGS ===");
     log_info(
         tt::LogType::LogAlways,
-        "Total tiles per core: {} (gather_width={} / TILE_HEIGHT={})",
+        "Total tiles per core: {} (block_width={} / TILE_HEIGHT={})",
         total_tiles_per_core,
-        config.gather_l1_output_shard_width,
+        block_size_width,
         TILE_HEIGHT);
     log_info(
         tt::LogType::LogAlways,
@@ -799,11 +803,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         config.gather_l1_output_shard_height);
     log_info(
         tt::LogType::LogAlways,
-        "Setting block_size_bytes={} (gather_shard_height={} * gather_shard_width={} * element_size={})",
-        block_size_bytes,
-        config.gather_l1_output_shard_height,
-        config.gather_l1_output_shard_width,
-        config.element_size_bytes);
+        "Setting block_size_bytes={} (same as CB_IN_BATCH total size for alignment)",
+        block_size_bytes);
 
     std::vector<uint32_t> writer_compile_time_args0 = {
         CBIndex::CB_IN,
