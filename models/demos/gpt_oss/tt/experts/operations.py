@@ -89,30 +89,17 @@ def apply_tensor_parallel_allreduce(tensor, mesh_config, mesh_device, ccl_manage
     Returns:
         Allreduced tensor
     """
-    # Convert to bfloat16 for allreduce if needed
-    if tensor.dtype != ttnn.bfloat16:
-        tensor_16 = ttnn.typecast(tensor, ttnn.bfloat16)
-        ttnn.deallocate(tensor)
-    else:
-        tensor_16 = tensor
-
     # Synchronize for prefill
     if seq_len > 1:
         ttnn.synchronize_device(mesh_device)  # ✅ Use explicit mesh_device
 
     tensor_allreduced = mesh_config.allreduce(
-        tensor_16,
+        tensor,
         ccl_manager,
-        pad_size=192 if tp == 8 else 0,  # Optimal padding for TP=8
+        pad_size=0,  # Optimal padding for TP=8
         axis=mesh_config.tp_axis,
     )
-    tensor_16.deallocate(True)
-
-    # Convert back to original dtype if needed
-    if tensor_allreduced.dtype == ttnn.bfloat16 and activation_dtype != ttnn.bfloat16:
-        tensor_converted = ttnn.typecast(tensor_allreduced, activation_dtype)
-        tensor_allreduced.deallocate(True)
-        return tensor_converted
+    tensor.deallocate(True)
 
     return tensor_allreduced
 

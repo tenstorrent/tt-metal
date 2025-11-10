@@ -71,7 +71,6 @@ def _process_prefill_chunk(
 
     num_experts_per_tok = (config.num_experts // ep) * group_size
     output_tile = ttnn.Tile([32, 32])
-    print("prefill ", sparsity_layout)
     # Gate projection
     gate = ttnn.sparse_matmul(
         hidden_states_4D,
@@ -85,7 +84,8 @@ def _process_prefill_chunk(
     )
     gate = ttnn.transpose(gate, 1, 3)
     gate = ttnn.reshape(gate, (batch_size, config.num_experts, seq_len, weights.intermediate_size_per_device))
-    gate = ttnn.add(gate, weights.gate_proj_bias, output_tensor=gate)
+    bias_transposed = ttnn.transpose(weights.gate_proj_bias, 1, 0)
+    gate = ttnn.add(gate, bias_transposed, output_tensor=gate)
 
     # Up projection
     up = ttnn.sparse_matmul(
@@ -102,7 +102,8 @@ def _process_prefill_chunk(
 
     up = ttnn.transpose(up, 1, 3)
     up = ttnn.reshape(up, (batch_size, config.num_experts, seq_len, weights.intermediate_size_per_device))
-    up = ttnn.add(up, weights.up_proj_bias, output_tensor=up)
+    bias_transposed = ttnn.transpose(weights.up_proj_bias, 1, 0)
+    up = ttnn.add(up, bias_transposed, output_tensor=up)
 
     # Apply SwiGLU
     down_input = apply_swiglu(gate, up, config)
@@ -157,7 +158,8 @@ def _process_prefill_chunk(
         # Apply bias and routing weights
         split_seq_len = seq_len if seq_len < split_size else split_size
         next_states = ttnn.reshape(down, (batch_size, config.num_experts, split_seq_len, config.hidden_size))
-        next_states = ttnn.add(next_states, weights.down_proj_bias, output_tensor=next_states)
+        bias_transposed = ttnn.transpose(weights.down_proj_bias, 1, 0)
+        next_states = ttnn.add(next_states, bias_transposed, output_tensor=next_states)
         next_states = apply_routing_weights(next_states, routing_weights_list[i])
 
         # Reduce across experts
@@ -249,7 +251,6 @@ def prefill_forward(
     # Process each chunk
     next_states_list = []
     for hidden_chunk, routing_chunk in zip(hidden_states_chunks, routing_weights_chunks):
-        print("prefill sparsity", prefill_sparsity.shape)
         next_states = _process_prefill_chunk(
             hidden_chunk,
             routing_chunk,

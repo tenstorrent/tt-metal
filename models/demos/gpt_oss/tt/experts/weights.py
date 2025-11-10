@@ -87,15 +87,15 @@ def load_expert_weights(
         cache_file_name=get_cache_file_name(tensor_cache_path, "up_proj"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-
+    bias_dtype = ttnn.bfloat16
     # Load gate bias
     gate_proj_bias_tt = ttnn.as_tensor(
         gate_proj_bias,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
-        dtype=weight_dtype,
+        dtype=bias_dtype,
         mesh_mapper=col_mesh_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, "gate_proj_bias"),
+        cache_file_name=get_cache_file_name(tensor_cache_path, f"gate_proj_bias_{gate_proj_bias.shape}"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
@@ -104,9 +104,9 @@ def load_expert_weights(
         up_proj_bias,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
-        dtype=weight_dtype,
+        dtype=bias_dtype,
         mesh_mapper=col_mesh_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, "up_proj_bias"),
+        cache_file_name=get_cache_file_name(tensor_cache_path, f"up_proj_bias_{up_proj_bias.shape}"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
@@ -134,9 +134,9 @@ def load_expert_weights(
         down_proj_bias,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
-        dtype=weight_dtype,
+        dtype=bias_dtype,
         mesh_mapper=col_mesh_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, "down_proj_bias"),
+        cache_file_name=get_cache_file_name(tensor_cache_path, f"down_proj_bias_{down_proj_bias.shape}"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 

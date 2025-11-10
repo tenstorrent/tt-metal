@@ -74,7 +74,9 @@ def decode_forward(
         program_config=program_config.get_decode_gate_up_config(hidden_states_4D.shape[2], weights.gate_proj.shape[3]),
         dtype=activation_dtype,
     )
-    gate = ttnn.transpose(gate, 4, 3)
+    gate = ttnn.reshape(gate, (batch_size, config.num_experts, 1, weights.intermediate_size_per_device))
+    gate = ttnn.transpose(gate, 1, 2)
+
     gate = ttnn.reshape(gate, (batch_size, config.num_experts, weights.intermediate_size_per_device))
     gate = ttnn.add(gate, weights.gate_proj_bias, output_tensor=gate)
 
@@ -90,7 +92,8 @@ def decode_forward(
         dtype=activation_dtype,
     )
     hidden_states_4D.deallocate(True)
-    up = ttnn.transpose(up, 4, 3)
+    up = ttnn.reshape(up, (batch_size, config.num_experts, 1, weights.intermediate_size_per_device))
+    up = ttnn.transpose(up, 1, 2)
     up = ttnn.reshape(up, (batch_size, config.num_experts, weights.intermediate_size_per_device))
     up = ttnn.add(up, weights.up_proj_bias, output_tensor=up)
 
