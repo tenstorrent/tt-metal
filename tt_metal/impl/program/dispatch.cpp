@@ -61,7 +61,7 @@
 #include "vector_aligned.hpp"
 #include "dispatch/worker_config_buffer.hpp"
 #include "tt_metal/distributed/mesh_workload_impl.hpp"
-#include "kernels/kernel_impl.hpp"
+#include "kernels/kernel.hpp"
 #include "tt_metal/impl/dispatch/hardware_command_queue.hpp"
 
 namespace tt {

@@ -33,7 +33,7 @@
 #include "tt_metal/jit_build/genfiles.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/arch.hpp>
-#include "kernel_impl.hpp"
+#include "kernel.hpp"
 
 namespace tt {
 

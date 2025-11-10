@@ -25,7 +25,7 @@
 #include <tt-metalium/persistent_kernel_cache.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include "impl/kernels/kernel_impl.hpp"
+#include "impl/kernels/kernel.hpp"
 // Access to internal API: ProgramImpl::get_kernels
 #include "impl/program/program_impl.hpp"
 
