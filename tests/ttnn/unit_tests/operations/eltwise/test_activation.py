@@ -467,3 +467,24 @@ def run_activation_test_threshold(device, h, w, scalar1, scalar2, ttnn_function,
 @pytest.mark.parametrize("w", [128])
 def test_threshold(device, h, w, value, threshold):
     run_activation_test_threshold(device, h, w, value, threshold, ttnn.threshold)
+
+
+@pytest.mark.parametrize("ttnn_dtype, torch_dtype", [(ttnn.float32, torch.float32), (ttnn.bfloat16, torch.bfloat16)])
+def test_mish_golden_verification(ttnn_dtype, torch_dtype, device):
+    input_data = torch.tensor(
+        [
+            [-1.1258, -1.1524, -0.2506, 1.5863, 0.9463, -0.8437],
+            [-0.6136, 0.0316, -0.4927, -1.2341, 1.8197, -0.5515],
+            [-0.5692, 0.9200, 1.1108, -0.9565, 0.0335, 0.7101],
+        ],
+        dtype=torch_dtype,
+    )
+    golden_function = torch.nn.functional.mish
+    golden_output = golden_function(input_data)
+
+    input_tensor = ttnn.from_torch(
+        input_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG, device=device
+    )
+    output_tensor = ttnn.mish(input_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(golden_output, output_tensor, pcc=0.99)

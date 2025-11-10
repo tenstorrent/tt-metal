@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 import ttnn
 
 from ..layers.feedforward import ParallelFeedForward
-from ..layers.linear import ColParallelLinear
+from ..layers.linear import ColParallelLinear, prepare_chunked_linear_output
 from ..layers.module import Module
 from ..layers.normalization import DistributedLayerNorm
 from ..utils.substate import rename_substate
@@ -161,13 +161,13 @@ class TransformerBlock(Module):
         rename_substate(state, "ff_context.net.0.proj", "ff_context.ff1")
         rename_substate(state, "ff_context.net.2", "ff_context.ff2")
 
-        _shuffle_linear_output(
+        prepare_chunked_linear_output(
             state,
             prefix="norm1_linear",
             device_count=self.parallel_config.tensor_parallel.factor,
             chunks=6,
         )
-        _shuffle_linear_output(
+        prepare_chunked_linear_output(
             state,
             prefix="norm1_context_linear",
             device_count=self.parallel_config.tensor_parallel.factor,
@@ -202,8 +202,8 @@ class TransformerBlock(Module):
         if not skip_time_embed_activation_fn:
             time_embed = ttnn.silu(time_embed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        spatial_time = self.norm1_linear(time_embed, core_grid=self.core_grid)
-        prompt_time = self.norm1_context_linear(time_embed, core_grid=self.core_grid)
+        spatial_time = self.norm1_linear(time_embed)
+        prompt_time = self.norm1_context_linear(time_embed)
 
         (
             spatial_shift_attn,
@@ -265,7 +265,7 @@ class TransformerBlock(Module):
             spatial_normed, dim=2, mesh_axis=tp_axis, use_hyperparams=True
         )
 
-        spatial_ff = ttnn.squeeze(self.ff(ttnn.unsqueeze(spatial_normed, 0), core_grid=self.core_grid), 0)
+        spatial_ff = ttnn.squeeze(self.ff(ttnn.unsqueeze(spatial_normed, 0)), 0)
         spatial_ff = spatial_ff * spatial_gate_ff
 
         spatial = spatial + spatial_ff
@@ -284,7 +284,7 @@ class TransformerBlock(Module):
             prompt_normed, dim=2, mesh_axis=tp_axis, use_hyperparams=True
         )
 
-        prompt_ff = ttnn.squeeze(self.ff_context(ttnn.unsqueeze(prompt_normed, 0), core_grid=self.core_grid), 0)
+        prompt_ff = ttnn.squeeze(self.ff_context(ttnn.unsqueeze(prompt_normed, 0)), 0)
         prompt_ff = prompt_ff * prompt_gate_ff
 
         prompt = prompt + prompt_ff
@@ -303,20 +303,3 @@ class TransformerBlock(Module):
 def _chunk_time3d(t: ttnn.Tensor, count: int) -> list[ttnn.Tensor]:
     size = t.shape[-1] // count
     return [t[:, :, i * size : (i + 1) * size] for i in range(count)]
-
-
-def _shuffle_linear_output(state: dict[str, torch.Tensor], *, prefix: str, device_count: int, chunks: int) -> None:
-    weight_key = f"{prefix}.weight"
-    bias_key = f"{prefix}.bias"
-
-    weight = state.get(weight_key)
-    bias = state.get(bias_key)
-
-    if weight is not None:
-        _, in_dim = weight.shape
-        weight = weight.reshape([chunks, device_count, -1, in_dim]).transpose(0, 1).reshape([-1, in_dim])
-        state[weight_key] = weight
-
-    if bias is not None:
-        bias = state[bias_key].reshape([chunks, device_count, -1]).transpose(0, 1).reshape([-1])
-        state[bias_key] = bias

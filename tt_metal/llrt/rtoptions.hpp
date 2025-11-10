@@ -132,6 +132,7 @@ class RunTimeOptions {
     bool profiler_mid_run_dump = false;
     bool profiler_trace_profiler = false;
     bool profiler_trace_tracking = false;
+    bool profiler_cpp_post_process = false;
     bool profiler_buffer_usage_enabled = false;
     bool profiler_noc_events_enabled = false;
     std::string profiler_noc_events_report_path;
@@ -220,6 +221,9 @@ class RunTimeOptions {
 
     // Reliability mode override parsed from environment (RELIABILITY_MODE)
     std::optional<tt::tt_fabric::FabricReliabilityMode> reliability_mode = std::nullopt;
+
+    // Force JIT compile even if dependencies are up to date
+    bool force_jit_compile = false;
 
 public:
     RunTimeOptions();
@@ -416,6 +420,7 @@ public:
     bool get_profiler_trace_only() const { return profiler_trace_profiler; }
     bool get_profiler_trace_tracking() const { return profiler_trace_tracking; }
     bool get_profiler_mid_run_dump() const { return profiler_mid_run_dump; }
+    bool get_profiler_cpp_post_process() const { return profiler_cpp_post_process; }
     bool get_profiler_buffer_usage_enabled() const { return profiler_buffer_usage_enabled; }
     bool get_profiler_noc_events_enabled() const { return profiler_noc_events_enabled; }
     std::string get_profiler_noc_events_report_path() const { return profiler_noc_events_report_path; }
@@ -529,6 +534,9 @@ public:
     // Using MGD 1.0 syntax for mesh graph descriptor in Fabric Control Plane
     // TODO: This will be removed after MGD 1.0 is deprecated
     bool get_use_mesh_graph_descriptor_1_0() const { return use_mesh_graph_descriptor_1_0; }
+
+    bool get_force_jit_compile() const { return force_jit_compile; }
+    void set_force_jit_compile(bool enable) { force_jit_compile = enable; }
 
     // Parse all feature-specific environment variables, after hal is initialized.
     // (Needed because syntax of some env vars is arch-dependent.)

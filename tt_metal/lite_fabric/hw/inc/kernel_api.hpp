@@ -5,7 +5,7 @@
 #pragma once
 
 #include "tt_metal/lite_fabric/hw/inc/host_interface.hpp"
-#include "tt_metal/lite_fabric/hw/inc/lf_dev_mem_map.hpp"
+#include "lf_dev_mem_map.hpp"
 
 namespace lite_fabric {
 
