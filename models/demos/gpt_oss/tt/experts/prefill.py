@@ -66,8 +66,7 @@ def _process_prefill_chunk(
     # Note: prefill_sparsity is cached and reused, don't deallocate it
     sparsity_repeated = ttnn.repeat(prefill_sparsity, (1, 1, group_size, 1))
     routing_weights_4d = ttnn.unsqueeze_to_4D(routing_weights)
-    sparsity_layout = sparsity_repeated  # ttnn.to_layout(routing_weights_4d, ttnn.ROW_MAJOR_LAYOUT)
-    # routing_weights_4d.deallocate(True)  # ✅ Deallocate temporary 4D tensor
+    sparsity_layout = sparsity_repeated
 
     num_experts_per_tok = (config.num_experts // ep) * group_size
     output_tile = ttnn.Tile([32, 32])
@@ -117,14 +116,10 @@ def _process_prefill_chunk(
         prefill_sparsity_reshaped,
         output_tensor=routing_weights,
     )
-    # prefill_sparsity_reshaped.deallocate(True)  # ✅ Deallocate reshaped sparsity
-    # sparsity_layout.deallocate(True)  # ✅ Deallocate sparsity_layout after gate/up matmuls
-    # sparsity_repeated.deallocate(True)  # ✅ Deallocate repeated sparsity (not used for down)
 
     routing_weights_permuted = ttnn.permute(routing_weights, (1, 0))
-    routing_weights.deallocate(True)  # ✅ Deallocate before reshape
+    routing_weights.deallocate(True)
     routing_weights = ttnn.reshape(routing_weights_permuted, (batch_size, config.num_experts, seq_len, 1))
-    # routing_weights_permuted.deallocate(True)  # ✅ Deallocate permuted
 
     # Process down projection in splits if needed
     split_size = program_config.down_split_size
@@ -170,10 +165,6 @@ def _process_prefill_chunk(
     # Concatenate splits (deallocates list elements internally in some TTNN versions)
     next_states_concat = ttnn.concat(next_states_reduced_list, dim=2)
 
-    # # ✅ Deallocate all split results after concat
-    # for tensor in next_states_reduced_list:
-    #     tensor.deallocate(True)
-
     return next_states_concat
 
 
@@ -209,7 +200,6 @@ def prefill_forward(
     batch_size = hidden_states.shape[0]
     seq_len_global = hidden_states.shape[1]
 
-    # ✅ Use exceptions instead of assertions and validate seq_len
     if batch_size != 1:
         raise NotImplementedError(f"Currently only batch_size=1 supported, got {batch_size}")
 
@@ -218,7 +208,6 @@ def prefill_forward(
             f"Prefill mode requires seq_len>1, got {seq_len_global}. " f"Use decode mode for single tokens."
         )
 
-    # ✅ Validate seq_len is divisible by TILE_SIZE (32)
     TILE_SIZE = 32
     if seq_len_global % TILE_SIZE != 0:
         raise ValueError(
@@ -232,9 +221,7 @@ def prefill_forward(
 
     # Reshard for sequence parallelism if needed
     if sp > 1:
-        hidden_states, routing_weights = _reshard_for_sequence_parallel(
-            hidden_states, routing_weights, mesh_device  # ✅ Use explicit mesh_device
-        )
+        hidden_states, routing_weights = _reshard_for_sequence_parallel(hidden_states, routing_weights, mesh_device)
 
     # Chunk processing for very long sequences
     chunk_size = program_config.sequence_chunk_size
@@ -261,15 +248,11 @@ def prefill_forward(
             tp,
         )
         next_states_list.append(next_states)
-        hidden_chunk.deallocate(True)  # ✅ Deallocate chunk after processing
-        routing_chunk.deallocate(True)  # ✅ Deallocate chunk after processing
+        hidden_chunk.deallocate(True)
+        routing_chunk.deallocate(True)
 
     # Concatenate all chunks
     next_states = ttnn.concat(next_states_list, dim=2)
-
-    # ✅ Deallocate chunk results after concat
-    # for tensor in next_states_list:
-    #     tensor.deallocate(True)
 
     # Expert parallel communication
     if ep > 1:
@@ -284,7 +267,7 @@ def prefill_forward(
             ccl_manager,
             activation_dtype,
             seq_len_global,
-            tp,  # ✅ Pass mesh_device
+            tp,
         )
 
     # Sequence parallel all-gather
