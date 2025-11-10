@@ -87,6 +87,9 @@ class Generator:
         kv_cache,
         enable_trace,
     ):
+        if self.prefill_traces_warmup or not enable_trace:
+            return
+
         self.prefill_traces_warmup = True
         for model_id in range(self.data_parallel):
             for supported_length in [128, 256, 512, 1024, 2048, 4096, 8192]:
@@ -226,12 +229,11 @@ class Generator:
             # Only paged attention is supported for prefill
             enable_trace = False
 
-        if not self.prefill_traces_warmup and enable_trace:
-            self.warmup_prefill_traces(
-                page_table,
-                kv_cache,
-                enable_trace,
-            )
+        self.warmup_prefill_traces(
+            page_table,
+            kv_cache,
+            enable_trace,
+        )
 
         batch_size, batch_seq_len = tokens.shape
         max_batch_size_per_model = self.model_args[0].max_batch_size
