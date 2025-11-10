@@ -120,6 +120,15 @@ def test_flip_small_tensors_rm(device, shape, dims, dtype):
     assert_equal(torch_output, ttnn.to_torch(tt_output))
 
 
+# TODO: flip fails for 1D input ((10,), [0]),
+@pytest.mark.parametrize(
+    "shape,dims",
+    [
+        ((5, 10), [0]),
+        ((5, 10), [1]),
+        ((5, 10), [0, 1]),
+    ],
+)
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32])
 def test_flip_small_tensors_tiled(device, shape, dims, dtype):
     torch.manual_seed(123)
