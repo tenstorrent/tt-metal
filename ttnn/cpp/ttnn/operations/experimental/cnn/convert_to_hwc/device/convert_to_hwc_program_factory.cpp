@@ -664,7 +664,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         config.hw_total,
         config.l1_input_cores,
         config.l1_input_cores);  // TODO: L1 input grid can be different if resharding
-    const uint32_t block_size_width = config.l1_input_shard_width * config.batch_size;  // One block per batch
+    const uint32_t block_size_width =
+        config.l1_input_shard_width * config.batch_size;  // One block per batch (investigating CB dependencies)
     const auto blocked_result = convert_to_hwc::detail::group_transfers_by_output_column_blocks_with_count(
         gather_transfers,
         config.batch_size,
