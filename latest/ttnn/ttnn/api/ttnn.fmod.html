@@ -234,6 +234,12 @@
 <p><em>ttnn.Tensor</em> – the output tensor.</p>
 </dd>
 </dl>
+<p>Binary elementwise operations, C=op(A,B), support input tensors A and B in row major and tile layout, in interleaved or sharded format (height, width or block sharded), in DRAM or L1. A and B are completely independent, and can have different tensor specs.</p>
+<p>Broadcast of A and B operands is supported up to dimension 5 (DNCHW). Any dimensions of size 1 in either A or B will be expanded to match the other input, and data will be duplicated along that dimension. For example, if the shape of A is [2,1,1,32] and B is [1,16,8,1], the output shape will be [2,16,8,32]. The size of dimensions higher than 5 must match between A and B.</p>
+<p>The output C also supports row major and tile layout, interleaved or sharded format (height, width or block sharded), in DRAM or L1. The tensor spec of C is independent of A and B, and can be explicitly set using the optional output tensor input; if not provided, the operation will attempt a best decision at an appropriate tensor spec. The dimensions of C, or equivalently the optional output tensor, must match the broadcast-matched size of A and B.</p>
+<p>Performance considerations:
+Elementwise operations operate natively in tile format, tiled tensors are preferred as an input, and row-major tensors are tilized and untilized during the operation.
+L1 sharded layout is preferred, with no broadcast and matching tensor specs for A, B and C.</p>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
 <p>Supported dtypes, layouts, and ranks:</p>
