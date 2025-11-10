@@ -7,5 +7,5 @@
 #include <tt-metalium/shape.hpp>
 
 namespace ttnn {
-using Shape = tt::tt_metal::Shape;
+using tt::tt_metal::Shape;
 }  // namespace ttnn
