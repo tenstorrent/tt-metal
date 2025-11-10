@@ -30,7 +30,7 @@ bool is_tt_fabric_config(tt::tt_fabric::FabricConfig fabric_config) {
 
 FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config) {
     switch (fabric_config) {
-        case tt::tt_fabric::FabricConfig::FABRIC_1D_RING: return FabricType::TORUS_XY;
+        case tt::tt_fabric::FabricConfig::FABRIC_1D_RING: return FabricType::MESH;
         case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X: return FabricType::TORUS_X;
         case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y: return FabricType::TORUS_Y;
         case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY: return FabricType::TORUS_XY;
