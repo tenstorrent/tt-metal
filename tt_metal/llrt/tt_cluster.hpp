@@ -189,6 +189,17 @@ public:
         return read_hex_vec;
     }
 
+    // NOC multicast write wrappers
+    void noc_multicast_write(
+        const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core_start, tt_cxy_pair core_end, uint64_t addr) const;
+    void noc_multicast_write(
+        const void* mem_ptr,
+        uint32_t sz_in_bytes,
+        ChipId chip_id,
+        CoreCoord core_start,
+        CoreCoord core_end,
+        uint64_t addr) const;
+
     std::optional<std::tuple<uint32_t, uint32_t>> get_tlb_data(const tt_cxy_pair& target) const {
         tt::umd::CoreCoord target_coord = get_soc_desc(target.chip).get_coord_at(target, CoordSystem::TRANSLATED);
         auto tlb_configuration = driver_->get_tlb_configuration(target.chip, target_coord);
