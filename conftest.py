@@ -527,8 +527,6 @@ def bh_1d_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device
     fabric_config = updated_device_params.pop("fabric_config", None)
     fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
     reliability_mode = updated_device_params.pop("reliability_mode", None)
-    if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING:
-        pytest.skip("Skipping 1D ring on blackhole")
     set_fabric(fabric_config, reliability_mode, fabric_tensix_config)
 
     mesh_device = ttnn.open_mesh_device(
@@ -560,8 +558,6 @@ def bh_2d_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device
     fabric_config = updated_device_params.pop("fabric_config", None)
     fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
     reliability_mode = updated_device_params.pop("reliability_mode", None)
-    if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING:
-        pytest.skip("Skipping 1D ring on blackhole")
     set_fabric(fabric_config, reliability_mode, fabric_tensix_config)
     if ttnn.get_num_devices() == 8:
         mesh_device = ttnn.open_mesh_device(
