@@ -95,7 +95,6 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_minimal_matmul_
     const std::vector<GlobalSemaphore>& semaphore,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    std::optional<uint32_t> tiles_per_chunk,
     std::optional<uint32_t> num_workers_per_direction_opt,
     std::optional<uint32_t> num_buffers_per_channel,
     CoreCoord core_grid_offset,
@@ -126,7 +125,6 @@ std::vector<Tensor> strided_all_gather_minimal_matmul_async(
     std::optional<operations::unary::UnaryWithParam> fused_activation = std::nullopt,
     const std::optional<const operations::experimental::minimal_matmul::MinimalMatmulConfig> config = std::nullopt,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    std::optional<uint32_t> tiles_per_chunk = std::nullopt,
     std::optional<uint32_t> num_workers_per_link = std::nullopt,
     std::optional<uint32_t> num_buffers_per_channel = std::nullopt);
 
