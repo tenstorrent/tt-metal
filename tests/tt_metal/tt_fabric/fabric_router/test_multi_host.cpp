@@ -502,7 +502,7 @@ TEST(MultiHost, TestBHQB4x4Fabric1DSanity) {
 
     // Intra-mesh adjacency count is determined by the MGD, independent of fabric config
     const auto& intramesh_connections = get_all_intramesh_connections(control_plane);
-    EXPECT_EQ(intramesh_connections.size(), 96);
+    EXPECT_EQ(intramesh_connections.size(), 128);
 
     for (const auto& [src_node_id, dst_node_id] : intramesh_connections) {
         const auto& direction = control_plane.get_forwarding_direction(src_node_id, dst_node_id);
