@@ -41,13 +41,35 @@ void bind_uniform_operation(nb::module_& mod) {
         mod,
         ttnn::uniform,
         doc,
-        ttnn::nanobind_arguments_t{
+        ttnn::nanobind_overload_t{
+            [](const std::decay_t<decltype(ttnn::uniform)> self,
+               const ttnn::Tensor& input,
+               float from,
+               float to,
+               uint32_t seed,
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               nb::object compute_kernel_config_obj) -> ttnn::Tensor {
+                std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt;
+                if (!compute_kernel_config_obj.is_none()) {
+                    if (nb::isinstance<ttnn::WormholeComputeKernelConfig>(compute_kernel_config_obj)) {
+                        compute_kernel_config = nb::cast<ttnn::WormholeComputeKernelConfig>(compute_kernel_config_obj);
+                    } else if (nb::isinstance<ttnn::GrayskullComputeKernelConfig>(compute_kernel_config_obj)) {
+                        compute_kernel_config = nb::cast<ttnn::GrayskullComputeKernelConfig>(compute_kernel_config_obj);
+                    } else {
+                        throw nb::type_error(
+                            "compute_kernel_config must be WormholeComputeKernelConfig or "
+                            "GrayskullComputeKernelConfig");
+                    }
+                }
+                return self(input, from, to, seed, memory_config, compute_kernel_config);
+            },
             nb::arg("input"),
             nb::arg("from") = 0,
             nb::arg("to") = 1,
             nb::arg("seed") = 0,
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()});
+            nb::arg("compute_kernel_config") = nb::none(),
+        });
 }
 }  // namespace ttnn::operations::uniform
