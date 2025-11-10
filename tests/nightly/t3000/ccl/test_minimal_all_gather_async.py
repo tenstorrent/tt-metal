@@ -11,13 +11,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 from models.common.utility_functions import skip_for_blackhole
 
 from ttnn import ShardTensorToMesh, ConcatMeshToTensor
-
-try:
-    from tracy import signpost
-except ImportError:
-    # Fallback implementation if tracy module is not available
-    def signpost(*args, **kwargs):
-        pass
+from tracy import signpost
 
 
 def is_unsupported_case(
