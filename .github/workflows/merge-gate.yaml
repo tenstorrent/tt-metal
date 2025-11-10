@@ -259,6 +259,24 @@ jobs:
       runner: ${{ matrix.platform }}
       product: tt-nn
 
+  ttnn-mgate-tests:
+    needs: [build, find-changes]
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          { arch: wormhole_b0, runner-label: N300 }
+        ]
+    uses: ./.github/workflows/ttnn-post-commit.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.build.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
+      arch: ${{ matrix.test-group.arch }}
+      runner-label: ${{ matrix.test-group.runner-label }}
+      merge-gate-call: true
+
   ttsim-unit-tests:
     if: ${{ github.ref_name == 'main' ||
             needs.find-changes.outputs.any-code-changed == 'true'
