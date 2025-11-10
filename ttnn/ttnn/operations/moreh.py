@@ -39,13 +39,14 @@ def logsoftmax(
 ):
     # Fast path: if no compute_kernel_config provided, delegate to bound op
     if compute_kernel_config is None:
-        return ttnn._ttnn.operations.moreh.moreh_logsoftmax(
-            input_tensor,
-            dim,
-            output_tensor=output_tensor,
-            strategy=strategy,
-            memory_config=memory_config,
-        )
+        _kwargs = {}
+        if output_tensor is not None:
+            _kwargs["output_tensor"] = output_tensor
+        if strategy is not None:
+            _kwargs["strategy"] = strategy
+        if memory_config is not None:
+            _kwargs["memory_config"] = memory_config
+        return ttnn._ttnn.operations.moreh.moreh_logsoftmax(input_tensor, dim, **_kwargs)
     # Fallback path for nanobind: use normalization softmax, then log
     softmax_out = ttnn.softmax(
         input_tensor,
@@ -68,14 +69,14 @@ def logsoftmax_backward(
 ):
     # Fast path: if no compute_kernel_config provided, delegate to bound op
     if compute_kernel_config is None:
-        return ttnn._ttnn.operations.moreh.moreh_logsoftmax_backward(
-            output_tensor,
-            output_grad_tensor,
-            dim,
-            input_grad_tensor=input_grad_tensor,
-            strategy=strategy,
-            memory_config=memory_config,
-        )
+        _kwargs = {}
+        if input_grad_tensor is not None:
+            _kwargs["input_grad_tensor"] = input_grad_tensor
+        if strategy is not None:
+            _kwargs["strategy"] = strategy
+        if memory_config is not None:
+            _kwargs["memory_config"] = memory_config
+        return ttnn._ttnn.operations.moreh.moreh_logsoftmax_backward(output_tensor, output_grad_tensor, dim, **_kwargs)
     # Fallback path for nanobind: use composite gradient
     # dx = dy - exp(y) * sum(dy, dim, keepdim=True)
     exp_y = ttnn.exp(output_tensor)
