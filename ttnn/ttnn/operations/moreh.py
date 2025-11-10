@@ -56,7 +56,38 @@ def logsoftmax(
     return ttnn.log(softmax_out)
 
 
-logsoftmax_backward = ttnn._ttnn.operations.moreh.moreh_logsoftmax_backward
+def logsoftmax_backward(
+    output_tensor,
+    output_grad_tensor,
+    dim,
+    *,
+    input_grad_tensor=None,
+    strategy=None,
+    memory_config=None,
+    compute_kernel_config=None,
+):
+    # Fast path: if no compute_kernel_config provided, delegate to bound op
+    if compute_kernel_config is None:
+        return ttnn._ttnn.operations.moreh.moreh_logsoftmax_backward(
+            output_tensor,
+            output_grad_tensor,
+            dim,
+            input_grad_tensor=input_grad_tensor,
+            strategy=strategy,
+            memory_config=memory_config,
+        )
+    # Fallback path for nanobind: use composite gradient
+    # dx = dy - exp(y) * sum(dy, dim, keepdim=True)
+    exp_y = ttnn.exp(output_tensor)
+    # Avoid passing compute_kernel_config to sum to sidestep nanobind kw-mismatch
+    sum_dy = sum(output_grad_tensor, dim, keepdim=True)
+    return ttnn.subtract(
+        output_grad_tensor,
+        ttnn.multiply(exp_y, sum_dy),
+        memory_config=memory_config,
+    )
+
+
 matmul = ttnn._ttnn.operations.moreh.moreh_matmul
 matmul_backward = ttnn._ttnn.operations.moreh.moreh_matmul_backward
 mean = ttnn._ttnn.operations.moreh.moreh_mean
