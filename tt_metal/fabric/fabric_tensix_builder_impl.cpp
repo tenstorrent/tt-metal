@@ -455,7 +455,7 @@ FabricTensixDatamoverMuxBuilder::FabricTensixDatamoverMuxBuilder(
     core_id_(core_id),
     noc_x_(noc_x),
     noc_y_(noc_y),
-    config_(config),
+    config_(std::move(config)),
     direction_(direction) {
     channel_connection_liveness_check_disable_array_.fill(false);
     TT_FATAL(config_ != nullptr, "Config cannot be null");
@@ -636,7 +636,7 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_runtime_args(tt::tt_m
     const auto& fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
     if (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::UDM) {
         TT_FATAL(
-            upstream_routers_noc_x_.size() == 0 && upstream_routers_noc_y_.size() == 0,
+            upstream_routers_noc_x_.empty() && upstream_routers_noc_y_.empty(),
             "In UDM mode there should NOT be any upstream routers being set");
     }
     runtime_args.insert(runtime_args.end(), upstream_routers_noc_x_.begin(), upstream_routers_noc_x_.end());
@@ -672,7 +672,7 @@ FabricTensixDatamoverRelayBuilder::FabricTensixDatamoverRelayBuilder(
     core_id_(core_id),
     noc_x_(noc_x),
     noc_y_(noc_y),
-    config_(config),
+    config_(std::move(config)),
     direction_(direction) {
     channel_connection_liveness_check_disable_array_.fill(false);
     TT_FATAL(config_ != nullptr, "Config cannot be null");
