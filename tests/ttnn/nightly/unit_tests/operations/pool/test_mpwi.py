@@ -60,7 +60,6 @@ def test_mpwi_20_core_C_dims(device, in_c):
         None,  # None means auto sharding
         ceil_mode,
         memory_config,
-        False,  # not in place
     )
 
 
@@ -112,6 +111,5 @@ def test_mpwi_general(device, ttnn_dtype, input_spec):
         sharding=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ceil_mode=ceil_mode,
         memory_config=None,
-        in_place=False,
         run_twice=True,
     )
