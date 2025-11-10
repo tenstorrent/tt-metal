@@ -10,6 +10,7 @@ training_config:
   weight_decay: 0.01
   use_moreh_adamw: true
   use_kahan_summation: false
+  data_path: "data/tokenized_shakespeare.csv"
   transformer_config:
     num_heads: 6
     embedding_dim: 384

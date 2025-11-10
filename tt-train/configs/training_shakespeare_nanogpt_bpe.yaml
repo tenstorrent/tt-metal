@@ -8,7 +8,7 @@ training_config:
   max_steps: 5000
   learning_rate: 0.0003
   weight_decay: 0.01
-  tokenizer_type: bpe
+  data_path: "data/tokenized_shakespeare.csv"
 
   transformer_config:
     num_heads: 6

@@ -12,8 +12,6 @@ training_config:
   use_moreh_adamw: true
   use_kahan_summation: false
   gradient_accumulation_steps: 1
-  tokenizer_type: bpe
-  tokenizer_path: "data/gpt2-tokenizer.json"
   data_path: "data/tokenized_shakespeare.csv"
 
   transformer_config:

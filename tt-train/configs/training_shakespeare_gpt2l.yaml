@@ -11,7 +11,7 @@ training_config:
   use_moreh_adamw: true
   use_kahan_summation: false
   gradient_accumulation_steps: 8
-  tokenizer_type: bpe
+  data_path: "data/tokenized_shakespeare.csv"
 
   transformer_config:
     runner_type: memory_efficient
