@@ -141,6 +141,11 @@ Tensor Tensor::pad(
 }
 
 Tensor Tensor::cpu(bool blocking, std::optional<ttnn::QueueId> cq_id) const {
+    // To cpu will always materialize the tensors, always.
+    if (!lazy()->is_materialized()) {
+        ttnn::experimental::lazy::evaluate(lazy());
+    }
+
     return Tensor(get_materialized_tensor().cpu(blocking, cq_id));
 }
 
@@ -257,6 +262,10 @@ uint32_t Tensor::element_size() const { return tensor_impl::element_size_bytes(t
 
 // ttnn Tensor-only methods / constructors
 tt::tt_metal::metal_tensor::Tensor& Tensor::get_materialized_tensor() {
+    if (!lazy_tensor_->is_materialized()) {
+        printf("lazy_tensor_->is_materialized(): %d\n", lazy_tensor_->is_materialized());
+    }
+
     TT_FATAL(lazy_tensor_->is_materialized(), "Tensor is not materialized");
     return lazy_tensor_->materialized_tensor();
 }

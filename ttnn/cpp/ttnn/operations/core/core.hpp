@@ -22,6 +22,34 @@ namespace ttnn {
 namespace operations {
 namespace core {
 
+struct ToDeviceOperation : public ttnn::experimental::lazy::LazyOperation {
+    using tensor_args_t = Tensor;
+    distributed::MeshDevice* mesh_device_;
+    ttsl::optional_reference<const MemoryConfig> mem_config_;
+    std::optional<ttnn::QueueId> cq_id_;
+
+    ToDeviceOperation(
+        distributed::MeshDevice* mesh_device,
+        ttsl::optional_reference<const MemoryConfig> mem_config,
+        std::optional<ttnn::QueueId> cq_id) :
+        mesh_device_(mesh_device), mem_config_(mem_config), cq_id_(cq_id) {}
+
+    virtual std::vector<tt::tt_metal::metal_tensor::Tensor> invoke(
+        const ttnn::experimental::lazy::LazyOperationInputs& inputs) override {
+        TT_FATAL(inputs.size() == 1, "ToDeviceOperation expects exactly one input");
+        TT_FATAL(inputs.at(0)->is_materialized(), "We need a materialized tensor to move to device");
+        return {inputs.at(0)->materialized_tensor().to_device(mesh_device_, mem_config_, cq_id_)};
+    }
+
+    virtual std::string_view name() const override { return "ToDeviceOperation"; }
+
+    virtual tt::stl::hash::hash_t operation_type_id() const override {
+        return tt::stl::hash::type_hash<ToDeviceOperation>;
+    }
+
+    virtual ~ToDeviceOperation() = default;
+};
+
 ttnn::Tensor unsqueeze_to_4D(const ttnn::Tensor& tensor);
 
 ttnn::Tensor squeeze_from_4D(const ttnn::Tensor& tensor, int rank);

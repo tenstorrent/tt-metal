@@ -1399,5 +1399,28 @@ TEST_F(LazyModeFixture, SortOperationLazy) {
     log_info(tt::LogTest, "==== Finished SortOperationLazy test ====");
 }
 
+TEST_F(LazyModeFixture, LazyToDeviceOperation) {
+    lazy::enable();
+    ASSERT_TRUE(lazy::is_lazy_enabled()) << "Lazy mode should be enabled";
+    Shape shape({32, 64});
+
+    const auto input_lazy = ttnn::random::random(shape, DataType::BFLOAT16, Layout::TILE);
+    ASSERT_TRUE(input_lazy.lazy()->is_materialized()) << "input_lazy should be materialized";  // this is true
+
+    const auto device_lazy = ttnn::to_device(input_lazy, device_, std::nullopt);
+    ASSERT_FALSE(device_lazy.lazy()->is_materialized()) << "device_lazy should not be materialized";
+
+    // now lets shake things up a bit
+    // input lazy is in host and is materialized
+    const auto view_result = ttnn::reshape(input_lazy, ttnn::Shape({64, 32}), std::nullopt);
+    ASSERT_FALSE(view_result.lazy()->is_materialized()) << "view_result should not be materialized";
+
+    const auto view_result_device = ttnn::to_device(view_result, device_, std::nullopt);
+    ASSERT_FALSE(view_result_device.lazy()->is_materialized()) << "view_result_device should not be materialized";
+
+    const auto view_result_to_cpu = ttnn::from_device(view_result_device, true, std::nullopt);
+    ASSERT_TRUE(view_result_to_cpu.lazy()->is_materialized()) << "view_result_to_cpu should be materialized";
+}
+
 }  // namespace test
 }  // namespace ttnn
