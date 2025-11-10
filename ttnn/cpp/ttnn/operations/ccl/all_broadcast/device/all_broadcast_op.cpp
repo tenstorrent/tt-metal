@@ -154,10 +154,6 @@ std::vector<Tensor> all_broadcast_impl(
         num_devices,
         tensor_topology_shape);
 
-    ttnn::ccl::Topology ccl_topology = topology;
-    if (num_devices == 2) {
-        ccl_topology = ttnn::ccl::Topology::Linear;
-    }
     log_debug(tt::LogOp, "DEBUG: creating line_fabric with num devices: {}, num links: {}", num_devices, num_links);
     log_debug(tt::LogOp, "DEBUG: line_fabric is created");
 
@@ -166,7 +162,7 @@ std::vector<Tensor> all_broadcast_impl(
             num_links,
             num_devices,
             memory_config.value_or(input_tensor.memory_config()),
-            ccl_topology,
+            topology,
             sub_device_id,
             cluster_axis),
         {input_tensor});

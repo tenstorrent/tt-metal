@@ -1,3 +1,5 @@
+add_compile_options("$<$<CXX_COMPILER_ID:Clang>:-Wunused-parameter>")
+
 add_library(tt_metal)
 add_library(TT::Metalium ALIAS tt_metal)
 add_library(Metalium::Metal ALIAS tt_metal) # For backwards compatibility
@@ -270,7 +272,6 @@ target_link_libraries(
         lite_fabric
         FlatBuffers::FlatBuffers
         TT::Metalium::Logging
-        TT::ScaleoutTools
 )
 
 target_precompile_headers(tt_metal REUSE_FROM TT::CommonPCH)
