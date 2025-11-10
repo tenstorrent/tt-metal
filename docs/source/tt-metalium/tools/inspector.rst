@@ -22,6 +22,7 @@ Configure the Inspector by setting the following environment variables:
    export TT_METAL_INSPECTOR_WARN_ON_WRITE_EXCEPTIONS=0         # optional: enable/disable warnings on logging write exceptions (like disk out of space). Default is `1` (enabled).
    export TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS=localhost:50051 # optional: set the address of the Inspector RPC server. Default is `localhost:50051`.
    export TT_METAL_INSPECTOR_RPC=1                              # optional: enable/disable the Inspector RPC server. Default is `1` (enabled).
+   export TT_METAL_INSPECTOR_TRACK_OPERATIONS=1                 # optional: enable/disable operation tracking with callstacks. Default is `1` (enabled).
 
 Enabling the Inspector will override `TT_METAL_RISCV_DEBUG_INFO` and debugging info will be generated for riscv elfs.
 You can also use unix sockets for the RPC server by setting `TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS` to a unix socket path,

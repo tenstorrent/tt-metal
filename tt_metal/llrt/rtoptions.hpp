@@ -92,6 +92,7 @@ struct InspectorSettings {
     std::filesystem::path log_path;
     std::string rpc_server_address = "localhost:50051";
     bool rpc_server_enabled = true;
+    bool track_operations = true;
 };
 
 class RunTimeOptions {
@@ -299,6 +300,8 @@ public:
     void set_inspector_rpc_server_address(const std::string& address) { inspector_settings.rpc_server_address = address; }
     bool get_inspector_rpc_server_enabled() const { return inspector_settings.rpc_server_enabled; }
     void set_inspector_rpc_server_enabled(bool enabled) { inspector_settings.rpc_server_enabled = enabled; }
+    bool get_inspector_track_operations() const { return inspector_settings.track_operations; }
+    void set_inspector_track_operations(bool enabled) { inspector_settings.track_operations = enabled; }
 
     // Info from DPrint environment variables, setters included so that user can
     // override with a SW call.

@@ -23,6 +23,7 @@ class RpcServer;  // NOLINT(cppcoreguidelines-virtual-class-destructor)
 class Inspector {
 public:
     static bool is_enabled();
+    static bool is_operation_tracking_enabled();
 
     static std::unique_ptr<inspector::Data> initialize();
     static void serialize_rpc();
