@@ -68,17 +68,6 @@ static ttnn::Tensor to_tt(const xt::xarray<float>& x) {
     return ttml::core::from_xtensor(x, &ttml::autograd::ctx().get_device());
 }
 
-[[maybe_unused]] static xt::xarray<float> to_bf16(const xt::xarray<float>& x) {
-    xt::xarray<float> result = xt::empty_like(x);
-    for (size_t i = 0; i < x.size(); ++i) {
-        uint32_t bits = std::bit_cast<uint32_t>(x(i));
-        // BF16: keep sign (1 bit) + exponent (8 bits) + top 7 bits of mantissa, zero out lower 16 bits
-        uint32_t bf16_bits = bits & 0xFFFF0000u;
-        result(i) = std::bit_cast<float>(bf16_bits);
-    }
-    return result;
-}
-
 static size_t compare_tensors(
     const xt::xarray<float>& expected,
     const xt::xarray<float>& actual,
