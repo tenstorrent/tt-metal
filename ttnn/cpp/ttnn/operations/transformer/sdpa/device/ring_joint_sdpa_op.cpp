@@ -154,7 +154,7 @@ void RingJointScaledDotProductAttention::validate(const std::vector<Tensor>& inp
         (N_global - this->logical_n) < N_local,
         "Delta between global (padded) and logical (unpadded) sequence length must be less than local (per device) "
         "sequence length. Got delta: {}, local sequence length: {} "
-        "This implies at least one device will have only padded tokens not have any real tokens to process. Either "
+        "This implies at least one device will have only padded tokens and noreal tokens to process. Either "
         "reduce the ring size or reduce padding by reducing the chunk size.",
         N_global - this->logical_n,
         N_local);
