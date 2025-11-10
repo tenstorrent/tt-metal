@@ -98,6 +98,7 @@ target_sources(
         core/tensor/types.cpp
         core/tensor/unit_mesh/unit_mesh_utils.cpp
         core/tensor/xtensor/partition.cpp
+        core/tensor/to_string.cpp
 )
 target_include_directories(
     ttnn_core

@@ -20,6 +20,7 @@
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/tensor/to_string.hpp"
 
 // NOLINTBEGIN(cppcoreguidelines-no-malloc)
 
@@ -121,7 +122,7 @@ void test_raw_host_memory_pointer() {
         TT_ASSERT(element == output_value);
     }
 
-    tensor_for_printing.print();
+    std::cout << ttnn::to_string(tensor_for_printing) << std::endl;
     /*  Run and Print End   */
 
     /* Alternative Way to Print Start */
@@ -136,7 +137,7 @@ void test_raw_host_memory_pointer() {
 
     Tensor alternative_tensor_for_printing =
         Tensor(std::move(alternative_tensor_for_printing_buffer), shape, DataType::BFLOAT16, Layout::TILE);
-    alternative_tensor_for_printing.print();
+    std::cout << ttnn::to_string(alternative_tensor_for_printing) << std::endl;
 
     for (auto& element : tt::tt_metal::host_buffer::get_as<bfloat16>(alternative_tensor_for_printing)) {
         TT_ASSERT(element == output_value);
