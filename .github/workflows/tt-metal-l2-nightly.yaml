@@ -133,6 +133,7 @@ jobs:
         test-group: [
           { arch: wormhole_b0, runner-label: N150 },
           { arch: wormhole_b0, runner-label: N300 },
+          { arch: blackhole, runner-label: P150 },
         ]
     uses: ./.github/workflows/cpp-post-commit.yaml
     with:
