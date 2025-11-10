@@ -88,7 +88,7 @@ class ModelOptimizations:
                     {
                         "TensorPrecision": {
                             TensorGroup.WQKV: PrecisionSetting.BF16,
-                            TensorGroup.KV_CACHE: PrecisionSetting.BF16,
+                            TensorGroup.KV_CACHE: PrecisionSetting.BF8,
                             TensorGroup.WO: PrecisionSetting.BF16,
                         },
                         "OpFidelity": {
@@ -118,7 +118,7 @@ class ModelOptimizations:
                 {
                     "TensorPrecision": {
                         TensorGroup.WQKV: PrecisionSetting.BF16,
-                        TensorGroup.KV_CACHE: PrecisionSetting.BF16,
+                        TensorGroup.KV_CACHE: PrecisionSetting.BF8,
                         TensorGroup.WO: PrecisionSetting.BF16,
                     },
                     "OpFidelity": {
