@@ -24,7 +24,6 @@ std::vector<ttnn::Tensor> ExecuteStridedAllGatherMinimalMatmulAsync::invoke(
     const std::optional<const minimal_matmul::MinimalMatmulConfig>& config,
     const std::optional<ttnn::MemoryConfig>& memory_config_mm,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
-    std::optional<uint32_t> tiles_per_chunk,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel) {
     return ttnn::operations::experimental::ccl::strided_all_gather_minimal_matmul_async(
@@ -43,7 +42,6 @@ std::vector<ttnn::Tensor> ExecuteStridedAllGatherMinimalMatmulAsync::invoke(
         fused_activation,
         config,
         compute_kernel_config,
-        tiles_per_chunk,
         num_workers_per_link.value_or(
             1),  // Conservatively 1 right now since the all gather core grid is hardcoded from the outside
         num_buffers_per_channel);
