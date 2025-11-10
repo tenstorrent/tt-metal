@@ -411,10 +411,14 @@ class Generator:
             return_logits = False
 
         if self.prev_page_table is None:
-            self.prev_page_table = page_table
+            self.prev_page_table = (
+                page_table.clone()
+            )  # Make sure we reference a fresh page table, in case it has changed
         if torch.any(self.prev_page_table != page_table).item():
             reset_inputs = True
-            self.prev_page_table = page_table
+            self.prev_page_table = (
+                page_table.clone()
+            )  # Make sure we reference a fresh page table, in case it has changed
 
         if self.model.is_decode_setup is False:
             self.model.switch_mode("decode")
