@@ -19,10 +19,7 @@
 #include "compute_kernel_api/transpose_wh.h"
 #include "compute_kernel_api/welford.h"
 #include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
-#include "debug/dprint_pages.h"
-#include "dprint_tensix.h"
-// read dest reg
-#include "debug/dprint.h"
+#include "ttnn/operations/normalization/kernel_util/compute/memory.h"
 #include "compute_kernel_api/compute_kernel_hw_startup.h"
 #include "compute_kernel_api/transpose_wh_dest.h"
 
@@ -43,14 +40,21 @@ inline To _bit_cast_(const From& from) noexcept {
 }
 void MAIN {
     uint32_t NCHt = get_arg_val<uint32_t>(0);
+    namespace kutil = norm::kernel_util;
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
     constexpr uint32_t W = get_compile_time_arg_val(1);
 
     constexpr uint32_t cb_inp = tt::CBIndex::c_0;
     constexpr uint32_t cb_out = tt::CBIndex::c_14;
-    constexpr uint32_t cb_x2 = tt::CBIndex::c_6;  // x**2
+    constexpr uint32_t cb_x2 = tt::CBIndex::c_1;           // x**2
+    constexpr uint32_t cb_reciprocals = tt::CBIndex::c_2;  // recip table
 
     compute_kernel_hw_startup(cb_inp, cb_inp, cb_x2);
+    // Get pointer to the reciprocal LUT
+    using recip_lut_t = std::array<uint32_t, W>;
+    auto p_reciprocals = kutil::compute::memory::get_pointer_to_cb_data<recip_lut_t>(cb_reciprocals, 0);
+    // The number of valid rows in the last tile in width dimension
+    constexpr uint32_t last_tile_rows = (W % 32) == 0 ? 32 : W % 32;
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         constexpr uint32_t dst0 = 0;
@@ -63,12 +67,20 @@ void MAIN {
         welford_init();
 
         tile_regs_acquire();
-        for (uint32_t wt = 0; wt < Wt; wt++) {
+        uint32_t start_N = 0;
+        for (uint32_t wt = 0; wt < (Wt - 1); wt++) {
             cb_wait_front(cb_inp, 1);  // cumulative wait
             transpose_wh_tile(cb_inp, 0, dst0);
-            welford_tile<dst0, dst1, dst2, true, 0>((wt) * 32, W, 0, {});
+            // welford_tile<dst0, dst1, dst2, true, 0>((wt) * 32, W, 0, {});
+            welford_tile<W>(dst0, start_N, *p_reciprocals);
+            start_N += 32;
             cb_pop_front(cb_inp, 1);
         }
+        cb_wait_front(cb_inp, 1);  // cumulative wait
+        transpose_wh_tile(cb_inp, 0, dst0);
+        welford_partial_tile<W>(dst0, start_N, 0, last_tile_rows, *p_reciprocals);
+        cb_pop_front(cb_inp, 1);
+        welford_store_mean_var_to_dst_row<W>(dst1, W - 1, *p_reciprocals);
         // tt-llk/issues/549
         // BUG: using transpose_dest here causes a bug. where the kernel hangs
         //  transpose_wh_dest_init_short();
