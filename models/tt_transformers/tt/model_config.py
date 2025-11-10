@@ -1349,25 +1349,26 @@ class ModelArgs:
         self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
 
     def get_trace_prefill_supported_seq_lens(self):
-        # TODO: If no specific sequence lengths are listed for a model and device, the default one will be used (from the default_supported_seq_lens dictionary)
-        supported_seq_lens = {
-            "Llama-3.1-8B": {
-                "N150": [128, 256, 512, 1024],
-            }
-        }
-
         default_supported_seq_lens = {
             "N150": [128, 256, 512],
-            "N300": [128, 256, 512, 1024, 2048, 4096, 8192],
+            "N300": [128, 256, 512, 1024],
             "T3K": [128, 256, 512, 1024, 2048, 4096, 8192],
             "TG": [128, 256, 512, 1024, 2048, 4096, 8192],
+        }
+
+        # TODO: If no specific sequence lengths are listed for a model and device, the default one will be used (from the default_supported_seq_lens dictionary)
+        model_specific_supported_seq_lens = {
+            "Llama-3.1-8B": {
+                "N150": [128, 256, 512, 1024],
+                "N300": [128, 256, 512, 1024, 2048, 4096, 8192],
+            }
         }
 
         model_name = self.base_model_name
         device_name = self.device_name
 
         # Try model-specific sequence lengths first
-        result = supported_seq_lens.get(model_name, {}).get(device_name)
+        result = model_specific_supported_seq_lens.get(model_name, {}).get(device_name)
         if result:
             return result
 
@@ -1378,9 +1379,6 @@ class ModelArgs:
 
         # No supported sequence lengths found, return empty list
         return []
-
-    def get_supported_trace_prefill_seq_lens(self):
-        return self.trace_prefill_supported_seq_lens
 
     @staticmethod
     def __get_llama_local_params_name(model_name):
@@ -1877,7 +1875,7 @@ class ModelArgs:
         if hasattr(self, "sliding_window") and getattr(self, "sliding_window") != None:
             return False
 
-        allowed_seq_lens = self.get_supported_trace_prefill_seq_lens()
+        allowed_seq_lens = self.trace_prefill_supported_seq_lens
 
         return (
             prefill_seq_len in allowed_seq_lens
