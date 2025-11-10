@@ -151,6 +151,15 @@ void RingJointScaledDotProductAttention::validate(const std::vector<Tensor>& inp
         N_global);
 
     TT_FATAL(
+        (N_global - this->logical_n) < N_local,
+        "Delta between global (padded) and logical (unpadded) sequence length must be less than local (per device) "
+        "sequence length. Got delta: {}, local sequence length: {} "
+        "This implies at least one device will have only padded tokens not have any real tokens to process. Either "
+        "reduce the ring size or reduce padding by reducing the chunk size.",
+        N_global - this->logical_n,
+        N_local);
+
+    TT_FATAL(
         joint_k_shape[2] == L && joint_v_shape[2] == L,
         "Joint sequence length must match. Got joint_K: {}, joint_V: {}",
         joint_k_shape[2],
