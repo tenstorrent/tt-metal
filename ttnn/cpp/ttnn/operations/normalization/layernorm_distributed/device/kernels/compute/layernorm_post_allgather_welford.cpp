@@ -36,8 +36,6 @@ void MAIN {
     uint32_t NCHt = get_arg_val<uint32_t>(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
     constexpr uint32_t W = get_compile_time_arg_val(1);
-    DPRINT << "W: " << W << ENDL();
-    DPRINT << "Wt: " << Wt << ENDL();
     constexpr uint32_t blk = get_compile_time_arg_val(2);
     constexpr uint32_t stats_tiles_cols = get_compile_time_arg_val(3) / 2;
     constexpr uint32_t do_gamma = get_compile_time_arg_val(4);
@@ -164,7 +162,9 @@ void MAIN {
         }
         cb_pop_front(cb_recip_sqrt_var, 1);
 
+        DPRINT << "here" << ENDL();
         if constexpr (do_gamma) {
+            DPRINT << "do_gamma" << ENDL();
             /*
              * x_normed * gamma
              */
@@ -177,6 +177,7 @@ void MAIN {
                 cb_reserve_back(cb_times_gamma_out, blk);
                 ACQ();
                 for (uint32_t wtr = 0; wtr < blk; wtr++) {
+                    UNPACK(tt::compute::common::print_full_tile(cb_gamma, wt + wtr, true));
                     mul_tiles_bcast_rows(cb_x_normed, cb_gamma, wtr, wt + wtr, wtr);
                     pack_tile(wtr, cb_times_gamma_out);
                 }

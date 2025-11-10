@@ -49,7 +49,8 @@ void kernel_main() {
     const auto src_stats = TensorAccessor(stats_args, stats_addr, stats_tile_bytes);
 
 #ifdef FUSE_GAMMA
-    const auto addrg = TensorAccessor(gamma_args, gamma_addr, gamma_stick_size);
+    const auto addrg = TensorAccessor(gamma_args, gamma_addr, get_tile_size(cb_gamma));
+    DPRINT << "gamma_stick_size" << gamma_stick_size << ENDL();
     const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma);
 #endif
 #ifdef FUSE_BETA
@@ -98,19 +99,25 @@ void kernel_main() {
             for (uint32_t wt = 0; wt < Wt; wt += blk) {
 #ifdef FUSE_GAMMA
                 {
-                    cb_reserve_back(cb_gamma, blk);
-                    uint32_t l1_write_addr = get_write_ptr(cb_gamma);
                     for (uint32_t r = 0; r < blk; r++) {
-                        uint64_t gamma_noc_addr = get_noc_addr(y_offset + wt + r, addrg);
-                        noc_async_read(gamma_noc_addr, l1_write_addr, 32 * 2);
-                        gamma_noc_addr = get_noc_addr(l1_write_addr + 32);
+                        DPRINT << " pre_wait_front: " << wt + r << ENDL();
+                        cb_reserve_back(cb_gamma, 1);
+                        DPRINT << " post_wait_front: " << wt + r << ENDL();
+                        // uint64_t gamma_noc_addr = get_noc_addr(y_offset + wt + r, addrg);
+                        uint32_t l1_write_addr = get_write_ptr(cb_gamma);
+                        noc_async_read_page(y_offset + wt + r, addrg, l1_write_addr);
+                        DPRINT << "noc_req sent: " << wt + r << ENDL();
                         noc_async_read_barrier();
-                        noc_async_read(gamma_noc_addr, l1_write_addr + 512, 32);
-                        l1_write_addr += gamma_tile_bytes;
+                        cb_push_back(cb_gamma, 1);
+                        DPRINT << "noc_req done: " << wt << "-" << wt + r << ENDL();
+                        // noc_async_read(gamma_noc_addr, l1_write_addr, 32 * 2);
+                        // // gamma_noc_addr = get_noc_addr(l1_write_addr + 32);
+                        // noc_async_read_barrier();
+                        // noc_async_read(gamma_noc_addr + 512, l1_write_addr + 512, 32 * 2);
+                        // l1_write_addr += gamma_tile_bytes;
                     }
-                    noc_async_read_barrier();
-                    cb_push_back(cb_gamma, blk);
                 }
+                DPRINT << "done gamma" << ENDL();
 #endif
 
 #ifdef FUSE_BETA

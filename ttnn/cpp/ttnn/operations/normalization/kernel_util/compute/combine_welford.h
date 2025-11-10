@@ -20,8 +20,6 @@
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "compute_kernel_api/reg_api.h"
 
-#include "dprint_tensix.h"
-
 namespace norm::kernel_util::compute {
 namespace detail {
 /**
@@ -97,17 +95,12 @@ inline void combine_welford_partials(
     fill_tile(m2_acc_dst, 0.f);
 
     uint32_t acc_n = 0;
-    DPRINT << num_sets << ENDL();
     for (uint32_t b = 0; b < num_sets; b++) {
         // Wait for 1 mean tile and 1 var tile
-        DPRINT << "set: " << b << ENDL();
         cb_wait_front(cb_partials, 2);
 
         const float n_a = acc_n;
         const float n_b = next_set_size_fn(b);
-
-        DPRINT << "n_a: " << n_a << ENDL();
-        DPRINT << "n_b: " << n_b << ENDL();
 
         const float n_a_norm = static_cast<float>(n_a) / (n_a + n_b);
         const float n_b_norm = static_cast<float>(n_b) / (n_a + n_b);
@@ -162,10 +155,7 @@ inline void combine_welford_partials(
 
     // Convert final M2 to var
     binop_with_scalar_tile_init();
-    dprint_tensix_dest_reg(m2_acc_dst);
-    DPRINT << acc_n << ENDL();
     mul_unary_tile(m2_acc_dst, detail::bit_cast<uint32_t>(1.f / acc_n));
-    dprint_tensix_dest_reg(m2_acc_dst);
 
     // Compute 1/sqrt(Var[x] + eps) if enabled
     if (rsqrt_policy.compute) {
