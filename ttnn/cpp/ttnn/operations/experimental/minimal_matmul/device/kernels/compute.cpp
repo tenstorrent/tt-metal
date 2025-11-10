@@ -202,7 +202,6 @@ void MAIN {
                     current_subblock_h,
                     current_subblock_w);
 
-#ifndef FUSE_AG
                 if (k_block == K_num_blocks - 1) {
                     /**
                      * On next iteration we're going to get some reuse on in0 or in1
@@ -210,14 +209,22 @@ void MAIN {
                      *
                      */
                     if (n_block_iter < N_blocks_per_core - 1) {
-                        // going to stride on N, so reuse in0
-                        reuse_in0_block = true;
-                    } else {
+#ifdef FUSE_AG
+                        if (n_block_iter > 0) {
+#endif
+                            // going to stride on N, so reuse in0
+                            reuse_in0_block = true;
+#ifdef FUSE_AG
+                        }
+#endif
+                    }
+#ifndef FUSE_AG
+                    else {
                         // going to stride on M, so reuse in1
                         reuse_in1_block = true;
                     }
-                }
 #endif
+                }
                 if (!reuse_in0_block) {
                     cb_pop_front(in0_cb, in0_block_num_tiles);
                 }
