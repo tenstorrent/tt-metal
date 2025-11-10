@@ -50,6 +50,31 @@ class ProgramConfig:
     fp32_dest_acc_en: bool = False
     packer_l1_acc: bool = False
 
+    # Matmul program config parameters (optional - None means no program config)
+    # Decode QKV projection
+    decode_qkv_cores: tuple[int, int] | None = None
+    decode_qkv_in0_block_w: int = 1
+    decode_qkv_out_subblock_h: int = 1
+    decode_qkv_out_subblock_w: int = 1
+
+    # Decode output projection
+    decode_out_cores: tuple[int, int] | None = None
+    decode_out_in0_block_w: int = 1
+    decode_out_out_subblock_h: int = 1
+    decode_out_out_subblock_w: int = 1
+
+    # Prefill QKV projection
+    prefill_qkv_cores: tuple[int, int] | None = None
+    prefill_qkv_in0_block_w: int = 1
+    prefill_qkv_out_subblock_h: int = 1
+    prefill_qkv_out_subblock_w: int = 1
+
+    # Prefill output projection
+    prefill_out_cores: tuple[int, int] | None = None
+    prefill_out_in0_block_w: int = 1
+    prefill_out_out_subblock_h: int = 1
+    prefill_out_out_subblock_w: int = 1
+
     def __post_init__(self):
         """Validate configuration on creation"""
         if self.decode_q_chunk_size < 0 or self.decode_k_chunk_size <= 0:
@@ -101,4 +126,90 @@ class ProgramConfig:
             math_approx_mode=self.math_approx_mode,
             fp32_dest_acc_en=self.fp32_dest_acc_en,
             packer_l1_acc=self.packer_l1_acc,
+        )
+
+    def _build_matmul_config(
+        self,
+        cores: tuple[int, int],
+        m: int,
+        n: int,
+        k: int,
+        in0_block_w: int,
+        out_subblock_h: int,
+        out_subblock_w: int,
+    ) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
+        """Build matmul program config for attention projections"""
+        core_x, core_y = cores
+        return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
+            in0_block_w=in0_block_w,
+            out_subblock_h=out_subblock_h,
+            out_subblock_w=out_subblock_w,
+            out_block_h=1,
+            out_block_w=1,
+            per_core_M=m // 32,
+            per_core_N=n // 32 // (core_x * core_y),
+            fuse_batch=False,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+
+    def get_decode_qkv_config(self, m: int, n: int, k: int) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig | None:
+        """Get program config for decode QKV projection"""
+        if self.decode_qkv_cores is None:
+            return None
+        return self._build_matmul_config(
+            self.decode_qkv_cores,
+            m,
+            n,
+            k,
+            self.decode_qkv_in0_block_w,
+            self.decode_qkv_out_subblock_h,
+            self.decode_qkv_out_subblock_w,
+        )
+
+    def get_decode_out_config(self, m: int, n: int, k: int) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig | None:
+        """Get program config for decode output projection"""
+        if self.decode_out_cores is None:
+            return None
+        return self._build_matmul_config(
+            self.decode_out_cores,
+            m,
+            n,
+            k,
+            self.decode_out_in0_block_w,
+            self.decode_out_out_subblock_h,
+            self.decode_out_out_subblock_w,
+        )
+
+    def get_prefill_qkv_config(
+        self, m: int, n: int, k: int
+    ) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig | None:
+        """Get program config for prefill QKV projection"""
+        if self.prefill_qkv_cores is None:
+            return None
+        return self._build_matmul_config(
+            self.prefill_qkv_cores,
+            m,
+            n,
+            k,
+            self.prefill_qkv_in0_block_w,
+            self.prefill_qkv_out_subblock_h,
+            self.prefill_qkv_out_subblock_w,
+        )
+
+    def get_prefill_out_config(
+        self, m: int, n: int, k: int
+    ) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig | None:
+        """Get program config for prefill output projection"""
+        if self.prefill_out_cores is None:
+            return None
+        return self._build_matmul_config(
+            self.prefill_out_cores,
+            m,
+            n,
+            k,
+            self.prefill_out_in0_block_w,
+            self.prefill_out_out_subblock_h,
+            self.prefill_out_out_subblock_w,
         )

@@ -17,10 +17,9 @@ def decode_forward(
     weights: ExpertWeights,
     config: ExpertConfig,
     mesh_config,
-    mesh_device,  # ✅ Added mesh_device parameter
+    mesh_device,
     ccl_manager,
     program_config: ProgramConfig,
-    activation_dtype=ttnn.bfloat8_b,
 ):
     """
     Decode forward pass - optimized for single token (seq_len=1).
@@ -34,7 +33,6 @@ def decode_forward(
         mesh_device: TTNN mesh device
         ccl_manager: Communication manager
         program_config: Model-specific program configs
-        activation_dtype: Data type for activations
 
     Returns:
         Expert output [batch, 1, hidden_size]

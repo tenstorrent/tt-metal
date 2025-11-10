@@ -28,7 +28,6 @@ def prefill_forward(
     position_idx,
     page_table,
     ccl_manager,
-    activation_dtype,
 ):
     """
     Prefill forward pass - optimized for sequence processing (seq_len>1).
@@ -46,11 +45,11 @@ def prefill_forward(
         position_idx: Position indices (unused in prefill)
         page_table: Page table for paged attention (optional)
         ccl_manager: Communication manager
-        activation_dtype: Data type for activations
 
     Returns:
         Attention output [batch, seq_len, hidden_size]
     """
+    activation_dtype = ttnn.bfloat16
     batch_size, seq_len, hidden_size = hidden_states.shape
 
     # Validate prefill mode

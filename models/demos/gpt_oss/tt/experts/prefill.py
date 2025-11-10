@@ -48,11 +48,11 @@ def _process_prefill_chunk(
     config: ExpertConfig,
     prefill_sparsity,
     program_config: ProgramConfig,
-    activation_dtype,
     ep,
     tp,
 ):
     """Process a single chunk of the sequence in prefill mode."""
+    activation_dtype = ttnn.bfloat8_b
     TILE_SIZE = 32
     batch_size = hidden_states.shape[0]
     seq_len = hidden_states.shape[1]
@@ -183,11 +183,10 @@ def prefill_forward(
     weights: ExpertWeights,
     config: ExpertConfig,
     mesh_config,
-    mesh_device,  # ✅ Added mesh_device parameter
+    mesh_device,
     ccl_manager,
     program_config: ProgramConfig,
-    activation_dtype,
-    prefill_sparsity,  # ✅ Added prefill_sparsity parameter (cached)
+    prefill_sparsity,
 ):
     """
     Prefill forward pass - optimized for sequence processing (seq_len>1).
@@ -201,12 +200,12 @@ def prefill_forward(
         mesh_device: TTNN mesh device
         ccl_manager: Communication manager
         program_config: Model-specific program configs
-        activation_dtype: Data type for activations
         prefill_sparsity: Cached prefill sparsity mask
 
     Returns:
         Expert output [batch, seq_len, hidden_size]
     """
+    activation_dtype = ttnn.bfloat8_b
     batch_size = hidden_states.shape[0]
     seq_len_global = hidden_states.shape[1]
 
@@ -258,7 +257,6 @@ def prefill_forward(
             config,
             prefill_sparsity,
             program_config,
-            activation_dtype,
             ep,
             tp,
         )

@@ -22,7 +22,6 @@ def decode_forward(
     position_idx,
     page_table,
     ccl_manager,
-    activation_dtype,
 ):
     """
     Decode forward pass - optimized for single token (seq_len=1).
@@ -41,7 +40,6 @@ def decode_forward(
         position_idx: Current position index
         page_table: Page table for paged attention (optional)
         ccl_manager: Communication manager
-        activation_dtype: Data type for activations
 
     Returns:
         Attention output [batch, 1, hidden_size]

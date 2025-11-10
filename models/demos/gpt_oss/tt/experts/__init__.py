@@ -55,7 +55,6 @@ class Experts:
         mesh_config: MeshConfig,
         program_config: ProgramConfig,
         weight_dtype=ttnn.bfloat4_b,
-        activation_dtype=ttnn.bfloat8_b,
         tensor_cache_path=None,
     ):
         """
@@ -69,15 +68,13 @@ class Experts:
             mesh_config: Mesh parallelization configuration
             program_config: Model-specific program configurations
             weight_dtype: Data type for weights (default: bfloat4_b)
-            activation_dtype: Data type for activations (default: bfloat8_b)
             tensor_cache_path: Optional path for weight caching
         """
         self.config = config
         self.mesh_config = mesh_config
-        self.mesh_device = mesh_device  # ✅ Store mesh_device
+        self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self.program_config = program_config
-        self.activation_dtype = activation_dtype
 
         # Load weights
         self.weights = load_expert_weights(
@@ -144,10 +141,9 @@ class Experts:
                 weights=self.weights,
                 config=self.config,
                 mesh_config=self.mesh_config,
-                mesh_device=self.mesh_device,  # ✅ Pass mesh_device
+                mesh_device=self.mesh_device,
                 ccl_manager=self.ccl_manager,
                 program_config=self.program_config,
-                activation_dtype=self.activation_dtype,
             )
         else:
             return prefill_forward(
@@ -156,9 +152,8 @@ class Experts:
                 weights=self.weights,
                 config=self.config,
                 mesh_config=self.mesh_config,
-                mesh_device=self.mesh_device,  # ✅ Pass mesh_device
+                mesh_device=self.mesh_device,
                 ccl_manager=self.ccl_manager,
                 program_config=self.program_config,
-                activation_dtype=self.activation_dtype,
-                prefill_sparsity=self.prefill_sparsity,  # ✅ Pass cached sparsity
+                prefill_sparsity=self.prefill_sparsity,
             )

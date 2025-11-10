@@ -34,7 +34,6 @@ class Attention:
         paged_attention_config=None,
         transformation_mats=None,
         weight_dtype=ttnn.bfloat8_b,
-        activation_dtype=ttnn.bfloat16,
         tensor_cache_path=None,
         create_kv_cache=True,
     ):
@@ -52,7 +51,6 @@ class Attention:
             paged_attention_config: Optional paged attention configuration
             transformation_mats: Optional transformation matrices for RoPE
             weight_dtype: Data type for weights (default: bfloat8_b)
-            activation_dtype: Data type for activations (default: bfloat16)
             tensor_cache_path: Optional path for weight caching
             create_kv_cache: Whether to create KV cache (default: True)
         """
@@ -61,7 +59,6 @@ class Attention:
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self.program_config = program_config
-        self.activation_dtype = activation_dtype
         self.layer_idx = layer_idx
         self.transformation_mats = transformation_mats
         self.paged_attention_config = paged_attention_config
@@ -150,7 +147,6 @@ class Attention:
                 position_idx=position_idx,
                 page_table=page_table,
                 ccl_manager=self.ccl_manager,
-                activation_dtype=self.activation_dtype,
             )
         else:
             return prefill_forward(
@@ -166,5 +162,4 @@ class Attention:
                 position_idx=position_idx,
                 page_table=page_table,
                 ccl_manager=self.ccl_manager,
-                activation_dtype=self.activation_dtype,
             )
