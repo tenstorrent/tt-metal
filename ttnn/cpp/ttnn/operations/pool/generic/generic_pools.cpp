@@ -402,6 +402,24 @@ static std::vector<Tensor> pool2d_DRAM(
                     BufferType::DRAM,
                 })),
         input_tensor_on_device.device());
+    std::vector<std::reference_wrapper<Tensor>> output_tensors = {std::ref(dram_output_tensor)};
+    // Currently return_indices is not supported for DRAM Max Pooling.
+    Tensor dram_output_indices_tensor;
+    if (return_indices) {
+        dram_output_indices_tensor = tt::tt_metal::create_device_tensor(
+            TensorSpec(
+                ttnn::Shape({batch_size, output_height, output_width, channels}),
+                tt::tt_metal::TensorLayout(
+                    DataType::UINT16,
+                    tt::tt_metal::PageConfig(output_layout),
+                    MemoryConfig{
+                        TensorMemoryLayout::INTERLEAVED,
+                        BufferType::DRAM,
+                    })),
+            input_tensor_on_device.device());
+        output_tensors.push_back(std::ref(dram_output_indices_tensor));
+    }
+
     auto dram_slice_config = dram_slice_config_.value();
     TT_FATAL(dram_slice_config.num_slices > 0, "Number of slices must be greater than zero for DRAM slicing.");
     auto pool_slice_attr = Pool2dSliceAttr(
@@ -416,18 +434,23 @@ static std::vector<Tensor> pool2d_DRAM(
         count_include_pad,
         divisor_override,
         applied_shard_scheme,
+        return_indices,
         pool_type,
         dtype,
         output_layout,
         compute_kernel_config,
         input_tensor_on_device.device());
     ttnn::operations::op_slicing::run_sliced_op(
-        input_tensor_on_device, dram_output_tensor, &pool_slice_attr, dram_slice_config);
+        input_tensor_on_device, output_tensors, &pool_slice_attr, dram_slice_config);
 
     if (deallocate_input) {
         input_tensor_on_device.deallocate(true);
     }
-    return {dram_output_tensor};
+    if (return_indices) {
+        return {dram_output_tensor, dram_output_indices_tensor};
+    } else {
+        return {dram_output_tensor};
+    }
 }
 
 static std::vector<Tensor> pool2d(
@@ -610,6 +633,7 @@ Pool2dSliceAttr::Pool2dSliceAttr(
     bool count_include_pad,
     std::optional<int32_t> divisor_override,
     std::optional<const TensorMemoryLayout> applied_shard_scheme,
+    bool return_indices,
     Pool2DType pool_type,
     DataType dtype,
     Layout output_layout,
@@ -625,6 +649,7 @@ Pool2dSliceAttr::Pool2dSliceAttr(
     ceil_mode(ceil_mode),
     count_include_pad(count_include_pad),
     divisor_override(divisor_override),
+    return_indices(return_indices),
     pool_type(pool_type),
     dtype(dtype),
     output_layout(output_layout),
@@ -701,7 +726,7 @@ tt::tt_metal::MemoryConfig Pool2dSliceAttr::get_input_memory_config(
         BufferType::DRAM));
     return sliced_input_tensor_memory_config;
 }
-ttnn::Tensor Pool2dSliceAttr::run_L1_op(
+std::vector<ttnn::Tensor> Pool2dSliceAttr::run_L1_op(
     const ttnn::Tensor& sliced_input_tensor, IOShape output_slice_start, IOShape output_slice_end) {
     auto [output_slice_height_start, output_slice_width_start] = output_slice_start;
     auto [output_slice_height_end, output_slice_width_end] = output_slice_end;
@@ -785,9 +810,9 @@ ttnn::Tensor Pool2dSliceAttr::run_L1_op(
         false,
         true,
         true,
-        false,
+        return_indices,
         dtype,
-        output_layout)[0];
+        output_layout);
 }
 std::string Pool2dSliceAttr::name() { return "Pool2D"; }
 }  // namespace operations::pool

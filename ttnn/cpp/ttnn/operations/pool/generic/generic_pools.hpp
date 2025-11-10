@@ -75,9 +75,6 @@ struct AvgPool2DOp {
 };
 
 class Pool2dSliceAttr : public ttnn::operations::op_slicing::OpSliceAttr {
-    using OptionalRefTensor = std::optional<std::reference_wrapper<ttnn::Tensor>>;
-    using RefTensor = std::reference_wrapper<ttnn::Tensor>;
-
     uint32_t batch_size;
     IOShape input_shape;
     uint32_t channels;
@@ -111,6 +108,7 @@ public:
         bool count_include_pad,
         std::optional<int32_t> divisor_override,
         std::optional<const TensorMemoryLayout> applied_shard_scheme,
+        bool return_indices,
         Pool2DType pool_type,
         DataType dtype,
         Layout output_layout,
@@ -120,7 +118,7 @@ public:
     std::tuple<IOShape, IOShape> get_input_slice(IOShape output_slice_start, IOShape output_slice_end) override;
     uint32_t get_L1_usage() override;
     tt::tt_metal::MemoryConfig get_input_memory_config(IOShape output_slice_start, IOShape output_slice_end) override;
-    ttnn::Tensor run_L1_op(
+    std::vector<ttnn::Tensor> run_L1_op(
         const ttnn::Tensor& sliced_input_tensor, IOShape output_slice_start, IOShape output_slice_end) override;
     std::string name() override;
 };
