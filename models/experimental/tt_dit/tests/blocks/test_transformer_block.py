@@ -22,7 +22,7 @@ from ...utils.tensor import bf16_tensor, bf16_tensor_2dshard
 @pytest.mark.parametrize(
     ("mesh_device", "submesh_shape", "sp_axis", "tp_axis", "num_links", "mesh_id"),
     [
-        pytest.param((2, 4), (1, 4), 0, 1, 1, "1x4sp0tp1", id="1x4sp0tp1"),
+        pytest.param((2, 2), (2, 2), 0, 1, 1, "2x2sp0tp1", id="2x2sp0tp1"),
         pytest.param((2, 4), (2, 4), 0, 1, 1, "2x4sp0tp1", id="2x4sp0tp1"),
         pytest.param((2, 4), (2, 4), 1, 0, 1, "2x4sp1tp0", id="2x4sp1tp0"),
         pytest.param((4, 8), (4, 4), 0, 1, 4, "4x4sp0tp1", id="4x4sp0tp1"),
