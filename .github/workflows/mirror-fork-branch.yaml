@@ -53,9 +53,10 @@ jobs:
           echo "fork_repo=$FORK_REPO" >> $GITHUB_OUTPUT
 
       - name: Checkout base repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          token: ${{ secrets.LLK_UPLIFT_PAT }}
 
       - name: Configure Git
         run: |
@@ -95,7 +96,7 @@ jobs:
         run: |
           TARGET_BRANCH="${{ steps.create_branch.outputs.target_branch }}"
           echo "Pushing branch '$TARGET_BRANCH' to origin"
-          git push origin "$TARGET_BRANCH" --force
+          git push origin "$TARGET_BRANCH" --force-with-lease
 
       - name: Find PR
         id: pr
