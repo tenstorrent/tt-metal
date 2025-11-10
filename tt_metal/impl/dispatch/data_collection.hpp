@@ -2,13 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 #include <device.hpp>
 #include <host_api.hpp>
 #include <stdint.h>
 #include <optional>
 #include "program/program_impl.hpp"
-
-#pragma once
 
 namespace tt {
 namespace tt_metal {

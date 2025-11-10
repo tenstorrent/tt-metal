@@ -2,11 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 #include <cstdint>
 #include <map>
+#include <vector>
+#include <optional>
+#include <fstream>
 #include "data_collection.hpp"
-
-#pragma once
 
 namespace tt::tt_metal {
 
@@ -30,8 +33,8 @@ private:
 // Class to manage & dump dispatch data for each program
 class DataCollector {
 public:
-    DataCollector() {};
-    ~DataCollector() {};
+    DataCollector() = default;
+    ~DataCollector() = default;
 
     void RecordData(
         uint64_t program_id,
