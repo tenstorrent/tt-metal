@@ -96,12 +96,12 @@ jobs:
         uses: tenstorrent/tt-metal/.github/actions/find-changed-files@v0.63.0
 
   build:
-    # if: ${{ github.ref_name == 'main' ||
-    #         needs.find-changes.outputs.cmake-changed == 'true' ||
-    #         needs.find-changes.outputs.any-code-changed == 'true' ||
-    #         needs.find-changes.outputs.docs-changed == 'true' ||
-    #         needs.find-changes.outputs.build-workflows-changed == 'true'
-    #     }}
+    if: ${{ github.ref_name == 'main' ||
+            needs.find-changes.outputs.cmake-changed == 'true' ||
+            needs.find-changes.outputs.any-code-changed == 'true' ||
+            needs.find-changes.outputs.docs-changed == 'true' ||
+            needs.find-changes.outputs.build-workflows-changed == 'true'
+        }}
     needs: find-changes
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
