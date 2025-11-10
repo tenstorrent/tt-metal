@@ -4,4 +4,4 @@
 
 #pragma once
 
-#include "tt_metal/fabric/hw/inc/addrgen_api_common.h"
+#include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
