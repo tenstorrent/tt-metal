@@ -13,12 +13,14 @@ from models.experimental.efficientdetd0.reference.modules import BiFPN
 from models.experimental.efficientdetd0.tt.bifpn import TtBiFPN
 from models.experimental.efficientdetd0.tt.custom_preprocessor import create_custom_mesh_preprocessor
 from ttnn.model_preprocessing import infer_ttnn_module_args
+from models.experimental.efficientdetd0.common import load_torch_model_state
+
 
 torch.manual_seed(0)
 
 
 @pytest.mark.parametrize(
-    "num_channels, conv_channels, first_time, attention, inputs",
+    "num_channels, conv_channels, first_time, attention, inputs, weight_key",
     [
         (
             64,  # num_channels
@@ -30,6 +32,7 @@ torch.manual_seed(0)
                 torch.randn(1, 112, 32, 32),
                 torch.randn(1, 320, 16, 16),
             ),
+            "bifpn.0",
         ),
         (
             64,
@@ -43,6 +46,7 @@ torch.manual_seed(0)
                 torch.randn([1, 64, 8, 8]),
                 torch.randn([1, 64, 4, 4]),
             ),
+            "bifpn.1",
         ),
     ],
 )
@@ -53,6 +57,7 @@ def test_bifpn(
     first_time,
     attention,
     inputs,
+    weight_key,
     device,
 ):
     PCC_THRESHOLD = 0.99
@@ -67,10 +72,7 @@ def test_bifpn(
         attention=attention,
         use_p8=False,
     ).eval()
-    # load_torch_model_state(torch_model, "Bi")
-
-    # Convert model to bfloat16 to match input dtype
-    # torch_model = torch_model.to(torch.bfloat16)
+    load_torch_model_state(torch_model, weight_key)
 
     # Run PyTorch forward pass
     with torch.no_grad():

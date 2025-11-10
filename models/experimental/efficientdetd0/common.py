@@ -7,12 +7,18 @@ import torch
 from loguru import logger
 
 from models.experimental.efficientdetd0.reference.efficientdet import EfficientDetBackbone
-from models.experimental.efficientdetd0.reference.modules import Regressor, Classifier
+from models.experimental.efficientdetd0.reference.modules import BiFPN, Regressor, Classifier
 
 
 KEY_MAPPINGS = {
     "depthwise_conv.conv": "depthwise_conv",
     "pointwise_conv.conv": "pointwise_conv",
+    "p3_down_channel.0.conv": "p3_down_channel.0",
+    "p4_down_channel.0.conv": "p4_down_channel.0",
+    "p5_down_channel.0.conv": "p5_down_channel.0",
+    "p5_to_p6.0.conv": "p5_to_p6.0",
+    "p4_down_channel_2.0.conv": "p4_down_channel_2.0",
+    "p5_down_channel_2.0.conv": "p5_down_channel_2.0",
 }
 
 
@@ -51,31 +57,40 @@ def load_torch_model_state(torch_model: torch.nn.Module = None, layer_name: str 
     # Load checkpoint
     state_dict = torch.load(weights_path, map_location="cpu")
 
-    # Get keys
-    checkpoint_keys = set(state_dict.keys())
-
-    # Get key mappings
-    logger.info("Mapping keys...")
-    key_mapping = {}
-    for checkpoint_key in checkpoint_keys:  # pickle key
-        mapped_key = map_single_key(checkpoint_key)
-        key_mapping[checkpoint_key] = mapped_key
-
-    # Apply mappings
-    mapped_state_dict = {}
-    for checkpoint_key, model_key in key_mapping.items():
-        mapped_state_dict[model_key] = state_dict[checkpoint_key]
-    logger.debug(f"Mapped {len(mapped_state_dict)} weights")
-
     if isinstance(
         torch_model,
         (
+            BiFPN,
             Regressor,
             Classifier,
         ),
     ):
+        # Get keys
+        checkpoint_keys = set(state_dict.keys())
+
+        # Get key mappings
+        logger.info("Mapping keys...")
+        key_mapping = {}
+        for checkpoint_key in checkpoint_keys:  # pickle key
+            mapped_key = map_single_key(checkpoint_key)
+            key_mapping[checkpoint_key] = mapped_key
+
+        # Apply mappings
+        mapped_state_dict = {}
+        for checkpoint_key, model_key in key_mapping.items():
+            mapped_state_dict[model_key] = state_dict[checkpoint_key]
+        logger.debug(f"Mapped {len(mapped_state_dict)} weights")
+
+        # Load weights
         torch_model = load_partial_state(torch_model, mapped_state_dict, layer_name)
     elif isinstance(torch_model, EfficientDetBackbone):
+        ds_state_dict = {k: v for k, v in state_dict.items()}
+        mapped_state_dict = {}
+        for (name1, parameter1), (name2, parameter2) in zip(torch_model.state_dict().items(), ds_state_dict.items()):
+            if isinstance(parameter2, torch.FloatTensor):
+                mapped_state_dict[name1] = parameter2
+
+        # Load weights
         torch_model.load_state_dict(mapped_state_dict, strict=True)
     else:
         raise NotImplementedError("Unknown torch model. Weight loading not implemented")

@@ -17,10 +17,10 @@ from models.experimental.efficientdetd0.tt.custom_preprocessor import (
     create_custom_mesh_preprocessor,
 )
 from tests.ttnn.utils_for_testing import check_with_pcc
+from models.experimental.efficientdetd0.common import load_torch_model_state
+
 
 torch.manual_seed(0)
-
-PCC_THRESHOLD = 0.99
 
 
 @pytest.mark.parametrize(
@@ -31,12 +31,14 @@ PCC_THRESHOLD = 0.99
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_efficient_det(batch, channels, height, width, device):
+    PCC_THRESHOLD = 0.99
+    num_classes = 90
     torch_model = EfficientDetBackbone(
-        num_classes=80,
-        compound_coef=0,
+        num_classes=num_classes,
         load_weights=False,
-    )
-    torch_model.eval()
+    ).eval()
+    load_torch_model_state(torch_model)
+
     # Run PyTorch forward pass
     torch_inputs = torch.randn(batch, channels, height, width)
     with torch.no_grad():
@@ -47,7 +49,6 @@ def test_efficient_det(batch, channels, height, width, device):
         custom_preprocessor=create_custom_mesh_preprocessor(None),
         device=device,
     )
-    # module_args = infer_module_args(model=torch_model, input=torch_inputs)
     module_args = infer_torch_module_args(model=torch_model, input=torch_inputs)
 
     # Create TTNN BiFPN model
@@ -55,13 +56,11 @@ def test_efficient_det(batch, channels, height, width, device):
         device=device,
         parameters=parameters,
         conv_params=module_args,
-        num_classes=80,
-        compound_coef=0,
+        num_classes=num_classes,
     )
     # Convert inputs to TTNN format
     ttnn_input_tensor = ttnn.from_torch(
         torch_inputs,
-        # torch_inputs.permute(0, 2, 3, 1),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,

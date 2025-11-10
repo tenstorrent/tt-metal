@@ -98,14 +98,14 @@ def custom_preprocessor(
                     continue  # Maxpool case
         # Store attention weights if using fast attention
         if model.attention:
-            parameters["p6_w1"] = model.p6_w1.data
-            parameters["p5_w1"] = model.p5_w1.data
-            parameters["p4_w1"] = model.p4_w1.data
-            parameters["p3_w1"] = model.p3_w1.data
-            parameters["p4_w2"] = model.p4_w2.data
-            parameters["p5_w2"] = model.p5_w2.data
-            parameters["p6_w2"] = model.p6_w2.data
-            parameters["p7_w2"] = model.p7_w2.data
+            parameters["p6_w1"] = ttnn.from_torch(model.p6_w1.data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            parameters["p5_w1"] = ttnn.from_torch(model.p5_w1.data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            parameters["p4_w1"] = ttnn.from_torch(model.p4_w1.data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            parameters["p3_w1"] = ttnn.from_torch(model.p3_w1.data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            parameters["p4_w2"] = ttnn.from_torch(model.p4_w2.data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            parameters["p5_w2"] = ttnn.from_torch(model.p5_w2.data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            parameters["p6_w2"] = ttnn.from_torch(model.p6_w2.data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            parameters["p7_w2"] = ttnn.from_torch(model.p7_w2.data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     elif isinstance(model, Efficientnetb0):
         parameters = {}
         parameters["_conv_stem"] = _preprocess_conv_bn_parameter(model._conv_stem, model._bn0)

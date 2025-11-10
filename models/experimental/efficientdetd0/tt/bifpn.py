@@ -7,8 +7,8 @@ from models.experimental.efficientdetd0.tt.utils import (
 )
 
 
-def weight_modifier(w, epsilon, three_weights, device):
-    weight = ttnn.from_torch(w, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+def weight_modifier(weight, epsilon, three_weights, device):
+    # weight = ttnn.from_torch(w, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     # Convert to interleaved if sharded
     w_relu = ttnn.relu(weight)
     w_sum = ttnn.sum(w_relu, dim=0)
