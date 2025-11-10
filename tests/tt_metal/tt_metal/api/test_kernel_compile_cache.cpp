@@ -55,7 +55,7 @@ TEST_F(MeshDeviceFixture, TensixTestIncompleteKernelBinaryWithPersistentCache) {
             device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
 
         const auto& kernels = program.impl().get_kernels(static_cast<uint32_t>(HalProgrammableCoreType::TENSIX));
-        const std::string full_kernel_name = KernelImpl::from(*kernels.at(kernel_handle)).get_full_kernel_name();
+        const std::string full_kernel_name = kernels.at(kernel_handle)->get_full_kernel_name();
 
         const std::string successful_marker_path =
             build_state.get_out_path() + full_kernel_name + SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME;
@@ -113,10 +113,8 @@ TEST_F(MeshDeviceFixture, TensixTestEquivalentDataMovementKernelsWithDifferentPr
             device->build_id(), tensix_core_type, dm_class_idx, riscv_1_id);
 
         const auto& kernels = program.impl().get_kernels(static_cast<uint32_t>(HalProgrammableCoreType::TENSIX));
-        const std::string full_kernel_name_riscv_0 =
-            KernelImpl::from(*kernels.at(kernel_handle_riscv_0)).get_full_kernel_name();
-        const std::string full_kernel_name_riscv_1 =
-            KernelImpl::from(*kernels.at(kernel_handle_riscv_1)).get_full_kernel_name();
+        const std::string full_kernel_name_riscv_0 = kernels.at(kernel_handle_riscv_0)->get_full_kernel_name();
+        const std::string full_kernel_name_riscv_1 = kernels.at(kernel_handle_riscv_1)->get_full_kernel_name();
 
         const std::string elf_file_path_riscv_0 = build_state_riscv_0.get_target_out_path(full_kernel_name_riscv_0);
         const std::string elf_file_path_riscv_1 = build_state_riscv_1.get_target_out_path(full_kernel_name_riscv_1);

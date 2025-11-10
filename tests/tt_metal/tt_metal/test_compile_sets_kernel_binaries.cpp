@@ -190,11 +190,11 @@ int main(int argc, char** argv) {
             // Run iteration to get golden
             auto mask = tt_metal::BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key();
             tt_metal::detail::CompileProgram(device, program);
-            compute_binaries.insert({mask, tt_metal::KernelImpl::from(*compute_kernel).binaries(mask)});
+            compute_binaries.insert({mask, compute_kernel->binaries(mask)});
             TT_FATAL(compute_binaries.at(mask).size() == 3, "Expected 3 Compute binaries!");
-            brisc_binaries.insert({mask, tt_metal::KernelImpl::from(*riscv0_kernel).binaries(mask)});
+            brisc_binaries.insert({mask, riscv0_kernel->binaries(mask)});
             TT_FATAL(brisc_binaries.at(mask).size() == 1, "Expected 1 BRISC binary!");
-            ncrisc_binaries.insert({mask, tt_metal::KernelImpl::from(*riscv1_kernel).binaries(mask)});
+            ncrisc_binaries.insert({mask, riscv1_kernel->binaries(mask)});
             TT_FATAL(ncrisc_binaries.at(mask).size() == 1, "Expected 1 NCRISC binary!");
         }
 
@@ -256,15 +256,9 @@ int main(int argc, char** argv) {
                         }
                         TT_FATAL(
                             compute_kernel != nullptr && riscv0_kernel != nullptr && riscv1_kernel != nullptr, "Error");
-                        TT_FATAL(
-                            tt_metal::KernelImpl::from(*compute_kernel).binaries(mask) == compute_binaries.at(mask),
-                            "Error");
-                        TT_FATAL(
-                            tt_metal::KernelImpl::from(*riscv0_kernel).binaries(mask) == brisc_binaries.at(mask),
-                            "Error");
-                        TT_FATAL(
-                            tt_metal::KernelImpl::from(*riscv1_kernel).binaries(mask) == ncrisc_binaries.at(mask),
-                            "Error");
+                        TT_FATAL(compute_kernel->binaries(mask) == compute_binaries.at(mask), "Error");
+                        TT_FATAL(riscv0_kernel->binaries(mask) == brisc_binaries.at(mask), "Error");
+                        TT_FATAL(riscv1_kernel->binaries(mask) == ncrisc_binaries.at(mask), "Error");
 
                         std::string kernel_name = get_latest_kernel_binary_path(
                             tt_metal::BuildEnvManager::get_instance()

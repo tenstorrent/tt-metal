@@ -323,8 +323,8 @@ uint32_t finalize_kernel_bins(
         std::ranges::fill(kg->kernel_text_offsets, 0);
         for (auto kernel_id : kg->kernel_ids) {
             const auto& kernel = kernels.at(kernel_id);
-            const auto& binaries = KernelImpl::from(*kernel).binaries(
-                BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key());
+            const auto& binaries =
+                kernel->binaries(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key());
             uint32_t num_binaries = kernel->expected_num_binaries();
             TT_ASSERT(kernel->get_kernel_programmable_core_type() == programmable_core_type);
             for (uint32_t i = 0; i < num_binaries; i++) {

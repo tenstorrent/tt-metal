@@ -44,8 +44,7 @@ struct KernelSource {
     }
 };
 
-
-class Kernel {
+class Kernel : public JitBuildSettings {
 public:
     using Config = std::variant<DataMovementConfig, EthernetConfig, ComputeConfig>;
 
@@ -87,7 +86,11 @@ public:
 
     std::string compute_hash() const;
 
-    virtual const std::string& get_full_kernel_name() const = 0;
+    const std::string& get_full_kernel_name() const override;
+    void process_defines(std::function<void(const std::string& define, const std::string& value)>) const override;
+    void process_compile_time_args(std::function<void(const std::vector<uint32_t>& values)>) const override;
+    void process_named_compile_time_args(
+        std::function<void(const std::unordered_map<std::string, uint32_t>& named_args)>) const override;
 
     void validate_runtime_args_size(size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord& logical_core);
     void set_runtime_args(const CoreCoord &logical_core, stl::Span<const uint32_t> runtime_args);
@@ -106,7 +109,8 @@ public:
     void add_defines(const std::map<std::string, std::string>& defines);
 
     virtual uint8_t expected_num_binaries() const = 0;
-    virtual uint32_t get_binary_packed_size(IDevice* device, int index) const = 0;
+    uint32_t get_binary_packed_size(IDevice* device, int index) const;
+    uint32_t get_binary_text_size(IDevice* device, int index) const;
 
     bool is_idle_eth() const;
 
@@ -114,7 +118,27 @@ public:
     // Note: device is nullable
     detail::KernelMeta meta(IDevice* device) const;
 
+    // Binary management (moved from KernelImpl)
+    const std::vector<const ll_api::memory*>& binaries(uint64_t build_key) const;
+    void set_binaries(uint64_t build_key, std::vector<const ll_api::memory*>&& binaries);
+    bool binaries_exist_on_disk(const IDevice* device) const;
+
+    virtual void set_build_options(JitBuildOptions& /*build_options*/) const {}
+    virtual void generate_binaries(IDevice* device, JitBuildOptions& build_options) const = 0;
+    virtual void read_binaries(IDevice* device) = 0;
+
+    void register_kernel_elf_paths_with_watcher(IDevice& device) const;
+
 protected:
+    Kernel(
+        HalProgrammableCoreType programmable_core_type,
+        HalProcessorClassType processor_class,
+        const KernelSource& kernel_src,
+        const CoreRangeSet& core_range_set,
+        const std::vector<uint32_t>& compile_args,
+        const std::map<std::string, std::string>& defines,
+        const std::unordered_map<std::string, uint32_t>& named_compile_args);
+
     HalProgrammableCoreType programmable_core_type_;
     HalProcessorClassType processor_class_;
 
@@ -136,83 +160,21 @@ protected:
     std::map<std::string, std::string> defines_;        // preprocessor defines. this is to be able to generate generic instances.
     std::set<CoreCoord> logical_cores_;
 
+    // Build key -> binaries (moved from KernelImpl)
+    std::unordered_map<uint64_t, std::vector<const ll_api::memory*>> binaries_;
+
     virtual std::string config_hash() const = 0;
+
+    std::vector<std::string> file_paths(IDevice& device) const;
 
 private:
     void register_kernel_with_watcher();
-
-    Kernel(
-        HalProgrammableCoreType programmable_core_type,
-        HalProcessorClassType processor_class,
-        const KernelSource& kernel_src,
-        const CoreRangeSet& core_range_set,
-        const std::vector<uint32_t>& compile_args,
-        const std::map<std::string, std::string>& defines = {},
-        const std::unordered_map<std::string, uint32_t>& named_compile_args = {});
-
-    // Only allow KernelImpl to inherit from Kernel.
-    friend class KernelImpl;
 };
 
-class KernelImpl : public Kernel, public JitBuildSettings {
-public:
-    const std::vector<const ll_api::memory*>& binaries(uint64_t build_key) const;
-    uint32_t get_binary_packed_size(IDevice* device, int index) const override;
-    uint32_t get_binary_text_size(IDevice* device, int index) const;
-    void set_binaries(uint64_t build_key, std::vector<const ll_api::memory*>&& binaries);
-
-    const std::string& get_full_kernel_name() const override;
-    void process_defines(std::function<void(const std::string& define, const std::string& value)>) const override;
-    void process_compile_time_args(std::function<void(const std::vector<uint32_t>& values)>) const override;
-    void process_named_compile_time_args(
-        std::function<void(const std::unordered_map<std::string, uint32_t>& named_args)>) const override;
-    bool binaries_exist_on_disk(const IDevice* device) const;
-
-    virtual void set_build_options(JitBuildOptions& /*build_options*/) const {}
-    virtual void generate_binaries(IDevice* device, JitBuildOptions& build_options) const = 0;
-    virtual void read_binaries(IDevice* device) = 0;
-
-    void register_kernel_elf_paths_with_watcher(IDevice& device) const;
-
-    static KernelImpl& from(Kernel& kernel) {
-        // KernelImpl and subclasses are the only implementations of Kernel.
-        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast)
-        return static_cast<KernelImpl&>(kernel);
-    }
-
-    static const KernelImpl& from(const Kernel& kernel) {
-        // KernelImpl and subclasses are the only implementations of Kernel.
-        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast)
-        return static_cast<const KernelImpl&>(kernel);
-    }
-
-protected:
-    KernelImpl(
-        HalProgrammableCoreType programmable_core_type,
-        HalProcessorClassType processor_class,
-        const KernelSource& kernel_src,
-        const CoreRangeSet& core_range_set,
-        const std::vector<uint32_t>& compile_args,
-        const std::map<std::string, std::string>& defines,
-        const std::unordered_map<std::string, uint32_t>& named_compile_args) :
-        Kernel(
-            programmable_core_type,
-            processor_class,
-            kernel_src,
-            core_range_set,
-            compile_args,
-            defines,
-            named_compile_args) {}
-    // Build key -> binaries
-    std::unordered_map<uint64_t, std::vector<const ll_api::memory*>> binaries_;
-
-    std::vector<std::string> file_paths(IDevice& device) const;
-};
-
-class DataMovementKernel : public KernelImpl {
+class DataMovementKernel : public Kernel {
 public:
     DataMovementKernel(const KernelSource& kernel_src, const CoreRangeSet& cr_set, const DataMovementConfig& config) :
-        KernelImpl(
+        Kernel(
             HalProgrammableCoreType::TENSIX,
             HalProcessorClassType::DM,
             kernel_src,
@@ -249,10 +211,10 @@ private:
     std::string config_hash() const override;
 };
 
-class EthernetKernel : public KernelImpl {
+class EthernetKernel : public Kernel {
 public:
     EthernetKernel(const KernelSource& kernel_src, const CoreRangeSet& cr_set, const EthernetConfig& config) :
-        KernelImpl(
+        Kernel(
             config.eth_mode == Eth::IDLE ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::ACTIVE_ETH,
             HalProcessorClassType::DM,
             kernel_src,
@@ -289,10 +251,10 @@ private:
     std::string config_hash() const override;
 };
 
-class ComputeKernel : public KernelImpl {
+class ComputeKernel : public Kernel {
 public:
     ComputeKernel(const KernelSource& kernel_src, const CoreRangeSet& cr_set, const ComputeConfig& config) :
-        KernelImpl(
+        Kernel(
             HalProgrammableCoreType::TENSIX,
             HalProcessorClassType::COMPUTE,
             kernel_src,
