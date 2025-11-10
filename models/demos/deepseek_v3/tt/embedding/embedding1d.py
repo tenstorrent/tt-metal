@@ -77,7 +77,7 @@ class Embedding1D(AbstractModule):
                     mesh_device=mesh_device,
                     remove_dims=True,
                     dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
             }
@@ -156,13 +156,10 @@ class Embedding1D(AbstractModule):
     @classmethod
     def create_state(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device, ccl: CCL) -> dict[str, ttnn.Tensor]:
         """Create the state for the embedding module."""
+        # Store CCL object for runtime semaphore initialization
         return {
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
-            "all_gather": {
-                "multi_device_global_semaphore": ccl.get_gather_sem(0),
-                "barrier_semaphore": ccl.get_barrier_sem(0),
-                "num_links": ccl.get_max_links(0),
-            },
+            "ccl": ccl,
         }
 
     @classmethod
@@ -192,7 +189,12 @@ class Embedding1D(AbstractModule):
         embeddings_tc = ttnn.typecast(embeddings, **cfg["typecast"])
         ttnn.deallocate(embeddings)
 
-        embeddings_ag = ttnn.experimental.all_gather_async(embeddings_tc, **cfg["all_gather"])
+        # CCL runtime initialization in execution order
+        ccl = cfg["ccl"]
+
+        embeddings_ag = ttnn.experimental.all_gather_async(
+            embeddings_tc, **ccl.populate_all_gather_runtime_args(cfg["all_gather"])
+        )
         ttnn.deallocate(embeddings_tc)
 
         assert len(embeddings_ag.shape) == 4

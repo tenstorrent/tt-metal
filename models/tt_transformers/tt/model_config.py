@@ -106,7 +106,12 @@ class ModelOptimizations:
                 base_model_name.startswith("Llama-3")
                 or base_model_name.startswith("Mistral-7B")
                 or base_model_name.startswith("Phi-3-mini")
+                or base_model_name.startswith("phi-4")
             ):
+                if model_name.startswith("phi-4"):
+                    logger.info(
+                        f"Model {model_name} is running out of DRAM memory for weight fetching under standard accuracy settings, using BFP8 for WQKV"
+                    )
                 logger.info(
                     f"Llama 3, Mistral 7B and Phi3-mini models test insensitive to attention precision, using BFP8 attention and kv-cache with FP16 MLP accumulation even in accuracy mode"
                 )
@@ -508,6 +513,7 @@ class ModelArgs:
         elif HF_MODEL:
             self.CKPT_DIR = HF_MODEL
             self.TOKENIZER_PATH = HF_MODEL
+
             if not self.CACHE_PATH:
                 self.CACHE_PATH = os.path.join("model_cache", HF_MODEL, self.device_name)
             else:  # For HF models, always append the device name (e.g. N150/N300/T3K/TG) to the cache path
@@ -568,7 +574,6 @@ class ModelArgs:
                     f"No local params found for {self.CKPT_DIR}, dummy weights are not supported for this model"
                 )
             self._set_model_params(self.LOCAL_LLAMA_PARAMS[local_params])
-
         # Set the max number of tokens for each prefill chunk based on the model and device
         max_prefill_chunk_size_div1024 = os.getenv("MAX_PREFILL_CHUNK_SIZE")
         if max_prefill_chunk_size_div1024 is None:
@@ -582,11 +587,13 @@ class ModelArgs:
                 "Llama-3.1-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
                 "Llama-3.2-90B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
                 "DeepSeek-R1-Distill-Llama-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
-                "Qwen2.5-7B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
+                "Qwen2.5-7B": {"N150": 4, "N300": 32, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 16, "TG": 128, "P150x4": 128},
                 "Qwen2.5-VL-3B": {"N150": 128, "N300": 128, "T3K": None, "TG": None, "P150x4": None},
+                "Qwen2.5-VL-7B": {"N150": 64, "N300": 128, "T3K": None, "TG": None, "P150x4": None},
                 "Qwen2.5-VL-32B": {"N150": None, "N300": None, "T3K": 64, "TG": None, "P150x4": None},
                 "Qwen2.5-VL-72B": {"N150": None, "N300": None, "T3K": 32, "TG": None, "P150x4": None},
+                "DeepSeek-R1-Distill-Qwen-14B": {"N150": 4, "N300": 64, "T3K": 128, "TG": None, "P150x4": None},
                 "Phi-3.5-mini-instruct": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Phi-3-mini-128k-instruct": {"N150": 32, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "QwQ-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
@@ -1610,6 +1617,9 @@ class ModelArgs:
 
         self.query_pre_attn_scalar = text_config.get("query_pre_attn_scalar", None)
 
+        # Sliding window attention
+        self.sliding_window = text_config.get("sliding_window", None)
+
         # Configurable MLP activation type
         self.mlp_activation_type = self._get_hidden_activation_type(text_config)
 
@@ -1757,17 +1767,43 @@ class ModelArgs:
         self._set_params_from_dict(config, is_hf=True)
 
         # compatibility with _set_params
-        if ("llama" in self.model_name.lower()) and ("3.2-11B" in checkpoint_dir):
-            logger.warning(f"-Vision is removed from model_name {self.model_name}")
-            # TODO: do not remove "-Vision" part
-            self.model_name = "Llama-3.2-11B" + ("-Instruct" if self.instruct else "")
-        elif ("llama" in self.model_name.lower()) and ("3.1-70B" in checkpoint_dir):
-            self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
-        elif ("llama" in self.model_name.lower()) and ("3.2-90B" in checkpoint_dir):
-            logger.warning(f"-Vision is removed from model_name {self.model_name}")
-            # TODO: do not remove "-Vision" part
-            self.model_name = "Llama-3.2-90B" + ("-Instruct" if self.instruct else "")
-            self.is_90b = True
+        if "llama" in self.model_name.lower():
+            self.orig_context_len = 8192
+            if "3.2-1B" in checkpoint_dir:
+                self.rope_scaling_factor = 32
+            elif "3.2-3B" in checkpoint_dir:
+                self.rope_scaling_factor = 32
+            elif "3.1-8B" in checkpoint_dir:
+                self.rope_scaling_factor = 8
+            elif "3.2-11B" in checkpoint_dir:
+                logger.warning(f"-Vision is removed from model_name {self.model_name}")
+                # TODO: do not remove "-Vision" part
+                self.model_name = "Llama-3.2-11B" + ("-Instruct" if self.instruct else "")
+                self.rope_scaling_factor = 8  # shared with 3.1-8B
+            elif "3.1-70B" in checkpoint_dir:
+                self.rope_scaling_factor = 8
+                self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
+            elif "3.2-90B" in checkpoint_dir:
+                logger.warning(f"-Vision is removed from model_name {self.model_name}")
+                # TODO: do not remove "-Vision" part
+                self.model_name = "Llama-3.2-90B" + ("-Instruct" if self.instruct else "")
+                self.rope_scaling_factor = 8
+                self.is_90b = True
+            else:
+                self.rope_scaling_factor = None
+                self.orig_context_len = None
+                logger.warning(f"Unknown Meta-style model: {checkpoint_dir}")
+            self.rope_scaling = (
+                rope_scaling_model_factory(
+                    {
+                        "rope_type": "llama3",
+                        "factor": self.rope_scaling_factor,
+                        "original_max_position_embeddings": self.orig_context_len,
+                    }
+                )
+                if self.rope_scaling_factor is not None
+                else None
+            )
 
     def __repr__(self):
         return f"""ModelArgs(
@@ -1790,6 +1826,28 @@ class ModelArgs:
 
     def is_llama_vision(self):
         return ("llama" in self.CKPT_DIR.lower()) and ("vision" in self.CKPT_DIR.lower())
+
+    def can_enable_trace(self, prefill_seq_len):
+        """
+        This function is used to determine if trace should be enabled for the prefill.
+        Tracing is used only for certain sequence lengths, because for bigger sequence lengths, op2op gaps are already small, so we don't need tracing.
+        If we have chunked prefill, we disable tracing because there is no support to pass parameters such as chunk_start and chunk_end to trace.
+        There is no support to pass them as a tensor, and then inside the trace read it as a number.
+        # TODO: Support sliding window attention - This PR disabled tracing if a model uses sliding window attention, because this PR mainly covers models without sliding window attention. (for example,Llama-8B).
+        """
+        # Trace in prefill is currently supported only for Llama-3.1-8B, Llama-3.1-70B, Llama-3.3-70B
+        # TODO: (https://github.com/tenstorrent/tt-metal/issues/25722) Support all other models that use tt_transformers
+        if self.base_model_name not in ["Llama-3.1-8B", "Llama-3.1-70B", "Llama-3.3-70B"]:
+            return False
+        if hasattr(self, "sliding_window") and getattr(self, "sliding_window") != None:
+            return False
+
+        if self.device_name == "N150":
+            allowed_seq_lens = [128, 256, 512, 1024]
+        else:
+            allowed_seq_lens = [128, 256, 512, 1024, 2048, 4096, 8192]
+
+        return prefill_seq_len in allowed_seq_lens and prefill_seq_len <= self.max_prefill_chunk_size
 
     def get_state_dict_prefix(self, module_name, layer_num, is_vision=False):
         text_prefix = self.state_dict_text_prefix
@@ -1861,7 +1919,22 @@ class ModelArgs:
                     config.num_hidden_layers = self.n_layers
 
                 model_cls = self.get_hf_model_cls()
-                model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
+
+                try:
+                    # .from_pretrained + _init_weights works faster than .from_config
+                    model = model_cls.from_pretrained(
+                        self.CKPT_DIR,
+                        config=config,
+                        torch_dtype="auto",
+                        trust_remote_code=self.trust_remote_code_hf,
+                        local_files_only=True,
+                    )
+                    model.apply(model._init_weights)
+                except Exception as e:
+                    logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
+                    model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
+
+                # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
                 state_dict = model.state_dict()
             else:
                 reference_model = Transformer(self)
@@ -2400,7 +2473,7 @@ class ModelArgs:
                     raise e
 
             # Add meta-compatible stop token list to the HF tokenizer
-            if not "stop_tokens" in tokenizer.__dict__:
+            if not hasattr(tokenizer, "stop_tokens") or tokenizer.stop_tokens is None:
                 tokenizer.stop_tokens = [tokenizer.eos_token_id]
                 # Phi-3-mini uses "<|end|>" as EOS token
                 if "phi-3-mini" in self.base_model_name.lower():
@@ -2476,11 +2549,26 @@ class ModelArgs:
                 else:
                     config.num_layers = self.n_layers
                     config.num_hidden_layers = self.n_layers
-                model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
+
+                try:
+                    # .from_pretrained + _init_weights works faster than .from_config
+                    model = model_cls.from_pretrained(
+                        self.CKPT_DIR,
+                        config=config,
+                        torch_dtype="auto",
+                        trust_remote_code=self.trust_remote_code_hf,
+                        local_files_only=True,
+                    )
+                    model.apply(model._init_weights)
+                except Exception as e:
+                    logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
+                    model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
+                # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
             else:
                 if self.cache_hf_flag and self.cached_hf_model is None:
                     model = model_cls.from_pretrained(
                         self.CKPT_DIR,
+                        torch_dtype="auto",
                         local_files_only=os.getenv("CI") == "true",
                         trust_remote_code=self.trust_remote_code_hf,
                     )
@@ -2491,6 +2579,7 @@ class ModelArgs:
                     # No caching - load fresh each time
                     model = model_cls.from_pretrained(
                         self.CKPT_DIR,
+                        torch_dtype="auto",
                         trust_remote_code=self.trust_remote_code_hf,
                         local_files_only=os.getenv("CI") == "true",
                     )
@@ -2501,7 +2590,7 @@ class ModelArgs:
                 # We keep language_model because transformers don't let us change or delete it
             model.model.layers = model.model.layers[: self.n_layers]
             if wrap:
-                wrapper = HfModelWrapper(model, self.head_dim)
+                wrapper = HfModelWrapper(model, self.head_dim, config=self.hf_config)
                 return wrapper
             else:
                 return model
@@ -2528,7 +2617,21 @@ class ModelArgs:
                 config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
                 config.num_layers = self.n_layers
                 config.num_hidden_layers = self.n_layers
-                model = model_cls.from_config(config)
+
+                try:
+                    # .from_pretrained + _init_weights works faster than .from_config
+                    model = model_cls.from_pretrained(
+                        self.CKPT_DIR,
+                        config=config,
+                        torch_dtype="auto",
+                        trust_remote_code=self.trust_remote_code_hf,
+                        local_files_only=True,
+                    )
+                    model.apply(model._init_weights)
+                except Exception as e:
+                    logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
+                    model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
+                # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
             else:
                 if self.cached_hf_model is None:
                     model = model_cls.from_pretrained(self.CKPT_DIR, local_files_only=os.getenv("CI") == "true")
@@ -2816,11 +2919,12 @@ class HfDecoderWrapper:
 
 
 class HfModelWrapper:
-    def __init__(self, model, head_dim):
+    def __init__(self, model, head_dim, config=None):
         from transformers import DynamicCache
 
         self.model = model
         self.head_dim = head_dim
+        self.config = config
         self.past_key_values = DynamicCache()
 
     def forward(self, inputs_embeds, start_pos, mode="decode"):
@@ -2847,7 +2951,9 @@ class HfModelWrapper:
             fuse_mlp = hasattr(self.model.model.layers[0].mlp, "gate_up_proj")
         except:
             fuse_qkv, fuse_mlp = False, False
-        return self.model.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim, fuse_qkv, fuse_mlp))
+        return self.model.load_state_dict(
+            convert_meta_to_hf(state_dict, self.head_dim, fuse_qkv, fuse_mlp, self.config)
+        )
 
     def eval(self):
         self.model.eval()
@@ -2885,6 +2991,17 @@ class HfModelWrapper:
 
 
 class DecodersPrecision:
+    @classmethod
+    def from_string(cls, optimizations: str):
+        if optimizations == "performance":
+            return cls.performance
+        elif optimizations == "accuracy":
+            return cls.accuracy
+        else:
+            raise ValueError(
+                f"Invalid optimization configuration: {optimizations}. Allowed values are 'performance' or 'accuracy'"
+            )
+
     @classmethod
     def accuracy(cls, num_decoders, model_name):
         inst = cls._precision_factory(num_decoders, model_name, ModelOptimizations.accuracy)
@@ -3005,6 +3122,7 @@ def determine_device_name(mesh_device):
             2: "P300",
             4: "P150x4",
             8: "P150x8",
+            32: "BHGLX",
         }
     elif is_wormhole_b0():
         dict_device_names = {

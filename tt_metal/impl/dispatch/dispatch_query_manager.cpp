@@ -25,7 +25,7 @@ tt::tt_metal::DispatchCoreConfig dispatch_core_config() {
 tt_cxy_pair dispatch_core(uint8_t cq_id) {
     tt_cxy_pair dispatch_core = tt_cxy_pair(0, 0, 0);
     std::optional<tt_cxy_pair> first_dispatch_core = std::nullopt;
-    for (chip_id_t device_id : tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids()) {
+    for (tt::ChipId device_id : tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids()) {
         uint16_t channel =
             tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id);
         if (tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id) == device_id) {
@@ -83,11 +83,6 @@ std::vector<CoreCoord> get_consistent_logical_cores(
     return current_cores;
 }
 
-std::vector<CoreCoord> populate_all_logical_storage_cores(
-    uint8_t num_hw_cqs, const tt::tt_metal::DispatchCoreConfig& dispatch_core_config) {
-    return get_consistent_logical_cores(num_hw_cqs, dispatch_core_config, tt::get_logical_storage_cores);
-}
-
 std::vector<CoreCoord> populate_all_logical_dispatch_cores(
     uint8_t num_hw_cqs, const tt::tt_metal::DispatchCoreConfig& dispatch_core_config) {
     return get_consistent_logical_cores(num_hw_cqs, dispatch_core_config, tt::get_logical_dispatch_cores);
@@ -113,21 +108,12 @@ void DispatchQueryManager::reset(uint8_t num_hw_cqs) {
     go_signal_noc_ = dispatch_s_enabled_ ? NOC::NOC_1 : NOC::NOC_0;
     // Reset the dispatch cores reported by the manager. Will be re-populated when the associated query is made
     dispatch_cores_ = {};
-    // Populate dispatch and storage
+    // Populate dispatch
     logical_dispatch_cores_on_user_chips_ = populate_all_logical_dispatch_cores(num_hw_cqs_, dispatch_core_config());
-    logical_storage_cores_on_user_chips_ = populate_all_logical_storage_cores(num_hw_cqs_, dispatch_core_config());
-}
-
-const std::vector<CoreCoord>& DispatchQueryManager::get_logical_storage_cores(uint32_t device_id) const {
-    return tt::get_logical_storage_cores(device_id, num_hw_cqs_, dispatch_core_config());
 }
 
 const std::vector<CoreCoord>& DispatchQueryManager::get_logical_dispatch_cores(uint32_t device_id) const {
     return tt::get_logical_dispatch_cores(device_id, num_hw_cqs_, dispatch_core_config());
-}
-
-const std::vector<CoreCoord>& DispatchQueryManager::get_logical_storage_cores_on_user_chips() const {
-    return logical_storage_cores_on_user_chips_;
 }
 
 const std::vector<CoreCoord>& DispatchQueryManager::get_logical_dispatch_cores_on_user_chips() const {

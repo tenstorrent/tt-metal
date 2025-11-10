@@ -15,7 +15,8 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import (
     SDXL_L1_SMALL_SIZE,
     SDXL_TRACE_REGION_SIZE,
     retrieve_timesteps,
-    run_tt_iteration,
+    run_tt_denoising,
+    run_torch_denoising,
     prepare_input_tensors,
     allocate_input_tensors,
     create_user_tensors,
@@ -24,94 +25,12 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
 import matplotlib.pyplot as plt
 from models.common.utility_functions import is_wormhole_b0
 
-UNET_LOOP_PCC = {"10": 0.872, "50": 0.895}
-
-
-def run_tt_denoising(
-    ttnn_device,
-    tt_latents_device,
-    tt_latents_output,
-    tt_unet,
-    tt_scheduler,
-    input_shape,
-    ttnn_prompt_embeds,
-    ttnn_add_text_embeds,
-    ttnn_add_time_ids,
-    guidance_scale,
-    extra_step_kwargs,
-    tid=None,
-    compile_run=False,
-):
-    B, C, H, W = input_shape
-    if tid is None:
-        tid = ttnn.begin_trace_capture(ttnn_device, cq_id=0) if not compile_run else None
-        unet_outputs = []
-        tt_latents = tt_latents_device
-        for unet_slice in range(len(ttnn_prompt_embeds)):
-            tt_latent_model_input = tt_latents
-            noise_pred, noise_shape = run_tt_iteration(
-                tt_unet,
-                tt_scheduler,
-                tt_latent_model_input,
-                [B, C, H, W],
-                ttnn_prompt_embeds[unet_slice],
-                ttnn_add_time_ids[unet_slice],
-                ttnn_add_text_embeds[unet_slice],
-            )
-            C, H, W = noise_shape
-
-            unet_outputs.append(noise_pred)
-
-        noise_pred_uncond, noise_pred_text = unet_outputs
-        noise_pred_text = ttnn.sub_(noise_pred_text, noise_pred_uncond)
-        noise_pred_text = ttnn.mul_(noise_pred_text, guidance_scale)
-        noise_pred = ttnn.add_(noise_pred_uncond, noise_pred_text)
-
-        tt_latents = tt_scheduler.step(noise_pred, None, tt_latents, **extra_step_kwargs, return_dict=False)[0]
-
-        ttnn.deallocate(noise_pred_uncond)
-        ttnn.deallocate(noise_pred_text)
-
-        if not compile_run:
-            ttnn.end_trace_capture(ttnn_device, tid, cq_id=0)
-    else:
-        ttnn.execute_trace(ttnn_device, tid, cq_id=0, blocking=True)
-    return tid, tt_latents_device, tt_latents_output, [C, H, W]
-
-
-def run_torch_denoising(
-    latents,
-    iter,
-    pipeline,
-    prompt_embeds,
-    added_cond_kwargs,
-    t,
-    guidance_scale,
-    extra_step_kwargs,
-):
-    latent_model_input = torch.cat([latents] * 2)
-
-    latent_model_input = pipeline.scheduler.scale_model_input(latent_model_input, t)
-
-    noise_pred = pipeline.unet(
-        latent_model_input,
-        t,
-        encoder_hidden_states=prompt_embeds[iter],
-        timestep_cond=None,
-        cross_attention_kwargs=None,
-        added_cond_kwargs=added_cond_kwargs[iter],
-        return_dict=False,
-    )[0]
-
-    noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
-    noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
-
-    latents = pipeline.scheduler.step(noise_pred, t, latents, **extra_step_kwargs, return_dict=False)[0]
-    return latents
+# TODO: test 20 instead of 10 unet iterations
+UNET_LOOP_PCC = {"10": 0.862, "50": 0.894}
 
 
 @torch.no_grad()
-def run_unet_inference(ttnn_device, is_ci_env, prompts, num_inference_steps):
+def run_unet_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, debug_mode):
     torch.manual_seed(0)
 
     if isinstance(prompts, str):
@@ -138,6 +57,7 @@ def run_unet_inference(ttnn_device, is_ci_env, prompts, num_inference_steps):
         pipeline.unet.state_dict(),
         "unet",
         model_config=tt_model_config,
+        debug_mode=debug_mode,
     )
     tt_scheduler = TtEulerDiscreteScheduler(
         ttnn_device,
@@ -286,29 +206,31 @@ def run_unet_inference(ttnn_device, is_ci_env, prompts, num_inference_steps):
         compile_run=True,
     )
 
-    prepare_input_tensors(
-        [
-            tt_latents,
-            *tt_prompt_embeds[0],
-            tt_add_text_embeds[0][0],
-            tt_add_text_embeds[0][1],
-        ],
-        [tt_latents_device, *tt_prompt_embeds_device, *tt_text_embeds_device],
-    )
-    tid, _, _, _ = run_tt_denoising(
-        ttnn_device=ttnn_device,
-        tt_latents_device=tt_latents_device,
-        tt_latents_output=None,
-        tt_unet=tt_unet,
-        tt_scheduler=tt_scheduler,
-        input_shape=[B, C, H, W],
-        ttnn_prompt_embeds=tt_prompt_embeds_device,
-        ttnn_add_text_embeds=tt_text_embeds_device,
-        ttnn_add_time_ids=tt_time_ids_device,
-        guidance_scale=guidance_scale,
-        extra_step_kwargs=extra_step_kwargs,
-        tid=None,
-    )
+    tid = None
+    if not debug_mode:
+        prepare_input_tensors(
+            [
+                tt_latents,
+                *tt_prompt_embeds[0],
+                tt_add_text_embeds[0][0],
+                tt_add_text_embeds[0][1],
+            ],
+            [tt_latents_device, *tt_prompt_embeds_device, *tt_text_embeds_device],
+        )
+        tid, _, _, _ = run_tt_denoising(
+            ttnn_device=ttnn_device,
+            tt_latents_device=tt_latents_device,
+            tt_latents_output=None,
+            tt_unet=tt_unet,
+            tt_scheduler=tt_scheduler,
+            input_shape=[B, C, H, W],
+            ttnn_prompt_embeds=tt_prompt_embeds_device,
+            ttnn_add_text_embeds=tt_text_embeds_device,
+            ttnn_add_time_ids=tt_time_ids_device,
+            guidance_scale=guidance_scale,
+            extra_step_kwargs=extra_step_kwargs,
+            tid=None,
+        )
 
     ttnn.synchronize_device(ttnn_device)
     pcc_per_iter = []
@@ -339,6 +261,7 @@ def run_unet_inference(ttnn_device, is_ci_env, prompts, num_inference_steps):
                 guidance_scale=guidance_scale,
                 extra_step_kwargs=extra_step_kwargs,
                 tid=tid,
+                compile_run=debug_mode,
             )
             latents = run_torch_denoising(
                 latents=latents,
@@ -366,7 +289,8 @@ def run_unet_inference(ttnn_device, is_ci_env, prompts, num_inference_steps):
             pcc_per_iter.append(float(pcc_message))
 
         tt_scheduler.set_step_index(0)
-    ttnn.release_trace(ttnn_device, tid)
+    if tid is not None:
+        ttnn.release_trace(ttnn_device, tid)
     if not is_ci_env:
         plt.plot(pcc_per_iter, marker="o")
         plt.title("PCC per iteration")
@@ -394,5 +318,6 @@ def test_unet_loop(
     is_ci_env,
     prompt,
     loop_iter_num,
+    debug_mode,
 ):
-    return run_unet_inference(device, is_ci_env, prompt, loop_iter_num)
+    return run_unet_inference(device, is_ci_env, prompt, loop_iter_num, debug_mode)

@@ -16,7 +16,7 @@ from models.demos.llama3_70b_galaxy.tt.llama_rope import TtLlamaRotarySetup
 from models.demos.llama3_70b_galaxy.tt.llama_embedding import TtLlamaEmbedding
 from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
 from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
-from models.demos.llama3_70b_galaxy.tt.sampling import TTSampling
+from models.common.tt_sampling import TTSampling
 
 
 class TtTransformer(LightweightModule):
@@ -350,7 +350,9 @@ class TtTransformer(LightweightModule):
         """
         B = tokens.shape[0]
         # assert current_pos.shape[0] == B, "Batch size mismatch"
-        assert B == self.args.max_batch_size, f"Batch size must be equal to max_batch_size {self.args.max_batch_size}"
+        assert (
+            B == self.args.max_batch_size
+        ), f"Batch size {B} must be equal to max_batch_size {self.args.max_batch_size}"
 
         # Necessary padding to be full tile sized when on device
         tokens = torch.nn.functional.pad(tokens.view(-1), (0, 32 - len(tokens)), "constant", 0)

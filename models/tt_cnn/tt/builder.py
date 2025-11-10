@@ -46,10 +46,18 @@ class ChannelSliceStrategyConfiguration(SliceStrategyConfiguration):
             raise ValueError(f"Channel slicing requires num_slices > 1")
 
 
+# If slicing is None, DRAM is assumed; Need explicit Strategy for L1
+@dataclass
+class L1FullSliceStrategyConfiguration(SliceStrategyConfiguration):
+    def get_slice_type(self):
+        return ttnn.Conv2dL1Full
+
+
 SliceStrategy = Union[
     HeightSliceStrategyConfiguration,
     WidthSliceStrategyConfiguration,
     ChannelSliceStrategyConfiguration,
+    L1FullSliceStrategyConfiguration,
 ]
 
 
@@ -112,6 +120,8 @@ class WidthShardedStrategyConfiguration(ShardedStrategyConfiguration):
 class BlockShardedStrategyConfiguration(ShardedStrategyConfiguration):
     reshard_if_not_optimal: bool = False
     override_core_grid: Optional[ttnn.CoreRangeSet] = None
+    act_block_h_override: int = 0
+    act_block_w_div: int = 1
 
     def get_tensor_memory_layout(self):
         return ttnn.TensorMemoryLayout.BLOCK_SHARDED
@@ -158,6 +168,8 @@ class Conv2dConfiguration:
 
     deallocate_activation: bool = False
     reallocate_halo_output: bool = True
+
+    config_tensors_in_dram: bool = False
 
     @classmethod
     def convert_torch_weight_and_bias_to_ttnn(cls, weight, bias=None, mesh_mapper=None):
@@ -310,6 +322,9 @@ class MaxPool2dConfiguration:
     deallocate_input: bool = False
     reallocate_halo_output: bool = True
 
+    dtype: ttnn.DataType = ttnn.bfloat16
+    output_layout: ttnn.Layout = ttnn.ROW_MAJOR_LAYOUT
+
     slice_strategy: Optional[SliceStrategy] = None
 
     def __post_init__(self):
@@ -438,7 +453,8 @@ def sharding_strategy_to_conv2d_config(sharding_strategy: ShardingStrategy):
     elif isinstance(sharding_strategy, WidthShardedStrategyConfiguration):
         output["act_block_w_div"] = sharding_strategy.act_block_w_div
     elif isinstance(sharding_strategy, BlockShardedStrategyConfiguration):
-        ...
+        output["act_block_h_override"] = sharding_strategy.act_block_h_override
+        output["act_block_w_div"] = sharding_strategy.act_block_w_div
     else:
         raise ValueError(f"Invalid sharding ShardedStrategyConfiguration was encountered: {sharding_strategy}")
 
@@ -461,6 +477,7 @@ def to_conv2d_config(configuration: Conv2dConfiguration):
         ),
         reallocate_halo_output=configuration.reallocate_halo_output,
         enable_weights_double_buffer=configuration.enable_weights_double_buffer,
+        config_tensors_in_dram=configuration.config_tensors_in_dram,
         **parameters_from_sharding_configuration,
     )
 
@@ -571,6 +588,13 @@ class TtConv2d:
 
     def _apply_channel_slicing(self, x):
         """Apply channel slicing to the input tensor and return the result."""
+        # check for flattened input tensor
+        is_flattened = (
+            x.shape[0] == 1
+            and x.shape[1] == 1
+            and x.shape[2]
+            == self.configuration.batch_size * self.configuration.input_height * self.configuration.input_width
+        )
         # slice input
         input_slices = []
         for i in range(self.configuration.slice_strategy.get_num_slices()):
@@ -584,9 +608,13 @@ class TtConv2d:
                         i * self.configuration.in_channels // self.configuration.slice_strategy.get_num_slices(),
                     ],
                     [
-                        self.configuration.batch_size,
-                        self.configuration.input_height,
-                        self.configuration.input_width,
+                        self.configuration.batch_size if not is_flattened else 1,
+                        self.configuration.input_height if not is_flattened else 1,
+                        self.configuration.input_width
+                        if not is_flattened
+                        else self.configuration.batch_size
+                        * self.configuration.input_height
+                        * self.configuration.input_width,
                         (i + 1) * self.configuration.in_channels // self.configuration.slice_strategy.get_num_slices(),
                     ],
                 )
@@ -674,6 +702,8 @@ class TtMaxPool2d:
             "in_place_halo": self.configuration.in_place,
             "deallocate_input": self.configuration.deallocate_input,
             "reallocate_halo_output": self.configuration.reallocate_halo_output,
+            "dtype": self.configuration.dtype,
+            "output_layout": self.configuration.output_layout,
         }
 
     def _apply_channel_slicing(self, x):
@@ -761,6 +791,13 @@ class TtUpsample:
 
     def _apply_channel_slicing(self, x):
         """Apply channel slicing to the input tensor and return the result."""
+        # check for flattened input tensor
+        is_flattened = (
+            x.shape[0] == 1
+            and x.shape[1] == 1
+            and x.shape[2]
+            == self.configuration.batch_size * self.configuration.input_height * self.configuration.input_width
+        )
         # Slice input tensor along channel dimension
         input_slices = []
         for i in range(self.num_slices):
@@ -771,9 +808,13 @@ class TtUpsample:
                 x,
                 [0, 0, 0, start_channel],
                 [
-                    self.configuration.batch_size,
-                    self.configuration.input_height,
-                    self.configuration.input_width,
+                    self.configuration.batch_size if not is_flattened else 1,
+                    self.configuration.input_height if not is_flattened else 1,
+                    self.configuration.input_width
+                    if not is_flattened
+                    else self.configuration.batch_size
+                    * self.configuration.input_height
+                    * self.configuration.input_width,
                     end_channel,
                 ],
             )

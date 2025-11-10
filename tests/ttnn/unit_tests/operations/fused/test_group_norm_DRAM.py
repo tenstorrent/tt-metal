@@ -12,21 +12,8 @@ import ttnn
 import math
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import is_blackhole
-from tests.ttnn.unit_tests.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
+from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 from models.common.utility_functions import run_for_blackhole
-
-
-# Helper function to get welford parameters based on device type
-def get_welford_params():
-    """Return welford parameters - only legacy mode for Blackhole, both modes for other devices"""
-    if is_blackhole():
-        return ("legacy",)
-    else:
-        return ("legacy", "welford_normal", "welford_reciprocal")
-
-
-welford_flavors = get_welford_params()
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
@@ -71,7 +58,7 @@ welford_flavors = get_welford_params()
         # (21, 128, 480, 848, 32, 140, 8, 8), Failing on single device CI.
     ],
 )
-@pytest.mark.parametrize("welford_mode", welford_flavors)
+@pytest.mark.parametrize("welford_mode", ("legacy", "welford_normal", "welford_reciprocal"))
 def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, welford_mode):
     torch.manual_seed(0)
     if device.core_grid.y == 7:
@@ -132,7 +119,11 @@ def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y
         )
 
     # groupnorm
+
     num_itr = 2  # second iteration to help catch potential runtime args issue.
+
+    if C > 512 or N > 2:
+        num_itr = 1  # one iter if it is too slow
     for _ in range(num_itr):
         output_tensor = ttnn.group_norm(
             input_tensor_tilized,

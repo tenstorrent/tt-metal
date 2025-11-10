@@ -114,12 +114,12 @@ import pytest
 
 
 @pytest.mark.parametrize(
-    "input_shape, dim, input_a_dtype, input_a_layout, input_a_memory_config, output_memory_config",
+    "input_shape, dim, keepdim, input_a_dtype, input_a_layout, input_a_memory_config, output_memory_config",
     [
         ([7, 32, 4, 96], 3, True, ttnn.float32, ttnn.TILE_LAYOUT, ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
     ],
 )
-def test_reduction_sum_localrun_fail_only(
+def test_reduction_sum(
     device, input_shape, dim, keepdim, input_a_dtype, input_a_layout, input_a_memory_config, output_memory_config
 ):
     (result, msg), e2e_perf = run_sum(

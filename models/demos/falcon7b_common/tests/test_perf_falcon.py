@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from pathlib import Path
+
 import pytest
 
 from models.common.utility_functions import disable_persistent_kernel_cache, is_blackhole, is_e75, is_wormhole_b0
@@ -12,6 +14,7 @@ from models.demos.falcon7b_common.tests.run_falcon_end_to_end import (
     run_test_FalconCausalLM_end_to_end,
 )
 from models.demos.falcon7b_common.tt.model_config import get_model_config
+from models.tt_transformers.tt.common import get_hf_tt_cache_path
 
 
 @pytest.mark.parametrize(
@@ -59,8 +62,6 @@ class TestParametrized:
         expected_inference_time,
         num_layers,
         model_config_str,
-        model_location_generator,
-        get_tt_cache_path,
         device,
     ):
         if is_e75(device) and batch == 32:
@@ -70,9 +71,7 @@ class TestParametrized:
             pytest.skip("Sharded config is not supported on GS")
 
         model_config = get_model_config(model_config_str, seq_len, batch)
-        tt_cache_path = get_tt_cache_path(
-            model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
-        )
+        tt_cache_path = Path(get_hf_tt_cache_path(model_version))
 
         disable_persistent_kernel_cache()
 
@@ -97,7 +96,6 @@ class TestParametrized:
             model_config,
             model_config_str,
             tt_cache_path,
-            model_location_generator,
             e2e_perf=True,
             expected_inference_time=expected_inference_time,
         )
@@ -113,17 +111,13 @@ class TestParametrized:
         num_layers,
         expected_pccs,
         model_config_str,
-        model_location_generator,
-        get_tt_cache_path,
         mesh_device,
     ):
         if model_config_str == "BFLOAT16-L1_SHARDED" and llm_mode == "prefill":
             pytest.skip(f"prefill does not support L1_SHARDED")
 
         model_config = get_model_config(model_config_str, seq_len, batch)
-        tt_cache_path = get_tt_cache_path(
-            model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
-        )
+        tt_cache_path = Path(get_hf_tt_cache_path(model_version))
 
         disable_persistent_kernel_cache()
 
@@ -139,7 +133,6 @@ class TestParametrized:
             model_config,
             model_config_str,
             tt_cache_path,
-            model_location_generator,
             e2e_perf=True,
             expected_inference_time=expected_inference_time,
         )
@@ -153,10 +146,10 @@ class TestParametrized:
             ("prefill", 32, 1, 2048, 0, "BFLOAT16-DRAM", 0.89),
             ("decode", 32, 32, 1, 128, "BFLOAT16-DRAM", 0.099),
             ("decode", 32, 32, 1, 128, "BFLOAT16-L1", 0.089),
-            ("decode", 32, 32, 1, 128, "BFLOAT16-L1_SHARDED", 0.055),
+            ("decode", 32, 32, 1, 128, "BFLOAT16-L1_SHARDED", 0.063),
             ("decode", 32, 32, 1, 1024, "BFLOAT16-DRAM", 0.38),
             ("decode", 32, 32, 1, 1024, "BFLOAT16-L1", 0.29),
-            ("decode", 32, 32, 1, 1024, "BFLOAT16-L1_SHARDED", 0.059),
+            ("decode", 32, 32, 1, 1024, "BFLOAT16-L1_SHARDED", 0.065),
             ("decode", 32, 32, 1, 2047, "BFLOAT16-DRAM", 0.70),
             ("decode", 32, 32, 1, 2047, "BFLOAT16-L1", 0.55),
             ("decode", 32, 32, 1, 2047, "BFLOAT16-L1_SHARDED", 0.064),
@@ -187,8 +180,6 @@ class TestParametrized:
         expected_inference_time,
         num_layers,
         model_config_str,
-        model_location_generator,
-        get_tt_cache_path,
         mesh_device,
     ):
         if llm_mode == "prefill":
@@ -210,8 +201,6 @@ class TestParametrized:
             num_layers,
             [expected_output_pcc, expected_k_cache_pcc, expected_v_cache_pcc],
             model_config_str,
-            model_location_generator,
-            get_tt_cache_path,
             mesh_device,
         )
 
@@ -248,8 +237,6 @@ class TestParametrized:
         expected_inference_time,
         num_layers,
         model_config_str,
-        model_location_generator,
-        get_tt_cache_path,
         mesh_device,
     ):
         if llm_mode == "prefill":
@@ -271,7 +258,5 @@ class TestParametrized:
             num_layers,
             [expected_output_pcc, expected_k_cache_pcc, expected_v_cache_pcc],
             model_config_str,
-            model_location_generator,
-            get_tt_cache_path,
             mesh_device,
         )

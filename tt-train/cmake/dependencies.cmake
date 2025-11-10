@@ -174,3 +174,13 @@ CPMAddPackage(
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "NB_USE_SUBMODULE_DEPS ON"
 )
+
+####################################################################################################################
+# simd-everywhere
+####################################################################################################################
+CPMAddPackage(NAME simd-everywhere GITHUB_REPOSITORY simd-everywhere/simde GIT_TAG v0.8.2)
+if(simd-everywhere_ADDED)
+    add_library(simde INTERFACE)
+    add_library(simde::simde ALIAS simde)
+    target_include_directories(simde SYSTEM INTERFACE ${simd-everywhere_SOURCE_DIR})
+endif()

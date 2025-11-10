@@ -49,7 +49,7 @@ namespace llrt {
 
 namespace internal_ {
 void wait_until_cores_done(
-    chip_id_t device_id, int run_state, std::unordered_set<CoreCoord>& not_done_phys_cores, int timeout_ms);
+    ChipId device_id, int run_state, std::unordered_set<CoreCoord>& not_done_phys_cores, int timeout_ms);
 }  // namespace internal_
 }  // namespace llrt
 
@@ -126,7 +126,7 @@ std::pair<int, int> get_cpu_cores_for_dispatch_threads(
 }
 
 std::unordered_map<uint32_t, uint32_t> get_device_id_to_core_map(
-    const std::vector<chip_id_t>& device_ids,
+    const std::vector<ChipId>& device_ids,
     std::unordered_set<uint32_t>& free_cores,
     bool use_numa_node_based_thread_binding,
     const uint8_t num_hw_cqs,
@@ -221,7 +221,7 @@ void DevicePool::init_profiler() const {
 }
 
 void DevicePool::initialize(
-    const std::vector<chip_id_t>& device_ids,
+    const std::vector<ChipId>& device_ids,
     const uint8_t num_hw_cqs,
     size_t l1_small_size,
     size_t trace_region_size,
@@ -251,7 +251,7 @@ void DevicePool::initialize(
     _inst->initialize_fabric_and_dispatch_fw_ = initialize_fabric_and_dispatch_fw;
     _inst->using_fast_dispatch_ = tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch();
 
-    std::vector<chip_id_t> device_ids_to_open = device_ids;
+    std::vector<ChipId> device_ids_to_open = device_ids;
     // Never skip for TG Cluster
     bool is_galaxy = tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster();
     bool skip = !is_galaxy;
@@ -281,7 +281,7 @@ void DevicePool::initialize(
         }
     }
 
-    std::vector<chip_id_t> target_mmio_ids;
+    std::vector<ChipId> target_mmio_ids;
     for (const auto& device_id : device_ids_to_open) {
         TT_FATAL(
             tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().find(device_id) !=
@@ -486,7 +486,7 @@ void DevicePool::initialize_active_devices() const {
     _inst->dispatch_firmware_active_ = true;
 }
 
-void DevicePool::activate_device(chip_id_t id) {
+void DevicePool::activate_device(ChipId id) {
     TT_FATAL(
         tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().find(id) !=
             tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().end(),
@@ -524,7 +524,7 @@ void DevicePool::activate_device(chip_id_t id) {
     }
 }
 
-bool DevicePool::is_device_active(chip_id_t id) const {
+bool DevicePool::is_device_active(ChipId id) const {
     auto device = get_device(id);
     if (!device) {
         return false;
@@ -533,7 +533,7 @@ bool DevicePool::is_device_active(chip_id_t id) const {
     return device->is_initialized();
 }
 
-IDevice* DevicePool::get_device(chip_id_t id) const {
+IDevice* DevicePool::get_device(ChipId id) const {
     auto it = std::find_if(devices.begin(), devices.end(), [&id](const auto& device) { return device->id() == id; });
     if (it == devices.end()) {
         return nullptr;
@@ -563,8 +563,8 @@ std::size_t DevicePool::get_max_num_eth_cores_across_all_devices() const {
     return max_eth_core_count;
 }
 
-void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
-    std::set<chip_id_t> devices_to_activate;
+void DevicePool::add_devices_to_pool(const std::vector<ChipId>& device_ids) {
+    std::set<ChipId> devices_to_activate;
 
     if (this->skip_remote_devices) {
         for (const auto& device_id : device_ids) {
@@ -597,7 +597,18 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
     if (tt_fabric::is_tt_fabric_config(fabric_config)) {
         for (int i = 0; i < tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices(); i++) {
             // Fabric currently requires all devices to be active
-            TT_FATAL(_inst->is_device_active(i), "Fabric is being used but Device {} is not active", i);
+            TT_FATAL(
+                _inst->is_device_active(i),
+                "Fabric is being used but Device {} is not active. "
+                "This may indicate that the fabric was launched on a subset of the devices available in the system, "
+                "which is currently not supported. "
+                "To launch on a subset of devices, first create a MeshDevice of the full system size, then create "
+                "submeshes accordingly.\n"
+                "For example, on a 6u system (8x4), if you wanted to run a 2x4 workload you could do:\n"
+                "ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)\n"
+                "mesh_device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(4, 8))\n"
+                "submeshes = mesh_device.create_submeshes(ttnn.MeshShape(2,8))",
+                i);
         }
     }
 
@@ -717,8 +728,8 @@ DevicePool::DevicePool() {
     ZoneScoped;
     log_debug(tt::LogMetal, "DevicePool constructor");
     bool use_numa_node_based_thread_binding = parse_env("TT_METAL_NUMA_BASED_AFFINITY", false);
-    std::vector<chip_id_t> all_device_ids;
-    for (chip_id_t device_id : tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids()) {
+    std::vector<ChipId> all_device_ids;
+    for (ChipId device_id : tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids()) {
         all_device_ids.emplace_back(device_id);
     }
     std::unordered_set<uint32_t> free_cores = {};
@@ -734,7 +745,7 @@ DevicePool::DevicePool() {
     }
 }
 
-IDevice* DevicePool::get_active_device(chip_id_t device_id) const {
+IDevice* DevicePool::get_active_device(ChipId device_id) const {
     auto device = get_device(device_id);
     TT_ASSERT(device != nullptr, "DevicePool does not contain device {}", device_id);
     TT_ASSERT(device->is_initialized(), "Device {} is not initialized", device_id);
@@ -751,7 +762,42 @@ std::vector<IDevice* > DevicePool::get_all_active_devices() const {
     return user_devices;
 }
 
-void DevicePool::teardown_fd(const std::unordered_set<chip_id_t>& devices_to_close) {
+// Get all active device ids
+// This function needs to be thread-safe as its called in inspector::data on a different thread
+std::vector<ChipId> DevicePool::get_all_active_device_ids() const {
+    std::vector<ChipId> device_ids;
+    std::lock_guard<std::mutex> lock(this->lock);
+    device_ids.reserve(this->devices.size());
+    for (const auto& device : this->devices) {
+        if (device && device->is_initialized()) {
+            device_ids.emplace_back(device->id());
+        }
+    }
+    return device_ids;
+}
+
+// Get all command queue event infos for all active devices
+// The key is the device id and the value is a vector of event ids for each command queue
+// This function needs to be thread-safe as its called in inspector::data on a different thread
+std::unordered_map<ChipId, std::vector<uint32_t>> DevicePool::get_all_command_queue_event_infos() const {
+    std::unordered_map<ChipId, std::vector<uint32_t>> cq_to_event_by_device;
+    std::lock_guard<std::mutex> lock(this->lock);
+    cq_to_event_by_device.reserve(this->devices.size());
+    for (const auto& device : this->devices) {
+        if (device && device->is_initialized()) {
+            auto& vec = cq_to_event_by_device[device->id()];
+            const auto num_hw_cqs = device->num_hw_cqs();
+            vec.resize(num_hw_cqs);
+            for (size_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
+                const auto event_id = device->sysmem_manager().get_last_event(static_cast<uint8_t>(cq_id));
+                vec[cq_id] = event_id;
+            }
+        }
+    }
+    return cq_to_event_by_device;
+}
+
+void DevicePool::teardown_fd(const std::unordered_set<ChipId>& devices_to_close) {
     for (const auto& dev_id : devices_to_close) {
         // Device is still active at this point
         auto dev = tt::DevicePool::instance().get_active_device(dev_id);
@@ -771,7 +817,7 @@ void DevicePool::teardown_fd(const std::unordered_set<chip_id_t>& devices_to_clo
 
 bool DevicePool::is_dispatch_firmware_active() const { return this->dispatch_firmware_active_; }
 
-bool DevicePool::close_device(chip_id_t device_id) {
+bool DevicePool::close_device(ChipId device_id) {
     // Sync and close one device
     // Currently can only call this on mmio chips, once we split dispatch kernel shutdown
     // from device close, we can call this on remote devices too
@@ -789,15 +835,15 @@ bool DevicePool::close_device(chip_id_t device_id) {
     return close_devices(devices_to_close);
 }
 
-bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_synchronize) {
+bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool /*skip_synchronize*/) {
     ZoneScoped;
 
     // Ordered, because we need to shutdown tunnels from the farthest to the closest.
-    std::vector<chip_id_t> devices_to_close;
+    std::vector<ChipId> devices_to_close;
 
     // Loop over all devices and add remote devices to devices_to_close
     // For Galaxy if an mmio device's tunnels are being closed, close the mmio device as well
-    std::unordered_set<chip_id_t> mmio_devices_to_close;
+    std::unordered_set<ChipId> mmio_devices_to_close;
     for (const auto& dev : devices) {
         const auto& mmio_device_id =
             tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(dev->id());
@@ -820,13 +866,13 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
     }
 
     // TODO(MO): Remove when legacy non-mesh device is removed
-    for (const chip_id_t device_id : devices_to_close) {
+    for (const ChipId device_id : devices_to_close) {
         IDevice* device = tt::DevicePool::instance().get_active_device(device_id);
         detail::ReadDeviceProfilerResults(device, ProfilerReadState::LAST_FD_READ);
     }
 
     dispatch_firmware_active_ = false;
-    teardown_fd(std::unordered_set<chip_id_t>(devices_to_close.begin(), devices_to_close.end()));
+    teardown_fd(std::unordered_set<ChipId>(devices_to_close.begin(), devices_to_close.end()));
     // Terminate sent to each device. Wait for dispatch to finish. MMIO only to prevent clogging SD path.
     // Dispatch kernels internally have a sync at the end to ensure all credits are returned
     for (const auto& dev_id : devices_to_close) {
@@ -902,7 +948,7 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
         }
     }
 
-    for (const chip_id_t device_id : devices_to_close) {
+    for (const ChipId device_id : devices_to_close) {
         IDevice* device = tt::DevicePool::instance().get_active_device(device_id);
         detail::ReadDeviceProfilerResults(device, ProfilerReadState::ONLY_DISPATCH_CORES);
     }

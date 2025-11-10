@@ -4,11 +4,11 @@
 
 import pytest
 import torch
-from diffusers import AutoencoderKL
 
 import ttnn
 from models.common.utility_functions import skip_for_blackhole
 from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
+from models.demos.wormhole.stable_diffusion.sd_helper_funcs import get_reference_vae
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_configs import (
     UPBLOCK_RESNET_CONV_CHANNEL_SPLIT_FACTORS,
     UPBLOCK_RESNET_NORM_NUM_BLOCKS,
@@ -85,9 +85,12 @@ def test_vae_upblock(
     resnet_conv_in_channel_split_factors,
     upsample_conv_channel_split_factors,
     block_id,
+    is_ci_env,
+    is_ci_v2_env,
+    model_location_generator,
 ):
     torch.manual_seed(0)
-    vae = AutoencoderKL.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="vae")
+    vae = get_reference_vae(is_ci_env, is_ci_v2_env, model_location_generator)
 
     torch_upblock = vae.decoder.up_blocks[block_id]
 

@@ -46,7 +46,7 @@ void py_bind_reshape(pybind11::module& module) {
     detail::bind_reshape(
         module,
         ttnn::reshape_on_device,
-        R"doc(reshape(input_tensor: ttnn.Tensor, W: int, Z: int, Y: int, X: int, *, Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+        R"doc(
 
         Returns a tensor with the new shape of ``[W, Z, Y, X]``. The X dimension of input and output tensor must have same size.
 
