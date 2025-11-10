@@ -33,6 +33,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/to_string.hpp"
 
 #include "tt-metalium/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -1352,7 +1353,7 @@ void pytensor_module(py::module& m_tensor) {
                     [7, 8, 9]]] dtype=bfloat16 ]
         )doc")
         .def(
-            "__repr__", [](const Tensor& self) { return tt::tt_metal::ops::to_string(self); }, R"doc(
+            "__repr__", [](const Tensor& self) { return ttnn::to_string(self); }, R"doc(
             Prints the tensor as list of nested lists. Number of levels of nesting is equal to tensor rank.
 
             .. code-block:: python
