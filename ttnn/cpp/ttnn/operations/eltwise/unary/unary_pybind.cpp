@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <string>
 #include <optional>
+#include <variant>
 
 #include <fmt/format.h>
 #include <pybind11/pybind11.h>
@@ -21,6 +22,8 @@
 #include "unary.hpp"
 
 namespace ttnn::operations::unary {
+
+using ScalarVariant = std::variant<float, int32_t>;
 
 namespace {
 template <typename unary_operation_t>
@@ -1197,13 +1200,11 @@ void bind_sigmoid_accurate(py::module& module, const unary_operation_t& operatio
         ttnn::pybind_overload_t{
             [](const unary_operation_t& self,
                const Tensor& input_tensor,
-               bool fast_and_approximate_mode,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<Tensor>& output_tensor) -> ttnn::Tensor {
-                return self(input_tensor, fast_and_approximate_mode, memory_config, output_tensor);
+                return self(input_tensor, memory_config, output_tensor);
             },
             py::arg("input_tensor"),
-            py::arg("fast_and_approximate_mode") = false,
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt});
@@ -1985,12 +1986,6 @@ void py_module(py::module& module) {
         module,
         ttnn::mish,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|mish|(\mathrm{{input\_tensor}}_i))doc",
-        "[Supported range -20 to inf]",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_operation(
-        module,
-        ttnn::hardmish,
-        R"doc(\mathrm{{output\_tensor}}_i = \verb|hardmish|(\mathrm{{input\_tensor}}_i))doc",
         "[Supported range -20 to inf]",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
     bind_unary_operation(
