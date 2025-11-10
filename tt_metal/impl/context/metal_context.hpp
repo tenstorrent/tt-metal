@@ -5,6 +5,7 @@
 #pragma once
 
 #include <string>
+#include <mutex>
 #include <tt_stl/indestructible.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/distributed_context.hpp>
@@ -157,6 +158,7 @@ private:
 
     // Used to track which FW has been built already
     std::unordered_set<uint64_t> firmware_built_keys_;
+    std::mutex firmware_built_keys_mutex_;
 
     // Written to device as part of FW init, device-specific
     std::unordered_map<ChipId, std::vector<int32_t>> dram_bank_offset_map_;
