@@ -238,11 +238,13 @@ class Conv2dNormActivation:
             batch_size=batch_size,
             input_height=input_height,
             input_width=input_width,
-            slice_config=self.slice_config,
+            # slice_config=self.slice_config,
             compute_config=self.compute_config,
             conv_config=self.conv_config,
             return_output_dim=True,
             return_weights_and_bias=True,  # ADD THIS
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            slice_config=ttnn.Conv2dL1FullSliceConfig,
         )
 
         # Get output shape after conv

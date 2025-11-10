@@ -244,6 +244,8 @@ def ttnn_retinanet_classification_head(
             input_width=W,
             compute_config=compute_config,
             conv_config=fpn_final_config,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            slice_config=ttnn.Conv2dL1FullSliceConfig,
         )
 
         # Reshape from (N, H, W, 819) to (N, H, W, 9, 91)
