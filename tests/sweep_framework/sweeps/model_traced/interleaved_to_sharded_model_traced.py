@@ -1,4 +1,4 @@
-# Model traced sweep for sharded_to_interleaved
+# Model traced sweep for interleaved_to_sharded
 # Generated automatically - DO NOT EDIT MANUALLY
 
 import torch
@@ -18,7 +18,7 @@ TIMEOUT = 30
 # Load traced configurations from real model tests
 loader = MasterConfigLoader()
 # Default: Run exact traced configs from real models with all parameter values in vectors
-model_traced_params = loader.get_suite_parameters("sharded_to_interleaved", all_cases=False)
+model_traced_params = loader.get_suite_parameters("interleaved_to_sharded", all_cases=False)
 
 # Parameters provided to the test vector generator are defined here.
 parameters = {
@@ -48,7 +48,7 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
-    # Handle tuple input_shape for sample suite
+    # Handle tuple input_shape
     if isinstance(input_shape, (tuple, list)):
         shape = tuple(input_shape)
     else:
@@ -58,23 +58,36 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(shape)
 
-    # The traced operation expects the input tensor to already be sharded
-    # Follow the working unit test approach: create interleaved -> convert to sharded
+    # For interleaved_to_sharded, the output is the same tensor but in sharded memory layout
+    torch_output_tensor = torch_input_tensor_a.clone()
 
-    # Create a working sharded memory config (ignore traced config which may be invalid)
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=input_a_dtype,
+        layout=input_a_layout,
+        device=device,
+        memory_config=input_a_memory_config,
+    )
+
+    # The traced operation expects the output to be sharded
+    # Use a working sharding configuration like the unit tests (DRAM, reasonable core range)
+
+    # Create core range (use 4 cores like working unit tests)
     num_cores = 4
     core_range = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))
     core_range_set = ttnn.CoreRangeSet({core_range})
 
-    # Calculate tile-aligned shard shape
+    # Calculate shard shape - must be divisible by tile size (32 for TILE_LAYOUT)
     tile_size = 32
     total_height = shape[-2]
     total_width = shape[-1]
 
+    # Shard height: divide total height by number of cores, ensure tile alignment
     shard_height = (total_height // num_cores) // tile_size * tile_size
     if shard_height == 0:
-        shard_height = tile_size
+        shard_height = tile_size  # Minimum tile size
 
+    # Shard width: full width, ensure tile alignment
     shard_width = (total_width // tile_size) * tile_size
     if shard_width == 0:
         shard_width = tile_size
@@ -83,33 +96,19 @@ def run(
 
     shard_spec = ttnn.ShardSpec(core_range_set, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
 
-    # Use DRAM for sharding
+    # Use DRAM for sharding (like working unit tests)
     sharded_memory_config = ttnn.MemoryConfig(
-        memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED, buffer_type=ttnn.BufferType.DRAM, shard_spec=shard_spec
+        memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        buffer_type=ttnn.BufferType.DRAM,  # Use DRAM instead of L1
+        shard_spec=shard_spec,
     )
-
-    # Create interleaved tensor first
-    input_tensor_interleaved = ttnn.from_torch(
-        torch_input_tensor_a,
-        dtype=input_a_dtype,
-        layout=input_a_layout,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    # Convert to sharded
-    sharded_tensor = ttnn.interleaved_to_sharded(input_tensor_interleaved, sharded_memory_config)
-
-    # PyTorch reference: sharded_to_interleaved should return the same tensor
-    # Since memory layout doesn't change the tensor values
-    torch_output_tensor = torch_input_tensor_a.clone()
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.sharded_to_interleaved(sharded_tensor, memory_config=output_memory_config)
+    output_tensor = ttnn.interleaved_to_sharded(input_tensor_a, sharded_memory_config)
     output_tensor = ttnn.to_torch(output_tensor)
     e2e_perf = stop_measuring_time(start_time)
 
-    # Check with PCC
+    # Check with PCC - should be identical since it's just a memory layout change
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
     return [pcc, e2e_perf]

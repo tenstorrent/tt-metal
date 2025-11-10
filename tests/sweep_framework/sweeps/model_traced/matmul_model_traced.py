@@ -1,4 +1,4 @@
-# Model traced sweep for sharded_to_interleaved
+# Model traced sweep for matmul
 # Generated automatically - DO NOT EDIT MANUALLY
 
 import torch
@@ -18,16 +18,17 @@ TIMEOUT = 30
 # Load traced configurations from real model tests
 loader = MasterConfigLoader()
 # Default: Run exact traced configs from real models with all parameter values in vectors
-model_traced_params = loader.get_suite_parameters("sharded_to_interleaved", all_cases=False)
+model_traced_params = loader.get_suite_parameters("matmul", all_cases=False)
 
 # Parameters provided to the test vector generator are defined here.
 parameters = {
     # Quick sample test with basic configurations for fast validation
     "model_traced_sample": {
-        "input_shape": [(1, 1, 32, 32)],
+        "input_shape": [(1, 1, 32, 32)],  # First matrix shape
         "input_a_dtype": [ttnn.bfloat16],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
     },
 }
@@ -42,70 +43,63 @@ def run(
     input_a_dtype,
     input_a_layout,
     input_a_memory_config,
+    input_b_dtype,
+    input_b_layout,
+    input_b_memory_config,
     output_memory_config,
     *,
     device,
 ) -> list:
     torch.manual_seed(0)
 
-    # Handle tuple input_shape for sample suite
-    if isinstance(input_shape, (tuple, list)):
-        shape = tuple(input_shape)
+    # Handle both sample suite (tuple/list) and model_traced suite (dict)
+    if isinstance(input_shape, dict) and "self" in input_shape and "other" in input_shape:
+        # This is model_traced suite - dict with 'self' and 'other' keys
+        shape_a = input_shape["self"]
+        shape_b = input_shape["other"]
     else:
-        shape = input_shape
+        # This is sample suite - use simple shapes
+        if isinstance(input_shape, (tuple, list)):
+            shape_a = tuple(input_shape)
+        else:
+            shape_a = input_shape
+
+        # Create compatible shapes for matrix multiplication
+        # shape_a: [..., M, K], shape_b: [..., K, N]
+        M, K = shape_a[-2], shape_a[-1]
+        N = 64  # Fixed output dimension for this test
+        shape_b = shape_a[:-2] + (K, N)  # Same batch dims, K x N
 
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
-    )(shape)
+    )(shape_a)
 
-    # The traced operation expects the input tensor to already be sharded
-    # Follow the working unit test approach: create interleaved -> convert to sharded
+    torch_input_tensor_b = gen_func_with_cast_tt(
+        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
+    )(shape_b)
 
-    # Create a working sharded memory config (ignore traced config which may be invalid)
-    num_cores = 4
-    core_range = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))
-    core_range_set = ttnn.CoreRangeSet({core_range})
+    # Matrix multiplication - convert to float32 for PyTorch operations
+    torch_output_tensor = torch.matmul(torch_input_tensor_a.float(), torch_input_tensor_b.float())
 
-    # Calculate tile-aligned shard shape
-    tile_size = 32
-    total_height = shape[-2]
-    total_width = shape[-1]
-
-    shard_height = (total_height // num_cores) // tile_size * tile_size
-    if shard_height == 0:
-        shard_height = tile_size
-
-    shard_width = (total_width // tile_size) * tile_size
-    if shard_width == 0:
-        shard_width = tile_size
-
-    shard_shape = [shard_height, shard_width]
-
-    shard_spec = ttnn.ShardSpec(core_range_set, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
-
-    # Use DRAM for sharding
-    sharded_memory_config = ttnn.MemoryConfig(
-        memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED, buffer_type=ttnn.BufferType.DRAM, shard_spec=shard_spec
-    )
-
-    # Create interleaved tensor first
-    input_tensor_interleaved = ttnn.from_torch(
+    input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
         dtype=input_a_dtype,
         layout=input_a_layout,
         device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=input_a_memory_config,
     )
 
-    # Convert to sharded
-    sharded_tensor = ttnn.interleaved_to_sharded(input_tensor_interleaved, sharded_memory_config)
-
-    # PyTorch reference: sharded_to_interleaved should return the same tensor
-    # Since memory layout doesn't change the tensor values
-    torch_output_tensor = torch_input_tensor_a.clone()
+    # Force interleaved memory config for input_b since matmul requires it
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        dtype=input_b_dtype,
+        layout=input_b_layout,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,  # Force interleaved
+    )
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.sharded_to_interleaved(sharded_tensor, memory_config=output_memory_config)
+    output_tensor = ttnn.matmul(input_tensor_a, input_tensor_b, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(output_tensor)
     e2e_perf = stop_measuring_time(start_time)
 

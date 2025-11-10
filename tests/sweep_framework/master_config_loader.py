@@ -18,6 +18,7 @@ import ttnn
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
 from pathlib import Path
+from .operation_parameter_extractors import OperationParameterExtractors
 
 # Get the base directory dynamically - import from model_tracer
 try:
@@ -386,7 +387,12 @@ class MasterConfigLoader:
                 )
             elif operation_name in ["linear", "ttnn::linear"]:
                 print(f"🔧 Detected linear operation with special parameter structure")
-                return self._get_linear_suite_parameters(
+                return self._get_operation_suite_parameters(
+                    operation_name, configs, all_cases, deduplicate_inputs=not all_cases
+                )
+            elif operation_name in ["embedding", "ttnn::embedding"]:
+                print(f"🔧 Detected embedding operation with special parameter structure")
+                return self._get_operation_suite_parameters(
                     operation_name, configs, all_cases, deduplicate_inputs=not all_cases
                 )
 
@@ -1367,6 +1373,93 @@ class MasterConfigLoader:
             return {}
         except Exception as e:
             print(f"❌ Error extracting linear parameters: {e}")
+            import traceback
+
+            traceback.print_exc()
+            return {}
+
+    def _get_operation_suite_parameters(
+        self, operation_name: str, configs: List, all_cases: bool, deduplicate_inputs: bool = False
+    ) -> Dict:
+        """Get parameters for operations using the OperationParameterExtractors registry"""
+        try:
+            # Clean operation name (remove namespace prefix if present)
+            clean_op_name = operation_name.replace("ttnn::", "")
+
+            # First extract parameters from each config
+            extracted_params = []
+            for config in configs:
+                params = OperationParameterExtractors.extract_parameters(clean_op_name, config)
+                if params:
+                    extracted_params.append(params)
+
+            # Then transform the extracted parameters
+            if extracted_params:
+                transformed_configs = OperationParameterExtractors.transform_parameters(clean_op_name, extracted_params)
+
+                if transformed_configs:
+                    print(
+                        f"✅ Loaded {len(transformed_configs)} traced configurations for {operation_name} (model_traced suite)"
+                    )
+
+                    # For embedding, we have a specific parameter format
+                    if clean_op_name == "embedding":
+                        param_names = [
+                            "input_shape,input_a_dtype,input_b_dtype,input_a_layout,input_b_layout,"
+                            + "input_a_memory_config,input_b_memory_config,output_memory_config"
+                        ]
+                        param_lists = [
+                            [
+                                (
+                                    cfg["input_shape"],
+                                    cfg["input_a_dtype"],
+                                    cfg["input_b_dtype"],
+                                    cfg["input_a_layout"],
+                                    cfg["input_b_layout"],
+                                    cfg["input_a_memory_config"],
+                                    cfg["input_b_memory_config"],
+                                    cfg["output_memory_config"],
+                                )
+                                for cfg in transformed_configs
+                            ]
+                        ]
+                        return {param_names[0]: param_lists[0]}
+
+                    # For linear, we have a specific parameter format
+                    elif clean_op_name == "linear":
+                        param_names = [
+                            "input_shape,weight_shape,bias_shape,input_a_dtype,input_b_dtype,input_a_layout,input_b_layout,"
+                            + "input_a_memory_config,input_b_memory_config,output_memory_config,transpose_a,transpose_b,has_bias"
+                        ]
+                        param_lists = [
+                            [
+                                (
+                                    cfg["input_shape"],
+                                    cfg["weight_shape"],
+                                    cfg["bias_shape"],
+                                    cfg["input_a_dtype"],
+                                    cfg["input_b_dtype"],
+                                    cfg["input_a_layout"],
+                                    cfg["input_b_layout"],
+                                    cfg["input_a_memory_config"],
+                                    cfg["input_b_memory_config"],
+                                    cfg["output_memory_config"],
+                                    cfg["transpose_a"],
+                                    cfg["transpose_b"],
+                                    cfg["has_bias"],
+                                )
+                                for cfg in transformed_configs
+                            ]
+                        ]
+                        return {param_names[0]: param_lists[0]}
+
+                    # For other operations, return the transformed configs directly
+                    # This would need to be customized per operation
+                    return {}
+
+            return {}
+        except Exception as e:
+            print(f"❌ Error extracting {operation_name} parameters: {e}")
             import traceback
 
             traceback.print_exc()

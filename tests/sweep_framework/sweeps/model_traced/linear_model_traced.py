@@ -84,10 +84,8 @@ def run(
     torch_a = torch.randn(*shape_a, dtype=torch.float32)
     torch_b = torch.randn(*shape_b, dtype=torch.float32)
 
-    # For torch.linear, weight matrix should be (out_features, in_features)
+    # For linear operations, use the weight as-is (TTNN handles the format)
     torch_weight = torch_b
-    if len(shape_b) >= 2:
-        torch_weight = torch.transpose(torch_weight, -1, -2)
 
     # Create bias tensor if needed
     torch_bias = None
@@ -97,7 +95,20 @@ def run(
         ttnn_bias = ttnn.from_torch(torch_bias, layout=input_a_layout, device=device)
 
     # Golden output using PyTorch
-    torch_output_tensor = torch.nn.functional.linear(torch_a, torch_weight, torch_bias)
+    # Use matmul for multi-dimensional tensors (like traced 4D configs)
+    # Use linear for 2D tensors (like sample tests)
+    if len(torch_a.shape) > 2:
+        # Multi-dimensional tensors: use matmul semantics
+        # input[..., m, k] @ weight[..., k, n] -> result[..., m, n]
+        torch_output_tensor = torch.matmul(torch_a, torch_weight)
+        if torch_bias is not None:
+            torch_output_tensor = torch_output_tensor + torch_bias
+    else:
+        # 2D tensors: use linear (transpose weight to match torch.linear expectations)
+        torch_weight_for_linear = torch_weight
+        if len(torch_weight.shape) >= 2:
+            torch_weight_for_linear = torch_weight.transpose(-1, -2)
+        torch_output_tensor = torch.nn.functional.linear(torch_a, torch_weight_for_linear, torch_bias)
 
     # Create TTNN tensors
     ttnn_a = ttnn.from_torch(

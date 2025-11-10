@@ -1,4 +1,4 @@
-# Model traced sweep for sharded_to_interleaved
+# Model traced sweep for all_gather_async
 # Generated automatically - DO NOT EDIT MANUALLY
 
 import torch
@@ -18,7 +18,7 @@ TIMEOUT = 30
 # Load traced configurations from real model tests
 loader = MasterConfigLoader()
 # Default: Run exact traced configs from real models with all parameter values in vectors
-model_traced_params = loader.get_suite_parameters("sharded_to_interleaved", all_cases=False)
+model_traced_params = loader.get_suite_parameters("experimental::all_gather_async", all_cases=False)
 
 # Parameters provided to the test vector generator are defined here.
 parameters = {
@@ -48,7 +48,7 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
-    # Handle tuple input_shape for sample suite
+    # Handle tuple input_shape
     if isinstance(input_shape, (tuple, list)):
         shape = tuple(input_shape)
     else:
@@ -58,58 +58,24 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(shape)
 
-    # The traced operation expects the input tensor to already be sharded
-    # Follow the working unit test approach: create interleaved -> convert to sharded
+    # For all_gather_async, the output should be the same as input in a single device setup
+    torch_output_tensor = torch_input_tensor_a.clone()
 
-    # Create a working sharded memory config (ignore traced config which may be invalid)
-    num_cores = 4
-    core_range = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))
-    core_range_set = ttnn.CoreRangeSet({core_range})
-
-    # Calculate tile-aligned shard shape
-    tile_size = 32
-    total_height = shape[-2]
-    total_width = shape[-1]
-
-    shard_height = (total_height // num_cores) // tile_size * tile_size
-    if shard_height == 0:
-        shard_height = tile_size
-
-    shard_width = (total_width // tile_size) * tile_size
-    if shard_width == 0:
-        shard_width = tile_size
-
-    shard_shape = [shard_height, shard_width]
-
-    shard_spec = ttnn.ShardSpec(core_range_set, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
-
-    # Use DRAM for sharding
-    sharded_memory_config = ttnn.MemoryConfig(
-        memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED, buffer_type=ttnn.BufferType.DRAM, shard_spec=shard_spec
-    )
-
-    # Create interleaved tensor first
-    input_tensor_interleaved = ttnn.from_torch(
+    input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
         dtype=input_a_dtype,
         layout=input_a_layout,
         device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=input_a_memory_config,
     )
 
-    # Convert to sharded
-    sharded_tensor = ttnn.interleaved_to_sharded(input_tensor_interleaved, sharded_memory_config)
-
-    # PyTorch reference: sharded_to_interleaved should return the same tensor
-    # Since memory layout doesn't change the tensor values
-    torch_output_tensor = torch_input_tensor_a.clone()
-
     start_time = start_measuring_time()
-    output_tensor = ttnn.sharded_to_interleaved(sharded_tensor, memory_config=output_memory_config)
+    # all_gather_async is a collective operation - in single device setup it should be identity
+    output_tensor = ttnn.experimental.all_gather_async(input_tensor_a, dim=0, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(output_tensor)
     e2e_perf = stop_measuring_time(start_time)
 
-    # Check with PCC
+    # Check with PCC - should be identical in single device setup
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
     return [pcc, e2e_perf]
