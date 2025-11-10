@@ -12,14 +12,6 @@ namespace ttnn::operations::data_movement {
 
 namespace detail {
 
-// static uint32_t get_tiled_page_size(const ttnn::Tensor& input_tensor) {
-//     auto BUFFER_ALIGNMENT = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
-//                                 ? tt::tt_metal::hal::get_dram_alignment()
-//                                 : tt::tt_metal::hal::get_l1_alignment();
-//     const auto& shape = input_tensor.logical_shape();  // in anticipation of RM padding
-//     return tt::round_up(shape[-1] * input_tensor.element_size(), BUFFER_ALIGNMENT);
-// }
-
 static uint32_t get_tile_volume(const ttnn::Tensor& input_tensor) {
     const auto& tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     return tile_shape[0] * tile_shape[1];
@@ -103,7 +95,10 @@ FlipDeviceOperation::MultiCoreTiled::cached_program_t FlipDeviceOperation::Multi
     // 2) Create circular buffer
     // ------------------------------------------------------------------------
     DataFormat input_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
-    uint32_t input_page_size = detail::get_rm_page_size(input_tensor);
+
+    uint32_t input_page_size =
+        input_tensor.tensor_spec().tile().get_tile_size(datatype_to_dataformat_converter(input_tensor.dtype()));
+
     uint32_t num_input_pages_to_read = 2;  // double buffering
     uint32_t cb_size = num_input_pages_to_read * input_page_size;
 

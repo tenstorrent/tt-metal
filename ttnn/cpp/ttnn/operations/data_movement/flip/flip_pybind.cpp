@@ -22,13 +22,11 @@ void bind_flip(py::module& module) {
 
             Input Specs:
                 - **Supported:**
-                    - Tensors with up to 4 dimensions
                     - Interleaved row-major layout tensors of following dtypes: `bfloat16`, `float32`, `int32`
-                    - Interleaved tiled layout tensors of following dtypes: `bfloat16`, `float32`
+                    - Interleaved tiled layout tensors of following dtypes: `bfloat16`, `float32`, `int32`
 
                 - **Not Supported:**
                     - Sharded tensors
-                    - Interleaved tiled layout tensors  of `int32` dtype
 
             Args:
                 input_tensor (ttnn.Tensor): the input tensor.

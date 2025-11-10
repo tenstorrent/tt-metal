@@ -65,12 +65,12 @@ MassagedFlip build_untilize_rm_retilize_flip(
     const MemoryConfig& output_memory_config, ttnn::Shape& logical_output_shape) {
     return MassagedFlip(MassagedFlipParams{
         // predicate: decide whether we need untilize->rm-slice->retilize
-        .predicate = [](const ttnn::Tensor& tensor, const ttnn::SmallVector<uint32_t>& /*dims*/) -> bool {
-            // If padded_shape != logical_shape then input is tiled/padded and needs handling
-            bool res = tensor.layout() == ttnn::TILE_LAYOUT && tensor.logical_shape() != tensor.padded_shape();
-            flip_db_print(res, "untilize_rm_retilize required");
+        .predicate = [](const ttnn::Tensor& tensor, const ttnn::SmallVector<uint32_t>&) -> bool {
+            bool res = tensor.layout() == ttnn::TILE_LAYOUT;
+            flip_db_print(res, "untilize_rm_retilize required (always for TILE_LAYOUT)");
             return res;
         },
+
         // pre_transform: untilize -> padding-oblivious slice -> reshape to logical shape
         .pre_transform = [output_memory_config](
                              const ttnn::Tensor& input_tensor,
@@ -129,12 +129,10 @@ ttnn::Tensor ExecuteFlip::invoke(
     const std::optional<MemoryConfig>& memory_config) {
     const auto input_rank = input_tensor.logical_shape().rank();
 
-    TT_FATAL(input_rank <= 5, "Flip operation supports tensors with rank up to 5, got rank {}", input_rank);
+    // TT_FATAL(input_rank <= 5, "Flip operation supports tensors with rank up to 5, got rank {}", input_rank);
     TT_FATAL(!dims.empty(), "Flip dimensions cannot be empty");
     TT_FATAL(is_device_tensor(input_tensor), "Input tensor must be on device");
-    TT_FATAL(
-        !(input_tensor.layout() == ttnn::Layout::TILE && input_tensor.dtype() == ttnn::DataType::INT32),
-        "Flip does not support INT32 tensors with tiled layout");
+    TT_FATAL(input_rank > 1, "Flip does not support tensors with rank 1");
 
     // Normalize dimensions to positive indices
     SmallVector<uint32_t> normalized_dims(dims.size());
