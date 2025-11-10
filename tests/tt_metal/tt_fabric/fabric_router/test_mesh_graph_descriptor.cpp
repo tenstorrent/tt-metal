@@ -474,9 +474,15 @@ TEST(MeshGraphDescriptorTests, TestInstanceCreation) {
     auto pod_ids = desc.instances_by_type("POD");
     auto mesh_ids = desc.instances_by_type("MESH");
 
-    for (uint32_t id : cluster_ids) check_instance_type(desc, id, true);   // CLUSTER should be graph
-    for (uint32_t id : pod_ids) check_instance_type(desc, id, true);       // POD should be graph
-    for (uint32_t id : mesh_ids) check_instance_type(desc, id, false);     // mesh should be mesh
+    for (uint32_t id : cluster_ids) {
+        check_instance_type(desc, id, true);  // CLUSTER should be graph
+    }
+    for (uint32_t id : pod_ids) {
+        check_instance_type(desc, id, true);  // POD should be graph
+    }
+    for (uint32_t id : mesh_ids) {
+        check_instance_type(desc, id, false);  // mesh should be mesh
+    }
 
     // Check hierarchy relationships
     check_instance_exists_by_name(desc, "G0");
