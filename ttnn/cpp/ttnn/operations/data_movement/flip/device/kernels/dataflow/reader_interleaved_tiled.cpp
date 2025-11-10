@@ -27,16 +27,6 @@ inline uint32_t calc_src_tile_index(
         }
     }
 
-    // DPRINT << "DST_MULTI_DIM: ";
-    // for (uint32_t i = 0; i < rank; ++i)
-    //     DPRINT << dst_multi_dim[i] << ", ";
-    // DPRINT << ENDL();
-
-    // DPRINT << "SRC_MULTI_DIM: ";
-    // for (uint32_t i = 0; i < rank; ++i)
-    //     DPRINT << src_multi_dim[i] << ", ";
-    // DPRINT << ENDL();
-
     // 3. Convert source tile multi-dimensional index to linear index
     uint32_t src_tile_id = 0;
     for (uint32_t i = 0; i < rank; ++i) {
@@ -135,18 +125,6 @@ void kernel_main() {
             }
         }
 
-        // DPRINT << "debug print" << ENDL();
-        // for (uint32_t face = 0; face < 4; face++) {
-        //     for (uint32_t face_row = 0; face_row < FACE_HEIGHT; face_row++) {
-        //         for (uint32_t face_col = 0; face_col < FACE_WIDTH; ++face_col) {
-        //             DPRINT << uint32_t(reinterpret_cast<uint32_t*>(save_addr)[face_col]) << ", ";
-        //         }
-        //         save_addr += SUBTILE_LINE_BYTES;
-        //         DPRINT << ENDL();
-        //     }
-        //     DPRINT << ENDL();
-        // }
-        // noc_async_read_barrier();
         cb_push_back(cb_id, onetile);
     }
 }

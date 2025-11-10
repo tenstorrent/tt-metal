@@ -56,7 +56,6 @@ void kernel_main() {
 
     // Derived constants
     const uint32_t row_width = input_shape[rank - 1];
-    // const bool is_vertical_flip = static_cast<bool>(dims_to_flip[rank - 2]);
     const bool is_horizontal_flip = static_cast<bool>(dims_to_flip[rank - 1]);
 
     constexpr uint32_t cb_id = tt::CBIndex::c_0;
@@ -65,23 +64,10 @@ void kernel_main() {
     for (uint32_t row_id = start_row; row_id < end_row; row_id++) {
         uint32_t src_row_id = compute_src_row_id(row_id, rank, input_shape, dims_to_flip, input_row_strides);
 
-        // DPRINT << src_row_id << " | " << row_id << ENDL();
-
         cb_reserve_back(cb_id, 1);
         uint32_t l1_buffer_addr = get_write_ptr(cb_id);
         noc_async_read_page(src_row_id, s0, l1_buffer_addr);
         noc_async_read_barrier();
-
-        // cb_reserve_back(cb_id, 1);
-        // uint32_t l1_buffer_addr = get_write_ptr(cb_id);
-        // uint64_t read_noc_addr = get_noc_addr(src_row_id, s0);
-        // noc_async_read(read_noc_addr, l1_buffer_addr, page_size);
-        // noc_async_read_barrier();
-
-        // for (uint32_t col_id = 0; col_id < row_width; ++col_id) {
-        //     DPRINT << uint32_t(reinterpret_cast<uint32_t*>(l1_buffer_addr)[col_id]) << ", ";
-        // }
-        // DPRINT << ENDL();
 
         if (is_horizontal_flip) {
             // flip elements within the row

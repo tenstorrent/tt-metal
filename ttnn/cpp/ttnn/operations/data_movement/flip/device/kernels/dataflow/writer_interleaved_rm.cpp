@@ -17,7 +17,6 @@ void kernel_main() {
     uint32_t end_row = get_arg_val<uint32_t>(2);
 
     constexpr uint32_t cb_id = tt::CBIndex::c_0;
-    // const InterleavedAddrGen<dst_is_dram> d0 = {.bank_base_address = dst_addr, .page_size = page_size};
     const auto d0 = TensorAccessor(dst_args, dst_addr, page_size);
 
     for (uint32_t row_id = start_row; row_id < end_row; ++row_id) {
