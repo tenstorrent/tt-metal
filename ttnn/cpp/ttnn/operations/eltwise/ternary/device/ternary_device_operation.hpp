@@ -21,6 +21,7 @@ struct TernaryDeviceOperation {
         TernaryBroadcastType broadcast_type;
         tt::tt_metal::MemoryConfig memory_config;
         DataType input_dtype;
+        const CoreRangeSet worker_grid;
         std::optional<DataType> dtype;
         std::optional<DeviceComputeKernelConfig> compute_kernel_config;
 
@@ -45,7 +46,6 @@ struct TernaryDeviceOperation {
             tt::tt_metal::KernelHandle reader_kernel_id{};
             tt::tt_metal::KernelHandle writer_kernel_id{};
             tt::tt_metal::KernelHandle compute_kernel_id{};
-            CoreCoord compute_with_storage_grid_size;
         };
 
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
