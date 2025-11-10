@@ -265,9 +265,11 @@ def sdxl_get_prompts(
     start_from,
     num_prompts,
 ):
-    assert (
-        0 <= start_from < 5000 and start_from + num_prompts <= 5000
-    ), "start_from must be between 0 and 4999, and start_from + num_prompts must not exceed 5000."
+    # assert (
+    #     0 <= start_from < 5000 and start_from + num_prompts <= 5000
+    # ), "start_from must be between 0 and 4999, and start_from + num_prompts must not exceed 5000."
+    to_repeat = num_prompts // 5000 + 1
+    num_prompts = min(num_prompts, 5000)
 
     prompts = []
 
@@ -287,6 +289,7 @@ def sdxl_get_prompts(
                 break
             prompts.append(row[2])
 
+    prompts = prompts * to_repeat
     return prompts
 
 
