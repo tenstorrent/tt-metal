@@ -56,7 +56,11 @@ std::vector<Tensor> send_async_impl(
     return tt::tt_metal::operation::run(ttnn::SendAsync(mesh_socket), {input_tensor});
 }
 
-std::vector<Tensor> send_async(const Tensor& input_tensor, const tt::tt_metal::distributed::MeshSocket& mesh_socket) {
+std::vector<Tensor> send_async(
+    const Tensor& input_tensor,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
+    const tt::tt_metal::distributed::SocketConfig& socket_config) {
+    auto mesh_socket = tt::tt_metal::distributed::MeshSocket(mesh_device, socket_config);
     return send_async_impl(input_tensor, mesh_socket);
 }
 
