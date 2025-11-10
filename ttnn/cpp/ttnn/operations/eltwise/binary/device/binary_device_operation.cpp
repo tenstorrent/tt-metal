@@ -31,10 +31,17 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
         case BinaryOpType::LOGICAL_AND:
         case BinaryOpType::LOGICAL_OR:
         case BinaryOpType::LOGICAL_XOR:
+            return a == b && (
+                a == DataType::FLOAT32 ||
+                a == DataType::INT32 ||
+                a == DataType::UINT32 ||
+                a == DataType::UINT16);
         case BinaryOpType::SQUARED_DIFFERENCE:
-            return (
-                (a == DataType::FLOAT32 && b == DataType::FLOAT32) || (a == DataType::INT32 && b == DataType::INT32) ||
-                (a == DataType::UINT16 && b == DataType::UINT16) || (a == DataType::UINT8 && b == DataType::UINT8));
+            return a == b && (
+                a == DataType::FLOAT32 ||
+                a == DataType::INT32 ||
+                a == DataType::UINT16 ||
+                a == DataType::UINT8);
         case BinaryOpType::LOGADDEXP:
         case BinaryOpType::LOGADDEXP2:
         case BinaryOpType::LDEXP:
@@ -57,9 +64,10 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
         case BinaryOpType::BITWISE_XOR:
         case BinaryOpType::BITWISE_OR:
         case BinaryOpType::BITWISE_AND:
-            return (
-                (a == DataType::INT32 && b == DataType::INT32) || (a == DataType::UINT16 && b == DataType::UINT16) ||
-                (a == DataType::UINT32 && b == DataType::UINT32));
+            return a == b && (
+                a == DataType::INT32 ||
+                a == DataType::UINT32 ||
+                a == DataType::UINT16);
         case BinaryOpType::MAXIMUM:
         case BinaryOpType::MINIMUM:
         case BinaryOpType::XLOGY:
