@@ -1,9 +1,10 @@
 transformer_config:
-    num_heads: 32
-    num_groups: 8  # must be divisible by number of devices, original value was 4
-    embedding_dim: 2048
-    dropout_prob: 0.0
-    num_blocks: 22
-    vocab_size: 32000
-    max_sequence_length: 2048
-    runner_type: default
+  model_type: "llama"
+  num_heads: 32
+  num_groups: 8  # must be divisible by number of devices, original value was 4
+  embedding_dim: 2048
+  dropout_prob: 0.0
+  num_blocks: 22
+  vocab_size: 32000
+  max_sequence_length: 2048
+  runner_type: default

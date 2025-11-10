@@ -1,4 +1,5 @@
 transformer_config:
+  model_type: "llama"
   num_heads: 32
   num_groups: 32 # original value was 8
   embedding_dim: 4096

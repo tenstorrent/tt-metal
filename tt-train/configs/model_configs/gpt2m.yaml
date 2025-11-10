@@ -1,4 +1,5 @@
 transformer_config:
+  model_type: "gpt2"
   runner_type: memory_efficient
   num_heads: 16
   embedding_dim: 1024

@@ -1,10 +1,11 @@
 transformer_config:
-    num_heads: 32
-    num_groups: 8
-    embedding_dim: 4096
-    dropout_prob: 0.0
-    num_blocks: 32
-    vocab_size: 32000
-    max_sequence_length: 2048
-    runner_type: memory_efficient
-    theta: 10000.0
+  model_type: "llama"
+  num_heads: 32
+  num_groups: 8
+  embedding_dim: 4096
+  dropout_prob: 0.0
+  num_blocks: 32
+  vocab_size: 32000
+  max_sequence_length: 2048
+  runner_type: memory_efficient
+  theta: 10000.0

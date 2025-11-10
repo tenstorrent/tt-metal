@@ -1,4 +1,5 @@
 transformer_config:
+  model_type: "gpt2"
   num_heads: 6
   embedding_dim: 384
   dropout_prob: 0.2
