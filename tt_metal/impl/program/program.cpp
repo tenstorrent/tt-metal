@@ -1086,7 +1086,7 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
                         page_offsets[transfer_info_index] =
                             binaries_data.size() * sizeof(uint32_t) / HostMemDeviceCommand::PROGRAM_PAGE_SIZE;
                         lengths[transfer_info_index] = len * sizeof(uint32_t);
-                        processor_ids[transfer_info_index] = kernel_impl.get_kernel_processor_type(sub_kernel_index);
+                        processor_ids[transfer_info_index] = kernel->get_kernel_processor_type(sub_kernel_index);
 
                         binaries_data.insert(binaries_data.end(), mem_ptr, mem_ptr + len);
                         binaries_data.resize(
