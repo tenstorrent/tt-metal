@@ -22,11 +22,13 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
 @pytest.mark.parametrize(
     "mesh_device, sp, tp, encoder_tp, vae_tp, topology, num_links",
     [
+        [(1, 2), (1, 0), (2, 1), (2, 1), (2, 1), ttnn.Topology.Linear, 1],
         [(2, 2), (2, 0), (2, 1), (2, 1), (2, 1), ttnn.Topology.Linear, 1],
         [(2, 4), (2, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1],
         [(4, 8), (4, 0), (8, 1), (4, 0), (4, 0), ttnn.Topology.Linear, 4],
     ],
     ids=[
+        "1x2sp0tp1",
         "2x2sp0tp1",
         "2x4sp0tp1",
         "4x8sp0tp1",
@@ -274,12 +276,23 @@ def test_flux1_pipeline_performance(
             "vae_decoding_time": 2.6,
             "total_time": 25.0,
         }
+    elif tuple(mesh_device.shape) == (1, 2):
+        assert is_blackhole(), "1x2 is only supported for blackhole"
+        expected_metrics = {
+            "clip_encoding_time": 0.1,
+            "t5_encoding_time": 0.25,
+            "total_encoding_time": 0.3,
+            "denoising_steps_time": 1.1 * num_inference_steps,
+            "vae_decoding_time": 1.6,
+            "total_time": 30.0,
+        }
     else:
         assert False, f"Unknown mesh device for performance comparison: {mesh_device}"
 
     if is_ci_env:
         # In CI, dump a performance report
         device_name_map = {
+            (1, 2): "bh_p300",
             (2, 2): "bh_qb",
             (2, 4): "wh_t3k",
             (4, 8): "wh_glx",

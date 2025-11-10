@@ -25,6 +25,7 @@ from time import time
 @pytest.mark.parametrize(
     ("mesh_device", "submesh_shape", "sp_axis", "tp_axis", "num_links", "id"),
     [
+        pytest.param((1, 2), (1, 2), 0, 1, 1, "1x2sp0tp1", id="1x2sp0tp1"),
         pytest.param((1, 4), (1, 4), 0, 1, 1, "1x4sp0tp1", id="1x4sp0tp1"),
         pytest.param((2, 2), (2, 2), 0, 1, 1, "2x2sp0tp1", id="2x2sp0tp1"),
         pytest.param((2, 4), (2, 4), 0, 1, 1, "2x4sp0tp1", id="2x4sp0tp1"),
@@ -177,6 +178,7 @@ def test_single_transformer_block(
 @pytest.mark.parametrize(
     ("mesh_device", "submesh_shape", "sp_axis", "tp_axis", "num_links", "id"),
     [
+        pytest.param((1, 2), (1, 2), 0, 1, 1, "1x2sp0tp1", id="1x2sp0tp1"),
         pytest.param((1, 4), (1, 4), 0, 1, 1, "1x4sp0tp1", id="1x4sp0tp1"),
         pytest.param((2, 2), (2, 2), 0, 1, 1, "2x2sp0tp1", id="2x2sp0tp1"),
         pytest.param((2, 4), (2, 4), 0, 1, 1, "2x4sp0tp1", id="2x4sp0tp1"),
