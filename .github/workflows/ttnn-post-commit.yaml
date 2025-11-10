@@ -85,7 +85,6 @@ jobs:
             { name: "ttnn data_movement/ccl group 1", cmd: 'pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/data_movement tests/ttnn/unit_tests/operations/ccl tests/ttnn/unit_tests/operations/point_to_point -xv --splits 3 --group 1 -m "not disable_fast_runtime_mode"', merge_gate: false },
             { name: "ttnn data_movement/ccl group 2", cmd: 'pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/data_movement tests/ttnn/unit_tests/operations/ccl tests/ttnn/unit_tests/operations/point_to_point -xv --splits 3 --group 2 -m "not disable_fast_runtime_mode"', merge_gate: false },
             { name: "ttnn data_movement/ccl group 3", cmd: 'pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/data_movement tests/ttnn/unit_tests/operations/ccl tests/ttnn/unit_tests/operations/point_to_point -xv --splits 3 --group 3 -m "not disable_fast_runtime_mode"', merge_gate: false },
-            { name: "ttnn data_movement/ccl group 1", cmd: 'pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/data_movement tests/ttnn/unit_tests/operations/ccl tests/ttnn/unit_tests/operations/point_to_point -xv --splits 3 --group 1 -m "not disable_fast_runtime_mode"', merge_gate: false },
             { name: "ttnn conv group", cmd: 'pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/conv -xv -m "not disable_fast_runtime_mode"', merge_gate: false },
             { name: "ttnn pool group", cmd: 'pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/pool -xv -m "not disable_fast_runtime_mode"', merge_gate: false },
             { name: "ttnn matmul group", cmd: 'pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/matmul -xv -m "not disable_fast_runtime_mode"', merge_gate: false },
@@ -109,7 +108,7 @@ jobs:
           requested_ttnn_tests=$default_ttnn_tests
 
           requested_ttnn_tests=$(jq --argjson merge_gate_call "${{ inputs.merge-gate-call }}" '[.[] | select(.merge_gate == $merge_gate_call)]' <<< "$requested_ttnn_tests")
-          echo "[info] after filtering filtering out perf tests: $requested_ttnn_tests"
+          echo "[info] after filtering for requested workflow tests: $requested_ttnn_tests"
 
           # Check that we have a valid test list that's not empty
           echo "$requested_ttnn_tests" | jq -e 'if type != "array" then error("Not a valid JSON array") elif length == 0 then error("Test list is empty") else . end' && echo "Valid test configs"
