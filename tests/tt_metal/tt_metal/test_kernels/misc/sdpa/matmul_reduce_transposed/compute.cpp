@@ -123,8 +123,6 @@ void reduce_c_transposed(uint32_t out_cb) {
         copy_tile(in0_cb, i, i);
     }
 
-    // dprint_tensix_dest_reg<false>(0);
-
     tile_regs_wait();  // pack thread waits for math thread to finish
 
     sfpu_reduce_max_sdpa_init(q_chunk_size);
@@ -137,7 +135,7 @@ void reduce_c_transposed(uint32_t out_cb) {
         pack_tile(i, out_cb, i);
     }
 
-    // PACK(( tt::compute::common::print_full_tile(out_cb, 0) ));
+    PACK((tt::compute::common::print_full_tile(out_cb, 0)));
 
     release_dst();
 }
