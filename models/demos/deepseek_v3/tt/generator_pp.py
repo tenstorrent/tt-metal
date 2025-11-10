@@ -558,9 +558,6 @@ class DeepseekGenerator:
 
         profiler.end("run")
 
-        if early_print_first_user:
-            logger.info("\n===== Done =====")
-
         # Calculate statistics
         prefill_time = profiler.get_duration("inference_prefill")
         decode_times = [profiler.get_duration(f"decode_time_{i}") for i in range(max_new_tokens)]
