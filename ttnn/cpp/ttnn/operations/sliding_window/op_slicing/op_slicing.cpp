@@ -16,11 +16,13 @@ namespace ttnn::operations::op_slicing {
 
 void run_sliced_op(
     const ttnn::Tensor& input_tensor,
-    ttnn::Tensor& output_tensor,
+    std::vector<OpSliceAttr::RefTensor>& output_tensors,
     OpSliceAttr* op_slice_attr,
     Op2DSliceConfig dram_slice_config) {
-    tt::tt_metal::Layout output_layout = output_tensor.layout();
-    auto [batch_size, output_height, output_width, output_channels] = output_tensor.logical_shape().to_array_4D();
+    tt::tt_metal::Layout output_layout = output_tensors[0].get().layout();
+    uint32_t num_output_tensors = output_tensors.size();
+    auto [batch_size, output_height, output_width, output_channels] =
+        output_tensors[0].get().logical_shape().to_array_4D();
     auto [in_batch_, input_height, input_width, input_channels] = input_tensor.logical_shape().to_array_4D();
 
     uint32_t slice_rounding_value = 1;
@@ -142,36 +144,45 @@ void run_sliced_op(
             ttnn::SmallVector<uint32_t>{1, 1, 1, 1},  // Step
             sliced_input_tensor_memory_config);
 
-        ttnn::Tensor sliced_output_tensor = op_slice_attr->run_L1_op(
+        auto sliced_output_tensors = op_slice_attr->run_L1_op(
             sliced_input_tensor,
             {output_slice_height_start, output_slice_width_start},
             {output_slice_height_end, output_slice_width_end});
-
-        // slice_write supports all sharding layouts for tiled inputs. For row major, height & block sharding are
-        // supported.
-        if (sliced_output_tensor.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED &&
-            sliced_output_tensor.memory_config().memory_layout() != TensorMemoryLayout::BLOCK_SHARDED &&
-            output_tensor.layout() == Layout::ROW_MAJOR) {
-            sliced_output_tensor = ttnn::to_memory_config(
-                sliced_output_tensor, MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1});
-        }
-        if (sliced_output_tensor.layout() != Layout::ROW_MAJOR && output_layout == Layout::ROW_MAJOR) {
-            sliced_output_tensor = ttnn::untilize(sliced_output_tensor);
-        }
-        if (sliced_output_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED) {
-            // slice_write expects the output tensor to be correctly shaped when its in interleaved memory layout.
-            sliced_output_tensor = ttnn::reshape(
+        TT_FATAL(
+            sliced_output_tensors.size() == num_output_tensors,
+            "Number of output tensors from run_L1_op {} does not match the expected number of output tensors {}",
+            sliced_output_tensors.size(),
+            num_output_tensors);
+        for (uint32_t output_tensor_index = 0; output_tensor_index < num_output_tensors; output_tensor_index++) {
+            auto& sliced_output_tensor = sliced_output_tensors[output_tensor_index];
+            auto& output_tensor = output_tensors[output_tensor_index].get();
+            // slice_write supports all sharding layouts for tiled inputs. For row major, height & block sharding are
+            // supported.
+            if (sliced_output_tensor.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED &&
+                sliced_output_tensor.memory_config().memory_layout() != TensorMemoryLayout::BLOCK_SHARDED &&
+                output_layout == Layout::ROW_MAJOR) {
+                sliced_output_tensor = ttnn::to_memory_config(
+                    sliced_output_tensor, MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1});
+            }
+            if (sliced_output_tensor.layout() != Layout::ROW_MAJOR && output_layout == Layout::ROW_MAJOR) {
+                sliced_output_tensor = ttnn::untilize(sliced_output_tensor);
+            }
+            if (sliced_output_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED) {
+                // slice_write expects the output tensor to be correctly shaped when its in interleaved memory layout.
+                sliced_output_tensor = ttnn::reshape(
+                    sliced_output_tensor,
+                    ttnn::Shape({batch_size, output_slice_height, output_slice_width, output_channels}),
+                    ttnn::Shape(
+                        {batch_size, output_slice_height, output_slice_width, sliced_output_tensor.padded_shape()[3]}));
+            }
+            ttnn::experimental::slice_write(
                 sliced_output_tensor,
-                ttnn::Shape({batch_size, output_slice_height, output_slice_width, output_channels}),
-                ttnn::Shape(
-                    {batch_size, output_slice_height, output_slice_width, sliced_output_tensor.padded_shape()[3]}));
+                output_tensor,
+                ttnn::SmallVector<uint32_t>{0, output_slice_height_start, output_slice_width_start, 0},
+                ttnn::SmallVector<uint32_t>{
+                    batch_size, output_slice_height_end, output_slice_width_end, output_channels},
+                ttnn::SmallVector<uint32_t>{1, 1, 1, 1});
         }
-        ttnn::experimental::slice_write(
-            sliced_output_tensor,
-            output_tensor,
-            ttnn::SmallVector<uint32_t>{0, output_slice_height_start, output_slice_width_start, 0},
-            ttnn::SmallVector<uint32_t>{batch_size, output_slice_height_end, output_slice_width_end, output_channels},
-            ttnn::SmallVector<uint32_t>{1, 1, 1, 1});
         output_slice_dim_start += output_slice_size;
         slice_index++;
     }
