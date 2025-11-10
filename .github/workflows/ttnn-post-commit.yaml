@@ -107,7 +107,7 @@ jobs:
           echo $default_ttnn_tests
           echo $default_ttnn_tests | jq
           requested_ttnn_tests=$default_ttnn_tests
-          
+
           requested_ttnn_tests=$(jq --argjson merge_gate_call "${{ inputs.merge-gate-call }}" '[.[] | select(.merge_gate == $merge_gate_call)]' <<< "$requested_ttnn_tests")
           echo "[info] after filtering filtering out perf tests: $requested_ttnn_tests"
 
