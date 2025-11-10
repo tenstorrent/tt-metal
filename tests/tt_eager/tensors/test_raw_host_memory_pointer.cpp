@@ -122,7 +122,7 @@ void test_raw_host_memory_pointer() {
         TT_ASSERT(element == output_value);
     }
 
-    std::cout << ttnn::to_string(tensor_for_printing) << std::endl;
+    std::cout << ttnn::to_string(tensor_for_printing) << "\n";
     /*  Run and Print End   */
 
     /* Alternative Way to Print Start */
@@ -137,7 +137,7 @@ void test_raw_host_memory_pointer() {
 
     Tensor alternative_tensor_for_printing =
         Tensor(std::move(alternative_tensor_for_printing_buffer), shape, DataType::BFLOAT16, Layout::TILE);
-    std::cout << ttnn::to_string(alternative_tensor_for_printing) << std::endl;
+    std::cout << ttnn::to_string(alternative_tensor_for_printing) << "\n";
 
     for (auto& element : tt::tt_metal::host_buffer::get_as<bfloat16>(alternative_tensor_for_printing)) {
         TT_ASSERT(element == output_value);

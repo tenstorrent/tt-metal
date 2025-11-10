@@ -64,11 +64,11 @@ TEST_F(SoftmaxTest, SoftmaxTest_Batch) {
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
     std::cout << "Input Logits:\n";
-    std::cout << ttnn::to_string(input) << std::endl;
+    std::cout << ttnn::to_string(input) << "\n";
 
     auto result = ttml::metal::softmax(input, dim);
     std::cout << "Sofrmax_test:\nResult:\n";
-    std::cout << ttnn::to_string(result) << std::endl;
+    std::cout << ttnn::to_string(result) << "\n";
 
     auto ttnn_softmax = ttnn_fixed::softmax(input, dim);
     auto ttnn_softmax_xtensor = core::to_xtensor(ttnn_softmax);
@@ -76,7 +76,7 @@ TEST_F(SoftmaxTest, SoftmaxTest_Batch) {
     auto expected_result = xt_softmax(input_tensor, dim);
     auto expected_result_print = core::from_xtensor(expected_result, &autograd::ctx().get_device());
     std::cout << "Expected Result:\n";
-    std::cout << ttnn::to_string(expected_result_print) << std::endl;
+    std::cout << ttnn::to_string(expected_result_print) << "\n";
 
     // Check if the result is close to the expected result
     auto result_xtensor = core::to_xtensor(result);
@@ -101,16 +101,16 @@ TEST_F(SoftmaxTest, SoftmaxTest_Big_Batch) {
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
     std::cout << "Input Logits:\n";
-    std::cout << ttnn::to_string(input) << std::endl;
+    std::cout << ttnn::to_string(input) << "\n";
 
     auto result = ttml::metal::softmax(input, dim);
     std::cout << "CrossEntropyBackward_Test:\nResult:\n";
-    std::cout << ttnn::to_string(result) << std::endl;
+    std::cout << ttnn::to_string(result) << "\n";
 
     auto expected_result = xt_softmax(input_tensor, dim);
     auto expected_result_print = core::from_xtensor(expected_result, &autograd::ctx().get_device());
     std::cout << "Expected Result:\n";
-    std::cout << ttnn::to_string(expected_result_print) << std::endl;
+    std::cout << ttnn::to_string(expected_result_print) << "\n";
 
     // Check if the result is close to the expected result
     auto result_xtensor = core::to_xtensor(result);
@@ -139,16 +139,16 @@ TEST_F(SoftmaxTest, NIGHTLY_SoftmaxTest_Huge_Batch) {
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
     std::cout << "Input Logits:\n";
-    std::cout << ttnn::to_string(input) << std::endl;
+    std::cout << ttnn::to_string(input) << "\n";
 
     auto result = ttml::metal::softmax(input, dim);
     std::cout << "CrossEntropyBackward_Test:\nResult:\n";
-    std::cout << ttnn::to_string(result) << std::endl;
+    std::cout << ttnn::to_string(result) << "\n";
 
     auto expected_result = xt_softmax(input_tensor, dim);
     auto expected_result_print = core::from_xtensor(expected_result, &autograd::ctx().get_device());
     std::cout << "Expected Result:\n";
-    std::cout << ttnn::to_string(expected_result_print) << std::endl;
+    std::cout << ttnn::to_string(expected_result_print) << "\n";
 
     // Check if the result is close to the expected result
     auto result_xtensor = core::to_xtensor(result);
@@ -204,11 +204,11 @@ TEST_F(SoftmaxTest, SoftmaxTest_Large_Values) {
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
     std::cout << "Input Logits:\n";
-    std::cout << ttnn::to_string(input) << std::endl;
+    std::cout << ttnn::to_string(input) << "\n";
 
     auto result = ttml::metal::softmax(input, dim);
     std::cout << "Sofrmax_test:\nResult:\n";
-    std::cout << ttnn::to_string(result) << std::endl;
+    std::cout << ttnn::to_string(result) << "\n";
 
     auto ttnn_softmax = ttnn_fixed::softmax(input, dim);
     auto ttnn_softmax_xtensor = core::to_xtensor(ttnn_softmax);
@@ -216,7 +216,7 @@ TEST_F(SoftmaxTest, SoftmaxTest_Large_Values) {
     auto expected_result = xt_softmax(input_tensor, dim);
     auto expected_result_print = core::from_xtensor(expected_result, &autograd::ctx().get_device());
     std::cout << "Expected Result:\n";
-    std::cout << ttnn::to_string(expected_result_print) << std::endl;
+    std::cout << ttnn::to_string(expected_result_print) << "\n";
 
     // Check if the result is close to the expected result
     auto result_xtensor = core::to_xtensor(result);
