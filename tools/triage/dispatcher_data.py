@@ -226,7 +226,6 @@ class DispatcherData:
         go_message_index = -1
         go_data = -1
         preload = False
-        host_assigned_id = -1
         waypoint = ""
         host_assigned_id = None
         try:

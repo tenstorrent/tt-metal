@@ -744,7 +744,6 @@ def run_generate_test_and_display_results(validate_tests=False):
 
             # Run generated tests one by one
             log.substep("Running generated tests to verify they work...")
-            all_tests_ran = True
             test_results = []
 
             for test_file in generated_files:
@@ -789,7 +788,6 @@ def run_generate_test_and_display_results(validate_tests=False):
                 except Exception as e:
                     log.error(f"  ✗ Failed to run {test_file}: {e}")
                     test_results.append((test_file, "error"))
-                    all_tests_ran = False
 
             # Summary of test results
             log.separator()
@@ -908,7 +906,7 @@ def run_hang_detection_test(
                 log.step(5, "Testing --isolate-hang functionality")
 
                 # Run dump_ops with isolate-hang flag
-                gen_result = subprocess.run(
+                subprocess.run(
                     ["python", "tools/triage/dump_ops.py", "--isolate-hang"],
                     capture_output=True,
                     text=True,
@@ -1065,7 +1063,7 @@ def run_external_test_hang_detection(
             log.substep(f"Process PID: {process.pid}")
 
             log.step(3, f"Monitoring output for hang (timeout: {hang_timeout}s)")
-            found_pattern, last_line = monitor_process_output(process, hang_timeout, None, "External Test")
+            _, last_line = monitor_process_output(process, hang_timeout, None, "External Test")
 
             if last_line:
                 log.substep(f"Last output: {last_line.strip()}")
@@ -1306,7 +1304,7 @@ def test_py_hang_with_generate_test(clean_device):
             log.substep(f"Process PID: {process.pid}")
 
             log.step(3, "Monitoring output for hang (timeout: 30s)")
-            found_pattern, last_line = monitor_process_output(process, 30, "Step 4:", "Python")
+            _, _ = monitor_process_output(process, 30, "Step 4:", "Python")
 
             if process.poll() is not None:
                 pytest.fail("Process should hang on ADD operation")

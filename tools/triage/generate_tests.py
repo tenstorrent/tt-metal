@@ -94,9 +94,6 @@ def generate_test_content(operation_id, operation, arguments_str):
     """Generate the test file content"""
     args = parse_arguments(arguments_str)
 
-    # Create parameter strings for pytest
-    shape_params = ", ".join(str(s) for s in args["shape"])
-
     # Handle different tensor dimensions
     if len(args["shape"]) == 1:
         param_names = ["size"]

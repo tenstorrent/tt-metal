@@ -38,11 +38,6 @@ import re, textwrap, subprocess, shutil, linecache
 import os
 from pathlib import Path
 
-script_config = ScriptConfig(
-    data_provider=False,
-    depends=["inspector_data", "dispatcher_data"],
-)
-
 
 # ============================================================================
 # Test Generation Functions (from generate_tests.py)
@@ -95,9 +90,6 @@ def extract_operation_from_name(operation_name):
 def generate_test_content(operation_id, operation, arguments_str):
     """Generate the test file content for a specific operation"""
     args = parse_arguments_for_test(arguments_str)
-
-    # Create parameter strings for pytest
-    shape_params = ", ".join(str(s) for s in args["shape"])
 
     # Handle different tensor dimensions
     if len(args["shape"]) == 1:
@@ -441,7 +433,6 @@ def resolve_cpp_callstack(callstack: str) -> str:
 
                 # Without -i flag, we get a single pair of (function, location)
                 if len(lines) >= 2:
-                    function_name = lines[0]
                     location = lines[1]
 
                     # Check if we got valid debug info (not "??")
@@ -568,6 +559,9 @@ def preserve_indentation_serializer(value) -> str:
 script_config = ScriptConfig(
     depends=["run_checks", "dispatcher_data"],
 )
+
+# Module-level variable to store collected host_id and operation names
+_collected_host_id_op_names = []
 
 
 @dataclass
@@ -1085,9 +1079,8 @@ def run(args, context: Context):
         all_host_id_op_names.extend(host_id_op_names)
 
     # Save host_id_op_names to a module-level variable for access in __main__
-    import dump_ops as this_module
-
-    this_module._collected_host_id_op_names = all_host_id_op_names
+    global _collected_host_id_op_names
+    _collected_host_id_op_names = all_host_id_op_names
 
     # Generate tests if requested
     if generate_test:
