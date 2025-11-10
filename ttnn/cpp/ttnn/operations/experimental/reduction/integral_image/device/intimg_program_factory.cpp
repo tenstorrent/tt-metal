@@ -16,6 +16,11 @@
 
 namespace ttnn::operations::experimental::reduction {
 
+// it is expected that this operator is used primarily on BOS' custom chips, which are 4 rows and 5 columns, however the
+// expected parallelisation of the maximal input shape is calculated to be 4 rows and 2 columns
+constexpr uint32_t CORES_X = 2;
+constexpr uint32_t CORES_Y = 4;
+
 IntImgProgramFactory::cached_program_t IntImgProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
@@ -27,7 +32,7 @@ IntImgProgramFactory::cached_program_t IntImgProgramFactory::create(
     auto& output_tensor{tensor_return_value};
     const auto& input_shape{input_tensor.padded_shape()};
 
-    constexpr uint32_t block_depth = 48;
+    constexpr uint32_t BLOCK_DEPTH = 32;
 
     Program program{};
 
@@ -42,8 +47,6 @@ IntImgProgramFactory::cached_program_t IntImgProgramFactory::create(
     const auto tile_spec = input_tensor.tensor_spec().tile();
 
     constexpr uint32_t TILES_NUM = 48;
-    constexpr uint32_t CORES_X = 2;
-    constexpr uint32_t CORES_Y = 4;
     const auto core_range_set = CoreRangeSet{{{0, 0}, {CORES_X - 1, CORES_Y - 1}}};
     create_cb(program, input_tensor.dtype(), IntImgCB::START, core_range_set, TILES_NUM);
     create_cb(program, input_tensor.dtype(), IntImgCB::INPUT, core_range_set, TILES_NUM);
@@ -69,11 +72,13 @@ IntImgProgramFactory::cached_program_t IntImgProgramFactory::create(
         static_cast<uint32_t>(IntImgCB::AXIS_3_BUFFER_1),
         tile_spec.get_height(),
         tile_spec.get_width(),
-        block_depth,
+        BLOCK_DEPTH,
         input_shape[3],
         input_shape[2],
         input_shape[1],
-        input_shape[0]};
+        input_shape[0],
+        CORES_X,
+        CORES_Y};
     auto dataflow_compile_time_args = compute_compile_time_args;
     tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(dataflow_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(dataflow_compile_time_args);
@@ -111,8 +116,8 @@ void IntImgProgramFactory::override_runtime_arguments(
 
     auto input_buffer_address = tensor_args.input_tensor.buffer()->address();
     auto output_buffer_address = tensor_return_value.buffer()->address();
-    for (uint32_t x = 0; x < 2; ++x) {
-        for (uint32_t y = 0; y < 4; ++y) {
+    for (uint32_t x = 0; x < CORES_X; ++x) {
+        for (uint32_t y = 0; y < CORES_Y; ++y) {
             const auto core = CoreCoord{x, y};
             auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
             auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);

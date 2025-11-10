@@ -8,13 +8,6 @@ import pytest
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from loguru import logger
 
-try:
-    from tracy import signpost
-except ModuleNotFoundError:
-
-    def signpost(header: str):
-        pass
-
 
 def ttnn_integral_image_cumsum_channel_last(features_nhwc):
     assert len(features_nhwc.shape) == 4, "Input tensor must be 4D"
@@ -49,7 +42,7 @@ def test_cumsum_channel_last(device, input_shape_nhwc, dtype, memory_config):
     if dtype == ttnn.bfloat16:
         torch_input_tensor = torch.relu(torch.rand(input_shape_nhwc, dtype=torch.bfloat16))
     else:
-        raise ValueError("Unsupported dtype")
+        pytest.skip("Unsupported dtype")
 
     # golden
     torch_output_tensor = torch.cumsum(torch.cumsum(torch_input_tensor, dim=1), dim=2)
@@ -58,15 +51,9 @@ def test_cumsum_channel_last(device, input_shape_nhwc, dtype, memory_config):
     input_tensor = ttnn.from_torch(
         torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype, memory_config=memory_config
     )
-    signpost(header=f"start_cumsum {input_shape_nhwc} {input_tensor.dtype} {input_tensor.memory_config().buffer_type}")
     output_tensor = ttnn_integral_image_cumsum_channel_last(input_tensor)
-    signpost(
-        header=f"stop_cumsum {output_tensor.shape} {output_tensor.dtype} {output_tensor.memory_config().buffer_type}"
-    )
     ttnn_output_tensor = ttnn.to_torch(output_tensor)
     assert_with_pcc(torch_output_tensor, ttnn_output_tensor, pcc=0.999)
-
-    signpost(header=f"=======")
 
     # check L1 just in case
     buffers = ttnn._ttnn.reports.get_buffers(device)
@@ -78,10 +65,6 @@ def test_cumsum_channel_last(device, input_shape_nhwc, dtype, memory_config):
     input_tensor = ttnn.from_torch(
         torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype, memory_config=memory_config
     )
-    signpost(header=f"start_intimg {input_shape_nhwc} {input_tensor.dtype} {input_tensor.memory_config().buffer_type}")
     output_tensor_2 = ttnn_integral_image_channel_last(input_tensor)
-    signpost(
-        header=f"stop_intimg {output_tensor_2.shape} {output_tensor_2.dtype} {output_tensor_2.memory_config().buffer_type}"
-    )
     ttnn_output_tensor_2 = ttnn.to_torch(output_tensor_2)
     assert_with_pcc(torch_output_tensor, ttnn_output_tensor_2, pcc=0.999)

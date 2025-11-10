@@ -15,14 +15,12 @@ FORCE_INLINE void receive_upper_block(
     uint32_t channels_slice_i,
     uint32_t column_block_i,
     uint32_t row_block_i,
-    uint32_t num_blocks_in_row,
     uint32_t num_blocks_in_column,
     uint32_t num_slices_along_channels,
     uint32_t block_depth,
     uint32_t generic_block_depth = 32) {
     for (uint32_t tile_i = 0; tile_i < block_depth; ++tile_i) {
         const uint32_t read_tile_id = get_tile_id(
-            num_blocks_in_row,
             num_blocks_in_column,
             num_slices_along_channels,
             tile_i,
@@ -41,14 +39,12 @@ FORCE_INLINE void output_block(
     uint32_t channels_slice_i,
     uint32_t column_block_i,
     uint32_t row_block_i,
-    uint32_t num_blocks_in_row,
     uint32_t num_blocks_in_column,
     uint32_t num_slices_along_channels,
     uint32_t block_depth,
     uint32_t generic_block_depth = 32) {
     for (uint32_t inner_tile_stride = 0; inner_tile_stride < block_depth; ++inner_tile_stride) {
         const uint32_t write_tile_id = get_tile_id(
-            num_blocks_in_row,
             num_blocks_in_column,
             num_slices_along_channels,
             inner_tile_stride,
@@ -65,11 +61,13 @@ FORCE_INLINE void broadcast_last_row_to_all_rows_in_cube(
     const output_addr_gen_t& output_addr_gen,
     uint32_t axis_3_propagation_read_cb,
     uint32_t axis_3_propagation_write_cb,
+    uint32_t tile_height = 32,
+    uint32_t tile_width = 32,
     uint32_t block_depth = 32) {
     // get the output after processing previous row (the block right above the currently processed block)
     // make the axis 3 propagation tile
     // push back to the compute
-    constexpr uint32_t LAST_ROW_ORD = 32 - 1;
+    const uint32_t LAST_ROW_INDEX = tile_height - 1;
     for (uint32_t tile_i = 0; tile_i < block_depth; ++tile_i) {
         ReadCBGuard propagation_upper_read_guard{axis_3_propagation_read_cb, ONE_TILE};
         WriteCBGuard propagation_upper_write_guard{axis_3_propagation_write_cb, ONE_TILE};
@@ -79,10 +77,10 @@ FORCE_INLINE void broadcast_last_row_to_all_rows_in_cube(
             reinterpret_cast<volatile tt_l1_ptr output_number_t*>(propagation_read_addr);
         volatile tt_l1_ptr output_number_t* propagation_write_ptr =
             reinterpret_cast<volatile tt_l1_ptr output_number_t*>(propagation_write_addr);
-        for (uint32_t column_read_i = 0; column_read_i < 32; ++column_read_i) {
+        for (uint32_t column_read_i = 0; column_read_i < tile_width; ++column_read_i) {
             output_number_t value_to_broadcast =
-                propagation_read_ptr[get_coord_from_tile_xy(column_read_i, LAST_ROW_ORD)];
-            for (uint32_t row_write_i = 0; row_write_i < 32; ++row_write_i) {
+                propagation_read_ptr[get_coord_from_tile_xy(column_read_i, LAST_ROW_INDEX)];
+            for (uint32_t row_write_i = 0; row_write_i < tile_height; ++row_write_i) {
                 propagation_write_ptr[get_coord_from_tile_xy(column_read_i, row_write_i)] = value_to_broadcast;
             }
         }
@@ -96,13 +94,13 @@ void kernel_main() {
     constexpr auto ctas = get_ctas();
     using output_number_type = std_type_t<get_dataformat(ctas.output_cb)>;
     const auto output_addr_gtor = TensorAccessor(ctas.output_args, output_base_addr, get_tile_size(ctas.output_cb));
-    constexpr uint32_t num_slices_along_channels = block_depth_ceil(ctas.num_channels, 32);
-    constexpr uint32_t num_blocks_in_row = 1;
-    constexpr uint32_t num_blocks_in_column = block_depth_ceil(ctas.input_height, 32);
+    constexpr uint32_t num_slices_along_channels = block_depth_ceil(ctas.num_channels, ctas.block_depth);
+    constexpr uint32_t num_blocks_in_row = block_depth_ceil(ctas.input_depth, ctas.block_depth);
+    constexpr uint32_t num_blocks_in_column = block_depth_ceil(ctas.input_height, ctas.block_depth);
 
     const auto core_x = get_absolute_logical_x();
     const auto core_y = get_absolute_logical_y();
-    const uint32_t my_channel = core_y * 2 + core_x;
+    const uint32_t my_channel = core_y * ctas.cores_x + core_x;
 
     for (uint32_t batch_i = 0; batch_i < ctas.num_batches;
          ++batch_i) {  // only one batch expected, unit tests don't cover more, also not everything is implemented in
@@ -112,19 +110,24 @@ void kernel_main() {
                 const uint32_t block_depth =
                     std::min(ctas.input_depth - column_block_i * ctas.block_depth, ctas.block_depth);
                 if (row_chunk_i > 0) {
+                    const uint32_t previous_row_chunk_i = row_chunk_i - 1;
                     receive_upper_block(
                         output_addr_gtor,
                         ctas.axis_3_buffer_0_cb,
                         my_channel,
                         column_block_i,
-                        row_chunk_i - 1,
-                        num_blocks_in_row,
+                        previous_row_chunk_i,
                         num_blocks_in_column,
                         num_slices_along_channels,
                         block_depth,
                         ctas.block_depth);
                     broadcast_last_row_to_all_rows_in_cube<output_number_type, decltype(output_addr_gtor)>(
-                        output_addr_gtor, ctas.axis_3_buffer_0_cb, ctas.axis_3_buffer_1_cb, block_depth);
+                        output_addr_gtor,
+                        ctas.axis_3_buffer_0_cb,
+                        ctas.axis_3_buffer_1_cb,
+                        ctas.tile_height,
+                        ctas.tile_width,
+                        block_depth);
                 }
                 output_block(
                     output_addr_gtor,
@@ -132,7 +135,6 @@ void kernel_main() {
                     my_channel,
                     column_block_i,
                     row_chunk_i,
-                    num_blocks_in_row,
                     num_blocks_in_column,
                     num_slices_along_channels,
                     block_depth,

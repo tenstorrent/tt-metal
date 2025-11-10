@@ -15,7 +15,6 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "compute_kernel_api/tile_move_copy.h"
-// #include "ttnn/operations/experimental/reduction/integral_image/device/kernels/common.hpp"
 
 #define APPROX false
 #include "compute_kernel_api/common.h"
@@ -27,6 +26,31 @@ constexpr uint32_t ONE_TILE{1};
 constexpr uint32_t FIRST_TILE{0};
 constexpr uint32_t WORKING_REG{0};
 
+/**
+ * @brief RAII guard for safely reading from a Circular Buffer (CB).
+ *
+ * `ReadCBGuard` automatically manages CB read synchronization in a scoped manner.
+ * When constructed, it waits for `tiles` tiles to be available at the CB front
+ * (`cb_wait_front`), ensuring data readiness before access. Upon destruction,
+ * it automatically pops those tiles from the CB front (`cb_pop_front`),
+ * signaling that the tiles have been consumed.
+ *
+ * This guarantees balanced `cb_wait_front`/`cb_pop_front` calls, even in the
+ * presence of early returns or exceptions, preventing CB underflows and race
+ * conditions.
+ *
+ * @note This class is strictly non-copyable and non-movable to prevent any
+ *       double-pop or premature release of CB resources.
+ *
+ * Example usage:
+ * @code
+ * {
+ *     ReadCBGuard guard(cb_id, num_tiles);
+ *     // Safely read from CB: data is guaranteed ready.
+ *     // ...
+ * } // Automatically pops the tiles on scope exit.
+ * @endcode
+ */
 class ReadCBGuard {
     uint32_t cb;
     uint32_t tiles;
@@ -43,6 +67,30 @@ public:
     operator any_type_t() = delete;
 };
 
+/**
+ * @brief RAII guard for safely writing to a Circular Buffer (CB).
+ *
+ * `WriteCBGuard` automatically manages CB write synchronization in a scoped manner.
+ * When constructed, it reserves space for `tiles` tiles at the CB back
+ * (`cb_reserve_back`), ensuring sufficient room for writing. Upon destruction,
+ * it automatically pushes those tiles to the CB back (`cb_push_back`),
+ * making them visible to downstream consumers.
+ *
+ * This ensures balanced `cb_reserve_back`/`cb_push_back` calls and prevents
+ * buffer overflows or mismatched producer-consumer behavior.
+ *
+ * @note Like `ReadCBGuard`, this class is non-copyable and non-movable to ensure
+ *       one-to-one ownership of the CB reservation.
+ *
+ * Example usage:
+ * @code
+ * {
+ *     WriteCBGuard guard(cb_id, num_tiles);
+ *     // Safely write to CB: space is guaranteed reserved.
+ *     // ...
+ * } // Automatically pushes tiles to the CB on scope exit.
+ * @endcode
+ */
 class WriteCBGuard {
     uint32_t cb;
     uint32_t tiles;
@@ -64,22 +112,6 @@ FORCE_INLINE uint32_t get_coord_from_tile_xy(uint32_t read_i, uint32_t write_i) 
            | ((read_i & 0x10) << 4)   // x_hi * 256
            | ((write_i & 0x0F) << 4)  // y_lo * 16
            | (read_i & 0x0F);
-}
-
-FORCE_INLINE uint32_t get_tile_id(
-    uint32_t depth_blocks_num,
-    uint32_t height_blocks_num,
-    uint32_t channels_blocks_num,
-    uint32_t inner_tile_stride,
-    uint32_t channels_slice_i,
-    uint32_t row_block_i,
-    uint32_t column_block_i,
-    uint32_t block_depth = 32) {
-    const uint32_t tensor_face_block_size = channels_blocks_num * height_blocks_num;
-    const uint32_t block_first_tile_id =
-        block_depth * (tensor_face_block_size * column_block_i + depth_blocks_num * row_block_i + channels_slice_i);
-    const uint32_t tile_id = block_first_tile_id + block_depth * tensor_face_block_size;
-    return tile_id;
 }
 
 FORCE_INLINE constexpr uint32_t block_depth_ceil(uint32_t value, uint32_t block_depth = 32) {
@@ -107,27 +139,19 @@ struct IntImgComputeCTAs {
     const uint32_t input_height;  // axis 3/4
     const uint32_t input_depth;   // axis 2/4
     const uint32_t num_batches;   // axis 1/4
+    const uint32_t cores_x;
+    const uint32_t cores_y;
 };
 
 FORCE_INLINE constexpr IntImgComputeCTAs get_ctas() {
     return {
-        get_compile_time_arg_val(0),
-        get_compile_time_arg_val(1),
-        get_compile_time_arg_val(2),
-        get_compile_time_arg_val(3),
-        get_compile_time_arg_val(4),
-        get_compile_time_arg_val(5),
-        get_compile_time_arg_val(6),
-        get_compile_time_arg_val(7),
-        get_compile_time_arg_val(8),
-        get_compile_time_arg_val(9),
-        get_compile_time_arg_val(10),
-        get_compile_time_arg_val(11),
-        get_compile_time_arg_val(12),
-        get_compile_time_arg_val(13),
-        get_compile_time_arg_val(14),
-        get_compile_time_arg_val(15),
-        get_compile_time_arg_val(16),
+        get_compile_time_arg_val(0),  get_compile_time_arg_val(1),  get_compile_time_arg_val(2),
+        get_compile_time_arg_val(3),  get_compile_time_arg_val(4),  get_compile_time_arg_val(5),
+        get_compile_time_arg_val(6),  get_compile_time_arg_val(7),  get_compile_time_arg_val(8),
+        get_compile_time_arg_val(9),  get_compile_time_arg_val(10), get_compile_time_arg_val(11),
+        get_compile_time_arg_val(12), get_compile_time_arg_val(13), get_compile_time_arg_val(14),
+        get_compile_time_arg_val(15), get_compile_time_arg_val(16), get_compile_time_arg_val(17),
+        get_compile_time_arg_val(18),
     };
 }
 
@@ -327,8 +351,8 @@ namespace NAMESPACE {
 void MAIN {
     constexpr auto ctas{get_ctas()};
 
-    constexpr uint32_t num_blocks_in_row = 1;
-    constexpr uint32_t num_blocks_in_column = block_depth_ceil(ctas.input_height, 32);
+    constexpr uint32_t num_blocks_in_row = block_depth_ceil(ctas.input_depth, ctas.block_depth);
+    constexpr uint32_t num_blocks_in_column = block_depth_ceil(ctas.input_height, ctas.block_depth);
 
     for (uint32_t rows_block_i = 0; rows_block_i < num_blocks_in_column; ++rows_block_i) {
         perform_intimg_along_row_chunk(ctas, num_blocks_in_row, rows_block_i);

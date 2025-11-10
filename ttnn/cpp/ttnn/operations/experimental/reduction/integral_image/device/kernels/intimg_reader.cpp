@@ -34,13 +34,11 @@ FORCE_INLINE void send_block(
     uint32_t channels_slice_i,
     uint32_t column_block_i,
     uint32_t row_chunk_i,
-    uint32_t num_blocks_in_row,
     uint32_t num_blocks_in_column,
     uint32_t num_slices_along_channels,
     uint32_t block_depth) {
     for (uint32_t inner_tile_stride = 0; inner_tile_stride < block_depth; ++inner_tile_stride) {
         const uint32_t read_tile_id = get_tile_id(
-            num_blocks_in_row,
             num_blocks_in_column,
             num_slices_along_channels,
             inner_tile_stride,
@@ -59,18 +57,17 @@ void kernel_main() {
     constexpr auto ctas = get_ctas();
     using input_number_type = std_type_t<get_dataformat(ctas.input_cb)>;
     const auto input_addr_gtor = TensorAccessor(ctas.input_args, input_base_addr, get_tile_size(ctas.input_cb));
-    constexpr uint32_t num_slices_along_channels = block_depth_ceil(ctas.num_channels, 32);
-    constexpr uint32_t num_blocks_in_row = 1;
-    constexpr uint32_t num_blocks_in_column = block_depth_ceil(ctas.input_height, 32);
+    constexpr uint32_t num_slices_along_channels = block_depth_ceil(ctas.num_channels, ctas.block_depth);
+    constexpr uint32_t num_blocks_in_row = block_depth_ceil(ctas.input_depth, ctas.block_depth);
+    constexpr uint32_t num_blocks_in_column = block_depth_ceil(ctas.input_height, ctas.block_depth);
 
     const auto core_x = get_absolute_logical_x();
     const auto core_y = get_absolute_logical_y();
-    const uint32_t my_channel = core_y * 2 + core_x;
+    const uint32_t my_channel = core_y * ctas.cores_x + core_x;
 
     for (uint32_t batch_i = 0; batch_i < ctas.num_batches;
          ++batch_i) {  // only one batch expected, unit tests don't cover more, also not everything is implemented in
                        // terms of num_batches > 1
-        // for (uint32_t channels_slice_i = 0; channels_slice_i < um_slices_along_channels; ++channels_slice_i) {
         for (uint32_t row_chunk_i = 0; row_chunk_i < num_blocks_in_column; ++row_chunk_i) {
             for (uint32_t column_block_i = 0; column_block_i < num_blocks_in_row; ++column_block_i) {
                 prepare_start_tile_for_cumsum_axis_2<input_number_type>(
@@ -83,7 +80,6 @@ void kernel_main() {
                     my_channel,
                     column_block_i,
                     row_chunk_i,
-                    num_blocks_in_row,
                     num_blocks_in_column,
                     num_slices_along_channels,
                     block_depth);

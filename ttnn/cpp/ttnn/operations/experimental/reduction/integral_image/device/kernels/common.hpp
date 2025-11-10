@@ -107,7 +107,6 @@ FORCE_INLINE uint32_t get_coord_from_tile_xy(uint32_t read_i, uint32_t write_i) 
 }
 
 FORCE_INLINE uint32_t get_tile_id(
-    uint32_t depth_blocks_num,
     uint32_t height_blocks_num,
     uint32_t channels_blocks_num,
     uint32_t inner_tile_stride,
@@ -151,12 +150,14 @@ struct IntImgCTAs {
     const uint32_t input_height;  // axis 3/4
     const uint32_t input_depth;   // axis 2/4
     const uint32_t num_batches;   // axis 1/4
+    const uint32_t cores_x;
+    const uint32_t cores_y;
     const InputAccessorArgs input_args;
     const OutputAccessorArgs output_args;  // reused for reading upper block for propagation.
 };
 
 FORCE_INLINE constexpr auto get_ctas() {
-    constexpr auto input_args = TensorAccessorArgs<17>();
+    constexpr auto input_args = TensorAccessorArgs<19>();
     constexpr auto output_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     return IntImgCTAs<decltype(input_args), decltype(output_args)>{
         get_compile_time_arg_val(0),
@@ -176,6 +177,8 @@ FORCE_INLINE constexpr auto get_ctas() {
         get_compile_time_arg_val(14),
         get_compile_time_arg_val(15),
         get_compile_time_arg_val(16),
+        get_compile_time_arg_val(17),
+        get_compile_time_arg_val(18),
         input_args,
         output_args,
     };

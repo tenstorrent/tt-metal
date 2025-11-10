@@ -40,10 +40,46 @@ void bind_reduction_intimg_operation(py::module& module) {
             A 4D tensor with the same shape/layout/dtype as `x`, where each element
             at (0, w, h, c) equals the inclusive sum of x over [0:w, 0:h] in channel c.
 
+        Supported dtypes and layout for input tensor values:
+
+        .. list-table::
+            :header-rows: 1
+
+            * - Dtypes
+                - Layouts
+            * - BFLOAT16
+                - TILE
+
+        Memory Support:
+            - Interleaved: DRAM and L1
+
+        Example:
+
+        .. code-block:: python
+
+            import ttnn
+            import torch
+
+            # Create a compliant tensor
+            input_tensor = torch.Tensor([3, 1, 2])
+
+            # Convert tensor to ttnn format
+            input_tensor_ttnn = ttnn.from_torch(input_tensor, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+
+            # Golden tensor
+            golden_intimg_tensor_ttnn = ttnn.cumsum(ttnn.cumsum(input_tensor_ttnn, 1), 2)
+
+            # Integral image (still experimental)
+            intimg_tensor_ttnn = ttnn.experimental.intimg(input_tensor_ttnn)
+
+            # Compare PCC
+            assert_with_pcc(golden_intimg_tensor_ttnn, intimg_tensor_ttnn, pcc=0.999)
+
         Notes
         -----
-        • Summation is inclusive in both width and height.
-        • Each channel is processed independently.
+        - This feature is still *experimental*.
+        - Summation is inclusive in both width and height.
+        - Each channel is processed independently.
 
         )doc";
 
