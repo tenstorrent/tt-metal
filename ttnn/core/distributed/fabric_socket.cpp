@@ -13,14 +13,12 @@ namespace {
 
 namespace CMAKE_UNIQUE_NAMESPACE {
 
-bool check_if_send_socket(const tt::tt_metal::distributed::MeshSocket& mesh_socket) {
-    const auto& socket_config = mesh_socket.get_config();
+bool check_if_send_socket(const tt::tt_metal::distributed::SocketConfig& socket_config) {
     auto expected_sender_rank = socket_config.distributed_context->rank();
     return (socket_config.sender_rank == expected_sender_rank);
 }
 
-bool check_if_recv_socket(const tt::tt_metal::distributed::MeshSocket& mesh_socket) {
-    const auto& socket_config = mesh_socket.get_config();
+bool check_if_recv_socket(const tt::tt_metal::distributed::SocketConfig& socket_config) {
     auto expected_receiver_rank = socket_config.distributed_context->rank();
     return (socket_config.receiver_rank == expected_receiver_rank);
 }
@@ -29,26 +27,29 @@ bool check_if_recv_socket(const tt::tt_metal::distributed::MeshSocket& mesh_sock
 
 }  // namespace
 
-FabricSocket::FabricSocket(const tt::tt_metal::distributed::MeshSocket& mesh_socket) : mesh_socket_(mesh_socket) {}
+FabricSocket::FabricSocket(
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
+    const tt::tt_metal::distributed::SocketConfig& socket_config) :
+    mesh_device_(mesh_device), socket_config_(socket_config) {}
 
 void FabricSocket::send(const ttnn::Tensor& tensor) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    assert(check_if_send_socket(mesh_socket_));
-    ttnn::experimental::send_async(tensor, mesh_socket_);
+    assert(check_if_send_socket(socket_config_));
+    ttnn::experimental::send_async(tensor, mesh_device_, socket_config_);
 }
 
 void FabricSocket::recv(ttnn::Tensor& tensor) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    assert(check_if_recv_socket(mesh_socket_));
-    ttnn::experimental::recv_async(tensor, mesh_socket_);
+    assert(check_if_recv_socket(socket_config_));
+    ttnn::experimental::recv_async(tensor, mesh_device_, socket_config_);
 }
 
 tt::tt_metal::distributed::multihost::Rank FabricSocket::get_rank() const {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    if (check_if_send_socket(mesh_socket_)) {
-        return mesh_socket_.get_config().sender_rank;
-    } else if (check_if_recv_socket(mesh_socket_)) {
-        return mesh_socket_.get_config().receiver_rank;
+    if (check_if_send_socket(socket_config_)) {
+        return socket_config_.sender_rank;
+    } else if (check_if_recv_socket(socket_config_)) {
+        return socket_config_.receiver_rank;
     }
 
     TT_THROW(
@@ -58,7 +59,7 @@ tt::tt_metal::distributed::multihost::Rank FabricSocket::get_rank() const {
 
 std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> FabricSocket::get_distributed_context()
     const {
-    return mesh_socket_.get_config().distributed_context;
+    return socket_config_.distributed_context;
 }
 
 std::unique_ptr<FabricSocket> FabricSocket::create(
@@ -68,8 +69,7 @@ std::unique_ptr<FabricSocket> FabricSocket::create(
     tt::tt_metal::distributed::SocketConfig socket_config) {
     socket_config.sender_rank = sender_rank;
     socket_config.receiver_rank = receiver_rank;
-    auto mesh_socket = tt::tt_metal::distributed::MeshSocket(mesh_device, socket_config);
-    return std::make_unique<FabricSocket>(mesh_socket);
+    return std::make_unique<FabricSocket>(mesh_device, socket_config);
 }
 
 }  // namespace ttnn::distributed

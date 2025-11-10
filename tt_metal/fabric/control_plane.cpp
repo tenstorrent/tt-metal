@@ -1522,7 +1522,7 @@ void ControlPlane::compute_and_embed_1d_routing_path_table(
                              : static_cast<uint16_t>(local_mesh_chip_id_container.size());
 
     intra_mesh_routing_path_t<1, false> routing_path_1d;
-    routing_path_1d.calculate_chip_to_all_routing_fields(0, num_chips);
+    routing_path_1d.calculate_chip_to_all_routing_fields(FabricNodeId(mesh_id, 0), num_chips);
 
     std::memcpy(
         &tensix_routing_info.routing_path_table_1d, &routing_path_1d, sizeof(intra_mesh_routing_path_t<1, false>));
@@ -1552,7 +1552,6 @@ void ControlPlane::compute_and_embed_2d_routing_path_table(
 
     // Calculate routing using global mesh geometry (device tables are indexed by global chip ids)
     MeshShape mesh_shape = this->get_physical_mesh_shape(mesh_id, MeshScope::GLOBAL);
-    uint16_t ew_dim = mesh_shape[1];  // east-west dimension
     uint16_t num_chips = mesh_shape[0] * mesh_shape[1];
     TT_ASSERT(num_chips <= 256, "Number of chips exceeds 256 for mesh {}", *mesh_id);
     TT_ASSERT(
@@ -1563,7 +1562,7 @@ void ControlPlane::compute_and_embed_2d_routing_path_table(
         mesh_shape[1]);
 
     intra_mesh_routing_path_t<2, true> routing_path_2d;
-    routing_path_2d.calculate_chip_to_all_routing_fields(chip_id, num_chips, ew_dim);
+    routing_path_2d.calculate_chip_to_all_routing_fields(FabricNodeId(mesh_id, chip_id), num_chips);
 
     std::memcpy(
         &tensix_routing_info.routing_path_table_2d, &routing_path_2d, sizeof(intra_mesh_routing_path_t<2, true>));
@@ -1646,11 +1645,13 @@ void ControlPlane::write_routing_tables_to_tensix_cores(MeshId mesh_id, ChipId c
         tensix_routing_info.inter_mesh_routing_table.set_original_direction(dst_mesh_id, direction_value);
     }
 
-    // Compute and embed 1D routing path table (independent of src chip id)
-    compute_and_embed_1d_routing_path_table(mesh_id, tensix_routing_info);
-
-    // Compute and embed 2D routing path table and exit node table (per src chip id)
-    compute_and_embed_2d_routing_path_table(mesh_id, chip_id, tensix_routing_info);
+    if (this->get_fabric_context().is_2D_routing_enabled()) {
+        // Compute and embed 2D routing path table and exit node table (per src chip id)
+        compute_and_embed_2d_routing_path_table(mesh_id, chip_id, tensix_routing_info);
+    } else {
+        // Compute and embed 1D routing path table (independent of src chip id)
+        compute_and_embed_1d_routing_path_table(mesh_id, tensix_routing_info);
+    }
 
     // Finally, write the full routing info to all Tensix cores and mirror to IDLE_ETH routing table
     write_to_all_cores(
