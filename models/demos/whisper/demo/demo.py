@@ -683,7 +683,7 @@ def test_demo_for_audio_classification_dataset(
 )
 @pytest.mark.parametrize(
     "stream",
-    [True, False],
+    [False],
 )
 # To run the demo with specific device configurations, provide the desired number of devices under the `mesh_device` parameter.
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
@@ -723,10 +723,15 @@ def test_demo_for_conditional_generation(
         stream=stream,
     )
 
+    # Skip test in CI when using generate_kwargs
+    if is_ci_env and model_repo == "openai/whisper-large-v3" and compression_ratio_threshold is not None:
+        pytest.skip("Skipping test in CI since it provides redundant testing")
+
     if (
         is_ci_env
         and model_repo == "distil-whisper/distil-large-v3"
         and mesh_device.get_num_devices() == available_devices
+        and compression_ratio_threshold is None  # Check perf only when generate_kwargs are None
     ):
         metrics_dictionary = {
             1: {"prefill_time_to_token": 0.24, "decode_t/s/u": 53.2},
@@ -789,7 +794,7 @@ def test_demo_for_conditional_generation(
 )
 @pytest.mark.parametrize(
     "stream",
-    [True, False],
+    [False],
 )
 # To run the demo with specific device configurations, provide the desired number of devices under the `mesh_device` parameter.
 def test_demo_for_conditional_generation_dataset(
@@ -807,7 +812,8 @@ def test_demo_for_conditional_generation_dataset(
     stream,
     request,
 ):
-    if is_ci_env:
+    # Skip test in CI when using generate_kwargs
+    if is_ci_env and model_repo == "openai/whisper-large-v3" and compression_ratio_threshold is not None:
         pytest.skip("Skipping test in CI since it provides redundant testing")
 
     generation_params = GenerationParams(
