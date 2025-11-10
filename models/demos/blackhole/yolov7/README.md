@@ -34,11 +34,10 @@ pytest --disable-warnings models/demos/blackhole/yolov7/tests/pcc/test_ttnn_yolo
 ### Single Device (BS=1)
 #### Custom Images:
 - Use the following command to run demo for `640x640` resolution :
-
     ```bash
     pytest --disable-warnings models/demos/blackhole/yolov7/demo/demo.py::test_demo
     ```
-- To use a different image(s) for demo, replace your image(s) in the image path `models/demos/yolov7/demo/images`
+- To use a different image(s) for demo, replace your image(s) in the image path `models/demos/blackhole/yolov7/demo/images`
 
 #### Coco-2017 dataset:
 - Use the following command to run demo for `640x640` resolution :

@@ -21,14 +21,12 @@ pytest --disable-warnings models/demos/blackhole/yolov5x/tests/pcc/test_ttnn_yol
 
 #### Single Device (BS=1) :
 - For `640x640`, end-2-end perf is `127` FPS (**On P150**)
-
   ```
   pytest --disable-warnings models/demos/blackhole/yolov5x/tests/perf/test_e2e_performant.py::test_e2e_performant
   ```
 
-#### Multi Device (DP=2, N300) :
+#### Multi Device (DP=2) :
 - For `640x640`:
-
   ```
   pytest --disable-warnings models/demos/blackhole/yolov5x/tests/perf/test_e2e_performant.py::test_e2e_performant_dp
   ```

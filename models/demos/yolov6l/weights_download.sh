@@ -3,7 +3,7 @@
 #!/bin/bash
 
 # Output filename
-OUTPUT="models/demos/yolov6l/tests/pcc/yolov6l.pt"
+OUTPUT="models/demos/yolov6l/yolov6l.pt"
 
 # Create output directory if it doesn't exist
 mkdir -p "$(dirname "$OUTPUT")"
