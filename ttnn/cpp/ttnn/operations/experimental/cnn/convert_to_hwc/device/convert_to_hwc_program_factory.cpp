@@ -665,7 +665,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         config.l1_input_cores,
         config.l1_input_cores);  // TODO: L1 input grid can be different if resharding
     const uint32_t block_size_width = config.l1_input_shard_width * config.batch_size;  // One block per batch
-    const auto blocked_gather_transfers = convert_to_hwc::detail::group_transfers_by_output_column_blocks(
+    const auto blocked_result = convert_to_hwc::detail::group_transfers_by_output_column_blocks_with_count(
         gather_transfers,
         config.batch_size,
         config.input_channels,
@@ -675,8 +675,14 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         a.element_size(),
         block_size_width);
 
-    const uint32_t num_blocks = blocked_gather_transfers.size();
-    log_info(tt::LogType::LogAlways, "num_blocks={}, block_size_width={}", num_blocks, block_size_width);
+    const auto blocked_gather_transfers = std::move(blocked_result.blocked_transfers);
+    const uint32_t num_blocks = blocked_result.num_logical_blocks;
+    log_info(
+        tt::LogType::LogAlways,
+        "num_blocks={} (logical blocks), block_size_width={}, transfer_groups={}",
+        num_blocks,
+        block_size_width,
+        blocked_gather_transfers.size());
 
     const auto per_core_blocked_gather_transfers =
         convert_to_hwc::detail::split_by_destination_core(blocked_gather_transfers, config.l1_input_cores.size());
