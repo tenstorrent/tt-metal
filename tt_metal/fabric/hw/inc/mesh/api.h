@@ -2114,4 +2114,42 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state(
         page_size);
 }
 
+/**
+ * @brief Multicast write using address generator for automatic NOC address computation.
+ *
+ * @param client_interface Fabric sender interface
+ * @param packet_header Packet header
+ * @param dst_dev_id Destination device ID
+ * @param dst_mesh_id Destination mesh ID
+ * @param ranges Multicast hop counts (east, west, north, south)
+ * @param src_addr Source L1 address
+ * @param addrgen Address generator (e.g., TensorAccessor)
+ * @param page_id Page index for address computation
+ * @param offset Offset within page (default: 0)
+ */
+template <typename FabricSenderType, typename AddrGenType>
+FORCE_INLINE void fabric_multicast_noc_unicast_write(
+    tt_l1_ptr FabricSenderType* client_interface,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint8_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    const MeshMcastRange& ranges,
+    uint32_t src_addr,
+    const AddrGenType& addrgen,
+    uint32_t page_id,
+    uint32_t offset = 0) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
+
+    fabric_multicast_noc_unicast_write(
+        client_interface,
+        packet_header,
+        dst_dev_id,
+        dst_mesh_id,
+        ranges,
+        src_addr,
+        page_size,
+        tt::tt_fabric::NocUnicastCommandHeader{noc_address});
+}
+
 }  // namespace tt::tt_fabric::mesh::experimental
