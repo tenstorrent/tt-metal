@@ -58,9 +58,7 @@ public:
     DispatchQueryManager& get_dispatch_query_manager();
     const DispatchMemMap& dispatch_mem_map() const;  // DispatchMemMap for the core type we're dispatching on.
     const DispatchMemMap& dispatch_mem_map(const CoreType& core_type) const;  // DispatchMemMap for specific core type.
-    inspector::Data* get_inspector_data() const {
-        return inspector_data_.get();
-    }
+    inspector::Data* get_inspector_data() const { return inspector_data_.get(); }
     std::unique_ptr<DPrintServer>& dprint_server() { return dprint_server_; }
     std::unique_ptr<WatcherServer>& watcher_server() { return watcher_server_; }
 
@@ -193,7 +191,8 @@ private:
     // is expected that any downed devices/links will result in some sort of error condition being
     // reported. When set to false, the control plane is free to instantiate fewer routing planes
     // according to which links are available.
-    tt_fabric::FabricReliabilityMode fabric_reliability_mode_ = tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
+    tt_fabric::FabricReliabilityMode fabric_reliability_mode_ =
+        tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
     uint8_t num_fabric_active_routing_planes_ = 0;
     std::map<tt_fabric::FabricNodeId, ChipId> logical_mesh_chip_id_to_physical_chip_id_mapping_;
     std::optional<std::string> custom_mesh_graph_desc_path_ = std::nullopt;
