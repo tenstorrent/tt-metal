@@ -259,7 +259,7 @@ jobs:
       runner: ${{ matrix.platform }}
       product: tt-nn
 
-  ttnn-mgate-tests:
+  ttnn-merge-gate-tests:
     needs: [build, find-changes]
     strategy:
       fail-fast: false
