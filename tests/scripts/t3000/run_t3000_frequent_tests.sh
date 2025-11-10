@@ -386,7 +386,7 @@ run_t3000_flux1_tests() {
 run_t3000_motif_tests() {
   run_t3000_dit_tests \
     "models/experimental/tt_dit/tests/blocks/test_attention.py::test_attention_motif" \
-    "models/experimental/tt_dit/tests/models/motif/test_transformer_motif.py"
+    "models/experimental/tt_dit/tests/blocks/test_transformer_block.py::test_transformer_block_motif"
 }
 
 run_t3000_wan22_tests() {

@@ -134,7 +134,7 @@ run_tg_dit_tests() {
 
   echo "LOG_METAL: Running ${test_cmd}"
 
-  NO_PROMPT=1 TT_MM_THROTTLE_PERF=5 pytest -n auto ${test_cmd} --timeout 1200 ; fail+=$?
+  NO_PROMPT=1 pytest -n auto ${test_cmd} --timeout 1200 ; fail+=$?
 
   if [[ $fail -ne 0 ]]; then
     echo "LOG_METAL: ${test_name} failed"
@@ -179,7 +179,7 @@ run_tg_mochi_demo_tests() {
 
   export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
   pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_transformer_mochi.py::test_mochi_transformer_model_caching -k "4x8sp1tp0"
-  TT_MM_THROTTLE_PERF=5 pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_pipeline_mochi.py -k "4x8sp1tp0" --timeout=1500 ; fail+=$?
+  pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_pipeline_mochi.py -k "4x8sp1tp0" --timeout=1500 ; fail+=$?
 
   if [[ $fail -ne 0 ]]; then
     echo "LOG_METAL: run_tg_mochi_demo_tests failed"
@@ -198,7 +198,7 @@ run_tg_wan22_demo_tests() {
 
   export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
   pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_transformer_wan.py::test_wan_transformer_model_caching -k "wh_4x8sp1tp0"
-  TT_MM_THROTTLE_PERF=5 pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "wh_4x8sp1tp0 and resolution_720p" --timeout 1500; fail+=$?
+  pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "wh_4x8sp1tp0 and resolution_720p" --timeout 1500; fail+=$?
 
   if [[ $fail -ne 0 ]]; then
     echo "LOG_METAL: run_tg_wan22_demo_tests failed"
@@ -226,6 +226,8 @@ run_tg_demo_tests() {
     run_tg_mochi_demo_tests
   elif [[ "$1" == "flux1" ]]; then
     run_tg_flux1_tests
+  elif [[ "$1" == "motif" ]]; then
+    run_tg_motif_tests
   elif [[ "$1" == "sentence_bert" ]]; then
     run_tg_sentence_bert_tests
   elif [[ "$1" == "gpt-oss" ]]; then
