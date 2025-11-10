@@ -590,7 +590,7 @@ const std::unique_ptr<AllocatorImpl>& Device::allocator_impl() const {
 const std::unique_ptr<Allocator>& Device::allocator() const { return this->allocator_impl()->view(); }
 
 const std::unique_ptr<AllocatorImpl>& Device::allocator_impl(SubDeviceId sub_device_id) const {
-    return sub_device_manager_tracker_->get_default_sub_device_manager()->allocator(SubDeviceId{0});
+    return sub_device_manager_tracker_->get_default_sub_device_manager()->allocator(sub_device_id);
 }
 
 const std::unique_ptr<Allocator>& Device::allocator(SubDeviceId sub_device_id) const {
