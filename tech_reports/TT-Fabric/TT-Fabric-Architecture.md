@@ -812,7 +812,6 @@ Basic architecture of a 2D mesh virtual channel is shown in the following diagra
 
 The following table lists the sender/receiver channel counts for different fabric topologies.
 
-TODO: Add a table here.
 
 
 # 4 API Specification <a id="rw_api"></a>
@@ -863,8 +862,7 @@ For example, **collective communication libraries (CCLs)** written using **1D (l
 
 # 5 Sockets over TT-Fabric <a id="socket_api"></a>
 
-We have implemented sockets as send and receive operatoins that use tt-fabric asynchronous write APIs to implement flowcontroled data transfer between a sender and receiver.
-TODO: Add more information on send/receive operations.
+We have implemented sockets as send and receive operatoins that use tt-fabric asynchronous write APIs to implement flowcontrolled data transfer between a sender and receiver.
 
 
 # 6 Deadlock Avoidance and Mitigation <a id="deadlocks"></a>
