@@ -70,8 +70,6 @@ inline void _llk_math_transpose_dest_(const std::uint32_t dst_index)
     }
 
     TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD);
-    // Unclear exactly why this is needed, see: https://github.com/tenstorrent/tt-metal/issues/22383
-    TTI_CLEARDVALID(0, 1);
 }
 
 template <bool is_32bit>
