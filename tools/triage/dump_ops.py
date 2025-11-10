@@ -5,16 +5,17 @@
 
 """
 Usage:
-    dump_ops [--generate-test] [--max-width=<width>]
+    dump_ops [--isolate-hang] [--max-width=<width>]
 
 Options:
-    --generate-test        Generate test files for hanging operations
+    --isolate-hang         Generate test files for hanging operations (experimental)
     --max-width=<width>    Maximum column width for table output. [default: 100]
 
 Description:
     Prints the current operation running on each core.
 
-    Use --generate-test to create test files for operations that could be causing hangs.
+    Use --isolate-hang to create test files for operations that could be causing hangs.
+    Note: --isolate-hang is an experimental feature.
     Use --max-width to control table column widths.
 
 """
@@ -1064,8 +1065,8 @@ def dump_ops(
 def run(args, context: Context):
     """Run the dump_ops script."""
     max_width = int(args["--max-width"]) if args["--max-width"] else 100
-    # Check for generate-test flag - args returns None if not present
-    generate_test = bool(args["--generate-test"])
+    # Check for isolate-hang flag - args returns None if not present
+    generate_test = bool(args["--isolate-hang"])
     # Always use summary mode
     summary = True
     verbose_mode = False

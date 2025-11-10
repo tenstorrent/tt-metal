@@ -681,7 +681,7 @@ def cpp_binary_stripped(cpp_binary):
 
 def run_generate_test_and_display_results(validate_tests=False):
     """
-    Common function to run dump_ops --generate-test and display results.
+    Common function to run dump_ops --isolate-hang and display results.
 
     Args:
         validate_tests: If True, reset device and run generated tests to verify they work
@@ -689,11 +689,11 @@ def run_generate_test_and_display_results(validate_tests=False):
     Returns:
         tuple of (success, generated_files, tests_passed)
     """
-    log.substep("Running dump_ops.py with --generate-test flag")
+    log.substep("Running dump_ops.py with --isolate-hang flag")
 
-    # Run dump_ops with generate-test flag
+    # Run dump_ops with isolate-hang flag
     gen_result = subprocess.run(
-        ["python", "tools/triage/dump_ops.py", "--generate-test"],
+        ["python", "tools/triage/dump_ops.py", "--isolate-hang"],
         capture_output=True,
         text=True,
         timeout=60,
@@ -903,13 +903,13 @@ def run_hang_detection_test(
                 allow_no_line_numbers=allow_no_line_numbers,
             )
 
-            # Optionally test the generate-test functionality
+            # Optionally test the isolate-hang functionality
             if test_generate:
-                log.step(5, "Testing --generate-test functionality")
+                log.step(5, "Testing --isolate-hang functionality")
 
-                # Run dump_ops with generate-test flag
+                # Run dump_ops with isolate-hang flag
                 gen_result = subprocess.run(
-                    ["python", "tools/triage/dump_ops.py", "--generate-test"],
+                    ["python", "tools/triage/dump_ops.py", "--isolate-hang"],
                     capture_output=True,
                     text=True,
                     timeout=60,
@@ -1205,7 +1205,7 @@ def test_cpp_stripped_binary_hang_detection(cpp_binary_stripped, clean_device):
 
 
 def test_py_timeout_with_generate_test(clean_device):
-    """Test --generate-test works when operation times out (not just hangs)"""
+    """Test --isolate-hang works when operation times out (not just hangs)"""
     _ = clean_device  # Ensure device is reset before test
 
     log.test_header("Python Timeout with Test Generation")
@@ -1254,7 +1254,7 @@ def test_py_timeout_with_generate_test(clean_device):
             if serialized_files:
                 log.success(f"Found {len(serialized_files)} serialized files")
 
-        log.step(5, "Running dump_ops.py with --generate-test flag and validating")
+        log.step(5, "Running dump_ops.py with --isolate-hang flag and validating")
 
         # Use common helper to run generate-test and display results
         # Pass validate_tests=True to actually run and verify the generated tests
@@ -1281,7 +1281,7 @@ def test_py_timeout_with_generate_test(clean_device):
 
 
 def test_py_hang_with_generate_test(clean_device):
-    """Test that --generate-test flag creates reproducible test for hanging operation"""
+    """Test that --isolate-hang flag creates reproducible test for hanging operation"""
     _ = clean_device  # Ensure device is reset before test
 
     log.test_header("Python Generate Test for Hanging Operation")
@@ -1313,7 +1313,7 @@ def test_py_hang_with_generate_test(clean_device):
 
             log.success("Process is hanging as expected")
 
-            log.step(4, "Running dump_ops.py with --generate-test flag and validating")
+            log.step(4, "Running dump_ops.py with --isolate-hang flag and validating")
 
             # Use common helper to run generate-test and display results
             # Pass validate_tests=True to actually run and verify the generated tests
