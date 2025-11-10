@@ -253,10 +253,10 @@ def test_motif_pipeline_performance(
         expected_metrics = {
             "clip_encoding_time": 0.21,
             "t5_encoding_time": 0.15,
-            "total_encoding_time": 0.6,
+            "total_encoding_time": 0.5,
             "denoising_steps_time": 0.2 * num_inference_steps,
             "vae_decoding_time": 1.4,
-            "total_time": 6.8,
+            "total_time": 6.5,
         }
     else:
         assert False, f"Unknown mesh device for performance comparison: {mesh_device}"
