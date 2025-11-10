@@ -17,9 +17,11 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_sdxl_img2img_pipeline im
 from models.experimental.stable_diffusion_xl_base.tt.tt_euler_discrete_scheduler import TtEulerDiscreteScheduler
 from models.common.utility_functions import profiler
 
-MAX_SEQUENCE_LENGTH = 77
-TEXT_ENCODER_2_PROJECTION_DIM = 1280
-CONCATENATED_TEXT_EMBEDINGS_SIZE = 2048  # text_encoder_1_hidden_size + text_encoder_2_hidden_size (768 + 1280)
+from models.experimental.stable_diffusion_xl_base.tests.test_common import (
+    MAX_SEQUENCE_LENGTH,
+    TEXT_ENCODER_2_PROJECTION_DIM,
+    CONCATENATED_TEXT_EMBEDINGS_SIZE,
+)
 
 
 @dataclass
@@ -342,13 +344,6 @@ class TtSDXLCombinedPipeline:
 
         # 4. Run base pipeline with timesteps[0:split_idx]
         if self.config.use_refiner and split_idx < effective_num_inference_steps:
-            # Temporarily adjust base pipeline timesteps and num_inference_steps
-            original_timesteps = self.base_pipeline.ttnn_timesteps
-            original_num_inference_steps = self.base_pipeline.num_inference_steps
-            base_timesteps = original_timesteps[:split_idx]
-            refiner_timesteps = original_timesteps[split_idx:]
-            self.base_pipeline.ttnn_timesteps = base_timesteps
-
             # Set base pipeline to only run split_idx steps
             # We set the attribute directly since we're manually managing timesteps
             self.base_pipeline.num_inference_steps = split_idx
@@ -356,10 +351,6 @@ class TtSDXLCombinedPipeline:
             logger.info(f"Running base pipeline for {split_idx} steps...")
             self.base_pipeline.prepare_input_tensors([tt_latents, tt_prompt_embeds[0], tt_add_text_embeds[0]])
             base_latents = self.base_pipeline.generate_images(return_latents=True)  # Skip VAE decoding for refiner
-
-            # Restore original timesteps and num_inference_steps for base
-            self.base_pipeline.ttnn_timesteps = original_timesteps
-            self.base_pipeline.num_inference_steps = original_num_inference_steps
 
             # 5. Run refiner pipeline with timesteps[split_idx:] and base latents
             logger.info(f"Running refiner pipeline for {effective_num_inference_steps - split_idx} steps...")
@@ -383,7 +374,6 @@ class TtSDXLCombinedPipeline:
 
             # Now override timesteps and num_inference_steps AFTER generate_input_tensors
             # to avoid them being reset by _prepare_timesteps
-            self.refiner_pipeline.ttnn_timesteps = refiner_timesteps
             self.refiner_pipeline.num_inference_steps = effective_num_inference_steps - split_idx
 
             self.refiner_pipeline.prepare_input_tensors(
@@ -397,12 +387,6 @@ class TtSDXLCombinedPipeline:
 
             # Reset scheduler and restore timesteps for next generation
             self.refiner_pipeline.tt_scheduler.set_step_index(0)
-            self.refiner_pipeline.ttnn_timesteps = original_timesteps
-
-            # Restore original configs if they were modified
-            if num_inference_steps is not None and num_inference_steps != self.config.base_config.num_inference_steps:
-                self.base_pipeline.pipeline_config.num_inference_steps = original_base_config_steps
-                self.refiner_pipeline.pipeline_config.num_inference_steps = original_refiner_config_steps
         else:
             # No refiner or split_idx == effective_num_inference_steps, just run base
             logger.info(f"Running base pipeline only for {effective_num_inference_steps} steps...")
