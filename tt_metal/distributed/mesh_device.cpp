@@ -24,7 +24,7 @@
 #include <unordered_map>
 #include <utility>
 
-#include "allocator.hpp"
+#include "impl/allocator/allocator.hpp"
 #include <tt_stl/assert.hpp>
 #include "buffer.hpp"
 #include "device/device_impl.hpp"
