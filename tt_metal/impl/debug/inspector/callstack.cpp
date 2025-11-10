@@ -35,7 +35,7 @@ std::string get_python_callstack() {
     // This avoids linking against Python libraries for pure C++ builds
 
     // Function pointers for Python API
-    static auto* py_is_initialized = (int (*)())dlsym(RTLD_DEFAULT, "Py_IsInitialized");
+    static auto* py_is_initialized = reinterpret_cast<int (*)()>(dlsym(RTLD_DEFAULT, "Py_IsInitialized"));
     if (!py_is_initialized || !py_is_initialized()) {
         return "";  // Python not available
     }
@@ -53,13 +53,16 @@ std::string get_python_callstack() {
     // We can't directly load it, so we'll handle refcounting differently
 
     // Load Python API functions dynamically
-    static auto* dyn_PyGILState_Ensure = (PyGILState_Ensure_t)dlsym(RTLD_DEFAULT, "PyGILState_Ensure");
-    static auto* dyn_PyGILState_Release = (PyGILState_Release_t)dlsym(RTLD_DEFAULT, "PyGILState_Release");
-    static auto* dyn_PyEval_GetFrame = (PyEval_GetFrame_t)dlsym(RTLD_DEFAULT, "PyEval_GetFrame");
-    static auto* dyn_PyFrame_GetCode = (PyFrame_GetCode_t)dlsym(RTLD_DEFAULT, "PyFrame_GetCode");
-    static auto* dyn_PyFrame_GetBack = (PyFrame_GetBack_t)dlsym(RTLD_DEFAULT, "PyFrame_GetBack");
-    static auto* dyn_PyFrame_GetLineNumber = (PyFrame_GetLineNumber_t)dlsym(RTLD_DEFAULT, "PyFrame_GetLineNumber");
-    static auto* dyn_PyUnicode_AsUTF8 = (PyUnicode_AsUTF8_t)dlsym(RTLD_DEFAULT, "PyUnicode_AsUTF8");
+    static auto* dyn_PyGILState_Ensure =
+        reinterpret_cast<PyGILState_Ensure_t>(dlsym(RTLD_DEFAULT, "PyGILState_Ensure"));
+    static auto* dyn_PyGILState_Release =
+        reinterpret_cast<PyGILState_Release_t>(dlsym(RTLD_DEFAULT, "PyGILState_Release"));
+    static auto* dyn_PyEval_GetFrame = reinterpret_cast<PyEval_GetFrame_t>(dlsym(RTLD_DEFAULT, "PyEval_GetFrame"));
+    static auto* dyn_PyFrame_GetCode = reinterpret_cast<PyFrame_GetCode_t>(dlsym(RTLD_DEFAULT, "PyFrame_GetCode"));
+    static auto* dyn_PyFrame_GetBack = reinterpret_cast<PyFrame_GetBack_t>(dlsym(RTLD_DEFAULT, "PyFrame_GetBack"));
+    static auto* dyn_PyFrame_GetLineNumber =
+        reinterpret_cast<PyFrame_GetLineNumber_t>(dlsym(RTLD_DEFAULT, "PyFrame_GetLineNumber"));
+    static auto* dyn_PyUnicode_AsUTF8 = reinterpret_cast<PyUnicode_AsUTF8_t>(dlsym(RTLD_DEFAULT, "PyUnicode_AsUTF8"));
 
     // Check if all required functions are available
     if (!dyn_PyGILState_Ensure || !dyn_PyGILState_Release || !dyn_PyEval_GetFrame || !dyn_PyFrame_GetCode ||
@@ -71,8 +74,9 @@ std::string get_python_callstack() {
     using PyObject_GetAttrString_t = PyObject* (*)(PyObject*, const char*);
     using Py_DecRef_t = void (*)(PyObject*);
 
-    static auto* dyn_PyObject_GetAttrString = (PyObject_GetAttrString_t)dlsym(RTLD_DEFAULT, "PyObject_GetAttrString");
-    static auto* dyn_Py_DecRef = (Py_DecRef_t)dlsym(RTLD_DEFAULT, "Py_DecRef");
+    static auto* dyn_PyObject_GetAttrString =
+        reinterpret_cast<PyObject_GetAttrString_t>(dlsym(RTLD_DEFAULT, "PyObject_GetAttrString"));
+    static auto* dyn_Py_DecRef = reinterpret_cast<Py_DecRef_t>(dlsym(RTLD_DEFAULT, "Py_DecRef"));
 
     if (!dyn_PyObject_GetAttrString) {
         return "";  // Can't safely access Python objects
