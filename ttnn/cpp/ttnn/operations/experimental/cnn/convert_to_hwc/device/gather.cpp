@@ -337,16 +337,12 @@ std::vector<BlockedTransferGroup> coalesce_contiguous_transfers(
                 return a.dst_offset_bytes < b.dst_offset_bytes;
             });
 
-        // Coalesce contiguous and stride-aware transfers
+        // Coalesce contiguous transfers
         for (size_t i = 0; i < sorted_transfers.size();) {
             auto current_transfer = sorted_transfers[i];
             size_t j = i + 1;
-            uint32_t stride_pattern = 0;
-            bool has_stride_pattern = false;
-            std::vector<size_t> stride_group_indices;  // Track which transfers are part of stride group
-            stride_group_indices.push_back(i);
 
-            // Phase 1: Traditional contiguous coalescing
+            // Traditional contiguous coalescing only
             while (j < sorted_transfers.size()) {
                 const auto& next_transfer = sorted_transfers[j];
 
@@ -360,131 +356,19 @@ std::vector<BlockedTransferGroup> coalesce_contiguous_transfers(
                     (current_transfer.dst_offset_bytes + current_transfer.transfer_size_bytes ==
                      next_transfer.dst_offset_bytes);
 
-                if (!same_core || !src_contiguous) {
-                    break;
-                }
-
-                if (dst_contiguous) {
+                if (same_core && src_contiguous && dst_contiguous) {
                     // Traditional contiguous coalescing
                     current_transfer.transfer_size_bytes += next_transfer.transfer_size_bytes;
                     current_transfer.length += next_transfer.length;
                     j++;
                 } else {
-                    break;  // Switch to stride-aware coalescing
-                }
-            }
-
-            // Phase 2: Stride-aware coalescing (if no contiguous coalescing happened)
-            if (j == i + 1 && j < sorted_transfers.size()) {
-                const auto& next_transfer = sorted_transfers[j];
-                uint32_t dst_stride = next_transfer.dst_offset_bytes - current_transfer.dst_offset_bytes;
-                uint32_t src_stride = next_transfer.src_offset_bytes - current_transfer.src_offset_bytes;
-
-                // Check if this could be a stride pattern
-                bool same_core = (current_transfer.src_shard_idx == next_transfer.src_shard_idx) &&
-                                 (current_transfer.src_noc_x == next_transfer.src_noc_x) &&
-                                 (current_transfer.src_noc_y == next_transfer.src_noc_y);
-                bool valid_stride = (dst_stride > current_transfer.transfer_size_bytes) &&
-                                    (dst_stride <= 8 * current_transfer.transfer_size_bytes) &&
-                                    (src_stride == current_transfer.transfer_size_bytes);  // Source must be contiguous
-
-                if (same_core && valid_stride &&
-                    next_transfer.transfer_size_bytes == current_transfer.transfer_size_bytes) {
-                    stride_pattern = dst_stride;
-                    has_stride_pattern = true;
-                    stride_group_indices.push_back(j);
-
-                    // Look for more transfers that match this stride pattern
-                    size_t k = j + 1;
-                    while (k < sorted_transfers.size()) {
-                        const auto& candidate = sorted_transfers[k];
-                        const auto& prev = sorted_transfers[k - 1];
-
-                        uint32_t expected_src = prev.src_offset_bytes + prev.transfer_size_bytes;
-                        uint32_t expected_dst = prev.dst_offset_bytes + stride_pattern;
-
-                        bool matches_stride = (candidate.src_shard_idx == current_transfer.src_shard_idx) &&
-                                              (candidate.src_noc_x == current_transfer.src_noc_x) &&
-                                              (candidate.src_noc_y == current_transfer.src_noc_y) &&
-                                              (candidate.src_offset_bytes == expected_src) &&
-                                              (candidate.dst_offset_bytes == expected_dst) &&
-                                              (candidate.transfer_size_bytes == current_transfer.transfer_size_bytes);
-
-                        if (matches_stride) {
-                            stride_group_indices.push_back(k);
-                            k++;
-                        } else {
-                            break;
-                        }
-                    }
-
-                    // Only coalesce if we have at least 2 transfers in the stride pattern
-                    if (stride_group_indices.size() >= 2) {
-                        // Create a coalesced transfer representing the stride pattern
-                        // Note: This is conceptual - the actual kernel would need to handle strided transfers
-                        size_t total_transfers = stride_group_indices.size();
-                        current_transfer.transfer_size_bytes =
-                            current_transfer.transfer_size_bytes * total_transfers;  // Total bytes
-                        current_transfer.length = current_transfer.length * total_transfers;
-
-                        // Store stride information (would need to extend LowLevelGatherTransfer to support this)
-                        // For now, we'll log the optimization
-                        log_info(
-                            tt::LogType::LogAlways,
-                            "STRIDE COALESCED: {} transfers into 1 strided transfer (stride={}, segment_size={}, "
-                            "total_bytes={})",
-                            total_transfers,
-                            stride_pattern,
-                            sorted_transfers[i].transfer_size_bytes,
-                            current_transfer.transfer_size_bytes);
-
-                        j = stride_group_indices.back() + 1;  // Skip all coalesced transfers
-                    } else {
-                        // Not enough for stride coalescing
-                        log_info(
-                            tt::LogType::LogAlways,
-                            "Detected stride pattern but insufficient transfers: src[{}→{}] dst[{}→{}] stride={}",
-                            current_transfer.src_offset_bytes,
-                            current_transfer.src_offset_bytes + current_transfer.transfer_size_bytes,
-                            current_transfer.dst_offset_bytes,
-                            next_transfer.dst_offset_bytes,
-                            stride_pattern);
-                        j = i + 1;
-                    }
-                } else {
-                    j = i + 1;  // No coalescing possible
+                    break;
                 }
             }
 
             // Add the (possibly coalesced) transfer
             optimized_group.transfers.push_back(current_transfer);
             i = j;
-        }
-
-        // Log detailed transfer information for debugging
-        if (group.transfers.size() > 1) {
-            log_info(
-                tt::LogType::LogAlways,
-                "Block[{}:{}] has {} transfers:",
-                group.dst_shard_idx,
-                group.dst_block_idx,
-                group.transfers.size());
-            for (size_t i = 0; i < std::min(group.transfers.size(), size_t(4)); ++i) {
-                const auto& t = sorted_transfers[i];
-                log_info(
-                    tt::LogType::LogAlways,
-                    "  [{}]: src_shard={} src_off={} dst_off={} size={} noc=({},{})",
-                    i,
-                    t.src_shard_idx,
-                    t.src_offset_bytes,
-                    t.dst_offset_bytes,
-                    t.transfer_size_bytes,
-                    t.src_noc_x,
-                    t.src_noc_y);
-            }
-            if (group.transfers.size() > 4) {
-                log_info(tt::LogType::LogAlways, "  ... and {} more transfers", group.transfers.size() - 4);
-            }
         }
 
         // Log the optimization results
@@ -497,13 +381,6 @@ std::vector<BlockedTransferGroup> coalesce_contiguous_transfers(
                 group.transfers.size(),
                 optimized_group.transfers.size(),
                 group.transfers.size() - optimized_group.transfers.size());
-        } else if (group.transfers.size() > 1) {
-            log_info(
-                tt::LogType::LogAlways,
-                "Block[{}:{}]: No coalescing possible ({} transfers remain separate)",
-                group.dst_shard_idx,
-                group.dst_block_idx,
-                group.transfers.size());
         }
 
         optimized_groups.push_back(std::move(optimized_group));
