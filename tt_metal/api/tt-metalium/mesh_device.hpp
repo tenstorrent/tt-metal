@@ -33,6 +33,7 @@
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <tt-metalium/host_buffer.hpp>
+#include <tt-metalium/experimental/pinned_memory.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -142,15 +143,22 @@ private:
 
     std::lock_guard<std::mutex> lock_api() { return std::lock_guard<std::mutex>(api_mutex_); }
 
-public:
-    struct MemoryPinningParameters {
-        uint32_t max_pins;
-        uint64_t max_total_pin_size;
-        bool can_map_to_noc;
-    };
+    experimental::MemoryPinningParameters memory_pinning_params_{};
+    /**
+     * @brief Pin existing host memory for a specific set of mesh coordinates
+     * @param coordinate_range_set Set of mesh coordinates to pin memory for
+     * @param host_buffer Existing host memory to map (must not be null)
+     * @param buffer_size Size of buffer to map to each device
+     * @param map_to_noc Whether to map the buffer to the NOC
+     * @return Unique pointer to the created PinnedMemory instance
+     */
+    std::unique_ptr<experimental::PinnedMemory> pin_memory(
+        const MeshCoordinateRangeSet& coordinate_range_set, HostBuffer& host_buffer, bool map_to_noc = false);
 
-private:
-    MemoryPinningParameters memory_pinning_params_{};
+    experimental::MemoryPinningParameters get_memory_pinning_parameters() const;
+
+    // To allow access to pin_memory and get_memory_pinning_parameters from experimental::PinnedMemory.
+    friend experimental::PinnedMemory;
 
 public:
     MeshDevice(
@@ -341,19 +349,6 @@ public:
     // Currently expose users to the dispatch thread pool through the MeshDevice
     void enqueue_to_thread_pool(std::function<void()>&& f);
     void wait_for_thread_pool();
-
-    /**
-     * @brief Pin existing host memory for a specific set of mesh coordinates
-     * @param coordinate_range_set Set of mesh coordinates to pin memory for
-     * @param host_buffer Existing host memory to map (must not be null)
-     * @param buffer_size Size of buffer to map to each device
-     * @param map_to_noc Whether to map the buffer to the NOC
-     * @return Unique pointer to the created PinnedMemory instance
-     */
-    std::unique_ptr<PinnedMemory> pin_memory(
-        const MeshCoordinateRangeSet& coordinate_range_set, HostBuffer& host_buffer, bool map_to_noc = false);
-
-    MemoryPinningParameters get_memory_pinning_parameters() const;
 
     static std::shared_ptr<MeshDevice> create(
         const MeshDeviceConfig& config,
