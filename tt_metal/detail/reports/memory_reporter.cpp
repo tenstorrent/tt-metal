@@ -78,8 +78,8 @@ void write_memory_usage(
     std::ofstream& memory_usage_summary_report,
     std::ofstream& detailed_memory_usage_report,
     std::ofstream& l1_usage_summary_report) {
-    auto num_banks = device->allocator_impl()->get_num_banks(buffer_type);
-    auto stats = device->allocator_impl()->get_statistics(buffer_type);
+    auto num_banks = device->allocator()->get_num_banks(buffer_type);
+    auto stats = device->allocator()->get_statistics(buffer_type);
     memory_usage_summary_report << "," << stats.total_allocatable_size_bytes << "," << stats.total_allocated_bytes
                                 << "," << stats.total_free_bytes << "," << stats.largest_free_block_bytes << "\n";
 
@@ -160,8 +160,8 @@ void DumpDeviceMemoryState(const IDevice* device, const std::string& prefix) {
 }
 
 MemoryView MemoryReporter::get_memory_view(const IDevice* device, const BufferType& buffer_type) const {
-    auto stats = device->allocator_impl()->get_statistics(buffer_type);
-    auto num_banks_ = device->allocator_impl()->get_num_banks(buffer_type);
+    auto stats = device->allocator()->get_statistics(buffer_type);
+    auto num_banks_ = device->allocator()->get_num_banks(buffer_type);
 
     return MemoryView{
         .num_banks = num_banks_,
