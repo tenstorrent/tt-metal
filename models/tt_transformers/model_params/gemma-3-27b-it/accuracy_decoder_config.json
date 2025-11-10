@@ -129,6 +129,186 @@
             "precision_cfg": {
                 "KV_CACHE": "BFP8"
             }
+        },
+        "26": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "27": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "28": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "29": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "30": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "31": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "32": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "33": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "34": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "35": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "36": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "37": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "38": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "39": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "40": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "41": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "42": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "43": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "44": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "45": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "46": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "47": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "48": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "49": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "50": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "51": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "52": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "53": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "54": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "55": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "56": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "57": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "58": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "59": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "60": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
+        },
+        "61": {
+            "precision_cfg": {
+                "KV_CACHE": "BFP8"
+            }
         }
     }
 }
