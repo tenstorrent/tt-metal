@@ -237,12 +237,22 @@ test_suite_bh_glx_metal_unit_tests() {
 
     # Dispatch
     build/test/tt_metal/unit_tests_eth --gtest_filter=UnitMeshCQMultiDeviceProgramFixture.ActiveEthKernelsSendInterleavedBufferAllConnectedChips
-    build/test/tt_metal/unit_tests_dispatch --gtest_filter=**RandomProgram**
-    build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshCQSingleCardBufferFixture.ShardedBufferLargeL1ReadWrites
-    build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshCQSingleCardBufferFixture.ShardedBufferLargeDRAMReadWrites
-    build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshCQSingleCardFixture.TensixTestSubDeviceAllocations
-    build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshMultiCQMultiDeviceEventFixture.*
-    build/test/tt_metal/unit_tests_device --gtest_filter=UnitMeshCQSingleCardFixture.TensixTestReadWriteMultipleCoresL1
+
+    build/test/tt_metal/unit_tests_dispatch --gtest_filter="\
+        UnitMeshCQProgramFixture.TensixTestRandomizedProgram:\
+        UnitMeshRandomProgramFixture.TensixActiveEthTestPrograms:\
+        UnitMeshRandomProgramFixture.TensixTestLargeProgramInBetweenFiveSmallPrograms:\
+        UnitMeshRandomProgramTraceFixture.TensixActiveEthTestProgramsTraceAndNoTrace:\
+        UnitMeshRandomProgramTraceFixture.TensixActiveEthTestProgramsTrace:\
+        UnitMeshRandomProgramTraceFixture.TensixTestLargeProgramInBetweenFiveSmallProgramsTrace:\
+        UnitMeshRandomProgramTraceFixture.TensixTestSimpleProgramsTrace:\
+        UnitMeshCQTraceFixture.TensixEnqueueMultiProgramTraceBenchmark:\
+        UnitMeshCQTraceFixture.TensixEnqueueTwoProgramTrace:\
+        UnitMeshCQSingleCardBufferFixture.ShardedBufferLargeL1ReadWrites:\
+        UnitMeshCQSingleCardBufferFixture.ShardedBufferLargeDRAMReadWrites:\
+        UnitMeshCQSingleCardFixture.TensixTestSubDeviceAllocations:\
+        UnitMeshMultiCQMultiDeviceEventFixture.*:\
+        UnitMeshCQSingleCardFixture.TensixTestReadWriteMultipleCoresL1"
 }
 
 test_suite_bh_glx_python_unit_tests() {
