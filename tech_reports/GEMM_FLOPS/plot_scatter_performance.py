@@ -43,9 +43,9 @@ df = pd.concat([df_n150, df_p150], ignore_index=True)
 
 # dtype-fidelity configurations to plot with colors
 dtype_configs = [
-    ("BFLOAT4_B_LoFi", "#1f77b4", "BFLOAT4_B (LoFi)"),  # Blue
-    ("BFLOAT8_B_HiFi2", "#2ca02c", "BFLOAT8_B (HiFi2)"),  # Green
-    ("BFLOAT16_HiFi4", "#ff7f0e", "BFLOAT16 (HiFi4)"),  # Orange
+    ("BFLOAT4_B_LoFi", "#2ca02c", "BFLOAT4_B (LoFi)"),  # Green
+    ("BFLOAT8_B_HiFi2", "#ff7f0e", "BFLOAT8_B (HiFi2)"),  # Orange
+    ("BFLOAT16_HiFi4", "#1f77b4", "BFLOAT16 (HiFi4)"),  # Blue
 ]
 
 # Create figure

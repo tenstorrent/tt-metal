@@ -7,9 +7,9 @@ import numpy as np
 from matplotlib.lines import Line2D
 
 dtype_configs = [
-    ("BFLOAT4_B_LoFi", "BFLOAT4_B (LoFi)", "#1f77b4"),
-    ("BFLOAT8_B_HiFi2", "BFLOAT8_B (HiFi2)", "#2ca02c"),
-    ("BFLOAT16_HiFi4", "BFLOAT16 (HiFi4)", "#ff7f0e"),
+    ("BFLOAT4_B_LoFi", "BFLOAT4_B (LoFi)", "#2ca02c"),  # Green
+    ("BFLOAT8_B_HiFi2", "BFLOAT8_B (HiFi2)", "#ff7f0e"),  # Orange
+    ("BFLOAT16_HiFi4", "BFLOAT16 (HiFi4)", "#1f77b4"),  # Blue
 ]
 
 df_n150 = pd.read_csv("tech_reports/GEMM_FLOPS/n150-sweep.csv")
@@ -141,42 +141,63 @@ for source in ["n150", "p150"]:
     ax.tick_params(axis="both", labelsize=11)
 
     legend_elements = []
-    legend_elements.append(Line2D([0], [0], color="none", label="Data Type (Math Fidelity):"))
 
+    # Dtype section header
+    legend_elements.append(Line2D([0], [0], color="none", label=r"$\mathbf{Dtype\ (Math\ Fidelity):}$"))
+
+    # Add each dtype with its color
     for dtype_fidelity, dtype_label, color in dtype_configs:
-        legend_elements.append(
-            Line2D(
-                [0],
-                [0],
-                color=color,
-                marker="^",
-                linestyle="-",
-                linewidth=2,
-                markersize=8,
-                markerfacecolor=color,
-                markeredgecolor="black",
-                markeredgewidth=1,
-                label=f"  {dtype_label} (Traced)",
-            )
+        legend_elements.append(Line2D([0], [0], color=color, linewidth=4, label=f"  {dtype_label}"))
+
+    # Spacer
+    legend_elements.append(Line2D([0], [0], color="none", label=""))
+
+    # Execution type section header
+    legend_elements.append(Line2D([0], [0], color="none", label=r"$\mathbf{Execution\ Type:}$"))
+
+    # Traced (solid line, filled triangles)
+    legend_elements.append(
+        Line2D(
+            [0],
+            [0],
+            color="gray",
+            linewidth=3,
+            linestyle="-",
+            marker="^",
+            markersize=10,
+            markerfacecolor="gray",
+            markeredgecolor="black",
+            markeredgewidth=1.5,
+            label="  Traced",
         )
-        legend_elements.append(
-            Line2D(
-                [0],
-                [0],
-                color=color,
-                marker="v",
-                linestyle="--",
-                linewidth=2,
-                markersize=8,
-                markerfacecolor="none",
-                markeredgecolor=color,
-                markeredgewidth=1.5,
-                label=f"  {dtype_label} (Non-traced)",
-            )
+    )
+
+    # Non-traced (dashed line, hollow triangles)
+    legend_elements.append(
+        Line2D(
+            [0],
+            [0],
+            color="gray",
+            linewidth=3,
+            linestyle="--",
+            marker="v",
+            markersize=10,
+            markerfacecolor="none",
+            markeredgecolor="gray",
+            markeredgewidth=2.5,
+            label="  Non-traced",
         )
+    )
 
     ax.legend(
-        handles=legend_elements, loc="upper left", fontsize=11, framealpha=0.95, edgecolor="black", handlelength=3
+        handles=legend_elements,
+        loc="upper left",
+        fontsize=12,
+        framealpha=0.95,
+        edgecolor="black",
+        fancybox=True,
+        shadow=True,
+        handlelength=3.5,
     )
 
     plt.tight_layout()

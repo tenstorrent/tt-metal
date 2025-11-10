@@ -72,9 +72,9 @@ df = pd.concat([df_n150, df_p150], ignore_index=True)
 
 # Define dtype-fidelity pairs and aspect ratios (colors match scatter/bar plots)
 dtype_configs = [
-    ("BFLOAT4_B_LoFi", "BFLOAT4_B-LoFi", "#1f77b4"),  # Blue
-    ("BFLOAT8_B_HiFi2", "BFLOAT8_B-HiFi2", "#2ca02c"),  # Green
-    ("BFLOAT16_HiFi4", "BFLOAT16-HiFi4", "#ff7f0e"),  # Orange
+    ("BFLOAT4_B_LoFi", "BFLOAT4_B-LoFi", "#2ca02c"),  # Green
+    ("BFLOAT8_B_HiFi2", "BFLOAT8_B-HiFi2", "#ff7f0e"),  # Orange
+    ("BFLOAT16_HiFi4", "BFLOAT16-HiFi4", "#1f77b4"),  # Blue
 ]
 
 aspect_ratios = ["1:1:1", "1:2:4"]

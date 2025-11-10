@@ -73,9 +73,9 @@ gap_between_n150_p150 = 0.10
 gap_between_clusters = 0.30
 
 dtype_color_map = {
-    "BFLOAT16_HiFi4": "#ff7f0e",  # Orange (same as scatter plots)
-    "BFLOAT8_B_HiFi2": "#2ca02c",  # Green (same as scatter plots)
-    "BFLOAT4_B_LoFi": "#1f77b4",  # Blue (same as scatter plots)
+    "BFLOAT16_HiFi4": "#1f77b4",  # Blue (same as scatter plots)
+    "BFLOAT8_B_HiFi2": "#ff7f0e",  # Orange (same as scatter plots)
+    "BFLOAT4_B_LoFi": "#2ca02c",  # Green (same as scatter plots)
 }
 
 positions = []
@@ -146,7 +146,7 @@ for pair_idx in range(len(all_m_values)):
                     va="bottom",
                     fontsize=10,
                     fontweight="bold",
-                    bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor="gray", alpha=0.8, linewidth=0.5),
+                    bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", alpha=0.8, linewidth=1),
                 )
 
 ax.set_xlabel("Base Matrix Dimension m (Input Rows): N150 / P150", fontsize=13, fontweight="bold", labelpad=10)
@@ -165,47 +165,44 @@ ax.grid(True, axis="y", linestyle="--", alpha=0.4)
 ax.set_axisbelow(True)
 ax.set_ylim(0, max_height * 1.2)
 
-# Legend - group by dtype, show N150/P150 side by side for each
+# Legend - cleaner format like scatter plots
 from matplotlib.patches import Rectangle
-from matplotlib.text import Text
+from matplotlib.lines import Line2D
 
-legend_handles = []
-legend_labels = []
+legend_elements = []
 
-# Add each dtype as a row: dtype name, then N150, then P150
+# Dtype section header
+legend_elements.append(Line2D([0], [0], color="none", label=r"$\mathbf{Dtype\ (Math\ Fidelity):}$"))
+
+# Add each dtype with its color
 for dtype_fidelity, label in dtype_configs:
-    # Dtype label (bold, smaller, no box handle)
-    legend_handles.append(Rectangle((0, 0), 0, 0, facecolor="none", edgecolor="none", visible=False))
-    # Keep original label format and make it bold
-    label_escaped = label.replace("_", r"\_")
-    legend_labels.append(f"$\\mathbf{{{label_escaped}}}$")
+    legend_elements.append(Line2D([0], [0], color=dtype_color_map[dtype_fidelity], linewidth=4, label=f"  {label}"))
 
-    # N150 bar (lighter)
-    legend_handles.append(
-        Rectangle((0, 0), 1, 1, facecolor=dtype_color_map[dtype_fidelity], alpha=0.7, edgecolor="black", linewidth=1)
-    )
-    legend_labels.append("N150")
+# Spacer
+legend_elements.append(Line2D([0], [0], color="none", label=""))
 
-    # P150 bar (darker)
-    legend_handles.append(
-        Rectangle((0, 0), 1, 1, facecolor=dtype_color_map[dtype_fidelity], alpha=1.0, edgecolor="black", linewidth=1)
-    )
-    legend_labels.append("P150")
+# Device section header
+legend_elements.append(Line2D([0], [0], color="none", label=r"$\mathbf{Device:}$"))
+
+# N150 (lighter)
+legend_elements.append(
+    Rectangle((0, 0), 1, 1, facecolor="gray", alpha=0.7, edgecolor="black", linewidth=1, label="  N150")
+)
+
+# P150 (darker)
+legend_elements.append(
+    Rectangle((0, 0), 1, 1, facecolor="gray", alpha=1.0, edgecolor="black", linewidth=1, label="  P150")
+)
 
 ax.legend(
-    legend_handles,
-    legend_labels,
-    title="$\\mathbf{Dtype\\ (Math\\ Fidelity)}$",
+    handles=legend_elements,
     loc="upper left",
-    bbox_to_anchor=(0.01, 0.99),
-    ncol=3,
-    fontsize=10,
+    fontsize=12,
     framealpha=0.95,
     edgecolor="black",
-    columnspacing=0.8,
-    handletextpad=0.5,
-    labelspacing=0.4,
-    handlelength=0.8,
+    fancybox=True,
+    shadow=True,
+    handlelength=3.5,
 )
 
 plt.subplots_adjust(left=0.03, right=0.97, bottom=0.12, top=0.93)

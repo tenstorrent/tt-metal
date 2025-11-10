@@ -10,9 +10,9 @@ from matplotlib.lines import Line2D
 
 # Configuration
 dtype_configs = [
-    ("BFLOAT4_B-LoFi", "#1f77b4"),  # Blue
-    ("BFLOAT8_B-HiFi2", "#2ca02c"),  # Green
-    ("BFLOAT16-HiFi4", "#ff7f0e"),  # Orange
+    ("BFLOAT4_B-LoFi", "#2ca02c"),  # Green
+    ("BFLOAT8_B-HiFi2", "#ff7f0e"),  # Orange
+    ("BFLOAT16-HiFi4", "#1f77b4"),  # Blue
 ]
 
 device_configs = [
@@ -98,17 +98,31 @@ for dtype_label, dtype_color in dtype_configs:
             )
 
 # Formatting
-ax.set_xlabel(
-    "Total Matrix Elements (m × k × n)\n[(m,k) = input matrix size, (k,n) = weight matrix size]",
+ax.set_xlabel("Total Matrix Elements (m × k × n)", fontsize=12, fontweight="bold")
+# Add explanation below x-axis (non-bold)
+ax.text(
+    0.5,
+    -0.12,
+    "[(m,k) = input matrix size, (k,n) = weight matrix size]",
+    transform=ax.transAxes,
+    ha="center",
+    va="top",
+    fontsize=10,
+)
+ax.set_ylabel("Utilization (%)", fontsize=12, fontweight="bold")
+
+# Set main title and subtitle
+fig.suptitle(
+    "Utilization Comparison: N150 (Wormhole) vs P150 (Blackhole)",
+    fontsize=16,
+    fontweight="bold",
+    y=0.98,
+)
+ax.set_title(
+    "Utilization vs Matrix Size for Different Data Types and Math Fidelities",
     fontsize=12,
     fontweight="bold",
-)
-ax.set_ylabel("Device Utilization (%)", fontsize=12, fontweight="bold")
-ax.set_title(
-    "Device Utilization Comparison: N150 (Wormhole) vs P150 (Blackhole)\nDevice-based Utilization vs Matrix Size for Different Data Types and Math Fidelities",
-    fontsize=14,
-    fontweight="bold",
-    pad=20,
+    pad=10,
 )
 
 ax.set_xscale("log")
@@ -124,7 +138,7 @@ legend_elements.append(Line2D([0], [0], color="none", marker="", linestyle="", l
 # Dtype entries (just colored lines, no markers)
 for dtype_label, color in dtype_configs:
     parts = dtype_label.split("-")
-    dtype_part = parts[0].replace("_", r"\_")
+    dtype_part = parts[0]  # Keep uppercase format
     fidelity_part = parts[1]
     formatted_label = f"{dtype_part} ({fidelity_part})"
     legend_elements.append(Line2D([0], [0], color=color, linewidth=3, label=f"{formatted_label}"))
