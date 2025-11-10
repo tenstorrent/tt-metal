@@ -18,7 +18,44 @@ void bind_moreh_layer_norm_backward_operation(nb::module_& mod) {
         mod,
         ttnn::moreh_layer_norm_backward,
         "Moreh Layer Norm Backward Operation",
-        ttnn::nanobind_arguments_t{
+        ttnn::nanobind_overload_t{
+            [](const decltype(ttnn::moreh_layer_norm_backward)& self,
+               const Tensor& output_grad,
+               const Tensor& input,
+               const Tensor& mean,
+               const Tensor& rstd,
+               uint32_t normalized_dims,
+               const std::optional<const Tensor>& gamma,
+               const std::optional<const Tensor>& input_grad,
+               const std::optional<const Tensor>& gamma_grad,
+               const std::optional<const Tensor>& beta_grad,
+               const std::optional<MemoryConfig>& memory_config,
+               nb::object compute_kernel_config_obj) {
+                std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt;
+                if (!compute_kernel_config_obj.is_none()) {
+                    if (nb::isinstance<ttnn::WormholeComputeKernelConfig>(compute_kernel_config_obj)) {
+                        compute_kernel_config = nb::cast<ttnn::WormholeComputeKernelConfig>(compute_kernel_config_obj);
+                    } else if (nb::isinstance<ttnn::GrayskullComputeKernelConfig>(compute_kernel_config_obj)) {
+                        compute_kernel_config = nb::cast<ttnn::GrayskullComputeKernelConfig>(compute_kernel_config_obj);
+                    } else {
+                        throw nb::type_error(
+                            "compute_kernel_config must be WormholeComputeKernelConfig | "
+                            "GrayskullComputeKernelConfig or None");
+                    }
+                }
+                return self(
+                    output_grad,
+                    input,
+                    mean,
+                    rstd,
+                    normalized_dims,
+                    gamma,
+                    input_grad,
+                    gamma_grad,
+                    beta_grad,
+                    memory_config,
+                    compute_kernel_config);
+            },
             nb::arg("output_grad"),
             nb::arg("input"),
             nb::arg("mean"),
