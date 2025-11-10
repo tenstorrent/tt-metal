@@ -862,7 +862,7 @@ For example, **collective communication libraries (CCLs)** written using **1D (l
 
 # 5 Sockets over TT-Fabric <a id="socket_api"></a>
 
-We have implemented sockets as send and receive operatoins that use tt-fabric asynchronous write APIs to implement flowcontrolled data transfer between a sender and receiver.
+We have implemented sockets as send and receive operations that use tt-fabric asynchronous write APIs to implement flowcontrolled data transfer between a sender and receiver.
 
 
 # 6 Deadlock Avoidance and Mitigation <a id="deadlocks"></a>
