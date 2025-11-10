@@ -98,9 +98,6 @@ ALWI void process_grid_point_nearest(
         const uint32_t input_stick_index = batch_offset + (nearest_h * input_width) + nearest_w;
         const uint64_t input_noc_addr = input_tensor_accessor.get_noc_addr(input_stick_index);
         noc_async_read(input_noc_addr, l1_write_output_addr, input_stick_nbytes);
-        // if constexpr (!is_sharded) {
-        //     noc_async_read_barrier();
-        // }
     } else {
         // Out of bounds - fill with zeros
         for (uint32_t i = 0; i < input_stick_nbytes; i += sizeof(uint32_t)) {

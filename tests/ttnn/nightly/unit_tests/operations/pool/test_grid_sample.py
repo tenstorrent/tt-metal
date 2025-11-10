@@ -729,6 +729,10 @@ def test_grid_sample_oft(
         pytest.skip("Precomputed grid only supports bfloat16")
 
     torch.manual_seed(0)
+    compute_grid_size = device.compute_with_storage_grid_size()
+    # Check if device has enough cores for the specified core grid
+    if core_grid.y > compute_grid_size.y or core_grid.x > compute_grid_size.x:
+        core_grid = ttnn.CoreGrid(x=compute_grid_size.x, y=compute_grid_size.y)
 
     batch_size, channels, height, width = input_shape
     grid_n, grid_h, grid_w, grid_coords = grid_shape
@@ -759,20 +763,6 @@ def test_grid_sample_oft(
     ttnn_grid_device = ttnn.reshape(ttnn_grid_device, (1, 1, ttnn_grid_device.shape[1], ttnn_grid_device.shape[3]))
     ttnn_grid_device_slices = ttnn.split(ttnn_grid_device, ttnn_grid_device.shape[2] // num_slices, dim=2)
 
-    # Memory config for sharded grid_sample output
-    shard_height = (
-        math.ceil(ttnn_grid_device_slices[0].shape[2] // ttnn.TILE_SIZE / (core_grid.y * core_grid.x)) * ttnn.TILE_SIZE
-    )
-    shard_width = math.ceil(channels * grid_batching_factor // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
-
-    grid_sample_memory_config = ttnn.create_sharded_memory_config(
-        (shard_height, shard_width),
-        core_grid,
-        ttnn.ShardStrategy.HEIGHT,
-        ttnn.ShardOrientation.ROW_MAJOR,
-        use_height_and_width_as_shard_shape=True,
-    )
-
     if use_signpost:
         signpost(header=f"Starting OFT grid_sample with {num_slices} slices and input shape {input_shape}")
 
@@ -792,7 +782,6 @@ def test_grid_sample_oft(
             batch_output_channels=True,
             mode="nearest",
             align_corners=True,
-            memory_config=grid_sample_memory_config,
         )
 
         ttnn_output_torch = ttnn.to_torch(ttnn_output).reshape(1, ttnn_output.shape[2], 1, ttnn_output.shape[3])

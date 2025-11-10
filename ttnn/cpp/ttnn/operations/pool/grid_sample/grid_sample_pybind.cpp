@@ -45,7 +45,7 @@ void bind_grid_sample(py::module& module) {
                                  - Generated using ttnn.prepare_grid_sample_grid() for K=1, then ttnn.reshape() for K>1, both being done on host side
 
         Keyword Args:
-            mode (str): Interpolation mode. Currently only "bilinear" is supported.
+            mode (str): Interpolation mode.
             padding_mode (str): How to handle out-of-bounds coordinates. Currently only "zeros" is supported.
             align_corners (bool): Whether to align corners when mapping normalized coordinates to pixel indices.
             use_precomputed_grid (bool): Whether to use precomputed grid coordinates.
