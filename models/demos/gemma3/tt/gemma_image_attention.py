@@ -227,7 +227,9 @@ class TtGemmaImageAttention(LightweightModule):
         seq_len = x_11SH.shape[-2]
         batch_size = x_11SH.shape[0]
 
-        # Reason this line is needed - ttnn.embedding will return [b, s, d] and nlp_create_qkv_heads expects [b, 1, s, d]
+        # Reshape required:
+        # ttnn.embedding returns [b, s, d]
+        # ttnn.nlp_create_qkv_heads expects [b, 1, s, d]
         if len(x_11SH.shape) == 3:
             x_11SH = ttnn.reshape(x_11SH, (batch_size, 1, seq_len, -1))
 
