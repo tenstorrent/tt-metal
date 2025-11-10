@@ -47,6 +47,31 @@ struct df_to_std<DataFormat::UInt8> {
 template <DataFormat df>
 using std_type_t = typename df_to_std<df>::std_type;
 
+/**
+ * @brief RAII guard for safely reading from a Circular Buffer (CB).
+ *
+ * `ReadCBGuard` automatically manages CB read synchronization in a scoped manner.
+ * When constructed, it waits for `tiles` tiles to be available at the CB front
+ * (`cb_wait_front`), ensuring data readiness before access. Upon destruction,
+ * it automatically pops those tiles from the CB front (`cb_pop_front`),
+ * signaling that the tiles have been consumed.
+ *
+ * This guarantees balanced `cb_wait_front`/`cb_pop_front` calls, even in the
+ * presence of early returns or exceptions, preventing CB underflows and race
+ * conditions.
+ *
+ * @note This class is strictly non-copyable and non-movable to prevent any
+ *       double-pop or premature release of CB resources.
+ *
+ * Example usage:
+ * @code
+ * {
+ *     ReadCBGuard guard(cb_id, num_tiles);
+ *     // Safely read from CB: data is guaranteed ready.
+ *     // ...
+ * } // Automatically pops the tiles on scope exit.
+ * @endcode
+ */
 class ReadCBGuard {
     uint32_t cb;
     uint32_t tiles;
@@ -63,6 +88,30 @@ public:
     operator any_type_t() = delete;
 };
 
+/**
+ * @brief RAII guard for safely writing to a Circular Buffer (CB).
+ *
+ * `WriteCBGuard` automatically manages CB write synchronization in a scoped manner.
+ * When constructed, it reserves space for `tiles` tiles at the CB back
+ * (`cb_reserve_back`), ensuring sufficient room for writing. Upon destruction,
+ * it automatically pushes those tiles to the CB back (`cb_push_back`),
+ * making them visible to downstream consumers.
+ *
+ * This ensures balanced `cb_reserve_back`/`cb_push_back` calls and prevents
+ * buffer overflows or mismatched producer-consumer behavior.
+ *
+ * @note Like `ReadCBGuard`, this class is non-copyable and non-movable to ensure
+ *       one-to-one ownership of the CB reservation.
+ *
+ * Example usage:
+ * @code
+ * {
+ *     WriteCBGuard guard(cb_id, num_tiles);
+ *     // Safely write to CB: space is guaranteed reserved.
+ *     // ...
+ * } // Automatically pushes tiles to the CB on scope exit.
+ * @endcode
+ */
 class WriteCBGuard {
     uint32_t cb;
     uint32_t tiles;
@@ -126,8 +175,6 @@ FORCE_INLINE constexpr uint32_t block_depth_ceil(uint32_t value, uint32_t block_
     return (value + block_depth - 1) / block_depth;
 }
 
-// total tiles with double buffering (apart from 32t CBs, for which there is not enough memory) and default 32
-// block_size: 204, each tile: 4 KB, total: 808 KB for 4-byte types per core.
 template <typename InputAccessorArgs, typename OutputAccessorArgs>
 struct IntImgCTAs {
     const uint32_t start_cb;

@@ -67,6 +67,9 @@ FORCE_INLINE void broadcast_last_row_to_all_rows_in_cube(
     // get the output after processing previous row (the block right above the currently processed block)
     // make the axis 3 propagation tile
     // push back to the compute
+
+    // this variable signifies the index of the last row in the imported tile from which values are supposed to be
+    // broadcasted across all other rows
     const uint32_t LAST_ROW_INDEX = tile_height - 1;
     for (uint32_t tile_i = 0; tile_i < block_depth; ++tile_i) {
         ReadCBGuard propagation_upper_read_guard{axis_3_propagation_read_cb, ONE_TILE};

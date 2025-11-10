@@ -328,7 +328,6 @@ FORCE_INLINE void perform_intimg_along_row_chunk(
                 get_and_propagate_adder_cube(
                     ctas.cumsum_stage_2_cb, ctas.axis_3_buffer_1_cb, ctas.output_cb, block_depth);
             } else {
-                // produce: cb_output 1t x32
                 cumsum_cube_axis_3(ctas.cumsum_stage_1_cb, ctas.output_cb, block_depth);
             }
         } else {

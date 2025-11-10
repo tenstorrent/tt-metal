@@ -11,22 +11,44 @@
 
 ---
 
+## 0) TL;DR — mental model (with **[B, W, H, C]**)
+
+- Do a **W (left→right) scan** per block, **save** the block’s right edge.
+- Add that right edge to the **next block** along **W**.
+- Do an **H (top→bottom) scan** inside each tile.
+- Add a **broadcast of the upper block’s last row** to vertically stitch row chunks in **H**.
+- Write out; repeat for all `column_block_i` and `row_chunk_i`. ✅
+
+---
+
 ## 1) What the kernel computes (the math)
 
 For an input tensor `X[B=1, W, H, C]`, the **integral image** `I` is defined as:
 
-\[
-I(1, x, y, c) \;=\; \sum_{u=0}^{x}\sum_{v=0}^{y} X(1, u, v, c)
-\]
+$I(1, x, y, c) = \sum_{u=0}^{x}\sum_{v=0}^{y} X(1, u, v, c)$
 
-This code computes the same object but in **tile blocks** to match Tenstorrent’s tiled compute model and on-chip circular buffers (CBs). The work is split into three stages:
+The integral image kernel computes `I` with **tile blocks** to utilize Tenstorrent’s tiled compute model and on-chip circular buffers (CBs). The work is split into three stages:
+
+Throughout, the kernels use **tiles** of size `tile_height × tile_width` (often 32×32) and processes **blocks** of up to `block_depth` tiles (default 32), where `block_depth` iterates along **Width (W)** inside a row of tiles.
 
 - **Reader:** moves input tiles from DRAM to on-chip CBs in the correct order; initializes the per-block prefix-sum state.
 - **Compute:** performs cumulative sums along **Width (W)** within a block (kernel’s “axis 2”), then along **Height (H)** within a tile (kernel’s “axis 3”), and **propagates partial sums across blocks** so results are globally correct.
 - **Writer:** writes results back to DRAM and, when on later row chunks, **imports the block above** to continue the global vertical accumulation (H propagation), broadcasting its last row to all rows.
+- **Prefix sums** (running sums)
 
-Throughout, the code uses **tiles** of size `tile_height × tile_width` (often 32×32) and processes **blocks** of up to `block_depth` tiles (default 32), where `block_depth` iterates along **Width (W)** inside a row of tiles.
+A **prefix sum** (also called a *running sum* or *cumulative sum*) computes the sum of all elements up to and including a given position — an **inclusive** prefix sum:
 
+$S_i = \sum_{k=0}^{i} x_k$
+
+In the integral image kernel, this concept is applied along the **Width (W)** dimension first, and then along **Height (H)**:
+
+- For each block, the kernel performs a **cumsum along W** (“`cumsum2`”), producing the running sum of tiles within that block.
+- The **last tile** of the block is saved as a **carry** — the accumulated sum of everything so far.
+- The next block **applies that carry** to its own cumsum results before continuing the scan.
+- This repeats for subsequent blocks, ensuring the sums are globally correct across the entire image.
+
+Intuitively:
+> “Compute the cumsum of block 0 → keep the carry → cumsum of block 1 → apply carry → keep new carry → repeat sequentially for all following blocks.”
 ---
 
 ## 2) Key vocabulary (TT-metal essentials)
@@ -192,7 +214,7 @@ This `cb_axis_3_buffer_1` is then consumed by the compute stage via `get_and_pro
 | **Height propagation** | **H**           | `get_and_propagate_adder_cube` | add “upper” block    |
 | Channels               | **C**           | core sharding            | per-core slice        |
 
-> The names “axis_2/axis_3” in the code are historical; for coherence we speak in **W/H** terms throughout.
+> The names “axis_2/axis_3” in the code are historical; for coherence with your requested layout we speak in **W/H** terms throughout.
 
 ---
 
@@ -202,14 +224,12 @@ Let `P_W(y_block, x_block, i, c)` be the result of the **W-scan** for the `i`-th
 Let `L_W(y_block, x_block-1, c)` be the **last tile** of the **previous** block in the same row after the W-scan.
 
 Then the **global** W prefix for tile `i` in block `x_block` is:
-\[
-H\_W(y\_block, x\_block, i, c) = P\_W(y\_block, x\_block, i, c) + \mathbf{1}\_{x\_block>0}\,L\_W(y\_block, x\_block-1, c).
-\]
+
+$H\_W(y\_block, x\_block, i, c) = P\_W(y\_block, x\_block, i, c) + \mathbf{1}\_{x\_block>0}\,L\_W(y\_block, x\_block-1, c)$.
 
 Next, vertical accumulation within tile plus the last-row broadcast of the **upper** block `(y_block-1, x_block)` yields for each `(x, y)` inside the tile:
-\[
-I(1, x, y, c) = \mathrm{cumsum\_H}\big(H\_W(\cdot)\big) \;+\; \mathbf{1}\_{y\_block>0}\,\mathrm{broadcast\_last\_row}\big(I(1,\cdot,\text{end of upper block}, c)\big).
-\]
+
+$I(1, x, y, c) = cumsum_H(H_W(·)) + 1_{y_block > 0} · broadcastLastRow(I(1, ·, endOfUpperBlock, c))$
 
 This is the classic 2D scan split into **tile-local** cumsums plus **cross-block** additive propagations in **W** and **H**.
 
@@ -256,16 +276,6 @@ cb_output             # final per-tile output to write
 
 ---
 
-## 12) TL;DR — mental model (with **[B, W, H, C]**)
-
-- Do a **W (left→right) scan** per block, **save** the block’s right edge.
-- Add that right edge to the **next block** along **W**.
-- Do an **H (top→bottom) scan** inside each tile.
-- Add a **broadcast of the upper block’s last row** to vertically stitch row chunks in **H**.
-- Write out; repeat for all `column_block_i` and `row_chunk_i`. ✅
-
----
-
 ## Appendix: Code-to-concept map
 
 - `cumsum_cube_axis_2` → horizontal prefix, plus optional “last tile” capture.
@@ -275,7 +285,7 @@ cb_output             # final per-tile output to write
 - Reader `send_block`/Writer `output_block` mirror each other’s `get_tile_id` addressing.
 - Writer’s `broadcast_last_row_to_all_rows_in_cube` prepares the vertical offset matrix.
 
----
+--
 
 ### Quick ASCII diagram (W/H oriented)
 
