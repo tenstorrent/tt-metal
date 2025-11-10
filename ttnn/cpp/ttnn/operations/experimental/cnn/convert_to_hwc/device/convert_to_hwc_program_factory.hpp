@@ -33,6 +33,10 @@ struct ConvertToHwcConfig {
     uint32_t output_shard_height;
     uint32_t output_shard_width;
 
+    // Gather output shard specifications for CB_IN_BATCH and transfer calculations
+    uint32_t gather_l1_output_shard_height;
+    uint32_t gather_l1_output_shard_width;
+
     // Core information
     std::vector<CoreCoord> l1_input_cores;
     std::vector<CoreCoord> dram_input_cores;

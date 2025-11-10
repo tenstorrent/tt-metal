@@ -49,22 +49,22 @@ void MAIN {
     constexpr uint32_t cb_tiled_in = get_compile_time_arg_val(1);
     constexpr uint32_t cb_transpose_in0 = get_compile_time_arg_val(2);
     constexpr uint32_t cb_transpose_in1 = get_compile_time_arg_val(3);
-    constexpr uint32_t total_tiles = get_compile_time_arg_val(4);
+    constexpr uint32_t total_tiles_per_block = get_compile_time_arg_val(4);
     constexpr uint32_t total_sticks_per_block = get_compile_time_arg_val(5);
     constexpr uint32_t total_num_blocks = get_compile_time_arg_val(6);
 
     compute_kernel_hw_startup(cb_in_batch, cb_tiled_in);
 
     for (uint32_t block_idx = 0; block_idx < total_num_blocks; block_idx++) {
-        tilize_init(cb_in_batch, total_tiles, cb_tiled_in);
-        tilize(cb_in_batch, total_tiles, total_sticks_per_block, cb_tiled_in);
+        tilize_init(cb_in_batch, total_tiles_per_block, cb_tiled_in);
+        tilize(cb_in_batch, total_tiles_per_block, total_sticks_per_block, cb_tiled_in);
         tilize_uninit(cb_in_batch, cb_tiled_in);
 
         pack_untilize_init(cb_in_batch, cb_transpose_in0);
         transpose_wh_init(cb_in_batch, cb_transpose_in0);
         pack_untilize_dest_init<1>(cb_in_batch);
 
-        for (uint32_t idx = 0; idx < total_tiles; idx++) {
+        for (uint32_t idx = 0; idx < total_tiles_per_block; idx++) {
             const uint32_t cb_transpose_in = idx % 2 == 0 ? cb_transpose_in0 : cb_transpose_in1;
             transpose<1>(cb_tiled_in, cb_transpose_in);
         }

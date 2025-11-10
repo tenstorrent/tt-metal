@@ -124,7 +124,7 @@ def test_convert_to_hwc(device, B, C, HW, core_grid, padded_sharded_dim, provide
         ],
         dim=1,
     )
-    input_tensor = torch.randn([1, B, C, HW], dtype=torch.bfloat16)
+    # input_tensor = torch.randn([1, B, C, HW], dtype=torch.bfloat16)
 
     expected = input_tensor.transpose(2, 3).reshape(1, 1, B * HW, C)
 
