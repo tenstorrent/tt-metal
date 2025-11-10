@@ -39,7 +39,7 @@ Finally, run the demo
 pytest models/experimental/stable_diffusion_35_large/fun_demo.py -k "t3k_cfg2_sp2_tp2 and yes_trace"
 
 # On Galaxy
-TT_MM_THROTTLE_PERF=5 pytest models/experimental/stable_diffusion_35_large/fun_demo.py -k "tg_cfg2_sp4_tp4 and yes_trace"
+pytest models/experimental/stable_diffusion_35_large/fun_demo.py -k "tg_cfg2_sp4_tp4 and yes_trace"
 ```
 
 
