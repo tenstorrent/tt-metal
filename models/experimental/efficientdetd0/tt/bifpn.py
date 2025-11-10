@@ -7,6 +7,25 @@ from models.experimental.efficientdetd0.tt.utils import (
 )
 
 
+def weight_modifier(w, epsilon, three_weights, device):
+    weight = ttnn.from_torch(w, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    # Convert to interleaved if sharded
+    w_relu = ttnn.relu(weight)
+    w_sum = ttnn.sum(w_relu, dim=0)
+    denominator = ttnn.add(w_sum, epsilon)
+    weight_0 = ttnn.div(w_relu[0], denominator)
+    weight_1 = ttnn.div(w_relu[1], denominator)
+    if three_weights:
+        weight_2 = ttnn.div(w_relu[2], denominator)
+    ttnn.deallocate(w_relu)
+    ttnn.deallocate(w_sum)
+    ttnn.deallocate(denominator)
+    if three_weights:
+        return weight_0, weight_1, weight_2
+    else:
+        return weight_0, weight_1
+
+
 class TtBiFPN:
     """
     TTNN implementation of BiFPN (Bi-directional Feature Pyramid Network)
@@ -193,24 +212,30 @@ class TtBiFPN:
 
         # Store attention weights as TTNN tensors
         if attention:
-            self.p6_w1 = ttnn.from_torch(parameters.p6_w1, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-            self.p5_w1 = ttnn.from_torch(parameters.p5_w1, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-            self.p4_w1 = ttnn.from_torch(parameters.p4_w1, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-            self.p3_w1 = ttnn.from_torch(parameters.p3_w1, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-
-            self.p4_w2 = ttnn.from_torch(parameters.p4_w2, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-            self.p5_w2 = ttnn.from_torch(parameters.p5_w2, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-            self.p6_w2 = ttnn.from_torch(parameters.p6_w2, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-            self.p7_w2 = ttnn.from_torch(parameters.p7_w2, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-
-            p7_w2_relu = ttnn.relu(self.p7_w2)
-            p7_w2_sum = ttnn.sum(p7_w2_relu, dim=0)
-            denominator = ttnn.add(p7_w2_sum, self.epsilon)
-            self.p7_weight_0 = ttnn.div(p7_w2_relu[0], denominator)
-            self.p7_weight_1 = ttnn.div(p7_w2_relu[1], denominator)
-            ttnn.deallocate(p7_w2_relu)
-            ttnn.deallocate(p7_w2_sum)
-            ttnn.deallocate(denominator)
+            self.p6_w1_weight_0, self.p6_w1_weight_1 = weight_modifier(
+                parameters.p6_w1, epsilon=self.epsilon, three_weights=False, device=self.device
+            )
+            self.p5_w1_weight_0, self.p5_w1_weight_1 = weight_modifier(
+                parameters.p5_w1, epsilon=self.epsilon, three_weights=False, device=self.device
+            )
+            self.p4_w1_weight_0, self.p4_w1_weight_1 = weight_modifier(
+                parameters.p4_w1, epsilon=self.epsilon, three_weights=False, device=self.device
+            )
+            self.p3_w1_weight_0, self.p3_w1_weight_1 = weight_modifier(
+                parameters.p3_w1, epsilon=self.epsilon, three_weights=False, device=self.device
+            )
+            self.p4_w2_weight_0, self.p4_w2_weight_1, self.p4_w2_weight_2 = weight_modifier(
+                parameters.p4_w2, epsilon=self.epsilon, three_weights=True, device=self.device
+            )
+            self.p5_w2_weight_0, self.p5_w2_weight_1, self.p5_w2_weight_2 = weight_modifier(
+                parameters.p5_w2, epsilon=self.epsilon, three_weights=True, device=self.device
+            )
+            self.p6_w2_weight_0, self.p6_w2_weight_1, self.p6_w2_weight_2 = weight_modifier(
+                parameters.p6_w2, epsilon=self.epsilon, three_weights=True, device=self.device
+            )
+            self.p7_w2_weight_0, self.p7_w2_weight_1 = weight_modifier(
+                parameters.p7_w2, epsilon=self.epsilon, three_weights=False, device=self.device
+            )
 
     def _upsample(self, x, scale_factor):
         # Convert to interleaved if sharded
@@ -266,65 +291,49 @@ class TtBiFPN:
             p3_in, p4_in, p5_in, p6_in, p7_in = inputs
 
         # P6_1 = weighted_sum(P6_0, upsample(P7_0))
-        p6_w1_tile = ttnn.to_layout(self.p6_w1, ttnn.TILE_LAYOUT)
-        p6_w1_relu = ttnn.relu(p6_w1_tile)
-        p6_w1_sum = ttnn.sum(p6_w1_relu, dim=0)
-        denominator = ttnn.add(p6_w1_sum, self.epsilon)  # Use ttnn.add for tensor + scalar
-        weight_0 = ttnn.div(p6_w1_relu[0], denominator)
-        weight_1 = ttnn.div(p6_w1_relu[1], denominator)
-
         p7_upsampled = self._upsample(p7_in, scale_factor=2)
-        term1 = ttnn.mul(weight_0, p6_in)
-        term2 = ttnn.mul(weight_1, p7_upsampled)
-        term2_reshaped = ttnn.reshape(term2, term1.shape)
-        p6_weighted = ttnn.add(term1, term2_reshaped)
+        term1 = ttnn.mul(self.p6_w1_weight_0, p6_in)
+        term2 = ttnn.mul(self.p6_w1_weight_1, p7_upsampled)
+        term2 = ttnn.reshape(term2, term1.shape)
+        p6_weighted = ttnn.add(term1, term2)
         p6_up = self.conv6_up(self._swish(p6_weighted))
 
-        # P5_1 = weighted_sum(P5_0, upsample(P6_1))
-        p5_w1_tile = ttnn.to_layout(self.p5_w1, ttnn.TILE_LAYOUT)
-        p5_w1_relu = ttnn.relu(p5_w1_tile)
-        p5_w1_sum = ttnn.sum(p5_w1_relu, dim=0)
-        denominator = ttnn.add(p5_w1_sum, self.epsilon)
-        weight_0 = ttnn.div(p5_w1_relu[0], denominator)
-        weight_1 = ttnn.div(p5_w1_relu[1], denominator)
+        ttnn.deallocate(p7_upsampled)
+        ttnn.deallocate(p6_weighted)
 
+        # P5_1 = weighted_sum(P5_0, upsample(P6_1))
         p6_upsampled = self._upsample(p6_up, scale_factor=2)
-        term1 = ttnn.mul(weight_0, p5_in)
-        term2 = ttnn.mul(weight_1, p6_upsampled)
-        term2_reshaped = ttnn.reshape(term2, term1.shape)
-        p5_weighted = ttnn.add(term1, term2_reshaped)
+        term1 = ttnn.mul(self.p5_w1_weight_0, p5_in)
+        term2 = ttnn.mul(self.p5_w1_weight_1, p6_upsampled)
+        term2 = ttnn.reshape(term2, term1.shape)
+        p5_weighted = ttnn.add(term1, term2)
         p5_up = self.conv5_up(self._swish(p5_weighted))
 
-        # P4_1 = weighted_sum(P4_0, upsample(P5_1))
-        p4_w1_tile = ttnn.to_layout(self.p4_w1, ttnn.TILE_LAYOUT)
-        p4_w1_relu = ttnn.relu(p4_w1_tile)
-        p4_w1_sum = ttnn.sum(p4_w1_relu, dim=0)
-        denominator = ttnn.add(p4_w1_sum, self.epsilon)
-        weight_0 = ttnn.div(p4_w1_relu[0], denominator)
-        weight_1 = ttnn.div(p4_w1_relu[1], denominator)
+        ttnn.deallocate(p6_upsampled)
+        ttnn.deallocate(p5_weighted)
 
+        # P4_1 = weighted_sum(P4_0, upsample(P5_1))
         p5_upsampled = self._upsample(p5_up, scale_factor=2)
-        term1 = ttnn.mul(weight_0, p4_in)
-        term2 = ttnn.mul(weight_1, p5_upsampled)
-        term2_reshaped = ttnn.reshape(term2, term1.shape)
-        p4_weighted = ttnn.add(term1, term2_reshaped)
+        term1 = ttnn.mul(self.p4_w1_weight_0, p4_in)
+        term2 = ttnn.mul(self.p4_w1_weight_0, p5_upsampled)
+        term2 = ttnn.reshape(term2, term1.shape)
+        p4_weighted = ttnn.add(term1, term2)
         p4_up = self.conv4_up(self._swish(p4_weighted))
 
-        # P3_2 = weighted_sum(P3_0, upsample(P4_1))
-        p3_w1_tile = ttnn.to_layout(self.p3_w1, ttnn.TILE_LAYOUT)
-        p3_w1_relu = ttnn.relu(p3_w1_tile)
-        p3_w1_sum = ttnn.sum(p3_w1_relu, dim=0)
-        denominator = ttnn.add(p3_w1_sum, self.epsilon)
-        weight_0 = ttnn.div(p3_w1_relu[0], denominator)
-        weight_1 = ttnn.div(p3_w1_relu[1], denominator)
+        ttnn.deallocate(p5_upsampled)
+        ttnn.deallocate(p4_weighted)
 
+        # P3_2 = weighted_sum(P3_0, upsample(P4_1))
         p4_upsampled = self._upsample(p4_up, scale_factor=2)
-        term1 = ttnn.mul(weight_0, p3_in)
+        term1 = ttnn.mul(self.p3_w1_weight_0, p3_in)
         ttnn.deallocate(p3_in)
-        term2 = ttnn.mul(weight_1, p4_upsampled)
-        term2_reshaped = ttnn.reshape(term2, term1.shape)
-        p3_weighted = ttnn.add(term1, term2_reshaped)
+        term2 = ttnn.mul(self.p3_w1_weight_1, p4_upsampled)
+        term2 = ttnn.reshape(term2, term1.shape)
+        p3_weighted = ttnn.add(term1, term2)
         p3_out = self.conv3_up(self._swish(p3_weighted))
+
+        ttnn.deallocate(p4_upsampled)
+        ttnn.deallocate(p3_weighted)
 
         # Update p4_in and p5_in for bottom-up path if first_time
         if self.first_time:
@@ -335,78 +344,57 @@ class TtBiFPN:
 
         # Bottom-up pathway with weighted attention
         # P4_2 = weighted_sum(P4_0, P4_1, downsample(P3_2))
-        p4_w2_tile = ttnn.to_layout(self.p4_w2, ttnn.TILE_LAYOUT)
-        p4_w2_relu = ttnn.relu(p4_w2_tile)
-        p4_w2_sum = ttnn.sum(p4_w2_relu, dim=0)
-        denominator = ttnn.add(p4_w2_sum, self.epsilon)
-        weight_0 = ttnn.div(p4_w2_relu[0], denominator)
-        weight_1 = ttnn.div(p4_w2_relu[1], denominator)
-        weight_2 = ttnn.div(p4_w2_relu[2], denominator)
-
         p3_downsampled = self.p4_downsample(p3_out)
-        term1 = ttnn.mul(weight_0, p4_in)
+        term1 = ttnn.mul(self.p4_w2_weight_0, p4_in)
         ttnn.deallocate(p4_in)
-        term2 = ttnn.mul(weight_1, p4_up)
-        term3 = ttnn.mul(weight_2, p3_downsampled)
-        term2_reshaped = ttnn.reshape(term2, term1.shape)
-        term3_reshaped = ttnn.reshape(term3, term1.shape)
-        p4_weighted = ttnn.add(term1, term2_reshaped)
-        p4_weighted = ttnn.add(p4_weighted, term3_reshaped)
+        term2 = ttnn.mul(self.p4_w2_weight_1, p4_up)
+        term3 = ttnn.mul(self.p4_w2_weight_2, p3_downsampled)
+        term2 = ttnn.reshape(term2, term1.shape)
+        term3 = ttnn.reshape(term3, term1.shape)
+        p4_weighted = ttnn.add(term1, term2)
+        p4_weighted = ttnn.add(p4_weighted, term3)
         p4_out = self.conv4_down(self._swish(p4_weighted))
 
+        ttnn.deallocate(p3_downsampled)
+        ttnn.deallocate(p4_weighted)
+
         # P5_2 = weighted_sum(P5_0, P5_1, downsample(P4_2))
-        p5_w2_tile = ttnn.to_layout(self.p5_w2, ttnn.TILE_LAYOUT)
-        p5_w2_relu = ttnn.relu(p5_w2_tile)
-        p5_w2_sum = ttnn.sum(p5_w2_relu, dim=0)
-        denominator = ttnn.add(p5_w2_sum, self.epsilon)
-        weight_0 = ttnn.div(p5_w2_relu[0], denominator)
-        weight_1 = ttnn.div(p5_w2_relu[1], denominator)
-        weight_2 = ttnn.div(p5_w2_relu[2], denominator)
-
         p4_downsampled = self.p5_downsample(p4_out)
-        term1 = ttnn.mul(weight_0, p5_in)
+        term1 = ttnn.mul(self.p5_w2_weight_0, p5_in)
         ttnn.deallocate(p5_in)
-        term2 = ttnn.mul(weight_1, p5_up)
-        term3 = ttnn.mul(weight_2, p4_downsampled)
+        term2 = ttnn.mul(self.p5_w2_weight_1, p5_up)
+        term3 = ttnn.mul(self.p5_w2_weight_2, p4_downsampled)
 
-        term2_reshaped = ttnn.reshape(term2, term1.shape)
-        term3_reshaped = ttnn.reshape(term3, term1.shape)
-        p5_weighted = ttnn.add(term1, term2_reshaped)
-        p5_weighted = ttnn.add(p5_weighted, term3_reshaped)
+        term2 = ttnn.reshape(term2, term1.shape)
+        term3 = ttnn.reshape(term3, term1.shape)
+        p5_weighted = ttnn.add(term1, term2)
+        p5_weighted = ttnn.add(p5_weighted, term3)
         p5_out = self.conv5_down(self._swish(p5_weighted))
 
-        # P6_2 = weighted_sum(P6_0, P6_1, downsample(P5_2))
-        p6_w2_tile = ttnn.to_layout(self.p6_w2, ttnn.TILE_LAYOUT)
-        p6_w2_relu = ttnn.relu(p6_w2_tile)
-        p6_w2_sum = ttnn.sum(p6_w2_relu, dim=0)
-        denominator = ttnn.add(p6_w2_sum, self.epsilon)
-        weight_0 = ttnn.div(p6_w2_relu[0], denominator)
-        weight_1 = ttnn.div(p6_w2_relu[1], denominator)
-        weight_2 = ttnn.div(p6_w2_relu[2], denominator)
+        ttnn.deallocate(p4_downsampled)
+        ttnn.deallocate(p5_weighted)
 
+        # P6_2 = weighted_sum(P6_0, P6_1, downsample(P5_2))
         p5_downsampled = self.p6_downsample(p5_out)
 
-        term1 = ttnn.mul(weight_0, p6_in)
+        term1 = ttnn.mul(self.p6_w2_weight_0, p6_in)
         ttnn.deallocate(p6_in)
-        term2 = ttnn.mul(weight_1, p6_up)
-        term3 = ttnn.mul(weight_2, p5_downsampled)
+        term2 = ttnn.mul(self.p6_w2_weight_1, p6_up)
+        term3 = ttnn.mul(self.p6_w2_weight_2, p5_downsampled)
 
-        term2_reshaped = ttnn.reshape(term2, term1.shape)
-        term3_reshaped = ttnn.reshape(term3, term1.shape)
-        p6_weighted = ttnn.add(term1, term2_reshaped)
-        p6_weighted = ttnn.add(p6_weighted, term3_reshaped)
+        term2 = ttnn.reshape(term2, term1.shape)
+        term3 = ttnn.reshape(term3, term1.shape)
+        p6_weighted = ttnn.add(term1, term2)
+        p6_weighted = ttnn.add(p6_weighted, term3)
         p6_out = self.conv6_down(self._swish(p6_weighted))
+        ttnn.deallocate(p5_downsampled)
+        ttnn.deallocate(term3)
+        ttnn.deallocate(p6_weighted)
 
         # P7_2 = weighted_sum(P7_0, downsample(P6_2))
-        # p7_w2_relu = ttnn.relu(self.p7_w2)
-        # p7_w2_sum = ttnn.sum(p7_w2_relu, dim=0)
-        # denominator = ttnn.add(p7_w2_sum, self.epsilon)
-        # weight_0 = ttnn.div(p7_w2_relu[0], denominator)
-        # weight_1 = ttnn.div(p7_w2_relu[1], denominator)
-
         p6_downsampled = self.p7_downsample(p6_out)
-        term1 = ttnn.mul(self.p7_weight_0, p7_in)
-        term2 = ttnn.mul(self.p7_weight_1, p6_downsampled)
+        term1 = ttnn.mul(self.p7_w2_weight_0, p7_in)
+        term2 = ttnn.mul(self.p7_w2_weight_1, p6_downsampled)
         term2 = ttnn.reshape(term2, term1.shape)
         p7_weighted = ttnn.add(term1, term2)
         p7_out = self.conv7_down(self._swish(p7_weighted))
