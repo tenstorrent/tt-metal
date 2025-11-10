@@ -74,8 +74,6 @@ private:
     mutable std::mutex operations_mutex;
     std::vector<OperationInfo> operations_;
 
-    void dbg_serialize_operations();
-
     // fw_compile_hash needs to be atomic because it is set in MetalContext::initialize()
     std::atomic<uint64_t> fw_compile_hash;
     friend class tt::tt_metal::Inspector;
