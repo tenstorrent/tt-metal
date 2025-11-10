@@ -22,7 +22,6 @@
 #include "core_coord.hpp"
 #include "thread_pool.hpp"
 #include "profiler_optional_metadata.hpp"
-#include "profiler_analysis.hpp"
 #include "profiler_types.hpp"
 #include "tracy/TracyTTDevice.hpp"
 
@@ -184,7 +183,7 @@ private:
     // Track the smallest timestamp read
     void updateFirstTimestamp(uint64_t timestamp);
 
-    // Generate ops analysis results for device markers
+    // Generate programs analysis results for device markers
     void generateAnalysesForDeviceMarkers(
         const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers) const;
 
