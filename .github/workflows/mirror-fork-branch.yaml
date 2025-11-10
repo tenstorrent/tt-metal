@@ -92,6 +92,8 @@ jobs:
           echo "target_branch=$TARGET_BRANCH" >> $GITHUB_OUTPUT
 
       - name: Push branch to origin
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TARGET_BRANCH="${{ steps.create_branch.outputs.target_branch }}"
           echo "Pushing branch '$TARGET_BRANCH' to origin"
