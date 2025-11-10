@@ -147,7 +147,7 @@ class Resnet50FpnTestInfra:
                 dtype=ttnn.bfloat16,
                 mesh_mapper=self.inputs_mesh_mapper,
             )
-            self.input_tensor[key] = ttnn.to_device(tt_host_tensor[key], device)
+            self.input_tensor[key] = ttnn.to_device(tt_host_tensor[key], device, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # Build TTNN model
         self.ttnn_model = resnet50Fpn(

@@ -14,13 +14,13 @@ class NeckOptimizer:
 
 neck_optimisations = NeckOptimizer(
     conv1={
-        # "shard_layout": ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        "deallocate_activation": False,
+        "shard_layout": ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        "deallocate_activation": True,
         "reallocate_halo_output": True,
-        # "reshard_if_not_optimal": True,
         "enable_act_double_buffer": True,
         "enable_weights_double_buffer": True,
-        # "slice_config": ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=2),
+        "memory_config": ttnn.L1_MEMORY_CONFIG,
+        "slice_config": ttnn.Conv2dL1FullSliceConfig,
         "dtype": ttnn.bfloat16,
     }
 )

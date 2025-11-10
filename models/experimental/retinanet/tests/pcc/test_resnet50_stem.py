@@ -11,7 +11,6 @@ from PIL import Image
 from torchvision import transforms
 from ttnn.model_preprocessing import preprocess_model_parameters
 from tests.ttnn.utils_for_testing import check_with_pcc
-import pickle
 
 from models.experimental.retinanet.tt.tt_stem import resnet50Stem, neck_optimisations
 from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d
@@ -102,7 +101,7 @@ class Resnet50StemTestInfra:
             dtype=ttnn.bfloat16,
             mesh_mapper=self.inputs_mesh_mapper,
         )
-        self.input_tensor = ttnn.to_device(tt_host_tensor, device)
+        self.input_tensor = ttnn.to_device(tt_host_tensor, device, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # Build TTNN model
         self.ttnn_model = resnet50Stem(
@@ -134,8 +133,6 @@ class Resnet50StemTestInfra:
 
     def run(self):
         self.output_tensor = self.ttnn_model(self.input_tensor, self.device)
-        with open("models/experimental/retinanet/resources/pickle/retinanet_stem_output_tt.pkl", "wb") as f:
-            pickle.dump(ttnn.to_torch(self.output_tensor, device=self.device), f)
         return self.output_tensor
 
     def validate(self, model_config, output_tensor=None):
