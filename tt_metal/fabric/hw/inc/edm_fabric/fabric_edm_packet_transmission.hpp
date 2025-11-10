@@ -234,9 +234,7 @@ FORCE_INLINE
 // Unlike execute_chip_unicast_to_local_chip, this sends the FULL packet (header + payload)
 // to the relay, which will then handle forwarding to local chip workers
 //
-// !!!WARNING!!!
 // !!!WARNING!!! * ENSURE RELAY HAS SPACE FOR PACKET BEFORE CALLING
-// !!!WARNING!!!
 template <typename LocalRelayInterfaceT>
 __attribute__((optimize("jump-tables"))) void execute_chip_unicast_to_relay(
     LocalRelayInterfaceT& local_relay_interface,
