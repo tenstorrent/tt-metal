@@ -46,6 +46,32 @@ uint32_t all_gather_async_core_count_per_link(
     return (num_workers_per_direction + num_mux_cores_per_direction_per_link) * num_directions_per_link;
 }
 
+uint32_t all_gather_async_core_count_per_link_1mux(
+    uint32_t num_workers_per_direction,
+    uint32_t num_directions_per_link,
+    uint32_t num_mux_cores_per_direction_per_link) {
+    log_info(
+        tt::LogOp,
+        "all_gather_async_core_count_per_link_1mux num_workers_per_direction: {}, num_directions_per_link: {}, num_mux_cores_per_direction_per_link: {}",
+        num_workers_per_direction,
+        num_directions_per_link,
+        num_mux_cores_per_direction_per_link);
+    return (num_workers_per_direction) * num_directions_per_link + 1;
+}
+
+uint32_t all_gather_async_core_count_per_link_1worker(
+    uint32_t num_workers_per_direction,
+    uint32_t num_directions_per_link,
+    uint32_t num_mux_cores_per_direction_per_link) {
+    log_info(
+        tt::LogOp,
+        "all_gather_async_core_count_per_link_1worker num_workers_per_direction: {}, num_directions_per_link: {}, num_mux_cores_per_direction_per_link: {}",
+        num_workers_per_direction,
+        num_directions_per_link,
+        num_mux_cores_per_direction_per_link);
+    return num_workers_per_direction + (num_mux_cores_per_direction_per_link * num_directions_per_link);
+}
+
 uint32_t default_workers(
     const MeshDevice& mesh_device,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
@@ -74,6 +100,92 @@ uint32_t default_workers(
     for (auto worker_count : candidate_worker_counts) {
         uint32_t core_count =
             num_links * all_gather_async_core_count_per_link(
+                            worker_count, num_directions_per_link, num_mux_cores_per_direction_per_link);
+        if (num_cores >= core_count) {
+            log_trace(
+                tt::LogOp,
+                "data_moved_per_link_bytes: {} and worker_count: {}",
+                data_moved_per_link_bytes,
+                worker_count);
+            return worker_count;
+        }
+    }
+    TT_THROW(
+        "Not enough cores available on the subdevice or device for the requested match the number of links {}",
+        num_links);
+}
+
+uint32_t default_workers_1mux(
+    const MeshDevice& mesh_device,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    ccl::Topology topology,
+    uint32_t output_data_size_bytes,
+    uint32_t num_links,
+    uint32_t ring_size,
+    uint32_t num_directions_per_link,
+    uint32_t num_mux_cores_per_direction_per_link) {
+    auto sd_id = sub_device_id.value_or(mesh_device.get_sub_device_ids().at(0));
+    auto subdevice_core_range_set = mesh_device.worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
+    uint32_t num_cores = subdevice_core_range_set.num_cores();
+    // Above 4 workers we start getting performance drops, so we limit to 4 workers or less, depending on the number of
+    // available cores This was determined by the sweep
+    // tests/ttnn/multidevice_perf_tests/sweep_all_gather_hyperparameters_T3K.py
+    ttnn::SmallVector<uint32_t> candidate_worker_counts;
+    // if per link data moved is greater than 0.25 MB, we search greedily for 4 workers, otherwise we search greedily
+    // for 2 workers. for ring, half the data is moved per link, so we divide by 2
+    double data_moved_per_link_bytes = double(output_data_size_bytes) * (ring_size - 1) / ring_size / num_links /
+                                       (topology == ccl::Topology::Ring ? 2 : 1);
+    if (data_moved_per_link_bytes > double(0.25 * 1024 * 1024)) {
+        candidate_worker_counts = {4, 2, 1};
+    } else {
+        candidate_worker_counts = {2, 1};
+    }
+    for (auto worker_count : candidate_worker_counts) {
+        uint32_t core_count =
+            num_links * all_gather_async_core_count_per_link_1mux(
+                            worker_count, num_directions_per_link, num_mux_cores_per_direction_per_link);
+        if (num_cores >= core_count) {
+            log_trace(
+                tt::LogOp,
+                "data_moved_per_link_bytes: {} and worker_count: {}",
+                data_moved_per_link_bytes,
+                worker_count);
+            return worker_count;
+        }
+    }
+    TT_THROW(
+        "Not enough cores available on the subdevice or device for the requested match the number of links {}",
+        num_links);
+}
+
+uint32_t default_workers_1worker(
+    const MeshDevice& mesh_device,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    ccl::Topology topology,
+    uint32_t output_data_size_bytes,
+    uint32_t num_links,
+    uint32_t ring_size,
+    uint32_t num_directions_per_link,
+    uint32_t num_mux_cores_per_direction_per_link) {
+    auto sd_id = sub_device_id.value_or(mesh_device.get_sub_device_ids().at(0));
+    auto subdevice_core_range_set = mesh_device.worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
+    uint32_t num_cores = subdevice_core_range_set.num_cores();
+    // Above 4 workers we start getting performance drops, so we limit to 4 workers or less, depending on the number of
+    // available cores This was determined by the sweep
+    // tests/ttnn/multidevice_perf_tests/sweep_all_gather_hyperparameters_T3K.py
+    ttnn::SmallVector<uint32_t> candidate_worker_counts;
+    // if per link data moved is greater than 0.25 MB, we search greedily for 4 workers, otherwise we search greedily
+    // for 2 workers. for ring, half the data is moved per link, so we divide by 2
+    double data_moved_per_link_bytes = double(output_data_size_bytes) * (ring_size - 1) / ring_size / num_links /
+                                       (topology == ccl::Topology::Ring ? 2 : 1);
+    if (data_moved_per_link_bytes > double(0.25 * 1024 * 1024)) {
+        candidate_worker_counts = {4, 2, 1};
+    } else {
+        candidate_worker_counts = {2, 1};
+    }
+    for (auto worker_count : candidate_worker_counts) {
+        uint32_t core_count =
+            num_links * all_gather_async_core_count_per_link_1worker(
                             worker_count, num_directions_per_link, num_mux_cores_per_direction_per_link);
         if (num_cores >= core_count) {
             log_trace(
@@ -176,6 +288,117 @@ void all_gather_async_minimal_default_helper_override_runtime_arguments(
                 }
 
                 core_idx++;
+            }
+        }
+    }
+}
+
+void all_gather_async_minimal_default_helper_override_runtime_arguments_1mux(
+    tt::tt_metal::Program& program,
+    const std::vector<tt::tt_metal::KernelHandle>& reader_kernel_ids,
+    const std::vector<tt::tt_metal::KernelHandle>& writer_kernel_ids,
+    const std::vector<tt::tt_metal::CoreCoord>& all_cores,
+    uint32_t num_links,
+    uint32_t num_directions_per_link,
+    uint32_t num_workers_per_direction,
+    uint32_t num_mux_cores_per_direction_per_link,
+    uint32_t num_cores_per_link,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    const std::vector<GlobalSemaphore>& semaphore,
+    const Tensor& input,
+    const Tensor& output) {
+    // Update runtime arguments for all worker cores
+    uint32_t core_idx = 0;
+    for (uint32_t link = 0; link < num_links; link++) {
+        for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
+            uint32_t mux_core_offset = (link * num_cores_per_link) +
+                            (dir * (num_workers_per_direction));
+            for (uint32_t worker = 0; worker < num_workers_per_direction; worker++) {
+                // uint32_t mux_core_offset = (link * num_cores_per_link) +
+                //                            (dir * (num_mux_cores_per_direction_per_link + num_workers_per_direction));
+                tt::tt_metal::CoreCoord core =
+                    all_cores[mux_core_offset + num_mux_cores_per_direction_per_link + worker];
+                auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_ids[core_idx]);
+                auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_ids[core_idx]);
+
+                const auto& out_ready_semaphore = semaphore.at(dir);
+
+                // sender reader
+                auto& worker_reader_sender_runtime_args = reader_runtime_args[core.x][core.y];
+                worker_reader_sender_runtime_args[0] = input.buffer()->address();
+                worker_reader_sender_runtime_args[1] = output.buffer()->address();
+                worker_reader_sender_runtime_args[2] = out_ready_semaphore.address();
+
+                // sender writer
+                auto& worker_writer_sender_runtime_args = writer_runtime_args[core.x][core.y];
+                worker_writer_sender_runtime_args[0] = output.buffer()->address();
+                worker_writer_sender_runtime_args[3] = out_ready_semaphore.address();
+
+                if (barrier_semaphore.has_value()) {
+                    worker_writer_sender_runtime_args[5] = barrier_semaphore.value().address();
+                }
+
+                core_idx++;
+            }
+        }
+    }
+}
+
+void all_gather_async_minimal_default_helper_override_runtime_arguments_1worker(
+    tt::tt_metal::Program& program,
+    const std::vector<tt::tt_metal::KernelHandle>& reader_kernel_ids,
+    const std::vector<tt::tt_metal::KernelHandle>& writer_kernel_ids,
+    const std::vector<tt::tt_metal::CoreCoord>& all_cores,
+    uint32_t num_links,
+    uint32_t num_directions_per_link,
+    uint32_t num_workers_per_direction,
+    uint32_t num_mux_cores_per_direction_per_link,
+    uint32_t num_cores_per_link,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    const std::vector<GlobalSemaphore>& semaphore,
+    const Tensor& input,
+    const Tensor& output) {
+    // Update runtime arguments for all worker cores
+    uint32_t core_idx = 0;
+    for (uint32_t link = 0; link < num_links; link++) {
+        for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
+            for (uint32_t worker = 0; worker < num_workers_per_direction; worker++) {
+                uint32_t mux_core_offset = (link * num_cores_per_link) +
+                                           (dir * (num_mux_cores_per_direction_per_link + num_workers_per_direction));
+                
+                if (dir == 0) {
+                    tt::tt_metal::CoreCoord core =
+                        all_cores[mux_core_offset + num_mux_cores_per_direction_per_link + worker];
+                    log_info(
+                        tt::LogOp,
+                        "all_gather_async_minimal_default_helper_override_runtime_arguments_1worker core_idx: {}, core: {}",
+                        core_idx,
+                        core);
+                    auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_ids[core_idx]);
+                    auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_ids[core_idx]);
+
+                    const auto& out_ready_semaphore_bwd = semaphore.at(0);
+                    const auto& out_ready_semaphore_fwd = semaphore.at(1);
+
+                    // sender reader
+                    auto& worker_reader_sender_runtime_args = reader_runtime_args[core.x][core.y];
+                    worker_reader_sender_runtime_args[0] = input.buffer()->address();
+                    worker_reader_sender_runtime_args[1] = output.buffer()->address();
+                    worker_reader_sender_runtime_args[2] = out_ready_semaphore_bwd.address();
+                    worker_reader_sender_runtime_args[3] = out_ready_semaphore_fwd.address();
+
+                    // sender writer
+                    auto& worker_writer_sender_runtime_args = writer_runtime_args[core.x][core.y];
+                    worker_writer_sender_runtime_args[0] = output.buffer()->address();
+                    worker_writer_sender_runtime_args[3] = out_ready_semaphore_bwd.address();
+                    worker_writer_sender_runtime_args[4] = out_ready_semaphore_fwd.address();
+
+                    if (barrier_semaphore.has_value()) {
+                        worker_writer_sender_runtime_args[6] = barrier_semaphore.value().address();
+                    }
+
+                    core_idx++;
+                }
             }
         }
     }
@@ -333,16 +556,16 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
     std::set<CoreRange> sender_worker_core_ranges;
     std::set<CoreRange> sender_forward_core_ranges;
     std::set<CoreRange> sender_backward_core_ranges;
-    std::set<CoreRange> mux_forward_core_ranges;
-    std::set<CoreRange> mux_backward_core_ranges;
+    std::set<CoreRange> mux_dir0_core_ranges;
+    std::set<CoreRange> mux_dir1_core_ranges;
     uint32_t core_id = 0;
     for (uint32_t link = 0; link < num_links; link++) {
         for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
             const auto& mux_core = all_cores[core_id++];
             if (dir) {
-                mux_forward_core_ranges.insert(CoreRange(mux_core));
+                mux_dir0_core_ranges.insert(CoreRange(mux_core));
             } else {
-                mux_backward_core_ranges.insert(CoreRange(mux_core));
+                mux_dir1_core_ranges.insert(CoreRange(mux_core));
             }
             for (uint32_t worker = 0; worker < num_workers_per_direction; worker++) {
                 const auto& worker_core = all_cores[core_id++];
@@ -358,8 +581,8 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
     CoreRangeSet sender_worker_core_range_set = CoreRangeSet(sender_worker_core_ranges);
     CoreRangeSet sender_forward_core_range_set = CoreRangeSet(sender_forward_core_ranges);
     CoreRangeSet sender_backward_core_range_set = CoreRangeSet(sender_backward_core_ranges);
-    CoreRangeSet mux_forward_core_range_set = CoreRangeSet(mux_forward_core_ranges);
-    CoreRangeSet mux_backward_core_range_set = CoreRangeSet(mux_backward_core_ranges);
+    CoreRangeSet mux_dir0_core_range_set = CoreRangeSet(mux_dir0_core_ranges);
+    CoreRangeSet mux_dir1_core_range_set = CoreRangeSet(mux_dir1_core_ranges);
 
     // L1 Scratch CB Creation
     const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
@@ -736,6 +959,1200 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
         num_cores_per_link};
 }
 
+AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifacts_1mux(
+    tt::tt_metal::Program& program,
+    const Tensor& input_tensor,
+    const MeshCoordinate& sender_device_coord,
+    const std::optional<MeshCoordinate>& forward_coord,
+    const std::optional<MeshCoordinate>& backward_coord,
+    Tensor& output_tensor,
+    const uint32_t dim,
+    const uint32_t num_links,
+    const uint32_t ring_size,
+    const uint32_t ring_index,
+    ccl::Topology topology,
+    const std::vector<GlobalSemaphore>& semaphore,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    bool using_persistent_buffers,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    std::optional<experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
+    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> num_workers_per_direction_opt,
+    std::optional<uint32_t> num_buffers_per_channel,
+    const CoreCoord core_grid_offset,
+    const bool reverse_order) {
+    // Tensor Info
+    const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
+    const auto& input_tensor_shape = input_tensor.padded_shape();
+    const auto& output_tensor_shape = output_tensor.padded_shape();
+    auto mesh_device = input_tensor.device();
+    TT_FATAL(mesh_device != nullptr, "Mesh device not found");
+
+    // When reverse_order is enabled, tensor width must be divisible by 32*num_devices for proper sharding
+    if (reverse_order) {
+        uint32_t tensor_width = output_tensor_shape[3];
+        uint32_t required_divisor = 32 * ring_size;
+        TT_FATAL(
+            tensor_width % required_divisor == 0,
+            "When reverse_order=true, tensor width ({}) must be divisible by 32*num_devices (32*{} = {})",
+            tensor_width,
+            ring_size,
+            required_divisor);
+    }
+
+    // op hyperparams
+    uint32_t num_directions_per_link = 2;
+    uint32_t num_mux_cores_per_direction_per_link = 1;
+    // Get worker cores
+    // 2 senders (reader + writer) per direction (forward, reverse_order) per link
+    uint32_t output_data_size_bytes = output_tensor.buffer()->size();
+    uint32_t num_workers_per_direction = num_workers_per_direction_opt.value_or(detail::default_workers_1mux(
+        *mesh_device,
+        sub_device_id,
+        topology,
+        output_data_size_bytes,
+        num_links,
+        ring_size,
+        num_directions_per_link,
+        num_mux_cores_per_direction_per_link));
+    uint32_t num_cores_per_link = detail::all_gather_async_core_count_per_link_1mux(
+        num_workers_per_direction, num_directions_per_link, num_mux_cores_per_direction_per_link);
+
+    log_info(tt::LogOp, "DEBUG: num_workers_per_direction: {}", num_workers_per_direction);
+    log_info(tt::LogOp, "DEBUG: num_cores_per_link: {}", num_cores_per_link);
+    uint32_t num_buffers_full_size_channels = num_buffers_per_channel.value_or(1);
+
+    [[maybe_unused]] bool is_first_chip = ring_index == 0;
+    [[maybe_unused]] bool is_last_chip = ring_index == ring_size - 1;
+    log_trace(
+        tt::LogOp,
+        "DEBUG: device coord: {}, is_first_chip: {}, is_last_chip: {}",
+        sender_device_coord,
+        is_first_chip,
+        is_last_chip);
+
+    /* All gather fusion */
+    bool fuse_op = fused_op_signaler.has_value();
+
+    // Need a separate signaler for the sender workers, to handle the first tensor slice that is locally available
+    std::optional<experimental::ccl::AllGatherFusedOpSignaler> fused_op_signaler_sender_workers;
+    std::optional<experimental::ccl::AllGatherFusedOpSignaler> fused_op_signaler_forward;
+    std::optional<experimental::ccl::AllGatherFusedOpSignaler> fused_op_signaler_backward;
+    if (fuse_op) {
+        fused_op_signaler_sender_workers = fused_op_signaler.value();
+        fused_op_signaler_forward = fused_op_signaler.value();
+        fused_op_signaler_backward = fused_op_signaler.value();
+    }
+
+    // Get OP Config, topology config
+    uint32_t page_size = input_tensor.buffer()->page_size();
+    auto [num_targets_forward, num_targets_backward] =
+        ccl::get_forward_backward_line_mcast_distance(ring_size, ring_index, topology, false);
+    auto [unicast_forward_args, unicast_backward_args] = ccl::get_forward_backward_line_unicast_configuration(
+        topology, sender_device_coord, forward_coord, backward_coord, mesh_device);
+    auto [barrier_mcast_forward_args, barrier_mcast_backward_args] = ccl::get_forward_backward_line_mcast_configuration(
+        topology,
+        sender_device_coord,
+        forward_coord,
+        backward_coord,
+        topology == ccl::Topology::Linear ? num_targets_forward : ring_size - 1,
+        topology == ccl::Topology::Linear ? num_targets_backward : ring_size - 1,
+        mesh_device);
+
+    TT_FATAL(
+        !((topology == ccl::Topology::Linear) && fuse_op), "linear is not support when using fused for all-gather");
+
+    const auto [all_core_range, all_cores] =
+        choose_worker_cores(num_links, num_cores_per_link, mesh_device, sub_device_id, core_grid_offset);
+    std::set<CoreRange> sender_worker_core_ranges;
+    std::set<CoreRange> sender_forward_core_ranges;
+    std::set<CoreRange> sender_backward_core_ranges;
+    std::set<CoreRange> mux_both_core_ranges;
+    // std::set<CoreRange> mux_dir0_core_ranges;
+    // std::set<CoreRange> mux_dir1_core_ranges;
+    uint32_t core_id = 0;
+    for (uint32_t link = 0; link < num_links; link++) {
+        const auto& mux_core = all_cores[core_id++];
+        mux_both_core_ranges.insert(CoreRange(mux_core));
+        for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
+            // const auto& mux_core = all_cores[core_id++];
+            // if (dir) {
+            //     mux_dir0_core_ranges.insert(CoreRange(mux_core));
+            // } else {
+            //     mux_dir1_core_ranges.insert(CoreRange(mux_core));
+            // }
+            for (uint32_t worker = 0; worker < num_workers_per_direction; worker++) {
+                const auto& worker_core = all_cores[core_id++];
+                if (dir) {
+                    sender_forward_core_ranges.insert(CoreRange(worker_core));
+                } else {
+                    sender_backward_core_ranges.insert(CoreRange(worker_core));
+                }
+                sender_worker_core_ranges.insert(CoreRange(worker_core));
+            }
+        }
+    }
+    CoreRangeSet sender_worker_core_range_set = CoreRangeSet(sender_worker_core_ranges);
+    CoreRangeSet sender_forward_core_range_set = CoreRangeSet(sender_forward_core_ranges);
+    CoreRangeSet sender_backward_core_range_set = CoreRangeSet(sender_backward_core_ranges);
+    CoreRangeSet mux_both_core_range_set = CoreRangeSet(mux_both_core_ranges);
+    // CoreRangeSet mux_dir0_core_range_set = CoreRangeSet(mux_dir0_core_ranges);
+    // CoreRangeSet mux_dir1_core_range_set = CoreRangeSet(mux_dir1_core_ranges);
+
+    log_info(tt::LogOp, "sender_worker_core_range_set={}", sender_worker_core_range_set);
+    log_info(tt::LogOp, "sender_forward_core_range_set={}", sender_forward_core_range_set);
+    log_info(tt::LogOp, "sender_backward_core_range_set={}", sender_backward_core_range_set);
+    log_info(tt::LogOp, "mux_both_core_range_set={}", mux_both_core_ranges);
+
+    // L1 Scratch CB Creation
+    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    uint32_t l1_scratch_cb_page_size_bytes = page_size;
+
+    // scatter-write currently only supports 2 distinct noc addresses
+    uint32_t max_target_noc_addresses_per_packet = 2;
+
+    // for bfloat8_b, tile_num_per_link=6, we would need to send 2 packages, but they can be of size 3 instead of 4
+    uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
+    uint32_t num_tiles_to_write_per_packet = std::min(max_target_noc_addresses_per_packet, num_pages_per_packet);
+    uint32_t cb_num_pages = 3 * num_tiles_to_write_per_packet;  // triple buffering
+    tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+
+    // CBs for transferring data between sender_reader and sender_writer
+    uint32_t sender_cb_index = tt::CB::c_in0;
+    tt::tt_metal::CircularBufferConfig cb_sender_config =
+        tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{sender_cb_index, df}})
+            .set_page_size(sender_cb_index, l1_scratch_cb_page_size_bytes);
+    CreateCircularBuffer(program, sender_worker_core_range_set, cb_sender_config);
+
+    bool input_is_sharded = input_tensor.is_sharded();
+    bool output_is_sharded = output_tensor.is_sharded();
+
+    std::map<std::string, std::string> reader_compute_defines;
+    std::map<std::string, std::string> writer_compute_defines;
+
+    if (input_is_sharded) {
+        reader_compute_defines["INPUT_IS_SHARDED"] = "1";
+    }
+    if (output_is_sharded) {
+        reader_compute_defines["OUTPUT_IS_SHARDED"] = "1";
+        writer_compute_defines["OUTPUT_IS_SHARDED"] = "1";
+    }
+
+    // KERNEL CREATION
+    /* All gather fusion */
+    if (fuse_op) {
+        auto sender_workers_forward = corerange_to_cores(sender_forward_core_ranges, std::nullopt, true);
+        auto sender_workers_backward = corerange_to_cores(sender_backward_core_ranges, std::nullopt, true);
+        fused_op_signaler_forward->init_all_gather(
+            program, mesh_device, sender_forward_core_ranges, sender_workers_forward);
+        fused_op_signaler_backward->init_all_gather(
+            program, mesh_device, sender_backward_core_ranges, sender_workers_backward);
+        fused_op_signaler_sender_workers->init_all_gather(
+            program, mesh_device, sender_forward_core_ranges, sender_workers_forward);
+    }
+
+    std::vector<tt::tt_metal::KernelHandle> reader_kernel_ids;
+    std::vector<tt::tt_metal::KernelHandle> writer_kernel_ids;
+    const uint32_t l1_unreserved_base_address =
+        mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    const size_t mux_base_l1_address = l1_unreserved_base_address;
+
+    auto map_nd_to_4d = [&]() {
+        // Here we do a couple of tricks so that the kernels can handle ND tensors
+        // implicitly reshape lower dims so it is treated as 4D
+        uint32_t batch_head_size =
+            std::accumulate(input_tensor_shape.cbegin(), input_tensor_shape.cend() - 2, 1, std::multiplies<uint32_t>());
+
+        auto [normalized_dim, rank_diff] = composite_common::normalize_dim_4d(dim, input_tensor_shape.rank());
+
+        // if the gather dim is 4D normalized to 0,2,3 we can proceed as if nothing has changed
+        // if not we have to roll up the lower dims from the gather dim up to 1 into C and gather on 1.
+        uint32_t c_includes_dim;
+        if (rank_diff >= 1 && dim <= rank_diff) {
+            // gather dim to rank-3 accumulated into C
+            c_includes_dim = dim;
+            normalized_dim = 1;
+        } else {
+            // C will be 4D normalized dim 1
+            c_includes_dim = 1 + rank_diff;
+        }
+
+        uint32_t input_tensor_C = std::accumulate(
+            input_tensor_shape.view().rbegin() + 2,
+            input_tensor_shape.view().rend() - c_includes_dim,
+            1,
+            std::multiplies<uint32_t>());
+
+        uint32_t output_tensor_C = std::accumulate(
+            output_tensor_shape.view().rbegin() + 2,
+            output_tensor_shape.view().rend() - c_includes_dim,
+            1,
+            std::multiplies<uint32_t>());
+
+        return std::make_tuple(normalized_dim, batch_head_size, input_tensor_C, output_tensor_C);
+    };
+
+    auto map_2d_to_4d = [&]() {
+        const uint32_t normalized_dim = std::get<0>(composite_common::normalize_dim_4d(dim, input_tensor_shape.rank()));
+        constexpr uint32_t input_tensor_C = 1, output_tensor_C = 1, batch_head_size = 1;
+
+        return std::make_tuple(normalized_dim, batch_head_size, input_tensor_C, output_tensor_C);
+    };
+
+    const auto [normalized_dim, batch_head_size, input_tensor_C, output_tensor_C] =
+        (input_tensor_shape.rank() == 2) ? map_2d_to_4d() : map_nd_to_4d();
+
+    uint32_t single_batch_head_num_pages = input_tensor_num_pages / batch_head_size;
+    TT_FATAL(!(input_tensor_shape[-1] % TILE_WIDTH), "Input tensor width must be a multiple of TILE_WIDTH");
+    TT_FATAL(!(output_tensor_shape[-1] % TILE_WIDTH), "Output tensor width must be a multiple of TILE_WIDTH");
+    uint32_t TILE_WIDTH = 32;
+
+    uint32_t input_tensor_Wt = input_tensor_shape[-1] / TILE_WIDTH;
+    uint32_t input_tensor_Ht = input_tensor_shape[-2] / TILE_WIDTH;
+
+    uint32_t output_tensor_Wt = output_tensor_shape[-1] / TILE_WIDTH;
+    uint32_t output_tensor_Ht = output_tensor_shape[-2] / TILE_WIDTH;
+
+    for (uint32_t link = 0; link < num_links; link++) {
+
+        // Fabrix mux kernel
+        uint32_t mux_core = (link * num_cores_per_link);
+        CoreCoord mux_logical_core = all_cores[mux_core];
+        CoreCoord mux_virtual_core = mesh_device->worker_core_from_logical_core(mux_logical_core);
+        auto num_full_size_channels = num_workers_per_direction * 2;
+        auto num_header_only_channels = 0;
+        size_t buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+        auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
+            num_full_size_channels,
+            num_header_only_channels,
+            num_buffers_full_size_channels,
+            0,
+            buffer_size_bytes_full_size_channel,
+            mux_base_l1_address);
+
+        log_info(tt::LogOp, "link {}: Creating mux kernel on mux_core {} on mux_logical_core {}", link, mux_core, mux_logical_core);
+        const bool mux_connection_valid = true;
+        if (mux_connection_valid) {
+            auto mux_kernel_id = tt::tt_metal::CreateKernel(
+                program,
+                "tt_metal/fabric/impl/kernels/tt_fabric_mux_both.cpp",
+                {mux_logical_core},
+                tt::tt_metal::DataMovementConfig{
+                    .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt::tt_metal::NOC::RISCV_0_default,
+                    .compile_args = mux_kernel_config.get_fabric_mux_compile_time_args(),
+                    .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
+            std::vector<uint32_t> mux_rt_args1 = {};
+            std::vector<uint32_t> mux_rt_args2 = {};
+            const auto src_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
+            // if (dir) {  // forward
+                const auto fwd_dst_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
+                mux_rt_args1 = mux_kernel_config.get_fabric_mux_run_time_args(
+                    src_node_id, fwd_dst_node_id, link, program, {mux_logical_core});
+            // } else {
+                const auto bwd_dst_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
+                mux_rt_args2 = mux_kernel_config.get_fabric_mux_run_time_args(
+                    src_node_id, bwd_dst_node_id, link, program, {mux_logical_core});
+            // }
+            std::vector<uint32_t> mux_rt_args;;
+            mux_rt_args.insert(mux_rt_args.end(), mux_rt_args1.begin(), mux_rt_args1.end());
+            mux_rt_args.insert(mux_rt_args.end(), mux_rt_args2.begin(), mux_rt_args2.end());
+
+            log_info(tt::LogOp, "mux_rt_args1 count = {}, mux_rt_args2 count = {}, mux_rt_args count = {}", mux_rt_args1.size(), mux_rt_args2.size(), mux_rt_args.size());
+            tt::tt_metal::SetRuntimeArgs(program, mux_kernel_id, {mux_logical_core}, mux_rt_args);
+        }
+
+        for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
+            // // Fabrix mux kernel
+            uint32_t mux_core_offset = (link * num_cores_per_link) +
+                                       (dir * (num_workers_per_direction));
+            // CoreCoord mux_logical_core = all_cores[mux_core_offset];
+            // CoreCoord mux_virtual_core = mesh_device->worker_core_from_logical_core(mux_logical_core);
+            // auto num_full_size_channels = num_workers_per_direction;
+            // auto num_header_only_channels = 0;
+            // size_t buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+            // auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
+            //     num_full_size_channels,
+            //     num_header_only_channels,
+            //     num_buffers_full_size_channels,
+            //     0,
+            //     buffer_size_bytes_full_size_channel,
+            //     mux_base_l1_address);
+
+            // const bool mux_connection_valid =
+            //     (dir && backward_coord.has_value()) || (!dir && forward_coord.has_value());
+            // if (mux_connection_valid) {
+            //     auto mux_kernel_id = tt::tt_metal::CreateKernel(
+            //         program,
+            //         "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
+            //         {mux_logical_core},
+            //         tt::tt_metal::DataMovementConfig{
+            //             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            //             .noc = tt::tt_metal::NOC::RISCV_0_default,
+            //             .compile_args = mux_kernel_config.get_fabric_mux_compile_time_args(),
+            //             .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
+            //     std::vector<uint32_t> mux_rt_args = {};
+            //     const auto src_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
+            //     if (dir) {  // forward
+            //         const auto dst_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
+            //         mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
+            //             src_node_id, dst_node_id, link, program, {mux_logical_core});
+            //     } else {
+            //         const auto dst_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
+            //         mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
+            //             src_node_id, dst_node_id, link, program, {mux_logical_core});
+            //     }
+            //     tt::tt_metal::SetRuntimeArgs(program, mux_kernel_id, {mux_logical_core}, mux_rt_args);
+            // }
+
+            for (uint32_t worker = 0; worker < num_workers_per_direction; worker++) {
+                log_info(tt::LogOp, "mux_core_offset + num_mux_cores_per_direction_per_link + worker = {}", mux_core_offset + num_mux_cores_per_direction_per_link + worker);
+                
+                CoreCoord core = all_cores[mux_core_offset + num_mux_cores_per_direction_per_link + worker];
+                CoreCoord virtual_core = mesh_device->worker_core_from_logical_core(core);
+                CoreCoord supplemental_core = all_cores
+                    [(link * num_cores_per_link) +
+                     ((1 - dir) * (num_workers_per_direction)) +
+                     num_mux_cores_per_direction_per_link + worker];
+                log_info(tt::LogOp, "supplemental_core = {}", (link * num_cores_per_link) +
+                     ((1 - dir) * (num_workers_per_direction)) +
+                     num_mux_cores_per_direction_per_link + worker);
+                CoreCoord opposite_core_coord = mesh_device->worker_core_from_logical_core(supplemental_core);
+
+                uint32_t global_worker_id = (link * num_workers_per_direction) + worker;
+                uint32_t global_worker_count = num_links * num_workers_per_direction;
+                uint32_t base_pages_per_worker = single_batch_head_num_pages / global_worker_count;
+                uint32_t remainder = single_batch_head_num_pages % global_worker_count;
+                uint32_t input_tile_id_start =
+                    (global_worker_id * base_pages_per_worker) + std::min(global_worker_id, remainder);
+                uint32_t input_tile_id_end =
+                    ((global_worker_id + 1) * base_pages_per_worker) + std::min(global_worker_id + 1, remainder);
+
+                // Heuristic is based on a sweep of large shapes. This will be used when total chunks per worker is
+                // larger than 160. Doing it less frequently adds performance cost to many shapes. Sweep test:
+                // tests/ttnn/multidevice_perf_tests/sweep_all_gather_hyperparameters_T3K.py
+                constexpr uint32_t HEURISTIC_MAX_CHUNKS_PER_SYNC = 160;
+                uint32_t chunks_per_sync_val = chunks_per_sync.value_or(std::min(
+                    std::max((input_tile_id_end - input_tile_id_start) / num_tiles_to_write_per_packet, (uint32_t)1),
+                    HEURISTIC_MAX_CHUNKS_PER_SYNC));
+                log_trace(tt::LogOp, "DEBUG: chunks_per_sync_val: {}", chunks_per_sync_val);
+
+                uint32_t start_pages_read_in_row = input_tile_id_start % input_tensor_Wt;
+                uint32_t start_row_offset = input_tile_id_start / input_tensor_Wt * output_tensor_Wt;
+
+                uint32_t self_write_done_semaphore;
+                if (fuse_op) {
+                    self_write_done_semaphore = CreateSemaphore(program, {core}, 0);
+                }
+
+                // Reader
+                std::vector<uint32_t> sender_reader_compile_args = {
+                    ring_size,                        // ring_size
+                    ring_index,                       // my_chip_id
+                    sender_cb_index,                  // cb_forward_id
+                    num_tiles_to_write_per_packet,    // num_tiles_to_write_per_packet
+                    page_size,                        // page_size
+                    num_targets_forward,              // num_slices_forward_direction
+                    num_targets_backward,             // num_slices_backward_direction
+                    static_cast<uint32_t>(topology),  // topology
+                    dir,                              // direction
+                    normalized_dim,                   // gather_dim
+                    batch_head_size,                  // input_batch_head_count (product of the first two dims)
+                    input_tensor_Wt,                  // input_tensor_Wt
+                    input_tensor_Ht,                  // input_tensor_Ht
+                    input_tensor_C,                   // input_tensor_C
+                    output_tensor_Wt,                 // output_tensor_Wt
+                    output_tensor_Ht,                 // output_tensor_Ht
+                    output_tensor_C,                  // output_tensor_C
+                    input_tile_id_start,              // input_tile_id_start
+                    input_tile_id_end,                // input_tile_id_end
+                    start_pages_read_in_row,          // start_pages_read_in_row
+                    start_row_offset,                 // start_row_offset
+                    fuse_op,                          // fuse_op
+                    chunks_per_sync_val,              // chunks_per_sync
+                    reverse_order,                    // reverse
+                };
+                if (input_is_sharded) {
+                    shard_builder::extend_sharding_compile_time_args(input_tensor, sender_reader_compile_args);
+                } else {
+                    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(sender_reader_compile_args);
+                }
+                if (output_is_sharded) {
+                    shard_builder::extend_sharding_compile_time_args(output_tensor, sender_reader_compile_args);
+                } else {
+                    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(sender_reader_compile_args);
+                }
+                log_info(tt::LogOp, "CreateKernel reader core : {}", core);
+                auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
+                    program,
+                    "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/"
+                    "minimal_default_reader.cpp",
+                    {core},
+                    tt::tt_metal::ReaderDataMovementConfig(sender_reader_compile_args, reader_compute_defines));
+                reader_kernel_ids.push_back(worker_sender_reader_kernel_id);
+
+                std::vector<uint32_t> reader_rt_args = {
+                    input_tensor.buffer()->address(),   // input_tensor_address
+                    output_tensor.buffer()->address(),  // output_tensor_address
+                    semaphore.at(dir).address(),        // out_ready_sem
+                };
+                if (input_is_sharded) {
+                    shard_builder::extend_sharding_run_time_args(input_tensor, reader_rt_args);
+                }
+                if (output_is_sharded) {
+                    shard_builder::extend_sharding_run_time_args(output_tensor, reader_rt_args);
+                }
+                if (fuse_op) {
+                    reader_rt_args.push_back(self_write_done_semaphore);
+                    if (dir) {
+                        fused_op_signaler_forward->push_all_gather_fused_op_rt_args(
+                            reader_rt_args,
+                            num_workers_per_direction * num_links,
+                            worker + (link * num_workers_per_direction),
+                            1);
+                    } else {
+                        fused_op_signaler_backward->push_all_gather_fused_op_rt_args(
+                            reader_rt_args,
+                            num_workers_per_direction * num_links,
+                            worker + (link * num_workers_per_direction),
+                            0);
+                    }
+                }
+
+                tt::tt_metal::SetRuntimeArgs(program, worker_sender_reader_kernel_id, {core}, reader_rt_args);
+
+                CoreCoord termination_master_logical_core =
+                    all_cores[mux_core_offset + num_mux_cores_per_direction_per_link + 0];
+                CoreCoord termination_master_virtual_core =
+                    mesh_device->worker_core_from_logical_core(termination_master_logical_core);
+
+                // Writer
+                std::vector<uint32_t> sender_writer_compile_args = {
+                    ring_size,                        // ring_size
+                    ring_index,                       // my_chip_id
+                    sender_cb_index,                  // cb_forward_id
+                    num_tiles_to_write_per_packet,    // num_tiles_to_write_per_packet
+                    page_size,                        // page_size
+                    num_targets_forward,              // num_targets_forward_direction
+                    num_targets_backward,             // num_targets_backward_direction
+                    static_cast<uint32_t>(topology),  // topology
+                    dir,                              // direction
+                    normalized_dim,                   // gather_dim
+                    batch_head_size,                  // input_batch_head_count (product of the first two dims)
+                    input_tensor_Wt,                  // input_tensor_Wt
+                    input_tensor_Ht,                  // input_tensor_Ht
+                    input_tensor_C,                   // input_tensor_C
+                    output_tensor_Wt,                 // output_tensor_Wt
+                    output_tensor_Ht,                 // output_tensor_Ht
+                    output_tensor_C,                  // output_tensor_C
+                    input_tile_id_start,              // input_tile_id_start
+                    input_tile_id_end,                // input_tile_id_end
+                    start_pages_read_in_row,          // start_pages_read_in_row
+                    start_row_offset,                 // start_row_offset
+                    fuse_op,                          // fuse_op
+                    chunks_per_sync_val,              // chunks_per_sync
+                    reverse_order,                    // reverse
+                };
+                log_info(tt::LogOp, "sender_writer_compile_args mux_virtual_core : {}", mux_virtual_core);
+                log_info(tt::LogOp, "dir = {}, worker = {}, worker * 2 + dir = {}", dir, worker, worker * 2 + dir);
+                fabric_mux_connection_ct_args(
+                    worker == 0 && dir == 0,
+                    mux_virtual_core,
+                    tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
+                    worker * 2 + dir,
+                    mux_kernel_config,
+                    sender_writer_compile_args);
+                if (dir) {
+                    sender_writer_compile_args.insert(
+                        sender_writer_compile_args.end(), unicast_backward_args.begin(), unicast_backward_args.end());
+                    sender_writer_compile_args.insert(
+                        sender_writer_compile_args.end(),
+                        barrier_mcast_backward_args.begin(),
+                        barrier_mcast_backward_args.end());
+                } else {
+                    sender_writer_compile_args.insert(
+                        sender_writer_compile_args.end(), unicast_forward_args.begin(), unicast_forward_args.end());
+                    sender_writer_compile_args.insert(
+                        sender_writer_compile_args.end(),
+                        barrier_mcast_forward_args.begin(),
+                        barrier_mcast_forward_args.end());
+                }
+                if (output_is_sharded) {
+                    shard_builder::extend_sharding_compile_time_args(output_tensor, sender_writer_compile_args);
+                } else {
+                    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(sender_writer_compile_args);
+                }
+
+                log_info(tt::LogOp, "CreateKernel writer core : {}", core);
+                auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
+                    program,
+                    "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/"
+                    "minimal_default_writer.cpp",
+                    {core},
+                    tt::tt_metal::WriterDataMovementConfig(sender_writer_compile_args, writer_compute_defines));
+                writer_kernel_ids.push_back(worker_sender_writer_kernel_id);
+
+                std::vector<uint32_t> writer_rt_args = {
+                    output_tensor.buffer()->address(),                           // output_tensor_address
+                    virtual_core.x,                                              // out_ready_sem_noc0_x
+                    virtual_core.y,                                              // out_ready_sem_noc0_y
+                    semaphore.at(dir).address(),                                 // out_ready_semaphore_forward
+                    barrier_semaphore.has_value() && !using_persistent_buffers,  // use synchronize barrier semaphore
+                    barrier_semaphore.has_value()                                // synchronize barrier semaphore
+                        ? barrier_semaphore.value().address()
+                        : 0,
+                    opposite_core_coord.x,
+                    opposite_core_coord.y};
+                fabric_mux_connection_rt_args(
+                    mux_connection_valid,
+                    core,
+                    program,
+                    termination_master_virtual_core,
+                    num_workers_per_direction,
+                    writer_rt_args);
+                if (output_is_sharded) {
+                    shard_builder::extend_sharding_run_time_args(output_tensor, writer_rt_args);
+                }
+                if (fuse_op) {
+                    writer_rt_args.push_back(self_write_done_semaphore);
+                    fused_op_signaler_sender_workers->push_all_gather_fused_op_rt_args(
+                        writer_rt_args,
+                        num_workers_per_direction * num_links,
+                        worker + (link * num_workers_per_direction),
+                        1);
+                }
+                tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
+            }
+        }
+    }
+
+    // Return the program artifacts
+    return {
+        reader_kernel_ids,
+        writer_kernel_ids,
+        all_cores,
+        num_directions_per_link,
+        num_workers_per_direction,
+        num_mux_cores_per_direction_per_link,
+        num_cores_per_link};
+}
+
+
+AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifacts_1worker(
+    tt::tt_metal::Program& program,
+    const Tensor& input_tensor,
+    const MeshCoordinate& sender_device_coord,
+    const std::optional<MeshCoordinate>& forward_coord,
+    const std::optional<MeshCoordinate>& backward_coord,
+    Tensor& output_tensor,
+    const uint32_t dim,
+    const uint32_t num_links,
+    const uint32_t ring_size,
+    const uint32_t ring_index,
+    ccl::Topology topology,
+    const std::vector<GlobalSemaphore>& semaphore,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    bool using_persistent_buffers,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    std::optional<experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
+    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> num_workers_per_direction_opt,
+    std::optional<uint32_t> num_buffers_per_channel,
+    const CoreCoord core_grid_offset,
+    const bool reverse_order) {
+    // Tensor Info
+    const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
+    const auto& input_tensor_shape = input_tensor.padded_shape();
+    const auto& output_tensor_shape = output_tensor.padded_shape();
+    auto mesh_device = input_tensor.device();
+    TT_FATAL(mesh_device != nullptr, "Mesh device not found");
+
+    // When reverse_order is enabled, tensor width must be divisible by 32*num_devices for proper sharding
+    if (reverse_order) {
+        uint32_t tensor_width = output_tensor_shape[3];
+        uint32_t required_divisor = 32 * ring_size;
+        TT_FATAL(
+            tensor_width % required_divisor == 0,
+            "When reverse_order=true, tensor width ({}) must be divisible by 32*num_devices (32*{} = {})",
+            tensor_width,
+            ring_size,
+            required_divisor);
+    }
+
+    // op hyperparams
+    uint32_t num_directions_per_link = 2;
+    uint32_t num_mux_cores_per_direction_per_link = 1;
+    // Get worker cores
+    // 2 senders (reader + writer) per direction (forward, reverse_order) per link
+    uint32_t output_data_size_bytes = output_tensor.buffer()->size();
+    uint32_t num_workers_per_direction = num_workers_per_direction_opt.value_or(detail::default_workers_1worker(
+        *mesh_device,
+        sub_device_id,
+        topology,
+        output_data_size_bytes,
+        num_links,
+        ring_size,
+        num_directions_per_link,
+        num_mux_cores_per_direction_per_link));
+    uint32_t num_cores_per_link = detail::all_gather_async_core_count_per_link_1worker(
+        num_workers_per_direction, num_directions_per_link, num_mux_cores_per_direction_per_link);
+
+    log_info(tt::LogOp, "DEBUG: num_workers_per_direction: {}", num_workers_per_direction);
+    log_info(tt::LogOp, "DEBUG: num_cores_per_link: {}", num_cores_per_link);
+    uint32_t num_buffers_full_size_channels = num_buffers_per_channel.value_or(1);
+
+    [[maybe_unused]] bool is_first_chip = ring_index == 0;
+    [[maybe_unused]] bool is_last_chip = ring_index == ring_size - 1;
+    log_trace(
+        tt::LogOp,
+        "DEBUG: device coord: {}, is_first_chip: {}, is_last_chip: {}",
+        sender_device_coord,
+        is_first_chip,
+        is_last_chip);
+
+    /* All gather fusion */
+    bool fuse_op = fused_op_signaler.has_value();
+
+    // Need a separate signaler for the sender workers, to handle the first tensor slice that is locally available
+    // std::optional<experimental::ccl::AllGatherFusedOpSignaler> fused_op_signaler_sender_workers;
+    // std::optional<experimental::ccl::AllGatherFusedOpSignaler> fused_op_signaler_forward;
+    // std::optional<experimental::ccl::AllGatherFusedOpSignaler> fused_op_signaler_backward;
+    // if (fuse_op) {
+    //     fused_op_signaler_sender_workers = fused_op_signaler.value();
+    //     fused_op_signaler_forward = fused_op_signaler.value();
+    //     fused_op_signaler_backward = fused_op_signaler.value();
+    // }
+
+    // Get OP Config, topology config
+    uint32_t page_size = input_tensor.buffer()->page_size();
+    auto [num_targets_forward, num_targets_backward] =
+        ccl::get_forward_backward_line_mcast_distance(ring_size, ring_index, topology, false);
+    auto [unicast_forward_args, unicast_backward_args] = ccl::get_forward_backward_line_unicast_configuration(
+        topology, sender_device_coord, forward_coord, backward_coord, mesh_device);
+    auto [barrier_mcast_forward_args, barrier_mcast_backward_args] = ccl::get_forward_backward_line_mcast_configuration(
+        topology,
+        sender_device_coord,
+        forward_coord,
+        backward_coord,
+        topology == ccl::Topology::Linear ? num_targets_forward : ring_size - 1,
+        topology == ccl::Topology::Linear ? num_targets_backward : ring_size - 1,
+        mesh_device);
+
+    TT_FATAL(
+        !((topology == ccl::Topology::Linear) && fuse_op), "linear is not support when using fused for all-gather");
+
+    const auto [all_core_range, all_cores] =
+        choose_worker_cores(num_links, num_cores_per_link, mesh_device, sub_device_id, core_grid_offset);
+    // std::set<CoreRange> sender_worker_core_ranges;
+    // std::set<CoreRange> sender_forward_core_ranges;
+    // std::set<CoreRange> sender_backward_core_ranges;
+    std::set<CoreRange> sender_both_core_core_ranges;
+    // std::set<CoreRange> mux_both_core_ranges;
+    std::set<CoreRange> mux_dir0_core_ranges;
+    std::set<CoreRange> mux_dir1_core_ranges;
+    uint32_t core_id = 0;
+    for (uint32_t link = 0; link < num_links; link++) {
+        // const auto& mux_core = all_cores[core_id++];
+        // mux_both_core_ranges.insert(CoreRange(mux_core));
+        for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
+            const auto& mux_core = all_cores[core_id++];
+            if (dir) {
+                mux_dir0_core_ranges.insert(CoreRange(mux_core));
+            } else {
+                mux_dir1_core_ranges.insert(CoreRange(mux_core));
+            }
+            for (uint32_t worker = 0; worker < num_workers_per_direction; worker++) {
+                const auto& worker_core = all_cores[core_id++];
+                if (dir == 0) {
+                    sender_both_core_core_ranges.insert(CoreRange(worker_core));
+                }
+            }
+        }
+    }
+    // CoreRangeSet sender_worker_core_range_set = CoreRangeSet(sender_worker_core_ranges);
+    // CoreRangeSet sender_forward_core_range_set = CoreRangeSet(sender_forward_core_ranges);
+    // CoreRangeSet sender_backward_core_range_set = CoreRangeSet(sender_backward_core_ranges);
+    CoreRangeSet sender_both_core_range_set = CoreRangeSet(sender_both_core_core_ranges);
+    // CoreRangeSet mux_both_core_range_set = CoreRangeSet(mux_both_core_ranges);
+    CoreRangeSet mux_dir0_core_range_set = CoreRangeSet(mux_dir0_core_ranges);
+    CoreRangeSet mux_dir1_core_range_set = CoreRangeSet(mux_dir1_core_ranges);
+
+    // log_info(tt::LogOp, "sender_worker_core_range_set={}", sender_worker_core_range_set);
+    // log_info(tt::LogOp, "sender_forward_core_range_set={}", sender_forward_core_range_set);
+    // log_info(tt::LogOp, "sender_backward_core_range_set={}", sender_backward_core_range_set);
+    log_info(tt::LogOp, "sender_both_core_range_set={}", sender_both_core_range_set);
+    // log_info(tt::LogOp, "mux_both_core_range_set={}", mux_both_core_ranges);
+    log_info(tt::LogOp, "mux_dir0_core_range_set={}", mux_dir0_core_range_set);
+    log_info(tt::LogOp, "mux_dir1_core_range_set={}", mux_dir1_core_range_set);
+
+    // L1 Scratch CB Creation
+    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    uint32_t l1_scratch_cb_page_size_bytes = page_size;
+
+    // scatter-write currently only supports 2 distinct noc addresses
+    uint32_t max_target_noc_addresses_per_packet = 2;
+
+    // for bfloat8_b, tile_num_per_link=6, we would need to send 2 packages, but they can be of size 3 instead of 4
+    uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
+    uint32_t num_tiles_to_write_per_packet = std::min(max_target_noc_addresses_per_packet, num_pages_per_packet);
+    uint32_t cb_num_pages = 3 * num_tiles_to_write_per_packet;  // triple buffering
+    tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+
+    // CBs for transferring data between sender_reader and sender_writer
+    uint32_t sender_cb_index_bwd = tt::CB::c_in0;
+    tt::tt_metal::CircularBufferConfig cb_sender_config_bwd =
+        tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{sender_cb_index_bwd, df}})
+            .set_page_size(sender_cb_index_bwd, l1_scratch_cb_page_size_bytes);
+    uint32_t sender_cb_index_fwd = tt::CB::c_in1;
+    tt::tt_metal::CircularBufferConfig cb_sender_config_fwd =
+        tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{sender_cb_index_fwd, df}})
+            .set_page_size(sender_cb_index_fwd, l1_scratch_cb_page_size_bytes);
+    CreateCircularBuffer(program, sender_both_core_range_set, cb_sender_config_bwd);
+    CreateCircularBuffer(program, sender_both_core_range_set, cb_sender_config_fwd);
+
+    bool input_is_sharded = input_tensor.is_sharded();
+    bool output_is_sharded = output_tensor.is_sharded();
+
+    std::map<std::string, std::string> reader_compute_defines;
+    std::map<std::string, std::string> writer_compute_defines;
+
+    if (input_is_sharded) {
+        reader_compute_defines["INPUT_IS_SHARDED"] = "1";
+    }
+    if (output_is_sharded) {
+        reader_compute_defines["OUTPUT_IS_SHARDED"] = "1";
+        writer_compute_defines["OUTPUT_IS_SHARDED"] = "1";
+    }
+
+    // KERNEL CREATION
+    /* All gather fusion */
+    if (fuse_op) {
+        // auto sender_workers_forward = corerange_to_cores(sender_forward_core_ranges, std::nullopt, true);
+        // auto sender_workers_backward = corerange_to_cores(sender_backward_core_ranges, std::nullopt, true);
+        // fused_op_signaler_forward->init_all_gather(
+        //     program, mesh_device, sender_forward_core_ranges, sender_workers_forward);
+        // fused_op_signaler_backward->init_all_gather(
+        //     program, mesh_device, sender_backward_core_ranges, sender_workers_backward);
+        // fused_op_signaler_sender_workers->init_all_gather(
+        //     program, mesh_device, sender_forward_core_ranges, sender_workers_forward);
+    }
+
+    std::vector<tt::tt_metal::KernelHandle> reader_kernel_ids;
+    std::vector<tt::tt_metal::KernelHandle> writer_kernel_ids;
+    const uint32_t l1_unreserved_base_address =
+        mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    const size_t mux_base_l1_address = l1_unreserved_base_address;
+
+    auto map_nd_to_4d = [&]() {
+        // Here we do a couple of tricks so that the kernels can handle ND tensors
+        // implicitly reshape lower dims so it is treated as 4D
+        uint32_t batch_head_size =
+            std::accumulate(input_tensor_shape.cbegin(), input_tensor_shape.cend() - 2, 1, std::multiplies<uint32_t>());
+
+        auto [normalized_dim, rank_diff] = composite_common::normalize_dim_4d(dim, input_tensor_shape.rank());
+
+        // if the gather dim is 4D normalized to 0,2,3 we can proceed as if nothing has changed
+        // if not we have to roll up the lower dims from the gather dim up to 1 into C and gather on 1.
+        uint32_t c_includes_dim;
+        if (rank_diff >= 1 && dim <= rank_diff) {
+            // gather dim to rank-3 accumulated into C
+            c_includes_dim = dim;
+            normalized_dim = 1;
+        } else {
+            // C will be 4D normalized dim 1
+            c_includes_dim = 1 + rank_diff;
+        }
+
+        uint32_t input_tensor_C = std::accumulate(
+            input_tensor_shape.view().rbegin() + 2,
+            input_tensor_shape.view().rend() - c_includes_dim,
+            1,
+            std::multiplies<uint32_t>());
+
+        uint32_t output_tensor_C = std::accumulate(
+            output_tensor_shape.view().rbegin() + 2,
+            output_tensor_shape.view().rend() - c_includes_dim,
+            1,
+            std::multiplies<uint32_t>());
+
+        return std::make_tuple(normalized_dim, batch_head_size, input_tensor_C, output_tensor_C);
+    };
+
+    auto map_2d_to_4d = [&]() {
+        const uint32_t normalized_dim = std::get<0>(composite_common::normalize_dim_4d(dim, input_tensor_shape.rank()));
+        constexpr uint32_t input_tensor_C = 1, output_tensor_C = 1, batch_head_size = 1;
+
+        return std::make_tuple(normalized_dim, batch_head_size, input_tensor_C, output_tensor_C);
+    };
+
+    const auto [normalized_dim, batch_head_size, input_tensor_C, output_tensor_C] =
+        (input_tensor_shape.rank() == 2) ? map_2d_to_4d() : map_nd_to_4d();
+
+    uint32_t single_batch_head_num_pages = input_tensor_num_pages / batch_head_size;
+    TT_FATAL(!(input_tensor_shape[-1] % TILE_WIDTH), "Input tensor width must be a multiple of TILE_WIDTH");
+    TT_FATAL(!(output_tensor_shape[-1] % TILE_WIDTH), "Output tensor width must be a multiple of TILE_WIDTH");
+    uint32_t TILE_WIDTH = 32;
+
+    uint32_t input_tensor_Wt = input_tensor_shape[-1] / TILE_WIDTH;
+    uint32_t input_tensor_Ht = input_tensor_shape[-2] / TILE_WIDTH;
+
+    uint32_t output_tensor_Wt = output_tensor_shape[-1] / TILE_WIDTH;
+    uint32_t output_tensor_Ht = output_tensor_shape[-2] / TILE_WIDTH;
+
+    for (uint32_t link = 0; link < num_links; link++) {
+
+        // Fabrix mux kernel
+        // uint32_t mux_core = (link * num_cores_per_link);
+        // CoreCoord mux_logical_core = all_cores[mux_core];
+        // CoreCoord mux_virtual_core = mesh_device->worker_core_from_logical_core(mux_logical_core);
+        // auto num_full_size_channels = num_workers_per_direction * 2;
+        // auto num_header_only_channels = 0;
+        // size_t buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+        // auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
+        //     num_full_size_channels,
+        //     num_header_only_channels,
+        //     num_buffers_full_size_channels,
+        //     0,
+        //     buffer_size_bytes_full_size_channel,
+        //     mux_base_l1_address);
+
+        // log_info(tt::LogOp, "link {}: Creating mux kernel on mux_core {} on mux_logical_core {}", link, mux_core, mux_logical_core);
+        // const bool mux_connection_valid = true;
+        // if (mux_connection_valid) {
+        //     auto mux_kernel_id = tt::tt_metal::CreateKernel(
+        //         program,
+        //         "tt_metal/fabric/impl/kernels/tt_fabric_mux_both.cpp",
+        //         {mux_logical_core},
+        //         tt::tt_metal::DataMovementConfig{
+        //             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+        //             .noc = tt::tt_metal::NOC::RISCV_0_default,
+        //             .compile_args = mux_kernel_config.get_fabric_mux_compile_time_args(),
+        //             .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
+        //     std::vector<uint32_t> mux_rt_args1 = {};
+        //     std::vector<uint32_t> mux_rt_args2 = {};
+        //     const auto src_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
+        //     // if (dir) {  // forward
+        //         const auto fwd_dst_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
+        //         mux_rt_args1 = mux_kernel_config.get_fabric_mux_run_time_args(
+        //             src_node_id, fwd_dst_node_id, link, program, {mux_logical_core});
+        //     // } else {
+        //         const auto bwd_dst_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
+        //         mux_rt_args2 = mux_kernel_config.get_fabric_mux_run_time_args(
+        //             src_node_id, bwd_dst_node_id, link, program, {mux_logical_core});
+        //     // }
+        //     std::vector<uint32_t> mux_rt_args;;
+        //     mux_rt_args.insert(mux_rt_args.end(), mux_rt_args1.begin(), mux_rt_args1.end());
+        //     mux_rt_args.insert(mux_rt_args.end(), mux_rt_args2.begin(), mux_rt_args2.end());
+
+        //     log_info(tt::LogOp, "mux_rt_args1 count = {}, mux_rt_args2 count = {}, mux_rt_args count = {}", mux_rt_args1.size(), mux_rt_args2.size(), mux_rt_args.size());
+        //     tt::tt_metal::SetRuntimeArgs(program, mux_kernel_id, {mux_logical_core}, mux_rt_args);
+        // }
+        auto num_full_size_channels = num_workers_per_direction;
+        auto num_header_only_channels = 0;
+        size_t buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+        auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
+            num_full_size_channels,
+            num_header_only_channels,
+            num_buffers_full_size_channels,
+            0,
+            buffer_size_bytes_full_size_channel,
+            mux_base_l1_address);
+        for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
+            // Fabrix mux kernel
+            uint32_t mux_core_offset = (link * num_cores_per_link) +
+                                       (dir * (num_mux_cores_per_direction_per_link + num_workers_per_direction));
+            CoreCoord mux_logical_core = all_cores[mux_core_offset];
+            // CoreCoord mux_virtual_core = mesh_device->worker_core_from_logical_core(mux_logical_core);
+            // auto num_full_size_channels = num_workers_per_direction;
+            // auto num_header_only_channels = 0;
+            // size_t buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+            // auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
+            //     num_full_size_channels,
+            //     num_header_only_channels,
+            //     num_buffers_full_size_channels,
+            //     0,
+            //     buffer_size_bytes_full_size_channel,
+            //     mux_base_l1_address);
+
+            const bool mux_connection_valid =
+                (dir && backward_coord.has_value()) || (!dir && forward_coord.has_value());
+            if (mux_connection_valid) {
+                log_info(tt::LogOp, "CreateKernel mux core : {}", mux_logical_core);
+                auto mux_kernel_id = tt::tt_metal::CreateKernel(
+                    program,
+                    "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
+                    {mux_logical_core},
+                    tt::tt_metal::DataMovementConfig{
+                        .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                        .noc = tt::tt_metal::NOC::RISCV_0_default,
+                        .compile_args = mux_kernel_config.get_fabric_mux_compile_time_args(),
+                        .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
+                std::vector<uint32_t> mux_rt_args = {};
+                const auto src_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
+                if (dir) {  // forward
+                    const auto dst_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
+                    mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
+                        src_node_id, dst_node_id, link, program, {mux_logical_core});
+                } else {
+                    const auto dst_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
+                    mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
+                        src_node_id, dst_node_id, link, program, {mux_logical_core});
+                }
+                tt::tt_metal::SetRuntimeArgs(program, mux_kernel_id, {mux_logical_core}, mux_rt_args);
+            }
+        }
+
+        uint32_t mux_core_offset_dir0 = (link * num_cores_per_link);
+        CoreCoord mux_logical_core_dir0 = all_cores[mux_core_offset_dir0];
+        CoreCoord mux_virtual_core_dir0 = mesh_device->worker_core_from_logical_core(mux_logical_core_dir0);
+        uint32_t mux_core_offset_dir1 = mux_core_offset_dir0 + num_mux_cores_per_direction_per_link + num_workers_per_direction;
+        CoreCoord mux_logical_core_dir1 = all_cores[mux_core_offset_dir1];
+        CoreCoord mux_virtual_core_dir1 = mesh_device->worker_core_from_logical_core(mux_logical_core_dir1);
+
+        log_info(tt::LogOp, "link {}: Creating dir0 mux kernel on mux_core {} on mux_logical_core {}", link, mux_core_offset_dir0,  mux_logical_core_dir0);
+        log_info(tt::LogOp, "link {}: Creating dir1 mux kernel on mux_core {} on mux_logical_core {}", link, mux_core_offset_dir1,  mux_logical_core_dir1);
+
+        for (uint32_t worker = 0; worker < num_workers_per_direction; worker++) {
+            log_info(tt::LogOp, "mux_core_offset_dir0 + num_mux_cores_per_direction_per_link + worker = {}", mux_core_offset_dir0 + num_mux_cores_per_direction_per_link + worker);
+            
+            CoreCoord core = all_cores[mux_core_offset_dir0 + num_mux_cores_per_direction_per_link + worker];
+            CoreCoord virtual_core = mesh_device->worker_core_from_logical_core(core);
+            // CoreCoord supplemental_core = all_cores
+            //     [(link * num_cores_per_link) +
+            //         ((1 - dir) * (num_workers_per_direction)) +
+            //         num_mux_cores_per_direction_per_link + worker];
+            // log_info(tt::LogOp, "supplemental_core = {}", (link * num_cores_per_link) +
+            //         ((1 - dir) * (num_workers_per_direction)) +
+            //         num_mux_cores_per_direction_per_link + worker);
+            // CoreCoord opposite_core_coord = mesh_device->worker_core_from_logical_core(supplemental_core);
+
+            uint32_t global_worker_id = (link * num_workers_per_direction) + worker;
+            uint32_t global_worker_count = num_links * num_workers_per_direction;
+            uint32_t base_pages_per_worker = single_batch_head_num_pages / global_worker_count;
+            uint32_t remainder = single_batch_head_num_pages % global_worker_count;
+            uint32_t input_tile_id_start =
+                (global_worker_id * base_pages_per_worker) + std::min(global_worker_id, remainder);
+            uint32_t input_tile_id_end =
+                ((global_worker_id + 1) * base_pages_per_worker) + std::min(global_worker_id + 1, remainder);
+
+            // Heuristic is based on a sweep of large shapes. This will be used when total chunks per worker is
+            // larger than 160. Doing it less frequently adds performance cost to many shapes. Sweep test:
+            // tests/ttnn/multidevice_perf_tests/sweep_all_gather_hyperparameters_T3K.py
+            constexpr uint32_t HEURISTIC_MAX_CHUNKS_PER_SYNC = 160;
+            uint32_t chunks_per_sync_val = chunks_per_sync.value_or(std::min(
+                std::max((input_tile_id_end - input_tile_id_start) / num_tiles_to_write_per_packet, (uint32_t)1),
+                HEURISTIC_MAX_CHUNKS_PER_SYNC));
+            log_info(tt::LogOp, "DEBUG: chunks_per_sync_val: {}", chunks_per_sync_val);
+
+            uint32_t start_pages_read_in_row = input_tile_id_start % input_tensor_Wt;
+            uint32_t start_row_offset = input_tile_id_start / input_tensor_Wt * output_tensor_Wt;
+
+            uint32_t self_write_done_semaphore;
+            if (fuse_op) {
+                self_write_done_semaphore = CreateSemaphore(program, {core}, 0);
+            }
+
+            // Reader
+            std::vector<uint32_t> sender_reader_compile_args = {
+                ring_size,                        // ring_size
+                ring_index,                       // my_chip_id
+                sender_cb_index_bwd,                  // cb_forward_id
+                num_tiles_to_write_per_packet,    // num_tiles_to_write_per_packet
+                page_size,                        // page_size
+                num_targets_forward,              // num_slices_forward_direction
+                num_targets_backward,             // num_slices_backward_direction
+                static_cast<uint32_t>(topology),  // topology
+                0,                              // direction
+                normalized_dim,                   // gather_dim
+                batch_head_size,                  // input_batch_head_count (product of the first two dims)
+                input_tensor_Wt,                  // input_tensor_Wt
+                input_tensor_Ht,                  // input_tensor_Ht
+                input_tensor_C,                   // input_tensor_C
+                output_tensor_Wt,                 // output_tensor_Wt
+                output_tensor_Ht,                 // output_tensor_Ht
+                output_tensor_C,                  // output_tensor_C
+                input_tile_id_start,              // input_tile_id_start
+                input_tile_id_end,                // input_tile_id_end
+                start_pages_read_in_row,          // start_pages_read_in_row
+                start_row_offset,                 // start_row_offset
+                fuse_op,                          // fuse_op
+                chunks_per_sync_val,              // chunks_per_sync
+                reverse_order,                    // reverse
+                sender_cb_index_fwd,
+            };
+            if (input_is_sharded) {
+                shard_builder::extend_sharding_compile_time_args(input_tensor, sender_reader_compile_args);
+            } else {
+                tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(sender_reader_compile_args);
+            }
+            if (output_is_sharded) {
+                shard_builder::extend_sharding_compile_time_args(output_tensor, sender_reader_compile_args);
+            } else {
+                tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(sender_reader_compile_args);
+            }
+            log_info(tt::LogOp, "ring_size : {}, ring_index : {}", ring_size, ring_index);
+            log_info(tt::LogOp, "CreateKernel reader core : {}", core);
+            auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
+                program,
+                "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/"
+                "minimal_default_reader_1worker.cpp",
+                {core},
+                tt::tt_metal::ReaderDataMovementConfig(sender_reader_compile_args, reader_compute_defines));
+            reader_kernel_ids.push_back(worker_sender_reader_kernel_id);
+
+            std::vector<uint32_t> reader_rt_args = {
+                input_tensor.buffer()->address(),   // input_tensor_address
+                output_tensor.buffer()->address(),  // output_tensor_address
+                semaphore.at(0).address(),        // out_ready_sem
+                semaphore.at(1).address(),        // out_ready_sem
+            };
+            if (input_is_sharded) {
+                shard_builder::extend_sharding_run_time_args(input_tensor, reader_rt_args);
+            }
+            if (output_is_sharded) {
+                shard_builder::extend_sharding_run_time_args(output_tensor, reader_rt_args);
+            }
+            if (fuse_op) {
+                reader_rt_args.push_back(self_write_done_semaphore);
+                // if (dir) {
+                //     fused_op_signaler_forward->push_all_gather_fused_op_rt_args(
+                //         reader_rt_args,
+                //         num_workers_per_direction * num_links,
+                //         worker + (link * num_workers_per_direction),
+                //         1);
+                // } else {
+                //     fused_op_signaler_backward->push_all_gather_fused_op_rt_args(
+                //         reader_rt_args,
+                //         num_workers_per_direction * num_links,
+                //         worker + (link * num_workers_per_direction),
+                //         0);
+                // }
+            }
+
+            tt::tt_metal::SetRuntimeArgs(program, worker_sender_reader_kernel_id, {core}, reader_rt_args);
+
+            CoreCoord termination_master_logical_core =
+                all_cores[mux_core_offset_dir0 + num_mux_cores_per_direction_per_link + 0];
+            CoreCoord termination_master_virtual_core =
+                mesh_device->worker_core_from_logical_core(termination_master_logical_core);
+
+            // Writer
+            std::vector<uint32_t> sender_writer_compile_args = {
+                ring_size,                        // ring_size
+                ring_index,                       // my_chip_id
+                sender_cb_index_bwd,                  // cb_forward_id
+                num_tiles_to_write_per_packet,    // num_tiles_to_write_per_packet
+                page_size,                        // page_size
+                num_targets_forward,              // num_targets_forward_direction
+                num_targets_backward,             // num_targets_backward_direction
+                static_cast<uint32_t>(topology),  // topology
+                0,                              // direction
+                normalized_dim,                   // gather_dim
+                batch_head_size,                  // input_batch_head_count (product of the first two dims)
+                input_tensor_Wt,                  // input_tensor_Wt
+                input_tensor_Ht,                  // input_tensor_Ht
+                input_tensor_C,                   // input_tensor_C
+                output_tensor_Wt,                 // output_tensor_Wt
+                output_tensor_Ht,                 // output_tensor_Ht
+                output_tensor_C,                  // output_tensor_C
+                input_tile_id_start,              // input_tile_id_start
+                input_tile_id_end,                // input_tile_id_end
+                start_pages_read_in_row,          // start_pages_read_in_row
+                start_row_offset,                 // start_row_offset
+                fuse_op,                          // fuse_op
+                chunks_per_sync_val,              // chunks_per_sync
+                reverse_order,                    // reverse
+            };
+            log_info(tt::LogOp, "sender_writer_compile_args mux_virtual_core_dir0 : {}, mux_virtual_core_dir1 : {}", mux_virtual_core_dir0,  mux_virtual_core_dir1);
+            log_info(tt::LogOp, "dir = both, worker = {}", worker);
+            fabric_mux_connection_ct_args(
+                worker == 0,
+                mux_virtual_core_dir0,
+                tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
+                worker,
+                mux_kernel_config,
+                sender_writer_compile_args);
+            sender_writer_compile_args.push_back(sender_cb_index_fwd);
+            sender_writer_compile_args.push_back(mux_virtual_core_dir1.x);
+            sender_writer_compile_args.push_back(mux_virtual_core_dir1.y);
+            sender_writer_compile_args.insert(
+                sender_writer_compile_args.end(), unicast_forward_args.begin(), unicast_forward_args.end());
+            sender_writer_compile_args.insert(
+                sender_writer_compile_args.end(),
+                barrier_mcast_forward_args.begin(),
+                barrier_mcast_forward_args.end());
+            sender_writer_compile_args.insert(
+                sender_writer_compile_args.end(), unicast_backward_args.begin(), unicast_backward_args.end());
+            sender_writer_compile_args.insert(
+                sender_writer_compile_args.end(),
+                barrier_mcast_backward_args.begin(),
+                barrier_mcast_backward_args.end());
+            if (output_is_sharded) {
+                shard_builder::extend_sharding_compile_time_args(output_tensor, sender_writer_compile_args);
+            } else {
+                tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(sender_writer_compile_args);
+            }
+
+            log_info(tt::LogOp, "CreateKernel writer core : {}", core);
+            auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
+                program,
+                "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/"
+                "minimal_default_writer_1worker.cpp",
+                {core},
+                tt::tt_metal::WriterDataMovementConfig(sender_writer_compile_args, writer_compute_defines));
+            writer_kernel_ids.push_back(worker_sender_writer_kernel_id);
+
+            std::vector<uint32_t> writer_rt_args = {
+                output_tensor.buffer()->address(),                           // output_tensor_address
+                virtual_core.x,                                              // out_ready_sem_noc0_x
+                virtual_core.y,                                              // out_ready_sem_noc0_y
+                semaphore.at(0).address(),                                 // out_ready_semaphore_bwd
+                semaphore.at(1).address(),                                 // out_ready_semaphore_fwd
+                barrier_semaphore.has_value() && !using_persistent_buffers,  // use synchronize barrier semaphore
+                barrier_semaphore.has_value()                                // synchronize barrier semaphore
+                    ? barrier_semaphore.value().address()
+                    : 0,
+                0, // opposite_core_coord.x,
+                0}; // opposite_core_coord.y
+            const bool mux_connection_valid = true;
+            fabric_mux_connection_rt_args(
+                mux_connection_valid,
+                core,
+                program,
+                termination_master_virtual_core,
+                num_workers_per_direction,
+                writer_rt_args);
+
+            writer_rt_args.push_back(CreateSemaphore(program, {core}, 0));
+            writer_rt_args.push_back(CreateSemaphore(program, {core}, 0));
+            writer_rt_args.push_back(CreateSemaphore(program, {core}, 0));
+            writer_rt_args.push_back(CreateSemaphore(program, {core}, 0));
+            if (output_is_sharded) {
+                shard_builder::extend_sharding_run_time_args(output_tensor, writer_rt_args);
+            }
+            if (fuse_op) {
+                // writer_rt_args.push_back(self_write_done_semaphore);
+                // fused_op_signaler_sender_workers->push_all_gather_fused_op_rt_args(
+                //     writer_rt_args,
+                //     num_workers_per_direction * num_links,
+                //     worker + (link * num_workers_per_direction),
+                //     1);
+            }
+            tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
+        }
+    }
+
+    // Return the program artifacts
+    return {
+        reader_kernel_ids,
+        writer_kernel_ids,
+        all_cores,
+        num_directions_per_link,
+        num_workers_per_direction,
+        num_mux_cores_per_direction_per_link,
+        num_cores_per_link};
+}
+
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_helper(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
@@ -759,6 +2176,21 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
     const CoreCoord core_grid_offset,
     const bool reverse_order) {
     // Call the builder to create the program and get artifacts
+
+    auto mux_1 = false;
+    auto worker_1 = true;
+    auto func_p =
+        // mux_1 && worker_1 ? build_all_gather_async_minimal_default_program_artifacts_1mux_1worker :
+        mux_1 && !worker_1 ? build_all_gather_async_minimal_default_program_artifacts_1mux :
+        !mux_1 && worker_1 ? build_all_gather_async_minimal_default_program_artifacts_1worker :
+                            build_all_gather_async_minimal_default_program_artifacts;
+
+    auto func_override =
+        // mux_1 && worker_1 ? all_gather_async_minimal_default_helper_override_runtime_arguments_1mux_1worker :
+        mux_1 && !worker_1 ? all_gather_async_minimal_default_helper_override_runtime_arguments_1mux :
+        !mux_1 && worker_1 ? all_gather_async_minimal_default_helper_override_runtime_arguments_1worker :
+                            all_gather_async_minimal_default_helper_override_runtime_arguments;
+
     auto
         [reader_kernel_ids,
          writer_kernel_ids,
@@ -767,7 +2199,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
          num_workers_per_direction,
          num_mux_cores_per_direction_per_link,
          num_cores_per_link] =
-            build_all_gather_async_minimal_default_program_artifacts(
+            func_p(
                 program,
                 input_tensor,
                 sender_device_coord,
@@ -799,7 +2231,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
          num_directions_per_link,
          num_workers_per_direction,
          num_mux_cores_per_direction_per_link,
-         num_cores_per_link](
+         num_cores_per_link,
+         func_override](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -811,7 +2244,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
             auto barrier_semaphore = static_cast<const ttnn::AllGatherAsync*>(operation)->barrier_semaphore;
             auto semaphore = static_cast<const ttnn::AllGatherAsync*>(operation)->semaphore;
 
-            all_gather_async_minimal_default_helper_override_runtime_arguments(
+            func_override(
                 program,
                 reader_kernel_ids,
                 writer_kernel_ids,

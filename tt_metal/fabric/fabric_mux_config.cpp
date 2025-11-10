@@ -184,6 +184,21 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_main_args(
     const tt::tt_fabric::FabricEriscDatamoverConfig& fabric_router_config) const {
     TT_FATAL(fabric_endpoint_channel_num_buffers_ > 0, "fabric_endpoint_channel_num_buffers_ must be larger than 0");
     TT_FATAL(fabric_endpoint_status_address_ != 0, "fabric_endpoint_status_address_ must not be invalid address 0");
+
+    log_info(tt::LogOp, "FabricMux\n - num_full_size_channels_: {}, \n - num_buffers_full_size_channel_: {}, \n - "
+                        "buffer_size_bytes_full_size_channel_: {}, \n - num_header_only_channels_: {}, \n - "
+                        "num_buffers_header_only_channel_: {}, \n - fabric_endpoint_status_address_: {}, \n - "
+                        "fabric_endpoint_channel_num_buffers_: {}, \n - core_type_index_: {}, \n - "
+                        "wait_for_fabric_endpoint_ready_: {}",
+             num_full_size_channels_,
+             num_buffers_full_size_channel_,
+             buffer_size_bytes_full_size_channel_,
+             num_header_only_channels_,
+             num_buffers_header_only_channel_,
+             fabric_endpoint_status_address_,
+             fabric_endpoint_channel_num_buffers_,
+             core_type_index_,
+             wait_for_fabric_endpoint_ready_);
     return std::vector<uint32_t>{
         num_full_size_channels_,
         num_buffers_full_size_channel_,
@@ -268,7 +283,15 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_run_time_args(
 
     tt::tt_fabric::append_fabric_connection_rt_args(
         src_fabric_node_id, dst_fabric_node_id, link_idx, mux_program, mux_logical_core, args, core_type_);
-
+    log_info(
+        tt::LogOp,
+        "Fabric Mux RT Args: src_node_id: {}, dst_node_id: {}, link_idx: {}, num_regions_to_clear: {} core_type_:{} total: {}",
+        src_fabric_node_id,
+        dst_fabric_node_id,
+        link_idx,
+        num_regions_to_clear,
+        core_type_,
+        args.size());
     return args;
 }
 
