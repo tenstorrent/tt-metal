@@ -71,18 +71,14 @@ std::int64_t CoreIDs::get_device_operation_id() { return device_operation_id.loa
 void CoreIDs::set_device_operation_id(std::int64_t device_operation_id_) { device_operation_id = device_operation_id_; }
 std::int64_t CoreIDs::fetch_and_increment_device_operation_id() { return device_operation_id.fetch_add(1); }
 
-// Thread-local storage for the first assigned device operation ID in current operation
-thread_local std::int64_t CoreIDs::first_assigned_device_operation_id = 0;
-
-void CoreIDs::set_first_assigned_device_operation_id(std::int64_t device_operation_id_) {
-    // Only set if not already set (capture first, not last)
-    if (first_assigned_device_operation_id == 0) {
-        first_assigned_device_operation_id = device_operation_id_;
-    }
+// Thread-local storage for tracking and report the host-assigned device operation ID during a hang.
+thread_local std::optional<std::int64_t> CoreIDs::host_assigned_device_operation_id;
+void CoreIDs::set_host_assigned_device_operation_id(std::int64_t device_operation_id_) {
+    host_assigned_device_operation_id = device_operation_id_;
 }
-
-std::int64_t CoreIDs::get_first_assigned_device_operation_id() { return first_assigned_device_operation_id; }
-
-void CoreIDs::clear_first_assigned_device_operation_id() { first_assigned_device_operation_id = 0; }
+std::optional<std::int64_t> CoreIDs::get_host_assigned_device_operation_id() {
+    return host_assigned_device_operation_id;
+}
+void CoreIDs::reset_host_assigned_device_operation_id() { host_assigned_device_operation_id = std::nullopt; }
 
 }  // namespace ttnn

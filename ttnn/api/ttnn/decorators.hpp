@@ -19,6 +19,7 @@
 namespace tt::tt_metal {
 class Inspector {
 public:
+    static bool is_operation_tracking_enabled();
     static void track_operation(
         std::optional<std::int64_t> device_op_id, const std::string& operation_name, const std::string& arguments);
 };
@@ -123,21 +124,24 @@ private:
         log_debug(tt::LogOp, "Started C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
 
         // Capture operation start for tracking
-        ttnn::CoreIDs::instance().clear_first_assigned_device_operation_id();
-
         tt::tt_metal::GraphTracker::instance().track_function_start(cpp_fully_qualified_name, args...);
+
+        // Reset device operation ID only if tracking enabled
+        if (tt::tt_metal::Inspector::is_operation_tracking_enabled()) {
+            ttnn::CoreIDs::instance().reset_host_assigned_device_operation_id();
+        }
 
         auto output = invoke(std::forward<args_t>(args)...);
 
-        // Capture device operation ID if any device operations occurred
-        auto device_op_id = ttnn::CoreIDs::instance().get_first_assigned_device_operation_id();
-
-        // Track the operation
-        auto arguments = serialize_arguments(args...);
-        tt::tt_metal::Inspector::track_operation(
-            device_op_id > 0 ? std::optional{device_op_id} : std::nullopt,
-            std::string{cpp_fully_qualified_name},
-            arguments);
+        // Track operation only if enabled AND device_op_id exists
+        if (tt::tt_metal::Inspector::is_operation_tracking_enabled()) {
+            auto device_op_id = ttnn::CoreIDs::instance().get_host_assigned_device_operation_id();
+            if (device_op_id.has_value()) {
+                auto arguments = serialize_arguments(args...);
+                tt::tt_metal::Inspector::track_operation(
+                    device_op_id, std::string{cpp_fully_qualified_name}, arguments);
+            }
+        }
 
         tt::tt_metal::GraphTracker::instance().track_function_end(output);
         log_debug(tt::LogOp, "Finished invoking C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
