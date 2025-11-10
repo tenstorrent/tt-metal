@@ -1400,6 +1400,7 @@ def test_demo_text(
                 # N300 targets
                 "N300_Qwen2.5-7B": (95, 1.20),  # (value, high_tolerance_ratio)
                 # T3K targets
+                "T3K_Llama-3.1-8B": 45,
                 "T3K_Llama-3.1-70B": 240,
                 "T3K_Qwen2.5-72B": (290, 1.35),  # (value, high_tolerance_ratio)
                 "T3K_Qwen2.5-Coder-32B": (215, 1.27),  # (value, high_tolerance_ratio)
@@ -1414,10 +1415,16 @@ def test_demo_text(
                 # N300 targets
                 "N300_Qwen2.5-7B": 22.8,
                 # T3K targets
+                "T3K_Llama-3.2-1B": 300,  # TODO Update target
+                "T3K_Llama-3.2-3B": 150,  # TODO Update target
+                "T3K_Llama-3.1-8B": 45,
+                "T3K_Llama-3.2-11B": 45,  # TODO Update target
                 "T3K_Llama-3.1-70B": 15,
                 "T3K_Qwen2.5-72B": 13.25,
                 "T3K_Qwen2.5-Coder-32B": 21,
                 "T3K_Qwen3-32B": 21,
+                "T3K_Mistral-7B": 45,  # TODO Update target
+                "T3K_gemma-3-27b-it": 16,
             }
 
             # Only call verify_perf if the model_device_key exists in the targets

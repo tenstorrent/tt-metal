@@ -1311,6 +1311,7 @@ def test_demo_text(
                 # "T3K_Llama-3.1-70B": 16, # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24303)
                 # "T3K_Qwen2.5-72B": 13, # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24303)
                 "T3K_Qwen2.5-Coder-32B": 21,
+                "T3K_gemma-3-27b-it": 16
                 # "T3K_Qwen3-32B": 20, # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24303)
             }
 
