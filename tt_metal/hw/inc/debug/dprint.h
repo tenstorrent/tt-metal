@@ -218,10 +218,6 @@ uint8_t DebugPrintTypeToId<int64_t>() {
     return DPrintINT64;
 }
 template <>
-uint8_t DebugPrintTypeToId<int>() {
-    return DPrintINT32;
-}
-template <>
 uint8_t DebugPrintTypeToId<float>() {
     return DPrintFLOAT32;
 }
