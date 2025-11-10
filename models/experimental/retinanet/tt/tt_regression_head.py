@@ -215,7 +215,6 @@ class Conv2dNormActivation:
         Returns:
             Output tensor after Conv2d + GroupNorm + ReLU
         """
-        from loguru import logger
 
         # Create hierarchical log prefix
         prefix = (
@@ -225,23 +224,6 @@ class Conv2dNormActivation:
         )
 
         logger.info(f"{prefix} Starting forward pass")
-        logger.info(f"{prefix}   Input: {x.shape}, batch={batch_size}, H={input_height}, W={input_width}")
-
-        # Weight/bias debug with prefix
-        logger.info(f"{prefix} [WEIGHT] Before conv2d:")
-        logger.info(
-            f"{prefix}   Shape: {self.conv_weight.shape}, Layout: {self.conv_weight.layout}, Storage: {self.conv_weight.storage_type()}"
-        )
-
-        logger.info(f"{prefix} [BIAS] Before conv2d:")
-        if self.conv_bias is not None:
-            logger.info(
-                f"{prefix}   Shape: {self.conv_bias.shape}, Layout: {self.conv_bias.layout}, Storage: {self.conv_bias.storage_type()}"
-            )
-
-        # Conv2d operation
-        logger.info(f"Conv2dNormActivation: Calling ttnn.conv2d...")
-        logger.info(f"  kernel_size={list(self.kernel_size)}, stride={list(self.stride)}, padding={list(self.padding)}")
 
         x, [H_out, W_out], [prepared_weight, prepared_bias] = ttnn.conv2d(
             input_tensor=x,
@@ -263,19 +245,9 @@ class Conv2dNormActivation:
             return_weights_and_bias=True,  # ADD THIS
         )
 
-        # After conv2d
-        logger.info(f"{prefix} [WEIGHT] After conv2d:")
-        logger.info(
-            f"{prefix}   Shape: {prepared_weight.shape}, Layout: {prepared_weight.layout}, Storage: {prepared_weight.storage_type()}"
-        )
-
-        logger.info(f"{prefix} [CACHE] Updated weights/bias")
-        logger.info(f"{prefix} Output: {x.shape}")
         # Get output shape after conv
         N, H_out, W_out, C = x.shape
-        logger.info(f"  After conv2d: shape={x.shape}, H_out={H_out}, W_out={W_out}")
 
-        # Calculate padding needed for tile alignment
         # GroupNorm requires H_out * W_out divisible by (grid_size.y * 32)
         spatial_size = H_out * W_out
         required_size = ((spatial_size + self.grid_size.y * 32 - 1) // (self.grid_size.y * 32)) * (
@@ -315,7 +287,6 @@ class Conv2dNormActivation:
 
         # Reshape back using PRESERVED dimensions
         x = ttnn.reshape(x_normalized, (N, input_height, input_width, C))
-        logger.info(f"  After reshape back: shape={x.shape}")
         H_out = input_height
         W_out = input_width
         # ReLU activation

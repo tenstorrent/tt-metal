@@ -122,38 +122,29 @@ class TTBackbone:
 
     def __call__(self, x, device):
         x = self.stem(x, device)
-        logger.debug("✅✅✅ stem Complete ✅✅✅")
-
         shape = x.shape
 
         for i, block in enumerate(self.layer1):
             x, shape = block(x, device, shape)
-            logger.debug(f"✅✅ layer1 bottleneck {i+1} Complete ✅✅")
-        logger.debug("✅✅✅ layer1 Complete ✅✅✅")
 
         for i, block in enumerate(self.layer2):
             x, shape = block(x, device, shape)
-            logger.debug(f"✅✅ layer2 bottleneck {i+1} Complete ✅✅")
+
         c3 = ttnn.clone(x)
         c3 = ttnn.to_memory_config(c3, ttnn.DRAM_MEMORY_CONFIG)
-        logger.debug("✅✅✅ layer2 Complete ✅✅✅")
 
         for i, block in enumerate(self.layer3):
             x, shape = block(x, device, shape)
-            logger.debug(f"✅✅ layer3 bottleneck {i+1} Complete ✅✅")
+
         c4 = ttnn.clone(x)
         c4 = ttnn.to_memory_config(c4, ttnn.DRAM_MEMORY_CONFIG)
-        logger.debug("✅✅✅ layer3 Complete ✅✅✅")
 
         for i, block in enumerate(self.layer4):
             x, shape = block(x, device, shape)
-            logger.debug(f"✅✅ layer4 bottleneck {i+1} Complete ✅✅")
+
         c5 = ttnn.clone(x)
         c5 = ttnn.to_memory_config(c5, ttnn.DRAM_MEMORY_CONFIG)
-        logger.debug("✅✅✅ layer4 Complete ✅✅✅")
-
         out = {"c3": c3, "c4": c4, "c5": c5}
-
         out = self.fpn(out, device)
         logger.debug("✅✅✅ FPN Complete ✅✅✅")
 

@@ -5,7 +5,6 @@ import ttnn
 from models.experimental.retinanet.tt.utils import TTConv2D
 from dataclasses import dataclass
 from typing import Optional
-from loguru import logger
 
 
 @dataclass
@@ -249,29 +248,19 @@ class TTBottleneck:
             x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
 
         # conv1 is 1x1 conv
-        logger.debug("Running Conv_1")
         out, shape = self.conv1(device, x, in_shape)
-        logger.debug("✅ Conv_1 Complete")
 
         # FIXME: PCC drop when persistent L1 buffer is used
         if self.downsample:
             out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
 
         # conv2 is 3x3 conv
-        logger.debug("Running Conv_2")
         out, shape = self.conv2(device, out, shape)
-        logger.debug("✅ Conv_2 Complete")
-
         # conv3 is 1x1 conv
-        logger.debug("Running Conv_3")
         out, shape = self.conv3(device, out, shape)
-        logger.debug("✅ Conv_3 Complete")
-
         # run downsample conv 1x1 if required
         if self.downsample:
-            logger.debug("Running Downsample")
             ds_out, _ = self.downsample_conv(device, x, in_shape)
-            logger.debug("✅ Downsample Complete")
             ttnn.deallocate(x)
             ds_out = ttnn.reallocate(ds_out)
         else:
@@ -279,21 +268,16 @@ class TTBottleneck:
 
         if ds_out.shape != out.shape:
             ds_out = ttnn.reshape(ds_out, (1, 1, ds_out.shape[0] * ds_out.shape[1] * ds_out.shape[2], ds_out.shape[3]))
-            logger.debug("here")
         if ds_out.layout != out.layout:
             ds_out = ttnn.to_layout(ds_out, out.layout)
-            logger.debug("here")
         if ds_out.memory_config() != out.memory_config():
             ds_out = ttnn.to_memory_config(ds_out, out.memory_config())
-            logger.debug("here")
 
-        logger.debug("Running Add")
         out = ttnn.add_(
             out,
             ds_out,
             activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)],
         )
-        logger.debug("✅ Add Complete")
         out = ttnn.reallocate(out)
         ttnn.deallocate(ds_out)
         return out, shape

@@ -206,13 +206,6 @@ def ttnn_retinanet_classification_head(
         else:
             logger.info(f"[FPN{fpn_idx}] ⚠ Conv blocks config: None (using defaults)")
 
-        if fpn_final_config:
-            logger.info(
-                f"[FPN{fpn_idx}] ✓ Final conv config: act_block_h={fpn_final_config_dict.get('act_block_h_override', 'auto')}, shard={fpn_final_config_dict.get('shard_layout', 'auto')}"
-            )
-        else:
-            logger.info(f"[FPN{fpn_idx}] ⚠ Final conv config: None (using defaults)")
-
         # Create 4 Conv2dNormActivation blocks for this FPN level
         x = feature_map
         for conv_idx in range(4):
@@ -252,21 +245,16 @@ def ttnn_retinanet_classification_head(
             compute_config=compute_config,
             conv_config=fpn_final_config,
         )
-        logger.info(f"After cls_logits conv: {cls_logits.shape}")
 
         # Reshape from (N, H, W, 819) to (N, H, W, 9, 91)
         N, H_out, W_out, _ = cls_logits.shape
         cls_logits = ttnn.reshape(cls_logits, (N, H_out, W_out, num_anchors, num_classes))
-        logger.info(f"After reshape to (N, H, W, A, K): {cls_logits.shape}")
 
         # Flatten to (N, H*W*A, K)
         cls_logits = ttnn.reshape(cls_logits, (N, H_out * W_out * num_anchors, num_classes))
-        logger.info(f"After flatten to (N, HWA, K): {cls_logits.shape}")
 
         all_cls_logits.append(cls_logits)
 
     # Concatenate all FPN levels
     output = ttnn.concat(all_cls_logits, dim=1)
-    logger.info(f"\nFinal output shape: {output.shape}")
-
     return output
