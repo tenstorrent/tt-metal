@@ -121,25 +121,24 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_nearest_program_factor
 
     // Writer for nearest mode with sharded grid - matches sharded reader argument structure
     std::vector<uint32_t> writer_compile_time_args = {
-        DUMMY_CB_ID,                                 // ct_arg[0]: input_cb_index
-        grid_cb_index0,                              // ct_arg[1]: grid_cb_index
-        output_cb_index,                             // ct_arg[2]: output_cb_index (replaces scalar_cb_index)
-        input_stick_size,                            // ct_arg[3]: input_stick_size
-        grid_stick_size_arg,                         // ct_arg[4]: grid_stick_size
-        input_height,                                // ct_arg[5]: input_height
-        input_width,                                 // ct_arg[6]: input_width
-        grid_batching_factor,                        // ct_arg[7]: grid_batching_factor
-        static_cast<uint32_t>(grid_tensor.dtype()),  // ct_arg[8]: grid_dtype
-        grid_hw,                                     // ct_arg[9]: grid_hw
-        use_precomputed_grid ? 1U : 0U,              // ct_arg[10]: use_precomputed_grid
-        align_corners ? 1U : 0U,                     // ct_arg[11]: align_corners
-        enable_split_reader ? 1U : 0U,               // ct_arg[12]: split_reader (same as reader)
-        0U,                                          // ct_arg[13]: reader_id (will be set per core)
-        grid_nsticks_per_core,                       // ct_arg[14]: grid_nsticks_per_core
-        is_sharded ? 1U : 0U                         // ct_arg[15]: is_sharded
+        grid_cb_index0,                              // ct_arg[0]: grid_cb_index
+        output_cb_index,                             // ct_arg[1]: output_cb_index (replaces scalar_cb_index)
+        input_stick_size,                            // ct_arg[2]: input_stick_size
+        grid_stick_size_arg,                         // ct_arg[3]: grid_stick_size
+        input_height,                                // ct_arg[4]: input_height
+        input_width,                                 // ct_arg[5]: input_width
+        grid_batching_factor,                        // ct_arg[6]: grid_batching_factor
+        static_cast<uint32_t>(grid_tensor.dtype()),  // ct_arg[7]: grid_dtype
+        grid_hw,                                     // ct_arg[8]: grid_hw
+        use_precomputed_grid ? 1U : 0U,              // ct_arg[9]: use_precomputed_grid
+        align_corners ? 1U : 0U,                     // ct_arg[10]: align_corners
+        enable_split_reader ? 1U : 0U,               // ct_arg[11]: split_reader (same as reader)
+        0U,                                          // ct_arg[12]: reader_id (will be set per core)
+        grid_nsticks_per_core,                       // ct_arg[13]: grid_nsticks_per_core
+        is_sharded ? 1U : 0U                         // ct_arg[14]: is_sharded
     };
 
-    // Add tensor accessor args for input tensor (16 compile time args offset)
+    // Add tensor accessor args for input tensor (15 compile time args offset)
     tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(writer_compile_time_args);
     if (!is_sharded) {
         tt::tt_metal::TensorAccessorArgs(*grid_tensor.buffer()).append_to(writer_compile_time_args);
@@ -162,8 +161,8 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_nearest_program_factor
 
     if (enable_split_reader) {
         auto writer1_compile_time_args = writer_compile_time_args;
-        writer1_compile_time_args[1] = is_sharded ? grid_cb_index0 : grid_cb_index1;  // ct_arg[1]: grid_cb_index1
-        writer1_compile_time_args[13] = 1;                                            // ct_arg[13]: reader_id = 1
+        writer1_compile_time_args[0] = is_sharded ? grid_cb_index0 : grid_cb_index1;  // ct_arg[0]: grid_cb_index1
+        writer1_compile_time_args[12] = 1;                                            // ct_arg[12]: reader_id = 1
 
         writer1_kernel_id = tt::tt_metal::CreateKernel(
             program,

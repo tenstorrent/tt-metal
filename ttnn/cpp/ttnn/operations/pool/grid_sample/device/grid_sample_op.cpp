@@ -94,6 +94,12 @@ void GridSample::validate(const std::vector<Tensor>& input_tensors) const {
 
     TT_FATAL(padding_mode_ == "zeros", "Only zeros padding mode is currently supported");
 
+    // Mode and precomputed grid compatibility validation
+    TT_FATAL(
+        !(mode_ == "nearest" && !use_precomputed_grid_),
+        "use_precomputed_grid = false is not supported with mode = 'nearest'. Please use precomputed grid with nearest "
+        "mode.");
+
     // Memory layout validation - support interleaved and height sharded
     auto input_memory_layout = input_tensor.memory_config().memory_layout();
     auto grid_memory_layout = grid_tensor.memory_config().memory_layout();
