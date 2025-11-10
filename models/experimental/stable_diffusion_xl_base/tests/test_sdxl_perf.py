@@ -117,7 +117,7 @@ def test_refiner_unet(
 
 @pytest.mark.models_device_performance_bare_metal
 def test_sdxl_refiner_unet_perf_device():
-    expected_device_perf_cycles_per_iteration = 640_816_818
+    expected_device_perf_cycles_per_iteration = 555_229_231
 
     command = f"pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py::test_refiner_unet"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
