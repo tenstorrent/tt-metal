@@ -2005,8 +2005,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
         FabricTelemetry<FabricArch::BLACKHOLE>,
         FabricTelemetry<FabricArch::WORMHOLE_B0>>;
     FabricTelemetryT local_fabric_telemetry{};
-    auto fabric_telemetry =
-        reinterpret_cast<volatile FabricTelemetryT*>(eth_l1_mem::address_map::AERISC_FABRIC_TELEMETRY_ADDR);
+    auto fabric_telemetry = reinterpret_cast<volatile FabricTelemetryT*>(MEM_AERISC_FABRIC_TELEMETRY_BASE);
     *termination_signal_ptr = tt::tt_fabric::TerminationSignal::KEEP_RUNNING;
 
     // May want to promote to part of the handshake but for now we just initialize in this standalone way
