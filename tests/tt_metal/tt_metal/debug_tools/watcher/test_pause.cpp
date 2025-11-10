@@ -84,8 +84,9 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     bool has_ieth_cores = !device->get_inactive_ethernet_cores().empty();
 
     // TODO: Enable this when FD-on-idle-eth is supported.
-    if (!fixture->IsSlowDispatch())
+    if (!fixture->IsSlowDispatch()) {
         has_ieth_cores = false;
+    }
 
     if (has_eth_cores) {
         KernelHandle erisc_kid;
