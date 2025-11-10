@@ -41,6 +41,7 @@ def run_reduce_scatter_impl(
     verify_output=True,
     use_new=False,
 ):
+    use_sub_devices = False
     torch.manual_seed(0)
 
     tile = (32, 32)
@@ -58,8 +59,9 @@ def run_reduce_scatter_impl(
     worker_sub_device_id = ttnn.SubDeviceId(0)
     sub_device_stall_group = [worker_sub_device_id]
 
-    sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
-    mesh_device.load_sub_device_manager(sub_device_manager)
+    if use_sub_devices:
+        sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
+        mesh_device.load_sub_device_manager(sub_device_manager)
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
     # create global semaphore handles
@@ -242,7 +244,8 @@ def run_reduce_scatter_impl(
             assert eq, f"{i} FAILED ag: {output}"
 
     mesh_device.reset_sub_device_stall_group()
-    mesh_device.clear_loaded_sub_device_manager()
+    if use_sub_devices:
+        mesh_device.clear_loaded_sub_device_manager()
 
 
 @skip_for_blackhole("Requires wormhole_b0 to run")
@@ -251,6 +254,29 @@ def run_reduce_scatter_impl(
 @pytest.mark.parametrize(
     "rs_input_shape, dim, layout, rs_input_dtype, use_new, enable_trace, num_iters, use_barrier, use_persistent_buffers",
     [
+        # Dim 0 tests
+        (
+            [16, 2, 128, 128],
+            0,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            False,
+            True,
+            10,
+            True,
+            True,
+        ),  # perf, barrier_with_persistent
+        (
+            [8, 2, 128, 128],
+            0,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            False,
+            False,
+            1,
+            True,
+            False,
+        ),  # check, barrier_without_persistent
         # Dim 1 tests
         (
             [2, 24, 256, 256],
@@ -466,6 +492,8 @@ def run_reduce_scatter_impl(
         ),  # perf, barrier_with_persistent
     ],
     ids=[
+        "scatter_dim_0_test_one-perf-barrier_with_persistent",
+        "scatter_dim_0_test_two-check-barrier_without_persistent",
         "scatter_dim_1_test_one-perf-barrier_with_persistent",
         "scatter_dim_1_test_two-check-barrier_without_persistent",
         "scatter_dim_1_test_three-perf-no_barrier_with_persistent",

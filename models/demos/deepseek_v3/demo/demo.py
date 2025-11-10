@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from glob import glob
 from pathlib import Path
@@ -11,15 +12,38 @@ from pathlib import Path
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3.tt.generator import DeepseekGenerator
+from models.demos.deepseek_v3.tt.generator import DeepseekGenerator as DeepseekGeneratorDP
+from models.demos.deepseek_v3.tt.generator_pp import DeepseekGenerator as DeepseekGeneratorPP
 from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
 
 
 def _default_mesh_shape() -> ttnn.MeshShape:
     device_ids = ttnn.get_device_ids()
-    if len(device_ids) == 32:
-        return ttnn.MeshShape(4, 8)
-    return ttnn.MeshShape(1, max(1, len(device_ids)))
+    mesh_device_env = os.getenv("MESH_DEVICE")
+    if mesh_device_env == "DUAL":
+        default_mesh_shape = ttnn.MeshShape(8, 8)  # If running on DUAL system
+    elif mesh_device_env == "QUAD":
+        default_mesh_shape = ttnn.MeshShape(16, 8)  # If running on QUAD system
+    elif mesh_device_env == "TG" or len(device_ids) == 32:  # If running on Galaxy system
+        default_mesh_shape = ttnn.MeshShape(4, 8)
+    else:
+        default_mesh_shape = ttnn.MeshShape(1, len(device_ids))
+    return default_mesh_shape
+
+
+def _print_performance_metrics(results: dict) -> None:
+    """Print performance metrics from results if available."""
+    if "statistics" in results and results["statistics"]:
+        statistics = results["statistics"]
+        logger.info("=== Performance Metrics ===")
+        logger.info(f"Config preparation - Prefill: {statistics.get('preparing_prefill_config', 0)*1000:.2f}ms")
+        logger.info(f"Config preparation - Decode: {statistics.get('preparing_decode_config', 0)*1000:.2f}ms")
+        logger.info(f"Prefill time: {statistics['inference_prefill']*1000:.2f}ms")
+        logger.info(f"Average time to first token: {statistics['prefill_time_to_token']*1000:.2f}ms")
+        logger.info(f"Prefill tokens/sec: {statistics['prefill_t/s']:.2f}")
+        logger.info(f"Decode tokens/sec/user: {statistics['decode_t/s/u']:.2f}")
+        logger.info(f"Decode tokens/sec (total): {statistics['decode_t/s']:.2f}")
+        logger.info(f"Full demo runtime: {statistics['Full demo runtime']:.2f}s")
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -30,6 +54,21 @@ def create_parser() -> argparse.ArgumentParser:
         type=str,
         nargs="*",
         help="Prompt text(s) (required for full-model mode; ignored with --random-weights). Can pass multiple prompts.",
+    )
+    p.add_argument(
+        "--prompts-file",
+        type=str,
+        help="Path to JSON file containing prompts. The JSON should have a 'prompts' array with objects containing a 'prompt' field. If provided, all prompts from the file will be used.",
+    )
+    p.add_argument(
+        "--num-prompts",
+        type=int,
+        help="Maximum number of prompts to load from the JSON file. If not specified, all prompts will be used.",
+    )
+    p.add_argument(
+        "--output-path",
+        type=str,
+        help="Path to output JSON file. If --prompts-file is provided and --output-path is not specified, output will be saved to <prompts-file-stem>_output.json in the same directory as the prompts file.",
     )
     p.add_argument(
         "--model-path",
@@ -66,7 +105,79 @@ def create_parser() -> argparse.ArgumentParser:
         default=False,
         help="Print generated tokens for the first user token as they are produced, instead of waiting until the end.",
     )
+    p.add_argument(
+        "--generator",
+        choices=["pp", "bp"],
+        default="bp",
+        help="Select generator implementation: default = bp (batch parallel), pp (pipeline parallel).",
+    )
+    p.add_argument(
+        "--enable-trace",
+        action="store_true",
+        default=False,
+        help="Enable trace for decode forward pass",
+    )
     return p
+
+
+def load_prompts_from_json(json_file_path: str, max_prompts: int | None = None) -> list[str]:
+    """Load prompts from a JSON file.
+
+    Supports two JSON formats:
+    1. Array format: [{"prompt": "..."}, {"prompt": "..."}, ...]
+    2. Object format: {"prompts": [{"prompt": "..."}, ...]}
+
+    Args:
+        json_file_path: Path to the JSON file containing prompts
+        max_prompts: Maximum number of prompts to load. If None, loads all prompts.
+
+    Returns a list of prompt strings.
+    """
+    json_path = Path(json_file_path)
+    if not json_path.exists():
+        raise SystemExit(f"Prompts file does not exist: '{json_path}'")
+    if not json_path.is_file():
+        raise SystemExit(f"Prompts path is not a file: '{json_path}'")
+
+    try:
+        with open(json_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except json.JSONDecodeError as e:
+        raise SystemExit(f"Failed to parse JSON file '{json_path}': {e}")
+    except Exception as e:
+        raise SystemExit(f"Failed to read prompts file '{json_path}': {e}")
+
+    # Handle both array format and object format with "prompts" key
+    if isinstance(data, list):
+        prompt_items = data
+    elif isinstance(data, dict) and "prompts" in data:
+        prompt_items = data["prompts"]
+    else:
+        raise SystemExit(
+            f"JSON file '{json_path}' must be either an array of prompt objects "
+            f"or an object with a 'prompts' key containing an array"
+        )
+
+    prompts = []
+    for item in prompt_items:
+        if max_prompts is not None and len(prompts) >= max_prompts:
+            break
+        if not isinstance(item, dict):
+            logger.warning(f"Skipping invalid prompt item (not a dict): {item}")
+            continue
+        if "prompt" not in item:
+            logger.warning(f"Skipping prompt item missing 'prompt' field: {item}")
+            continue
+        prompts.append(str(item["prompt"]))
+
+    if not prompts:
+        raise SystemExit(f"No valid prompts found in '{json_path}'")
+
+    logger.info(
+        f"Loaded {len(prompts)} prompts from '{json_path}'"
+        + (f" (limited to {max_prompts})" if max_prompts is not None else "")
+    )
+    return prompts
 
 
 def validate_model_path(model_path_str: str, require_safetensors: bool, require_tokenizer: bool) -> None:
@@ -120,6 +231,8 @@ def run_demo(
     reference_file: str | Path | None = None,
     tf_prompt_len: int | None = None,
     early_print_first_user: bool = True,
+    generator: str = "bp",
+    enable_trace: bool = False,
 ) -> dict:
     """Programmatic entrypoint for the DeepSeek-V3 demo.
 
@@ -142,7 +255,13 @@ def run_demo(
     logger.info("Setting fabric config to FABRIC_1D for demo run")
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
     logger.info(f"Opening mesh device with shape {mesh_shape}")
-    mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape)
+    if enable_trace:
+        logger.info("Enabling trace for decode forward pass")
+        trace_region_size = 2789376 + int(0.20 * 2789376)  # 20% additional
+        logger.info(f"Trace region size set to {trace_region_size}")
+        mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, trace_region_size=trace_region_size)
+    else:
+        mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape)
 
     # Load tokenizer only for full-model mode; in random-weights mode we synthesize token ids
     tokenizer = None
@@ -175,17 +294,31 @@ def run_demo(
             from models.demos.deepseek_v3.demo.token_accuracy import TokenAccuracy
 
             token_acc = TokenAccuracy(str(reference_file), prompt_len=tf_prompt_len)
-
-        gen = DeepseekGenerator(
-            mesh_device=mesh_device,
-            model_path=Path(model_path),
-            cache_dir=Path(cache_dir),
-            tokenizer=tokenizer,
-            random_weights=bool(random_weights),
-            dense_layers=(1 if random_weights and single_layer else None),
-            override_num_layers=(1 if random_weights else None),
-            single_layer=(single_layer if random_weights else None),
-        )
+        if generator == "bp":
+            gen = DeepseekGeneratorDP(
+                mesh_device=mesh_device,
+                model_path=Path(model_path),
+                cache_dir=Path(cache_dir),
+                tokenizer=tokenizer,
+                random_weights=bool(random_weights),
+                dense_layers=(1 if random_weights and single_layer else None),
+                override_num_layers=(1 if random_weights else None),
+                single_layer=(single_layer if random_weights else None),
+                enable_trace=enable_trace,
+            )
+        else:  # generator == "pp"
+            if enable_trace:
+                assert False, "Tracing is not supported for pp generator."
+            gen = DeepseekGeneratorPP(
+                mesh_device=mesh_device,
+                model_path=Path(model_path),
+                cache_dir=Path(cache_dir),
+                tokenizer=tokenizer,
+                random_weights=bool(random_weights),
+                dense_layers=(1 if random_weights and single_layer else None),
+                override_num_layers=(1 if random_weights else None),
+                single_layer=(single_layer if random_weights else None),
+            )
         # Build the prompt list
         if random_weights:
             prompt_list = [""]
@@ -237,6 +370,18 @@ def run_demo(
 def main() -> None:
     args = create_parser().parse_args()
 
+    # Load prompts from JSON file if provided
+    prompts_file_path = None
+    if args.prompts_file:
+        prompts_file_path = Path(args.prompts_file)
+        json_prompts = load_prompts_from_json(args.prompts_file, max_prompts=args.num_prompts)
+        # Merge with command-line prompts if any, JSON prompts take precedence if both provided
+        if args.prompts:
+            logger.info(
+                f"Both --prompts-file and command-line prompts provided. Using {len(json_prompts)} prompts from JSON file (command-line prompts ignored)."
+            )
+        args.prompts = json_prompts
+
     if not args.random_weights and not args.prompts:
         raise SystemExit("A prompt is required unless --random-weights is used.")
 
@@ -251,44 +396,80 @@ def main() -> None:
         reference_file=args.reference_file,
         tf_prompt_len=args.tf_prompt_len,
         early_print_first_user=args.early_print_first_user,
+        generator=args.generator,
+        enable_trace=args.enable_trace,
     )
 
-    print("\n===== Generated =====\n")
-
-    for i, gen_result in enumerate(results["generations"]):
-        prompt_text = ""
-        if args.prompts is not None and i < len(args.prompts):
-            prompt_text = args.prompts[i]
-        elif args.random_weights:
-            prompt_text = "[random-weights default prompt]"
-
-        print("-" * 30)
-        if prompt_text:
-            print(f"Prompt[{i+1}]: {prompt_text}")
+    # If prompts were loaded from a JSON file, save output to JSON file instead of printing
+    if prompts_file_path:
+        # Use provided output path, or generate default: input_name + "_output.json"
+        if args.output_path:
+            output_path = Path(args.output_path)
         else:
-            print(f"Prompt[{i+1}]: [empty prompt]")
-        print(f"Generation[{i+1}]:")
-        if gen_result.get("text") is not None:
-            print(gen_result["text"])  # type: ignore
-        else:
-            print("[random-weights mode] token IDs:")
-            print(gen_result["tokens"])  # type: ignore
-        print("-" * 30)
+            output_path = prompts_file_path.parent / f"{prompts_file_path.stem}_output.json"
 
-    print("=====================\n")
+        # Prepare output data structure
+        output_data = {
+            "prompts": args.prompts if args.prompts else [],
+            "generations": [],
+            "statistics": results.get("statistics", {}),
+        }
+
+        # Add generation results
+        for i, gen_result in enumerate(results["generations"]):
+            prompt_text = ""
+            if args.prompts is not None and i < len(args.prompts):
+                prompt_text = args.prompts[i]
+            elif args.random_weights:
+                prompt_text = "[random-weights default prompt]"
+
+            output_data["generations"].append(
+                {
+                    "index": i + 1,
+                    "prompt": prompt_text if prompt_text else "[empty prompt]",
+                    "text": gen_result.get("text"),
+                }
+            )
+
+        # Write to JSON file
+        try:
+            with open(output_path, "w", encoding="utf-8") as f:
+                json.dump(output_data, f, indent=2, ensure_ascii=False)
+            logger.info(f"Results saved to '{output_path}'")
+            print(f"\nResults saved to '{output_path}'\n")
+        except Exception as e:
+            raise SystemExit(f"Failed to write output file '{output_path}': {e}")
+    else:
+        # Print to terminal as before
+        print("\n===== Generated =====\n")
+
+        for i, gen_result in enumerate(results["generations"]):
+            prompt_text = ""
+            if args.prompts is not None and i < len(args.prompts):
+                prompt_text = args.prompts[i]
+            elif args.random_weights:
+                prompt_text = "[random-weights default prompt]"
+
+            print("-" * 30)
+            if prompt_text:
+                print(f"Prompt[{i+1}]: {prompt_text}")
+            else:
+                print(f"Prompt[{i+1}]: [empty prompt]")
+            print(f"Generation[{i+1}]:")
+            if gen_result.get("text") is not None:
+                print(gen_result["text"])  # type: ignore
+            else:
+                print("[random-weights mode] token IDs:")
+                print(gen_result["tokens"])  # type: ignore
+            print("-" * 30)
+
+        print("=====================\n")
+
+        # Print performance metrics if available
+        _print_performance_metrics(results)
 
     # Print performance metrics if available
-    if "statistics" in results and results["statistics"]:
-        statistics = results["statistics"]
-        logger.info("=== Performance Metrics ===")
-        logger.info(f"Config preparation - Prefill: {statistics.get('preparing_prefill_config', 0)*1000:.2f}ms")
-        logger.info(f"Config preparation - Decode: {statistics.get('preparing_decode_config', 0)*1000:.2f}ms")
-        logger.info(f"Prefill time: {statistics['inference_prefill']*1000:.2f}ms")
-        logger.info(f"Average time to first token: {statistics['prefill_time_to_token']*1000:.2f}ms")
-        logger.info(f"Prefill tokens/sec: {statistics['prefill_t/s']:.2f}")
-        logger.info(f"Decode tokens/sec/user: {statistics['decode_t/s/u']:.2f}")
-        logger.info(f"Decode tokens/sec (total): {statistics['decode_t/s']:.2f}")
-        logger.info(f"Full demo runtime: {statistics['Full demo runtime']:.2f}s")
+    _print_performance_metrics(results)
 
 
 if __name__ == "__main__":

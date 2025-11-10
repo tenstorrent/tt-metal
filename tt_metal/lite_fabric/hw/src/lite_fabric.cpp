@@ -95,12 +95,9 @@ __attribute__((noinline)) void service_lite_fabric() {
             reinterpret_cast<volatile lite_fabric::FabricLiteMemoryMap*>(LITE_FABRIC_CONFIG_START)
                 ->config.routing_enabled = lite_fabric::RoutingEnabledState::STOPPED;
             ConnectedRiscInterface::assert_connected_dm1_reset();
-            internal_::eth_write_remote_reg(
-                0,
-                static_cast<uint32_t>(reinterpret_cast<uintptr_t>(
-                    &(reinterpret_cast<volatile lite_fabric::FabricLiteMemoryMap*>(LITE_FABRIC_CONFIG_START)
-                          ->config.routing_enabled))),
-                static_cast<uint32_t>(lite_fabric::RoutingEnabledState::STOPPED));
+            constexpr uint32_t routing_enabled_address =
+                LITE_FABRIC_CONFIG_START + offsetof(lite_fabric::FabricLiteConfig, routing_enabled);
+            internal_::eth_send_packet<false>(0, routing_enabled_address >> 4, routing_enabled_address >> 4, 1);
             return;
     }
     lite_fabric::run_sender_channel_step<0>();

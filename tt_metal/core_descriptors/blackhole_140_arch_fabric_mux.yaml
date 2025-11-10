@@ -15,8 +15,6 @@ unharvested:
         start: [0, 0]
         end: [13, 8]
 
-      storage_cores: # Relative to grid of tensix cores
-        []
 
       # First half for fabric mux, second half for dispatch (14 cores total -> 8/6 each)
       fabric_mux_cores:
@@ -33,8 +31,6 @@ unharvested:
         start: [0, 0]
         end: [13, 8]
 
-      storage_cores: # Relative to grid of tensix cores
-        []
 
       # First half for fabric mux, second half for dispatch (14 cores total -> 8/6 each)
       fabric_mux_cores:
@@ -51,8 +47,6 @@ unharvested:
         start: [0, 0]
         end: [12, 9]
 
-      storage_cores: # Relative to grid of tensix cores
-        []
 
       # First half for fabric mux, second half for dispatch (10 cores total -> 5 each)
       fabric_mux_cores:
@@ -69,8 +63,6 @@ unharvested:
         start: [0, 0]
         end: [12, 9]
 
-      storage_cores: # Relative to grid of tensix cores
-        []
 
       # Same allocation for 2 CQ configuration
       fabric_mux_cores:
@@ -89,8 +81,6 @@ unharvested:
         start: [0, 0]
         end: [12, 8]
 
-      storage_cores: # Relative to grid of tensix cores
-        []
 
       # First half for fabric mux, second half for dispatch (13 cores total -> 8/5 each)
       fabric_mux_cores:
@@ -107,8 +97,6 @@ unharvested:
         start: [0, 0]
         end: [12, 8]
 
-      storage_cores: # Relative to grid of tensix cores
-        []
 
       # First half for fabric mux, second half for dispatch (13 cores total -> 8/5 each)
       fabric_mux_cores:
@@ -126,8 +114,6 @@ unharvested:
         start: [0, 0]
         end: [11, 9]
 
-      storage_cores: # Relative to grid of tensix cores
-        []
 
       # First half for fabric mux, second half for dispatch (10 cores total -> 5 each)
       fabric_mux_cores:
@@ -144,8 +130,6 @@ unharvested:
         start: [0, 0]
         end: [11, 9]
 
-      storage_cores: # Relative to grid of tensix cores
-        []
 
       # Same allocation for 2 CQ configuration
       fabric_mux_cores:
@@ -164,8 +148,6 @@ unharvested:
         start: [0, 0]
         end: [11, 8]
 
-      storage_cores: # Relative to grid of tensix cores
-        []
 
       # First half for fabric mux, second half for dispatch (12 cores total -> 6 each)
       fabric_mux_cores:
@@ -182,8 +164,6 @@ unharvested:
         start: [0, 0]
         end: [11, 8]
 
-      storage_cores: # Relative to grid of tensix cores
-        []
 
       # First half for fabric mux, second half for dispatch (12 cores total -> 6 each)
       fabric_mux_cores:
@@ -201,8 +181,6 @@ unharvested:
         start: [0, 0]
         end: [10, 9]
 
-      storage_cores: # Relative to grid of tensix cores
-        []
 
       # First half for fabric mux, second half for dispatch (10 cores total -> 5 each)
       fabric_mux_cores:
@@ -219,8 +197,6 @@ unharvested:
         start: [0, 0]
         end: [10, 9]
 
-      storage_cores: # Relative to grid of tensix cores
-        []
 
       # Same allocation for 2 CQ configuration
       fabric_mux_cores:

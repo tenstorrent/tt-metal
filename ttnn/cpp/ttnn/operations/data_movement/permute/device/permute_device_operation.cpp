@@ -42,7 +42,6 @@ void PermuteDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         attributes.dims.size() == tensor_args.input_tensor.logical_shape().rank(),
         "Permute dimensions must match input tensor rank");
-    TT_FATAL(tensor_args.input_tensor.is_sharded() == false, "Permute operation does not support sharded input tensor");
 }
 
 void PermuteDeviceOperation::validate_on_program_cache_hit(

@@ -27,32 +27,6 @@ const std::unique_ptr<tt::umd::Cluster> PhysicalSystemDescriptor::null_cluster =
 
 namespace {
 
-// This reimplements tt::Cluster::get_bus_id() and should be moved to tt::umd::Cluster
-inline uint16_t get_bus_id(const std::unique_ptr<tt::umd::Cluster>& cluster, ChipId chip) {
-    // Prefer cached value from cluster descriptor (available for silicon and our simulator/mock descriptors)
-    auto cluster_desc = cluster->get_cluster_description();
-    uint16_t bus_id = cluster_desc->get_bus_id(chip);
-
-    return bus_id;
-}
-
-// This reimplements tt::Cluster::get_arch() and should be moved to tt::umd::Cluster
-tt::ARCH get_arch(const std::unique_ptr<tt::umd::ClusterDescriptor>& cluster_descriptor) {
-    // Pick a chip and query its architecture
-    const std::unordered_set<ChipId>& chips = cluster_descriptor->get_all_chips();
-    TT_FATAL(!chips.empty(), "Unable to determine architecture because UMD driver detected no chips.");
-    tt::ARCH arch = cluster_descriptor->get_arch(*chips.begin());
-    TT_FATAL(arch != tt::ARCH::Invalid, "Chip {} has invalid architecture.", *chips.begin());
-
-    // We don't yet support mixed architecture clusters. Check that all chips are the same architecture.
-    bool all_same_arch = std::all_of(
-        chips.begin(), chips.end(), [&](ChipId chip_id) { return cluster_descriptor->get_arch(chip_id) == arch; });
-
-    TT_FATAL(all_same_arch, "Chips with differing architectures detected. This is unsupported.");
-
-    return arch;
-}
-
 std::string get_host_name() {
     char hostname[HOST_NAME_MAX + 1];
     gethostname(hostname, sizeof(hostname));
@@ -72,7 +46,7 @@ std::string get_mobo_name() {
 }
 
 TrayID get_tray_id_for_chip(
-    const std::unique_ptr<tt::umd::Cluster>& cluster,
+    tt::umd::Cluster& cluster,
     ChipId chip_id,
     const std::string& mobo_name,
     bool using_mock_cluster_desc) {
@@ -85,7 +59,7 @@ TrayID get_tray_id_for_chip(
         return TrayID{0};
     }
     const auto& ordered_bus_ids = mobo_to_bus_ids.at(mobo_name);
-    auto bus_id = get_bus_id(cluster, chip_id);
+    auto bus_id = tt::tt_fabric::get_bus_id(cluster, chip_id);
     auto bus_id_it = std::find(ordered_bus_ids.begin(), ordered_bus_ids.end(), bus_id);
     TT_FATAL(bus_id_it != ordered_bus_ids.end(), "Bus ID {} not found.", bus_id);
     auto tray_id = std::distance(ordered_bus_ids.begin(), bus_id_it) + 1;
@@ -93,19 +67,20 @@ TrayID get_tray_id_for_chip(
 }
 
 std::pair<TrayID, ASICLocation> get_asic_position(
-    const std::unique_ptr<tt::umd::Cluster>& cluster, tt::ARCH arch, ChipId chip_id, bool using_mock_cluster_desc) {
-    auto cluster_desc = cluster->get_cluster_description();
+    tt::umd::Cluster& cluster, ChipId chip_id, bool using_mock_cluster_desc) {
+    auto cluster_desc = cluster.get_cluster_description();
     if (cluster_desc->get_board_type(chip_id) == BoardType::UBB_WORMHOLE ||
         cluster_desc->get_board_type(chip_id) == BoardType::UBB_BLACKHOLE) {
         constexpr std::string_view ubb_mobo_name = "S7T-MB";
 
         TT_FATAL(
             using_mock_cluster_desc || get_mobo_name() == ubb_mobo_name, "UBB systems must use S7T-MB motherboard.");
-        auto ubb_id = tt::tt_fabric::get_ubb_id(chip_id);
+        auto ubb_id = tt::tt_fabric::get_ubb_id(cluster, chip_id);
         return {TrayID{ubb_id.tray_id}, ASICLocation{ubb_id.asic_id}};
     } else {
         auto tray_id = get_tray_id_for_chip(cluster, chip_id, get_mobo_name(), using_mock_cluster_desc);
         ASICLocation asic_location;
+        tt::ARCH arch = cluster_desc->get_arch(chip_id);
         if (arch == tt::ARCH::WORMHOLE_B0) {
             // Derive ASIC Location based on the tunnel depth for Wormhole systems
             // TODO: Remove this once UMD populates the ASIC Location for WH systems.
@@ -258,12 +233,14 @@ void PhysicalSystemDescriptor::run_local_discovery(bool run_live_discovery) {
     this->clear();
 
     if (!run_live_discovery || target_device_type_ != TargetDevice::Silicon) {
-        cluster_desc_ = std::make_unique<tt::umd::ClusterDescriptor>(*cluster_->get_cluster_description());
+        TT_FATAL(cluster_ != nullptr, "PhysicalSystemDescriptor must be initialized with a valid UMD cluster reference in order to run live discovery");
+        tt::umd::Cluster& cluster = *cluster_;
+        cluster_desc_ = std::make_unique<tt::umd::ClusterDescriptor>(*cluster.get_cluster_description());
     } else {
         // As part of live discovery, we create a new cluster descriptor to query the latest state from UMD.
         // Otherwise, we use the existing cluster descriptor, which may be stale with respect to the state of
         // the hardware.
-        cluster_desc_ = tt::umd::Cluster::create_cluster_descriptor("", {}, umd::IODeviceType::PCIe);
+        cluster_desc_ = tt::umd::Cluster::create_cluster_descriptor();
     }
     const auto& chip_unique_ids = cluster_desc_->get_chip_unique_ids();
     const auto& eth_connections = cluster_desc_->get_ethernet_connections();
@@ -278,8 +255,10 @@ void PhysicalSystemDescriptor::run_local_discovery(bool run_live_discovery) {
     auto& exit_nodes = exit_node_connection_table_[hostname];
 
     auto add_local_asic_descriptor = [&](AsicID src_unique_id, ChipId src_chip_id) {
+        TT_FATAL(cluster_ != nullptr, "PhysicalSystemDescriptor must be initialized with a valid UMD cluster reference in order to run live discovery");
+        tt::umd::Cluster& cluster = *cluster_;
         auto [tray_id, asic_location] =
-            get_asic_position(cluster_, get_arch(cluster_desc_), src_chip_id, target_device_type_ != TargetDevice::Silicon);
+            get_asic_position(cluster, src_chip_id, target_device_type_ != TargetDevice::Silicon);
         asic_descriptors_[src_unique_id] = ASICDescriptor{
             TrayID{tray_id}, asic_location, cluster_desc_->get_board_type(src_chip_id), src_unique_id, hostname};
     };
@@ -337,6 +316,8 @@ void PhysicalSystemDescriptor::run_local_discovery(bool run_live_discovery) {
     }
 
     system_graph_.host_connectivity_graph[hostname] = {};
+    // Get Ethernet Firmware Version from the driver - Initialize to 0 if not available
+    ethernet_firmware_version_ = cluster_->get_ethernet_firmware_version().value_or(tt::umd::semver_t(0, 0, 0));
 }
 
 void PhysicalSystemDescriptor::run_global_discovery() {
@@ -391,6 +372,20 @@ void PhysicalSystemDescriptor::remove_unresolved_nodes() {
                    asic_descriptors_.find(exit_node.dst_exit_node) == asic_descriptors_.end();
         });
     }
+}
+
+void PhysicalSystemDescriptor::validate_eth_fw_versions(
+    const tt::umd::semver_t& peer_ethernet_firmware_version,
+    const std::string& my_host_name,
+    const std::string& peer_host_name) {
+    TT_FATAL(
+        peer_ethernet_firmware_version == ethernet_firmware_version_,
+        "Ethernet Firmware Versions are expected to be consistent across all nodes in the cluster. Hosts: {} and {} "
+        "have different Ethernet Firmware Versions: {} and {}.",
+        my_host_name,
+        peer_host_name,
+        ethernet_firmware_version_.to_string(),
+        peer_ethernet_firmware_version.to_string());
 }
 
 void PhysicalSystemDescriptor::exchange_metadata(bool issue_gather) {
@@ -449,6 +444,10 @@ void PhysicalSystemDescriptor::exchange_metadata(bool issue_gather) {
                 Rank{rank},
                 Tag{0});
             auto peer_desc = deserialize_physical_system_descriptor_from_bytes(serialized_peer_desc);
+            this->validate_eth_fw_versions(
+                peer_desc.get_ethernet_firmware_version(),
+                asic_descriptors_.begin()->second.host_name,
+                peer_desc.get_asic_descriptors().begin()->second.host_name);
             this->merge(std::move(peer_desc));
         }
     }
@@ -810,6 +809,9 @@ AsicID PhysicalSystemDescriptor::get_asic_id(
 }
 
 LocalEthernetMetrics PhysicalSystemDescriptor::query_local_ethernet_metrics() const {
+    TT_FATAL(cluster_ != nullptr, "PhysicalSystemDescriptor must be initialized with a valid UMD cluster reference in order to query Ethernet metrics");
+    tt::umd::Cluster& cluster = *cluster_;
+
     const auto& local_asics = get_asics_connected_to_host(my_host_name());
     const auto& local_asic_graph = get_asic_topology(my_host_name());
     std::unordered_map<AsicID, std::unordered_map<uint8_t, EthernetMetrics>> local_ethernet_metrics;
@@ -832,20 +834,20 @@ LocalEthernetMetrics PhysicalSystemDescriptor::query_local_ethernet_metrics() co
 
                 auto src_eth_chan = eth_connection.src_chan;
                 auto src_chip_id = get_chip_id_for_asic(asic);
-                const auto& soc_desc = cluster_->get_soc_descriptor(src_chip_id);
+                const auto& soc_desc = cluster.get_soc_descriptor(src_chip_id);
                 const auto& translated_eth_core =
                     soc_desc.get_eth_core_for_channel(src_eth_chan, CoordSystem::TRANSLATED);
 
-                cluster_->read_from_device(
+                cluster.read_from_device(
                     &retrain_count_val, src_chip_id, translated_eth_core, retrain_count_addr, sizeof(uint32_t));
-                cluster_->read_from_device(
+                cluster.read_from_device(
                     &crc_error_val, src_chip_id, translated_eth_core, crc_addr, sizeof(uint32_t));
-                cluster_->read_from_device(&corr_val_hi, src_chip_id, translated_eth_core, corr_addr, sizeof(uint32_t));
-                cluster_->read_from_device(
+                cluster.read_from_device(&corr_val_hi, src_chip_id, translated_eth_core, corr_addr, sizeof(uint32_t));
+                cluster.read_from_device(
                     &corr_val_lo, src_chip_id, translated_eth_core, corr_addr + 4, sizeof(uint32_t));
-                cluster_->read_from_device(
+                cluster.read_from_device(
                     &uncorr_val_hi, src_chip_id, translated_eth_core, uncorr_addr, sizeof(uint32_t));
-                cluster_->read_from_device(
+                cluster.read_from_device(
                     &uncorr_val_lo, src_chip_id, translated_eth_core, uncorr_addr + 4, sizeof(uint32_t));
 
                 local_ethernet_metrics[asic][src_eth_chan] = {
@@ -893,24 +895,20 @@ std::string PhysicalSystemDescriptor::get_host_name_for_asic(AsicID asic_id) con
     return asic_descriptors_.at(asic_id).host_name;
 }
 
-UID PhysicalSystemDescriptor::get_u_id(const std::string& hostname) {
+UID PhysicalSystemDescriptor::get_u_id(const std::string& /*hostname*/) {
     TT_THROW("Querying Host UID requires the Cable Spec which is not currently supported.");
 }
 
-RackID PhysicalSystemDescriptor::get_rack_id(const std::string& hostname) {
+RackID PhysicalSystemDescriptor::get_rack_id(const std::string& /*hostname*/) {
     TT_THROW("Querying Host Rack ID requires the Cable Spec which is not currently supported.");
 }
 
-AisleID PhysicalSystemDescriptor::get_aisle_id(const std::string& hostname) {
+AisleID PhysicalSystemDescriptor::get_aisle_id(const std::string& /*hostname*/) {
     TT_THROW("Querying Host Aisle ID requires the Cable Spec which is not currently supported.");
 }
 
-HallID PhysicalSystemDescriptor::get_hall_id(const std::string& hostname) {
+HallID PhysicalSystemDescriptor::get_hall_id(const std::string& /*hostname*/) {
     TT_THROW("Querying Host Hall ID requires the Cable Spec which is not currently supported.");
-}
-
-bool PhysicalSystemDescriptor::is_using_mock_cluster() const {
-    return target_device_type_ == TargetDevice::Mock || target_device_type_ == TargetDevice::Simulator;
 }
 
 }  // namespace tt::tt_metal
