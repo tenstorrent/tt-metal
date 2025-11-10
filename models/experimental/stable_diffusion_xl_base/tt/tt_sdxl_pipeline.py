@@ -323,7 +323,7 @@ class TtSDXLPipeline(LightweightModule):
 
             self.encoders_compiled = True
 
-    def compile_image_processing(self):
+    def compile_image_processing(self, force_no_trace=False):
         # Compile/trace run for denoising loop and vae decoder.
         if not self.image_processing_compiled:
             assert self.allocated_device_tensors, "Input tensors are not allocated"
@@ -356,7 +356,7 @@ class TtSDXLPipeline(LightweightModule):
             ttnn.synchronize_device(self.ttnn_device)
             profiler.end("warmup_run")
 
-            if self.pipeline_config.capture_trace:
+            if self.pipeline_config.capture_trace and not force_no_trace:
                 self.__trace_image_processing()
 
             self._reset_num_inference_steps()
