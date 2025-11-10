@@ -358,6 +358,7 @@ static std::vector<Tensor> pool2d_DRAM(
             dtype,
             output_layout);
     }
+    TT_FATAL(!return_indices, "DRAM pooling with return_indices=True is not supported yet.");
     std::array<uint32_t, 4> padding_4d = sliding_window::get_pair_n4_padding(padding);
     auto dilation = dilation_.value_or(std::array<uint32_t, 2>{1, 1});
     sliding_window::SlidingWindowConfig sliding_window_config{
@@ -779,7 +780,7 @@ ttnn::Tensor Pool2dSliceAttr::run_L1_op(
         count_include_pad,
         divisor_override,
         std::nullopt,
-        shard_layout,
+        std::nullopt,
         compute_kernel_config,
         false,
         true,
