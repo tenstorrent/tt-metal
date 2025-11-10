@@ -377,7 +377,7 @@ int main(int argc, char **argv) {
         tokens_vector = ttml::datasets::load_tokens_from_space_separated_file(config.data_path);
     } catch (const std::exception &e) {
         std::cerr << e.what() << std::endl;
-        std::cerr << "\nDid you tokenize the dataset?" << std::endl;
+        std::cerr << "\nDid you tokenize the dataset? See the README for details." << std::endl;
         return -1;
     }
 

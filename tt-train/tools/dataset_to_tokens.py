@@ -65,7 +65,7 @@ def main():
     parser.add_argument(
         "--output_file",
         type=str,
-        default=f"{os.environ['TT_METAL_HOME']}/tt-train/data/tokenized_data",
+        default=f"{os.environ.get('TT_METAL_HOME', '~/tt-metal')}/tt-train/data/tokenized_data",
         help="Base path to save the tokenized data (extension will be added based on format).",
     )
 
