@@ -204,7 +204,7 @@ for source in ["N150", "P150"]:
 
     ax.set_ylabel("Average TFLOPs", fontsize=14, fontweight="bold", labelpad=10)
     ax.set_xlabel(
-        "Matrix Aspect Ratio (m:k:n)\n(m=input rows, k=inner dim, n=output cols)",
+        "Matrix Aspect Ratio (M:K:N)\n(M=input rows, K=inner dim, N=output cols)",
         fontsize=13,
         fontweight="bold",
         labelpad=10,

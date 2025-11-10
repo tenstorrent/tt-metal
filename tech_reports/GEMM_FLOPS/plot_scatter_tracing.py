@@ -120,7 +120,7 @@ for source in ["n150", "p150"]:
     ax.text(
         0.5,
         -0.08,
-        "Total Matrix Elements (m × k × n)",
+        "Total Matrix Elements (M × K × N)",
         transform=ax.transAxes,
         ha="center",
         va="top",
@@ -130,7 +130,7 @@ for source in ["n150", "p150"]:
     ax.text(
         0.5,
         -0.12,
-        "[(m,k) = input matrix size, (k,n) = weight matrix size]",
+        "[(M,K) = input matrix size, (K,N) = weight matrix size]",
         transform=ax.transAxes,
         ha="center",
         va="top",

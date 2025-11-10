@@ -107,16 +107,16 @@ for dtype_label, dtype_color in dtype_configs:
             )
 
 # Formatting
-ax.set_xlabel("Total Matrix Elements (m × k × n)", fontsize=12, fontweight="bold")
-# Add explanation below x-axis (non-bold)
+ax.set_xlabel("Total Matrix Elements (M × K × N)", fontsize=12, fontweight="bold")
+# Add explanation below x-axis (smaller, non-bold)
 ax.text(
     0.5,
-    -0.12,
-    "[(m,k) = input matrix size, (k,n) = weight matrix size]",
+    -0.10,
+    "[(M,K) = input matrix size, (K,N) = weight matrix size]",
     transform=ax.transAxes,
     ha="center",
     va="top",
-    fontsize=10,
+    fontsize=9,
 )
 ax.set_ylabel("Utilization (%)", fontsize=12, fontweight="bold")
 

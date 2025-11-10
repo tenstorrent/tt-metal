@@ -157,7 +157,7 @@ for pair_idx in range(len(all_m_values)):
                     bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", alpha=0.8, linewidth=1),
                 )
 
-ax.set_xlabel("Base Matrix Dimension m (Input Rows): N150 / P150", fontsize=13, fontweight="bold", labelpad=10)
+ax.set_xlabel("Base Matrix Dimension M (Input Rows): N150 / P150", fontsize=13, fontweight="bold", labelpad=10)
 ax.set_ylabel("Performance (TFLOPs)", fontsize=14, fontweight="bold")
 
 fig.suptitle("Performance Comparison: N150 (Wormhole) vs P150 (Blackhole)", fontsize=18, fontweight="bold", y=0.98)

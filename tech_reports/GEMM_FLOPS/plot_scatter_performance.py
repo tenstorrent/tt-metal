@@ -125,14 +125,14 @@ ax.grid(True, which="both", linestyle=":", linewidth=0.8, alpha=0.4, color="gray
 ax.set_axisbelow(True)
 
 # Axis labels
-ax.set_xlabel("Total Matrix Elements (m × k × n)", fontsize=15, fontweight="bold", labelpad=10)
+ax.set_xlabel("Total Matrix Elements (M × K × N)", fontsize=15, fontweight="bold", labelpad=10)
 ax.set_ylabel("Performance (TFLOPs)", fontsize=15, fontweight="bold", labelpad=10)
 
 # Add explanation below x-axis
 ax.text(
     0.5,
     -0.08,
-    "where (m,k) = input matrix size, (k,n) = weight matrix size",
+    "where (M,K) = input matrix size, (K,N) = weight matrix size",
     transform=ax.transAxes,
     ha="center",
     va="top",
