@@ -297,6 +297,8 @@ private:
     bool eth_fw_is_cooperative_ = false;  // set when eth riscs have to context switch
     std::unordered_set<dev_msgs::AddressableCoreType> virtualized_core_types_;
     HalTensixHarvestAxis tensix_harvest_axis_{HalTensixHarvestAxis::ROW};
+    size_t max_pinned_memory_count_{};
+    size_t total_pinned_memory_size_{};
 
     float eps_ = 0.0f;
     float nan_ = 0.0f;
@@ -497,6 +499,9 @@ public:
     bool verify_eth_fw_version(tt::umd::semver_t eth_fw_version) const {
         return this->verify_eth_fw_version_func_(eth_fw_version);
     }
+
+    size_t get_max_pinned_memory_count() const { return max_pinned_memory_count_; }
+    size_t get_total_pinned_memory_size() const { return total_pinned_memory_size_; }
 };
 
 inline uint32_t Hal::get_programmable_core_type_count() const { return core_info_.size(); }

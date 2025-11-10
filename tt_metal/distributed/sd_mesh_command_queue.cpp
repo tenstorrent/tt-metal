@@ -105,6 +105,7 @@ MeshEvent SDMeshCommandQueue::enqueue_record_event_to_host_nolock(
 
 MeshEvent SDMeshCommandQueue::enqueue_record_event_to_host(
     tt::stl::Span<const SubDeviceId> sub_device_ids, const std::optional<MeshCoordinateRange>& device_range) {
+    // No synchronization is needed for slow dispatch, so we can call the non-locking version.
     return this->enqueue_record_event_to_host_nolock(sub_device_ids, device_range);
 }
 
