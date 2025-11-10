@@ -22,11 +22,27 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
 
-namespace tt::tt_fabric::bench {
+namespace tt::tt_fabric::test {
+
+// Import needed types from bench namespace
+using tt::tt_fabric::bench::HelpersFixture;
+using tt::tt_fabric::bench::PerfParams;
+using tt::tt_fabric::bench::PerfPoint;
 
 // ---------- helpers (validation / utilities) ----------
 
 namespace {
+
+// Lookup device by physical chip ID
+inline tt::tt_metal::IDevice* find_device_by_id(ChipId phys_id) {
+    auto devices = tt::DevicePool::instance().get_all_active_devices();
+    for (auto* d : devices) {
+        if (d->id() == phys_id) {
+            return d;
+        }
+    }
+    return nullptr;
+}
 
 // Validate workload
 inline bool validate_workload_or_fail(const PerfParams& p) {
@@ -36,25 +52,6 @@ inline bool validate_workload_or_fail(const PerfParams& p) {
     }
     return true;
 }
-
-// // Resolve forwarding link and fail early if none found.
-// inline bool pick_forwarding_link_or_fail(
-//     const tt::tt_fabric::FabricNodeId& /*src*/,
-//     const tt::tt_fabric::FabricNodeId& /*dst*/,
-//     uint32_t& out_link_idx,
-//     const PerfParams& p) {
-//     auto links = tt::tt_fabric::get_forwarding_link_indices(
-//         tt::tt_fabric::FabricNodeId{tt::tt_fabric::MeshId{p.mesh_id}, p.src_chip},
-//         tt::tt_fabric::FabricNodeId{tt::tt_fabric::MeshId{p.mesh_id}, p.dst_chip});
-
-//     if (links.empty()) {
-//         ADD_FAILURE() << "No forwarding links from src(mesh=" << p.mesh_id << ",dev=" << p.src_chip
-//                       << ") to dst(mesh=" << p.mesh_id << ",dev=" << p.dst_chip << ")";
-//         return false;
-//     }
-//     out_link_idx = links[0];
-//     return true;
-// }
 
 // Device lookup and basic existence check.
 inline bool lookup_devices_or_fail(
@@ -96,7 +93,7 @@ inline void verify_payload_words(const std::vector<uint32_t>& rx, const std::vec
 }  // anonymous namespace
 
 // ----------------------------------- program -----------------------------------
-PerfPoint run_all_gather_once(HelpersFixture* fixture, const PerfParams& p) {
+void run_multicast_write_test(HelpersFixture* fixture, const PerfParams& p) {
     const auto& cp = tt::tt_metal::MetalContext::instance().get_control_plane();
 
     // Check if fabric is 2D and create defines map
@@ -117,11 +114,11 @@ PerfPoint run_all_gather_once(HelpersFixture* fixture, const PerfParams& p) {
     tt::tt_metal::IDevice* src_dev = nullptr;
     tt::tt_metal::IDevice* dst_dev = nullptr;
     if (!lookup_devices_or_fail(src_phys, dst_phys, src_dev, dst_dev)) {
-        return PerfPoint{};
+        return;
     }
 
     if (!validate_workload_or_fail(p)) {
-        return PerfPoint{};
+        return;
     }
 
     tt::tt_metal::CoreCoord rx_xy = dst_dev->worker_core_from_logical_core(p.receiver_core);
@@ -167,7 +164,7 @@ PerfPoint run_all_gather_once(HelpersFixture* fixture, const PerfParams& p) {
     if (M == 0 || N == 0 || M > (uint32_t)shape[0] || N > (uint32_t)shape[1]) {
         ADD_FAILURE() << "Invalid --mesh-rows/--mesh-cols for physical mesh shape (" << shape[0] << "x" << shape[1]
                       << ")";
-        return PerfPoint{};
+        return;
     }
     for (uint32_t r = 0; r < M; ++r) {
         for (uint32_t c = 0; c < N; ++c) {
@@ -184,7 +181,7 @@ PerfPoint run_all_gather_once(HelpersFixture* fixture, const PerfParams& p) {
     }
     if (dst_coords.empty()) {
         ADD_FAILURE() << "Receiver set is empty (rectangle excludes all but sender).";
-        return PerfPoint{};
+        return;
     }
     for (auto c : dst_coords) {
         Dist::WriteShard(mcq, dst_buf, zeros, c, /*blocking=*/true);
@@ -193,7 +190,7 @@ PerfPoint run_all_gather_once(HelpersFixture* fixture, const PerfParams& p) {
 
     // ---------------------------- PROGRAM FACTORY ----------------------------
     /*
-All gather bench — top-level flow:
+Multicast test — top-level flow:
 
 ┌────────────────────────────┐                               ┌────────────────────────────┐
 │ Device SRC (chip p.src)    │                               │ Device DST (chip p.dst)    │
@@ -231,13 +228,13 @@ Notes:
         gsem_done = tt::tt_metal::CreateGlobalSemaphore(mesh.get(), rx_core_one, /*initial_value=*/0);
     }
 
-    constexpr const char* KDIR = "tests/tt_metal/tt_fabric/benchmark/collectives/all_gather/kernels/";
+    constexpr const char* KDIR = "tests/tt_metal/tt_fabric/fabric_data_movement/addrgen_write/kernels/multicast/";
 
     for (size_t i = 0; i < dst_coords.size(); ++i) {
         receiver_progs.emplace_back(tt::tt_metal::CreateProgram());
         auto rx_wait_k = tt::tt_metal::CreateKernel(
             receiver_progs.back(),
-            std::string(KDIR) + "all_gather_rx.cpp",
+            std::string(KDIR) + "multicast_rx_addrgen.cpp",
             p.receiver_core,
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -253,7 +250,7 @@ Notes:
         if (xy_i != rx_xy) {
             ADD_FAILURE() << "Receiver worker XY mismatch across chips; need identical mapping of logical core "
                           << "(" << p.receiver_core.x << "," << p.receiver_core.y << ") on all chips.";
-            return PerfPoint{};
+            return;
         }
     }
 
@@ -276,7 +273,7 @@ Notes:
 
     auto reader_k = tt::tt_metal::CreateKernel(
         sender_prog,
-        std::string(KDIR) + "all_gather_tx_reader_to_cb.cpp",
+        std::string(KDIR) + "multicast_tx_reader_to_cb_addrgen.cpp",
         p.sender_core,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -293,7 +290,7 @@ Notes:
 
     auto writer_k = tt::tt_metal::CreateKernel(
         sender_prog,
-        std::string(KDIR) + "all_gather_tx_writer_cb_to_dst.cpp",
+        std::string(KDIR) + "multicast_tx_writer_cb_to_dst_addrgen.cpp",
         p.sender_core,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
@@ -375,16 +372,16 @@ Notes:
 
     uint32_t link_idx_w = 0, link_idx_e = 0, link_idx_n = 0, link_idx_s = 0;
     if (w_hops && !pick_link(rep_w, link_idx_w)) {
-        return PerfPoint{};
+        return;
     }
     if (e_hops && !pick_link(rep_e, link_idx_e)) {
-        return PerfPoint{};
+        return;
     }
     if (n_hops && !pick_link(rep_n, link_idx_n)) {
-        return PerfPoint{};
+        return;
     }
     if (s_hops && !pick_link(rep_s, link_idx_s)) {
-        return PerfPoint{};
+        return;
     }
 
     // Direction bitmask encoded into RT args so the kernel knows how many connections to parse.
@@ -439,10 +436,8 @@ Notes:
     }
     mesh->end_mesh_trace(mcq.id(), trace_id);
     // 3) Replay measured section
-    auto t0 = std::chrono::steady_clock::now();
     mesh->replay_mesh_trace(mcq.id(), trace_id, /*blocking=*/false);
     Dist::Finish(mcq);
-    auto t1 = std::chrono::steady_clock::now();
     mesh->release_mesh_trace(trace_id);
 
     // Read back and verify (remote destinations only)
@@ -451,26 +446,6 @@ Notes:
         Dist::ReadShard(mcq, rx, dst_buf, mc, /*blocking=*/true);
         verify_payload_words(rx, tx);
     }
-
-    // Perf point
-    const double e2e_sec_total = std::chrono::duration<double>(t1 - t0).count();
-    const double e2e_sec = (p.trace_iters > 0) ? (e2e_sec_total / static_cast<double>(p.trace_iters)) : 0.0;
-    const uint64_t bytes = static_cast<uint64_t>(p.tensor_bytes);
-    const double GB = static_cast<double>(bytes) / 1e9;          // gigabytes
-    const double GB_s = (e2e_sec > 0.0) ? (GB / e2e_sec) : 0.0;  // GB per second
-    const double ms = e2e_sec * 1000.0;
-
-    return PerfPoint{
-        .bytes = bytes,
-        .sec = e2e_sec,
-        .ms = ms,
-        .GB_s = GB_s,
-    };
 }
 
-}  // namespace tt::tt_fabric::bench
-
-// --- Shim so perf_helpers can drive this binary without knowing about all_gather.
-namespace tt::tt_fabric::bench {
-PerfPoint run_unicast_once(HelpersFixture* fixture, const PerfParams& p) { return run_all_gather_once(fixture, p); }
-}  // namespace tt::tt_fabric::bench
+}  // namespace tt::tt_fabric::test

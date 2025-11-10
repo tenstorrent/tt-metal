@@ -23,7 +23,8 @@ enum class AddrgenApiVariant {
     ScatterWriteSetState,          // fabric_unicast_noc_scatter_write_set_state + _with_state
     FusedAtomicIncWrite,           // fabric_unicast_noc_fused_unicast_with_atomic_inc
     FusedAtomicIncWriteWithState,  // fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state
-    FusedAtomicIncWriteSetState    // fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state + _with_state
+    FusedAtomicIncWriteSetState,   // fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state + _with_state
+    MulticastWrite                 // fabric_multicast_noc_unicast_write (2x2 mesh multicast)
 };
 
 using HelpersFixture = ::tt::tt_metal::MeshDeviceFixtureBase;
