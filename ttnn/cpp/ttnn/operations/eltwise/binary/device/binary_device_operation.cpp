@@ -35,7 +35,8 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
                 a == DataType::FLOAT32 ||
                 a == DataType::INT32 ||
                 a == DataType::UINT32 ||
-                a == DataType::UINT16);
+                a == DataType::UINT16 ||
+                a == DataType::UINT8);
         case BinaryOpType::SQUARED_DIFFERENCE:
             return a == b && (
                 a == DataType::FLOAT32 ||
