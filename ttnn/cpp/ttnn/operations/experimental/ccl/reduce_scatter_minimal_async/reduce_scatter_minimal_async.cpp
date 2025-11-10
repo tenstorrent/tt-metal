@@ -8,7 +8,6 @@
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/operations/experimental/ccl/all_broadcast_async/device/all_broadcast_async_op.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/global_semaphore.hpp"
@@ -30,8 +29,9 @@ ttnn::Tensor ExecuteReduceScatterMinimalAsync::invoke(
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel) {
+    tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
     log_debug(tt::LogOp, "DEBUG: using reduce_scatter_minimal_async");
-    if (composite_common::use_composite_reduce_scatter(input_tensor, topology, dim, cluster_axis)) {
+    if (composite_common::use_composite_reduce_scatter(input_tensor, dim, cluster_axis)) {
         log_debug(tt::LogOp, "DEBUG: using composite_reduce_scatter");
         return composite_common::composite_reduce_scatter(
             input_tensor, dim, num_links, memory_config, subdevice_id, cluster_axis);
@@ -46,7 +46,7 @@ ttnn::Tensor ExecuteReduceScatterMinimalAsync::invoke(
             num_links,
             memory_config,
             intermediate_memory_config,
-            topology,
+            topology_,
             subdevice_id,
             cluster_axis,
             chunks_per_sync,

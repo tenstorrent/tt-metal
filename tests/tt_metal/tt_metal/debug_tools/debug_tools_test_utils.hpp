@@ -94,8 +94,9 @@ inline std::string_view::size_type FloatingGlobEndsAt(const std::string_view hay
         if (result != haystack.npos) {
             return result + idx;
         }
-        if (!idx)
+        if (!idx) {
             break;
+        }
     }
 
     return haystack.npos;
@@ -104,8 +105,9 @@ inline std::string_view::size_type FloatingGlobEndsAt(const std::string_view hay
 // Count the number of '*' characters.
 inline unsigned GlobCount(const std::string_view glob) {
     unsigned count = 0;
-    for (std::string_view::size_type idx = 0; (idx = glob.find('*', idx)) != glob.npos; idx++)
+    for (std::string_view::size_type idx = 0; (idx = glob.find('*', idx)) != glob.npos; idx++) {
         count++;
+    }
     return count;
 }
 // str matches pattern, allowing '?' and '*' globbing.
@@ -122,8 +124,9 @@ inline bool StringContainsGlob(const std::string_view haystack, const std::strin
 // strings between lines in the file.
 inline bool FileContainsAllStrings(const std::string& file_name, const std::vector<std::string> &must_contain) {
     std::fstream log_file;
-    if (!OpenFile(file_name, log_file, std::fstream::in))
+    if (!OpenFile(file_name, log_file, std::fstream::in)) {
         return false;
+    }
 
     // Construct a set of required strings, we'll remove each one when it's found.
     std::set<std::string_view> must_contain_set;
@@ -151,12 +154,13 @@ inline bool FileContainsAllStrings(const std::string& file_name, const std::vect
         }
 
         // Remove all strings found on this line from the set to continue searching for
-        for (const auto &s : found_on_current_line)
+        for (const auto& s : found_on_current_line) {
             must_contain_set.erase(s);
+        }
     }
 
     // Reached EOF with strings yet to find.
-    std::string missing_strings = "";
+    std::string missing_strings;
     for (const auto &s : must_contain_set) {
         missing_strings.append(&", \""[missing_strings.empty() ? 2 : 0]).append(s).push_back('"');
     }
@@ -173,8 +177,9 @@ inline bool FileContainsAllStrings(const std::string& file_name, const std::vect
 // between lines in a file.
 inline bool FileContainsAllStringsInOrder(const std::string& file_name, const std::vector<std::string> &must_contain) {
     std::fstream log_file;
-    if (!OpenFile(file_name, log_file, std::fstream::in))
+    if (!OpenFile(file_name, log_file, std::fstream::in)) {
         return false;
+    }
 
     // Construct a deque of required strings, we'll remove each one when it's found.
     std::deque<std::string_view> must_contain_queue;
@@ -202,7 +207,7 @@ inline bool FileContainsAllStringsInOrder(const std::string& file_name, const st
     }
 
     // Reached EOF with strings yet to find.
-    std::string missing_strings = "";
+    std::string missing_strings;
     for (const auto &s : must_contain_queue) {
         missing_strings.append(&", \""[missing_strings.empty() ? 2 : 0]).append(s).push_back('"');
     }

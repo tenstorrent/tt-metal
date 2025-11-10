@@ -63,22 +63,9 @@ jobs:
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
-      version: ${{ inputs.version || '22.04' }}
-      skip-tt-train: false
-      ref: ${{ inputs.commit || github.sha }}
-
-  build-artifact-profiler:
-    needs: parse-tests-json
-    if: ${{ contains(needs.parse-tests-json.outputs.tests-to-run, 'run-profiler-regression') }}
-    uses: ./.github/workflows/build-artifact.yaml
-    permissions:
-      packages: write
-    secrets: inherit
-    with:
-      build-type: ${{ inputs.build-type || 'Release' }}
-      build-wheel: true
       tracy: true
       version: ${{ inputs.version || '22.04' }}
+      skip-tt-train: false
       ref: ${{ inputs.commit || github.sha }}
 
   sd-unit-tests:
@@ -218,7 +205,7 @@ jobs:
       enable-watcher: ${{ inputs.enable-watcher || false }}
 
   run-profiler-regression:
-    needs: [parse-tests-json, build-artifact-profiler]
+    needs: [parse-tests-json, build-artifact]
     if: ${{ contains(needs.parse-tests-json.outputs.tests-to-run, 'run-profiler-regression') }}
     secrets: inherit
     strategy:
@@ -232,9 +219,9 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch}}
       runner-label: ${{ matrix.test-group.runner-label}}
-      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
 
   t3000-apc-fast-tests:
@@ -247,25 +234,6 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
-
-  galaxy-apc-fast-tests:
-    needs: [parse-tests-json, build-artifact]
-    if: ${{ contains(needs.parse-tests-json.outputs.tests-to-run, 'galaxy-apc-fast-tests') }}
-    secrets: inherit
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: [
-          { arch: wormhole_b0, runner-label: in-service, topology: topology-6u },
-        ]
-    uses: ./.github/workflows/galaxy-apc-fast-tests-impl.yaml
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      runner-label: ${{ matrix.test-group.runner-label }}
-      enable-watcher: ${{ inputs.enable-watcher || false }}
-      topology: ${{ matrix.test-group.topology }}
 
   test-ttnn-tutorials:
     needs: [parse-tests-json, build-artifact]

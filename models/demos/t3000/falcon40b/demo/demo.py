@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import os
 import time
 from functools import partial
 
@@ -176,7 +177,6 @@ def run_falcon_demo_kv(
     batch_size,
     num_layers,
     max_seq_len,
-    model_location_generator,
     get_tt_cache_path,
     mesh_device,
     prefill_on_host,
@@ -214,8 +214,9 @@ def run_falcon_demo_kv(
     logger.info("Loading weights...")
     profiler.start("loading_weights")
 
-    model_name = model_location_generator(model_version, model_subdir="Falcon")
-    hugging_face_reference_model = FalconForCausalLM.from_pretrained(model_name, low_cpu_mem_usage=True)
+    hugging_face_reference_model = FalconForCausalLM.from_pretrained(
+        model_version, local_files_only=os.getenv("CI") == "true", low_cpu_mem_usage=True
+    )
     hugging_face_reference_model.eval()
     state_dict = hugging_face_reference_model.state_dict()
 
@@ -599,6 +600,11 @@ def run_falcon_demo_kv(
     # Save benchmark data (will only save if running in CI environment)
     benchmark_data = create_benchmark_data(profiler, measurements, N_warmup_iter, targets=perf_targets)
     run_type = f"demo_{'perf' if perf_mode else 'generate'}_{mesh_device.get_num_devices()}chip"
+
+    data_parallel = 1
+    tensor_parallel = mesh_device.get_num_devices() // data_parallel
+    config_params = configuration.to_dict() | {"data_parallel": data_parallel, "tensor_parallel": tensor_parallel}
+
     benchmark_data.save_partial_run_json(
         profiler,
         run_type=run_type,
@@ -606,7 +612,7 @@ def run_falcon_demo_kv(
         ml_model_type="llm",
         num_layers=num_layers,
         batch_size=batch_size,
-        config_params=configuration.to_dict(),
+        config_params=config_params,
         precision=f"prefill[{model_config_str_for_prefill}]_decode[{model_config_str_for_decode}]",
         input_sequence_length=num_input_tokens,
         output_sequence_length=1 if perf_mode else output_token_index + 1,

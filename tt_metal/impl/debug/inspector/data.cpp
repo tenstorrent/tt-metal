@@ -6,8 +6,12 @@
 #include <stdexcept>
 #include "impl/debug/inspector/rpc_server_controller.hpp"
 #include "impl/debug/inspector/logger.hpp"
+#include "impl/dispatch/system_memory_manager.hpp"
 #include "impl/context/metal_context.hpp"
 #include "distributed/mesh_workload_impl.hpp"
+#include "jit_build/build_env_manager.hpp"
+#include <tt-metalium/device_pool.hpp>
+#include <tt_stl/reflection.hpp>
 
 namespace tt::tt_metal::inspector {
 
@@ -27,7 +31,11 @@ Data::Data()
             get_rpc_server().setGetMeshDevicesCallback([this](auto result) { this->rpc_get_mesh_devices(result); });
             get_rpc_server().setGetMeshWorkloadsCallback([this](auto result) { this->rpc_get_mesh_workloads(result); });
             get_rpc_server().setGetDevicesInUseCallback([this](auto result) { this->rpc_get_devices_in_use(result); });
-            get_rpc_server().setGetKernelCallback([this](auto params, auto result) { this->rpc_get_kernel(params, result); });
+            get_rpc_server().setGetKernelCallback(
+                [this](auto params, auto result) { this->rpc_get_kernel(params, result); });
+            get_rpc_server().setGetAllBuildEnvsCallback([this](auto result) { this->rpc_get_all_build_envs(result); });
+            get_rpc_server().setGetAllDispatchCoreInfosCallback(
+                [this](auto result) { this->rpc_get_all_dispatch_core_infos(result); });
         } catch (const std::exception& e) {
             TT_INSPECTOR_THROW("Failed to start Inspector RPC server: {}", e.what());
         }
@@ -147,32 +155,8 @@ void Data::rpc_get_mesh_workloads(rpc::Inspector::GetMeshWorkloadsResults::Build
 }
 
 void Data::rpc_get_devices_in_use(rpc::Inspector::GetDevicesInUseResults::Builder& results) {
-    std::scoped_lock locks(programs_mutex, mesh_devices_mutex, mesh_workloads_mutex);
-    std::set<uint64_t> device_ids;
-
-    // First add all devices from mesh workloads
-    for (const auto& [mesh_workload_id, mesh_workload_data] : mesh_workloads_data) {
-        for (const auto& [mesh_device_id, status] : mesh_workload_data.binary_status_per_device) {
-            if (status != ProgramBinaryStatus::NotSent) {
-                auto mesh_device_it = mesh_devices_data.find(mesh_device_id);
-                if (mesh_device_it != mesh_devices_data.end()) {
-                    auto* mesh_device = mesh_device_it->second.mesh_device;
-                    for (auto& device : mesh_device->get_devices()) {
-                        device_ids.insert(static_cast<uint64_t>(device->id()));
-                    }
-                }
-            }
-        }
-    }
-
-    // Add all devices from programs
-    for (const auto& [program_id, program_data] : programs_data) {
-        for (const auto& [device_id, status] : program_data.binary_status_per_device) {
-            if (status != ProgramBinaryStatus::NotSent) {
-                device_ids.insert(static_cast<uint64_t>(device_id));
-            }
-        }
-    }
+    // Get all active device ids
+    auto device_ids = DevicePool::instance().get_all_active_device_ids();
 
     // Write result
     auto result_device_ids = results.initDeviceIds(device_ids.size());
@@ -207,6 +191,76 @@ void Data::rpc_get_kernel(rpc::Inspector::GetKernelParams::Reader params, rpc::I
     kernel.setProgramId(program_id);
 }
 
+// Get build environment information for all devices
+// This allows Inspector clients (e.g. tt-triage) to get the correct firmware path
+// for each device and build config, enabling correct firmware path resolution
+// without relying on relative paths
+// Declared here in Data to centralize Inspector RPC callback registration and
+// tie it to Inspector Data's lifetime
+void Data::rpc_get_all_build_envs(rpc::Inspector::GetAllBuildEnvsResults::Builder results) {
+    // Get build environment info for all devices
+    // Calls to BuildEnvManager::get_all_build_envs_info are thread-safe as it's protected by an internal mutex
+    const auto& build_envs_info = BuildEnvManager::get_instance().get_all_build_envs_info();
+    // Populate RPC response with build environment info for all devices
+    auto result_build_envs = results.initBuildEnvs(build_envs_info.size());
+    const auto fw_compile_hash = this->fw_compile_hash.load(std::memory_order_acquire);
+    size_t i = 0;
+    for (const auto& build_env : build_envs_info) {
+        auto item = result_build_envs[i++];
+        item.setDeviceId(build_env.device_id);
+        // Populate RPC response with build environment info
+        auto build_info = item.initBuildInfo();
+        build_info.setBuildKey(build_env.build_key);
+        build_info.setFirmwarePath(build_env.firmware_root_path);
+        build_info.setFwCompileHash(fw_compile_hash);
+    }
+}
+
+// Get all dispatch core infos for all active devices
+// Do an on-demand snapshot of the command queue event info
+// Populate the results with the dispatch core info and corresponding cq_id event info
+void Data::rpc_get_all_dispatch_core_infos(rpc::Inspector::GetAllDispatchCoreInfosResults::Builder results) {
+    // This returns a map of command queue id to event id for all active devices
+    auto cq_to_event_by_device = DevicePool::instance().get_all_command_queue_event_infos();
+    // In a single lock, get the number of non-empty categories and initialize the results
+    std::scoped_lock locks(dispatch_core_info_mutex, dispatch_s_core_info_mutex, prefetcher_core_info_mutex);
+
+    // Get the number of non-empty categories
+    size_t non_empty_categories = 0;
+    if (!dispatch_core_info.empty()) {
+        non_empty_categories++;
+    }
+    if (!dispatch_s_core_info.empty()) {
+        non_empty_categories++;
+    }
+    if (!prefetcher_core_info.empty()) {
+        non_empty_categories++;
+    }
+
+    // Initialize the results with the number of non-empty categories
+    auto list = results.initCoresByCategory(non_empty_categories);
+
+    size_t category_index = 0;
+    // Populate the dispatch core info
+    if (!dispatch_core_info.empty()) {
+        auto category = list[category_index++];
+        Data::populate_core_entries_by_category(
+            category, rpc::CoreCategory::DISPATCH, dispatch_core_info, cq_to_event_by_device);
+    }
+    // Populate the dispatch_s core info
+    if (!dispatch_s_core_info.empty()) {
+        auto category = list[category_index++];
+        Data::populate_core_entries_by_category(
+            category, rpc::CoreCategory::DISPATCH_S, dispatch_s_core_info, cq_to_event_by_device);
+    }
+    // Populate the prefetcher core info
+    if (!prefetcher_core_info.empty()) {
+        auto category = list[category_index++];
+        Data::populate_core_entries_by_category(
+            category, rpc::CoreCategory::PREFETCH, prefetcher_core_info, cq_to_event_by_device);
+    }
+}
+
 // Helper function to convert internal enum to Cap'n Proto enum
 rpc::BinaryStatus Data::convert_binary_status(ProgramBinaryStatus status) {
     switch (status) {
@@ -221,5 +275,62 @@ rpc::BinaryStatus Data::convert_binary_status(ProgramBinaryStatus status) {
     }
 }
 
+// Helper function to populate the core info
+void Data::populate_core_info(rpc::CoreInfo::Builder& out, const CoreInfo& info, uint32_t event_id) {
+    out.setDeviceId(info.device_id);
+    out.setServicingDeviceId(info.servicing_device_id);
+    // Convert enum to string
+    std::string worker_type_str(enchantum::to_string(info.worker_type));
+    out.setWorkType(worker_type_str);
+    out.setEventID(event_id);
+    out.setCqId(info.cq_id);
+}
+
+// Helper function to get the event id for a core
+// If not found, return std::numeric_limits<uint32_t>::max()
+uint32_t Data::get_event_id_for_core(
+    const CoreInfo& info, const std::unordered_map<ChipId, std::vector<uint32_t>>& cq_to_event_by_device) {
+    auto device_it = cq_to_event_by_device.find(info.device_id);
+    if (device_it != cq_to_event_by_device.end() && info.cq_id < device_it->second.size()) {
+        return device_it->second[info.cq_id];
+    }
+    return std::numeric_limits<uint32_t>::max();
+}
+
+// Helper function to populate the core entry
+void Data::populate_core_entry(
+    rpc::CoreEntry::Builder& entry, const tt_cxy_pair& k, const CoreInfo& info, uint32_t event_id) {
+    // Populate the key
+    auto key = entry.initKey();
+    key.setChip(k.chip);
+    key.setX(k.x);
+    key.setY(k.y);
+    // Populate the info
+    auto out = entry.initInfo();
+    Data::populate_core_info(out, info, event_id);
+}
+
+// Helper function to populate the core entries by category
+void Data::populate_core_entries_by_category(
+    rpc::CoreEntriesByCategory::Builder& category_builder,
+    rpc::CoreCategory category_type,
+    const std::unordered_map<tt_cxy_pair, CoreInfo>& core_info,
+    const std::unordered_map<ChipId, std::vector<uint32_t>>& cq_to_event_by_device) {
+    // Set the category type
+    category_builder.setCategory(category_type);
+    // Initialize the entries
+    auto entries = category_builder.initEntries(core_info.size());
+    size_t i = 0;
+    for (const auto& kv : core_info) {
+        // Get key, value from core_info
+        const tt_cxy_pair& k = kv.first;
+        const auto& info = kv.second;
+        // Get the event id for the core's command queue
+        uint32_t event_id = Data::get_event_id_for_core(info, cq_to_event_by_device);
+        // Populate the core entry with the key, info, and event id
+        auto entry = entries[i++];
+        Data::populate_core_entry(entry, k, info, event_id);
+    }
+}
 
 }  // namespace tt::tt_metal::inspector

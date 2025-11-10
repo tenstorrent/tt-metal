@@ -2,14 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+
 import torch
 from tqdm import tqdm
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
+from models.common.tt_sampling import TTSampling
 from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.common import copy_host_to_device, get_decode_mask
+from models.tt_transformers.tt.common import copy_host_to_device
 from models.tt_transformers.tt.decoder import TransformerBlock
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.embedding import Embedding, ScaledEmbedding
@@ -30,7 +32,6 @@ class Transformer(LightweightModule):
         use_paged_kv_cache=False,
         attention_class=None,
         rope_setup_class=None,
-        attn_mask=None,
     ):
         super().__init__()
         self.args = args
@@ -129,65 +130,89 @@ class Transformer(LightweightModule):
             max_columns_per_device=self.args.max_columns_per_device_lm_head,
         )
 
-        if hasattr(self.args, "sliding_window") and self.args.sliding_window is not None:
-            # We are using sliding window attention in this model. We can create a custom attention mask to apply the sliding attention
-            # First we create the mask for all decode positions on host [bsz, n_heads_per_device, seq_len, seq_len]
-            self.decode_sliding_mask_mat = get_decode_mask(
-                self.args,
-                self.mesh_device,
-                paged_attention_config=paged_attention_config,
-            )
-            # Then we copy a slice for a single decode position for each user on to device [bsz, n_heads_per_device, 1, seq_len]
-            # We can update this tensor on host each iteration and copy to device to save storing the large square tensor on device
-            self.device_decode_sliding_mask = ttnn.as_tensor(
-                torch.concat(
-                    [self.decode_sliding_mask_mat[i, :, 0:1, :].unsqueeze(0) for i in range(self.args.max_batch_size)],
-                    axis=0,
-                ).transpose(1, 2),
-                dtype=ttnn.bfloat4_b,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.mesh_device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            )
+        # Initialize on-device sampling if supported
+        # Sampling on device is supported only if each device has maximum logits size of 64*1024
+        sampling_splits = self.args.num_devices if list(self.mesh_device.shape) != [1, 1] else 2
+        self._supports_on_device_sampling = self.args.vocab_size // sampling_splits <= 64 * 1024
+        if self._supports_on_device_sampling:
+            self.tt_sampling = TTSampling(mesh_device=mesh_device, tt_ccl=self.tt_ccl, args=args)
         else:
-            self.decode_sliding_mask_mat = None
-            self.device_decode_sliding_mask = None
+            self.tt_sampling = None
 
-    def prepare_inputs_prefill(self, tokens, start_pos=0, page_table=None, chunk_page_table=None):
+    def process_logits_after_prefill_trace(self, logits, last_token_idx):
+        get_last_token = (last_token_idx // 32) * 32
+        logits = ttnn.slice(
+            logits,
+            (0, 0, get_last_token, 0),
+            (1, 1, get_last_token + 32, logits.shape[-1]),
+        )
+        logits = self.norm(logits, mode="prefill")
+        if self.model_config["LM_HEAD_INPUT_MEMCFG"].is_sharded():
+            logits = ttnn.interleaved_to_sharded(logits, self.model_config["LM_HEAD_INPUT_MEMCFG"])
+        logits = self.lm_head(logits)
+        logits = ttnn.to_layout(logits, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return logits
+
+    def prepare_prefill_inputs_trace(self, tokens, page_table=None, chunk_page_table=None):
         """
         Inputs are torch tensors or python types. This function returns ttnn
-        tensors on device.
+        tensors on host.
+        """
+        host_inputs = self.prepare_inputs_prefill(
+            tokens, page_table=page_table, chunk_page_table=chunk_page_table, trace_enabled=True
+        )
+        return host_inputs
+
+    def transform_and_embed_prefill_inputs_device(self, tokens, tt_page_table, tt_chunk_page_table):
+        tt_tokens = self.embd(tokens)
+        tt_tokens = ttnn.unsqueeze_to_4D(tt_tokens)
+        return tt_tokens, tt_page_table, tt_chunk_page_table
+
+    def prepare_inputs_prefill(self, tokens, start_pos=0, page_table=None, chunk_page_table=None, trace_enabled=False):
+        """
+        Inputs are torch tensors or python types. This function returns ttnn
+        tensors on device if trace is disabled or on host if trace is enabled.
         TODO: Debate whether this function is responsible for padding
         """
+
+        # We set the device to None if trace is enabled so we keep the tensors on host instead of sending it to the device (None - keeps on host, device - sends to specified device)
+        # We will send them to device later (copy_host_to_device)
+        device = None if trace_enabled else self.mesh_device
 
         assert tokens.dim() == 2, "tokens must be a 2D tensor"
         tokens = tokens.reshape(1, 1, 1, -1)
         S = tokens.shape[-1]
         tokens = ttnn.from_torch(
             tokens,
-            device=self.mesh_device,
+            device=device,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-        tokens_embd = self.embd(tokens)
-        tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
+
+        # self.embd expects that tokens are on device ; if trace is enabled, the tensors will be later on device, so we will do these 2 steps when we copy the tokens to the device
+        if not trace_enabled:
+            tokens_embd = self.embd(tokens)
+            tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
 
         # Slice the rot mats to the prefill seqlen
         assert (
             self.rope_setup.cos_matrix.shape[2] >= start_pos + S
         ), f"Padded prefill end idx {start_pos + S} exceeds max seq len {self.rope_setup.cos_matrix.shape[2]}"
 
+        # We set the end_pos to max_seq_len so that we don't create a new tensor for the whole cos_matrix and sin_matrix ; in case of trace, we will use the whole matrix for all seq_lens supported by trace
+        start_pos = 0 if trace_enabled else start_pos
+        end_pos = self.args.max_seq_len if trace_enabled else start_pos + S
+
         tt_rot_mats_prefill_global = [
-            self.rope_setup.cos_matrix[:, :, start_pos : start_pos + S, :],
-            self.rope_setup.sin_matrix[:, :, start_pos : start_pos + S, :],
+            self.rope_setup.cos_matrix[:, :, start_pos:end_pos, :],
+            self.rope_setup.sin_matrix[:, :, start_pos:end_pos, :],
         ]
 
         if hasattr(self, "rope_local_setup"):
             tt_rot_mats_prefill_local = [
-                self.rope_local_setup.cos_matrix[:, :, start_pos : start_pos + S, :],
-                self.rope_local_setup.sin_matrix[:, :, start_pos : start_pos + S, :],
+                self.rope_local_setup.cos_matrix[:, :, start_pos:end_pos, :],
+                self.rope_local_setup.sin_matrix[:, :, start_pos:end_pos, :],
             ]
         else:
             tt_rot_mats_prefill_local = None
@@ -195,7 +220,7 @@ class Transformer(LightweightModule):
         if page_table is not None:
             tt_page_table = ttnn.from_torch(
                 page_table,
-                device=self.mesh_device,
+                device=device,
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
@@ -206,7 +231,7 @@ class Transformer(LightweightModule):
         if chunk_page_table is not None:
             tt_chunk_page_table = ttnn.from_torch(
                 chunk_page_table,
-                device=self.mesh_device,
+                device=device,
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
@@ -214,7 +239,13 @@ class Transformer(LightweightModule):
         else:
             tt_chunk_page_table = None
 
-        return tokens_embd, tt_rot_mats_prefill_global, tt_rot_mats_prefill_local, tt_page_table, tt_chunk_page_table
+        return (
+            tokens if trace_enabled else tokens_embd,
+            tt_rot_mats_prefill_global,
+            tt_rot_mats_prefill_local,
+            tt_page_table,
+            tt_chunk_page_table,
+        )
 
     def prepare_inputs_decode(self, *inputs):
         """
@@ -234,7 +265,9 @@ class Transformer(LightweightModule):
         """
         B = tokens.shape[0]
         assert current_pos.shape[0] == B, "Batch size mismatch"
-        assert B == self.args.max_batch_size, "Batch size must be equal to max_batch_size"
+        assert (
+            B == self.args.max_batch_size
+        ), f"Batch size {B} must be equal to max_batch_size {self.args.max_batch_size}"
 
         # Necessary padding to be full tile sized when on device
         tokens = torch.nn.functional.pad(tokens.view(-1), (0, 32 - len(tokens)), "constant", 0)
@@ -319,8 +352,10 @@ class Transformer(LightweightModule):
         Input is ttnn host tensor of logits if is_tokens=False, otherwise tokens. Output is the corresponding torch tensor.
         """
         if is_tokens:
+            # Pad to 32 to match the expected batch size for decode operations (tiles are 32x32)
+            padded_batch_size = 32
+            tt_out = ttnn.reshape(tt_out, ttnn.Shape([1, 1, padded_batch_size, 1]))
             return self.concat_host_output(tt_out)[0, 0, :B, 0]
-
         if self.args.num_devices > 1:
             tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
         else:
@@ -344,17 +379,6 @@ class Transformer(LightweightModule):
         This method will take device tensors and any other args to run forward.
         It returns ttnn device tensors.
         """
-        if hasattr(self.args, "sliding_window") and self.args.sliding_window is not None:
-            mask = torch.triu(torch.full((1, 1, x.shape[-2], x.shape[-2]), -float("inf")), diagonal=1)
-            sliding_mask = mask + torch.tril(
-                torch.full((1, 1, x.shape[-2], x.shape[-2]), -float("inf")),
-                diagonal=-self.args.sliding_window,
-            )
-            sliding_attn_mask = ttnn.from_torch(
-                sliding_mask, device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
-            )
-        else:
-            sliding_attn_mask = None
         return self.forward(
             x,
             current_pos=None,
@@ -367,30 +391,11 @@ class Transformer(LightweightModule):
             chunk_start_idx=chunk_start_idx,
             get_last_token=get_last_token,
             kv_cache=kv_cache,
-            sliding_attn_mask=sliding_attn_mask,
         )
 
     def _increment_decode_positions_device(self, current_pos, rot_mat_idxs):
         ttnn.plus_one(current_pos, skip_negative_entries=True)
         ttnn.plus_one(rot_mat_idxs)
-
-    def update_attention_masks(self, current_pos):
-        torch_mask = torch.concat(
-            [
-                self.decode_sliding_mask_mat[i, :, current_pos[i].item() : current_pos[i].item() + 1, :].unsqueeze(0)
-                for i in range(self.decode_sliding_mask_mat.shape[0])
-            ],
-            axis=0,
-        ).transpose(1, 2)
-        sliding_window_causal_mask = ttnn.as_tensor(
-            torch_mask,
-            dtype=ttnn.bfloat4_b,
-            layout=ttnn.TILE_LAYOUT,
-            device=None,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-        )
-        ttnn.copy_host_to_device_tensor(sliding_window_causal_mask, self.device_decode_sliding_mask)
 
     def ttnn_decode_forward(
         self,
@@ -399,7 +404,7 @@ class Transformer(LightweightModule):
         rot_mat_idxs=None,
         page_table=None,
         kv_cache=None,
-        argmax_on_device=False,
+        sampling_on_device=False,
     ):
         """
         This method will take device tensors and any other args to run forward.
@@ -416,8 +421,14 @@ class Transformer(LightweightModule):
             mode="decode",
             page_table=page_table,
             kv_cache=kv_cache,
-            sliding_attn_mask=self.device_decode_sliding_mask,
         )
+
+        if sampling_on_device and self.tt_sampling is not None:
+            # Perform on-device sampling using TTSampling
+            tt_toks = self.tt_sampling(tt_logits, tt_out_tok=x)
+            # Update device tensors for the next iteration
+            self._increment_decode_positions_device(current_pos, rot_mat_idxs)
+            return tt_toks
 
         # Gather the output across all devices and untilize the tensor (for argmax)
         if self.args.num_devices > 1:
@@ -440,15 +451,7 @@ class Transformer(LightweightModule):
 
         tt_logits = ttnn.untilize(tt_logits, use_multicore=True)
 
-        if argmax_on_device:
-            tt_logits = ttnn.argmax(tt_logits, dim=3, keepdim=True, use_multicore=True)
-
-            # Update device tensors for the next iteration
-            self._increment_decode_positions_device(current_pos, rot_mat_idxs)
-
-            # Update input tokens with sampled tokens for the next iteration
-            ttnn.copy(tt_logits.reshape(x.shape), x)
-        elif not self.args.is_galaxy:
+        if not self.args.is_galaxy:
             # Send output logits to DRAM so L1 is not reserved for ttnn tracing and can be used by subsequent operations
             tt_logits = ttnn.to_memory_config(tt_logits, ttnn.DRAM_MEMORY_CONFIG)
 
@@ -467,7 +470,6 @@ class Transformer(LightweightModule):
         chunk_start_idx=None,
         get_last_token=-1,
         kv_cache=None,
-        sliding_attn_mask=None,
     ):
         for i, layer in enumerate(self.layers):
             # No-op if callers already provide the right memory config
@@ -479,14 +481,6 @@ class Transformer(LightweightModule):
             elif activation_dtype is not None and x.dtype != activation_dtype:
                 x = ttnn.typecast(x, activation_dtype)
 
-            if sliding_attn_mask is not None:
-                attn_mask_i = (
-                    sliding_attn_mask
-                    if (hasattr(layer.attention, "is_sliding") and layer.attention.is_sliding)
-                    else None
-                )
-            else:
-                attn_mask_i = None
             x = layer(
                 x,
                 current_pos,
@@ -498,7 +492,6 @@ class Transformer(LightweightModule):
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
                 kv_cache=kv_cache[i] if kv_cache is not None else None,
-                attn_mask=attn_mask_i,
             )
 
         if mode == "prefill" and get_last_token == -1:

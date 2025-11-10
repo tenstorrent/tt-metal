@@ -10,7 +10,6 @@
 #include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/mesh_device.hpp>
 
@@ -215,12 +214,13 @@ Tensor to_layout_bfloat(const Tensor& tensor, Layout target_layout);
 template <typename T>
 Tensor pad(
     const Tensor& tensor,
-    const ttnn::Shape& output_padded_shape,
-    const ttnn::Shape& input_tensor_start,
+    const tt::tt_metal::Shape& output_padded_shape,
+    const tt::tt_metal::Shape& input_tensor_start,
     float pad_value);
 
 template <typename T>
-Tensor unpad(const Tensor& tensor, const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end);
+Tensor unpad(
+    const Tensor& tensor, const tt::tt_metal::Shape& output_tensor_start, const tt::tt_metal::Shape& output_tensor_end);
 
 // ======================================================================================
 //                                         Print

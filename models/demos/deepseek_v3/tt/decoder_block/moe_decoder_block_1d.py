@@ -104,7 +104,6 @@ class MoEDecoderBlock1D(DecoderBlock1DBase):
         }
 
     @classmethod
-    @abstractmethod
     def create_mlp_state(
         cls,
         hf_config: PretrainedConfig,
@@ -117,10 +116,7 @@ class MoEDecoderBlock1D(DecoderBlock1DBase):
                 None if is_padding else MoE.create_state(hf_config, mesh_device, ccl) for is_padding in is_padding_layer
             ],
             "shared_expert": SharedExpert.create_state(hf_config, mesh_device, ccl),
-            "revert_dp": {
-                "multi_device_global_semaphore": ccl.get_gather_sem(0),
-                "barrier_semaphore": ccl.get_barrier_sem(0),
-            },
+            "ccl": ccl,
         }
 
     @classmethod
@@ -163,10 +159,10 @@ class MoEDecoderBlock1D(DecoderBlock1DBase):
 
                 ttnn.point_to_point(
                     tt_input,
-                    dest_coord,
                     source_coord,
-                    ttnn.Topology.Linear,
-                    optional_output_tensor=tt_input,
+                    dest_coord,
+                    topology=ttnn.Topology.Linear,
+                    output_tensor=tt_input,
                 )
 
         return tt_input
@@ -185,10 +181,13 @@ class MoEDecoderBlock1D(DecoderBlock1DBase):
         return tt_out_tensor
 
     @classmethod
-    def revert_data_parallelism(cls, x: ttnn.Tensor, row_idx: int, **cfg) -> ttnn.Tensor:
+    def revert_data_parallelism(
+        cls, x: ttnn.Tensor, row_idx: int, cfg: RunDecodeConfig | RunPrefillConfig
+    ) -> ttnn.Tensor:
         """Revert data parallelism by gathering partitioned tensor back to original form."""
         # Gather tensor along specified dimension across mesh cluster axis
-        tt_out_tensor = ttnn.experimental.all_gather_async(x, **cfg)
+        ccl = cfg["ccl"]
+        tt_out_tensor = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["revert_dp"]))
         return tt_out_tensor
 
     @classmethod
@@ -204,7 +203,6 @@ class MoEDecoderBlock1D(DecoderBlock1DBase):
         }
 
     @classmethod
-    @abstractmethod
     def forward_mlp_prefill(cls, x: ttnn.Tensor, row_idx: int, cfg: RunPrefillConfig) -> ttnn.Tensor:
         num_tokens_to_route = x.shape[-3] * x.shape[-2]
         DP_FACTOR = cfg["moe"][row_idx]["num_dispatch_devices"]
@@ -216,7 +214,7 @@ class MoEDecoderBlock1D(DecoderBlock1DBase):
         mlp_out = MoE.forward_prefill(x_dp if apply_dp else x, cfg["moe"][row_idx])
         if apply_dp:
             ttnn.deallocate(x_dp)
-            mlp_out = cls.revert_data_parallelism(mlp_out, row_idx, **cfg["revert_dp"])
+            mlp_out = cls.revert_data_parallelism(mlp_out, row_idx, cfg)
         mlp_out += SharedExpert.forward_prefill(x, cfg["shared_expert"])
         return mlp_out
 
@@ -233,6 +231,6 @@ class MoEDecoderBlock1D(DecoderBlock1DBase):
         mlp_out = MoE.forward_decode(x_dp if apply_dp else x, cfg["moe"][row_idx])
         if apply_dp:
             ttnn.deallocate(x_dp)
-            mlp_out = cls.revert_data_parallelism(mlp_out, row_idx, **cfg["revert_dp"])
+            mlp_out = cls.revert_data_parallelism(mlp_out, row_idx, cfg)
         mlp_out += SharedExpert.forward_decode(x, cfg["shared_expert"])
         return mlp_out

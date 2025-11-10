@@ -11,7 +11,28 @@ set_target_properties(
 )
 
 # Globbing non-build files is acceptable for now because devs don't generate packages.
-file(GLOB_RECURSE nlp_kv_cache_load_slice/device/kernels/*)
+file(
+    GLOB_RECURSE kernels
+    all_reduce_create_qkv_heads/device/kernels/*
+    concatenate_heads/device/kernels/*
+    create_qkv_heads/device/kernels/*
+    create_qkv_heads_from_separate_tensors/device/kernels/*
+    fused_distributed_rmsnorm/device/kernels/*
+    nlp_concat_heads/device/kernels/*
+    nlp_concat_heads_boltz/device/kernels/*
+    nlp_concat_heads_decode/device/kernels/*
+    nlp_create_qkv_heads/device/kernels/*
+    nlp_create_qkv_heads_boltz/device/kernels/*
+    nlp_create_qkv_heads_falcon7b/device/kernels/*
+    nlp_create_qkv_heads_segformer/device/kernels/*
+    nlp_create_qkv_heads_vit/device/kernels/*
+    nlp_kv_cache_load_slice/device/kernels/*
+    rotary_embedding/device/kernels/*
+    rotary_embedding_llama/device/kernels/*
+    rotary_embedding_llama_fused_qk/device/kernels/*
+    rotate_half/device/kernels/*
+    split_query_key_value_and_split_heads/device/kernels/*
+)
 target_sources(
     ttnn_op_experimental_transformer
     PUBLIC
@@ -69,6 +90,12 @@ target_sources(
         nlp_kv_cache_load_slice/device/nlp_kv_cache_load_slice_device_operation.cpp
         nlp_kv_cache_load_slice/device/nlp_kv_cache_load_slice_program_factory.cpp
         nlp_kv_cache_load_slice/nlp_kv_cache_load_slice.cpp
+        fused_distributed_rmsnorm/rmsnorm_pre_all_gather.cpp
+        fused_distributed_rmsnorm/rmsnorm_post_all_gather.cpp
+        fused_distributed_rmsnorm/device/rmsnorm_pre_all_gather_op.cpp
+        fused_distributed_rmsnorm/device/rmsnorm_post_all_gather_op.cpp
+        fused_distributed_rmsnorm/device/multicore/rmsnorm_pre_all_gather_op_multi_core.cpp
+        fused_distributed_rmsnorm/device/multicore/rmsnorm_post_all_gather_op_multi_core.cpp
         rotary_embedding/device/rotary_embedding_device_operation.cpp
         rotary_embedding/device/rotary_embedding_program_factory.cpp
         rotary_embedding/rotary_embedding.cpp

@@ -73,8 +73,8 @@ void loop_and_wait_with_timeout(
 }
 }  // namespace
 
-SystemMemoryManager::SystemMemoryManager(chip_id_t device_id, uint8_t num_hw_cqs) :
-    device_id(device_id), num_hw_cqs(num_hw_cqs), bypass_enable(false), bypass_buffer_write_offset(0) {
+SystemMemoryManager::SystemMemoryManager(ChipId device_id, uint8_t num_hw_cqs) :
+    device_id(device_id), bypass_enable(false), bypass_buffer_write_offset(0) {
     this->completion_byte_addrs.resize(num_hw_cqs);
     this->prefetcher_cores.resize(num_hw_cqs);
     this->prefetch_q_writers.reserve(num_hw_cqs);
@@ -83,8 +83,7 @@ SystemMemoryManager::SystemMemoryManager(chip_id_t device_id, uint8_t num_hw_cqs
     this->prefetch_q_dev_fences.resize(num_hw_cqs);
 
     // Split hugepage into however many pieces as there are CQs
-    chip_id_t mmio_device_id =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
+    ChipId mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
     uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id);
     char* hugepage_start =
         (char*)tt::tt_metal::MetalContext::instance().get_cluster().host_dma_address(0, mmio_device_id, channel);
@@ -181,6 +180,12 @@ uint32_t SystemMemoryManager::get_next_event(const uint8_t cq_id) {
     return next_event;
 }
 
+// Get last issued event to Command Queue
+uint32_t SystemMemoryManager::get_last_event(const uint8_t cq_id) {
+    std::lock_guard<std::mutex> lock(cq_to_event_locks[cq_id]);
+    return this->cq_to_event[cq_id];
+}
+
 void SystemMemoryManager::reset_event_id(const uint8_t cq_id) {
     cq_to_event_locks[cq_id].lock();
     this->cq_to_event[cq_id] = 0;
@@ -272,11 +277,12 @@ uint32_t SystemMemoryManager::get_completion_queue_read_toggle(const uint8_t cq_
 
 uint32_t SystemMemoryManager::get_cq_size() const { return this->cq_size; }
 
-chip_id_t SystemMemoryManager::get_device_id() const { return this->device_id; }
+ChipId SystemMemoryManager::get_device_id() const { return this->device_id; }
 
 std::vector<SystemMemoryCQInterface>& SystemMemoryManager::get_cq_interfaces() { return this->cq_interfaces; }
 
 void* SystemMemoryManager::issue_queue_reserve(uint32_t cmd_size_B, const uint8_t cq_id) {
+    TT_ASSERT(cmd_size_B > 0, "Command size must be greater than 0");
     if (this->bypass_enable) {
         uint32_t curr_size = this->bypass_buffer.size();
         uint32_t new_size = curr_size + (cmd_size_B / sizeof(uint32_t));
@@ -331,6 +337,7 @@ void SystemMemoryManager::cq_write(const void* data, uint32_t size_in_bytes, uin
 
 // TODO: RENAME issue_queue_stride ?
 void SystemMemoryManager::issue_queue_push_back(uint32_t push_size_B, const uint8_t cq_id) {
+    TT_ASSERT(push_size_B > 0, "Push size must be greater than 0");
     if (this->bypass_enable) {
         this->bypass_buffer_write_offset += push_size_B;
         return;
@@ -354,7 +361,7 @@ void SystemMemoryManager::issue_queue_push_back(uint32_t push_size_B, const uint
     }
 
     // Also store this data in hugepages, so if a hang happens we can see what was written by host.
-    chip_id_t mmio_device_id =
+    ChipId mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(this->device_id);
     uint16_t channel =
         tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(this->device_id);
@@ -374,7 +381,7 @@ void SystemMemoryManager::send_completion_queue_read_ptr(const uint8_t cq_id) co
     this->completion_q_writers[cq_id].write(this->completion_byte_addrs[cq_id], read_ptr_and_toggle);
 
     // Also store this data in hugepages in case we hang and can't get it from the device.
-    chip_id_t mmio_device_id =
+    ChipId mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(this->device_id);
     uint16_t channel =
         tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(this->device_id);
@@ -448,7 +455,7 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
 
     // Body of the operation to be timed out
     auto wait_operation_body =
-        [this, cq_id, &exit_condition, &write_ptr_and_toggle, &write_ptr, &write_toggle, &cq_interface]() -> uint32_t {
+        [this, cq_id, &exit_condition, &write_ptr_and_toggle, &write_ptr, &write_toggle]() -> uint32_t {
         write_ptr_and_toggle = get_cq_completion_wr_ptr<true>(this->device_id, cq_id, this->cq_size);
         write_ptr = write_ptr_and_toggle & 0x7fffffff;
         write_toggle = write_ptr_and_toggle >> 31;
@@ -520,6 +527,7 @@ void SystemMemoryManager::fetch_queue_write(uint32_t command_size_B, const uint8
         max_command_size_B);
     TT_ASSERT(
         (command_size_B >> DispatchSettings::PREFETCH_Q_LOG_MINSIZE) < 0xFFFF, "FetchQ command too large to represent");
+    TT_ASSERT(command_size_B > 0, "Command size must be greater than 0");
     if (this->bypass_enable) {
         return;
     }

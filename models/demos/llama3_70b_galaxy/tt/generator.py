@@ -22,7 +22,7 @@ from models.tt_transformers.tt.common import (
     num_blocks_in_seq,
     get_block_size,
 )
-
+from models.common.tt_sampling import format_sampling_params
 from models.tt_transformers.tt.generator import SamplingParams
 
 
@@ -65,6 +65,60 @@ class Generator:
         self.trace_inputs_prefill = defaultdict(lambda: None)
         self.trace_output_prefill = defaultdict(lambda: None)
         self.prev_page_table = None
+        self.prefill_traces_warmup = False
+        self.trace_ids_decode = defaultdict(lambda: None)  # {return_logits: {device_id: trace_id}}
+        self.trace_inputs_decode = defaultdict(lambda: None)
+        self.trace_output_decode = defaultdict(lambda: None)
+
+    def warmup_prefill_traces(
+        self,
+        tokens: torch.Tensor,
+        page_table=None,
+        kv_cache=None,
+        prompt_lens=None,
+        enable_trace=True,
+        sampling_params=None,
+        empty_slots=None,
+        tt_out_logits_all_users=None,
+    ):
+        # Avoids an infinite loop
+        self.prefill_traces_warmup = True
+
+        logger.info("Warming up prefill traces for all supported sequence lengths")
+        for supported_length in self.model.tt_ccl.support_seqlens:
+            logger.info(f"Creating warmup tensor for sequence length: {supported_length}")
+            # Capture trace for both
+            for batch in (1, 32):  # TODO add proper support for batched prefill == b-32
+                # For batched prefill this needs to be *32
+                if batch == 32 and supported_length == 4096:
+                    # For batched prefill max batch sequence length is 2048 or lower (128k limit)
+                    logger.info(f"Skipping warm up step on batched prefill for sequence length {supported_length}")
+                    continue
+                if batch == 32:
+                    current_batch = page_table.shape[0]
+                    if current_batch < batch:
+                        pad_rows = batch - current_batch
+                        padding = torch.full((pad_rows, page_table.shape[1]), -1, dtype=torch.int32)
+                        warmup_page_table = torch.cat([page_table, padding], dim=0)
+                    else:
+                        warmup_page_table = page_table
+                else:
+                    warmup_page_table = page_table
+                warmup_tokens = torch.zeros(batch, supported_length, dtype=torch.long)
+                warmup_prompt_lens = torch.tensor([supported_length] * batch, dtype=torch.long)
+                warmup_empty_slots = list(range(batch))
+                self.prefill_forward_text(
+                    warmup_tokens,
+                    warmup_page_table,
+                    kv_cache,
+                    warmup_prompt_lens,
+                    enable_trace,
+                    sampling_params,
+                    warmup_empty_slots,
+                    tt_out_logits_all_users,
+                )
+        # trace_id_prefill dict check
+        logger.info("Prefill traces warmup completed")
 
     def prefill_forward_text(
         self,
@@ -77,6 +131,18 @@ class Generator:
         empty_slots=None,
         tt_out_logits_all_users=None,
     ):
+        if self.prefill_traces_warmup is False:
+            self.warmup_prefill_traces(
+                tokens,
+                page_table,
+                kv_cache,
+                prompt_lens,
+                enable_trace,
+                sampling_params,
+                empty_slots,
+                tt_out_logits_all_users,
+            )
+
         if sampling_params is None:
             return_logits = True
         else:
@@ -183,7 +249,11 @@ class Generator:
                 tt_out_logits_all_users[id] = tt_out_logits_saved
 
         if return_logits:
+            # TODO: the current solution runs the argmax even if we are returning logits
+            # This is inefficient and should be fixed
             # Return logits instead of tokens
+            # batch x seq x padded_vocab_size -> batch x seq x vocab_size
+            tt_out_logits_all_users = tt_out_logits_all_users[:, :, : self.model.vocab_size]
             return tt_out_logits_all_users
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
@@ -231,6 +301,8 @@ class Generator:
         """
         Tracing is easy! Just call this method and we'll handle tracing for you.
         """
+        # Trace is independent of whether we are returning logits or sampling on device
+        # The difference happens outside of the trace, in process_output_prefill
         trace_key = f"{prefill_seq_len}_{batch_size}"
         if self.trace_id_prefill[trace_key] is None:
             trace_id, tt_out_trace, *device_inputs = self._capture_trace_prefill(
@@ -265,7 +337,7 @@ class Generator:
         batch_size=1,
     ):
         """
-        Captures a trace for the decode_forward method.
+        Captures a trace for the prefill_forward method.
         """
 
         # Compile run
@@ -304,7 +376,7 @@ class Generator:
         batch_size=1,
     ):
         """
-        Executes the trace for the decode_forward method but does not read back outputs.
+        Executes the trace for the prefill_forward method but does not read back outputs.
         """
         host_inputs = self.model.prepare_prefill_inputs_host(tokens, user_id, page_table, batch_size=batch_size)
 
@@ -334,16 +406,19 @@ class Generator:
     ):
         if sampling_params is None:
             return_logits = True
-            read_from_device = False
             reset_inputs = True
         else:
             return_logits = False
 
         if self.prev_page_table is None:
-            self.prev_page_table = page_table
+            self.prev_page_table = (
+                page_table.clone()
+            )  # Make sure we reference a fresh page table, in case it has changed
         if torch.any(self.prev_page_table != page_table).item():
             reset_inputs = True
-            self.prev_page_table = page_table
+            self.prev_page_table = (
+                page_table.clone()
+            )  # Make sure we reference a fresh page table, in case it has changed
 
         if self.model.is_decode_setup is False:
             self.model.switch_mode("decode")
@@ -358,17 +433,20 @@ class Generator:
             "is_page_table_sharded": is_page_table_sharded,
         }
         if reset_inputs and sampling_params is not None:
-            if sampling_params.temperature == 0:  # argmax
-                sampling_params = SamplingParams(temperature=1.0, top_k=1, top_p=0.0)
+            sampling_params = format_sampling_params(sampling_params, self.model_args.max_batch_size)
+
             self.model.tt_sampling.reset_params(
-                k=[sampling_params.top_k] * 32,
-                p=[sampling_params.top_p] * 32,
-                temp=[1 / sampling_params.temperature] * 32,
+                k=sampling_params.top_k,
+                p=sampling_params.top_p,
+                temp=sampling_params.temperature,
             )
+
         if tt_out_logits_saved is not None:
             decode_kwargs["tt_out_logits_saved"] = tt_out_logits_saved
         if enable_trace:
-            tt_tok = self._easy_trace_text(**decode_kwargs, reset_inputs=reset_inputs, return_logits=return_logits)
+            tt_tok = self._decode_easy_trace_text(
+                **decode_kwargs, reset_inputs=reset_inputs, return_logits=return_logits
+            )
         else:
             tt_tok = self._decode_forward_no_trace_text(**decode_kwargs, return_logits=return_logits)
 
@@ -476,7 +554,7 @@ class Generator:
 
         return tt_out_trace
 
-    def _easy_trace_text(
+    def _decode_easy_trace_text(
         self,
         tokens,
         current_pos,
@@ -488,11 +566,11 @@ class Generator:
         return_logits=False,
     ):
         """
-        Tracing is easy! Just call this method and we'll handle tracing for you.
+        Run decode forward text with tracing
         """
         tokens = tokens.view(-1, 1)
-
-        if not hasattr(self, "trace_id_text"):
+        # The trace is different depending on whether we are returning logits or sampling on device
+        if not self.trace_ids_decode[return_logits]:
             trace_id, tt_out_tok, *device_inputs = self._capture_trace_text(
                 tokens,
                 current_pos,
@@ -502,9 +580,9 @@ class Generator:
                 is_page_table_sharded=is_page_table_sharded,
                 return_logits=return_logits,
             )
-            self.trace_id_text = trace_id
-            self.trace_inputs_text = device_inputs
-            self.trace_output_text = tt_out_tok
+            self.trace_ids_decode[return_logits] = trace_id
+            self.trace_inputs_decode[return_logits] = device_inputs
+            self.trace_output_decode[return_logits] = tt_out_tok
         if reset_inputs:
             host_inputs = self.model.prepare_decode_inputs_host(
                 tokens, current_pos, page_table, is_cur_pos_sharded, is_page_table_sharded
@@ -512,13 +590,13 @@ class Generator:
             shard_specs = self.model.prepare_decode_shard_configs(is_cur_pos_sharded, is_page_table_sharded)
             device_inputs = copy_host_to_device(
                 host_tensors=host_inputs,
-                device_tensors=self.trace_inputs_text,
+                device_tensors=self.trace_inputs_decode[return_logits],
                 shard_specs=shard_specs,
             )
         trace_tok_rm = self._decode_forward_trace_text(
-            self.trace_id_text,
-            self.trace_inputs_text,
-            self.trace_output_text,
+            self.trace_ids_decode[return_logits],
+            self.trace_inputs_decode[return_logits],
+            self.trace_output_decode[return_logits],
             tokens,
             current_pos,
             page_table=page_table,
@@ -606,7 +684,6 @@ class Generator:
 
     def _get_prefill_user_page_table(self, page_table, kv_cache, prefill_len, user_id, use_batched_prefill=False):
         # Ensure page_table is not padded with extra blocks for paged_fill_cache to work properly
-
         block_size = get_block_size(kv_cache)
         num_blocks = num_blocks_in_seq(prefill_len, block_size)
         page_table = page_table[:, :num_blocks]

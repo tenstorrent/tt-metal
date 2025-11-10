@@ -27,6 +27,7 @@ struct Host {
     uint32_t rack = 0;
     uint32_t shelf_u = 0;
     std::string motherboard;
+    std::string node_type;
 };
 
 struct LogicalChannelEndpoint {
@@ -89,7 +90,8 @@ struct ResolvedGraphInstance {
 
 enum class CableLength { CABLE_0P5, CABLE_1, CABLE_2P5, CABLE_3, CABLE_5, UNKNOWN };
 
-CableLength calc_cable_length(const Host& host1, const Host& host2);
+CableLength calc_cable_length(
+    const Host& host1, int tray_id1, const Host& host2, int tray_id2, const std::string& node_type);
 
 class CablingGenerator {
 public:
@@ -132,7 +134,6 @@ private:
         const;
 
     // Caches for optimization
-    std::unordered_map<tt::umd::BoardType, Board> board_templates_;
     std::unordered_map<std::string, Node> node_templates_;  // Templates with host_id=0
 
     std::unique_ptr<ResolvedGraphInstance> root_instance_;

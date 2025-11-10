@@ -1,6 +1,8 @@
 #!/bin/bash
 set -eo pipefail
 
+TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache
+
 run_t3000_ethernet_tests() {
   # Record the start time
   fail=0
@@ -29,23 +31,25 @@ run_t3000_llama3_tests() {
   echo "LOG_METAL: Running run_t3000_llama3_tests"
 
   # Llama3.2-1B
-  llama1b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-1B-Instruct/
+  llama1b=meta-llama/Llama-3.2-1B-Instruct
   # Llama3.2-3B
-  llama3b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-3B-Instruct/
+  llama3b=meta-llama/Llama-3.2-3B-Instruct
   # Llama3.1-8B
-  llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
+  llama8b=meta-llama/Llama-3.1-8B-Instruct
   # Llama3.2-11B
-  llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
+  llama11b=meta-llama/Llama-3.2-11B-Vision-Instruct
 
   # Run test model for llama3 - 1B, 3B, 8B and 11B weights
-  for llama_dir in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
-    LLAMA_DIR=$llama_dir pytest -n auto models/tt_transformers/tests/test_model.py -k full ; fail+=$?
-    LLAMA_DIR=$llama_dir pytest -n auto models/tt_transformers/tests/test_model_prefill.py ; fail+=$?
-    echo "LOG_METAL: Llama3 tests for $llama_dir completed"
+  for hf_model in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
+    tt_cache=$TT_CACHE_HOME/$hf_model
+    HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest -n auto models/tt_transformers/tests/test_model.py -k full ; fail+=$?
+    HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest -n auto models/tt_transformers/tests/test_model_prefill.py ; fail+=$?
+    echo "LOG_METAL: Llama3 tests for $hf_model completed"
   done
 
   # Run chunked prefill test for llama3-1B
-  LLAMA_DIR=$llama1b pytest models/tt_transformers/tests/test_chunked_generation.py; fail+=$?
+  tt_cache_llama1b=$TT_CACHE_HOME/$llama1b
+  HF_MODEL=$llama1b TT_CACHE_PATH=$tt_cache_llama1b pytest models/tt_transformers/tests/test_chunked_generation.py; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -64,9 +68,10 @@ run_t3000_llama3_70b_tests() {
   echo "LOG_METAL: Running run_t3000_llama3_70b_tests"
 
   # Run test_model (decode and prefill) for llama3 70B
-  llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/
-  LLAMA_DIR=$llama70b pytest -n auto models/tt_transformers/tests/test_model.py -k full ; fail+=$?
-  LLAMA_DIR=$llama70b pytest -n auto models/tt_transformers/tests/test_model_prefill.py ; fail+=$?
+  llama70b=meta-llama/Llama-3.1-70B-Instruct
+  tt_cache_llama70b=$TT_CACHE_HOME/$llama70b
+  HF_MODEL=$llama70b TT_CACHE_PATH=$tt_cache_llama70b pytest -n auto models/tt_transformers/tests/test_model.py -k full ; fail+=$?
+  HF_MODEL=$llama70b TT_CACHE_PATH=$tt_cache_llama70b pytest -n auto models/tt_transformers/tests/test_model_prefill.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -85,9 +90,10 @@ run_t3000_llama3_90b_tests() {
   echo "LOG_METAL: Running run_t3000_llama3_90b_tests"
 
   # Run test_model (decode and prefill) for llama3 70B
-  llama90b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-90B-Vision-Instruct/
-  LLAMA_DIR=$llama90b pytest -n auto models/tt_transformers/tests/test_model.py -k quick ; fail+=$?
-  LLAMA_DIR=$llama90b pytest -n auto models/tt_transformers/tests/test_model_prefill.py -k "performance and 1layer" ; fail+=$?
+  llama90b=meta-llama/Llama-3.2-90B-Vision-Instruct
+  tt_cache_llama90b=$TT_CACHE_HOME/$llama90b
+  HF_MODEL=$llama90b TT_CACHE_PATH=$tt_cache_llama90b pytest -n auto models/tt_transformers/tests/test_model.py -k quick ; fail+=$?
+  HF_MODEL=$llama90b TT_CACHE_PATH=$tt_cache_llama90b pytest -n auto models/tt_transformers/tests/test_model_prefill.py -k "performance and 1layer" ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -106,18 +112,19 @@ run_t3000_llama3_accuracy_tests() {
   echo "LOG_METAL: Running run_t3000_llama3_accuracy_tests"
 
   # Llama3.2-1B
-  llama1b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-1B-Instruct/
+  llama1b=meta-llama/Llama-3.2-1B-Instruct
   # Llama3.2-3B
-  llama3b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-3B-Instruct/
+  llama3b=meta-llama/Llama-3.2-3B-Instruct
   # Llama3.1-8B
-  llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
+  llama8b=meta-llama/Llama-3.1-8B-Instruct
   # Llama3.2-11B
-  llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
+  llama11b=meta-llama/Llama-3.2-11B-Vision-Instruct
 
   # Run test accuracy llama3 - 1B, 3B, 8B, and 11B weights
-  for llama_dir in "$llama1b" "$llama3b" "$llama8b" "$llama11b" ; do
-    LLAMA_DIR=$llama_dir pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-token-matching" ; fail+=$?
-    echo "LOG_METAL: Llama3 accuracy tests for $llama_dir completed"
+  for hf_model in "$llama1b" "$llama3b" "$llama8b" "$llama11b" ; do
+    tt_cache=$TT_CACHE_HOME/$hf_model
+    HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-token-matching" ; fail+=$?
+    echo "LOG_METAL: Llama3 accuracy tests for $hf_model completed"
   done
 
   # Record the end time
@@ -137,14 +144,15 @@ run_t3000_llama3_70n90b_accuracy_tests() {
   echo "LOG_METAL: Running run_t3000_llama3_accuracy_tests"
 
   # Llama3.1-70B
-  llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/
+  llama70b=meta-llama/Llama-3.1-70B-Instruct
   # Llama3.2-90B
-  llama90b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-90B-Vision-Instruct/
+  llama90b=meta-llama/Llama-3.2-90B-Vision-Instruct
 
-  # Run test accuracy llama3 - 70B and 90B weights
-  for llama_dir in "$llama70b" "$llama90b"; do
-    LLAMA_DIR=$llama_dir pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-token-matching" --timeout 4200 ; fail+=$?
-    echo "LOG_METAL: Llama3 accuracy tests for $llama_dir completed"
+  # Run test accuracy llama3 - 1B, 3B, 8B, 11B and 70B weights
+  for hf_model in "$llama70b" "$llama90b"; do
+    tt_cache=$TT_CACHE_HOME/$hf_model
+    HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-token-matching" --timeout 4200 ; fail+=$?
+    echo "LOG_METAL: Llama3 accuracy tests for $hf_model completed"
   done
 
   # Record the end time
@@ -164,12 +172,13 @@ run_t3000_llama3.2-11b-vision_freq_tests() {
   echo "LOG_METAL: Running run_t3000_llama3.2-11b-vision_freq_tests"
 
   # Llama3.2-11B
-  llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
+  llama11b=meta-llama/Llama-3.2-11B-Vision-Instruct
+  tt_cache_llama11b=$TT_CACHE_HOME/$llama11b
 
-  LLAMA_DIR=$llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_transformer.py ; fail+=$?
-  LLAMA_DIR=$llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_vision_encoder.py ; fail+=$?
-  LLAMA_DIR=$llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_text.py ; fail+=$?
-  LLAMA_DIR=$llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_vision.py ; fail+=$?
+  HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b  pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_transformer.py ; fail+=$?
+  HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_vision_encoder.py ; fail+=$?
+  HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_text.py ; fail+=$?
+  HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_vision.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -188,14 +197,15 @@ run_t3000_spoof_n300_llama3.2-11b-vision_freq_tests() {
   echo "LOG_METAL: Running run_t3000_spoof_n300_llama3.2-11b-vision_freq_tests"
 
   # Llama3.2-11B
-  llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
+  llama11b=meta-llama/Llama-3.2-11B-Vision-Instruct
+  tt_cache_llama11b=$TT_CACHE_HOME/$llama11b
   # Use MESH_DEVICE env variable to run on an N300 mesh
   mesh_device=N300
 
-  MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_transformer.py ; fail+=$?
-  MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_vision_encoder.py ; fail+=$?
-  MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_text.py ; fail+=$?
-  MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_vision.py ; fail+=$?
+  MESH_DEVICE=$mesh_device HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_transformer.py ; fail+=$?
+  MESH_DEVICE=$mesh_device HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_vision_encoder.py ; fail+=$?
+  MESH_DEVICE=$mesh_device HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_text.py ; fail+=$?
+  MESH_DEVICE=$mesh_device HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_vision.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -214,11 +224,12 @@ run_t3000_llama3.2-90b-vision_freq_tests() {
   echo "LOG_METAL: Running run_t3000_llama3.2-90b-vision_freq_tests"
 
   # Llama3.2-90B -- use repacked weights when acceptable for faster testing
-  llama90b_repacked=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-90B-Vision-Instruct/repacked
-  LLAMA_DIR=$llama90b_repacked pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_text.py --timeout 2400; fail+=$?
-  LLAMA_DIR=$llama90b_repacked pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_transformer.py ; fail+=$?
-  LLAMA_DIR=$llama90b_repacked pytest -n auto models/tt_transformers/tests/multimodal/test_llama_vision_encoder.py ; fail+=$?
-  LLAMA_DIR=$llama90b_repacked pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_vision.py ; fail+=$?
+  llama90b=meta-llama/Llama-3.2-90B-Vision-Instruct
+  tt_cache_llama90b=$TT_CACHE_HOME/$llama90b
+  HF_MODEL=$llama90b TT_CACHE_PATH=$tt_cache_llama90b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_text.py --timeout 2400; fail+=$?
+  HF_MODEL=$llama90b TT_CACHE_PATH=$tt_cache_llama90b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_transformer.py ; fail+=$?
+  HF_MODEL=$llama90b TT_CACHE_PATH=$tt_cache_llama90b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_vision_encoder.py ; fail+=$?
+  HF_MODEL=$llama90b TT_CACHE_PATH=$tt_cache_llama90b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_vision.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -234,8 +245,8 @@ run_t3000_mistral_tests() {
 
   echo "LOG_METAL: Running run_t3000_mistral_frequent_tests"
 
-  tt_cache_path="/mnt/MLPerf/tt_dnn-models/Mistral/TT_CACHE/Mistral-7B-Instruct-v0.3"
-  hf_model="/mnt/MLPerf/tt_dnn-models/Mistral/hub/models--mistralai--Mistral-7B-Instruct-v0.3/snapshots/e0bc86c23ce5aae1db576c8cca6f06f1f73af2db"
+  hf_model=mistralai/Mistral-7B-Instruct-v0.3
+  tt_cache_path=$TT_CACHE_HOME/$hf_model
   TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest -n auto models/tt_transformers/tests/test_model.py -k full
   TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest -n auto models/tt_transformers/tests/test_model_prefill.py
 
@@ -268,22 +279,8 @@ run_t3000_tteager_tests() {
 
   echo "LOG_METAL: Running run_t3000_tteager_tests"
 
-  pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_gather.py -k post_commit ; fail+=$?
-  pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_gather_matmul.py -k post_commit ; fail+=$?
-  pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_reduce_scatter_post_commit.py ; fail+=$?
-  pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_send_recv_async.py ; fail+=$?
-  pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_barrier_t3000_frequent.py ; fail+=$?
-  pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_reduce_t3000_frequent.py ; fail+=$?
-  pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_to_all_dispatch_t3000.py ; fail+=$?
-  pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_to_all_combine_t3000.py ; fail+=$?
-  pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_mesh_partition_t3000.py ; fail+=$?
-  pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_moe_ccl_end_to_end.py ; fail+=$?
-  pytest -n auto tests/ttnn/unit_tests/operations/point_to_point/test_point_to_point.py ; fail+=$?
-  pytest -n auto tests/ttnn/unit_tests/operations/data_movement/test_moe_expert_token_remap_t3k.py ; fail+=$?
-  pytest -n auto tests/ttnn/unit_tests/operations/debug/test_apply_device_delay_t3000.py ; fail+=$?
-
   # distributed layernorm
-  pytest tests/ttnn/unit_tests/operations/test_distributed_layernorm.py ; fail+=$?
+  pytest tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -299,7 +296,7 @@ run_t3000_trace_stress_tests() {
   start_time=$(date +%s)
 
   echo "LOG_METAL: Running run_t3000_trace_stress_tests"
-  NUM_TRACE_LOOPS=15 pytest -n auto tests/ttnn/unit_tests/test_multi_device_trace.py ; fail+=$?
+  NUM_TRACE_LOOPS=15 pytest -n auto tests/ttnn/unit_tests/base_functionality/test_multi_device_trace.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -350,28 +347,85 @@ run_t3000_resnet_tests() {
   fi
 }
 
-
-run_t3000_sd35large_tests() {
+run_t3000_dit_tests() {
   # Record the start time
   fail=0
   start_time=$(date +%s)
+  test_name=${FUNCNAME[1]}
 
-  echo "LOG_METAL: Running run_t3000_sd35large_tests"
+  echo "LOG_METAL: Running ${test_name}"
 
   # Run test_model for sd35 large
-  pytest -n auto models/experimental/tt_dit/tests/models/test_vae_sd35.py -k "t3k"; fail+=$?
-  pytest -n auto models/experimental/tt_dit/tests/models/test_attention_sd35.py; fail+=$?
-  pytest -n auto models/experimental/tt_dit/tests/models/test_transformer_sd35.py::test_sd35_transformer_block; fail+=$?
+  for test_cmd in "$@"; do
+    pytest -n auto ${test_cmd} ; fail+=$?
+  done
 
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_sd35large_tests $duration seconds to complete"
+  echo "LOG_METAL: ${test_name} $duration seconds to complete"
   if [[ $fail -ne 0 ]]; then
     exit 1
   fi
 }
 
+run_t3000_sd35large_tests() {
+  run_t3000_dit_tests \
+    "models/experimental/tt_dit/tests/models/sd35/test_vae_sd35.py -k t3k" \
+    "models/experimental/tt_dit/tests/models/sd35/test_attention_sd35.py" \
+    "models/experimental/tt_dit/tests/models/sd35/test_transformer_sd35.py::test_sd35_transformer_block"
+}
+
+run_t3000_flux1_tests() {
+  run_t3000_dit_tests \
+    "models/experimental/tt_dit/tests/blocks/test_attention.py::test_attention_flux" \
+    "models/experimental/tt_dit/tests/models/flux1/test_transformer_flux1.py::test_single_transformer_block" \
+    "models/experimental/tt_dit/tests/blocks/test_transformer_block.py::test_transformer_block_flux"
+}
+
+run_t3000_wan22_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_wan22_tests"
+
+  # Run test_model for Wan2.2
+  export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
+  pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_rope.py -k "2x4"; fail+=$?
+  pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_attention_wan.py -k "2x4sp0tp1"; fail+=$?
+  pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_transformer_wan.py -k "transformer_block and 2x4sp0tp1 or short_seq-2x4sp0tp1 and not yes_load_cache and not model_caching" --timeout 600; fail+=$?
+  pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_vae_wan2_1.py -k "test_wan_decoder and 2x4 and real_weights and check_output and _1f"; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_wan22_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
+run_t3000_mochi_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_mochi_tests"
+
+  export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
+  FAKE_DEVICE=T3K pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_vae_mochi.py -k "decoder and 1link-load_dit-large_latent or conv3d_1x1x1 or -1link-l768" --timeout=1500; fail+=$?
+  pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_attention_mochi.py -k "short_seq"; fail+=$?
+  pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_transformer_mochi.py -k "1x8 or 2x4 and short_seq and not yes_load_cache and not model_caching"; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_mochi_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
 
 run_t3000_tests() {
   # Run ethernet tests
@@ -420,9 +474,17 @@ run_t3000_tests() {
   # Run sd35_large tests
   run_t3000_sd35large_tests
 
+  # Run flux1 tests
+  run_t3000_flux1_tests
+
   # Run trace tests
   run_t3000_trace_stress_tests
 
+  # Run wan22 tests
+  run_t3000_wan22_tests
+
+  # Run mochi tests
+  run_t3000_mochi_tests
 }
 
 fail=0

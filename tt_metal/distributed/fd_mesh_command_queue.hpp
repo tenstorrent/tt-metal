@@ -6,7 +6,7 @@
 
 #include "mesh_command_queue_base.hpp"
 
-#include <tt-metalium/command_queue.hpp>
+#include "impl/dispatch/command_queue.hpp"
 
 #include "tt_metal/common/multi_producer_single_consumer_queue.hpp"
 #include "dispatch/cq_shared_state.hpp"
@@ -61,7 +61,7 @@ private:
     // When running trace, the dispatch commands responsible for forwarding go signals must be
     // captured on these subgrids.
     void capture_go_signal_trace_on_unused_subgrids(
-        const MeshCoordinateRange& active_sub_grids,
+        const MeshCoordinateRangeSet& active_sub_grids_set,
         const SubDeviceId& sub_device_id,
         uint32_t expected_num_workers_completed,
         bool mcast_go_signals,

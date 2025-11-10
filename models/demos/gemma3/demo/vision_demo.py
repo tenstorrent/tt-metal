@@ -72,7 +72,7 @@ def create_multimodal_model(
     from models.tt_transformers.tt.multimodal.llama_vision_model import CrossAttentionTransformer
 
     tt_model_args = ModelArgs(mesh_device, max_batch_size=max_batch_size, optimizations=optimizations)
-    assert tt_model_args.is_vision(), "This model is multimodal"
+    assert tt_model_args.is_multimodal, "This model is multimodal"
 
     # limit length or we'll run out of space
     tt_model_args.max_seq_len = max_seq_len
@@ -257,7 +257,9 @@ def test_multimodal_demo_text(
     else:
         from transformers import AutoProcessor
 
-        processor = AutoProcessor.from_pretrained(model_args[0].CKPT_DIR, use_fast=True, do_convert_rgb=True)
+        processor = AutoProcessor.from_pretrained(
+            model_args[0].CKPT_DIR, local_files_only=os.getenv("CI") == "true", use_fast=True, do_convert_rgb=True
+        )
 
     generator = Generator(model, model_args, mesh_device)
 
@@ -591,6 +593,7 @@ def test_multimodal_demo_text(
             ml_model_type="vlm",
             num_layers=model_args[0].n_layers,
             batch_size=max_batch_size,
+            config_params={"data_parallel": data_parallel, "tensor_parallel": num_devices // data_parallel},
             input_sequence_length=max(prefill_lens).item(),
             output_sequence_length=max_gen_len,
         )

@@ -26,28 +26,27 @@ from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
 
 def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, model: Transformer, model_args: ModelArgs, tt_cache_path):
     for layer_idx in range(num_layers):
-        cache_k = torch.zeros(kv_cache_shape, dtype=dtype)
-        cache_v = torch.zeros(kv_cache_shape, dtype=dtype)
+        cache_kv = torch.zeros(kv_cache_shape, dtype=dtype)
 
         model.layers[layer_idx].attention.layer_past = [
             ttnn.as_tensor(
-                k_or_v,
+                cache_kv,
                 device=model.mesh_device,
                 dtype=ttnn.bfloat8_b,
                 layout=model_args.model_config["ATTN_W_LAYOUT_TILE"],
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(model.mesh_device),
-                cache_file_name=f"{tt_cache_path}/kvcache_{k_or_v.shape}",
+                # Separate cache files for K and V to avoid collision.
+                cache_file_name=f"{tt_cache_path}/{kv}cache_{kv_cache_shape}",
             )
-            for k_or_v in [cache_k, cache_v]
+            for kv in ["k", "v"]
         ]
 
     return [l.attention.layer_past for l in model.layers]
 
 
 def get_platform_specific_optimizations(model_name):
-    is_72B = "72B" in model_name
-    max_seq_len = 65536 if is_72B else 131072
+    max_seq_len = 131072
 
     performance_opt = lambda model_args: DecodersPrecision.performance(model_args.n_layers, model_args.model_name)
 
@@ -111,7 +110,10 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         super().__init__(*args, **kwargs)
 
     @classmethod
-    def initialize_vllm_model(cls, hf_config, mesh_device, max_batch_size, max_seq_len, tt_data_parallel=1):
+    def initialize_vllm_model(
+        cls, hf_config, mesh_device, max_batch_size, max_seq_len, tt_data_parallel=1, optimizations=None
+    ):
+        assert optimizations is None, "Custom optimizations are not supported for this model"
         optimizations, max_seq_len_native = get_platform_specific_optimizations(hf_config.name_or_path)
         if max_seq_len > max_seq_len_native:
             logger.warning(
@@ -138,7 +140,7 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             mesh_device,
             max_batch_size=model_args.max_batch_size,
             max_seq_len=model_args.max_seq_len,
-            optimizations=optimizations,
+            optimizations=DecodersPrecision.performance(config.vision_config.depth, ref_model_name),
         )
         vision_model_args.hf_config.vision_config.depth = config.vision_config.depth
         visual_model = DropInVisionTransformer(reference_model.visual, vision_model_args)
@@ -211,7 +213,7 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             pad_embedding=self.reference_model.model.language_model.embed_tokens(torch.tensor(pad_token_id)),
         )
         # Get user-specific rotary position embeddings
-        cos, sin = multimodal_rope_from_hf(
+        cos, sin, rope_deltas = multimodal_rope_from_hf(
             inputs, input_embeds, self.reference_model, self.model_args, pad_token_id=pad_token_id
         )
         rot_mats = (cos, sin)
@@ -223,13 +225,13 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             kv_cache=kv_cache,
             prompt_lens=decoding_pos,
         )
-        return logits, rot_mats
+        return logits, rope_deltas
 
     def decode_forward(self, *args, **kwargs):
-        rot_mats_list: list = kwargs.pop(
-            "rot_mats_all_users", None
+        rope_deltas_list: list = kwargs.pop(
+            "rope_deltas_all_users", None
         )  # [INFO] update the cos/sin matrices for the current users in the batch
-        if rot_mats_list is not None:
-            super().update_cos_sin_rows(rot_mats_list)
+        if rope_deltas_list is not None:
+            super().update_rope_deltas(rope_deltas_list)
 
         return super().decode_forward_text(*args, **kwargs)

@@ -12,7 +12,7 @@
 namespace tt {
 namespace tt_metal {
 
-uint32_t calculate_max_prefetch_data_size_bytes(const CoreType& dispatch_core_type, uint32_t num_subdevices) {
+uint32_t calculate_max_prefetch_data_size_bytes(const CoreType& /*dispatch_core_type*/, uint32_t num_subdevices) {
     // CQ capacity would be reduced by the commands and alignment padding.
     // prefetch_relay_inline, dispatch_wait (x #workers), and dispatch_write_linear would add alignment padding
     const auto host_alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(HalMemType::HOST);
@@ -178,7 +178,7 @@ void issue_core_read_command_sequence(const CoreReadDispatchParams& dispatch_par
 
 void read_core_data_from_completion_queue(
     const ReadCoreDataDescriptor& read_descriptor,
-    chip_id_t mmio_device_id,
+    ChipId mmio_device_id,
     uint16_t channel,
     uint8_t cq_id,
     SystemMemoryManager& sysmem_manager,

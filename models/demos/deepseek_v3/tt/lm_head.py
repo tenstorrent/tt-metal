@@ -253,12 +253,10 @@ class LMHead(AbstractModule):
 
     @classmethod
     def create_state(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device, ccl: CCL) -> ModelState:
+        # Store CCL object for runtime semaphore initialization
         return {
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
-            "all_gather": {
-                "multi_device_global_semaphore": ccl.get_gather_sem(1),
-                "num_links": ccl.get_max_links(1),
-            },
+            "ccl": ccl,
         }
 
     @classmethod

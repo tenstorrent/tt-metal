@@ -6,7 +6,7 @@
 #include <chrono>
 #include <fmt/base.h>
 #include <stdint.h>
-#include <tt-metalium/command_queue.hpp>
+#include "impl/dispatch/command_queue.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -35,7 +35,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include "impl/context/metal_context.hpp"
-#include <tt-metalium/semaphore.hpp>
+#include "impl/buffers/semaphore.hpp"
 #include <tt_stl/span.hpp>
 #include "test_common.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
@@ -684,7 +684,7 @@ static int pgm_dispatch(T& state, TestInfo info) {
     bool pass = true;
     std::shared_ptr<MeshDevice> mesh_device;
     try {
-        const chip_id_t device_id = 0;
+        const ChipId device_id = 0;
         const std::size_t cq_id = 0;
         DispatchCoreType dispatch_core_type = info.dispatch_from_eth ? DispatchCoreType::ETH : DispatchCoreType::WORKER;
         mesh_device = MeshDevice::create_unit_mesh(
@@ -1105,37 +1105,12 @@ int main(int argc, char** argv) {
             BM_pgm_dispatch,
             TestInfo{
                 .warmup_iterations = 5000,
-                .brisc_enabled = false,
+                .brisc_enabled = true,
                 .ncrisc_enabled = false,
                 .trisc_enabled = false,
-                .erisc_enabled = true,
-                .use_trace = true})
-            ->Apply(Max8192Args)
-            ->UseManualTime();
-        benchmark::RegisterBenchmark(
-            "BM_pgm_dispatch/tensix_eth_2",
-            BM_pgm_dispatch,
-            TestInfo{
-                .warmup_iterations = 5000,
-                .n_args = 16,
-                .n_kgs = std::get<0>(core_count),
-                .erisc_enabled = true,
+                .erisc_enabled = false,
                 .use_trace = true,
-                .use_all_cores = true})
-            ->Apply(Max8192Args)
-            ->UseManualTime();
-        benchmark::RegisterBenchmark(
-            "BM_pgm_dispatch/tensix_eth_2_4_shadow",
-            BM_pgm_dispatch,
-            TestInfo{
-                .warmup_iterations = 5000,
-                .slow_kernel_cycles = 40000,
-                .nfast_kernels = 4,
-                .n_args = 16,
-                .n_kgs = std::get<0>(core_count),
-                .erisc_enabled = true,
-                .use_trace = true,
-                .use_all_cores = true})
+                .dispatch_from_eth = true})
             ->Apply(Max8192Args)
             ->UseManualTime();
     }

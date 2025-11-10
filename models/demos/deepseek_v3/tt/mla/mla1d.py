@@ -17,6 +17,7 @@ from models.demos.deepseek_v3.tt.rms_norm.rms_norm import RMSNorm
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import (
     AllGatherAsyncConfig,
+    AllToAllAsyncGenericConfig,
     FromWeightConfig,
     LinearConfig,
     MeshDeviceStub,
@@ -543,16 +544,10 @@ class MLA1D(AbstractModule):
         )
 
         # Q all-to-all
-        wq_a2a_ag_config = AllGatherAsyncConfig(
-            mesh_device=MeshDeviceStub(mesh_shape),
+        wq_a2a_config = AllToAllAsyncGenericConfig(
             cluster_axis=1,
-            dim=1,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=ttnn.Topology.Linear,
-        )
-        wq_a2a_rs_config = ReduceScatterAsyncMinimalConfig(
-            cluster_axis=1,
-            dim=1,
+            in_dim=2,
+            out_dim=1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
         )
@@ -583,16 +578,10 @@ class MLA1D(AbstractModule):
         )
 
         # FlashMLA all-to-all
-        flash_mla_ag_config = AllGatherAsyncConfig(
-            mesh_device=MeshDeviceStub(mesh_shape),
+        flash_mla_a2a_config = AllToAllAsyncGenericConfig(
             cluster_axis=1,
-            dim=1,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=ttnn.Topology.Linear,
-        )
-        flash_mla_rs_config = ReduceScatterAsyncMinimalConfig(
-            cluster_axis=1,
-            dim=1,
+            in_dim=1,
+            out_dim=2,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
         )
@@ -632,13 +621,11 @@ class MLA1D(AbstractModule):
             "kv_norm": kv_norm_config,
             "wq_a_rs_decode": wq_a_rs_config,
             "wq_a_ag_decode": wq_a_ag_config,
-            "wq_a2a_ag_decode": wq_a2a_ag_config,
-            "wq_a2a_rs_decode": wq_a2a_rs_config,
+            "wq_a2a_decode": wq_a2a_config,
             "wkv_a_ag_decode": wkv_a_ag_config,
             "wkv_a_r_decode": wkv_a_r_config,
             "wkv_a_rs_decode": wkv_a_rs_config,
-            "flash_mla_ag_decode": flash_mla_ag_config,
-            "flash_mla_rs_decode": flash_mla_rs_config,
+            "flash_mla_a2a_decode": flash_mla_a2a_config,
             "wo_ag_decode": wo_ag_config,
             "mesh_device": mesh_device,
         }
@@ -737,41 +724,12 @@ class MLA1D(AbstractModule):
         if caches is None:
             caches = (torch.zeros(cache_shape),) * mesh_device.shape[0]
 
-        # CCL states setup (Must be in order of execution)
-        get_rs_params = lambda axis: {
-            "multi_device_global_semaphore": ccl.get_reduce_scatter_sem(axis=axis),
-            "barrier_semaphore": ccl.get_barrier_sem(axis=axis),
-            "num_links": ccl.get_max_links(axis=axis),
-        }
-        get_ag_params = lambda axis: {
-            "multi_device_global_semaphore": ccl.get_gather_sem(axis=axis),
-            "barrier_semaphore": ccl.get_barrier_sem(axis=axis),
-            "num_links": ccl.get_max_links(axis=axis),
-        }
-        ccl_states_prefill = {
-            "wq_a_rs_prefill": get_rs_params(1),
-            "wq_a_ag_prefill": get_ag_params(1),
-            "wkv_a_ag_prefill": get_ag_params(1),
-            "wo_ag_prefill": get_ag_params(1),
-        }
-        ccl_states_decode = {
-            "wq_a_rs_decode": get_rs_params(1),
-            "wq_a_ag_decode": get_ag_params(1),
-            "wq_a2a_ag_decode": get_ag_params(1),
-            "wq_a2a_rs_decode": get_rs_params(1),
-            "wkv_a_ag_decode": get_ag_params(1),
-            "wkv_a_rs_decode": get_rs_params(1),
-            "flash_mla_ag_decode": get_ag_params(1),
-            "flash_mla_rs_decode": get_rs_params(1),
-            "wo_ag_decode": get_ag_params(1),
-        }
-
+        # Store CCL object for runtime semaphore initialization
         return {
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
             "mesh_shape": mesh_device.shape,
             "kvpe_cache": cls._convert_cache(tuple(caches), mesh_device),
-            **ccl_states_prefill,
-            **ccl_states_decode,
+            "ccl": ccl,
         }
 
     @classmethod
@@ -822,22 +780,21 @@ class MLA1D(AbstractModule):
         v_head_dim = cfg["v_head_dim"]
 
         kvpe_cache = cfg["kvpe_cache"]
+        ccl = cfg["ccl"]
 
         bsz = x.shape[2]
         scale = 1.0 / mla_tp_factor
 
         # wq_a and wq_b
         tt_q = ttnn.linear(x, **cfg["wq_a"])
-        tt_q = ttnn.experimental.reduce_scatter_minimal_async(tt_q, **cfg["wq_a_rs_decode"])
-        tt_q = ttnn.experimental.all_gather_async(tt_q, **cfg["wq_a_ag_decode"])
+        tt_q = ttnn.experimental.reduce_scatter_minimal_async(
+            tt_q, **ccl.populate_reduce_scatter_runtime_args(cfg["wq_a_rs_decode"])
+        )
+        tt_q = ttnn.experimental.all_gather_async(tt_q, **ccl.populate_all_gather_runtime_args(cfg["wq_a_ag_decode"]))
 
         tt_q = RMSNorm.forward_decode(tt_q, cfg["q_norm"])
         tt_q = ttnn.linear(tt_q, **cfg["wq_b"])
-
-        # Bug: https://github.com/tenstorrent/tt-metal/issues/29932
-        tt_q = ttnn.to_layout(tt_q, ttnn.ROW_MAJOR_LAYOUT)
         tt_q = ttnn.reshape(tt_q, (bsz, 1, num_heads_local, qk_head_dim))
-        tt_q = ttnn.to_layout(tt_q, ttnn.TILE_LAYOUT)
 
         tt_q_nope = ttnn.slice(tt_q, [0, 0, 0, 0], [bsz, 1, num_heads_local, qk_nope_head_dim])
         tt_q_rope = ttnn.slice(tt_q, [0, 0, 0, qk_nope_head_dim], [bsz, 1, num_heads_local, qk_head_dim])
@@ -864,24 +821,14 @@ class MLA1D(AbstractModule):
         # Q ready for FlashMLA
         tt_q = ttnn.concat([tt_q_nope, tt_q_rope], dim=-1)
 
-        # FIXME: All-to-All here!! (tt_q)
-        # The following code does the following:
-        # [1, bsz, num_heads_local, kv_lora_rank + qk_rope_head_dim] -> [1, bsz_local, num_heads, kv_lora_rank + qk_rope_head_dim]
-        # Using the following algorithm: 1. AG on in_dim, 2. Scale by number of devices, 3. RS on out_dim
-        tt_q = ttnn.permute(tt_q, (0, 2, 1, 3))  # [1, num_heads_local, bsz_local, kv_lora_rank + qk_rope_head_dim]
-        tt_q = ttnn.experimental.all_gather_async(
-            tt_q, **cfg["wq_a2a_ag_decode"]
-        )  # [1, num_heads, bsz_local, kv_lora_rank + qk_rope_head_dim]
-        tt_q = ttnn.permute(tt_q, (0, 2, 1, 3))  # [1, bsz_local, num_heads, kv_lora_rank + qk_rope_head_dim]
-        tt_q = ttnn.experimental.reduce_scatter_minimal_async(tt_q, **cfg["wq_a2a_rs_decode"])
-        tt_q = tt_q * scale  # Scale the input tensor
+        tt_q = ttnn.experimental.all_to_all_async_generic(tt_q, **cfg["wq_a2a_decode"])
 
         # KVPE Stuff
         tt_kv = ttnn.linear(x, **cfg["wkv_a"])
 
         # AG + Reduce b/c sub-tile RS not supported
         tt_kv = ttnn.experimental.all_gather_async(
-            tt_kv, **cfg["wkv_a_ag_decode"]
+            tt_kv, **ccl.populate_all_gather_runtime_args(cfg["wkv_a_ag_decode"])
         )  # [1, num_devices, bsz, kv_lora_rank + qk_rope_head_dim]
         tt_kv = ttnn.experimental.fast_reduce_nc(
             tt_kv, **cfg["wkv_a_r_decode"]
@@ -914,7 +861,9 @@ class MLA1D(AbstractModule):
         # FIXME: Reduce-Scatter here!! (tt_kvpe)
         tt_kvpe = ttnn.pad(tt_kvpe, [(0, 0), (0, ttnn.TILE_SIZE - 1), (0, 0), (0, 0)], 0)
         tt_kvpe = ttnn.permute(tt_kvpe, (0, 2, 1, 3))  # [1, bsz, ttnn.TILE_SIZE, kv_lora_rank + qk_rope_head_dim]
-        tt_kvpe = ttnn.experimental.reduce_scatter_minimal_async(tt_kvpe, **cfg["wkv_a_rs_decode"])
+        tt_kvpe = ttnn.experimental.reduce_scatter_minimal_async(
+            tt_kvpe, **ccl.populate_reduce_scatter_runtime_args(cfg["wkv_a_rs_decode"])
+        )
         tt_kvpe = tt_kvpe[:, :, :1, :]  # [1, bsz_local, 1, kv_lora_rank + qk_rope_head_dim]
         tt_kvpe = tt_kvpe * scale  # Scale the input tensor
 
@@ -943,30 +892,18 @@ class MLA1D(AbstractModule):
         ttnn.deallocate(tt_q)
         attn_out = ttnn.to_memory_config(attn_out, **cfg["flash_mla_out_reshard"])
 
-        # FIXME: All-to-All here!! (attn_out)
-        # TODO: add deallocation of intermediate tensors
-        attn_out = ttnn.experimental.all_gather_async(
-            attn_out, **cfg["flash_mla_ag_decode"]
-        )  # [1, bsz, num_heads, kv_lora_rank]
-        attn_out = ttnn.permute(attn_out, (0, 2, 1, 3))  # [1, num_heads, bsz, kv_lora_rank]
-        attn_out = ttnn.experimental.reduce_scatter_minimal_async(
-            attn_out, **cfg["flash_mla_rs_decode"]
-        )  # [1, num_heads_local, bsz, kv_lora_rank]
-        attn_out = ttnn.permute(attn_out, (0, 2, 1, 3))  # [1, bsz, num_heads_local, kv_lora_rank]
-        attn_out = attn_out * scale  # Scale the output tensor
+        attn_out = ttnn.experimental.all_to_all_async_generic(attn_out, **cfg["flash_mla_a2a_decode"])
 
         # wkv_b2
         attn_out = ttnn.permute(attn_out, (0, 2, 1, 3))  # [1, num_heads_local, bsz, kv_lora_rank]
         v_out = ttnn.linear(attn_out, **cfg["wkv_b2"])  # [1, num_heads_local, bsz, v_head_dim]
 
         # wo
-        v_out = ttnn.experimental.all_gather_async(v_out, **cfg["wo_ag_decode"])  # [1, num_heads, bsz, v_head_dim]
+        v_out = ttnn.experimental.all_gather_async(
+            v_out, **ccl.populate_all_gather_runtime_args(cfg["wo_ag_decode"])
+        )  # [1, num_heads, bsz, v_head_dim]
         v_out = ttnn.permute(v_out, (0, 2, 1, 3))  # [1, bsz, num_heads, v_head_dim]
-
-        # Bug: https://github.com/tenstorrent/tt-metal/issues/29932
-        v_out = ttnn.to_layout(v_out, ttnn.ROW_MAJOR_LAYOUT)
         v_out = ttnn.reshape(v_out, (1, 1, bsz, num_heads * v_head_dim))
-        v_out = ttnn.to_layout(v_out, ttnn.TILE_LAYOUT)
 
         out = ttnn.linear(v_out, **cfg["wo"])  # [1, 1, bsz, dim]
 
@@ -996,7 +933,9 @@ class MLA1D(AbstractModule):
             Output tensor after MLP computation
         """
 
-        sdpa_dp_factor, mla_tp_factor = mesh_shape = cfg["mesh_shape"]
+        mesh_shape = cfg["mesh_shape"]
+
+        sdpa_dp_factor = mla_tp_factor = mesh_shape[1]
 
         num_heads = cfg["num_heads"]
         num_heads_local = even_int_div(num_heads, mla_tp_factor)
@@ -1007,17 +946,17 @@ class MLA1D(AbstractModule):
         v_head_dim = cfg["v_head_dim"]
 
         kvpe_cache = cfg["kvpe_cache"]
+        ccl = cfg["ccl"]
 
         seq_len = x.shape[2]
 
         # wq_a and wq_b
         tt_q = ttnn.linear(x, **cfg["wq_a"])
 
-        tt_q = ttnn.experimental.reduce_scatter_minimal_async(tt_q, **cfg["wq_a_rs_prefill"])
-        tt_q = ttnn.experimental.all_gather_async(tt_q, **cfg["wq_a_ag_prefill"])
-
-        # Bug: https://github.com/tenstorrent/tt-metal/issues/29935
-        ttnn.synchronize_device(cfg["mesh_device"])
+        tt_q = ttnn.experimental.reduce_scatter_minimal_async(
+            tt_q, **ccl.populate_reduce_scatter_runtime_args(cfg["wq_a_rs_prefill"])
+        )
+        tt_q = ttnn.experimental.all_gather_async(tt_q, **ccl.populate_all_gather_runtime_args(cfg["wq_a_ag_prefill"]))
 
         tt_q = RMSNorm.forward_prefill(tt_q, cfg["q_norm"])
         tt_q = ttnn.linear(tt_q, **cfg["wq_b"])
@@ -1047,7 +986,7 @@ class MLA1D(AbstractModule):
         tt_kv = ttnn.linear(x, **cfg["wkv_a"])
 
         tt_kv = ttnn.experimental.all_gather_async(
-            tt_kv, **cfg["wkv_a_ag_prefill"]
+            tt_kv, **ccl.populate_all_gather_runtime_args(cfg["wkv_a_ag_prefill"])
         )  # [1, 1, seq_len / num_devices, kv_lora_rank + qk_rope_head_dim]
         tt_kv = ttnn.experimental.fast_reduce_nc(
             tt_kv, **cfg["wkv_a_r_prefill"]
@@ -1077,8 +1016,10 @@ class MLA1D(AbstractModule):
         tt_kvpe = ttnn.typecast(tt_kvpe, dtype=kvpe_cache.dtype)
 
         # Update KVPE Cache
-        local_batch_idx = batch_idx % sdpa_dp_factor  # Local batch index within the DP shard
-        col_idx = batch_idx // sdpa_dp_factor  # Which DP shard the batch belongs to
+        batch_size_per_dp_shard = even_int_div(USERS_PER_ROW, sdpa_dp_factor)
+        local_batch_idx = batch_idx % batch_size_per_dp_shard  # Local batch index within the DP shard
+        col_idx = batch_idx // batch_size_per_dp_shard  # Which DP shard the batch belongs to
+
         ttnn.experimental.paged_fill_cache(
             kvpe_cache,
             tt_kvpe,
@@ -1097,7 +1038,9 @@ class MLA1D(AbstractModule):
 
         # wkv_b2
         v_out = ttnn.linear(attn_out, **cfg["wkv_b2"])  # [1, num_heads_local, seq_len, v_head_dim]
-        v_out = ttnn.experimental.all_gather_async(v_out, **cfg["wo_ag_prefill"])  # [1, num_heads, seq_len, v_head_dim]
+        v_out = ttnn.experimental.all_gather_async(
+            v_out, **ccl.populate_all_gather_runtime_args(cfg["wo_ag_prefill"])
+        )  # [1, num_heads, seq_len, v_head_dim]
 
         # wo
         v_out = ttnn.permute(v_out, (0, 2, 1, 3))  # [1, seq_len, num_heads, v_head_dim]
