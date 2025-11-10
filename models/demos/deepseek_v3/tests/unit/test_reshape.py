@@ -48,6 +48,7 @@ def test_repeat(mesh_device, in_shape, out_shape, layout, mem_config, dtype):
         torch_input,
         device=mesh_device,
         dtype=dtype,
+        layout=layout,
         memory_config=mem_config,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
