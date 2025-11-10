@@ -305,55 +305,6 @@ Notes:
     std::vector<uint32_t> writer_rt = {
         (uint32_t)dst_buf->address(), (uint32_t)rx_xy.x, (uint32_t)rx_xy.y, (uint32_t)gsem_done->address()};
 
-    tt::tt_metal::Program local_prog = tt::tt_metal::CreateProgram();
-
-    // Recreate the same CB on the same core for this program
-    {
-        const uint32_t CB_ID = tt::CBIndex::c_0;
-        auto cb_cfg_local = tt::tt_metal::CircularBufferConfig(8 * p.page_size, {{CB_ID, tt::DataFormat::Float16}})
-                                .set_page_size(CB_ID, p.page_size);
-        (void)tt::tt_metal::CreateCircularBuffer(local_prog, p.sender_core, cb_cfg_local);
-    }
-
-    // Reader (DRAM src_buf -> CB): same kernel/args as the sender's reader
-    std::vector<uint32_t> local_reader_cta;
-    tt::tt_metal::TensorAccessorArgs(*src_buf).append_to(local_reader_cta);
-    local_reader_cta.push_back(1u /*SRC_IS_DRAM*/);
-    local_reader_cta.push_back(NUM_PAGES);
-    local_reader_cta.push_back(p.page_size);
-
-    auto local_reader_k = tt::tt_metal::CreateKernel(
-        local_prog,
-        std::string(KDIR) + "all_gather_tx_reader_to_cb.cpp",
-        p.sender_core,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt::tt_metal::NOC::RISCV_0_default,
-            .compile_args = local_reader_cta,
-            .defines = defines});
-    tt::tt_metal::SetRuntimeArgs(local_prog, local_reader_k, p.sender_core, {(uint32_t)src_buf->address()});
-
-    // Local writer (CB -> dst_buf on THIS chip via NoC)
-    std::vector<uint32_t> local_writer_cta;
-    tt::tt_metal::TensorAccessorArgs(*dst_buf).append_to(local_writer_cta);
-    local_writer_cta.push_back(NUM_PAGES);
-    local_writer_cta.push_back(p.page_size);
-
-    auto local_writer_k = tt::tt_metal::CreateKernel(
-        local_prog,
-        std::string(KDIR) + "all_gather_local_writer_cb_to_self.cpp",
-        p.sender_core,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt::tt_metal::NOC::RISCV_0_default,
-            .compile_args = local_writer_cta,
-            .defines = defines});
-    tt::tt_metal::SetRuntimeArgs(local_prog, local_writer_k, p.sender_core, {(uint32_t)dst_buf->address()});
-
-    // Wrap as a workload on the *source* device
-    auto local_workload = Dist::MeshWorkload();
-    local_workload.add_program(Dist::MeshCoordinateRange(src_coord), std::move(local_prog));
-
     // -------------------------- end PROGRAM FACTORY --------------------------
 
     // Phase A hops: bounding box of all receivers relative to sender
@@ -494,17 +445,12 @@ Notes:
     auto t1 = std::chrono::steady_clock::now();
     mesh->release_mesh_trace(trace_id);
 
-    Dist::EnqueueMeshWorkload(mcq, local_workload, /*blocking=*/true);
-
-    // Read back and verify
-    std::vector<uint32_t> rx_self(n_words, 0u);
+    // Read back and verify (remote destinations only)
     for (auto mc : dst_coords) {
         std::vector<uint32_t> rx(n_words, 0u);
         Dist::ReadShard(mcq, rx, dst_buf, mc, /*blocking=*/true);
         verify_payload_words(rx, tx);
     }
-    Dist::ReadShard(mcq, rx_self, dst_buf, src_coord, /*blocking=*/true);
-    verify_payload_words(rx_self, tx);
 
     // Perf point
     const double e2e_sec_total = std::chrono::duration<double>(t1 - t0).count();
