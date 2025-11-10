@@ -5,7 +5,7 @@ from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.tt_transformers.tt.common import get_base_model_name
 
 # NOTE: We need to override trace_region_size before the mesh device is opened
-# NOTE: When using DP, we need to have the imnplemented logic because when we parametrize the test with a specific trace region size, all submeshes will have that trace region size
+# NOTE: When using DP, we need to have the imlpemented logic because when we parametrize the test with a specific trace region size, all submeshes will have that trace region size
 # example of the above : T3K (DP-8-b1 ; @parametrize(trace_region_size=X) -> we efectivly have 8 N150's with trace_region_size=X which could leed to OOM if X is too large)
 
 # TODO: For now, each confest.py should call get_supported_trace_region_size if they want to override the trace region size
