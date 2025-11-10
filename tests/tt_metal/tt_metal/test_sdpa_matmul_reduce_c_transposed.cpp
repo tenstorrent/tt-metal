@@ -417,9 +417,9 @@ int main(int argc, char** argv) {
      * Parameters to sweep over for correctness.
      */
     // sizes are in terms of tiles (32x32)
-    std::vector<uint32_t> q_chunk_sizes = {1};
-    std::vector<uint32_t> k_chunk_sizes = {1};
-    std::vector<uint32_t> head_dim_sizes = {1};
+    std::vector<uint32_t> q_chunk_sizes = {1, 2, 4, 8};
+    std::vector<uint32_t> k_chunk_sizes = {1, 2, 4, 8, 16};
+    std::vector<uint32_t> head_dim_sizes = {1, 2, 4, 8};
     // Excluding fp32_dest_acc_en since SFPU reduce_max overlap will initially only support bf16 dst
     std::vector<bool> fp32_dest_acc_ens = {false};
     // Excluding do_eltwise since SFPU reduce_max overlap will not include eltwise max

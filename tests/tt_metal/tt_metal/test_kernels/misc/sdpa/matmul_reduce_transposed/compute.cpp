@@ -120,7 +120,10 @@ void reduce_c_transposed(uint32_t out_cb) {
     tile_regs_wait();  // pack thread waits for math thread to finish
 
     sfpu_reduce_max_sdpa_init(q_chunk_size);
-    sfpu_reduce_max_sdpa(0, k_chunk_size, (int)VectorMode::RC_custom);
+
+    for (uint32_t i = 0; i < q_chunk_size; i++) {
+        sfpu_reduce_max_sdpa(i, k_chunk_size, (int)VectorMode::RC_custom);
+    }
 
     for (uint32_t i = 0; i < num_tiles; i++) {
         pack_tile(i, out_cb, i);
