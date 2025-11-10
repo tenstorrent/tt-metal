@@ -739,6 +739,7 @@ def test_demo_text(
     token_accuracy,
     stress_test,
     enable_trace,
+    model_location_generator,
     num_layers,
     mode,
 ):
