@@ -45,13 +45,13 @@ static const std::unordered_map<KernelLookupKey, KernelConfigEntry, KernelLookup
     {{TernaryOpType::WHERE, TernaryVariant::TTT, TernaryBroadcastType::COL_BCAST},
      {KernelName::ReaderColBcastTTT, KernelName::ComputeBcastTTT, KernelName::WriterColBcastTTT}},
     {{TernaryOpType::WHERE, TernaryVariant::TTT, TernaryBroadcastType::OUTER_BCAST},
-     {KernelName::ReaderOuterBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcast}},
+     {KernelName::ReaderOuterBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcastTernary}},
     {{TernaryOpType::WHERE, TernaryVariant::TTT, TernaryBroadcastType::ROW_BCAST},
-     {KernelName::ReaderRowBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcast}},
+     {KernelName::ReaderRowBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcastTernary}},
     {{TernaryOpType::WHERE, TernaryVariant::TTT, TernaryBroadcastType::SCALAR_BCAST},
-     {KernelName::ReaderScalarBcastTTT, KernelName::ComputeBcastTTT, KernelName::WriterNoBcast}},
+     {KernelName::ReaderScalarBcastTTT, KernelName::ComputeBcastTTT, KernelName::WriterNoBcastTernary}},
     {{TernaryOpType::WHERE, TernaryVariant::TTT, TernaryBroadcastType::NONE},
-     {KernelName::ReaderNoBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcast}},
+     {KernelName::ReaderNoBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcastTernary}},
 
     // TTS configurations for WHERE
     {{TernaryOpType::WHERE, TernaryVariant::TTS, TernaryBroadcastType::COL_BCAST},
@@ -85,17 +85,17 @@ static const std::unordered_map<KernelLookupKey, KernelConfigEntry, KernelLookup
     {{TernaryOpType::LERP, TernaryVariant::TTT, TernaryBroadcastType::COL_BCAST},
      {KernelName::ReaderColBcastTTT, KernelName::ComputeBcastTTT, KernelName::WriterColBcastTTT}},
     {{TernaryOpType::LERP, TernaryVariant::TTT, TernaryBroadcastType::OUTER_BCAST},
-     {KernelName::ReaderOuterBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcast}},
+     {KernelName::ReaderOuterBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcastTernary}},
     {{TernaryOpType::LERP, TernaryVariant::TTT, TernaryBroadcastType::ROW_BCAST},
-     {KernelName::ReaderRowBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcast}},
+     {KernelName::ReaderRowBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcastTernary}},
     {{TernaryOpType::LERP, TernaryVariant::TTT, TernaryBroadcastType::SCALAR_BCAST},
-     {KernelName::ReaderScalarBcastTTT, KernelName::ComputeBcastTTT, KernelName::WriterNoBcast}},
+     {KernelName::ReaderScalarBcastTTT, KernelName::ComputeBcastTTT, KernelName::WriterNoBcastTernary}},
     {{TernaryOpType::LERP, TernaryVariant::TTT, TernaryBroadcastType::NONE},
-     {KernelName::ReaderNoBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcast}},
+     {KernelName::ReaderNoBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcastTernary}},
 
     // TTT configurations for ADDCMUL
     {{TernaryOpType::ADDCMUL, TernaryVariant::TTT, TernaryBroadcastType::NONE},
-     {KernelName::ReaderNoBcastTTT, KernelName::ComputeNoBcastAddcmul, KernelName::WriterNoBcast}},
+     {KernelName::ReaderNoBcastTTT, KernelName::ComputeNoBcastAddcmul, KernelName::WriterNoBcastTernary}},
     {{TernaryOpType::ADDCMUL, TernaryVariant::TTT, TernaryBroadcastType::OUTER_BCAST},
      {KernelName::ReaderOuterBcastTTT, KernelName::ComputeNoBcastAddcmul, KernelName::WriterNoBcast}},
     {{TernaryOpType::ADDCMUL, TernaryVariant::TTT, TernaryBroadcastType::ROW_BCAST},
@@ -146,8 +146,9 @@ std::string get_kernel_file_path(KernelName kernel_name, bool is_fpu) {
     constexpr std::string_view compute = "{}/compute/{}";
 
     switch (kernel_name) {
-        case KernelName::ReaderNoBcastTTT: return fmt::format(dataflow, root, "ternary_reader_nobcast_ttt.cpp");
-        case KernelName::ReaderOuterBcastTTT: return fmt::format(dataflow, root, "ternary_reader_outerbcast_ttt.cpp");
+        case KernelName::ReaderNoBcastTTT:
+        case KernelName::ReaderOuterBcastTTT:
+            return fmt::format(dataflow, root, "ternary_reader_nosubtilebcast_ttt.cpp");
         case KernelName::ReaderNoBcastTST: return fmt::format(dataflow, root, "ternary_reader_nobcast_tst_tts.cpp");
         case KernelName::ReaderNoBcastTTS: return fmt::format(dataflow, root, "ternary_reader_nobcast_tst_tts.cpp");
         case KernelName::ReaderOuterBcastTTS: return fmt::format(dataflow, root, "tst_tts_reader_outer_bcast.cpp");
@@ -161,6 +162,7 @@ std::string get_kernel_file_path(KernelName kernel_name, bool is_fpu) {
         case KernelName::ReaderRowBcastTTT: return fmt::format(dataflow, root, "ternary_reader_rowbcast_ttt.cpp");
         case KernelName::ReaderRowBcastTST:
         case KernelName::ReaderRowBcastTTS: return fmt::format(dataflow, root, "tts_tst_reader_row_bcast.cpp");
+        case KernelName::WriterNoBcastTernary: return fmt::format(dataflow, root, "ternary_writer_nobcast.cpp");
 
         case KernelName::WriterNoBcast:
             return "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
