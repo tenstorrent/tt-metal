@@ -149,7 +149,7 @@ void kernel_main() {
                 uint32_t in0_start_address = get_write_ptr(cb_id_in0);
                 if constexpr (is_injector_core) {
 #ifdef FUSE_AG
-                    if constexpr (is_injector_core) {
+                    if (is_injector_core && n_block_iter == 0) {
                         k_block = fused_op_receiver.compute_actual_k_block_iter(k_block_iter);
                     }
 #endif
@@ -207,10 +207,14 @@ void kernel_main() {
             }
 #endif
 
-#ifndef FUSE_AG
             k_forward = !k_forward;
             // We get reuse on in0 when striding N block
-            reuse_block = true;
+#ifdef FUSE_AG
+            if (n_block_iter > 0) {
+#endif
+                reuse_block = true;
+#ifdef FUSE_AG
+            }
 #endif
 
             defer_write_m_tile = m_tile;
