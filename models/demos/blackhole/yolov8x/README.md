@@ -38,7 +38,7 @@ Note: Output images will be saved in the `models/demos/blackhole/yolov8x/demo/ru
   ```bash
   pytest --disable-warnings models/demos/blackhole/yolov8x/demo/demo.py::test_demo
   ```
-  - To use a different image(s) for demo, replace your image(s) in the image path `models/demos//yolov8x/demo/images` and run the same command.
+  - To use a different image(s) for demo, replace your image(s) in the image path `models/demos/blackhole/yolov8x/demo/images` and run the same command.
 
 #### Coco-2017 dataset:
 - Use the following command to run demo for `640x640` resolution:
@@ -52,7 +52,7 @@ Note: Output images will be saved in the `models/demos/blackhole/yolov8x/demo/ru
   ```bash
   pytest --disable-warnings models/demos/blackhole/yolov8x/demo/demo.py::test_demo_dp
   ```
-  - To use a different image(s) for demo, replace your image(s) in the image path `models/demos/yolov8x/demo/images` and run the same command.
+  - To use a different image(s) for demo, replace your image(s) in the image path `models/demos/blackhole/yolov8x/demo/images` and run the same command.
 
 #### Coco-2017 dataset:
 - Use the following command to run demo for `640x640` resolution :
