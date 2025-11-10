@@ -419,7 +419,7 @@ foreach(ARCH_CPU IN LISTS TLS_ARCH_CPUS)
     list(POP_FRONT CPUS)
 
     # TODO:Review this list
-    set(CPP_INCLUDES
+    set(GPP_INCLUDES
         -I.
         -I..
         -I${PROJECT_SOURCE_DIR}
@@ -431,6 +431,7 @@ foreach(ARCH_CPU IN LISTS TLS_ARCH_CPUS)
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/debug
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/firmware/src/tt-2xx
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/tt-2xx/${ARCH}
+        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/tt-2xx/${ARCH}/noc
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/ckernels/${ARCH}/metal/common
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/ckernels/${ARCH}/metal/llk_io
     )
@@ -438,6 +439,7 @@ foreach(ARCH_CPU IN LISTS TLS_ARCH_CPUS)
     set(HW_OBJ_SRC_PAIRS
         "substitutes.o:tt_metal/hw/toolchain/substitutes.cpp"
         "crt0-tls.o:tt_metal/hw/toolchain/crt0-tls.S"
+        "noc.o:tt_metal/hw/firmware/src/tt-2xx/${ARCH}/noc.c"
     )
     set(GPP_DEFINES -D${ARCH})
 
@@ -450,7 +452,7 @@ foreach(ARCH_CPU IN LISTS TLS_ARCH_CPUS)
 
             set(GPP_FLAGS
                 -mcpu=${CPU}
-                ${CPP_FLAGS_common}
+                ${GPP_FLAGS_common}
             )
             add_custom_command(
                 OUTPUT

@@ -95,9 +95,7 @@ OUTPUT_ARCH(riscv)
 
 ENTRY(_start)
 
-#if defined(OBJECTS)
-INPUT(OBJECTS)
-#endif
+
 
 PHDRS {
   attributes 0x70000003;

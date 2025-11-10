@@ -48,7 +48,7 @@
 
 /////////////
 // Firmware/kernel code holes
-#define MEM_DM_FIRMWARE_SIZE (1024 * 7)
+#define MEM_DM_FIRMWARE_SIZE (1024 * 12)
 #define MEM_TRISC_FIRMWARE_SIZE (1024 * 3 / 2)
 #define MEM_DM_KERNEL_SIZE (1024 * 48)
 #define MEM_TRISC_KERNEL_SIZE (1024 * 24)
