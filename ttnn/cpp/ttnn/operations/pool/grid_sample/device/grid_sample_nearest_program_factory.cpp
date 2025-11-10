@@ -64,7 +64,7 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_nearest_program_factor
         if (output_tensor.shard_spec().has_value()) {
             grid_nsticks = output_tensor.shard_spec().value().shape[0] * output_tensor.shard_spec().value().num_cores();
         } else {
-            grid_nsticks = round_up(grid_nsticks, compute_grid_size.x * compute_grid_size.y);
+            grid_nsticks = tt::round_up(grid_nsticks, compute_grid_size.x * compute_grid_size.y);
         }
         auto [num_cores_used, all_cores_range, core_group_1_range, core_group_2_range, num_sticks_1, num_sticks_2] =
             tt::tt_metal::split_work_to_cores(compute_grid_size, grid_nsticks);

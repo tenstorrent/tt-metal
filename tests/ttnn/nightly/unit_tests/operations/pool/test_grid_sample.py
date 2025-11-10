@@ -712,7 +712,7 @@ def test_grid_sample_sharded_batched(
 @pytest.mark.parametrize(
     "core_grid",
     [
-        ttnn.CoreGrid(y=4, x=5),  # Limited core grid (5x4=20 cores)
+        ttnn.CoreGrid(x=5, y=4),  # Limited core grid (5x4=20 cores)
     ],
 )
 def test_grid_sample_oft(
@@ -764,8 +764,6 @@ def test_grid_sample_oft(
         math.ceil(ttnn_grid_device_slices[0].shape[2] // ttnn.TILE_SIZE / (core_grid.y * core_grid.x)) * ttnn.TILE_SIZE
     )
     shard_width = math.ceil(channels * grid_batching_factor // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
-
-    print(f"shard_height: {shard_height}, shard_width: {shard_width}")
 
     grid_sample_memory_config = ttnn.create_sharded_memory_config(
         (shard_height, shard_width),
