@@ -8,7 +8,10 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/circular_buffer.hpp>
+#include <tt-metalium/global_circular_buffer.hpp>
 
 namespace ttnn::operations::experimental::deepseek_b1::matmul_1d {
 
@@ -37,7 +40,7 @@ tt::tt_metal::operation::ProgramWithCallbacks deepseek_b1_matmul_multi_core_reus
     const CoreRangeSet& hop_cores,
     bool untilize_out,
     const std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
-    const std::optional<const GlobalCircularBuffer>& global_cb,
+    const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
     uint32_t num_global_cb_receivers,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
 
