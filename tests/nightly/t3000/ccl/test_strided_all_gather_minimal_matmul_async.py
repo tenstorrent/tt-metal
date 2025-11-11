@@ -54,6 +54,7 @@ def run_strided_all_gather_impl(
     fp32_acc=True,
     mm_core_grid=None,
     use_non_fused=True,
+    shard_weights=False,
 ):
     torch.manual_seed(0)
 
@@ -143,7 +144,9 @@ def run_strided_all_gather_impl(
             layout=layout,
             dtype=ag_input_dtype,
             memory_config=mem_config_input,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=dim),
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=dim)
+            if shard_weights
+            else ttnn.ReplicateTensorToMesh(mesh_device),
         )
         if use_bias:
             bias_tensor_mesh = ttnn.from_torch(
@@ -201,7 +204,7 @@ def run_strided_all_gather_impl(
                 subdevice_id=worker_sub_device_id,
                 cluster_axis=cluster_axis,
                 barrier_semaphore=barrier_semaphore_handles[i],
-                tiles_per_chunk=mm_core_grid.y * mm_block_h * mm_block_w,
+                tiles_per_chunk=mm_core_grid.y * (mm_block_m // 32) * (mm_block_k // 32),
                 num_workers_per_link=num_workers_per_link,
                 num_buffers_per_channel=num_buffers_per_channel,
                 mm_cores_y=mm_core_grid.y,
@@ -277,13 +280,12 @@ def run_strided_all_gather_impl(
         for i in range(num_iters):
             tt_ag_out_tensor = tt_all_gather_out_tensor_list[i]
             torch_ag_out_tensor = ag_output_tensor_goldens_list[i if not enable_trace else 0]
-            expected_tensor = torch_ag_out_tensor
 
             tt_ag_out = ttnn.from_device(tt_ag_out_tensor)
             tt_ag_out = ttnn.to_torch(tt_ag_out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=3))
 
-            tt_ag_out = tt_ag_out[:, :, :, 0 : expected_tensor.shape[3]]
-            eq, output = comp_pcc(tt_ag_out, expected_tensor, allowed_pcc)
+            tt_ag_out = tt_ag_out[:, :, :, 0 : torch_ag_out_tensor.shape[3]]
+            eq, output = comp_pcc(tt_ag_out, torch_ag_out_tensor, allowed_pcc)
 
             logger.info(f"{output}, iteration {i}")
             assert eq, f"{i} AG FAILED ag: {output}"
@@ -293,9 +295,8 @@ def run_strided_all_gather_impl(
 
             tt_mm_out = ttnn.from_device(tt_mm_out_tensor)
             tt_mm_out = ttnn.to_torch(tt_mm_out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=3))
-
-            breakpoint()
-
+            if not shard_weights:
+                tt_mm_out = tt_mm_out[:, :, :, 0 : torch_mm_out_tensor.shape[3]]
             eq, output = comp_pcc(tt_mm_out, torch_mm_out_tensor)
 
             logger.info(f"{output}, iteration {i}")
@@ -313,21 +314,21 @@ def run_strided_all_gather_impl(
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
-    "M, K, N, dim, num_workers_per_link, layout, ag_input_dtype, mm_block_m, mm_block_k, mm_block_n, subblock_h, subblock_w, mm_core_grid",
+    "M, K, N, dim, num_workers_per_link, layout, ag_input_dtype, mm_block_m, mm_block_k, mm_block_n, subblock_h, subblock_w, mm_core_grid, shard_weights",
     [
-        (64, 512, 512, 3, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2)),
-        (64, 512, 1024, 3, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2)),
-        (64, 512, 2048, 3, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2)),
-        (64, 512, 512, 3, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2)),
-        (128, 512, 512, 3, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 64, 32, 32, 1, 1, ttnn.CoreCoord(2, 2)),
-        (128, 512, 512, 3, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 64, 32, 32, 1, 1, ttnn.CoreCoord(2, 2)),
-        (64, 1024, 512, 3, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 64, 32, 1, 1, ttnn.CoreCoord(2, 2)),
-        (64, 1024, 512, 3, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 64, 32, 1, 1, ttnn.CoreCoord(2, 2)),
-        (64, 512, 1024, 3, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 64, 1, 1, ttnn.CoreCoord(2, 2)),
-        (64, 512, 1024, 3, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 64, 1, 1, ttnn.CoreCoord(2, 2)),
-        (4096, 4096, 4096, 3, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2)),
-        (4096, 4096, 4096, 3, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(4, 4)),
-        (4096, 4096, 4096, 3, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 256, 256, 256, 2, 2, ttnn.CoreCoord(4, 4)),
+        (64, 512, 512, 3, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
+        (64, 512, 1024, 3, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
+        (64, 512, 2048, 3, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
+        (64, 512, 512, 3, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
+        (128, 512, 512, 3, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 64, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
+        (128, 512, 512, 3, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 64, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
+        (64, 1024, 512, 3, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 64, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
+        (64, 1024, 512, 3, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 64, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
+        (64, 512, 1024, 3, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 64, 1, 1, ttnn.CoreCoord(2, 2), False),
+        (64, 512, 1024, 3, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 64, 1, 1, ttnn.CoreCoord(2, 2), False),
+        (4096, 4096, 4096, 3, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
+        (4096, 4096, 4096, 3, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(4, 4), False),
+        (4096, 4096, 4096, 3, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 256, 256, 256, 2, 2, ttnn.CoreCoord(4, 4), False),
     ],
     ids=[
         "base",  # 1 forward pass through K
@@ -403,10 +404,21 @@ def test_strided_all_gather_async(
     subblock_w,
     mm_core_grid,
     use_non_fused,
+    shard_weights,
 ):
+    TILE_SIZE = 32
     assert not (M % mm_block_m), f"M must be divisible by mm_block_m"
     assert not ((M // mm_block_m) % mm_core_grid.y), f"num M blocks must divide evenly into mm_core_grid.y"
-    assert not ((M // 32) % num_workers_per_link), f"worker must be divisible by num workers per link"
+    assert not ((M // TILE_SIZE) % num_workers_per_link), f"worker must be divisible by num workers per link"
+    Nt = N // TILE_SIZE
+    if shard_weights:
+        Nt_per_device = Nt // mesh_device.get_num_devices()
+    else:
+        Nt_per_device = Nt
+    Nt_per_core = Nt_per_device // mm_core_grid.x
+    assert Nt_per_core > (
+        mm_block_n // TILE_SIZE
+    ), f"block_n size is {mm_block_n // TILE_SIZE} tiles, but only {Nt_per_core} tiles of work per core"
 
     run_strided_all_gather_impl(
         mesh_device,
@@ -432,4 +444,5 @@ def test_strided_all_gather_async(
         subblock_w=subblock_w,
         mm_core_grid=mm_core_grid,
         use_non_fused=use_non_fused,
+        shard_weights=shard_weights,
     )
