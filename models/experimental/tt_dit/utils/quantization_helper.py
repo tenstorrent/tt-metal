@@ -7,7 +7,6 @@ import torch
 import ttnn
 import uuid
 from loguru import logger
-from models.common.utility_functions import comp_pcc
 
 
 class TensorIO:
@@ -46,10 +45,10 @@ class TensorIO:
         if self.filter_key is not None and self.filter_key not in operation.python_fully_qualified_name:
             return
         logger.info(f"Hook called for {operation.python_fully_qualified_name}")
-        self.new_args = [arg for arg in args]
-        self.new_kwargs = kwargs.copy()
+        # self.new_args = [arg for arg in args]
+        # self.new_kwargs = kwargs.copy()
         for i, arg in enumerate(args):
-            if isinstance(arg, ttnn._ttnn.tensor.Tensor):
+            if False:  # isinstance(arg, ttnn._ttnn.tensor.Tensor):
                 torch_tensor = ttnn.to_torch(
                     arg, dtype=torch.float32, mesh_composer=ttnn.concat_mesh_to_tensor_composer(self.mesh_device, dim=0)
                 )
@@ -76,7 +75,7 @@ class TensorIO:
                 print(f" tensor_2[:10]={tensor_2.flatten()[:10]}")
 
             self.print_if_tensor(arg, f"arg[{i}]")
-            self.print_if_tensor(self.new_args[i], f"arg[{i}]")
+            # self.print_if_tensor(self.new_args[i], f"arg[{i}]")
             self.write_if_tensor(
                 arg,
                 os.path.join(
@@ -87,18 +86,18 @@ class TensorIO:
 
         # TODO: Set the kernel config math fidelity.
 
-        self.new_kwargs["persistent_output_buffer_k"] = self.ccl_manager.get_ag_ping_pong_buffer(
-            args[1].shape,
-            2,
-            self.parallel_config.sequence_parallel.mesh_axis,
-            dtype=self.new_args[1].dtype,
-        )
-        self.new_kwargs["persistent_output_buffer_v"] = self.ccl_manager.get_ag_ping_pong_buffer(
-            args[2].shape,
-            2,
-            self.parallel_config.sequence_parallel.mesh_axis,
-            dtype=self.new_args[2].dtype,
-        )
+        # self.new_kwargs["persistent_output_buffer_k"] = self.ccl_manager.get_ag_ping_pong_buffer(
+        #    args[1].shape,
+        #    2,
+        #    self.parallel_config.sequence_parallel.mesh_axis,
+        #    dtype=self.new_args[1].dtype,
+        # )
+        # self.new_kwargs["persistent_output_buffer_v"] = self.ccl_manager.get_ag_ping_pong_buffer(
+        #    args[2].shape,
+        #    2,
+        #    self.parallel_config.sequence_parallel.mesh_axis,
+        #    dtype=self.new_args[2].dtype,
+        # )
 
         self.operation_count += 1
 
@@ -114,28 +113,28 @@ class TensorIO:
         )
 
         # FIXME: Update the output with the modified version?
-        test_output = operation(*tuple(self.new_args), **self.new_kwargs)
-        print(f"len(output)={len(output)}")
-        if len(output) > 0:
-            print(f"type(output[0])={type(output[0])}")
-            if isinstance(output[0], ttnn._ttnn.tensor.Tensor):
-                tensor_1 = ttnn.to_torch(
-                    output[0],
-                    dtype=torch.float32,
-                    mesh_composer=ttnn.concat_mesh_to_tensor_composer(self.mesh_device, dim=0),
-                )
-                tensor_2 = ttnn.to_torch(
-                    test_output[0],
-                    dtype=torch.float32,
-                    mesh_composer=ttnn.concat_mesh_to_tensor_composer(self.mesh_device, dim=0),
-                )
-                passed, pcc = comp_pcc(tensor_1, tensor_2, 1.0)
-                print(f" tensor_1[:10]={tensor_1.flatten()[:10]}")
-                print(f" tensor_2[:10]={tensor_2.flatten()[:10]}")
-                print(
-                    f" tensor_1.shape={tensor_1.shape} mean(tensor_1)={torch.mean(tensor_1)}, std(tensor_1)={torch.std(tensor_1)}"
-                )
-                print(
-                    f" tensor_2.shape={tensor_2.shape} mean(tensor_2)={torch.mean(tensor_2)}, std(tensor_2)={torch.std(tensor_2)}"
-                )
-                print(f" max(abs(diff))={torch.max(torch.abs(tensor_1-tensor_2))} pcc={pcc}")
+        # test_output = operation(*tuple(self.new_args), **self.new_kwargs)
+        # print(f"len(output)={len(output)}")
+        # if len(output) > 0:
+        #    print(f"type(output[0])={type(output[0])}")
+        #    if isinstance(output[0], ttnn._ttnn.tensor.Tensor):
+        #        tensor_1 = ttnn.to_torch(
+        #            output[0],
+        #            dtype=torch.float32,
+        #            mesh_composer=ttnn.concat_mesh_to_tensor_composer(self.mesh_device, dim=0),
+        #        )
+        #        tensor_2 = ttnn.to_torch(
+        #            test_output[0],
+        #            dtype=torch.float32,
+        #            mesh_composer=ttnn.concat_mesh_to_tensor_composer(self.mesh_device, dim=0),
+        #        )
+        #        passed, pcc = comp_pcc(tensor_1, tensor_2, 1.0)
+        #        print(f" tensor_1[:10]={tensor_1.flatten()[:10]}")
+        #        print(f" tensor_2[:10]={tensor_2.flatten()[:10]}")
+        #        print(
+        #            f" tensor_1.shape={tensor_1.shape} mean(tensor_1)={torch.mean(tensor_1)}, std(tensor_1)={torch.std(tensor_1)}"
+        #        )
+        #        print(
+        #            f" tensor_2.shape={tensor_2.shape} mean(tensor_2)={torch.mean(tensor_2)}, std(tensor_2)={torch.std(tensor_2)}"
+        #        )
+        #        print(f" max(abs(diff))={torch.max(torch.abs(tensor_1-tensor_2))} pcc={pcc}")
