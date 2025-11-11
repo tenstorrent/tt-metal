@@ -14,7 +14,6 @@
 #include <filesystem>
 #include <fstream>
 #include <google/protobuf/text_format.h>
-#include <tt_stl/assert.hpp>
 #include <tt_stl/caseless_comparison.hpp>
 #include <tt_stl/reflection.hpp>
 #include <tt_stl/span.hpp>
@@ -190,15 +189,13 @@ HostId resolve_path_from_proto(
     }
 }
 
-// Builds a resolved graph instance from a graph instance and deployment descriptor.
-// deployment_descriptor is optional - if nullptr, no validation is performed.
-std::unique_ptr<ResolvedGraphInstance> build_graph_instance_impl(
+// Build resolved graph instance from template and concrete host mappings
+std::unique_ptr<ResolvedGraphInstance> build_graph_instance(
     const tt::scaleout_tools::cabling_generator::proto::GraphInstance& graph_instance,
     const tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor& cluster_descriptor,
-    const tt::scaleout_tools::deployment::proto::DeploymentDescriptor* deployment_descriptor,
+    const tt::scaleout_tools::deployment::proto::DeploymentDescriptor& deployment_descriptor,
     const std::string& instance_name,
-    std::unordered_map<std::string, Node>& node_templates,
-    std::map<HostId, std::string>& host_id_to_node_type) {
+    std::unordered_map<std::string, Node>& node_templates) {
     auto resolved = std::make_unique<ResolvedGraphInstance>();
     resolved->template_name = graph_instance.template_name();
     resolved->instance_name = instance_name;
@@ -214,50 +211,37 @@ std::unique_ptr<ResolvedGraphInstance> build_graph_instance_impl(
         if (child_def.has_node_ref()) {
             // Leaf node - create node
             if (child_mapping.mapping_case() != tt::scaleout_tools::cabling_generator::proto::ChildMapping::kHostId) {
-                TT_THROW("Node child must have host_id mapping: {}", child_name);
+                throw std::runtime_error("Node child must have host_id mapping: " + child_name);
             }
 
             HostId host_id = HostId(child_mapping.host_id());
             const std::string& node_descriptor_name = child_def.node_ref().node_descriptor();
 
-            // Validate deployment node type if deployment descriptor is provided
-            if (deployment_descriptor != nullptr) {
-                if (*host_id < deployment_descriptor->hosts().size()) {
-                    const auto& deployment_host = deployment_descriptor->hosts()[*host_id];
-                    if (!deployment_host.node_type().empty() && deployment_host.node_type() != node_descriptor_name) {
-                        TT_THROW(
-                            "Node type mismatch for host {} (host_id {}): deployment specifies '{}' "
-                            "but cluster configuration expects '{}'",
-                            deployment_host.host(),
-                            *host_id,
-                            deployment_host.node_type(),
-                            node_descriptor_name);
-                    }
-                } else {
-                    TT_THROW("Host ID {} not found in deployment", *host_id);
+            // Validate deployment node type if specified
+            if (*host_id < deployment_descriptor.hosts().size()) {
+                const auto& deployment_host = deployment_descriptor.hosts()[*host_id];
+                if (!deployment_host.node_type().empty() && deployment_host.node_type() != node_descriptor_name) {
+                    throw std::runtime_error(
+                        "Node type mismatch for host " + deployment_host.host() + " (host_id " +
+                        std::to_string(*host_id) + "): " + "deployment specifies '" + deployment_host.node_type() +
+                        "' " + "but cluster configuration expects '" + node_descriptor_name + "'");
                 }
+            } else {
+                throw std::runtime_error("Host ID " + std::to_string(*host_id) + " not found in deployment");
             }
 
-            // Find node descriptor and build node
+            // Find node descriptor and build node inside build_node
             resolved->nodes[child_name] = build_node(node_descriptor_name, host_id, cluster_descriptor, node_templates);
-
-            // Store the mapping from host_id to node type
-            host_id_to_node_type[host_id] = node_descriptor_name;
 
         } else if (child_def.has_graph_ref()) {
             // Non-leaf node - recursively build subgraph
             if (child_mapping.mapping_case() !=
                 tt::scaleout_tools::cabling_generator::proto::ChildMapping::kSubInstance) {
-                TT_THROW("Graph child must have sub_instance mapping: {}", child_name);
+                throw std::runtime_error("Graph child must have sub_instance mapping: " + child_name);
             }
 
-            resolved->subgraphs[child_name] = build_graph_instance_impl(
-                child_mapping.sub_instance(),
-                cluster_descriptor,
-                deployment_descriptor,
-                child_name,
-                node_templates,
-                host_id_to_node_type);
+            resolved->subgraphs[child_name] = build_graph_instance(
+                child_mapping.sub_instance(), cluster_descriptor, deployment_descriptor, child_name, node_templates);
         }
     }
 
@@ -280,6 +264,8 @@ std::unique_ptr<ResolvedGraphInstance> build_graph_instance_impl(
             // Resolve paths to HostId using proto data
             HostId host_a_id = resolve_path_from_proto(path_a, graph_instance, cluster_descriptor);
             HostId host_b_id = resolve_path_from_proto(path_b, graph_instance, cluster_descriptor);
+
+            // Can't use create_port_connection here because we don't have all the nodes yet
 
             // Store connection with resolved HostId
             resolved->internal_connections[*port_type].emplace_back(
@@ -308,67 +294,9 @@ void populate_deployment_hosts(
     }
 }
 
-void populate_deployment_hosts_from_hostnames(
-    const std::vector<std::string>& hostnames,
-    const std::map<HostId, Node*>& host_id_to_node,
-    const std::map<HostId, std::string>& host_id_to_node_type,
-    std::vector<Host>& deployment_hosts) {
-    // Store deployment hosts with just hostname and motherboard (no physical location info)
-    deployment_hosts.reserve(hostnames.size());
-    for (size_t i = 0; i < hostnames.size(); ++i) {
-        HostId host_id = HostId(i);
-        auto it = host_id_to_node.find(host_id);
-        if (it == host_id_to_node.end()) {
-            throw std::runtime_error("Host ID " + std::to_string(i) + " not found in cluster configuration");
-        }
-
-        // Get the node type from the mapping
-        std::string node_type;
-        auto type_it = host_id_to_node_type.find(host_id);
-        if (type_it != host_id_to_node_type.end()) {
-            node_type = type_it->second;
-        }
-
-        deployment_hosts.emplace_back(Host{
-            .hostname = hostnames[i],
-            .hall = "",
-            .aisle = "",
-            .rack = 0,
-            .shelf_u = 0,
-            .motherboard = it->second->motherboard,
-            .node_type = node_type});
-    }
-}
-
-std::unique_ptr<ResolvedGraphInstance> build_graph_instance(
-    const tt::scaleout_tools::cabling_generator::proto::GraphInstance& graph_instance,
-    const tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor& cluster_descriptor,
-    const tt::scaleout_tools::deployment::proto::DeploymentDescriptor& deployment_descriptor,
-    const std::string& instance_name,
-    std::unordered_map<std::string, Node>& node_templates,
-    std::map<HostId, std::string>& host_id_to_node_type) {
-    return build_graph_instance_impl(
-        graph_instance,
-        cluster_descriptor,
-        &deployment_descriptor,
-        instance_name,
-        node_templates,
-        host_id_to_node_type);
-}
-
-std::unique_ptr<ResolvedGraphInstance> build_graph_instance(
-    const tt::scaleout_tools::cabling_generator::proto::GraphInstance& graph_instance,
-    const tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor& cluster_descriptor,
-    const std::string& instance_name,
-    std::unordered_map<std::string, Node>& node_templates,
-    std::map<HostId, std::string>& host_id_to_node_type) {
-    return build_graph_instance_impl(
-        graph_instance, cluster_descriptor, nullptr, instance_name, node_templates, host_id_to_node_type);
-}
-
 }  // anonymous namespace
 
-// Constructor with full deployment descriptor
+// Constructor
 CablingGenerator::CablingGenerator(
     const std::string& cluster_descriptor_path, const std::string& deployment_descriptor_path) {
     // Load descriptors from file paths
@@ -381,12 +309,7 @@ CablingGenerator::CablingGenerator(
 
     // Build cluster with all connections and port validation
     root_instance_ = build_graph_instance(
-        cluster_descriptor.root_instance(),
-        cluster_descriptor,
-        deployment_descriptor,
-        "",
-        node_templates_,
-        host_id_to_node_type_);
+        cluster_descriptor.root_instance(), cluster_descriptor, deployment_descriptor, "", node_templates_);
 
     // Validate host_id uniqueness across all nodes
     validate_host_id_uniqueness();
@@ -401,31 +324,6 @@ CablingGenerator::CablingGenerator(
     populate_deployment_hosts(deployment_descriptor, node_templates_, deployment_hosts_);
 }
 
-// Constructor with just hostnames (no physical location info)
-CablingGenerator::CablingGenerator(
-    const std::string& cluster_descriptor_path, const std::vector<std::string>& hostnames) {
-    // Load cluster descriptor
-    auto cluster_descriptor =
-        load_descriptor_from_textproto<tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor>(
-            cluster_descriptor_path);
-
-    // Build cluster with all connections and port validation (without deployment descriptor)
-    root_instance_ = build_graph_instance(
-        cluster_descriptor.root_instance(), cluster_descriptor, "", node_templates_, host_id_to_node_type_);
-
-    // Validate host_id uniqueness across all nodes
-    validate_host_id_uniqueness();
-
-    // Populate the host_id_to_node_ map
-    populate_host_id_to_node();
-
-    // Generate all logical chip connections
-    generate_logical_chip_connections();
-
-    // Populate deployment hosts from hostnames
-    populate_deployment_hosts_from_hostnames(hostnames, host_id_to_node_, host_id_to_node_type_, deployment_hosts_);
-}
-
 // Getters for all data
 const std::vector<Host>& CablingGenerator::get_deployment_hosts() const { return deployment_hosts_; }
 
@@ -433,16 +331,13 @@ const std::vector<LogicalChannelConnection>& CablingGenerator::get_chip_connecti
     return chip_connections_;
 }
 
-// Helper function to build factory system descriptor protobuf (shared between emit and generate_string methods)
-static tt::scaleout_tools::fsd::proto::FactorySystemDescriptor build_factory_system_descriptor(
-    const std::vector<Host>& deployment_hosts,
-    const std::map<HostId, Node*>& host_id_to_node,
-    const std::vector<LogicalChannelConnection>& chip_connections) {
+// Method to emit textproto factory system descriptor
+void CablingGenerator::emit_factory_system_descriptor(const std::string& output_path) const {
     tt::scaleout_tools::fsd::proto::FactorySystemDescriptor fsd;
 
     // Add host information from deployment hosts (indexed by host_id)
-    for (size_t i = 0; i < deployment_hosts.size(); ++i) {
-        const auto& deployment_host = deployment_hosts[i];
+    for (size_t i = 0; i < deployment_hosts_.size(); ++i) {
+        const auto& deployment_host = deployment_hosts_[i];
         auto* host = fsd.add_hosts();
         host->set_hostname(deployment_host.hostname);
         host->set_hall(deployment_host.hall);
@@ -453,7 +348,7 @@ static tt::scaleout_tools::fsd::proto::FactorySystemDescriptor build_factory_sys
     }
 
     // Add board types
-    for (const auto& [host_id, node] : host_id_to_node) {
+    for (const auto& [host_id, node] : host_id_to_node_) {
         for (const auto& [tray_id, board] : node->boards) {
             auto* board_location = fsd.mutable_board_types()->add_board_locations();
             board_location->set_host_id(*host_id);
@@ -462,8 +357,8 @@ static tt::scaleout_tools::fsd::proto::FactorySystemDescriptor build_factory_sys
         }
     }
 
-    // Add ASIC connections from chip_connections
-    for (const auto& [start, end] : chip_connections) {
+    // Add ASIC connections from chip_connections_
+    for (const auto& [start, end] : chip_connections_) {
         auto* connection = fsd.mutable_eth_connections()->add_connection();
 
         auto* endpoint_a = connection->mutable_endpoint_a();
@@ -478,13 +373,6 @@ static tt::scaleout_tools::fsd::proto::FactorySystemDescriptor build_factory_sys
         endpoint_b->set_asic_location(end.asic_channel.asic_location);
         endpoint_b->set_chan_id(*end.asic_channel.channel_id);
     }
-
-    return fsd;
-}
-
-// Method to emit textproto factory system descriptor
-void CablingGenerator::emit_factory_system_descriptor(const std::string& output_path) const {
-    auto fsd = build_factory_system_descriptor(deployment_hosts_, host_id_to_node_, chip_connections_);
 
     // Create parent directory if it doesn't exist
     std::filesystem::path output_file_path(output_path);
@@ -510,11 +398,6 @@ void CablingGenerator::emit_factory_system_descriptor(const std::string& output_
 
     output_file << output_string;
     output_file.close();
-}
-
-// Method to generate factory system descriptor as protobuf object (uses shared helper)
-tt::scaleout_tools::fsd::proto::FactorySystemDescriptor CablingGenerator::generate_factory_system_descriptor() const {
-    return build_factory_system_descriptor(deployment_hosts_, host_id_to_node_, chip_connections_);
 }
 
 void CablingGenerator::emit_cabling_guide_csv(const std::string& output_path, bool loc_info) const {
