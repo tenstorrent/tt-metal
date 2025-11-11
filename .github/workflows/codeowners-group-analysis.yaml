@@ -885,13 +885,33 @@ jobs:
             done
           fi
 
+          # Helper function to check if two file lists have any overlap
+          files_have_overlap() {
+            local files1="$1"
+            local files2="$2"
+            if [ -z "$files1" ] || [ -z "$files2" ]; then
+              return 1
+            fi
+            # Convert comma-separated lists to arrays and check for any common file
+            IFS=',' read -ra FILES1_ARRAY <<< "$files1"
+            IFS=',' read -ra FILES2_ARRAY <<< "$files2"
+            for file1 in "${FILES1_ARRAY[@]}"; do
+              for file2 in "${FILES2_ARRAY[@]}"; do
+                if [ "$file1" = "$file2" ]; then
+                  return 0  # Found overlap
+                fi
+              done
+            done
+            return 1  # No overlap
+          }
+
           for key in "${GROUP_KEYS[@]}"; do
             files="${GROUP_FILES[$key]}"
             members="${GROUP_MEMBERS_LIST[$key]}"
             combined_members="$members"
             has_other_groups=false
             for other_key in "${GROUP_KEYS[@]}"; do
-              if [ "$other_key" != "$key" ] && [ "$files" = "${GROUP_FILES[$other_key]}" ]; then
+              if [ "$other_key" != "$key" ] && files_have_overlap "$files" "${GROUP_FILES[$other_key]}"; then
                 other_members="${GROUP_MEMBERS_LIST[$other_key]}"
                 [ -n "$other_members" ] && combined_members="$combined_members,$other_members" && has_other_groups=true
               fi
@@ -1575,6 +1595,7 @@ jobs:
         id: setup-notifications
         run: |
           PR_NUMBER="${{ steps.generate-comment.outputs.pr-number }}"
+          CHANGED_FILES_COUNT="${{ needs.analyze-codeowners.outputs.changed-files-count || 0 }}"
 
           # Validate PR_NUMBER
           if [ -z "$PR_NUMBER" ] || [ "$PR_NUMBER" = "null" ]; then
@@ -1834,10 +1855,31 @@ jobs:
 
           declare -A FILES_HAS_APPROVAL  # sorted_files -> true/false
 
+          # Helper function to check if two file lists have any overlap
+          files_have_overlap() {
+            local files1="$1"
+            local files2="$2"
+            if [ -z "$files1" ] || [ -z "$files2" ]; then
+              return 1
+            fi
+            # Convert comma-separated lists to arrays and check for any common file
+            IFS=',' read -ra FILES1_ARRAY <<< "$files1"
+            IFS=',' read -ra FILES2_ARRAY <<< "$files2"
+            for file1 in "${FILES1_ARRAY[@]}"; do
+              for file2 in "${FILES2_ARRAY[@]}"; do
+                if [ "$file1" = "$file2" ]; then
+                  return 0  # Found overlap
+                fi
+              done
+            done
+            return 1  # No overlap
+          }
+
           for sorted_files in "${!FILES_TO_MEMBERS[@]}"; do
             combined_members="${FILES_TO_MEMBERS[$sorted_files]}"
 
             # Check if ANY member from combined set has approved
+            # Also check members from other file sets that overlap with this one
             has_approval=false
             if [ -n "$combined_members" ]; then
               IFS=',' read -ra COMBINED_ARRAY <<< "$combined_members"
@@ -1847,6 +1889,26 @@ jobs:
                   has_approval=true
                   echo "DEBUG select-owners: Files [$sorted_files] approved by $member"
                   break
+                fi
+              done
+            fi
+
+            # If not approved yet, check overlapping file sets
+            if [ "$has_approval" != "true" ]; then
+              for other_files in "${!FILES_TO_MEMBERS[@]}"; do
+                if [ "$other_files" != "$sorted_files" ] && files_have_overlap "$sorted_files" "$other_files"; then
+                  other_members="${FILES_TO_MEMBERS[$other_files]}"
+                  if [ -n "$other_members" ]; then
+                    IFS=',' read -ra OTHER_ARRAY <<< "$other_members"
+                    for member in "${OTHER_ARRAY[@]}"; do
+                      [ -z "$member" ] && continue
+                      if echo "$APPROVED_REVIEWERS" | grep -q "$member"; then
+                        has_approval=true
+                        echo "DEBUG select-owners: Files [$sorted_files] approved by $member (from overlapping set [$other_files])"
+                        break 2  # Break out of both loops
+                      fi
+                    done
+                  fi
                 fi
               done
             fi
