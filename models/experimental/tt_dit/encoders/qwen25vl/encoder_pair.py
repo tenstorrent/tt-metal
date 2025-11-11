@@ -111,7 +111,7 @@ def _get_qwen_prompt_embeds(
     tokenizer_out = tokenizer(
         prompts,
         return_tensors="pt",
-        padding="longest",
+        padding="max_length",
         max_length=sequence_length + drop_idx,
         truncation=True,
     )
@@ -175,15 +175,10 @@ def _get_qwen_prompt_embeds(
 
         hidden_states = output.hidden_states[-1].to("cpu")
 
-    split_hidden_states = _extract_masked_hidden(hidden_states, attention_mask)
-    split_hidden_states = [e[drop_idx:] for e in split_hidden_states]
-    attn_mask_list = [torch.ones(e.size(0), dtype=torch.long) for e in split_hidden_states]
-    prompt_embeds = torch.stack(
-        [torch.cat([u, u.new_zeros(sequence_length - u.size(0), u.size(1))]) for u in split_hidden_states]
-    )
-    encoder_attention_mask = torch.stack(
-        [torch.cat([u, u.new_zeros(sequence_length - u.size(0))]) for u in attn_mask_list]
-    )
+    prompt_embeds = hidden_states[:, drop_idx:]
+    encoder_attention_mask = attention_mask[:, drop_idx:]
+
+    prompt_embeds[torch.logical_not(encoder_attention_mask)] = 0.0
 
     prompt_embeds = prompt_embeds.repeat_interleave(num_images_per_prompt, dim=0)
     encoder_attention_mask = encoder_attention_mask.repeat_interleave(num_images_per_prompt, dim=0)
