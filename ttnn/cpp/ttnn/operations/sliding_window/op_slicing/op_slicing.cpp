@@ -18,7 +18,7 @@ void run_sliced_op(
     const ttnn::Tensor& input_tensor,
     std::vector<OpSliceAttr::RefTensor>& output_tensors,
     OpSliceAttr* op_slice_attr,
-    Op2DSliceConfig dram_slice_config) {
+    Op2dSliceConfig dram_slice_config) {
     tt::tt_metal::Layout output_layout = output_tensors[0].get().layout();
     uint32_t num_output_tensors = output_tensors.size();
     auto [batch_size, output_height, output_width, output_channels] =
@@ -27,13 +27,13 @@ void run_sliced_op(
 
     uint32_t slice_rounding_value = 1;
     if (output_layout == tt::tt_metal::Layout::TILE &&
-        dram_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_WIDTH) {
+        dram_slice_config.slice_type == Op2dSliceConfig::SliceType::DRAM_WIDTH) {
         // In DRAM Slicing with Tile Layout, the width must be a multiple of TILE_HEIGHT.
         slice_rounding_value = tt::constants::TILE_HEIGHT;
     }
 
     const uint32_t output_sliced_dim =
-        dram_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_HEIGHT ? output_height : output_width;
+        dram_slice_config.slice_type == Op2dSliceConfig::SliceType::DRAM_HEIGHT ? output_height : output_width;
     const uint32_t min_output_slice_size =
         tt::div_up(output_sliced_dim, slice_rounding_value) / dram_slice_config.num_slices;
     const uint32_t output_slice_rem =
@@ -56,7 +56,7 @@ void run_sliced_op(
 
         uint32_t output_slice_height_start, output_slice_height_end, input_slice_height_start, input_slice_height_end;
         uint32_t output_slice_width_start, output_slice_width_end, input_slice_width_start, input_slice_width_end;
-        if (dram_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_HEIGHT) {
+        if (dram_slice_config.slice_type == Op2dSliceConfig::SliceType::DRAM_HEIGHT) {
             output_slice_height_start = output_slice_dim_start;
             output_slice_height_end = output_slice_dim_end;
             output_slice_width_start = 0;
