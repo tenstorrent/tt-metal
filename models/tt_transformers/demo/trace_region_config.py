@@ -72,7 +72,11 @@ def get_supported_trace_region_size(request, mesh_device):
             "N300": 33000000,
             "T3K": 50000000,
             "TG": 50000000,
-        }
+        },
+        "Llama-3.3-70B": {
+            "T3K": 80000000,
+            "TG": 80000000,
+        },
     }
 
     device_name_based_on_dp = device_name_based_on_data_parallel(request, mesh_device, os.getenv("MESH_DEVICE"))
