@@ -191,9 +191,6 @@ def run_strided_all_gather_impl(
 
     def run_op(i):
         if use_non_fused:
-            tiles_per_chunk_across_cores = mm_core_grid.y * mm_block_h * mm_block_w
-            global_worker_count = num_links * num_workers_per_link
-            tiles_per_chunk_val = (tiles_per_chunk_across_cores + global_worker_count - 1) // global_worker_count
             tt_all_gather_out_tensor = ttnn.experimental.strided_all_gather_async(
                 input_tensor_mesh_list[i],
                 dim=dim,
@@ -204,7 +201,7 @@ def run_strided_all_gather_impl(
                 subdevice_id=worker_sub_device_id,
                 cluster_axis=cluster_axis,
                 barrier_semaphore=barrier_semaphore_handles[i],
-                tiles_per_chunk=tiles_per_chunk_val,
+                tiles_per_chunk=mm_core_grid.y * mm_block_h * mm_block_w,
                 num_workers_per_link=num_workers_per_link,
                 num_buffers_per_channel=num_buffers_per_channel,
                 mm_cores_y=mm_core_grid.y,

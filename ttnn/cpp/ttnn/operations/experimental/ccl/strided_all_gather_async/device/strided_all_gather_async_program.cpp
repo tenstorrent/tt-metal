@@ -413,9 +413,7 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
                 log_trace(tt::LogOp, "DEBUG: tiles_per_chunk__val: {}", tiles_per_chunk_val);
 
                 if (fuse_op) {
-                    uint32_t tiles_per_chunk_across_cores = mm_cores_y_val * mm_block_ht_val * mm_block_wt_val;
-                    tiles_per_chunk_val =
-                        (tiles_per_chunk_across_cores + global_worker_count - 1) / global_worker_count;
+                    tiles_per_chunk_val = mm_cores_y_val * mm_block_ht_val * mm_block_wt_val;
                 }
 
                 // Reader
