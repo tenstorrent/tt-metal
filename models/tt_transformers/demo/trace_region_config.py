@@ -70,7 +70,7 @@ def get_supported_trace_region_size(request, mesh_device):
     trace_region_size_dict = {
         "Llama-3.1-8B": {
             "N150": 25000000,
-            "N300": 33000000,
+            "N300": 38000000,
             "T3K": 50000000,
             "TG": 50000000,
         },
