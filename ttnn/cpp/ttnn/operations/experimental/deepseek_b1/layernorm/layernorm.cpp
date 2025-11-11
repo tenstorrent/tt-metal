@@ -11,7 +11,7 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "device/layernorm_op.hpp"
 
-namespace ttnn::operations::normalization {
+namespace ttnn::operations::experimental::deepseek_b1::layernorm {
 
 ttnn::Tensor ExecuteLayerNorm::invoke(
     const ttnn::Tensor& input_tensor,
@@ -52,4 +52,4 @@ ttnn::Tensor ExecuteLayerNorm::invoke(
         .at(0);
 }
 
-}  // namespace ttnn::operations::normalization
+}  // namespace ttnn::operations::experimental::deepseek_b1::layernorm

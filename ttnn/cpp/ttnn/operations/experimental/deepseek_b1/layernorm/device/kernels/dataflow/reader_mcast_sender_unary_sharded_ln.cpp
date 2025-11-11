@@ -7,7 +7,7 @@
 #include "hostdevcommon/common_values.hpp"
 #include "noc_addr_utils.h"
 
-namespace df = norm::layernorm::device::kernels::dataflow;
+namespace df = ttnn::operations::experimental::deepseek_b1::layernorm::device::kernels::dataflow;
 
 /**
  * @brief This kernel implements the sender (coordinator) logic for

@@ -20,7 +20,7 @@ using uint32_t = std::uint32_t;
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::normalization {
+namespace ttnn::operations::experimental::deepseek_b1::layernorm {
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
@@ -275,7 +275,8 @@ operation::ProgramWithCallbacks layernorm_multi_core(
 
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)block_size};
     tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(nullptr).append_to(reader_compile_time_args);  // b not used (no FUSE_PRE_ADD)
+    tt::tt_metal::TensorAccessorArgs(static_cast<tt::tt_metal::Buffer*>(nullptr))
+        .append_to(reader_compile_time_args);  // b not used (no FUSE_PRE_ADD)
     tt::tt_metal::TensorAccessorArgs(gamma ? gamma->buffer() : nullptr).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(beta ? beta->buffer() : nullptr).append_to(reader_compile_time_args);
 
@@ -592,6 +593,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     DeviceComputeKernelConfig compute_kernel_config) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     constexpr bool rms_norm = true;  // Always RMSNorm
+    constexpr bool use_welford = false;  // RMSNorm doesn't use Welford's method
     bool is_pre_all_gather = distributed_norm_stage == DistributedLayerNormStage::PRE_ALL_GATHER;
     bool is_post_all_gather = distributed_norm_stage == DistributedLayerNormStage::POST_ALL_GATHER;
 
@@ -1722,6 +1724,13 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         }
 
         // Set writer runtime args
+        // Convert epsilon float to uint32_t for passing to kernel
+        union {
+            float f;
+            uint32_t u;
+        } e;
+        e.f = eps;
+
         if ((not use_two_stage_reduce and width_index < num_cores_all_to_all) or
             (use_two_stage_reduce and width_index_two_stage < num_cores_all_to_all_first_stage)) {
             std::vector<uint32_t> writer_mcast_sender_args;
@@ -1835,4 +1844,4 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-}  // namespace ttnn::operations::normalization
+}  // namespace ttnn::operations::experimental::deepseek_b1::layernorm

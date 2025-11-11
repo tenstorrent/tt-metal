@@ -13,7 +13,7 @@
 
 #include "layernorm_types.hpp"
 
-namespace ttnn::operations::normalization {
+namespace ttnn::operations::experimental::deepseek_b1::layernorm {
 
 tt::tt_metal::operation::ProgramWithCallbacks layernorm_multi_core(
     const Tensor& a,
@@ -62,4 +62,4 @@ struct LayerNorm {
         std::vector<Tensor>& output_tensors) const;
 };
 
-}  // namespace ttnn::operations::normalization
+}  // namespace ttnn::operations::experimental::deepseek_b1::layernorm

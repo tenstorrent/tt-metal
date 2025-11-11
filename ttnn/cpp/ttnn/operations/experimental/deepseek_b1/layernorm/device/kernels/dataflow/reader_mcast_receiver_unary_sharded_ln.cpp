@@ -7,7 +7,7 @@
 #include "dataflow_api.h"
 #include "noc_addr_utils.h"
 
-namespace df = norm::layernorm::device::kernels::dataflow;
+namespace df = ttnn::operations::experimental::deepseek_b1::layernorm::device::kernels::dataflow;
 
 /**
  * @brief This kernel implements reader (non-coordinator, i.e. non-sender) logic for

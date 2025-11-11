@@ -6,9 +6,9 @@
 #include "ttnn-pybind/decorators.hpp"
 #include "layernorm.hpp"
 
-namespace ttnn::operations::normalization::detail {
-
 namespace py = pybind11;
+
+namespace ttnn::operations::experimental::deepseek_b1::layernorm::detail {
 
 void bind_normalization_layernorm_program_config(py::module& module) {
     py::class_<LayerNormProgramConfig>(module, "LayerNormProgramConfig").def(py::init<>());
@@ -39,7 +39,7 @@ void bind_normalization_layernorm_program_config(py::module& module) {
 void bind_normalization_layernorm_operation(py::module& module) {
     ttnn::bind_registered_operation(
         module,
-        ttnn::layer_norm,
+        ttnn::experimental::deepseek_b1::layer_norm,
         R"doc(
         Compute RMS norm over :attr:`input_tensor`.
         This is a specialized implementation for RMSNorm only.
@@ -145,4 +145,4 @@ void bind_normalization_layernorm(py::module& module) {
     bind_normalization_layernorm_operation(module);
 }
 
-}  // namespace ttnn::operations::normalization::detail
+}  // namespace ttnn::operations::experimental::deepseek_b1::layernorm::detail

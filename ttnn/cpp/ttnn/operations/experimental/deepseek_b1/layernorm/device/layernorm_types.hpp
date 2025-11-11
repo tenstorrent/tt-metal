@@ -8,7 +8,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 
-namespace ttnn::operations::normalization {
+namespace ttnn::operations::experimental::deepseek_b1::layernorm {
 
 enum class DistributedLayerNormStage { NOT_DISTRIBUTED, PRE_ALL_GATHER, POST_ALL_GATHER };
 
@@ -28,4 +28,4 @@ struct LayerNormShardedMultiCoreProgramConfig {
 
 using LayerNormProgramConfig = std::variant<LayerNormDefaultProgramConfig, LayerNormShardedMultiCoreProgramConfig>;
 
-}  // namespace ttnn::operations::normalization
+}  // namespace ttnn::operations::experimental::deepseek_b1::layernorm

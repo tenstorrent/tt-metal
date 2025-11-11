@@ -15,7 +15,7 @@ using uint32_t = std::uint32_t;
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::normalization {
+namespace ttnn::operations::experimental::deepseek_b1::layernorm {
 
 void LayerNorm::validate(
     const std::vector<Tensor>& input_tensors,
@@ -437,4 +437,4 @@ operation::ProgramWithCallbacks LayerNorm::create_program(
         this->program_config);
 }
 
-}  // namespace ttnn::operations::normalization
+}  // namespace ttnn::operations::experimental::deepseek_b1::layernorm

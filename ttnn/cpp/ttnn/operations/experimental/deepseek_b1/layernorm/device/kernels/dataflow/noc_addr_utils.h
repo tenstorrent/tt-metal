@@ -13,7 +13,7 @@
 
 #include "dataflow_api.h"
 
-namespace norm::layernorm::device::kernels::dataflow {
+namespace ttnn::operations::experimental::deepseek_b1::layernorm::device::kernels::dataflow {
 
 using NumNocAddrs = uint32_t;
 
@@ -146,4 +146,4 @@ inline void compute_single_stage_noc_addrs(
         }
     }
 }
-}  // namespace norm::layernorm::device::kernels::dataflow
+}  // namespace ttnn::operations::experimental::deepseek_b1::layernorm::device::kernels::dataflow

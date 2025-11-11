@@ -9,8 +9,7 @@
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
-namespace ttnn {
-namespace operations::normalization {
+namespace ttnn::operations::experimental::deepseek_b1::layernorm {
 
 struct ExecuteLayerNorm {
     static ttnn::Tensor invoke(
@@ -24,9 +23,12 @@ struct ExecuteLayerNorm {
         std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 };
 
-}  // namespace operations::normalization
+}  // namespace ttnn::operations::experimental::deepseek_b1::layernorm
 
-constexpr auto layer_norm =
-    ttnn::register_operation<"ttnn::layer_norm", ttnn::operations::normalization::ExecuteLayerNorm>();
+namespace ttnn::experimental::deepseek_b1 {
 
-}  // namespace ttnn
+constexpr auto layer_norm = ttnn::register_operation<
+    "ttnn::experimental::deepseek_b1::layer_norm",
+    ttnn::operations::experimental::deepseek_b1::layernorm::ExecuteLayerNorm>();
+
+}  // namespace ttnn::experimental::deepseek_b1

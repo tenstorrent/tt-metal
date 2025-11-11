@@ -6,8 +6,8 @@
 
 #include "ttnn-pybind/pybind_fwd.hpp"
 
-namespace ttnn::operations::normalization::detail {
+namespace ttnn::operations::experimental::deepseek_b1::layernorm::detail {
 
 void bind_normalization_layernorm(pybind11::module& module);
 
-}  // namespace ttnn::operations::normalization::detail
+}  // namespace ttnn::operations::experimental::deepseek_b1::layernorm::detail
