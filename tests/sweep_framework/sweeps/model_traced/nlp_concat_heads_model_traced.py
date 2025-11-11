@@ -53,7 +53,21 @@ def run(
         partial(torch_random, low=-1, high=1, dtype=torch.float32), input_a_dtype
     )(shape)
 
-    torch_output_tensor = torch_input_tensor_a.clone()
+    # nlp_concat_heads concatenates heads: [B, H, S, D] -> [B, 1, S, H*D]
+    # So we need to compute the expected output shape
+    if len(shape) == 4:
+        batch, num_heads, seq_len, head_dim = shape
+        expected_output_shape = (batch, 1, seq_len, num_heads * head_dim)
+        # Reshape input to match expected output for comparison
+        torch_output_tensor = (
+            torch_input_tensor_a.permute(0, 2, 1, 3)
+            .contiguous()
+            .view(batch, seq_len, num_heads * head_dim)
+            .unsqueeze(1)
+        )
+    else:
+        # Fallback: just clone the input
+        torch_output_tensor = torch_input_tensor_a.clone()
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,

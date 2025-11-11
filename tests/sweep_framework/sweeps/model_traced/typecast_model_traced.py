@@ -60,9 +60,16 @@ def run(
     else:
         shape = input_shape
 
-    torch_input_tensor_a = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
-    )(shape)
+    # Handle UINT16 specially - PyTorch doesn't have native uint16, use int16 with proper range
+    if input_a_dtype == ttnn.uint16:
+        # For uint16, create values in valid range [0, 65535]
+        torch_input_tensor_a = torch.randint(0, 65536, shape, dtype=torch.int32)
+        # Convert to uint16 representation (but keep as int32 for PyTorch)
+        torch_input_tensor_a = torch_input_tensor_a.clamp(0, 65535)
+    else:
+        torch_input_tensor_a = gen_func_with_cast_tt(
+            partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
+        )(shape)
 
     # Typecast to output dtype
     torch_output_tensor = torch_input_tensor_a.to(torch.float32)  # Convert to float32 first for comparison

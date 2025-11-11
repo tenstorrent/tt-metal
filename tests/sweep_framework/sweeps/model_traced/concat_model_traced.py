@@ -39,16 +39,29 @@ if model_traced_params:
 
 
 def run(
-    input_shape,
-    input_a_dtype,
-    input_a_layout,
-    input_a_memory_config,
-    input_b_memory_config,
+    dim,
     output_memory_config,
+    input_shape=None,
+    input_a_dtype=None,
+    input_a_layout=None,
+    input_a_memory_config=None,
+    input_b_memory_config=None,
     *,
     device,
 ) -> list:
     torch.manual_seed(0)
+
+    # Handle default values if not provided (for model_traced suite)
+    if input_shape is None:
+        input_shape = (1, 1, 32, 16)
+    if input_a_dtype is None:
+        input_a_dtype = ttnn.bfloat16
+    if input_a_layout is None:
+        input_a_layout = ttnn.TILE_LAYOUT
+    if input_a_memory_config is None:
+        input_a_memory_config = ttnn.DRAM_MEMORY_CONFIG
+    if input_b_memory_config is None:
+        input_b_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
     # Handle tuple input_shape
     if isinstance(input_shape, (tuple, list)):
@@ -60,15 +73,17 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(shape)
 
-    # Create second tensor with same shape except last dimension halved
+    # Create second tensor with same shape except the dimension being concatenated
     shape_b = list(shape)
-    shape_b[-1] = shape[-1] // 2  # Second tensor has half the width
+    # Normalize dim to positive index
+    dim_idx = dim if dim >= 0 else len(shape) + dim
+    shape_b[dim_idx] = shape[dim_idx] // 2  # Second tensor has half the size along concat dim
     torch_input_tensor_b = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(shape_b)
 
-    # Concatenate along last dimension (dim=-1)
-    torch_output_tensor = torch.cat([torch_input_tensor_a, torch_input_tensor_b], dim=-1)
+    # Concatenate along specified dimension
+    torch_output_tensor = torch.cat([torch_input_tensor_a, torch_input_tensor_b], dim=dim)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -87,7 +102,7 @@ def run(
     )
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.concat([input_tensor_a, input_tensor_b], dim=-1, memory_config=output_memory_config)
+    output_tensor = ttnn.concat([input_tensor_a, input_tensor_b], dim=dim, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(output_tensor)
     e2e_perf = stop_measuring_time(start_time)
 

@@ -92,20 +92,43 @@ class OperationParameterExtractors:
         try:
             params = {}
 
-            # Find the input_shape argument which contains {'self': [...], 'other': [...]}
+            # Extract tensor configs from arg0 (indices) and arg1 (weights)
+            indices_config = None
+            weights_config = None
+
             for arg in config:
-                if isinstance(arg, dict) and "input_shape" in arg:
-                    input_shape_data = arg["input_shape"]
-                    if (
-                        isinstance(input_shape_data, dict)
-                        and "self" in input_shape_data
-                        and "other" in input_shape_data
-                    ):
-                        params["input_shape"] = input_shape_data
-                        return params
+                if isinstance(arg, dict):
+                    if "arg0" in arg:
+                        indices_config = OperationParameterExtractors.extract_tensor_config(arg["arg0"])
+                    if "arg1" in arg:
+                        weights_config = OperationParameterExtractors.extract_tensor_config(arg["arg1"])
+
+            if indices_config and weights_config:
+                # Create input_shape dict format expected by transform
+                params["input_shape"] = {"self": indices_config.shape, "other": weights_config.shape}
+                params["indices_dtype"] = indices_config.dtype
+                params["weights_dtype"] = weights_config.dtype
+                params["indices_layout"] = indices_config.layout
+                params["weights_layout"] = weights_config.layout
+                params["indices_memory_config"] = indices_config.memory_config
+                params["weights_memory_config"] = weights_config.memory_config
+
+                # Extract output memory config from arg6 if present
+                output_memory_config = None
+                for arg in config:
+                    if isinstance(arg, dict) and "arg6" in arg:
+                        mem_config_data = arg["arg6"]
+                        if isinstance(mem_config_data, dict) and "MemoryConfig" in mem_config_data:
+                            output_memory_config = mem_config_data["MemoryConfig"]
+                            break
+
+                params["output_memory_config"] = output_memory_config or weights_config.memory_config
+
+                return params
 
             return None
-        except Exception:
+        except Exception as e:
+            print(f"Error extracting embedding parameters: {e}")
             return None
 
     @staticmethod
@@ -115,45 +138,43 @@ class OperationParameterExtractors:
 
         for config in configs:
             try:
-                # config is a tuple: (input_shape_dict, input_a_dtype, input_b_dtype, ...)
-                input_shape_dict = config[0]  # {'self': [...], 'other': [...]}
+                if not isinstance(config, dict):
+                    continue
+
+                # Extract from the extracted params dict
+                input_shape_dict = config.get("input_shape", {})
+                if not input_shape_dict or "self" not in input_shape_dict or "other" not in input_shape_dict:
+                    continue
+
                 indices_shape = input_shape_dict["self"]
                 weights_shape = input_shape_dict["other"]
 
-                # Extract vocab_size and embedding_dim from weights shape
-                # weights_shape is [1, 1, vocab_size, embedding_dim]
-                vocab_size = weights_shape[-2]
-                embedding_dim = weights_shape[-1]
+                # Parse dtypes and layouts from the config
+                indices_dtype_str = config.get("indices_dtype", "DataType::UINT32")
+                weights_dtype_str = config.get("weights_dtype", "DataType::BFLOAT16")
+                indices_layout_str = config.get("indices_layout", "Layout::TILE")
+                weights_layout_str = config.get("weights_layout", "Layout::TILE")
 
-                # Convert indices shape to batch_size, seq_length format
-                if len(indices_shape) == 1:
-                    batch_size, seq_length = 1, indices_shape[0]
-                elif len(indices_shape) == 2:
-                    batch_size, seq_length = indices_shape[0], indices_shape[1]
-                else:
-                    # For higher dimensions, flatten all but last dimension
-                    batch_size = 1
-                    seq_length = 1
-                    for dim in indices_shape[:-1]:
-                        seq_length *= dim
-
-                embedding_args = (batch_size, seq_length, embedding_dim, vocab_size)
+                # Parse memory configs
+                indices_mem_config = config.get("indices_memory_config", {})
+                weights_mem_config = config.get("weights_memory_config", {})
+                output_mem_config = config.get("output_memory_config", weights_mem_config)
 
                 transformed_config = {
-                    "embedding_args": embedding_args,
-                    "input_dtype": config[1],  # input_a_dtype (uint32)
-                    "weight_dtype": config[2],  # input_b_dtype (bfloat16)
-                    "output_dtype": config[2],  # Use same as weight dtype for output
-                    "input_layout": config[3],  # input_a_layout
-                    "weight_layout": config[4],  # input_b_layout (will be forced to ROW_MAJOR)
-                    "input_memory_config": config[5],  # input_a_memory_config
-                    "weight_memory_config": config[6],  # input_b_memory_config
-                    "output_memory_config": config[7],  # output_memory_config
+                    "input_shape": input_shape_dict,  # Keep as dict with 'self' and 'other'
+                    "input_a_dtype": indices_dtype_str,
+                    "input_b_dtype": weights_dtype_str,
+                    "input_a_layout": indices_layout_str,
+                    "input_b_layout": weights_layout_str,
+                    "input_a_memory_config": indices_mem_config,
+                    "input_b_memory_config": weights_mem_config,
+                    "output_memory_config": output_mem_config,
                 }
 
                 transformed_configs.append(transformed_config)
 
-            except Exception:
+            except Exception as e:
+                print(f"Error transforming embedding config: {e}")
                 continue
 
         return transformed_configs

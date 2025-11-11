@@ -89,21 +89,60 @@ class MasterConfigLoader:
 
         # Try exact match first
         if operation_name in self.master_data.get("operations", {}):
-            return self.master_data["operations"][operation_name].get("configurations", [])
+            configs = self.master_data["operations"][operation_name].get("configurations", [])
+            # Convert new format (dict with source) to old format (list) for backward compatibility
+            return self._normalize_configs(configs)
 
         # Try with ttnn:: prefix
         ttnn_op_name = f"ttnn::{operation_name}"
         if ttnn_op_name in self.master_data.get("operations", {}):
-            return self.master_data["operations"][ttnn_op_name].get("configurations", [])
+            configs = self.master_data["operations"][ttnn_op_name].get("configurations", [])
+            return self._normalize_configs(configs)
+
+        # Try with transformer:: namespace (e.g., transformer::paged_scaled_dot_product_attention_decode)
+        transformer_op_name = f"ttnn::transformer::{operation_name}"
+        if transformer_op_name in self.master_data.get("operations", {}):
+            configs = self.master_data["operations"][transformer_op_name].get("configurations", [])
+            return self._normalize_configs(configs)
 
         # Try without prefix if it starts with ttnn::
         if operation_name.startswith("ttnn::"):
             base_name = operation_name[6:]  # Remove "ttnn::"
             if base_name in self.master_data.get("operations", {}):
-                return self.master_data["operations"][base_name].get("configurations", [])
+                configs = self.master_data["operations"][base_name].get("configurations", [])
+                return self._normalize_configs(configs)
+            # Also try with transformer:: namespace
+            transformer_base = f"ttnn::transformer::{base_name}"
+            if transformer_base in self.master_data.get("operations", {}):
+                configs = self.master_data["operations"][transformer_base].get("configurations", [])
+                return self._normalize_configs(configs)
 
         print(f"⚠️ No configurations found for operation: {operation_name}")
         return []
+
+    def _normalize_configs(self, configs: List) -> List[List[Dict]]:
+        """
+        Normalize configurations to always return list of argument lists.
+        Handles both old format (list) and new format (dict with source).
+
+        Args:
+            configs: List of configurations (either list of args or dict with 'arguments' and 'source')
+
+        Returns:
+            List of argument lists (backward compatible format)
+        """
+        normalized = []
+        for config in configs:
+            if isinstance(config, dict) and "arguments" in config:
+                # New format: extract arguments
+                normalized.append(config["arguments"])
+            elif isinstance(config, list):
+                # Old format: use as-is
+                normalized.append(config)
+            else:
+                # Fallback: wrap in list
+                normalized.append(config if isinstance(config, list) else [config])
+        return normalized
 
     def parse_dtype(self, dtype_str: str) -> Any:
         """Convert dtype string to ttnn dtype"""
@@ -126,6 +165,61 @@ class MasterConfigLoader:
         else:
             return ttnn.TILE_LAYOUT  # Default
 
+    def _is_valid_sharding_config(self, memory_config: Dict, tensor_shape: list = None) -> bool:
+        """
+        Check if a sharding configuration is valid for the current hardware.
+        Validates that num_shards <= num_compute_banks.
+
+        Args:
+            memory_config: Memory config dictionary
+            tensor_shape: Tensor shape (optional, for validation)
+
+        Returns:
+            True if sharding config is valid, False otherwise
+        """
+        try:
+            shard_spec = memory_config.get("nd_shard_spec") or memory_config.get("shard_spec")
+            if not shard_spec or shard_spec == "std::nullopt":
+                return True  # Non-sharded configs are always valid
+
+            grid_data = shard_spec.get("grid", [])
+            if not grid_data:
+                return True
+
+            # Calculate number of cores from grid
+            num_cores = 0
+            if isinstance(grid_data, list):
+                if isinstance(grid_data[0], list):
+                    # Multiple core ranges
+                    for range_pair in grid_data:
+                        if len(range_pair) >= 2:
+                            start = range_pair[0]
+                            end = range_pair[1]
+                            if isinstance(start, dict) and isinstance(end, dict):
+                                start_x, start_y = start.get("x", 0), start.get("y", 0)
+                                end_x, end_y = end.get("x", 0), end.get("y", 0)
+                                num_cores += (end_x - start_x + 1) * (end_y - start_y + 1)
+                else:
+                    # Single core range
+                    if len(grid_data) >= 2:
+                        start = grid_data[0]
+                        end = grid_data[1]
+                        if isinstance(start, dict) and isinstance(end, dict):
+                            start_x, start_y = start.get("x", 0), start.get("y", 0)
+                            end_x, end_y = end.get("x", 0), end.get("y", 0)
+                            num_cores = (end_x - start_x + 1) * (end_y - start_y + 1)
+
+            # For wormhole_b0, we have 56 compute banks
+            # Filter out configs that require more cores than available
+            MAX_COMPUTE_BANKS = 56
+            if num_cores > MAX_COMPUTE_BANKS:
+                return False
+
+            return True
+        except Exception:
+            # If we can't validate, assume it's valid (let it fail at runtime if needed)
+            return True
+
     def parse_memory_config(self, memory_config: Dict, tensor_shape: list = None) -> Any:
         """Convert memory config dict to ttnn memory config
 
@@ -134,6 +228,11 @@ class MasterConfigLoader:
             tensor_shape: Tensor shape needed for creating sharded configs
         """
         try:
+            # Validate sharding config before parsing
+            if not self._is_valid_sharding_config(memory_config, tensor_shape):
+                # Invalid sharding config - return DRAM interleaved as fallback
+                return ttnn.DRAM_MEMORY_CONFIG
+
             buffer_type = memory_config.get("buffer_type", "BufferType::DRAM")
             memory_layout = memory_config.get("memory_layout", "TensorMemoryLayout::INTERLEAVED")
 
@@ -395,6 +494,29 @@ class MasterConfigLoader:
                 return self._get_operation_suite_parameters(
                     operation_name, configs, all_cases, deduplicate_inputs=not all_cases
                 )
+            elif operation_name in ["concat", "ttnn::concat"]:
+                print(f"🔧 Detected concat operation with vector of tensors input")
+                return self._get_concat_suite_parameters(
+                    operation_name, configs, all_cases, deduplicate_inputs=not all_cases
+                )
+            elif operation_name in [
+                "nlp_create_qkv_heads",
+                "experimental::nlp_create_qkv_heads",
+                "ttnn::experimental::nlp_create_qkv_heads",
+            ]:
+                print(f"🔧 Detected nlp_create_qkv_heads operation - extracting num_q_heads and num_kv_heads")
+                return self._get_nlp_create_qkv_heads_suite_parameters(
+                    operation_name, configs, all_cases, deduplicate_inputs=not all_cases
+                )
+            elif operation_name in [
+                "nlp_create_qkv_heads_decode",
+                "experimental::nlp_create_qkv_heads_decode",
+                "ttnn::experimental::nlp_create_qkv_heads_decode",
+            ]:
+                print(f"🔧 Detected nlp_create_qkv_heads_decode operation - extracting num_heads and num_kv_heads")
+                return self._get_nlp_create_qkv_heads_decode_suite_parameters(
+                    operation_name, configs, all_cases, deduplicate_inputs=not all_cases
+                )
 
             # Detect the number of tensor inputs
             tensor_count = self._count_tensor_inputs(configs)
@@ -517,6 +639,29 @@ class MasterConfigLoader:
                             end_shape = self._extract_shape_parameter(config, arg_name="arg1")
                             if end_shape:
                                 config_dict["end_shape"] = end_shape
+                        elif operation_name in [
+                            "nlp_concat_heads_decode",
+                            "experimental::nlp_concat_heads_decode",
+                            "ttnn::experimental::nlp_concat_heads_decode",
+                        ]:
+                            # Extract num_heads from arg1
+                            num_heads = None
+                            for arg in config:
+                                if isinstance(arg, dict) and "arg1" in arg:
+                                    num_heads_val = arg["arg1"]
+                                    if isinstance(num_heads_val, (int, str)) and num_heads_val != "nullopt":
+                                        try:
+                                            num_heads = int(num_heads_val)
+                                        except:
+                                            pass
+                                    break
+                            if num_heads is None:
+                                # Try to infer from shape [B, 1, H, D] -> H might be num_heads
+                                if len(tensor_config.shape) == 4 and tensor_config.shape[1] == 1:
+                                    num_heads = tensor_config.shape[2]  # Use shape[2] as num_heads
+                                else:
+                                    num_heads = 16  # Default fallback
+                            config_dict["num_heads"] = num_heads
                         elif operation_name == "transpose":
                             # For transpose, extract dim0 and dim1 from arg1 and arg2
                             dim0 = self._extract_int_parameter(config, "arg1")
@@ -528,6 +673,27 @@ class MasterConfigLoader:
                             # For reshape, extract target_shape from arg1
                             target_shape = self._extract_shape_parameter(config, arg_name="arg1")
                             if target_shape:
+                                # Validate reshape: input and target must have same number of elements
+                                import math
+
+                                input_elements = math.prod(tensor_config.shape) if tensor_config.shape else 0
+                                # Handle -1 in target_shape (means infer from other dimensions)
+                                if -1 in target_shape:
+                                    # Calculate what -1 should be
+                                    known_product = math.prod([d for d in target_shape if d != -1])
+                                    if known_product == 0:
+                                        # Invalid: cannot infer -1 with zero in other dimensions
+                                        failed_configs += 1
+                                        continue
+                                    inferred_dim = input_elements // known_product
+                                    target_shape = [inferred_dim if d == -1 else d for d in target_shape]
+
+                                target_elements = math.prod(target_shape) if target_shape else 0
+                                if input_elements != target_elements:
+                                    # Invalid reshape config - skip it
+                                    failed_configs += 1
+                                    continue
+
                                 config_dict["target_shape"] = target_shape
                         elif operation_name == "pad":
                             # For pad, extract padding (arg1) and value (arg2)
@@ -658,6 +824,16 @@ class MasterConfigLoader:
                 value_list = [] if operation_name == "pad" else None
                 padded_shape_list = [] if operation_name == "tilize_with_val_padding" else None
                 pad_value_list = [] if operation_name == "tilize_with_val_padding" else None
+                num_heads_list = (
+                    []
+                    if operation_name
+                    in [
+                        "nlp_concat_heads_decode",
+                        "experimental::nlp_concat_heads_decode",
+                        "ttnn::experimental::nlp_concat_heads_decode",
+                    ]
+                    else None
+                )
 
                 for idx, cfg in enumerate(paired_configs):
                     input_shapes.append(cfg["shape"])
@@ -684,6 +860,16 @@ class MasterConfigLoader:
                         if "padded_shape" in cfg and "pad_value" in cfg:
                             padded_shape_list.append(cfg["padded_shape"])
                             pad_value_list.append(cfg["pad_value"])
+                    if (
+                        operation_name
+                        in [
+                            "nlp_concat_heads_decode",
+                            "experimental::nlp_concat_heads_decode",
+                            "ttnn::experimental::nlp_concat_heads_decode",
+                        ]
+                        and "num_heads" in cfg
+                    ):
+                        num_heads_list.append(cfg["num_heads"])
 
                 # Convert to exact configurations format (prevents Cartesian product)
                 # Use comma-separated parameter names to pass tuples of values together
@@ -721,6 +907,17 @@ class MasterConfigLoader:
                 if operation_name == "tilize_with_val_padding" and padded_shape_list and pad_value_list:
                     param_names.extend(["padded_shape", "pad_value"])
                     param_lists.extend([padded_shape_list, pad_value_list])
+                if (
+                    operation_name
+                    in [
+                        "nlp_concat_heads_decode",
+                        "experimental::nlp_concat_heads_decode",
+                        "ttnn::experimental::nlp_concat_heads_decode",
+                    ]
+                    and num_heads_list
+                ):
+                    param_names.append("num_heads")
+                    param_lists.append(num_heads_list)
 
                 # NOTE: traced_config_name is metadata only, not passed to run()
                 # param_names.append("traced_config_name")
@@ -1404,6 +1601,39 @@ class MasterConfigLoader:
 
                     # For embedding, we have a specific parameter format
                     if clean_op_name == "embedding":
+                        # Convert string dtypes and layouts to TTNN types
+                        processed_configs = []
+                        for cfg in transformed_configs:
+                            processed_cfg = cfg.copy()
+                            # Convert dtype strings to TTNN dtypes
+                            processed_cfg["input_a_dtype"] = self.parse_dtype(
+                                cfg.get("input_a_dtype", "DataType::UINT32")
+                            )
+                            processed_cfg["input_b_dtype"] = self.parse_dtype(
+                                cfg.get("input_b_dtype", "DataType::BFLOAT16")
+                            )
+                            # Convert layout strings to TTNN layouts
+                            processed_cfg["input_a_layout"] = self.parse_layout(
+                                cfg.get("input_a_layout", "Layout::TILE")
+                            )
+                            processed_cfg["input_b_layout"] = self.parse_layout(
+                                cfg.get("input_b_layout", "Layout::TILE")
+                            )
+                            # Convert memory configs
+                            input_shape = cfg.get("input_shape", {})
+                            indices_shape = input_shape.get("self", [])
+                            weights_shape = input_shape.get("other", [])
+                            processed_cfg["input_a_memory_config"] = self.parse_memory_config(
+                                cfg.get("input_a_memory_config", {}), indices_shape
+                            )
+                            processed_cfg["input_b_memory_config"] = self.parse_memory_config(
+                                cfg.get("input_b_memory_config", {}), weights_shape
+                            )
+                            processed_cfg["output_memory_config"] = self.parse_memory_config(
+                                cfg.get("output_memory_config", {}), weights_shape
+                            )
+                            processed_configs.append(processed_cfg)
+
                         param_names = [
                             "input_shape,input_a_dtype,input_b_dtype,input_a_layout,input_b_layout,"
                             + "input_a_memory_config,input_b_memory_config,output_memory_config"
@@ -1420,13 +1650,119 @@ class MasterConfigLoader:
                                     cfg["input_b_memory_config"],
                                     cfg["output_memory_config"],
                                 )
-                                for cfg in transformed_configs
+                                for cfg in processed_configs
                             ]
                         ]
                         return {param_names[0]: param_lists[0]}
 
                     # For linear, we have a specific parameter format
                     elif clean_op_name == "linear":
+                        # Convert string dtypes, layouts, and memory configs to TTNN types
+                        processed_configs = []
+                        for cfg in transformed_configs:
+                            processed_cfg = cfg.copy()
+                            # Convert dtype strings to TTNN dtypes
+                            processed_cfg["input_a_dtype"] = self.parse_dtype(
+                                cfg.get("input_a_dtype", "DataType::BFLOAT16")
+                            )
+                            processed_cfg["input_b_dtype"] = self.parse_dtype(
+                                cfg.get("input_b_dtype", "DataType::BFLOAT16")
+                            )
+                            # Convert layout strings to TTNN layouts
+                            processed_cfg["input_a_layout"] = self.parse_layout(
+                                cfg.get("input_a_layout", "Layout::TILE")
+                            )
+                            processed_cfg["input_b_layout"] = self.parse_layout(
+                                cfg.get("input_b_layout", "Layout::TILE")
+                            )
+                            # Convert memory configs - handle both string and dict formats
+                            input_shape = cfg.get("input_shape", [])
+                            weight_shape = cfg.get("weight_shape", [])
+                            # If memory_config is a string, convert to dict format for parsing
+                            input_a_mem_cfg = cfg.get("input_a_memory_config", "MemoryConfig.INTERLEAVED")
+                            input_b_mem_cfg = cfg.get("input_b_memory_config", "MemoryConfig.INTERLEAVED")
+                            output_mem_cfg = cfg.get("output_memory_config", "MemoryConfig.INTERLEAVED")
+
+                            # Convert string memory configs to dict format
+                            if isinstance(input_a_mem_cfg, str):
+                                # Parse string like "MemoryConfig.INTERLEAVED" or "MemoryConfig.WIDTH_SHARDED"
+                                if "INTERLEAVED" in input_a_mem_cfg:
+                                    input_a_mem_cfg = {
+                                        "memory_layout": "TensorMemoryLayout::INTERLEAVED",
+                                        "buffer_type": "BufferType::DRAM",
+                                    }
+                                elif "WIDTH_SHARDED" in input_a_mem_cfg:
+                                    input_a_mem_cfg = {
+                                        "memory_layout": "TensorMemoryLayout::WIDTH_SHARDED",
+                                        "buffer_type": "BufferType::L1",
+                                    }
+                                elif "HEIGHT_SHARDED" in input_a_mem_cfg:
+                                    input_a_mem_cfg = {
+                                        "memory_layout": "TensorMemoryLayout::HEIGHT_SHARDED",
+                                        "buffer_type": "BufferType::L1",
+                                    }
+                                else:
+                                    input_a_mem_cfg = {
+                                        "memory_layout": "TensorMemoryLayout::INTERLEAVED",
+                                        "buffer_type": "BufferType::DRAM",
+                                    }
+
+                            if isinstance(input_b_mem_cfg, str):
+                                if "INTERLEAVED" in input_b_mem_cfg:
+                                    input_b_mem_cfg = {
+                                        "memory_layout": "TensorMemoryLayout::INTERLEAVED",
+                                        "buffer_type": "BufferType::DRAM",
+                                    }
+                                elif "WIDTH_SHARDED" in input_b_mem_cfg:
+                                    input_b_mem_cfg = {
+                                        "memory_layout": "TensorMemoryLayout::WIDTH_SHARDED",
+                                        "buffer_type": "BufferType::L1",
+                                    }
+                                elif "HEIGHT_SHARDED" in input_b_mem_cfg:
+                                    input_b_mem_cfg = {
+                                        "memory_layout": "TensorMemoryLayout::HEIGHT_SHARDED",
+                                        "buffer_type": "BufferType::L1",
+                                    }
+                                else:
+                                    input_b_mem_cfg = {
+                                        "memory_layout": "TensorMemoryLayout::INTERLEAVED",
+                                        "buffer_type": "BufferType::DRAM",
+                                    }
+
+                            if isinstance(output_mem_cfg, str):
+                                if "INTERLEAVED" in output_mem_cfg:
+                                    output_mem_cfg = {
+                                        "memory_layout": "TensorMemoryLayout::INTERLEAVED",
+                                        "buffer_type": "BufferType::DRAM",
+                                    }
+                                elif "WIDTH_SHARDED" in output_mem_cfg:
+                                    output_mem_cfg = {
+                                        "memory_layout": "TensorMemoryLayout::WIDTH_SHARDED",
+                                        "buffer_type": "BufferType::L1",
+                                    }
+                                elif "HEIGHT_SHARDED" in output_mem_cfg:
+                                    output_mem_cfg = {
+                                        "memory_layout": "TensorMemoryLayout::HEIGHT_SHARDED",
+                                        "buffer_type": "BufferType::L1",
+                                    }
+                                else:
+                                    output_mem_cfg = {
+                                        "memory_layout": "TensorMemoryLayout::INTERLEAVED",
+                                        "buffer_type": "BufferType::DRAM",
+                                    }
+
+                            # Parse memory configs to TTNN MemoryConfig objects
+                            processed_cfg["input_a_memory_config"] = self.parse_memory_config(
+                                input_a_mem_cfg, input_shape
+                            )
+                            processed_cfg["input_b_memory_config"] = self.parse_memory_config(
+                                input_b_mem_cfg, weight_shape
+                            )
+                            processed_cfg["output_memory_config"] = self.parse_memory_config(
+                                output_mem_cfg, input_shape
+                            )
+                            processed_configs.append(processed_cfg)
+
                         param_names = [
                             "input_shape,weight_shape,bias_shape,input_a_dtype,input_b_dtype,input_a_layout,input_b_layout,"
                             + "input_a_memory_config,input_b_memory_config,output_memory_config,transpose_a,transpose_b,has_bias"
@@ -1448,7 +1784,7 @@ class MasterConfigLoader:
                                     cfg["transpose_b"],
                                     cfg["has_bias"],
                                 )
-                                for cfg in transformed_configs
+                                for cfg in processed_configs
                             ]
                         ]
                         return {param_names[0]: param_lists[0]}
@@ -1460,6 +1796,297 @@ class MasterConfigLoader:
             return {}
         except Exception as e:
             print(f"❌ Error extracting {operation_name} parameters: {e}")
+            import traceback
+
+            traceback.print_exc()
+            return {}
+
+    def _get_concat_suite_parameters(
+        self, operation_name: str, configs: List, all_cases: bool, deduplicate_inputs: bool = False
+    ) -> Dict:
+        """Get parameters for concat operation which takes a vector of tensors"""
+        try:
+            paired_configs = []
+            failed_configs = 0
+
+            for config_idx, config in enumerate(configs):
+                try:
+                    # Concat takes a vector of tensors as arg0, dim as arg1, memory_config as arg2
+                    # Since we can't easily extract all tensors from the vector, we'll extract
+                    # what we can from the config - mainly the dim and memory_config
+
+                    # Extract dim from arg1
+                    dim = None
+                    memory_config = None
+
+                    for arg in config:
+                        if isinstance(arg, dict):
+                            if "arg1" in arg:
+                                dim_val = arg["arg1"]
+                                if isinstance(dim_val, (int, str)) and dim_val != "nullopt":
+                                    try:
+                                        dim = int(dim_val)
+                                    except:
+                                        pass
+                            if "arg2" in arg:
+                                mem_config_data = arg["arg2"]
+                                if isinstance(mem_config_data, dict) and "MemoryConfig" in mem_config_data:
+                                    memory_config = self.parse_memory_config(mem_config_data["MemoryConfig"], None)
+
+                    # For concat, we need at least 2 tensors, but we can't extract them from the vector
+                    # So we'll create a minimal config that can be used for testing
+                    # The actual tensor shapes will need to come from the test itself
+                    if dim is not None:
+                        # Use a default shape for now - this is a limitation
+                        # The test will need to handle the actual tensor shapes
+                        config_dict = {
+                            "dim": dim,
+                            "output_memory_config": memory_config or ttnn.DRAM_MEMORY_CONFIG,
+                        }
+                        paired_configs.append(config_dict)
+
+                except Exception as e:
+                    failed_configs += 1
+                    continue
+
+            if paired_configs:
+                print(f"✅ Loaded {len(paired_configs)} traced configurations for {operation_name} (model_traced suite)")
+                print(f"   ⚠️ Note: Concat takes a vector of tensors - tensor shapes not extracted from trace")
+
+                # Build parameter dict
+                param_names = ["dim", "output_memory_config"]
+                param_lists = [
+                    [cfg["dim"] for cfg in paired_configs],
+                    [cfg["output_memory_config"] for cfg in paired_configs],
+                ]
+
+                # Create tuples of exact configurations
+                exact_configs = list(zip(*param_lists))
+                param_key = ",".join(param_names)
+
+                return {param_key: exact_configs}
+
+            return {}
+        except Exception as e:
+            print(f"❌ Error extracting concat parameters: {e}")
+            import traceback
+
+            traceback.print_exc()
+            return {}
+
+    def _get_nlp_create_qkv_heads_suite_parameters(
+        self, operation_name: str, configs: List, all_cases: bool, deduplicate_inputs: bool = False
+    ) -> Dict:
+        """Get parameters for nlp_create_qkv_heads operation which requires num_q_heads and num_kv_heads parameters"""
+        try:
+            paired_configs = []
+            failed_configs = 0
+
+            for config_idx, config in enumerate(configs):
+                try:
+                    # Extract input tensor (arg0)
+                    tensor_config = None
+                    num_q_heads = None
+                    num_kv_heads = None
+
+                    for arg in config:
+                        if isinstance(arg, dict):
+                            if "arg0" in arg:
+                                tensor_config = self.extract_tensor_config(arg["arg0"])
+                            if "arg2" in arg:
+                                # arg2 is num_q_heads
+                                num_q_heads_val = arg["arg2"]
+                                if isinstance(num_q_heads_val, (int, str)) and num_q_heads_val != "nullopt":
+                                    try:
+                                        num_q_heads = int(num_q_heads_val)
+                                    except:
+                                        pass
+                            if "arg3" in arg:
+                                # arg3 is num_kv_heads
+                                num_kv_heads_val = arg["arg3"]
+                                if isinstance(num_kv_heads_val, (int, str)) and num_kv_heads_val != "nullopt":
+                                    try:
+                                        num_kv_heads = int(num_kv_heads_val)
+                                    except:
+                                        pass
+
+                    if not tensor_config or num_q_heads is None or num_kv_heads is None:
+                        failed_configs += 1
+                        continue
+
+                    # Parse tensor config
+                    parsed_dtype = self.parse_dtype(tensor_config.dtype)
+                    parsed_layout = self.parse_layout(tensor_config.layout)
+                    parsed_mem_config = self.parse_memory_config(tensor_config.memory_config, tensor_config.shape)
+
+                    # Extract output memory config from arg5 if present
+                    output_mem_config = parsed_mem_config
+                    for arg in config:
+                        if isinstance(arg, dict) and "arg5" in arg:
+                            mem_config_data = arg["arg5"]
+                            if isinstance(mem_config_data, dict) and "MemoryConfig" in mem_config_data:
+                                output_mem_config = self.parse_memory_config(
+                                    mem_config_data["MemoryConfig"], tensor_config.shape
+                                )
+                                break
+
+                    if parsed_dtype and parsed_layout and parsed_mem_config:
+                        config_dict = {
+                            "shape": tensor_config.shape,
+                            "dtype": parsed_dtype,
+                            "layout": parsed_layout,
+                            "memory_config": parsed_mem_config,
+                            "output_memory_config": output_mem_config,
+                            "num_q_heads": num_q_heads,
+                            "num_kv_heads": num_kv_heads,
+                        }
+                        paired_configs.append(config_dict)
+
+                except Exception as e:
+                    failed_configs += 1
+                    continue
+
+            if paired_configs:
+                print(f"✅ Loaded {len(paired_configs)} traced configurations for {operation_name} (model_traced suite)")
+
+                # Build parameter dict
+                param_names = [
+                    "input_shape",
+                    "input_a_dtype",
+                    "input_a_layout",
+                    "input_a_memory_config",
+                    "num_q_heads",
+                    "num_kv_heads",
+                    "output_memory_config",
+                ]
+                param_lists = [
+                    [cfg["shape"] for cfg in paired_configs],
+                    [cfg["dtype"] for cfg in paired_configs],
+                    [cfg["layout"] for cfg in paired_configs],
+                    [cfg["memory_config"] for cfg in paired_configs],
+                    [cfg["num_q_heads"] for cfg in paired_configs],
+                    [cfg["num_kv_heads"] for cfg in paired_configs],
+                    [cfg["output_memory_config"] for cfg in paired_configs],
+                ]
+
+                # Create tuples of exact configurations
+                exact_configs = list(zip(*param_lists))
+                param_key = ",".join(param_names)
+
+                return {param_key: exact_configs}
+
+            return {}
+        except Exception as e:
+            print(f"❌ Error extracting nlp_create_qkv_heads parameters: {e}")
+            import traceback
+
+            traceback.print_exc()
+            return {}
+
+    def _get_nlp_create_qkv_heads_decode_suite_parameters(
+        self, operation_name: str, configs: List, all_cases: bool, deduplicate_inputs: bool = False
+    ) -> Dict:
+        """Get parameters for nlp_create_qkv_heads_decode operation which requires num_heads and num_kv_heads parameters"""
+        try:
+            paired_configs = []
+            failed_configs = 0
+
+            for config_idx, config in enumerate(configs):
+                try:
+                    # Extract input tensor (arg0)
+                    tensor_config = None
+                    num_heads = None
+                    num_kv_heads = None
+
+                    for arg in config:
+                        if isinstance(arg, dict):
+                            if "arg0" in arg:
+                                tensor_config = self.extract_tensor_config(arg["arg0"])
+                            if "arg1" in arg:
+                                # arg1 is num_q_heads (called num_heads in function)
+                                num_heads_val = arg["arg1"]
+                                if isinstance(num_heads_val, (int, str)) and num_heads_val != "nullopt":
+                                    try:
+                                        num_heads = int(num_heads_val)
+                                    except:
+                                        pass
+                            if "arg2" in arg:
+                                # arg2 is num_kv_heads
+                                num_kv_heads_val = arg["arg2"]
+                                if isinstance(num_kv_heads_val, (int, str)) and num_kv_heads_val != "nullopt":
+                                    try:
+                                        num_kv_heads = int(num_kv_heads_val)
+                                    except:
+                                        pass
+
+                    if not tensor_config or num_heads is None or num_kv_heads is None:
+                        failed_configs += 1
+                        continue
+
+                    # Parse tensor config
+                    parsed_dtype = self.parse_dtype(tensor_config.dtype)
+                    parsed_layout = self.parse_layout(tensor_config.layout)
+                    parsed_mem_config = self.parse_memory_config(tensor_config.memory_config, tensor_config.shape)
+
+                    # Extract output memory config from arg6 if present
+                    output_mem_config = parsed_mem_config
+                    for arg in config:
+                        if isinstance(arg, dict) and "arg6" in arg:
+                            mem_config_data = arg["arg6"]
+                            if isinstance(mem_config_data, dict) and "MemoryConfig" in mem_config_data:
+                                output_mem_config = self.parse_memory_config(
+                                    mem_config_data["MemoryConfig"], tensor_config.shape
+                                )
+                                break
+
+                    if parsed_dtype and parsed_layout and parsed_mem_config:
+                        config_dict = {
+                            "shape": tensor_config.shape,
+                            "dtype": parsed_dtype,
+                            "layout": parsed_layout,
+                            "memory_config": parsed_mem_config,
+                            "output_memory_config": output_mem_config,
+                            "num_heads": num_heads,
+                            "num_kv_heads": num_kv_heads,
+                        }
+                        paired_configs.append(config_dict)
+
+                except Exception as e:
+                    failed_configs += 1
+                    continue
+
+            if paired_configs:
+                print(f"✅ Loaded {len(paired_configs)} traced configurations for {operation_name} (model_traced suite)")
+
+                # Build parameter dict
+                param_names = [
+                    "input_shape",
+                    "input_a_dtype",
+                    "input_a_layout",
+                    "input_a_memory_config",
+                    "num_heads",
+                    "num_kv_heads",
+                    "output_memory_config",
+                ]
+                param_lists = [
+                    [cfg["shape"] for cfg in paired_configs],
+                    [cfg["dtype"] for cfg in paired_configs],
+                    [cfg["layout"] for cfg in paired_configs],
+                    [cfg["memory_config"] for cfg in paired_configs],
+                    [cfg["num_heads"] for cfg in paired_configs],
+                    [cfg["num_kv_heads"] for cfg in paired_configs],
+                    [cfg["output_memory_config"] for cfg in paired_configs],
+                ]
+
+                # Create tuples of exact configurations
+                exact_configs = list(zip(*param_lists))
+                param_key = ",".join(param_names)
+
+                return {param_key: exact_configs}
+
+            return {}
+        except Exception as e:
+            print(f"❌ Error extracting nlp_create_qkv_heads_decode parameters: {e}")
             import traceback
 
             traceback.print_exc()

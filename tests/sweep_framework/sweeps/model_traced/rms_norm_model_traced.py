@@ -98,6 +98,8 @@ def run(
     )
 
     start_time = start_measuring_time()
+    # Use the traced output_memory_config directly
+    # Note: If RMS norm fails with sharded inputs, it will raise an error naturally
     output_tensor = ttnn.rms_norm(input_tensor_a, epsilon=eps, weight=weight_tensor, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(output_tensor)
     e2e_perf = stop_measuring_time(start_time)

@@ -116,16 +116,29 @@ def print_operation_configs(
         print(f"\n📋 Configuration {i}:")
         print("-" * 40)
 
-        if isinstance(config, list):
+        # Handle new format (dict with source) and old format (list)
+        if isinstance(config, dict) and "arguments" in config:
+            # New format: show source information
+            source = config.get("source", "unknown")
+            print(f"📝 Source: {source}")
+            config_args = config["arguments"]
+        elif isinstance(config, list):
+            # Old format: no source info
+            config_args = config
+            print(f"📝 Source: unknown (legacy format)")
+        else:
+            config_args = config
+
+        if isinstance(config_args, list):
             if debug_mode:
                 # Show ALL arguments in debug mode
-                for j, arg in enumerate(config):
+                for j, arg in enumerate(config_args):
                     formatted_arg = format_argument(arg)
                     print(f"  arg{j}: {formatted_arg}")
             else:
                 # Filter out nullopt/None arguments (normal mode)
                 relevant_args = []
-                for j, arg in enumerate(config):
+                for j, arg in enumerate(config_args):
                     if isinstance(arg, dict):
                         # Check if the argument value is nullopt or None-like
                         arg_key = f"arg{j}"

@@ -81,22 +81,53 @@ def run(
     # Matrix multiplication - convert to float32 for PyTorch operations
     torch_output_tensor = torch.matmul(torch_input_tensor_a.float(), torch_input_tensor_b.float())
 
-    input_tensor_a = ttnn.from_torch(
-        torch_input_tensor_a,
-        dtype=input_a_dtype,
-        layout=input_a_layout,
-        device=device,
-        memory_config=input_a_memory_config,
-    )
+    # Create tensors with the traced memory configs
+    # If direct creation fails, try creating interleaved first then converting to sharded
+    # This matches how models typically create sharded tensors
+    try:
+        input_tensor_a = ttnn.from_torch(
+            torch_input_tensor_a,
+            dtype=input_a_dtype,
+            layout=input_a_layout,
+            device=device,
+            memory_config=input_a_memory_config,
+        )
+    except RuntimeError:
+        # If direct creation fails, try interleaved->sharded conversion
+        input_tensor_a_interleaved = ttnn.from_torch(
+            torch_input_tensor_a,
+            dtype=input_a_dtype,
+            layout=input_a_layout,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        if hasattr(input_a_memory_config, "shard_spec") and input_a_memory_config.shard_spec is not None:
+            input_tensor_a = ttnn.interleaved_to_sharded(input_tensor_a_interleaved, input_a_memory_config)
+        else:
+            input_tensor_a = input_tensor_a_interleaved
 
-    # Force interleaved memory config for input_b since matmul requires it
-    input_tensor_b = ttnn.from_torch(
-        torch_input_tensor_b,
-        dtype=input_b_dtype,
-        layout=input_b_layout,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,  # Force interleaved
-    )
+    # Create input_b tensor - use the actual traced config
+    try:
+        input_tensor_b = ttnn.from_torch(
+            torch_input_tensor_b,
+            dtype=input_b_dtype,
+            layout=input_b_layout,
+            device=device,
+            memory_config=input_b_memory_config,
+        )
+    except RuntimeError:
+        # If direct creation fails, try interleaved->sharded conversion
+        input_tensor_b_interleaved = ttnn.from_torch(
+            torch_input_tensor_b,
+            dtype=input_b_dtype,
+            layout=input_b_layout,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        if hasattr(input_b_memory_config, "shard_spec") and input_b_memory_config.shard_spec is not None:
+            input_tensor_b = ttnn.interleaved_to_sharded(input_tensor_b_interleaved, input_b_memory_config)
+        else:
+            input_tensor_b = input_tensor_b_interleaved
 
     start_time = start_measuring_time()
     output_tensor = ttnn.matmul(input_tensor_a, input_tensor_b, memory_config=output_memory_config)

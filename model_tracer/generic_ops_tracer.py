@@ -83,6 +83,7 @@ class OperationsTracingPlugin:
         self.output_dir = "OUTPUT_DIR_PLACEHOLDER"
         self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.valid_operations = self.load_valid_operations()
+        self.current_test_source = None  # Will be set in pytest_runtest_setup
 
         # Operations to exclude from tracing (even if in Allops.txt)
         self.excluded_operations = {
@@ -322,11 +323,46 @@ class OperationsTracingPlugin:
                         op_name = op.get('operation', 'unknown')
                         if op_name not in operations_dict:
                             operations_dict[op_name] = {"configurations": []}
-                        operations_dict[op_name]["configurations"].append(op.get('arguments', []))
+                        # Convert old format (list) to new format (dict with source)
+                        op_args = op.get('arguments', [])
+                        if isinstance(op_args, list) and len(op_args) > 0:
+                            # Check if already in new format
+                            if isinstance(op_args[0], dict) and 'arguments' in op_args[0]:
+                                operations_dict[op_name]["configurations"].extend(op_args)
+                            else:
+                                # Old format - convert to new format with unknown source
+                                operations_dict[op_name]["configurations"].append({
+                                    "arguments": op_args,
+                                    "source": "unknown"
+                                })
                     master_data = {
                         "operations": operations_dict,
                         "metadata": master_data.get('metadata', {"models": [], "total_operations": 0, "unique_operations": 0})
                     }
+
+                # Convert old format configurations (list) to new format (dict with source)
+                # This handles existing master files that have list format
+                for op_name, op_data in master_data.get('operations', {}).items():
+                    configs = op_data.get('configurations', [])
+                    if configs and isinstance(configs[0], list):
+                        print(f"🔄 Converting {op_name} configurations to new format with source tags...")
+                        converted_configs = []
+                        for config in configs:
+                            if isinstance(config, list):
+                                converted_configs.append({
+                                    "arguments": config,
+                                    "source": "unknown"  # Legacy configs don't have source info
+                                })
+                            elif isinstance(config, dict) and 'arguments' in config:
+                                # Already in new format
+                                converted_configs.append(config)
+                            else:
+                                # Fallback: wrap in new format
+                                converted_configs.append({
+                                    "arguments": config,
+                                    "source": "unknown"
+                                })
+                        master_data['operations'][op_name]['configurations'] = converted_configs
 
             except (json.JSONDecodeError, IOError) as e:
                 print(f"⚠️ Could not load existing master file: {str(e)}. Starting fresh.")
@@ -351,12 +387,25 @@ class OperationsTracingPlugin:
                 existing_signatures = set()
 
                 for existing_config in master_data['operations'][op_name]["configurations"]:
-                    existing_sig = self.get_arguments_signature(existing_config)
+                    # Handle both old format (list) and new format (dict with source)
+                    if isinstance(existing_config, list):
+                        existing_args = existing_config
+                    elif isinstance(existing_config, dict) and 'arguments' in existing_config:
+                        existing_args = existing_config['arguments']
+                    else:
+                        existing_args = existing_config
+
+                    existing_sig = self.get_arguments_signature(existing_args)
                     existing_signatures.add(existing_sig)
 
-                # Add configuration if it's unique
+                # Add configuration if it's unique (in new format with source tag)
                 if arg_signature not in existing_signatures:
-                    master_data['operations'][op_name]["configurations"].append(op_args)
+                    # Store in new format: dict with arguments and source
+                    config_entry = {
+                        "arguments": op_args,
+                        "source": test_name
+                    }
+                    master_data['operations'][op_name]["configurations"].append(config_entry)
                     new_configs_added += 1
 
         # Update metadata
@@ -402,7 +451,29 @@ class OperationsTracingPlugin:
 
     def pytest_runtest_setup(self, item):
         """Start tracing before each test"""
+        # Extract test name/path for source tagging
+        # Use nodeid which includes the full path (e.g., "models/demo.py::test_function")
+        nodeid = getattr(item, 'nodeid', item.name)
+        # Clean up the source name for readability
+        if '::' in nodeid:
+            # Extract file path and test name
+            parts = nodeid.split('::')
+            source_path = parts[0] if len(parts) > 0 else item.name
+        else:
+            source_path = nodeid
+
+        # Normalize absolute paths to relative paths (if within BASE_DIR)
+        if os.path.isabs(source_path) and BASE_DIR_PLACEHOLDER in source_path:
+            try:
+                source_path = os.path.relpath(source_path, BASE_DIR_PLACEHOLDER)
+            except ValueError:
+                # If relpath fails, keep original
+                pass
+
+        self.current_test_source = source_path
+
         print(f"\\n🔍 Starting operations trace for: {item.name}")
+        print(f"📝 Source tag: {self.current_test_source}")
         os.makedirs(self.output_dir, exist_ok=True)
 
         # Begin graph capture
@@ -437,8 +508,28 @@ class OperationsTracingPlugin:
 
                 # Update master JSON file with unique configurations
                 master_file = os.path.join(self.output_dir, 'ttnn_operations_master.json')
-                new_configs_added = self.update_master_file(master_file, filtered_operations, item.name)
-                print(f"📝 Added {new_configs_added} new unique configurations to master file")
+                # Use the source tag we set in pytest_runtest_setup
+                # If current_test_source is None (test skipped before setup), use item.name as fallback
+                test_source = getattr(self, 'current_test_source', None)
+                if test_source is None:
+                    # Fallback: extract source from item.nodeid or use item.name
+                    nodeid = getattr(item, 'nodeid', item.name)
+                    if '::' in nodeid:
+                        parts = nodeid.split('::')
+                        test_source = parts[0] if len(parts) > 0 else item.name
+                    else:
+                        test_source = nodeid
+
+                    # Normalize absolute paths to relative paths (if within BASE_DIR)
+                    if os.path.isabs(test_source) and BASE_DIR_PLACEHOLDER in test_source:
+                        try:
+                            test_source = os.path.relpath(test_source, BASE_DIR_PLACEHOLDER)
+                        except ValueError:
+                            # If relpath fails, keep original
+                            pass
+
+                new_configs_added = self.update_master_file(master_file, filtered_operations, test_source)
+                print(f"📝 Added {new_configs_added} new unique configurations to master file (source: {test_source})")
 
             # Generate trace filename - sanitize the test name
             test_name = item.name.replace("[", "_").replace("]", "_").replace(":", "_").replace("/", "_").replace("-", "_")

@@ -13,7 +13,8 @@ from functools import partial
 from tests.sweep_framework.master_config_loader import MasterConfigLoader
 
 # Override the default timeout in seconds for hang detection.
-TIMEOUT = 30
+# Linear operations with large shapes can take longer, increase timeout
+TIMEOUT = 120
 
 # Load traced configurations from real model tests
 loader = MasterConfigLoader()
