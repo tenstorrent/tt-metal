@@ -55,7 +55,7 @@ def create_full_range_tensor(input_shape, dtype, value_ranges):
 def test_unary_uint32(ttnn_op, value_ranges, input_shape, device):
     torch_input_tensor = create_full_range_tensor(input_shape=input_shape, dtype=torch.int64, value_ranges=value_ranges)
     if ttnn_op == ttnn.logical_not:
-        torch_input_tensor[::5] = 0  # every 5th element is zero
+        torch_input_tensor[..., ::5] = 0  # every 5th element is zero
         corner_case = torch.tensor([4294967295], dtype=torch.int64)
         torch_input_tensor = torch_input_tensor.flatten()
         torch_input_tensor[-len(corner_case) :] = corner_case
