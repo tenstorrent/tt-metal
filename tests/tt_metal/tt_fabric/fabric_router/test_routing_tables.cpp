@@ -17,13 +17,16 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/fabric.hpp>
 
 namespace {
 
-constexpr auto kFabricConfig = tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC;
+constexpr auto kFabricConfig = tt::tt_fabric::FabricConfig::FABRIC_1D_RING;
 constexpr auto kReliabilityMode = tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
 
 std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane(const std::filesystem::path& graph_desc) {
+    // Set fabric config in MetalContext before creating ControlPlane so that MeshGraph gets the correct config
+    tt::tt_fabric::SetFabricConfig(kFabricConfig, kReliabilityMode);
     auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(graph_desc.string());
     control_plane->initialize_fabric_context(kFabricConfig);
     control_plane->configure_routing_tables_for_fabric_ethernet_channels(kFabricConfig, kReliabilityMode);
@@ -34,6 +37,8 @@ std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane(const std::files
 std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane(
     const std::filesystem::path& graph_desc,
     const std::map<tt::tt_fabric::FabricNodeId, tt::ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
+    // Set fabric config in MetalContext before creating ControlPlane so that MeshGraph gets the correct config
+    tt::tt_fabric::SetFabricConfig(kFabricConfig, kReliabilityMode);
     auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(
         graph_desc.string(), logical_mesh_chip_id_to_physical_chip_id_mapping);
     control_plane->initialize_fabric_context(kFabricConfig);
@@ -143,6 +148,13 @@ TEST_F(ControlPlaneFixture, TestSingleGalaxy1x32FabricRoutes) {
         auto path = control_plane->get_fabric_route(FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 31), chan);
         EXPECT_EQ(!path.empty(), true);
     }
+    // test forwarding direction
+    auto direction = control_plane->get_forwarding_direction(FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 3));
+    EXPECT_EQ(direction.has_value(), true);
+
+    // test forwarding direction to 28
+    direction = control_plane->get_forwarding_direction(FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 28));
+    EXPECT_EQ(direction.has_value(), true);
 }
 
 class T3kCustomMeshGraphControlPlaneFixture

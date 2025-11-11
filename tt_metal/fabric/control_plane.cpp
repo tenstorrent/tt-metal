@@ -844,6 +844,14 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
     this->inter_mesh_routing_tables_.clear();
     this->router_port_directions_to_physical_eth_chan_map_.clear();
 
+    log_critical(tt::LogFabric, "Fabric config: {}", tt::tt_metal::MetalContext::instance().get_fabric_config());
+    log_critical(
+        tt::LogFabric,
+        "Fabric type: {}",
+        tt::tt_fabric::get_fabric_type(tt::tt_metal::MetalContext::instance().get_fabric_config()));
+    log_critical(
+        tt::LogFabric, "Cluster type: {}", tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type());
+
     const auto& intra_mesh_connectivity = this->routing_table_generator_->mesh_graph->get_intra_mesh_connectivity();
     // Initialize the bookkeeping for mapping from mesh/chip/direction to physical ethernet channels
     for (const auto& [fabric_node_id, _] : this->logical_mesh_chip_id_to_physical_chip_id_mapping_) {
