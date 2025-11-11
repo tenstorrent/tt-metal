@@ -9,23 +9,19 @@
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 
 void kernel_main() {
-    constexpr uint32_t in0_block_num_tiles = get_compile_time_arg_val(2);
-    constexpr uint32_t in0_block_size_bytes = get_compile_time_arg_val(3);
-
-    // in0/in1 common args
-    constexpr uint32_t num_blocks_inner_dim = get_compile_time_arg_val(5);
-    // in0 mcast args
-    uint32_t in0_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(8));
-    uint32_t in0_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(9));
-    constexpr uint32_t in0_mcast_num_dests = get_compile_time_arg_val(10);
-    constexpr uint32_t in0_mcast_num_cores = get_compile_time_arg_val(11);
-    constexpr uint32_t num_x = get_compile_time_arg_val(12);
-    constexpr uint32_t num_y = get_compile_time_arg_val(13);
-    constexpr bool transpose_mcast = (bool)get_compile_time_arg_val(14);
-    constexpr uint32_t shard_width_in_tiles = get_compile_time_arg_val(15);
-    constexpr uint32_t in0_block_w = get_compile_time_arg_val(17);
-
-    constexpr uint32_t batch = get_compile_time_arg_val(19);
+    constexpr uint32_t in0_block_num_tiles = get_compile_time_arg_val(0);
+    constexpr uint32_t in0_block_size_bytes = get_compile_time_arg_val(1);
+    constexpr uint32_t num_blocks_inner_dim = get_compile_time_arg_val(2);
+    uint32_t in0_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(3));
+    uint32_t in0_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(4));
+    constexpr uint32_t in0_mcast_num_dests = get_compile_time_arg_val(5);
+    constexpr uint32_t in0_mcast_num_cores = get_compile_time_arg_val(6);
+    constexpr uint32_t num_x = get_compile_time_arg_val(7);
+    constexpr uint32_t num_y = get_compile_time_arg_val(8);
+    constexpr bool transpose_mcast = (bool)get_compile_time_arg_val(9);
+    constexpr uint32_t shard_width_in_tiles = get_compile_time_arg_val(10);
+    constexpr uint32_t in0_block_w = get_compile_time_arg_val(11);
+    constexpr uint32_t batch = get_compile_time_arg_val(12);
 
     uint32_t rt_args_idx = 0;
     const uint32_t sender_id = get_arg_val<uint32_t>(rt_args_idx++);

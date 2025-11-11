@@ -11,13 +11,13 @@ namespace NAMESPACE {
 
 void MAIN {
     constexpr uint32_t in0_block_w = get_compile_time_arg_val(0);              // inner block size in tiles
-    constexpr uint32_t in0_block_num_tiles = get_compile_time_arg_val(2);      // out_subblock_h*in0_block_w
-    constexpr uint32_t in1_block_num_tiles = get_compile_time_arg_val(5);      // out_subblock_w*in0_block_w
-    constexpr uint32_t in1_block_w = get_compile_time_arg_val(6);              // out_subblock_w
-    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(10);          // inner row block size in tiles
-    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(11);          // inner column block size in tiles
-    constexpr uint32_t out_subblock_num_tiles = get_compile_time_arg_val(12);  // out_subblock_h * out_subblock_w
-    constexpr bool untilize_out = get_compile_time_arg_val(15);                // untilize output
+    constexpr uint32_t in0_block_num_tiles = get_compile_time_arg_val(1);      // out_subblock_h*in0_block_w
+    constexpr uint32_t in1_block_num_tiles = get_compile_time_arg_val(2);      // out_subblock_w*in0_block_w
+    constexpr uint32_t in1_block_w = get_compile_time_arg_val(3);              // out_subblock_w
+    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(4);           // inner row block size in tiles
+    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(5);           // inner column block size in tiles
+    constexpr uint32_t out_subblock_num_tiles = get_compile_time_arg_val(6);   // out_subblock_h * out_subblock_w
+    constexpr bool untilize_out = get_compile_time_arg_val(7);                 // untilize output
 
     constexpr uint32_t in0_cb_id = tt::CBIndex::c_0;
     constexpr uint32_t in1_cb_id = tt::CBIndex::c_1;
