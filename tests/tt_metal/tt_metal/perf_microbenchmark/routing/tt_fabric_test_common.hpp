@@ -852,101 +852,67 @@ public:
             return std::find(devices.begin(), devices.end(), node_id) != devices.end();
         };
 
-        // Collect perimeter neighbors by direction from actual connectivity
-        std::unordered_map<RoutingDirection, std::vector<FabricNodeId>> perimeter_neighbors_by_dir;
+        // Collect all perimeter neighbors with their directions from actual connectivity
+        // For a ring topology, each perimeter node should have exactly 2 perimeter neighbors
+        std::vector<std::pair<RoutingDirection, FabricNodeId>> perimeter_neighbors;
         for (const auto& [dst_chip_id, edge] : chip_connectivity) {
             if (dst_chip_id != src_node.chip_id && edge.port_direction != RoutingDirection::C &&
                 edge.port_direction != RoutingDirection::NONE) {
                 FabricNodeId neighbor = FabricNodeId{src_node.mesh_id, dst_chip_id};
                 if (is_chip_on_perimeter(dst_chip_id) && neighbor_in_devices(neighbor)) {
-                    perimeter_neighbors_by_dir[edge.port_direction].push_back(neighbor);
+                    perimeter_neighbors.push_back({edge.port_direction, neighbor});
                 }
             }
         }
 
-        // Determine forward and backward neighbors based on position and ring traversal order
-        // Forward: prefer E (right), then N (up) for ring traversal
-        // Backward: prefer W (left), then S (down) for ring traversal
-        std::optional<FabricNodeId> forward_neighbor;
-        std::optional<FabricNodeId> backward_neighbor;
-
-        // Determine preferred directions based on position
-        std::vector<RoutingDirection> forward_directions, backward_directions;
-
-        if (row == 0 && col == 0) {
-            // Top-left corner: forward goes right (E), backward goes down (S)
-            forward_directions = {RoutingDirection::E};
-            backward_directions = {RoutingDirection::S};
-        } else if (row == 0 && col == mesh_width - 1) {
-            // Top-right corner: forward goes down (S), backward goes left (W)
-            forward_directions = {RoutingDirection::S};
-            backward_directions = {RoutingDirection::W};
-        } else if (row == mesh_height - 1 && col == mesh_width - 1) {
-            // Bottom-right corner: forward goes left (W), backward goes up (N)
-            forward_directions = {RoutingDirection::W};
-            backward_directions = {RoutingDirection::N};
-        } else if (row == mesh_height - 1 && col == 0) {
-            // Bottom-left corner: forward goes up (N), backward goes right (E)
-            forward_directions = {RoutingDirection::N};
-            backward_directions = {RoutingDirection::E};
-        } else if (row == 0) {
-            // Top row: forward goes right (E), backward goes left (W)
-            forward_directions = {RoutingDirection::E};
-            backward_directions = {RoutingDirection::W};
-        } else if (col == mesh_width - 1) {
-            // Right column: forward goes down (S), backward goes up (N)
-            forward_directions = {RoutingDirection::S};
-            backward_directions = {RoutingDirection::N};
-        } else if (row == mesh_height - 1) {
-            // Bottom row: forward goes left (W), backward goes right (E)
-            forward_directions = {RoutingDirection::W};
-            backward_directions = {RoutingDirection::E};
-        } else if (col == 0) {
-            // Left column: forward goes up (N), backward goes down (S)
-            forward_directions = {RoutingDirection::N};
-            backward_directions = {RoutingDirection::S};
-        }
-
-        // Find forward neighbor from actual connectivity
-        for (const auto& direction : forward_directions) {
-            auto it = perimeter_neighbors_by_dir.find(direction);
-            if (it != perimeter_neighbors_by_dir.end() && !it->second.empty()) {
-                forward_neighbor = it->second[0];
-                break;
-            }
-        }
-
-        // Find backward neighbor from actual connectivity
-        for (const auto& direction : backward_directions) {
-            auto it = perimeter_neighbors_by_dir.find(direction);
-            if (it != perimeter_neighbors_by_dir.end() && !it->second.empty()) {
-                backward_neighbor = it->second[0];
-                break;
-            }
-        }
-
-        // If we didn't find both neighbors, return nullopt
-        if (!forward_neighbor.has_value() || !backward_neighbor.has_value()) {
+        // For a ring topology, we should have exactly 2 perimeter neighbors
+        if (perimeter_neighbors.size() != 2) {
             log_warning(
                 LogTest,
-                "get_wrap_around_mesh_ring_neighbors: Could not find ring neighbors - src_chip_id: {}, "
-                "row: {}, col: {}, forward_neighbor: {}, backward_neighbor: {}",
-                src_node.chip_id,
-                row,
-                col,
-                forward_neighbor.has_value() ? forward_neighbor->chip_id : ChipId(-1),
-                backward_neighbor.has_value() ? backward_neighbor->chip_id : ChipId(-1));
+                "get_wrap_around_mesh_ring_neighbors: Expected exactly 2 perimeter neighbors for ring topology, "
+                "but found {} - src_chip_id: {}",
+                perimeter_neighbors.size(),
+                src_node.chip_id);
             return std::nullopt;
         }
 
+        // Determine forward and backward neighbors based on ring traversal order
+        // The ring traversal order is determined by the connectivity pattern in the mesh graph
+        // We'll use direction priority to determine forward vs backward:
+        // Forward: prefer E, then N, then W, then S (clockwise order)
+        // Backward: the other neighbor
+        // Direction priority order: E < N < W < S (based on enum values)
+        std::sort(
+            perimeter_neighbors.begin(),
+            perimeter_neighbors.end(),
+            [](const std::pair<RoutingDirection, FabricNodeId>& a, const std::pair<RoutingDirection, FabricNodeId>& b) {
+                // Sort by direction priority: E < N < W < S
+                auto get_priority = [](RoutingDirection dir) {
+                    switch (dir) {
+                        case RoutingDirection::E: return 0;
+                        case RoutingDirection::N: return 1;
+                        case RoutingDirection::W: return 2;
+                        case RoutingDirection::S: return 3;
+                        default: return 4;
+                    }
+                };
+                return get_priority(a.first) < get_priority(b.first);
+            });
+
+        // First neighbor (lower priority direction) is forward, second is backward
+        FabricNodeId forward_neighbor = perimeter_neighbors[0].second;
+        FabricNodeId backward_neighbor = perimeter_neighbors[1].second;
+
         log_debug(
             LogTest,
-            "src_node: {}, forward_chip_id: {}, backward_chip_id: {}",
+            "src_node: {}, forward_chip_id: {} (dir: {}), backward_chip_id: {} (dir: {})",
             src_node.chip_id,
-            forward_neighbor->chip_id,
-            backward_neighbor->chip_id);
+            forward_neighbor.chip_id,
+            static_cast<int>(perimeter_neighbors[0].first),
+            backward_neighbor.chip_id,
+            static_cast<int>(perimeter_neighbors[1].first));
 
-        return std::make_pair(*forward_neighbor, *backward_neighbor);
+        return std::make_pair(forward_neighbor, backward_neighbor);
     }
 
     uint32_t get_num_sync_devices() const {
