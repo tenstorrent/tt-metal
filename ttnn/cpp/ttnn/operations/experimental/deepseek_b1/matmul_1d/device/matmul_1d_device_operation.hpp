@@ -29,8 +29,8 @@ struct Matmul1DProgramConfig {
 // Device operation for 1D mcast matmul
 struct Matmul1DDeviceOperation {
     const Matmul1DProgramConfig program_config;
-    const std::optional<MemoryConfig> output_mem_config;
-    const std::optional<DataType> output_dtype;
+    const std::optional<tt::tt_metal::MemoryConfig> output_mem_config;
+    const std::optional<tt::tt_metal::DataType> output_dtype;
     const std::optional<DeviceComputeKernelConfig> compute_kernel_config;
 
     void validate(const std::vector<Tensor>& input_tensors) const;
