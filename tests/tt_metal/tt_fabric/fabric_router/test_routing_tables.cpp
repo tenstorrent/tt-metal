@@ -42,6 +42,16 @@ std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane(
     return control_plane;
 }
 
+constexpr auto kFabricConfig1D = tt::tt_fabric::FabricConfig::FABRIC_1D_RING;
+
+std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane_1d(const std::filesystem::path& graph_desc) {
+    auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(graph_desc.string());
+    control_plane->initialize_fabric_context(kFabricConfig1D);
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels(kFabricConfig1D, kReliabilityMode);
+
+    return control_plane;
+}
+
 }  // namespace
 
 namespace tt::tt_fabric::fabric_router_tests {
@@ -115,18 +125,46 @@ TEST_F(ControlPlaneFixture, TestT3kFabricRoutes) {
     }
 }
 
+TEST_F(ControlPlaneFixture, TestT3k1x8FabricRoutes) {
+    const std::filesystem::path t3k_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_1x8_mesh_graph_descriptor.yaml";
+    auto control_plane = make_control_plane_1d(t3k_mesh_graph_desc_path);
+
+    auto valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(FabricNodeId(MeshId{0}, 0), 0);
+    EXPECT_GT(valid_chans.size(), 0);
+    for (auto chan : valid_chans) {
+        auto path = control_plane->get_fabric_route(FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 7), chan);
+        EXPECT_EQ(!path.empty(), true);
+    }
+    valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(FabricNodeId(MeshId{0}, 0), 1);
+    EXPECT_GT(valid_chans.size(), 0);
+    for (auto chan : valid_chans) {
+        auto path = control_plane->get_fabric_route(FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 7), chan);
+        EXPECT_EQ(!path.empty(), true);
+    }
+
+    // Test that all forwarding directions are valid
+    auto src_fabric_node_id = FabricNodeId(MeshId{0}, 0);
+    for (unsigned int x = 1; x < 8; ++x) {
+        auto dst_fabric_node_id = FabricNodeId(MeshId{0}, x);
+        auto forwarding_direction = control_plane->get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
+        EXPECT_EQ(forwarding_direction.has_value(), true);
+    }
+}
+
 TEST_F(ControlPlaneFixture, TestSingleGalaxy1x32ControlPlaneInit) {
     const std::filesystem::path galaxy_6u_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/galaxy_1x32_mesh_graph_descriptor.textproto";
-    auto control_plane = make_control_plane(galaxy_6u_mesh_graph_desc_path);
+    auto control_plane = make_control_plane_1d(galaxy_6u_mesh_graph_desc_path);
 }
 
 TEST_F(ControlPlaneFixture, TestSingleGalaxy1x32FabricRoutes) {
     const std::filesystem::path galaxy_6u_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/galaxy_1x32_mesh_graph_descriptor.textproto";
-    auto control_plane = make_control_plane(galaxy_6u_mesh_graph_desc_path);
+    auto control_plane = make_control_plane_1d(galaxy_6u_mesh_graph_desc_path);
 
     // Test routing from first chip (0) to last chip (31) in the 1x32 topology
     auto valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(FabricNodeId(MeshId{0}, 0), 0);
@@ -142,6 +180,14 @@ TEST_F(ControlPlaneFixture, TestSingleGalaxy1x32FabricRoutes) {
     for (auto chan : valid_chans) {
         auto path = control_plane->get_fabric_route(FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 31), chan);
         EXPECT_EQ(!path.empty(), true);
+    }
+
+    // Test that all forwarding directions are valid
+    auto src_fabric_node_id = FabricNodeId(MeshId{0}, 0);
+    for (unsigned int x = 1; x < 32; ++x) {
+        auto dst_fabric_node_id = FabricNodeId(MeshId{0}, x);
+        auto forwarding_direction = control_plane->get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
+        EXPECT_EQ(forwarding_direction.has_value(), true);
     }
 }
 

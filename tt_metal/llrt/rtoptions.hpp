@@ -219,6 +219,9 @@ class RunTimeOptions {
     // Reliability mode override parsed from environment (RELIABILITY_MODE)
     std::optional<tt::tt_fabric::FabricReliabilityMode> reliability_mode = std::nullopt;
 
+    // Force JIT compile even if dependencies are up to date
+    bool force_jit_compile = false;
+
 public:
     RunTimeOptions();
     RunTimeOptions(const RunTimeOptions&) = delete;
@@ -524,6 +527,9 @@ public:
     TargetDevice get_target_device() const { return runtime_target_device_; }
 
     std::chrono::duration<float> get_timeout_duration_for_operations() const { return timeout_duration_for_operations; }
+
+    bool get_force_jit_compile() const { return force_jit_compile; }
+    void set_force_jit_compile(bool enable) { force_jit_compile = enable; }
 
     // Parse all feature-specific environment variables, after hal is initialized.
     // (Needed because syntax of some env vars is arch-dependent.)
