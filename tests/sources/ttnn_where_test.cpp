@@ -113,6 +113,8 @@ void run_kernel()
 
     // calculation of sfpu operation on dest
     _llk_math_eltwise_ternary_sfpu_init_<SfpuType::where>();
+    ckernel::sfpu::_init_where_<false>();
+
     _llk_math_eltwise_ternary_sfpu_start_<DstSync::SyncHalf>(0);
 
     constexpr int iterations = 32;

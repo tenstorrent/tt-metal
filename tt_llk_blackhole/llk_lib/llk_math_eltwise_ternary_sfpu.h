@@ -24,6 +24,16 @@ inline void eltwise_ternary_sfpu_configure_addrmod()
         .dest = {.incr = 0},
     }
         .set(ADDR_MOD_7);
+
+    if (sfpu_op == SfpuType::where)
+    {
+        addr_mod_t {
+            .srca = {.incr = 0},
+            .srcb = {.incr = 0},
+            .dest = {.incr = 2},
+        }
+            .set(ADDR_MOD_6);
+    }
 }
 
 inline void eltwise_ternary_sfpu_configure_mop();
