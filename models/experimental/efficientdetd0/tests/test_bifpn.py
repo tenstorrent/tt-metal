@@ -133,8 +133,7 @@ def test_bifpn(
 
         passing, pcc_message = comp_pcc(torch_output, ttnn_output_torch, PCC_THRESHOLD)
         logger.info(f"{output_names[i]} PCC: {pcc_message}")
-        # logger.info(comp_allclose(torch_output, ttnn_output_torch))
 
-        # assert passing, f"{output_names[i]} PCC value is lower than {PCC_THRESHOLD}. {pcc_message}"
+        assert passing, f"{output_names[i]} PCC value is lower than {PCC_THRESHOLD}. {pcc_message}"
 
     logger.info("BiFPN Test Passed!")

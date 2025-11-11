@@ -7,8 +7,7 @@ from models.experimental.efficientdetd0.tt.utils import (
 )
 
 
-def weight_modifier(weight, epsilon, three_weights, device):
-    # weight = ttnn.from_torch(w, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+def compute_fast_attention_weights(weight, epsilon, three_weights):
     # Convert to interleaved if sharded
     w_relu = ttnn.relu(weight)
     w_sum = ttnn.sum(w_relu, dim=0)
@@ -212,29 +211,29 @@ class TtBiFPN:
 
         # Store attention weights as TTNN tensors
         if attention:
-            self.p6_w1_weight_0, self.p6_w1_weight_1 = weight_modifier(
-                parameters.p6_w1, epsilon=self.epsilon, three_weights=False, device=self.device
+            self.p6_w1_weight_0, self.p6_w1_weight_1 = compute_fast_attention_weights(
+                parameters.p6_w1, epsilon=self.epsilon, three_weights=False
             )
-            self.p5_w1_weight_0, self.p5_w1_weight_1 = weight_modifier(
-                parameters.p5_w1, epsilon=self.epsilon, three_weights=False, device=self.device
+            self.p5_w1_weight_0, self.p5_w1_weight_1 = compute_fast_attention_weights(
+                parameters.p5_w1, epsilon=self.epsilon, three_weights=False
             )
-            self.p4_w1_weight_0, self.p4_w1_weight_1 = weight_modifier(
-                parameters.p4_w1, epsilon=self.epsilon, three_weights=False, device=self.device
+            self.p4_w1_weight_0, self.p4_w1_weight_1 = compute_fast_attention_weights(
+                parameters.p4_w1, epsilon=self.epsilon, three_weights=False
             )
-            self.p3_w1_weight_0, self.p3_w1_weight_1 = weight_modifier(
-                parameters.p3_w1, epsilon=self.epsilon, three_weights=False, device=self.device
+            self.p3_w1_weight_0, self.p3_w1_weight_1 = compute_fast_attention_weights(
+                parameters.p3_w1, epsilon=self.epsilon, three_weights=False
             )
-            self.p4_w2_weight_0, self.p4_w2_weight_1, self.p4_w2_weight_2 = weight_modifier(
-                parameters.p4_w2, epsilon=self.epsilon, three_weights=True, device=self.device
+            self.p4_w2_weight_0, self.p4_w2_weight_1, self.p4_w2_weight_2 = compute_fast_attention_weights(
+                parameters.p4_w2, epsilon=self.epsilon, three_weights=True
             )
-            self.p5_w2_weight_0, self.p5_w2_weight_1, self.p5_w2_weight_2 = weight_modifier(
-                parameters.p5_w2, epsilon=self.epsilon, three_weights=True, device=self.device
+            self.p5_w2_weight_0, self.p5_w2_weight_1, self.p5_w2_weight_2 = compute_fast_attention_weights(
+                parameters.p5_w2, epsilon=self.epsilon, three_weights=True
             )
-            self.p6_w2_weight_0, self.p6_w2_weight_1, self.p6_w2_weight_2 = weight_modifier(
-                parameters.p6_w2, epsilon=self.epsilon, three_weights=True, device=self.device
+            self.p6_w2_weight_0, self.p6_w2_weight_1, self.p6_w2_weight_2 = compute_fast_attention_weights(
+                parameters.p6_w2, epsilon=self.epsilon, three_weights=True
             )
-            self.p7_w2_weight_0, self.p7_w2_weight_1 = weight_modifier(
-                parameters.p7_w2, epsilon=self.epsilon, three_weights=False, device=self.device
+            self.p7_w2_weight_0, self.p7_w2_weight_1 = compute_fast_attention_weights(
+                parameters.p7_w2, epsilon=self.epsilon, three_weights=False
             )
 
     def _upsample(self, x, scale_factor, input_shape=None):
@@ -296,54 +295,42 @@ class TtBiFPN:
             p7_upsampled = self._upsample(p7_in, scale_factor=2, input_shape=self.p6_to_p7.dynamic_conv.output_shape)
         else:
             p7_upsampled = self._upsample(p7_in, scale_factor=2)
-        term1 = ttnn.mul(self.p6_w1_weight_0, p6_in)
-        term2 = ttnn.mul(self.p6_w1_weight_1, p7_upsampled)
-        term1 = ttnn.reshape(term1, term2.shape)
-        p6_weighted = ttnn.add(term1, term2)
-        p6_up = self.conv6_up(self._swish(p6_weighted))
+
+        p6_in = ttnn.reshape(p6_in, p7_upsampled.shape)
+        p6_up = self.conv6_up(self._swish(self.p6_w1_weight_0 * p6_in + self.p6_w1_weight_1 * p7_upsampled))
 
         ttnn.deallocate(p7_upsampled)
-        ttnn.deallocate(p6_weighted)
 
         # P5_1 = weighted_sum(P5_0, upsample(P6_1))
         p6_upsampled = self._upsample(
             p6_up, scale_factor=2, input_shape=self.conv6_up.pointwise_conv.dynamic_conv.output_shape
         )
-        term1 = ttnn.mul(self.p5_w1_weight_0, p5_in)
-        term2 = ttnn.mul(self.p5_w1_weight_1, p6_upsampled)
-        term1 = ttnn.reshape(term1, term2.shape)
-        p5_weighted = ttnn.add(term1, term2)
-        p5_up = self.conv5_up(self._swish(p5_weighted))
+        p5_in = ttnn.to_memory_config(p5_in, ttnn.DRAM_MEMORY_CONFIG)
+        p5_in = ttnn.reshape(p5_in, p6_upsampled.shape)
+        p5_up = self.conv5_up(self._swish(self.p5_w1_weight_0 * p5_in + self.p5_w1_weight_1 * p6_upsampled))
 
         ttnn.deallocate(p6_upsampled)
-        ttnn.deallocate(p5_weighted)
 
         # P4_1 = weighted_sum(P4_0, upsample(P5_1))
         p5_upsampled = self._upsample(
             p5_up, scale_factor=2, input_shape=self.conv5_up.pointwise_conv.dynamic_conv.output_shape
         )
-        term1 = ttnn.mul(self.p4_w1_weight_0, p4_in)
-        term2 = ttnn.mul(self.p4_w1_weight_1, p5_upsampled)
-        term1 = ttnn.reshape(term1, term2.shape)
-        p4_weighted = ttnn.add(term1, term2)
-        p4_up = self.conv4_up(self._swish(p4_weighted))
+        p4_in = ttnn.to_memory_config(p4_in, ttnn.DRAM_MEMORY_CONFIG)
+        p4_in = ttnn.reshape(p4_in, p5_upsampled.shape)
+        p4_up = self.conv4_up(self._swish(self.p4_w1_weight_0 * p4_in + self.p4_w1_weight_1 * p5_upsampled))
 
         ttnn.deallocate(p5_upsampled)
-        ttnn.deallocate(p4_weighted)
 
         # P3_2 = weighted_sum(P3_0, upsample(P4_1))
         p4_upsampled = self._upsample(
             p4_up, scale_factor=2, input_shape=self.conv4_up.pointwise_conv.dynamic_conv.output_shape
         )
-        term1 = ttnn.mul(self.p3_w1_weight_0, p3_in)
-        ttnn.deallocate(p3_in)
-        term2 = ttnn.mul(self.p3_w1_weight_1, p4_upsampled)
-        term1 = ttnn.reshape(term1, term2.shape)
-        p3_weighted = ttnn.add(term1, term2)
-        p3_out = self.conv3_up(self._swish(p3_weighted))
+        p3_in = ttnn.to_memory_config(p3_in, ttnn.DRAM_MEMORY_CONFIG)
+        p3_in = ttnn.reshape(p3_in, p4_upsampled.shape)
+        p3_out = self.conv3_up(self._swish(self.p3_w1_weight_0 * p3_in + self.p3_w1_weight_1 * p4_upsampled))
 
+        ttnn.deallocate(p3_in)
         ttnn.deallocate(p4_upsampled)
-        ttnn.deallocate(p3_weighted)
 
         # Update p4_in and p5_in for bottom-up path if first_time
         if self.first_time:
@@ -353,65 +340,50 @@ class TtBiFPN:
             p5_in = ttnn.to_memory_config(p5_in, ttnn.DRAM_MEMORY_CONFIG)
 
         # Bottom-up pathway with weighted attention
-        # P4_2 = weighted_sum(P4_0, P4_1, downsample(P3_2))
         p3_downsampled = self.p4_downsample(p3_out)
-        term1 = ttnn.mul(self.p4_w2_weight_0, p4_in)
+        p4_up = ttnn.reshape(p4_up, p4_in.shape)
+        p3_downsampled = ttnn.reshape(p3_downsampled, p4_in.shape)
+        p4_out = self.conv4_down(
+            self._swish(
+                self.p4_w2_weight_0 * p4_in + self.p4_w2_weight_1 * p4_up + self.p4_w2_weight_2 * p3_downsampled
+            )
+        )
+
         ttnn.deallocate(p4_in)
-        term2 = ttnn.mul(self.p4_w2_weight_1, p4_up)
-        term3 = ttnn.mul(self.p4_w2_weight_2, p3_downsampled)
-        term2 = ttnn.reshape(term2, term1.shape)
-        term3 = ttnn.reshape(term3, term1.shape)
-        p4_weighted = ttnn.add(term1, term2)
-        p4_weighted = ttnn.add(p4_weighted, term3)
-        p4_out = self.conv4_down(self._swish(p4_weighted))
-
         ttnn.deallocate(p3_downsampled)
-        ttnn.deallocate(p4_weighted)
 
-        # P5_2 = weighted_sum(P5_0, P5_1, downsample(P4_2))
         p4_downsampled = self.p5_downsample(p4_out)
-        term1 = ttnn.mul(self.p5_w2_weight_0, p5_in)
+        p5_up = ttnn.to_memory_config(p5_up, ttnn.DRAM_MEMORY_CONFIG)
+        p5_up = ttnn.reshape(p5_up, p5_in.shape)
+        p4_downsampled = ttnn.reshape(p4_downsampled, p5_in.shape)
+        p5_out = self.conv5_down(
+            self._swish(
+                self.p5_w2_weight_0 * p5_in + self.p5_w2_weight_1 * p5_up + self.p5_w2_weight_2 * p4_downsampled
+            )
+        )
+
         ttnn.deallocate(p5_in)
-        term2 = ttnn.mul(self.p5_w2_weight_1, p5_up)
-        term3 = ttnn.mul(self.p5_w2_weight_2, p4_downsampled)
-
-        term2 = ttnn.reshape(term2, term1.shape)
-        term3 = ttnn.reshape(term3, term1.shape)
-        p5_weighted = ttnn.add(term1, term2)
-        p5_weighted = ttnn.add(p5_weighted, term3)
-        p5_out = self.conv5_down(self._swish(p5_weighted))
-
         ttnn.deallocate(p4_downsampled)
-        ttnn.deallocate(p5_weighted)
 
         # P6_2 = weighted_sum(P6_0, P6_1, downsample(P5_2))
         p5_downsampled = self.p6_downsample(p5_out)
-
-        term1 = ttnn.mul(self.p6_w2_weight_0, p6_in)
+        p6_up = ttnn.to_memory_config(p6_up, ttnn.DRAM_MEMORY_CONFIG)
+        p6_up = ttnn.reshape(p6_up, p6_in.shape)
+        p5_downsampled = ttnn.reshape(p5_downsampled, p6_in.shape)
+        p6_out = self.conv6_down(
+            self._swish(
+                self.p6_w2_weight_0 * p6_in + self.p6_w2_weight_1 * p6_up + self.p6_w2_weight_2 * p5_downsampled
+            )
+        )
         ttnn.deallocate(p6_in)
-        term2 = ttnn.mul(self.p6_w2_weight_1, p6_up)
-        term3 = ttnn.mul(self.p6_w2_weight_2, p5_downsampled)
-
-        term2 = ttnn.reshape(term2, term1.shape)
-        term3 = ttnn.reshape(term3, term1.shape)
-        p6_weighted = ttnn.add(term1, term2)
-        p6_weighted = ttnn.add(p6_weighted, term3)
-        p6_out = self.conv6_down(self._swish(p6_weighted))
         ttnn.deallocate(p5_downsampled)
-        ttnn.deallocate(term3)
-        ttnn.deallocate(p6_weighted)
 
         # P7_2 = weighted_sum(P7_0, downsample(P6_2))
         p6_downsampled = self.p7_downsample(p6_out)
-        term1 = ttnn.mul(self.p7_w2_weight_0, p7_in)
-        term2 = ttnn.mul(self.p7_w2_weight_1, p6_downsampled)
-        term2 = ttnn.reshape(term2, term1.shape)
-        p7_weighted = ttnn.add(term1, term2)
-        p7_out = self.conv7_down(self._swish(p7_weighted))
+        p6_downsampled = ttnn.to_memory_config(p6_downsampled, ttnn.DRAM_MEMORY_CONFIG)
+        p6_downsampled = ttnn.reshape(p6_downsampled, p7_in.shape)
+        p7_out = self.conv7_down(self._swish(self.p7_w2_weight_0 * p7_in + self.p7_w2_weight_1 * p6_downsampled))
         ttnn.deallocate(p7_in)
         ttnn.deallocate(p6_downsampled)
-        ttnn.deallocate(term1)
-        ttnn.deallocate(term2)
-        ttnn.deallocate(p7_weighted)
 
         return p3_out, p4_out, p5_out, p6_out, p7_out
