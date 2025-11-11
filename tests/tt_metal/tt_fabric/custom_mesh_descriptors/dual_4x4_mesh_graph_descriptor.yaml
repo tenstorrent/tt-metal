@@ -36,5 +36,5 @@ Graph: [
   # M0 D12 (row 3, col 0) <-> M1 D0 (row 0, col 0)
   [[M0, D12], [M1, D0], 1],
   # M0 D13 (row 3, col 1) <-> M1 D1 (row 0, col 1)
-  [[M0, D13], [M1, D1], 1],
+  [[M0, D15], [M1, D3], 1],
 ]
