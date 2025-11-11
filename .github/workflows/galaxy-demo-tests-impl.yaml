@@ -43,7 +43,7 @@ jobs:
               "model": "llama3_70b_dp",
               "timeout": 30,
               "owner_id": "U08BH66EXAL"
-            },
+            }
           ]' --compact-output)
 
           # Filter matrix based on model selection
