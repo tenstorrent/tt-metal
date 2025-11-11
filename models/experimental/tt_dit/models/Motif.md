@@ -1,38 +1,31 @@
-# Stable Diffusion 3.5 Large
+# Motif
 
 ## Introduction
 
-[Stable Diffusion 3.5](https://stability.ai/news/introducing-stable-diffusion-3-5) is a generative model for image synthesis guided by text prompts.
-
-This version of Stable Diffusion 3.5 Large is tuned for inference performance, achieving competitive performance on Wormhole Galaxy Systems.
+[Motif](https://huggingface.co/Motif-Technologies/Motif-Image-6B-Preview) is a text-to-image generative model.
 
 
 ## Details
 
-The architecture is described in the paper
-[Scaling Rectified Flow Transformers for High-Resolution Image Synthesis](https://arxiv.org/abs/2403.03206).
+The architecture follows a Rectified Flow Diffusion Transformer design inspired by [Scaling Rectified Flow Transformers for High-Resolution Image Synthesis](https://arxiv.org/abs/2403.03206).
 
-
-The model consists of two different text encoders together with their tokenizers, a scheduler, a transformer and a VAE. The core component is the transformer, called MMDiT (Multimodal Diffusion Transformer). The transformer is made up of spatial, prompt and time embeddings, and a series of transformer blocks. Transformer blocks mainly contain attention layers, that operate either on the spatial embedding only, or on the spatial and prompt embeddings together.
+The model consists of three text encoders (CLIP-L, CLIP-G, and T5-XXL) together with their tokenizers, a scheduler, a transformer, and a VAE. The core component is the transformer, called Motif DiT (Diffusion Transformer). The transformer is made up of spatial, prompt and time embeddings, and a series of 30 transformer blocks. Transformer blocks contain attention layers that operate either on the spatial embedding only, or on the spatial and prompt embeddings together.
 
 
 ## Performance
 
-Current performance and target performance for two systems are detailed below. Performance is measured in seconds per image, where the image size is 1024x1024px.
+Current performance and target performance for two systems are detailed below. Performance is measured in seconds per image, where the image size is 1024x1024px with 20 inference steps.
 
 | System    | CFG | SP | TP | Current Performance | Target Performance |
 |-----------|-----|----|----|---------------------|--------------------|
-| QuietBox  | 2   | 2  | 2  | 12.2s               | 14.4s              |
-| Galaxy    | 2   | 4  | 4  | 5.6s               | 3.6s               |
+| QuietBox  | 2   | 2  | 2  | 10.5s               | TBD                |
+| Galaxy    | 2   | 4  | 4  | 10.5s               | 6.5s               |
 
 ## Prerequisites
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
 
 ## How to Run
-
-1. Visit [HuggingFace](https://huggingface.co/stabilityai/stable-diffusion-3.5-large) to grant access to the model weights
-2. Login with the HuggingFace token: `huggingface-cli login`
 
 ```bash
 # [Install tt-metal](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
@@ -41,16 +34,16 @@ Current performance and target performance for two systems are detailed below. P
 export TT_DIT_CACHE_DIR=/your/cache/path
 
 # Run the pipeline test on QuietBox (2x4 mesh)
-pytest models/experimental/tt_dit/tests/models/sd35/test_pipeline_sd35.py -k "2x4cfg1sp0tp1 and yes_traced"
+pytest models/experimental/tt_dit/tests/models/motif/test_pipeline_motif.py -k "2x4cfg1sp0tp1 and traced and encoder_device"
 
 # Run the pipeline test on Galaxy (4x8 mesh)
-pytest models/experimental/tt_dit/tests/models/sd35/test_pipeline_sd35.py -k "4x8cfg1sp0tp1 and yes_traced"
+pytest models/experimental/tt_dit/tests/models/motif/test_pipeline_motif.py -k "4x8cfg1sp0tp1 and traced and encoder_device"
 ```
 
 
 ## Scalability
 
-SD3.5-Large has been implemented to support execution on 8-chip (LoudBox and QuietBox) as well as 32-chip (Galaxy) systems.
+Motif has been implemented to support execution on 8-chip (QuietBox and LoudBox with 2x4 mesh topology) as well as 32-chip (Galaxy with 4x8 mesh topology) systems.
 The model has only been tested on Wormhole. Blackhole support is coming soon.
 
 The DiT model can be parallelized on 3 axes:
@@ -66,4 +59,4 @@ An example parallel config on a 2x4 mesh is `((2, 1), (2, 0), (2, 1))`. This giv
 
 Another example parallel config on a 4x8 mesh is `((2, 1), (4, 0), (4, 1))`. `cfg` factor 2 on axis 1 yields 2 4x4 submeshes. `sp` is on axis 0 and `tp` is on axis 1, giving us `sp` factor 4 and `tp` factor 4.
 
-The text embedding models and the VAE decoder are parallelized with tensor parallelism on one or both of the cfg submeshes.
+The text embedding models (CLIP-L, CLIP-G, and T5-XXL) and the VAE decoder are parallelized with tensor parallelism on one or both of the cfg submeshes.
