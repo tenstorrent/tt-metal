@@ -127,7 +127,49 @@ def mean(
     )
 
 
-mean_backward = ttnn._ttnn.operations.moreh.moreh_mean_backward
+def mean_backward(
+    output_grad,
+    *,
+    dim=None,
+    keepdim=False,
+    input_grad_shape=None,
+    input_grad=None,
+    memory_config=None,
+    compute_kernel_config=None,
+):
+    # Nanobind does not accept dim=None. Tests expect dim=None to mean
+    # reduction over all input dimensions. Infer dims from available inputs.
+    if dim is None:
+        if input_grad is not None:
+            dims = tuple(range(len(input_grad.shape)))
+        elif input_grad_shape is not None:
+            dims = tuple(range(len(input_grad_shape)))
+        elif keepdim:
+            # Fallback: if keepdim=True and neither input_grad nor input_grad_shape
+            # is provided, use output_grad rank as a conservative proxy.
+            dims = tuple(range(len(output_grad.shape)))
+        else:
+            raise TypeError("mean_backward(dim=None) requires input_grad or input_grad_shape when keepdim is False")
+        return ttnn._ttnn.operations.moreh.moreh_mean_backward(
+            output_grad,
+            dim=dims,
+            keepdim=keepdim,
+            input_grad_shape=input_grad_shape,
+            input_grad=input_grad,
+            memory_config=memory_config,
+            compute_kernel_config=compute_kernel_config,
+        )
+    return ttnn._ttnn.operations.moreh.moreh_mean_backward(
+        output_grad,
+        dim=dim,
+        keepdim=keepdim,
+        input_grad_shape=input_grad_shape,
+        input_grad=input_grad,
+        memory_config=memory_config,
+        compute_kernel_config=compute_kernel_config,
+    )
+
+
 nll_loss = ttnn._ttnn.operations.moreh.moreh_nll_loss
 nll_loss_backward = ttnn._ttnn.operations.moreh.moreh_nll_loss_backward
 nll_loss_unreduced_backward = ttnn._ttnn.operations.moreh.moreh_nll_loss_unreduced_backward
