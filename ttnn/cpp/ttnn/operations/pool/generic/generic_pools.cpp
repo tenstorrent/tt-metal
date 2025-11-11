@@ -322,7 +322,7 @@ static std::vector<Tensor> pool2d_DRAM(
     bool count_include_pad = true,
     std::optional<int32_t> divisor_override = std::nullopt,
     const std::optional<const MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<Op2DSliceConfig>& dram_slice_config_ = std::nullopt,
+    const std::optional<Op2dSliceConfig>& dram_slice_config_ = std::nullopt,
     const std::optional<const TensorMemoryLayout> applied_shard_scheme = std::nullopt,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     bool in_place_halo = false,
@@ -332,7 +332,7 @@ static std::vector<Tensor> pool2d_DRAM(
     const DataType dtype = DataType::BFLOAT16,
     const Layout output_layout = Layout::ROW_MAJOR) {
     if (!dram_slice_config_.has_value() ||
-        dram_slice_config_->slice_type == op_slicing::Op2DSliceConfig::SliceType::L1_FULL ||
+        dram_slice_config_->slice_type == op_slicing::Op2dSliceConfig::SliceType::L1_FULL ||
         dram_slice_config_->num_slices == 1) {
         return pool2d_L1(
             input_tensor,
@@ -468,7 +468,7 @@ static std::vector<Tensor> pool2d(
     bool count_include_pad = true,
     std::optional<int32_t> divisor_override = std::nullopt,
     const std::optional<const MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<Op2DSliceConfig>& dram_slice_config = std::nullopt,
+    const std::optional<Op2dSliceConfig>& dram_slice_config = std::nullopt,
     const std::optional<const TensorMemoryLayout> applied_shard_scheme = std::nullopt,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     bool in_place_halo = false,
@@ -541,7 +541,7 @@ std::vector<Tensor> MaxPool2DOp::invoke(
     std::array<uint32_t, 2> dilation,
     bool ceil_mode,
     const std::optional<const MemoryConfig>& memory_config,
-    const std::optional<Op2DSliceConfig>& dram_slice_config,
+    const std::optional<Op2dSliceConfig>& dram_slice_config,
     const std::optional<const TensorMemoryLayout> applied_shard_scheme,
     bool deallocate_input,
     bool reallocate_halo_output,
@@ -586,7 +586,7 @@ Tensor AvgPool2DOp::invoke(
     bool count_include_pad,
     std::optional<int32_t> divisor_override,
     const std::optional<const MemoryConfig>& memory_config,
-    const std::optional<Op2DSliceConfig>& dram_slice_config,
+    const std::optional<Op2dSliceConfig>& dram_slice_config,
     const std::optional<const TensorMemoryLayout> applied_shard_scheme,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     bool deallocate_input,

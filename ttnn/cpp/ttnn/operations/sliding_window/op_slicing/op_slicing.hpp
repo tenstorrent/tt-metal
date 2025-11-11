@@ -9,7 +9,7 @@
 #include "ttnn/tensor/tensor.hpp"
 namespace ttnn::operations::op_slicing {
 
-struct Op2DSliceConfig {
+struct Op2dSliceConfig {
     // Determines the dimension along which the input & output tensors are sliced.
     // Slices based on [N, H, W, C] shape.
     // Using width slicing is more efficient as it reduces memory usage. This is because the overlap of data between
@@ -49,6 +49,6 @@ void run_sliced_op(
     const ttnn::Tensor& input_tensor,
     std::vector<OpSliceAttr::RefTensor>& output_tensor,
     OpSliceAttr* op_slice_attr,
-    Op2DSliceConfig dram_slice_config);
+    Op2dSliceConfig dram_slice_config);
 
 }  // namespace ttnn::operations::op_slicing
