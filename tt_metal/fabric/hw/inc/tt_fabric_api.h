@@ -119,13 +119,13 @@ void fabric_set_mcast_route(
         tt_l1_ptr tensix_routing_l1_info_t* routing_table =
             reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(ROUTING_TABLE_BASE);
         packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
-        packet_header->mcast_params_16 = ((uint64_t)s_num_hops << 48) | ((uint64_t)n_num_hops << 32) |
+        packet_header->mcast_params_64 = ((uint64_t)s_num_hops << 48) | ((uint64_t)n_num_hops << 32) |
                                          ((uint64_t)w_num_hops << 16) | ((uint64_t)e_num_hops);
         packet_header->is_mcast_active = 0;
         if (routing_table->my_mesh_id != dst_mesh_id) {
             // TODO: refactoring
             fabric_set_unicast_route(packet_header, dst_dev_id, dst_mesh_id);
-            packet_header->mcast_params_16 = ((uint64_t)s_num_hops << 48) | ((uint64_t)n_num_hops << 32) |
+            packet_header->mcast_params_64 = ((uint64_t)s_num_hops << 48) | ((uint64_t)n_num_hops << 32) |
                                              ((uint64_t)w_num_hops << 16) | ((uint64_t)e_num_hops);
             return;
         }
@@ -195,7 +195,7 @@ bool fabric_set_unicast_route(
     volatile tt_l1_ptr HybridMeshPacketHeader* packet_header, uint16_t dst_dev_id, uint16_t dst_mesh_id) {
     if constexpr (!called_from_router) {
         packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
-        packet_header->mcast_params_16 = 0;
+        packet_header->mcast_params_64 = 0;
         packet_header->is_mcast_active = 0;
     }
     auto* routing_info = reinterpret_cast<tt_l1_ptr intra_mesh_routing_path_t<2, true>*>(ROUTING_PATH_BASE_2D);

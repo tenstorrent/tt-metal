@@ -25,7 +25,7 @@ void fabric_set_unicast_route(
     uint16_t my_mesh_id = routing_table->my_mesh_id;
     packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
     packet_header->routing_fields.value = 0;
-    packet_header->mcast_params_16 = 0;
+    packet_header->mcast_params_64 = 0;
     if (my_mesh_id != dst_mesh_id) {
         // TODO: https://github.com/tenstorrent/tt-metal/issues/27881
         // dst_dev_id = exit_node;

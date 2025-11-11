@@ -564,7 +564,7 @@ FORCE_INLINE uint32_t recompute_path(
     PACKET_HEADER_TYPE* packet_header,
     ROUTING_FIELDS_TYPE& cached_routing_fields,
     const tt::tt_fabric::tensix_routing_l1_info_t& routing_table) {
-    if (packet_header->mcast_params_16 != 0 && packet_header->dst_start_mesh_id == routing_table.my_mesh_id) {
+    if (packet_header->mcast_params_64 != 0 && packet_header->dst_start_mesh_id == routing_table.my_mesh_id) {
         fabric_set_mcast_route(packet_header);
     } else {
         fabric_set_unicast_route<true, static_cast<eth_chan_directions>(my_direction)>(

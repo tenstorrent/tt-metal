@@ -610,7 +610,7 @@ struct HybridMeshPacketHeader : PacketHeaderBase<HybridMeshPacketHeader> {
         // TODO: 8bit
         uint16_t mcast_params[4];  // Array representing the hops in each direction
         // TODO: 16bit
-        uint64_t mcast_params_16;  // Used for efficiently writing to the mcast_params array
+        uint64_t mcast_params_64;  // Used for efficiently writing to the mcast_params array
     };
     uint8_t is_mcast_active;  // TODO: -> can be 1 bit in routing fields
 
@@ -652,9 +652,6 @@ static_assert(
     ((ROUTING_MODE & (ROUTING_MODE_2D | ROUTING_MODE_MESH)) != 0) || \
     ((ROUTING_MODE & (ROUTING_MODE_2D | ROUTING_MODE_TORUS)) != 0))
 #if (ROUTING_MODE & ROUTING_MODE_LOW_LATENCY) != 0
-#ifndef FABRIC_2D_TMP  // TODO: remove this ifdef after validation
-#define FABRIC_2D_TMP
-#endif
 #define PACKET_HEADER_TYPE tt::tt_fabric::HybridMeshPacketHeader
 #define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyMeshRoutingFields
 #else
