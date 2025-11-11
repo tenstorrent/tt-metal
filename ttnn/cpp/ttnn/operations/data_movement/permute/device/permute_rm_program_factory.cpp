@@ -231,7 +231,7 @@ PermuteDeviceOperation::DramShardedRowInvariant::create(
 
     std::vector<uint32_t> reader_compile_time_args = {};
     std::unordered_map<std::string, uint32_t> reader_named_compile_time_args = {
-        {"N", N}, {"page_size", input_rm_page_size}, {"num_rows", num_rows}};
+        {"N", N}, {"page_size", input_rm_page_size}, {"num_rows", num_rows}, {"cb_depth", num_input_pages_to_read}};
     TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(

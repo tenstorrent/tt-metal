@@ -5,16 +5,19 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 
-// TODO:
-// the reserve_back and noc_barrier logic is causing
-// functional failures.
+// Status:
+// Functionally passes, but seems to sporadically fail. Not sure if there's
+// a race condition somewhere ...
 //
-// removal of dram_sharded APIs: https://github.com/tenstorrent/tt-metal/pull/30687
+// Resources:
+// Removal of dram_sharded APIs: https://github.com/tenstorrent/tt-metal/pull/30687
+// Metal 2.0: https://github.com/tenstorrent/tt-metal/pull/31376
 
 void kernel_main() {
     constexpr uint32_t N = get_named_compile_time_arg_val("N");
     constexpr uint32_t page_size = get_named_compile_time_arg_val("page_size");
     constexpr uint32_t num_rows = get_named_compile_time_arg_val("num_rows");
+    constexpr uint32_t cb_depth = get_named_compile_time_arg_val("cb_depth");
     constexpr auto src_args = TensorAccessorArgs<0>();
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -33,19 +36,22 @@ void kernel_main() {
     constexpr uint32_t noc_index = 0;  // TODO avoid hardcoding tt::tt_metal::NOC::NOC_0 ?
     reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, noc_index);
     // Transaction ids
-    constexpr uint32_t max_trid = NOC_MAX_TRANSACTION_ID;  // 0xF
-    constexpr uint32_t num_reads_in_flight = 2;            // TODO should match CB depth
-    uint32_t prev_trid = 1;
-    uint32_t curr_trid = prev_trid;
-    // warmup=true for first few iterations until we reach num_reads_in_flight, during which don't use barrier
+    static_assert(
+        cb_depth < NOC_MAX_TRANSACTION_ID, "Circular buffer depth exceeds max NOC transaction ID");  // max trid = 0xF
+    constexpr uint32_t start_trid = 1;
+    constexpr uint32_t end_trid = cb_depth;
+    uint32_t prev_trid = start_trid;
+    uint32_t curr_trid = start_trid;
+    // warmup=true for first few iterations until we reach end_trid, during which don't use barrier
     bool warmup = true;
 
-    cb_reserve_back(tt::CBIndex::c_0, num_reads_in_flight);
-    uint32_t l1_addr = get_write_ptr(tt::CBIndex::c_0);
+    // Manually keep track of CB pointer, since the get_write_ptr() API only
+    // updates after a cb_push_back().
+    uint32_t l1_addr_start = get_write_ptr(tt::CBIndex::c_0);
+    uint32_t l1_addr = l1_addr_start;
 
     for (uint32_t row = start_row; row < end_row; ++row) {
-        // cb_reserve_back(tt::CBIndex::c_0, 1);
-        // uint32_t l1_addr = get_write_ptr(tt::CBIndex::c_0);
+        cb_reserve_back(tt::CBIndex::c_0, 1);
 
         noc_async_read_tile_dram_sharded_set_trid(curr_trid);
         // noc_async_read_page(row, s0, l1_addr);
@@ -56,23 +62,18 @@ void kernel_main() {
         noc_async_read_one_packet(s0.get_noc_addr(row), l1_addr, page_size, noc_index, vc);
 
         if (warmup) {
-            l1_addr += page_size;
-            warmup = curr_trid < num_reads_in_flight - 1;
+            warmup = curr_trid < end_trid - 1;
         } else {
             noc_async_read_barrier_with_trid(prev_trid);
             cb_push_back(tt::CBIndex::c_0, 1);
-            cb_reserve_back(tt::CBIndex::c_0, 1);
-            l1_addr = get_write_ptr(tt::CBIndex::c_0);
-            prev_trid = (prev_trid == max_trid) ? 1 : (prev_trid + 1);
+            prev_trid = (prev_trid == end_trid) ? start_trid : (prev_trid + 1);
         }
-        curr_trid = (curr_trid == max_trid) ? 1 : (curr_trid + 1);
-        // noc_async_read_barrier_with_trid(curr_trid);
-        // cb_push_back(tt::CBIndex::c_0, 1);
-        // curr_trid = (curr_trid == max_trid) ? 1 : (curr_trid + 1);
+        l1_addr = (curr_trid == end_trid) ? l1_addr_start : (l1_addr + page_size);
+        curr_trid = (curr_trid == end_trid) ? start_trid : (curr_trid + 1);
     }
     while (prev_trid != curr_trid) {
         noc_async_read_barrier_with_trid(prev_trid);
         cb_push_back(tt::CBIndex::c_0, 1);
-        prev_trid = (prev_trid == max_trid) ? 1 : (prev_trid + 1);
+        prev_trid = (prev_trid == end_trid) ? start_trid : (prev_trid + 1);
     }
 }
