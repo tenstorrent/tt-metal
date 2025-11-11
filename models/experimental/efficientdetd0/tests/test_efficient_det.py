@@ -18,6 +18,7 @@ from models.experimental.efficientdetd0.tt.custom_preprocessor import (
 )
 from tests.ttnn.utils_for_testing import check_with_pcc
 from models.experimental.efficientdetd0.common import load_torch_model_state
+from models.demos.utils.common_demo_utils import get_mesh_mappers
 
 
 torch.manual_seed(0)
@@ -44,9 +45,10 @@ def test_efficient_det(batch, channels, height, width, device):
     with torch.no_grad():
         torch_features, torch_regression, torch_classification = torch_model(torch_inputs)
 
+    inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer = get_mesh_mappers(device)
     parameters = preprocess_model_parameters(
         initialize_model=lambda: torch_model,
-        custom_preprocessor=create_custom_mesh_preprocessor(None),
+        custom_preprocessor=create_custom_mesh_preprocessor(weights_mesh_mapper),
         device=device,
     )
     module_args = infer_torch_module_args(model=torch_model, input=torch_inputs)

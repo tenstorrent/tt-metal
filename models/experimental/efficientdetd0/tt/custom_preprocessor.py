@@ -18,33 +18,35 @@ from models.experimental.efficientdetd0.reference.modules import Regressor, Clas
 from models.experimental.efficientdetd0.reference.modules import SeparableConvBlock
 
 
-def _preprocess_conv_bn_parameter(conv, bn, *, dtype=ttnn.float32):
+def _preprocess_conv_bn_parameter(conv, bn, *, dtype=ttnn.bfloat16, mesh_mapper=None):
     parameters = {}
     conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(conv, bn)
-    parameters["weight"] = ttnn.from_torch(conv_weight, dtype=dtype)
-    parameters["bias"] = ttnn.from_torch(conv_bias.reshape((1, 1, 1, -1)), dtype=dtype)
+    parameters["weight"] = ttnn.from_torch(conv_weight, dtype=dtype, mesh_mapper=mesh_mapper)
+    parameters["bias"] = ttnn.from_torch(conv_bias.reshape((1, 1, 1, -1)), dtype=dtype, mesh_mapper=mesh_mapper)
     return parameters
 
 
-def _preprocess_conv_params(conv, *, dtype=ttnn.float32):
+def _preprocess_conv_params(conv, *, dtype=ttnn.bfloat16, mesh_mapper=None):
     parameters = {}
     weight = conv.weight
     bias = conv.bias
-    parameters["weight"] = ttnn.from_torch(weight, dtype=dtype)
-    parameters["bias"] = ttnn.from_torch(bias.reshape((1, 1, 1, -1)), dtype=dtype)
+    parameters["weight"] = ttnn.from_torch(weight, dtype=dtype, mesh_mapper=mesh_mapper)
+    parameters["bias"] = ttnn.from_torch(bias.reshape((1, 1, 1, -1)), dtype=dtype, mesh_mapper=mesh_mapper)
     return parameters
 
 
-def _extract_seperable_conv(model, bn=None):
+def _extract_seperable_conv(model, bn=None, dtype=ttnn.bfloat16, mesh_mapper=None):
     assert isinstance(model, SeparableConvBlock)
     parameters = {}
     parameters["depthwise_conv"] = {}
-    parameters["depthwise_conv"]["weight"] = ttnn.from_torch(model.depthwise_conv.weight, dtype=ttnn.float32)
+    parameters["depthwise_conv"]["weight"] = ttnn.from_torch(
+        model.depthwise_conv.weight, dtype=dtype, mesh_mapper=mesh_mapper
+    )
     parameters["depthwise_conv"]["bias"] = None
     if model.depthwise_conv.bias is not None:
         bias = model.depthwise_conv.bias
         bias = bias.reshape((1, 1, 1, -1))
-        parameters["depthwise_conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        parameters["depthwise_conv"]["bias"] = ttnn.from_torch(bias, dtype=dtype, mesh_mapper=mesh_mapper)
 
     parameters["pointwise_conv"] = {}
     if bn is not None:
@@ -54,10 +56,10 @@ def _extract_seperable_conv(model, bn=None):
     else:
         weight, bias = model.pointwise_conv.weight, model.pointwise_conv.bias
 
-    parameters["pointwise_conv"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32)
+    parameters["pointwise_conv"]["weight"] = ttnn.from_torch(weight, dtype=dtype, mesh_mapper=mesh_mapper)
     if bias is not None:
         bias = bias.reshape((1, 1, 1, -1))
-        parameters["pointwise_conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        parameters["pointwise_conv"]["bias"] = ttnn.from_torch(bias, dtype=dtype, mesh_mapper=mesh_mapper)
 
     return parameters
 
@@ -69,7 +71,7 @@ def custom_preprocessor(
     weight_dtype = ttnn.bfloat16
 
     if isinstance(model, SeparableConvBlock):
-        parameters = _extract_seperable_conv(model)
+        parameters = _extract_seperable_conv(model, dtype=weight_dtype, mesh_mapper=mesh_mapper)
     elif isinstance(
         model,
         (
@@ -83,42 +85,76 @@ def custom_preprocessor(
         for layer_num, pyramid_layer_bn_list in enumerate(model.bn_list):
             parameters["conv_list"][layer_num] = {}
             for id, bn in enumerate(pyramid_layer_bn_list):
-                parameters["conv_list"][layer_num][id] = _extract_seperable_conv(model.conv_list[id], bn)
-            parameters["header_list"][layer_num] = _extract_seperable_conv(model.header)
+                parameters["conv_list"][layer_num][id] = _extract_seperable_conv(
+                    model.conv_list[id], bn, dtype=weight_dtype, mesh_mapper=mesh_mapper
+                )
+            parameters["header_list"][layer_num] = _extract_seperable_conv(
+                model.header, dtype=weight_dtype, mesh_mapper=mesh_mapper
+            )
     elif isinstance(model, BiFPN):
         # Let the sub-modules handle their own preprocessing
         for child_name, child in model.named_children():
             if isinstance(child, SeparableConvBlock):
-                parameters[child_name] = _extract_seperable_conv(child)
+                parameters[child_name] = _extract_seperable_conv(child, dtype=weight_dtype, mesh_mapper=mesh_mapper)
             elif isinstance(child, nn.Sequential) and len(child) > 1:
                 if isinstance(child[0], nn.Conv2d) and isinstance(child[1], nn.BatchNorm2d):
                     parameters[child_name] = {}
-                    parameters[child_name][0] = _preprocess_conv_bn_parameter(child[0], child[1])
+                    parameters[child_name][0] = _preprocess_conv_bn_parameter(
+                        child[0], child[1], dtype=weight_dtype, mesh_mapper=mesh_mapper
+                    )
                 else:
                     continue  # Maxpool case
         # Store attention weights if using fast attention
         if model.attention:
-            parameters["p6_w1"] = ttnn.from_torch(model.p6_w1.data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-            parameters["p5_w1"] = ttnn.from_torch(model.p5_w1.data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-            parameters["p4_w1"] = ttnn.from_torch(model.p4_w1.data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-            parameters["p3_w1"] = ttnn.from_torch(model.p3_w1.data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-            parameters["p4_w2"] = ttnn.from_torch(model.p4_w2.data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-            parameters["p5_w2"] = ttnn.from_torch(model.p5_w2.data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-            parameters["p6_w2"] = ttnn.from_torch(model.p6_w2.data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-            parameters["p7_w2"] = ttnn.from_torch(model.p7_w2.data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            parameters["p6_w1"] = ttnn.from_torch(
+                model.p6_w1.data, dtype=weight_dtype, mesh_mapper=mesh_mapper, layout=ttnn.TILE_LAYOUT
+            )
+            parameters["p5_w1"] = ttnn.from_torch(
+                model.p5_w1.data, dtype=weight_dtype, mesh_mapper=mesh_mapper, layout=ttnn.TILE_LAYOUT
+            )
+            parameters["p4_w1"] = ttnn.from_torch(
+                model.p4_w1.data, dtype=weight_dtype, mesh_mapper=mesh_mapper, layout=ttnn.TILE_LAYOUT
+            )
+            parameters["p3_w1"] = ttnn.from_torch(
+                model.p3_w1.data, dtype=weight_dtype, mesh_mapper=mesh_mapper, layout=ttnn.TILE_LAYOUT
+            )
+            parameters["p4_w2"] = ttnn.from_torch(
+                model.p4_w2.data, dtype=weight_dtype, mesh_mapper=mesh_mapper, layout=ttnn.TILE_LAYOUT
+            )
+            parameters["p5_w2"] = ttnn.from_torch(
+                model.p5_w2.data, dtype=weight_dtype, mesh_mapper=mesh_mapper, layout=ttnn.TILE_LAYOUT
+            )
+            parameters["p6_w2"] = ttnn.from_torch(
+                model.p6_w2.data, dtype=weight_dtype, mesh_mapper=mesh_mapper, layout=ttnn.TILE_LAYOUT
+            )
+            parameters["p7_w2"] = ttnn.from_torch(
+                model.p7_w2.data, dtype=weight_dtype, mesh_mapper=mesh_mapper, layout=ttnn.TILE_LAYOUT
+            )
     elif isinstance(model, Efficientnetb0):
         parameters = {}
-        parameters["_conv_stem"] = _preprocess_conv_bn_parameter(model._conv_stem, model._bn0)
+        parameters["_conv_stem"] = _preprocess_conv_bn_parameter(
+            model._conv_stem, model._bn0, dtype=weight_dtype, mesh_mapper=mesh_mapper
+        )
         blocks_params = {}
         for i in range(0, 16):
             block_parameters = {}
             block = model.__getattr__(f"_blocks{i}")
             if i != 0:
-                block_parameters["_expand_conv"] = _preprocess_conv_bn_parameter(block._expand_conv, block._bn0)
-            block_parameters["_depthwise_conv"] = _preprocess_conv_bn_parameter(block._depthwise_conv, block._bn1)
-            block_parameters["_se_reduce"] = _preprocess_conv_params(block._se_reduce)
-            block_parameters["_se_expand"] = _preprocess_conv_params(block._se_expand)
-            block_parameters["_project_conv"] = _preprocess_conv_bn_parameter(block._project_conv, block._bn2)
+                block_parameters["_expand_conv"] = _preprocess_conv_bn_parameter(
+                    block._expand_conv, block._bn0, dtype=weight_dtype, mesh_mapper=mesh_mapper
+                )
+            block_parameters["_depthwise_conv"] = _preprocess_conv_bn_parameter(
+                block._depthwise_conv, block._bn1, dtype=weight_dtype, mesh_mapper=mesh_mapper
+            )
+            block_parameters["_se_reduce"] = _preprocess_conv_params(
+                block._se_reduce, dtype=weight_dtype, mesh_mapper=mesh_mapper
+            )
+            block_parameters["_se_expand"] = _preprocess_conv_params(
+                block._se_expand, dtype=weight_dtype, mesh_mapper=mesh_mapper
+            )
+            block_parameters["_project_conv"] = _preprocess_conv_bn_parameter(
+                block._project_conv, block._bn2, dtype=weight_dtype, mesh_mapper=mesh_mapper
+            )
             blocks_params[f"_blocks{i}"] = block_parameters
         parameters["blocks"] = blocks_params
     elif isinstance(

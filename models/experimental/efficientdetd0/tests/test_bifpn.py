@@ -14,6 +14,7 @@ from models.experimental.efficientdetd0.tt.bifpn import TtBiFPN
 from models.experimental.efficientdetd0.tt.custom_preprocessor import create_custom_mesh_preprocessor
 from ttnn.model_preprocessing import infer_ttnn_module_args
 from models.experimental.efficientdetd0.common import load_torch_model_state
+from models.demos.utils.common_demo_utils import get_mesh_mappers
 
 
 torch.manual_seed(0)
@@ -79,9 +80,10 @@ def test_bifpn(
         torch_outputs = torch_model(inputs)
 
     # Preprocess model parameters
+    inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer = get_mesh_mappers(device)
     parameters = preprocess_model_parameters(
         initialize_model=lambda: torch_model,
-        custom_preprocessor=create_custom_mesh_preprocessor(None),
+        custom_preprocessor=create_custom_mesh_preprocessor(weights_mesh_mapper),
         device=device,
     )
 
