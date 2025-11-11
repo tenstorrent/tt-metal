@@ -4,6 +4,7 @@
 
 #include "groupnorm_input_mask.hpp"
 #include <tt-metalium/constants.hpp>
+#include <algorithm>
 
 using namespace tt::constants;
 
@@ -22,9 +23,7 @@ static int64_t find_max_tile_span(int64_t W, int64_t group_size, int64_t tile_wi
         int64_t start_tile = current_position / tile_width;
         int64_t end_tile = (group_end - 1) / tile_width;
         int64_t current_tile_span = end_tile - start_tile + 1;
-        if (current_tile_span > max_tile_span) {
-            max_tile_span = current_tile_span;
-        }
+        max_tile_span = std::max(current_tile_span, max_tile_span);
         current_position = group_end;
     }
     return max_tile_span;
