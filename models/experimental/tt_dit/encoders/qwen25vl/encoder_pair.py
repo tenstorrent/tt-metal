@@ -77,7 +77,9 @@ class Qwen25VlTokenizerEncoderPair:
 
         return torch_model, model, model_args
 
-    def encode(self, prompts: Sequence[str], *, num_images_per_prompt: int) -> tuple[torch.Tensor, torch.Tensor]:
+    def encode(
+        self, prompts: Sequence[str], *, num_images_per_prompt: int, sequence_length: int
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         return _get_qwen_prompt_embeds(
             prompts=prompts,
             num_images_per_prompt=num_images_per_prompt,
@@ -85,7 +87,7 @@ class Qwen25VlTokenizerEncoderPair:
             text_encoder=self._encoder,
             model_args=self._model_args,
             torch_text_encoder=self._torch_encoder,
-            max_sequence_length=512,
+            sequence_length=sequence_length,
             mesh_device=self._device,
         )
 
@@ -98,7 +100,7 @@ def _get_qwen_prompt_embeds(
     torch_text_encoder: Qwen2_5_VLForConditionalGeneration,
     tokenizer: PreTrainedTokenizerBase,
     mesh_device: ttnn.MeshDevice | None,
-    max_sequence_length: int,
+    sequence_length: int,
     num_images_per_prompt: int,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     assert len(prompts) == 1, "only batch size 1 is supported by the transformer model in prefill mode"
@@ -112,7 +114,7 @@ def _get_qwen_prompt_embeds(
         prompts,
         return_tensors="pt",
         padding="longest",
-        max_length=max_sequence_length + drop_idx,
+        max_length=sequence_length + drop_idx,
         truncation=True,
     )
 
@@ -176,11 +178,12 @@ def _get_qwen_prompt_embeds(
     split_hidden_states = _extract_masked_hidden(hidden_states, attention_mask)
     split_hidden_states = [e[drop_idx:] for e in split_hidden_states]
     attn_mask_list = [torch.ones(e.size(0), dtype=torch.long) for e in split_hidden_states]
-    max_seq_len = max([e.size(0) for e in split_hidden_states])
     prompt_embeds = torch.stack(
-        [torch.cat([u, u.new_zeros(max_seq_len - u.size(0), u.size(1))]) for u in split_hidden_states]
+        [torch.cat([u, u.new_zeros(sequence_length - u.size(0), u.size(1))]) for u in split_hidden_states]
     )
-    encoder_attention_mask = torch.stack([torch.cat([u, u.new_zeros(max_seq_len - u.size(0))]) for u in attn_mask_list])
+    encoder_attention_mask = torch.stack(
+        [torch.cat([u, u.new_zeros(sequence_length - u.size(0))]) for u in attn_mask_list]
+    )
 
     prompt_embeds = prompt_embeds.repeat_interleave(num_images_per_prompt, dim=0)
     encoder_attention_mask = encoder_attention_mask.repeat_interleave(num_images_per_prompt, dim=0)

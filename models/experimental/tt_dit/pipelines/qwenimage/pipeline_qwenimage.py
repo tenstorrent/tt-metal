@@ -708,6 +708,7 @@ class QwenImagePipeline:
             return self._text_encoder.encode(
                 prompts,
                 num_images_per_prompt=num_images_per_prompt,
+                sequence_length=512,
             )
 
 
