@@ -78,15 +78,15 @@ on:
         options:
           - disabled
           - all
-          - cnn
-          - llama70b
-          - llama_unit_tests
-          - llama70b_prefill
+#          - cnn
+#          - llama70b
+#          - llama_unit_tests
+#          - llama70b_prefill
           - sd35
           - flux1-dev
           - sentence_bert
-          - wan2-2
-          - mochi
+#          - wan2-2
+#          - mochi
         default: 'disabled'
 run-name: ${{ inputs.description }}
 jobs:
