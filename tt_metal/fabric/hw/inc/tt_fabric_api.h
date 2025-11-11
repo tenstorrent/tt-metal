@@ -97,12 +97,13 @@ void fabric_set_route(
     packet_header->routing_fields.hop_index = 0;
 }
 
-// template <bool called_from_router = false, eth_chan_directions my_direction = eth_chan_directions::COUNT>
-// bool fabric_set_unicast_route(
-//     volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
-//     uint16_t dst_dev_id,
-//     uint16_t dst_mesh_id = MAX_NUM_MESHES);
+template <bool called_from_router = false, eth_chan_directions my_direction = eth_chan_directions::COUNT>
+bool fabric_set_unicast_route(
+    volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
+    uint16_t dst_dev_id,
+    uint16_t dst_mesh_id = MAX_NUM_MESHES);
 
+template <bool called_from_router = false>
 void fabric_set_mcast_route(
     volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
     uint16_t dst_dev_id,
@@ -113,25 +114,22 @@ void fabric_set_mcast_route(
     uint16_t s_num_hops) {
     uint32_t spine_hops = 0;
     uint32_t mcast_branch = 0;
-
-    tt_l1_ptr tensix_routing_l1_info_t* routing_table =
-        reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(ROUTING_TABLE_BASE);
-    uint16_t my_mesh_id = routing_table->my_mesh_id;
-    if (my_mesh_id != dst_mesh_id) {
-        tt_l1_ptr exit_node_table_t* exit_node_table =
-            reinterpret_cast<tt_l1_ptr exit_node_table_t*>(EXIT_NODE_TABLE_BASE);
-        dst_dev_id = exit_node_table->nodes[dst_mesh_id];
-        // fabric_set_unicast_route(packet_header, dst_dev_id, dst_mesh_id);
-        // TODO: refactoring
+    packet_header->routing_fields.value = 0;
+    if constexpr (!called_from_router) {
+        tt_l1_ptr tensix_routing_l1_info_t* routing_table =
+            reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(ROUTING_TABLE_BASE);
+        packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
         packet_header->mcast_params_16 = ((uint64_t)s_num_hops << 48) | ((uint64_t)n_num_hops << 32) |
                                          ((uint64_t)w_num_hops << 16) | ((uint64_t)e_num_hops);
-        return;
+        packet_header->is_mcast_active = 0;
+        if (routing_table->my_mesh_id != dst_mesh_id) {
+            // TODO: refactoring
+            fabric_set_unicast_route(packet_header, dst_dev_id, dst_mesh_id);
+            packet_header->mcast_params_16 = ((uint64_t)s_num_hops << 48) | ((uint64_t)n_num_hops << 32) |
+                                             ((uint64_t)w_num_hops << 16) | ((uint64_t)e_num_hops);
+            return;
+        }
     }
-    packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
-    packet_header->routing_fields.value = 0;
-    packet_header->mcast_params_16 = ((uint64_t)s_num_hops << 48) | ((uint64_t)n_num_hops << 32) |
-                                     ((uint64_t)w_num_hops << 16) | ((uint64_t)e_num_hops);
-    packet_header->is_mcast_active = 0;
 
     // For 2D Mcast, mcast spine runs N/S and branches are E/W
     // If api is called with east and/or west hops != 0, it may be a 2D mcast
@@ -163,6 +161,28 @@ void fabric_set_mcast_route(
     }
 }
 
+#if defined(COMPILE_FOR_ERISC)
+// Called only from fabric_erisc_router.cpp
+void fabric_set_mcast_route(volatile tt_l1_ptr HybridMeshPacketHeader* packet_header) {
+    auto e_num_hops = packet_header->mcast_params[eth_chan_directions::EAST];
+    auto w_num_hops = packet_header->mcast_params[eth_chan_directions::WEST];
+    auto n_num_hops = packet_header->mcast_params[eth_chan_directions::NORTH];
+    auto s_num_hops = packet_header->mcast_params[eth_chan_directions::SOUTH];
+    e_num_hops = e_num_hops > 0 ? e_num_hops + 1 : 0;
+    w_num_hops = w_num_hops > 0 ? w_num_hops + 1 : 0;
+    n_num_hops = n_num_hops > 0 ? n_num_hops + 1 : 0;
+    s_num_hops = s_num_hops > 0 ? s_num_hops + 1 : 0;
+    fabric_set_mcast_route<true>(
+        packet_header,
+        packet_header->dst_start_chip_id,
+        packet_header->dst_start_mesh_id,
+        e_num_hops,
+        w_num_hops,
+        n_num_hops,
+        s_num_hops);
+}
+#endif
+
 uint8_t get_router_direction(uint32_t eth_channel) {
     tt_l1_ptr tensix_fabric_connections_l1_info_t* connection_info =
         reinterpret_cast<tt_l1_ptr tensix_fabric_connections_l1_info_t*>(MEM_TENSIX_FABRIC_CONNECTIONS_BASE);
@@ -170,11 +190,9 @@ uint8_t get_router_direction(uint32_t eth_channel) {
 }
 
 // Overload: Fill route_buffer of HybridMeshPacketHeader and initialize hop_index/branch offsets for 2D.
-template <bool called_from_router = false, eth_chan_directions my_direction = eth_chan_directions::COUNT>
+template <bool called_from_router, eth_chan_directions my_direction>
 bool fabric_set_unicast_route(
-    volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
-    uint16_t dst_dev_id,
-    uint16_t dst_mesh_id = MAX_NUM_MESHES) {
+    volatile tt_l1_ptr HybridMeshPacketHeader* packet_header, uint16_t dst_dev_id, uint16_t dst_mesh_id) {
     if constexpr (!called_from_router) {
         packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
         packet_header->mcast_params_16 = 0;
@@ -229,16 +247,6 @@ bool fabric_set_unicast_route(
         }
     } else {
         ok = routing_info->decode_route_to_buffer(dst_dev_id, packet_header->route_buffer);
-        // uint32_t packed_debug_value =
-        //     0x20000000 |
-        //     ((uint32_t)(routing_table->my_mesh_id & 0xF) << 24) |
-        //     ((uint32_t)(packet_header->dst_start_mesh_id & 0xF) << 20) |
-        //     ((uint32_t)(routing_table->my_device_id & 0xF) << 16) |
-        //     ((uint32_t)(packet_header->dst_start_chip_id & 0xF) << 12) |
-        //     ((uint32_t)(dst_dev_id & 0xF) << 8) |
-        //     ((uint32_t)(packet_header->route_buffer[0] & 0xF) << 4) |
-        //     ((uint32_t)(packet_header->noc_send_type & 0xF) << 0);
-        // WATCHER_RING_BUFFER_PUSH(packed_debug_value);
     }
     packet_header->routing_fields.value = 0;
 
