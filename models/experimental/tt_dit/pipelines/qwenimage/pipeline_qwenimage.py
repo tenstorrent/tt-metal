@@ -40,6 +40,10 @@ class PipelineTrace:
     timestep_input: ttnn.Tensor
     sigma_difference_input: ttnn.Tensor
     latents_output: ttnn.Tensor
+    spatial_rope_cos: ttnn.Tensor
+    spatial_rope_sin: ttnn.Tensor
+    prompt_rope_cos: ttnn.Tensor
+    prompt_rope_sin: ttnn.Tensor
 
 
 class QwenImagePipeline:
@@ -616,6 +620,10 @@ class QwenImagePipeline:
                         spatial_input=latents[submesh_id],
                         prompt_input=prompt_embeds[submesh_id],
                         timestep_input=timestep_device,
+                        spatial_rope_cos=spatial_rope_cos[submesh_id],
+                        spatial_rope_sin=spatial_rope_sin[submesh_id],
+                        prompt_rope_cos=prompt_rope_cos[submesh_id],
+                        prompt_rope_sin=prompt_rope_sin[submesh_id],
                         latents_output=pred,
                         sigma_difference_input=sigma_difference_device,
                         tid=trace_id,
