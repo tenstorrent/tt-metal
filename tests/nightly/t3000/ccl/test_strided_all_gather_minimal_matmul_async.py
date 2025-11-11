@@ -315,20 +315,144 @@ def run_strided_all_gather_impl(
 @pytest.mark.parametrize(
     "M, K, N, dim, num_workers_per_link, layout, ag_input_dtype, mm_block_m, mm_block_k, mm_block_n, subblock_h, subblock_w, mm_core_grid",
     [
-        (64, 512, 512, 3, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2)),
-        (64, 512, 1024, 3, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2)),
-        (64, 512, 2048, 3, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2)),
-        (64, 512, 512, 3, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2)),
-        (4096, 4096, 4096, 3, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2)),
-        (4096, 4096, 4096, 3, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(4, 4)),
+        (64, 512, 512, 3, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2)),  # base
+        (
+            64,
+            512,
+            1024,
+            3,
+            1,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            32,
+            32,
+            32,
+            1,
+            1,
+            ttnn.CoreCoord(2, 2),
+        ),  # forwardbackwardK
+        (
+            64,
+            512,
+            2048,
+            3,
+            1,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            32,
+            32,
+            32,
+            1,
+            1,
+            ttnn.CoreCoord(2, 2),
+        ),  # twiceforwardbackwardK
+        (64, 512, 512, 3, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2)),  # 2workercores
+        (
+            128,
+            512,
+            512,
+            3,
+            1,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            64,
+            32,
+            32,
+            1,
+            1,
+            ttnn.CoreCoord(2, 2),
+        ),  # mblock21worker
+        (
+            128,
+            512,
+            512,
+            3,
+            2,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            64,
+            32,
+            32,
+            1,
+            1,
+            ttnn.CoreCoord(2, 2),
+        ),  # mblock22workers
+        (
+            64,
+            1024,
+            512,
+            3,
+            1,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            32,
+            64,
+            32,
+            1,
+            1,
+            ttnn.CoreCoord(2, 2),
+        ),  # kblock21worker
+        (
+            64,
+            1024,
+            512,
+            3,
+            2,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            32,
+            64,
+            32,
+            1,
+            1,
+            ttnn.CoreCoord(2, 2),
+        ),  # kblock22workers
+        (
+            64,
+            512,
+            1024,
+            3,
+            1,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            32,
+            32,
+            64,
+            1,
+            1,
+            ttnn.CoreCoord(2, 2),
+        ),  # nblock21worker
+        (
+            64,
+            512,
+            1024,
+            3,
+            2,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            32,
+            32,
+            64,
+            1,
+            1,
+            ttnn.CoreCoord(2, 2),
+        ),  # nblock22workers
+        (4096, 4096, 4096, 3, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2)),  # 4k4k4k
+        (4096, 4096, 4096, 3, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(4, 4)),  # 4x4mmcores
     ],
     ids=[
         "base",  # 1 forward pass through K
         "forwardbackwardK",  # 1 forward, 1 backward (special because it's not reusing on the first backward)
         "twiceforwardbackwardK",  # 2 forward, 2 backward (both the non reuse and reuse branches hit)
         "2workercores",  # test two worker cores on the AG side
+        "mblock21worker",  # make m block size greater than 1
+        "mblock22workers",  # make m block size greater than 1, plus 2 workers
+        "kblock21worker",  # make k block size greater than 1
+        "kblock22workers",  # make m block size greater than 1, plus 2 workers
+        "nblock21worker",  # make n block size greater than 1
+        "nblock22workers",  # make n block size greater than 1, plus 2 workers
         "4k4k4k",
-        "4x4mmcores",
+        "4x4mmcores",  # increase to a larger core grid
     ],
 )
 @pytest.mark.parametrize(
