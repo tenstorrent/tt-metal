@@ -1,0 +1,46 @@
+name: "Schedule APC Run for Copilot Branch"
+
+on:
+  # Run APC tests on schedule
+  schedule:
+    # Runs daily at 2:00 AM UTC
+    - cron: "0 2 * * *"
+  
+  # Allow manual triggering
+  workflow_dispatch:
+    inputs:
+      build-type:
+        required: false
+        default: Release
+        type: choice
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+      version:
+        required: false
+        default: "22.04"
+        type: choice
+        options:
+          - "22.04"
+          - "24.04"
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+  pages: write
+  id-token: write
+  packages: write
+  checks: write
+
+jobs:
+  run-apc-tests:
+    name: Run APC Post-Commit Tests
+    uses: ./.github/workflows/all-post-commit-workflows.yaml
+    secrets: inherit
+    with:
+      build-type: ${{ inputs.build-type || 'Release' }}
+      version: ${{ inputs.version || '22.04' }}
