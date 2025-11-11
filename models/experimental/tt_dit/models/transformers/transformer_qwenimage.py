@@ -185,7 +185,7 @@ class QwenImageTransformer(Module):
         return self.proj_out(spatial)
 
     def patchify(self, latents: torch.Tensor) -> torch.Tensor:
-        # N, H, W, C -> N, (H / P) * (W / P), P * P * C
+        # N, H, W, C -> N, (H / P) * (W / P), C * P * P
         batch_size, height, width, channels = latents.shape
         patch = self._patch_size
 
@@ -194,10 +194,10 @@ class QwenImageTransformer(Module):
             raise ValueError(msg)
 
         latents = latents.reshape([batch_size, height // patch, patch, width // patch, patch, channels])
-        return latents.transpose(2, 3).flatten(3, 5).flatten(1, 2)
+        return latents.permute(0, 1, 3, 5, 2, 4).flatten(3, 5).flatten(1, 2)
 
     def unpatchify(self, spatial: torch.Tensor, *, height: int, width: int) -> torch.Tensor:
-        # N, (H / P) * (W / P), P * P * C -> N, H, W, C
+        # N, (H / P) * (W / P), C * P * P -> N, H, W, C
         batch_size, _, _ = spatial.shape
         patch = self._patch_size
 
@@ -205,8 +205,8 @@ class QwenImageTransformer(Module):
             msg = f"height ({height}) and width ({width}) must be divisible by patch_size ({patch})"
             raise ValueError(msg)
 
-        spatial = spatial.reshape([batch_size, height // patch, width // patch, patch, patch, -1])
-        return spatial.transpose(2, 3).flatten(3, 4).flatten(1, 2)
+        spatial = spatial.reshape([batch_size, height // patch, width // patch, -1, patch, patch])
+        return spatial.permute(0, 1, 4, 2, 5, 3).flatten(3, 4).flatten(1, 2)
 
 
 def _chunk_time3d(t: ttnn.Tensor, count: int) -> list[ttnn.Tensor]:
