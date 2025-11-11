@@ -212,7 +212,6 @@ class QwenImagePipeline:
                 ttnn.synchronize_device(self.encoder_device)
 
         self._traces = None
-        self.warmup()
 
     @contextmanager
     def encoder_reshape(self, device: ttnn.MeshDevice | None) -> Generator[None]:
@@ -300,19 +299,6 @@ class QwenImagePipeline:
             width=width,
             height=height,
         )
-
-    def warmup(self) -> None:
-        """Warmup the pipeline by running a single inference step."""
-        logger.info("Pipeline warmup...")
-        self(
-            prompts=["warmup"],
-            negative_prompts=[None],
-            num_inference_steps=1,
-            cfg_scale=0,
-            traced=False,
-        )
-        for device in self._submesh_devices:
-            ttnn.synchronize_device(device)
 
     def __call__(
         self,
@@ -591,6 +577,20 @@ class QwenImagePipeline:
             for submesh_id, submesh_device in enumerate(self._submesh_devices):
                 timestep_device = timestep[submesh_id].to(submesh_device)
                 sigma_difference_device = sigma_difference[submesh_id].to(submesh_device)
+
+                pred = self._step_inner(
+                    cfg_enabled=cfg_enabled,
+                    latent=latents[submesh_id],
+                    prompt=prompt_embeds[submesh_id],
+                    timestep=timestep_device,
+                    spatial_rope_cos=spatial_rope_cos[submesh_id],
+                    spatial_rope_sin=spatial_rope_sin[submesh_id],
+                    prompt_rope_cos=prompt_rope_cos[submesh_id],
+                    prompt_rope_sin=prompt_rope_sin[submesh_id],
+                    spatial_sequence_length=spatial_sequence_length,
+                    prompt_sequence_length=prompt_sequence_length,
+                    submesh_index=submesh_id,
+                )
 
                 trace_id = ttnn.begin_trace_capture(submesh_device, cq_id=0)
                 pred = self._step_inner(
