@@ -39,27 +39,20 @@ def ttnn_integral_image_channel_last(features_nhwc):
 def test_cumsum_channel_last(device, input_shape_nhwc, dtype, memory_config):
     torch.manual_seed(0)
 
-    if dtype == ttnn.bfloat16:
-        torch_input_tensor = torch.relu(torch.rand(input_shape_nhwc, dtype=torch.bfloat16))
-    else:
+    if dtype != ttnn.bfloat16:
         pytest.skip("Unsupported dtype")
 
+    torch_input_tensor = torch.relu(torch.rand(input_shape_nhwc, dtype=torch.bfloat16))
     # golden
     torch_output_tensor = torch.cumsum(torch.cumsum(torch_input_tensor, dim=1), dim=2)
 
-    # reference  (test hangs if removed)
+    # reference
     input_tensor = ttnn.from_torch(
         torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype, memory_config=memory_config
     )
     output_tensor = ttnn_integral_image_cumsum_channel_last(input_tensor)
     ttnn_output_tensor = ttnn.to_torch(output_tensor)
     assert_with_pcc(torch_output_tensor, ttnn_output_tensor, pcc=0.999)
-
-    # check L1 just in case
-    buffers = ttnn._ttnn.reports.get_buffers(device)
-    l1_buffers = [buf for buf in buffers if buf.buffer_type == ttnn.BufferType.L1]
-    for i, buf in enumerate(l1_buffers):
-        logger.warning(f"L1 Buffer {i}: addr={buf.address}, size={buf.max_size_per_bank}, layout={buf.buffer_layout}")
 
     # experimental intimg
     input_tensor = ttnn.from_torch(

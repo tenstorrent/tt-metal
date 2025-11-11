@@ -4,7 +4,7 @@
 
 #include "dataflow_api.h"
 
-#include "common.hpp"
+#include "common_dataflow.hpp"
 
 namespace {
 
@@ -46,7 +46,7 @@ FORCE_INLINE void send_block(
             row_chunk_i,
             column_block_i,
             block_depth);
-        load_to_cb(cb_input, input_addr_gen, read_tile_id);
+        load_from_dram(cb_input, input_addr_gen, read_tile_id);
     }
 }
 

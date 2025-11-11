@@ -4,7 +4,7 @@
 
 #include "dataflow_api.h"
 
-#include "common.hpp"
+#include "common_dataflow.hpp"
 
 namespace {
 
@@ -28,7 +28,7 @@ FORCE_INLINE void receive_upper_block(
             row_block_i,
             column_block_i,
             generic_block_depth);
-        load_to_cb(cb_axis_3_buffer_write, output_addr_gen, read_tile_id, ONE_TILE);
+        load_from_dram(cb_axis_3_buffer_write, output_addr_gen, read_tile_id, ONE_TILE);
     }
 }
 
