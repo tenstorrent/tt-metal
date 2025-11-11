@@ -237,14 +237,15 @@ class TtBiFPN:
                 parameters.p7_w2, epsilon=self.epsilon, three_weights=False, device=self.device
             )
 
-    def _upsample(self, x, scale_factor):
+    def _upsample(self, x, scale_factor, input_shape=None):
         # Convert to interleaved if sharded
         if x.is_sharded():
             x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
-
         # Convert to ROW_MAJOR layout for upsample
         x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-
+        if input_shape:
+            N, C, H, W = input_shape
+            x = ttnn.reshape(x, (N, H, W, C))
         # Perform upsample
         x = ttnn.upsample(x, (scale_factor, scale_factor))
 
@@ -291,10 +292,13 @@ class TtBiFPN:
             p3_in, p4_in, p5_in, p6_in, p7_in = inputs
 
         # P6_1 = weighted_sum(P6_0, upsample(P7_0))
-        p7_upsampled = self._upsample(p7_in, scale_factor=2)
+        if self.first_time:
+            p7_upsampled = self._upsample(p7_in, scale_factor=2, input_shape=self.p6_to_p7.dynamic_conv.output_shape)
+        else:
+            p7_upsampled = self._upsample(p7_in, scale_factor=2)
         term1 = ttnn.mul(self.p6_w1_weight_0, p6_in)
         term2 = ttnn.mul(self.p6_w1_weight_1, p7_upsampled)
-        term2 = ttnn.reshape(term2, term1.shape)
+        term1 = ttnn.reshape(term1, term2.shape)
         p6_weighted = ttnn.add(term1, term2)
         p6_up = self.conv6_up(self._swish(p6_weighted))
 
@@ -302,10 +306,12 @@ class TtBiFPN:
         ttnn.deallocate(p6_weighted)
 
         # P5_1 = weighted_sum(P5_0, upsample(P6_1))
-        p6_upsampled = self._upsample(p6_up, scale_factor=2)
+        p6_upsampled = self._upsample(
+            p6_up, scale_factor=2, input_shape=self.conv6_up.pointwise_conv.dynamic_conv.output_shape
+        )
         term1 = ttnn.mul(self.p5_w1_weight_0, p5_in)
         term2 = ttnn.mul(self.p5_w1_weight_1, p6_upsampled)
-        term2 = ttnn.reshape(term2, term1.shape)
+        term1 = ttnn.reshape(term1, term2.shape)
         p5_weighted = ttnn.add(term1, term2)
         p5_up = self.conv5_up(self._swish(p5_weighted))
 
@@ -313,10 +319,12 @@ class TtBiFPN:
         ttnn.deallocate(p5_weighted)
 
         # P4_1 = weighted_sum(P4_0, upsample(P5_1))
-        p5_upsampled = self._upsample(p5_up, scale_factor=2)
+        p5_upsampled = self._upsample(
+            p5_up, scale_factor=2, input_shape=self.conv5_up.pointwise_conv.dynamic_conv.output_shape
+        )
         term1 = ttnn.mul(self.p4_w1_weight_0, p4_in)
-        term2 = ttnn.mul(self.p4_w1_weight_0, p5_upsampled)
-        term2 = ttnn.reshape(term2, term1.shape)
+        term2 = ttnn.mul(self.p4_w1_weight_1, p5_upsampled)
+        term1 = ttnn.reshape(term1, term2.shape)
         p4_weighted = ttnn.add(term1, term2)
         p4_up = self.conv4_up(self._swish(p4_weighted))
 
@@ -324,11 +332,13 @@ class TtBiFPN:
         ttnn.deallocate(p4_weighted)
 
         # P3_2 = weighted_sum(P3_0, upsample(P4_1))
-        p4_upsampled = self._upsample(p4_up, scale_factor=2)
+        p4_upsampled = self._upsample(
+            p4_up, scale_factor=2, input_shape=self.conv4_up.pointwise_conv.dynamic_conv.output_shape
+        )
         term1 = ttnn.mul(self.p3_w1_weight_0, p3_in)
         ttnn.deallocate(p3_in)
         term2 = ttnn.mul(self.p3_w1_weight_1, p4_upsampled)
-        term2 = ttnn.reshape(term2, term1.shape)
+        term1 = ttnn.reshape(term1, term2.shape)
         p3_weighted = ttnn.add(term1, term2)
         p3_out = self.conv3_up(self._swish(p3_weighted))
 

@@ -216,6 +216,7 @@ def register_layer_hooks(model, layer_type):
                 batch_size=input_shape[0],
                 input_height=input_shape[-2],
                 input_width=input_shape[-1],
+                output_shape=output_shape,
             )
 
         return hook_fn

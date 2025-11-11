@@ -39,6 +39,7 @@ class EfficientDetd0Maxpool2D:
         self.shard_layout = shard_layout
         self.output_layout = output_layout
         self.dilation = dilation
+        self.output_shape = maxpool_params.output_shape
 
     def __call__(self, x):
         return ttnn.max_pool2d(
@@ -156,6 +157,7 @@ class EfficientNetb0Conv2D:
         self.conv_config = self._initialize_conv_config()
         self.compute_config = self._initialize_compute_config()
         self.weights, self.bias = self.parameters["weight"], self.parameters["bias"]
+        self.output_shape = conv.output_shape
 
     def _initialize_conv_config(self):
         conv_config = ttnn.Conv2dConfig(

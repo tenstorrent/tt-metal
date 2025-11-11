@@ -11,8 +11,10 @@ from models.common.utility_functions import comp_pcc
 
 from models.experimental.efficientdetd0.reference.modules import BiFPN
 from models.experimental.efficientdetd0.tt.bifpn import TtBiFPN
-from models.experimental.efficientdetd0.tt.custom_preprocessor import create_custom_mesh_preprocessor
-from ttnn.model_preprocessing import infer_ttnn_module_args
+from models.experimental.efficientdetd0.tt.custom_preprocessor import (
+    create_custom_mesh_preprocessor,
+    infer_torch_module_args,
+)
 from models.experimental.efficientdetd0.common import load_torch_model_state
 from models.demos.utils.common_demo_utils import get_mesh_mappers
 
@@ -88,9 +90,7 @@ def test_bifpn(
     )
 
     # Infer module arguments for all Conv2d layers
-    module_args = infer_ttnn_module_args(
-        model=torch_model, run_model=lambda torch_model: torch_model(inputs), device=None
-    )
+    module_args = infer_torch_module_args(model=torch_model, input=inputs)
 
     # Create TTNN BiFPN model
     ttnn_model = TtBiFPN(
