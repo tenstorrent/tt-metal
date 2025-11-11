@@ -201,6 +201,34 @@ class Dual2x4FabricFixture : public Fixture {
     }
 };
 
+template <typename Fixture>
+class ClosetBoxFabricFixture : public Fixture {
+    std::string get_path_to_mesh_graph_desc() override {
+        return "tests/tt_metal/tt_fabric/custom_mesh_descriptors/16_lb_mesh_graph_descriptor.textproto";
+    }
+
+    std::vector<std::vector<EthCoord>> get_eth_coord_mapping() override {
+        return {
+            get_eth_coords_for_2x4_t3k(),
+            get_eth_coords_for_2x4_t3k(),
+            get_eth_coords_for_2x4_t3k(),
+            get_eth_coords_for_2x4_t3k(),
+            get_eth_coords_for_2x4_t3k(),
+            get_eth_coords_for_2x4_t3k(),
+            get_eth_coords_for_2x4_t3k(),
+            get_eth_coords_for_2x4_t3k(),
+            get_eth_coords_for_2x4_t3k(),
+            get_eth_coords_for_2x4_t3k(),
+            get_eth_coords_for_2x4_t3k(),
+            get_eth_coords_for_2x4_t3k(),
+            get_eth_coords_for_2x4_t3k(),
+            get_eth_coords_for_2x4_t3k(),
+            get_eth_coords_for_2x4_t3k(),
+            get_eth_coords_for_2x4_t3k(),
+        };
+    }
+};
+
 // Generic Fixture for Nano-Exabox systems using Fabric (each T3K is initialized as a 2x4 Mesh)
 template <typename Fixture>
 class NanoExabox2x4FabricFixture : public Fixture {
@@ -253,6 +281,9 @@ using MeshDeviceNanoExabox2x4Fixture = NanoExabox2x4FabricFixture<MultiMeshDevic
 
 using IntermeshNanoExabox1x8FabricFixture = NanoExabox1x8FabricFixture<InterMeshRoutingFabric2DFixture>;
 using MeshDeviceNanoExabox1x8Fixture = NanoExabox1x8FabricFixture<MultiMeshDeviceFabricFixture>;
+
+using IntermeshClosetBoxFabricFixture = ClosetBoxFabricFixture<InterMeshRoutingFabric2DFixture>;
+using MeshDeviceClosetBoxFabricFixture = ClosetBoxFabricFixture<MultiMeshDeviceFabricFixture>;
 
 // Fixture for Exabox systems using Fabric
 class IntermeshExaboxFabricFixture : public BaseFabricFixture {

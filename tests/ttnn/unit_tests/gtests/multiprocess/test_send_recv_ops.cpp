@@ -21,6 +21,8 @@ namespace tt::tt_metal {
 class MeshDeviceDual2x4SendRecvFixture : public tt::tt_fabric::fabric_router_tests::MeshDeviceDual2x4Fixture,
                                          public testing::WithParamInterface<SocketTestArgs> {};
 
+using MeshDeviceClosetBoxSendRecvFixture = tt::tt_fabric::fabric_router_tests::MeshDeviceClosetBoxFabricFixture;
+
 INSTANTIATE_TEST_SUITE_P(
     MeshDeviceDual2x4SendRecvTests, MeshDeviceDual2x4SendRecvFixture, ::testing::ValuesIn(get_socket_test_args()));
 
@@ -252,6 +254,80 @@ TEST_P(MeshDeviceNanoExabox2x4SendRecvFixture, MultiSendRecvAsync) {
             }
         }
     }
+}
+
+TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
+    distributed::multihost::Rank pipeline_start_rank = distributed::multihost::Rank{0};
+    distributed::multihost::Rank pipeline_end_rank = distributed::multihost::Rank{15};
+    const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
+
+    auto sender_logical_coord = CoreCoord(0, 0);
+    auto recv_logical_coord = CoreCoord(0, 1);
+
+    uint32_t socket_fifo_size = 14 * 1024;
+    auto mesh_shape = mesh_device_->shape();
+
+    distributed::SocketConnection socket_connection = {
+        .sender_core = {distributed::MeshCoordinate(0, 0), sender_logical_coord},
+        .receiver_core = {distributed::MeshCoordinate(0, 0), recv_logical_coord},
+    };
+
+    distributed::SocketMemoryConfig socket_mem_config = {
+        .socket_storage_type = BufferType::L1,
+        .fifo_size = socket_fifo_size,
+    };
+
+    distributed::SocketConfig send_socket_config = {
+        .socket_connection_config = {socket_connection},
+        .socket_mem_config = socket_mem_config,
+        .sender_rank = distributed_context->rank(),
+        .receiver_rank = distributed::multihost::Rank(*distributed_context->rank() + 1),
+    };
+
+    distributed::SocketConfig recv_socket_config = {
+        .socket_connection_config = {socket_connection},
+        .socket_mem_config = socket_mem_config,
+        .sender_rank = distributed::multihost::Rank(*distributed_context->rank() - 1),
+        .receiver_rank = distributed_context->rank(),
+    };
+
+    auto send_socket = distributed::MeshSocket(mesh_device_, send_socket_config);
+    auto recv_socket = distributed::MeshSocket(mesh_device_, recv_socket_config);
+
+    auto tensor_spec = TensorSpec(
+        ttnn::Shape({1, 1, 112, 160}),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
+            tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1)));
+
+    if (*distributed_context->rank() < *pipeline_end_rank) {
+        if (*distributed_context->rank() == *pipeline_start_rank) {
+            const auto& input_shape = tensor_spec.logical_shape();
+            const auto& memory_config = tensor_spec.memory_config();
+            uint32_t num_elems = input_shape.volume();
+            auto layout = tensor_spec.layout();
+            auto dtype = tensor_spec.data_type();
+            auto input_tensor =
+                ttnn::distributed::distribute_tensor(
+                    ttnn::experimental::view(ttnn::arange(0, num_elems, 1, dtype), input_shape).to_layout(layout),
+                    *ttnn::distributed::replicate_tensor_to_mesh_mapper(*mesh_device_),
+                    std::nullopt)
+                    .to_device(mesh_device_.get(), memory_config);
+            ttnn::experimental::send_async(input_tensor, mesh_device_, send_socket_config);
+        } else {
+            auto output_tensor = tt::tt_metal::allocate_tensor_on_device(tensor_spec, mesh_device_.get());
+            ttnn::experimental::recv_async(output_tensor, mesh_device_, recv_socket_config);
+            if (*distributed_context->rank() < *pipeline_end_rank) {
+                ttnn::experimental::send_async(output_tensor, mesh_device_, send_socket_config);
+            } else {
+                auto composer = ttnn::distributed::concat_mesh_to_tensor_composer(*mesh_device_, /*dim=*/0);
+                auto output_data = ttnn::distributed::aggregate_tensor(output_tensor, *composer).to_vector<bfloat16>();
+                std::cout << "Output Tensor Shape: " << output_tensor.tensor_spec().logical_shape() << std::endl;
+            }
+        }
+    }
+    distributed::Synchronize(mesh_device_.get(), std::nullopt);
 }
 
 }  // namespace tt::tt_metal
