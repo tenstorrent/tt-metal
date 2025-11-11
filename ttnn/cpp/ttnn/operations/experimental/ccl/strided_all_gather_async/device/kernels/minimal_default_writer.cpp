@@ -69,8 +69,8 @@ void kernel_main() {
     uint32_t input_tensor_Ht = get_arg_val<uint32_t>(arg_idx++);
     uint32_t output_tensor_Wt = get_arg_val<uint32_t>(arg_idx++);
     uint32_t output_tensor_Ht = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t input_batch_head_count = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t input_tile_id_start = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t num_batches = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t output_worker_tile_offset = get_arg_val<uint32_t>(arg_idx++);
     uint32_t input_tiles_per_core = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
@@ -185,22 +185,22 @@ void kernel_main() {
         }
     }
 
-    uint32_t global_tile_id_start = input_tile_id_start;
+    uint32_t batch_output_tile_offset = output_worker_tile_offset;
     uint32_t global_tile_index = 0;
-    uint32_t tiles_per_bh = input_tensor_Wt * input_tensor_Ht;
-    uint32_t output_tiles_per_bh = output_tensor_Wt * output_tensor_Ht;
-    uint32_t chunks_per_core = div_up(tiles_per_bh, tiles_per_chunk);
+    uint32_t tiles_per_batch = input_tensor_Wt * input_tensor_Ht;
+    uint32_t output_tiles_per_batch = output_tensor_Wt * output_tensor_Ht;
+    uint32_t chunks_per_core = div_up(tiles_per_batch, tiles_per_chunk);
     uint32_t tiles_written = 0;
 
     // Write out the local slice to both DRAM and forward and backward
-    for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
+    for (uint32_t b_idx = 0; b_idx < num_batches; b_idx++) {
         global_tile_index = 0;
         tiles_written = 0;
         for (uint32_t chunk_idx = 0; chunk_idx < chunks_per_core; chunk_idx++) {
-            uint32_t chunk_start_tile_index = global_tile_index;
+            uint32_t chunk_start_tile = global_tile_index;
             write_chunk(
-                chunk_start_tile_index,
-                global_tile_id_start,
+                chunk_start_tile,
+                batch_output_tile_offset,
                 cb_output_id,
                 tiles_written,
                 input_tiles_per_core,
@@ -234,10 +234,10 @@ void kernel_main() {
             uint32_t local_tiles_written = 0;
             while (slice_writes < writes_expected) {
                 uint32_t actual_sender_chip_id = get_sender_id(direction, my_chip_id, slice_writes, ring_size);
-                chunk_start_tile_index = global_tile_index;
+                chunk_start_tile = global_tile_index;
                 local_tiles_written = write_chunk(
-                    chunk_start_tile_index,
-                    global_tile_id_start,
+                    chunk_start_tile,
+                    batch_output_tile_offset,
                     cb_output_id,
                     tiles_written,
                     input_tiles_per_core,
@@ -262,10 +262,10 @@ void kernel_main() {
                     false);
                 slice_writes++;
             }
-            global_tile_index = chunk_start_tile_index;
+            global_tile_index = chunk_start_tile;
             tiles_written += local_tiles_written;
         }
-        global_tile_id_start += output_tiles_per_bh;
+        batch_output_tile_offset += output_tiles_per_batch;
     }
 
     noc_async_write_barrier();

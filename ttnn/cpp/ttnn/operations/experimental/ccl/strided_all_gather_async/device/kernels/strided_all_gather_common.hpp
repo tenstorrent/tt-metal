@@ -18,19 +18,24 @@
 
 using namespace tt::tt_fabric::linear::experimental;
 
+// Return the global tile index of the tile_iter tile that this worker is responsible for,
+// either in the input buffer or output buffer dependening on if read_from_output is set.
+// The returned tile index will be in the unpadded space.
+// chunk size is k_block_tiles * mm_core_grid.y
+// subchunk height is k_block height
 FORCE_INLINE uint32_t get_next_chunk_tile(
-    uint32_t chunk_tile_index,
+    uint32_t tile_iter,
     uint32_t input_chunk_start_tile_index,
-    uint32_t chunk_width,
-    uint32_t subchunk_height,
+    uint32_t chunk_width,      // This is the k_block width, unless the block is not full, then it's the partial width.
+    uint32_t subchunk_height,  // This is the full k_block height.
     uint32_t subchunk_height_stride,
-    uint32_t core_tile_offset,
-    uint32_t ag_parallel_factor,
-    uint32_t input_tensor_Wt,
-    uint32_t output_tensor_Wt,
+    uint32_t worker_tile_offset,
+    uint32_t num_workers,
+    uint32_t input_tensor_Wt,   // this should be the unpadded width
+    uint32_t output_tensor_Wt,  // this should be the unpadded width
     uint32_t device_index,
     bool read_from_output) {
-    uint32_t chunk_linear_index = core_tile_offset + chunk_tile_index * ag_parallel_factor;
+    uint32_t chunk_linear_index = worker_tile_offset + tile_iter * num_workers;
     uint32_t chunk_row = chunk_linear_index / chunk_width;
     uint32_t subchunk_index = chunk_row / subchunk_height;
     uint32_t subchunk_row = chunk_row % subchunk_height;
@@ -64,7 +69,7 @@ FORCE_INLINE uint32_t div_up(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
 template <typename AddrGenType>
 FORCE_INLINE uint32_t read_chunk(
     uint32_t& chunk_start_tile,
-    uint32_t core_tile_offset,
+    uint32_t worker_tile_offset,
     uint32_t cb_output_id,
     uint32_t tiles_read,
     uint32_t tiles_per_core,
@@ -88,21 +93,21 @@ FORCE_INLINE uint32_t read_chunk(
     uint32_t tiles_in_curr_chunk = std::min(tiles_left, worker_tiles_in_curr_chunk);
     uint32_t num_tiles_per_packet = std::min(max_tiles_per_packet, tiles_in_curr_chunk);
     uint32_t packets_in_curr_chunk = div_up(tiles_in_curr_chunk, num_tiles_per_packet);
-    uint32_t chunk_tile_idx = 0;
+    uint32_t chunk_tile_iter = 0;
     for (uint32_t packet_idx = 0; packet_idx < packets_in_curr_chunk; packet_idx++) {
-        uint32_t tiles_left_in_chunk = tiles_in_curr_chunk - chunk_tile_idx;
+        uint32_t tiles_left_in_chunk = tiles_in_curr_chunk - chunk_tile_iter;
         uint32_t tiles_to_read_in_packet = std::min(tiles_left_in_chunk, num_tiles_per_packet);
 
         cb_reserve_back(cb_output_id, max_tiles_per_packet);
         size_t l1_write_addr = get_write_ptr(cb_output_id);
         for (uint32_t j = 0; j < tiles_to_read_in_packet; ++j) {
             uint32_t tile_id = get_next_chunk_tile(
-                chunk_tile_idx,
+                chunk_tile_iter,
                 chunk_start_tile,
                 chunk_width,
                 subchunk_height,
                 subchunk_height_stride,
-                core_tile_offset,
+                worker_tile_offset,
                 ag_worker_cores,
                 input_tensor_Wt,
                 output_tensor_Wt,
@@ -113,7 +118,7 @@ FORCE_INLINE uint32_t read_chunk(
             noc_async_read(noc_read_addr, l1_write_addr, input_tensor_page_size);
 
             l1_write_addr += input_tensor_page_size;
-            chunk_tile_idx++;
+            chunk_tile_iter++;
         }
 
         noc_async_read_barrier();
@@ -128,13 +133,13 @@ FORCE_INLINE uint32_t read_chunk(
     } else {
         chunk_start_tile = new_chunk_start_tile;
     }
-    return chunk_tile_idx;
+    return chunk_tile_iter;
 }
 
 template <typename AddrGenType, uint8_t FABRIC_MUX_CHANNEL_NUM_BUFFERS = 0>
 FORCE_INLINE uint32_t write_chunk(
     uint32_t& chunk_start_tile,
-    uint32_t core_tile_offset,
+    uint32_t worker_tile_offset,
     uint32_t cb_output_id,
     uint32_t tiles_written,
     uint32_t tiles_per_core,
@@ -177,7 +182,7 @@ FORCE_INLINE uint32_t write_chunk(
             chunk_width,
             subchunk_height,
             subchunk_height_stride,
-            core_tile_offset,
+            worker_tile_offset,
             ag_worker_cores,
             input_tensor_Wt,
             output_tensor_Wt,
@@ -192,7 +197,7 @@ FORCE_INLINE uint32_t write_chunk(
                 chunk_width,
                 subchunk_height,
                 subchunk_height_stride,
-                core_tile_offset,
+                worker_tile_offset,
                 ag_worker_cores,
                 input_tensor_Wt,
                 output_tensor_Wt,

@@ -41,8 +41,8 @@ void kernel_main() {
     uint32_t input_tensor_Wt = get_arg_val<uint32_t>(arg_idx++);
     uint32_t input_tensor_Ht = get_arg_val<uint32_t>(arg_idx++);
     uint32_t output_tensor_Wt = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t input_batch_head_count = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t input_tile_id_start = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t num_batches = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t input_worker_tile_offset = get_arg_val<uint32_t>(arg_idx++);
     uint32_t input_tiles_per_core = get_arg_val<uint32_t>(arg_idx++);
     uint32_t ring_size = get_arg_val<uint32_t>(arg_idx++);
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
@@ -97,21 +97,21 @@ void kernel_main() {
     // Imagine the input has already been permuted to the appropriate schedule, then the parameters that control
     // this are just input_tile_id_start and end (like before).  It probably needs a number tiles per sync, but that
     // probably goes to the writer, the reader just reads the whole block. Push out our local slice
-    uint32_t global_tile_id_start = input_tile_id_start;
+    uint32_t batch_input_tile_offset = input_worker_tile_offset;
     uint32_t global_tile_index = 0;
-    uint32_t tiles_per_bh = input_tensor_Wt * input_tensor_Ht;
-    uint32_t chunks_per_core = div_up(tiles_per_bh, tiles_per_chunk);
+    uint32_t tiles_per_batch = input_tensor_Wt * input_tensor_Ht;
+    uint32_t chunks_per_core = div_up(tiles_per_batch, tiles_per_chunk);
     uint32_t tiles_read = 0;
     uint32_t sem_target = 0;
 
-    for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
+    for (uint32_t b_idx = 0; b_idx < num_batches; b_idx++) {
         global_tile_index = 0;
         tiles_read = 0;
         for (uint32_t chunk_idx = 0; chunk_idx < chunks_per_core; chunk_idx++) {
-            uint32_t chunk_start_tile_index = global_tile_index;
+            uint32_t chunk_start_tile = global_tile_index;
             read_chunk(
-                chunk_start_tile_index,
-                global_tile_id_start,
+                chunk_start_tile,
+                batch_input_tile_offset,
                 cb_output_id,
                 tiles_read,
                 input_tiles_per_core,
@@ -143,10 +143,10 @@ void kernel_main() {
                 if ((topology == Topology::Linear && writes_expected > 0) ||
                     (topology == Topology::Ring && ((slices_received + 1) < (writes_expected + 1)))) {
                     // read the next chunk out of memory, and put it in CB
-                    chunk_start_tile_index = global_tile_index;
+                    chunk_start_tile = global_tile_index;
                     local_tiles_read = read_chunk(
-                        chunk_start_tile_index,
-                        global_tile_id_start,
+                        chunk_start_tile,
+                        batch_input_tile_offset,
                         cb_output_id,
                         tiles_read,
                         input_tiles_per_core,
@@ -171,10 +171,10 @@ void kernel_main() {
                     op_signaler.synchronize_workers_and_signal_op(actual_sender_chip_id);
                 }
             }
-            global_tile_index = chunk_start_tile_index;
+            global_tile_index = chunk_start_tile;
             tiles_read += local_tiles_read;
         }
-        global_tile_id_start += tiles_per_bh;
+        batch_input_tile_offset += tiles_per_batch;
     }
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
 }
