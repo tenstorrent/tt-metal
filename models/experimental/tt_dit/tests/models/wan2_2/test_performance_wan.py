@@ -9,6 +9,7 @@ import ttnn
 import numpy as np
 from loguru import logger
 from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
+from models.common.utility_functions import is_blackhole
 from models.experimental.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
 from diffusers.utils import export_to_video
 from ....parallel.config import DiTParallelConfig, VaeHWParallelConfig, ParallelFactor
@@ -19,6 +20,7 @@ from models.common.utility_functions import is_blackhole
 @pytest.mark.parametrize(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
+        [(1, 4), (1, 4), 0, 1, 2, False, line_params, ttnn.Topology.Linear, False],
         [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True],
         # WH (ring) on 4x8
         [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True],
@@ -26,6 +28,7 @@ from models.common.utility_functions import is_blackhole
         [(4, 8), (4, 8), 1, 0, 2, False, line_params, ttnn.Topology.Linear, False],
     ],
     ids=[
+        "1x4sp0tp1",
         "2x4sp0tp1",
         "wh_4x8sp1tp0",
         "bh_4x8sp1tp0",
@@ -272,8 +275,13 @@ def test_pipeline_performance(
         assert False, f"Unknown mesh device for performance comparison: {mesh_device}"
 
     if is_ci_env:
+        device_name_map = {
+            (1, 4): "bh_qb",
+            (2, 4): "wh_t3k",
+            (4, 8): "wh_glx",
+        }
         # In CI, dump a performance report
-        profiler_model_name = f"wan_{'t3k' if tuple(mesh_device.shape) == (2, 4) else 'tg'}_sp{sp_factor}_tp{tp_factor}"
+        profiler_model_name = f"wan_{device_name_map[tuple(mesh_device.shape)]}_sp{sp_factor}_tp{tp_factor}"
         benchmark_data = BenchmarkData()
         benchmark_data.save_partial_run_json(
             benchmark_profiler,
