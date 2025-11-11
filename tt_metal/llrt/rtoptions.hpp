@@ -146,7 +146,6 @@ class RunTimeOptions {
     bool clear_dram = false;
 
     bool skip_loading_fw = false;
-    bool skip_reset_cores_on_init = false;
 
     bool riscv_debug_info_enabled = false;
     uint32_t watcher_debug_delay = 0;
@@ -438,7 +437,6 @@ public:
     void set_clear_dram(bool clear) { clear_dram = clear; }
 
     bool get_skip_loading_fw() const { return skip_loading_fw; }
-    bool get_skip_reset_cores_on_init() const { return skip_reset_cores_on_init; }
 
     // Whether to compile with -g to include DWARF debug info in the binary.
     bool get_riscv_debug_info_enabled() const { return riscv_debug_info_enabled; }
