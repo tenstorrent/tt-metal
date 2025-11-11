@@ -197,6 +197,10 @@ class TtBottleneck(LightweightModule):
         # Conv2 + separate ReLU (BatchNorm fused into Conv2)
         logger.debug(f"TtBottleneck {self.block_id} processing conv2 (3x3 spatial)")
         out = self.conv2(out)
+
+        if "res2" in self.block_id or "res3.0" in self.block_id:
+            out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
+
         # TT CNN returns flattened [B, 1, H*W, C], reshape to pre-computed output shape
         if out.memory_config().buffer_type != ttnn.BufferType.DRAM:
             out = ttnn.move(out)
@@ -217,8 +221,7 @@ class TtBottleneck(LightweightModule):
         if "res4.0" in self.block_id:
             identity = ttnn.reshard(identity, out.memory_config())
         # Always add residual - shapes should match after reshape
-        out = ttnn.add(out, identity)
-        out = ttnn.relu(out)
+        out = ttnn.add(out, identity, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)])
         if out.memory_config().buffer_type != ttnn.BufferType.DRAM:
             out = ttnn.move(out)
 
