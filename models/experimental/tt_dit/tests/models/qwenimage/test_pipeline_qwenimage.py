@@ -21,10 +21,10 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 31000000}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 36000000}],
     indirect=True,
 )
-@pytest.mark.parametrize(("width", "height", "num_inference_steps"), [(1024, 1024, 20)])
+@pytest.mark.parametrize(("width", "height", "num_inference_steps"), [(1024, 1024, 50)])
 @pytest.mark.parametrize(
     ("mesh_device", "cfg", "sp", "tp", "encoder_tp", "vae_tp", "topology", "num_links", "mesh_test_id"),
     [
@@ -133,7 +133,7 @@ def test_qwenimage_pipeline(
             prompts=[prompt],
             negative_prompts=[None],
             num_inference_steps=num_inference_steps,
-            cfg_scale=5.0,
+            cfg_scale=4.0,
             seed=seed,
             traced=traced,
         )

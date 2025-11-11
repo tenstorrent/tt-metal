@@ -27,6 +27,8 @@ from ...utils import cache, tensor
 from ...utils.padding import PaddingConfig
 
 if TYPE_CHECKING:
+    from collections.abc import Generator
+
     from PIL import Image
 
 
@@ -99,7 +101,7 @@ class QwenImagePipeline:
             for submesh_device in self._submesh_devices
         ]
 
-        self.encoder_device = self._submesh_devices[0]
+        self.encoder_device = self._submesh_devices[0] if not use_torch_text_encoder else None
         self.encoder_mesh_shape = ttnn.MeshShape(1, self._encoder_parallel_config.tensor_parallel.factor)
         self.vae_device = self._submesh_devices[0]
         self.encoder_submesh_idx = 0  # Use submesh 0 for encoder
@@ -187,7 +189,8 @@ class QwenImagePipeline:
                 use_torch=use_torch_text_encoder,
             )
 
-            ttnn.synchronize_device(self.encoder_device)
+            if self.encoder_device is not None:
+                ttnn.synchronize_device(self.encoder_device)
 
             if not use_torch_vae_decoder:
                 logger.info("creating TT-NN VAE decoder...")
@@ -205,17 +208,22 @@ class QwenImagePipeline:
             else:
                 self._vae_decoder = None
 
-            ttnn.synchronize_device(self.encoder_device)
+            if self.encoder_device is not None:
+                ttnn.synchronize_device(self.encoder_device)
 
         self._traces = None
         self.warmup()
 
     @contextmanager
-    def encoder_reshape(self, device: ttnn.MeshDevice):
+    def encoder_reshape(self, device: ttnn.MeshDevice | None) -> Generator[None]:
+        if device is None:
+            yield
+            return
+
         original_mesh_shape = ttnn.MeshShape(tuple(device.shape))
-        assert original_mesh_shape.mesh_size() == self.encoder_mesh_shape.mesh_size(), (
-            f"Device cannot be reshaped device shape: {device.shape} encoder mesh shape: {self.encoder_mesh_shape}"
-        )
+        assert (
+            original_mesh_shape.mesh_size() == self.encoder_mesh_shape.mesh_size()
+        ), f"Device cannot be reshaped device shape: {device.shape} encoder mesh shape: {self.encoder_mesh_shape}"
         if original_mesh_shape != self.encoder_mesh_shape:
             device.reshape(self.encoder_mesh_shape)
         yield
@@ -364,10 +372,8 @@ class QwenImagePipeline:
                 self._width // self._vae_scale_factor,
             ]
             # We let randn generate a permuted latent tensor in float32, so that the generated noise
-            # matches the reference implementation. TODO: is this true for this model?
-            latents = self.transformers[0].patchify(
-                torch.randn(shape, dtype=torch.float32).to(dtype=torch.bfloat16).permute(0, 2, 3, 1)
-            )
+            # matches the reference implementation.
+            latents = self.transformers[0].patchify(torch.randn(shape).permute(0, 2, 3, 1))
 
             p = self._patch_size
             img_shapes = [[(1, latents_height // p, latents_width // p)]] * transformer_batch_size
