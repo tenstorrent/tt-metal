@@ -12,7 +12,7 @@ import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc, nearest_32
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import get_single_rot_mat
-from models.tt_transformers.tt.model_config import CheckpointType, ModelArgs
+from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.multimodal.llama_cross_attention_transformer_text import (
     TtLlamaCrossAttentionTransformerText,
 )
@@ -77,10 +77,6 @@ def test_cross_attention_transformer_text_inference(
     partial_state_dict = {
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
-    if model_args.checkpoint_type == CheckpointType.HuggingFace:
-        if "learnable_embedding.weight" not in partial_state_dict:
-            partial_state_dict["learnable_embedding.weight"] = partial_state_dict["tok_embeddings.weight"][-8:]
-            partial_state_dict["tok_embeddings.weight"] = partial_state_dict["tok_embeddings.weight"][:-8]
     if model_args.is_90b and is_ci_env:
         # removing extra cross attention layers from the state dict as the Ref model decrees
         x_atten_prefix = "cross_attention_layers."
