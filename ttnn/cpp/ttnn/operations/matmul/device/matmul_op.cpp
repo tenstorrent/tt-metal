@@ -39,9 +39,21 @@ constexpr std::array<std::tuple<uint32_t, uint32_t>, 20> SUBBLOCK_HW_CHOICES = {
 
 constexpr uint32_t NARROW_SHAPE_RATIO_THRESHOLD = 8;
 
-bool is_narrow_shape(uint32_t height, uint32_t width) {
+// This function helps determine if an optimised 1D MM config will provide perf benefits for a matmul
+bool is_narrow_shape(uint32_t height, uint32_t width, bool all_dram) {
     uint32_t height_width_ratio = (height > width) ? height / width : width / height;
-    return height_width_ratio > NARROW_SHAPE_RATIO_THRESHOLD || height <= ttnn::TILE_SIZE || width <= ttnn::TILE_SIZE;
+
+    // Check if tensor is actually narrow and will benefit from 1D config
+    if (height_width_ratio > NARROW_SHAPE_RATIO_THRESHOLD) {
+        return true;
+    }
+
+    // MMs that are entirely in DRAM but with a dimension smaller than the tile size will benefit from 1D config
+    if (all_dram) {
+        return height <= ttnn::TILE_SIZE || width <= ttnn::TILE_SIZE;
+    }
+
+    return false;
 }
 
 inline bool get_fp32_dest_acc_en(const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
@@ -517,19 +529,22 @@ inline MatmulProgramConfig create_simple_matmul_program_config(
     uint32_t per_core_M, per_core_N, out_subblock_h, out_subblock_w;
     uint32_t num_blocks_x, num_blocks_y;
 
-    bool all_dram_interleaved = input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
-                                mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED &&
-                                input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
-                                input_tensor_a.memory_config().buffer_type() == BufferType::DRAM &&
-                                input_tensor_b.memory_config().buffer_type() == BufferType::DRAM &&
-                                mem_config.buffer_type() == BufferType::DRAM;
+    const bool all_interleaved = input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
+                                 mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED &&
+                                 input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED;
+
+    const bool all_dram = input_tensor_a.memory_config().buffer_type() == BufferType::DRAM &&
+                          input_tensor_b.memory_config().buffer_type() == BufferType::DRAM &&
+                          mem_config.buffer_type() == BufferType::DRAM;
+
+    const bool all_dram_interleaved = all_dram && all_interleaved;
 
     uint32_t height = ashape[-2];
     uint32_t width = bshape[-1];
-    bool is_narrow = is_narrow_shape(height, width);
+    const bool is_narrow = is_narrow_shape(height, width, all_dram);
     bool is_wide = false;
     bool is_tall = false;
-    if (all_dram_interleaved && is_narrow) {
+    if (all_interleaved && is_narrow) {
         is_wide = width > height;
         is_tall = !is_wide;
     }
@@ -750,7 +765,7 @@ MatmulProgramConfig create_matmul_program_config(
     auto height = batch_size_a * m_size;
     auto width = n_size;
     bool a_is_block_sharded = a_layout == TensorMemoryLayout::BLOCK_SHARDED;
-    if (is_narrow_shape(height, width) || any_size_within_tile) {
+    if (is_narrow_shape(height, width, false) || any_size_within_tile) {
         if (!a_is_block_sharded) {
             return create_matmul_1d_systolic_array_program_config(
                 input_tensor_a,

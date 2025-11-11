@@ -26,6 +26,7 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 #include <umd/device/types/arch.hpp>
+#include "common/tt_backend_api_types.hpp"
 
 namespace tt {
 namespace tt_metal {
