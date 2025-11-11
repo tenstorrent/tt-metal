@@ -114,201 +114,51 @@ void kernel_main() {
     cb_reserve_back(cb_id_in2, batch * in0_block_num_tiles);
 
     uint32_t in0_tensor_shard_read_addr = get_read_ptr(cb_id_in2);
-    uint32_t in0_tensor_read_addr = 0;
+    uint32_t in0_tensor_read_addr = in0_tensor_shard_read_addr;
 
-    MatmulOpReceiver fused_op_receiver;
-    if constexpr (fuse_op) {
-        fused_op_receiver = MatmulOpReceiver(
-            sender_id < num_remote_senders, /* wait_for_op_signal */
-            rt_args_idx,
-            num_blocks_inner_dim,
-            in0_block_w /* tiles_per_block (in the same dimension as tensor slice) */
-        );
-    }
+    cb_reserve_back(cb_id_in0, in0_block_num_tiles);
 
-    for (uint32_t b = 0; b < batch; ++b) {
-        uint32_t in0_tensor_current_h_dim_block_start_addr = in0_tensor_shard_read_addr;
-        for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
-            for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
-                uint32_t in0_tensor_current_inner_dim_block_start_addr = in0_tensor_current_h_dim_block_start_addr;
-                DPRINT << num_blocks_inner_dim << ENDL();
-                for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
-                    uint32_t block_id = block / num_blocks_per_shard;
-                    // If used fused op, make block_id conform to ordering of tensor slices from all
-                    // gather
-                    if constexpr (fuse_op) {
-                        block_id = fused_op_receiver.align_to_slice_and_sync(block, sender_id);
-                    }
+    const uint32_t block_id = 0;
+    if (sender_id == block_id) {
+        // Operand 0
+        uint32_t in0_tensor_local_l1_write_addr = get_write_ptr(cb_id_in0);
 
-                    cb_reserve_back(cb_id_in0, in0_block_num_tiles);
+        noc_semaphore_wait(in0_mcast_sender_semaphore_addr_ptr, in0_mcast_num_dests - 1);
+        noc_semaphore_set(in0_mcast_sender_semaphore_addr_ptr, 0);
 
-                    // All cores in receiver grid need to participate in receiving regardless if they produce output
-                    // work or not. Otherwise, data corruption since we mcast from and to the same CB (eg.
-                    // extract_shard_sub_blocks). If we only ever mcast with loopback src (ie. always to a different
-                    // CB), we can have just the cores that produce work participate in receiving.
-                    if constexpr (core_in_in0_receiver_mcast_grid) {
-                        // Set in0 semaphore value to INVALID
-                        noc_semaphore_set(in0_mcast_receiver_semaphore_addr_ptr, INVALID);
-                    }
+        // Now we have the block in the CB address, we can mcast to dests!
+        uint64_t in0_multicast_data_addr = in0_multicast_data_noc | in0_tensor_local_l1_write_addr;
 
-                    if (block_id == sender_id) {
-                        // Operand 0
-                        uint32_t in0_tensor_local_l1_write_addr = get_write_ptr(cb_id_in0);
+        noc_async_write_multicast_loopback_src(
+            in0_tensor_read_addr, in0_multicast_data_addr, in0_block_size_bytes, in0_mcast_num_cores, true);
 
-                        if constexpr (extract_shard_sub_blocks) {
-                            in0_tensor_read_addr = in0_tensor_local_l1_write_addr;
+        // We should also multicast the flag to destinations
+        noc_semaphore_set_multicast_loopback_src(
+            in0_mcast_sender_semaphore_valid_addr, in0_mcast_receiver_semaphore_noc_addr, in0_mcast_num_cores);
 
-                            uint32_t l1_write_extract_shard_in0 = in0_tensor_local_l1_write_addr;
-                            uint64_t noc_shard_read_addr = get_noc_addr(in0_tensor_current_inner_dim_block_start_addr);
-
-                            for (uint32_t i = 0; i < out_block_h; i++) {
-                                noc_async_read(noc_shard_read_addr, l1_write_extract_shard_in0, shard_read_width);
-                                l1_write_extract_shard_in0 += shard_read_width;
-                                noc_shard_read_addr += shard_read_stride;
-                            }
-
-                            in0_tensor_current_inner_dim_block_start_addr += shard_read_width;
-
-                            noc_async_read_barrier();
-
-                            if constexpr (in0_last_ktile_w > 0) {
-                                if ((block == num_blocks_inner_dim - 1)) {
-                                    auto in0_last_ktile_w_ptr = l1_write_extract_shard_in0 - in0_single_tile_size_bytes;
-                                    pad_last_ktile<in0_data_format, in0_last_ktile_w>(in0_last_ktile_w_ptr);
-                                }
-                            }
-                        } else {
-                            in0_tensor_read_addr = in0_tensor_current_inner_dim_block_start_addr;
-                            in0_tensor_current_inner_dim_block_start_addr += in0_block_size_bytes;
-
-                            if constexpr (in0_last_ktile_w > 0) {
-                                if ((block == num_blocks_inner_dim - 1)) {
-                                    auto in0_last_ktile_w_ptr =
-                                        in0_tensor_read_addr + in0_block_size_bytes - in0_single_tile_size_bytes;
-                                    pad_last_ktile<in0_data_format, in0_last_ktile_w>(in0_last_ktile_w_ptr);
-                                }
-                            }
-                        }
-
-                        // wait until all in0 mcast destinations have atomically incremented the in0 semaphore_addr
-                        // (i.e. its value should be in0_mcast_num_dests), then reset the semaphore_addr value back to
-                        // zero for the next block
-                        if constexpr (core_in_in0_receiver_mcast_grid) {
-                            // wait for every core in receiver grid EXCLUDING myself
-                            noc_semaphore_wait(in0_mcast_sender_semaphore_addr_ptr, in0_mcast_num_dests - 1);
-                        } else {
-                            // wait for every core in receiver grid
-                            noc_semaphore_wait(in0_mcast_sender_semaphore_addr_ptr, in0_mcast_num_dests);
-                        }
-                        noc_semaphore_set(in0_mcast_sender_semaphore_addr_ptr, 0);
-
-                        // Now we have the block in the CB address, we can mcast to dests!
-                        uint64_t in0_multicast_data_addr = in0_multicast_data_noc | in0_tensor_local_l1_write_addr;
-
-                        if constexpr (core_in_in0_receiver_mcast_grid) {
-                            // Mcast from/to same CB
-                            if constexpr (extract_shard_sub_blocks) {
-                                // multicast to every core in receiver grid EXCLUDING myself
-                                // Skip if there are no other cores since this core already has the data.
-                                // Note: noc_async_write_multicast[_loopback_src] may hang if called with 0 cores.
-                                if constexpr (in0_mcast_num_cores > 1) {
-                                    noc_async_write_multicast(
-                                        in0_tensor_read_addr,
-                                        in0_multicast_data_addr,
-                                        in0_block_size_bytes,
-                                        in0_mcast_num_cores - 1,
-                                        true);
-                                }
-                            }
-                            // Mcast from different CB to another CB
-                            else {
-                                if constexpr (in0_mcast_num_cores == 1) {
-                                    // noc_async_write if we only want to copy data between CB locally
-                                    noc_async_write(
-                                        in0_tensor_read_addr, in0_multicast_data_addr, in0_block_size_bytes);
-                                } else {
-                                    // multicast to every core in receiver grid
-                                    DPRINT << "in0_block_size_bytes: " << in0_block_size_bytes << ENDL();
-                                    noc_async_write_multicast_loopback_src(
-                                        in0_tensor_read_addr,
-                                        in0_multicast_data_addr,
-                                        in0_block_size_bytes,
-                                        in0_mcast_num_cores,
-                                        true);
-                                }
-                            }
-
-                            // We should also multicast the flag to destinations
-                            if constexpr (in0_mcast_num_cores == 1) {
-                                // All work is done on one core (the current one).
-                                // noc_semaphore_set_multicast_loopback_src is a no-op in this case.
-                                // Data needs to be written directly in the core.
-                                in0_mcast_receiver_semaphore_addr_ptr[0] = VALID;
-                            } else {
-                                noc_semaphore_set_multicast_loopback_src(
-                                    in0_mcast_sender_semaphore_valid_addr,
-                                    in0_mcast_receiver_semaphore_noc_addr,
-                                    in0_mcast_num_cores);
-                            }
-                        } else {
-                            // If we are not part of receiver grid, always do a regular noc_async_write_multicast to all
-                            // cores in receiver grid
-                            noc_async_write_multicast(
-                                in0_tensor_read_addr,
-                                in0_multicast_data_addr,
-                                in0_block_size_bytes,
-                                in0_mcast_num_cores,
-                                true);
-
-                            // We should also multicast the flag to destinations
-                            noc_semaphore_set_multicast(
-                                in0_mcast_sender_semaphore_valid_addr,
-                                in0_mcast_receiver_semaphore_noc_addr,
-                                in0_mcast_num_cores);
-                        }
-                        // Note: no need for write barrier, since these two multicasts are done on the same noc id and
-                        // same vc even though cmd bufs are different Also, this only works because we are setting VCs
-                        // statically (using NOC_CMD_STATIC_VC).
+        // Note: no need for write barrier, since these two multicasts are done on the same noc id and
+        // same vc even though cmd bufs are different Also, this only works because we are setting VCs
+        // statically (using NOC_CMD_STATIC_VC).
 #ifdef ARCH_BLACKHOLE
-                        // On Blackhole the flush is needed because NoC latency is higher than L1 <-> RISCV latency
-                        // which means data could be changed before
-                        //  write is issued.
-                        noc_async_writes_flushed();
+        // On Blackhole the flush is needed because NoC latency is higher than L1 <-> RISCV latency
+        // which means data could be changed before
+        //  write is issued.
+        noc_async_writes_flushed();
 #endif
+    } else {
+        noc_semaphore_set(in0_mcast_receiver_semaphore_addr_ptr, INVALID);
+        uint64_t in0_mcast_sender_semaphore_noc_addr = remote_sender_noc_addrs[block_id];
 
-                    } else if constexpr (core_in_in0_receiver_mcast_grid) {
-                        uint64_t in0_mcast_sender_semaphore_noc_addr = remote_sender_noc_addrs[block_id];
+        // Atomic increment source core counter
+        noc_semaphore_inc(in0_mcast_sender_semaphore_noc_addr, 1);
 
-                        // Atomic increment source core counter
-                        noc_semaphore_inc(in0_mcast_sender_semaphore_noc_addr, 1);
-                    }
-
-                    if constexpr (core_in_in0_receiver_mcast_grid) {
-                        // wait on in0 semaphore value to become VALID (set by mcast sender after it multicasts data)
-                        noc_semaphore_wait(in0_mcast_receiver_semaphore_addr_ptr, VALID);
-                    }
-                    DPRINT << "Pushing back " << in0_block_num_tiles << " tiles to cb_id_in0" << ENDL();
-                    DPRINT << TileSlice(
-                                  cb_id_in0,
-                                  0,
-                                  SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 16},
-                                  true,
-                                  true)
-                           << ENDL();
-                    cb_push_back(cb_id_in0, in0_block_num_tiles);
-
-                    // If core does not produce output block work, free cb_id_in0 immediately.
-                    // This is necessary since mcast is in lockstep; this ensures write ptr addresses are synced
-                    // properly for cores that only send and have no compute / writer active. Technically, don't have to
-                    // do this if cb_id_in0 is not double buffered.
-                    if constexpr (!core_has_output_block_work) {
-                        cb_pop_front(cb_id_in0, in0_block_num_tiles);
-                    }
-                }
-            }
-            in0_tensor_current_h_dim_block_start_addr += in0_tensor_next_h_dim_block_stride;
-        }
+        // wait on in0 semaphore value to become VALID (set by mcast sender after it multicasts data)
+        noc_semaphore_wait(in0_mcast_receiver_semaphore_addr_ptr, VALID);
     }
 
+    DPRINT << "Pushing back " << in0_block_num_tiles << " tiles to cb_id_in0" << ENDL();
+    DPRINT << TileSlice(cb_id_in0, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 16}, true, true)
+           << ENDL();
+    cb_push_back(cb_id_in0, in0_block_num_tiles);
     noc_async_write_barrier();
 }
