@@ -21,7 +21,7 @@ namespace reuse_dram_sharded_optimized_helpers {
 using ttnn::operations::unary::UnaryOpType;
 using ttnn::operations::unary::UnaryWithParam;
 
-// this type of access pattern cannot be copied.
+// This type of access pattern cannot be copied.
 // Treat it as a one off patch to restore functionality that
 // was adjusted to fix one P0 causing another P0.
 // TODO: Proper fix will be implemented in Issue #32205
