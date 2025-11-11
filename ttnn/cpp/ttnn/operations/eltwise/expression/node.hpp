@@ -4,13 +4,13 @@
 
 #pragma once
 
-#include "ttnn/operations/eltwise/lazy/operation.hpp"
-#include "ttnn/operations/eltwise/lazy/param.hpp"
+#include "ttnn/operations/eltwise/expression/operation.hpp"
+#include "ttnn/operations/eltwise/expression/param.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 #include <variant>
 
-namespace ttnn::operations::lazy {
+namespace ttnn::operations::expression {
 
 struct FunctionNode {
     Operation operation;
@@ -20,4 +20,4 @@ struct FunctionNode {
 
 using Node = std::variant<Tensor, FunctionNode>;
 
-}  // namespace ttnn::operations::lazy
+}  // namespace ttnn::operations::expression

@@ -6,7 +6,7 @@
 
 #include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
-#include "ttnn/operations/eltwise/lazy/expression.hpp"
+#include "ttnn/operations/eltwise/expression/expression.hpp"
 
 namespace ttnn {
 namespace operations::materialize {
@@ -62,7 +62,7 @@ struct MaterializeDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
     // TODO allow output tensor/dtype/memory_config
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(lazy::FunctionView expression);
+    static std::tuple<operation_attributes_t, tensor_args_t> invoke(expression::FunctionView expression);
 };
 
 }  // namespace operations::materialize

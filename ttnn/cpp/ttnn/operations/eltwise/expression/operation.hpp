@@ -8,7 +8,7 @@
 
 #include <variant>
 
-namespace ttnn::operations::lazy {
+namespace ttnn::operations::expression {
 
 // arity is based on number of tensor arguments
 // different types should be used to distinguish number of scalar parameters
@@ -57,4 +57,4 @@ using Operation = std::variant<Unary, UnaryWithParam, Binary, Ternary>;
 template <typename T>
 using Arguments = ttsl::SmallVector<T, 3>;
 
-}  // namespace ttnn::operations::lazy
+}  // namespace ttnn::operations::expression

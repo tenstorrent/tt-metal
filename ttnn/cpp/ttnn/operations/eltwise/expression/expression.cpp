@@ -3,12 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_stl/overloaded.hpp"
-#include "ttnn/operations/eltwise/lazy/expression.hpp"
+#include "ttnn/operations/eltwise/expression/expression.hpp"
 
 #include <enchantum/enchantum.hpp>
 #include <fmt/ranges.h>
 
-namespace ttnn::operations::lazy {
+namespace ttnn::operations::expression {
 
 template <typename T>
 BasicExpressionView<T>::BasicExpressionView(std::span<const Node> nodes, bool is_root) noexcept :
@@ -485,15 +485,15 @@ std::string function_name(DataType dtype, Unary operation) {
     using enum Unary;
     switch (operation) {
         case RECIP: return "recip";
-        case NEGATIVE: return lazy::function_name_i32(dtype, "negative");
+        case NEGATIVE: return expression::function_name_i32(dtype, "negative");
         case EXP: return "exp";
-        case EQZ: return lazy::function_name_i32_u16_u32(dtype, "eqz");
-        case GEZ: return lazy::function_name_i32(dtype, "gez");
-        case GTZ: return lazy::function_name_i32(dtype, "gtz");
-        case LEZ: return lazy::function_name_i32(dtype, "lez");
-        case LTZ: return lazy::function_name_i32(dtype, "ltz");
-        case NEZ: return lazy::function_name_i32_u16_u32(dtype, "nez");
-        case LOGICAL_NOT: return lazy::function_name_i32_u16_u32(dtype, "logical_not");
+        case EQZ: return expression::function_name_i32_u16_u32(dtype, "eqz");
+        case GEZ: return expression::function_name_i32(dtype, "gez");
+        case GTZ: return expression::function_name_i32(dtype, "gtz");
+        case LEZ: return expression::function_name_i32(dtype, "lez");
+        case LTZ: return expression::function_name_i32(dtype, "ltz");
+        case NEZ: return expression::function_name_i32_u16_u32(dtype, "nez");
+        case LOGICAL_NOT: return expression::function_name_i32_u16_u32(dtype, "logical_not");
         case ATAN: return "atan";
     }
 }
@@ -501,7 +501,7 @@ std::string function_name(DataType dtype, Unary operation) {
 std::string function_name(DataType dtype, UnaryWithParam operation) {
     using enum UnaryWithParam;
     switch (operation) {
-        case ADD: return lazy::function_name_i32(dtype, "add_unary");
+        case ADD: return expression::function_name_i32(dtype, "add_unary");
         case SUB: return "sub_unary";
         case RSUB: return "rsub_unary";
         case MUL: return "mul_unary";
@@ -525,7 +525,7 @@ std::string function_name(DataType dtype, Binary operation) {
 std::string function_name(DataType dtype, Ternary operation) {
     using enum Ternary;
     switch (operation) {
-        case WHERE: return lazy::function_name_f32_i32(dtype, "where");
+        case WHERE: return expression::function_name_f32_i32(dtype, "where");
     }
 }
 
@@ -535,9 +535,14 @@ void format_to_kernel_string(
         ttsl::overloaded{
             [&](UnaryWithParam alternative) {
                 fmt::format_to(
-                    out, "::views::{}(get_arg_val<uint32_t>({}))", lazy::function_name(dtype, alternative), rt_offset);
+                    out,
+                    "::views::{}(get_arg_val<uint32_t>({}))",
+                    expression::function_name(dtype, alternative),
+                    rt_offset);
             },
-            [&](auto alternative) { fmt::format_to(out, "::views::{}()", lazy::function_name(dtype, alternative)); }},
+            [&](auto alternative) {
+                fmt::format_to(out, "::views::{}()", expression::function_name(dtype, alternative));
+            }},
         operation);
 }
 
@@ -550,7 +555,7 @@ void format_to_kernel_string(std::back_insert_iterator<std::string> out, Functio
         fmt::join(function.arguments() | std::views::transform(to_cb_index), ","),
         to_cb_index(function));
     // n_tiles precedes runtime arguments in expression tree
-    lazy::format_to_kernel_string(out, function.dtype(), function.operation(), function.rt_offset() + 1);
+    expression::format_to_kernel_string(out, function.dtype(), function.operation(), function.rt_offset() + 1);
     *out++ = ')';
 }
 
@@ -573,7 +578,7 @@ std::optional<Function> defer(Ternary operation, ExpressionView first, Expressio
 std::string to_compute_kernel_string(FunctionView expression) {
     std::string result;
 
-    lazy::traverse(
+    expression::traverse(
         ttsl::overloaded{
             [](const ttnn::Tensor&) {},
             [&](FunctionView function) {
@@ -585,14 +590,15 @@ std::string to_compute_kernel_string(FunctionView expression) {
                         expression.circular_buffers());
                     fmt::format_to(
                         std::back_inserter(result),
-                        "View::init_tiles(::views::init_sfpu<c_0,{}>());",
+                        "View::init_tiles(::views::init_sfpu<{},{}>());",
+                        enchantum::to_string(function.arguments().front().cb_index()),
                         enchantum::to_string(expression.cb_index()));
                     result.append("View::compute_tiles<num_tiles_per_cycle>(n_tiles,");
                 } else {
                     result.push_back(',');
                 }
 
-                lazy::format_to_kernel_string(std::back_inserter(result), function);
+                expression::format_to_kernel_string(std::back_inserter(result), function);
             }},
         expression);
 
@@ -606,7 +612,7 @@ void format_to_debug_string(std::back_insert_iterator<std::string> out, Function
     constexpr auto to_lower = [](unsigned char ch) -> char { return std::tolower(ch); };
     constexpr auto arg_to_string = [](ExpressionView expression) {
         std::string result;
-        lazy::format_to_debug_string(std::back_inserter(result), expression);
+        expression::format_to_debug_string(std::back_inserter(result), expression);
         return result;
     };
     constexpr auto param_to_string = [](Param param) {
@@ -625,7 +631,7 @@ void format_to_debug_string(std::back_insert_iterator<std::string> out, Function
 
 void format_to_debug_string(std::back_insert_iterator<std::string> out, ExpressionView expression) {
     if (auto function = expression.function()) {
-        lazy::format_to_debug_string(out, *function);
+        expression::format_to_debug_string(out, *function);
         return;
     }
 
@@ -634,8 +640,8 @@ void format_to_debug_string(std::back_insert_iterator<std::string> out, Expressi
 
 std::string to_debug_string(FunctionView expression) {
     std::string result;
-    lazy::format_to_debug_string(std::back_inserter(result), expression);
+    expression::format_to_debug_string(std::back_inserter(result), expression);
     return result;
 }
 
-}  // namespace ttnn::operations::lazy
+}  // namespace ttnn::operations::expression

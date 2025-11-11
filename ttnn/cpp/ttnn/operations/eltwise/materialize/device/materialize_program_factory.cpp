@@ -13,6 +13,16 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 namespace metal = tt::tt_metal;
 namespace materialize = ttnn::operations::materialize;
 
+std::tuple<uint32_t, metal::CoreRangeSet, metal::CoreRangeSet, metal::CoreRangeSet, uint32_t, uint32_t>
+split_work_to_cores_for_materialize(const metal::CoreRangeSet& core_grid, const uint32_t units_to_divide) {
+    if (const auto bounding_box = core_grid.bounding_box();
+        bounding_box.size() == core_grid.num_cores() and bounding_box.start_coord == metal::CoreCoord(0, 0)) {
+        return metal::split_work_to_cores(bounding_box.end_coord, units_to_divide);
+    }
+
+    return metal::split_work_to_cores(core_grid, units_to_divide);
+}
+
 template <typename F>
 void set_or_update_runtime_arguments(
     metal::Program& program,
@@ -24,7 +34,7 @@ void set_or_update_runtime_arguments(
     const auto num_tiles = output_tensor.physical_volume() / output_tensor.tensor_spec().tile().get_tile_hw();
     const auto
         [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-            tt::tt_metal::split_work_to_cores(operation_attributes.worker_grid, num_tiles);
+            split_work_to_cores_for_materialize(operation_attributes.worker_grid, num_tiles);
 
     const auto set_runtime_args_for =
         [&](const CoreRangeSet& group, uint32_t num_tiles_per_core_group, uint32_t group_start_id = 0) {
@@ -33,8 +43,8 @@ void set_or_update_runtime_arguments(
                 num_tiles_per_core_group, group_start_id, output_tensor.buffer()->address()};
             ttsl::SmallVector<std::uint32_t> compute_runtime_args{num_tiles_per_core_group};
 
-            for (const auto& tensor : tensor_args.input_tensors) {
-                reader_runtime_args.push_back(tensor.buffer()->address());
+            for (const auto index : operation_attributes.inputs | std::views::values) {
+                reader_runtime_args.push_back(tensor_args.input_tensors[index].buffer()->address());
             }
 
             const std::span params = operation_attributes.params;
@@ -150,9 +160,10 @@ MaterializeDeviceOperation::ProgramFactory::cached_program_t MaterializeDeviceOp
         operation_attributes,
         tensor_args,
         output_tensor,
-        [](Program& program, metal::KernelHandle kernel_id, CoreCoord core, std::span<const std::uint32_t> args) {
-            metal::SetRuntimeArgs(program, kernel_id, core, args);
-        });
+        [](metal::Program& program,
+           metal::KernelHandle kernel_id,
+           metal::CoreCoord core,
+           std::span<const std::uint32_t> args) { metal::SetRuntimeArgs(program, kernel_id, core, args); });
 
     return {std::move(program), std::move(shared_variables)};
 }
@@ -170,7 +181,10 @@ void MaterializeDeviceOperation::ProgramFactory::override_runtime_arguments(
         operation_attributes,
         tensor_args,
         output_tensor,
-        [](Program& program, metal::KernelHandle kernel_id, CoreCoord core, std::span<const std::uint32_t> args) {
+        [](metal::Program& program,
+           metal::KernelHandle kernel_id,
+           metal::CoreCoord core,
+           std::span<const std::uint32_t> args) {
             auto& all_args = GetRuntimeArgs(program, kernel_id);
             auto& core_args = all_args.at(core.x).at(core.y);
             std::copy(args.begin(), args.end(), core_args.data());

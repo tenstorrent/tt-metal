@@ -6,7 +6,7 @@
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
-#include "ttnn/operations/eltwise/lazy/lazy.hpp"
+#include "ttnn/operations/eltwise/expression/operations.hpp"
 #include "ttnn/operations/eltwise/materialize/device/materialize_device_operation.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary_composite.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
@@ -21,7 +21,7 @@ TEST_F(TTNNFixtureWithDevice, TestMaterializeReciprocal) {
     auto device_input_tensor = input_tensor.to_device(this->device_);
     auto golden = ttnn::reciprocal(device_input_tensor).cpu();
 
-    auto expression = lazy::reciprocal(device_input_tensor);
+    auto expression = expression::reciprocal(device_input_tensor);
     auto device_output_tensor = ttnn::prim::materialize(expression);
     auto output_tensor = device_output_tensor.cpu();
     auto rtol = 0.01f;
@@ -38,7 +38,7 @@ TEST_F(TTNNFixtureWithDevice, TestMaterializeMul) {
     auto device_input_tensor_b = input_tensor_b.to_device(this->device_);
     auto golden = ttnn::multiply(device_input_tensor_a, device_input_tensor_b).cpu();
 
-    auto expression = lazy::mul(device_input_tensor_a, device_input_tensor_b);
+    auto expression = expression::mul(device_input_tensor_a, device_input_tensor_b);
     auto device_output_tensor = ttnn::prim::materialize(expression);
     auto output_tensor = device_output_tensor.cpu();
     auto allclose = ttnn::allclose<bfloat16>(golden, output_tensor);
@@ -53,7 +53,7 @@ TEST_F(TTNNFixtureWithDevice, TestMaterializeAtan2) {
     auto device_input_tensor_b = input_tensor_b.to_device(this->device_);
     auto golden = ttnn::atan2(device_input_tensor_a, device_input_tensor_b).cpu();
 
-    auto expression = lazy::atan2(device_input_tensor_a, device_input_tensor_b);
+    auto expression = expression::atan2(device_input_tensor_a, device_input_tensor_b);
     auto device_output_tensor = ttnn::prim::materialize(expression);
     auto output_tensor = device_output_tensor.cpu();
     auto rtol = 0.f;
@@ -73,12 +73,13 @@ TEST_F(TTNNFixtureWithDevice, TestMaterializeAddCMul) {
     auto device_input_tensor_c = input_tensor_c.to_device(this->device_);
     auto golden = ttnn::addcmul(device_input_tensor_a, device_input_tensor_b, device_input_tensor_c, value).cpu();
 
-    constexpr auto lazy_addcmul = [](const ttnn::Tensor& a, const ttnn::Tensor& b, const ttnn::Tensor& c, float value) {
-        auto mul = lazy::mul(b, c);
-        auto factor = lazy::mul(value, mul);
-        return lazy::add(a, factor);
-    };
-    auto expression = lazy_addcmul(device_input_tensor_a, device_input_tensor_b, device_input_tensor_c, value);
+    constexpr auto addcmul_expression =
+        [](const ttnn::Tensor& a, const ttnn::Tensor& b, const ttnn::Tensor& c, float value) {
+            auto mul = expression::mul(b, c);
+            auto factor = expression::mul(value, mul);
+            return expression::add(a, factor);
+        };
+    auto expression = addcmul_expression(device_input_tensor_a, device_input_tensor_b, device_input_tensor_c, value);
     auto device_output_tensor = ttnn::prim::materialize(expression);
     auto output_tensor = device_output_tensor.cpu();
     auto rtol = 0.04f;
@@ -95,11 +96,11 @@ TEST_F(TTNNFixtureWithDevice, TestMaterializeThreshold) {
     auto device_input_tensor = input_tensor.to_device(this->device_);
     auto golden = ttnn::threshold(device_input_tensor, threshold, value).cpu();
 
-    constexpr auto lazy_threshold = [](const ttnn::Tensor& input, auto threshold, auto value) {
-        auto cond = lazy::gt(input, threshold);
-        return lazy::where(cond, input, value);
+    constexpr auto threshold_expression = [](const ttnn::Tensor& input, auto threshold, auto value) {
+        auto cond = expression::gt(input, threshold);
+        return expression::where(cond, input, value);
     };
-    auto expression = lazy_threshold(device_input_tensor, threshold, value);
+    auto expression = threshold_expression(device_input_tensor, threshold, value);
     auto device_output_tensor = ttnn::prim::materialize(expression);
     auto output_tensor = device_output_tensor.cpu();
     auto allclose = ttnn::allclose<bfloat16>(golden, output_tensor);

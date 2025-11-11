@@ -2,8 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-# ruff: noqa: F401
-from ttnn._ttnn.operations.lazy import (
+from ttnn._ttnn.operations.experimental.expression import (
     Arguments,
     Binary,
     Expression,

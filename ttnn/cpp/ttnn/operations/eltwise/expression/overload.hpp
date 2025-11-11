@@ -4,15 +4,15 @@
 
 #pragma once
 
-#include "ttnn/operations/eltwise/lazy/expression.hpp"
+#include "ttnn/operations/eltwise/expression/expression.hpp"
 
 #include <boost/mp11.hpp>
 
-namespace ttnn::operations::lazy {
+namespace ttnn::operations::expression {
 
 template <std::constructible_from<Expression>>
 Expression convert_to(std::same_as<const Tensor&> auto tensor) {
-    return lazy::defer(tensor).value();
+    return expression::defer(tensor).value();
 }
 
 // additional conversion overloads go here
@@ -28,7 +28,7 @@ struct Overload;
 template <typename Derived, template <typename...> typename List, typename... To, typename... From>
 struct Overload<Derived, List<To...>, List<From...>> {
     [[nodiscard]] auto operator()(From... from) const -> decltype(auto) {
-        return static_cast<const Derived&>(*this)(lazy::convert_to<To, From>(std::forward<From>(from))...);
+        return static_cast<const Derived&>(*this)(expression::convert_to<To, From>(std::forward<From>(from))...);
     }
 };
 
@@ -85,4 +85,4 @@ struct OverloadsFor : Overloads<
                           mp::mp_list<To...>,
                           mp::mp_rest<mp::mp_product<mp::mp_list, mp_find_from<To, mp_convert_map>...>>> {};
 
-}  // namespace ttnn::operations::lazy
+}  // namespace ttnn::operations::expression

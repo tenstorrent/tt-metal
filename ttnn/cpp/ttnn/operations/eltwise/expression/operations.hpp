@@ -4,10 +4,10 @@
 
 #pragma once
 
-#include "ttnn/operations/eltwise/lazy/operation.hpp"
-#include "ttnn/operations/eltwise/lazy/overload.hpp"
+#include "ttnn/operations/eltwise/expression/operation.hpp"
+#include "ttnn/operations/eltwise/expression/overload.hpp"
 
-namespace ttnn::operations::lazy {
+namespace ttnn::operations::expression {
 
 struct UnaryFn : OverloadsFor<UnaryFn, ExpressionView> {
     Unary operation;
@@ -144,12 +144,12 @@ inline constexpr UnaryFn logical_not{.operation = Unary::LOGICAL_NOT};
 
 inline constexpr UnaryFn atan{.operation = Unary::ATAN};
 
-inline constexpr CompareFn eq{.operation = lazy::eqz};
-inline constexpr CompareFn ge{.operation = lazy::gez};
-inline constexpr CompareFn gt{.operation = lazy::gtz};
-inline constexpr CompareFn le{.operation = lazy::lez};
-inline constexpr CompareFn lt{.operation = lazy::ltz};
-inline constexpr CompareFn ne{.operation = lazy::nez};
+inline constexpr CompareFn eq{.operation = expression::eqz};
+inline constexpr CompareFn ge{.operation = expression::gez};
+inline constexpr CompareFn gt{.operation = expression::gtz};
+inline constexpr CompareFn le{.operation = expression::lez};
+inline constexpr CompareFn lt{.operation = expression::ltz};
+inline constexpr CompareFn ne{.operation = expression::nez};
 
 inline constexpr OverloadedBinaryFn add{
     UnaryWithParamFn{.operation = UnaryWithParam::ADD},
@@ -180,9 +180,9 @@ inline constexpr DivFn div{
     BinaryFn{.operation = Binary::DIV},
 };
 
-inline constexpr LogicalBinaryFn logical_and{.operation = lazy::mul};
-inline constexpr LogicalBinaryFn logical_or{.operation = lazy::add};
-inline constexpr LogicalBinaryFn logical_xor{.operation = lazy::sub};
+inline constexpr LogicalBinaryFn logical_and{.operation = expression::mul};
+inline constexpr LogicalBinaryFn logical_or{.operation = expression::add};
+inline constexpr LogicalBinaryFn logical_xor{.operation = expression::sub};
 
 inline constexpr WhereFn where{
     TernaryFn{.operation = Ternary::WHERE},
@@ -190,4 +190,4 @@ inline constexpr WhereFn where{
 
 inline constexpr Atan2Fn atan2{};
 
-}  // namespace ttnn::operations::lazy
+}  // namespace ttnn::operations::expression

@@ -4,9 +4,9 @@
 
 #pragma once
 
-#include "ttnn/operations/eltwise/lazy/node.hpp"
-#include "ttnn/operations/eltwise/lazy/operation.hpp"
-#include "ttnn/operations/eltwise/lazy/param.hpp"
+#include "ttnn/operations/eltwise/expression/node.hpp"
+#include "ttnn/operations/eltwise/expression/operation.hpp"
+#include "ttnn/operations/eltwise/expression/param.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
@@ -14,7 +14,7 @@
 #include <variant>
 #include <vector>
 
-namespace ttnn::operations::lazy {
+namespace ttnn::operations::expression {
 
 template <typename>
 class BasicExpressionView;
@@ -275,4 +275,4 @@ std::string to_compute_kernel_string(FunctionView expression);
 
 std::string to_debug_string(FunctionView expression);
 
-}  // namespace ttnn::operations::lazy
+}  // namespace ttnn::operations::expression

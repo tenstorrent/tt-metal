@@ -8,10 +8,10 @@
 
 #include <variant>
 
-namespace ttnn::operations::lazy {
+namespace ttnn::operations::expression {
 
 using Param = std::variant<float, std::int32_t, std::uint32_t>;
 using Params = ttsl::SmallVector<Param, 1>;
 using ParamsView = std::span<const Param>;
 
-}  // namespace ttnn::operations::lazy
+}  // namespace ttnn::operations::expression

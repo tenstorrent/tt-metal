@@ -74,13 +74,13 @@ target_link_libraries(
         TTNN::CPP
 )
 
-add_library(unit_tests_ttnn_lazy OBJECT)
-add_library(TTNN::Test::Lazy ALIAS unit_tests_ttnn_lazy)
-TT_ENABLE_UNITY_BUILD(unit_tests_ttnn_lazy)
-target_sources(unit_tests_ttnn_lazy PRIVATE test_materialize.cpp)
-target_include_directories(unit_tests_ttnn_lazy PRIVATE ${PROJECT_SOURCE_DIR}/tests)
+add_library(unit_tests_ttnn_eltwise_expression OBJECT)
+add_library(TTNN::Test::Eltwise::Expression ALIAS unit_tests_ttnn_eltwise_expression)
+TT_ENABLE_UNITY_BUILD(unit_tests_ttnn_eltwise_expression)
+target_sources(unit_tests_ttnn_eltwise_expression PRIVATE test_materialize.cpp)
+target_include_directories(unit_tests_ttnn_eltwise_expression PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 target_link_libraries(
-    unit_tests_ttnn_lazy
+    unit_tests_ttnn_eltwise_expression
     PRIVATE
         test_common_libs
         TTNN::CPP
@@ -92,7 +92,7 @@ target_link_libraries(
     PRIVATE
         TTNN::Test::Smoke
         TTNN::Test::Basic
-        TTNN::Test::Lazy
+        TTNN::Test::Eltwise::Expression
 )
 
 # unit_tests_ttnn_ccl

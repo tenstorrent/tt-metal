@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "lazy_pybind.hpp"
-#include "lazy.hpp"
+#include "expression_pybind.hpp"
+#include "operations.hpp"
 
 #include <ttnn-pybind/export_enum.hpp>
 #include <tt_stl/type_name.hpp>
@@ -12,9 +12,9 @@
 #include <pybind11/operators.h>
 #include <pybind11/stl.h>
 
-PYBIND11_MAKE_OPAQUE(ttnn::operations::lazy::Arguments<ttnn::operations::lazy::ExpressionView>);
+PYBIND11_MAKE_OPAQUE(ttnn::operations::expression::Arguments<ttnn::operations::expression::ExpressionView>);
 
-namespace ttnn::operations::lazy {
+namespace ttnn::operations::expression {
 
 template <typename T>
 void bind_iterable(py::handle scope, const std::string& name) {
@@ -207,56 +207,56 @@ void py_module(py::module& module) {
         def_rbinary(function, name, operation);
     };
 
-    def_all_binary("__add__", lazy::add);
-    def_all_rbinary("__radd__", lazy::add);
+    def_all_binary("__add__", expression::add);
+    def_all_rbinary("__radd__", expression::add);
 
-    def_all_binary("__sub__", lazy::sub);
+    def_all_binary("__sub__", expression::sub);
 
-    def_all_binary("__mul__", lazy::mul);
-    def_all_rbinary("__rmul__", lazy::mul);
+    def_all_binary("__mul__", expression::mul);
+    def_all_rbinary("__rmul__", expression::mul);
 
-    def_all_binary("__truediv__", lazy::div);
+    def_all_binary("__truediv__", expression::div);
 
-    def_all_binary("__lt__", lazy::lt);
-    def_all_binary("__gt__", lazy::gt);
-    def_all_binary("__eq__", lazy::eq);
-    def_all_binary("__ne__", lazy::ne);
-    def_all_binary("__le__", lazy::le);
-    def_all_binary("__ge__", lazy::ge);
+    def_all_binary("__lt__", expression::lt);
+    def_all_binary("__gt__", expression::gt);
+    def_all_binary("__eq__", expression::eq);
+    def_all_binary("__ne__", expression::ne);
+    def_all_binary("__le__", expression::le);
+    def_all_binary("__ge__", expression::ge);
 
-    def_all_binary("__and__", lazy::logical_and);
-    def_all_rbinary("__rand__", lazy::logical_and);
+    def_all_binary("__and__", expression::logical_and);
+    def_all_rbinary("__rand__", expression::logical_and);
 
-    def_all_binary("__or__", lazy::logical_or);
-    def_all_rbinary("__ror__", lazy::logical_or);
+    def_all_binary("__or__", expression::logical_or);
+    def_all_rbinary("__ror__", expression::logical_or);
 
-    def_functor(module, "reciprocal", lazy::reciprocal);
-    def_functor(module, "neg", lazy::neg);
-    def_functor(module, "exp", lazy::exp);
-    def_functor(module, "eqz", lazy::eqz);
-    def_functor(module, "gez", lazy::gez);
-    def_functor(module, "gtz", lazy::gtz);
-    def_functor(module, "lez", lazy::lez);
-    def_functor(module, "ltz", lazy::ltz);
-    def_functor(module, "nez", lazy::nez);
-    def_functor(module, "logical_not", lazy::logical_not);
-    def_functor(module, "atan", lazy::atan);
-    def_functor(module, "eq", lazy::eq);
-    def_functor(module, "ge", lazy::ge);
-    def_functor(module, "gt", lazy::gt);
-    def_functor(module, "le", lazy::le);
-    def_functor(module, "lt", lazy::lt);
-    def_functor(module, "ne", lazy::ne);
-    def_functor(module, "add", lazy::add);
-    def_functor(module, "sub", lazy::sub);
-    def_functor(module, "mul", lazy::mul);
-    def_functor(module, "pow", lazy::pow);
-    def_functor(module, "div", lazy::div);
-    def_functor(module, "logical_and", lazy::logical_and);
-    def_functor(module, "logical_or", lazy::logical_or);
-    def_functor(module, "logical_xor", lazy::logical_xor);
-    def_functor(module, "where", lazy::where);
-    def_functor(module, "atan2", lazy::atan2);
+    def_functor(module, "reciprocal", expression::reciprocal);
+    def_functor(module, "neg", expression::neg);
+    def_functor(module, "exp", expression::exp);
+    def_functor(module, "eqz", expression::eqz);
+    def_functor(module, "gez", expression::gez);
+    def_functor(module, "gtz", expression::gtz);
+    def_functor(module, "lez", expression::lez);
+    def_functor(module, "ltz", expression::ltz);
+    def_functor(module, "nez", expression::nez);
+    def_functor(module, "logical_not", expression::logical_not);
+    def_functor(module, "atan", expression::atan);
+    def_functor(module, "eq", expression::eq);
+    def_functor(module, "ge", expression::ge);
+    def_functor(module, "gt", expression::gt);
+    def_functor(module, "le", expression::le);
+    def_functor(module, "lt", expression::lt);
+    def_functor(module, "ne", expression::ne);
+    def_functor(module, "add", expression::add);
+    def_functor(module, "sub", expression::sub);
+    def_functor(module, "mul", expression::mul);
+    def_functor(module, "pow", expression::pow);
+    def_functor(module, "div", expression::div);
+    def_functor(module, "logical_and", expression::logical_and);
+    def_functor(module, "logical_or", expression::logical_or);
+    def_functor(module, "logical_xor", expression::logical_xor);
+    def_functor(module, "where", expression::where);
+    def_functor(module, "atan2", expression::atan2);
 }
 
-}  // namespace ttnn::operations::lazy
+}  // namespace ttnn::operations::expression

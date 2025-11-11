@@ -22,7 +22,7 @@ void py_module(py::module& module) {
         materialize,
         "",
         ttnn::pybind_overload_t{
-            [](materialize_t self, lazy::FunctionView expression) { return self(expression); },
+            [](materialize_t self, expression::FunctionView expression) { return self(expression); },
             py::arg("expression"),
         });
 }

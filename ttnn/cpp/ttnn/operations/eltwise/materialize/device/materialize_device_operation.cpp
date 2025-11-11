@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "materialize_device_operation.hpp"
-#include "ttnn/operations/eltwise/lazy/expression.hpp"
+#include "ttnn/operations/eltwise/expression/expression.hpp"
 
 namespace ttnn::operations::materialize {
 
@@ -35,17 +35,17 @@ MaterializeDeviceOperation::tensor_return_value_t MaterializeDeviceOperation::cr
 }
 
 std::tuple<MaterializeDeviceOperation::operation_attributes_t, MaterializeDeviceOperation::tensor_args_t>
-MaterializeDeviceOperation::invoke(lazy::FunctionView expression) {
+MaterializeDeviceOperation::invoke(expression::FunctionView expression) {
     namespace metal = tt::tt_metal;
 
     std::map<tt::CBIndex, std::size_t> inputs;
     ttsl::SmallVector<std::uint32_t> params;
     std::vector<Tensor> input_tensors;
 
-    lazy::traverse(
+    expression::traverse(
         ttsl::overloaded{
             [](const Tensor&) {},
-            [&](lazy::FunctionView function) {
+            [&](expression::FunctionView function) {
                 for (const auto argument : function.arguments()) {
                     if (auto tensor = argument.tensor()) {
                         // input_tensors.size() before push_back() is index of current tensor
@@ -81,7 +81,7 @@ MaterializeDeviceOperation::invoke(lazy::FunctionView expression) {
 
     return {
         operation_attributes_t{
-            .compute_kernel_source = lazy::to_compute_kernel_string(expression),
+            .compute_kernel_source = expression::to_compute_kernel_string(expression),
             .circular_buffers = expression.circular_buffers(),
             .inputs = std::move(inputs),
             .output = expression.cb_index(),
