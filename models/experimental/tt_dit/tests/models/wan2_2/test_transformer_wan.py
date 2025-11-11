@@ -24,6 +24,7 @@ from diffusers import WanTransformer3DModel as TorchWanTransformer3DModel
 @pytest.mark.parametrize(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, device_params, topology",
     [
+        [(2, 2), (2, 2), 0, 1, 1, line_params, ttnn.Topology.Linear],
         [(2, 4), (2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear],
         [(2, 4), (2, 4), 1, 0, 1, line_params, ttnn.Topology.Linear],
         # WH (ring) on 4x8
@@ -41,6 +42,7 @@ from diffusers import WanTransformer3DModel as TorchWanTransformer3DModel
         # "2x1sp1tp0",
         # "2x2sp0tp1",
         # "2x2sp1tp0",
+        "2x2sp0tp1",
         "2x4sp0tp1",
         "2x4sp1tp0",
         "wh_4x8sp0tp1",
@@ -218,6 +220,8 @@ def test_wan_transformer_block(
         # [(2, 1), (2, 1), 1, 0, 1],
         # [(2, 2), (2, 2), 0, 1, 1],
         # [(2, 2), (2, 2), 1, 0, 1],
+        [(1, 4), (1, 4), 0, 1, 1, line_params, ttnn.Topology.Linear],
+        [(2, 2), (2, 2), 0, 1, 1, line_params, ttnn.Topology.Linear],
         [(2, 4), (2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear],
         [(2, 4), (2, 4), 1, 0, 1, line_params, ttnn.Topology.Linear],
         # WH (ring) on 4x8
@@ -235,6 +239,8 @@ def test_wan_transformer_block(
         # "2x1sp1tp0",
         # "2x2sp0tp1",
         # "2x2sp1tp0",
+        "1x4sp0tp1",
+        "2x2sp0tp1",
         "2x4sp0tp1",
         "2x4sp1tp0",
         "wh_4x8sp0tp1",
@@ -388,6 +394,7 @@ def test_wan_transformer_model(
 @pytest.mark.parametrize(
     "mesh_device, sp_axis, tp_axis, num_links, device_params, topology",
     [
+        [(1, 4), 0, 1, 1, line_params, ttnn.Topology.Linear],
         [(2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear],
         # WH (ring) on 4x8
         [(4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring],
@@ -395,6 +402,7 @@ def test_wan_transformer_model(
         [(4, 8), 1, 0, 2, line_params, ttnn.Topology.Linear],
     ],
     ids=[
+        "1x4sp0tp1",
         "2x4sp0tp1",
         "wh_4x8sp1tp0",
         "bh_4x8sp1tp0",
