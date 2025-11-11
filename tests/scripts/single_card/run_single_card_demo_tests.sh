@@ -88,7 +88,7 @@ run_segformer_func() {
 run_sentencebert_func() {
 
   #SentenceBERT Demo
-  pytest models/demos/sentence_bert/demo/demo.py
+  pytest models/demos/wormhole/sentence_bert/demo/demo.py
 
 }
 
@@ -134,7 +134,7 @@ run_llama3_func() {
 
 run_ufld_v2_func() {
   #ufld_v2 demo
-  pytest models/demos/ufld_v2/demo/demo.py
+  pytest models/demos/wormhole/ufld_v2/demo/demo.py
 }
 
 run_vgg_func() {
@@ -319,7 +319,7 @@ run_yolov8s_world_perf() {
 
 run_vanilla_unet_demo() {
  # vanilla_unet demo
- pytest models/demos/vanilla_unet/demo/demo.py
+ pytest models/demos/wormhole/vanilla_unet/demo/demo.py
 }
 
 run_swin_s_demo() {
@@ -369,7 +369,7 @@ run_yolov6l_demo() {
 
 run_vgg_unet_demo() {
  # vgg_unet demo
-  pytest models/demos/vgg_unet/demo/demo.py
+  pytest models/demos/wormhole/vgg_unet/demo/demo.py
 }
 
 
