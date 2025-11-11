@@ -29,7 +29,6 @@ bool is_tt_fabric_config(tt::tt_fabric::FabricConfig fabric_config) {
 }
 
 FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config) {
-    auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
     switch (fabric_config) {
         case tt::tt_fabric::FabricConfig::FABRIC_1D_RING:; return FabricType::TORUS_XY;
         case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X: return FabricType::TORUS_X;
