@@ -36,6 +36,8 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor& a, Tensor& outp
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
+    bool fp32_llk_acc = a.dtype() == DataType::FLOAT32;
+
     uint32_t num_tiles = a.physical_volume() / TILE_HW;
 
     auto width = a.padded_shape()[-1];
@@ -123,7 +125,10 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor& a, Tensor& outp
         program,
         "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/tilize.cpp",
         core,
-        tt::tt_metal::ComputeConfig{.compile_args = compute_args});
+        tt::tt_metal::ComputeConfig{
+            .fp32_dest_acc_en = fp32_llk_acc,
+            .compile_args = compute_args,
+        });
 
     tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_kernel_args);
 
@@ -162,6 +167,8 @@ operation::ProgramWithCallbacks tilize_multi_core_block(const Tensor& a, Tensor&
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
+
+    bool fp32_llk_acc = a.dtype() == DataType::FLOAT32;
 
     IDevice* device = a.device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();
@@ -304,21 +311,30 @@ operation::ProgramWithCallbacks tilize_multi_core_block(const Tensor& a, Tensor&
             program,
             "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_wh.cpp",
             core_range,
-            ComputeConfig{.compile_args = {single_block_size, single_block_size, third_dim}});
+            ComputeConfig{
+                .fp32_dest_acc_en = fp32_llk_acc,
+                .compile_args = {single_block_size, single_block_size, third_dim},
+            });
     }
     if (has_cliff_col && has_cliff_row) {
         CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_wh.cpp",
             cliff_col_row_core_range,
-            ComputeConfig{.compile_args = {single_block_size_cliff_col, single_block_size_cliff_row, third_dim}});
+            ComputeConfig{
+                .fp32_dest_acc_en = fp32_llk_acc,
+                .compile_args = {single_block_size_cliff_col, single_block_size_cliff_row, third_dim},
+            });
     }
     if (has_cliff_row) {
         CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_wh.cpp",
             cliff_row_core_range,
-            ComputeConfig{.compile_args = {single_block_size, single_block_size_cliff_row, third_dim}});
+            ComputeConfig{
+                .fp32_dest_acc_en = fp32_llk_acc,
+                .compile_args = {single_block_size, single_block_size_cliff_row, third_dim},
+            });
     }
 
     if (has_cliff_col) {
@@ -326,7 +342,10 @@ operation::ProgramWithCallbacks tilize_multi_core_block(const Tensor& a, Tensor&
             program,
             "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_wh.cpp",
             cliff_col_core_range,
-            ComputeConfig{.compile_args = {single_block_size_cliff_col, single_block_size, third_dim}});
+            ComputeConfig{
+                .fp32_dest_acc_en = fp32_llk_acc,
+                .compile_args = {single_block_size_cliff_col, single_block_size, third_dim},
+            });
     }
 
     // RUNTIME ARGS
@@ -427,6 +446,7 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, T
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
+    bool fp32_llk_acc = a.dtype() == DataType::FLOAT32;
 
     uint32_t num_tiles_per_row = output.padded_shape()[-1] / TILE_WIDTH;
 
@@ -509,14 +529,20 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, T
             program,
             "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/tilize.cpp",
             core_range,
-            ComputeConfig{.compile_args = compute_args});
+            ComputeConfig{
+                .fp32_dest_acc_en = fp32_llk_acc,
+                .compile_args = compute_args,
+            });
     }
     if (!core_range_cliff.empty()) {
         CreateKernel(
             program,
             "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/tilize.cpp",
             core_range_cliff,
-            ComputeConfig{.compile_args = compute_args_cliff});
+            ComputeConfig{
+                .fp32_dest_acc_en = fp32_llk_acc,
+                .compile_args = compute_args_cliff,
+            });
     }
 
     // 1D distribution of blocks across cores
@@ -615,6 +641,7 @@ operation::ProgramWithCallbacks tilize_multi_core_sharded(const Tensor& input, T
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
+    bool fp32_llk_acc = input.dtype() == DataType::FLOAT32;
 
     auto shard_spec = input.shard_spec().value();
     uint32_t num_tiles_per_shard = shard_spec.shape[0] * shard_spec.shape[1] / TILE_HW;
@@ -662,7 +689,10 @@ operation::ProgramWithCallbacks tilize_multi_core_sharded(const Tensor& input, T
         program,
         "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/tilize.cpp",
         all_cores,
-        tt::tt_metal::ComputeConfig{.compile_args = compute_args});
+        tt::tt_metal::ComputeConfig{
+            .fp32_dest_acc_en = fp32_llk_acc,
+            .compile_args = compute_args,
+        });
 
     tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, all_cores, {num_tiles_per_shard});
 

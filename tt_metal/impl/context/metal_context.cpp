@@ -195,10 +195,7 @@ void MetalContext::initialize(
     for (ChipId device_id : all_devices) {
         ClearNocData(device_id);
 
-        // TODO: as optimization, investigate removing all this call for already initialized devivces
-        if (!rtoptions_.get_skip_reset_cores_on_init()) {
-            reset_cores(device_id);
-        }
+        reset_cores(device_id);
 
         initialize_and_launch_firmware(device_id);
     }
