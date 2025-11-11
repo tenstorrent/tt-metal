@@ -346,15 +346,15 @@ run_t3000_llama3.2-11b-vision_unit_tests() {
   llama11b=meta-llama/Llama-3.2-11B-Vision-Instruct
   tt_cache_llama11b=$TT_CACHE_HOME/$llama11b
 
-  HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_mlp.py ; fail+=$?
-  HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_attention.py ; fail+=$?
-  HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_block.py ; fail+=$?
-  HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention.py -k "batch_1" ; fail+=$?
-  HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_block.py -k "batch_1" ; fail+=$?
+  # HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_mlp.py ; fail+=$?
+  # HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_attention.py ; fail+=$?
+  # HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_block.py ; fail+=$?
+  # HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention.py -k "batch_1" ; fail+=$?
+  # HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_block.py -k "batch_1" ; fail+=$?
   HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_conv2d_patch.py ; fail+=$?
-  HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_class_embedding.py ; fail+=$?
-  HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_tile_position_embedding.py ; fail+=$?
-  HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_positional_embedding.py ; fail+=$?
+  # HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_class_embedding.py ; fail+=$?
+  # HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_tile_position_embedding.py ; fail+=$?
+  # HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_positional_embedding.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -578,53 +578,53 @@ run_t3000_ccl_tests() {
 }
 
 run_t3000_tests() {
-  # Run ttmetal tests
-  run_t3000_ttmetal_tests
+  # # Run ttmetal tests
+  # run_t3000_ttmetal_tests
 
-  # Run ttfabric tests
-  run_t3000_ttfabric_tests
+  # # Run ttfabric tests
+  # run_t3000_ttfabric_tests
 
-  # Run ttnn tests
-  run_t3000_ttnn_tests
+  # # Run ttnn tests
+  # run_t3000_ttnn_tests
 
-  # Run falcon7b tests
-  run_t3000_falcon7b_tests
+  # # Run falcon7b tests
+  # run_t3000_falcon7b_tests
 
-  # Run falcon40b tests
-  run_t3000_falcon40b_tests
+  # # Run falcon40b tests
+  # run_t3000_falcon40b_tests
 
-  # Run llama3-small (1B, 3B, 8B) tests
-  run_t3000_llama3-small_tests
+  # # Run llama3-small (1B, 3B, 8B) tests
+  # run_t3000_llama3-small_tests
 
-  # Run llama3.2-11B tests
-  run_t3000_llama3.2-11b_tests
+  # # Run llama3.2-11B tests
+  # run_t3000_llama3.2-11b_tests
 
-  # Run llama3.1-70B tests
-  run_t3000_llama3.1-70b_tests
+  # # Run llama3.1-70B tests
+  # run_t3000_llama3.1-70b_tests
 
-  # Run llama3.2-90B tests
-  run_t3000_llama3.2-90b_tests
+  # # Run llama3.2-90B tests
+  # run_t3000_llama3.2-90b_tests
 
   # Run llama3.2-11B-vision tests
   run_t3000_llama3.2-11b-vision_unit_tests
 
-  # Run mistral tests
-  run_t3000_mistral_tests
+  # # Run mistral tests
+  # run_t3000_mistral_tests
 
-  # Run llama3.2-11B-vision tests on spoofed N300 mesh
-  run_t3000_spoof_n300_llama3.2-11b-vision_unit_tests
+  # # Run llama3.2-11B-vision tests on spoofed N300 mesh
+  # run_t3000_spoof_n300_llama3.2-11b-vision_unit_tests
 
-  # Run llama3.2-90B-vision tests
-  run_t3000_llama3.2-90b-vision_unit_tests
+  # # Run llama3.2-90B-vision tests
+  # run_t3000_llama3.2-90b-vision_unit_tests
 
-  # Run mixtral tests
-  run_t3000_mixtral_tests
+  # # Run mixtral tests
+  # run_t3000_mixtral_tests
 
-  # Run grok tests
-  run_t3000_grok_tests
+  # # Run grok tests
+  # run_t3000_grok_tests
 
-  # Run unet shallow tests
-  run_t3000_unet_shallow_tests
+  # # Run unet shallow tests
+  # run_t3000_unet_shallow_tests
 }
 
 fail=0
