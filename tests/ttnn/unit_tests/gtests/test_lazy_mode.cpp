@@ -50,8 +50,6 @@ protected:
         TTNNFixtureWithDevice::SetUp();
         // Enable lazy mode by setting environment variable
         setenv("TTNN_LAZY_MODE", "1", 1);
-        // TODO: old device infra doesn't work well with cache enabled for some reason
-        ttnn::disable_and_clear_program_cache(*device_);
     }
 
     void TearDown() override {

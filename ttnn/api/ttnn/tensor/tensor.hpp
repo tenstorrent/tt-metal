@@ -187,8 +187,15 @@ public:
 
     uint32_t element_size() const;
 
-    static constexpr auto attribute_names = std::forward_as_tuple("lazy_tensor_id");
-    auto attribute_values() const { return std::forward_as_tuple(lazy_tensor_->id()); }
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("tensor_spec", "buffer_spec", "storage_type", "device");
+    auto attribute_values() const {
+        return std::forward_as_tuple(
+            lazy_tensor_->tensor_spec(),
+            lazy_tensor_->buffer_spec(),
+            lazy_tensor_->storage_type(),
+            lazy_tensor_->device());
+    }
 
     // ttnn Tensor-only methods / constructors
     tt::tt_metal::metal_tensor::Tensor& get_materialized_tensor();

@@ -89,23 +89,10 @@ tt::tt_metal::metal_tensor::Tensor& LazyTensor::materialized_tensor() {
     return materialized_outputs_[materialized_output_idx_];
 }
 
+const LazyTensor::TensorMetadata::BufferSpec& LazyTensor::buffer_spec() const { return tensor_metadata_.buffer_spec_; }
 const TensorSpec& LazyTensor::tensor_spec() const { return tensor_metadata_.tensor_spec_.value(); }
 tt::tt_metal::StorageType LazyTensor::storage_type() const { return tensor_metadata_.storage_type_; }
 tt::tt_metal::distributed::MeshDevice* LazyTensor::device() const { return tensor_metadata_.device_; }
-uint32_t LazyTensor::buffer_alignment() const { return tensor_metadata_.buffer_metadata_.alignment_; }
-tt::tt_metal::DeviceAddr LazyTensor::buffer_page_size() const { return tensor_metadata_.buffer_metadata_.page_size_; }
-tt::tt_metal::DeviceAddr LazyTensor::buffer_aligned_page_size() const {
-    return tensor_metadata_.buffer_metadata_.aligned_page_size_;
-}
-tt::tt_metal::DeviceAddr LazyTensor::buffer_size() const { return tensor_metadata_.buffer_metadata_.size_; }
-tt::tt_metal::DeviceAddr LazyTensor::buffer_aligned_size() const {
-    return tensor_metadata_.buffer_metadata_.aligned_size_;
-}
-tt::tt_metal::BufferType LazyTensor::buffer_type() const { return tensor_metadata_.buffer_metadata_.buffer_type_; }
-tt::tt_metal::TensorMemoryLayout LazyTensor::buffer_layout() const {
-    return tensor_metadata_.buffer_metadata_.buffer_layout_;
-}
-bool LazyTensor::buffer_bottom_up() const { return tensor_metadata_.buffer_metadata_.bottom_up_; }
 
 const LazyTensor::LazyOperationPtr& LazyTensor::op() const { return op_; }
 LazyTensorState LazyTensor::state() const { return state_; }
@@ -152,7 +139,7 @@ LazyTensor::TensorMetadata::TensorMetadata(
     tt::tt_metal::distributed::MeshDevice* device,
     tt::tt_metal::StorageType storage_type) :
     tensor_spec_(tensor_spec), device_(device), storage_type_(storage_type) {
-    buffer_metadata_ = Buffer(tensor_spec, tensor_spec.memory_config());
+    buffer_spec_ = BufferSpec(tensor_spec, tensor_spec.memory_config());
 }
 
 LazyTensor::TensorMetadata::TensorMetadata(
@@ -174,11 +161,11 @@ LazyTensor::TensorMetadata::TensorMetadata(
         storage_type_ = tt::tt_metal::StorageType::DEVICE;
     }
 
-    buffer_metadata_ = Buffer(tensor_spec, tensor_spec.memory_config());
+    buffer_spec_ = BufferSpec(tensor_spec, tensor_spec.memory_config());
 }
 
 // ======================= LazyTensor::TensorMetadata::BufferMetadata =======================
-LazyTensor::TensorMetadata::Buffer::Buffer(
+LazyTensor::TensorMetadata::BufferSpec::BufferSpec(
     const tt::tt_metal::TensorSpec& tensor_spec, const tt::tt_metal::MemoryConfig& memory_config) :
     buffer_type_(memory_config.buffer_type()),
     buffer_layout_(memory_config.memory_layout()),
