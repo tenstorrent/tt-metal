@@ -81,7 +81,7 @@ def test_matmul(device):
 
     # Create width-sharded input B
     ttnn_b = ttnn.from_torch(
-        torch_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=b_width_sharded_mem_config
+        torch_b, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=b_width_sharded_mem_config
     )
 
     logger.info(f"Matmul params: in0_block_w={k_per_core_tiles}, per_core_M={m_tiles}, per_core_N=1")
