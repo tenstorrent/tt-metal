@@ -108,6 +108,7 @@ class YOLOv10PerformantRunner:
 
     def _validate(self, input_tensor, result_output_tensor):
         torch_output_tensor = self.runner_infra.torch_output_tensor
+        result_output_tensor = ttnn.to_torch(result_output_tensor, mesh_composer=self.mesh_composer)
         assert_with_pcc(torch_output_tensor, result_output_tensor, 0.99)
 
     def run(self, torch_input_tensor, check_pcc=False):

@@ -5,6 +5,7 @@
 #include <yaml-cpp/yaml.h>
 #include <algorithm>
 #include <set>
+#include <fstream>
 
 #include <umd/device/cluster.hpp>
 #include <umd/device/soc_descriptor.hpp>

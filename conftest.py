@@ -528,6 +528,7 @@ def bh_1d_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device
     fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
     reliability_mode = updated_device_params.pop("reliability_mode", None)
     set_fabric(fabric_config, reliability_mode, fabric_tensix_config)
+
     mesh_device = ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape(ttnn.get_num_devices(), 1),
         **updated_device_params,
