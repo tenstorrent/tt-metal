@@ -5,13 +5,6 @@
 import ttnn
 from models.demos.vgg_unet.runner.performant_runner_infra import create_test_infra
 
-try:
-    pass
-
-    use_signpost = True
-except ModuleNotFoundError:
-    use_signpost = False
-
 
 class VggUnetTrace2CQ:
     def __init__(self):
