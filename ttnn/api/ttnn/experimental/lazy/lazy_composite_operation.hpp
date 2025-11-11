@@ -21,7 +21,8 @@ struct LazyCompositeOperationInputs : public LazyOperationInputs {
             fn(tensor.lazy());
         }
     }
-    std::any inputs() const override { return input_tensors_; }
+    std::any get() const override { return input_tensors_; }
+
 private:
     std::vector<Tensor> input_tensors_;
 };
@@ -40,7 +41,7 @@ public:
         const LazyOperationInputs& inputs) override {
         // Use the standard device operation eager execution path
         // TODO: Remove this conversion once we have a proper metal tensor
-        auto input_tensors = std::any_cast<std::vector<Tensor>>(inputs.inputs());
+        auto input_tensors = std::any_cast<std::vector<Tensor>>(inputs.get());
         return convert_result_to_vector(operation_.invoke(input_tensors));
     }
 

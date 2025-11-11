@@ -13,7 +13,7 @@ namespace ttnn::experimental::lazy {
 // Interface for lazy operation inputs
 struct LazyOperationInputs {
     virtual void for_each(const std::function<void(const std::shared_ptr<LazyTensor>&)>& fn) const {}
-    virtual std::any inputs() const { return std::any(); }
+    virtual std::any get() const { return std::any(); }
     virtual ~LazyOperationInputs() = default;
 
     size_t size() const {

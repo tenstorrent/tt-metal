@@ -118,7 +118,8 @@ void UnaryOperationsFusionPass::run(const ttnn::Tensor& tensor) {
 
             // Get the input of the first operation in the chain (for graph dependency update)
             auto first_op_inputs = chain_tensors[0]->op_inputs();
-            auto first_op_tensor_args = std::any_cast<ttnn::operations::unary::UnaryDeviceOperation::tensor_args_t>(first_op_inputs->inputs());
+            auto first_op_tensor_args =
+                std::any_cast<ttnn::operations::unary::UnaryDeviceOperation::tensor_args_t>(first_op_inputs->get());
 
             // Create new attributes with merged op_chain
             auto merged_attributes = ttnn::operations::unary::operation_attributes_t{

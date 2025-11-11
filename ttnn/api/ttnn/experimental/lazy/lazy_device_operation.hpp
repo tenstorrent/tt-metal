@@ -21,7 +21,7 @@ public:
     void for_each(const std::function<void(const std::shared_ptr<LazyTensor>&)>& fn) const override {
         tt::stl::reflection::visit_object_of_type<Tensor>([&](const Tensor& t) { fn(t.lazy()); }, tensor_args_);
     }
-    std::any inputs() const override { return tensor_args_; }
+    std::any get() const override { return tensor_args_; }
 
 private:
     tensor_args_t tensor_args_;
@@ -60,7 +60,7 @@ public:
 
     std::vector<tt::tt_metal::metal_tensor::Tensor> invoke(const LazyOperationInputs& inputs) override {
         // Reconstruct tensor_args from input tensors using stored metadata
-        auto tensor_args = std::any_cast<tensor_args_t>(inputs.inputs());
+        auto tensor_args = std::any_cast<tensor_args_t>(inputs.get());
 
         // Use the standard device operation eager execution path
         auto result = ttnn::device_operation::detail::invoke<operation_t>(attributes_, tensor_args);
