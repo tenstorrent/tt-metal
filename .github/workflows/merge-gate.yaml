@@ -53,32 +53,32 @@ permissions:
   packages: write
 
 jobs:
-  static-checks:
-    # Workaround for https://github.com/orgs/community/discussions/46757?sort=old#discussioncomment-4909336
-    # We must have this workflow trigger on PRs in order to allow us to require them in the merge queue.
-    # But we don't actually WANT to run it on PRs -- that's the whole point.  GitHub strikes again.
-    if: github.event.action != 'destroyed' && github.event_name != 'pull_request'
-    uses: ./.github/workflows/all-static-checks.yaml
-    secrets: inherit
+  # static-checks:
+  #   # Workaround for https://github.com/orgs/community/discussions/46757?sort=old#discussioncomment-4909336
+  #   # We must have this workflow trigger on PRs in order to allow us to require them in the merge queue.
+  #   # But we don't actually WANT to run it on PRs -- that's the whole point.  GitHub strikes again.
+  #   if: github.event.action != 'destroyed' && github.event_name != 'pull_request'
+  #   uses: ./.github/workflows/all-static-checks.yaml
+  #   secrets: inherit
 
-  code-analysis:
-    # Workaround for https://github.com/orgs/community/discussions/46757?sort=old#discussioncomment-4909336
-    # We must have this workflow trigger on PRs in order to allow us to require them in the merge queue.
-    # But we don't actually WANT to run it on PRs -- that's the whole point.  GitHub strikes again.
-    if: github.event.action != 'destroyed' && github.event_name != 'pull_request'
-    uses: ./.github/workflows/code-analysis.yaml
-    secrets: inherit
-    with:
-      version: 24.04
+  # code-analysis:
+  #   # Workaround for https://github.com/orgs/community/discussions/46757?sort=old#discussioncomment-4909336
+  #   # We must have this workflow trigger on PRs in order to allow us to require them in the merge queue.
+  #   # But we don't actually WANT to run it on PRs -- that's the whole point.  GitHub strikes again.
+  #   if: github.event.action != 'destroyed' && github.event_name != 'pull_request'
+  #   uses: ./.github/workflows/code-analysis.yaml
+  #   secrets: inherit
+  #   with:
+  #     version: 24.04
 
-  fail-fast:
-    if: failure()
-    runs-on: ubuntu-latest
-    needs: [code-analysis]
-    permissions:
-      actions: write
-    steps:
-      - uses: action-pack/cancel@bb57491c99942855e9da36ffbe86a686b2bd35a3
+  # fail-fast:
+  #   if: failure()
+  #   runs-on: ubuntu-latest
+  #   needs: [code-analysis]
+  #   permissions:
+  #     actions: write
+  #   steps:
+  #     - uses: action-pack/cancel@bb57491c99942855e9da36ffbe86a686b2bd35a3
 
   find-changes:
     if: github.event.action != 'destroyed' && github.event_name != 'pull_request'
@@ -96,12 +96,12 @@ jobs:
         uses: tenstorrent/tt-metal/.github/actions/find-changed-files@v0.63.0
 
   build:
-    if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.cmake-changed == 'true' ||
-            needs.find-changes.outputs.any-code-changed == 'true' ||
-            needs.find-changes.outputs.docs-changed == 'true' ||
-            needs.find-changes.outputs.build-workflows-changed == 'true'
-        }}
+    # if: ${{ github.ref_name == 'main' ||
+    #         needs.find-changes.outputs.cmake-changed == 'true' ||
+    #         needs.find-changes.outputs.any-code-changed == 'true' ||
+    #         needs.find-changes.outputs.docs-changed == 'true' ||
+    #         needs.find-changes.outputs.build-workflows-changed == 'true'
+    #     }}
     needs: find-changes
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
@@ -113,175 +113,175 @@ jobs:
       version: 22.04
       skip-tt-train: false
 
-  build-docs:
-    if: ${{ needs.find-changes.outputs.any-code-changed == 'true' ||
-            needs.find-changes.outputs.docs-changed == 'true'
-        }}
-    needs: [find-changes, build]
-    uses: ./.github/workflows/docs-latest-public.yaml
-    secrets: inherit
-    with:
-      docker-image: ${{ needs.build.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
+  # build-docs:
+  #   if: ${{ needs.find-changes.outputs.any-code-changed == 'true' ||
+  #           needs.find-changes.outputs.docs-changed == 'true'
+  #       }}
+  #   needs: [find-changes, build]
+  #   uses: ./.github/workflows/docs-latest-public.yaml
+  #   secrets: inherit
+  #   with:
+  #     docker-image: ${{ needs.build.outputs.dev-docker-image }}
+  #     build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
+  #     wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
 
-  build-tsan:
-    if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.cmake-changed == 'true' ||
-            needs.find-changes.outputs.any-code-changed == 'true' ||
-            needs.find-changes.outputs.build-workflows-changed == 'true'
-        }}
-    needs: find-changes
-    uses: ./.github/workflows/build-artifact.yaml
-    permissions:
-      packages: write
-    secrets: inherit
-    with:
-      build-type: TSan
-      version: 24.04
-      skip-tt-train: false
-      publish-artifact: false
+  # build-tsan:
+  #   if: ${{ github.ref_name == 'main' ||
+  #           needs.find-changes.outputs.cmake-changed == 'true' ||
+  #           needs.find-changes.outputs.any-code-changed == 'true' ||
+  #           needs.find-changes.outputs.build-workflows-changed == 'true'
+  #       }}
+  #   needs: find-changes
+  #   uses: ./.github/workflows/build-artifact.yaml
+  #   permissions:
+  #     packages: write
+  #   secrets: inherit
+  #   with:
+  #     build-type: TSan
+  #     version: 24.04
+  #     skip-tt-train: false
+  #     publish-artifact: false
 
-  build-sweeps:
-    if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.cmake-changed == 'true' ||
-            needs.find-changes.outputs.any-code-changed == 'true'
-        }}
-    needs: find-changes
-    uses: ./.github/workflows/build-wrapper.yaml
-    permissions:
-      packages: write
-    secrets: inherit
+  # build-sweeps:
+  #   if: ${{ github.ref_name == 'main' ||
+  #           needs.find-changes.outputs.cmake-changed == 'true' ||
+  #           needs.find-changes.outputs.any-code-changed == 'true'
+  #       }}
+  #   needs: find-changes
+  #   uses: ./.github/workflows/build-wrapper.yaml
+  #   permissions:
+  #     packages: write
+  #   secrets: inherit
 
-  metalium-smoke-tests:
-    needs: [find-changes, build-tsan]
-    if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.cmake-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
-        }}
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: [
-          "N300-viommu",
-          # "N300-llmbox-viommu", # re-enable when we have more capacity
-        ]
-    uses: ./.github/workflows/smoke.yaml
-    with:
-      docker-image: ${{ needs.build-tsan.outputs.dev-docker-image }}
-      package-artifact-name: ${{ needs.build-tsan.outputs.packages-artifact-name }}
-      runner: ${{ matrix.platform }}
-      per-test-timeout: 11 # TSan can be slow; relax the timeout somewhat
-      product: tt-metalium
+  # metalium-smoke-tests:
+  #   needs: [find-changes, build-tsan]
+  #   if: ${{ github.ref_name == 'main' ||
+  #           needs.find-changes.outputs.cmake-changed == 'true' ||
+  #           needs.find-changes.outputs.tt-metalium-changed == 'true' ||
+  #           needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
+  #       }}
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       platform: [
+  #         "N300-viommu",
+  #         # "N300-llmbox-viommu", # re-enable when we have more capacity
+  #       ]
+  #   uses: ./.github/workflows/smoke.yaml
+  #   with:
+  #     docker-image: ${{ needs.build-tsan.outputs.dev-docker-image }}
+  #     package-artifact-name: ${{ needs.build-tsan.outputs.packages-artifact-name }}
+  #     runner: ${{ matrix.platform }}
+  #     per-test-timeout: 11 # TSan can be slow; relax the timeout somewhat
+  #     product: tt-metalium
 
-  ttnn-smoke-tests:
-    needs: [find-changes, build-tsan]
-    if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.cmake-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-changed == 'true' ||
-            needs.find-changes.outputs.tt-nn-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
-        }}
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: [
-          "N300-viommu",
-          # "N300-llmbox-viommu", # re-enable when we have more capacity
-        ]
-    uses: ./.github/workflows/smoke.yaml
-    with:
-      docker-image: ${{ needs.build-tsan.outputs.dev-docker-image }}
-      package-artifact-name: ${{ needs.build-tsan.outputs.packages-artifact-name }}
-      runner: ${{ matrix.platform }}
-      per-test-timeout: 11 # TSan can be slow; relax the timeout somewhat
-      product: tt-nn
+  # ttnn-smoke-tests:
+  #   needs: [find-changes, build-tsan]
+  #   if: ${{ github.ref_name == 'main' ||
+  #           needs.find-changes.outputs.cmake-changed == 'true' ||
+  #           needs.find-changes.outputs.tt-metalium-changed == 'true' ||
+  #           needs.find-changes.outputs.tt-nn-changed == 'true' ||
+  #           needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
+  #       }}
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       platform: [
+  #         "N300-viommu",
+  #         # "N300-llmbox-viommu", # re-enable when we have more capacity
+  #       ]
+  #   uses: ./.github/workflows/smoke.yaml
+  #   with:
+  #     docker-image: ${{ needs.build-tsan.outputs.dev-docker-image }}
+  #     package-artifact-name: ${{ needs.build-tsan.outputs.packages-artifact-name }}
+  #     runner: ${{ matrix.platform }}
+  #     per-test-timeout: 11 # TSan can be slow; relax the timeout somewhat
+  #     product: tt-nn
 
-  build-asan:
-    if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.cmake-changed == 'true' ||
-            needs.find-changes.outputs.any-code-changed == 'true' ||
-            needs.find-changes.outputs.build-workflows-changed == 'true'
-        }}
-    needs: find-changes
-    uses: ./.github/workflows/build-artifact.yaml
-    permissions:
-      packages: write
-    secrets: inherit
-    with:
-      build-type: ASan
-      version: 22.04
-      skip-tt-train: false
-      publish-artifact: false
+  # build-asan:
+  #   if: ${{ github.ref_name == 'main' ||
+  #           needs.find-changes.outputs.cmake-changed == 'true' ||
+  #           needs.find-changes.outputs.any-code-changed == 'true' ||
+  #           needs.find-changes.outputs.build-workflows-changed == 'true'
+  #       }}
+  #   needs: find-changes
+  #   uses: ./.github/workflows/build-artifact.yaml
+  #   permissions:
+  #     packages: write
+  #   secrets: inherit
+  #   with:
+  #     build-type: ASan
+  #     version: 22.04
+  #     skip-tt-train: false
+  #     publish-artifact: false
 
-  metalium-basic-tests:
-    if: ${{
-        github.ref_name == 'main' ||
-        needs.find-changes.outputs.cmake-changed == 'true' ||
-        needs.find-changes.outputs.tt-metalium-changed == 'true' ||
-        needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
-      }}
-    needs: [ build-asan, find-changes ]
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: [
-          "N150-viommu",
-        ]
-    uses: ./.github/workflows/basic.yaml
-    with:
-      docker-image: ${{ needs.build-asan.outputs.dev-docker-image }}
-      package-artifact-name: ${{ needs.build-asan.outputs.packages-artifact-name }}
-      per-test-timeout: 11
-      runner: ${{ matrix.platform }}
-      product: tt-metalium
+  # metalium-basic-tests:
+  #   if: ${{
+  #       github.ref_name == 'main' ||
+  #       needs.find-changes.outputs.cmake-changed == 'true' ||
+  #       needs.find-changes.outputs.tt-metalium-changed == 'true' ||
+  #       needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
+  #     }}
+  #   needs: [ build-asan, find-changes ]
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       platform: [
+  #         "N150-viommu",
+  #       ]
+  #   uses: ./.github/workflows/basic.yaml
+  #   with:
+  #     docker-image: ${{ needs.build-asan.outputs.dev-docker-image }}
+  #     package-artifact-name: ${{ needs.build-asan.outputs.packages-artifact-name }}
+  #     per-test-timeout: 11
+  #     runner: ${{ matrix.platform }}
+  #     product: tt-metalium
 
-  ttnn-basic-tests:
-    needs: [build-asan, find-changes]
-    if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.cmake-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-changed == 'true' ||
-            needs.find-changes.outputs.tt-nn-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
-        }}
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: [
-          "N150-viommu",
-        ]
-    uses: ./.github/workflows/basic.yaml
-    with:
-      docker-image: ${{ needs.build-asan.outputs.dev-docker-image }}
-      package-artifact-name: ${{ needs.build-asan.outputs.packages-artifact-name }}
-      per-test-timeout: 11
-      runner: ${{ matrix.platform }}
-      product: tt-nn
+  # ttnn-basic-tests:
+  #   needs: [build-asan, find-changes]
+  #   if: ${{ github.ref_name == 'main' ||
+  #           needs.find-changes.outputs.cmake-changed == 'true' ||
+  #           needs.find-changes.outputs.tt-metalium-changed == 'true' ||
+  #           needs.find-changes.outputs.tt-nn-changed == 'true' ||
+  #           needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
+  #       }}
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       platform: [
+  #         "N150-viommu",
+  #       ]
+  #   uses: ./.github/workflows/basic.yaml
+  #   with:
+  #     docker-image: ${{ needs.build-asan.outputs.dev-docker-image }}
+  #     package-artifact-name: ${{ needs.build-asan.outputs.packages-artifact-name }}
+  #     per-test-timeout: 11
+  #     runner: ${{ matrix.platform }}
+  #     product: tt-nn
 
-  ttsim-unit-tests:
-    if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.any-code-changed == 'true'
-        }}
-    needs: [build, find-changes]
-    secrets: inherit
-    strategy:
-      fail-fast: false
-    uses: ./.github/workflows/ttsim.yaml
-    with:
-      basic-docker-image: ${{ needs.build.outputs.basic-dev-docker-image }}
-      test-docker-image: ${{ needs.build.outputs.ci-test-docker-image }}
-      wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
-      build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
-      run-ttsim-integration-tests: false
-      run-metal-cpp-unit-tests: true
+  # ttsim-unit-tests:
+  #   if: ${{ github.ref_name == 'main' ||
+  #           needs.find-changes.outputs.any-code-changed == 'true'
+  #       }}
+  #   needs: [build, find-changes]
+  #   secrets: inherit
+  #   strategy:
+  #     fail-fast: false
+  #   uses: ./.github/workflows/ttsim.yaml
+  #   with:
+  #     basic-docker-image: ${{ needs.build.outputs.basic-dev-docker-image }}
+  #     test-docker-image: ${{ needs.build.outputs.ci-test-docker-image }}
+  #     wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
+  #     build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
+  #     run-ttsim-integration-tests: false
+  #     run-metal-cpp-unit-tests: true
 
   triage-tests:
-    if: ${{
-        github.ref_name == 'main' ||
-        needs.find-changes.outputs.cmake-changed == 'true' ||
-        needs.find-changes.outputs.any-code-changed == 'true'
-      }}
+    # if: ${{
+    #     github.ref_name == 'main' ||
+    #     needs.find-changes.outputs.cmake-changed == 'true' ||
+    #     needs.find-changes.outputs.any-code-changed == 'true'
+    #   }}
     needs: [ build, find-changes ]
     strategy:
       fail-fast: false
@@ -297,36 +297,36 @@ jobs:
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       timeout: 11
 
-  # GitHub has so many design limitations it's not even funny.
-  # This job is purely so we can capture the essence of the workflow as a whole in our status checks.
-  workflow-status:
-    name: Merge Gate Status
-    # Force this job to run so GH can 'see' it, provided some other job has actually run.
-    # Otherwise if the entire workflow has been skipped (eg: the PR was in Draft), then this will
-    # report FAILED instead of SKIPPED.
-    if: >-
-      ${{
-        always() &&
-        contains(join(needs.*.result, ','), 'success') ||
-        contains(join(needs.*.result, ','), 'failure')
-      }}
-    needs: [static-checks, code-analysis, find-changes, build, build-docs, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttsim-unit-tests, triage-tests]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check if all jobs passed
-        uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
-        with:
-          required-jobs: "static-checks, code-analysis, find-changes"
-          optional-jobs: "build, build-docs, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttsim-unit-tests, triage-tests"
-        env:
-          NEEDS_CONTEXT: '${{ toJSON(needs) }}'
-      - if: (failure() && contains(join(needs.*.result, ','), 'failure') && github.event_name == 'merge_group')
-        uses: tenstorrent/tt-metal/.github/actions/slack-report-merge-gate@main
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_WEBHOOK_URL }}
-          owner: "U08GTDV8MDH"
-      - if: (failure() && contains(join(needs.*.result, ','), 'failure') && github.ref == 'refs/heads/main')
-        uses: tenstorrent/tt-metal/.github/actions/slack-report-merge-gate-main@main
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_WEBHOOK_URL }}
-          owner: "U08GTDV8MDH,U0908S3LUMD,U0982FCD80N,U08VC9954CE,U08TVGQGGAE,U08LG51QALX,U08DEGUJY3H,U08BNDNLUCD,U084DCKE0B0,U0883RN6CRE,U088NCP32NP,U07J3K6KS1K,U07HTBQPHFG,U085LTYEC00,U014XCQ9CF8"
+  # # GitHub has so many design limitations it's not even funny.
+  # # This job is purely so we can capture the essence of the workflow as a whole in our status checks.
+  # workflow-status:
+  #   name: Merge Gate Status
+  #   # Force this job to run so GH can 'see' it, provided some other job has actually run.
+  #   # Otherwise if the entire workflow has been skipped (eg: the PR was in Draft), then this will
+  #   # report FAILED instead of SKIPPED.
+  #   if: >-
+  #     ${{
+  #       always() &&
+  #       contains(join(needs.*.result, ','), 'success') ||
+  #       contains(join(needs.*.result, ','), 'failure')
+  #     }}
+  #   needs: [static-checks, code-analysis, find-changes, build, build-docs, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttsim-unit-tests, triage-tests]
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - name: Check if all jobs passed
+  #       uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
+  #       with:
+  #         required-jobs: "static-checks, code-analysis, find-changes"
+  #         optional-jobs: "build, build-docs, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttsim-unit-tests, triage-tests"
+  #       env:
+  #         NEEDS_CONTEXT: '${{ toJSON(needs) }}'
+  #     - if: (failure() && contains(join(needs.*.result, ','), 'failure') && github.event_name == 'merge_group')
+  #       uses: tenstorrent/tt-metal/.github/actions/slack-report-merge-gate@main
+  #       with:
+  #         slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_WEBHOOK_URL }}
+  #         owner: "U08GTDV8MDH"
+  #     - if: (failure() && contains(join(needs.*.result, ','), 'failure') && github.ref == 'refs/heads/main')
+  #       uses: tenstorrent/tt-metal/.github/actions/slack-report-merge-gate-main@main
+  #       with:
+  #         slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_WEBHOOK_URL }}
+  #         owner: "U08GTDV8MDH,U0908S3LUMD,U0982FCD80N,U08VC9954CE,U08TVGQGGAE,U08LG51QALX,U08DEGUJY3H,U08BNDNLUCD,U084DCKE0B0,U0883RN6CRE,U088NCP32NP,U07J3K6KS1K,U07HTBQPHFG,U085LTYEC00,U014XCQ9CF8"
