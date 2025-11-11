@@ -3,5 +3,5 @@ Profiler
 
 .. toctree::
   ReadMeshDeviceProfilerResults
-  GetLatestOpsPerfData
-  GetAllOpsPerfData
+  GetLatestProgramsPerfData
+  GetAllProgramsPerfData

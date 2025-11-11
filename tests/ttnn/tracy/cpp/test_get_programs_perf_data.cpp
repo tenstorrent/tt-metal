@@ -6,13 +6,14 @@
 #include <nlohmann/json.hpp>
 
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/experimental/profiler.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/profiler/profiler_paths.hpp"
 #include <umd/device/types/cluster_descriptor_types.hpp>
 
-namespace tt::tt_metal {
+namespace tt::tt_metal::experimental {
 void to_json(nlohmann::json& j, const ProgramExecutionUID& program_execution_uid) {
     j = nlohmann::json{
         {"runtime_id", program_execution_uid.runtime_id},
@@ -42,7 +43,7 @@ void to_json(nlohmann::json& j, const std::map<tt::ChipId, std::set<ProgramAnaly
     }
 }
 
-}  // namespace tt::tt_metal
+}  // namespace tt::tt_metal::experimental
 
 using namespace tt::tt_metal;
 
@@ -107,7 +108,7 @@ protected:
     }
 
     void WriteProgramsPerfDataToJson(
-        const std::vector<std::map<tt::ChipId, std::set<ProgramAnalysisData>>>& programs_perf_data_list,
+        const std::vector<std::map<tt::ChipId, std::set<experimental::ProgramAnalysisData>>>& programs_perf_data_list,
         const std::string& file_name) {
         nlohmann::json json_programs_perf_data_list;
         for (const auto& programs_perf_data : programs_perf_data_list) {
@@ -128,8 +129,10 @@ TEST_F(GetProgramsPerfDataFixture, TestGetProgramsPerfDataBeforeReadMeshDevicePr
     RunWorkload();
     RunWorkload();
 
-    const std::map<tt::ChipId, std::set<ProgramAnalysisData>> latest_programs_perf_data = GetLatestProgramsPerfData();
-    const std::map<tt::ChipId, std::set<ProgramAnalysisData>> all_programs_perf_data = GetAllProgramsPerfData();
+    const std::map<tt::ChipId, std::set<experimental::ProgramAnalysisData>> latest_programs_perf_data =
+        experimental::GetLatestProgramsPerfData();
+    const std::map<tt::ChipId, std::set<experimental::ProgramAnalysisData>> all_programs_perf_data =
+        experimental::GetAllProgramsPerfData();
 
     ReadMeshDeviceProfilerResults(*mesh_device_);
 
@@ -154,20 +157,25 @@ TEST_F(GetProgramsPerfDataFixture, TestGetProgramsPerfDataAfterSingleReadMeshDev
 
     ReadMeshDeviceProfilerResults(*mesh_device_);
 
-    const std::map<tt::ChipId, std::set<ProgramAnalysisData>> latest_programs_perf_data = GetLatestProgramsPerfData();
-    const std::map<tt::ChipId, std::set<ProgramAnalysisData>> all_programs_perf_data = GetAllProgramsPerfData();
+    const std::map<tt::ChipId, std::set<experimental::ProgramAnalysisData>> latest_programs_perf_data =
+        experimental::GetLatestProgramsPerfData();
+    const std::map<tt::ChipId, std::set<experimental::ProgramAnalysisData>> all_programs_perf_data =
+        experimental::GetAllProgramsPerfData();
 
     EXPECT_EQ(latest_programs_perf_data.size(), 1);
     EXPECT_TRUE(latest_programs_perf_data.contains(0));
     EXPECT_EQ(latest_programs_perf_data.at(0).size(), 3);
 
     uint32_t expected_runtime_id = 1;
-    for (const ProgramAnalysisData& program_analysis_data : latest_programs_perf_data.at(0)) {
+    for (const experimental::ProgramAnalysisData& program_analysis_data : latest_programs_perf_data.at(0)) {
         EXPECT_EQ(
             detail::DecodePerDeviceProgramID(program_analysis_data.program_execution_uid.runtime_id).base_program_id,
             expected_runtime_id++);
-        EXPECT_EQ(program_analysis_data.program_execution_uid.trace_id, INVALID_NUM_PROGRAM_EXECUTION_UID);
-        EXPECT_EQ(program_analysis_data.program_execution_uid.trace_id_counter, INVALID_NUM_PROGRAM_EXECUTION_UID);
+        EXPECT_EQ(
+            program_analysis_data.program_execution_uid.trace_id, experimental::INVALID_NUM_PROGRAM_EXECUTION_UID);
+        EXPECT_EQ(
+            program_analysis_data.program_execution_uid.trace_id_counter,
+            experimental::INVALID_NUM_PROGRAM_EXECUTION_UID);
     }
 
     EXPECT_EQ(all_programs_perf_data.size(), 1);
@@ -175,12 +183,15 @@ TEST_F(GetProgramsPerfDataFixture, TestGetProgramsPerfDataAfterSingleReadMeshDev
     EXPECT_EQ(all_programs_perf_data.at(0).size(), 3);
 
     expected_runtime_id = 1;
-    for (const ProgramAnalysisData& program_analysis_data : all_programs_perf_data.at(0)) {
+    for (const experimental::ProgramAnalysisData& program_analysis_data : all_programs_perf_data.at(0)) {
         EXPECT_EQ(
             detail::DecodePerDeviceProgramID(program_analysis_data.program_execution_uid.runtime_id).base_program_id,
             expected_runtime_id++);
-        EXPECT_EQ(program_analysis_data.program_execution_uid.trace_id, INVALID_NUM_PROGRAM_EXECUTION_UID);
-        EXPECT_EQ(program_analysis_data.program_execution_uid.trace_id_counter, INVALID_NUM_PROGRAM_EXECUTION_UID);
+        EXPECT_EQ(
+            program_analysis_data.program_execution_uid.trace_id, experimental::INVALID_NUM_PROGRAM_EXECUTION_UID);
+        EXPECT_EQ(
+            program_analysis_data.program_execution_uid.trace_id_counter,
+            experimental::INVALID_NUM_PROGRAM_EXECUTION_UID);
     }
 
     EXPECT_EQ(latest_programs_perf_data, all_programs_perf_data);
@@ -192,15 +203,17 @@ TEST_F(GetProgramsPerfDataFixture, TestGetProgramsPerfDataAfterSingleReadMeshDev
 // Test that calls ReadMeshDeviceProfilerResults() multiple times and calls GetLatestProgramsPerfData() and
 // GetAllProgramsPerfData() after each call
 TEST_F(GetProgramsPerfDataFixture, TestGetProgramsPerfDataAfterMultipleReadMeshDeviceProfilerResultsCalls) {
-    std::vector<std::map<tt::ChipId, std::set<ProgramAnalysisData>>> latest_programs_perf_data_list;
-    std::vector<std::map<tt::ChipId, std::set<ProgramAnalysisData>>> all_programs_perf_data_list;
+    std::vector<std::map<tt::ChipId, std::set<experimental::ProgramAnalysisData>>> latest_programs_perf_data_list;
+    std::vector<std::map<tt::ChipId, std::set<experimental::ProgramAnalysisData>>> all_programs_perf_data_list;
 
     RunWorkload();
     RunWorkload();
 
     ReadMeshDeviceProfilerResults(*mesh_device_);
-    std::map<tt::ChipId, std::set<ProgramAnalysisData>> latest_programs_perf_data = GetLatestProgramsPerfData();
-    std::map<tt::ChipId, std::set<ProgramAnalysisData>> all_programs_perf_data = GetAllProgramsPerfData();
+    std::map<tt::ChipId, std::set<experimental::ProgramAnalysisData>> latest_programs_perf_data =
+        experimental::GetLatestProgramsPerfData();
+    std::map<tt::ChipId, std::set<experimental::ProgramAnalysisData>> all_programs_perf_data =
+        experimental::GetAllProgramsPerfData();
 
     latest_programs_perf_data_list.push_back(latest_programs_perf_data);
     all_programs_perf_data_list.push_back(all_programs_perf_data);
@@ -210,12 +223,15 @@ TEST_F(GetProgramsPerfDataFixture, TestGetProgramsPerfDataAfterMultipleReadMeshD
     EXPECT_EQ(latest_programs_perf_data.at(0).size(), 2);
 
     uint32_t expected_runtime_id = 1;
-    for (const ProgramAnalysisData& program_analysis_data : latest_programs_perf_data.at(0)) {
+    for (const experimental::ProgramAnalysisData& program_analysis_data : latest_programs_perf_data.at(0)) {
         EXPECT_EQ(
             detail::DecodePerDeviceProgramID(program_analysis_data.program_execution_uid.runtime_id).base_program_id,
             expected_runtime_id++);
-        EXPECT_EQ(program_analysis_data.program_execution_uid.trace_id, INVALID_NUM_PROGRAM_EXECUTION_UID);
-        EXPECT_EQ(program_analysis_data.program_execution_uid.trace_id_counter, INVALID_NUM_PROGRAM_EXECUTION_UID);
+        EXPECT_EQ(
+            program_analysis_data.program_execution_uid.trace_id, experimental::INVALID_NUM_PROGRAM_EXECUTION_UID);
+        EXPECT_EQ(
+            program_analysis_data.program_execution_uid.trace_id_counter,
+            experimental::INVALID_NUM_PROGRAM_EXECUTION_UID);
     }
 
     EXPECT_EQ(all_programs_perf_data.size(), 1);
@@ -223,12 +239,15 @@ TEST_F(GetProgramsPerfDataFixture, TestGetProgramsPerfDataAfterMultipleReadMeshD
     EXPECT_EQ(all_programs_perf_data.at(0).size(), 2);
 
     expected_runtime_id = 1;
-    for (const ProgramAnalysisData& program_analysis_data : all_programs_perf_data.at(0)) {
+    for (const experimental::ProgramAnalysisData& program_analysis_data : all_programs_perf_data.at(0)) {
         EXPECT_EQ(
             detail::DecodePerDeviceProgramID(program_analysis_data.program_execution_uid.runtime_id).base_program_id,
             expected_runtime_id++);
-        EXPECT_EQ(program_analysis_data.program_execution_uid.trace_id, INVALID_NUM_PROGRAM_EXECUTION_UID);
-        EXPECT_EQ(program_analysis_data.program_execution_uid.trace_id_counter, INVALID_NUM_PROGRAM_EXECUTION_UID);
+        EXPECT_EQ(
+            program_analysis_data.program_execution_uid.trace_id, experimental::INVALID_NUM_PROGRAM_EXECUTION_UID);
+        EXPECT_EQ(
+            program_analysis_data.program_execution_uid.trace_id_counter,
+            experimental::INVALID_NUM_PROGRAM_EXECUTION_UID);
     }
 
     EXPECT_EQ(latest_programs_perf_data, all_programs_perf_data);
@@ -238,8 +257,8 @@ TEST_F(GetProgramsPerfDataFixture, TestGetProgramsPerfDataAfterMultipleReadMeshD
     RunWorkload();
 
     ReadMeshDeviceProfilerResults(*mesh_device_);
-    latest_programs_perf_data = GetLatestProgramsPerfData();
-    all_programs_perf_data = GetAllProgramsPerfData();
+    latest_programs_perf_data = experimental::GetLatestProgramsPerfData();
+    all_programs_perf_data = experimental::GetAllProgramsPerfData();
 
     latest_programs_perf_data_list.push_back(latest_programs_perf_data);
     all_programs_perf_data_list.push_back(all_programs_perf_data);
@@ -249,12 +268,15 @@ TEST_F(GetProgramsPerfDataFixture, TestGetProgramsPerfDataAfterMultipleReadMeshD
     EXPECT_EQ(latest_programs_perf_data.at(0).size(), 3);
 
     expected_runtime_id = 3;
-    for (const ProgramAnalysisData& program_analysis_data : latest_programs_perf_data.at(0)) {
+    for (const experimental::ProgramAnalysisData& program_analysis_data : latest_programs_perf_data.at(0)) {
         EXPECT_EQ(
             detail::DecodePerDeviceProgramID(program_analysis_data.program_execution_uid.runtime_id).base_program_id,
             expected_runtime_id++);
-        EXPECT_EQ(program_analysis_data.program_execution_uid.trace_id, INVALID_NUM_PROGRAM_EXECUTION_UID);
-        EXPECT_EQ(program_analysis_data.program_execution_uid.trace_id_counter, INVALID_NUM_PROGRAM_EXECUTION_UID);
+        EXPECT_EQ(
+            program_analysis_data.program_execution_uid.trace_id, experimental::INVALID_NUM_PROGRAM_EXECUTION_UID);
+        EXPECT_EQ(
+            program_analysis_data.program_execution_uid.trace_id_counter,
+            experimental::INVALID_NUM_PROGRAM_EXECUTION_UID);
     }
 
     EXPECT_EQ(all_programs_perf_data.size(), 1);
@@ -262,12 +284,15 @@ TEST_F(GetProgramsPerfDataFixture, TestGetProgramsPerfDataAfterMultipleReadMeshD
     EXPECT_EQ(all_programs_perf_data.at(0).size(), 5);
 
     expected_runtime_id = 1;
-    for (const ProgramAnalysisData& program_analysis_data : all_programs_perf_data.at(0)) {
+    for (const experimental::ProgramAnalysisData& program_analysis_data : all_programs_perf_data.at(0)) {
         EXPECT_EQ(
             detail::DecodePerDeviceProgramID(program_analysis_data.program_execution_uid.runtime_id).base_program_id,
             expected_runtime_id++);
-        EXPECT_EQ(program_analysis_data.program_execution_uid.trace_id, INVALID_NUM_PROGRAM_EXECUTION_UID);
-        EXPECT_EQ(program_analysis_data.program_execution_uid.trace_id_counter, INVALID_NUM_PROGRAM_EXECUTION_UID);
+        EXPECT_EQ(
+            program_analysis_data.program_execution_uid.trace_id, experimental::INVALID_NUM_PROGRAM_EXECUTION_UID);
+        EXPECT_EQ(
+            program_analysis_data.program_execution_uid.trace_id_counter,
+            experimental::INVALID_NUM_PROGRAM_EXECUTION_UID);
     }
 
     RunWorkload();
@@ -275,8 +300,8 @@ TEST_F(GetProgramsPerfDataFixture, TestGetProgramsPerfDataAfterMultipleReadMeshD
     ReadMeshDeviceProfilerResults(*mesh_device_);
     ReadMeshDeviceProfilerResults(*mesh_device_);
 
-    latest_programs_perf_data = GetLatestProgramsPerfData();
-    all_programs_perf_data = GetAllProgramsPerfData();
+    latest_programs_perf_data = experimental::GetLatestProgramsPerfData();
+    all_programs_perf_data = experimental::GetAllProgramsPerfData();
 
     latest_programs_perf_data_list.push_back(latest_programs_perf_data);
     all_programs_perf_data_list.push_back(all_programs_perf_data);
@@ -290,12 +315,15 @@ TEST_F(GetProgramsPerfDataFixture, TestGetProgramsPerfDataAfterMultipleReadMeshD
     EXPECT_EQ(all_programs_perf_data.at(0).size(), 6);
 
     expected_runtime_id = 1;
-    for (const ProgramAnalysisData& program_analysis_data : all_programs_perf_data.at(0)) {
+    for (const experimental::ProgramAnalysisData& program_analysis_data : all_programs_perf_data.at(0)) {
         EXPECT_EQ(
             detail::DecodePerDeviceProgramID(program_analysis_data.program_execution_uid.runtime_id).base_program_id,
             expected_runtime_id++);
-        EXPECT_EQ(program_analysis_data.program_execution_uid.trace_id, INVALID_NUM_PROGRAM_EXECUTION_UID);
-        EXPECT_EQ(program_analysis_data.program_execution_uid.trace_id_counter, INVALID_NUM_PROGRAM_EXECUTION_UID);
+        EXPECT_EQ(
+            program_analysis_data.program_execution_uid.trace_id, experimental::INVALID_NUM_PROGRAM_EXECUTION_UID);
+        EXPECT_EQ(
+            program_analysis_data.program_execution_uid.trace_id_counter,
+            experimental::INVALID_NUM_PROGRAM_EXECUTION_UID);
     }
 
     WriteProgramsPerfDataToJson(latest_programs_perf_data_list, "test_get_programs_perf_data_latest.json");

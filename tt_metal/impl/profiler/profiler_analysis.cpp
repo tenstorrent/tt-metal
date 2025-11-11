@@ -7,17 +7,17 @@
 #include <tracy/Tracy.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
-#include <type_traits>
+#include <tt-metalium/experimental/profiler.hpp>
 #include <fstream>
 
 #include "core_coord.hpp"
 #include "impl/context/metal_context.hpp"
 #include "profiler_analysis.hpp"
 #include "profiler_state_manager.hpp"
-#include "profiler_types.hpp"
 
 namespace std {
-std::size_t hash<tt::tt_metal::ProgramExecutionUID>::operator()(const tt::tt_metal::ProgramExecutionUID& id) const {
+std::size_t hash<tt::tt_metal::experimental::ProgramExecutionUID>::operator()(
+    const tt::tt_metal::experimental::ProgramExecutionUID& id) const {
     std::hash<uint64_t> hasher;
     std::size_t hash_value = 0;
     constexpr std::size_t hash_combine_prime = 0x9e3779b9;
@@ -55,12 +55,13 @@ namespace tt_metal {
 // INVALID_NUM_PROGRAM_EXECUTION_UID and INVALID_NUM must be equal to ensure proper translation between TTDeviceMarker
 // IDs and ProgramExecutionUID. INVALID_NUM cannot be used directly because ProgramExecutionUID is exposed in the public
 // API, and INVALID_NUM is declared in the Tracy submodule which should not be exposed.
-static_assert(tt::tt_metal::INVALID_NUM_PROGRAM_EXECUTION_UID == tracy::TTDeviceMarker::INVALID_NUM);
+static_assert(tt::tt_metal::experimental::INVALID_NUM_PROGRAM_EXECUTION_UID == tracy::TTDeviceMarker::INVALID_NUM);
 
-static inline const ProgramSingleAnalysisResult PROGRAM_INVALID_SINGLE_ANALYSIS_RESULT = {
+static inline const experimental::ProgramSingleAnalysisResult PROGRAM_INVALID_SINGLE_ANALYSIS_RESULT = {
     .start_timestamp = UINT64_MAX, .end_timestamp = 0, .duration = 0};
 
-bool ProgramSingleAnalysisResult::operator<(const ProgramSingleAnalysisResult& other) const {
+bool experimental::ProgramSingleAnalysisResult::operator<(
+    const experimental::ProgramSingleAnalysisResult& other) const {
     if (start_timestamp != other.start_timestamp) {
         return start_timestamp < other.start_timestamp;
     }
@@ -70,20 +71,22 @@ bool ProgramSingleAnalysisResult::operator<(const ProgramSingleAnalysisResult& o
     return duration < other.duration;
 }
 
-bool ProgramSingleAnalysisResult::operator==(const ProgramSingleAnalysisResult& other) const {
+bool experimental::ProgramSingleAnalysisResult::operator==(
+    const experimental::ProgramSingleAnalysisResult& other) const {
     return start_timestamp == other.start_timestamp && end_timestamp == other.end_timestamp &&
            duration == other.duration;
 }
 
-bool ProgramSingleAnalysisResult::operator!=(const ProgramSingleAnalysisResult& other) const {
+bool experimental::ProgramSingleAnalysisResult::operator!=(
+    const experimental::ProgramSingleAnalysisResult& other) const {
     return !(*this == other);
 }
 
-bool ProgramExecutionUID::operator==(const ProgramExecutionUID& other) const {
+bool experimental::ProgramExecutionUID::operator==(const experimental::ProgramExecutionUID& other) const {
     return runtime_id == other.runtime_id && trace_id == other.trace_id && trace_id_counter == other.trace_id_counter;
 }
 
-bool ProgramExecutionUID::operator<(const ProgramExecutionUID& other) const {
+bool experimental::ProgramExecutionUID::operator<(const experimental::ProgramExecutionUID& other) const {
     if (runtime_id != other.runtime_id) {
         return runtime_id < other.runtime_id;
     }
@@ -93,16 +96,16 @@ bool ProgramExecutionUID::operator<(const ProgramExecutionUID& other) const {
     return trace_id_counter < other.trace_id_counter;
 }
 
-bool ProgramAnalysisData::operator==(const ProgramAnalysisData& other) const {
+bool experimental::ProgramAnalysisData::operator==(const experimental::ProgramAnalysisData& other) const {
     return this->program_execution_uid == other.program_execution_uid &&
            this->program_analyses_results == other.program_analyses_results;
 }
 
-bool ProgramAnalysisData::operator<(const ProgramAnalysisData& other) const {
+bool experimental::ProgramAnalysisData::operator<(const experimental::ProgramAnalysisData& other) const {
     TT_ASSERT(this->program_analyses_results.find("DEVICE FW DURATION [ns]") != this->program_analyses_results.end());
     TT_ASSERT(other.program_analyses_results.find("DEVICE FW DURATION [ns]") != other.program_analyses_results.end());
 
-    const ProgramSingleAnalysisResult& this_fw_duration_analysis =
+    const experimental::ProgramSingleAnalysisResult& this_fw_duration_analysis =
         this->program_analyses_results.at("DEVICE FW DURATION [ns]");
     const ProgramSingleAnalysisResult& other_fw_duration_analysis =
         other.program_analyses_results.at("DEVICE FW DURATION [ns]");
@@ -152,18 +155,18 @@ AnalysisResults parse_duration(
     TT_FATAL(analysis_config.type == AnalysisType::PROGRAM_FIRST_TO_LAST_MARKER, "Unsupported analysis type");
 
     AnalysisResults analysis_results;
-    std::unordered_map<ProgramExecutionUID, ProgramSingleAnalysisResult>& results_per_program_execution_uid =
-        analysis_results.results_per_program_execution_uid;
+    std::unordered_map<experimental::ProgramExecutionUID, experimental::ProgramSingleAnalysisResult>&
+        results_per_program_execution_uid = analysis_results.results_per_program_execution_uid;
     ChipId device_id = -1;
 
     for (uint32_t i = 0; i < markers.size(); ++i) {
         const auto& marker_ref = markers[i];
         const tracy::TTDeviceMarker& marker = marker_ref.get();
-        const ProgramExecutionUID program_execution_uid = {
+        const experimental::ProgramExecutionUID program_execution_uid = {
             marker.runtime_host_id, marker.trace_id, marker.trace_id_counter};
         auto [program_execution_uid_results_it, _] = results_per_program_execution_uid.try_emplace(
             program_execution_uid, PROGRAM_INVALID_SINGLE_ANALYSIS_RESULT);
-        ProgramSingleAnalysisResult& program_results = program_execution_uid_results_it->second;
+        experimental::ProgramSingleAnalysisResult& program_results = program_execution_uid_results_it->second;
 
         if (matches_start_end_config(marker, analysis_config.start_config)) {
             if (program_results == PROGRAM_INVALID_SINGLE_ANALYSIS_RESULT) {
@@ -197,17 +200,18 @@ AnalysisResults parse_duration(
     return analysis_results;
 }
 
-std::map<ProgramExecutionUID, ProgramsPerfResults::SingleProgramPerfResults::ProgramMetaData> getMetaDataForPrograms(
-    const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& markers) {
+std::map<experimental::ProgramExecutionUID, ProgramsPerfResults::SingleProgramPerfResults::ProgramMetaData>
+getMetaDataForPrograms(const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& markers) {
     ZoneScoped;
 
-    std::map<ProgramExecutionUID, ProgramsPerfResults::SingleProgramPerfResults::ProgramMetaData>
+    std::map<experimental::ProgramExecutionUID, ProgramsPerfResults::SingleProgramPerfResults::ProgramMetaData>
         program_execution_uid_to_meta_data;
 
-    std::unordered_map<ProgramExecutionUID, std::unordered_set<CoreCoord>> fw_cores_per_program_execution_uid;
+    std::unordered_map<experimental::ProgramExecutionUID, std::unordered_set<CoreCoord>>
+        fw_cores_per_program_execution_uid;
     for (const auto& marker_ref : markers) {
         const tracy::TTDeviceMarker& marker = marker_ref.get();
-        const ProgramExecutionUID program_execution_uid = {
+        const experimental::ProgramExecutionUID program_execution_uid = {
             marker.runtime_host_id, marker.trace_id, marker.trace_id_counter};
         if (program_execution_uid_to_meta_data.find(program_execution_uid) ==
             program_execution_uid_to_meta_data.end()) {
@@ -274,7 +278,7 @@ ProgramsPerfResults generatePerfResultsForPrograms(
     ZoneScoped;
 
     ProgramsPerfResults programs_perf_results;
-    std::map<ProgramExecutionUID, ProgramsPerfResults::SingleProgramPerfResults>&
+    std::map<experimental::ProgramExecutionUID, ProgramsPerfResults::SingleProgramPerfResults>&
         program_execution_uid_to_perf_results = programs_perf_results.program_execution_uid_to_perf_results;
     std::vector<AnalysisResultsConfig>& analysis_results_configs = programs_perf_results.analysis_results_configs;
 
@@ -289,8 +293,8 @@ ProgramsPerfResults generatePerfResultsForPrograms(
         i++;
     }
 
-    std::map<ProgramExecutionUID, ProgramsPerfResults::SingleProgramPerfResults::ProgramMetaData> programs_meta_data =
-        getMetaDataForPrograms(device_markers);
+    std::map<experimental::ProgramExecutionUID, ProgramsPerfResults::SingleProgramPerfResults::ProgramMetaData>
+        programs_meta_data = getMetaDataForPrograms(device_markers);
 
     thread_pool.wait();
 
@@ -303,7 +307,7 @@ ProgramsPerfResults generatePerfResultsForPrograms(
             TT_ASSERT(
                 analysis_result.results_per_program_execution_uid.find(program_execution_uid) !=
                 analysis_result.results_per_program_execution_uid.end());
-            const ProgramSingleAnalysisResult& single_result =
+            const experimental::ProgramSingleAnalysisResult& single_result =
                 analysis_result.results_per_program_execution_uid.at(program_execution_uid);
             program_perf_results.analysis_results.push_back(single_result);
         }
@@ -320,7 +324,7 @@ void writeProgramsPerfResultsToCSV(
     std::scoped_lock lock(
         tt::tt_metal::MetalContext::instance().profiler_state_manager()->programs_perf_report_write_mutex);
 
-    std::map<ProgramExecutionUID, std::string> results_string_per_program_execution_uid;
+    std::map<experimental::ProgramExecutionUID, std::string> results_string_per_program_execution_uid;
 
     for (const auto& [program_execution_uid, program_perf_results] :
          programs_perf_results.program_execution_uid_to_perf_results) {
@@ -340,7 +344,7 @@ void writeProgramsPerfResultsToCSV(
             std::to_string(program_perf_results.program_meta_data.num_available_worker_cores);
 
         for (uint32_t i = 0; i < program_perf_results.analysis_results.size(); i++) {
-            const ProgramSingleAnalysisResult& analysis_result = program_perf_results.analysis_results[i];
+            const experimental::ProgramSingleAnalysisResult& analysis_result = program_perf_results.analysis_results[i];
             const AnalysisResultsConfig& analysis_result_config = programs_perf_results.analysis_results_configs[i];
             results_string_per_program_execution_uid[program_execution_uid] +=
                 "," + (analysis_result == PROGRAM_INVALID_SINGLE_ANALYSIS_RESULT

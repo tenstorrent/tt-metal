@@ -642,28 +642,6 @@ void ReadMeshDeviceProfilerResults(
 
 // clang-format off
 /**
- * Get performance results for all programs that were read in the most recent call to `ReadMeshDeviceProfilerResults`.
- *
- * This function only works in PROFILER builds. Please refer to the "Device Program Profiler" section for more information.
- *
- * Return value: std::map<ChipId, std::set<ProgramAnalysisData>>
- */
-// clang-format on
-std::map<ChipId, std::set<ProgramAnalysisData>> GetLatestProgramsPerfData();
-
-// clang-format off
-/**
- * Get performance results for all programs that have been read so far across all calls to `ReadMeshDeviceProfilerResults`.
- *
- * This function only works in PROFILER builds. Please refer to the "Device Program Profiler" section for more information.
- *
- * Return value: std::map<ChipId, std::set<ProgramAnalysisData>>
- */
-// clang-format on
-std::map<ChipId, std::set<ProgramAnalysisData>> GetAllProgramsPerfData();
-
-// clang-format off
-/**
  * Host will query an event for completion status on device.
  * Return value: bool.  True if event is completed, false otherwise.
  * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |

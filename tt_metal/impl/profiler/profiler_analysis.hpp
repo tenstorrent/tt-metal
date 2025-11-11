@@ -11,7 +11,7 @@
 
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <common/TracyTTDeviceData.hpp>
-#include <tt-metalium/profiler_types.hpp>
+#include <tt-metalium/experimental/profiler.hpp>
 #include <tt_stl/assert.hpp>
 #include "thread_pool.hpp"
 
@@ -51,7 +51,8 @@ struct AnalysisResultsConfig {
 
 struct AnalysisResults {
     AnalysisResultsConfig results_config;
-    std::unordered_map<ProgramExecutionUID, ProgramSingleAnalysisResult> results_per_program_execution_uid;
+    std::unordered_map<experimental::ProgramExecutionUID, experimental::ProgramSingleAnalysisResult>
+        results_per_program_execution_uid;
 };
 
 struct AnalysisStartEndConfig {
@@ -78,11 +79,11 @@ struct ProgramsPerfResults {
             uint32_t num_available_worker_cores = 0;
         };
         ProgramMetaData program_meta_data;
-        std::vector<ProgramSingleAnalysisResult> analysis_results;
+        std::vector<experimental::ProgramSingleAnalysisResult> analysis_results;
     };
 
     std::vector<AnalysisResultsConfig> analysis_results_configs;
-    std::map<ProgramExecutionUID, SingleProgramPerfResults> program_execution_uid_to_perf_results;
+    std::map<experimental::ProgramExecutionUID, SingleProgramPerfResults> program_execution_uid_to_perf_results;
 };
 
 ProgramsPerfResults generatePerfResultsForPrograms(

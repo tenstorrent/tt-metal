@@ -1062,6 +1062,8 @@ void ReadMeshDeviceProfilerResults(
 #endif
 }
 
+namespace experimental {
+
 std::map<ChipId, std::set<ProgramAnalysisData>> GetLatestProgramsPerfData() {
     std::map<ChipId, std::set<ProgramAnalysisData>> latest_programs_perf_data;
 #if defined(TRACY_ENABLE)
@@ -1110,6 +1112,8 @@ std::map<ChipId, std::set<ProgramAnalysisData>> GetAllProgramsPerfData() {
 #endif
     return all_programs_perf_data;
 }
+
+}  // namespace experimental
 
 }  // namespace tt_metal
 

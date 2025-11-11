@@ -267,13 +267,14 @@ std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> getSortedDevice
     return device_markers_vec;
 }
 
-std::set<ProgramAnalysisData> translateProgramsPerfResults(const ProgramsPerfResults& programs_perf_results) {
+std::set<experimental::ProgramAnalysisData> translateProgramsPerfResults(
+    const ProgramsPerfResults& programs_perf_results) {
     ZoneScoped;
 
-    std::set<ProgramAnalysisData> programs_analyses_data;
+    std::set<experimental::ProgramAnalysisData> programs_analyses_data;
     for (const auto& [program_execution_uid, program_perf_results] :
          programs_perf_results.program_execution_uid_to_perf_results) {
-        ProgramAnalysisData program_analysis_data;
+        experimental::ProgramAnalysisData program_analysis_data;
         program_analysis_data.program_execution_uid = program_execution_uid;
         TT_ASSERT(
             program_perf_results.analysis_results.size() == programs_perf_results.analysis_results_configs.size());
@@ -1753,7 +1754,7 @@ void DeviceProfiler::generateAnalysesForDeviceMarkers(
     const ProgramsPerfResults programs_perf_results =
         generatePerfResultsForPrograms(analysis_configs, device_markers, *this->thread_pool);
 
-    std::vector<std::set<ProgramAnalysisData>>& device_programs_perf_analyses =
+    std::vector<std::set<experimental::ProgramAnalysisData>>& device_programs_perf_analyses =
         tt::tt_metal::MetalContext::instance().profiler_state_manager()->device_programs_perf_analyses_map.at(
             this->device_id);
     device_programs_perf_analyses.push_back(translateProgramsPerfResults(programs_perf_results));
