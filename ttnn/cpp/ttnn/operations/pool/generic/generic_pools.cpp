@@ -47,7 +47,6 @@ static std::vector<Tensor> pool2d_invoke(
     const std::optional<const MemoryConfig>& memory_config = std::nullopt,
     const std::optional<const TensorMemoryLayout> applied_shard_scheme = std::nullopt,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
-    bool in_place_halo = false,
     bool deallocate_input = false,
     bool reallocate_halo_output = true,
     bool return_indices = false,
@@ -257,8 +256,7 @@ static std::vector<Tensor> pool2d_invoke(
         false,
         parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
         input_tensor_sharded.memory_config(),
-        is_out_tiled,
-        in_place_halo);
+        is_out_tiled);
 
     if (deallocate_input || is_input_tensor_in_dram) {
         input_tensor_sharded.deallocate(/*force*/ true);
@@ -319,7 +317,6 @@ std::vector<Tensor> MaxPool2DOp::invoke(
     bool ceil_mode,
     const std::optional<const MemoryConfig>& memory_config,
     const std::optional<const TensorMemoryLayout> applied_shard_scheme,
-    bool in_place_halo,
     bool deallocate_input,
     bool reallocate_halo_output,
     bool return_indices,
@@ -342,7 +339,6 @@ std::vector<Tensor> MaxPool2DOp::invoke(
         memory_config,
         applied_shard_scheme,
         std::nullopt,  // compute_kernel_config - not needed for max pool
-        in_place_halo,
         deallocate_input,
         reallocate_halo_output,
         return_indices,
@@ -365,7 +361,6 @@ Tensor AvgPool2DOp::invoke(
     const std::optional<const MemoryConfig>& memory_config,
     const std::optional<const TensorMemoryLayout> applied_shard_scheme,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
-    bool in_place_halo,
     bool deallocate_input,
     bool reallocate_halo_output,
     const DataType dtype,
@@ -387,7 +382,6 @@ Tensor AvgPool2DOp::invoke(
         memory_config,
         applied_shard_scheme,
         compute_kernel_config,
-        in_place_halo,
         deallocate_input,
         reallocate_halo_output,
         false,  // return_indices
