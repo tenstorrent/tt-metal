@@ -579,7 +579,8 @@ class Generator:
         ):
             # If the page table has changed, it means that the inputs have shuffled, so we need to copy them from host again
             reset_inputs = True
-            self.prev_page_table = tuple(pt.clone() for pt in page_table)
+            if page_table is not None:
+                self.prev_page_table = tuple(pt.clone() for pt in page_table)
 
         if reset_inputs:
             for i in range(self.data_parallel):
