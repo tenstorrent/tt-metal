@@ -43,6 +43,20 @@ jobs:
               "model": "llama3_70b_dp",
               "timeout": 30,
               "owner_id": "U08BH66EXAL"
+            },
+            {
+              "name": "Galaxy Llama3 demo tests",
+              "arch": "wormhole_b0",
+              "model": "llama3",
+              "timeout": 30,
+              "owner_id": "U053W15B6JF"
+            },
+            {
+              "name": "Galaxy Llama3 8B data-parallel demo tests",
+              "arch": "wormhole_b0",
+              "model": "llama3_8b_dp",
+              "timeout": 30,
+              "owner_id": "U08BH66EXAL"
             }
           ]' --compact-output)
 
