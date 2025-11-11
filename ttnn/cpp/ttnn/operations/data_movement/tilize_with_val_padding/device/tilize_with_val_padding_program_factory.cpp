@@ -14,6 +14,7 @@
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding_common.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -28,22 +29,28 @@ uint32_t get_packed_value(const Tensor tensor, const ttnn::PadValue pad_value) {
                 if (tensor.dtype() == DataType::BFLOAT16) {
                     bfloat16 bfloat_pad_value = bfloat16((pad_value));
                     return pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
+                } else if (tensor.dtype() == DataType::UINT16) {
+                    uint16_t uint16_pad_value = static_cast<uint16_t>(pad_value);
+                    return pack_two_uint16_into_uint32({uint16_pad_value, uint16_pad_value});
                 } else {
                     TT_FATAL(
                         tensor.dtype() == DataType::FLOAT32 or tensor.dtype() == DataType::UINT32 or
                             tensor.dtype() == DataType::INT32,
-                        "only supporting bfloat16, float32, and uint32/int32");
+                        "only supporting bfloat16, float32, and uint32/int32/uint16");
                     return (uint32_t)((pad_value));
                 }
             } else if constexpr (std::is_same_v<T, uint32_t>) {
                 if (tensor.dtype() == DataType::BFLOAT16) {
                     bfloat16 bfloat_pad_value = bfloat16((float)(pad_value));
                     return pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
+                } else if (tensor.dtype() == DataType::UINT16) {
+                    uint16_t uint16_pad_value = static_cast<uint16_t>(pad_value);
+                    return pack_two_uint16_into_uint32({uint16_pad_value, uint16_pad_value});
                 } else {
                     TT_FATAL(
                         tensor.dtype() == DataType::FLOAT32 or tensor.dtype() == DataType::INT32 or
                             tensor.dtype() == DataType::UINT32,
-                        "only supporting bfloat16, float32, and int32/uint32");
+                        "only supporting bfloat16, float32, and int32/uint32/uint16");
                     return ((pad_value));
                 }
             } else {
@@ -148,7 +155,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(
     tt::tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
     uint32_t packed_pad_value = get_packed_value(a, pad_value);
-    uint32_t tile_row_size_bytes = (a.dtype() == DataType::BFLOAT16) ? 64 : 128;
+    uint32_t tile_row_size_bytes = a.element_size() * TILE_HEIGHT;
 
     const std::array reader_kernel_args = {
         src0_buffer->address(),
@@ -202,7 +209,6 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(
 
     tt::tt_metal::SetRuntimeArgs(
         program, unary_writer_kernel_id, core, {dst_buffer->address(), (uint32_t)num_tiles, 0});
-
     auto override_runtime_args_callback = [reader_kernel_id = unary_reader_kernel_id,
                                            writer_kernel_id = unary_writer_kernel_id](
                                               const void* operation,
@@ -565,9 +571,14 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
      */
     uint32_t packed_pad_value = get_packed_value(a, pad_value);
     // log2(TILE_WIDTH * data_format_size_in_bytes)
-    uint32_t shift_bits = (a.dtype() == DataType::BFLOAT16) ? 6 : 7;
+    uint32_t shift_bits = static_cast<uint32_t>(std::log2(
+        a.element_size() *
+        TILE_HEIGHT));  // This gives log2 of bytes per tile row, so in the kernel we
+                        // can shift right by this to get number of tiles.
+                        // ex: bf16/uint16 -> log2(2 * 32) = 6, float32/int32/uint32 -> log2(4 * 32) = 7, etc.
+    uint32_t elem_size = a.element_size();
 
-    std::vector<uint32_t> reader_compile_time_args = {shift_bits, unpadded_row_size_bytes};
+    std::vector<uint32_t> reader_compile_time_args = {shift_bits, unpadded_row_size_bytes, elem_size};
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
     KernelHandle unary_reader_kernel_id = CreateKernel(
         program,
