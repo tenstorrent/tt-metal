@@ -41,6 +41,8 @@ struct ConvertToHwcConfig {
     std::vector<CoreCoord> l1_input_cores;
     std::vector<CoreCoord> dram_input_cores;
     CoreRangeSet l1_input_core_grid;
+    std::vector<CoreCoord> output_cores;
+    CoreRangeSet output_core_grid;
 
     // DRAM/L1 configuration
     bool is_input_in_dram;

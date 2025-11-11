@@ -111,6 +111,14 @@ ConvertToHwcConfig ConvertToHwcConfig::create_from_tensors(const Tensor& input, 
         config.l1_input_shard_width);
 
     // Core information
+    // Output cores are where kernels run - always use output shard grid
+    config.output_core_grid = output.shard_spec()->grid;
+    config.output_cores = corerange_to_cores(
+        config.output_core_grid,
+        std::nullopt,
+        output.shard_spec()->orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
+
+    // Input cores are where data comes from
     config.l1_input_core_grid = config.is_input_in_dram ? output.shard_spec()->grid : input.shard_spec()->grid;
     config.l1_input_cores = corerange_to_cores(
         config.l1_input_core_grid,
@@ -123,12 +131,17 @@ ConvertToHwcConfig ConvertToHwcConfig::create_from_tensors(const Tensor& input, 
 
     log_info(
         tt::LogType::LogAlways,
-        "Core info: l1_input_cores.size()={}, dram_input_cores.size()={}",
+        "Core info: l1_input_cores.size()={}, dram_input_cores.size()={}, output_cores.size()={}",
         config.l1_input_cores.size(),
-        config.dram_input_cores.size());
+        config.dram_input_cores.size(),
+        config.output_cores.size());
     log_info(tt::LogType::LogAlways, "L1 input cores:");
     for (size_t i = 0; i < config.l1_input_cores.size(); i++) {
         log_info(tt::LogType::LogAlways, "  [{}]: ({}, {})", i, config.l1_input_cores[i].x, config.l1_input_cores[i].y);
+    }
+    log_info(tt::LogType::LogAlways, "Output cores:");
+    for (size_t i = 0; i < config.output_cores.size(); i++) {
+        log_info(tt::LogType::LogAlways, "  [{}]: ({}, {})", i, config.output_cores[i].x, config.output_cores[i].y);
     }
 
     // Gather output shard specifications (for the intermediate gather result)
@@ -138,8 +151,8 @@ ConvertToHwcConfig ConvertToHwcConfig::create_from_tensors(const Tensor& input, 
 
     // For uneven sharding with B=1, use padded capacity instead of logical HW
     uint32_t effective_hw = calculate_effective_hw_for_sharding(
-        config.hw_total, config.batch_size, config.l1_input_shard_width, config.l1_input_cores.size());
-    config.gather_l1_output_shard_width = config.batch_size * effective_hw / config.l1_input_cores.size();
+        config.hw_total, config.batch_size, config.l1_input_shard_width, config.output_cores.size());
+    config.gather_l1_output_shard_width = config.batch_size * effective_hw / config.output_cores.size();
 
     log_info(
         tt::LogType::LogAlways,
@@ -149,7 +162,7 @@ ConvertToHwcConfig ConvertToHwcConfig::create_from_tensors(const Tensor& input, 
         config.input_channels,
         config.batch_size,
         effective_hw,
-        config.l1_input_cores.size());
+        config.output_cores.size());
 
     // Alignment requirements
     config.alignment_elements = compute_alignment_requirement_in_elements(output);
@@ -168,7 +181,7 @@ void ConvertToHwcConfig::validate() const {
         output_shard_width,
         alignment_elements);
     TT_FATAL(output_shard_height % 32 == 0, "Shard height {} must be multiple of tile width (32)", output_shard_height);
-    TT_FATAL(!l1_input_cores.empty(), "No input cores available for processing");
+    TT_FATAL(!output_cores.empty(), "No output cores available for processing");
 
     // Check for uneven sharding and validate B=1 requirement
     uint32_t input_num_cores = l1_input_cores.size();
@@ -673,21 +686,25 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
 
     // Use effective HW for gather transfers
     uint32_t effective_hw_for_gather = calculate_effective_hw_for_sharding(
-        config.hw_total, config.batch_size, config.l1_input_shard_width, static_cast<uint32_t>(in_cores.size()));
+        config.hw_total,
+        config.batch_size,
+        config.l1_input_shard_width,
+        static_cast<uint32_t>(config.output_cores.size()));
 
+    // Gather transfers: FROM input cores TO output cores
     const auto gather_transfers = convert_to_hwc::detail::precompute_gather_transfers(
-        config.batch_size, config.input_channels, effective_hw_for_gather, in_cores, config.l1_input_cores);
+        config.batch_size, config.input_channels, effective_hw_for_gather, in_cores, config.output_cores);
     const uint32_t block_size_width = config.l1_input_shard_width * config.batch_size;  // Back to working configuration
 
-    // Setup circular buffers after block_size_width is calculated
-    auto cb_handles = setup_circular_buffers(program, config.l1_input_core_grid, config, a, output, block_size_width);
+    // Setup circular buffers after block_size_width is calculated - use output cores where kernels run
+    auto cb_handles = setup_circular_buffers(program, config.output_core_grid, config, a, output, block_size_width);
     const auto blocked_result = convert_to_hwc::detail::group_transfers_by_output_column_blocks_with_count(
         gather_transfers,
         config.batch_size,
         config.input_channels,
         effective_hw_for_gather,
         in_cores,
-        config.l1_input_cores.size(),
+        config.output_cores.size(),
         a.element_size(),
         block_size_width);
 
@@ -702,7 +719,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
 
     // Split transfers by destination core first, then apply coalescing per-core
     auto per_core_blocked_gather_transfers =
-        convert_to_hwc::detail::split_by_destination_core(blocked_gather_transfers, config.l1_input_cores.size());
+        convert_to_hwc::detail::split_by_destination_core(blocked_gather_transfers, config.output_cores.size());
 
     // Apply transfer coalescing optimization to reduce NOC operations per-core
     for (auto& core_transfers : per_core_blocked_gather_transfers) {
@@ -732,9 +749,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
     }
 
     // Serialize blocked transfer groups for each core
-    std::vector<std::vector<uint32_t>> per_core_serialized_transfers(config.l1_input_cores.size());
+    std::vector<std::vector<uint32_t>> per_core_serialized_transfers(config.output_cores.size());
 
-    for (int core_idx = 0; core_idx < config.l1_input_cores.size(); core_idx++) {
+    for (int core_idx = 0; core_idx < config.output_cores.size(); core_idx++) {
         log_info(tt::LogType::LogAlways, "--- CORE {} ---", core_idx);
         const auto& core_transfers = per_core_blocked_gather_transfers[core_idx];
 
@@ -764,7 +781,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         config.input_channels,
         effective_hw_for_transfers,
         config.l1_input_cores,
-        config.l1_input_cores,
+        config.output_cores,
         config.element_size_bytes,
         config.l1_input_shard_width);
 
@@ -878,19 +895,19 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
     auto writer_kernel_id0 = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/cnn/convert_to_hwc/device/kernels/writer_convert_to_hwc.cpp",
-        config.l1_input_core_grid,
+        config.output_core_grid,
         tt::tt_metal::ReaderDataMovementConfig(writer_compile_time_args0));
 
     auto writer_kernel_id1 = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/cnn/convert_to_hwc/device/kernels/writer_convert_to_hwc.cpp",
-        config.l1_input_core_grid,
+        config.output_core_grid,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args1));
 
     tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/cnn/convert_to_hwc/device/kernels/convert_to_hwc.cpp",
-        config.l1_input_core_grid,
+        config.output_core_grid,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
             .fp32_dest_acc_en = false,
@@ -899,7 +916,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
 
     auto set_runtime_args = [&cb_handles, &config, per_core_serialized_transfers, writer_kernel_id0, writer_kernel_id1](
                                 tt::tt_metal::Program& program, const Tensor& a, const Tensor& output) {
-        for (uint32_t core_idx = 0; core_idx < config.l1_input_cores.size(); core_idx++) {
+        for (uint32_t core_idx = 0; core_idx < config.output_cores.size(); core_idx++) {
             std::vector<uint32_t> runtime_args_0 = {config.remote_address};
             std::vector<uint32_t> runtime_args_1 = {config.remote_address};
 
@@ -907,8 +924,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
             runtime_args_0.insert(runtime_args_0.end(), transfer_args.begin(), transfer_args.end());
             runtime_args_1.insert(runtime_args_1.end(), transfer_args.begin(), transfer_args.end());
 
-            SetRuntimeArgs(program, writer_kernel_id0, config.l1_input_cores[core_idx], runtime_args_0);
-            SetRuntimeArgs(program, writer_kernel_id1, config.l1_input_cores[core_idx], runtime_args_1);
+            SetRuntimeArgs(program, writer_kernel_id0, config.output_cores[core_idx], runtime_args_0);
+            SetRuntimeArgs(program, writer_kernel_id1, config.output_cores[core_idx], runtime_args_1);
         }
         // Only update input CB address for L1 input (DRAM input doesn't need CB update)
         if (!config.is_input_in_dram) {
