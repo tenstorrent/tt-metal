@@ -11,6 +11,8 @@ from models.perf.device_perf_utils import run_device_perf_detailed
 THRESHOLD = 1.0
 
 
+@pytest.mark.no_ensure_devices_tg
+@pytest.mark.no_reset_default_device
 @pytest.mark.parametrize(
     "mm_type, perf_target_us",
     [
@@ -25,7 +27,6 @@ THRESHOLD = 1.0
 def test_ring_mm_tg_llama_perf(
     mm_type,
     perf_target_us,
-    galaxy_type,
 ):
     profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()
@@ -58,7 +59,7 @@ def test_ring_mm_tg_llama_perf(
     benchmark_data.add_measurement(profiler, 0, step_name, f"ring_matmul-{mm_type}-std", measured_std)
     benchmark_data.save_partial_run_json(
         profiler,
-        run_type=f"tg_llama_ops" if galaxy_type != "6U" else "tg_llama_ops_6U",
+        run_type="tg_llama_ops_6U",
         ml_model_name="llama70b-tg",
     )
 
