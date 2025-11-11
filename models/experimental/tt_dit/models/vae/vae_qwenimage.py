@@ -136,8 +136,8 @@ class QwenImageRmsNorm(Module):
             norm = self._ccl_manager.reduce_scatter_persistent_buffer(norm, dim=-1, mesh_axis=self._tp_axis)
             norm = norm * (1 / n)
 
-        norm = ttnn.sqrt(norm + self.eps)
-        return ttnn.div(x, norm) * self.gamma.data
+        norm = ttnn.rsqrt(norm + self.eps)
+        return x * (norm * self.gamma.data)
 
 
 class QwenImageResample(Module):
