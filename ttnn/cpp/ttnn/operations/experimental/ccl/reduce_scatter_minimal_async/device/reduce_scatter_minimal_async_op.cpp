@@ -355,11 +355,6 @@ Tensor reduce_scatter_minimal_async_impl(
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
     TT_FATAL(
         num_devices > 1, "reduce_scatter_minimal_async op will only work for num_devices > 1, but has {}", num_devices);
-    ttnn::ccl::Topology ccl_topology = topology;
-
-    if (num_devices == 2) {
-        ccl_topology = ttnn::ccl::Topology::Linear;
-    }
 
     log_debug(tt::LogOp, "DEBUG: line_fabric is created");
 
@@ -377,7 +372,7 @@ Tensor reduce_scatter_minimal_async_impl(
                    num_devices,
                    memory_config.value_or(input_tensor.memory_config()),
                    optional_intermediate_memory_config,
-                   ccl_topology,
+                   topology,
                    multi_device_global_semaphore,
                    barrier_semaphore,
                    using_persistent_buffers,

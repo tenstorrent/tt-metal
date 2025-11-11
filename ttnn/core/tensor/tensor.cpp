@@ -195,7 +195,7 @@ Tensor Tensor::from_vector(
         TensorSpec(spec.logical_shape(), TensorLayout(buffer_dtype, spec.page_config(), spec.memory_config()));
     auto res = Tensor(create_host_buffer_from_row_major_data(std::move(buffer), buffer_spec, pad_value), buffer_spec);
     // Convert to datatype from original spec
-    res = ttnn::to_dtype(res, spec.data_type());
+    res = ops::to_dtype(res, spec.data_type());
     if (device) {
         res = res.to_device(device, spec.memory_config(), cq_id);
     }
@@ -435,13 +435,11 @@ bool Tensor::is_sharded() const {
 
 uint32_t Tensor::element_size() const { return tensor_impl::element_size_bytes(this->dtype()); }
 
-Tensor Tensor::reshape(const tt::tt_metal::Shape& new_shape) const {
-    return tensor_ops::tensor_reshape(*this, new_shape);
-}
+Tensor Tensor::reshape(const tt::tt_metal::Shape& new_shape) const { return tensor_ops::tensor_view(*this, new_shape); }
 
 Tensor Tensor::reshape(
     const tt::tt_metal::Shape& new_logical_shape, const tt::tt_metal::Shape& new_padded_shape) const {
-    return tensor_ops::tensor_reshape(*this, new_logical_shape, new_padded_shape);
+    return tensor_ops::tensor_view(*this, new_logical_shape, new_padded_shape);
 }
 
 Tensor Tensor::with_tensor_topology(TensorTopology tensor_topology) const {
@@ -717,7 +715,40 @@ const std::optional<NdShardSpec>& Tensor::nd_shard_spec() const { return this->m
 const TensorTopology& Tensor::tensor_topology() const { return this->tensor_attributes->get_tensor_topology(); }
 
 namespace ops {
+Tensor view(const Tensor& input_tensor, const Shape& new_shape, const Shape& new_padded_shape) {
+    return tensor_ops::tensor_view(input_tensor, new_shape, new_padded_shape);
+}
+Tensor view(const Tensor& input_tensor, const Shape& new_shape) {
+    return tensor_ops::tensor_view(input_tensor, new_shape);
+}
 Tensor to_dtype(const Tensor& tensor, DataType dtype) { return tensor_ops::tensor_to_dtype(tensor, dtype); }
+
+std::string to_string(const Tensor& tensor) {
+    const auto& shape = tensor.logical_shape();
+
+    if (!tensor.is_allocated()) {
+        return fmt::format(
+            "{}(<buffer is not allocated>, shape={}, dtype={}, layout={})",
+            "ttnn.Tensor",
+            shape,
+            tensor.dtype(),
+            tensor.layout());
+    }
+
+    if (std::holds_alternative<tt::tt_metal::DeviceStorage>(tensor.storage())) {
+        auto storage = std::get<tt::tt_metal::DeviceStorage>(tensor.storage());
+        if (storage.mesh_buffer != nullptr) {
+            auto* mesh_device = storage.mesh_buffer->device();  // cause crash
+
+            if (mesh_device->num_devices() == 1) {
+                auto cpu_tensor = tensor.cpu();
+                return tt::tt_metal::tensor_impl::to_string_wrapper(
+                    ttnn::distributed::get_device_tensors(cpu_tensor).at(0));
+            }
+        }
+    }
+    return tt::tt_metal::tensor_impl::to_string_wrapper(tensor);
+}
 }  // namespace ops
 
 }  // namespace tt::tt_metal
