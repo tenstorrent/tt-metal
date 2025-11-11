@@ -1,0 +1,40 @@
+ChipSpec: {
+  arch: wormhole_b0,
+  ethernet_ports: {
+    N: 2,
+    E: 2,
+    S: 2,
+    W: 2,
+  }
+}
+
+Board: [
+  { name: 4x4,
+    type: Mesh,
+    topology: [4, 4]}
+]
+
+Mesh: [
+{
+  id: 0,
+  board: 4x4,
+  device_topology: [4, 4],
+  host_topology: [1, 1],
+},
+{
+  id: 1,
+  board: 4x4,
+  device_topology: [4, 4],
+  host_topology: [1, 1],
+}
+]
+
+Graph: [
+  # Strict connections between specific devices
+  # For 8x4 machine split vertically: Mesh 0 (rows 0-3) connects to Mesh 1 (rows 4-7)
+  # Connect bottom row of M0 to top row of M1
+  # M0 D12 (row 3, col 0) <-> M1 D0 (row 0, col 0)
+  [[M0, D12], [M1, D0], 1],
+  # M0 D13 (row 3, col 1) <-> M1 D1 (row 0, col 1)
+  [[M0, D13], [M1, D1], 1],
+]
