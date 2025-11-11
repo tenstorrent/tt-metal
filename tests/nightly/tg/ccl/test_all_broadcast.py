@@ -41,9 +41,11 @@ def test_all_broadcast_trace(
     num_iters,
     function_level_defaults,
 ):
+    cluster_axis = 0
     if layout == ttnn.ROW_MAJOR_LAYOUT and input_dtype == ttnn.bfloat8_b:
         pytest.skip("bfloat8_b not supported for row-major")
     if num_devices < 8:
+        cluster_axis = 1
         mesh_mapper_config = ttnn.MeshMapperConfig(
             [ttnn.PlacementReplicate(), ttnn.PlacementShard(-1)], ttnn.MeshShape(1, num_devices)
         )
@@ -59,6 +61,7 @@ def test_all_broadcast_trace(
         input_dtype,
         layout,
         function_level_defaults,
+        cluster_axis=cluster_axis,
         all_broadcast_topology=ttnn.Topology.Linear,
         num_iters=num_iters,
         rand_tensor=True,
@@ -84,8 +87,8 @@ def test_all_broadcast_quad_host_mesh(mesh_device, output_shape, num_links, inpu
     input_tensor_tt = ttnn.from_torch(
         input_tensor, device=mesh_device, layout=layout, dtype=input_dtype, mesh_mapper=mesh_mapper
     )
-    output_tensors = ttnn.experimental.all_broadcast_async(
-        input_tensor_tt, num_links=num_links, topology=ttnn.Topology.Linear, cluster_axis=0
+    output_tensors = ttnn.all_broadcast(
+        input_tensor_tt, cluster_axis=0, num_links=num_links, topology=ttnn.Topology.Linear
     )
     for i, output_tensor in enumerate(output_tensors):
         result_torch = ttnn.to_torch(

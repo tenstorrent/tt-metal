@@ -21,25 +21,28 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
     switch (val) {
         case BinaryOpType::ADD:
         case BinaryOpType::SUB:
-            return (
-                (a == DataType::FLOAT32 && b == DataType::FLOAT32) || (a == DataType::INT32 && b == DataType::INT32) ||
-                (a == DataType::UINT32 && b == DataType::UINT32) || (a == DataType::UINT16 && b == DataType::UINT16));
         case BinaryOpType::MUL:
         case BinaryOpType::EQ:
         case BinaryOpType::NE:
         case BinaryOpType::LOGICAL_AND:
         case BinaryOpType::LOGICAL_OR:
         case BinaryOpType::LOGICAL_XOR:
+            return a == b && (
+                a == DataType::FLOAT32 ||
+                a == DataType::INT32 ||
+                a == DataType::UINT32 ||
+                a == DataType::UINT16);
         case BinaryOpType::SQUARED_DIFFERENCE:
-            return (
-                (a == DataType::FLOAT32 && b == DataType::FLOAT32) || (a == DataType::INT32 && b == DataType::INT32) ||
-                (a == DataType::UINT16 && b == DataType::UINT16));
-        case BinaryOpType::DIV:
+            return a == b && (
+                a == DataType::FLOAT32 ||
+                a == DataType::INT32 ||
+                a == DataType::UINT16);
         case BinaryOpType::LOGADDEXP:
         case BinaryOpType::LOGADDEXP2:
         case BinaryOpType::LDEXP:
         case BinaryOpType::BIAS_GELU:
         case BinaryOpType::HYPOT: return (a == DataType::FLOAT32 && b == DataType::FLOAT32);
+        case BinaryOpType::DIV:
         case BinaryOpType::RSUB:
         case BinaryOpType::GT:
         case BinaryOpType::LT:
@@ -56,9 +59,10 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
         case BinaryOpType::BITWISE_XOR:
         case BinaryOpType::BITWISE_OR:
         case BinaryOpType::BITWISE_AND:
-            return (
-                (a == DataType::INT32 && b == DataType::INT32) || (a == DataType::UINT16 && b == DataType::UINT16) ||
-                (a == DataType::UINT32 && b == DataType::UINT32));
+            return a == b && (
+                a == DataType::INT32 ||
+                a == DataType::UINT32 ||
+                a == DataType::UINT16);
         case BinaryOpType::MAXIMUM:
         case BinaryOpType::MINIMUM:
         case BinaryOpType::XLOGY:
@@ -104,8 +108,8 @@ BinaryDeviceOperation::program_factory_t BinaryDeviceOperation::select_program_f
         if (height_b == 1) {
             if (tensor_args.input_tensor_a.is_sharded()) {
                 if (tensor_args.input_tensor_a.padded_shape()[0] == tensor_args.input_tensor_b->padded_shape()[0] ||
-                    tensor_args.input_tensor_a.padded_shape()[0] > 1 and
-                        tensor_args.input_tensor_b->padded_shape()[0] == 1) {
+                    (tensor_args.input_tensor_a.padded_shape()[0] > 1 &&
+                        tensor_args.input_tensor_b->padded_shape()[0] == 1)) {
                     return BroadcastHeightMultiCoreShardedOptimized{};
                 }
                 return BroadcastHeightMultiCoreSharded{};

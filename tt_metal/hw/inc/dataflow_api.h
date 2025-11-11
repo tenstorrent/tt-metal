@@ -15,6 +15,7 @@
 #include <stdint.h>
 #include <tuple>
 #include <utility>
+#include <type_traits>
 
 #include "dataflow_api_addrgen.h"
 #include "core_config.h"
@@ -1942,17 +1943,18 @@ FORCE_INLINE void noc_inline_dw_write_set_state(
  *
  * Return value: None
  *
- * | Argument                            | Description                                         | Data type | Valid range   | required |
- * |-------------------------------------|-----------------------------------------------------|-----------|---------------|----------|
- * | val                                 | The value to be written                             | uint32_t  | Any uint32_t  | True     |
- * | addr                                | The local address to write to (if not set in state) | uint32_t  | 0..1MB        | False    |
- * | cmd_buf                             | Command buffer to use for the transaction           | uint8_t   | 0-3           | False    |
- * | noc                                 | NOC to use for the transaction                      | uint8_t   | 0 or 1        | False    |
- * | update_addr_lo (template parameter) | Whether to update the lower 32 bits of the address  | bool      | true or false | False    |
- * | update_counter (template parameter) | Whether to update the write counters                | bool      | true or false | False    |
- * | posted (template parameter)         | Whether the call is posted (i.e. ack requirement)   | bool      | true or false | False    |
- * | update_addr_hi (template parameter) | Whether to update the upper 32 bits of the address  | bool      | true or false | False    |
- * | update_val (template parameter)     | Whether to set the value to be written              | bool      | true or false | False    |
+ * | Argument                                   | Description                                            | Data type | Valid range   | required |
+ * |--------------------------------------------|--------------------------------------------------------|-----------|---------------|----------|
+ * | val                                        | The value to be written                                | uint32_t  | Any uint32_t  | True     |
+ * | addr                                       | The local address to write to (if not set in state)    | uint32_t  | 0..1MB        | False    |
+ * | cmd_buf                                    | Command buffer to use for the transaction              | uint8_t   | 0-3           | False    |
+ * | noc                                        | NOC to use for the transaction                         | uint8_t   | 0 or 1        | False    |
+ * | update_addr_lo (template parameter)        | Whether to update the lower 32 bits of the address     | bool      | true or false | False    |
+ * | update_counter (template parameter)        | Whether to update the write counters                   | bool      | true or false | False    |
+ * | posted (template parameter)                | Whether the call is posted (i.e. ack requirement)      | bool      | true or false | False    |
+ * | update_addr_hi (template parameter)        | Whether to update the upper 32 bits of the address     | bool      | true or false | False    |
+ * | update_val (template parameter)            | Whether to set the value to be written                 | bool      | true or false | False    |
+ * | dst_type (template parameter)              | Whether the write is targeting L1 or a Stream Register | InlineWriteDst| DEFAULT, L1, REG | False    |
  */
 // clang-format on
 template <
@@ -1960,7 +1962,8 @@ template <
     bool update_counter = true,
     bool posted = false,
     bool update_addr_hi = false,
-    bool update_val = false>
+    bool update_val = false,
+    InlineWriteDst dst_type = InlineWriteDst::DEFAULT>
 FORCE_INLINE void noc_inline_dw_write_with_state(
     uint32_t val, uint32_t addr = 0, uint8_t cmd_buf = write_at_cmd_buf, uint8_t noc = noc_index) {
 #ifdef ARCH_BLACKHOLE
@@ -1979,7 +1982,8 @@ FORCE_INLINE void noc_inline_dw_write_with_state(
         update_addr_hi,
         update_val,
         posted,
-        update_counter_in_callee>(noc, cmd_buf, val, addr);
+        update_counter_in_callee,
+        dst_type>(noc, cmd_buf, val, addr);
     WAYPOINT("NWID");
 }
 
@@ -2080,6 +2084,26 @@ void noc_async_read_tile_dram_sharded_set_trid(uint32_t trid = 0, uint8_t noc = 
     WAYPOINT("NSTW");
     ncrisc_noc_set_transaction_id(noc, read_cmd_buf, trid);
     WAYPOINT("NSTD");
+}
+
+// clang-format off
+/**
+ * Sets the transaction id for a noc write.
+ *
+ * Return value: None
+ *
+ * | Argument | Description                                        | Data type | Valid range | Required |
+ * |----------|----------------------------------------------------|-----------|-------------|----------|
+ * | trid     | Transaction id for the transaction                 | uint32_t  | 0x0 - 0xF   | False    |
+ * | noc      | Which NOC to use for the transaction               | uint32_t  | 0 or 1      | False    |
+ */
+// clang-format on
+FORCE_INLINE
+void noc_async_write_set_trid(uint32_t trid = 0, uint8_t noc = noc_index) {
+    RECORD_NOC_EVENT(NocEventType::WRITE_SET_TRID);
+    WAYPOINT("NWSW");
+    ncrisc_noc_set_transaction_id(noc, write_cmd_buf, trid);
+    WAYPOINT("NWSD");
 }
 
 // clang-format off
@@ -2278,6 +2302,31 @@ void noc_async_write_barrier_with_trid(uint32_t trid, uint8_t noc = noc_index) {
 
 // clang-format off
 /**
+ * This blocking call waits for all outstanding enqueued write transactions
+ * with the given transaction id to depart, but will not wait
+ * for them to complete.
+ *
+ * Return value: None
+ *
+ * | Argument | Description                          | Type     | Valid Range | Required |
+ * |----------|--------------------------------------|----------|-------------|----------|
+ * | trid     | Transaction id for the transaction   | uint32_t | 0x0 - 0xF   | True     |
+ * | noc      | Which NOC to use for the transaction | uint8_t  | 0 or 1      | False    |
+ */
+// clang-format on
+FORCE_INLINE
+void noc_async_write_flushed_with_trid(uint32_t trid, uint8_t noc = noc_index) {
+    RECORD_NOC_EVENT(NocEventType::WRITE_FLUSH_WITH_TRID);
+    WAYPOINT("NFTW");
+    while (!ncrisc_noc_nonposted_write_with_transaction_id_sent(noc, trid)) {
+        continue;
+    }
+    invalidate_l1_cache();
+    WAYPOINT("NFTD");
+}
+
+// clang-format off
+/**
  * This resets the barrier counter for a given transaction id on a given NOC using a mask.
  * Only the N bits up to the number of transaction ids are used.
  *
@@ -2296,6 +2345,8 @@ void reset_noc_trid_barrier_counter(uint32_t id_mask = NOC_CLEAR_OUTSTANDING_REQ
 
 namespace experimental {
 
+struct MulticastEndpoint;  // Forward declaration can be removed when 2.0 objects are split into different headers
+
 template <typename T>
 struct noc_traits_t {
     static_assert(sizeof(T) == 0, "NoC transactions are not supported for this type");
@@ -2309,6 +2360,14 @@ struct noc_traits_t {
 class Noc {
 public:
     enum class AddressType { NOC, LOCAL_L1 };
+
+    enum class TxnIdMode { ENABLED, DISABLED };
+
+    enum class ResponseMode { NON_POSTED, POSTED };
+
+    enum class BarrierMode { TXN_ID, FULL };
+
+    static constexpr uint32_t INVALID_TXN_ID = 0xFFFFFFFF;
 
 private:
     template <typename T>
@@ -2332,6 +2391,7 @@ private:
     }
 
 public:
+    Noc() : noc_id_(noc_index) {}
     explicit Noc(uint8_t noc_id) : noc_id_(noc_id) {}
 
     uint8_t get_noc_id() const { return noc_id_; }
@@ -2359,10 +2419,12 @@ public:
      * @param src_args Additional arguments for source address calculation
      * @param dst_args Additional arguments for destination address calculation
      * @param read_req_vc Virtual channel to use for the read request (default: NOC_UNICAST_WRITE_VC)
+     * @tparam txn_id_mode Whether transaction id will be used for the noc transaction (default: DISABLED)
      * @tparam max_page_size Maximum page size for the transfer (default: NOC_MAX_BURST_SIZE + 1)
      * @tparam enable_noc_tracing Enable NoC tracing for debugging (default: true)
      */
     template <
+        TxnIdMode txn_id_mode = TxnIdMode::DISABLED,
         uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1,
         bool enable_noc_tracing = true,
         typename Src,
@@ -2373,7 +2435,10 @@ public:
         uint32_t size_bytes,
         const src_args_t<Src>& src_args,
         const dst_args_t<Dst>& dst_args,
-        uint32_t read_req_vc = NOC_UNICAST_WRITE_VC) const {
+        uint32_t read_req_vc = NOC_UNICAST_WRITE_VC,
+        uint32_t trid = INVALID_TXN_ID) const {
+        // TODO (#31407): Add support for read with transaction id
+        static_assert(txn_id_mode == TxnIdMode::DISABLED);
         noc_async_read<max_page_size, enable_noc_tracing>(
             get_src_ptr<AddressType::NOC>(src, src_args),
             get_dst_ptr<AddressType::LOCAL_L1>(dst, dst_args),
@@ -2392,9 +2457,15 @@ public:
      * @param src_args Additional arguments for source address calculation
      * @param dst_args Additional arguments for destination address calculation
      * @param vc Virtual channel to use for the write transaction (default: NOC_UNICAST_WRITE_VC)
+     * @tparam txn_id_mode Whether transaction id will be used for the noc transaction (default: DISABLED)
+     * @tparam max_page_size Maximum page size for the transfer (default: NOC_MAX_BURST_SIZE + 1)
+     * @tparam response_mode Posted noc transactions do not get ack from receiver, non-posted ones do (default:
+     * NON_POSTED)
      * @tparam enable_noc_tracing Enable NoC tracing for debugging (default: true)
      */
     template <
+        TxnIdMode txn_id_mode = TxnIdMode::DISABLED,
+        ResponseMode response_mode = ResponseMode::NON_POSTED,
         uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1,
         bool enable_noc_tracing = true,
         typename Src,
@@ -2405,13 +2476,99 @@ public:
         uint32_t size_bytes,
         const src_args_t<Src>& src_args,
         const dst_args_t<Dst>& dst_args,
-        uint32_t vc = NOC_UNICAST_WRITE_VC) const {
-        noc_async_write<max_page_size, enable_noc_tracing>(
-            get_src_ptr<AddressType::LOCAL_L1>(src, src_args),
-            get_dst_ptr<AddressType::NOC>(dst, dst_args),
-            size_bytes,
+        uint32_t vc = NOC_UNICAST_WRITE_VC,
+        uint32_t trid = INVALID_TXN_ID) const {
+        if constexpr (txn_id_mode == TxnIdMode::ENABLED) {
+            // TODO (#31535): Need to add check in ncrisc_noc_fast_write_any_len to ensure outstanding transaction register does not overflow
+            WAYPOINT("NAWW");
+            ASSERT(trid != INVALID_TXN_ID);
+            auto src_addr = get_src_ptr<AddressType::LOCAL_L1>(src, src_args);
+            auto dst_noc_addr = get_dst_ptr<AddressType::NOC>(dst, dst_args);
+            if constexpr (enable_noc_tracing) {
+                RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID, dst_noc_addr, size_bytes, -1);
+            }
+            DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc_id_, dst_noc_addr, src_addr, size_bytes);
+            constexpr bool one_packet = max_page_size <= NOC_MAX_BURST_SIZE;
+            ncrisc_noc_fast_write_any_len<noc_mode, true, one_packet>(
+                noc_id_,
+                write_cmd_buf,
+                src_addr,
+                dst_noc_addr,
+                size_bytes,
+                vc,
+                false,  // mcast
+                false,  // linked
+                1,      // num_dests
+                true,   // multicast_path_reserve
+                response_mode == ResponseMode::POSTED,
+                trid);
+            WAYPOINT("NWPD");
+        } else {
+            noc_async_write<max_page_size, enable_noc_tracing, response_mode == ResponseMode::POSTED>(
+                get_src_ptr<AddressType::LOCAL_L1>(src, src_args),
+                get_dst_ptr<AddressType::NOC>(dst, dst_args),
+                size_bytes,
+                noc_id_,
+                vc);
+        }
+    }
+
+    /** @brief Initiates an asynchronous write of a 32-bit value to a NOC destination.
+     *
+     * Typically used for writing registers, but can be used for memory locations as well.
+     * The advantage over using noc_async_write is that we don't use a Tensix L1 memory source location; the write value
+     * is written directly into a register. Unlike using noc_async_write, there are also no address alignment concerns.
+     * The destination can be either a Tensix core+L1 memory address or a PCIe controller; This API does not support
+     * DRAM addresses. Note: Due to HW bug on Blackhole, inline writes to L1 will use a scratch location in L1 memory.
+     *
+     * @see async_write_barrier.
+     *
+     * @param dst Destination object (e.g., UnicastEndpoint)
+     * @param val The value to be written
+     * @param dst_args Additional arguments for destination address calculation
+     * @param be Byte-enable mask controls which bytes are written to at an L1 destination
+     * @param vc Virtual channel to use for the transaction
+     * @param trid Transaction ID to use for the transaction (default: INVALID_TXN_ID)
+     * @tparam txn_id_mode Whether transaction id will be used for the noc transaction (default: DISABLED)
+     * @tparam dst_type Whether the write is targeting L1 or a Stream Register
+     * @tparam response_mode Posted noc transactions do not get ack from receiver, non-posted ones do (default:
+     * NON_POSTED)
+     */
+    template <
+        TxnIdMode txn_id_mode = TxnIdMode::DISABLED,
+        InlineWriteDst dst_type = InlineWriteDst::DEFAULT,
+        ResponseMode response_mode = ResponseMode::NON_POSTED,
+        typename Dst>
+    void inline_dw_write(
+        const Dst& dst,
+        uint32_t val,
+        const dst_args_t<Dst>& dst_args,
+        uint8_t be = 0xF,
+        uint32_t vc = NOC_UNICAST_WRITE_VC,
+        uint32_t trid = INVALID_TXN_ID) const {
+        static_assert(txn_id_mode == TxnIdMode::DISABLED);
+        static_assert(!std::is_same_v<Dst, MulticastEndpoint>);  // Can be removed when #30023 is resolved
+        WAYPOINT("NWIW");
+        auto dst_addr = get_dst_ptr<AddressType::NOC>(dst, dst_args);
+        DEBUG_SANITIZE_NOC_ADDR(noc_id_, dst_addr, 4);
+        DEBUG_SANITIZE_NO_DRAM_ADDR(noc_id_, dst_addr, 4);
+#if defined(ARCH_BLACKHOLE) && defined(WATCHER_ENABLED)
+        if constexpr (dst_type == InlineWriteDst::L1) {
+            uint32_t src_addr = noc_get_interim_inline_value_addr(noc_id_, dst_addr);
+            DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc_id_, dst_addr, src_addr, 4);
+        }
+#endif
+
+        noc_fast_write_dw_inline<noc_mode, dst_type>(
             noc_id_,
-            vc);
+            write_at_cmd_buf,
+            val,
+            dst_addr,
+            be,
+            vc,
+            std::is_same_v<Dst, MulticastEndpoint>,
+            response_mode == ResponseMode::POSTED);
+        WAYPOINT("NWID");
     }
 
     /** @brief Initiates a read barrier for synchronization.
@@ -2419,22 +2576,46 @@ public:
      * This blocking call waits for all the outstanding enqueued read transactions
      * issued on the current Tensix core to complete.
      * After returning from this call there will be no outstanding read transactions for this noc for the current core.
+     *
+     * @param trid Transaction ID to wait on for outstanding reads (default: INVALID_TXN_ID for full barrier)
+     * @tparam barrier_type Indicates whether to issue a full barrier or on a transaction id
      */
-    void async_read_barrier() const { noc_async_read_barrier(noc_id_); }
+    template <BarrierMode barrier_type = BarrierMode::FULL>
+    void async_read_barrier(uint32_t trid = INVALID_TXN_ID) const {
+        if constexpr (barrier_type == BarrierMode::FULL) {
+            noc_async_read_barrier(noc_id_);
+        } else if constexpr (barrier_type == BarrierMode::TXN_ID) {
+            ASSERT(trid != INVALID_TXN_ID);
+            noc_async_read_barrier_with_trid(trid, noc_id_);
+        }
+    }
 
     /** @brief Initiates a write barrier for synchronization.
      *
      * This blocking call waits for all the outstanding enqueued write transactions
      * issued on the current Tensix core to complete.
      * After returning from this call there will be no outstanding write transactions for this noc for the current core.
+     *
+     * @param trid Transaction ID to wait on for outstanding writes (default: INVALID_TXN_ID for full barrier)
+     * @tparam barrier_type Indicates whether to issue a full barrier or on a transaction id
      */
-    void async_write_barrier() const { noc_async_write_barrier(noc_id_); }
+    template <BarrierMode barrier_type = BarrierMode::FULL>
+    void async_write_barrier(uint32_t trid = INVALID_TXN_ID) const {
+        if constexpr (barrier_type == BarrierMode::FULL) {
+            noc_async_write_barrier(noc_id_);
+        } else if constexpr (barrier_type == BarrierMode::TXN_ID) {
+            ASSERT(trid != INVALID_TXN_ID);
+            noc_async_write_barrier_with_trid(trid, noc_id_);
+        }
+    }
 
     /** @brief Waits for all outstanding write transactions to be flushed.
      *
      * This blocking call waits for all the outstanding enqueued write transactions
      * issued on the current Tensix core to depart, but will not wait for them to complete.
      */
+    // TODO (#31405): there is no variant of this for transaction ids. Use
+    // ncrisc_noc_nonposted_write_with_transaction_id_sent but none for dynamic noc version exists atm.
     void async_writes_flushed() const { noc_async_writes_flushed(noc_id_); }
 
     /** @brief Waits for all outstanding posted write transactions to be flushed.
@@ -2674,6 +2855,127 @@ public:
 
 private:
     uint32_t local_l1_addr_;
+};
+
+/**
+ * @brief Experimental wrapper around calculating unicast noc address given x, y, and address. This allows direct address to be supplied to NoC apis
+ *
+ * @note This API is experimental and subject to change.
+ */
+struct UnicastEndpoint {
+    uint64_t get_noc_unicast_addr(uint32_t noc_x, uint32_t noc_y, uint32_t addr, uint8_t noc) const {
+        return ::get_noc_addr(noc_x, noc_y, addr, noc);
+    }
+};
+
+/**
+ * @brief Experimental wrapper around calculating multicast noc address given 2D multicast rectangle and address. This allows direct address to be supplied to NoC apis
+ *
+ * @note This API is experimental and subject to change.
+ */
+struct MulticastEndpoint {
+    uint64_t get_noc_multicast_addr(
+        uint32_t noc_x_start, uint32_t noc_y_start, uint32_t noc_x_end, uint32_t noc_y_end, uint32_t addr, uint8_t noc)
+        const {
+        return ::get_noc_multicast_addr(noc_x_start, noc_y_start, noc_x_end, noc_y_end, addr, noc);
+    }
+};
+
+/**
+ * @brief Experimental wrapper around calculating noc address targeting a bank managed by the allocator (either DRAM or
+ * L1) given bank id and address. This allows direct address to be supplied to NoC apis
+ *
+ * @note This API is experimental and subject to change.
+ */
+enum AllocatorBankType { L1, DRAM };
+
+template <AllocatorBankType bank_type>
+struct AllocatorBank {
+    uint64_t get_noc_addr_from_bank_id(uint32_t bank_id, uint32_t addr, uint8_t noc) const {
+        return ::get_noc_addr_from_bank_id<bank_type == AllocatorBankType::DRAM>(bank_id, addr, noc);
+    }
+};
+
+template <>
+struct noc_traits_t<UnicastEndpoint> {
+    struct src_args_type {
+        uint32_t noc_x{};
+        uint32_t noc_y{};
+        uint32_t addr{};
+    };
+    struct dst_args_type {
+        uint32_t noc_x{};
+        uint32_t noc_y{};
+        uint32_t addr{};
+    };
+    template <Noc::AddressType address_type>
+    static auto src_addr(const UnicastEndpoint& src, const Noc& noc, const src_args_type& args) {
+        static_assert(address_type == Noc::AddressType::NOC);
+        uint64_t noc_addr = src.get_noc_unicast_addr(args.noc_x, args.noc_y, args.addr, noc.get_noc_id());
+        return noc_addr;
+    }
+    template <Noc::AddressType address_type>
+    static auto dst_addr(const UnicastEndpoint& dst, const Noc& noc, const dst_args_type& args) {
+        static_assert(address_type == Noc::AddressType::NOC);
+        uint64_t noc_addr = dst.get_noc_unicast_addr(args.noc_x, args.noc_y, args.addr, noc.get_noc_id());
+        return noc_addr;
+    }
+};
+
+template <>
+struct noc_traits_t<MulticastEndpoint> {
+    struct src_args_type {
+        uint32_t noc_x_start{};
+        uint32_t noc_y_start{};
+        uint32_t noc_x_end{};
+        uint32_t noc_y_end{};
+        uint32_t addr{};
+    };
+    struct dst_args_type {
+        uint32_t noc_x_start{};
+        uint32_t noc_y_start{};
+        uint32_t noc_x_end{};
+        uint32_t noc_y_end{};
+        uint32_t addr{};
+    };
+    template <Noc::AddressType address_type>
+    static auto src_addr(const MulticastEndpoint& src, const Noc& noc, const src_args_type& args) {
+        static_assert(address_type == Noc::AddressType::NOC);
+        uint64_t noc_addr = src.get_noc_multicast_addr(
+            args.noc_x_start, args.noc_y_start, args.noc_x_end, args.noc_y_end, args.addr, noc.get_noc_id());
+        return noc_addr;
+    }
+    template <Noc::AddressType address_type>
+    static auto dst_addr(const MulticastEndpoint& dst, const Noc& noc, const dst_args_type& args) {
+        static_assert(address_type == Noc::AddressType::NOC);
+        uint64_t noc_addr = dst.get_noc_multicast_addr(
+            args.noc_x_start, args.noc_y_start, args.noc_x_end, args.noc_y_end, args.addr, noc.get_noc_id());
+        return noc_addr;
+    }
+};
+
+template <AllocatorBankType bank_type>
+struct noc_traits_t<AllocatorBank<bank_type>> {
+    struct src_args_type {
+        uint32_t bank_id{};
+        uint32_t addr{};
+    };
+    struct dst_args_type {
+        uint32_t bank_id{};
+        uint32_t addr{};
+    };
+    template <Noc::AddressType address_type>
+    static auto src_addr(const AllocatorBank<bank_type>& src, const Noc& noc, const src_args_type& args) {
+        static_assert(address_type == Noc::AddressType::NOC);
+        uint64_t noc_addr = src.template get_noc_addr_from_bank_id(args.bank_id, args.addr, noc.get_noc_id());
+        return noc_addr;
+    }
+    template <Noc::AddressType address_type>
+    static auto dst_addr(const AllocatorBank<bank_type>& dst, const Noc& noc, const dst_args_type& args) {
+        static_assert(address_type == Noc::AddressType::NOC);
+        uint64_t noc_addr = dst.template get_noc_addr_from_bank_id(args.bank_id, args.addr, noc.get_noc_id());
+        return noc_addr;
+    }
 };
 
 // TODO(#29597): The traits classes for TensorAccessor and related classes could be moved to tensor_accessor.h

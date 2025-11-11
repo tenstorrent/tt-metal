@@ -13,7 +13,6 @@
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
-
 namespace ttnn {
 
 namespace operations::conv {
@@ -194,12 +193,15 @@ shard_or_reshard_tensor_if_required(
     bool auto_shard);
 
 bool auto_enable_kernel_folding(
+    const ttnn::MemoryConfig& input_memory_config,
+    Layout input_layout,
+    const DataType& input_dtype,
     std::optional<bool> enable_folding_,
-    bool is_dram,
     uint32_t input_height,
     uint32_t input_width,
     std::array<uint32_t, 2>& kernel_size,
     std::array<uint32_t, 2>& stride,
+    std::array<uint32_t, 2>& dilation,
     std::array<uint32_t, 4>& padding_n4);
 
 Tensor fold_input_tensor_if_required(
@@ -210,6 +212,7 @@ Tensor fold_input_tensor_if_required(
     uint32_t& in_channels,
     std::array<uint32_t, 2>& kernel_size,
     std::array<uint32_t, 2>& stride,
+    std::array<uint32_t, 2>& dilation,
     std::array<uint32_t, 4>& padding_n4,
     bool& mm_conv,
     Conv2dConfig& conv_config);

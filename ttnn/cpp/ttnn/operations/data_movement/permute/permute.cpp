@@ -8,6 +8,7 @@
 #include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
@@ -78,7 +79,7 @@ ttnn::Tensor permute_impl(
         } else if (N == 0 && C == 3 && H == 2 && W == 1) {
             output = transpose_wh(transpose_hc(transpose_wh(formatted_input_tensor)));
         } else {
-            TT_FATAL(false, "Sharded permute not supported for this permutation");
+            output = prim_permute(formatted_input_tensor);
         }
     } else {
         if (N == 0 && C == 1 && H == 2 && W == 3) {
@@ -194,8 +195,17 @@ ttnn::Tensor ExecutePermute::invoke(
     auto iorder = normalized_dims.size() < 4 ? adjust_order(normalized_dims) : normalized_dims;
 
     const auto input_layout = input_tensor.layout();
-    auto output_tensor =
-        detail::permute_launch(itensor, iorder, memory_config.value_or(input_tensor.memory_config()), pad_value);
+    const auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
+
+    if (input_layout == Layout::ROW_MAJOR) {
+        uint32_t l1_alignment = tt::tt_metal::hal::get_l1_alignment();
+        TT_FATAL(
+            !output_memory_config.is_sharded() ||
+                (*output_memory_config.shard_spec()).shape[1] * input_tensor.element_size() % (l1_alignment) == 0,
+            "Shard page size must be aligned to {}B for L1 Tensor",
+            l1_alignment);
+    }
+    auto output_tensor = detail::permute_launch(itensor, iorder, output_memory_config, pad_value);
     output_tensor = ttnn::to_layout(output_tensor, input_layout);
 
     if (input_rank < 4) {

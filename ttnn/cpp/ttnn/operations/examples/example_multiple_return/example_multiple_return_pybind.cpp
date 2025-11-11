@@ -21,7 +21,15 @@ void bind_example_multiple_return_operation(py::module& module) {
     bind_registered_operation(
         module,
         ttnn::composite_example_multiple_return,
-        R"doc(composite_example_multiple_return(input_tensor: ttnn.Tensor) -> std::vector<std::optional<Tensor>>)doc",
+        R"doc(
+        Example operation that returns multiple tensors.
+
+        Args:
+            input_tensor (ttnn.Tensor): The input tensor.
+
+        Returns:
+            List[ttnn.Tensor]: List of output tensors.
+        )doc",
         ttnn::pybind_arguments_t{py::arg("input_tensor"), py::arg("return_output1"), py::arg("return_output2")});
 }
 

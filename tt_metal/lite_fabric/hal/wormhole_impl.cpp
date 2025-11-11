@@ -6,19 +6,19 @@
 
 namespace lite_fabric {
 
-void WormholeLiteFabricHal::set_reset_state(tt_cxy_pair virtual_core, bool assert_reset) {}
+void WormholeLiteFabricHal::set_reset_state(tt_cxy_pair /*virtual_core*/, bool /*assert_reset*/) {}
 
-void WormholeLiteFabricHal::set_pc(tt_cxy_pair virtual_core, uint32_t pc_val) {}
+void WormholeLiteFabricHal::set_pc(tt_cxy_pair /*virtual_core*/, uint32_t /*pc_val*/) {}
 
 tt::umd::tt_version WormholeLiteFabricHal::get_binary_version() {
     return tt::umd::tt_version{0, 0, 0};
 }
 
-void WormholeLiteFabricHal::launch(const std::filesystem::path& bin_path) {}
+void WormholeLiteFabricHal::launch(const std::filesystem::path& /*bin_path*/) {}
 
 void WormholeLiteFabricHal::terminate() {}
 
-void WormholeLiteFabricHal::wait_for_state(tt_cxy_pair virtual_core, lite_fabric::InitState state) {}
+void WormholeLiteFabricHal::wait_for_state(tt_cxy_pair /*virtual_core*/, lite_fabric::InitState /*state*/) {}
 
 std::vector<std::filesystem::path> WormholeLiteFabricHal::build_includes(const std::filesystem::path& root_dir) {
     return {
@@ -29,7 +29,9 @@ std::vector<std::filesystem::path> WormholeLiteFabricHal::build_includes(const s
         root_dir / "tt_metal/hw/ckernels/wormhole/metal/llk_io",
         root_dir / "tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc",
         root_dir / "tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib",
-        root_dir / "tt_metal/lite_fabric/hw/inc"};  // For memory configuration headers
+        root_dir / "tt_metal/lite_fabric/hw/inc",
+        root_dir / "tt_metal/lite_fabric/hw/inc/wormhole",
+    };
 }
 
 std::vector<std::string> WormholeLiteFabricHal::build_defines() {
