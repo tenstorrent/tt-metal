@@ -1303,7 +1303,7 @@ std::optional<RoutingDirection> ControlPlane::get_forwarding_direction(
             }
         }
     }
-    return RoutingDirection::NONE;
+    return std::nullopt;
 }
 
 std::vector<chan_id_t> ControlPlane::get_forwarding_eth_chans_to_chip(
