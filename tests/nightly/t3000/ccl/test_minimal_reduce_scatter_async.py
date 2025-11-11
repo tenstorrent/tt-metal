@@ -1216,7 +1216,7 @@ def test_reduce_scatter_minimal_async_linear_sharded(
     )
 
 
-MESH_SHAPE = (2, 4)
+MESH_SHAPE = (1, 8)
 LAYOUT = ttnn.TILE_LAYOUT
 
 NUM_ITERS = 1
@@ -1274,19 +1274,19 @@ def _get_tensors(
     return tt_input, torch_reference
 
 
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize(
-    "input_shape", [[128, 128], [8, 8, 128, 128], [8, 128, 128], [8, 8, 8, 8, 128, 128], [8, 8, 8, 16, 16]]
+    "input_shape", [[256, 256], [8, 8, 256, 256], [8, 256, 256], [8, 8, 8, 8, 256, 256], [8, 8, 8, 16, 16]]
 )
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG])
 @pytest.mark.parametrize("dim", [0, 1, 2, 3, 4, 5])
-@pytest.mark.parametrize("cluster_axis", [0])
-@pytest.mark.parametrize("topology", [ttnn.Topology.Linear, ttnn.Topology.Ring])
+@pytest.mark.parametrize("cluster_axis", [1])
+@pytest.mark.parametrize("topology", [ttnn.Topology.Ring, ttnn.Topology.Linear])
 def test_nd(mesh_device, input_shape, dim, cluster_axis, dtype, memory_config, topology):
     if dim >= len(input_shape):
-        pytest.skip("Invalid gather dim")
+        pytest.skip("Invalid scatter dim")
 
     tt_input, torch_reference = _get_tensors(
         input_shape,
@@ -1304,8 +1304,6 @@ def test_nd(mesh_device, input_shape, dim, cluster_axis, dtype, memory_config, t
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
     )
     semaphores = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(3)]
-
-    print(f"{tt_input.shape=}")
 
     for i in range(NUM_ITERS):
         tt_out_tensor = ttnn.experimental.reduce_scatter_minimal_async(
