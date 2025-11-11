@@ -327,6 +327,10 @@ RunTimeOptions::RunTimeOptions() {
         log_info(tt::LogMetal, "Disabling multi-erisc mode with TT_METAL_DISABLE_MULTI_AERISC");
         this->enable_2_erisc_mode = false;
     }
+    if (this->runtime_target_device_ != tt::TargetDevice::Silicon) {
+        log_info(tt::LogMetal, "Disabling multi-erisc mode with simulator/mock target device");
+        this->enable_2_erisc_mode = false;
+    }
 
     if (getenv("TT_METAL_LOG_KERNELS_COMPILE_COMMANDS")) {
         this->log_kernels_compilation_commands = true;
