@@ -8,11 +8,24 @@ from loguru import logger
 from ttnn.model_preprocessing import infer_ttnn_module_args, preprocess_model_parameters
 
 import ttnn
-from models.common.utility_functions import divup, is_wormhole_b0
+from models.common.utility_functions import divup, is_blackhole, is_wormhole_b0
 from models.demos.ufld_v2.common import load_torch_model
-from models.demos.ufld_v2.tests.pcc.test_ttnn_ufld_v2 import create_custom_mesh_preprocessor, get_mesh_mappers
-from models.demos.ufld_v2.ttnn.ttnn_ufld_v2 import TtnnUFLDv2
 from tests.ttnn.utils_for_testing import assert_with_pcc
+
+if is_blackhole():
+    from models.demos.blackhole.ufld_v2.tests.pcc.test_ttnn_ufld_v2 import (
+        create_custom_mesh_preprocessor,
+        get_mesh_mappers,
+    )
+    from models.demos.blackhole.ufld_v2.ttnn.ttnn_ufld_v2 import TtnnUFLDv2
+elif is_wormhole_b0():
+    from models.demos.wormhole.ufld_v2.tests.pcc.test_ttnn_ufld_v2 import (
+        create_custom_mesh_preprocessor,
+        get_mesh_mappers,
+    )
+    from models.demos.wormhole.ufld_v2.ttnn.ttnn_ufld_v2 import TtnnUFLDv2
+else:
+    raise RuntimeError("Unsupported device: Only Blackhole and Wormhole are currently supported.")
 
 
 def load_ttnn_model(device, torch_model, torch_input_tensor, weights_mesh_mapper):
@@ -72,8 +85,10 @@ class UFLDPerformanceRunnerInfra:
     def setup_l1_sharded_input(self, device, torch_input_tensor=None, min_channels=16):
         if is_wormhole_b0():
             core_grid = ttnn.CoreGrid(y=8, x=8)
+        elif is_blackhole():
+            core_grid = ttnn.CoreGrid(y=8, x=8)
         else:
-            raise RuntimeError("Unsupported device: Only Wormhole B0 is currently supported.")
+            raise RuntimeError("Unsupported device: Only Wormhole and Blackhole are currently supported.")
 
         torch_input_tensor = self.torch_input_tensor if torch_input_tensor is None else torch_input_tensor
         n, c, h, w = torch_input_tensor.shape
@@ -84,7 +99,7 @@ class UFLDPerformanceRunnerInfra:
         n = n // self.num_devices if n // self.num_devices != 0 else n
         input_mem_config = ttnn.create_sharded_memory_config(
             [n, c, h, w],
-            ttnn.CoreGrid(x=8, y=8),
+            core_grid,
             ttnn.ShardStrategy.HEIGHT,
         )
         assert torch_input_tensor.ndim == 4, "Expected input tensor to have shape (BS, C, H, W)"
