@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "views/accessor_view.h"
+#include "accessor_view.h"
 
 void kernel_main() {
     const auto n_tiles = get_arg_val<uint32_t>(0);
@@ -10,7 +10,7 @@ void kernel_main() {
 
     constexpr auto num_tiles_per_cycle = get_compile_time_arg_val(0);
 
-    // 3 circular buffers with bank base addresses starting at compile args offset 1 and runtime args offset 2
-    const auto view = views::AccessorView<3, 1, num_tiles_per_cycle>(2);
-    view.read_tiles(n_tiles, start_id);
+    using View = views::AccessorView<1, 1, num_tiles_per_cycle>;
+    const auto view = View(2);
+    view.write_tiles(n_tiles, start_id);
 }

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "expression_pybind.hpp"
+#include "lazy_pybind.hpp"
 #include "lazy.hpp"
 
 #include <ttnn-pybind/export_enum.hpp>

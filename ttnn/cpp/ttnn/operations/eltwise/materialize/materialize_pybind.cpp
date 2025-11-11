@@ -3,17 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "materialize_pybind.hpp"
-#include "ttnn/operations/eltwise/fused/device/materialize_device_operation.hpp"
+#include "ttnn/operations/eltwise/materialize/device/materialize_device_operation.hpp"
 
 #include "ttnn-pybind/decorators.hpp"
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-namespace ttnn::operations::fused {
+namespace ttnn::operations::materialize {
 
 void py_module(py::module& module) {
-    auto prim = module.def_submodule("prim", "Primitive fused operations");
+    auto prim = module.def_submodule("prim", "Primitive materialize operation");
     auto materialize = ttnn::prim::materialize;
     using materialize_t = decltype(materialize);
 
@@ -27,4 +27,4 @@ void py_module(py::module& module) {
         });
 }
 
-}  // namespace ttnn::operations::fused
+}  // namespace ttnn::operations::materialize

@@ -192,8 +192,8 @@ set(TTNN_SRC_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/complex/complex_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/complex_unary/complex_unary_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/complex_unary_backward/complex_unary_backward_${PY_BINDING}.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/fused/materialize_${PY_BINDING}.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/lazy/expression_${PY_BINDING}.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/lazy/lazy_${PY_BINDING}.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/materialize/materialize_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/quantization/quantization_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/ternary/ternary_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/ternary_backward/ternary_backward_${PY_BINDING}.cpp
@@ -510,8 +510,8 @@ target_link_libraries(
         TTNN::Ops::Eltwise::Complex::Binary
         TTNN::Ops::Eltwise::Complex::Unary
         TTNN::Ops::Eltwise::Complex::Unary::Backward
-        TTNN::Ops::Eltwise::Fused
         TTNN::Ops::Eltwise::Lazy
+        TTNN::Ops::Eltwise::Materialize
         TTNN::Ops::Eltwise::Quantization
         TTNN::Ops::Eltwise::Ternary
         TTNN::Ops::Eltwise::Ternary::Backward
@@ -685,8 +685,8 @@ add_subdirectory(cpp/ttnn/operations/eltwise/complex)
 add_subdirectory(cpp/ttnn/operations/eltwise/complex_binary)
 add_subdirectory(cpp/ttnn/operations/eltwise/complex_unary)
 add_subdirectory(cpp/ttnn/operations/eltwise/complex_unary_backward)
-add_subdirectory(cpp/ttnn/operations/eltwise/fused)
 add_subdirectory(cpp/ttnn/operations/eltwise/lazy)
+add_subdirectory(cpp/ttnn/operations/eltwise/materialize)
 add_subdirectory(cpp/ttnn/operations/eltwise/quantization)
 add_subdirectory(cpp/ttnn/operations/eltwise/ternary)
 add_subdirectory(cpp/ttnn/operations/eltwise/ternary_backward)

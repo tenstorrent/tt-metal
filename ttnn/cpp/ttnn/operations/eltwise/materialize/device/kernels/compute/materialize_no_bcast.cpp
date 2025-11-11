@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "views/compute_view.h"
-#include "views/tile_views.h"
+#include "compute_view.h"
+#include "tile_views.h"
 
 namespace NAMESPACE {
 void MAIN {

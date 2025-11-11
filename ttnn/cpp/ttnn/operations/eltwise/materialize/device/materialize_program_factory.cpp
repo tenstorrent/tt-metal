@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/eltwise/fused/device/materialize_device_operation.hpp"
+#include "ttnn/operations/eltwise/materialize/device/materialize_device_operation.hpp"
 
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -11,15 +11,15 @@ namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
 namespace metal = tt::tt_metal;
-namespace fused = ttnn::operations::fused;
+namespace materialize = ttnn::operations::materialize;
 
 template <typename F>
 void set_or_update_runtime_arguments(
     metal::Program& program,
-    const fused::MaterializeDeviceOperation::ProgramFactory::shared_variables_t& shared_variables,
-    const fused::MaterializeDeviceOperation::operation_attributes_t& operation_attributes,
-    const fused::MaterializeDeviceOperation::tensor_args_t& tensor_args,
-    fused::MaterializeDeviceOperation::tensor_return_value_t& output_tensor,
+    const materialize::MaterializeDeviceOperation::ProgramFactory::shared_variables_t& shared_variables,
+    const materialize::MaterializeDeviceOperation::operation_attributes_t& operation_attributes,
+    const materialize::MaterializeDeviceOperation::tensor_args_t& tensor_args,
+    materialize::MaterializeDeviceOperation::tensor_return_value_t& output_tensor,
     F handle_args) {
     const auto num_tiles = output_tensor.physical_volume() / output_tensor.tensor_spec().tile().get_tile_hw();
     const auto
@@ -61,7 +61,7 @@ void set_or_update_runtime_arguments(
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
-namespace ttnn::operations::fused {
+namespace ttnn::operations::materialize {
 
 MaterializeDeviceOperation::ProgramFactory::cached_program_t MaterializeDeviceOperation::ProgramFactory::create(
     const operation_attributes_t& operation_attributes,
@@ -124,17 +124,17 @@ MaterializeDeviceOperation::ProgramFactory::cached_program_t MaterializeDeviceOp
     auto shared_variables = shared_variables_t{
         .reader_kernel_id = metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/eltwise/fused/device/kernels/dataflow/reader.cpp",
+            "ttnn/cpp/ttnn/operations/eltwise/materialize/device/kernels/dataflow/reader.cpp",
             all_device_cores,
             metal::ReaderDataMovementConfig(std::move(reader_compile_time_args))),
         .writer_kernel_id = metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/eltwise/fused/device/kernels/dataflow/writer.cpp",
+            "ttnn/cpp/ttnn/operations/eltwise/materialize/device/kernels/dataflow/writer.cpp",
             all_device_cores,
             metal::WriterDataMovementConfig(std::move(writer_compile_time_args))),
         .compute_kernel_id = metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/eltwise/fused/device/kernels/compute/materialize_no_bcast.cpp",
+            "ttnn/cpp/ttnn/operations/eltwise/materialize/device/kernels/compute/materialize_no_bcast.cpp",
             all_device_cores,
             metal::ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
@@ -177,4 +177,4 @@ void MaterializeDeviceOperation::ProgramFactory::override_runtime_arguments(
         });
 }
 
-}  // namespace ttnn::operations::fused
+}  // namespace ttnn::operations::materialize

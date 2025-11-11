@@ -5,7 +5,7 @@
 #include "materialize_device_operation.hpp"
 #include "ttnn/operations/eltwise/lazy/expression.hpp"
 
-namespace ttnn::operations::fused {
+namespace ttnn::operations::materialize {
 
 MaterializeDeviceOperation::program_factory_t MaterializeDeviceOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
@@ -92,4 +92,4 @@ MaterializeDeviceOperation::invoke(lazy::FunctionView expression) {
         tensor_args_t{.input_tensors = std::move(input_tensors)}};
 }
 
-}  // namespace ttnn::operations::fused
+}  // namespace ttnn::operations::materialize

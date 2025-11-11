@@ -6,8 +6,8 @@
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
-#include "ttnn/operations/eltwise/fused/device/materialize_device_operation.hpp"
 #include "ttnn/operations/eltwise/lazy/lazy.hpp"
+#include "ttnn/operations/eltwise/materialize/device/materialize_device_operation.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary_composite.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/functions.hpp"

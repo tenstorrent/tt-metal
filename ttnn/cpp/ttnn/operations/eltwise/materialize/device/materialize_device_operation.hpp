@@ -9,7 +9,7 @@
 #include "ttnn/operations/eltwise/lazy/expression.hpp"
 
 namespace ttnn {
-namespace operations::fused {
+namespace operations::materialize {
 
 struct MaterializeDeviceOperation {
     using spec_return_value_t = TensorSpec;
@@ -65,12 +65,12 @@ struct MaterializeDeviceOperation {
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(lazy::FunctionView expression);
 };
 
-}  // namespace operations::fused
+}  // namespace operations::materialize
 
 namespace prim {
 
 constexpr auto materialize =
-    ttnn::register_operation<"ttnn::prim::materialize", ttnn::operations::fused::MaterializeDeviceOperation>();
+    ttnn::register_operation<"ttnn::prim::materialize", ttnn::operations::materialize::MaterializeDeviceOperation>();
 
 }  // namespace prim
 }  // namespace ttnn
