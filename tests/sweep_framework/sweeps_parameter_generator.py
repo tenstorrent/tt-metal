@@ -42,10 +42,7 @@ def generate_vectors(module_name):
             v["sweep_name"] = module_name
 
         invalidate_vectors(test_module, suite_vectors)
-        if DUMP_FILE:
-            export_suite_vectors_json(module_name, suite, suite_vectors)
-        else:
-            export_suite_vectors(module_name, suite, suite_vectors)
+        export_suite_vectors_json(module_name, suite, suite_vectors)
 
 
 # Perform any post-gen validation to the resulting vectors.
@@ -95,74 +92,6 @@ def export_suite_vectors_json(module_name, suite_name, vectors):
     logger.info(f"SWEEPS: Generated {len(vectors)} test vectors for suite {suite_name}.")
 
 
-# Output the individual test vectors.
-def export_suite_vectors(module_name, suite_name, vectors):
-    # Perhaps we export with some sort of readable id, which can be passed to a runner to run specific sets of input vectors. (export seed as well for reproducability)
-    client = Elasticsearch(ELASTIC_CONNECTION_STRING, basic_auth=(ELASTIC_USERNAME, ELASTIC_PASSWORD))
-
-    index_name = VECTOR_INDEX_PREFIX + module_name
-    warnings = []
-
-    try:
-        response = client.search(
-            index=index_name,
-            query={
-                "bool": {
-                    "must": [
-                        {"match": {"tag.keyword": SWEEPS_TAG}},
-                        {"match": {"status.keyword": str(VectorStatus.CURRENT)}},
-                        {"match": {"suite_name.keyword": suite_name}},
-                    ]
-                }
-            },
-            size=10000,
-        )["hits"]["hits"]
-        old_vector_ids = set(vector["_id"] for vector in response)
-        old_vector_hashes = set(vector["_source"]["input_hash"] for vector in response)
-    except NotFoundError as e:
-        old_vector_ids = set()
-        old_vector_hashes = set()
-        pass
-
-    current_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-
-    new_vector_hashes = set()
-    serialized_vectors = dict()
-    for i in range(len(vectors)):
-        vector = dict()
-        for elem in vectors[i].keys():
-            vector[elem] = serialize(vectors[i][elem], warnings)
-        input_hash = hashlib.sha224(str(vector).encode("utf-8")).hexdigest()
-        new_vector_hashes.add(input_hash)
-        vector["timestamp"] = current_time
-        vector["input_hash"] = input_hash
-        vector["tag"] = SWEEPS_TAG
-        serialized_vectors[input_hash] = vector
-
-    if old_vector_hashes == new_vector_hashes:
-        logger.info(
-            f"Vectors generated for module {module_name}, suite {suite_name} already exist with tag {SWEEPS_TAG}, and have not changed. ({len(old_vector_hashes)} existing tests). Skipping..."
-        )
-        return
-    else:
-        logger.info(
-            f"New vectors found for module {module_name}, suite {suite_name}, with tag {SWEEPS_TAG}. Archiving old vectors and saving new suite. This step may take several minutes."
-        )
-        for old_vector_id in old_vector_ids:
-            client.update(index=index_name, id=old_vector_id, doc={"status": str(VectorStatus.ARCHIVED)})
-        serialized_vectors = list(serialized_vectors.values())
-        while serialized_vectors != []:
-            bulk = serialized_vectors[: min(200, len(serialized_vectors))]
-            serialized_vectors = serialized_vectors[min(200, len(serialized_vectors)) :]
-            bulk_query = []
-            for vector in bulk:
-                bulk_query.append({"create": {"_index": index_name}})
-                bulk_query.append(vector)
-            client.bulk(index=index_name, body=bulk_query)
-
-        logger.info(f"SWEEPS: Generated {len(new_vector_hashes)} test vectors for suite {suite_name}.")
-
-
 # Generate one or more sets of test vectors depending on module_name
 def generate_tests(module_name, skip_modules=None):
     skip_modules_set = set()
@@ -195,25 +124,6 @@ def generate_tests(module_name, skip_modules=None):
             raise
 
 
-def clean_module(module_name):
-    client = Elasticsearch(ELASTIC_CONNECTION_STRING, basic_auth=(ELASTIC_USERNAME, ELASTIC_PASSWORD))
-    vector_index = VECTOR_INDEX_PREFIX + module_name
-
-    if not client.indices.exists(index=vector_index):
-        logger.error(f"Could not clean vectors for module {module_name} as there is no corresponding index.")
-        exit(1)
-
-    update_script = {"source": f"ctx._source.status = '{str(VectorStatus.ARCHIVED)}'", "lang": "painless"}
-    client.update_by_query(
-        index=vector_index, query={"match": {"tag.keyword": SWEEPS_TAG}}, script=update_script, refresh=True
-    )
-    logger.info(
-        f"Marked all vectors with tag {SWEEPS_TAG} in index {vector_index} as archived. Proceeding with generation..."
-    )
-
-    client.close()
-
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         prog="Sweep Test Vector Generator",
@@ -221,19 +131,6 @@ if __name__ == "__main__":
     )
 
     parser.add_argument("--module-name", required=False, help="Test Module Name, or all tests if omitted")
-    parser.add_argument(
-        "--clean",
-        action="store_true",
-        default=False,
-        required=False,
-        help="Must be set with module_name. Setting this flag will mark ALL old vectors for an sweep as Archived, and generate the new set. Use this if you make a mistake when generating your vectors and want to refresh to the current state of your op test file.",
-    )
-    parser.add_argument(
-        "--elastic",
-        required=False,
-        default="corp",
-        help="Elastic Connection String for vector database. Available presets are ['corp', 'cloud']",
-    )
     parser.add_argument(
         "--tag",
         required=False,
@@ -245,7 +142,7 @@ if __name__ == "__main__":
         "--dump-file",
         required=False,
         action="store_true",
-        help="If set, dumps the results to disk in JSON instead of using ES",
+        help="[DEPRECATED] This flag is now the default behavior. Elasticsearch support has been removed. Vectors are always dumped to disk in JSON format.",
     )
     parser.add_argument(
         "--randomize",
@@ -261,16 +158,12 @@ if __name__ == "__main__":
 
     args = parser.parse_args(sys.argv[1:])
 
-    global DUMP_FILE
-    if not args.dump_file:
-        from elasticsearch import Elasticsearch, NotFoundError
-        from framework.elastic_config import *
-
-        global ELASTIC_CONNECTION_STRING
-        ELASTIC_CONNECTION_STRING = get_elastic_url(args.elastic)
-        DUMP_FILE = False
-    else:
-        DUMP_FILE = True
+    # Elasticsearch support has been removed. Vectors are always dumped to disk.
+    if args.dump_file:
+        logger.warning(
+            "The --dump-file flag is deprecated. Elasticsearch support has been removed. "
+            "Vectors are now always dumped to disk in JSON format by default."
+        )
 
     global SWEEPS_TAG
     SWEEPS_TAG = args.tag
@@ -280,6 +173,7 @@ if __name__ == "__main__":
         exit(1)
 
     logger.info(f"Running current generation with tag: {SWEEPS_TAG}.")
+    logger.info("Vectors will be exported to: tests/sweep_framework/vectors_export/")
 
     # Enable reproducible shuffling only when --randomize is provided
     if args.randomize is not None:
@@ -289,11 +183,5 @@ if __name__ == "__main__":
     else:
         DO_RANDOMIZE = False
         SHUFFLE_SEED = None
-
-    if args.clean and not args.module_name:
-        logger.error("The clean flag must be set in conjunction with a module name.")
-        exit(1)
-    elif args.clean:
-        clean_module(args.module_name)
 
     generate_tests(args.module_name, args.skip_modules)
