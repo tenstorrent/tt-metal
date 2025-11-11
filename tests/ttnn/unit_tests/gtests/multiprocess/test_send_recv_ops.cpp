@@ -258,7 +258,7 @@ TEST_P(MeshDeviceNanoExabox2x4SendRecvFixture, MultiSendRecvAsync) {
 
 TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
     distributed::multihost::Rank pipeline_start_rank = distributed::multihost::Rank{0};
-    distributed::multihost::Rank pipeline_end_rank = distributed::multihost::Rank{15};
+    distributed::multihost::Rank pipeline_end_rank = distributed::multihost::Rank{1};
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
 
     auto sender_logical_coord = CoreCoord(0, 0);

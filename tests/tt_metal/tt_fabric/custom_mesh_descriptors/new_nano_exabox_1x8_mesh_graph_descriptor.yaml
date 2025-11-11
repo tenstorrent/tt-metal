@@ -11,47 +11,24 @@ ChipSpec: {
 Board: [
   { name: 2x4,
     type: Mesh,
-    topology: [1, 8]}
+    topology: [2, 4]}
 ]
 
 Mesh: [
 {
-  id: 4,
-  board: 2x4,
-  device_topology: [1, 8],
-  host_topology: [1, 1],
-
-},
-{
   id: 0,
   board: 2x4,
-  device_topology: [1, 8],
+  device_topology: [2, 4],
   host_topology: [1, 1],
 },
 {
   id: 1,
   board: 2x4,
-  device_topology: [1, 8],
-  host_topology: [1, 1],
-
-},
-{
-  id: 2,
-  board: 2x4,
-  device_topology: [1, 8],
+  device_topology: [2, 4],
   host_topology: [1, 1],
 },
-{
-  id: 3,
-  board: 2x4,
-  device_topology: [1, 8],
-  host_topology: [1, 1],
-}
 ]
 
 RelaxedGraph: [
-  [M2, M0, 2],
-  [M2, M1, 2],
-  [M2, M3, 2],
-  [M2, M4, 2]
+  [M0, M1, 2],
 ]
