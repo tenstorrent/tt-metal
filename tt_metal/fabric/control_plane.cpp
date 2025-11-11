@@ -1283,20 +1283,27 @@ std::optional<RoutingDirection> ControlPlane::get_forwarding_direction(
     auto src_chip_id = src_fabric_node_id.chip_id;
     auto dst_mesh_id = dst_fabric_node_id.mesh_id;
     auto dst_chip_id = dst_fabric_node_id.chip_id;
-    // TODO: remove returning of std::nullopt, and just return NONE value
-    // Tests and usage should check for NONE value
+
     if (src_mesh_id != dst_mesh_id) {
-        const auto& inter_mesh_routing_table = this->routing_table_generator_->get_inter_mesh_table();
-        if (inter_mesh_routing_table[*src_mesh_id][src_chip_id][*dst_mesh_id] != RoutingDirection::NONE) {
-            return inter_mesh_routing_table[*src_mesh_id][src_chip_id][*dst_mesh_id];
+        const auto& table = this->routing_table_generator_->get_inter_mesh_table();
+        if (*src_mesh_id < table.size() && src_chip_id < table[*src_mesh_id].size() &&
+            *dst_mesh_id < table[*src_mesh_id][src_chip_id].size()) {
+            auto direction = table[*src_mesh_id][src_chip_id][*dst_mesh_id];
+            if (direction != RoutingDirection::NONE && direction != RoutingDirection::C) {
+                return direction;
+            }
         }
     } else if (src_chip_id != dst_chip_id) {
-        const auto& intra_mesh_routing_table = this->routing_table_generator_->get_intra_mesh_table();
-        if (intra_mesh_routing_table[*src_mesh_id][src_chip_id][dst_chip_id] != RoutingDirection::NONE) {
-            return intra_mesh_routing_table[*src_mesh_id][src_chip_id][dst_chip_id];
+        const auto& table = this->routing_table_generator_->get_intra_mesh_table();
+        if (*src_mesh_id < table.size() && src_chip_id < table[*src_mesh_id].size() &&
+            dst_chip_id < table[*src_mesh_id][src_chip_id].size()) {
+            auto direction = table[*src_mesh_id][src_chip_id][dst_chip_id];
+            if (direction != RoutingDirection::NONE && direction != RoutingDirection::C) {
+                return direction;
+            }
         }
     }
-    return std::nullopt;
+    return RoutingDirection::NONE;
 }
 
 std::vector<chan_id_t> ControlPlane::get_forwarding_eth_chans_to_chip(

@@ -125,7 +125,29 @@ void append_fabric_connection_rt_args(
 
     // get the direction in which the data will be forwarded from the src_fabric_node_id
     std::optional<RoutingDirection> forwarding_direction;
-    forwarding_direction = control_plane.get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
+    // FIXME: This looks like its not needed anymore because we have wraparound links in routing tables for 1D fabric?
+    if (is_2d_fabric) {
+        forwarding_direction = control_plane.get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
+    } else {
+        // TODO: Workaround for #22524 routing tables not having wraparound links
+        // for 1D fabric, we loop to match the dst chip since we need to ensure src and dst are on the same line
+        // remove this once control plane has row/col info/view
+        for (const auto& direction : FabricContext::routing_directions) {
+            // This assumes all neighbor chips to the dst mesh are the same
+            auto neighbors = control_plane.get_chip_neighbors(src_fabric_node_id, direction);
+            auto neighbor_mesh_chips = neighbors.find(dst_fabric_node_id.mesh_id);
+            if (neighbor_mesh_chips == neighbors.end() ||
+                (std::find(
+                     neighbor_mesh_chips->second.begin(),
+                     neighbor_mesh_chips->second.end(),
+                     dst_fabric_node_id.chip_id) == neighbor_mesh_chips->second.end())) {
+                continue;
+            }
+
+            forwarding_direction = direction;
+            break;
+        }
+    }
     TT_FATAL(
         forwarding_direction.has_value(),
         "Could not find any forwarding direction from src {} to dst {}",

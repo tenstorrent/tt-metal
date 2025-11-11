@@ -803,13 +803,18 @@ public:
 
     std::optional<std::pair<FabricNodeId, FabricNodeId>> get_wrap_around_mesh_ring_neighbors(
         const FabricNodeId& src_node, const std::vector<FabricNodeId>& devices) const override {
-        // Get mesh dimensions
+        // Use control plane to get actual connectivity from mesh graph
+        const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+        const auto& mesh_graph = control_plane.get_mesh_graph();
+
+        // Get mesh dimensions for perimeter checking
         uint32_t mesh_height = mesh_shape_[NS_DIM];
         uint32_t mesh_width = mesh_shape_[EW_DIM];
 
-        // Convert chip_id to row/col coordinates (row-major order)
-        uint32_t row = src_node.chip_id / mesh_width;
-        uint32_t col = src_node.chip_id % mesh_width;
+        // Convert logical chip_id to coordinates using mesh graph (logical to physical mapping)
+        MeshCoordinate src_coord = mesh_graph.chip_to_coordinate(src_node.mesh_id, src_node.chip_id);
+        uint32_t row = src_coord[NS_DIM];
+        uint32_t col = src_coord[EW_DIM];
 
         // Check if the device is on the outer ring (perimeter)
         bool is_perimeter = (row == 0) || (row == mesh_height - 1) || (col == 0) || (col == mesh_width - 1);
@@ -819,57 +824,129 @@ public:
             return std::nullopt;
         }
 
-        // Calculate ring neighbors based on position on perimeter
-        // forward always try to go right/up first, backward always try to go left/down first
-        ChipId forward_chip_id, backward_chip_id;
+        // Get actual neighbors from mesh graph connectivity (using control plane)
+        const auto& intra_mesh_connectivity = mesh_graph.get_intra_mesh_connectivity();
+        if (*src_node.mesh_id >= intra_mesh_connectivity.size() ||
+            src_node.chip_id >= intra_mesh_connectivity[*src_node.mesh_id].size()) {
+            log_warning(
+                LogTest,
+                "get_wrap_around_mesh_ring_neighbors: Out of bounds access to mesh graph - mesh_id: {}, chip_id: {}",
+                *src_node.mesh_id,
+                src_node.chip_id);
+            return std::nullopt;
+        }
+
+        const auto& chip_connectivity = intra_mesh_connectivity[*src_node.mesh_id][src_node.chip_id];
+
+        // Helper to check if a chip is on perimeter using logical coordinates from mesh graph
+        auto is_chip_on_perimeter =
+            [&mesh_graph, mesh_height, mesh_width, src_mesh_id = src_node.mesh_id](ChipId chip_id) {
+                MeshCoordinate coord = mesh_graph.chip_to_coordinate(src_mesh_id, chip_id);
+                uint32_t r = coord[NS_DIM];
+                uint32_t c = coord[EW_DIM];
+                return (r == 0) || (r == mesh_height - 1) || (c == 0) || (c == mesh_width - 1);
+            };
+
+        // Helper to check if neighbor exists in devices list
+        auto neighbor_in_devices = [&devices](const FabricNodeId& node_id) {
+            return std::find(devices.begin(), devices.end(), node_id) != devices.end();
+        };
+
+        // Collect perimeter neighbors by direction from actual connectivity
+        std::unordered_map<RoutingDirection, std::vector<FabricNodeId>> perimeter_neighbors_by_dir;
+        for (const auto& [dst_chip_id, edge] : chip_connectivity) {
+            if (dst_chip_id != src_node.chip_id && edge.port_direction != RoutingDirection::C &&
+                edge.port_direction != RoutingDirection::NONE) {
+                FabricNodeId neighbor = FabricNodeId{src_node.mesh_id, dst_chip_id};
+                if (is_chip_on_perimeter(dst_chip_id) && neighbor_in_devices(neighbor)) {
+                    perimeter_neighbors_by_dir[edge.port_direction].push_back(neighbor);
+                }
+            }
+        }
+
+        // Determine forward and backward neighbors based on position and ring traversal order
+        // Forward: prefer E (right), then N (up) for ring traversal
+        // Backward: prefer W (left), then S (down) for ring traversal
+        std::optional<FabricNodeId> forward_neighbor;
+        std::optional<FabricNodeId> backward_neighbor;
+
+        // Determine preferred directions based on position
+        std::vector<RoutingDirection> forward_directions, backward_directions;
 
         if (row == 0 && col == 0) {
-            // Top-left corner (0): forward=1, backward=4 (4x4 mesh)
-            forward_chip_id = 1;
-            backward_chip_id = mesh_width;
+            // Top-left corner: forward goes right (E), backward goes down (S)
+            forward_directions = {RoutingDirection::E};
+            backward_directions = {RoutingDirection::S};
         } else if (row == 0 && col == mesh_width - 1) {
-            // Top-right corner (3): forward=7, backward=2
-            forward_chip_id = src_node.chip_id + mesh_width;
-            backward_chip_id = src_node.chip_id - 1;
+            // Top-right corner: forward goes down (S), backward goes left (W)
+            forward_directions = {RoutingDirection::S};
+            backward_directions = {RoutingDirection::W};
         } else if (row == mesh_height - 1 && col == mesh_width - 1) {
-            // Bottom-right corner (15): forward=11, backward=14
-            forward_chip_id = src_node.chip_id - mesh_width;
-            backward_chip_id = src_node.chip_id - 1;
+            // Bottom-right corner: forward goes left (W), backward goes up (N)
+            forward_directions = {RoutingDirection::W};
+            backward_directions = {RoutingDirection::N};
         } else if (row == mesh_height - 1 && col == 0) {
-            // Bottom-left corner (12): forward=13, backward=8
-            forward_chip_id = src_node.chip_id + 1;
-            backward_chip_id = src_node.chip_id - mesh_width;
+            // Bottom-left corner: forward goes up (N), backward goes right (E)
+            forward_directions = {RoutingDirection::N};
+            backward_directions = {RoutingDirection::E};
         } else if (row == 0) {
-            // Top row (not corners): forward=right, backward=left
-            forward_chip_id = src_node.chip_id + 1;
-            backward_chip_id = src_node.chip_id - 1;
+            // Top row: forward goes right (E), backward goes left (W)
+            forward_directions = {RoutingDirection::E};
+            backward_directions = {RoutingDirection::W};
         } else if (col == mesh_width - 1) {
-            // Right column (not corners): forward=up, backward=down
-            forward_chip_id = src_node.chip_id - mesh_width;
-            backward_chip_id = src_node.chip_id + mesh_width;
+            // Right column: forward goes down (S), backward goes up (N)
+            forward_directions = {RoutingDirection::S};
+            backward_directions = {RoutingDirection::N};
         } else if (row == mesh_height - 1) {
-            // Bottom row (not corners): forward=right, backward=left
-            forward_chip_id = src_node.chip_id + 1;
-            backward_chip_id = src_node.chip_id - 1;
+            // Bottom row: forward goes left (W), backward goes right (E)
+            forward_directions = {RoutingDirection::W};
+            backward_directions = {RoutingDirection::E};
         } else if (col == 0) {
-            // Left column (not corners): forward=up, backward=down
-            forward_chip_id = src_node.chip_id - mesh_width;
-            backward_chip_id = src_node.chip_id + mesh_width;
-        } else {
-            TT_THROW("Device {} should be on perimeter but logic error occurred", src_node.chip_id);
+            // Left column: forward goes up (N), backward goes down (S)
+            forward_directions = {RoutingDirection::N};
+            backward_directions = {RoutingDirection::S};
+        }
+
+        // Find forward neighbor from actual connectivity
+        for (const auto& direction : forward_directions) {
+            auto it = perimeter_neighbors_by_dir.find(direction);
+            if (it != perimeter_neighbors_by_dir.end() && !it->second.empty()) {
+                forward_neighbor = it->second[0];
+                break;
+            }
+        }
+
+        // Find backward neighbor from actual connectivity
+        for (const auto& direction : backward_directions) {
+            auto it = perimeter_neighbors_by_dir.find(direction);
+            if (it != perimeter_neighbors_by_dir.end() && !it->second.empty()) {
+                backward_neighbor = it->second[0];
+                break;
+            }
+        }
+
+        // If we didn't find both neighbors, return nullopt
+        if (!forward_neighbor.has_value() || !backward_neighbor.has_value()) {
+            log_warning(
+                LogTest,
+                "get_wrap_around_mesh_ring_neighbors: Could not find ring neighbors - src_chip_id: {}, "
+                "row: {}, col: {}, forward_neighbor: {}, backward_neighbor: {}",
+                src_node.chip_id,
+                row,
+                col,
+                forward_neighbor.has_value() ? forward_neighbor->chip_id : ChipId(-1),
+                backward_neighbor.has_value() ? backward_neighbor->chip_id : ChipId(-1));
+            return std::nullopt;
         }
 
         log_debug(
             LogTest,
             "src_node: {}, forward_chip_id: {}, backward_chip_id: {}",
             src_node.chip_id,
-            forward_chip_id,
-            backward_chip_id);
+            forward_neighbor->chip_id,
+            backward_neighbor->chip_id);
 
-        FabricNodeId dst_node_forward = FabricNodeId{src_node.mesh_id, forward_chip_id};
-        FabricNodeId dst_node_backward = FabricNodeId{src_node.mesh_id, backward_chip_id};
-
-        return std::make_pair(dst_node_forward, dst_node_backward);
+        return std::make_pair(*forward_neighbor, *backward_neighbor);
     }
 
     uint32_t get_num_sync_devices() const {
