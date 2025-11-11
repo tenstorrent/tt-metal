@@ -14,6 +14,7 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/variant.h>
 
 #include "ttnn/decorators.hpp"
 #include "small_vector_caster.hpp"  // NOLINT - for nanobind11 SmallVector binding support.
