@@ -21,16 +21,6 @@ void kernel_main() {
 
     experimental::Noc noc(noc_index);
     experimental::UnicastEndpoint unicast_endpoint;
-    experimental::noc_traits_t<experimental::UnicastEndpoint>::src_args_type src_args = {
-        .noc_x = my_x[noc.get_noc_id()],
-        .noc_y = my_y[noc.get_noc_id()],
-        .addr = l1_local_addr,
-    };
-    experimental::noc_traits_t<experimental::UnicastEndpoint>::dst_args_type dst_args = {
-        .noc_x = receiver_x_coord,
-        .noc_y = receiver_y_coord,
-        .addr = l1_local_addr,
-    };
 
     {
         DeviceZoneScopedN("RISCV0");
@@ -38,7 +28,18 @@ void kernel_main() {
             // Cycle through virtual channels 0 to (num_virtual_channels - 1)
             uint32_t current_virtual_channel = i % num_virtual_channels;
             noc.async_write(
-                unicast_endpoint, unicast_endpoint, bytes_per_transaction, src_args, dst_args, current_virtual_channel);
+                unicast_endpoint,
+                unicast_endpoint,
+                bytes_per_transaction,
+                {
+                    .addr = l1_local_addr,
+                },
+                {
+                    .noc_x = receiver_x_coord,
+                    .noc_y = receiver_y_coord,
+                    .addr = l1_local_addr,
+                },
+                current_virtual_channel);
         }
         noc.async_write_barrier();
     }

@@ -18,16 +18,6 @@ void kernel_main() {
 
     experimental::Noc noc(noc_index);
     experimental::UnicastEndpoint unicast_endpoint;
-    experimental::noc_traits_t<experimental::UnicastEndpoint>::src_args_type src_args = {
-        .noc_x = responder_x_coord,
-        .noc_y = responder_y_coord,
-        .addr = l1_local_addr,
-    };
-    experimental::noc_traits_t<experimental::UnicastEndpoint>::dst_args_type dst_args = {
-        .noc_x = my_x[noc.get_noc_id()],
-        .noc_y = my_y[noc.get_noc_id()],
-        .addr = l1_local_addr,
-    };
 
     {
         DeviceZoneScopedN("RISCV1");
@@ -38,8 +28,14 @@ void kernel_main() {
                 unicast_endpoint,
                 unicast_endpoint,
                 transaction_size_bytes,
-                src_args,
-                dst_args,
+                {
+                    .noc_x = responder_x_coord,
+                    .noc_y = responder_y_coord,
+                    .addr = l1_local_addr,
+                },
+                {
+                    .addr = l1_local_addr,
+                },
                 current_virtual_channel);
         }
         noc.async_read_barrier();
