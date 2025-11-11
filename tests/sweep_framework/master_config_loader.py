@@ -625,121 +625,21 @@ class MasterConfigLoader:
                             "output_memory_config": output_mem_config,
                         }
 
-                        # Extract operation-specific parameters for certain operations
-                        if operation_name == "permute" or operation_name == "ttnn::permute":
-                            # For permute, extract dims from arg1
-                            dims = self._extract_permute_dims(config)
-                            if dims:
-                                config_dict["dims"] = dims
-                            else:
-                                # Fallback to default if extraction fails
-                                config_dict["dims"] = [0, 1, 3, 2]  # N, C, W, H -> N, C, H, W
-                        elif operation_name == "untilize_with_unpadding":
-                            # For untilize_with_unpadding, extract end_shape from arg1
-                            end_shape = self._extract_shape_parameter(config, arg_name="arg1")
-                            if end_shape:
-                                config_dict["end_shape"] = end_shape
-                        elif operation_name in [
-                            "nlp_concat_heads_decode",
-                            "experimental::nlp_concat_heads_decode",
-                            "ttnn::experimental::nlp_concat_heads_decode",
-                        ]:
-                            # Extract num_heads from arg1
-                            num_heads = None
-                            for arg in config:
-                                if isinstance(arg, dict) and "arg1" in arg:
-                                    num_heads_val = arg["arg1"]
-                                    if isinstance(num_heads_val, (int, str)) and num_heads_val != "nullopt":
-                                        try:
-                                            num_heads = int(num_heads_val)
-                                        except:
-                                            pass
-                                    break
-                            if num_heads is None:
-                                # Try to infer from shape [B, 1, H, D] -> H might be num_heads
-                                if len(tensor_config.shape) == 4 and tensor_config.shape[1] == 1:
-                                    num_heads = tensor_config.shape[2]  # Use shape[2] as num_heads
-                                else:
-                                    num_heads = 16  # Default fallback
-                            config_dict["num_heads"] = num_heads
-                        elif operation_name == "transpose":
-                            # For transpose, extract dim0 and dim1 from arg1 and arg2
-                            dim0 = self._extract_int_parameter(config, "arg1")
-                            dim1 = self._extract_int_parameter(config, "arg2")
-                            if dim0 is not None and dim1 is not None:
-                                config_dict["dim0"] = dim0
-                                config_dict["dim1"] = dim1
-                        elif operation_name == "reshape":
-                            # For reshape, extract target_shape from arg1
-                            target_shape = self._extract_shape_parameter(config, arg_name="arg1")
-                            if target_shape:
-                                # Validate reshape: input and target must have same number of elements
-                                import math
+                        # Extract operation-specific parameters using registry extractors
+                        clean_op_name = operation_name.replace("ttnn::", "")
+                        op_params = OperationParameterExtractors.extract_parameters(clean_op_name, config)
+                        if not op_params:
+                            # Try with full operation name
+                            op_params = OperationParameterExtractors.extract_parameters(operation_name, config)
 
-                                input_elements = math.prod(tensor_config.shape) if tensor_config.shape else 0
-                                # Handle -1 in target_shape (means infer from other dimensions)
-                                if -1 in target_shape:
-                                    # Calculate what -1 should be
-                                    known_product = math.prod([d for d in target_shape if d != -1])
-                                    if known_product == 0:
-                                        # Invalid: cannot infer -1 with zero in other dimensions
-                                        failed_configs += 1
-                                        continue
-                                    inferred_dim = input_elements // known_product
-                                    target_shape = [inferred_dim if d == -1 else d for d in target_shape]
+                        if op_params:
+                            # Merge extracted parameters into config_dict
+                            config_dict.update(op_params)
 
-                                target_elements = math.prod(target_shape) if target_shape else 0
-                                if input_elements != target_elements:
-                                    # Invalid reshape config - skip it
-                                    failed_configs += 1
-                                    continue
-
-                                config_dict["target_shape"] = target_shape
-                        elif operation_name == "pad":
-                            # For pad, extract padding (arg1) and value (arg2)
-                            padding = None
-                            value = None
-                            for arg in config:
-                                if isinstance(arg, dict):
-                                    if "arg1" in arg:
-                                        padding = self._parse_list_from_string(arg["arg1"])
-                                        # Normalize padding format
-                                        if padding and isinstance(padding, list):
-                                            # Check if it's a flat list that needs conversion
-                                            if len(padding) == 4 and all(isinstance(x, int) for x in padding):
-                                                # Convert [front_H, back_H, front_W, back_W] to [[0,0], [0,0], [front_H, back_H], [front_W, back_W]]
-                                                padding = [
-                                                    [0, 0],
-                                                    [0, 0],
-                                                    [padding[0], padding[1]],
-                                                    [padding[2], padding[3]],
-                                                ]
-                                    if "arg2" in arg:
-                                        value = self._parse_numeric_value(arg["arg2"])
-                                        # Value must be a single float, not a list
-                                        if isinstance(value, list):
-                                            # If all elements are the same, use that value
-                                            if len(set(value)) == 1:
-                                                value = float(value[0])
-                                            else:
-                                                # Use the first element (or could skip this config)
-                                                value = float(value[0])
-                                        elif value is not None:
-                                            value = float(value)
-                            if padding is not None and value is not None:
-                                config_dict["padding"] = padding
-                                config_dict["value"] = value
-                        elif operation_name == "tilize_with_val_padding":
-                            # For tilize_with_val_padding, extract padded_shape (arg1) and pad_value (arg2)
-                            padded_shape = self._extract_shape_parameter(config, arg_name="arg1")
-                            pad_value = None
-                            for arg in config:
-                                if isinstance(arg, dict) and "arg2" in arg:
-                                    pad_value = self._parse_numeric_value(arg["arg2"])
-                                    break
-                            if padded_shape and pad_value is not None:
-                                config_dict["padded_shape"] = padded_shape
-                                config_dict["pad_value"] = pad_value
+                            # Special handling for reshape - if validation failed, skip this config
+                            if operation_name == "reshape" and "target_shape" not in op_params:
+                                failed_configs += 1
+                                continue
 
                         paired_configs.append(config_dict)
                     else:
@@ -1592,48 +1492,21 @@ class MasterConfigLoader:
 
             # Then transform the extracted parameters
             if extracted_params:
-                transformed_configs = OperationParameterExtractors.transform_parameters(clean_op_name, extracted_params)
+                transformed_configs = OperationParameterExtractors.transform_parameters(
+                    clean_op_name,
+                    extracted_params,
+                    parse_dtype=self.parse_dtype,
+                    parse_layout=self.parse_layout,
+                    parse_memory_config=self.parse_memory_config,
+                )
 
                 if transformed_configs:
                     print(
                         f"✅ Loaded {len(transformed_configs)} traced configurations for {operation_name} (model_traced suite)"
                     )
 
-                    # For embedding, we have a specific parameter format
+                    # For embedding and linear, we have specific parameter formats
                     if clean_op_name == "embedding":
-                        # Convert string dtypes and layouts to TTNN types
-                        processed_configs = []
-                        for cfg in transformed_configs:
-                            processed_cfg = cfg.copy()
-                            # Convert dtype strings to TTNN dtypes
-                            processed_cfg["input_a_dtype"] = self.parse_dtype(
-                                cfg.get("input_a_dtype", "DataType::UINT32")
-                            )
-                            processed_cfg["input_b_dtype"] = self.parse_dtype(
-                                cfg.get("input_b_dtype", "DataType::BFLOAT16")
-                            )
-                            # Convert layout strings to TTNN layouts
-                            processed_cfg["input_a_layout"] = self.parse_layout(
-                                cfg.get("input_a_layout", "Layout::TILE")
-                            )
-                            processed_cfg["input_b_layout"] = self.parse_layout(
-                                cfg.get("input_b_layout", "Layout::TILE")
-                            )
-                            # Convert memory configs
-                            input_shape = cfg.get("input_shape", {})
-                            indices_shape = input_shape.get("self", [])
-                            weights_shape = input_shape.get("other", [])
-                            processed_cfg["input_a_memory_config"] = self.parse_memory_config(
-                                cfg.get("input_a_memory_config", {}), indices_shape
-                            )
-                            processed_cfg["input_b_memory_config"] = self.parse_memory_config(
-                                cfg.get("input_b_memory_config", {}), weights_shape
-                            )
-                            processed_cfg["output_memory_config"] = self.parse_memory_config(
-                                cfg.get("output_memory_config", {}), weights_shape
-                            )
-                            processed_configs.append(processed_cfg)
-
                         param_names = [
                             "input_shape,input_a_dtype,input_b_dtype,input_a_layout,input_b_layout,"
                             + "input_a_memory_config,input_b_memory_config,output_memory_config"
@@ -1650,119 +1523,12 @@ class MasterConfigLoader:
                                     cfg["input_b_memory_config"],
                                     cfg["output_memory_config"],
                                 )
-                                for cfg in processed_configs
+                                for cfg in transformed_configs
                             ]
                         ]
                         return {param_names[0]: param_lists[0]}
 
-                    # For linear, we have a specific parameter format
                     elif clean_op_name == "linear":
-                        # Convert string dtypes, layouts, and memory configs to TTNN types
-                        processed_configs = []
-                        for cfg in transformed_configs:
-                            processed_cfg = cfg.copy()
-                            # Convert dtype strings to TTNN dtypes
-                            processed_cfg["input_a_dtype"] = self.parse_dtype(
-                                cfg.get("input_a_dtype", "DataType::BFLOAT16")
-                            )
-                            processed_cfg["input_b_dtype"] = self.parse_dtype(
-                                cfg.get("input_b_dtype", "DataType::BFLOAT16")
-                            )
-                            # Convert layout strings to TTNN layouts
-                            processed_cfg["input_a_layout"] = self.parse_layout(
-                                cfg.get("input_a_layout", "Layout::TILE")
-                            )
-                            processed_cfg["input_b_layout"] = self.parse_layout(
-                                cfg.get("input_b_layout", "Layout::TILE")
-                            )
-                            # Convert memory configs - handle both string and dict formats
-                            input_shape = cfg.get("input_shape", [])
-                            weight_shape = cfg.get("weight_shape", [])
-                            # If memory_config is a string, convert to dict format for parsing
-                            input_a_mem_cfg = cfg.get("input_a_memory_config", "MemoryConfig.INTERLEAVED")
-                            input_b_mem_cfg = cfg.get("input_b_memory_config", "MemoryConfig.INTERLEAVED")
-                            output_mem_cfg = cfg.get("output_memory_config", "MemoryConfig.INTERLEAVED")
-
-                            # Convert string memory configs to dict format
-                            if isinstance(input_a_mem_cfg, str):
-                                # Parse string like "MemoryConfig.INTERLEAVED" or "MemoryConfig.WIDTH_SHARDED"
-                                if "INTERLEAVED" in input_a_mem_cfg:
-                                    input_a_mem_cfg = {
-                                        "memory_layout": "TensorMemoryLayout::INTERLEAVED",
-                                        "buffer_type": "BufferType::DRAM",
-                                    }
-                                elif "WIDTH_SHARDED" in input_a_mem_cfg:
-                                    input_a_mem_cfg = {
-                                        "memory_layout": "TensorMemoryLayout::WIDTH_SHARDED",
-                                        "buffer_type": "BufferType::L1",
-                                    }
-                                elif "HEIGHT_SHARDED" in input_a_mem_cfg:
-                                    input_a_mem_cfg = {
-                                        "memory_layout": "TensorMemoryLayout::HEIGHT_SHARDED",
-                                        "buffer_type": "BufferType::L1",
-                                    }
-                                else:
-                                    input_a_mem_cfg = {
-                                        "memory_layout": "TensorMemoryLayout::INTERLEAVED",
-                                        "buffer_type": "BufferType::DRAM",
-                                    }
-
-                            if isinstance(input_b_mem_cfg, str):
-                                if "INTERLEAVED" in input_b_mem_cfg:
-                                    input_b_mem_cfg = {
-                                        "memory_layout": "TensorMemoryLayout::INTERLEAVED",
-                                        "buffer_type": "BufferType::DRAM",
-                                    }
-                                elif "WIDTH_SHARDED" in input_b_mem_cfg:
-                                    input_b_mem_cfg = {
-                                        "memory_layout": "TensorMemoryLayout::WIDTH_SHARDED",
-                                        "buffer_type": "BufferType::L1",
-                                    }
-                                elif "HEIGHT_SHARDED" in input_b_mem_cfg:
-                                    input_b_mem_cfg = {
-                                        "memory_layout": "TensorMemoryLayout::HEIGHT_SHARDED",
-                                        "buffer_type": "BufferType::L1",
-                                    }
-                                else:
-                                    input_b_mem_cfg = {
-                                        "memory_layout": "TensorMemoryLayout::INTERLEAVED",
-                                        "buffer_type": "BufferType::DRAM",
-                                    }
-
-                            if isinstance(output_mem_cfg, str):
-                                if "INTERLEAVED" in output_mem_cfg:
-                                    output_mem_cfg = {
-                                        "memory_layout": "TensorMemoryLayout::INTERLEAVED",
-                                        "buffer_type": "BufferType::DRAM",
-                                    }
-                                elif "WIDTH_SHARDED" in output_mem_cfg:
-                                    output_mem_cfg = {
-                                        "memory_layout": "TensorMemoryLayout::WIDTH_SHARDED",
-                                        "buffer_type": "BufferType::L1",
-                                    }
-                                elif "HEIGHT_SHARDED" in output_mem_cfg:
-                                    output_mem_cfg = {
-                                        "memory_layout": "TensorMemoryLayout::HEIGHT_SHARDED",
-                                        "buffer_type": "BufferType::L1",
-                                    }
-                                else:
-                                    output_mem_cfg = {
-                                        "memory_layout": "TensorMemoryLayout::INTERLEAVED",
-                                        "buffer_type": "BufferType::DRAM",
-                                    }
-
-                            # Parse memory configs to TTNN MemoryConfig objects
-                            processed_cfg["input_a_memory_config"] = self.parse_memory_config(
-                                input_a_mem_cfg, input_shape
-                            )
-                            processed_cfg["input_b_memory_config"] = self.parse_memory_config(
-                                input_b_mem_cfg, weight_shape
-                            )
-                            processed_cfg["output_memory_config"] = self.parse_memory_config(
-                                output_mem_cfg, input_shape
-                            )
-                            processed_configs.append(processed_cfg)
-
                         param_names = [
                             "input_shape,weight_shape,bias_shape,input_a_dtype,input_b_dtype,input_a_layout,input_b_layout,"
                             + "input_a_memory_config,input_b_memory_config,output_memory_config,transpose_a,transpose_b,has_bias"
@@ -1784,7 +1550,7 @@ class MasterConfigLoader:
                                     cfg["transpose_b"],
                                     cfg["has_bias"],
                                 )
-                                for cfg in processed_configs
+                                for cfg in transformed_configs
                             ]
                         ]
                         return {param_names[0]: param_lists[0]}

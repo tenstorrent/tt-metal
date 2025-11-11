@@ -73,10 +73,30 @@ class OperationParameterExtractors:
         return None
 
     @classmethod
-    def transform_parameters(cls, operation_name: str, configs: List) -> List[Dict]:
-        """Transform parameters for a specific operation"""
+    def transform_parameters(
+        cls, operation_name: str, configs: List, parse_dtype=None, parse_layout=None, parse_memory_config=None
+    ) -> List[Dict]:
+        """Transform parameters for a specific operation
+
+        Args:
+            operation_name: Name of the operation
+            configs: List of extracted parameter dicts
+            parse_dtype: Optional function to parse dtype strings to TTNN types
+            parse_layout: Optional function to parse layout strings to TTNN types
+            parse_memory_config: Optional function to parse memory config dicts to TTNN MemoryConfig objects
+        """
         if operation_name in cls._transformers:
-            return cls._transformers[operation_name](configs)
+            transformer = cls._transformers[operation_name]
+            # Check if transformer accepts parser functions
+            import inspect
+
+            sig = inspect.signature(transformer)
+            if len(sig.parameters) > 1:  # More than just 'configs'
+                return transformer(
+                    configs, parse_dtype=parse_dtype, parse_layout=parse_layout, parse_memory_config=parse_memory_config
+                )
+            else:
+                return transformer(configs)
         return []
 
     @classmethod
@@ -132,8 +152,17 @@ class OperationParameterExtractors:
             return None
 
     @staticmethod
-    def _transform_embedding_parameters(configs: List) -> List[Dict]:
-        """Transform embedding traced configs to run function format"""
+    def _transform_embedding_parameters(
+        configs: List, parse_dtype=None, parse_layout=None, parse_memory_config=None
+    ) -> List[Dict]:
+        """Transform embedding traced configs to run function format
+
+        Args:
+            configs: List of extracted parameter dicts
+            parse_dtype: Optional function to parse dtype strings to TTNN types
+            parse_layout: Optional function to parse layout strings to TTNN types
+            parse_memory_config: Optional function to parse memory config dicts to TTNN MemoryConfig objects
+        """
         transformed_configs = []
 
         for config in configs:
@@ -170,6 +199,18 @@ class OperationParameterExtractors:
                     "input_b_memory_config": weights_mem_config,
                     "output_memory_config": output_mem_config,
                 }
+
+                # Apply parsers if provided
+                if parse_dtype:
+                    transformed_config["input_a_dtype"] = parse_dtype(indices_dtype_str)
+                    transformed_config["input_b_dtype"] = parse_dtype(weights_dtype_str)
+                if parse_layout:
+                    transformed_config["input_a_layout"] = parse_layout(indices_layout_str)
+                    transformed_config["input_b_layout"] = parse_layout(weights_layout_str)
+                if parse_memory_config:
+                    transformed_config["input_a_memory_config"] = parse_memory_config(indices_mem_config, indices_shape)
+                    transformed_config["input_b_memory_config"] = parse_memory_config(weights_mem_config, weights_shape)
+                    transformed_config["output_memory_config"] = parse_memory_config(output_mem_config, weights_shape)
 
                 transformed_configs.append(transformed_config)
 
@@ -261,8 +302,17 @@ class OperationParameterExtractors:
             return None
 
     @staticmethod
-    def _transform_linear_parameters(configs: List) -> List[Dict]:
-        """Transform linear traced configs to run function format"""
+    def _transform_linear_parameters(
+        configs: List, parse_dtype=None, parse_layout=None, parse_memory_config=None
+    ) -> List[Dict]:
+        """Transform linear traced configs to run function format
+
+        Args:
+            configs: List of extracted parameter dicts
+            parse_dtype: Optional function to parse dtype strings to TTNN types
+            parse_layout: Optional function to parse layout strings to TTNN types
+            parse_memory_config: Optional function to parse memory config dicts/strings to TTNN MemoryConfig objects
+        """
         transformed_configs = []
 
         for config in configs:
@@ -294,21 +344,105 @@ class OperationParameterExtractors:
                     else:
                         bias_shape = None
 
+                # Get memory configs - handle both string and dict formats
+                input_a_mem_cfg = config.get("input_a_memory_config", "MemoryConfig.INTERLEAVED")
+                input_b_mem_cfg = config.get("input_b_memory_config", "MemoryConfig.INTERLEAVED")
+                output_mem_cfg = config.get("output_memory_config", "MemoryConfig.INTERLEAVED")
+
+                # Convert string memory configs to dict format if needed
+                if isinstance(input_a_mem_cfg, str):
+                    if "INTERLEAVED" in input_a_mem_cfg:
+                        input_a_mem_cfg = {
+                            "memory_layout": "TensorMemoryLayout::INTERLEAVED",
+                            "buffer_type": "BufferType::DRAM",
+                        }
+                    elif "WIDTH_SHARDED" in input_a_mem_cfg:
+                        input_a_mem_cfg = {
+                            "memory_layout": "TensorMemoryLayout::WIDTH_SHARDED",
+                            "buffer_type": "BufferType::L1",
+                        }
+                    elif "HEIGHT_SHARDED" in input_a_mem_cfg:
+                        input_a_mem_cfg = {
+                            "memory_layout": "TensorMemoryLayout::HEIGHT_SHARDED",
+                            "buffer_type": "BufferType::L1",
+                        }
+                    else:
+                        input_a_mem_cfg = {
+                            "memory_layout": "TensorMemoryLayout::INTERLEAVED",
+                            "buffer_type": "BufferType::DRAM",
+                        }
+
+                if isinstance(input_b_mem_cfg, str):
+                    if "INTERLEAVED" in input_b_mem_cfg:
+                        input_b_mem_cfg = {
+                            "memory_layout": "TensorMemoryLayout::INTERLEAVED",
+                            "buffer_type": "BufferType::DRAM",
+                        }
+                    elif "WIDTH_SHARDED" in input_b_mem_cfg:
+                        input_b_mem_cfg = {
+                            "memory_layout": "TensorMemoryLayout::WIDTH_SHARDED",
+                            "buffer_type": "BufferType::L1",
+                        }
+                    elif "HEIGHT_SHARDED" in input_b_mem_cfg:
+                        input_b_mem_cfg = {
+                            "memory_layout": "TensorMemoryLayout::HEIGHT_SHARDED",
+                            "buffer_type": "BufferType::L1",
+                        }
+                    else:
+                        input_b_mem_cfg = {
+                            "memory_layout": "TensorMemoryLayout::INTERLEAVED",
+                            "buffer_type": "BufferType::DRAM",
+                        }
+
+                if isinstance(output_mem_cfg, str):
+                    if "INTERLEAVED" in output_mem_cfg:
+                        output_mem_cfg = {
+                            "memory_layout": "TensorMemoryLayout::INTERLEAVED",
+                            "buffer_type": "BufferType::DRAM",
+                        }
+                    elif "WIDTH_SHARDED" in output_mem_cfg:
+                        output_mem_cfg = {
+                            "memory_layout": "TensorMemoryLayout::WIDTH_SHARDED",
+                            "buffer_type": "BufferType::L1",
+                        }
+                    elif "HEIGHT_SHARDED" in output_mem_cfg:
+                        output_mem_cfg = {
+                            "memory_layout": "TensorMemoryLayout::HEIGHT_SHARDED",
+                            "buffer_type": "BufferType::L1",
+                        }
+                    else:
+                        output_mem_cfg = {
+                            "memory_layout": "TensorMemoryLayout::INTERLEAVED",
+                            "buffer_type": "BufferType::DRAM",
+                        }
+
                 transformed_config = {
                     "input_shape": processed_input_shape,
                     "weight_shape": processed_weight_shape,
                     "bias_shape": bias_shape,
-                    "input_a_dtype": "DataType.BFLOAT16",  # Default, could be extracted from config
-                    "input_b_dtype": "DataType.BFLOAT16",
-                    "input_a_layout": "Layout.TILE",  # Default
-                    "input_b_layout": "Layout.TILE",
-                    "input_a_memory_config": "MemoryConfig.INTERLEAVED",  # Default
-                    "input_b_memory_config": "MemoryConfig.INTERLEAVED",
-                    "output_memory_config": "MemoryConfig.INTERLEAVED",
+                    "input_a_dtype": config.get("input_a_dtype", "DataType.BFLOAT16"),
+                    "input_b_dtype": config.get("input_b_dtype", "DataType.BFLOAT16"),
+                    "input_a_layout": config.get("input_a_layout", "Layout.TILE"),
+                    "input_b_layout": config.get("input_b_layout", "Layout.TILE"),
+                    "input_a_memory_config": input_a_mem_cfg,
+                    "input_b_memory_config": input_b_mem_cfg,
+                    "output_memory_config": output_mem_cfg,
                     "transpose_a": transpose_a,
                     "transpose_b": transpose_b,
                     "has_bias": has_bias,
                 }
+
+                # Apply parsers if provided
+                if parse_dtype:
+                    transformed_config["input_a_dtype"] = parse_dtype(transformed_config["input_a_dtype"])
+                    transformed_config["input_b_dtype"] = parse_dtype(transformed_config["input_b_dtype"])
+                if parse_layout:
+                    transformed_config["input_a_layout"] = parse_layout(transformed_config["input_a_layout"])
+                    transformed_config["input_b_layout"] = parse_layout(transformed_config["input_b_layout"])
+                if parse_memory_config:
+                    transformed_config["input_a_memory_config"] = parse_memory_config(input_a_mem_cfg, input_shape)
+                    transformed_config["input_b_memory_config"] = parse_memory_config(input_b_mem_cfg, weight_shape)
+                    transformed_config["output_memory_config"] = parse_memory_config(output_mem_cfg, input_shape)
 
                 transformed_configs.append(transformed_config)
 
@@ -341,35 +475,100 @@ class OperationParameterExtractors:
         except Exception:
             return None
 
+    # Helper methods for parameter extraction
+    @staticmethod
+    def _parse_list_from_string(value) -> Optional[List]:
+        """Parse a list from string representation or return if already a list"""
+        try:
+            # If already a list, return it
+            if isinstance(value, list):
+                return value
+            # If string, try to parse it
+            if isinstance(value, str):
+                value = value.strip()
+                if value.startswith("[") and value.endswith("]"):
+                    # Use json.loads for safer parsing
+                    return json.loads(value.replace("'", '"'))
+            return None
+        except Exception:
+            return None
+
+    @staticmethod
+    def _parse_numeric_value(value):
+        """Parse numeric value from string or return if already numeric"""
+        try:
+            # If already a number, return it
+            if isinstance(value, (int, float)):
+                return value
+            # If list, check if it's a numeric list or parse each element
+            if isinstance(value, list):
+                # Could be a list of numbers for value parameter
+                return value
+            # If string, try to parse it
+            if isinstance(value, str):
+                value = value.strip()
+                # Try as list first
+                if value.startswith("["):
+                    parsed = OperationParameterExtractors._parse_list_from_string(value)
+                    if parsed is not None:
+                        return parsed
+                # Try as float
+                if "." in value:
+                    return float(value)
+                # Try as int
+                return int(value)
+            return None
+        except Exception:
+            return None
+
     @staticmethod
     def _extract_permute_dims(config: List) -> Optional[List[int]]:
         """Extract dimensions for permute operation"""
         try:
+            # Look for arg1 which should contain the dims parameter
             for arg in config:
                 if isinstance(arg, dict) and "arg1" in arg:
-                    dims = arg["arg1"]
-                    if isinstance(dims, list):
-                        return dims
+                    dims_str = arg["arg1"]
+                    # The dims are in format '[0, 2, 3, 1]' or similar
+                    if isinstance(dims_str, str) and dims_str.startswith("[") and dims_str.endswith("]"):
+                        # Parse the list string
+                        dims_str = dims_str.strip("[]")
+                        if dims_str:
+                            dims = [int(x.strip()) for x in dims_str.split(",")]
+                            return dims
+                    elif isinstance(dims_str, list):
+                        return dims_str
             return None
         except Exception:
             return None
 
     @staticmethod
     def _extract_shape_parameter(config: List, arg_name: str = "arg1") -> Optional[List[int]]:
-        """Extract shape parameter from config"""
+        """Extract Shape parameter from config (e.g., for untilize_with_unpadding end_shape, reshape target_shape)"""
         try:
             for arg in config:
                 if isinstance(arg, dict) and arg_name in arg:
-                    shape = arg[arg_name]
-                    if isinstance(shape, list):
-                        return shape
+                    shape_data = arg[arg_name]
+                    # Handle dict with 'Shape' key
+                    if isinstance(shape_data, dict) and "Shape" in shape_data:
+                        shape = shape_data["Shape"]
+                        if isinstance(shape, list):
+                            return shape
+                    # Handle string representation of list
+                    elif isinstance(shape_data, str):
+                        parsed = OperationParameterExtractors._parse_list_from_string(shape_data)
+                        if parsed is not None and isinstance(parsed, list):
+                            return parsed
+                    # Handle direct list
+                    elif isinstance(shape_data, list):
+                        return shape_data
             return None
         except Exception:
             return None
 
     @staticmethod
     def _extract_int_parameter(config: List, arg_name: str) -> Optional[int]:
-        """Extract integer parameter from config"""
+        """Extract integer parameter from config (e.g., for transpose dim0, dim1)"""
         try:
             for arg in config:
                 if isinstance(arg, dict) and arg_name in arg:
@@ -448,6 +647,173 @@ class OperationParameterExtractors:
 
         return None
 
+    # Unary operation extractors
+    @staticmethod
+    def _extract_permute_parameters(config: List) -> Optional[Dict]:
+        """Extract parameters for permute operation"""
+        try:
+            dims = OperationParameterExtractors._extract_permute_dims(config)
+            if dims:
+                return {"dims": dims}
+            # Fallback to default if extraction fails
+            return {"dims": [0, 1, 3, 2]}  # N, C, W, H -> N, C, H, W
+        except Exception:
+            return None
+
+    @staticmethod
+    def _extract_untilize_with_unpadding_parameters(config: List) -> Optional[Dict]:
+        """Extract parameters for untilize_with_unpadding operation"""
+        try:
+            end_shape = OperationParameterExtractors._extract_shape_parameter(config, arg_name="arg1")
+            if end_shape:
+                return {"end_shape": end_shape}
+            return None
+        except Exception:
+            return None
+
+    @staticmethod
+    def _extract_nlp_concat_heads_decode_parameters(config: List) -> Optional[Dict]:
+        """Extract parameters for nlp_concat_heads_decode operation"""
+        try:
+            num_heads = None
+            for arg in config:
+                if isinstance(arg, dict) and "arg1" in arg:
+                    num_heads_val = arg["arg1"]
+                    if isinstance(num_heads_val, (int, str)) and num_heads_val != "nullopt":
+                        try:
+                            num_heads = int(num_heads_val)
+                        except:
+                            pass
+                    break
+
+            # Try to infer from tensor shape if available
+            if num_heads is None:
+                # Extract tensor config from arg0
+                tensor_config = None
+                for arg in config:
+                    if isinstance(arg, dict) and "arg0" in arg:
+                        tensor_config = OperationParameterExtractors.extract_tensor_config(arg["arg0"])
+                        break
+
+                if tensor_config:
+                    # Try to infer from shape [B, 1, H, D] -> H might be num_heads
+                    if len(tensor_config.shape) == 4 and tensor_config.shape[1] == 1:
+                        num_heads = tensor_config.shape[2]  # Use shape[2] as num_heads
+                    else:
+                        num_heads = 16  # Default fallback
+                else:
+                    num_heads = 16  # Default fallback
+
+            return {"num_heads": num_heads}
+        except Exception:
+            return {"num_heads": 16}  # Default fallback
+
+    @staticmethod
+    def _extract_transpose_parameters(config: List) -> Optional[Dict]:
+        """Extract parameters for transpose operation"""
+        try:
+            dim0 = OperationParameterExtractors._extract_int_parameter(config, "arg1")
+            dim1 = OperationParameterExtractors._extract_int_parameter(config, "arg2")
+            if dim0 is not None and dim1 is not None:
+                return {"dim0": dim0, "dim1": dim1}
+            return None
+        except Exception:
+            return None
+
+    @staticmethod
+    def _extract_reshape_parameters(config: List) -> Optional[Dict]:
+        """Extract parameters for reshape operation"""
+        try:
+            target_shape = OperationParameterExtractors._extract_shape_parameter(config, arg_name="arg1")
+            if target_shape:
+                # Extract tensor config to validate reshape
+                tensor_config = None
+                for arg in config:
+                    if isinstance(arg, dict) and "arg0" in arg:
+                        tensor_config = OperationParameterExtractors.extract_tensor_config(arg["arg0"])
+                        break
+
+                if tensor_config:
+                    import math
+
+                    input_elements = math.prod(tensor_config.shape) if tensor_config.shape else 0
+                    # Handle -1 in target_shape (means infer from other dimensions)
+                    if -1 in target_shape:
+                        # Calculate what -1 should be
+                        known_product = math.prod([d for d in target_shape if d != -1])
+                        if known_product == 0:
+                            # Invalid: cannot infer -1 with zero in other dimensions
+                            return None
+                        inferred_dim = input_elements // known_product
+                        target_shape = [inferred_dim if d == -1 else d for d in target_shape]
+
+                    target_elements = math.prod(target_shape) if target_shape else 0
+                    if input_elements != target_elements:
+                        # Invalid reshape config - skip it
+                        return None
+
+                return {"target_shape": target_shape}
+            return None
+        except Exception:
+            return None
+
+    @staticmethod
+    def _extract_pad_parameters(config: List) -> Optional[Dict]:
+        """Extract parameters for pad operation"""
+        try:
+            padding = None
+            value = None
+            for arg in config:
+                if isinstance(arg, dict):
+                    if "arg1" in arg:
+                        padding = OperationParameterExtractors._parse_list_from_string(arg["arg1"])
+                        # Normalize padding format
+                        if padding and isinstance(padding, list):
+                            # Check if it's a flat list that needs conversion
+                            if len(padding) == 4 and all(isinstance(x, int) for x in padding):
+                                # Convert [front_H, back_H, front_W, back_W] to [[0,0], [0,0], [front_H, back_H], [front_W, back_W]]
+                                padding = [
+                                    [0, 0],
+                                    [0, 0],
+                                    [padding[0], padding[1]],
+                                    [padding[2], padding[3]],
+                                ]
+                    if "arg2" in arg:
+                        value = OperationParameterExtractors._parse_numeric_value(arg["arg2"])
+                        # Value must be a single float, not a list
+                        if isinstance(value, list):
+                            # If all elements are the same, use that value
+                            if len(set(value)) == 1:
+                                value = float(value[0])
+                            else:
+                                # Use the first element (or could skip this config)
+                                value = float(value[0])
+                        elif value is not None:
+                            value = float(value)
+
+            if padding is not None and value is not None:
+                return {"padding": padding, "value": value}
+            return None
+        except Exception:
+            return None
+
+    @staticmethod
+    def _extract_tilize_with_val_padding_parameters(config: List) -> Optional[Dict]:
+        """Extract parameters for tilize_with_val_padding operation"""
+        try:
+            padded_shape = OperationParameterExtractors._extract_shape_parameter(config, arg_name="arg1")
+            pad_value = None
+            for arg in config:
+                if isinstance(arg, dict) and "arg2" in arg:
+                    pad_value = OperationParameterExtractors._parse_numeric_value(arg["arg2"])
+                    break
+
+            if padded_shape and pad_value is not None:
+                return {"padded_shape": padded_shape, "pad_value": pad_value}
+            return None
+        except Exception:
+            return None
+
 
 # Register the built-in extractors
 OperationParameterExtractors.register_extractor(
@@ -464,6 +830,54 @@ OperationParameterExtractors.register_extractor(
 
 OperationParameterExtractors.register_extractor(
     "conv2d", extract_func=OperationParameterExtractors._extract_conv2d_parameters
+)
+
+# Register unary operation extractors
+OperationParameterExtractors.register_extractor(
+    "permute",
+    extract_func=OperationParameterExtractors._extract_permute_parameters,
+)
+OperationParameterExtractors.register_extractor(
+    "ttnn::permute",
+    extract_func=OperationParameterExtractors._extract_permute_parameters,
+)
+
+OperationParameterExtractors.register_extractor(
+    "untilize_with_unpadding",
+    extract_func=OperationParameterExtractors._extract_untilize_with_unpadding_parameters,
+)
+
+OperationParameterExtractors.register_extractor(
+    "nlp_concat_heads_decode",
+    extract_func=OperationParameterExtractors._extract_nlp_concat_heads_decode_parameters,
+)
+OperationParameterExtractors.register_extractor(
+    "experimental::nlp_concat_heads_decode",
+    extract_func=OperationParameterExtractors._extract_nlp_concat_heads_decode_parameters,
+)
+OperationParameterExtractors.register_extractor(
+    "ttnn::experimental::nlp_concat_heads_decode",
+    extract_func=OperationParameterExtractors._extract_nlp_concat_heads_decode_parameters,
+)
+
+OperationParameterExtractors.register_extractor(
+    "transpose",
+    extract_func=OperationParameterExtractors._extract_transpose_parameters,
+)
+
+OperationParameterExtractors.register_extractor(
+    "reshape",
+    extract_func=OperationParameterExtractors._extract_reshape_parameters,
+)
+
+OperationParameterExtractors.register_extractor(
+    "pad",
+    extract_func=OperationParameterExtractors._extract_pad_parameters,
+)
+
+OperationParameterExtractors.register_extractor(
+    "tilize_with_val_padding",
+    extract_func=OperationParameterExtractors._extract_tilize_with_val_padding_parameters,
 )
 
 
