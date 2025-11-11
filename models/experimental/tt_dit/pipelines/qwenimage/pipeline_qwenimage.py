@@ -31,6 +31,9 @@ if TYPE_CHECKING:
 
     from PIL import Image
 
+PROMPT_TEMPLATE = "<|im_start|>system\nDescribe the image by detailing the color, shape, size, texture, quantity, text, spatial relationships of the objects and background:<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n"  # noqa: E501
+PROMPT_DROP_IDX = 34
+
 
 @dataclass
 class PipelineTrace:
@@ -712,12 +715,18 @@ class QwenImagePipeline:
         if cfg_enabled:
             prompts = negative_prompts + prompts
 
+        prompts = [PROMPT_TEMPLATE.format(e) for e in prompts]
+
         with timer.time_section("text_encoding") if timer else nullcontext():
-            return self._text_encoder.encode(
+            embeds, mask = self._text_encoder.encode(
                 prompts,
                 num_images_per_prompt=num_images_per_prompt,
-                sequence_length=512,
+                sequence_length=512 + PROMPT_DROP_IDX,
             )
+
+        embeds[torch.logical_not(mask)] = 0.0
+
+        return embeds[:, PROMPT_DROP_IDX:], mask[:, PROMPT_DROP_IDX:]
 
 
 def _schedule(

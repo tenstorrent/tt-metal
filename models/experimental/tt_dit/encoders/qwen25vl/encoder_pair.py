@@ -103,16 +103,11 @@ def _get_qwen_prompt_embeds(
     sequence_length: int,
     num_images_per_prompt: int,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    template = "<|im_start|>system\nDescribe the image by detailing the color, shape, size, texture, quantity, text, spatial relationships of the objects and background:<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n"
-    drop_idx = 34
-
-    prompts = [template.format(e) for e in prompts]
-
     tokenizer_out = tokenizer(
         prompts,
         return_tensors="pt",
         padding="max_length",
-        max_length=sequence_length + drop_idx,
+        max_length=sequence_length,
         truncation=True,
     )
 
@@ -161,8 +156,8 @@ def _get_qwen_prompt_embeds(
         )
         tt_hidden_states = text_encoder.norm(tt_hidden_states, mode="prefill")
 
-        hidden_states = ttnn.to_torch(ttnn.get_device_tensors(tt_hidden_states)[0])
-        hidden_states = hidden_states[:, :, : tokens.shape[1], :].squeeze(1)
+        prompt_embeds = ttnn.to_torch(ttnn.get_device_tensors(tt_hidden_states)[0])
+        prompt_embeds = prompt_embeds[:, :, : tokens.shape[1], :].squeeze(1)
     else:
         tokens = tokens.to(device=torch_text_encoder.device)
 
@@ -173,17 +168,12 @@ def _get_qwen_prompt_embeds(
                 output_hidden_states=True,
             )
 
-        hidden_states = output.hidden_states[-1].to("cpu")
-
-    prompt_embeds = hidden_states[:, drop_idx:]
-    encoder_attention_mask = attention_mask[:, drop_idx:]
-
-    prompt_embeds[torch.logical_not(encoder_attention_mask)] = 0.0
+        prompt_embeds = output.hidden_states[-1].to("cpu")
 
     prompt_embeds = prompt_embeds.repeat_interleave(num_images_per_prompt, dim=0)
-    encoder_attention_mask = encoder_attention_mask.repeat_interleave(num_images_per_prompt, dim=0)
+    attention_mask = attention_mask.repeat_interleave(num_images_per_prompt, dim=0)
 
-    return prompt_embeds, encoder_attention_mask
+    return prompt_embeds, attention_mask
 
 
 def _extract_masked_hidden(hidden_states: torch.Tensor, mask: torch.Tensor) -> tuple[torch.Tensor, ...]:
