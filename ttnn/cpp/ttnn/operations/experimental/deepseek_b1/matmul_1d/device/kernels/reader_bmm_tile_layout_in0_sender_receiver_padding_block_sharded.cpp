@@ -7,20 +7,13 @@
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
-#include "pad_tile.hpp"
 
 void kernel_main() {
-    constexpr bool core_has_output_block_work = (bool)get_compile_time_arg_val(0);
-    constexpr bool core_in_in0_receiver_mcast_grid = (bool)get_compile_time_arg_val(1);
-
     constexpr uint32_t in0_block_num_tiles = get_compile_time_arg_val(2);
     constexpr uint32_t in0_block_size_bytes = get_compile_time_arg_val(3);
-    constexpr uint32_t in0_last_ktile_w = get_compile_time_arg_val(4);
 
     // in0/in1 common args
     constexpr uint32_t num_blocks_inner_dim = get_compile_time_arg_val(5);
-    constexpr uint32_t num_blocks_w_dim = get_compile_time_arg_val(6);
-    constexpr uint32_t num_blocks_h_dim = get_compile_time_arg_val(7);
     // in0 mcast args
     uint32_t in0_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(8));
     uint32_t in0_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(9));
@@ -30,12 +23,9 @@ void kernel_main() {
     constexpr uint32_t num_y = get_compile_time_arg_val(13);
     constexpr bool transpose_mcast = (bool)get_compile_time_arg_val(14);
     constexpr uint32_t shard_width_in_tiles = get_compile_time_arg_val(15);
-    constexpr uint32_t shard_height_in_tiles = get_compile_time_arg_val(16);
     constexpr uint32_t in0_block_w = get_compile_time_arg_val(17);
-    constexpr uint32_t in0_block_h = get_compile_time_arg_val(18);
 
     constexpr uint32_t batch = get_compile_time_arg_val(19);
-    constexpr bool fuse_op = (bool)get_compile_time_arg_val(20);
 
     uint32_t rt_args_idx = 0;
     const uint32_t sender_id = get_arg_val<uint32_t>(rt_args_idx++);
@@ -49,17 +39,7 @@ void kernel_main() {
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in2 = 2;  // Sharded cb
 
-    constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(cb_id_in0);
-    constexpr DataFormat in0_data_format = get_dataformat(cb_id_in0);
-
     constexpr uint32_t num_blocks_per_shard = shard_width_in_tiles / in0_block_w;
-    // In case we need to send multiple blocks per shard, and shard height in tiles is greater than 1
-    // Than we first need to extract the sub-blocks from the shard, and then send them to the destinations
-    constexpr bool extract_shard_sub_blocks = shard_height_in_tiles > 1 && num_blocks_per_shard > 1;
-    constexpr uint32_t out_block_h = shard_height_in_tiles / num_blocks_h_dim;
-    constexpr uint32_t shard_read_stride = shard_width_in_tiles * in0_single_tile_size_bytes;
-    constexpr uint32_t shard_read_width = in0_single_tile_size_bytes * in0_block_w;
-    constexpr uint32_t in0_tensor_next_h_dim_block_stride = shard_read_stride * in0_block_h;
 
     // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
     volatile tt_l1_ptr uint32_t* in0_mcast_receiver_semaphore_addr_ptr =
