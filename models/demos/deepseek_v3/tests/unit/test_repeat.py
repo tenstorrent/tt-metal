@@ -2,7 +2,6 @@
 #
 #  SPDX-License-Identifier: Apache-2.0
 
-
 import pytest
 import torch
 
@@ -13,12 +12,20 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 def random_torch_tensor(dtype, shape):
     torch.manual_seed(1234)
-    if dtype == ttnn.int32 or dtype == ttnn.uint32:
+    if dtype == ttnn.uint8:
+        return torch.randint(0, 100, shape).to(torch.int16)
+    if dtype == ttnn.uint16:
+        return torch.randint(0, 100, shape).to(torch.int16)
+    if dtype == ttnn.int32:
+        return torch.randint(-(2**31), 2**31, shape, dtype=torch.int32)
+    if dtype == ttnn.uint32:
         return torch.randint(0, 2**31, shape, dtype=torch.int32)
     if dtype == ttnn.float32:
         return torch.rand(shape, dtype=torch.float32)
     if dtype == ttnn.bfloat16:
         return torch.rand(shape, dtype=torch.bfloat16)
+    # return torch.rand(shape).bfloat16().float()
+    assert False, f"Unsupported dtype {dtype}"
 
 
 def run_test(mesh_device, run_op_proc, check_op_proc):
