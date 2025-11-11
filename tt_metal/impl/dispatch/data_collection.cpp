@@ -23,7 +23,7 @@
 #include <tt_stl/assert.hpp>
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
-#include "impl/kernels/kernel_impl.hpp"
+#include "impl/kernels/kernel.hpp"
 #include "program/program_impl.hpp"
 #include "tt-metalium/program.hpp"
 

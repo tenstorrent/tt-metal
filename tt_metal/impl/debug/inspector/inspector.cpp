@@ -13,7 +13,7 @@
 #include "program.hpp"
 #include <memory>
 #include <tt-logger/tt-logger.hpp>
-#include "impl/kernels/kernel_impl.hpp"
+#include "impl/kernels/kernel.hpp"
 
 namespace tt::tt_metal {
 
