@@ -347,7 +347,7 @@ def test_multimodal_demo_text(
     for iter_num in range(warmup_iters + 1):
         logger.info(f"Iteration {iter_num}")
         current_dialogs = trace_dialogs + dialogs
-        for batch_idx in range(num_batches):
+        for batch_idx in range(num_trace_batches + num_batches):
             batch_dialogs = current_dialogs[batch_idx * max_batch_size : (batch_idx + 1) * max_batch_size]
             for dialog in batch_dialogs:
                 for msg in dialog:
@@ -464,11 +464,7 @@ def test_multimodal_demo_text(
             vision_token = processor.image_token_id
 
             for user_id in range(max_batch_size):
-                # Remove <|image|> tokens since they break the tokenizer
-                tokens_out = [
-                    t if t != vision_token else tokenizer.pad_token_id
-                    for t in tokens[user_id].tolist()[: position_id[user_id] + 2]
-                ]
+                tokens_out = [t for t in tokens[user_id].tolist()[: position_id[user_id] + 2]]
                 text = tokenizer.decode(tokens_out)
                 logger.info(f"User {user_id} full text: {text}")
 
