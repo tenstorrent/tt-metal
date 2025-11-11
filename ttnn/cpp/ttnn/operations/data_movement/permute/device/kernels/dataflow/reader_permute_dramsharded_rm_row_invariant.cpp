@@ -61,6 +61,7 @@ void kernel_main() {
         // noc_async_read_with_state(s0.get_noc_addr(row), l1_addr, page_size);
         noc_async_read_one_packet(s0.get_noc_addr(row), l1_addr, page_size, noc_index, vc);
 
+        // Update trid and CB
         if (warmup) {
             warmup = curr_trid < end_trid - 1;
         } else {
@@ -71,6 +72,7 @@ void kernel_main() {
         l1_addr = (curr_trid == end_trid) ? l1_addr_start : (l1_addr + page_size);
         curr_trid = (curr_trid == end_trid) ? start_trid : (curr_trid + 1);
     }
+    // Flush outstanding reads
     while (prev_trid != curr_trid) {
         noc_async_read_barrier_with_trid(prev_trid);
         cb_push_back(tt::CBIndex::c_0, 1);

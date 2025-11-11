@@ -205,7 +205,7 @@ PermuteDeviceOperation::DramShardedRowInvariant::create(
     uint32_t output_rm_page_size = detail::page_size(tensor_return_value);
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
-    uint32_t num_input_pages_to_read = 2;
+    uint32_t num_input_pages_to_read = 4;
 
     uint32_t num_rows = input_tensor.physical_volume() / input_tensor.logical_shape()[-1];
 
