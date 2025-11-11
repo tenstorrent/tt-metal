@@ -3,12 +3,9 @@
 mesh_descriptors {
   name: "M0"
   arch: WORMHOLE_B0
-  device_topology { dims: [ 1, 8 ] dim_types: [ RING, RING ] }
+  device_topology { dims: [ 1, 32 ] dim_types: [ RING, RING ] }
   host_topology   { dims: [ 1, 1 ] }
-  channels {
-    count: 2
-    policy: STRICT
-  }
+  channels { count: 4 policy: STRICT }
 }
 
 # --- Instantiation ----------------------------------------------------------

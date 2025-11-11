@@ -31,6 +31,15 @@ std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane(const std::files
     return control_plane;
 }
 
+std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane_1d_ring(const std::filesystem::path& graph_desc) {
+    constexpr auto kFabricConfig1DRing = tt::tt_fabric::FabricConfig::FABRIC_1D_RING;
+    auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(graph_desc.string());
+    control_plane->initialize_fabric_context(kFabricConfig1DRing);
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels(kFabricConfig1DRing, kReliabilityMode);
+
+    return control_plane;
+}
+
 // Deep-compare helper for IntraMeshConnectivity
 void expect_intra_mesh_connectivity_equal(
     const tt::tt_fabric::IntraMeshConnectivity &lhs, const tt::tt_fabric::IntraMeshConnectivity &rhs) {
@@ -272,6 +281,43 @@ TEST_F(ControlPlaneFixture, TestSingleGalaxyControlPlaneInitMGD2) {
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/single_galaxy_mesh_graph_descriptor.textproto";
     [[maybe_unused]] auto control_plane = make_control_plane(single_galaxy_mesh_graph_desc_path.string());
+}
+
+TEST_F(ControlPlaneFixture, TestT3k1x8ControlPlaneInitMGD2) {
+    const std::filesystem::path t3k_1x8_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_1x8_mesh_graph_descriptor.textproto";
+    auto control_plane = make_control_plane(t3k_1x8_mesh_graph_desc_path);
+}
+
+TEST_F(ControlPlaneFixture, TestT3k1x8FabricRoutesMGD2) {
+    const std::filesystem::path t3k_1x8_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_1x8_mesh_graph_descriptor.textproto";
+    auto control_plane = make_control_plane_1d_ring(t3k_1x8_mesh_graph_desc_path);
+
+    // Test routing from first chip (0) to last chip (7) in the 1x8 topology
+    auto valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(FabricNodeId(MeshId{0}, 0), 0);
+    EXPECT_GT(valid_chans.size(), 0);
+    for (auto chan : valid_chans) {
+        auto path = control_plane->get_fabric_route(FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 7), chan);
+        EXPECT_EQ(!path.empty(), true);
+    }
+
+    // Test routing on second routing plane
+    valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(FabricNodeId(MeshId{0}, 0), 1);
+    EXPECT_GT(valid_chans.size(), 0);
+    for (auto chan : valid_chans) {
+        auto path = control_plane->get_fabric_route(FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 7), chan);
+        EXPECT_EQ(!path.empty(), true);
+    }
+
+    // Check the forwarding direction from node 0 to nodes 1 through 7
+    for (ChipId dst_node = 1; dst_node <= 7; ++dst_node) {
+        auto forwarding_direction =
+            control_plane->get_forwarding_direction(FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, dst_node));
+        EXPECT_TRUE(forwarding_direction.has_value());
+    }
 }
 
 TEST(MeshGraphValidation, TestT3kDualHostMeshGraphMGD2) {

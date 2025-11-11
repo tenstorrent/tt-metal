@@ -45,11 +45,73 @@ RoutingDirection routing_direction_to_port_direction(const proto::RoutingDirecti
 
 
 using ClusterToDescriptorMap = std::unordered_map<tt::tt_metal::ClusterType, std::string_view>;
-using FabricToClusterDescriptorMap = std::unordered_map<tt::tt_fabric::FabricType, ClusterToDescriptorMap>;
+using FabricToClusterDescriptorMap = std::unordered_map<tt::tt_fabric::FabricConfig, ClusterToDescriptorMap>;
+
+// Helper function to create the common MESH descriptor map (yaml version)
+ClusterToDescriptorMap create_mesh_descriptor_map_yaml() {
+    return ClusterToDescriptorMap{
+        {tt::tt_metal::ClusterType::N150, "n150_mesh_graph_descriptor.yaml"},
+        {tt::tt_metal::ClusterType::N300, "n300_mesh_graph_descriptor.yaml"},
+        {tt::tt_metal::ClusterType::T3K, "t3k_mesh_graph_descriptor.yaml"},
+        {tt::tt_metal::ClusterType::GALAXY, "single_galaxy_mesh_graph_descriptor.yaml"},
+        {tt::tt_metal::ClusterType::TG, "tg_mesh_graph_descriptor.yaml"},
+        {tt::tt_metal::ClusterType::P100, "p100_mesh_graph_descriptor.yaml"},
+        {tt::tt_metal::ClusterType::P150, "p150_mesh_graph_descriptor.yaml"},
+        {tt::tt_metal::ClusterType::P150_X2, "p150_x2_mesh_graph_descriptor.yaml"},
+        {tt::tt_metal::ClusterType::P150_X4, "p150_x4_mesh_graph_descriptor.yaml"},
+        {tt::tt_metal::ClusterType::P150_X8, "p150_x8_mesh_graph_descriptor.yaml"},
+        {tt::tt_metal::ClusterType::SIMULATOR_WORMHOLE_B0, "n150_mesh_graph_descriptor.yaml"},
+        {tt::tt_metal::ClusterType::SIMULATOR_BLACKHOLE, "p150_mesh_graph_descriptor.yaml"},
+        {tt::tt_metal::ClusterType::SIMULATOR_QUASAR, "p150_mesh_graph_descriptor.yaml"},  // TODO use quasar mesh
+        {tt::tt_metal::ClusterType::N300_2x2, "n300_2x2_mesh_graph_descriptor.yaml"},
+        {tt::tt_metal::ClusterType::P300, "p300_mesh_graph_descriptor.yaml"},
+        {tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, "single_bh_galaxy_mesh_graph_descriptor.yaml"},
+        {tt::tt_metal::ClusterType::P300_X2, "p300_x2_mesh_graph_descriptor.yaml"},
+    };
+}
+
+// Helper function to create the common MESH descriptor map (textproto version)
+ClusterToDescriptorMap create_mesh_descriptor_map_textproto() {
+    return ClusterToDescriptorMap{
+        {tt::tt_metal::ClusterType::N150, "n150_mesh_graph_descriptor.textproto"},
+        {tt::tt_metal::ClusterType::N300, "n300_mesh_graph_descriptor.textproto"},
+        {tt::tt_metal::ClusterType::T3K, "t3k_mesh_graph_descriptor.textproto"},
+        {tt::tt_metal::ClusterType::GALAXY, "single_galaxy_mesh_graph_descriptor.textproto"},
+        {tt::tt_metal::ClusterType::TG, "tg_mesh_graph_descriptor.textproto"},
+        {tt::tt_metal::ClusterType::P100, "p100_mesh_graph_descriptor.textproto"},
+        {tt::tt_metal::ClusterType::P150, "p150_mesh_graph_descriptor.textproto"},
+        {tt::tt_metal::ClusterType::P150_X2, "p150_x2_mesh_graph_descriptor.textproto"},
+        {tt::tt_metal::ClusterType::P150_X4, "p150_x4_mesh_graph_descriptor.textproto"},
+        {tt::tt_metal::ClusterType::P150_X8, "p150_x8_mesh_graph_descriptor.textproto"},
+        {tt::tt_metal::ClusterType::SIMULATOR_WORMHOLE_B0, "n150_mesh_graph_descriptor.textproto"},
+        {tt::tt_metal::ClusterType::SIMULATOR_BLACKHOLE, "p150_mesh_graph_descriptor.textproto"},
+        {tt::tt_metal::ClusterType::SIMULATOR_QUASAR, "p150_mesh_graph_descriptor.textproto"},
+        {tt::tt_metal::ClusterType::N300_2x2, "n300_2x2_mesh_graph_descriptor.textproto"},
+        {tt::tt_metal::ClusterType::P300, "p300_mesh_graph_descriptor.textproto"},
+        {tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, "single_bh_galaxy_mesh_graph_descriptor.textproto"},
+        {tt::tt_metal::ClusterType::P300_X2, "p300_x2_mesh_graph_descriptor.textproto"},
+    };
+}
 
 const tt::stl::Indestructible<FabricToClusterDescriptorMap>& cluster_type_to_mesh_graph_descriptor =
     tt::stl::Indestructible<FabricToClusterDescriptorMap>(FabricToClusterDescriptorMap{
-        {tt::tt_fabric::FabricType::MESH,
+        // MESH fabric types (FABRIC_1D, FABRIC_2D, FABRIC_2D_DYNAMIC)
+        {tt::tt_fabric::FabricConfig::FABRIC_1D,
+         ClusterToDescriptorMap{
+             {tt::tt_metal::ClusterType::N150, "n150_mesh_graph_descriptor.yaml"},
+             {tt::tt_metal::ClusterType::N300, "n300_mesh_graph_descriptor.yaml"},
+             {tt::tt_metal::ClusterType::P100, "p100_mesh_graph_descriptor.yaml"},
+             {tt::tt_metal::ClusterType::P150, "p150_mesh_graph_descriptor.yaml"},
+             {tt::tt_metal::ClusterType::P150_X2, "p150_x2_mesh_graph_descriptor.yaml"},
+             {tt::tt_metal::ClusterType::P300, "p300_mesh_graph_descriptor.yaml"},
+             {tt::tt_metal::ClusterType::P300_X2, "p300_x2_mesh_graph_descriptor.yaml"},
+             {tt::tt_metal::ClusterType::SIMULATOR_WORMHOLE_B0, "n150_mesh_graph_descriptor.yaml"},
+             {tt::tt_metal::ClusterType::SIMULATOR_BLACKHOLE, "p150_mesh_graph_descriptor.yaml"},
+             {tt::tt_metal::ClusterType::SIMULATOR_QUASAR, "p150_mesh_graph_descriptor.yaml"},  // TODO use quasar mesh
+             {tt::tt_metal::ClusterType::GALAXY, "single_galaxy_1x32_mesh_graph_descriptor.yaml"},
+             {tt::tt_metal::ClusterType::T3K, "t3k_1x8_mesh_graph_descriptor.yaml"},
+         }},
+        {tt::tt_fabric::FabricConfig::FABRIC_2D,
          ClusterToDescriptorMap{
              {tt::tt_metal::ClusterType::N150, "n150_mesh_graph_descriptor.yaml"},
              {tt::tt_metal::ClusterType::N300, "n300_mesh_graph_descriptor.yaml"},
@@ -67,24 +129,81 @@ const tt::stl::Indestructible<FabricToClusterDescriptorMap>& cluster_type_to_mes
              {tt::tt_metal::ClusterType::N300_2x2, "n300_2x2_mesh_graph_descriptor.yaml"},
              {tt::tt_metal::ClusterType::P300, "p300_mesh_graph_descriptor.yaml"},
              {tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, "single_bh_galaxy_mesh_graph_descriptor.yaml"},
-             {tt::tt_metal::ClusterType::P300_X2, "p300_x2_mesh_graph_descriptor.textproto"},
+             {tt::tt_metal::ClusterType::P300_X2, "p300_x2_mesh_graph_descriptor.yaml"},
          }},
-        {tt::tt_fabric::FabricType::TORUS_X,
+        {tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
+         ClusterToDescriptorMap{
+             {tt::tt_metal::ClusterType::N150, "n150_mesh_graph_descriptor.yaml"},
+             {tt::tt_metal::ClusterType::N300, "n300_mesh_graph_descriptor.yaml"},
+             {tt::tt_metal::ClusterType::T3K, "t3k_mesh_graph_descriptor.yaml"},
+             {tt::tt_metal::ClusterType::GALAXY, "single_galaxy_mesh_graph_descriptor.yaml"},
+             {tt::tt_metal::ClusterType::TG, "tg_mesh_graph_descriptor.yaml"},
+             {tt::tt_metal::ClusterType::P100, "p100_mesh_graph_descriptor.yaml"},
+             {tt::tt_metal::ClusterType::P150, "p150_mesh_graph_descriptor.yaml"},
+             {tt::tt_metal::ClusterType::P150_X2, "p150_x2_mesh_graph_descriptor.yaml"},
+             {tt::tt_metal::ClusterType::P150_X4, "p150_x4_mesh_graph_descriptor.yaml"},
+             {tt::tt_metal::ClusterType::P150_X8, "p150_x8_mesh_graph_descriptor.yaml"},
+             {tt::tt_metal::ClusterType::SIMULATOR_WORMHOLE_B0, "n150_mesh_graph_descriptor.yaml"},
+             {tt::tt_metal::ClusterType::SIMULATOR_BLACKHOLE, "p150_mesh_graph_descriptor.yaml"},
+             {tt::tt_metal::ClusterType::SIMULATOR_QUASAR, "p150_mesh_graph_descriptor.yaml"},  // TODO use quasar mesh
+             {tt::tt_metal::ClusterType::N300_2x2, "n300_2x2_mesh_graph_descriptor.yaml"},
+             {tt::tt_metal::ClusterType::P300, "p300_mesh_graph_descriptor.yaml"},
+             {tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, "single_bh_galaxy_mesh_graph_descriptor.yaml"},
+             {tt::tt_metal::ClusterType::P300_X2, "p300_x2_mesh_graph_descriptor.yaml"},
+         }},
+        // TORUS_X fabric types
+        {tt::tt_fabric::FabricConfig::FABRIC_1D_RING,
+         ClusterToDescriptorMap{
+             {tt::tt_metal::ClusterType::GALAXY, "single_galaxy_1x32_mesh_graph_descriptor.yaml"},
+             {tt::tt_metal::ClusterType::T3K, "t3k_1x8_mesh_graph_descriptor.yaml"},
+         }},
+        {tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X,
          ClusterToDescriptorMap{
              {tt::tt_metal::ClusterType::GALAXY, "single_galaxy_torus_x_graph_descriptor.yaml"},
          }},
-        {tt::tt_fabric::FabricType::TORUS_Y,
+        {tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_X,
+         ClusterToDescriptorMap{
+             {tt::tt_metal::ClusterType::GALAXY, "single_galaxy_torus_x_graph_descriptor.yaml"},
+         }},
+        // TORUS_Y fabric types
+        {tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y,
          ClusterToDescriptorMap{
              {tt::tt_metal::ClusterType::GALAXY, "single_galaxy_torus_y_graph_descriptor.yaml"},
          }},
-        {tt::tt_fabric::FabricType::TORUS_XY,
+        {tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_Y,
+         ClusterToDescriptorMap{
+             {tt::tt_metal::ClusterType::GALAXY, "single_galaxy_torus_y_graph_descriptor.yaml"},
+         }},
+        // TORUS_XY fabric types
+        {tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY,
+         ClusterToDescriptorMap{
+             {tt::tt_metal::ClusterType::GALAXY, "single_galaxy_torus_xy_graph_descriptor.yaml"},
+         }},
+        {tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY,
          ClusterToDescriptorMap{
              {tt::tt_metal::ClusterType::GALAXY, "single_galaxy_torus_xy_graph_descriptor.yaml"},
          }}});
 
 const tt::stl::Indestructible<FabricToClusterDescriptorMap>& cluster_type_to_mesh_graph_descriptor_mgd2 =
     tt::stl::Indestructible<FabricToClusterDescriptorMap>(FabricToClusterDescriptorMap{
-        {tt::tt_fabric::FabricType::MESH,
+        // MESH fabric types (FABRIC_1D, FABRIC_2D, FABRIC_2D_DYNAMIC)
+        {tt::tt_fabric::FabricConfig::FABRIC_1D,
+         ClusterToDescriptorMap{
+             {tt::tt_metal::ClusterType::N150, "n150_mesh_graph_descriptor.textproto"},
+             {tt::tt_metal::ClusterType::N300, "n300_mesh_graph_descriptor.textproto"},
+             {tt::tt_metal::ClusterType::P100, "p100_mesh_graph_descriptor.textproto"},
+             {tt::tt_metal::ClusterType::P150, "p150_mesh_graph_descriptor.textproto"},
+             {tt::tt_metal::ClusterType::P150_X2, "p150_x2_mesh_graph_descriptor.textproto"},
+             {tt::tt_metal::ClusterType::P300, "p300_mesh_graph_descriptor.textproto"},
+             {tt::tt_metal::ClusterType::P300_X2, "p300_x2_mesh_graph_descriptor.textproto"},
+             {tt::tt_metal::ClusterType::SIMULATOR_WORMHOLE_B0, "n150_mesh_graph_descriptor.textproto"},
+             {tt::tt_metal::ClusterType::SIMULATOR_BLACKHOLE, "p150_mesh_graph_descriptor.textproto"},
+             {tt::tt_metal::ClusterType::SIMULATOR_QUASAR,
+              "p150_mesh_graph_descriptor.textproto"},  // TODO use quasar mesh
+             {tt::tt_metal::ClusterType::GALAXY, "single_galaxy_1x32_mesh_graph_descriptor.textproto"},
+             {tt::tt_metal::ClusterType::T3K, "t3k_1x8_mesh_graph_descriptor.textproto"},
+         }},
+        {tt::tt_fabric::FabricConfig::FABRIC_2D,
          ClusterToDescriptorMap{
              {tt::tt_metal::ClusterType::N150, "n150_mesh_graph_descriptor.textproto"},
              {tt::tt_metal::ClusterType::N300, "n300_mesh_graph_descriptor.textproto"},
@@ -98,21 +217,63 @@ const tt::stl::Indestructible<FabricToClusterDescriptorMap>& cluster_type_to_mes
              {tt::tt_metal::ClusterType::P150_X8, "p150_x8_mesh_graph_descriptor.textproto"},
              {tt::tt_metal::ClusterType::SIMULATOR_WORMHOLE_B0, "n150_mesh_graph_descriptor.textproto"},
              {tt::tt_metal::ClusterType::SIMULATOR_BLACKHOLE, "p150_mesh_graph_descriptor.textproto"},
-             {tt::tt_metal::ClusterType::SIMULATOR_QUASAR, "p150_mesh_graph_descriptor.textproto"},
+             {tt::tt_metal::ClusterType::SIMULATOR_QUASAR,
+              "p150_mesh_graph_descriptor.textproto"},  // TODO use quasar mesh
              {tt::tt_metal::ClusterType::N300_2x2, "n300_2x2_mesh_graph_descriptor.textproto"},
              {tt::tt_metal::ClusterType::P300, "p300_mesh_graph_descriptor.textproto"},
              {tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, "single_bh_galaxy_mesh_graph_descriptor.textproto"},
              {tt::tt_metal::ClusterType::P300_X2, "p300_x2_mesh_graph_descriptor.textproto"},
          }},
-        {tt::tt_fabric::FabricType::TORUS_X,
+        {tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
+         ClusterToDescriptorMap{
+             {tt::tt_metal::ClusterType::N150, "n150_mesh_graph_descriptor.textproto"},
+             {tt::tt_metal::ClusterType::N300, "n300_mesh_graph_descriptor.textproto"},
+             {tt::tt_metal::ClusterType::T3K, "t3k_mesh_graph_descriptor.textproto"},
+             {tt::tt_metal::ClusterType::GALAXY, "single_galaxy_mesh_graph_descriptor.textproto"},
+             {tt::tt_metal::ClusterType::TG, "tg_mesh_graph_descriptor.textproto"},
+             {tt::tt_metal::ClusterType::P100, "p100_mesh_graph_descriptor.textproto"},
+             {tt::tt_metal::ClusterType::P150, "p150_mesh_graph_descriptor.textproto"},
+             {tt::tt_metal::ClusterType::P150_X2, "p150_x2_mesh_graph_descriptor.textproto"},
+             {tt::tt_metal::ClusterType::P150_X4, "p150_x4_mesh_graph_descriptor.textproto"},
+             {tt::tt_metal::ClusterType::P150_X8, "p150_x8_mesh_graph_descriptor.textproto"},
+             {tt::tt_metal::ClusterType::SIMULATOR_WORMHOLE_B0, "n150_mesh_graph_descriptor.textproto"},
+             {tt::tt_metal::ClusterType::SIMULATOR_BLACKHOLE, "p150_mesh_graph_descriptor.textproto"},
+             {tt::tt_metal::ClusterType::SIMULATOR_QUASAR,
+              "p150_mesh_graph_descriptor.textproto"},  // TODO use quasar mesh
+             {tt::tt_metal::ClusterType::N300_2x2, "n300_2x2_mesh_graph_descriptor.textproto"},
+             {tt::tt_metal::ClusterType::P300, "p300_mesh_graph_descriptor.textproto"},
+             {tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, "single_bh_galaxy_mesh_graph_descriptor.textproto"},
+             {tt::tt_metal::ClusterType::P300_X2, "p300_x2_mesh_graph_descriptor.textproto"},
+         }},
+        // TORUS_X fabric types
+        {tt::tt_fabric::FabricConfig::FABRIC_1D_RING,
+         ClusterToDescriptorMap{
+             {tt::tt_metal::ClusterType::GALAXY, "single_galaxy_1x32_mesh_graph_descriptor.textproto"},
+             {tt::tt_metal::ClusterType::T3K, "t3k_1x8_mesh_graph_descriptor.textproto"},
+         }},
+        {tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X,
          ClusterToDescriptorMap{
              {tt::tt_metal::ClusterType::GALAXY, "single_galaxy_torus_x_graph_descriptor.textproto"},
          }},
-        {tt::tt_fabric::FabricType::TORUS_Y,
+        {tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_X,
+         ClusterToDescriptorMap{
+             {tt::tt_metal::ClusterType::GALAXY, "single_galaxy_torus_x_graph_descriptor.textproto"},
+         }},
+        // TORUS_Y fabric types
+        {tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y,
          ClusterToDescriptorMap{
              {tt::tt_metal::ClusterType::GALAXY, "single_galaxy_torus_y_graph_descriptor.textproto"},
          }},
-        {tt::tt_fabric::FabricType::TORUS_XY,
+        {tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_Y,
+         ClusterToDescriptorMap{
+             {tt::tt_metal::ClusterType::GALAXY, "single_galaxy_torus_y_graph_descriptor.textproto"},
+         }},
+        // TORUS_XY fabric types
+        {tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY,
+         ClusterToDescriptorMap{
+             {tt::tt_metal::ClusterType::GALAXY, "single_galaxy_torus_xy_graph_descriptor.textproto"},
+         }},
+        {tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY,
          ClusterToDescriptorMap{
              {tt::tt_metal::ClusterType::GALAXY, "single_galaxy_torus_xy_graph_descriptor.textproto"},
          }}});
@@ -191,6 +352,11 @@ std::unordered_map<ChipId, RouterEdge> MeshGraph::get_valid_connections(
     std::unordered_map<ChipId, RouterEdge> valid_connections;
 
     MeshShape mesh_shape = mesh_coord_range.shape();
+    ChipId src_chip_id = (src_mesh_coord[0] * mesh_shape[1]) + src_mesh_coord[1];
+
+    // Check if this is a 1x1 or 1xA topology (1 row)
+    bool is_1d_topology = (mesh_shape[0] == 1);
+
     MeshCoordinate N(src_mesh_coord[0] - 1, src_mesh_coord[1]);
     MeshCoordinate E(src_mesh_coord[0], src_mesh_coord[1] + 1);
     MeshCoordinate S(src_mesh_coord[0] + 1, src_mesh_coord[1]);
@@ -211,6 +377,16 @@ std::unordered_map<ChipId, RouterEdge> MeshGraph::get_valid_connections(
           std::pair{W, RoutingDirection::W}}) {
         if (mesh_coord_range.contains(coord)) {
             ChipId fabric_chip_id = (coord[0] * mesh_shape[1]) + coord[1];
+
+            // For torus topologies with 1x1 or 1xA shapes, skip self-connections in the 1D direction (X direction)
+            bool is_torus_x = has_flag(fabric_type, FabricType::TORUS_X);
+            bool is_self_connection = (fabric_chip_id == src_chip_id);
+            bool is_x_direction = (direction == RoutingDirection::E || direction == RoutingDirection::W);
+
+            if (is_1d_topology && is_torus_x && is_self_connection && is_x_direction) {
+                continue;  // Skip self-connections in X direction for 1D torus topologies
+            }
+
             valid_connections.insert(
                 {fabric_chip_id,
                  RouterEdge{
@@ -818,13 +994,13 @@ const MeshContainer<MeshHostRankId>& MeshGraph::get_host_ranks(MeshId mesh_id) c
 }
 
 std::filesystem::path MeshGraph::get_mesh_graph_descriptor_path_for_cluster_type(
-    const tt::tt_metal::ClusterType cluster_type,
+    tt::tt_metal::ClusterType cluster_type,
     const std::string& root_dir,
-    const bool version_2,
-    const tt::tt_fabric::FabricType fabric_type) {
+    bool version_2,
+    tt::tt_fabric::FabricConfig fabric_config) {
     auto& fabric_to_cluster_map =
         version_2 ? cluster_type_to_mesh_graph_descriptor_mgd2.get() : cluster_type_to_mesh_graph_descriptor.get();
-    auto fabric_it = fabric_to_cluster_map.find(fabric_type);
+    auto fabric_it = fabric_to_cluster_map.find(fabric_config);
     if (fabric_it != fabric_to_cluster_map.end()) {
         const auto& cluster_to_descriptor_map = fabric_it->second;
         auto cluster_it = cluster_to_descriptor_map.find(cluster_type);
@@ -833,23 +1009,18 @@ std::filesystem::path MeshGraph::get_mesh_graph_descriptor_path_for_cluster_type
         }
     }
 
-    // Fallback: if a torus fabric type was requested but not found, try MESH fabric type.
-    if (fabric_type != FabricType::MESH) {
-        auto mesh_fabric_it = fabric_to_cluster_map.find(FabricType::MESH);
+    // Fallback: if a torus fabric config was requested but not found, try FABRIC_2D config
+    auto mesh_fabric_configs = tt::tt_fabric::FabricConfig::FABRIC_2D;
+    auto mesh_fabric_it = fabric_to_cluster_map.find(mesh_fabric_configs);
+    if (mesh_fabric_it != fabric_to_cluster_map.end()) {
         const auto& cluster_to_descriptor_map = mesh_fabric_it->second;
         auto cluster_it = cluster_to_descriptor_map.find(cluster_type);
         if (cluster_it != cluster_to_descriptor_map.end()) {
-            log_warning(
-                tt::LogFabric,
-                "Mesh Graph Descriptor for fabric type {} and cluster type {} not found. Picking mesh graph descriptor "
-                "for MESH fabric type.",
-                enchantum::to_string(fabric_type),
-                enchantum::to_string(cluster_type));
             return std::filesystem::path(root_dir) / MESH_GRAPH_DESCRIPTOR_DIR / cluster_it->second;
         }
     }
 
-    TT_THROW("Cannot find mesh graph descriptor for fabric type {} and cluster type {}", fabric_type, cluster_type);
+    TT_THROW("Cannot find mesh graph descriptor for fabric config {} and cluster type {}", fabric_config, cluster_type);
 }
 
 }  // namespace tt::tt_fabric
