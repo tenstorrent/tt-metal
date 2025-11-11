@@ -105,6 +105,11 @@ std::unordered_map<GlobalNodeId, std::vector<ConnectionData>> get_valid_connecti
             const auto src_device_id = instance.sub_instances_local_id_to_global_id.at(get_device_id(src_mesh_coord, mesh_shape));
             const auto dst_device_id = instance.sub_instances_local_id_to_global_id.at(get_device_id(coord, mesh_shape));
 
+            // Ignore self-connections (can occur with ring topology when mesh dimension size is 1)
+            if (src_device_id == dst_device_id) {
+                continue;
+            }
+
             ConnectionData data{
                 .nodes = {src_device_id, dst_device_id},
                 .count = channels_count,

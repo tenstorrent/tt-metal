@@ -206,6 +206,7 @@ std::unordered_map<ChipId, RouterEdge> MeshGraph::get_valid_connections(
         N = MeshCoordinate((src_mesh_coord[0] - 1 + mesh_shape[0]) % mesh_shape[0], src_mesh_coord[1]);
         S = MeshCoordinate((src_mesh_coord[0] + 1) % mesh_shape[0], src_mesh_coord[1]);
     }
+    ChipId src_chip_id = (src_mesh_coord[0] * mesh_shape[1]) + src_mesh_coord[1];
     for (auto& [coord, direction] :
          {std::pair{N, RoutingDirection::N},
           std::pair{E, RoutingDirection::E},
@@ -213,6 +214,10 @@ std::unordered_map<ChipId, RouterEdge> MeshGraph::get_valid_connections(
           std::pair{W, RoutingDirection::W}}) {
         if (mesh_coord_range.contains(coord)) {
             ChipId fabric_chip_id = (coord[0] * mesh_shape[1]) + coord[1];
+            // Ignore self-connections (can occur with ring topology when mesh dimension size is 1)
+            if (fabric_chip_id == src_chip_id) {
+                continue;
+            }
             valid_connections.insert(
                 {fabric_chip_id,
                  RouterEdge{
