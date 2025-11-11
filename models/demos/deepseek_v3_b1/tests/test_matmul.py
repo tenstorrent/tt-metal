@@ -59,14 +59,30 @@ def test_matmul(device):
         tile=ttnn.Tile([tile_height, 32]),
     )
 
-    # Create interleaved input B
-    ttnn_b = ttnn.from_torch(
-        torch_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
-
     # Calculate matmul parameters
     m_tiles = m // tile_height  # 1 tile
     n_tiles = n // 32  # 48 tiles
+
+    # Create width-sharded memory config for input B
+    # Width sharding distributes along the N dimension (1536)
+    # Each core gets n/num_cores = 1536/48 = 32 = 1 tile width
+    n_per_core_tiles = n_tiles // num_cores  # 1 tile per core
+
+    b_shard_shape = (k, n_per_core_tiles * 32)
+    b_shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}),
+        b_shard_shape,
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
+    b_width_sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, b_shard_spec
+    )
+
+    # Create width-sharded input B
+    ttnn_b = ttnn.from_torch(
+        torch_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=b_width_sharded_mem_config
+    )
 
     logger.info(f"Matmul params: in0_block_w={k_per_core_tiles}, per_core_M={m_tiles}, per_core_N=1")
 
