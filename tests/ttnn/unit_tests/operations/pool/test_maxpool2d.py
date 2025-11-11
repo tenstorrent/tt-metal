@@ -13,7 +13,6 @@ WS = ttnn.TensorMemoryLayout.WIDTH_SHARDED
 parameters = {
     "dram_slice_tests": {
         "in_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-        "in_place": [False],
         "input_specs": [
             # Contains following parameters
             # [in_n, in_c, in_h, in_w, kernel_h, kernel_w, stride_h, stride_w, pad_h, pad_w, dilation_h, dilation_w, ceil_mode, num_slices, shard_layout]
@@ -86,9 +85,8 @@ parameters = {
 
 @pytest.mark.parametrize("input_spec", parameters["dram_slice_tests"]["input_specs"])
 @pytest.mark.parametrize("in_dtype", parameters["dram_slice_tests"]["in_dtype"])
-@pytest.mark.parametrize("in_place", parameters["dram_slice_tests"]["in_place"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_max_pool2d_dram_slice(device, in_dtype, in_place, input_spec):
+def test_max_pool2d_dram_slice(device, in_dtype, input_spec):
     (
         in_n,
         in_c,
@@ -119,7 +117,6 @@ def test_max_pool2d_dram_slice(device, in_dtype, in_place, input_spec):
         in_dtype,
         shard_scheme=shard_scheme,
         ceil_mode=ceil_mode,
-        in_place=in_place,
         nightly_skips=False,
         dram_slice_config=dram_slice_config,
     )
