@@ -668,15 +668,15 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
     auto config = ConvertToHwcConfig::create_from_tensors(a, output);
     config.validate();
 
-    // Use effective HW for gather transfers in uneven sharding cases
+    // Select input cores based on source memory (DRAM vs L1)
+    const auto& in_cores = config.is_input_in_dram ? config.dram_input_cores : config.l1_input_cores;
+
+    // Use effective HW for gather transfers
     uint32_t effective_hw_for_gather = calculate_effective_hw_for_sharding(
-        config.hw_total, config.batch_size, config.l1_input_shard_width, config.l1_input_cores.size());
+        config.hw_total, config.batch_size, config.l1_input_shard_width, static_cast<uint32_t>(in_cores.size()));
+
     const auto gather_transfers = convert_to_hwc::detail::precompute_gather_transfers(
-        config.batch_size,
-        config.input_channels,
-        effective_hw_for_gather,
-        config.l1_input_cores,
-        config.l1_input_cores);  // TODO: L1 input grid can be different if resharding
+        config.batch_size, config.input_channels, effective_hw_for_gather, in_cores, config.l1_input_cores);
     const uint32_t block_size_width = config.l1_input_shard_width * config.batch_size;  // Back to working configuration
 
     // Setup circular buffers after block_size_width is calculated
@@ -686,7 +686,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         config.batch_size,
         config.input_channels,
         effective_hw_for_gather,
-        config.l1_input_cores,
+        in_cores,
         config.l1_input_cores.size(),
         a.element_size(),
         block_size_width);
@@ -709,10 +709,27 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         core_transfers = convert_to_hwc::detail::coalesce_contiguous_transfers(core_transfers);
     }
 
-    // Create lambda for logical to worker core conversion
-    auto logical_to_worker_core = [&a](const CoreCoord& logical_core) {
-        return a.device()->worker_core_from_logical_core(logical_core);
-    };
+    // Create converter for serialized transfer source addressing:
+    // - L1 input: map logical -> worker core (x,y)
+    // - DRAM input: encode bank_id into x and set y to 0
+    std::function<CoreCoord(const CoreCoord&)> logical_to_addr_id;
+    if (config.is_input_in_dram) {
+        std::map<std::pair<int, int>, uint32_t> bank_id_by_core;
+        for (const auto& c : config.dram_input_cores) {
+            auto bank_ids = a.device()->allocator()->get_bank_ids_from_logical_core(config.remote_buffer_type, c);
+            uint32_t bank_id = bank_ids.empty() ? 0 : bank_ids[0];
+            bank_id_by_core[{c.x, c.y}] = bank_id;
+        }
+        logical_to_addr_id = [bank_id_by_core = std::move(bank_id_by_core)](const CoreCoord& logical_core) {
+            auto it = bank_id_by_core.find({logical_core.x, logical_core.y});
+            uint32_t bank_id = (it == bank_id_by_core.end()) ? 0 : it->second;
+            return CoreCoord(bank_id, 0);
+        };
+    } else {
+        logical_to_addr_id = [&a](const CoreCoord& logical_core) {
+            return a.device()->worker_core_from_logical_core(logical_core);
+        };
+    }
 
     // Serialize blocked transfer groups for each core
     std::vector<std::vector<uint32_t>> per_core_serialized_transfers(config.l1_input_cores.size());
@@ -729,8 +746,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         }
 
         // Serialize this core's blocked transfer groups
-        per_core_serialized_transfers[core_idx] = convert_to_hwc::detail::serialize_blocked_transfer_groups(
-            core_transfers, config.l1_input_cores, logical_to_worker_core);
+        per_core_serialized_transfers[core_idx] =
+            convert_to_hwc::detail::serialize_blocked_transfer_groups(core_transfers, in_cores, logical_to_addr_id);
 
         log_info(
             tt::LogType::LogAlways,
@@ -740,9 +757,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
             per_core_serialized_transfers[core_idx]);
     }
 
-    // Generate transfer instructions using effective HW for uneven sharding
-    uint32_t effective_hw_for_transfers = calculate_effective_hw_for_sharding(
-        config.hw_total, config.batch_size, config.l1_input_shard_width, config.l1_input_cores.size());
+    // Generate transfer instructions using the same effective HW
+    uint32_t effective_hw_for_transfers = effective_hw_for_gather;
     auto transfers = generate_batch_redistribution_transfers(
         config.batch_size,
         config.input_channels,
@@ -755,9 +771,10 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
     // Calculate tiles based on block width (which becomes input to compute pipeline)
     const uint32_t total_tiles_per_block = tt::div_up(block_size_width, TILE_HEIGHT);  // assumes C < 32
     const uint32_t total_tiles_per_core = total_tiles_per_block * num_blocks;
-    const uint32_t total_tiles_writer0 =
-        tt::div_up(total_tiles_per_core, 2);  // each writer should process half of the output tiles
-    const uint32_t total_tiles_writer1 = total_tiles_per_core - total_tiles_writer0;
+
+    // Each writer should process half of the tiles PER BLOCK
+    const uint32_t tiles_per_block_writer0 = tt::div_up(total_tiles_per_block, 2);
+    const uint32_t tiles_per_block_writer1 = total_tiles_per_block - tiles_per_block_writer0;
 
     // Validation: ensure tiles divide evenly across blocks
     TT_FATAL(
@@ -767,13 +784,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         num_blocks);
     uint32_t output_stride_sticks = TILE_WIDTH;
 
-    // Update transfers with DRAM bank IDs if input is in DRAM
-    if (config.is_input_in_dram) {
-        populate_dram_bank_ids(transfers, config.dram_input_cores, config.remote_buffer_type, a.device());
-    }
-
-    const auto grouped_transfers = group_by_destination_core(transfers, config.l1_input_cores.size());
-
     // If there is only one HW tile we shouldn't stride the output copies because only one writer is working
     const uint32_t output_addr_stride =
         block_size_width != TILE_HEIGHT ? output_stride_sticks * config.output_shard_width * config.element_size_bytes
@@ -781,10 +791,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
 
     // Writer kernel processes gather output blocks - height is the number of sticks per block
     const uint32_t num_sticks_block_size_kernel_0 = config.gather_l1_output_shard_height;
-    // const uint32_t channel_size = config.output_shard_width * config.element_size_bytes;
 
-    // block_size_bytes should be exactly the same as CB_IN_BATCH total size
-    // Using the block-aligned dimensions for consistency
+    // This should be exactly the same as CB_IN_BATCH total size
     const uint32_t block_size_bytes =
         config.gather_l1_output_shard_height * block_size_width * config.element_size_bytes;
 
@@ -800,7 +808,11 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         "Num blocks: {}, Tiles per block: {} (total_tiles_per_core / num_blocks)",
         num_blocks,
         total_tiles_per_block);
-    log_info(tt::LogType::LogAlways, "Writer0 tiles: {}, Writer1 tiles: {}", total_tiles_writer0, total_tiles_writer1);
+    log_info(
+        tt::LogType::LogAlways,
+        "Writer0 tiles per block: {}, Writer1 tiles per block: {}",
+        tiles_per_block_writer0,
+        tiles_per_block_writer1);
     log_info(
         tt::LogType::LogAlways,
         "Writer num_output_channels_padded arg: {} (output_shard_width - padded to min 8)",
@@ -826,7 +838,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         CBIndex::CB_IN_TRANSPOSE_0,
         CBIndex::CB_OUT,
         config.output_shard_width,  // output channels (padded to minimum 8)
-        total_tiles_writer0,
+        tiles_per_block_writer0,
         output_stride_sticks,
         0,
         config.element_size_bytes,
@@ -843,7 +855,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         CBIndex::CB_IN_TRANSPOSE_1,
         CBIndex::CB_OUT,
         config.output_shard_width,  // output channels (padded to minimum 8)
-        total_tiles_writer1,
+        tiles_per_block_writer1,
         output_stride_sticks,
         output_stride_sticks,
         config.element_size_bytes,
@@ -885,40 +897,25 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
             .math_approx_mode = false,
             .compile_args = compute_compile_time_args});
 
-    auto set_runtime_args =
-        [&cb_handles, &config, grouped_transfers, per_core_serialized_transfers, writer_kernel_id0, writer_kernel_id1](
-            tt::tt_metal::Program& program, const Tensor& a, const Tensor& output) {
-            for (uint32_t core_idx = 0; core_idx < config.l1_input_cores.size(); core_idx++) {
-                std::vector<uint32_t> runtime_args_0 = {config.remote_address};
-                std::vector<uint32_t> runtime_args_1 = {config.remote_address};
+    auto set_runtime_args = [&cb_handles, &config, per_core_serialized_transfers, writer_kernel_id0, writer_kernel_id1](
+                                tt::tt_metal::Program& program, const Tensor& a, const Tensor& output) {
+        for (uint32_t core_idx = 0; core_idx < config.l1_input_cores.size(); core_idx++) {
+            std::vector<uint32_t> runtime_args_0 = {config.remote_address};
+            std::vector<uint32_t> runtime_args_1 = {config.remote_address};
 
-                const auto& transfer_args = per_core_serialized_transfers.at(core_idx);
-                runtime_args_0.insert(runtime_args_0.end(), transfer_args.begin(), transfer_args.end());
-                runtime_args_1.insert(runtime_args_1.end(), transfer_args.begin(), transfer_args.end());
+            const auto& transfer_args = per_core_serialized_transfers.at(core_idx);
+            runtime_args_0.insert(runtime_args_0.end(), transfer_args.begin(), transfer_args.end());
+            runtime_args_1.insert(runtime_args_1.end(), transfer_args.begin(), transfer_args.end());
 
-                /*
-                const auto& args_for_all_segments = grouped_transfers.at(core_idx);
-                runtime_args_0.push_back(args_for_all_segments.size());
-                runtime_args_1.push_back(args_for_all_segments.size());
-
-                for (const auto& args : args_for_all_segments) {
-                    auto core = a.device()->worker_core_from_logical_core(args.src_core_coord);
-                    // Always pass bank_id (0 for L1 transfers, actual bank_id for DRAM transfers)
-                    const std::vector<uint32_t> segment_args = {
-                        core.x, core.y, args.src_offset, args.dst_offset, args.transfer_size, args.bank_id};
-                    runtime_args_0.insert(runtime_args_0.end(), segment_args.begin(), segment_args.end());
-                    runtime_args_1.insert(runtime_args_1.end(), segment_args.begin(), segment_args.end());
-                }
-                */
-                SetRuntimeArgs(program, writer_kernel_id0, config.l1_input_cores[core_idx], runtime_args_0);
-                SetRuntimeArgs(program, writer_kernel_id1, config.l1_input_cores[core_idx], runtime_args_1);
-            }
-            // Only update input CB address for L1 input (DRAM input doesn't need CB update)
-            if (!config.is_input_in_dram) {
-                UpdateDynamicCircularBufferAddress(program, cb_handles.cb_in, *a.buffer());
-            }
-            UpdateDynamicCircularBufferAddress(program, cb_handles.cb_out, *output.buffer());
-        };
+            SetRuntimeArgs(program, writer_kernel_id0, config.l1_input_cores[core_idx], runtime_args_0);
+            SetRuntimeArgs(program, writer_kernel_id1, config.l1_input_cores[core_idx], runtime_args_1);
+        }
+        // Only update input CB address for L1 input (DRAM input doesn't need CB update)
+        if (!config.is_input_in_dram) {
+            UpdateDynamicCircularBufferAddress(program, cb_handles.cb_in, *a.buffer());
+        }
+        UpdateDynamicCircularBufferAddress(program, cb_handles.cb_out, *output.buffer());
+    };
     set_runtime_args(program, a, output);
 
     auto override_runtime_arguments_callback = [set_runtime_args](

@@ -86,6 +86,7 @@ void kernel_main() {
                 uint32_t src_offset_bytes = args[args_idx++];
                 uint32_t dst_offset_bytes = args[args_idx++];
                 uint32_t transfer_size_bytes = args[args_idx++];
+                uint32_t bank_id = args[args_idx++];
 
                 DPRINT << "Transfer " << transfer_idx << ": src=(" << src_x << "," << src_y << ")" << ENDL();
                 DPRINT << "  src_offset_bytes=" << src_offset_bytes << ", dst_offset_bytes=" << dst_offset_bytes
@@ -94,8 +95,8 @@ void kernel_main() {
 
                 uint64_t src_addr_base = 0;
                 if constexpr (is_input_in_dram) {
-                    // For DRAM, use bank_id (set to 0 for now, bank_id logic may need to be added back)
-                    src_addr_base = get_noc_addr_from_bank_id<true>(0, dram_base_read_addr);
+                    // For DRAM, use bank_id to compute NOC address from bank_id
+                    src_addr_base = get_noc_addr_from_bank_id<true>(bank_id, dram_base_read_addr);
                     DPRINT << "DRAM transfer: src_addr_base=" << (uint32_t)src_addr_base << ENDL();
                 } else {
                     src_addr_base = get_noc_addr(src_x, src_y, get_read_ptr(cb_in));
@@ -112,9 +113,8 @@ void kernel_main() {
         } else {
             // For non-reader kernels, skip over the transfer data
             const uint32_t group_size = args[args_idx++];
-            args_idx +=
-                group_size *
-                5;  // Skip 5 args per transfer (src_x, src_y, src_offset_bytes, dst_offset_bytes, transfer_size_bytes)
+            args_idx += group_size * 6;  // Skip 6 args per transfer (src_x, src_y, src_offset_bytes, dst_offset_bytes,
+                                         // transfer_size_bytes, bank_id)
             DPRINT << "Non-reader: skipped group_size=" << group_size << " transfers" << ENDL();
         }
 

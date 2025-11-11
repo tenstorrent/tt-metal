@@ -69,6 +69,7 @@ struct LowLevelGatherTransfer {
     uint32_t src_offset_bytes;     // Absolute offset within the source shard (in bytes)
     uint32_t dst_offset_bytes;     // Absolute offset within the destination shard (in bytes)
     uint32_t transfer_size_bytes;  // Number of bytes to transfer
+    uint32_t bank_id;              // DRAM bank id (0 for L1)
 
     LowLevelGatherTransfer(uint32_t ssi, uint32_t so, uint32_t dsi, uint32_t doff, uint32_t len) :
         src_shard_idx(ssi),
@@ -80,7 +81,8 @@ struct LowLevelGatherTransfer {
         src_noc_y(0),
         src_offset_bytes(0),
         dst_offset_bytes(0),
-        transfer_size_bytes(0) {}
+        transfer_size_bytes(0),
+        bank_id(0) {}
 
     LowLevelGatherTransfer(
         uint32_t ssi,
@@ -102,7 +104,8 @@ struct LowLevelGatherTransfer {
         src_noc_y(sny),
         src_offset_bytes(sob),
         dst_offset_bytes(dob),
-        transfer_size_bytes(tsb) {}
+        transfer_size_bytes(tsb),
+        bank_id(0) {}
 };
 
 /**
@@ -299,6 +302,8 @@ void serialize_low_level_transfer(
     output.push_back(transfer.src_offset_bytes);
     output.push_back(transfer.dst_offset_bytes);
     output.push_back(transfer.transfer_size_bytes);
+    // Always serialize bank_id as the 6th value per transfer (0 for L1)
+    output.push_back(transfer.bank_id);
 }
 
 std::vector<uint32_t> serialize_blocked_transfer_groups(
