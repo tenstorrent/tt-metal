@@ -115,6 +115,7 @@ private:
     void clear_launch_messages_on_eth_cores(ChipId device_id);
     void construct_control_plane(const std::filesystem::path& mesh_graph_desc_path);
     void teardown_fabric_config();
+    void teardown_base_objects();
 
     void reset_cores(ChipId device_id);
     void assert_cores(ChipId device_id);

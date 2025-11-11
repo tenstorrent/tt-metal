@@ -33,13 +33,13 @@ bool operator==(const HalProcessorIdentifier& lhs, const HalProcessorIdentifier&
 
 // Hal Constructor determines the platform architecture by using UMD
 // Once it knows the architecture it can self initialize architecture specific memory maps
-Hal::Hal(tt::ARCH arch, bool is_base_routing_fw_enabled) : arch_(arch) {
+Hal::Hal(tt::ARCH arch, bool is_base_routing_fw_enabled, bool enable_2_erisc_mode) : arch_(arch) {
     switch (this->arch_) {
         case tt::ARCH::WORMHOLE_B0: initialize_wh(is_base_routing_fw_enabled); break;
 
         case tt::ARCH::QUASAR: initialize_qa(); break;
 
-        case tt::ARCH::BLACKHOLE: initialize_bh(); break;
+        case tt::ARCH::BLACKHOLE: initialize_bh(enable_2_erisc_mode); break;
 
         default: /*TT_THROW("Unsupported arch for HAL")*/; break;
     }
