@@ -1664,7 +1664,7 @@ FORCE_INLINE bool run_sender_channel_step_impl(
             perf_telemetry_recorder);
         // Update local TX counters: split responsibility in multi-ERISC mode
         if constexpr (ENABLE_FABRIC_TELEMETRY) {
-            update_bw_counters(pkt_header, local_fabric_telemetry);
+            // update_bw_counters(pkt_header, local_fabric_telemetry);
         }
         increment_local_update_ptr_val(sender_channel_free_slots_stream_id, 1);
     }
@@ -1837,7 +1837,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             progress = true;
             // Count RX bytes/packets (header + payload) when consuming a packet from receiver buffer
             if constexpr (ENABLE_FABRIC_TELEMETRY) {
-                update_bw_counters(packet_header, local_fabric_telemetry);
+                // update_bw_counters(packet_header, local_fabric_telemetry);
             }
             uint8_t trid = receiver_channel_trid_tracker.update_buffer_slot_to_next_trid_and_advance_trid_counter(
                 receiver_buffer_index);
