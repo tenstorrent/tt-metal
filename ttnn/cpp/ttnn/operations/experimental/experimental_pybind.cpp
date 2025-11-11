@@ -50,6 +50,7 @@
 #include "ttnn/operations/experimental/where/where_pybind.hpp"
 #include "ttnn/operations/experimental/test/hang_device/hang_device_operation_pybind.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/minimal_matmul_pybind.hpp"
+#include "ttnn/operations/experimental/deepseek_b1/deepseek_b1_pybind.hpp"
 
 namespace py = pybind11;
 
@@ -118,6 +119,10 @@ void py_module(py::module& module) {
     operations::experimental::ternary::detail::bind_where(module);
 
     minimal_matmul::detail::py_bind_minimal_matmul(module);
+
+    // DeepSeek B1 operations
+    auto m_deepseek_b1 = module.def_submodule("deepseek_b1", "DeepSeek B1 experimental operations");
+    deepseek_b1::py_module(m_deepseek_b1);
 }
 
 }  // namespace ttnn::operations::experimental
