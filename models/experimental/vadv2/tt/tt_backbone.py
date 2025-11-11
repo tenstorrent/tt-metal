@@ -76,7 +76,6 @@ class TtResnet50:
 
         x = ttnn.sharded_to_interleaved(x)
 
-        # Note: Using in_place_halo is not performant, as discussed in Issue https://github.com/tenstorrent/tt-metal/issues/23184
         x = ttnn.max_pool2d(
             input_tensor=x,
             batch_size=self.maxpool_args.batch_size,
@@ -89,7 +88,6 @@ class TtResnet50:
             dilation=[1, 1],
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             ceil_mode=False,
-            in_place_halo=True,
         )
         outputs = []
         # Layer 1
