@@ -412,7 +412,7 @@ TABLE_CONFIGS = [
 ]
 
 
-@pytest.mark.skip()
+# @pytest.mark.skip()
 @pytest.mark.parametrize(
     "M, K, N",
     TABLE_CONFIGS,
