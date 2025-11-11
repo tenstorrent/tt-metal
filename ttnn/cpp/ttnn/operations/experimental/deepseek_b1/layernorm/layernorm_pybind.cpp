@@ -1,0 +1,148 @@
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "layernorm_pybind.hpp"
+#include "ttnn-pybind/decorators.hpp"
+#include "layernorm.hpp"
+
+namespace ttnn::operations::normalization::detail {
+
+namespace py = pybind11;
+
+void bind_normalization_layernorm_program_config(py::module& module) {
+    py::class_<LayerNormProgramConfig>(module, "LayerNormProgramConfig").def(py::init<>());
+
+    py::class_<LayerNormDefaultProgramConfig>(module, "LayerNormDefaultProgramConfig")
+        .def(
+            py::init<bool, bool>(),
+            py::kw_only(),
+            py::arg("legacy_reduction").noconvert() = false,
+            py::arg("legacy_rsqrt").noconvert() = false)
+        .def("__repr__", [](const LayerNormDefaultProgramConfig& config) { return fmt::format("{}", config); });
+
+    py::class_<LayerNormShardedMultiCoreProgramConfig>(module, "LayerNormShardedMultiCoreProgramConfig")
+        .def(
+            py::init<CoreCoord, std::size_t, std::size_t, std::size_t, bool, bool, bool>(),
+            py::kw_only(),
+            py::arg("compute_with_storage_grid_size"),
+            py::arg("subblock_w").noconvert(),
+            py::arg("block_h").noconvert(),
+            py::arg("block_w").noconvert(),
+            py::arg("inplace").noconvert(),
+            py::arg("legacy_reduction").noconvert() = false,
+            py::arg("legacy_rsqrt").noconvert() = false)
+        .def(
+            "__repr__", [](const LayerNormShardedMultiCoreProgramConfig& config) { return fmt::format("{}", config); });
+}
+
+void bind_normalization_layernorm_operation(py::module& module) {
+    ttnn::bind_registered_operation(
+        module,
+        ttnn::layer_norm,
+        R"doc(
+        Compute RMS norm over :attr:`input_tensor`.
+        This is a specialized implementation for RMSNorm only.
+
+          .. math::
+
+              \text{rms_norm}(x, \gamma, \epsilon) = \frac{x}{\sqrt{\text{mean}(x^2) + \epsilon}} \cdot \gamma
+
+          Where:
+              - :math:`\text{mean}(x^2)` is the mean of squared values computed over the last dimension (W)
+              - :math:`\gamma` is the learnable scale parameter
+              - :math:`\epsilon` is a small constant for numerical stability
+
+
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
+
+
+        Keyword args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            epsilon (float): Small constant for numerical stability. Defaults to 1e-12.
+            weight (ttnn.Tensor, optional): Scale parameter (gamma). Defaults to `None`.
+            bias (ttnn.Tensor, optional): Shift parameter (beta), typically not used in RMSNorm. Defaults to `None`.
+            residual_input_tensor (ttnn.Tensor, optional): Tensor for residual connection. Defaults to `None`.
+            program_config (ttnn.ProgramConfig, optional): Program configuration. Defaults to `None`.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig): Compute kernel configuration. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            This implementation is specifically optimized for RMSNorm and does not support LayerNorm.
+
+            Supported data types and layouts by tensor:
+
+            .. list-table:: input_tensor
+               :header-rows: 1
+
+               * - dtype
+                 - layout
+               * - BFLOAT16, FLOAT32, BFLOAT8_B
+                 - TILE
+
+            .. list-table:: residual_input_tensor
+               :header-rows: 1
+
+               * - dtype
+                 - layout
+               * - BFLOAT16, FLOAT32, BFLOAT8_B
+                 - TILE
+
+            .. list-table:: weight (gamma) and bias (beta)
+               :header-rows: 1
+
+               * - dtype
+                 - layout
+               * - BFLOAT16, FLOAT32
+                 - TILE, ROW_MAJOR
+
+            .. list-table:: output_tensor
+               :header-rows: 1
+
+               * - dtype
+                 - layout
+               * - BFLOAT16, FLOAT32, BFLOAT8_B
+                 - TILE
+
+        Memory Support:
+            - Interleaved: DRAM and L1
+            - Sharded (L1): Block sharded
+
+        Limitations:
+            - All input tensors must be on-device and have a rank >= 1.
+            - Unsharded tensors must be interleaved, sharded tensors cannot be height sharded.
+            - If the input is sharded, the :attr:`output` and :attr:`residual_input_tensor` must have identical shard spec and memory config.
+            - If `residual_input_tensor` is provided, it must match the input's padded shape.
+            - If TILE: `weight` and `bias` padded dim must match input's last padded dim; padded height must equal TILE_HEIGHT (i.e. 32).
+            - If ROW_MAJOR: `weight` and `bias` last padded dim must be TILE_WIDTH and the stick count must align with the input width.
+
+
+        Example:
+            .. code-block:: python
+
+                input_tensor = ttnn.rand([32, 64], dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT, device=device)
+                output_tensor = ttnn.layer_norm(input_tensor)
+
+        )doc",
+
+        ttnn::pybind_arguments_t{
+            py::arg("input_tensor"),
+            py::kw_only(),
+            py::arg("epsilon") = 1e-12,
+            py::arg("weight") = std::nullopt,
+            py::arg("bias") = std::nullopt,
+            py::arg("residual_input_tensor") = std::nullopt,
+            py::arg("memory_config") = std::nullopt,
+            py::arg("program_config") = std::nullopt,
+            py::arg("compute_kernel_config") = std::nullopt});
+}
+
+void bind_normalization_layernorm(py::module& module) {
+    bind_normalization_layernorm_program_config(module);
+    bind_normalization_layernorm_operation(module);
+}
+
+}  // namespace ttnn::operations::normalization::detail
