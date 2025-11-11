@@ -19,11 +19,13 @@ def test_matmul(device):
     tile_height = 1
     m = tile_height  # set to minimum tile height for b1
     k = 7168
-    n = 1536
 
     # Core grid: 48 cores (6x8 grid)
-    grid_size = ttnn.CoreGrid(y=8, x=6)
+    # n = 1536
+    # grid_size = ttnn.CoreGrid(y=8, x=6)
+    grid_size = ttnn.CoreGrid(y=1, x=1)
     num_cores = grid_size.num_cores
+    n = 32 * num_cores
 
     logger.info(f"Testing matmul with shape [{m}, {k}] x [{k}, {n}]")
     logger.info(f"Using {num_cores} cores in {grid_size.y}x{grid_size.x} grid")
@@ -59,19 +61,39 @@ def test_matmul(device):
         tile=ttnn.Tile([tile_height, 32]),
     )
 
-    # Create interleaved input B
-    ttnn_b = ttnn.from_torch(
-        torch_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
-
     # Calculate matmul parameters
     m_tiles = m // tile_height  # 1 tile
     n_tiles = n // 32  # 48 tiles
 
-    logger.info(f"Matmul params: in0_block_w={k_per_core_tiles}, per_core_M={m_tiles}, per_core_N=1")
+    # Create width-sharded memory config for input B
+    # Width sharding distributes along the N dimension (1536)
+    # Each core gets n/num_cores = 1536/48 = 32 = 1 tile width
+    n_per_core_tiles = n_tiles // num_cores  # 1 tile per core
+
+    b_shard_shape = (k, n_per_core_tiles * 32)
+    b_shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}),
+        b_shard_shape,
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
+    b_width_sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, b_shard_spec
+    )
+
+    # Create width-sharded input B
+    ttnn_b = ttnn.from_torch(
+        torch_b, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=b_width_sharded_mem_config
+    )
+
+    # All matmul parameters are now hardcoded inside the operation:
+    # - in0_block_w = K (entire K dimension in tiles)
+    # - out_subblock_h = 1, out_subblock_w = 1
+    # - per_core_M = 1, per_core_N = 1
+    logger.info(f"Matmul params hardcoded: in0_block_w=K, per_core_M=1, per_core_N=1")
 
     # Create width-sharded memory config for output
-    # Each core produces per_core_N tiles in the N dimension
+    # Each core produces 1 tile in the N dimension (per_core_N=1)
     per_core_N = 1
     output_shard_shape = (m, per_core_N * 32)
     output_shard_spec = ttnn.ShardSpec(
@@ -83,21 +105,15 @@ def test_matmul(device):
         ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, output_shard_spec
     )
 
-    # Use the new DeepSeek B1 matmul_1d operation
+    # Use the new simplified DeepSeek B1 matmul_1d operation
     print(f"ttnn_a: {ttnn_a}")
-    ttnn_output = ttnn.experimental.deepseek_b1.matmul_1d(
-        ttnn_a,
-        ttnn_b,
-        core_grid=grid_size,
-        in0_block_w=k_per_core_tiles,
-        out_subblock_h=1,
-        out_subblock_w=1,
-        per_core_M=m_tiles,
-        per_core_N=per_core_N,
-        fuse_batch=True,
-        mcast_in0=True,
-        memory_config=output_width_sharded_mem_config,
-    )
+    for i in range(1000):
+        ttnn_output = ttnn.experimental.deepseek_b1.matmul_1d(
+            ttnn_a,
+            ttnn_b,
+            core_grid=grid_size,
+            memory_config=output_width_sharded_mem_config,
+        )
 
     # Convert back to torch for comparison
     output_torch = ttnn.to_torch(ttnn_output)

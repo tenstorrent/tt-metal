@@ -25,11 +25,56 @@ void Matmul1DDeviceOperation::validate(const std::vector<Tensor>& input_tensors)
     const auto& ashape = input_tensor_a.padded_shape();
     const auto& bshape = input_tensor_b.padded_shape();
 
-    auto tile = input_tensor_a.tensor_spec().tile();
-    TT_FATAL(ashape[-1] == bshape[-2], "Input A width must match Input B height");
-    TT_FATAL(ashape[-1] % tile.get_tile_shape()[1] == 0, "Input A width must be divisible by tile width");
-    TT_FATAL(ashape[-2] % tile.get_tile_shape()[0] == 0, "Input A height must be divisible by tile height");
-    TT_FATAL(bshape[-1] % TILE_WIDTH == 0, "Input B width must be divisible by tile width");
+    auto in0_tile = input_tensor_a.tensor_spec().tile();
+    auto in1_tile = input_tensor_b.tensor_spec().tile();
+    auto in0_tile_shape = in0_tile.get_tile_shape();
+    auto in1_tile_shape = in1_tile.get_tile_shape();
+
+    // Shape compatibility checks
+    TT_FATAL(ashape[-1] == bshape[-2], "Dimension K (A.shape[-1] and B.shape[-2]) must match for A and B in matmul");
+
+    // Tile divisibility checks for input A
+    TT_FATAL(
+        ashape[-2] % in0_tile_shape[0] == 0,
+        "A.shape[-2] ({}) must be divisible by tile shape[0] ({})",
+        ashape[-2],
+        in0_tile_shape[0]);
+    TT_FATAL(
+        ashape[-1] % in0_tile_shape[1] == 0,
+        "A.shape[-1] ({}) must be divisible by tile shape[1] ({})",
+        ashape[-1],
+        in0_tile_shape[1]);
+
+    // Tile divisibility checks for input B
+    TT_FATAL(
+        bshape[-2] % in1_tile_shape[0] == 0,
+        "B.shape[-2] ({}) must be divisible by tile shape[0] ({})",
+        bshape[-2],
+        in1_tile_shape[0]);
+    TT_FATAL(
+        bshape[-1] % in1_tile_shape[1] == 0,
+        "B.shape[-1] ({}) must be divisible by tile shape[1] ({})",
+        bshape[-1],
+        in1_tile_shape[1]);
+
+    // Buffer size checks
+    tt::DataFormat in0_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_a.dtype());
+    tt::DataFormat in1_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_b.dtype());
+    uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
+    uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
+    tt::tt_metal::Buffer* in0_buffer = input_tensor_a.buffer();
+    tt::tt_metal::Buffer* in1_buffer = input_tensor_b.buffer();
+
+    TT_FATAL(
+        in0_buffer->size() % in0_single_tile_size == 0,
+        "Input A buffer size ({}) must be divisible by single tile size ({})",
+        in0_buffer->size(),
+        in0_single_tile_size);
+    TT_FATAL(
+        in1_buffer->size() % in1_single_tile_size == 0,
+        "Input B buffer size ({}) must be divisible by single tile size ({})",
+        in1_buffer->size(),
+        in1_single_tile_size);
 }
 
 std::vector<ttnn::TensorSpec> Matmul1DDeviceOperation::compute_output_specs(
@@ -54,51 +99,13 @@ tt::tt_metal::operation::ProgramWithCallbacks Matmul1DDeviceOperation::create_pr
     const auto& input_tensor_b = input_tensors.at(1);
     auto& output_tensor = output_tensors.at(0);
 
-    // Convert our config to the matmul program config
-    MatmulMultiCoreReuseMultiCast1DProgramConfig matmul_config{
-        .compute_with_storage_grid_size = program_config.compute_with_storage_grid_size,
-        .in0_block_w = program_config.in0_block_w,
-        .out_subblock_h = program_config.out_subblock_h,
-        .out_subblock_w = program_config.out_subblock_w,
-        .out_block_h = program_config.per_core_M,
-        .out_block_w = program_config.per_core_N,
-        .per_core_M = program_config.per_core_M,
-        .per_core_N = program_config.per_core_N,
-        .fuse_batch = program_config.fuse_batch,
-        .fused_activation = std::nullopt,
-        .mcast_in0 = program_config.mcast_in0,
-        .gather_in0 = false,
-        .hop_cores = CoreRangeSet{},
-        .num_global_cb_receivers = 0,
-        .untilize_out = false,
-    };
-
-    // Call our local program factory (copied from matmul)
+    // Call our local program factory with simplified signature
     return deepseek_b1_matmul_multi_core_reuse_mcast_1d_optimized(
         input_tensor_a,
         input_tensor_b,
-        /*bias=*/std::nullopt,
         output_tensor,
-        /*bcast_batch=*/false,
-        matmul_config.compute_with_storage_grid_size,
-        compute_kernel_config.value_or(DeviceComputeKernelConfig{}),
-        matmul_config.in0_block_w,
-        matmul_config.out_subblock_h,
-        matmul_config.out_subblock_w,
-        matmul_config.out_block_h,
-        matmul_config.out_block_w,
-        matmul_config.per_core_M,
-        matmul_config.per_core_N,
-        matmul_config.fuse_batch,
-        matmul_config.fused_activation,
-        matmul_config.mcast_in0,
-        matmul_config.gather_in0,
-        matmul_config.hop_cores,
-        matmul_config.untilize_out,
-        /*fused_op_signaler=*/std::nullopt,
-        /*global_cb=*/std::nullopt,
-        matmul_config.num_global_cb_receivers,
-        /*sub_device_id=*/std::nullopt);
+        program_config.compute_with_storage_grid_size,
+        compute_kernel_config.value_or(DeviceComputeKernelConfig{}));
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_b1::matmul_1d

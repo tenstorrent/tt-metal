@@ -7,23 +7,13 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include <tt-metalium/core_coord.hpp>
 
 namespace ttnn::operations::experimental::deepseek_b1::matmul_1d {
 
-using ttnn::operations::unary::UnaryWithParam;
-
 // Program config for 1D mcast matmul
 struct Matmul1DProgramConfig {
     CoreCoord compute_with_storage_grid_size;
-    std::size_t in0_block_w{};
-    std::size_t out_subblock_h{};
-    std::size_t out_subblock_w{};
-    std::size_t per_core_M{};
-    std::size_t per_core_N{};
-    bool fuse_batch{};
-    bool mcast_in0{};
 };
 
 // Device operation for 1D mcast matmul
