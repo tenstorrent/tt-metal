@@ -327,6 +327,7 @@ def run_strided_all_gather_impl(
         (64, 512, 1024, 3, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 64, 1, 1, ttnn.CoreCoord(2, 2)),
         (4096, 4096, 4096, 3, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2)),
         (4096, 4096, 4096, 3, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(4, 4)),
+        (4096, 4096, 4096, 3, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 256, 256, 256, 2, 2, ttnn.CoreCoord(4, 4)),
     ],
     ids=[
         "base",  # 1 forward pass through K
@@ -341,6 +342,7 @@ def run_strided_all_gather_impl(
         "nblock22workers",  # make n block size greater than 1, plus 2 workers
         "4k4k4k",
         "4x4mmcores",  # increase to a larger core grid
+        "fulltest",
     ],
 )
 @pytest.mark.parametrize(
