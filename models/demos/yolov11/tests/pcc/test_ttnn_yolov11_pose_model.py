@@ -15,7 +15,7 @@ import torch
 
 import ttnn
 from models.demos.yolov11.common import YOLOV11_L1_SMALL_SIZE
-from models.demos.yolov11.reference.yolov11_pose_raw_output import YoloV11PoseRaw
+from models.demos.yolov11.reference.yolov11_pose_correct import YoloV11Pose
 from models.demos.yolov11.tt.model_preprocessing import create_yolov11_input_tensors
 from models.demos.yolov11.tt.model_preprocessing_pose import create_yolov11_pose_model_parameters
 from models.demos.yolov11.tt.ttnn_yolov11_pose_model import TtnnYoloV11Pose
@@ -53,7 +53,7 @@ def test_yolov11_pose_model(device, reset_seeds, resolution, use_pretrained_weig
 
     # Create PyTorch model with RAW keypoint output (no decoding in model)
     # This matches TTNN which also outputs raw keypoints
-    torch_model_raw = YoloV11PoseRaw()
+    torch_model_raw = YoloV11Pose()
     torch_model_raw.eval()
 
     # Load pretrained weights if requested
@@ -109,7 +109,7 @@ def test_yolov11_pose_model(device, reset_seeds, resolution, use_pretrained_weig
         ttnn_output_torch = ttnn_output_torch.squeeze(0).permute(2, 1, 0).squeeze(-1).unsqueeze(0)  # [1, 116, 8400]
 
         # Apply post-processing to get final decoded output
-        from ttnn_raw_output_demo import apply_pytorch_postprocessing
+        from models.demos.yolov11.demo.demo_pose import apply_pytorch_postprocessing
 
         ttnn_processed = apply_pytorch_postprocessing(ttnn_output_torch, [])
 
