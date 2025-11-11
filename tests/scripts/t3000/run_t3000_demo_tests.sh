@@ -172,8 +172,8 @@ run_t3000_llama3_vision_tests() {
   t3k=T3K
 
   for mesh_device in "$n300" "$t3k"; do
-    MESH_DEVICE=$mesh_device HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b \
-    pytest -n auto models/tt_transformers/demo/simple_vision_demo.py -k "not batch1-notrace" --timeout 900; fail+=$?
+    MESH_DEVICE=$mesh_device HF_MODEL=$llama11b TT_CACHE_PATH="${tt_cache_llama11b}_temp" \
+    pytest -n auto models/tt_transformers/demo/simple_vision_demo.py -k "not batch1-notrace" --timeout 2700; fail+=$?
     echo "LOG_METAL: Llama3 vision tests for $mesh_device completed"
   done
 
@@ -199,7 +199,7 @@ run_t3000_llama3_90b_vision_tests() {
   tt_cache_llama90b=$TT_CACHE_HOME/$llama90b
   mesh_device=T3K
 
-  MESH_DEVICE=$mesh_device HF_MODEL=$llama90b TT_CACHE_PATH=$tt_cache_llama90b pytest -n auto models/tt_transformers/demo/simple_vision_demo.py -k "batch1-trace" --timeout 1000 || fail=1
+  MESH_DEVICE=$mesh_device HF_MODEL=$llama90b TT_CACHE_PATH="${tt_cache_llama90b}_temp" pytest -n auto models/tt_transformers/demo/simple_vision_demo.py -k "batch1-trace" --timeout 3000 || fail=1
   echo "LOG_METAL: Llama3.2-90B vision tests for $mesh_device completed"
 
   # Record the end time
