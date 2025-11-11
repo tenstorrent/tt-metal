@@ -49,10 +49,7 @@ def base_model_name_from_env():
     LLAMA_DIR = os.getenv("LLAMA_DIR")
     HF_MODEL = os.getenv("HF_MODEL")
 
-    if LLAMA_DIR:
-        model_name = os.path.basename(LLAMA_DIR.strip("/"))
-    elif HF_MODEL:
-        model_name = HF_MODEL.strip("/").split("/")[-1]
+    model_name = LLAMA_DIR.strip("/").split("/")[-1] if LLAMA_DIR else HF_MODEL.split("/")[-1]
 
     return get_base_model_name(model_name)
 

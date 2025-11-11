@@ -1261,8 +1261,8 @@ class ModelArgs:
         default_supported_seq_lens = {
             "N150": [128, 256, 512],
             "N300": [128, 256, 512, 1024],
-            "T3K": [128, 256, 512, 1024, 2048, 4096, 8192],
-            "TG": [128, 256, 512, 1024, 2048, 4096, 8192],
+            "T3K": [128, 256, 512, 1024],
+            "TG": [128, 256, 512, 1024],
         }
 
         # TODO: If no specific sequence lengths are listed for a model and device, the default one will be used (from the default_supported_seq_lens dictionary)
