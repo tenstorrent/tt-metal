@@ -1,0 +1,74 @@
+# --- Meshes ---------------------------------------------------------------
+
+mesh_descriptors {
+  name: "GALAXY"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 32 ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 4 policy: STRICT }
+}
+
+# --- Graphs ---------------------------------------------------------------
+
+graph_descriptors {
+  name: "CLUSTER"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "GALAXY" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "GALAXY" mesh_id: 1 } }
+  instances { mesh { mesh_descriptor: "GALAXY" mesh_id: 2 } }
+  instances { mesh { mesh_descriptor: "GALAXY" mesh_id: 3 } }
+  instances { mesh { mesh_descriptor: "GALAXY" mesh_id: 4 } }
+  connections {
+    nodes { mesh { mesh_descriptor: "GALAXY" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "GALAXY" mesh_id: 1 } }
+    channels { count: 4 policy: STRICT }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "GALAXY" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "GALAXY" mesh_id: 2 } }
+    channels { count: 4 policy: STRICT }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "GALAXY" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "GALAXY" mesh_id: 3 } }
+    channels { count: 4 policy: STRICT }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "GALAXY" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "GALAXY" mesh_id: 4 } }
+    channels { count: 4 policy: STRICT }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "GALAXY" mesh_id: 1 } }
+    nodes { mesh { mesh_descriptor: "GALAXY" mesh_id: 2 } }
+    channels { count: 4 policy: STRICT }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "GALAXY" mesh_id: 1 } }
+    nodes { mesh { mesh_descriptor: "GALAXY" mesh_id: 3 } }
+    channels { count: 4 policy: STRICT }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "GALAXY" mesh_id: 1 } }
+    nodes { mesh { mesh_descriptor: "GALAXY" mesh_id: 4 } }
+    channels { count: 4 policy: STRICT }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "GALAXY" mesh_id: 2 } }
+    nodes { mesh { mesh_descriptor: "GALAXY" mesh_id: 3 } }
+    channels { count: 4 policy: STRICT }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "GALAXY" mesh_id: 2 } }
+    nodes { mesh { mesh_descriptor: "GALAXY" mesh_id: 4 } }
+    channels { count: 4 policy: STRICT }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "GALAXY" mesh_id: 3 } }
+    nodes { mesh { mesh_descriptor: "GALAXY" mesh_id: 4 } }
+    channels { count: 4 policy: STRICT }
+  }
+}
+
+# --- Instantiation ----------------------------------------------------------
+top_level_instance { graph { graph_descriptor: "CLUSTER" graph_id: 0 } }
