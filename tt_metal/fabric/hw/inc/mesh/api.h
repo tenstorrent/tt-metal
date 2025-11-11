@@ -946,6 +946,53 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write(
 
 // clang-format off
 /**
+ * Multicast unicast write (addrgen overload): Automatically computes NOC addresses using TensorAccessor.
+ *
+ * This overload simplifies multicast writes by accepting an address generator (e.g., TensorAccessor)
+ * that automatically computes the destination NOC address based on page_id and offset.
+ *
+ * Return value: None
+ *
+ * | Argument         | Description                             | Type                          | Required |
+ * |------------------|-----------------------------------------|-------------------------------|----------|
+ * | client_interface | Fabric sender interface                 | FabricSenderType*             | True     |
+ * | packet_header    | Packet header for routing               | volatile PACKET_HEADER_TYPE*  | True     |
+ * | dst_dev_id       | Destination device id                   | uint8_t                       | True     |
+ * | dst_mesh_id      | Destination mesh id                     | uint16_t                      | True     |
+ * | ranges           | Multicast hop counts (E/W/N/S)          | const MeshMcastRange&         | True     |
+ * | src_addr         | Source L1 address                       | uint32_t                      | True     |
+ * | addrgen          | Address generator (e.g., TensorAccessor)| const AddrGenType&            | True     |
+ * | page_id          | Page index for address computation      | uint32_t                      | True     |
+ * | offset           | Optional byte offset within page        | uint32_t                      | False    |
+ */
+// clang-format on
+template <typename FabricSenderType, typename AddrGenType>
+FORCE_INLINE void fabric_multicast_noc_unicast_write(
+    tt_l1_ptr FabricSenderType* client_interface,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint8_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    const MeshMcastRange& ranges,
+    uint32_t src_addr,
+    const AddrGenType& addrgen,
+    uint32_t page_id,
+    uint32_t offset = 0) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
+
+    fabric_multicast_noc_unicast_write(
+        client_interface,
+        packet_header,
+        dst_dev_id,
+        dst_mesh_id,
+        ranges,
+        src_addr,
+        page_size,
+        tt::tt_fabric::NocUnicastCommandHeader{noc_address});
+}
+
+// clang-format off
+/**
  * Multicast unicast write (route variant): issues writes for all headers in the route using multicast routing metadata.
  *
  * Return value: None
