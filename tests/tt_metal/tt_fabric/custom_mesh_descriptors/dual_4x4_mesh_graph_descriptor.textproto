@@ -31,8 +31,8 @@ graph_descriptors {
   }
   # M0 D13 (row 3, col 1) <-> M1 D1 (row 0, col 1)
   connections {
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 13 } }
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 device_id: 1 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 15 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 device_id: 3 } }
     channels { count: 1 }
   }
 }
