@@ -36,7 +36,7 @@ FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config) {
         // If you want to use 1D Ring on t3k please use 1x8 MGD.
         case tt::tt_fabric::FabricConfig::FABRIC_1D_RING: {
             if (cluster_type == tt::tt_metal::ClusterType::GALAXY) {
-                return FabricType::TORUS_XY;
+                return FabricType::MESH;
             }
             return FabricType::MESH;
         }
