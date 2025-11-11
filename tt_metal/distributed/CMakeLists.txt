@@ -67,7 +67,11 @@ elseif(ENABLE_DISTRIBUTED)
     else()
         message(
             FATAL_ERROR
-            "ENABLE_DISTRIBUTED is ON but no MPI implementation found. Please install MPI or disable distributed support."
+            "ENABLE_DISTRIBUTED is ON but no MPI implementation found.\n"
+            "Please install MPI:\n"
+            "  Ubuntu/Debian: sudo apt-get install -y openmpi-bin libopenmpi-dev\n"
+            "  RHEL/CentOS: sudo yum install -y openmpi openmpi-devel\n"
+            "Or disable distributed support with: ./build_metal.sh --without-distributed"
         )
     endif()
 else()

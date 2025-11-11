@@ -13,7 +13,9 @@ add_compile_options(-Wno-unused-variable)
 ############################################################################################################################
 find_library(NUMA_LIBRARY NAMES numa)
 if(NOT NUMA_LIBRARY)
-    message(FATAL_ERROR "NUMA library not found")
+    message(FATAL_ERROR "NUMA library not found. Please install libnuma-dev:\n"
+            "  Ubuntu/Debian: sudo apt-get install -y libnuma-dev\n"
+            "  RHEL/CentOS: sudo yum install -y numactl-devel")
 endif()
 
 ############################################################################################################################
