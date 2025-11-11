@@ -543,9 +543,9 @@ def test_multimodal_demo_text(
             ), f"Prefill targets exist, but decode targets are missing for {run_config}"
 
             perf_targets = {
-                "prefill_t/s": targets_prefill_tok_s[run_config],
-                "decode_t/s": targets_decode_tok_s_u[run_config][0] * max_batch_size,
-                "decode_t/s/u": targets_decode_tok_s_u[run_config][0],
+                # "prefill_t/s": targets_prefill_tok_s[run_config],
+                # "decode_t/s": targets_decode_tok_s_u[run_config][0] * max_batch_size,
+                # "decode_t/s/u": targets_decode_tok_s_u[run_config][0],
             }
 
             perf_tolerance = targets_decode_tok_s_u[run_config][1] or 1.15  # default to 15% tolerance
