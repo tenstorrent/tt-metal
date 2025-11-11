@@ -3031,7 +3031,18 @@ class DecodersPrecision:
             PrecisionSetting.BF16: ttnn.bfloat16,
             None: None,  # this signals that original dtype should be used
         }
-        return precision_setting_lookup[self.decoder_optimizations[decoder_id].tensor_dtype_settings[tensor]]
+        if (
+            decoder_id not in self.decoder_optimizations
+            or tensor not in self.decoder_optimizations[decoder_id].tensor_dtype_settings
+        ):
+            return None
+
+        key = self.decoder_optimizations[decoder_id].tensor_dtype_settings[tensor]
+
+        if key is None or key not in precision_setting_lookup:
+            return None
+
+        return precision_setting_lookup[key]
 
     def get_math_fidelity(self, decoder_id, op: OpGroup, configuration: ModelArgs):
         math_fidelity_setting_lookup = {
