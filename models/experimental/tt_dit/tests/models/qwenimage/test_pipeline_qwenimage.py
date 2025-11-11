@@ -70,8 +70,8 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
 @pytest.mark.parametrize(
     "use_torch_text_encoder",
     [
-        # pytest.param(True, id="encoder_cpu"),
-        pytest.param(False, id="encoder_device"),
+        pytest.param(True, id="encoder_cpu"),
+        # pytest.param(False, id="encoder_device"),
     ],
 )
 @pytest.mark.parametrize(

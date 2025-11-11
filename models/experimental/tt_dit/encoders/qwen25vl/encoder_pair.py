@@ -103,8 +103,6 @@ def _get_qwen_prompt_embeds(
     sequence_length: int,
     num_images_per_prompt: int,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    assert len(prompts) == 1, "only batch size 1 is supported by the transformer model in prefill mode"
-
     template = "<|im_start|>system\nDescribe the image by detailing the color, shape, size, texture, quantity, text, spatial relationships of the objects and background:<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n"
     drop_idx = 34
 
@@ -131,6 +129,8 @@ def _get_qwen_prompt_embeds(
         logger.warning("input text was truncated")
 
     if text_encoder is not None:
+        assert len(prompts) == 1, "only batch size 1 is supported by the transformer model in prefill mode"
+
         assert mesh_device is not None
         assert model_args is not None
 
