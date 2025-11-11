@@ -92,7 +92,7 @@ class Generator:
 
         self.prefill_traces_warmup = True
         for model_id in range(self.data_parallel):
-            for supported_length in [128, 256, 512, 1024, 2048, 4096, 8192]:
+            for supported_length in self.model_args[0].trace_prefill_supported_seq_lens:
                 # Only sequence lengths used by Llama-3.1-8B since we only support trace for Llama-3.1-8B for now
                 warmup_tokens = torch.zeros(1, supported_length, dtype=torch.long)
                 warmup_prompt_lens = torch.tensor([supported_length], dtype=torch.long)
