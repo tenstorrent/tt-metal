@@ -5,20 +5,7 @@
 #include <cstdint>
 
 #include "compute_kernel_api/matmul.h"
-#include "compute_kernel_api/pack_untilize.h"
 #include "compute_kernel_api/tile_move_copy.h"
-#include "mod_div_lib.h"
-
-#ifdef FUSE_BIAS
-#include "compute_kernel_api/bcast.h"
-#endif
-
-#include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
-
-// Please update
-// tests/tt_metal/tt_metal/perf_microbenchmark/1_compute_mm/kernels/bmm_large_block_zm_fused_bias_activation_copy.cpp
-// when making any changes to this file.
-// Have to keep a copy because cannot import ttnn into tests/tt_metal.
 
 namespace NAMESPACE {
 
@@ -49,12 +36,7 @@ void MAIN {
     constexpr uint32_t out_subblock_w = get_compile_time_arg_val(11);          // inner column block size in tiles
     constexpr uint32_t out_subblock_num_tiles = get_compile_time_arg_val(12);  // out_subblock_h * out_subblock_w;
     constexpr uint32_t batch = get_compile_time_arg_val(13);                   // batch dim
-    constexpr uint32_t out_block_num_tiles = get_compile_time_arg_val(14);     // number of tiles in out_block
     constexpr bool untilize_out = get_compile_time_arg_val(15);                // untilize output
-    // This boolean is set when the number of batches is only known at runtime, typically based on a sparsity tensor.
-    constexpr bool get_batch_from_reader = (bool)get_compile_time_arg_val(16);
-
-    constexpr uint32_t out_block_w = out_subblock_w * in1_num_subblocks;
 
     constexpr uint32_t in0_cb_id = tt::CBIndex::c_0;
     constexpr uint32_t in1_cb_id = tt::CBIndex::c_1;
@@ -73,13 +55,6 @@ void MAIN {
             for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
                 for (uint32_t block = 0; block < num_blocks_inner_dim; block++) {
                     bool last_out = block == (num_blocks_inner_dim - 1);
-// Configure packer once for pack out without Bias
-#if not defined FUSE_BIAS and defined PACK_RELU
-                    if (last_out) {
-                        // if last block we pack the final result with relu enabled
-                        PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
-                    }
-#endif
 
                     cb_wait_front(in0_cb_id, in0_block_num_tiles);
                     cb_wait_front(in1_cb_id, in1_block_num_tiles);
