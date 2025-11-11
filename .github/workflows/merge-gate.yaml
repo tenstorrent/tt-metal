@@ -165,7 +165,7 @@ jobs:
       matrix:
         platform: [
           "N300-viommu",
-          "in-service-dedicated-merge-gate", # run t3k tests on CIv1 for now in order to have dedicated machine
+          # "N300-llmbox-viommu", # re-enable when we have more capacity
         ]
     uses: ./.github/workflows/smoke.yaml
     with:
@@ -188,7 +188,7 @@ jobs:
       matrix:
         platform: [
           "N300-viommu",
-          "in-service-dedicated-merge-gate", # run t3k tests on CIv1 for now in order to have dedicated machine
+          # "N300-llmbox-viommu", # re-enable when we have more capacity
         ]
     uses: ./.github/workflows/smoke.yaml
     with:
