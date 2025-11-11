@@ -550,7 +550,7 @@ deepseek_b1_matmul_multi_core_reuse_mcast_1d_optimized_(
     auto mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek_b1/matmul_1d/device/kernels/"
-        "reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp",
+        "reader.cpp",
         in0_mcast_cores_with_work_and_in_receiver_grid,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
@@ -566,7 +566,7 @@ deepseek_b1_matmul_multi_core_reuse_mcast_1d_optimized_(
         mm_kernel_in0_mcast_cores_without_work_and_in_receiver_grid_id = tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/experimental/deepseek_b1/matmul_1d/device/kernels/"
-            "reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp",
+            "reader.cpp",
             in0_mcast_cores_without_work_and_in_receiver_grid,
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_1,
@@ -580,7 +580,7 @@ deepseek_b1_matmul_multi_core_reuse_mcast_1d_optimized_(
         mm_kernel_in0_mcast_cores_without_work_and_not_in_receiver_grid_id = tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/experimental/deepseek_b1/matmul_1d/device/kernels/"
-            "reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp",
+            "reader.cpp",
             in0_mcast_cores_without_work_and_not_in_receiver_grid,
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_1,
@@ -592,7 +592,7 @@ deepseek_b1_matmul_multi_core_reuse_mcast_1d_optimized_(
     auto mm_kernel_in1_sender_writer_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek_b1/matmul_1d/device/kernels/"
-        "reader_bmm_tile_layout_in1_sender_writer_padding.cpp",
+        "writer.cpp",
         all_cores_with_work,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -641,7 +641,7 @@ deepseek_b1_matmul_multi_core_reuse_mcast_1d_optimized_(
     tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek_b1/matmul_1d/device/kernels/"
-        "bmm_large_block_zm_fused_bias_activation.cpp",
+        "compute.cpp",
         all_cores_with_work,
         tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
