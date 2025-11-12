@@ -13,8 +13,6 @@ from loguru import logger
 
 import ttnn
 
-# todo)) add checks to to_torch_auto_compose to ensure it only supports ttnn.MeshDevice and cpu device for input and cpu device for output!
-
 # ======================================================================================
 # Public API
 # ======================================================================================
@@ -104,7 +102,7 @@ def _infer_mesh_composer_from_topology(
     # Must match length (should be guaranteed by C++ TT_FATAL in ttnn/core/distributed/distributed_tensor.cpp)
     assert len(dist_shape) == len(placements)
 
-    if len(dist_shape) == 1:
+    if len(dist_shape) == 1 and mesh_device.shape.dims() == 1:
         return _compose_1d_sharded(mesh_device, placements, dist_shape)
     else:
         # N >= 2 dimensions
