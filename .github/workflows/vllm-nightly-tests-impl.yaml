@@ -205,7 +205,7 @@ jobs:
             arch: arch-wormhole_b0,
             mesh-device: TG,
             multimodal: false,
-            tt-llama-text-ver: "",
+            tt-llama-text-ver: "tt_transformers",
             additional-args: "--max_num_seqs 1 --num_scheduler_steps 1",
             co-owner-1-id: U08TJ70UFRT, # Harry Andrews
             co-owner-2-id: U06F3ER8X9A, # Stuti Raizada
