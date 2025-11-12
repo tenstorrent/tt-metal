@@ -1,5 +1,7 @@
-# Model traced sweep for untilize
-# Generated automatically - DO NOT EDIT MANUALLY
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
 
 import torch
 import ttnn

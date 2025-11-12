@@ -1,5 +1,7 @@
-# Model traced sweep for embedding
-# Generated automatically - DO NOT EDIT MANUALLY
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
 
 from typing import Optional, Tuple
 from functools import partial
