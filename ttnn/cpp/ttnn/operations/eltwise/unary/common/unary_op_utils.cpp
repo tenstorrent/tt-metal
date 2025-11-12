@@ -1054,9 +1054,6 @@ std::string get_compute_kernel_path(
 
 template <typename T>
 uint32_t pack_scalar_runtime_arg_impl(const T& param, DataType dtype) {
-    // if ((dtype == DataType::UINT32 || dtype == DataType::INT32) && std::same_as<T, float>) {
-    //     return std::bit_cast<uint32_t>(static_cast<int32_t>(param));
-    // }
     if constexpr (std::same_as<T, uint32_t>) {
         return param;
     } else {
