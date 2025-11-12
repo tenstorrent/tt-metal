@@ -32,15 +32,11 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
         case BinaryOpType::LOGICAL_AND:
         case BinaryOpType::LOGICAL_OR:
         case BinaryOpType::LOGICAL_XOR:
-            return a == b && (
-                a == DataType::FLOAT32 ||
-                a == DataType::INT32 ||
-                a == DataType::UINT32 ||
-                a == DataType::UINT16);
         case BinaryOpType::SQUARED_DIFFERENCE:
             return a == b && (
                 a == DataType::FLOAT32 ||
                 a == DataType::INT32 ||
+                a == DataType::UINT32 ||
                 a == DataType::UINT16);
         case BinaryOpType::LOGADDEXP:
         case BinaryOpType::LOGADDEXP2:
