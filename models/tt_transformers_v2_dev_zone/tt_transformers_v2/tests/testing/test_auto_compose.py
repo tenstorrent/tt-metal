@@ -9,7 +9,6 @@ It validates both host-sharded and device-sharded cases.
 """
 
 import os
-import struct
 
 import pytest
 import torch
@@ -70,13 +69,19 @@ def _make_known_pattern(num_chunks: int) -> torch.Tensor:
     return data.to(torch.bfloat16)
 
 
-def _make_arange_dtype(shape: tuple[int, ...], dtype: torch.dtype = torch.bfloat16) -> torch.Tensor:
-    """Create a deterministic tensor with arange data and bfloat16 dtype."""
+def _make_arange_dtype(
+    shape: tuple[int, ...], dtype: torch.dtype = torch.bfloat16, min_value: float = 0, max_value: float = 100
+) -> torch.Tensor:
+    """Create a deterministic tensor with arange data and specified dtype."""
     numel = 1
     for s in shape:
         numel *= s
-    data = torch.arange(numel, dtype=torch.float32).reshape(shape)
-    return data.to(dtype=dtype)
+    # Generate values from min_value to max_value with step of 1
+    values = torch.arange(min_value, max_value + 1, dtype=dtype)
+    # Randomly sample indices (with replacement) to fill the tensor
+    indices = torch.randint(0, len(values), size=(numel,))
+    data = values[indices].reshape(shape)
+    return data
 
 
 def _pos_dim(dim: int, rank: int) -> int:
@@ -93,341 +98,6 @@ def _get_hw_shard_unit() -> int:
         return int(os.environ.get("TT_TEST_SHARD_UNIT", "32"))
     except Exception:
         return 32
-
-
-def _get_max_exp(u32_vec: list[int], is_exp_a: bool = False) -> int:
-    """
-    Compute the maximum exponent from a list of uint32 float32 representations.
-    Matches C++ get_max_exp function.
-    """
-    max_exp = 0
-    for u32_val in u32_vec:
-        exp = (u32_val & 0x7F800000) >> 23
-        if is_exp_a:
-            se = int(exp) - 127 + 15
-            if se > 31:
-                se = 31
-            elif se < 0:
-                se = 0
-            exp = se
-        max_exp = max(max_exp, exp)
-    return max_exp
-
-
-# todo)) may want to refactor the quantization code into a separate file and add tests for it
-def _convert_float32_to_bfloat4_b(input_val: float, shared_exp: int, is_exp_a: bool = False) -> int:
-    """
-    Convert a single float32 value to bfloat4_b format.
-    Matches C++ convert_u32_to_bfp<Bfp4_b, false> function.
-
-    Args:
-        input_val: Input float32 value
-        shared_exp: Shared exponent for the group
-        is_exp_a: Whether to use exp_a rebias format
-
-    Returns:
-        uint8 value representing the bfloat4_b quantized value
-    """
-    # Convert float32 to uint32 representation
-    u32_input = struct.unpack("I", struct.pack("f", input_val))[0]
-
-    # Constants for bfloat4_b
-    MANTISSA_BFP_WIDTH = 3
-    MANTISSA_BFP_SHIFT = 24 - MANTISSA_BFP_WIDTH  # 21
-    MANTISSA_BFP_MAX_VAL = (1 << MANTISSA_BFP_WIDTH) - 1  # 7
-
-    # Extract sign, exponent, mantissa from float32
-    mantissa = u32_input & 0x007FFFFF
-    exp = (u32_input & 0x7F800000) >> 23
-    sign = (u32_input & 0x80000000) >> 31
-
-    # Check for zero or denormal
-    is_zero_or_denormal = exp == 0
-    if is_zero_or_denormal:
-        return 0
-
-    # Handle exp_a rebias
-    if is_exp_a:
-        se = int(exp) - 127 + 15
-        # Check for saturation
-        if se > 31:
-            se = 31
-            mantissa = 0x007FFFFF
-        elif se < 0:
-            se = 0
-            mantissa = 0x0
-        exp = se
-
-    # Add hidden bit (float mantissa is 23 bits + hidden bit = 24 bits)
-    mantissa = (1 << 23) | mantissa
-
-    # Adjust mantissa if shared_exp > exp
-    if shared_exp > exp:
-        exp_diff = shared_exp - exp
-        # Handle large shifts (undefined if shift >= bit width)
-        while exp_diff > 31:
-            mantissa = mantissa >> 31
-            exp_diff -= 31
-        mantissa = mantissa >> exp_diff
-
-    # Round mantissa to nearest; ties round to even
-    MANTISSA_ROUND_MASK = (1 << MANTISSA_BFP_SHIFT) - 1
-    TIE_VALUE = 1 << (MANTISSA_BFP_SHIFT - 1)
-    round_value = mantissa & MANTISSA_ROUND_MASK
-    mantissa = mantissa >> MANTISSA_BFP_SHIFT
-    guard_bit = mantissa & 0x1
-
-    if round_value > TIE_VALUE or (round_value == TIE_VALUE and guard_bit == 1):
-        # Round up
-        mantissa += 1
-
-    mantissa = min(mantissa, MANTISSA_BFP_MAX_VAL)
-
-    # Add sign bit only if result is not 0
-    if mantissa == 0:
-        sign = 0
-    mantissa = (sign << MANTISSA_BFP_WIDTH) | mantissa
-
-    return mantissa
-
-
-def _convert_bfloat4_b_to_float32(bfp4_data: int, shared_exp: int, is_exp_a: bool = False) -> float:
-    """
-    Convert a bfloat4_b uint8 value back to float32.
-    Matches C++ convert_bfp_to_u32 function for Bfp4_b format.
-
-    Args:
-        bfp4_data: uint8 value representing bfloat4_b quantized value
-        shared_exp: Shared exponent for the group
-        is_exp_a: Whether to use exp_a rebias format
-
-    Returns:
-        float32 value
-    """
-    sign = bfp4_data >> 3
-    man = bfp4_data & 0x7
-
-    # Shift mantissa up until there is a 1 in bit 3
-    shift_cnt = 0
-    if man == 0:
-        man = 0
-        exp = 0
-    else:
-        while (man & 0x04) == 0:
-            man = man << 1
-            shift_cnt += 1
-        # Shift one more time and zero the hidden top mantissa bit
-        man = man << 1
-        man = man & 0x7
-
-        # Adjust exponent (C++ code asserts exp >= shift_cnt, but handle edge case)
-        if shared_exp < shift_cnt:
-            # Denormal case: flush to zero (matches SIMD unpacking behavior)
-            return 0.0
-
-        exp = shared_exp - shift_cnt
-
-        # If exp_a rebias exp to 127
-        if is_exp_a:
-            exp = exp - 15 + 127
-
-    # Put s, e, m together
-    out_num = (sign << 31) | (exp << 23) | (man << 20)
-
-    # Convert uint32 back to float32
-    return struct.unpack("f", struct.pack("I", out_num))[0]
-
-
-def _convert_row_major_to_tile_nfaces(
-    tensor_flat: torch.Tensor,
-    H: int,
-    W: int,
-    B: int,
-    tile_H: int = 32,
-    tile_W: int = 32,
-    face_H: int = 16,
-    face_W: int = 16,
-) -> torch.Tensor:
-    """
-    Convert row-major tensor to tile_nfaces layout.
-    Mirrors the layout expected by pack_as_bfp_tiles with row_major_input=False.
-    """
-    row_tiles = H // tile_H
-    col_tiles = W // tile_W
-    row_faces = tile_H // face_H
-    col_faces = tile_W // face_W
-
-    result = torch.zeros_like(tensor_flat)
-    batch_size = H * W
-
-    for b in range(B):
-        batch_start = b * batch_size
-        tile_row_base = batch_start
-
-        for row_tile in range(row_tiles):
-            tile_col_base = tile_row_base
-            for col_tile in range(col_tiles):
-                # Faces are stored sequentially per tile
-                for face_h_idx in range(row_faces):
-                    for face_w_idx in range(col_faces):
-                        # Source in row-major
-                        src_face_row0 = tile_col_base + (face_h_idx * face_H) * W + (face_w_idx * face_W)
-                        # Destination in tile_nfaces
-                        tile_offset = (row_tile * col_tiles + col_tile) * (tile_H * tile_W)
-                        face_offset = (face_h_idx * col_faces + face_w_idx) * (face_H * face_W)
-                        dst_face_row0 = batch_start + tile_offset + face_offset
-
-                        # Copy face rows
-                        for r in range(face_H):
-                            src_idx = src_face_row0 + r * W
-                            dst_idx = dst_face_row0 + r * face_W
-                            result[dst_idx : dst_idx + face_W] = tensor_flat[src_idx : src_idx + face_W]
-                tile_col_base += tile_W
-            tile_row_base += tile_H * W
-
-    return result
-
-
-def _convert_tile_nfaces_to_row_major(
-    tensor_flat: torch.Tensor,
-    H: int,
-    W: int,
-    B: int,
-    tile_H: int = 32,
-    tile_W: int = 32,
-    face_H: int = 16,
-    face_W: int = 16,
-) -> torch.Tensor:
-    """
-    Convert tile_nfaces layout back to row-major.
-    Mirrors the inverse of _convert_row_major_to_tile_nfaces.
-    """
-    row_faces = tile_H // face_H
-    col_faces = tile_W // face_W
-    tile_rows = H // tile_H
-    tile_cols = W // tile_W
-
-    result = torch.zeros_like(tensor_flat)
-    batch_size = H * W
-
-    for b in range(B):
-        batch_start = b * batch_size
-        for tile_row in range(tile_rows):
-            for tile_col in range(tile_cols):
-                tile_offset = (tile_row * tile_cols + tile_col) * (tile_H * tile_W)
-                for face_h_idx in range(row_faces):
-                    for face_w_idx in range(col_faces):
-                        face_offset = (face_h_idx * col_faces + face_w_idx) * (face_H * face_W)
-                        src_face_row0 = batch_start + tile_offset + face_offset
-                        dst_face_row0 = (
-                            batch_start
-                            + (tile_row * tile_H + face_h_idx * face_H) * W
-                            + (tile_col * tile_W + face_w_idx * face_W)
-                        )
-                        for r in range(face_H):
-                            src_idx = src_face_row0 + r * face_W
-                            dst_idx = dst_face_row0 + r * W
-                            result[dst_idx : dst_idx + face_W] = tensor_flat[src_idx : src_idx + face_W]
-    return result
-
-
-def _convert_tensor_to_bfloat4_b_and_back(tensor: torch.Tensor) -> torch.Tensor:
-    """
-    Convert a torch tensor from float32/bfloat16 to bfloat4_b quantization and back to float32.
-
-    Important: TT layout flattens all dims except the last into the 2D height, and uses the last dim as width.
-    We mirror that exactly here, so exponent sharing groups run along the last (channel) dimension in
-    rows of 16 within each tile face.
-
-    Args:
-        tensor: Input tensor (will be converted to float32)
-
-    Returns:
-        Tensor with same shape, representing the dequantized float32 values
-    """
-    # Convert to float32 for processing
-    if tensor.dtype != torch.float32:
-        tensor_fp32 = tensor.to(torch.float32)
-    else:
-        tensor_fp32 = tensor.clone()
-
-    original_shape = tensor_fp32.shape
-
-    # Ensure rank >= 1. Treat last dim as width; all preceding dims multiply into height
-    t = tensor_fp32
-    if t.ndim == 0:
-        t = t.view(1)
-    if t.ndim == 1:
-        # Height=1, Width=C
-        t = t.view(1, t.shape[0])
-
-    # Normalize to (..., C)
-    rank = t.ndim
-    C = t.shape[-1]
-    H_flat = int(torch.tensor(t.shape[:-1]).prod().item()) if rank > 1 else 1
-    t2d = t.reshape(H_flat, C)
-
-    # Tile and face sizes match hardware defaults
-    TILE_H, TILE_W = 32, 32
-    FACE_H, FACE_W = 16, 16
-
-    # Pad 2D to tile boundaries: height to 32, width to 32
-    H_padded = ((H_flat + TILE_H - 1) // TILE_H) * TILE_H
-    W_padded = ((C + TILE_W - 1) // TILE_W) * TILE_W
-
-    if H_padded != H_flat or W_padded != C:
-        pad_H = H_padded - H_flat
-        pad_W = W_padded - C
-        t2d = torch.nn.functional.pad(t2d, (0, pad_W, 0, pad_H))  # pad last dim then first dim
-
-    # Single 2D image to tilize
-    B_images = 1
-    tensor_flat = t2d.flatten()
-
-    # Convert to tile_nfaces layout
-    tiled = _convert_row_major_to_tile_nfaces(tensor_flat, H_padded, W_padded, B_images, TILE_H, TILE_W, FACE_H, FACE_W)
-
-    # Process rows of 16 within each face
-    result_tiled = torch.zeros_like(tiled, dtype=torch.float32)
-    is_exp_a = False  # BF4_b uses non-rebiased exponent
-
-    tile_HW = TILE_H * TILE_W
-    face_HW = FACE_H * FACE_W
-    row_faces = TILE_H // FACE_H
-    col_faces = TILE_W // FACE_W
-    batch_size = H_padded * W_padded
-    num_tiles_per_batch = batch_size // tile_HW
-
-    for b in range(B_images):
-        batch_base = b * batch_size
-        for tile_idx in range(num_tiles_per_batch):
-            tile_base = batch_base + tile_idx * tile_HW
-            for fh in range(row_faces):
-                for fw in range(col_faces):
-                    face_base = tile_base + (fh * col_faces + fw) * face_HW
-                    for r in range(FACE_H):
-                        row_start = face_base + r * FACE_W
-                        group = tiled[row_start : row_start + FACE_W]
-                        group_u32 = [struct.unpack("I", struct.pack("f", float(val.item())))[0] for val in group]
-                        shared_exp = _get_max_exp(group_u32, is_exp_a)
-                        for j, val in enumerate(group):
-                            bfp4_val = _convert_float32_to_bfloat4_b(float(val.item()), shared_exp, is_exp_a)
-                            deq = _convert_bfloat4_b_to_float32(bfp4_val, shared_exp, is_exp_a)
-                            result_tiled[row_start + j] = deq
-
-    # Convert back to row-major 2D
-    result_rowmajor = _convert_tile_nfaces_to_row_major(
-        result_tiled, H_padded, W_padded, B_images, TILE_H, TILE_W, FACE_H, FACE_W
-    )
-
-    # Reshape and unpad to 2D (H_flat, C)
-    result_2d = result_rowmajor.reshape(H_padded, W_padded)[:H_flat, :C]
-
-    # Restore the original shape (..., C)
-    result_nd = result_2d.reshape(*t.shape[:-1], C)
-
-    # Finally, reshape back to the original shape
-    return result_nd.reshape(original_shape)
 
 
 def _build_and_compose_sharded(
@@ -482,8 +152,10 @@ def test_sharded_1d_basic(ttnn_mesh_device: ttnn.MeshDevice, layout, dtype, stor
 def test_replicate_1d_basic(ttnn_mesh_device: ttnn.MeshDevice, layout, dtype, storage: str) -> None:
     """Replicated 1D distribution should compose to identity for host and device storage."""
     # Any shape works; replication does not change global shape
-    # use float32 to use _convert_tensor_to_bfloat4_b_and_back as it converts to torch.float32
-    torch_in = _make_arange_dtype((2, 3, 4, 5), dtype=torch.float32)
+    # ttnn.from_torch perform naive quantization to lower dtypes -- work on existing exponent and mantissa values
+    # get range of values for bfloat4_b quantization which has 4 bits for the mantissa and shared 8-bit exponent
+    min_value, max_value = -7, 7
+    torch_in = _make_arange_dtype((2, 3, 4, 5), dtype=torch.float32, min_value=min_value, max_value=max_value)
 
     device = None if storage == "host" else ttnn_mesh_device
     tt_replicated = ttnn.from_torch(
@@ -500,12 +172,7 @@ def test_replicate_1d_basic(ttnn_mesh_device: ttnn.MeshDevice, layout, dtype, st
     else:
         torch_auto = to_torch_auto_compose(tt_replicated)
 
-    if dtype != ttnn.bfloat4_b:
-        assert torch.equal(torch_auto, torch_in)
-    else:
-        # bfloat4_b quantizes, so compute expected quantized result
-        expected = _convert_tensor_to_bfloat4_b_and_back(torch_in)
-        assert torch.equal(torch_auto, expected)
+    assert torch.equal(torch_auto, torch_in)
 
 
 # --------------------------------------------------------------------------------------
@@ -606,8 +273,8 @@ def test_sharded_2d_with_replicate(
     other_mesh_dim = mesh_shape[1 - replicate_axis]
     shape[shard_axis] = ((shape[shard_axis] + other_mesh_dim - 1) // other_mesh_dim) * other_mesh_dim
 
-    # use float32 to use _convert_tensor_to_bfloat4_b_and_back as it converts to torch.float32
-    torch_in = _make_arange_dtype(tuple(shape), dtype=torch.float32)
+    # get range of values for bfloat4_b quantization which has 4 bits for the mantissa and shared 8-bit exponent
+    torch_in = _make_arange_dtype(tuple(shape), dtype=torch.float32, min_value=-7, max_value=7)
 
     mapper = ttnn.ShardTensor2dMesh(ttnn_mesh_device, mesh_shape=mesh_shape, dims=dims_pair)  # type: ignore[arg-type]
     device = None if storage == "host" else ttnn_mesh_device
@@ -618,12 +285,7 @@ def test_sharded_2d_with_replicate(
     else:
         torch_auto = to_torch_auto_compose(tt_sharded)
 
-    if dtype != ttnn.bfloat4_b:
-        assert torch.equal(torch_auto, torch_in)
-    else:
-        # bfloat4_b quantizes, so compute expected quantized result
-        expected = _convert_tensor_to_bfloat4_b_and_back(torch_in)
-        assert torch.equal(torch_auto, expected)
+    assert torch.equal(torch_auto, torch_in)
 
 
 # --------------------------------------------------------------------------------------
