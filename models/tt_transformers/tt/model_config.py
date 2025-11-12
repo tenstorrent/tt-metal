@@ -1047,36 +1047,55 @@ class ModelArgs:
                 )
             )
 
+            # FF1 and FF3:
+            # 32 x 4096 @ 4096 * 7168 -> 32 x 7168 @ 7168 * 4096
+
             # Prefetcher + MLP program configs
             # FF1 and FF3 program configs
             self.model_config["PREFETCHER_MLP_W1_W3_PRG_CONFIG"] = self.matmul_1d_ring_config(
                 1,
                 32,
-                8192 // self.cluster_shape[0],
-                3840,  # Use padded N
+                self.dim // self.cluster_shape[1],
+                self.hidden_dim,  # Use padded N
                 self.prefetcher.ring_size,
+                num_global_cb_receivers=4,
             )
             # FF2 program configs
             self.model_config["PREFETCHER_MLP_W2_PRG_CONFIG"] = self.matmul_1d_ring_config(
                 1,
                 32,
-                3584,
-                9216 // 4,  # Use padded N
+                self.hidden_dim,
+                self.dim // self.cluster_shape[1],  # Use padded N
                 self.prefetcher.ring_size,
+                num_global_cb_receivers=4,
             )
 
-            # Prefetcher Memory config for FF1 and FF3 output
+            # Prefetcher Memory config for Input, FF1 and FF3 output
+            self.model_config["SHARDED_MLP_INPUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
+                shape=(32, self.dim // self.cluster_shape[1] // self.prefetcher.ring_size),  # Use padded N
+                core_grid=self.prefetcher.to_core_range_set(
+                    self.prefetcher.receiver_cores(sender_active=True, receiver_active=True)
+                ),
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+
             self.model_config["PREFETCHER_SHARDED_FF13_OUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
-                shape=(32, 3840 // self.prefetcher.ring_size),  # Use padded N
-                core_grid=self.prefetcher.to_core_range_set(self.prefetcher.receiver_cores(active=True)),
+                shape=(32, self.hidden_dim // self.prefetcher.ring_size),  # Use padded N
+                core_grid=self.prefetcher.to_core_range_set(
+                    self.prefetcher.receiver_cores(sender_active=True, receiver_active=True)
+                ),
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
             )
             # Prefetcher Memory config for FF2 output
             self.model_config["PREFETCHER_SHARDED_FF2_OUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
-                shape=(32, 9216 // 4 // self.prefetcher.ring_size),  # Use padded N
-                core_grid=self.prefetcher.to_core_range_set(self.prefetcher.receiver_cores(active=True)),
+                shape=(32, self.dim // self.cluster_shape[1] // self.prefetcher.ring_size),  # Use padded N
+                core_grid=self.prefetcher.to_core_range_set(
+                    self.prefetcher.receiver_cores(sender_active=True, receiver_active=True)
+                ),
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
@@ -2291,7 +2310,9 @@ class ModelArgs:
         N,
         num_cores,
         prefetch=True,
+        num_global_cb_receivers=3,
     ):
+        breakpoint()
         M *= B  # Fuse batch always enabled
 
         in0_block_h = M // ttnn.TILE_SIZE
@@ -2335,7 +2356,7 @@ class ModelArgs:
             mcast_in0=False,
             gather_in0=True,
             hop_cores=hop_core_range_set,
-            num_global_cb_receivers=2 if prefetch else 1,
+            num_global_cb_receivers=num_global_cb_receivers,
         )
 
         return program_config

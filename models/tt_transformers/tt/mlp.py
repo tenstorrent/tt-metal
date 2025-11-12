@@ -150,6 +150,7 @@ class MLP(LightweightModule):
             else:
                 return ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
 
+        breakpoint()
         w1_out = ttnn.linear(
             x,
             self.w1,
@@ -158,7 +159,7 @@ class MLP(LightweightModule):
             compute_kernel_config=li_ff1_3_compute_kernel_cfg,
             program_config=pc_1,
             memory_config=get_ff1_3_memory_config(),
-            global_cb=self.prefetcher.global_circular_buffer if self.prefetcher is not None else None,
+            global_cb=self.prefetcher.global_cb if self.prefetcher is not None else None,
             sub_device_id=self.prefetcher.worker_sub_device_id if mode == "decode" else None,
         )
 
@@ -170,7 +171,7 @@ class MLP(LightweightModule):
             compute_kernel_config=li_ff1_3_compute_kernel_cfg,
             program_config=pc_3,
             memory_config=get_ff1_3_memory_config(),
-            global_cb=self.prefetcher.global_circular_buffer if self.prefetcher is not None else None,
+            global_cb=self.prefetcher.global_cb if self.prefetcher is not None else None,
             sub_device_id=self.prefetcher.worker_sub_device_id if mode == "decode" else None,
         )
         ttnn.deallocate(x)
