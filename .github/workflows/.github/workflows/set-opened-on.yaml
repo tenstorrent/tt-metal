@@ -1,0 +1,122 @@
+name: Set "Opened On" in Project
+
+on:
+  issues:
+    types: [opened]
+  workflow_dispatch: {}
+
+# This job uses your fine-grained PAT secret (DATE_AUTOMATION) via gh CLI.
+# No repo write perms needed from the Actions token itself.
+permissions:
+  contents: read
+
+jobs:
+  set-opened-on:
+    runs-on: ubuntu-latest
+    env:
+      # Your secret name
+      GH_TOKEN: ${{ secrets.DATE_AUTOMATION }}
+      GITHUB_TOKEN: ${{ secrets.DATE_AUTOMATION }}
+
+      # Your org/project/field config
+      ORG: "tenstorrent"
+      PROJECT_NUMBER: "31"
+      OPENED_ON_FIELD_NAME: "Opened On"
+    steps:
+      - name: Extract issue creation date (YYYY-MM-DD)
+        id: evt
+        run: |
+          RAW_CREATED="${{ github.event.issue.created_at }}"
+          OPENED_DATE="${RAW_CREATED%%T*}"
+          echo "opened_date=$OPENED_DATE" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve Project ID and Field ID
+        id: ids
+        run: |
+          # Query the org project by number and list fields
+          RESP=$(gh api graphql -f query='
+          query($org:String!, $number:Int!){
+            organization(login:$org){
+              projectV2(number:$number){
+                id
+                fields(first:200){
+                  nodes { id name dataType }
+                }
+              }
+            }
+          }' -F org="$ORG" -F number="$PROJECT_NUMBER")
+
+          PROJECT_ID=$(echo "$RESP" | jq -r '.data.organization.projectV2.id')
+          FIELD_ID=$(echo "$RESP" | jq -r --arg NAME "$OPENED_ON_FIELD_NAME" '.data.organization.projectV2.fields.nodes[] | select(.name==$NAME) | .id')
+
+          if [ -z "$PROJECT_ID" ] || [ "$PROJECT_ID" = "null" ]; then
+            echo "Project not found: $ORG / $PROJECT_NUMBER" >&2
+            exit 1
+          fi
+          if [ -z "$FIELD_ID" ] || [ "$FIELD_ID" = "null" ]; then
+            echo "Field not found: \"$OPENED_ON_FIELD_NAME\"" >&2
+            echo "Available fields:" >&2
+            echo "$RESP" | jq -r '.data.organization.projectV2.fields.nodes[] | "\(.name) [\(.dataType)]"' >&2
+            exit 1
+          fi
+
+          echo "project_id=$PROJECT_ID" >> "$GITHUB_OUTPUT"
+          echo "field_id=$FIELD_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Get Issue Node ID
+        id: issue
+        run: |
+          ISSUE_NODE_ID=$(gh api graphql -f query='
+          query($owner:String!, $repo:String!, $number:Int!){
+            repository(owner:$owner, name:$repo){
+              issue(number:$number){ id }
+            }
+          }' \
+          -F owner='${{ github.repository_owner }}' \
+          -F repo='${{ github.event.repository.name }}' \
+          -F number='${{ github.event.issue.number }}' --jq '.data.repository.issue.id')
+
+          if [ -z "$ISSUE_NODE_ID" ] || [ "$ISSUE_NODE_ID" = "null" ]; then
+            echo "Could not resolve issue node ID" >&2
+            exit 1
+          fi
+
+          echo "id=$ISSUE_NODE_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Add Issue to Project (idempotent)
+        id: add
+        run: |
+          ADD_RESP=$(gh api graphql -f query='
+          mutation($projectId:ID!, $contentId:ID!){
+            addProjectV2ItemById(input:{projectId:$projectId, contentId:$contentId}){
+              item{ id }
+            }
+          }' \
+          -F projectId='${{ steps.ids.outputs.project_id }}' \
+          -F contentId='${{ steps.issue.outputs.id }}')
+
+          ITEM_ID=$(echo "$ADD_RESP" | jq -r '.data.addProjectV2ItemById.item.id')
+          if [ -z "$ITEM_ID" ] || [ "$ITEM_ID" = "null" ]; then
+            echo "Failed to add/find project item" >&2
+            echo "$ADD_RESP" >&2
+            exit 1
+          fi
+          echo "item_id=$ITEM_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Set "Opened On" field value (Date)
+        run: |
+          gh api graphql -f query='
+          mutation($projectId:ID!, $itemId:ID!, $fieldId:ID!, $date:String!){
+            updateProjectV2ItemFieldValue(input:{
+              projectId:$projectId,
+              itemId:$itemId,
+              fieldId:$fieldId,
+              value:{ date:$date }
+            }){
+              projectV2Item{ id }
+            }
+          }' \
+          -F projectId='${{ steps.ids.outputs.project_id }}' \
+          -F itemId='${{ steps.add.outputs.item_id }}' \
+          -F fieldId='${{ steps.ids.outputs.field_id }}' \
+          -F date='${{ steps.evt.outputs.opened_date }}'
