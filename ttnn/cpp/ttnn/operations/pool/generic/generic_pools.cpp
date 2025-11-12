@@ -474,7 +474,9 @@ static std::vector<Tensor> pool2d(
     bool return_indices = false,
     const DataType dtype = DataType::BFLOAT16,
     const Layout output_layout = Layout::ROW_MAJOR) {
-    if (!dram_slice_config.has_value()) {
+    if (!dram_slice_config.has_value() ||
+        dram_slice_config->slice_type == op_slicing::Op2dSliceConfig::SliceType::L1_FULL ||
+        dram_slice_config->num_slices == 1) {
         return pool2d_L1(
             input_tensor,
             pool_type,
