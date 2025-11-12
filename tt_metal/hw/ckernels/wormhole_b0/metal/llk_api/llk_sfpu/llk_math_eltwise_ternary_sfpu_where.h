@@ -23,5 +23,6 @@ inline void llk_math_eltwise_ternary_sfpu_where(
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_ternary_sfpu_where_init() {
     _llk_math_eltwise_ternary_sfpu_init_<SfpuType::where>();
+    ckernel::sfpu::_init_where_<APPROXIMATE>();
 }
 }  // namespace ckernel
