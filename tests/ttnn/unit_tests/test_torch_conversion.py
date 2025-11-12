@@ -408,3 +408,25 @@ def test_from_numpy_conversion(device, shape, ttnn_dtype, numpy_dtype, ttnn_layo
         actual_pytorch_result=torch_computed.to(torch.float64),
         pcc=get_expected_conversion_pcc(ttnn_dtype, numpy_dtype),
     )
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (2, 2, 2, 2, 2),
+        (2, 2, 2, 2, 2, 2),
+        (2, 2, 255, 255, 37),
+    ],
+)
+@pytest.mark.parametrize("with_device", [True, False])
+def test_on_device_from_torch_high_rank(shape, device, with_device):
+    torch_input_tensor = torch.rand(shape, dtype=torch.bfloat16)
+    if with_device:
+        tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+
+    else:
+        tensor = ttnn.from_torch(torch_input_tensor)
+        tensor = ttnn.to_device(tensor, device)
+        tensor = ttnn.to_layout(tensor, ttnn.TILE_LAYOUT)
+
+    assert torch.allclose(torch.tensor(torch_input_tensor.tolist()), torch.tensor(tensor.to_list()))

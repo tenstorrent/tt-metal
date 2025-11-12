@@ -535,6 +535,8 @@ def run_matmul_2d_multiple_output_blocks_per_core(
         )
     else:
         in0_memory_config = ttnn.L1_MEMORY_CONFIG
+
+    device.disable_program_cache()
     in0_t = ttnn.from_torch(
         in0,
         dtype=ttnn.bfloat16,
@@ -549,6 +551,7 @@ def run_matmul_2d_multiple_output_blocks_per_core(
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+    device.enable_program_cache()
 
     if has_bias:
         bias = torch.randn(bias_shape).bfloat16().float()
@@ -669,6 +672,7 @@ def test_matmul_2d_multiple_output_blocks_per_core(
         # dummy tensor to change tensor alloc
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
+        mesh_device.disable_program_cache()
         tt_dummy_tensor = ttnn.from_torch(
             py_dummy_tensor,
             dtype=ttnn.DataType.BFLOAT16,
@@ -676,6 +680,7 @@ def test_matmul_2d_multiple_output_blocks_per_core(
             device=mesh_device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
+        mesh_device.enable_program_cache()
     assert mesh_device.num_program_cache_entries() == 1
 
 
@@ -703,6 +708,8 @@ def run_matmul_2d_tiny_tile(
         )
     else:
         in0_memory_config = ttnn.L1_MEMORY_CONFIG
+
+    device.disable_program_cache()
     in0_t = ttnn.from_torch(
         in0,
         tile=ttnn.Tile((tile_h, 32)),
@@ -719,11 +726,13 @@ def run_matmul_2d_tiny_tile(
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+    device.enable_program_cache()
 
     if has_bias:
         bias = torch.randn(bias_shape).bfloat16().float()
         bias_padded = bias.unsqueeze(2)
         bias_padded = torch.nn.functional.pad(bias_padded, (0, 0, 0, tile_h - bias_padded.size(2)), "constant", 0)
+        device.disable_program_cache()
         bias_t = ttnn.from_torch(
             bias_padded,
             tile=ttnn.Tile((tile_h, tile_w)),
@@ -732,6 +741,7 @@ def run_matmul_2d_tiny_tile(
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        device.enable_program_cache()
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid_size,
@@ -823,6 +833,7 @@ def test_matmul_2d_tiny_tile(
         # dummy tensor to change tensor alloc
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
+        device.disable_program_cache()
         tt_dummy_tensor = ttnn.from_torch(
             py_dummy_tensor,
             dtype=ttnn.DataType.BFLOAT16,
@@ -830,6 +841,7 @@ def test_matmul_2d_tiny_tile(
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
+        device.enable_program_cache()
     assert device.num_program_cache_entries() == 1
 
 
