@@ -33,14 +33,14 @@ void MAIN {
             copy_tile(cb_input, 0, 0);
 
             fill_tile_init();
-#ifdef FILL_FLOAT
-            FILL_FLOAT(1, *true_value);
-            FILL_FLOAT(2, *false_value);
-#endif
-#ifdef FILL_INT
-            FILL_INT(1, packed_scalar1);
-            FILL_INT(2, packed_scalar2);
-#endif
+            #if defined(INP_INT32) || defined(INP_UINT32)
+                fill_tile_int(1, packed_scalar1);
+                fill_tile_int(2, packed_scalar2);
+            #endif
+            #if defined(INP_FLOAT) || defined(INP_FLOAT32)
+                fill_tile(1, *true_value);
+                fill_tile(2, *false_value);
+            #endif
             SFPU_OP_CHAIN_0
             tile_regs_commit();
 

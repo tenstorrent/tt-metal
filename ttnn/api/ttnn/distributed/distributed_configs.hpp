@@ -63,7 +63,7 @@ struct MeshMapperConfig {
     //
 
     using Placement = std::variant<Replicate, Shard>;
-    tt::stl::SmallVector<Placement> placements;
+    ttsl::SmallVector<Placement> placements;
 
     // If provided, the sharding will be performed according to this shape, but re-mapped to the mesh device shape in
     // either row-major order, or preserving the original coordinates (if the shape fits within the mesh device
@@ -77,7 +77,7 @@ std::ostream& operator<<(std::ostream& os, const MeshMapperConfig& config);
 
 struct MeshComposerConfig {
     // Specifies dimension of the tensor to concatenate.
-    tt::stl::SmallVector<int> dims;
+    ttsl::SmallVector<int> dims;
 
     // If provided, the concatenation will be performed according to this shape, but re-mapped to the mesh device shape
     // in either row-major order, or preserving the original coordinates (if the shape fits within the mesh device

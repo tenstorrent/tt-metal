@@ -172,7 +172,7 @@ void build_tt_fabric_program(
         auto router_chans_and_direction = control_plane.get_active_fabric_eth_channels(fabric_node_id);
         for (const auto& [eth_chan, eth_direction] : router_chans_and_direction) {
             log_debug(
-                tt::LogOp,
+                tt::LogFabric,
                 "FabricEriscDatamoverConfig for device {}: eth_chan={}, direction={}",
                 device->id(),
                 eth_chan,
@@ -502,6 +502,12 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(tt::
             ct_args.push_back(router_channels_mask);
 
             auto proc = static_cast<tt::tt_metal::DataMovementProcessor>(risc_id);
+            if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::BLACKHOLE &&
+                tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode() &&
+                num_enabled_risc_cores == 1) {
+                // Force fabric to run on erisc1 due to stack usage exceeded with MUX on erisc0
+                proc = tt::tt_metal::DataMovementProcessor::RISCV_1;
+            }
 
             auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
             auto kernel = tt::tt_metal::CreateKernel(

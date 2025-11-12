@@ -29,9 +29,6 @@ There are many items we're making progress on to improve performance:
 ```bash
 # [Install tt-metal](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
 
-# Upgrade diffusers version
-pip install --upgrade diffusers==0.35.1
-
 # Set the directory to cache the weights to speed up future runs
 export TT_DIT_CACHE_DIR=/your/cache/path
 

@@ -134,7 +134,7 @@ run_tg_dit_tests() {
 
   echo "LOG_METAL: Running ${test_cmd}"
 
-  NO_PROMPT=1 TT_MM_THROTTLE_PERF=5 pytest -n auto ${test_cmd} --timeout 600 ; fail+=$?
+  NO_PROMPT=1 TT_MM_THROTTLE_PERF=5 pytest -n auto ${test_cmd} --timeout 1200 ; fail+=$?
 
   if [[ $fail -ne 0 ]]; then
     echo "LOG_METAL: ${test_name} failed"
@@ -189,6 +189,19 @@ run_tg_sentence_bert_tests() {
 
 }
 
+run_tg_wan22_demo_tests() {
+  fail=0
+
+  export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
+  pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_transformer_wan.py::test_wan_transformer_model_caching -k "wh_4x8sp1tp0"
+  TT_MM_THROTTLE_PERF=5 pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "wh_4x8sp1tp0 and resolution_720p" --timeout 1500; fail+=$?
+
+  if [[ $fail -ne 0 ]]; then
+    echo "LOG_METAL: run_tg_wan22_demo_tests failed"
+    exit 1
+  fi
+}
+
 run_tg_demo_tests() {
 
   if [[ "$1" == "falcon7b" ]]; then
@@ -213,6 +226,8 @@ run_tg_demo_tests() {
     run_tg_sentence_bert_tests
   elif [[ "$1" == "gpt-oss" ]]; then
     run_tg_gpt_oss_tests
+  elif [[ "$1" == "wan22" ]]; then
+    run_tg_wan22_demo_tests
   else
     echo "LOG_METAL: Unknown model type: $1"
     return 1
