@@ -50,6 +50,7 @@
 #include "ttnn/types.hpp"
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/xy_pair.hpp>
+#include "common/tt_backend_api_types.hpp"
 
 // #include <tt-metalium/kernel_types.hpp>
 

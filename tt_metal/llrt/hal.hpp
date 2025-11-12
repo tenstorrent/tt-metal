@@ -31,6 +31,7 @@
 
 #include <tt_stl/overloaded.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/arch.hpp>
 
 enum class AddressableCoreType : uint8_t;
 
@@ -261,7 +262,7 @@ public:
     using DispatchFeatureQueryFunc = std::function<bool(DispatchFeature)>;
     using SetIRAMTextSizeFunc = std::function<void(
         dev_msgs::launch_msg_t::View, HalProgrammableCoreType, HalProcessorClassType, uint32_t, uint32_t)>;
-    using VerifyFwVersionFunc = std::function<void(tt::umd::semver_t)>;
+    using VerifyFwVersionFunc = std::function<bool(tt::umd::semver_t)>;
 
 private:
     tt::ARCH arch_;
@@ -302,7 +303,7 @@ private:
     float inf_ = 0.0f;
 
     void initialize_wh(bool is_base_routing_fw_enabled);
-    void initialize_bh();
+    void initialize_bh(bool enable_2_erisc_mode);
     void initialize_qa();
 
     // Functions where implementation varies by architecture
@@ -325,7 +326,7 @@ private:
     VerifyFwVersionFunc verify_eth_fw_version_func_;
 
 public:
-    Hal(tt::ARCH arch, bool is_base_routing_fw_enabled);
+    Hal(tt::ARCH arch, bool is_base_routing_fw_enabled, bool enable_2_erisc_mode);
 
     tt::ARCH get_arch() const { return arch_; }
 
@@ -490,8 +491,8 @@ public:
 
     // Verify that the eth version is compatible with the HAL capabilities. Throws an exception if version is
     // not compatible.
-    void verify_eth_fw_version(tt::umd::semver_t eth_fw_version) const {
-        this->verify_eth_fw_version_func_(eth_fw_version);
+    bool verify_eth_fw_version(tt::umd::semver_t eth_fw_version) const {
+        return this->verify_eth_fw_version_func_(eth_fw_version);
     }
 };
 
