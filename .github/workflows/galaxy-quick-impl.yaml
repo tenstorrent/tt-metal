@@ -185,7 +185,7 @@ jobs:
         #NOTE: BH GLXs are NOT cabelled up as of yet
         run: |
         ./build/test/tt_metal/tt_fabric/test_system_health --system-topology MESH    
-     - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
