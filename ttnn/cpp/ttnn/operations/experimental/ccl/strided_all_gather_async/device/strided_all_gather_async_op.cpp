@@ -67,8 +67,8 @@ tt::tt_metal::operation::ProgramWithCallbacks StridedAllGatherAsync::create_prog
         this->num_workers_per_link,
         this->num_buffers_per_channel,
         this->mm_cores_y,
-        this->mm_block_h,
-        this->mm_block_w);
+        this->mm_block_ht,
+        this->mm_block_wt);
 }
 
 tt::tt_metal::operation::Hash StridedAllGatherAsync::compute_program_hash(
@@ -95,8 +95,8 @@ tt::tt_metal::operation::Hash StridedAllGatherAsync::compute_program_hash(
         this->num_workers_per_link,
         this->num_buffers_per_channel,
         this->mm_cores_y,
-        this->mm_block_h,
-        this->mm_block_w,
+        this->mm_block_ht,
+        this->mm_block_wt,
         input_shape,
         input_memory_layout,
         input_dtype,
@@ -123,8 +123,8 @@ Tensor strided_all_gather_async_impl(
     const std::optional<uint32_t>& num_workers_per_link,
     const std::optional<uint32_t>& num_buffers_per_channel,
     const std::optional<uint32_t>& mm_cores_y,
-    const std::optional<uint32_t>& mm_block_h,
-    const std::optional<uint32_t>& mm_block_w) {
+    const std::optional<uint32_t>& mm_block_ht,
+    const std::optional<uint32_t>& mm_block_wt) {
     TT_FATAL(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
         "strided_all_gather_async op is only supported for Fast Dispatch");
@@ -157,8 +157,8 @@ Tensor strided_all_gather_async_impl(
                    num_workers_per_link,
                    num_buffers_per_channel,
                    mm_cores_y,
-                   mm_block_h,
-                   mm_block_w),
+                   mm_block_ht,
+                   mm_block_wt),
                {input_tensor},
                {},
                {})
@@ -180,8 +180,8 @@ Tensor strided_all_gather_async(
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
     std::optional<uint32_t> mm_cores_y,
-    std::optional<uint32_t> mm_block_h,
-    std::optional<uint32_t> mm_block_w) {
+    std::optional<uint32_t> mm_block_ht,
+    std::optional<uint32_t> mm_block_wt) {
     return strided_all_gather_async_impl(
         input_tensor,
         dim,
@@ -197,8 +197,8 @@ Tensor strided_all_gather_async(
         num_workers_per_link,
         num_buffers_per_channel,
         mm_cores_y,
-        mm_block_h,
-        mm_block_w);
+        mm_block_ht,
+        mm_block_wt);
 }
 
 }  // namespace ccl
