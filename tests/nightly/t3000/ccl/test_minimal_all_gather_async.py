@@ -1119,33 +1119,34 @@ def test_all_gather_async_2x4_non_flat_mesh(mesh_device, input_shape):
     indirect=True,
     ids=["fabric_linear"],
 )
-@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 @pytest.mark.parametrize(
     "input_shape",
     [
-        [1, 1, 10240, 128],
+        [2, 1, 81920, 128],
     ],
 )
 @pytest.mark.parametrize("cluster_axis", [1])
 @pytest.mark.parametrize("dim", [2])
-def test_all_gather_async_1x8_dim2(mesh_device, input_shape, cluster_axis, dim):
+def test_all_gather_async_2x4_dim2(mesh_device, input_shape, cluster_axis, dim):
     torch.manual_seed(2005)
-    devices = mesh_device.get_num_devices()
-    input_shape[-1] *= devices
 
-    torch_input = torch.rand(input_shape, dtype=torch.bfloat16)
+    torch_input = torch.rand(input_shape, dtype=torch.bfloat16)  # [2, 1, 81920, 128]
     tt_input = ttnn.from_torch(
         torch_input,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=dim),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, dim), mesh_shape=mesh_device.shape),
         device=mesh_device,
-    )
+    )  # [1, 1, 20480, 128] per device
 
-    tt_output = ttnn.all_gather(tt_input, dim=dim, cluster_axis=cluster_axis)
+    tt_output = ttnn.all_gather(tt_input, dim=dim, cluster_axis=cluster_axis)  # [1, 1, 81920, 128]
 
-    torch_output = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+    torch_output = ttnn.to_torch(
+        tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)
+    )  # [8, 1, 81920, 128]
 
-    torch_reference = torch_input.repeat([devices, 1, 1, 1])
+    torch_reference = torch_input.repeat([1, mesh_device.shape[cluster_axis], 1, 1])  # [2, 4, 81920, 128]
+    torch_reference = torch_reference.reshape([8, 1, 81920, 128])
     eq, output = comp_equal(torch_output, torch_reference)
     assert eq, f"Output mismatch between torch and ttnn all-gather: {output}"
