@@ -434,7 +434,7 @@
     { "job-name-component": "data movement", "owner": { "id": "S09QQRK1CF8", "name": "ops-data-movement" } },
 
     { "job-name-component": "ttnn-run-sweeps / ccl.generality.all_broadcast", "owner": { "id": "S09QQRK1CF8", "name": "ops-data-movement" } },
-    { "job-name-component": "Run sweeps in parallel", "owner": { "id": "S09QQRK1CF8", "name": "ops-data-movement" } },
+    { "job-name-component": "Run sweeps in parallel", "owner": [{ "id": "S09QQRK1CF8", "name": "ops-data-movement" }, { "id": "U08T3JQEB36", "name": "Steven Lee" }] },
     { "job-name-component": "ccl.generality.all_broadcast", "owner": { "id": "S09QQRK1CF8", "name": "ops-data-movement" } },
     { "job-name-component": "ttnn-run-sweeps / ccl.generality.all_gather", "owner": { "id": "S09QQRK1CF8", "name": "ops-data-movement" } },
     { "job-name-component": "ccl.generality.all_gather", "owner": { "id": "S09QQRK1CF8", "name": "ops-data-movement" } },
