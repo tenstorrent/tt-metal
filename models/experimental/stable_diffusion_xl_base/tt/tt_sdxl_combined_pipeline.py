@@ -99,6 +99,10 @@ class TtSDXLCombinedPipeline:
         """
         logger.info("Creating combined pipeline with shared scheduler...")
 
+        if base_config.use_cfg_parallel:
+            assert ttnn_device.get_num_devices() % 2 == 0, "TT device must have even number of devices"
+            ttnn_device.reshape(ttnn.MeshShape(2, ttnn_device.get_num_devices() // 2))
+
         self.ttnn_device = ttnn_device
 
         if torch_refiner_pipeline is None and refiner_config is not None:
