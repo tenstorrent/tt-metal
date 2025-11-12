@@ -18,6 +18,7 @@ using namespace tt::constants;
 
 namespace {
 
+// Per-core tiling and addressing parameters used by the writers and compute kernels
 struct BlockTilingParams {
     uint32_t total_tiles_per_block;
     uint32_t total_tiles_per_core;
@@ -39,6 +40,8 @@ inline BlockTilingParams compute_block_tiling_params(
     const uint32_t tiles_per_block_writer0 = tt::div_up(total_tiles_per_block, 2);
     const uint32_t tiles_per_block_writer1 = total_tiles_per_block - tiles_per_block_writer0;
     const uint32_t output_stride_sticks = TILE_WIDTH;
+    // Inter-writer L1 output stride (bytes) between consecutive tiles written by a single writer.
+    // If a block is only one tile tall, only one writer is active, so no stride is needed.
     const uint32_t output_addr_stride =
         (block_size_width != TILE_HEIGHT) ? output_stride_sticks * config.output_shard_width * config.element_size_bytes
                                           : 0;
@@ -90,6 +93,7 @@ inline std::vector<uint32_t> make_compute_compile_args(
         num_blocks};
 }
 
+// Generate gather transfers, group them into output column blocks, and coalesce contiguous copies.
 GroupingResult group_and_coalesce_transfers(
     const ConvertToHwcConfig& config,
     const std::vector<CoreCoord>& in_cores,
@@ -123,6 +127,7 @@ GroupingResult group_and_coalesce_transfers(
     return {std::move(per_core_blocked_gather_transfers), blocked_result.num_logical_blocks};
 }
 
+// Serialize grouped transfers per destination core with the provided source-address mapping.
 inline std::vector<std::vector<uint32_t>> serialize_transfers_per_core(
     const std::vector<std::vector<convert_to_hwc::detail::BlockedTransferGroup>>& per_core_groups,
     const std::vector<CoreCoord>& in_cores,
@@ -138,16 +143,13 @@ inline std::vector<std::vector<uint32_t>> serialize_transfers_per_core(
 
 }  // namespace
 
-// Helper function to calculate effective HW dimension for sharding calculations
+// Effective HW used by gather: always the padded capacity per input core
 uint32_t calculate_effective_hw_for_sharding(
     uint32_t hw_total, uint32_t batch_size, uint32_t padded_shard_width, uint32_t num_cores) {
-    // Always use the full padded capacity for all batch sizes
-    // For even sharding: hw_total == num_cores * padded_shard_width (same result)
-    // For uneven sharding (B=1 only): hw_total < num_cores * padded_shard_width (handles padding correctly)
+    // Covers both even sharding (exact fit) and uneven sharding (B=1; padded)
     return num_cores * padded_shard_width;
 }
 
-// Helper struct to hold circular buffer handles
 struct CircularBufferHandles {
     tt::tt_metal::CBHandle cb_in;
     tt::tt_metal::CBHandle cb_out;
@@ -192,20 +194,18 @@ ConvertToHwcConfig ConvertToHwcConfig::create_from_tensors(const Tensor& input, 
     config.output_shard_height = output.shard_spec()->shape[0];
     config.output_shard_width = output.shard_spec()->shape[1];
     config.l1_input_shard_height = config.is_input_in_dram ? input.logical_shape()[-2] : input.shard_spec()->shape[0];
-    // For DRAM inputs, the shard width must reflect the input's padded sharded dim (WIDTH_SHARDED),
-    // not the output shard height. Use input.shard_spec()->shape[1] for both DRAM and L1.
+    // Use input's padded sharded width (WIDTH_SHARDED) for both DRAM and L1 inputs
     config.l1_input_shard_width = input.shard_spec()->shape[1];
 
     // Core information
-    // Output cores are where kernels run - always use output shard grid
+    // Kernels run on output cores; data sources are the input cores
     config.output_core_grid = output.shard_spec()->grid;
     config.output_cores = corerange_to_cores(
         config.output_core_grid,
         std::nullopt,
         output.shard_spec()->orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
 
-    // Input cores are where data comes from
-    // Always use the input tensor's shard grid to identify input core locations
+    // Always derive input core locations from the input tensor's shard grid
     config.l1_input_core_grid = input.shard_spec()->grid;
     config.l1_input_cores = corerange_to_cores(
         config.l1_input_core_grid,
@@ -294,7 +294,7 @@ CircularBufferHandles setup_circular_buffers(
     const tt::DataFormat intermediary_format = tt::DataFormat::Float16_b;
     const uint32_t intermediary_tile_size = tt::tile_size(intermediary_format);
 
-    // CB in (full input)
+    // CB_IN: full input shard per core
     const uint32_t cb_in_page_size = config.l1_input_shard_width * config.element_size_bytes;
     const uint32_t cb_in_total_size = config.l1_input_shard_height * cb_in_page_size;
     auto cb_in = create_circular_buffer(
@@ -306,19 +306,19 @@ CircularBufferHandles setup_circular_buffers(
         config.input_format,
         config.is_input_in_dram ? nullptr : input.buffer());
 
-    // CB in batch - using block_size_width to ensure alignment with transfer blocks
+    // CB_IN_BATCH: [C x block_size_width] staging for gathered sticks
     const uint32_t cb_in_batch_page_size = block_size_width * config.element_size_bytes;
     const uint32_t cb_in_batch_total_size = config.gather_l1_output_shard_height * cb_in_batch_page_size;
     create_circular_buffer(
         program, core_grid, CBIndex::CB_IN_BATCH, cb_in_batch_total_size, cb_in_batch_page_size, config.input_format);
 
-    // CB in tiled
+    // CB_IN_TILED: intermediate tiles
     const uint32_t cb_in_tiled_page_size = intermediary_tile_size;
     const uint32_t cb_in_tiled_total_size = tt::div_up(block_size_width, TILE_WIDTH) * intermediary_tile_size;
     create_circular_buffer(
         program, core_grid, CBIndex::CB_IN_TILED, cb_in_tiled_total_size, cb_in_tiled_page_size, intermediary_format);
 
-    // CB in transpose buffers
+    // CB_IN_TRANSPOSE_[0/1]: double-buffered transpose staging
     const uint32_t cb_in_transpose_page_size = intermediary_tile_size;
     const uint32_t cb_in_transpose_total_size = tt::div_up(block_size_width, TILE_WIDTH) * intermediary_tile_size;
     create_circular_buffer(
@@ -336,7 +336,7 @@ CircularBufferHandles setup_circular_buffers(
         cb_in_transpose_page_size,
         intermediary_format);
 
-    // CB out
+    // CB_OUT: output shard per core
     const uint32_t cb_out_page_size = config.output_shard_width * config.element_size_bytes;
     const uint32_t cb_out_total_size = cb_out_page_size * config.output_shard_height;  // same size as input
     auto cb_out = create_circular_buffer(
@@ -363,20 +363,20 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
     // Select input cores based on source memory (DRAM vs L1)
     const auto& in_cores = config.is_input_in_dram ? config.dram_input_cores : config.l1_input_cores;
 
-    // Use effective HW for gather transfers
+    // Effective HW for gather transfers (padded capacity per input core)
     uint32_t effective_hw_for_gather = calculate_effective_hw_for_sharding(
         config.hw_total, config.batch_size, config.l1_input_shard_width, static_cast<uint32_t>(in_cores.size()));
 
     const uint32_t block_size_width = config.gather_l1_output_shard_width;
 
-    // Setup circular buffers after block_size_width is calculated - use output cores where kernels run
+    // Setup circular buffers on the output cores (where the kernels execute)
     auto cb_handles = setup_circular_buffers(program, config.output_core_grid, config, a, output, block_size_width);
     auto grouping = group_and_coalesce_transfers(config, in_cores, effective_hw_for_gather, block_size_width);
     const uint32_t num_blocks = grouping.num_blocks;
 
-    // Create converter for serialized transfer source addressing:
-    // - L1 input: map logical -> worker core (x,y)
-    // - DRAM input: encode bank_id into x and set y to 0
+    // Source-address mapping for serialization:
+    // - L1 input: logical core -> worker core (x,y)
+    // - DRAM input: x := bank_id, y := 0
     std::function<CoreCoord(const CoreCoord&)> logical_to_addr_id;
     if (config.is_input_in_dram) {
         std::map<std::pair<int, int>, uint32_t> bank_id_by_core;
@@ -400,10 +400,10 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
     auto per_core_serialized_transfers =
         serialize_transfers_per_core(grouping.per_core_groups, in_cores, logical_to_addr_id);
 
-    // Calculate tiles based on block width (which becomes input to compute pipeline)
+    // Compute per-core tiling/state based on the chosen block width
     const BlockTilingParams tiling = compute_block_tiling_params(config, block_size_width, num_blocks);
 
-    // Each writer should process half of the tiles PER BLOCK
+    // Split tiles within each block between the two writers
     const uint32_t tiles_per_block_writer0 = tiling.tiles_per_block_writer0;
     const uint32_t tiles_per_block_writer1 = tiling.tiles_per_block_writer1;
 

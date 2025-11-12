@@ -16,7 +16,7 @@ BATCH_TEST_CASES = [1, 2, 4, 8]
 
 @pytest.mark.parametrize("B", BATCH_TEST_CASES)
 @pytest.mark.parametrize("C", CHANNEL_TEST_CASES)
-@pytest.mark.parametrize("provide_memory_config", [True])
+@pytest.mark.parametrize("provide_memory_config", [True, False])
 @pytest.mark.parametrize(
     "HW, core_grid, padded_sharded_dim",
     (
@@ -131,7 +131,7 @@ def test_convert_to_hwc_with_l1_input(device, B, C, HW, core_grid, padded_sharde
 
 @pytest.mark.parametrize("B", [1])  # Only B=1 is currently supported for uneven sharding
 @pytest.mark.parametrize("C", CHANNEL_TEST_CASES)
-@pytest.mark.parametrize("provide_memory_config", [True])
+@pytest.mark.parametrize("provide_memory_config", [True, False])
 @pytest.mark.parametrize(
     "HW, core_grid, padded_sharded_dim",
     (
@@ -317,8 +317,7 @@ def test_convert_to_hwc_with_l1_input_resharded(
     assert passed, message
 
 
-# @pytest.mark.parametrize("C", CHANNEL_TEST_CASES)
-@pytest.mark.parametrize("C", [1, 2])
+@pytest.mark.parametrize("C", CHANNEL_TEST_CASES)
 @pytest.mark.parametrize(
     "HW, input_core_grid, output_core_grid, input_padded_sharded_dim, output_padded_sharded_dim",
     (
@@ -387,7 +386,7 @@ def test_convert_to_hwc_dram(
     assert passed, message
 
 
-@pytest.mark.parametrize("C", [1, 2])
+@pytest.mark.parametrize("C", CHANNEL_TEST_CASES)
 @pytest.mark.parametrize(
     "HW, input_core_grid, output_core_grid, input_padded_sharded_dim, output_padded_sharded_dim",
     (
