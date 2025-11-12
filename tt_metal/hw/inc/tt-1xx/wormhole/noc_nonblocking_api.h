@@ -1545,3 +1545,24 @@ FORCE_INLINE void noc_inline_dw_write_with_state(uint32_t noc, uint64_t dst_addr
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
     }
 }
+
+template <uint8_t MAX_NOCS_TO_INIT = NUM_NOCS>
+inline __attribute__((always_inline)) void ncrisc_dynamic_noc_full_sync() {
+    for (uint32_t noc = 0; noc < MAX_NOCS_TO_INIT; noc++) {
+        while (!ncrisc_dynamic_noc_reads_flushed(noc)) {
+            invalidate_l1_cache();
+        }
+        while (!ncrisc_dynamic_noc_nonposted_writes_sent(noc)) {
+            invalidate_l1_cache();
+        }
+        while (!ncrisc_dynamic_noc_nonposted_writes_flushed(noc)) {
+            invalidate_l1_cache();
+        }
+        while (!ncrisc_dynamic_noc_nonposted_atomics_flushed(noc)) {
+            invalidate_l1_cache();
+        }
+        while (!ncrisc_dynamic_noc_posted_writes_sent(noc)) {
+            invalidate_l1_cache();
+        }
+    }
+}
