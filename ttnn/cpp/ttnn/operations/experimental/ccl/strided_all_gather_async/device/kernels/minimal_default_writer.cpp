@@ -257,7 +257,8 @@ void kernel_main() {
                     pkt_hdr_sem_inc,
                     out_ready_sem_noc_addr_in_pkt,
                     direction,
-                    true);
+                    true,
+                    chunk_idx == (device_k_block_counts[my_chip_id] - 1));
             }
             if constexpr (fuse_op && direction == 1) {
                 // Synchronize and signal that the local tensor slice is available
@@ -268,9 +269,8 @@ void kernel_main() {
             uint32_t slice_writes = 0;
             while (slice_writes < writes_expected) {
                 uint32_t actual_sender_chip_id = get_sender_id(direction, my_chip_id, slice_writes, ring_size);
-
+                input_chunk_start_tile = global_tile_index;
                 for (uint32_t chunk_idx = 0; chunk_idx < device_k_block_counts[actual_sender_chip_id]; chunk_idx++) {
-                    input_chunk_start_tile = global_tile_index;
                     uint32_t actual_chunk_w = next_mm_aligned_chunk_width(
                         input_chunk_start_tile, actual_sender_chip_id, input_tensor_Wt, mm_block_wt);
                     uint32_t actual_chunk_h = next_mm_aligned_chunk_height(
@@ -301,7 +301,8 @@ void kernel_main() {
                         pkt_hdr_sem_inc,
                         out_ready_sem_noc_addr_in_pkt,
                         direction,
-                        false);
+                        false,
+                        chunk_idx == (device_k_block_counts[actual_sender_chip_id] - 1));
                 }
                 slice_writes++;
             }

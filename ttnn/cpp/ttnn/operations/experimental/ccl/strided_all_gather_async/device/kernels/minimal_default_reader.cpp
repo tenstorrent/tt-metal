@@ -165,9 +165,9 @@ void kernel_main() {
 
                 if ((topology == Topology::Linear && writes_expected > 0) ||
                     (topology == Topology::Ring && ((slices_received + 1) < (writes_expected + 1)))) {
+                    input_chunk_start_tile = global_tile_index;
                     for (uint32_t chunk_idx = 0; chunk_idx < device_k_block_counts[actual_sender_chip_id];
                          chunk_idx++) {
-                        input_chunk_start_tile = global_tile_index;
                         uint32_t actual_chunk_w = next_mm_aligned_chunk_width(
                             input_chunk_start_tile, actual_sender_chip_id, input_tensor_Wt, mm_block_wt);
                         uint32_t actual_chunk_h = next_mm_aligned_chunk_height(
@@ -175,7 +175,6 @@ void kernel_main() {
                         uint32_t tiles_in_current_chunk =
                             actual_chunk_w * actual_chunk_h *
                             mm_cores_y;  // THIS IS NOT QUITE RIGHT, each mm core might have a different chunk_h
-
                         read_chunk(
                             input_chunk_start_tile,
                             batch_input_tile_offset,
