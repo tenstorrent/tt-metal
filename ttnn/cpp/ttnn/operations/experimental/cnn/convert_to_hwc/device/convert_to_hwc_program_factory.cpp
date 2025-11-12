@@ -16,6 +16,128 @@ namespace ttnn::operations::experimental::cnn::detail {
 
 using namespace tt::constants;
 
+namespace {
+
+struct BlockTilingParams {
+    uint32_t total_tiles_per_block;
+    uint32_t total_tiles_per_core;
+    uint32_t tiles_per_block_writer0;
+    uint32_t tiles_per_block_writer1;
+    uint32_t output_addr_stride;
+    uint32_t block_size_bytes;
+};
+
+struct GroupingResult {
+    std::vector<std::vector<convert_to_hwc::detail::BlockedTransferGroup>> per_core_groups;
+    uint32_t num_blocks;
+};
+
+inline BlockTilingParams compute_block_tiling_params(
+    const ConvertToHwcConfig& config, uint32_t block_size_width, uint32_t num_blocks) {
+    const uint32_t total_tiles_per_block = tt::div_up(block_size_width, TILE_HEIGHT);
+    const uint32_t total_tiles_per_core = total_tiles_per_block * num_blocks;
+    const uint32_t tiles_per_block_writer0 = tt::div_up(total_tiles_per_block, 2);
+    const uint32_t tiles_per_block_writer1 = total_tiles_per_block - tiles_per_block_writer0;
+    const uint32_t output_stride_sticks = TILE_WIDTH;
+    const uint32_t output_addr_stride =
+        (block_size_width != TILE_HEIGHT) ? output_stride_sticks * config.output_shard_width * config.element_size_bytes
+                                          : 0;
+    const uint32_t block_size_bytes =
+        config.gather_l1_output_shard_height * block_size_width * config.element_size_bytes;
+    return {
+        total_tiles_per_block,
+        total_tiles_per_core,
+        tiles_per_block_writer0,
+        tiles_per_block_writer1,
+        output_addr_stride,
+        block_size_bytes};
+}
+
+inline std::vector<uint32_t> make_writer_compile_args(
+    bool is_reader,
+    uint32_t cb_in_transpose_index,
+    const ConvertToHwcConfig& config,
+    const BlockTilingParams& tiling,
+    uint32_t tiles_per_block_for_writer,
+    uint32_t initial_write_stick_offset,
+    uint32_t num_blocks) {
+    return {
+        CBIndex::CB_IN,
+        CBIndex::CB_IN_BATCH,
+        cb_in_transpose_index,
+        CBIndex::CB_OUT,
+        config.output_shard_width,
+        tiles_per_block_for_writer,
+        initial_write_stick_offset,
+        config.element_size_bytes,
+        static_cast<uint32_t>(config.is_input_in_dram),
+        static_cast<uint32_t>(is_reader),
+        is_reader ? config.gather_l1_output_shard_height : 0u,
+        num_blocks,
+        tiling.output_addr_stride,
+        tiling.block_size_bytes};
+}
+
+inline std::vector<uint32_t> make_compute_compile_args(
+    uint32_t total_tiles_per_block, uint32_t total_sticks_per_block, uint32_t num_blocks) {
+    return {
+        CBIndex::CB_IN_BATCH,
+        CBIndex::CB_IN_TILED,
+        CBIndex::CB_IN_TRANSPOSE_0,
+        CBIndex::CB_IN_TRANSPOSE_1,
+        total_tiles_per_block,
+        total_sticks_per_block,
+        num_blocks};
+}
+
+GroupingResult group_and_coalesce_transfers(
+    const ConvertToHwcConfig& config,
+    const std::vector<CoreCoord>& in_cores,
+    uint32_t effective_hw_for_gather,
+    uint32_t block_size_width) {
+    const auto gather_transfers = convert_to_hwc::detail::precompute_gather_transfers(
+        config.batch_size,
+        config.input_channels,
+        effective_hw_for_gather,
+        in_cores,
+        config.output_cores,
+        block_size_width);
+
+    const auto blocked_result = convert_to_hwc::detail::group_transfers_by_output_column_blocks(
+        gather_transfers,
+        config.batch_size,
+        config.input_channels,
+        effective_hw_for_gather,
+        in_cores,
+        config.output_cores.size(),
+        /*element_size_bytes=*/config.element_size_bytes,
+        /*block_size=*/block_size_width,
+        /*output_shard_width=*/block_size_width);
+
+    auto blocked_gather_transfers = blocked_result.blocked_transfers;
+    auto per_core_blocked_gather_transfers =
+        convert_to_hwc::detail::split_by_destination_core(blocked_gather_transfers, config.output_cores.size());
+    for (auto& core_transfers : per_core_blocked_gather_transfers) {
+        core_transfers = convert_to_hwc::detail::coalesce_contiguous_transfers(core_transfers);
+    }
+    return {std::move(per_core_blocked_gather_transfers), blocked_result.num_logical_blocks};
+}
+
+inline std::vector<std::vector<uint32_t>> serialize_transfers_per_core(
+    const std::vector<std::vector<convert_to_hwc::detail::BlockedTransferGroup>>& per_core_groups,
+    const std::vector<CoreCoord>& in_cores,
+    const std::function<CoreCoord(const CoreCoord&)>& logical_to_addr_id) {
+    std::vector<std::vector<uint32_t>> per_core_serialized;
+    per_core_serialized.resize(per_core_groups.size());
+    for (size_t core_idx = 0; core_idx < per_core_groups.size(); core_idx++) {
+        per_core_serialized[core_idx] = convert_to_hwc::detail::serialize_blocked_transfer_groups(
+            per_core_groups[core_idx], in_cores, logical_to_addr_id);
+    }
+    return per_core_serialized;
+}
+
+}  // namespace
+
 // Helper function to calculate effective HW dimension for sharding calculations
 uint32_t calculate_effective_hw_for_sharding(
     uint32_t hw_total, uint32_t batch_size, uint32_t padded_shard_width, uint32_t num_cores) {
@@ -60,41 +182,11 @@ ConvertToHwcConfig ConvertToHwcConfig::create_from_tensors(const Tensor& input, 
     config.input_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     config.element_size_bytes = tt::datum_size(config.input_format);
 
-    log_info(tt::LogType::LogAlways, "=== ConvertToHwcConfig::create_from_tensors ===");
-    log_info(
-        tt::LogType::LogAlways,
-        "Input tensor logical shape: [{}, {}, {}, {}]",
-        input.logical_shape()[0],
-        input.logical_shape()[1],
-        input.logical_shape()[2],
-        input.logical_shape()[3]);
-    log_info(
-        tt::LogType::LogAlways,
-        "Output tensor logical shape: [{}, {}, {}, {}]",
-        output.logical_shape()[0],
-        output.logical_shape()[1],
-        output.logical_shape()[2],
-        output.logical_shape()[3]);
-    log_info(
-        tt::LogType::LogAlways,
-        "Parsed: batch_size={}, input_channels={}, hw_total={}, element_size_bytes={}",
-        config.batch_size,
-        config.input_channels,
-        config.hw_total,
-        config.element_size_bytes);
-
     // DRAM/L1 configuration
     config.is_input_in_dram = input.buffer()->core_type() == tt::CoreType::DRAM;
     config.remote_address = input.buffer()->address();
     config.remote_buffer_type = input.buffer()->buffer_type();
     config.remote_core_type = input.buffer()->core_type();
-
-    log_info(
-        tt::LogType::LogAlways,
-        "Input buffer: is_input_in_dram={}, remote_address={}, core_type={}",
-        config.is_input_in_dram,
-        config.remote_address,
-        (uint32_t)config.remote_core_type);
 
     // Shard specifications
     config.output_shard_height = output.shard_spec()->shape[0];
@@ -103,14 +195,6 @@ ConvertToHwcConfig ConvertToHwcConfig::create_from_tensors(const Tensor& input, 
     // For DRAM inputs, the shard width must reflect the input's padded sharded dim (WIDTH_SHARDED),
     // not the output shard height. Use input.shard_spec()->shape[1] for both DRAM and L1.
     config.l1_input_shard_width = input.shard_spec()->shape[1];
-
-    log_info(
-        tt::LogType::LogAlways,
-        "Shard specs: output_shard=[{}x{}], l1_input_shard=[{}x{}]",
-        config.output_shard_height,
-        config.output_shard_width,
-        config.l1_input_shard_height,
-        config.l1_input_shard_width);
 
     // Core information
     // Output cores are where kernels run - always use output shard grid
@@ -132,21 +216,6 @@ ConvertToHwcConfig ConvertToHwcConfig::create_from_tensors(const Tensor& input, 
         std::nullopt,
         input.shard_spec()->orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
 
-    log_info(
-        tt::LogType::LogAlways,
-        "Core info: l1_input_cores.size()={}, dram_input_cores.size()={}, output_cores.size()={}",
-        config.l1_input_cores.size(),
-        config.dram_input_cores.size(),
-        config.output_cores.size());
-    log_info(tt::LogType::LogAlways, "L1 input cores:");
-    for (size_t i = 0; i < config.l1_input_cores.size(); i++) {
-        log_info(tt::LogType::LogAlways, "  [{}]: ({}, {})", i, config.l1_input_cores[i].x, config.l1_input_cores[i].y);
-    }
-    log_info(tt::LogType::LogAlways, "Output cores:");
-    for (size_t i = 0; i < config.output_cores.size(); i++) {
-        log_info(tt::LogType::LogAlways, "  [{}]: ({}, {})", i, config.output_cores[i].x, config.output_cores[i].y);
-    }
-
     // Gather output shard specifications (for the intermediate gather result)
     // The gather operation transforms from [B, C, HW] to [C, B, HW] layout
     // So the gather output has height=C and width=B*HW_effective/num_output_cores
@@ -155,21 +224,22 @@ ConvertToHwcConfig ConvertToHwcConfig::create_from_tensors(const Tensor& input, 
     // Set per-destination-core gather width to the padded B*HW per output core (output shard height)
     config.gather_l1_output_shard_width = config.output_shard_height;
 
-    log_info(
-        tt::LogType::LogAlways,
-        "Gather shard specs: gather_l1_output_shard=[{}x{}] (C={}, B*HW_effective/num_cores={}*{}/{})",
-        config.gather_l1_output_shard_height,
-        config.gather_l1_output_shard_width,
-        config.input_channels,
-        config.batch_size,
-        config.gather_l1_output_shard_width * config.output_cores.size() / std::max(1u, config.batch_size),
-        config.output_cores.size());
-
     // Alignment requirements
     config.alignment_elements = compute_alignment_requirement_in_elements(output);
 
-    log_info(tt::LogType::LogAlways, "Alignment: alignment_elements={}", config.alignment_elements);
-    log_info(tt::LogType::LogAlways, "=== End ConvertToHwcConfig ===");
+    log_info(
+        tt::LogType::LogAlways,
+        "convert_to_hwc config: B={}, C={}, HW={}, input_in_dram={}, in_cores={}, out_cores={}, out_shard=[{}x{}], "
+        "gather_width={}",
+        config.batch_size,
+        config.input_channels,
+        config.hw_total,
+        config.is_input_in_dram,
+        config.l1_input_cores.size(),
+        config.output_cores.size(),
+        config.output_shard_height,
+        config.output_shard_width,
+        config.gather_l1_output_shard_width);
 
     return config;
 }
@@ -224,22 +294,9 @@ CircularBufferHandles setup_circular_buffers(
     const tt::DataFormat intermediary_format = tt::DataFormat::Float16_b;
     const uint32_t intermediary_tile_size = tt::tile_size(intermediary_format);
 
-    log_info(tt::LogType::LogAlways, "=== setup_circular_buffers ===");
-    log_info(
-        tt::LogType::LogAlways,
-        "intermediary_format={}, intermediary_tile_size={}",
-        (uint32_t)intermediary_format,
-        intermediary_tile_size);
-
     // CB in (full input)
     const uint32_t cb_in_page_size = config.l1_input_shard_width * config.element_size_bytes;
     const uint32_t cb_in_total_size = config.l1_input_shard_height * cb_in_page_size;
-    log_info(
-        tt::LogType::LogAlways,
-        "CB_IN: page_size={}, total_size={}, buffer={}",
-        cb_in_page_size,
-        cb_in_total_size,
-        (void*)(config.is_input_in_dram ? nullptr : input.buffer()));
     auto cb_in = create_circular_buffer(
         program,
         core_grid,
@@ -252,35 +309,18 @@ CircularBufferHandles setup_circular_buffers(
     // CB in batch - using block_size_width to ensure alignment with transfer blocks
     const uint32_t cb_in_batch_page_size = block_size_width * config.element_size_bytes;
     const uint32_t cb_in_batch_total_size = config.gather_l1_output_shard_height * cb_in_batch_page_size;
-    log_info(
-        tt::LogType::LogAlways,
-        "CB_IN_BATCH: page_size={}, total_size={} (using block_size_width={}, height={})",
-        cb_in_batch_page_size,
-        cb_in_batch_total_size,
-        block_size_width,
-        config.gather_l1_output_shard_height);
     create_circular_buffer(
         program, core_grid, CBIndex::CB_IN_BATCH, cb_in_batch_total_size, cb_in_batch_page_size, config.input_format);
 
     // CB in tiled
     const uint32_t cb_in_tiled_page_size = intermediary_tile_size;
     const uint32_t cb_in_tiled_total_size = tt::div_up(block_size_width, TILE_WIDTH) * intermediary_tile_size;
-    log_info(
-        tt::LogType::LogAlways,
-        "CB_IN_TILED: page_size={}, total_size={}",
-        cb_in_tiled_page_size,
-        cb_in_tiled_total_size);
     create_circular_buffer(
         program, core_grid, CBIndex::CB_IN_TILED, cb_in_tiled_total_size, cb_in_tiled_page_size, intermediary_format);
 
     // CB in transpose buffers
     const uint32_t cb_in_transpose_page_size = intermediary_tile_size;
     const uint32_t cb_in_transpose_total_size = tt::div_up(block_size_width, TILE_WIDTH) * intermediary_tile_size;
-    log_info(
-        tt::LogType::LogAlways,
-        "CB_IN_TRANSPOSE_0/1: page_size={}, total_size={}",
-        cb_in_transpose_page_size,
-        cb_in_transpose_total_size);
     create_circular_buffer(
         program,
         core_grid,
@@ -299,375 +339,13 @@ CircularBufferHandles setup_circular_buffers(
     // CB out
     const uint32_t cb_out_page_size = config.output_shard_width * config.element_size_bytes;
     const uint32_t cb_out_total_size = cb_out_page_size * config.output_shard_height;  // same size as input
-    log_info(
-        tt::LogType::LogAlways,
-        "CB_OUT: page_size={}, total_size={}, buffer={}",
-        cb_out_page_size,
-        cb_out_total_size,
-        (void*)output.buffer());
     auto cb_out = create_circular_buffer(
         program, core_grid, CBIndex::CB_OUT, cb_out_total_size, cb_out_page_size, config.input_format, output.buffer());
-
-    log_info(tt::LogType::LogAlways, "=== End setup_circular_buffers ===");
 
     return {cb_in, cb_out};
 }
 
-// Generate individual transfers for a single destination core
-std::map<uint32_t, std::vector<TransferData>> generate_transfers_for_output_core(
-    uint32_t dst_core,
-    uint32_t batch_size,
-    uint32_t channels,
-    uint32_t hw_total,
-    uint32_t input_num_cores,
-    uint32_t output_num_cores,
-    uint32_t element_size_bytes,
-    uint32_t padded_shard_width) {
-    std::map<uint32_t, std::vector<TransferData>> transfers_by_src;
-
-    // Helper function to get actual HW count for a given core (first cores get full shard, last may be partial)
-    auto get_hw_count_for_core = [&](uint32_t core_idx) -> uint32_t {
-        uint32_t remaining_hw = hw_total - (core_idx * padded_shard_width);
-        return std::min(padded_shard_width, remaining_hw);
-    };
-
-    // Check if we have uneven sharding (total logical HW < total padded capacity)
-    uint32_t total_padded_capacity = input_num_cores * padded_shard_width;
-    bool is_uneven_sharding = hw_total < total_padded_capacity;
-
-    uint32_t dst_bhw_start, dst_bhw_end;
-
-    if (is_uneven_sharding && batch_size == 1) {
-        // For uneven sharding with B=1, we need to process the full padded shard width
-        // to include padding for alignment purposes
-        dst_bhw_start = dst_core * padded_shard_width;
-        dst_bhw_end = (dst_core + 1) * padded_shard_width;
-    } else {
-        // For even sharding or B>1, use uniform distribution
-        uint32_t bhw_total = batch_size * hw_total;
-        uint32_t bhw_per_output_core = bhw_total / output_num_cores;
-        dst_bhw_start = dst_core * bhw_per_output_core;
-        dst_bhw_end = std::min(dst_bhw_start + bhw_per_output_core, bhw_total);
-    }
-
-    for (uint32_t bhw_idx = dst_bhw_start; bhw_idx < dst_bhw_end; bhw_idx++) {
-        uint32_t src_core, src_hw_offset, batch_id, hw_idx;
-
-        if (is_uneven_sharding && batch_size == 1) {
-            // For uneven sharding with B=1, map directly to padded shard layout
-            batch_id = 0;                             // B=1
-            hw_idx = bhw_idx;                         // Direct mapping since we're processing padded shard width
-            src_core = dst_core;                      // Same core as destination
-            src_hw_offset = bhw_idx - dst_bhw_start;  // Offset within the padded shard
-        } else {
-            // Convert BHW index back to (batch_id, hw_idx)
-            batch_id = bhw_idx / hw_total;
-            hw_idx = bhw_idx % hw_total;
-
-            // Find which input core has this hw_idx data
-            src_core = hw_idx / padded_shard_width;
-            src_hw_offset = hw_idx % padded_shard_width;
-
-            // Skip if this hw_idx exceeds the logical HW range for this core
-            uint32_t src_core_hw_count = get_hw_count_for_core(src_core);
-            if (src_hw_offset >= src_core_hw_count) {
-                continue;  // Skip invalid logical indices
-            }
-        }
-
-        // Generate one transfer per C and B (stick-by-stick)
-        for (uint32_t c_idx = 0; c_idx < channels; c_idx++) {
-            // Calculate source offset: [B*C, padded_shard_width] layout (interleaved batch-channel)
-            // Each core physically has padded_shard_width elements, but logically may have fewer
-            uint32_t src_offset =
-                (batch_id * channels * padded_shard_width + src_hw_offset * channels + c_idx) * element_size_bytes;
-
-            // Calculate destination offset: [1, C, BHW_per_output_core] layout
-            uint32_t dst_bhw_offset = bhw_idx - dst_bhw_start;
-            uint32_t dst_offset = (dst_bhw_offset * channels + c_idx) * element_size_bytes;
-
-            // Group by source core
-            if (transfers_by_src.find(src_core) == transfers_by_src.end()) {
-                transfers_by_src[src_core] = std::vector<TransferData>();
-            }
-
-            // Create one transfer per element (C and B combination)
-            transfers_by_src[src_core].emplace_back(src_offset, dst_offset, element_size_bytes);
-        }
-    }
-
-    // Log transfers before optimization
-    log_info(tt::LogType::LogAlways, "BEFORE OPTIMIZATION - dst_core={}, total transfers by src:", dst_core);
-    for (const auto& [src_core, transfer_list] : transfers_by_src) {
-        log_info(tt::LogType::LogAlways, "  src_core={}, num_transfers={}", src_core, transfer_list.size());
-        for (size_t i = 0; i < transfer_list.size() && i < 10; i++) {  // Limit to first 10 for readability
-            const auto& t = transfer_list[i];
-            log_info(
-                tt::LogType::LogAlways,
-                "    [{}]: src_offset={}, dst_offset={}, size={}",
-                i,
-                t.src_offset,
-                t.dst_offset,
-                t.size);
-        }
-        if (transfer_list.size() > 10) {
-            log_info(tt::LogType::LogAlways, "    ... ({} more transfers)", transfer_list.size() - 10);
-        }
-    }
-
-    return transfers_by_src;
-}
-
-// Optimize transfers using batch-aware grouping
-std::vector<BatchTransferInstruction> optimize_transfers(
-    const std::map<uint32_t, std::vector<TransferData>>& transfers_by_src,
-    uint32_t dst_core,
-    uint32_t batch_size,
-    uint32_t channels,
-    uint32_t hw_total,
-    uint32_t input_num_cores,
-    uint32_t element_size_bytes,
-    const std::vector<CoreCoord>& input_cores,
-    const std::vector<CoreCoord>& output_cores,
-    uint32_t padded_shard_width) {
-    std::vector<BatchTransferInstruction> instructions;
-
-    for (const auto& [src_core, transfer_list] : transfers_by_src) {
-        // Sort by source offset
-        std::vector<TransferData> sorted_transfers = transfer_list;
-        std::sort(sorted_transfers.begin(), sorted_transfers.end(), [](const TransferData& a, const TransferData& b) {
-            return a.src_offset < b.src_offset;
-        });
-
-        if (sorted_transfers.empty()) {
-            continue;
-        }
-
-        // Group transfers by batch to ensure at least one transfer per batch
-        std::map<uint32_t, std::vector<TransferData>> transfers_by_batch;
-        uint32_t batch_size_bytes = channels * padded_shard_width * element_size_bytes;
-
-        for (const TransferData& transfer : sorted_transfers) {
-            // Determine which batch this transfer belongs to
-            // The src_offset was calculated as: batch_id * channels * padded_shard_width + src_hw_offset * channels
-            uint32_t batch_id = transfer.src_offset / batch_size_bytes;
-            transfers_by_batch[batch_id].push_back(transfer);
-        }
-
-        // Process each batch separately to ensure at least one transfer per batch
-        for (auto& [batch_id, batch_transfers] : transfers_by_batch) {
-            // Group consecutive transfers within this batch
-            TransferData current_transfer = batch_transfers[0];
-
-            for (size_t i = 1; i < batch_transfers.size(); i++) {
-                const TransferData& next_transfer = batch_transfers[i];
-
-                // Check if we can combine transfers (within same batch)
-                if (next_transfer.src_offset == current_transfer.src_offset + current_transfer.size &&
-                    next_transfer.dst_offset == current_transfer.dst_offset + current_transfer.size) {
-                    current_transfer.size += next_transfer.size;
-                } else {
-                    // Emit current transfer and start new one
-                    instructions.emplace_back(
-                        src_core,
-                        dst_core,
-                        input_cores[src_core],
-                        output_cores[dst_core],
-                        current_transfer.src_offset,
-                        current_transfer.dst_offset,
-                        current_transfer.size,
-                        0);  // bank_id = 0 for L1 transfers
-                    current_transfer = next_transfer;
-                }
-            }
-
-            // Emit final transfer for this batch
-            instructions.emplace_back(
-                src_core,
-                dst_core,
-                input_cores[src_core],
-                output_cores[dst_core],
-                current_transfer.src_offset,
-                current_transfer.dst_offset,
-                current_transfer.size,
-                0);  // bank_id = 0 for L1 transfers
-        }
-    }
-
-    // Log transfers after optimization
-    log_info(
-        tt::LogType::LogAlways,
-        "AFTER OPTIMIZATION - dst_core={}, final instructions={}",
-        dst_core,
-        instructions.size());
-    for (size_t i = 0; i < instructions.size() && i < 20; i++) {  // Limit to first 20 for readability
-        const auto& instr = instructions[i];
-        log_info(
-            tt::LogType::LogAlways,
-            "  [{}]: src_core={}, src_offset={}, dst_offset={}, size={}",
-            i,
-            instr.src_core_idx,
-            instr.src_offset,
-            instr.dst_offset,
-            instr.transfer_size);
-    }
-    if (instructions.size() > 20) {
-        log_info(tt::LogType::LogAlways, "  ... ({} more instructions)", instructions.size() - 20);
-    }
-
-    return instructions;
-}
-
-void populate_dram_bank_ids(
-    std::vector<BatchTransferInstruction>& transfers,
-    const std::vector<CoreCoord>& dram_cores,
-    const tt::tt_metal::BufferType& dram_buffer_type,
-    tt::tt_metal::IDevice* device) {
-    for (auto& transfer : transfers) {
-        // Map source core index to DRAM core and get bank ID
-        TT_FATAL(
-            transfer.src_core_idx < dram_cores.size(),
-            "Source core index {} exceeds available DRAM cores {}",
-            transfer.src_core_idx,
-            dram_cores.size());
-
-        transfer.src_core_coord = dram_cores[transfer.src_core_idx];
-
-        // Get bank ID for the DRAM core
-        transfer.bank_id =
-            device->allocator()->get_bank_ids_from_logical_core(dram_buffer_type, dram_cores[transfer.src_core_idx])[0];
-    }
-}
-
-// Log transfer generation parameters and results
-void log_transfer_generation_info(
-    uint32_t batch_size,
-    uint32_t channels,
-    uint32_t hw_total,
-    uint32_t input_num_cores,
-    uint32_t output_num_cores,
-    const std::vector<CoreCoord>& input_cores,
-    const std::vector<CoreCoord>& output_cores,
-    const std::vector<BatchTransferInstruction>& instructions) {
-    uint32_t hw_per_input_core = hw_total / input_num_cores;
-    uint32_t bhw_total = batch_size * hw_total;
-    uint32_t bhw_per_output_core = bhw_total / output_num_cores;
-
-    log_info(
-        tt::LogType::LogAlways,
-        "generate_batch_redistribution_transfers: B={}, C={}, HW={}, input_cores={}, output_cores={}",
-        batch_size,
-        channels,
-        hw_total,
-        input_num_cores,
-        output_num_cores);
-    log_info(
-        tt::LogType::LogAlways,
-        "  hw_per_input_core={}, bhw_per_output_core={}",
-        hw_per_input_core,
-        bhw_per_output_core);
-
-    // Log core coordinates for debugging
-    log_info(tt::LogType::LogAlways, "Input cores:");
-    for (size_t i = 0; i < input_cores.size(); i++) {
-        log_info(tt::LogType::LogAlways, "  [{}]: ({}, {})", i, input_cores[i].x, input_cores[i].y);
-    }
-    log_info(tt::LogType::LogAlways, "Output cores:");
-    for (size_t i = 0; i < output_cores.size(); i++) {
-        log_info(tt::LogType::LogAlways, "  [{}]: ({}, {})", i, output_cores[i].x, output_cores[i].y);
-    }
-
-    log_info(tt::LogType::LogAlways, "Generated {} batch transfer instructions", instructions.size());
-    for (size_t i = 0; i < instructions.size(); i++) {
-        const auto& instr = instructions[i];
-        log_info(
-            tt::LogType::LogAlways,
-            "  {}: src_core={}({},{}), dst_core={}({},{}), src_offset={}, dst_offset={}, size={}",
-            i,
-            instr.src_core_idx,
-            instr.src_core_coord.x,
-            instr.src_core_coord.y,
-            instr.dst_core_idx,
-            instr.dst_core_coord.x,
-            instr.dst_core_coord.y,
-            instr.src_offset,
-            instr.dst_offset,
-            instr.transfer_size);
-    }
-}
-
-std::vector<BatchTransferInstruction> generate_batch_redistribution_transfers(
-    uint32_t batch_size,
-    uint32_t channels,
-    uint32_t hw_total,
-    const std::vector<CoreCoord>& input_cores,
-    const std::vector<CoreCoord>& output_cores,
-    uint32_t element_size_bytes,
-    uint32_t padded_shard_width) {
-    std::vector<BatchTransferInstruction> instructions;
-
-    uint32_t input_num_cores = input_cores.size();
-    uint32_t output_num_cores = output_cores.size();
-
-    // For each output core, generate and optimize transfers
-    for (uint32_t dst_core = 0; dst_core < output_num_cores; dst_core++) {
-        // Generate individual transfers for this destination core
-        auto transfers_by_src = generate_transfers_for_output_core(
-            dst_core,
-            batch_size,
-            channels,
-            hw_total,
-            input_num_cores,
-            output_num_cores,
-            element_size_bytes,
-            padded_shard_width);
-
-        // Optimize transfers using batch-aware grouping
-        auto core_instructions = optimize_transfers(
-            transfers_by_src,
-            dst_core,
-            batch_size,
-            channels,
-            hw_total,
-            input_num_cores,
-            element_size_bytes,
-            input_cores,
-            output_cores,
-            padded_shard_width);
-
-        // Add to overall instruction list
-        instructions.insert(instructions.end(), core_instructions.begin(), core_instructions.end());
-    }
-
-    // Log transfer generation information
-    log_transfer_generation_info(
-        batch_size, channels, hw_total, input_num_cores, output_num_cores, input_cores, output_cores, instructions);
-
-    return instructions;
-}
-
-template <typename T>
-std::vector<std::vector<T>> group_by_destination_core(const std::vector<T>& transfers, int num_output_cores) {
-    std::vector<std::vector<T>> output(num_output_cores);
-    for (const auto& transfer : transfers) {
-        output[transfer.dst_core_idx].push_back(transfer);
-    }
-    // Ensure transfers for each destination core are ordered by destination offset
-    // This guarantees segments are consumed in BHW order across source cores.
-    for (auto& per_core_transfers : output) {
-        std::sort(per_core_transfers.begin(), per_core_transfers.end(), [](const T& a, const T& b) {
-            if (a.dst_offset == b.dst_offset) {
-                // Stable tie-breaker to keep deterministic order across sources
-                if (a.src_core_idx == b.src_core_idx) {
-                    return a.src_offset < b.src_offset;
-                }
-                return a.src_core_idx < b.src_core_idx;
-            }
-            return a.dst_offset < b.dst_offset;
-        });
-    }
-    return output;
-}
+// (Removed) Legacy redistribution and grouping helpers (unused)
 
 uint32_t compute_alignment_requirement_in_elements(const Tensor& input_tensor) {
     const uint32_t element_size_bytes = input_tensor.element_size();
@@ -689,48 +367,12 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
     uint32_t effective_hw_for_gather = calculate_effective_hw_for_sharding(
         config.hw_total, config.batch_size, config.l1_input_shard_width, static_cast<uint32_t>(in_cores.size()));
 
-    // Gather transfers: FROM input cores TO output cores
-    // Override per-output-core width to match padded output shard height for uneven sharding
-    const auto gather_transfers = convert_to_hwc::detail::precompute_gather_transfers(
-        config.batch_size,
-        config.input_channels,
-        effective_hw_for_gather,
-        in_cores,
-        config.output_cores,
-        config.gather_l1_output_shard_width);
-    // Per-destination-core gather width (columns per core for this block)
     const uint32_t block_size_width = config.gather_l1_output_shard_width;
 
     // Setup circular buffers after block_size_width is calculated - use output cores where kernels run
     auto cb_handles = setup_circular_buffers(program, config.output_core_grid, config, a, output, block_size_width);
-    const auto blocked_result = convert_to_hwc::detail::group_transfers_by_output_column_blocks(
-        gather_transfers,
-        config.batch_size,
-        config.input_channels,
-        effective_hw_for_gather,
-        in_cores,
-        config.output_cores.size(),
-        a.element_size(),
-        block_size_width,
-        block_size_width);
-
-    auto blocked_gather_transfers = std::move(blocked_result.blocked_transfers);
-    const uint32_t num_blocks = blocked_result.num_logical_blocks;
-    log_info(
-        tt::LogType::LogAlways,
-        "num_blocks={} (logical blocks), block_size_width={}, transfer_groups={}",
-        num_blocks,
-        block_size_width,
-        blocked_gather_transfers.size());
-
-    // Split transfers by destination core first, then apply coalescing per-core
-    auto per_core_blocked_gather_transfers =
-        convert_to_hwc::detail::split_by_destination_core(blocked_gather_transfers, config.output_cores.size());
-
-    // Apply transfer coalescing optimization to reduce NOC operations per-core
-    for (auto& core_transfers : per_core_blocked_gather_transfers) {
-        core_transfers = convert_to_hwc::detail::coalesce_contiguous_transfers(core_transfers);
-    }
+    auto grouping = group_and_coalesce_transfers(config, in_cores, effective_hw_for_gather, block_size_width);
+    const uint32_t num_blocks = grouping.num_blocks;
 
     // Create converter for serialized transfer source addressing:
     // - L1 input: map logical -> worker core (x,y)
@@ -755,148 +397,42 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
     }
 
     // Serialize blocked transfer groups for each core
-    std::vector<std::vector<uint32_t>> per_core_serialized_transfers(config.output_cores.size());
-
-    for (int core_idx = 0; core_idx < config.output_cores.size(); core_idx++) {
-        log_info(tt::LogType::LogAlways, "--- CORE {} ---", core_idx);
-        const auto& core_transfers = per_core_blocked_gather_transfers[core_idx];
-
-        for (const auto& blocked_gather_transfer : core_transfers) {
-            log_info(tt::LogType::LogAlways, "Blocked groups: {}:", blocked_gather_transfer);
-            for (const auto& transfer : blocked_gather_transfer.transfers) {
-                log_info(tt::LogType::LogAlways, " - {}", transfer);
-            }
-        }
-
-        // Serialize this core's blocked transfer groups
-        per_core_serialized_transfers[core_idx] =
-            convert_to_hwc::detail::serialize_blocked_transfer_groups(core_transfers, in_cores, logical_to_addr_id);
-
-        log_info(
-            tt::LogType::LogAlways,
-            "Core {} serialized {} uint32_t values: {}",
-            core_idx,
-            per_core_serialized_transfers[core_idx].size(),
-            per_core_serialized_transfers[core_idx]);
-    }
-
-    // Generate transfer instructions using the same effective HW
-    uint32_t effective_hw_for_transfers = effective_hw_for_gather;
-    auto transfers = generate_batch_redistribution_transfers(
-        config.batch_size,
-        config.input_channels,
-        effective_hw_for_transfers,
-        config.l1_input_cores,
-        config.output_cores,
-        config.element_size_bytes,
-        config.l1_input_shard_width);
+    auto per_core_serialized_transfers =
+        serialize_transfers_per_core(grouping.per_core_groups, in_cores, logical_to_addr_id);
 
     // Calculate tiles based on block width (which becomes input to compute pipeline)
-    const uint32_t total_tiles_per_block = tt::div_up(block_size_width, TILE_HEIGHT);  // assumes C < 32
-    const uint32_t total_tiles_per_core = total_tiles_per_block * num_blocks;
+    const BlockTilingParams tiling = compute_block_tiling_params(config, block_size_width, num_blocks);
 
     // Each writer should process half of the tiles PER BLOCK
-    const uint32_t tiles_per_block_writer0 = tt::div_up(total_tiles_per_block, 2);
-    const uint32_t tiles_per_block_writer1 = total_tiles_per_block - tiles_per_block_writer0;
+    const uint32_t tiles_per_block_writer0 = tiling.tiles_per_block_writer0;
+    const uint32_t tiles_per_block_writer1 = tiling.tiles_per_block_writer1;
 
-    // Validation: ensure tiles divide evenly across blocks
+    // Ensure tiles divide evenly across blocks
     TT_FATAL(
-        total_tiles_per_core % num_blocks == 0,
+        tiling.total_tiles_per_core % num_blocks == 0,
         "total_tiles_per_core={} must be divisible by num_blocks={}",
-        total_tiles_per_core,
+        tiling.total_tiles_per_core,
         num_blocks);
-    uint32_t output_stride_sticks = TILE_WIDTH;
-
-    // If there is only one HW tile we shouldn't stride the output copies because only one writer is working
-    const uint32_t output_addr_stride =
-        block_size_width != TILE_HEIGHT ? output_stride_sticks * config.output_shard_width * config.element_size_bytes
-                                        : 0;
-
-    // Writer kernel processes gather output blocks - height is the number of sticks per block
-    const uint32_t num_sticks_block_size_kernel_0 = config.gather_l1_output_shard_height;
-
-    // This should be exactly the same as CB_IN_BATCH total size
-    const uint32_t block_size_bytes =
-        config.gather_l1_output_shard_height * block_size_width * config.element_size_bytes;
-
-    log_info(tt::LogType::LogAlways, "=== KERNEL COMPILE TIME ARGS ===");
-    log_info(
-        tt::LogType::LogAlways,
-        "Total tiles per core: {} (block_width={} / TILE_HEIGHT={})",
-        total_tiles_per_core,
-        block_size_width,
-        TILE_HEIGHT);
-    log_info(
-        tt::LogType::LogAlways,
-        "Num blocks: {}, Tiles per block: {} (total_tiles_per_core / num_blocks)",
-        num_blocks,
-        total_tiles_per_block);
-    log_info(
-        tt::LogType::LogAlways,
-        "Writer0 tiles per block: {}, Writer1 tiles per block: {}",
-        tiles_per_block_writer0,
-        tiles_per_block_writer1);
-    log_info(
-        tt::LogType::LogAlways,
-        "Writer num_output_channels_padded arg: {} (output_shard_width - padded to min 8)",
-        config.output_shard_width);
-    log_info(
-        tt::LogType::LogAlways,
-        "Writer input_block_size_sticks_per_core: {} (gather_l1_output_shard_height)",
-        num_sticks_block_size_kernel_0);
-    log_info(
-        tt::LogType::LogAlways, "Compute total_tiles_per_block: {} (tiles processed per block)", total_tiles_per_block);
-    log_info(
-        tt::LogType::LogAlways,
-        "Compute total_sticks_per_block: {} (gather_l1_output_shard_height)",
-        config.gather_l1_output_shard_height);
-    log_info(
-        tt::LogType::LogAlways,
-        "Setting block_size_bytes={} (same as CB_IN_BATCH total size for alignment)",
-        block_size_bytes);
-
-    std::vector<uint32_t> writer_compile_time_args0 = {
-        CBIndex::CB_IN,
-        CBIndex::CB_IN_BATCH,
+    auto writer_compile_time_args0 = make_writer_compile_args(
+        /*is_reader=*/true,
         CBIndex::CB_IN_TRANSPOSE_0,
-        CBIndex::CB_OUT,
-        config.output_shard_width,  // output channels (padded to minimum 8)
+        config,
+        tiling,
         tiles_per_block_writer0,
-        output_stride_sticks,
-        0,
-        config.element_size_bytes,
-        config.is_input_in_dram,
-        true,  // is_reader - this writer kernel acts as the reader
-        num_sticks_block_size_kernel_0,
-        num_blocks,
-        output_addr_stride,
-        block_size_bytes};
+        /*initial_write_stick_offset=*/0,
+        num_blocks);
 
-    std::vector<uint32_t> writer_compile_time_args1 = {
-        CBIndex::CB_IN,
-        CBIndex::CB_IN_BATCH,
+    auto writer_compile_time_args1 = make_writer_compile_args(
+        /*is_reader=*/false,
         CBIndex::CB_IN_TRANSPOSE_1,
-        CBIndex::CB_OUT,
-        config.output_shard_width,  // output channels (padded to minimum 8)
+        config,
+        tiling,
         tiles_per_block_writer1,
-        output_stride_sticks,
-        output_stride_sticks,
-        config.element_size_bytes,
-        config.is_input_in_dram,
-        false,  // is_reader - this writer kernel does not read input
-        0,      // num_sticks_block_size_kernel_1 - unused
-        num_blocks,
-        output_addr_stride,
-        block_size_bytes};
+        /*initial_write_stick_offset=*/TILE_WIDTH,
+        num_blocks);
 
-    std::vector<uint32_t> compute_compile_time_args = {
-        CBIndex::CB_IN_BATCH,
-        CBIndex::CB_IN_TILED,
-        CBIndex::CB_IN_TRANSPOSE_0,
-        CBIndex::CB_IN_TRANSPOSE_1,
-        total_tiles_per_block,                 // tiles per block, not total tiles
-        config.gather_l1_output_shard_height,  // total_sticks_per_block - height of gather output
-        num_blocks};
+    auto compute_compile_time_args =
+        make_compute_compile_args(tiling.total_tiles_per_block, config.gather_l1_output_shard_height, num_blocks);
 
     auto writer_kernel_id0 = tt::tt_metal::CreateKernel(
         program,
