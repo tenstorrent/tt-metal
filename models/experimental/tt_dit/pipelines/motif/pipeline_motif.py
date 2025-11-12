@@ -58,6 +58,7 @@ class MotifPipeline:
         num_links: int,
         height: int = 1024,
         width: int = 1024,
+        model_checkpoint_path: str = "Motif-Technologies/Motif-Image-6B-Preview",
     ) -> None:
         self.timing_collector = None
 
@@ -116,7 +117,7 @@ class MotifPipeline:
 
         logger.info("loading models...")
         checkpoint_path = huggingface_hub.hf_hub_download(
-            repo_id="Motif-Technologies/Motif-Image-6B-Preview",
+            repo_id=model_checkpoint_path,
             filename="motif_image_preview.bin",
             subfolder="checkpoints",
             revision="update_new_ckpt",
@@ -242,10 +243,11 @@ class MotifPipeline:
         topology=ttnn.Topology.Linear,
         width=1024,
         height=1024,
+        model_checkpoint_path="Motif-Technologies/Motif-Image-6B-Preview",
     ):
         default_config = {
             (2, 4): {
-                "cfg_config": (2, 1),
+                "cfg_config": (2, 0),
                 "sp": (2, 0),
                 "tp": (2, 1),
                 "encoder_tp": (4, 1),
@@ -298,6 +300,7 @@ class MotifPipeline:
             num_links=num_links,
             width=width,
             height=height,
+            model_checkpoint_path=model_checkpoint_path,
         )
 
         return pipeline
