@@ -6,6 +6,7 @@
 
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/tile_move_copy.h"
+#include <tools/profiler/kernel_profiler.hpp>
 
 namespace NAMESPACE {
 
@@ -42,22 +43,26 @@ void MAIN {
     uint32_t in0_index = 0;
     uint32_t in1_index = 0;
     // inner dim that we accumulate is the inner dim of in0/in1, which is in0_block_w
-    for (uint32_t inner_dim_idx = 0; inner_dim_idx < in0_block_w; ++inner_dim_idx) {
-        // matmul outer product of (out_subblock_h x out_subblock_w) tiles that fill dst
-        // accumulation is done by iterating matmul_block across inner dim
-        // in0_block_w is passed as inner dim (kt) to matmul_block, internally used to stride in0
-        matmul_block(
-            in0_cb_id,
-            in1_cb_id,
-            in0_index,
-            in1_index,
-            dst_index,
-            in1_transpose_tile,
-            out_subblock_w,
-            out_subblock_h,
-            in0_block_w);
-        in0_index++;               // stride right by 1
-        in1_index += in1_block_w;  // stride down by 1
+
+    {
+        DeviceZoneScopedN("matmul_block");
+        for (uint32_t inner_dim_idx = 0; inner_dim_idx < in0_block_w; ++inner_dim_idx) {
+            // matmul outer product of (out_subblock_h x out_subblock_w) tiles that fill dst
+            // accumulation is done by iterating matmul_block across inner dim
+            // in0_block_w is passed as inner dim (kt) to matmul_block, internally used to stride in0
+            matmul_block(
+                in0_cb_id,
+                in1_cb_id,
+                in0_index,
+                in1_index,
+                dst_index,
+                in1_transpose_tile,
+                out_subblock_w,
+                out_subblock_h,
+                in0_block_w);
+            in0_index++;               // stride right by 1
+            in1_index += in1_block_w;  // stride down by 1
+        }
     }
 
     tile_regs_commit();
