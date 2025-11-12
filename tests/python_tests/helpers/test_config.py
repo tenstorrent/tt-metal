@@ -5,7 +5,7 @@ import os
 from enum import Enum
 from pathlib import Path
 
-from .chip_architecture import get_chip_architecture
+from .chip_architecture import ChipArchitecture, get_chip_architecture
 from .data_format_inference import data_formats, is_format_combination_outlier
 from .device import (
     BootMode,
@@ -28,6 +28,7 @@ from .llk_params import (
     StochasticRounding,
     Tilize,
     Transpose,
+    UnpackerEngine,
     format_tile_sizes,
 )
 from .matmul_sweep import validate_tile_dimensions
@@ -134,6 +135,25 @@ def generate_build_header(test_config):
         f"constexpr bool UNPACK_TRANSPOSE_WITHIN_FACE = {unpack_transpose_within_face.value};"
     )
 
+    # ******** QUASAR specific ********
+    if get_chip_architecture() == ChipArchitecture.QUASAR:
+        # Implied math format
+        implied_math_format = test_config.get(
+            "implied_math_format", ImpliedMathFormat.No
+        )
+        header_content.append(
+            f"constexpr bool IMPLIED_MATH_FORMAT = {implied_math_format.value};"
+        )
+
+        # Select unpacker
+        unpacker_engine_sel = test_config.get(
+            "unpacker_engine_sel", UnpackerEngine.UnpA
+        )
+        header_content.append(
+            f"constexpr uint UNPACKER_ENGINE_SEL = p_unpacr::{unpacker_engine_sel.value};"
+        )
+    # *********************************
+
     # Throttle level
     throttle = test_config.get("throttle", 0)
     header_content.append(f"constexpr int THROTTLE_LEVEL = {throttle};")
@@ -219,12 +239,6 @@ def generate_build_header(test_config):
 
     header_content.append(f"constexpr bool PARTIAL_FACE_PACK = {partial_face_A};")
     header_content.append(f"constexpr bool PARTIAL_FACE_MATH = {partial_face_B};")
-
-    # Implied math format
-    implied_math_format = test_config.get("implied_math_format", ImpliedMathFormat.No)
-    header_content.append(
-        f"constexpr bool IMPLIED_MATH_FORMAT = {implied_math_format.value};"
-    )
 
     # Number of faces - support separate configurations for A and B
     num_faces = test_config.get("num_faces", 4)

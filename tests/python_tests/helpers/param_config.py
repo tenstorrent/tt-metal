@@ -325,3 +325,37 @@ def get_max_dst_index(dest_sync: DestSync, dest_acc: bool, result_tiles: int) ->
         DestSync.Full: 16 if not dest_acc else 8,
     }
     return max(DEST_SYNC_TILE_LIMITS[dest_sync] - result_tiles, 0)
+
+
+def generate_unary_input_dimensions(dest_acc, dest_sync=DestSync.Half):
+    """Generate all possible input dimensions for unary operations.
+    These dimensions are determined by the number of tiles that can fit into dest, which is determined by dest_sync and dest_acc.
+    The generated input dimensions should ensure that all of the data fits into dest without any overflow when running unary operations.
+
+    Key rules:
+    1. When DestSync.Half:  max_tiles_in_dest=8 (if dest is 16bit) or max_tiles_in_dest=4 (if dest is 32bit)
+    2. When DestSync.Full:  max_tiles_in_dest=16 (if dest is 16bit) or max_tiles_in_dest=8 (if dest is 32bit)
+
+    Args:
+        dest_acc: Dest 16/32 bit mode
+        dest_sync: DestSync mode. Defaults to DestSync.Half
+
+    Returns:
+        List of input dimensions
+    """
+
+    DEST_SYNC_TILE_LIMITS = {
+        DestSync.Half: 8,
+        DestSync.Full: 16,
+    }
+    capacity_divisor = 2 if dest_acc == DestAccumulation.Yes else 1
+    max_tiles_in_dest = DEST_SYNC_TILE_LIMITS[dest_sync] // capacity_divisor
+
+    num_tile_rows = 32
+    num_tile_cols = 32
+
+    return [
+        [row * num_tile_rows, column * num_tile_cols]
+        for row in range(1, max_tiles_in_dest + 1)
+        for column in range(1, (max_tiles_in_dest // row) + 1)
+    ]

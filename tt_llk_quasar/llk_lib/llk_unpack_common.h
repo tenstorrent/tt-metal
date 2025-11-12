@@ -19,14 +19,14 @@ inline void _llk_unpack_hw_configure_(const tdma_descriptor_t& tdma_desc_src)
 {
     static_assert(
         (UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B) || (UNP_SEL == p_unpacr::UNP_S) || (UNP_SEL == p_unpacr::UNP_DEST),
-        "UNP_SEL can only be set to p_unpacr::UNP_A/UNP_B/UNP_S");
+        "UNP_SEL can only be set to p_unpacr::UNP_A/UNP_B/UNP_S/UNP_DEST");
 
     // Populate the buffer descriptor table
     _configure_buf_desc_table_(tdma_desc_src.buf_desc_id, tdma_desc_src.buf_desc);
 
     // RT: make defines to aggregate the source format address, to make the below a single function
     // Program src formats
-    if constexpr (UNP_SEL == p_unpacr::UNP_A)
+    if constexpr (UNP_SEL == p_unpacr::UNP_A || UNP_SEL == p_unpacr::UNP_DEST)
     {
         cfg_rmw(THCON_UNPACKER0_REG0_OUT_DATA_FORMAT_RMW, static_cast<uint8_t>(tdma_desc_src.reg_data_format));
     }
@@ -34,7 +34,7 @@ inline void _llk_unpack_hw_configure_(const tdma_descriptor_t& tdma_desc_src)
     {
         cfg_rmw(THCON_UNPACKER1_REG0_OUT_DATA_FORMAT_RMW, static_cast<uint8_t>(tdma_desc_src.reg_data_format));
     }
-    else
+    else if constexpr (UNP_SEL == p_unpacr::UNP_S)
     {
         cfg_rmw(THCON_UNPACKER2_REG0_OUT_DATA_FORMAT_RMW, static_cast<uint8_t>(tdma_desc_src.reg_data_format));
     }
