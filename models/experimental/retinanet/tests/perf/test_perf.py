@@ -9,7 +9,7 @@ from models.perf.device_perf_utils import check_device_perf, prep_device_perf_re
 @pytest.mark.parametrize(
     "batch_size, model_name, expected_perf",
     [
-        (1, "ttnn_retinanet", 32),  # Adjust expected_perf based on your measurements
+        (1, "ttnn_retinanet", 37),  # Adjust expected_perf based on your measurements
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
