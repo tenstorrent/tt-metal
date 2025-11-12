@@ -208,8 +208,8 @@ def run_strided_all_gather_impl(
                 num_workers_per_link=num_workers_per_link,
                 num_buffers_per_channel=num_buffers_per_channel,
                 mm_cores_y=mm_core_grid.y,
-                mm_block_h=mm_block_m // 32,
-                mm_block_w=mm_block_k // 32,
+                mm_block_ht=mm_block_m // 32,
+                mm_block_wt=mm_block_k // 32,
             )
 
             tt_matmul_out_tensor = ttnn.experimental.minimal_matmul(

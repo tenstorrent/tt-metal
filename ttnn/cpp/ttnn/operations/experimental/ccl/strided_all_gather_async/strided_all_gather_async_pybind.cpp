@@ -40,8 +40,8 @@ void bind_strided_all_gather_async(pybind11::module& module, const ccl_operation
                std::optional<uint32_t> num_workers_per_link,
                std::optional<uint32_t> num_buffers_per_channel,
                std::optional<uint32_t> mm_cores_y,
-               std::optional<uint32_t> mm_block_h,
-               std::optional<uint32_t> mm_block_w) -> ttnn::Tensor {
+               std::optional<uint32_t> mm_block_ht,
+               std::optional<uint32_t> mm_block_wt) -> ttnn::Tensor {
                 return self(
                     input_tensor,
                     dim,
@@ -56,8 +56,8 @@ void bind_strided_all_gather_async(pybind11::module& module, const ccl_operation
                     num_workers_per_link,
                     num_buffers_per_channel,
                     mm_cores_y,
-                    mm_block_h,
-                    mm_block_w);
+                    mm_block_ht,
+                    mm_block_wt);
             },
             py::arg("input_tensor"),
             py::arg("dim"),
@@ -73,8 +73,8 @@ void bind_strided_all_gather_async(pybind11::module& module, const ccl_operation
             py::arg("num_workers_per_link") = std::nullopt,
             py::arg("num_buffers_per_channel") = std::nullopt,
             py::arg("mm_cores_y") = std::nullopt,
-            py::arg("mm_block_h") = std::nullopt,
-            py::arg("mm_block_w") = std::nullopt});
+            py::arg("mm_block_ht") = std::nullopt,
+            py::arg("mm_block_wt") = std::nullopt});
 }
 
 }  // namespace
