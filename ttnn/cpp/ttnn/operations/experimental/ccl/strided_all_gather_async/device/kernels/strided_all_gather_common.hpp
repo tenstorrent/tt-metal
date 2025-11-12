@@ -18,6 +18,10 @@
 
 using namespace tt::tt_fabric::linear::experimental;
 
+FORCE_INLINE uint32_t div_up(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
+
+FORCE_INLINE uint32_t round_up(uint32_t a, uint32_t b) { return b * div_up(a, b); }
+
 // Return the global tile index of the tile_iter tile that this worker is responsible for,
 // either in the input buffer or output buffer dependening on if read_from_output is set.
 // The returned tile index will be in the unpadded space.
@@ -64,16 +68,37 @@ get_sender_id(uint32_t direction, uint32_t my_chip_id, uint32_t slices_received,
     }
 }
 
-FORCE_INLINE uint32_t div_up(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
+FORCE_INLINE uint32_t next_mm_aligned_chunk_width(
+    uint32_t input_chunk_start_tile, uint32_t chip_id, uint32_t input_tensor_Wt, uint32_t mm_block_w) {
+    // Figure out the next largest multiple of mm_block_w in the global space
+    // First, get the output x index of chunk_start_tile (real_chunk_start)
+    // Then, find the next largest multiple of mm_block_w  (real_chunk_end)
+    // The difference (real_chunk_end - real_chunk_start) + 1 is the actual chunk width
+    uint32_t input_col = input_chunk_start_tile % input_tensor_Wt;
+    uint32_t output_col = input_col + chip_id * input_tensor_Wt;
+    uint32_t next_aligned_output_col = round_up(output_col + 1, mm_block_w);
+    uint32_t next_aligned_input_col = next_aligned_output_col - (chip_id * input_tensor_Wt);
+    uint32_t clipped_next_aligned_input_col = std::min(next_aligned_input_col, input_tensor_Wt);
+    uint32_t actual_chunk_w = clipped_next_aligned_input_col - input_col;
+    return actual_chunk_w;
+}
+
+FORCE_INLINE uint32_t next_mm_aligned_chunk_height(
+    uint32_t input_chunk_start_tile, uint32_t M_tiles_per_core, uint32_t input_tensor_Wt, uint32_t mm_block_h) {
+    uint32_t input_row = input_chunk_start_tile / input_tensor_Wt;
+    if ((input_row + mm_block_h) > M_tiles_per_core) {
+        return M_tiles_per_core - input_row;
+    } else {
+        return mm_block_h;
+    }
+}
 
 template <typename AddrGenType>
 FORCE_INLINE uint32_t read_chunk(
     uint32_t& chunk_start_tile,
     uint32_t worker_tile_offset,
     uint32_t cb_output_id,
-    uint32_t tiles_read,
-    uint32_t tiles_per_core,
-    uint32_t tiles_per_chunk,
+    uint32_t tiles_in_chunk,
     uint32_t chunk_width,
     uint32_t subchunk_height,
     uint32_t subchunk_height_stride,
@@ -87,15 +112,14 @@ FORCE_INLINE uint32_t read_chunk(
     uint32_t output_tensor_Wt,
     uint32_t actual_sender_chip_id,
     bool read_output) {
-    uint32_t tiles_left = tiles_per_core - tiles_read;
+    // TODO WHAT HAPPENS IF WORKER TILES BELOW is ZERO
     uint32_t worker_tiles_in_curr_chunk =
-        (tiles_per_chunk / ag_worker_cores) + ((ag_worker_core_id < (tiles_per_chunk % ag_worker_cores)) ? 1 : 0);
-    uint32_t tiles_in_curr_chunk = std::min(tiles_left, worker_tiles_in_curr_chunk);
-    uint32_t num_tiles_per_packet = std::min(max_tiles_per_packet, tiles_in_curr_chunk);
-    uint32_t packets_in_curr_chunk = div_up(tiles_in_curr_chunk, num_tiles_per_packet);
+        (tiles_in_chunk / ag_worker_cores) + ((ag_worker_core_id < (tiles_in_chunk % ag_worker_cores)) ? 1 : 0);
+    uint32_t num_tiles_per_packet = std::min(max_tiles_per_packet, worker_tiles_in_curr_chunk);
+    uint32_t packets_in_curr_chunk = div_up(worker_tiles_in_curr_chunk, num_tiles_per_packet);
     uint32_t chunk_tile_iter = 0;
     for (uint32_t packet_idx = 0; packet_idx < packets_in_curr_chunk; packet_idx++) {
-        uint32_t tiles_left_in_chunk = tiles_in_curr_chunk - chunk_tile_iter;
+        uint32_t tiles_left_in_chunk = worker_tiles_in_curr_chunk - chunk_tile_iter;
         uint32_t tiles_to_read_in_packet = std::min(tiles_left_in_chunk, num_tiles_per_packet);
 
         cb_reserve_back(cb_output_id, max_tiles_per_packet);
@@ -141,9 +165,7 @@ FORCE_INLINE uint32_t write_chunk(
     uint32_t& chunk_start_tile,
     uint32_t worker_tile_offset,
     uint32_t cb_output_id,
-    uint32_t tiles_written,
-    uint32_t tiles_per_core,
-    uint32_t tiles_per_chunk,
+    uint32_t tiles_in_chunk,
     uint32_t chunk_width,
     uint32_t subchunk_height,
     uint32_t subchunk_height_stride,
@@ -162,22 +184,21 @@ FORCE_INLINE uint32_t write_chunk(
     uint64_t out_ready_sem_noc_addr_in_pkt,
     bool direction,
     bool write_local) {
-    uint32_t tiles_left = tiles_per_core - tiles_written;
+    // TODO WHAT HAPPENS IF WORKER TILES BELOW is ZERO
     uint32_t worker_tiles_in_curr_chunk =
-        (tiles_per_chunk / ag_worker_cores) + ((ag_worker_core_id < (tiles_per_chunk % ag_worker_cores)) ? 1 : 0);
-    uint32_t tiles_in_curr_chunk = std::min(tiles_left, worker_tiles_in_curr_chunk);
-    uint32_t num_tiles_per_packet = std::min(max_tiles_per_packet, tiles_in_curr_chunk);
-    uint32_t packets_in_curr_chunk = div_up(tiles_in_curr_chunk, num_tiles_per_packet);
-    uint32_t chunk_tile_idx = 0;
+        (tiles_in_chunk / ag_worker_cores) + ((ag_worker_core_id < (tiles_in_chunk % ag_worker_cores)) ? 1 : 0);
+    uint32_t num_tiles_per_packet = std::min(max_tiles_per_packet, worker_tiles_in_curr_chunk);
+    uint32_t packets_in_curr_chunk = div_up(worker_tiles_in_curr_chunk, num_tiles_per_packet);
+    uint32_t chunk_tile_iter = 0;
     for (uint32_t packet_idx = 0; packet_idx < packets_in_curr_chunk; packet_idx++) {
-        uint32_t tiles_left_in_chunk = tiles_in_curr_chunk - chunk_tile_idx;
+        uint32_t tiles_left_in_chunk = worker_tiles_in_curr_chunk - chunk_tile_iter;
         uint32_t tiles_to_write_in_packet = std::min(tiles_left_in_chunk, num_tiles_per_packet);
 
         cb_wait_front(cb_output_id, max_tiles_per_packet);
         size_t l1_read_addr = get_read_ptr(cb_output_id);
 
         uint32_t tile_one_id = get_next_chunk_tile(
-            chunk_tile_idx,
+            chunk_tile_iter,
             chunk_start_tile,
             chunk_width,
             subchunk_height,
@@ -188,11 +209,11 @@ FORCE_INLINE uint32_t write_chunk(
             output_tensor_Wt,
             actual_sender_chip_id,
             true);
-        chunk_tile_idx++;
+        chunk_tile_iter++;
         uint32_t tile_two_id = tile_one_id;
         if (tiles_to_write_in_packet == 2) {
             tile_two_id = get_next_chunk_tile(
-                chunk_tile_idx,
+                chunk_tile_iter,
                 chunk_start_tile,
                 chunk_width,
                 subchunk_height,
@@ -203,7 +224,7 @@ FORCE_INLINE uint32_t write_chunk(
                 output_tensor_Wt,
                 actual_sender_chip_id,
                 true);
-            chunk_tile_idx++;
+            chunk_tile_iter++;
         }
         auto noc_address0 = tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addrgen, tile_one_id, 0);
         auto noc_address1 = tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addrgen, tile_two_id, 0);
@@ -256,5 +277,5 @@ FORCE_INLINE uint32_t write_chunk(
     } else {
         chunk_start_tile = new_chunk_start_tile;
     }
-    return chunk_tile_idx;
+    return chunk_tile_iter;
 }
