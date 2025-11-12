@@ -242,6 +242,155 @@ jobs:
           fi
           echo "PASS: PATCH bump test passed"
 
+  test-dev-tag-versioning:
+    name: Test Dev Tag Minor Version Bumping
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup git
+        run: |
+          git config user.name "Test User"
+          git config user.email "test@example.com"
+
+      # Test dev tag with different base versions
+      - name: Test dev tag from v1.5.3
+        run: |
+          git tag v1.5.3
+          echo "Created base tag v1.5.3"
+
+      - name: Test dev tag minor increment from v1.5.3
+        id: test-dev-v1-5-3
+        uses: ./.github/actions/calculate-version
+        with:
+          tag-type: "dev"
+
+      - name: Verify dev tag increments minor from v1.5.3
+        run: |
+          echo "Dev tag from v1.5.3 results:"
+          echo "  Latest semver: ${{ steps.test-dev-v1-5-3.outputs.latest_semver }}"
+          echo "  New version: ${{ steps.test-dev-v1-5-3.outputs.new_version }}"
+          echo "  Final version: ${{ steps.test-dev-v1-5-3.outputs.final_version }}"
+
+          if [ "${{ steps.test-dev-v1-5-3.outputs.latest_semver }}" != "v1.5.3" ]; then
+            echo "FAIL: Expected latest_semver to be v1.5.3"
+            exit 1
+          fi
+
+          if [ "${{ steps.test-dev-v1-5-3.outputs.new_version }}" != "v1.6.0" ]; then
+            echo "FAIL: Expected dev tag to increment minor version to v1.6.0, got ${{ steps.test-dev-v1-5-3.outputs.new_version }}"
+            exit 1
+          fi
+
+          # Check final version has correct format with date
+          current_date=$(date +%Y%m%d)
+          expected_final="v1.6.0-dev$current_date"
+          if [ "${{ steps.test-dev-v1-5-3.outputs.final_version }}" != "$expected_final" ]; then
+            echo "FAIL: Expected final version to be $expected_final, got ${{ steps.test-dev-v1-5-3.outputs.final_version }}"
+            exit 1
+          fi
+
+          echo "PASS: Dev tag minor increment from v1.5.3 test passed"
+
+      # Test dev tag from major version
+      - name: Test dev tag from v3.0.0
+        run: |
+          git tag v3.0.0
+          echo "Created base tag v3.0.0"
+
+      - name: Test dev tag minor increment from v3.0.0
+        id: test-dev-v3-0-0
+        uses: ./.github/actions/calculate-version
+        with:
+          tag-type: "dev"
+
+      - name: Verify dev tag increments minor from v3.0.0
+        run: |
+          echo "Dev tag from v3.0.0 results:"
+          echo "  Latest semver: ${{ steps.test-dev-v3-0-0.outputs.latest_semver }}"
+          echo "  New version: ${{ steps.test-dev-v3-0-0.outputs.new_version }}"
+          echo "  Final version: ${{ steps.test-dev-v3-0-0.outputs.final_version }}"
+
+          if [ "${{ steps.test-dev-v3-0-0.outputs.latest_semver }}" != "v3.0.0" ]; then
+            echo "FAIL: Expected latest_semver to be v3.0.0"
+            exit 1
+          fi
+
+          if [ "${{ steps.test-dev-v3-0-0.outputs.new_version }}" != "v3.1.0" ]; then
+            echo "FAIL: Expected dev tag to increment minor version to v3.1.0, got ${{ steps.test-dev-v3-0-0.outputs.new_version }}"
+            exit 1
+          fi
+
+          echo "PASS: Dev tag minor increment from v3.0.0 test passed"
+
+      # Test dev tag ignores commit indicators
+      - name: Test dev tag ignores commit version indicators
+        run: |
+          git reset --hard v3.0.0
+          echo "major change" > major-change.txt
+          git add major-change.txt
+          git commit -m "Breaking API change (MAJOR)"
+
+          echo "patch fix" > patch-fix.txt
+          git add patch-fix.txt
+          git commit -m "Bug fix (PATCH)"
+
+      - name: Test dev tag ignores MAJOR/PATCH commits
+        id: test-dev-ignores-commits
+        uses: ./.github/actions/calculate-version
+        with:
+          tag-type: "dev"
+
+      - name: Verify dev tag ignores commit indicators
+        run: |
+          echo "Dev tag ignores commits results:"
+          echo "  Latest semver: ${{ steps.test-dev-ignores-commits.outputs.latest_semver }}"
+          echo "  New version: ${{ steps.test-dev-ignores-commits.outputs.new_version }}"
+          echo "  Final version: ${{ steps.test-dev-ignores-commits.outputs.final_version }}"
+
+          # Should still be v3.1.0 regardless of MAJOR/PATCH commits
+          if [ "${{ steps.test-dev-ignores-commits.outputs.new_version }}" != "v3.1.0" ]; then
+            echo "FAIL: Expected dev tag to always increment minor to v3.1.0 regardless of commit indicators, got ${{ steps.test-dev-ignores-commits.outputs.new_version }}"
+            exit 1
+          fi
+
+          echo "PASS: Dev tag ignores commit indicators test passed"
+
+      # Test dev tag from v0.0.0 (no previous tags)
+      - name: Test dev tag from no previous tags
+        run: |
+          # Remove all tags to test v0.0.0 scenario
+          git tag -d $(git tag -l) || echo "No tags to delete"
+
+      - name: Test dev tag minor increment from v0.0.0
+        id: test-dev-v0-0-0
+        uses: ./.github/actions/calculate-version
+        with:
+          tag-type: "dev"
+
+      - name: Verify dev tag increments minor from v0.0.0
+        run: |
+          echo "Dev tag from v0.0.0 results:"
+          echo "  Latest semver: ${{ steps.test-dev-v0-0-0.outputs.latest_semver }}"
+          echo "  New version: ${{ steps.test-dev-v0-0-0.outputs.new_version }}"
+          echo "  Final version: ${{ steps.test-dev-v0-0-0.outputs.final_version }}"
+
+          if [ "${{ steps.test-dev-v0-0-0.outputs.latest_semver }}" != "v0.0.0" ]; then
+            echo "FAIL: Expected latest_semver to be v0.0.0 when no tags exist"
+            exit 1
+          fi
+
+          if [ "${{ steps.test-dev-v0-0-0.outputs.new_version }}" != "v0.1.0" ]; then
+            echo "FAIL: Expected dev tag to increment minor version to v0.1.0 from v0.0.0, got ${{ steps.test-dev-v0-0-0.outputs.new_version }}"
+            exit 1
+          fi
+
+          echo "PASS: Dev tag minor increment from v0.0.0 test passed"
+
   test-edge-cases:
     name: Test Edge Cases
     runs-on: ubuntu-latest
@@ -602,7 +751,7 @@ jobs:
   final-test-summary:
     name: Final Test Summary
     runs-on: ubuntu-latest
-    needs: [test-calculate-version, test-version-bumping, test-edge-cases, integration-test, test-force-bump-and-ignore-commits]
+    needs: [test-calculate-version, test-version-bumping, test-dev-tag-versioning, test-edge-cases, integration-test, test-force-bump-and-ignore-commits]
     steps:
       - name: Test summary
         run: |
@@ -621,6 +770,12 @@ jobs:
           echo "  ✅ MINOR version bumping"
           echo "  ✅ PATCH version bumping"
           echo "  ✅ No bump scenario"
+          echo ""
+          echo "Dev Tag Versioning:"
+          echo "  ✅ Dev tag minor increment from v1.5.3"
+          echo "  ✅ Dev tag minor increment from v3.0.0"
+          echo "  ✅ Dev tag minor increment from v0.0.0"
+          echo "  ✅ Dev tag ignores commit indicators"
           echo ""
           echo "Advanced Features:"
           echo "  ✅ RC increment logic"
