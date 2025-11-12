@@ -111,16 +111,20 @@ tt::tt_fabric::Topology get_fabric_topology();
  *
  * Return value: void
  *
- * | Argument           | Description                         | Data type         | Valid range | Required |
- * |--------------------|-------------------------------------|-------------------|-------------|----------|
- * | fabric_config      | Fabric config to set                | FabricConfig      |             | Yes      |
- * | num_routing_planes | Number of routing planes for fabric | optional<uint8_t> |             | No       |
+ * | Argument             | Description                      | Data type              | Required |
+ * |---------------------|----------------------------------|------------------------|----------|
+ * | fabric_config       | Fabric config to set             | FabricConfig           | Yes      |
+ * | reliability_mode    | Reliability mode for fabric      | FabricReliabilityMode  | No       |
+ * | num_routing_planes  | Number of routing planes         | optional<uint8_t>      | No       |
+ * | fabric_tensix_config| Tensix fabric configuration      | FabricTensixConfig     | No       |
+ * | fabric_udm_mode     | Unified DataMovement mode        | FabricUDMMode          | No       |
  */
 void SetFabricConfig(
     FabricConfig fabric_config,
     FabricReliabilityMode reliability_mode = FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
     std::optional<uint8_t> num_routing_planes = std::nullopt,
-    FabricTensixConfig fabric_tensix_config = FabricTensixConfig::DISABLED);
+    FabricTensixConfig fabric_tensix_config = FabricTensixConfig::DISABLED,
+    FabricUDMMode fabric_udm_mode = FabricUDMMode::DISABLED);
 
 FabricConfig GetFabricConfig();
 

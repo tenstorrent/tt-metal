@@ -21,6 +21,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "hostdevcommon/common_values.hpp"
+#include "common/tt_backend_api_types.hpp"
 
 using namespace tt::tt_metal;  // For test
 
