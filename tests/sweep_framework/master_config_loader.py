@@ -1427,9 +1427,11 @@ class MasterConfigLoader:
                 print(
                     f"✅ Loaded {len(input_specs_list)} traced configurations for {operation_name} (model_traced suite)"
                 )
+                # Pair input_specs with is_conv1d to prevent Cartesian product
+                # Use comma-separated parameter name to pass tuples together
+                paired_configs = list(zip(input_specs_list, [False] * len(input_specs_list)))
                 return {
-                    "input_specs": input_specs_list,
-                    "is_conv1d": [False] * len(input_specs_list),
+                    "input_specs,is_conv1d": paired_configs,
                 }
 
             return {"input_specs": [], "is_conv1d": []}
