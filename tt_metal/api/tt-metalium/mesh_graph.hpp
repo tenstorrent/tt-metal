@@ -193,7 +193,7 @@ private:
     // Switch tracking (switches use MeshId as their identifier)
     std::vector<MeshId> switch_ids_;
     std::map<MeshId, MeshContainer<ChipId>> switch_to_chip_ids_;
-    std::unordered_map<MeshId, std::vector<MeshId>> switch_to_meshes_;
+    std::unordered_map<MeshId, std::vector<MeshId>> switch_to_connected_meshes_;
 };
 
 }  // namespace tt::tt_fabric

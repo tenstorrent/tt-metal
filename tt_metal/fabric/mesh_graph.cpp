@@ -282,10 +282,10 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd, std::optiona
 
             // Track switch-to-mesh connections
             if (src_mesh_instance.kind == NodeKind::Switch && dst_mesh_instance.kind == NodeKind::Mesh) {
-                switch_to_meshes_[src_mesh_id].push_back(dst_mesh_id);
+                switch_to_connected_meshes_[src_mesh_id].push_back(dst_mesh_id);
             }
             if (dst_mesh_instance.kind == NodeKind::Switch && src_mesh_instance.kind == NodeKind::Mesh) {
-                switch_to_meshes_[dst_mesh_id].push_back(src_mesh_id);
+                switch_to_connected_meshes_[dst_mesh_id].push_back(src_mesh_id);
             }
         } else {
             MeshId src_mesh_id(src_instance.local_id);
@@ -295,10 +295,10 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd, std::optiona
 
             // Track switch-to-mesh connections
             if (src_instance.kind == NodeKind::Switch && dst_instance.kind == NodeKind::Mesh) {
-                switch_to_meshes_[src_mesh_id].push_back(dst_mesh_id);
+                switch_to_connected_meshes_[src_mesh_id].push_back(dst_mesh_id);
             }
             if (dst_instance.kind == NodeKind::Switch && src_instance.kind == NodeKind::Mesh) {
-                switch_to_meshes_[dst_mesh_id].push_back(src_mesh_id);
+                switch_to_connected_meshes_[dst_mesh_id].push_back(src_mesh_id);
             }
         }
     }
@@ -909,8 +909,8 @@ std::vector<SwitchId> MeshGraph::get_switch_ids() const {
 std::unordered_set<MeshId> MeshGraph::get_meshes_connected_to_switch(SwitchId switch_id) const {
     // Convert SwitchId to MeshId for internal lookup
     MeshId mesh_id(*switch_id);
-    auto it = switch_to_meshes_.find(mesh_id);
-    if (it != switch_to_meshes_.end()) {
+    auto it = switch_to_connected_meshes_.find(mesh_id);
+    if (it != switch_to_connected_meshes_.end()) {
         // Convert vector to unordered_set to automatically deduplicate (bidirectional connections may add the same mesh
         // twice)
         return std::unordered_set<MeshId>(it->second.begin(), it->second.end());
@@ -923,8 +923,8 @@ MeshId MeshGraph::get_mesh_id_for_switch(SwitchId switch_id) const { return Mesh
 bool MeshGraph::is_mesh_connected_to_switch(MeshId mesh_id, SwitchId switch_id) const {
     // Convert SwitchId to MeshId for internal lookup
     MeshId switch_mesh_id(*switch_id);
-    auto it = switch_to_meshes_.find(switch_mesh_id);
-    if (it != switch_to_meshes_.end()) {
+    auto it = switch_to_connected_meshes_.find(switch_mesh_id);
+    if (it != switch_to_connected_meshes_.end()) {
         const auto& meshes = it->second;
         return std::find(meshes.begin(), meshes.end(), mesh_id) != meshes.end();
     }
@@ -939,7 +939,7 @@ std::optional<SwitchId> MeshGraph::get_switch_for_mesh(MeshId mesh_id) const {
         }
     }
     // Check if any switch connects to this mesh
-    for (const auto& [switch_mesh_id, meshes] : switch_to_meshes_) {
+    for (const auto& [switch_mesh_id, meshes] : switch_to_connected_meshes_) {
         if (std::find(meshes.begin(), meshes.end(), mesh_id) != meshes.end()) {
             return SwitchId(*switch_mesh_id);
         }
