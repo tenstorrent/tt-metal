@@ -14,6 +14,7 @@
 #include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
+#include "tt_metal/fabric/fabric_edm_packet_header.hpp"
 #include "impl/context/metal_context.hpp"
 
 namespace tt::tt_fabric {
@@ -64,10 +65,18 @@ bool FabricContext::is_2D_topology(tt::tt_fabric::Topology topology) {
 }
 
 size_t FabricContext::get_packet_header_size_bytes() const {
-    if (this->is_2D_routing_enabled()) {
-        return sizeof(tt::tt_fabric::HybridMeshPacketHeader);
+    bool udm_enabled =
+        tt::tt_metal::MetalContext::instance().get_fabric_udm_mode() == tt::tt_fabric::FabricUDMMode::ENABLED;
+    if (udm_enabled) {
+        // UDM mode only supports 2D routing
+        TT_FATAL(this->is_2D_routing_enabled(), "UDM mode only supports 2D routing");
+        return sizeof(tt::tt_fabric::UDMHybridMeshPacketHeader);
     } else {
-        return sizeof(tt::tt_fabric::PacketHeader);
+        if (this->is_2D_routing_enabled()) {
+            return sizeof(tt::tt_fabric::HybridMeshPacketHeader);
+        } else {
+            return sizeof(tt::tt_fabric::PacketHeader);
+        }
     }
 }
 

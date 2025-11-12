@@ -1847,7 +1847,11 @@ class ModelArgs:
         else:
             allowed_seq_lens = [128, 256, 512, 1024, 2048, 4096, 8192]
 
-        return prefill_seq_len in allowed_seq_lens and prefill_seq_len <= self.max_prefill_chunk_size
+        return (
+            prefill_seq_len in allowed_seq_lens
+            and prefill_seq_len <= self.max_prefill_chunk_size
+            and prefill_seq_len <= self.max_seq_len
+        )
 
     def get_state_dict_prefix(self, module_name, layer_num, is_vision=False):
         text_prefix = self.state_dict_text_prefix

@@ -264,6 +264,13 @@ MetalContext& MetalContext::instance() {
     return inst.get();
 }
 
+void MetalContext::teardown_base_objects() {
+    // Teardown in backward order of dependencies to avoid dereferencing uninitialized objects
+    distributed_context_.reset();
+    cluster_.reset();
+    hal_.reset();
+}
+
 MetalContext::MetalContext() {
     // If a custom fabric mesh graph descriptor is specified as an RT Option, use it by default
     // to initialize the control plane.
@@ -271,12 +278,27 @@ MetalContext::MetalContext() {
         custom_mesh_graph_desc_path_ = rtoptions_.get_custom_fabric_mesh_graph_desc_path();
     }
 
-    bool is_base_routing_fw_enabled =
+    const bool is_base_routing_fw_enabled =
         Cluster::is_base_routing_fw_enabled(Cluster::get_cluster_type_from_cluster_desc(rtoptions_));
-    hal_ = std::make_unique<Hal>(get_platform_architecture(rtoptions_), is_base_routing_fw_enabled);
-    rtoptions_.ParseAllFeatureEnv(*hal_);
-    cluster_ = std::make_unique<Cluster>(rtoptions_, *hal_);
-    distributed_context_ = distributed::multihost::DistributedContext::get_current_world();
+    const auto platform_arch = get_platform_architecture(rtoptions_);
+
+    const auto initialize_objects = [&]() {
+        hal_ = std::make_unique<Hal>(platform_arch, is_base_routing_fw_enabled, rtoptions_.get_enable_2_erisc_mode());
+        rtoptions_.ParseAllFeatureEnv(*hal_);
+        cluster_ = std::make_unique<Cluster>(rtoptions_, *hal_);
+        distributed_context_ = distributed::multihost::DistributedContext::get_current_world();
+    };
+
+    initialize_objects();
+
+    // Requires reinit with features disabled
+    // This will maintain backward compatibility with clusters that have legacy firmware but it will cause a slowdown
+    // during the first init
+    if (!cluster_->verify_eth_fw_capability()) {
+        rtoptions_.set_enable_2_erisc_mode(false);
+        teardown_base_objects();
+        initialize_objects();
+    }
 
     // We do need to call Cluster teardown at the end of the program, use atexit temporarily until we have clarity on
     // how MetalContext lifetime will work through the API.
@@ -293,11 +315,7 @@ std::shared_ptr<distributed::multihost::DistributedContext> MetalContext::get_di
     return distributed_context_;
 }
 
-MetalContext::~MetalContext() {
-    distributed_context_.reset();
-    cluster_.reset();
-    hal_.reset();
-}
+MetalContext::~MetalContext() { teardown_base_objects(); }
 
 llrt::RunTimeOptions& MetalContext::rtoptions() { return rtoptions_; }
 
@@ -467,7 +485,8 @@ void MetalContext::set_fabric_config(
     const tt_fabric::FabricConfig fabric_config,
     tt_fabric::FabricReliabilityMode reliability_mode,
     std::optional<uint8_t> num_routing_planes,
-    tt_fabric::FabricTensixConfig fabric_tensix_config) {
+    tt_fabric::FabricTensixConfig fabric_tensix_config,
+    tt_fabric::FabricUDMMode fabric_udm_mode) {
     // Changes to fabric force a re-init. TODO: We should supply the fabric config in the same way as the dispatch
     // config, not through this function exposed in the detail API.
     force_reinit_ = true;
@@ -523,6 +542,7 @@ void MetalContext::set_fabric_config(
 
     // Set the fabric tensix config
     this->set_fabric_tensix_config(fabric_tensix_config);
+    this->fabric_udm_mode_ = fabric_udm_mode;
 }
 
 void MetalContext::initialize_fabric_config() {
@@ -559,6 +579,8 @@ void MetalContext::set_fabric_tensix_config(tt_fabric::FabricTensixConfig fabric
 }
 
 tt_fabric::FabricTensixConfig MetalContext::get_fabric_tensix_config() const { return fabric_tensix_config_; }
+
+tt_fabric::FabricUDMMode MetalContext::get_fabric_udm_mode() const { return fabric_udm_mode_; }
 
 void MetalContext::construct_control_plane(const std::filesystem::path& mesh_graph_desc_path) {
     if (!logical_mesh_chip_id_to_physical_chip_id_mapping_.empty()) {
