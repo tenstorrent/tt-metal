@@ -230,3 +230,5 @@ Some distributable forms of this project—such as manylinux-compliant wheels—
 - libevent (when built with multihost support)
 
 These libraries are bound by their own license terms.
+
+Test change for GitLab CI verification
