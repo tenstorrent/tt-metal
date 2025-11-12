@@ -58,6 +58,8 @@ Result conv2d_L1(
     // Store the original stride size for weight folding
     auto orig_stride = stride;
 
+    log_info(tt::LogOp, "input padded shape: {}", input_tensor_.padded_shape());
+
     auto input_tensor = fold_input_tensor_if_required(
         input_tensor_,
         device,
@@ -139,7 +141,8 @@ Result conv2d_L1(
         in_channels,
         out_channels,
         mm_conv,
-        auto_shard);
+        auto_shard,
+        groups);
 
     const uint32_t input_channels_alignment = get_input_channels_alignment(
         input_tensor_post_tm.memory_config().memory_layout(),
@@ -284,6 +287,8 @@ Result conv2d_L1(
                 input_tensor_post_tm = ttnn::move(input_tensor_post_tm);
             }
         }
+
+        log_info(tt::LogOp, "paralelization config after halo: {}", opt_conv_op_parallel_config);
 
         // call conv micro op
         auto conv_output = conv2d(

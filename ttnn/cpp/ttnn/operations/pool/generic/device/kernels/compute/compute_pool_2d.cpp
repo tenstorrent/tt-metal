@@ -181,7 +181,7 @@ void MAIN {
                     ? (number_of_tiles - 1) * num_faces_in_output_tile + num_faces_in_last_output_tile
                     : number_of_tiles * num_faces_in_output_tile;
             if constexpr (!is_output_tiled && !return_indices) {
-                cb_reserve_back(out_cb_id, output_faces);
+                cb_reserve_back(out_cb_id, (output_faces + 1) / 2);
             }
             if constexpr (tilize_reconfig) {
                 if (first_c_block || last_c_block) {
@@ -386,12 +386,12 @@ void MAIN {
                         for (uint32_t i = 0; i < num_pages_to_8; i++) {
                             pack_untilize_dest<partial_iter_output_tiles>(
                                 out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile, i * tiles_to_reduce);
-                            cb_push_back(out_cb_id, output_faces);
+                            cb_push_back(out_cb_id, (output_faces + 1) / 2);
                         }
                     } else {
                         pack_untilize_dest<max_tiles_per_iter>(
                             out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
-                        cb_push_back(out_cb_id, output_faces);
+                        cb_push_back(out_cb_id, (output_faces + 1) / 2);
                     }
                     // cb_push_back(out_cb_id, num_faces_in_output_tile * num_pages_to_8);
                     tile_regs_release();

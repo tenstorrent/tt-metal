@@ -1294,7 +1294,8 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
             input_layout,
             BufferType::L1,
             parallel_config,
-            conv_config.act_block_h_override);
+            conv_config.act_block_h_override,
+            groups);
 
         opt_conv_op_block_config = get_opt_block_config(
             mm_conv,

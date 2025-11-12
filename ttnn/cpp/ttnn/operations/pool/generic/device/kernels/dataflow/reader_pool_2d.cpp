@@ -494,9 +494,7 @@ void kernel_main() {
             up_left_wrap_inc_cb_id>();
     }
     if constexpr (reader_id == 0) {
-        fill_with_val(get_write_ptr(weight_cb_id), 512, 0x3f80);
-    } else {
-        fill_with_val(get_write_ptr(weight_cb_id) + 1024, 512, 0x3f80);
+        fill_with_val(get_write_ptr(weight_cb_id), 1024, 0x3f80);
     }
 
     // initialize the scalar CB

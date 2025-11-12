@@ -462,7 +462,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const uint32_t mul_cb_pagesize = tile_size(params.data_format);
     const uint32_t mul_cb_npages =
         std::min(effective_tiles, 3u) * params.multi_buffering_factor;  // Max 8 tiles per width (because of dest)
-    log_info(tt::LogOp, "Effective tiles for depthwise conv multiplication: {}", effective_tiles);
     tt::tt_metal::create_cb(mul_cb_id, program, all_cores, mul_cb_pagesize, mul_cb_npages, params.data_format);
     log_debug(tt::LogOp, "CB {} (mul_cb) :: PS = {}, NP = {}", mul_cb_id, mul_cb_pagesize, mul_cb_npages);
 

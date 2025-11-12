@@ -149,7 +149,8 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
     Layout input_tensor_layout,
     BufferType input_tensor_buffer_type,
     const std::optional<sliding_window::ParallelConfig>& input_tensor_parallel_config = std::nullopt,
-    std::optional<uint32_t> act_block_h_override = std::nullopt);
+    std::optional<uint32_t> act_block_h_override = std::nullopt,
+    uint32_t groups = 1);
 
 DeviceComputeKernelConfig get_conv_default_compute_kernel_config(MeshDevice* device);
 
@@ -190,7 +191,8 @@ shard_or_reshard_tensor_if_required(
     uint32_t in_channels,
     uint32_t out_channels,
     bool is_mm_conv,
-    bool auto_shard);
+    bool auto_shard,
+    uint32_t groups = 1);
 
 bool auto_enable_kernel_folding(
     const ttnn::MemoryConfig& input_memory_config,

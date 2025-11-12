@@ -397,6 +397,34 @@ conv_op_l1_usage calculate_L1_usage(
     uint32_t input_channels_padded,
     bool skip_act_cb_create = false);
 
+// Depthwise Conv2d factory function
+tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise(
+    tt::tt_metal::Program& program,
+    const Tensor& a,
+    const Tensor& b,
+    const ttnn::Shape& ashape,
+    const std::optional<const Tensor>& bias,
+    const sliding_window::SlidingWindowConfig& sliding_window_config,
+    const sliding_window::ParallelConfig& parallel_config,
+    const std::vector<uint32_t>& op_trace_metadata,
+    const std::vector<sliding_window::ShardBoundary>& shard_boundaries,
+    uint32_t output_channels,
+    uint32_t groups,
+    bool untilize_out,
+    bool has_bias,
+    const std::optional<unary::UnaryWithParam>& fused_activation,
+    const Conv2dParallelizationConfig& parallelization_config,
+    const Conv2dBlockConfig& block_config,
+    bool is_col_major,
+    Tensor& output,
+    DeviceComputeKernelConfig compute_kernel_config,
+    bool enable_act_double_buffer,
+    bool enable_weights_double_buffer,
+    bool full_inner_dim,
+    bool enable_activation_reuse,
+    bool config_tensors_in_dram,
+    std::optional<bool> force_split_reader);
+
 }  // namespace conv2d
 
 }  // namespace operations::conv
