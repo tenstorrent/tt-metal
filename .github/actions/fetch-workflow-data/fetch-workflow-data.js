@@ -102,7 +102,6 @@ async function run() {
     let gtestLogsIndexPath;
     let otherLogsIndexPath;
     let commitsPath;
-    let lastSuccessPath;
 
     // Find and restore artifacts from previous successful run (unless force-fresh is enabled)
     if (forceFresh) {
@@ -181,7 +180,7 @@ async function run() {
     fs.writeFileSync(outputPath, JSON.stringify(Array.from(grouped.entries())));
 
     // Update last success timestamps
-    lastSuccessPath = await updateLastSuccessTimestamps(
+    await updateLastSuccessTimestamps(
       grouped,
       branch,
       octokit,
