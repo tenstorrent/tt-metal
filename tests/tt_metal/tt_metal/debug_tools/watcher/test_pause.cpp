@@ -136,7 +136,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     for (uint32_t x = xy_start.x; x <= xy_end.x; x++) {
         for (uint32_t y = xy_start.y; y <= xy_end.y; y++) {
             CoreCoord virtual_core = device->worker_core_from_logical_core({x, y});
-            for (auto &risc_str : {"brisc", "ncrisc", "trisc0", "trisc1", "trisc2"}) {
+            for (auto& risc_str : {" brisc", "ncrisc", "trisc0", "trisc1", "trisc2"}) {
                 std::string expected = fmt::format("{}:{}", virtual_core.str(), risc_str);
                 expected_strings.push_back(expected);
             }
@@ -156,8 +156,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
             expected_strings.push_back(expected);
         }
     }
-    // See #10527
-    // EXPECT_TRUE(FileContainsAllStrings(fixture->log_file_name, expected_strings));
+    EXPECT_TRUE(FileContainsAllStrings(fixture->log_file_name, expected_strings));
 }
 }
 }

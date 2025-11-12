@@ -1,0 +1,1 @@
+../../../../models/demos/blackhole/vit/tests/test_ttnn_optimized_sharded_vit_bh.py

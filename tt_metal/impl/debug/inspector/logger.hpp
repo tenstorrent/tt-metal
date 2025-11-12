@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <fstream>
+
 #include "impl/debug/inspector/types.hpp"
 #include "mesh_coord.hpp"
 
