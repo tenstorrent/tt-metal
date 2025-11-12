@@ -58,7 +58,7 @@ TEST_P(AddrgenApiVariantTest, Write) {
     }
 }
 
-// Instantiate with all 7 variants (3 unicast + 3 fused atomic inc + 1 multicast)
+// Instantiate with all 10 variants (3 unicast + 3 fused atomic inc + 1 multicast + 3 scatter)
 INSTANTIATE_TEST_SUITE_P(
     AddrgenOverloads,
     AddrgenApiVariantTest,
@@ -69,7 +69,10 @@ INSTANTIATE_TEST_SUITE_P(
         tt::tt_fabric::test::AddrgenApiVariant::FusedAtomicIncWrite,
         tt::tt_fabric::test::AddrgenApiVariant::FusedAtomicIncWriteWithState,
         tt::tt_fabric::test::AddrgenApiVariant::FusedAtomicIncWriteSetState,
-        tt::tt_fabric::test::AddrgenApiVariant::MulticastWrite),
+        tt::tt_fabric::test::AddrgenApiVariant::MulticastWrite,
+        tt::tt_fabric::test::AddrgenApiVariant::ScatterWrite,
+        tt::tt_fabric::test::AddrgenApiVariant::ScatterWriteWithState,
+        tt::tt_fabric::test::AddrgenApiVariant::ScatterWriteSetState),
     [](const ::testing::TestParamInfo<AddrgenApiVariantTest::ParamType>& info) {
         switch (info.param) {
             case tt::tt_fabric::test::AddrgenApiVariant::UnicastWrite: return "UnicastWrite";
@@ -81,6 +84,9 @@ INSTANTIATE_TEST_SUITE_P(
             case tt::tt_fabric::test::AddrgenApiVariant::FusedAtomicIncWriteSetState:
                 return "FusedAtomicIncWriteSetState";
             case tt::tt_fabric::test::AddrgenApiVariant::MulticastWrite: return "MulticastWrite";
+            case tt::tt_fabric::test::AddrgenApiVariant::ScatterWrite: return "ScatterWrite";
+            case tt::tt_fabric::test::AddrgenApiVariant::ScatterWriteWithState: return "ScatterWriteWithState";
+            case tt::tt_fabric::test::AddrgenApiVariant::ScatterWriteSetState: return "ScatterWriteSetState";
             default: return "UnknownVariant";
         }
     });
