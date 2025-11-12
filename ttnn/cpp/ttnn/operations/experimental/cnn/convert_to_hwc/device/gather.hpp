@@ -176,13 +176,15 @@ std::vector<LowLevelGatherTransfer> lower_gather_transfers(
     const std::vector<CoreCoord>& input_cores,
     uint32_t num_output_cores,
     uint32_t element_size_bytes,
-    uint32_t output_shard_width_override = 0);
+    uint32_t output_shard_width);
+
+// Forward declaration for API that returns both groups and count
+struct BlockedTransfersWithCount;
 
 /**
  * @brief Group transfers by output column blocks for memory-efficient processing
  *
- * Analyzes all transfers and groups them by which column block of the output they write to,
- * enabling the output to be generated in small, cache-friendly chunks.
+ * Returns both the grouped transfers and the number of unique logical blocks.
  *
  * @param transfers High-level transfer list
  * @param B Batch size
@@ -192,9 +194,10 @@ std::vector<LowLevelGatherTransfer> lower_gather_transfers(
  * @param num_output_cores Number of output cores
  * @param element_size_bytes Size of each element in bytes
  * @param block_size Width of each column block (default 4)
- * @return Vector of BlockedTransferGroup objects sorted by (dst_shard_idx, dst_block_idx)
+ * @param output_shard_width Explicit width of each destination shard row
+ * @return BlockedTransfersWithCount {blocked_transfers, num_logical_blocks}
  */
-std::vector<BlockedTransferGroup> group_transfers_by_output_column_blocks(
+BlockedTransfersWithCount group_transfers_by_output_column_blocks(
     const std::vector<GatherTransfer>& transfers,
     uint32_t B,
     uint32_t C,
@@ -202,7 +205,8 @@ std::vector<BlockedTransferGroup> group_transfers_by_output_column_blocks(
     const std::vector<CoreCoord>& input_cores,
     uint32_t num_output_cores,
     uint32_t element_size_bytes,
-    uint32_t block_size = 4);
+    uint32_t block_size,
+    uint32_t output_shard_width);
 
 /**
  * @brief Tensor-based interface for gather transfers precomputation
@@ -230,7 +234,11 @@ std::vector<GatherTransfer> precompute_gather_transfers(
  * @return Vector of BlockedTransferGroup objects
  */
 std::vector<BlockedTransferGroup> group_transfers_by_output_column_blocks(
-    const Tensor& input, const Tensor& output, const std::vector<GatherTransfer>& transfers, uint32_t block_size = 4);
+    const Tensor& input,
+    const Tensor& output,
+    const std::vector<GatherTransfer>& transfers,
+    uint32_t block_size,
+    uint32_t output_shard_width);
 
 /**
  * @brief Wrapper struct that returns both blocked transfers and the actual number of logical blocks
@@ -240,22 +248,7 @@ struct BlockedTransfersWithCount {
     uint32_t num_logical_blocks;
 };
 
-/**
- * @brief Group transfers by output column blocks and return the logical block count
- *
- * This wrapper function calls group_transfers_by_output_column_blocks and also calculates
- * the actual number of unique logical blocks (unique dst_block_idx values) rather than
- * just counting the total transfer groups across all cores.
- */
-BlockedTransfersWithCount group_transfers_by_output_column_blocks_with_count(
-    const std::vector<GatherTransfer>& transfers,
-    uint32_t B,
-    uint32_t C,
-    uint32_t HW,
-    const std::vector<CoreCoord>& input_cores,
-    uint32_t num_output_cores,
-    uint32_t element_size_bytes,
-    uint32_t block_size);
+// Note: group_transfers_by_output_column_blocks returns both groups and logical block count.
 
 /**
  * @brief Coalesce contiguous transfers within blocked transfer groups to reduce NOC operations

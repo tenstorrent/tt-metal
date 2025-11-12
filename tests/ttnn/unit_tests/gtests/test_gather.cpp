@@ -169,8 +169,9 @@ std::vector<std::vector<float>> gather_with_blocked_transfers(
     uint32_t output_shard_width = B * HW / num_output_cores;
 
     // Group transfers by output column blocks
-    auto blocked_groups = group_transfers_by_output_column_blocks(
-        transfers, B, C, HW, input_cores, num_output_cores, sizeof(float), block_size);
+    auto blocked_result = group_transfers_by_output_column_blocks(
+        transfers, B, C, HW, input_cores, num_output_cores, sizeof(float), block_size, output_shard_width);
+    const auto& blocked_groups = blocked_result.blocked_transfers;
 
     // Flatten input shards for C-style access
     std::vector<std::vector<float>> input_shards_flat;
@@ -269,11 +270,12 @@ void gather_with_blocked_transfers_generic(
     auto transfers = precompute_gather_transfers(B, C, HW, input_cores, output_cores);
 
     // Group transfers by output column blocks
-    auto blocked_groups = group_transfers_by_output_column_blocks(
-        transfers, B, C, HW, input_cores, output_cores.size(), sizeof(float), block_size);
+    uint32_t output_shard_width = B * HW / output_cores.size();
+    auto blocked_result = group_transfers_by_output_column_blocks(
+        transfers, B, C, HW, input_cores, output_cores.size(), sizeof(float), block_size, output_shard_width);
+    const auto& blocked_groups = blocked_result.blocked_transfers;
 
     uint32_t input_shard_width = HW / input_cores.size();
-    uint32_t output_shard_width = B * HW / output_cores.size();
     uint32_t output_shard_height = C;
 
     // Cast to byte pointers for arithmetic
@@ -413,11 +415,12 @@ TEST_F(GatherTransferTest, BlockedTransferGrouping) {
     auto output_cores = make_cores(2);
 
     auto transfers = precompute_gather_transfers(B, C, HW, input_cores, output_cores);
-    auto blocked_groups = group_transfers_by_output_column_blocks(
-        transfers, B, C, HW, input_cores, output_cores.size(), sizeof(float), block_size);
+    uint32_t output_shard_width = B * HW / output_cores.size();
+    auto blocked_result = group_transfers_by_output_column_blocks(
+        transfers, B, C, HW, input_cores, output_cores.size(), sizeof(float), block_size, output_shard_width);
+    const auto& blocked_groups = blocked_result.blocked_transfers;
 
     // Calculate expected number of blocks
-    uint32_t output_shard_width = B * HW / output_cores.size();
     uint32_t blocks_per_shard = (output_shard_width + block_size - 1) / block_size;
 
     // Verify blocked groups
@@ -496,10 +499,10 @@ TEST_F(GatherTransferTest, LargeConfigurations) {
     // Test blocking with different block sizes
     std::vector<uint32_t> block_sizes = {4, 8, 16};
     for (auto block_size : block_sizes) {
-        auto blocked = group_transfers_by_output_column_blocks(
-            transfers, B, C, HW, input_cores, output_cores.size(), sizeof(float), block_size);
-
         uint32_t output_width = B * HW / output_cores.size();
+        auto blocked_result = group_transfers_by_output_column_blocks(
+            transfers, B, C, HW, input_cores, output_cores.size(), sizeof(float), block_size, output_width);
+        const auto& blocked = blocked_result.blocked_transfers;
         EXPECT_TRUE(verify_blocked_groups(blocked, output_width, block_size)) << "Failed for block_size=" << block_size;
     }
 }
@@ -529,7 +532,9 @@ TEST_F(GatherTransferTest, TransferLowering) {
     auto output_cores = make_cores(2);
 
     auto transfers = precompute_gather_transfers(B, C, HW, input_cores, output_cores);
-    auto low_level = lower_gather_transfers(transfers, B, C, HW, input_cores, output_cores.size(), sizeof(float));
+    uint32_t derived_output_width = B * HW / output_cores.size();
+    auto low_level = lower_gather_transfers(
+        transfers, B, C, HW, input_cores, output_cores.size(), sizeof(float), derived_output_width);
 
     // Should have same number of transfers
     EXPECT_EQ(transfers.size(), low_level.size());

@@ -36,6 +36,118 @@
 
 namespace ttnn::operations::experimental::cnn::convert_to_hwc::detail {
 
+namespace {
+
+// Try to extend the last transfer if it is adjacent and compatible; otherwise append a new one
+inline void append_or_extend_transfer(
+    std::vector<GatherTransfer>& transfers,
+    uint32_t input_core_idx,
+    uint32_t output_core_idx,
+    const std::vector<CoreCoord>& input_cores,
+    const std::vector<CoreCoord>& output_cores,
+    uint32_t input_offset_within_shard,
+    uint32_t output_offset_within_shard,
+    uint32_t channel,
+    uint32_t batch) {
+    if (!transfers.empty()) {
+        auto& last = transfers.back();
+        const bool compatible = last.src_core_idx == input_core_idx && last.dst_core_idx == output_core_idx &&
+                                last.channel == channel && last.batch == batch &&
+                                last.src_offset + last.length == input_offset_within_shard &&
+                                last.dst_offset + last.length == output_offset_within_shard;
+        if (compatible) {
+            last.length += 1;
+            return;
+        }
+    }
+
+    transfers.emplace_back(
+        input_core_idx,
+        output_core_idx,
+        input_cores[input_core_idx],
+        output_cores[output_core_idx],
+        input_offset_within_shard,
+        output_offset_within_shard,
+        1,
+        channel,
+        batch);
+}
+
+// Shared implementation for gather transfer generation.
+// If output_shard_width_override is provided, it is used verbatim; otherwise ceil(B*HW/num_output_cores).
+std::vector<GatherTransfer> generate_gather_transfers(
+    uint32_t B,
+    uint32_t C,
+    uint32_t HW,
+    const std::vector<CoreCoord>& input_cores,
+    const std::vector<CoreCoord>& output_cores,
+    std::optional<uint32_t> output_shard_width_override) {
+    std::vector<GatherTransfer> transfers;
+    const uint32_t num_input_cores = input_cores.size();
+    const uint32_t num_output_cores = output_cores.size();
+
+    TT_FATAL(HW % num_input_cores == 0, "HW={} must be divisible by num_input_cores={}", HW, num_input_cores);
+
+    const uint32_t input_shard_width = HW / num_input_cores;
+    const uint32_t output_shard_width = output_shard_width_override.has_value()
+                                            ? output_shard_width_override.value()
+                                            : (B * HW + num_output_cores - 1) / num_output_cores;
+    if (output_shard_width_override.has_value()) {
+        TT_FATAL(output_shard_width != 0, "output_shard_width_override must be non-zero");
+    }
+
+    // Iterate in destination order for better coalescing: rows=c, cols=b*HW + hw
+    for (uint32_t c = 0; c < C; c++) {
+        for (uint32_t b = 0; b < B; b++) {
+            for (uint32_t hw = 0; hw < HW; hw++) {
+                const uint32_t input_col = hw;
+                const uint32_t input_core_idx = input_col / input_shard_width;
+                const uint32_t input_offset_within_shard = input_col % input_shard_width;
+
+                const uint32_t output_col = b * HW + hw;
+                const uint32_t output_core_idx = output_col / output_shard_width;
+                const uint32_t output_offset_within_shard = output_col % output_shard_width;
+
+                append_or_extend_transfer(
+                    transfers,
+                    input_core_idx,
+                    output_core_idx,
+                    input_cores,
+                    output_cores,
+                    input_offset_within_shard,
+                    output_offset_within_shard,
+                    c,
+                    b);
+            }
+        }
+    }
+
+    // Sort by (src_core, src_row=b*C+c, src_offset) to improve locality
+    std::sort(transfers.begin(), transfers.end(), [C](const GatherTransfer& a, const GatherTransfer& b) {
+        if (a.src_core_idx != b.src_core_idx) {
+            return a.src_core_idx < b.src_core_idx;
+        }
+        const uint32_t a_row = a.batch * C + a.channel;
+        const uint32_t b_row = b.batch * C + b.channel;
+        if (a_row != b_row) {
+            return a_row < b_row;
+        }
+        return a.src_offset < b.src_offset;
+    });
+
+    return transfers;
+}
+
+// Compute the inclusive block range touched by a segment [start_col, start_col+length)
+inline std::pair<uint32_t, uint32_t> compute_block_span(uint32_t start_col, uint32_t length, uint32_t block_size) {
+    const uint32_t end_col = start_col + length - 1;
+    const uint32_t start_block = start_col / block_size;
+    const uint32_t end_block = end_col / block_size;
+    return {start_block, end_block};
+}
+
+}  // namespace
+
 /**
  * Precompute all transfers needed for the gather operation
  *
@@ -65,92 +177,7 @@ std::vector<GatherTransfer> precompute_gather_transfers(
     uint32_t HW,
     const std::vector<CoreCoord>& input_cores,
     const std::vector<CoreCoord>& output_cores) {
-    std::vector<GatherTransfer> transfers;
-
-    uint32_t num_input_cores = input_cores.size();
-    uint32_t num_output_cores = output_cores.size();
-
-    // Input validation
-    TT_FATAL(HW % num_input_cores == 0, "HW={} must be divisible by num_input_cores={}", HW, num_input_cores);
-
-    // Calculate sizes
-    uint32_t input_shard_width = HW / num_input_cores;
-    // Allow uneven B*HW across output cores by using ceil division
-    uint32_t output_shard_width = (B * HW + num_output_cores - 1) / num_output_cores;
-
-    // Variables preserved for documentation and future use:
-    // uint32_t input_shard_height = B * C;  // Height of each input shard
-    // uint32_t output_shard_height = C;      // Height of each output shard
-
-    // For each batch and channel, compute transfers
-    // This loops through the logical tensor in output order to ensure
-    // we can coalesce transfers that are contiguous in the output
-    for (uint32_t c = 0; c < C; c++) {
-        for (uint32_t b = 0; b < B; b++) {
-            for (uint32_t hw = 0; hw < HW; hw++) {
-                // Source location in original tensor [B, C, HW]
-                // This element is at position (b, c, hw)
-
-                // In input sharding: width-sharded [B * C, HW / num_input_cores]
-                // Row in input: b * C + c
-                // Column in input: hw
-                uint32_t input_col = hw;
-                uint32_t input_core_idx = input_col / input_shard_width;
-                uint32_t input_offset_within_shard = input_col % input_shard_width;
-
-                // Variables preserved for clarity:
-                // uint32_t input_row = b * C + c;  // Row index in the input shard
-
-                // In output sharding: width-sharded [C, BHW / num_output_cores]
-                // Row in output: c
-                // Column in output: b * HW + hw
-                uint32_t output_col = b * HW + hw;
-                uint32_t output_core_idx = output_col / output_shard_width;
-                uint32_t output_offset_within_shard = output_col % output_shard_width;
-
-                // Check if we need to add a new transfer or can extend an existing one
-                if (!transfers.empty()) {
-                    auto& last_transfer = transfers.back();
-                    if (last_transfer.src_core_idx == input_core_idx && last_transfer.dst_core_idx == output_core_idx &&
-                        last_transfer.channel == c && last_transfer.batch == b &&
-                        last_transfer.src_offset + last_transfer.length == input_offset_within_shard &&
-                        last_transfer.dst_offset + last_transfer.length == output_offset_within_shard) {
-                        // Extend the previous transfer (coalescing)
-                        last_transfer.length += 1;
-                        continue;
-                    }
-                }
-
-                // Create a new transfer
-                transfers.emplace_back(
-                    input_core_idx,
-                    output_core_idx,
-                    input_cores[input_core_idx],
-                    output_cores[output_core_idx],
-                    input_offset_within_shard,
-                    output_offset_within_shard,
-                    1,  // length
-                    c,
-                    b);
-            }
-        }
-    }
-
-    // Sort transfers by source core, then by source row, then by source offset
-    // This improves cache locality when reading from input shards
-    std::sort(transfers.begin(), transfers.end(), [C](const GatherTransfer& a, const GatherTransfer& b) {
-        if (a.src_core_idx != b.src_core_idx) {
-            return a.src_core_idx < b.src_core_idx;
-        }
-        uint32_t a_row = a.batch * C + a.channel;
-        uint32_t b_row = b.batch * C + b.channel;
-        if (a_row != b_row) {
-            return a_row < b_row;
-        }
-        return a.src_offset < b.src_offset;
-    });
-
-    return transfers;
+    return generate_gather_transfers(B, C, HW, input_cores, output_cores, std::nullopt);
 }
 
 // Variant with explicit output shard width override
@@ -161,67 +188,8 @@ std::vector<GatherTransfer> precompute_gather_transfers(
     const std::vector<CoreCoord>& input_cores,
     const std::vector<CoreCoord>& output_cores,
     uint32_t output_shard_width_override) {
-    std::vector<GatherTransfer> transfers;
-
-    uint32_t num_input_cores = input_cores.size();
-
-    // Input validation
-    TT_FATAL(HW % num_input_cores == 0, "HW={} must be divisible by num_input_cores={}", HW, num_input_cores);
-    TT_FATAL(output_shard_width_override != 0, "output_shard_width_override must be non-zero");
-
-    // Calculate sizes
-    uint32_t input_shard_width = HW / num_input_cores;
-    uint32_t output_shard_width = output_shard_width_override;
-
-    for (uint32_t c = 0; c < C; c++) {
-        for (uint32_t b = 0; b < B; b++) {
-            for (uint32_t hw = 0; hw < HW; hw++) {
-                uint32_t input_col = hw;
-                uint32_t input_core_idx = input_col / input_shard_width;
-                uint32_t input_offset_within_shard = input_col % input_shard_width;
-
-                uint32_t output_col = b * HW + hw;
-                uint32_t output_core_idx = output_col / output_shard_width;
-                uint32_t output_offset_within_shard = output_col % output_shard_width;
-
-                if (!transfers.empty()) {
-                    auto& last_transfer = transfers.back();
-                    if (last_transfer.src_core_idx == input_core_idx && last_transfer.dst_core_idx == output_core_idx &&
-                        last_transfer.channel == c && last_transfer.batch == b &&
-                        last_transfer.src_offset + last_transfer.length == input_offset_within_shard &&
-                        last_transfer.dst_offset + last_transfer.length == output_offset_within_shard) {
-                        last_transfer.length += 1;
-                        continue;
-                    }
-                }
-
-                transfers.emplace_back(
-                    input_core_idx,
-                    output_core_idx,
-                    input_cores[input_core_idx],
-                    output_cores[output_core_idx],
-                    input_offset_within_shard,
-                    output_offset_within_shard,
-                    1,
-                    c,
-                    b);
-            }
-        }
-    }
-
-    std::sort(transfers.begin(), transfers.end(), [C](const GatherTransfer& a, const GatherTransfer& b) {
-        if (a.src_core_idx != b.src_core_idx) {
-            return a.src_core_idx < b.src_core_idx;
-        }
-        uint32_t a_row = a.batch * C + a.channel;
-        uint32_t b_row = b.batch * C + b.channel;
-        if (a_row != b_row) {
-            return a_row < b_row;
-        }
-        return a.src_offset < b.src_offset;
-    });
-
-    return transfers;
+    return generate_gather_transfers(
+        B, C, HW, input_cores, output_cores, std::optional<uint32_t>(output_shard_width_override));
 }
 
 std::vector<LowLevelGatherTransfer> lower_gather_transfers(
@@ -232,17 +200,15 @@ std::vector<LowLevelGatherTransfer> lower_gather_transfers(
     const std::vector<CoreCoord>& input_cores,
     uint32_t num_output_cores,
     uint32_t element_size_bytes,
-    uint32_t output_shard_width_override) {
+    uint32_t output_shard_width) {
     std::vector<LowLevelGatherTransfer> low_level_transfers;
 
-    uint32_t num_input_cores = input_cores.size();
+    const uint32_t num_input_cores = input_cores.size();
 
     // Calculate shard dimensions
-    uint32_t input_shard_width = HW / num_input_cores;
-    // Allow uneven B*HW across output cores by using ceil division, unless an override is provided
-    uint32_t output_shard_width = (output_shard_width_override != 0)
-                                      ? output_shard_width_override
-                                      : (B * HW + num_output_cores - 1) / num_output_cores;
+    const uint32_t input_shard_width = HW / num_input_cores;
+    // Always require explicit output shard width for consistent offsets
+    TT_FATAL(output_shard_width != 0, "Output shard width must be provided");
 
     for (const auto& t : transfers) {
         // Calculate absolute offset in source shard
@@ -280,7 +246,7 @@ std::vector<LowLevelGatherTransfer> lower_gather_transfers(
     return low_level_transfers;
 }
 
-std::vector<BlockedTransferGroup> group_transfers_by_output_column_blocks(
+BlockedTransfersWithCount group_transfers_by_output_column_blocks(
     const std::vector<GatherTransfer>& transfers,
     uint32_t B,
     uint32_t C,
@@ -288,26 +254,22 @@ std::vector<BlockedTransferGroup> group_transfers_by_output_column_blocks(
     const std::vector<CoreCoord>& input_cores,
     uint32_t num_output_cores,
     uint32_t element_size_bytes,
-    uint32_t block_size) {
+    uint32_t block_size,
+    uint32_t output_shard_width) {
     // Dictionary to group transfers by (dst_shard_idx, column_block_idx)
     std::map<std::pair<uint32_t, uint32_t>, std::vector<LowLevelGatherTransfer>> groups;
 
     // Lower transfers to get flat offsets
-    auto low_level_transfers =
-        lower_gather_transfers(transfers, B, C, HW, input_cores, num_output_cores, element_size_bytes, block_size);
+    auto low_level_transfers = lower_gather_transfers(
+        transfers, B, C, HW, input_cores, num_output_cores, element_size_bytes, output_shard_width);
 
     // Group transfers by which column blocks they write to
     for (size_t i = 0; i < transfers.size(); i++) {
         const auto& transfer = transfers[i];
         const auto& low_level = low_level_transfers[i];
 
-        // Determine which column blocks this transfer writes to
-        // A transfer may span multiple column blocks
-        uint32_t start_col = transfer.dst_offset;
-        uint32_t end_col = transfer.dst_offset + transfer.length - 1;
-
-        uint32_t start_block = start_col / block_size;
-        uint32_t end_block = end_col / block_size;
+        const uint32_t start_col = transfer.dst_offset;
+        auto [start_block, end_block] = compute_block_span(start_col, transfer.length, block_size);
 
         // Add this transfer to all column blocks it touches
         for (uint32_t block_idx = start_block; block_idx <= end_block; block_idx++) {
@@ -346,29 +308,7 @@ std::vector<BlockedTransferGroup> group_transfers_by_output_column_blocks(
         blocked_groups.size(),
         unique_block_indices.size());
 
-    return blocked_groups;
-}
-
-BlockedTransfersWithCount group_transfers_by_output_column_blocks_with_count(
-    const std::vector<GatherTransfer>& transfers,
-    uint32_t B,
-    uint32_t C,
-    uint32_t HW,
-    const std::vector<CoreCoord>& input_cores,
-    uint32_t num_output_cores,
-    uint32_t element_size_bytes,
-    uint32_t block_size) {
-    // Get the blocked transfers using existing function
-    auto blocked_transfers = group_transfers_by_output_column_blocks(
-        transfers, B, C, HW, input_cores, num_output_cores, element_size_bytes, block_size);
-
-    // Count unique column block indices to determine actual number of logical blocks
-    std::set<uint32_t> unique_block_indices;
-    for (const auto& group : blocked_transfers) {
-        unique_block_indices.insert(group.dst_block_idx);
-    }
-
-    return {std::move(blocked_transfers), static_cast<uint32_t>(unique_block_indices.size())};
+    return {std::move(blocked_groups), static_cast<uint32_t>(unique_block_indices.size())};
 }
 
 std::vector<BlockedTransferGroup> coalesce_contiguous_transfers(
@@ -522,10 +462,16 @@ std::vector<BlockedTransferGroup> group_transfers_by_output_column_blocks(
     auto output_cores_vec = corerange_to_cores(
         output_core_grid, std::nullopt, output_shard_spec.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
     uint32_t num_output_cores = output_cores_vec.size();
+    // Compute per-core output row width (number of columns in each [C x (B*HW_per_core)] shard)
+    TT_FATAL(output.is_sharded(), "Output tensor must be sharded for gather operation");
+    const auto& output_shard_spec2 = output.shard_spec().value();
+    uint32_t output_shard_width =
+        static_cast<uint32_t>(output_shard_spec2.shape[0]);  // columns per output core = B*HW_per_core
 
-    // Call the original implementation
-    return group_transfers_by_output_column_blocks(
-        transfers, B, C, HW, input_cores_vec, num_output_cores, element_size_bytes, block_size);
+    // Call the unified implementation and return only the blocked transfers
+    auto result = group_transfers_by_output_column_blocks(
+        transfers, B, C, HW, input_cores_vec, num_output_cores, element_size_bytes, block_size, output_shard_width);
+    return result.blocked_transfers;
 }
 
 /**

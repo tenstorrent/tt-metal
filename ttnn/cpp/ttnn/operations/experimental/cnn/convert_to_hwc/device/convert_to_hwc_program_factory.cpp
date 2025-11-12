@@ -703,7 +703,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
 
     // Setup circular buffers after block_size_width is calculated - use output cores where kernels run
     auto cb_handles = setup_circular_buffers(program, config.output_core_grid, config, a, output, block_size_width);
-    const auto blocked_result = convert_to_hwc::detail::group_transfers_by_output_column_blocks_with_count(
+    const auto blocked_result = convert_to_hwc::detail::group_transfers_by_output_column_blocks(
         gather_transfers,
         config.batch_size,
         config.input_channels,
@@ -711,6 +711,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         in_cores,
         config.output_cores.size(),
         a.element_size(),
+        block_size_width,
         block_size_width);
 
     auto blocked_gather_transfers = std::move(blocked_result.blocked_transfers);
