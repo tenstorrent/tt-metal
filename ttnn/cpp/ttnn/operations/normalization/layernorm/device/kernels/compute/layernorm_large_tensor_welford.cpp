@@ -42,7 +42,7 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
 
     tile_regs_acquire();
     welford_init();
-    welford_store_mean_m2_to_dst(mean_dst);
+    welford_save_state(mean_dst);
     tile_regs_commit();
 
     cb_reserve_back(cb_ex, 1);
@@ -91,7 +91,7 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
         reconfig_data_format_srca(cb_ex, cb_ex2);
         copy_tile_to_dst_init_short_with_dt(cb_ex, cb_ex2);
         copy_tile(cb_ex2, 0, var_dst);
-        welford_load_mean_m2_from_dst(mean_dst);
+        welford_restore_state(mean_dst);
 
         reconfig_data_format_srca(cb_ex2, cb_interm_pre_add);
         transpose_wh_init_short(cb_interm_pre_add);
@@ -101,18 +101,18 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
 
             if constexpr (is_last_tile_full) {
                 // All tiles can go through the faster call which does 32 rows
-                welford_tile<W>(input_dst, sample_idx, reciprocal_lut);
+                welford_update<W>(input_dst, sample_idx, reciprocal_lut);
             } else {
                 // If it is the end tile, do it differently
                 if ((wt + j) == (Wt - 1)) {
-                    welford_tile<W>(input_dst, sample_idx, reciprocal_lut);
+                    welford_update<W>(input_dst, sample_idx, reciprocal_lut);
                 } else {
-                    welford_partial_tile<W>(input_dst, sample_idx, 0, last_tile_rows, reciprocal_lut);
+                    welford_update_rows<W>(input_dst, sample_idx, 0, last_tile_rows, reciprocal_lut);
                 }
             }
             sample_idx += tile_width;
         }
-        welford_store_mean_m2_to_dst(mean_dst);
+        welford_save_state(mean_dst);
         tile_regs_commit();
         cb_pop_front(cb_interm_pre_add, blk);
         cb_pop_front(cb_ex, 1);
@@ -136,9 +136,9 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     copy_tile(cb_ex, 0, mean_dst);
     copy_tile_to_dst_init_short_with_dt(cb_ex, cb_ex2);
     copy_tile(cb_ex2, 0, var_dst);
-    welford_load_mean_m2_from_dst(mean_dst);
+    welford_restore_state(mean_dst);
     // Store the mean and variance to the destination registers
-    welford_store_mean_var_to_dst_row<W>(mean_dst, W - 1, reciprocal_lut);
+    welford_finalize_to_row<W>(mean_dst, W - 1, reciprocal_lut);
     tile_regs_commit();
     cb_pop_front(cb_ex, 1);
     cb_pop_front(cb_ex2, 1);
@@ -170,7 +170,7 @@ void welford_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
         cb_wait_front(cb_in, 1);
         // Welford's needs transposed input tile
         transpose_wh_tile(cb_in, 0, input_dst);
-        welford_tile<W>(input_dst, sample_idx, reciprocal_lut);
+        welford_update<W>(input_dst, sample_idx, reciprocal_lut);
 
         // Pop the input
         cb_pop_front(cb_in, 1);
@@ -182,13 +182,13 @@ void welford_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     transpose_wh_tile(cb_in, 0, input_dst);
 
     if constexpr (is_last_tile_full) {
-        welford_tile<W>(input_dst, sample_idx, reciprocal_lut);
+        welford_update<W>(input_dst, sample_idx, reciprocal_lut);
     } else {
-        welford_partial_tile<W>(input_dst, sample_idx, 0, last_tile_rows, reciprocal_lut);
+        welford_update_rows<W>(input_dst, sample_idx, 0, last_tile_rows, reciprocal_lut);
     }
 
     // Store the mean and variance to the destination registers
-    welford_store_mean_var_to_dst_row<W>(mean_dst, W - 1, reciprocal_lut);
+    welford_finalize_to_row<W>(mean_dst, W - 1, reciprocal_lut);
 
     tile_regs_commit();
     cb_pop_front(cb_in, 1);

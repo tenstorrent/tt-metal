@@ -136,7 +136,7 @@ void MAIN {
         uint32_t block_xy_coord = 0;
 
         for (uint32_t g = 0; g < num_groups; ++g) {
-            welford_store_mean_m2_to_dst(mean_dst, g);
+            welford_save_state(mean_dst, g);
         }
 
         for (uint32_t i = 0; i < block_h; ++i) {
@@ -172,10 +172,9 @@ void MAIN {
                     uint32_t cols_available = tt::constants::TILE_WIDTH - group_offset;
                     uint32_t cols_consumed = std::min(cols_available, channels_left);
 
-                    welford_load_mean_m2_from_dst(mean_dst, g);
-                    welford_partial_tile<0>(
-                        input_dst, curr_xy_coord, group_offset, cols_consumed, empty_reciprocal_lut);
-                    welford_store_mean_m2_to_dst(mean_dst, g);
+                    welford_restore_state(mean_dst, g);
+                    welford_update_rows<0>(input_dst, curr_xy_coord, group_offset, cols_consumed, empty_reciprocal_lut);
+                    welford_save_state(mean_dst, g);
 
                     channels_left -= cols_consumed;
                     group_offset += cols_consumed;
@@ -208,8 +207,8 @@ void MAIN {
 
         for (uint32_t g = 0; g < num_groups; ++g) {
             // Convert M2 to variance
-            welford_load_mean_m2_from_dst(mean_dst, g);
-            welford_store_mean_var_to_dst_raw<0>(mean_dst, g, block_xy_coord - 1, empty_reciprocal_lut);
+            welford_restore_state(mean_dst, g);
+            welford_finalize_to_face<0>(mean_dst, g, block_xy_coord - 1, empty_reciprocal_lut);
         }
 
         tile_regs_commit();

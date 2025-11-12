@@ -59,11 +59,11 @@ void MAIN {
      *       For each group, we accumulate Welford statistics across all channels in that group
      *       Welford Partial Tile Updates:
      *           Process input tiles incrementally, updating running mean and M2 for each group
-     *           Uses welford_partial_tile()
+     *           Uses welford_update_rows()
      *           Intermediate results stored in dst registers between tiles
      *   Statistics Aggregation:
      *       Local aggregation per core:
-     *           Convert accumulated M2 to variance using welford_store_mean_var_to_dst_raw()
+     *           Convert accumulated M2 to variance using welford_finalize_to_face()
      *           Store per-group statistics in cb_ex_partial for inter-core communication
      *       Global reduction across cores:
      *           Reader kernels aggregate local statistics from all cores into cb_ex_global
@@ -82,10 +82,10 @@ void MAIN {
      *
      * Key Welford operations:
      * - welford_init(): Initialize algorithm state
-     * - welford_partial_tile(): Update running statistics for partial tile data
-     * - welford_store_mean_m2_to_dst(): Save intermediate statistics to dst registers
-     * - welford_load_mean_m2_from_dst(): Restore statistics for continued processing
-     * - welford_store_mean_var_to_dst_raw(): Convert M2 to final variance
+     * - welford_update_rows(): Update running statistics for partial tile data
+     * - welford_save_state(): Save intermediate statistics to dst registers
+     * - welford_restore_state(): Restore statistics for continued processing
+     * - welford_finalize_to_face(): Convert M2 to final variance
      *
      * To find code sections, search for "Start LABEL" or "End LABEL" comments
      * Examples: "Start Welford Partial Tile" or "End Statistics Aggregation"
@@ -229,7 +229,7 @@ void MAIN {
         uint32_t block_xy_coord = 0;
 
         for (uint32_t g = 0; g < num_groups; ++g) {
-            welford_store_mean_m2_to_dst(mean_dst, g);
+            welford_save_state(mean_dst, g);
         }
 
         for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
@@ -272,10 +272,10 @@ void MAIN {
                         uint32_t cols_available = tt::constants::TILE_WIDTH - group_offset;
                         uint32_t cols_consumed = std::min(cols_available, channels_left);
 
-                        welford_load_mean_m2_from_dst(mean_dst, g);
-                        welford_partial_tile<reciprocal_size>(
+                        welford_restore_state(mean_dst, g);
+                        welford_update_rows<reciprocal_size>(
                             input_dst, curr_xy_coord, group_offset, cols_consumed, *p_reciprocal);
-                        welford_store_mean_m2_to_dst(mean_dst, g);
+                        welford_save_state(mean_dst, g);
                         // End Welford Partial Tile Updates
 
                         channels_left -= cols_consumed;
@@ -311,8 +311,8 @@ void MAIN {
         // Start Statistics Aggregation
         for (uint32_t g = 0; g < num_groups; ++g) {
             // Convert M2 to variance
-            welford_load_mean_m2_from_dst(mean_dst, g);
-            welford_store_mean_var_to_dst_raw<reciprocal_size>(mean_dst, g, block_xy_coord - 1, *p_reciprocal);
+            welford_restore_state(mean_dst, g);
+            welford_finalize_to_face<reciprocal_size>(mean_dst, g, block_xy_coord - 1, *p_reciprocal);
         }
 
         tile_regs_commit();
