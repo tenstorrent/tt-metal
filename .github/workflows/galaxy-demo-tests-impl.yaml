@@ -381,11 +381,11 @@ jobs:
           owner: U09ELB03XRU # Stephen Osborne
 
       # Environment data and benchmark collection
-      - name: Save environment data for Falcon7b
+      - name: Save environment data for all models
         if: ${{ !cancelled() }}
         run: |
           python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
-      - name: Upload benchmark data for Falcon7b
+      - name: Upload benchmark data for all models
         if: ${{ !cancelled() }}
         uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
         with:
