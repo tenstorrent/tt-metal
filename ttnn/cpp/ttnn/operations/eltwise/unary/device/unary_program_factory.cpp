@@ -50,11 +50,21 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     uint32_t tmp0_cb_index = tt::CBIndex::c_1;  // temporary buffer for intermediate results
-    if (ops_chain[0].type() == UnaryOpType::HARDSHRINK || ops_chain[0].type() == UnaryOpType::CBRT) {
+    if (ops_chain[0].type() == UnaryOpType::HARDSHRINK || ops_chain[0].type() == UnaryOpType::CBRT ||
+        ops_chain[0].type() == UnaryOpType::LOGSIGMOID) {
         tt::tt_metal::CircularBufferConfig cb_tmp0_config =
             tt::tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{tmp0_cb_index, cb_data_format}})
                 .set_page_size(tmp0_cb_index, single_tile_size);
         tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_tmp0_config);
+    }
+
+    // Additional temp buffer for logsigmoid (cb_tmp1 for exp(-x))
+    uint32_t tmp1_cb_index = tt::CBIndex::c_3;
+    if (ops_chain[0].type() == UnaryOpType::LOGSIGMOID) {
+        tt::tt_metal::CircularBufferConfig cb_tmp1_config =
+            tt::tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{tmp1_cb_index, cb_data_format}})
+                .set_page_size(tmp1_cb_index, single_tile_size);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_tmp1_config);
     }
 
     uint32_t output_cb_index = tt::CBIndex::c_2;
@@ -118,6 +128,29 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
             case UnaryOpType::WHERE_TSS:
                 packed_scalar1 = utils::pack_scalar_runtime_arg(ops_chain[0], 0, input.dtype());
                 packed_scalar2 = utils::pack_scalar_runtime_arg(ops_chain[0], 1, input.dtype());
+                break;
+            case UnaryOpType::LOGSIGMOID: {
+                float beta_val = ops_chain[0].empty() ? 1.0f : *ops_chain[0].get_param_if<float>(0);
+                packed_scalar1 = std::bit_cast<uint32_t>(beta_val);
+            }
+                {
+                    auto threshold_param = ops_chain[0].get_param_if<float>(1);
+                    float threshold_val = threshold_param ? *threshold_param : 20.0f;
+                    packed_scalar2 = std::bit_cast<uint32_t>(threshold_val);
+                }
+                break;
+            default: break;
+        }
+    } else {
+        switch (ops_chain[0].type()) {
+            case UnaryOpType::CBRT:
+                if (input.dtype() == DataType::FLOAT32) {
+                    unary_defines["CBRT_FLOAT"] = "mul_binary_tile";
+                }
+                break;
+            case UnaryOpType::LOGSIGMOID:
+                packed_scalar1 = std::bit_cast<uint32_t>(1.0f);   // beta
+                packed_scalar2 = std::bit_cast<uint32_t>(20.0f);  // threshold
                 break;
             default: break;
         }

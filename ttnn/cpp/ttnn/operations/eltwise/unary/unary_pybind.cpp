@@ -1155,6 +1155,61 @@ void bind_softplus(py::module& module, const unary_operation_t& operation) {
 }
 
 template <typename unary_operation_t>
+void bind_log_sigmoid(py::module& module, const unary_operation_t& operation) {
+    auto doc = fmt::format(
+        R"doc(
+        Applies {0} to :attr:`input_tensor` element-wise.
+
+        .. math::
+            \mathrm{{output\_tensor}}_i = \log(\sigma(\mathrm{{input\_tensor}}_i))
+
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
+
+        Keyword Args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - BFLOAT16, BFLOAT8_B
+                 - TILE
+                 - 2, 3, 4
+
+        Example:
+            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            >>> output = {1}(tensor)
+        )doc",
+        ttnn::log_sigmoid.base_name(),
+        ttnn::log_sigmoid.python_fully_qualified_name());
+
+    bind_registered_operation(
+        module,
+        ttnn::log_sigmoid,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const unary_operation_t& self,
+               const Tensor& input,
+               const std::optional<MemoryConfig>& memory_config,
+               const std::optional<Tensor>& output_tensor) { return self(input, memory_config, output_tensor); },
+            py::arg("input_tensor"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt});
+}
+
+template <typename unary_operation_t>
 void bind_tanh_like(py::module& module, const unary_operation_t& operation) {
     auto doc = fmt::format(
         R"doc(
@@ -2200,12 +2255,7 @@ void py_module(py::module& module) {
         R"doc(\mathrm{{output\_tensor}}_i = \verb|tan|(\mathrm{{input\_tensor}}_i))doc",
         "Supported input range is (-1.45, 1.45)",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_operation(
-        module,
-        ttnn::log_sigmoid,
-        R"doc(\mathrm{{output\_tensor}}_i = \verb|log_sigmoid|(\mathrm{{input\_tensor}}_i))doc",
-        "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+    bind_log_sigmoid(module, ttnn::log_sigmoid);
     bind_unary_operation(
         module,
         ttnn::bitwise_not,
