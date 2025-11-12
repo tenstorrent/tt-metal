@@ -353,8 +353,10 @@ operation::ProgramWithCallbacks LayerNorm::create_program(
 
     return std::visit(
         [&](const auto& program_config) -> tt::tt_metal::operation::ProgramWithCallbacks {
-            uint32_t num_cores_x = 6;
-            uint32_t num_cores_y = 8;
+            // uint32_t num_cores_x = 6;
+            // uint32_t num_cores_y = 8;
+            uint32_t num_cores_x = 1;
+            uint32_t num_cores_y = 1;
             CoreCoord grid_size = CoreCoord(num_cores_x, num_cores_y);
 
             TT_FATAL(
