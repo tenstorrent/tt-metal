@@ -5,7 +5,6 @@
 #include "gtest/gtest.h"
 
 #include "ttnn/operations/experimental/ccl/all_gather_async/all_gather_async.hpp"
-#include "ttnn/operations/experimental/ccl/reduce_scatter_async/reduce_scatter.hpp"
 #include "ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/reduce_scatter_minimal_async.hpp"
 
@@ -196,24 +195,24 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, DISABLED_ReduceScatterAsync) {
     auto to_remote_multi_device_global_semaphore = CMAKE_UNIQUE_NAMESPACE::create_global_semaphore(devices);
 
     tt::tt_metal::distributed::Synchronize(mesh_device_.get(), std::nullopt, std::vector<SubDeviceId>());
-    auto reduced = ttnn::experimental::reduce_scatter_async(
-        tensors,
-        3,
-        from_remote_multi_device_global_semaphore,
-        to_remote_multi_device_global_semaphore,
-        ttnn::operations::reduction::ReduceType::Sum,
-        std::nullopt,
-        ttnn::ccl::Topology::Linear,
-        1,
-        SubDeviceId(0));
+    // auto reduced = ttnn::experimental::reduce_scatter_async(
+    //     tensors,
+    //     3,
+    //     from_remote_multi_device_global_semaphore,
+    //     to_remote_multi_device_global_semaphore,
+    //     ttnn::operations::reduction::ReduceType::Sum,
+    //     std::nullopt,
+    //     ttnn::ccl::Topology::Linear,
+    //     1,
+    //     SubDeviceId(0));
 
-    for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
-        auto data = reduced[dev_idx].to_vector<bfloat16>();
-        for (int i = 0; i < data.size(); i++) {
-            float expected = static_cast<float>(mesh_devices.size());
-            EXPECT_EQ(static_cast<float>(data[i]), expected);
-        }
-    }
+    // for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
+    //     auto data = reduced[dev_idx].to_vector<bfloat16>();
+    //     for (int i = 0; i < data.size(); i++) {
+    //         float expected = static_cast<float>(mesh_devices.size());
+    //         EXPECT_EQ(static_cast<float>(data[i]), expected);
+    //     }
+    // }
 }
 
 }  // namespace tt::tt_metal

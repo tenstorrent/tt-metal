@@ -374,14 +374,15 @@ void kernel_main() {
                                 get_noc_addr(noc_coord_x[i], noc_coord_y[i], global_means_ptr);
                             uint64_t noc_vars_addr =
                                 get_noc_addr(noc_coord_x[i], noc_coord_y[i], global_vars_ptr);
-                            noc_async_read_one_packet(noc_means_addr, global_means_ptr + i * NOC_DRAM_READ_ALIGNMENT_BYTES, NOC_DRAM_READ_ALIGNMENT_BYTES);
-                            noc_async_read_one_packet(noc_vars_addr, global_vars_ptr + i * NOC_DRAM_READ_ALIGNMENT_BYTES, NOC_DRAM_READ_ALIGNMENT_BYTES);
+                            noc_async_read_one_packet(noc_means_addr, global_means_ptr + i * NOC_L1_READ_ALIGNMENT_BYTES, NOC_L1_READ_ALIGNMENT_BYTES);
+                            noc_async_read_one_packet(noc_vars_addr, global_vars_ptr + i * NOC_L1_READ_ALIGNMENT_BYTES, NOC_L1_READ_ALIGNMENT_BYTES);
                         }
                         noc_async_read_barrier();
                     }
 
                     // Read mean and variance arrays from cb_ex_global, then combine using Welford
-                    auto global_result = combine_welford_stats<num_mcast_cores, num_channels_per_group * num_rows_per_group, 16>(p_global_means, p_global_vars);
+                    constexpr uint32_t stride = NOC_L1_READ_ALIGNMENT_BYTES / 2;
+                    auto global_result = combine_welford_stats<num_mcast_cores, num_channels_per_group * num_rows_per_group, stride>(p_global_means, p_global_vars);
 
                     // Write this to cb_ex_global
                     p_global_means[0] = global_result.mean;

@@ -1105,37 +1105,12 @@ int main(int argc, char** argv) {
             BM_pgm_dispatch,
             TestInfo{
                 .warmup_iterations = 5000,
-                .brisc_enabled = false,
+                .brisc_enabled = true,
                 .ncrisc_enabled = false,
                 .trisc_enabled = false,
-                .erisc_enabled = true,
-                .use_trace = true})
-            ->Apply(Max8192Args)
-            ->UseManualTime();
-        benchmark::RegisterBenchmark(
-            "BM_pgm_dispatch/tensix_eth_2",
-            BM_pgm_dispatch,
-            TestInfo{
-                .warmup_iterations = 5000,
-                .n_args = 16,
-                .n_kgs = std::get<0>(core_count),
-                .erisc_enabled = true,
+                .erisc_enabled = false,
                 .use_trace = true,
-                .use_all_cores = true})
-            ->Apply(Max8192Args)
-            ->UseManualTime();
-        benchmark::RegisterBenchmark(
-            "BM_pgm_dispatch/tensix_eth_2_4_shadow",
-            BM_pgm_dispatch,
-            TestInfo{
-                .warmup_iterations = 5000,
-                .slow_kernel_cycles = 40000,
-                .nfast_kernels = 4,
-                .n_args = 16,
-                .n_kgs = std::get<0>(core_count),
-                .erisc_enabled = true,
-                .use_trace = true,
-                .use_all_cores = true})
+                .dispatch_from_eth = true})
             ->Apply(Max8192Args)
             ->UseManualTime();
     }

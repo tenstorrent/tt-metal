@@ -33,6 +33,7 @@ enum class HalL1MemAddrType : uint8_t {
     GO_MSG_INDEX,
     LOCAL,
     BANK_TO_NOC_SCRATCH,
+    LOGICAL_TO_VIRTUAL_SCRATCH,
     APP_SYNC_INFO,
     APP_ROUTING_INFO,
     RETRAIN_COUNT,

@@ -14,7 +14,10 @@ from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.tt.tt_unet import TtUNet2DConditionModel
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_autoencoder_kl import TtAutoencoderKL
 from models.experimental.stable_diffusion_xl_base.tt.tt_euler_discrete_scheduler import TtEulerDiscreteScheduler
-from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
+from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs import (
+    ModelOptimisations,
+    RefinerModelOptimisations,
+)
 from transformers import CLIPTextModelWithProjection, CLIPTextModel
 from models.experimental.stable_diffusion_xl_base.tests.test_common import (
     create_tt_clip_text_encoders,
@@ -58,7 +61,9 @@ class TtSDXLPipeline(LightweightModule):
         assert isinstance(
             torch_pipeline, pipeline_config.pipeline_type
         ), f"torch_pipeline must be an instance of {pipeline_config.pipeline_type.__name__}, but got {type(torch_pipeline).__name__}"
-        assert isinstance(torch_pipeline.text_encoder, CLIPTextModel), "pipeline.text_encoder is not a CLIPTextModel"
+        assert (
+            isinstance(torch_pipeline.text_encoder, CLIPTextModel) or torch_pipeline.text_encoder is None
+        ), "pipeline.text_encoder is not a CLIPTextModel or None"
         assert isinstance(
             torch_pipeline.text_encoder_2, CLIPTextModelWithProjection
         ), "pipeline.text_encoder_2 is not a CLIPTextModelWithProjection"
@@ -122,6 +127,15 @@ class TtSDXLPipeline(LightweightModule):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.ttnn_device),
         )
 
+        self.one_minus_guidance_rescale = ttnn.from_torch(
+            torch.Tensor([1.0 - self.pipeline_config.guidance_rescale]),
+            dtype=ttnn.bfloat16,
+            device=self.ttnn_device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.ttnn_device),
+        )
+
         compute_grid_size = self.ttnn_device.compute_with_storage_grid_size()
         ccl_sub_device_crs = ttnn.CoreRangeSet(
             {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
@@ -170,7 +184,14 @@ class TtSDXLPipeline(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.ttnn_device),
         )
+        host_one_minus_guidance_rescale = ttnn.from_torch(
+            torch.Tensor([1.0 - self.pipeline_config.guidance_rescale]),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.ttnn_device),
+        )
         ttnn.copy_host_to_device_tensor(host_guidance_rescale, self.guidance_rescale)
+        ttnn.copy_host_to_device_tensor(host_one_minus_guidance_rescale, self.one_minus_guidance_rescale)
 
     def set_crop_coords_top_left(self, crop_coords_top_left: tuple):
         self.pipeline_config.crop_coords_top_left = crop_coords_top_left
@@ -289,7 +310,7 @@ class TtSDXLPipeline(LightweightModule):
         # Compilation of text encoders on the device.
         if not self.encoders_compiled:
             assert self.pipeline_config.encoders_on_device, "Host text encoders are used; compile is not needed"
-            assert self.tt_text_encoder is not None, "Text encoder is not loaded on the device"
+            assert self.tt_text_encoder_2 is not None, "Text encoder is not loaded on the device"
 
             warmup_tt_text_encoders(
                 self.tt_text_encoder,
@@ -329,7 +350,8 @@ class TtSDXLPipeline(LightweightModule):
                 self.ag_semaphores,
                 capture_trace=False,
                 use_cfg_parallel=self.pipeline_config.use_cfg_parallel,
-                guidance_rescale=self.pipeline_config.guidance_rescale,
+                guidance_rescale=self.guidance_rescale,
+                one_minus_guidance_rescale=self.one_minus_guidance_rescale,
             )
             ttnn.synchronize_device(self.ttnn_device)
             profiler.end("warmup_run")
@@ -592,7 +614,8 @@ class TtSDXLPipeline(LightweightModule):
             output_shape=self.output_shape,
             tid_vae=self.tid_vae if hasattr(self, "tid_vae") else None,
             use_cfg_parallel=self.pipeline_config.use_cfg_parallel,
-            guidance_rescale=self.pipeline_config.guidance_rescale,
+            guidance_rescale=self.guidance_rescale,
+            one_minus_guidance_rescale=self.one_minus_guidance_rescale,
         )
         self._reset_num_inference_steps()
         return imgs
@@ -612,19 +635,24 @@ class TtSDXLPipeline(LightweightModule):
         profiler.start("load_tt_componenets")
         with ttnn.distribute(ttnn.ReplicateTensorToMesh(self.ttnn_device)):
             # 2. Load tt_unet, tt_vae and tt_scheduler
-            self.tt_model_config = ModelOptimisations()
+            self.tt_unet_model_config = (
+                ModelOptimisations()
+                if not self.torch_pipeline.unet.state_dict()["conv_in.weight"].shape[0] == 384
+                else RefinerModelOptimisations()
+            )
+            self.tt_vae_model_config = ModelOptimisations()
             self.tt_unet = TtUNet2DConditionModel(
                 self.ttnn_device,
                 self.torch_pipeline.unet.state_dict(),
                 "unet",
-                model_config=self.tt_model_config,
+                model_config=self.tt_unet_model_config,
                 debug_mode=pipeline_config._debug_mode,
             )
             self.tt_vae = (
                 TtAutoencoderKL(
                     self.ttnn_device,
                     self.torch_pipeline.vae.state_dict(),
-                    self.tt_model_config,
+                    self.tt_vae_model_config,
                     debug_mode=pipeline_config._debug_mode,
                 )
                 if pipeline_config.vae_on_device
@@ -713,8 +741,7 @@ class TtSDXLPipeline(LightweightModule):
             )
             tt_time_ids_host = ttnn.squeeze(tt_time_ids_host, dim=0)
 
-            for host_tensor, device_tensor in zip(tt_time_ids_host, self.tt_time_ids_device):
-                ttnn.copy_host_to_device_tensor(host_tensor, device_tensor)
+            ttnn.copy_host_to_device_tensor(tt_time_ids_host, self.tt_time_ids_device)
 
     def __create_user_tensors(self, latents, all_prompt_embeds_torch, torch_add_text_embeds):
         # Instantiation of user host input tensors for the TT model.
@@ -771,7 +798,8 @@ class TtSDXLPipeline(LightweightModule):
             self.ag_semaphores,
             capture_trace=True,
             use_cfg_parallel=self.pipeline_config.use_cfg_parallel,
-            guidance_rescale=self.pipeline_config.guidance_rescale,
+            guidance_rescale=self.guidance_rescale,
+            one_minus_guidance_rescale=self.one_minus_guidance_rescale,
         )
         ttnn.synchronize_device(self.ttnn_device)
         profiler.end("capture_model_trace")

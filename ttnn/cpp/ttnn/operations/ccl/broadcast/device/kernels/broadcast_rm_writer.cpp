@@ -116,20 +116,19 @@ void kernel_main() {
 
     uint64_t barrier_sem_noc_addr_in_pkt = safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, barrier_sem, 0);
     fabric_multicast_noc_unicast_atomic_inc_set_state<
-        UnicastAtomicIncUpdateMask::Wrap | UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
+        UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
         fabric_connection,
         sem_route_id,
         starts,
         ranges,
         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-            0,                         // ignore
-            static_cast<uint16_t>(1),  // increment 1
-            32});
+            0,                           // ignore
+            static_cast<uint32_t>(1)});  // increment 1
 
     fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
         fabric_connection,
         sem_route_id,
-        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0, 0});
+        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0});
 
     noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), num_total_targets);
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
@@ -204,7 +203,7 @@ void kernel_main() {
         fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
             fabric_connection,
             sem_route_id,
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0, 0});
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
         // increment locally
         uint64_t out_ready_sem_noc_addr =
             safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);

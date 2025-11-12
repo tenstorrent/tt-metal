@@ -20,6 +20,9 @@
 
 #include <telemetry/telemetry_subscriber.hpp>
 #include <server/web_server.hpp>
+#include <server/prom_formatter.hpp>
+#include <unistd.h>
+#include <climits>
 
 using json = nlohmann::json;
 
@@ -243,6 +246,18 @@ public:
             res.set_content(response.dump(), "application/json");
         });
 
+        // Prometheus metrics endpoint
+        server_.Get("/api/metrics", [this](const httplib::Request&, httplib::Response& res) {
+            std::lock_guard<std::mutex> lock(snapshot_mutex_);
+            try {
+                auto prometheus_output = tt::telemetry::format_snapshot_as_prometheus(telemetry_state_);
+                res.set_content(prometheus_output, "text/plain; version=0.0.4; charset=utf-8");
+            } catch (const std::exception& e) {
+                res.status = 500;
+                res.set_content(std::string("Error formatting metrics: ") + e.what(), "text/plain; charset=utf-8");
+            }
+        });
+
         // Server-Sent Events endpoint for real-time telemetry
         server_.Get("/api/stream", [this](const httplib::Request&, httplib::Response& res) {
             res.set_header("Content-Type", "text/event-stream");
@@ -303,6 +318,7 @@ public:
         log_info(tt::LogAlways, "  GET  /<path>          - Static assets (serves static/<path>)");
         log_info(tt::LogAlways, "  GET  /api/status      - Server status");
         log_info(tt::LogAlways, "  GET  /api/stream      - Real-time stream (SSE)");
+        log_info(tt::LogAlways, "  GET  /api/metrics     - Prometheus metrics");
 
         server_.listen("0.0.0.0", port);
     }

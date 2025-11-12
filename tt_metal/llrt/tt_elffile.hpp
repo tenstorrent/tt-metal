@@ -20,7 +20,7 @@ namespace ll_api {
 
 class ElfFile {
 public:
-    // ELF32
+    // On ELF64 systems, we're statically restricted to the first 4GB
     using address_t = std::uint32_t;  // Address in memory
     using offset_t = std::uint32_t;   // Offset within region
     using word_t = std::uint32_t;     // Contents

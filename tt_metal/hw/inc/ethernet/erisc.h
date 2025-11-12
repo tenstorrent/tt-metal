@@ -27,7 +27,7 @@ inline __attribute__((always_inline)) void risc_context_switch() {
     ncrisc_noc_full_sync();
     rtos_context_switch_ptr();
     ncrisc_noc_counters_init();
-#elif defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0 && defined(ENABLE_2_ERISC_MODE)
+#elif defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
     // Only NoC0
     ncrisc_noc_full_sync<1>();
     service_eth_msg();
@@ -41,9 +41,9 @@ inline __attribute__((always_inline)) void risc_context_switch_without_noc_sync(
 #if defined(COMPILE_FOR_ERISC)
 #if defined(COOPERATIVE_ERISC)
     rtos_context_switch_ptr();
-#elif defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0 && defined(ENABLE_2_ERISC_MODE)
+#elif defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
     update_boot_results_eth_link_status_check();
-#elif defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 1
+#elif defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 1)
     lite_fabric::service_lite_fabric_channels();
 #endif
 #endif

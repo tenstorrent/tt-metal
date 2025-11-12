@@ -91,6 +91,10 @@ def manage_config(name, value):
 from ttnn._ttnn.multi_device import (
     CppMeshToTensor,
     CppTensorToMesh,
+    BidirectionalFabricSocket,
+    FabricSocket,
+    ISocket,
+    MPISocket,
     PlacementReplicate,
     PlacementShard,
     MeshMapperConfig,
@@ -344,6 +348,7 @@ from ttnn.operations.normalization import (
     SoftmaxShardedMultiCoreProgramConfig,
     LayerNormDefaultProgramConfig,
     LayerNormShardedMultiCoreProgramConfig,
+    LayerNormDistributedDefaultProgramConfig,
     create_group_norm_weight_bias_rm,
     create_group_norm_input_mask,
     create_group_norm_input_negative_mask,
@@ -391,6 +396,7 @@ from ttnn.operations.pool import (
 )
 
 from ttnn._ttnn.operations.experimental import Conv3dConfig
+from ttnn._ttnn.operations.experimental import MinimalMatmulConfig
 
 Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 

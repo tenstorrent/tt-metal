@@ -10,6 +10,7 @@ import datetime
 import os
 import hashlib
 import json
+import random
 
 from framework.permutations import *
 from framework.serialize import serialize, serialize_structured
@@ -18,6 +19,11 @@ from framework.sweeps_logger import sweeps_logger as logger
 
 SWEEPS_DIR = pathlib.Path(__file__).parent
 SWEEP_SOURCES_DIR = SWEEPS_DIR / "sweeps"
+
+
+# Shuffle control (set in __main__ when --randomize is provided)
+SHUFFLE_SEED = None
+DO_RANDOMIZE = False
 
 
 # Generate vectors from module parameters
@@ -58,6 +64,11 @@ def export_suite_vectors_json(module_name, suite_name, vectors):
     EXPORT_PATH = EXPORT_DIR_PATH / str(module_name + ".json")
     if not EXPORT_DIR_PATH.exists():
         EXPORT_DIR_PATH.mkdir()
+
+    # Randomize order only when explicitly requested via --randomize
+    if DO_RANDOMIZE:
+        rng = random.Random(SHUFFLE_SEED)
+        rng.shuffle(vectors)
 
     current_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     serialized_vectors = dict()
@@ -237,6 +248,12 @@ if __name__ == "__main__":
         help="If set, dumps the results to disk in JSON instead of using ES",
     )
     parser.add_argument(
+        "--randomize",
+        required=False,
+        type=int,
+        help="Randomize the order of vectors to allow reproducible order.",
+    )
+    parser.add_argument(
         "--skip-modules",
         required=False,
         help="Comma-separated list of module names to skip during generation",
@@ -263,6 +280,15 @@ if __name__ == "__main__":
         exit(1)
 
     logger.info(f"Running current generation with tag: {SWEEPS_TAG}.")
+
+    # Enable reproducible shuffling only when --randomize is provided
+    if args.randomize is not None:
+        SHUFFLE_SEED = int(args.randomize)
+        DO_RANDOMIZE = True
+        logger.info(f"Randomize seed: {SHUFFLE_SEED}")
+    else:
+        DO_RANDOMIZE = False
+        SHUFFLE_SEED = None
 
     if args.clean and not args.module_name:
         logger.error("The clean flag must be set in conjunction with a module name.")

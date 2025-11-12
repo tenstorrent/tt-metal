@@ -14,12 +14,12 @@ from models.experimental.panoptic_deeplab.tt.model_preprocessing import (
 from models.experimental.panoptic_deeplab.tt.tt_model import TtPanopticDeepLab
 from models.experimental.panoptic_deeplab.reference.pytorch_model import PytorchPanopticDeepLab
 from models.experimental.panoptic_deeplab.tt.model_configs import ModelOptimisations
-from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.panoptic_deeplab.tt.common import (
     PDL_L1_SMALL_SIZE,
     get_panoptic_deeplab_weights_path,
     get_panoptic_deeplab_config,
 )
+from models.experimental.panoptic_deeplab.tests.pcc.common import check_ttnn_output
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": PDL_L1_SMALL_SIZE}], indirect=True)
@@ -114,14 +114,12 @@ def test_ttnn_semseg(device, model_location_generator):
     logger.info("Running TTNN semantic segmentation head test...")
     ttnn_out_tt, _ = ttnn_model.semantic_head(ttnn_features)
 
-    ttnn_out_torch = ttnn.to_torch(ttnn_out_tt).permute(0, 3, 1, 2)
-
-    # Check if output was padded and needs slicing back to original channels
-    original_channels = ttnn_model.semantic_head.get_output_channels_for_slicing()
-    if original_channels is not None:
-        logger.info(f"Slicing output from {ttnn_out_torch.shape[1]} to {original_channels} channels in torch")
-        ttnn_out_torch = ttnn_out_torch[:, :original_channels, :, :]
-
-    passed, msg = assert_with_pcc(torch_out, ttnn_out_torch, pcc=0.99)
-    logger.info(f"Semantic segmentation PCC: {msg}")
-    assert passed, f"Semantic segmentation PCC test failed: {msg}"
+    passed = check_ttnn_output(
+        "Semantic",
+        torch_out,
+        ttnn_out_tt,
+        to_channel_first=False,
+        output_channels=ttnn_model.semantic_head.get_output_channels_for_slicing(),
+        exp_pcc=0.972,
+    )
+    assert passed, f"Semantic segmentation PCC test failed"

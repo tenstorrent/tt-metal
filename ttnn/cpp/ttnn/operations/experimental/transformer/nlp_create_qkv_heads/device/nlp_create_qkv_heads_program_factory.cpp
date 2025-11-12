@@ -38,12 +38,10 @@ NlpCreateHeadsDeviceOperation::Interleaved::cached_program_t NlpCreateHeadsDevic
 
     tt_metal::Buffer* in1_buffer = nullptr;
     uint32_t in1_buffer_addr = 0;
-    tt_metal::BufferType in1_buffer_type = tt_metal::BufferType::DRAM;
     if (read_from_input_tensor_kv) {
         in1_buffer = input_tensor_kv.value().buffer();
         TT_ASSERT(in1_buffer->size() % single_tile_size == 0);
         in1_buffer_addr = in1_buffer->address();
-        in1_buffer_type = in1_buffer->buffer_type();
     }
 
     ////////////////////////////////////////////////////////////////////////////

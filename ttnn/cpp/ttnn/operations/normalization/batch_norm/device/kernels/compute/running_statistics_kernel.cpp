@@ -29,11 +29,12 @@ void MAIN {
     binary_op_init_common(cb_batch_mean, cb_batch_var, cb_out0);
     constexpr uint32_t onetile = 1;
 
+    cb_wait_front(cb_one, 1);
+    cb_wait_front(cb_momentum, 1);
+
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
         tile_regs_acquire();
         // updated_running_stat = (1 − momentum) × running_stat + momentum × batch_stat
-        cb_wait_front(cb_one, 1);
-        cb_wait_front(cb_momentum, 1);
 
         if constexpr (old_running_mean_has_value) {
             sub_tiles_to_cb(cb_one, cb_momentum, cb_tmp1, 0, 0, 0, 0);               // 1 - momentum
@@ -51,9 +52,10 @@ void MAIN {
         tile_regs_wait();
         pack_tile(0, cb_out0);
         tile_regs_release();
-        cb_pop_front(cb_one, 1);
-        cb_pop_front(cb_momentum, 1);
         cb_push_back(cb_out0, 1);
     }
+
+    cb_pop_front(cb_one, 1);
+    cb_pop_front(cb_momentum, 1);
 }
 }  // namespace NAMESPACE

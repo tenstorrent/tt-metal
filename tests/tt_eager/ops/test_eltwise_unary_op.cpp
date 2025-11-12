@@ -77,7 +77,7 @@ bool run_test(MeshDevice* device, const ttnn::Shape& shape, float low, float hig
 
     if constexpr (unary_op_type == UnaryOpType::SQRT) {
         auto host_output = host_function<::detail::sqrt>(input_tensor);
-        auto device_output = ttnn::sqrt(input_tensor.to_device(device)).cpu();
+        auto device_output = ttnn::sqrt(input_tensor.to_device(device), /*fast_and_approximate_mode=*/false).cpu();
         return ttnn::allclose<bfloat16>(host_output, device_output, args...);
     } else if constexpr (unary_op_type == UnaryOpType::EXP) {
         auto host_output = host_function<::detail::exp>(input_tensor);

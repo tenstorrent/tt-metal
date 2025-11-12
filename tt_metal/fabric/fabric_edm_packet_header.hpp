@@ -18,6 +18,12 @@
 #include <tt_stl/assert.hpp>
 #endif
 
+// These functions have different behavior on host or device.
+// This causes problems trying to detect unused parameters.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-parameter"
+
+// NOLINTBEGIN(misc-unused-parameters)
 namespace tt::tt_fabric {
 
 enum TerminationSignal : uint32_t {
@@ -57,6 +63,7 @@ enum NocSendType : uint8_t {
     NOC_UNICAST_SCATTER_WRITE = 4,
     NOC_MULTICAST_WRITE = 5,       // mcast has bug
     NOC_MULTICAST_ATOMIC_INC = 6,  // mcast has bug
+    NOC_UNICAST_READ = 7,
     NOC_SEND_TYPE_LAST = NOC_UNICAST_SCATTER_WRITE
 };
 // How to send the payload across the cluster
@@ -101,23 +108,21 @@ struct NocUnicastInlineWriteCommandHeader {
     uint32_t value;
 };
 struct NocUnicastAtomicIncCommandHeader {
-    NocUnicastAtomicIncCommandHeader(uint64_t noc_address, uint16_t val, uint16_t wrap, bool flush = true) :
-        noc_address(noc_address), wrap(wrap), val(val), flush(flush) {}
+    NocUnicastAtomicIncCommandHeader(uint64_t noc_address, uint32_t val, bool flush = true) :
+        noc_address(noc_address), val(val), flush(flush) {}
 
     uint64_t noc_address;
-    uint16_t wrap;
-    uint16_t val;
+    uint32_t val;
     bool flush;
 };
 struct NocUnicastAtomicIncFusedCommandHeader {
     NocUnicastAtomicIncFusedCommandHeader(
-        uint64_t noc_address, uint64_t semaphore_noc_address, uint16_t val, uint16_t wrap, bool flush = true) :
-        noc_address(noc_address), semaphore_noc_address(semaphore_noc_address), wrap(wrap), val(val), flush(flush) {}
+        uint64_t noc_address, uint64_t semaphore_noc_address, uint32_t val, bool flush = true) :
+        noc_address(noc_address), semaphore_noc_address(semaphore_noc_address), val(val), flush(flush) {}
 
     uint64_t noc_address;
     uint64_t semaphore_noc_address;
-    uint16_t wrap;
-    uint16_t val;
+    uint32_t val;
     bool flush;
 };
 struct NocMulticastCommandHeader {
@@ -129,8 +134,7 @@ struct NocMulticastCommandHeader {
 };
 struct NocMulticastAtomicIncCommandHeader {
     uint32_t address;
-    uint16_t val;
-    uint16_t wrap;
+    uint32_t val;
     uint8_t noc_x_start;
     uint8_t noc_y_start;
     uint8_t size_x;
@@ -155,6 +159,37 @@ union NocCommandFields {
     NocUnicastScatterCommandHeader unicast_scatter_write;
 };
 static_assert(sizeof(NocCommandFields) == 24, "CommandFields size is not 24 bytes");
+
+struct UDMWriteControlHeader {
+    uint8_t src_chip_id;
+    uint16_t src_mesh_id;
+    uint8_t src_noc_x;
+    uint8_t src_noc_y;
+    uint8_t risc_id;
+    uint8_t transaction_id;
+    uint8_t posted;
+} __attribute__((packed));
+
+struct UDMReadControlHeader {
+    uint8_t src_chip_id;
+    uint16_t src_mesh_id;
+    uint8_t src_noc_x;
+    uint8_t src_noc_y;
+    uint32_t src_l1_address;
+    uint32_t size_bytes;
+    uint8_t risc_id;
+    uint8_t transaction_id;
+} __attribute__((packed));
+
+static_assert(sizeof(UDMWriteControlHeader) == 8, "UDMWriteControlHeader size is not 8 bytes");
+static_assert(sizeof(UDMReadControlHeader) == 15, "UDMReadControlHeader size is not 15 bytes");
+
+union UDMControlFields {
+    UDMWriteControlHeader write;
+    UDMReadControlHeader read;
+} __attribute__((packed));
+
+static_assert(sizeof(UDMControlFields) == 15, "UDMControlFields size is not 15 bytes");
 
 // TODO: wrap this in a debug version that holds type info so we can assert for field/command/
 template <typename Derived>
@@ -381,7 +416,6 @@ struct PacketHeaderBase {
         this->command_fields.unicast_seminc_fused.noc_address = noc_addr;
         this->command_fields.unicast_seminc_fused.semaphore_noc_address = semaphore_noc_addr;
         this->command_fields.unicast_seminc_fused.val = noc_fused_unicast_write_atomic_inc_command_header.val;
-        this->command_fields.unicast_seminc_fused.wrap = noc_fused_unicast_write_atomic_inc_command_header.wrap;
         this->command_fields.unicast_seminc_fused.flush = noc_fused_unicast_write_atomic_inc_command_header.flush;
 
         this->payload_size_bytes = payload_size_bytes;
@@ -404,7 +438,6 @@ struct PacketHeaderBase {
 
         this->command_fields.unicast_seminc.noc_address = noc_addr;
         this->command_fields.unicast_seminc.val = noc_unicast_atomic_inc_command_header.val;
-        this->command_fields.unicast_seminc.wrap = noc_unicast_atomic_inc_command_header.wrap;
         this->command_fields.unicast_seminc.flush = noc_unicast_atomic_inc_command_header.flush;
         this->payload_size_bytes = 0;
 #else
@@ -423,7 +456,6 @@ struct PacketHeaderBase {
         this->command_fields.mcast_seminc.size_x = noc_multicast_atomic_inc_command_header.size_x;
         this->command_fields.mcast_seminc.size_y = noc_multicast_atomic_inc_command_header.size_y;
         this->command_fields.mcast_seminc.val = noc_multicast_atomic_inc_command_header.val;
-        this->command_fields.mcast_seminc.wrap = noc_multicast_atomic_inc_command_header.wrap;
         this->payload_size_bytes = payload_size_bytes;
         return static_cast<volatile Derived*>(this);
     }
@@ -684,6 +716,17 @@ struct HybridMeshPacketHeader : PacketHeaderBase<HybridMeshPacketHeader> {
 } __attribute__((packed));
 static_assert(sizeof(HybridMeshPacketHeader) == 64, "sizeof(HybridMeshPacketHeader) is not equal to 64B");
 
+struct UDMHybridMeshPacketHeader : public HybridMeshPacketHeader {
+    UDMControlFields udm_control;
+    uint8_t padding[1];  // Padding to align to 80 bytes (64 base + 15 control + 1 padding = 80)
+
+    // Override to return correct size for UDMHybridMeshPacketHeader
+    size_t get_payload_size_including_header() volatile const {
+        return get_payload_size_excluding_header() + sizeof(UDMHybridMeshPacketHeader);
+    }
+} __attribute__((packed));
+static_assert(sizeof(UDMHybridMeshPacketHeader) == 80, "sizeof(UDMHybridMeshPacketHeader) is not equal to 80B");
+
 // TODO: When we remove the 32B padding requirement, reduce to 16B size check
 static_assert(sizeof(PacketHeader) == 32, "sizeof(PacketHeader) is not equal to 32B");
 // Host code still hardcoded to sizeof(PacketHeader) so we need to keep this check
@@ -698,6 +741,32 @@ static_assert(sizeof(MeshPacketHeader) == 48, "sizeof(MeshPacketHeader) is not e
 #define PACKET_HEADER_TYPE tt::tt_fabric::LowLatencyPacketHeader
 #define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyRoutingFields
 #else
+
+// Check if UDM_MODE is defined
+#ifdef UDM_MODE
+
+#if (                                                                \
+    ((ROUTING_MODE & (ROUTING_MODE_1D | ROUTING_MODE_LINE)) != 0) || \
+    ((ROUTING_MODE & (ROUTING_MODE_1D | ROUTING_MODE_RING)) != 0))
+// 1D routing with UDM is not supported
+static_assert(false, "UDM mode does not support 1D routing - use 2D routing instead");
+
+#elif (                                                              \
+    ((ROUTING_MODE & (ROUTING_MODE_2D | ROUTING_MODE_MESH)) != 0) || \
+    ((ROUTING_MODE & (ROUTING_MODE_2D | ROUTING_MODE_TORUS)) != 0))
+// 2D routing with UDM
+#if (ROUTING_MODE & ROUTING_MODE_LOW_LATENCY) != 0
+#define PACKET_HEADER_TYPE tt::tt_fabric::UDMHybridMeshPacketHeader
+#define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyMeshRoutingFieldsV2
+#else
+static_assert(false, "UDM mode requires LOW_LATENCY routing for 2D fabric");
+#endif
+
+#else
+static_assert(false, "non supported ROUTING_MODE with UDM: " TOSTRING(ROUTING_MODE));
+#endif
+
+#else  // UDM_MODE not defined - use default non-UDM headers
 
 #if (                                                                \
     ((ROUTING_MODE & (ROUTING_MODE_1D | ROUTING_MODE_LINE)) != 0) || \
@@ -731,6 +800,12 @@ static_assert(false, "ROUTING_MODE_DYNAMIC is not supported yet");
 #else
 static_assert(false, "non supported ROUTING_MODE: " TOSTRING(ROUTING_MODE));
 #endif
+
+#endif  // UDM_MODE
+
 #endif  // ROUTING_MODE
 
 }  // namespace tt::tt_fabric
+
+#pragma GCC diagnostic pop
+// NOLINTEND(misc-unused-parameters)

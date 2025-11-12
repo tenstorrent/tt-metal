@@ -61,9 +61,11 @@ void RMSAllGather::validate(
     TT_FATAL(
         a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR,
         "Minimal version requires row major sharding orientation");
-    TT_FATAL(a.layout() == Layout::TILE, "Error");
+    TT_FATAL(a.layout() == Layout::TILE, "Input tensor layout must be TILE but got {}", a.layout());
     TT_FATAL(
-        a.dtype() == DataType::FLOAT32 or a.dtype() == DataType::BFLOAT16 or a.dtype() == DataType::BFLOAT8_B, "Error");
+        a.dtype() == DataType::FLOAT32 or a.dtype() == DataType::BFLOAT16 or a.dtype() == DataType::BFLOAT8_B,
+        "Input tensor dtype must be FLOAT32, BFLOAT16, or BFLOAT8_B but got {}",
+        a.dtype());
     TT_FATAL(a.storage_type() == StorageType::DEVICE, "Operands to frmsnorm need to be on device!");
     TT_FATAL(a.buffer() != nullptr, "Operands to frmsnorm need to be allocated in buffers on device!");
 
@@ -86,19 +88,30 @@ void RMSAllGather::validate(
                 gamma.value().padded_shape()[-1]);
             TT_FATAL(
                 gamma.value().buffer() != nullptr, "Operands to frmsnorm need to be allocated in buffers on device!");
-            TT_FATAL(a.device() == gamma.value().device(), "Error");
-            TT_FATAL(gamma.value().padded_shape()[-2] == input_height, "Error");
+            TT_FATAL(a.device() == gamma.value().device(), "Input tensor device must match gamma tensor device");
+            TT_FATAL(
+                gamma.value().padded_shape()[-2] == input_height,
+                "Gamma tensor height ({}) must equal input height ({})",
+                gamma.value().padded_shape()[-2],
+                input_height);
         } else {
-            TT_FATAL(gamma.value().layout() == Layout::ROW_MAJOR, "Error");
+            TT_FATAL(
+                gamma.value().layout() == Layout::ROW_MAJOR,
+                "Gamma tensor layout must be ROW_MAJOR but got {}",
+                gamma.value().layout());
             TT_FATAL(
                 (gamma.value().padded_shape()[-1] == input_width &&
                  gamma.value().physical_volume() / input_width == a.padded_shape()[-1] / input_width),
-                "Error");
+                "Gamma tensor width ({}) must equal input width ({}) and physical volume / width must match",
+                gamma.value().padded_shape()[-1],
+                input_width);
             TT_FATAL(
                 gamma.value().buffer() != nullptr, "Operands to frmsnorm need to be allocated in buffers on device!");
-            TT_FATAL(a.device() == gamma.value().device(), "Error");
+            TT_FATAL(a.device() == gamma.value().device(), "Input tensor device must match gamma tensor device");
             TT_FATAL(
-                gamma.value().dtype() == DataType::FLOAT32 or gamma.value().dtype() == DataType::BFLOAT16, "Error");
+                gamma.value().dtype() == DataType::FLOAT32 or gamma.value().dtype() == DataType::BFLOAT16,
+                "Gamma tensor dtype must be FLOAT32 or BFLOAT16 but got {}",
+                gamma.value().dtype());
         }
     }
 
@@ -135,10 +148,20 @@ void RMSAllGather::validate(
                               ProgramConfigType,
                               ttnn::operations::normalization::LayerNormShardedMultiCoreProgramConfig>) {
                 if (program_config.inplace) {
-                    TT_FATAL(this->output_mem_config.is_sharded(), "Error");
+                    TT_FATAL(
+                        this->output_mem_config.is_sharded(),
+                        "Output memory config must be sharded for inplace operation");
                 }
-                TT_FATAL(a.memory_config().buffer_type() == this->output_mem_config.buffer_type(), "Error");
-                TT_FATAL(a.memory_config().memory_layout() == this->output_mem_config.memory_layout(), "Error");
+                TT_FATAL(
+                    a.memory_config().buffer_type() == this->output_mem_config.buffer_type(),
+                    "Input tensor buffer type ({}) must match output memory config buffer type ({})",
+                    a.memory_config().buffer_type(),
+                    this->output_mem_config.buffer_type());
+                TT_FATAL(
+                    a.memory_config().memory_layout() == this->output_mem_config.memory_layout(),
+                    "Input tensor memory layout ({}) must match output memory config layout ({})",
+                    a.memory_config().memory_layout(),
+                    this->output_mem_config.memory_layout());
 
                 // tensor shape
                 const auto& shape = a.padded_shape();
@@ -167,12 +190,21 @@ void RMSAllGather::validate(
                     tt::div_up(Kt, shard_spec.num_cores()) == program_config.block_w,
                     "block_w must equal to K / num_cores.");
                 TT_FATAL(Mt == program_config.block_h, "block_h must equal to M.");
-                TT_FATAL(a.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED, "Error");
+                TT_FATAL(
+                    a.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED,
+                    "Input tensor memory layout must not be HEIGHT_SHARDED but got {}",
+                    a.memory_config().memory_layout());
                 if (b.has_value()) {
-                    TT_FATAL(b.value().is_sharded(), "Error");
-                    TT_FATAL(b.value().shard_spec() == shard_spec, "Error");
+                    TT_FATAL(b.value().is_sharded(), "Tensor B must be sharded");
+                    TT_FATAL(
+                        b.value().shard_spec() == shard_spec, "Tensor B shard spec must match input tensor shard spec");
                 }
-                TT_FATAL(program_config.block_w * input_width == shard_spec.shape[1], "Error");
+                TT_FATAL(
+                    program_config.block_w * input_width == shard_spec.shape[1],
+                    "Program config block_w ({}) * input_width ({}) must equal shard_spec shape[1] ({})",
+                    program_config.block_w,
+                    input_width,
+                    shard_spec.shape[1]);
                 TT_FATAL(
                     program_config.block_w % program_config.subblock_w == 0,
                     "block_w must be divisible by subblock_w.");

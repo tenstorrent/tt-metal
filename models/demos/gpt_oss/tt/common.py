@@ -33,7 +33,9 @@ def create_tt_model(
 
     # Use provided mesh_config or create optimal MeshConfig for the mesh shape
     if mesh_config is None:
-        mesh_config = MeshConfig(mesh_device.shape, tp=mesh_device.shape[1], ep=mesh_device.shape[0])
+        from models.demos.gpt_oss.config import ModeConfig
+
+        mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=mesh_device.shape[1], ep=mesh_device.shape[0]))
 
     # Create GPT-OSS ModelArgs
     gpt_oss_model_args = ModelArgs(

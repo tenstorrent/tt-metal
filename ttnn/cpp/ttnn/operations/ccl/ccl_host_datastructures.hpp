@@ -156,13 +156,13 @@ public:
         handshake_addr(handshake_addr),
         num_channel_buffers(local_buffer_addresses.size()),
         buffer_sharing_mode(buffer_sharing_mode),
-        num_buffers_per_channel(num_buffers_per_channel),
         termination_mode(termination_mode),
-        enable_sender(false),
-        enable_receiver(false),
         num_senders(0),
         num_receivers(0),
-        chip_id(chip_id) {
+        num_buffers_per_channel(num_buffers_per_channel),
+        chip_id(chip_id),
+        enable_sender(false),
+        enable_receiver(false) {
         TT_ASSERT(num_buffers_per_channel > 0);
         TT_ASSERT(local_buffer_addresses.size() == local_semaphore_addresses.size());
         active_channels.reserve(num_channel_buffers);

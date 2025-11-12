@@ -209,6 +209,18 @@ public:
     }
 };
 
+class P150LBNode {
+public:
+    static tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() {
+        tt::scaleout_tools::cabling_generator::proto::NodeDescriptor node;
+        node.set_motherboard("H13DSG-O-CPU");
+
+        add_boards(&node, "P150", 1, 8);
+
+        return node;
+    }
+};
+
 // P150 QB AE Node class
 class P150QBAENode {
 public:
@@ -257,7 +269,6 @@ public:
         // Add WARP400 connections
         auto* const warp400_connections = get_port_connections(&node, "WARP400");
         add_connection(warp400_connections, 1, 1, 2, 1);
-        add_connection(warp400_connections, 1, 2, 2, 2);
 
         return node;
     }
@@ -376,6 +387,7 @@ tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create_node_descrip
         case NodeType::WH_GALAXY_X_TORUS: return WHGalaxyXTorusNode::create();
         case NodeType::WH_GALAXY_Y_TORUS: return WHGalaxyYTorusNode::create();
         case NodeType::WH_GALAXY_XY_TORUS: return WHGalaxyXYTorusNode::create();
+        case NodeType::P150_LB: return P150LBNode::create();
         case NodeType::P150_QB_AE: return P150QBAENode::create();
         case NodeType::P150_QB_AE_DEFAULT: return P150QBAEDefaultNode::create();
         case NodeType::P300_QB_GE: return P300QBGENode::create();

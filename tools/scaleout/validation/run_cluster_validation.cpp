@@ -33,7 +33,7 @@ struct InputArgs {
     bool print_connectivity = false;
     bool help = false;
     bool send_traffic = false;
-    uint32_t data_size = align_down(tt::tt_metal::hal::get_erisc_l1_unreserved_size(), 64);
+    uint32_t data_size = 0;
     uint32_t packet_size_bytes = 64;
     uint32_t num_iterations = 50;
     bool sweep_traffic_configs = false;
@@ -55,6 +55,11 @@ std::filesystem::path generate_output_dir() {
 
 InputArgs parse_input_args(const std::vector<std::string>& args_vec) {
     InputArgs input_args;
+
+    if (test_args::has_command_option(args_vec, "--help")) {
+        input_args.help = true;
+        return input_args;
+    }
 
     if (test_args::has_command_option(args_vec, "--cabling-descriptor-path")) {
         TT_FATAL(
@@ -91,7 +96,10 @@ InputArgs parse_input_args(const std::vector<std::string>& args_vec) {
             input_args.data_size <= tt::tt_metal::hal::get_erisc_l1_unreserved_size(),
             "Data size must be less than or equal to the L1 unreserved size: {} bytes",
             tt::tt_metal::hal::get_erisc_l1_unreserved_size());
+    } else {
+        input_args.data_size = align_down(tt::tt_metal::hal::get_erisc_l1_unreserved_size(), 64);
     }
+
     if (test_args::has_command_option(args_vec, "--packet-size-bytes")) {
         input_args.packet_size_bytes = std::stoi(test_args::get_command_option(args_vec, "--packet-size-bytes"));
         TT_FATAL(
@@ -105,7 +113,6 @@ InputArgs parse_input_args(const std::vector<std::string>& args_vec) {
     input_args.print_connectivity = test_args::has_command_option(args_vec, "--print-connectivity");
     input_args.send_traffic = test_args::has_command_option(args_vec, "--send-traffic");
     input_args.sweep_traffic_configs = test_args::has_command_option(args_vec, "--sweep-traffic-configs");
-    input_args.help = test_args::has_command_option(args_vec, "--help");
     input_args.validate_connectivity =
         input_args.cabling_descriptor_path.has_value() || input_args.fsd_path.has_value();
 
@@ -151,8 +158,9 @@ PhysicalSystemDescriptor generate_physical_system_descriptor(const InputArgs& in
             driver,
             context.get_distributed_context_ptr(),
             &context.hal(),
-            context.rtoptions().get_mock_enabled(),
-            run_discovery);
+            context.rtoptions(),
+            run_discovery
+        );
         log_output_rank0("Physical Discovery Complete");
         log_output_rank0("Detected Hosts: " + log_hostnames(physical_system_descriptor.get_all_hostnames()));
         return physical_system_descriptor;
@@ -182,14 +190,15 @@ AsicTopology validate_connectivity(const InputArgs& input_args, PhysicalSystemDe
     physical_system_descriptor.dump_to_yaml(gsd_yaml_path);
     log_output_rank0("Validating Factory System Descriptor (Golden Representation) against Global System Descriptor");
     bool log_output = *distributed_context.rank() == 0;
+    const auto fsd_path = get_factory_system_descriptor_path(input_args);
     auto missing_physical_connections = tt::scaleout_tools::validate_fsd_against_gsd(
-        get_factory_system_descriptor_path(input_args), gsd_yaml_path, true, input_args.fail_on_warning, log_output);
+        fsd_path, gsd_yaml_path, true, input_args.fail_on_warning, log_output);
     log_output_rank0("Factory System Descriptor (Golden Representation) Validation Complete");
     // TODO (AS): We shouldn't need to dump files to disk for validation, once validate_fsd_against_gsd can support
     // comparing string representations of the FSD and GSD. For now, each rank dumps a file to disk, which gets deleted
     // post validation (for all ranks except rank 0).
     if (*distributed_context.rank() != 0) {
-        cleanup_metadata(input_args, gsd_yaml_path, gsd_yaml_filename);
+        cleanup_metadata(input_args, gsd_yaml_path, fsd_path);
     }
     return generate_asic_topology_from_connections(missing_physical_connections, physical_system_descriptor);
 }
@@ -223,9 +232,14 @@ void set_config_vars() {
     // it writes custom kernels to ethernet cores, which shouldn't
     // be running fabric routers
     setenv("TT_METAL_SLOW_DISPATCH_MODE", "1", 1);
-    // Set env vars required by Control Plane when running on a multi-node cluster
-    setenv("TT_MESH_HOST_RANK", "0", 1);
-    setenv("TT_MESH_ID", "0", 1);
+
+    // Only set these if they are not already set
+    if (getenv("TT_MESH_HOST_RANK") == nullptr) {
+        setenv("TT_MESH_HOST_RANK", "0", 1);
+    }
+    if (getenv("TT_MESH_ID") == nullptr) {
+        setenv("TT_MESH_ID", "0", 1);
+    }
 }
 
 }  // namespace tt::scaleout_tools
@@ -258,7 +272,7 @@ int main(int argc, char* argv[]) {
         reset_ethernet_links(physical_system_descriptor, missing_asic_topology);
         links_reset = true;
         num_retrains++;
-        physical_system_descriptor.run_discovery(true);
+        physical_system_descriptor.run_discovery(true, true);
         missing_asic_topology = validate_connectivity(input_args, physical_system_descriptor);
     }
 

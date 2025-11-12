@@ -65,7 +65,7 @@ TensorSpec compute_tensor_spec_for_shards(
         if (!xtensor_view.has_value()) {
             continue;
         }
-        auto xtensor_shard_shape = experimental::xtensor::get_shape_from_xarray(xtensor_view->get());
+        auto xtensor_shard_shape = tt::tt_metal::experimental::xtensor::get_shape_from_xarray(xtensor_view->get());
         if (shard_shape.has_value()) {
             TT_FATAL(
                 shard_shape.value() == xtensor_shard_shape,
@@ -194,9 +194,10 @@ public:
         }
 
         // Otherwise, use xtensor to chunk the data into shards.
-        auto input_xtensor = experimental::xtensor::adapt(span, std::vector<size_t>(shape.cbegin(), shape.cend()));
+        auto input_xtensor =
+            tt::tt_metal::experimental::xtensor::adapt(span, std::vector<size_t>(shape.cbegin(), shape.cend()));
 
-        auto chunks = experimental::xtensor::chunk_ndim(input_xtensor, num_chunks_per_dim, tensor_dims);
+        auto chunks = tt::tt_metal::experimental::xtensor::chunk_ndim(input_xtensor, num_chunks_per_dim, tensor_dims);
         TT_FATAL(chunks.size() >= 1, "No chunks were produced");
         TT_FATAL(
             distribution_shape_.dims() == 1 || chunks.size() == sharded_mesh_size,
@@ -204,7 +205,8 @@ public:
             chunks.size(),
             sharded_mesh_size);
 
-        using StridedViewRef = std::reference_wrapper<experimental::xtensor::StridedView<decltype(input_xtensor)>>;
+        using StridedViewRef =
+            std::reference_wrapper<tt::tt_metal::experimental::xtensor::StridedView<decltype(input_xtensor)>>;
         tt::tt_metal::distributed::MeshContainer<std::optional<StridedViewRef>> sharded_xtensor_views(
             distribution_shape_, std::nullopt);
 
@@ -356,11 +358,11 @@ public:
         }
 
         // Convert shards into a linear buffer of xtensor views.
-        std::vector<experimental::xtensor::AdaptedView<const T>> xtensor_views;
+        std::vector<tt::tt_metal::experimental::xtensor::AdaptedView<const T>> xtensor_views;
         xtensor_views.reserve(distribution_shape_.mesh_size());
         std::vector<size_t> shard_shape(tensor.logical_shape().cbegin(), tensor.logical_shape().cend());
         dst_buffer.apply([&xtensor_views, &shard_shape](const tt::tt_metal::HostBuffer& shard) {
-            xtensor_views.push_back(experimental::xtensor::adapt(shard.view_as<const T>(), shard_shape));
+            xtensor_views.push_back(tt::tt_metal::experimental::xtensor::adapt(shard.view_as<const T>(), shard_shape));
         });
 
         tt::stl::SmallVector<int> num_chunks;
@@ -377,8 +379,9 @@ public:
             }
         }
 
-        auto xtensor_adapter = experimental::xtensor::concat_ndim(xtensor_views, num_chunks, config_.dims);
-        auto&& shape = experimental::xtensor::get_shape_from_xarray(xtensor_adapter.expr());
+        auto xtensor_adapter =
+            tt::tt_metal::experimental::xtensor::concat_ndim(xtensor_views, num_chunks, config_.dims);
+        auto&& shape = tt::tt_metal::experimental::xtensor::get_shape_from_xarray(xtensor_adapter.expr());
         return {std::move(xtensor_adapter).data(), std::move(shape)};
     }
 

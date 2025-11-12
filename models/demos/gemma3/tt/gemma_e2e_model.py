@@ -147,27 +147,32 @@ class TtGemmaModel(Transformer):
 
         assert 0 < batch_size <= 3, "Device runs OOM with batch size > 3"
 
-        num_images = pixel_values.shape[0]
-        num_batches = (num_images + batch_size - 1) // batch_size
-        logger.info(f"Starting vision encoder for {num_images} image(s)")
+        if not isinstance(pixel_values, list):
+            pixel_values = [pixel_values]
 
-        if num_images <= batch_size:
-            # Process all images at once if within batch size limit
-            vision_output = self.vision_model(pixel_values)
-            logger.info(f"Vision encoder done (single batch)")
-            return vision_output
+        pixel_values_batches = []
+        total_num_images = 0
+        for image in pixel_values:
+            num_images = image.shape[0]
+            total_num_images += num_images
+            if num_images < batch_size:
+                pixel_values_batches.append(image)
+            else:
+                # If image was too big it was split into several, but still in one tensor
+                for i in range(0, num_images, batch_size):
+                    end_idx = min(i + batch_size, num_images)
+                    pixel_values_batches.append(image[i:end_idx])
+
+        logger.info(f"Starting vision encoder for {total_num_images} image(s) in {len(pixel_values_batches)} batch(es)")
 
         # Process images in batches
         vision_outputs = []
-        for i in range(0, num_images, batch_size):
-            end_idx = min(i + batch_size, num_images)
-            batch_pixel_values = pixel_values[i:end_idx]
-
-            logger.info(f"Processing batch {i//batch_size + 1}/{num_batches}: images {i+1} to {end_idx}")
+        for batch_idx, batch_pixel_values in enumerate(pixel_values_batches):
+            logger.info(f"Processing batch {batch_idx + 1}/{len(pixel_values_batches)}")
             batch_vision_output = self.vision_model(batch_pixel_values)
             vision_outputs.append(batch_vision_output)
 
         # Combine all vision outputs along the batch dimension
         combined_vision_output = ttnn.concat(vision_outputs, dim=1)
-        logger.info(f"Vision encoder done (batched processing)")
+        logger.info(f"Vision encoder done")
         return combined_vision_output
