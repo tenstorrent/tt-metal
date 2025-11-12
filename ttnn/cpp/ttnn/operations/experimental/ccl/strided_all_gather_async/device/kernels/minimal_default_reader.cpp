@@ -46,8 +46,8 @@ void kernel_main() {
     uint32_t input_tiles_per_core = get_arg_val<uint32_t>(arg_idx++);
     uint32_t ring_size = get_arg_val<uint32_t>(arg_idx++);
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t mm_block_w = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t mm_block_h = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t mm_block_wt = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t mm_block_ht = get_arg_val<uint32_t>(arg_idx++);
     uint32_t mm_cores_y = get_arg_val<uint32_t>(arg_idx++);
 
     constexpr uint32_t ct_idx = 12;
@@ -85,85 +85,116 @@ void kernel_main() {
         }
     }
 
-    // Create schedule of tiles to be written out by this device
-
-    // Iterate over the schedule of tiles.  There should be a variable which is number of tiles per slice per semaphore
-    // In between each semaphore, receive number of tiles per slice per semaphore, and this can allow us to fire off the
-    // matmul chunk. However unlike before, it will move on to the next slice after the semaphore to finish the entire
-    // pass through K and devices, and then come back to the slice later. We should push out all local data first, get
-    // it out on the wire, but in the order that it's supposed to appear.
-
-    // Push out the local slice (make sure it abides by the appropriate schedule)
-    // Imagine the input has already been permuted to the appropriate schedule, then the parameters that control
-    // this are just input_tile_id_start and end (like before).  It probably needs a number tiles per sync, but that
-    // probably goes to the writer, the reader just reads the whole block. Push out our local slice
     uint32_t batch_input_tile_offset = input_worker_tile_offset;
     uint32_t global_tile_index = 0;
     uint32_t tiles_per_batch = input_tensor_Wt * input_tensor_Ht;
     uint32_t chunks_per_core = div_up(tiles_per_batch, tiles_per_chunk);
-    uint32_t tiles_read = 0;
     uint32_t sem_target = 0;
 
-    for (uint32_t b_idx = 0; b_idx < num_batches; b_idx++) {
-        global_tile_index = 0;
-        tiles_read = 0;
-        for (uint32_t chunk_idx = 0; chunk_idx < chunks_per_core; chunk_idx++) {
-            uint32_t chunk_start_tile = global_tile_index;
-            read_chunk(
-                chunk_start_tile,
-                batch_input_tile_offset,
-                cb_output_id,
-                tiles_read,
-                input_tiles_per_core,
-                tiles_per_chunk,
-                mm_block_w,
-                mm_block_h,
-                input_tensor_Ht / mm_cores_y,
-                max_tiles_per_packet,
-                ag_worker_id,
-                ag_worker_cores,
-                input_tensor_addrgen,
-                input_tensor_page_size,
-                output_tensor_addrgen,
-                input_tensor_Wt,
-                output_tensor_Wt,
-                my_chip_id,
-                false);
+    uint32_t padded_M_tiles = round_up(input_tensor_Ht, mm_cores_y);
+    uint32_t padded_K_tiles = round_up(output_tensor_Wt, mm_block_wt);
+    uint32_t M_tiles_per_core = padded_M_tiles / mm_cores_y;
+    uint32_t K_blocks = padded_K_tiles / mm_block_wt;
+    uint32_t M_blocks_per_core = div_up(M_tiles_per_core, mm_block_ht);
 
-            // Receive this chunk from all other devices
+    uint32_t curr_device = 0;
+    uint32_t curr_device_start = 0;
+    uint32_t curr_device_end = input_tensor_Wt - 1;
+    uint32_t device_k_block_counts[ring_size] = {0};
+    for (uint32_t k_block_iter = 0; k_block_iter < K_blocks; k_block_iter++) {
+        uint32_t curr_k_block_start = k_block_iter * mm_block_wt;
+        uint32_t curr_k_block_end = (k_block_iter + 1) * mm_block_wt - 1;
+        if (curr_k_block_end < curr_device_end) {
+            device_k_block_counts[curr_device]++;
+        } else if (curr_k_block_end == curr_device_end) {
+            device_k_block_counts[curr_device]++;
+            curr_device++;
+            curr_device_start = curr_device_end + 1;
+            curr_device_end = (curr_device + 1) * input_tensor_Wt - 1;
+        } else if (curr_k_block_end > curr_device_end) {
+            device_k_block_counts[curr_device]++;
+            if (curr_device + 1 < ring_size) {
+                device_k_block_counts[curr_device + 1]++;
+            }
+            curr_device++;
+            curr_device_start = curr_device_end + 1;
+            curr_device_end = (curr_device + 1) * input_tensor_Wt - 1;
+        }
+    }
+
+    for (uint32_t b_idx = 0; b_idx < num_batches; b_idx++) {
+        for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
+            // Send out local
+            uint32_t input_chunk_start_tile = global_tile_index;
+            for (uint32_t chunk_idx = 0; chunk_idx < device_k_block_counts[my_chip_id]; chunk_idx++) {
+                uint32_t actual_chunk_w =
+                    next_mm_aligned_chunk_width(input_chunk_start_tile, my_chip_id, input_tensor_Wt, mm_block_wt);
+                uint32_t actual_chunk_h = next_mm_aligned_chunk_height(
+                    input_chunk_start_tile, M_tiles_per_core, input_tensor_Wt, mm_block_ht);
+                uint32_t tiles_in_current_chunk =
+                    actual_chunk_w * actual_chunk_h *
+                    mm_cores_y;  // THIS IS NOT QUITE RIGHT, each mm core might have a different chunk_h
+                read_chunk(
+                    input_chunk_start_tile,
+                    batch_input_tile_offset,
+                    cb_output_id,
+                    tiles_in_current_chunk,
+                    actual_chunk_w,
+                    actual_chunk_h,
+                    input_tensor_Ht / mm_cores_y,
+                    max_tiles_per_packet,
+                    ag_worker_id,
+                    ag_worker_cores,
+                    input_tensor_addrgen,
+                    input_tensor_page_size,
+                    output_tensor_addrgen,
+                    input_tensor_Wt,
+                    output_tensor_Wt,
+                    my_chip_id,
+                    false);
+            }
+
+            // Receive remote chunks
             uint32_t slices_received = 0;
-            uint32_t local_tiles_read = 0;
             while (slices_received < slices_expected) {
                 uint32_t actual_sender_chip_id = get_sender_id(direction, my_chip_id, slices_received, ring_size);
 
-                // Receive the next chunk
+                // Receive the next row of data
                 noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target + 1);
                 sem_target++;
 
                 if ((topology == Topology::Linear && writes_expected > 0) ||
                     (topology == Topology::Ring && ((slices_received + 1) < (writes_expected + 1)))) {
-                    // read the next chunk out of memory, and put it in CB
-                    chunk_start_tile = global_tile_index;
-                    local_tiles_read = read_chunk(
-                        chunk_start_tile,
-                        batch_input_tile_offset,
-                        cb_output_id,
-                        tiles_read,
-                        input_tiles_per_core,
-                        tiles_per_chunk,
-                        mm_block_w,
-                        mm_block_h,
-                        input_tensor_Ht / mm_cores_y,
-                        max_tiles_per_packet,
-                        ag_worker_id,
-                        ag_worker_cores,
-                        input_tensor_addrgen,
-                        input_tensor_page_size,
-                        output_tensor_addrgen,
-                        input_tensor_Wt,
-                        output_tensor_Wt,
-                        actual_sender_chip_id,
-                        true);
+                    for (uint32_t chunk_idx = 0; chunk_idx < device_k_block_counts[actual_sender_chip_id];
+                         chunk_idx++) {
+                        input_chunk_start_tile = global_tile_index;
+                        uint32_t actual_chunk_w = next_mm_aligned_chunk_width(
+                            input_chunk_start_tile, actual_sender_chip_id, input_tensor_Wt, mm_block_wt);
+                        uint32_t actual_chunk_h = next_mm_aligned_chunk_height(
+                            input_chunk_start_tile, M_tiles_per_core, input_tensor_Wt, mm_block_ht);
+                        uint32_t tiles_in_current_chunk =
+                            actual_chunk_w * actual_chunk_h *
+                            mm_cores_y;  // THIS IS NOT QUITE RIGHT, each mm core might have a different chunk_h
+
+                        read_chunk(
+                            input_chunk_start_tile,
+                            batch_input_tile_offset,
+                            cb_output_id,
+                            tiles_in_current_chunk,
+                            actual_chunk_w,
+                            actual_chunk_h,
+                            input_tensor_Ht / mm_cores_y,
+                            max_tiles_per_packet,
+                            ag_worker_id,
+                            ag_worker_cores,
+                            input_tensor_addrgen,
+                            input_tensor_page_size,
+                            output_tensor_addrgen,
+                            input_tensor_Wt,
+                            output_tensor_Wt,
+                            actual_sender_chip_id,
+                            true);
+                    }
                 }
                 slices_received++;
                 if constexpr (fuse_op) {
@@ -171,8 +202,7 @@ void kernel_main() {
                     op_signaler.synchronize_workers_and_signal_op(actual_sender_chip_id);
                 }
             }
-            global_tile_index = chunk_start_tile;
-            tiles_read += local_tiles_read;
+            global_tile_index = input_chunk_start_tile;
         }
         batch_input_tile_offset += tiles_per_batch;
     }
