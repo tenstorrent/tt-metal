@@ -199,7 +199,7 @@ jobs:
     name: ttnn nightly docs examples tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
+        ((inputs.runner-label == 'P100' && 'tt-ubuntu-2204-p100a-viommu-stable') || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label))
       }}
     steps:
       - name: ⬇️  Setup Job
