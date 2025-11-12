@@ -159,8 +159,6 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/schedulers/sequential_scheduler.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/schedulers/step_scheduler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/schedulers/step_scheduler.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/msgpack_file.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/msgpack_file.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/serialization/flatbuffer_file.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/serialization/flatbuffer_file.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/serialization/tar_reader.cpp
@@ -513,8 +511,6 @@ message(STATUS "xtensor_SOURCE_DIR: ${xtensor_SOURCE_DIR}")
 message(STATUS "xtl_SOURCE_DIR: ${xtl_SOURCE_DIR}")
 message(STATUS "xtensor-blas_SOURCE_DIR: ${xtensor-blas_SOURCE_DIR}")
 
-message(STATUS "msgpack_SOURCE_DIR: ${msgpack_SOURCE_DIR}")
-target_include_directories(ttml PUBLIC ${msgpack_SOURCE_DIR}/include)
 message(STATUS "cli11_SOURCE_DIR: ${CLI11_SOURCE_DIR}")
 target_include_directories(ttml PUBLIC ${CLI11_SOURCE_DIR}/include)
 
