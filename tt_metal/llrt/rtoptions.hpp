@@ -205,6 +205,9 @@ class RunTimeOptions {
     bool log_kernels_compilation_commands = false;
 
     // Enable fabric performance telemetry
+    bool enable_fabric_bw_telemetry = false;
+
+    // Enable fabric telemetry
     bool enable_fabric_telemetry = false;
 
     // Mock cluster initialization using a provided cluster descriptor
@@ -510,6 +513,9 @@ public:
     // This BW telemetry is coarse grain and records the total time that the reouter has unsent and inflight packets.
     //
     // NOTE: Enabling this option will lead to a 0-2% performance degradation for fabric traffic.
+    bool get_enable_fabric_bw_telemetry() const { return enable_fabric_bw_telemetry; }
+    void set_enable_fabric_bw_telemetry(bool enable) { enable_fabric_bw_telemetry = enable; }
+
     bool get_enable_fabric_telemetry() const { return enable_fabric_telemetry; }
     void set_enable_fabric_telemetry(bool enable) { enable_fabric_telemetry = enable; }
 
