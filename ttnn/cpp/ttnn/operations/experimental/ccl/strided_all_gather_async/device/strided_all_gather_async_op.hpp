@@ -39,8 +39,8 @@ struct StridedAllGatherAsync {
     std::optional<uint32_t> num_workers_per_link;
     std::optional<uint32_t> num_buffers_per_channel;
     std::optional<uint32_t> mm_cores_y;
-    std::optional<uint32_t> mm_block_h;
-    std::optional<uint32_t> mm_block_w;
+    std::optional<uint32_t> mm_block_ht;
+    std::optional<uint32_t> mm_block_wt;
 
     StridedAllGatherAsync(
         std::vector<IDevice*> devices,
@@ -57,8 +57,8 @@ struct StridedAllGatherAsync {
         std::optional<uint32_t> num_workers_per_link,
         std::optional<uint32_t> num_buffers_per_channel,
         std::optional<uint32_t> mm_cores_y,
-        std::optional<uint32_t> mm_block_h,
-        std::optional<uint32_t> mm_block_w) :
+        std::optional<uint32_t> mm_block_ht,
+        std::optional<uint32_t> mm_block_wt) :
         devices(std::move(devices)),
         dim(dim),
         num_links(num_links),
@@ -73,8 +73,8 @@ struct StridedAllGatherAsync {
         num_workers_per_link(num_workers_per_link),
         num_buffers_per_channel(num_buffers_per_channel),
         mm_cores_y(mm_cores_y),
-        mm_block_h(mm_block_h),
-        mm_block_w(mm_block_w) {}
+        mm_block_ht(mm_block_ht),
+        mm_block_wt(mm_block_wt) {}
 
     // Add attributes method for reflection
     auto attributes() const {
@@ -93,8 +93,8 @@ struct StridedAllGatherAsync {
         attrs.emplace_back("num_worker_per_link", num_workers_per_link);
         attrs.emplace_back("num_buffers_per_channel", num_buffers_per_channel);
         attrs.emplace_back("mm_cores_y", mm_cores_y);
-        attrs.emplace_back("mm_block_h", mm_block_h);
-        attrs.emplace_back("mm_block_w", mm_block_w);
+        attrs.emplace_back("mm_block_ht", mm_block_ht);
+        attrs.emplace_back("mm_block_wt", mm_block_wt);
         return attrs;
     }
 
@@ -132,8 +132,8 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
     std::optional<uint32_t> mm_cores_y,
-    std::optional<uint32_t> mm_block_h,
-    std::optional<uint32_t> mm_block_w);
+    std::optional<uint32_t> mm_block_ht,
+    std::optional<uint32_t> mm_block_wt);
 tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_default_helper(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
@@ -154,8 +154,8 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
     std::optional<uint32_t> mm_cores_y,
-    std::optional<uint32_t> mm_block_h,
-    std::optional<uint32_t> mm_block_w,
+    std::optional<uint32_t> mm_block_ht,
+    std::optional<uint32_t> mm_block_wt,
     CoreCoord core_grid_offset = CoreCoord(0, 0));
 
 namespace operations {
@@ -176,8 +176,8 @@ Tensor strided_all_gather_async(
     std::optional<uint32_t> num_workers_per_link = std::nullopt,
     std::optional<uint32_t> num_buffers_per_channel = std::nullopt,
     std::optional<uint32_t> mm_cores_y = std::nullopt,
-    std::optional<uint32_t> mm_block_h = std::nullopt,
-    std::optional<uint32_t> mm_block_w = std::nullopt);
+    std::optional<uint32_t> mm_block_ht = std::nullopt,
+    std::optional<uint32_t> mm_block_wt = std::nullopt);
 
 }  // namespace ccl
 }  // namespace experimental
