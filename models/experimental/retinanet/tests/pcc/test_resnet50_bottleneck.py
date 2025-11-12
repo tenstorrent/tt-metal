@@ -107,16 +107,11 @@ class BottleneckTestInfra:
         self.inputs_mesh_mapper, self.weights_mesh_mapper, self.output_mesh_composer = self.get_mesh_mappers(device)
 
         # Torch model
-        # Load RetinaNet model
         retinanet = retinanet_resnet50_fpn_v2(weights=RetinaNet_ResNet50_FPN_V2_Weights.DEFAULT)
         backbone = retinanet.backbone.body
         layer = getattr(backbone, f"layer{int(name[-3])}")
         torch_model = layer[int(name[-1])]
         torch_model.eval()
-
-        # Torch input + golden output
-        # input_shape = (batch_size * self.num_devices, channels, height, width)
-        # self.torch_input_tensor = torch.randn(input_shape, dtype=torch.float)
 
         self.torch_input_tensor = load_input(name)
         tt_host_tensor = ttnn.from_torch(
@@ -157,7 +152,7 @@ class BottleneckTestInfra:
 
         # Move input to device
         self.input_tensor = ttnn.to_device(tt_host_tensor, device)
-        # self.input_tensor = ttnn.to_memory_config(self.input_tensor, ttnn.DRAM_MEMORY_CONFIG)
+
         # Run + validate
         self.run()
         self.validate()
@@ -197,12 +192,12 @@ class BottleneckTestInfra:
 
         assert self.pcc_passed, logger.error(f"PCC check failed: {self.pcc_message}")
         logger.info(
-            f"Bottleneck `{self.name}` passed: "
-            f"batch_size={self.batch_size}, "
-            f"act_dtype={model_config['ACTIVATIONS_DTYPE']}, "
-            f"weight_dtype={model_config['WEIGHTS_DTYPE']}, "
-            f"math_fidelity={model_config['MATH_FIDELITY']}, "
-            f"PCC={self.pcc_message}"
+            f"\nBottleneck `{self.name}` passed: "
+            f"\nbatch_size={self.batch_size}, "
+            f"\nact_dtype={model_config['ACTIVATIONS_DTYPE']}, "
+            f"\nweight_dtype={model_config['WEIGHTS_DTYPE']}, "
+            f"\nmath_fidelity={model_config['MATH_FIDELITY']}, "
+            f"\nPCC={self.pcc_message}"
         )
 
         return self.pcc_passed, self.pcc_message

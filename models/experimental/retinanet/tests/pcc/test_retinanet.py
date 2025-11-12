@@ -24,7 +24,7 @@ from models.experimental.retinanet.tt.tt_regression_head import ttnn_retinanet_r
 from models.experimental.retinanet.tt.tt_classification_head import ttnn_retinanet_classification_head
 
 
-class BackboneTestInfra:
+class RetinaNetTestInfra:
     def __init__(self, device, batch_size, in_channels, height, width, model_config, name):
         super().__init__()
         if not hasattr(self, "_model_initialized"):
@@ -41,11 +41,11 @@ class BackboneTestInfra:
         self.name = name
         self.inputs_mesh_mapper, self.weights_mesh_mapper, self.output_mesh_composer = self.get_mesh_mappers(device)
 
-        # Load FULL RetinaNet model (not just backbone)
+        # Load full RetinaNet model
         retinanet = retinanet_resnet50_fpn_v2(weights=RetinaNet_ResNet50_FPN_V2_Weights.DEFAULT)
         retinanet.eval()
 
-        # Store both backbone + regression head +classification head
+        # Store backbone, regression head, and classification head
         self.torch_backbone = retinanet.backbone
         self.torch_regression_head = retinanet.head.regression_head
         self.torch_classification_head = retinanet.head.classification_head
@@ -164,7 +164,6 @@ class BackboneTestInfra:
             optimization_profile="optimized",
         )
 
-        logger.debug("✅✅✅ REGRESSION HEAD Complete ✅✅✅")
         # Run classification head
         classification_output = ttnn_retinanet_classification_head(
             feature_maps=fpn_features,
@@ -177,7 +176,6 @@ class BackboneTestInfra:
             model_config=model_config,
             optimization_profile="optimized",
         )
-        logger.debug("✅✅✅ CLASSIFICATION HEAD Complete ✅✅✅")
 
         # Combine all outputs
         self.output_tensor = {
@@ -238,11 +236,11 @@ class BackboneTestInfra:
         assert all(self.pcc_passed_all), logger.error(f"PCC check failed: {self.pcc_message_all}")
         pcc_summary = ", ".join([f"{k}={v}" for k, v in pcc_results.items()])
         logger.info(
-            f"ResNet52 Backbone + Regression Head - batch_size={self.batch_size}, "
-            f"act_dtype={model_config['ACTIVATIONS_DTYPE']}, "
-            f"weight_dtype={model_config['WEIGHTS_DTYPE']}, "
-            f"math_fidelity={model_config['MATH_FIDELITY']}, "
-            f"PCC={pcc_summary}"
+            f"\nRetinaNet - batch_size={self.batch_size}, "
+            f"\nact_dtype={model_config['ACTIVATIONS_DTYPE']}, "
+            f"\nweight_dtype={model_config['WEIGHTS_DTYPE']}, "
+            f"\nmath_fidelity={model_config['MATH_FIDELITY']}, "
+            f"\nPCC: {pcc_summary}"
         )
 
         return self.pcc_passed_all, self.pcc_message_all
@@ -259,8 +257,8 @@ model_config = {
 @pytest.mark.parametrize(
     "batch_size, in_channels, height, width, name",
     [
-        (1, 3, 512, 512, "backbone"),
+        (1, 3, 512, 512, "retinanet"),
     ],
 )
-def test_backbone(device, batch_size, in_channels, height, width, name):
-    BackboneTestInfra(device, batch_size, in_channels, height, width, model_config, name)
+def test_retinanet(device, batch_size, in_channels, height, width, name):
+    RetinaNetTestInfra(device, batch_size, in_channels, height, width, model_config, name)

@@ -6,6 +6,7 @@ import pytest
 import ttnn
 import pickle
 import os
+from loguru import logger
 from torchvision.models.detection import retinanet_resnet50_fpn_v2, RetinaNet_ResNet50_FPN_V2_Weights
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.retinanet.tt.tt_regression_head import ttnn_retinanet_regression_head
@@ -25,8 +26,6 @@ def create_regression_head_parameters(torch_head, device, model_config):
     parameters["conv"] = []
     for i in range(4):
         # Conv2d weights
-        # conv_weight = torch_head.conv[i][0].weight.detach().to(torch.bfloat16)  # Was: torch.bfloat16
-        # bias=torch.zeros(conv_weight.shape[0])
         conv_weight = torch_head.conv[i][0].weight.detach().to(torch.bfloat16)
         bias = torch.zeros(conv_weight.shape[0]).to(torch.bfloat16)
 
@@ -115,13 +114,13 @@ def create_regression_head_parameters(torch_head, device, model_config):
         # Use prepare_conv_weights to transform to proper format
         prepared_bbox_weight = ttnn.prepare_conv_weights(
             weight_tensor=bbox_weight_ttnn,
-            input_memory_config=ttnn.DRAM_MEMORY_CONFIG,  # Match your input config
+            input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
             input_layout=ttnn.ROW_MAJOR_LAYOUT,
             weights_format="OIHW",
-            in_channels=256,  # From FPN output
-            out_channels=bbox_weight.shape[0],  # num_anchors * 4
+            in_channels=256,
+            out_channels=bbox_weight.shape[0],
             batch_size=1,
-            input_height=64,  # Use largest FPN size for preparation
+            input_height=64,
             input_width=64,
             kernel_size=[3, 3],
             stride=[1, 1],
@@ -178,7 +177,7 @@ def test_retinanet_v2_regression_head_ttnn_5_fpn_with_real_features(device, pcc,
     pickle_path = "models/experimental/retinanet/data/fpn_features.pkl"
 
     if os.path.exists(pickle_path):
-        print(f"✓ Loading real FPN features from {pickle_path}")
+        logger.info(f"Loading FPN features from {pickle_path}")
         with open(pickle_path, "rb") as f:
             saved_data = pickle.load(f)
 
@@ -191,7 +190,7 @@ def test_retinanet_v2_regression_head_ttnn_5_fpn_with_real_features(device, pcc,
         for i, feat in enumerate(torch_features):
             print(f"    Level {i}: {feat.shape}")
     else:
-        print(f"Pickle file not found at {pickle_path}, using random features")
+        logger.info(f"Pickle file not found at {pickle_path}, using random features")
 
         # Fallback to random features
         batch_size = 1
@@ -243,8 +242,5 @@ def test_retinanet_v2_regression_head_ttnn_5_fpn_with_real_features(device, pcc,
 
     # Assert PCC
     passed, pcc_msg = assert_with_pcc(torch_output, ttnn_output_torch, pcc=pcc)
+    logger.info(f"Regression Head PCC: {pcc_msg}")
     assert passed, f"PCC test failed: {pcc_msg}"
-
-    print(f"✓ TTNN regression head test passed with 5 FPN levels! {pcc_msg}")
-    print(f"PyTorch output shape: {torch_output.shape}")
-    print(f"TTNN output shape: {ttnn_output_torch.shape}")

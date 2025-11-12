@@ -107,7 +107,6 @@ bottleneck_layer_optimisations = {
         },
         downsample={
             "shard_layout": ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            # "slice_config": ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=2),
             "deallocate_activation": True,
             "reallocate_halo_output": True,
             "reshard_if_not_optimal": True,
@@ -272,7 +271,6 @@ class TTBottleneck:
                 stride=stride,
                 padding=0,
                 dilation=1,
-                # parameters=parameters.downsample,
                 parameters=getattr(parameters.downsample, "0", None),
                 kernel_fidelity=model_config,
                 activation=None,

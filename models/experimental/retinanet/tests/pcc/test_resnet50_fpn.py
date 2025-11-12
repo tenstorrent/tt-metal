@@ -10,7 +10,6 @@ from PIL import Image
 from torchvision import transforms
 from ttnn.model_preprocessing import preprocess_model_parameters
 from tests.ttnn.utils_for_testing import check_with_pcc
-
 from models.experimental.retinanet.tt.tt_fpn import resnet50Fpn, fpn_optimisations
 from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d
 
@@ -131,8 +130,6 @@ class Resnet50FpnTestInfra:
             device=None,
         )
 
-        print(parameters)
-
         # Prepare golden inputs/outputs
         backbone_input = preprocess(img).unsqueeze(0)
         self.torch_input_tensor = backbone(backbone_input)  # input dictionary for fpn layer
@@ -212,11 +209,11 @@ class Resnet50FpnTestInfra:
 
         assert all(self.pcc_passed_all), logger.error(f"PCC check failed: {self.pcc_message_all}")
         logger.info(
-            f"ResNet52 fpn - batch_size={self.batch_size}, "
-            f"act_dtype={model_config['ACTIVATIONS_DTYPE']}, "
-            f"weight_dtype={model_config['WEIGHTS_DTYPE']}, "
-            f"math_fidelity={model_config['MATH_FIDELITY']}, "
-            f"PCC={self.pcc_message_all}"
+            f"\nResNet52 fpn - batch_size={self.batch_size}, "
+            f"\nact_dtype={model_config['ACTIVATIONS_DTYPE']}, "
+            f"\nweight_dtype={model_config['WEIGHTS_DTYPE']}, "
+            f"\nmath_fidelity={model_config['MATH_FIDELITY']}, "
+            f"\nPCC={self.pcc_message_all}"
         )
 
         return self.pcc_passed_all, self.pcc_message_all

@@ -21,7 +21,6 @@ def create_classification_head_parameters(torch_head, device, model_config):
     layout = (
         ttnn.TILE_LAYOUT if model_config["WEIGHTS_DTYPE"] in [ttnn.bfloat8_b, ttnn.bfloat4_b] else ttnn.ROW_MAJOR_LAYOUT
     )
-    # layout=ttnn.ROW_MAJOR_LAYOUT
     # Convert 4 conv layers (Conv2d + GroupNorm weights)
     parameters["conv"] = []
     for i in range(4):
@@ -198,13 +197,9 @@ def test_classification_head_full(device, pcc, reset_seeds):
     num_anchors = 9
     num_classes = 91
 
-    logger.info(f"Input shapes: {[f.shape for f in torch_features]}")
-
     # PyTorch forward pass
     with torch.no_grad():
         torch_output = classification_head(torch_features)
-
-    logger.info(f"PyTorch output shape: {torch_output.shape}")
 
     # Convert to TTNN format (NHWC) - convert all features to device
     ttnn_features = [
@@ -218,7 +213,6 @@ def test_classification_head_full(device, pcc, reset_seeds):
         for feature in torch_features
     ]
 
-    logger.info(f"TTNN input shapes: {[f.shape for f in ttnn_features]}")
     model_config = {
         "MATH_FIDELITY": ttnn.MathFidelity.HiFi4,
         "WEIGHTS_DTYPE": ttnn.bfloat16,
@@ -227,11 +221,7 @@ def test_classification_head_full(device, pcc, reset_seeds):
     # Create TTNN parameters
     ttnn_parameters = create_classification_head_parameters(classification_head, device, model_config)
 
-    # Import TTNN implementation
-
     # TTNN forward pass
-    logger.info("Running TTNN forward pass")
-
     ttnn_output = ttnn_retinanet_classification_head(
         feature_maps=ttnn_features,
         parameters=ttnn_parameters,
@@ -245,17 +235,10 @@ def test_classification_head_full(device, pcc, reset_seeds):
         optimization_profile="optimized",
     )
 
-    logger.info(f"TTNN output shape: {ttnn_output.shape}")
-
     # Convert back to PyTorch for comparison
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
-    logger.info(f"PyTorch output shape: {torch_output.shape}")
-    logger.info(f"TTNN output shape (converted): {ttnn_output_torch.shape}")
-
     # Assert PCC
     passed, pcc_msg = assert_with_pcc(torch_output, ttnn_output_torch, pcc=pcc)
-    logger.info(f"PCC result: {pcc_msg}")
-    assert passed, f"PCC test failed: {pcc_msg}"
-
-    logger.info(f"✓ Classification head test passed with {len(torch_features)} FPN levels! {pcc_msg}")
+    logger.info(f"Classification Head PCC: {pcc_msg}")
+    assert passed, f"Classification Head test failed: {pcc_msg}"
