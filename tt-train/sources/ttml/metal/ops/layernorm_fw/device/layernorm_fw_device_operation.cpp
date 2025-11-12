@@ -93,7 +93,7 @@ spec_return_value_t LayerNormForwardDeviceOperation::compute_output_specs(
     } else {
         auto input_shape = tensor_args.input.logical_shape();
         output_specs.emplace_back(
-            ttnn::Shape(input_shape),
+            input_shape,
             tt::tt_metal::TensorLayout(
                 tensor_args.input.dtype(), tt::tt_metal::Layout::TILE, tensor_args.input.memory_config()));
     }
@@ -106,7 +106,7 @@ spec_return_value_t LayerNormForwardDeviceOperation::compute_output_specs(
             auto mean_shape = tensor_args.input.logical_shape();
             mean_shape[-1] = 1U;
             output_specs.emplace_back(
-                ttnn::Shape(mean_shape),
+                mean_shape,
                 tt::tt_metal::TensorLayout(
                     tensor_args.input.dtype(), tt::tt_metal::Layout::TILE, tensor_args.input.memory_config()));
         }
@@ -118,7 +118,7 @@ spec_return_value_t LayerNormForwardDeviceOperation::compute_output_specs(
             auto rstd_shape = tensor_args.input.logical_shape();
             rstd_shape[-1] = 1U;
             output_specs.emplace_back(
-                ttnn::Shape(rstd_shape),
+                rstd_shape,
                 tt::tt_metal::TensorLayout(
                     tensor_args.input.dtype(), tt::tt_metal::Layout::TILE, tensor_args.input.memory_config()));
         }
