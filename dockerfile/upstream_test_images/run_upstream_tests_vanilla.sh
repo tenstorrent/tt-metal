@@ -239,20 +239,20 @@ test_suite_bh_glx_metal_unit_tests() {
     build/test/tt_metal/unit_tests_eth --gtest_filter=UnitMeshCQMultiDeviceProgramFixture.ActiveEthKernelsSendInterleavedBufferAllConnectedChips
 
     build/test/tt_metal/unit_tests_dispatch --gtest_filter="\
-        UnitMeshCQProgramFixture.TensixTestRandomizedProgram:\
-        UnitMeshRandomProgramFixture.TensixActiveEthTestPrograms:\
-        UnitMeshRandomProgramFixture.TensixTestLargeProgramInBetweenFiveSmallPrograms:\
-        UnitMeshRandomProgramTraceFixture.TensixActiveEthTestProgramsTraceAndNoTrace:\
-        UnitMeshRandomProgramTraceFixture.TensixActiveEthTestProgramsTrace:\
-        UnitMeshRandomProgramTraceFixture.TensixTestLargeProgramInBetweenFiveSmallProgramsTrace:\
-        UnitMeshRandomProgramTraceFixture.TensixTestSimpleProgramsTrace:\
-        UnitMeshCQTraceFixture.TensixEnqueueMultiProgramTraceBenchmark:\
-        UnitMeshCQTraceFixture.TensixEnqueueTwoProgramTrace:\
-        UnitMeshCQSingleCardBufferFixture.ShardedBufferLargeL1ReadWrites:\
-        UnitMeshCQSingleCardBufferFixture.ShardedBufferLargeDRAMReadWrites:\
-        UnitMeshCQSingleCardFixture.TensixTestSubDeviceAllocations:\
-        UnitMeshMultiCQMultiDeviceEventFixture.*:\
-        UnitMeshCQSingleCardFixture.TensixTestReadWriteMultipleCoresL1"
+UnitMeshCQProgramFixture.TensixTestRandomizedProgram:\
+UnitMeshRandomProgramFixture.TensixActiveEthTestPrograms:\
+UnitMeshRandomProgramFixture.TensixTestLargeProgramInBetweenFiveSmallPrograms:\
+UnitMeshRandomProgramTraceFixture.TensixActiveEthTestProgramsTraceAndNoTrace:\
+UnitMeshRandomProgramTraceFixture.TensixActiveEthTestProgramsTrace:\
+UnitMeshRandomProgramTraceFixture.TensixTestLargeProgramInBetweenFiveSmallProgramsTrace:\
+UnitMeshRandomProgramTraceFixture.TensixTestSimpleProgramsTrace:\
+UnitMeshCQTraceFixture.TensixEnqueueMultiProgramTraceBenchmark:\
+UnitMeshCQTraceFixture.TensixEnqueueTwoProgramTrace:\
+UnitMeshCQSingleCardBufferFixture.ShardedBufferLargeL1ReadWrites:\
+UnitMeshCQSingleCardBufferFixture.ShardedBufferLargeDRAMReadWrites:\
+UnitMeshCQSingleCardFixture.TensixTestSubDeviceAllocations:\
+UnitMeshMultiCQMultiDeviceEventFixture.*:\
+UnitMeshCQSingleCardFixture.TensixTestReadWriteMultipleCoresL1"
 }
 
 test_suite_bh_glx_python_unit_tests() {
