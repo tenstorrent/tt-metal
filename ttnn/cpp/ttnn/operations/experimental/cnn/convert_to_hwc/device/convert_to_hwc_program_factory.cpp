@@ -119,7 +119,8 @@ ConvertToHwcConfig ConvertToHwcConfig::create_from_tensors(const Tensor& input, 
         output.shard_spec()->orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
 
     // Input cores are where data comes from
-    config.l1_input_core_grid = config.is_input_in_dram ? output.shard_spec()->grid : input.shard_spec()->grid;
+    // Always use the input tensor's shard grid to identify input core locations
+    config.l1_input_core_grid = input.shard_spec()->grid;
     config.l1_input_cores = corerange_to_cores(
         config.l1_input_core_grid,
         std::nullopt,
@@ -149,9 +150,11 @@ ConvertToHwcConfig ConvertToHwcConfig::create_from_tensors(const Tensor& input, 
     // So the gather output has height=C and width=B*HW_effective/num_output_cores
     config.gather_l1_output_shard_height = config.input_channels;
 
-    // For uneven sharding with B=1, use padded capacity instead of logical HW
+    // For uneven sharding with B=1, use padded capacity instead of logical HW.
+    // Effective HW is computed using the input cores, but gather width per destination core
+    // is B * HW_effective divided by the number of output cores.
     uint32_t effective_hw = calculate_effective_hw_for_sharding(
-        config.hw_total, config.batch_size, config.l1_input_shard_width, config.output_cores.size());
+        config.hw_total, config.batch_size, config.l1_input_shard_width, config.l1_input_cores.size());
     config.gather_l1_output_shard_width = config.batch_size * effective_hw / config.output_cores.size();
 
     log_info(
@@ -686,15 +689,13 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
 
     // Use effective HW for gather transfers
     uint32_t effective_hw_for_gather = calculate_effective_hw_for_sharding(
-        config.hw_total,
-        config.batch_size,
-        config.l1_input_shard_width,
-        static_cast<uint32_t>(config.output_cores.size()));
+        config.hw_total, config.batch_size, config.l1_input_shard_width, static_cast<uint32_t>(in_cores.size()));
 
     // Gather transfers: FROM input cores TO output cores
     const auto gather_transfers = convert_to_hwc::detail::precompute_gather_transfers(
         config.batch_size, config.input_channels, effective_hw_for_gather, in_cores, config.output_cores);
-    const uint32_t block_size_width = config.l1_input_shard_width * config.batch_size;  // Back to working configuration
+    // Per-destination-core gather width (columns per core for this block)
+    const uint32_t block_size_width = config.gather_l1_output_shard_width;
 
     // Setup circular buffers after block_size_width is calculated - use output cores where kernels run
     auto cb_handles = setup_circular_buffers(program, config.output_core_grid, config, a, output, block_size_width);
