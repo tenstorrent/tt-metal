@@ -8,7 +8,6 @@
 #include <cstdint>
 #include <tt-metalium/constants.hpp>
 #include "dataflow_api.h"
-#include "tt-metalium/math.hpp"
 
 // Zero out all tiles for a given circular buffer.
 template <uint32_t cb_id>
