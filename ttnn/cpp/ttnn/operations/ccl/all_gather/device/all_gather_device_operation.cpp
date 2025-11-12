@@ -121,6 +121,25 @@ AllGatherDeviceOperation::tensor_return_value_t AllGatherDeviceOperation::create
     return create_device_tensor(output_specs, tensor_args.input_tensor.device());
 }
 
+AllGatherDeviceOperation::topology_return_value_t AllGatherDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto& input_tensor = tensor_args.input_tensor;
+    const auto& input_topology = input_tensor.tensor_topology();
+    auto output_placements = input_topology.placements();
+
+    // For each distribution dimension, if sharded on the gather dim, make it replicated
+    for (size_t i = 0; i < output_placements.size(); i++) {
+        if (auto* shard = std::get_if<tt::tt_metal::distributed::MeshMapperConfig::Shard>(&output_placements[i])) {
+            if (shard->dim == static_cast<int>(operation_attributes.dim)) {
+                output_placements[i] = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
+            }
+        }
+    }
+
+    return {tt::tt_metal::TensorTopology(
+        input_topology.distribution_shape(), output_placements, input_topology.mesh_coords())};
+}
+
 ttsl::hash::hash_t AllGatherDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto input_tensor = tensor_args.input_tensor;
