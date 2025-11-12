@@ -1,44 +1,67 @@
-name: Bug report
+name: Bug Report
 description: File a bug or issue
 labels: ["bug"]
 body:
   - type: markdown
     attributes:
       value: |
-        :star2: Thanks for taking the time to report this issue! :star2:
+        :star2: Thanks for taking the time to report this issue! Please provide as much detail as possible. :star2:
   - type: textarea
-    id: describe-bug
+    id: reporter-requirements
     attributes:
-      label: Describe the bug
+      label: Reporter Requirements
       description: |
-        A clear and concise description of what the bug is and how to reproduce it.
-      placeholder: Tell us what you see! Copy/paste/link to any relevant log output.
+        Fill in the following information to help triage and reproduce the issue.
+      placeholder: |
+        - Expected vs Actual behaviour
+        - Repro steps
+        - Error messages, stack traces, or logs
+        - CI or unit test failures
+        - Minimal reproducing script (if applicable)
     validations:
       required: true
   - type: textarea
-    id: reproduce-bug
+    id: impact-statement
     attributes:
-      label: Steps to reproduce the issue
+      label: Impact Statement (Why P0)
       description: |
-        When possible/applicable, include the commands that you ran.
-      value: |
-        1. Go to '...'
-        2. Click on '....'
-        3. Scroll down to '....'
-        4. See error
-  - type: textarea
-    id: behavior
-    attributes:
-      label: Expected behavior
-      description: A clear and concise description of what you expected to happen.
-  - type: textarea
-    id: environment-info
-    attributes:
-      label: Please complete the following environment information
-      description: |
-        Details about your issue.
+        Describe why this issue is critical. Include scale of impact, affected architecture, number of users, etc.
       placeholder: |
-        - OS version (e.g. Ubuntu 22.04)
-        - Python version
-        - Framework version (e.g. JAX version)
-        - Version of software (e.g. release wheel or commit ID if you built from source)
+        - Scale of impact: 
+        - Scope (X Architecture, Y Users):
+  - type: textarea
+    id: action-history
+    attributes:
+      label: Action History
+      description: |
+        What has been tried so far to resolve or investigate the issue.
+  - type: textarea
+    id: next-steps
+    attributes:
+      label: Next Steps
+      description: |
+        Recommended next actions and who will take them.
+  - type: textarea
+    id: suspected-root-cause
+    attributes:
+      label: Suspected Root Cause
+      description: |
+        If known, the suspected root cause (commit hash, software layer, etc.)
+  - type: textarea
+    id: system-info
+    attributes:
+      label: System Information
+      description: |
+        Provide relevant system details to reproduce or debug the issue.
+      placeholder: |
+        - Host used
+        - Host OS
+        - Chip/Card type
+        - Software package: Metal, UMD/KMD, Forge, Firmware
+        - tt-smi dump? (Yes/No)
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance Criteria (to close P0)
+      description: |
+        Define the criteria that must be met to close this P0 bug.
