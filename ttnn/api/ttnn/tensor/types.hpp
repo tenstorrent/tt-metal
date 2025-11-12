@@ -99,5 +99,7 @@ struct NdShardSpec {
     bool operator!=(const NdShardSpec& other) const = default;
 };
 
+std::ostream& operator<<(std::ostream& os, const NdShardSpec& spec);
+
 }  // namespace tt_metal
 }  // namespace tt
