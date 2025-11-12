@@ -72,43 +72,64 @@ private:
     operation_attributes_t attributes_;
     std::string name_;
 
+    // Helper to extract metal tensor from Tensor or optional<Tensor>
+    static std::optional<tt::tt_metal::metal_tensor::Tensor> extract_metal_tensor(const auto& value) {
+        using value_t = std::decay_t<decltype(value)>;
+        if constexpr (std::same_as<value_t, Tensor>) {
+            return value.get_materialized_tensor();
+        } else if constexpr (std::same_as<value_t, std::optional<Tensor>>) {
+            if (value.has_value()) {
+                return value->get_materialized_tensor();
+            }
+            return std::nullopt;
+        } else {
+            static_assert(std::same_as<value_t, void>, "Unsupported tensor element type");
+            return std::nullopt;
+        }
+    }
+
     // Convert result from device operation to vector of tensors
     std::vector<tt::tt_metal::metal_tensor::Tensor> convert_result_to_vector(
         const tensor_return_value_t& result) const {
         // TODO: device operations are supposed to return metal tensors, not ttnn::Tensor
-        if constexpr (std::same_as<tensor_return_value_t, Tensor>) {
-            return {result.get_materialized_tensor()};
-        } else if constexpr (std::same_as<tensor_return_value_t, std::vector<Tensor>>) {
-            std::vector<tt::tt_metal::metal_tensor::Tensor> metal_tensors;
-            metal_tensors.reserve(result.size());
-            for (const auto& tensor : result) {
-                metal_tensors.push_back(tensor.get_materialized_tensor());
+
+        // Single element (Tensor or optional<Tensor>)
+        if constexpr (
+            std::same_as<tensor_return_value_t, Tensor> || std::same_as<tensor_return_value_t, std::optional<Tensor>>) {
+            auto metal_tensor = extract_metal_tensor(result);
+            if (metal_tensor.has_value()) {
+                return {metal_tensor.value()};
             }
-            return metal_tensors;
-        } else if constexpr (std::same_as<tensor_return_value_t, std::vector<std::optional<Tensor>>>) {
-            // For optional vectors: filter out nullopts, flatten to vector
+            return {};
+        }
+        // Tuple-like (array or tuple) - convert to vector
+        else if constexpr (TupleLike<tensor_return_value_t>) {
+            constexpr auto N = std::tuple_size_v<tensor_return_value_t>;
             std::vector<tt::tt_metal::metal_tensor::Tensor> metal_tensors;
-            for (const auto& tensor_opt : result) {
-                if (tensor_opt.has_value()) {
-                    metal_tensors.push_back(tensor_opt->get_materialized_tensor());
+
+            [&]<std::size_t... Is>(std::index_sequence<Is...>) {
+                (
+                    [&] {
+                        auto metal_tensor = extract_metal_tensor(std::get<Is>(result));
+                        if (metal_tensor.has_value()) {
+                            metal_tensors.push_back(metal_tensor.value());
+                        }
+                    }(),
+                    ...);
+            }(std::make_index_sequence<N>{});
+
+            return metal_tensors;
+        }
+        // Range-like (vector, etc) - iterate and convert
+        else if constexpr (RangeLike<tensor_return_value_t>) {
+            std::vector<tt::tt_metal::metal_tensor::Tensor> metal_tensors;
+            for (const auto& elem : result) {
+                auto metal_tensor = extract_metal_tensor(elem);
+                if (metal_tensor.has_value()) {
+                    metal_tensors.push_back(metal_tensor.value());
                 }
             }
             return metal_tensors;
-        } else if constexpr (ttnn::experimental::lazy::is_tensor_array_v<tensor_return_value_t>) {
-            // For std::array<Tensor, N>: convert to vector
-            std::vector<tt::tt_metal::metal_tensor::Tensor> metal_tensors;
-            metal_tensors.reserve(result.size());
-            for (const auto& tensor : result) {
-                metal_tensors.push_back(tensor.get_materialized_tensor());
-            }
-            return metal_tensors;
-        } else if constexpr (ttnn::experimental::lazy::is_all_tensor_tuple_v<tensor_return_value_t>) {
-            // For std::tuple<Tensor, ...>: convert to vector using apply
-            return std::apply(
-                [](const auto&... tensors) {
-                    return std::vector<tt::tt_metal::metal_tensor::Tensor>{tensors.get_materialized_tensor()...};
-                },
-                result);
         } else {
             TT_THROW("Unsupported tensor_return_value_t type");
         }
