@@ -289,7 +289,7 @@ Tensor Tensor::make_lazy_tensor(
 std::vector<Tensor> Tensor::make_lazy_tensors(
     const std::shared_ptr<ttnn::experimental::lazy::LazyOperationInputs>& op_inputs,
     const std::shared_ptr<ttnn::experimental::lazy::LazyOperation>& op,
-    const std::vector<TensorSpec>& tensor_specs) {
+    const std::vector<std::optional<TensorSpec>>& tensor_specs) {
     auto lazy_tensors = LazyTensor::make_lazy_tensors(op_inputs, op, tensor_specs);
     std::vector<Tensor> tensors;
     tensors.reserve(lazy_tensors.size());

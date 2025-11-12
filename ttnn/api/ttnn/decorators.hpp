@@ -198,15 +198,15 @@ private:
 
         auto lazy_inputs = ttnn::experimental::lazy::make_lazy_device_operation_inputs<operation_t>(tensor_args);
 
-        // Call compute_output_specs and flatten to vector<TensorSpec>
+        // Call compute_output_specs and flatten to vector<optional<TensorSpec>>
         auto output_specs = operation_t::compute_output_specs(operation_attributes, tensor_args);
-        auto [flat_specs, is_optional] = ttnn::experimental::lazy::flatten_specs(output_specs);
+        auto flat_specs = ttnn::experimental::lazy::flatten_specs(output_specs);
 
         // Create lazy tensors using the flat vector
         auto lazy_tensors = Tensor::make_lazy_tensors(lazy_inputs, lazy_op, flat_specs);
 
         // Reconstruct the correct return type
-        return ttnn::experimental::lazy::reconstruct_return_value<tensor_return_value_t>(lazy_tensors, is_optional);
+        return ttnn::experimental::lazy::reconstruct_return_value<tensor_return_value_t>(lazy_tensors, flat_specs);
     }
 };
 
