@@ -117,13 +117,14 @@ In most cases, storing all matrices on L1 is ideal, as it completely avoids acce
 
 Tracing in the TT-Metallium stack is a performance optimization that records commands for dispatching operations into the DRAM buffer and replays them later for execution, removing host overhead of dispatching operations during a loop iteration.
 
-#### Tracing on N150
-
-![](images/trace_comparison_n150.png)
-
 #### Tracing on P150
 
 ![](images/trace_comparison_p150.png)
+
+
+#### Tracing on N150
+
+![](images/trace_comparison_n150.png)
 
 As shown here, on both Wormhole and Blackhole, Trace helps recover more lost performance on smaller tensor matrix multiplications compared to larger ones. This is likely because smaller matrix operations take less time to execute than larger ones, meaning that host overhead is, percentage-wise, more harmful to overall runtime and maximum throughput compared to larger tensors.
 
@@ -132,14 +133,13 @@ As shown here, on both Wormhole and Blackhole, Trace helps recover more lost per
 
 Both architectures perform most ideally when the input tensors are closest to square shapes, but they still perform well on rectangular matrices. However, as the tensors become more rectangular, performance takes a larger hit.
 
+#### Rectangular Matrix on P150
+
+![](images/aspect_ratio_by_dtype_p150.png)
 
 #### Rectangular Matrix on N150
 
 ![](images/aspect_ratio_by_dtype_n150.png)
-
-#### Rectangular Matrix on P150
-
-![](images/aspect_ratio_by_dtype_p150.png)
 
 
 #### Out of Box Performance
