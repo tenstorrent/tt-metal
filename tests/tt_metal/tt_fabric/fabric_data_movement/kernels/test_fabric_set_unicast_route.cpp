@@ -17,8 +17,8 @@ void kernel_main() {
     uint32_t ew_dim = get_arg_val<uint32_t>(4);
 
     volatile tt_l1_ptr uint32_t* result_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(result_addr);
-    uint8_t expected_buffer[64];
-    uint8_t actual_buffer[64];
+    uint8_t expected_buffer[PACKET_HEADER_MAX_SIZE];
+    uint8_t actual_buffer[PACKET_HEADER_MAX_SIZE];
 
 #ifdef FABRIC_2D
     constexpr uint32_t MAX_ROUTE_BUFFER_SIZE = HYBRID_MESH_MAX_ROUTE_BUFFER_SIZE;
