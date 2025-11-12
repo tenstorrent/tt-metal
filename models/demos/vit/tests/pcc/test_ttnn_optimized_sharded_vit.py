@@ -11,7 +11,7 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0, torch_random
-from models.demos.vit.tt import ttnn_optimized_sharded_vit_gs as ttnn_optimized_sharded_vit
+from models.demos.grayskull.vit.tt import ttnn_optimized_sharded_vit_gs as ttnn_optimized_sharded_vit
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
