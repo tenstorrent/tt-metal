@@ -213,6 +213,8 @@ void TopologyMapper::build_asic_physical_chip_id_mappings() {
 }
 
 // Helper function to get physical chip ID from ASIC ID using cluster
+// Only works for ASICs on the current host. Returns 0 if ASIC is not on this host.
+// The physical_chip_id will be filled in by the host that owns this ASIC after receiving the mapping.
 static ChipId get_physical_chip_id_from_asic_id_via_cluster(tt::tt_metal::AsicID asic_id) {
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     for (const auto& [physical_chip_id, unique_id] : cluster.get_unique_chip_ids()) {
@@ -220,7 +222,8 @@ static ChipId get_physical_chip_id_from_asic_id_via_cluster(tt::tt_metal::AsicID
             return physical_chip_id;
         }
     }
-    TT_FATAL(false, "Physical chip id not found for ASIC id {}", asic_id);
+    // ASIC is not on this host, return 0 as placeholder
+    // The physical_chip_id will be filled in by the host that owns this ASIC
     return 0;
 }
 
@@ -258,6 +261,22 @@ void TopologyMapper::build_mapping() {
                 adjacency_map_logical.at(mesh_id),
                 asic_id_to_mesh_rank.at(mesh_id),
                 fabric_node_id_to_mesh_rank.at(mesh_id));
+        }
+
+        // Fill in physical_chip_id for ASICs that belong to this host
+        // (Some may have been set to 0 if they're on other hosts)
+        auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        const auto& my_host = physical_system_descriptor_.my_host_name();
+        for (auto& info : chip_topology_info_) {
+            if (info.physical_chip_id == 0 && info.hostname.has_value() && *info.hostname == my_host) {
+                // This ASIC belongs to this host, look up its physical chip ID
+                for (const auto& [physical_chip_id, unique_id] : cluster.get_unique_chip_ids()) {
+                    if (unique_id == *info.asic_id) {
+                        info.physical_chip_id = physical_chip_id;
+                        break;
+                    }
+                }
+            }
         }
 
         // Broadcast the mapping to all hosts
@@ -1389,6 +1408,22 @@ void TopologyMapper::receive_mapping_from_host(int rank) {
         "Topology mapping size mismatch after streaming receive: expected {}, got {}",
         count,
         chip_topology_info_.size());
+
+    // Fill in physical_chip_id for ASICs that belong to this host
+    // (The controller may have set it to 0 for ASICs on other hosts)
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& my_host = physical_system_descriptor_.my_host_name();
+    for (auto& info : chip_topology_info_) {
+        if (info.physical_chip_id == 0 && info.hostname.has_value() && *info.hostname == my_host) {
+            // This ASIC belongs to this host, look up its physical chip ID
+            for (const auto& [physical_chip_id, unique_id] : cluster.get_unique_chip_ids()) {
+                if (unique_id == *info.asic_id) {
+                    info.physical_chip_id = physical_chip_id;
+                    break;
+                }
+            }
+        }
+    }
 }
 
 void TopologyMapper::rebuild_lookup_maps() {
