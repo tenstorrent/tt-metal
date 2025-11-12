@@ -78,6 +78,10 @@ def test_conv2d_inference(
     partial_state_dict["weight"] = partial_state_dict[list(partial_state_dict.keys())[0]].reshape(
         out_channels, in_channels, kernel_size, kernel_size
     )
+    # torch.nn.conv2d expects a dictionary with a key named "weight" but the weight loader provides a key named "_linear.weight". 
+    partial_state_dict["weight"] = partial_state_dict["_linear.weight"].reshape(
+        out_channels, in_channels, kernel_size, kernel_size
+    )
     partial_state_dict.pop("_linear.weight")
     reference_model.load_state_dict(partial_state_dict)
     reference_output = reference_model(input_tensor).reshape(B, out_channels, -1).transpose(2, 1)
