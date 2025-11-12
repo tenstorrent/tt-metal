@@ -456,7 +456,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
             .math_approx_mode = false,
             .compile_args = compute_compile_time_args});
 
-    auto set_runtime_args = [&cb_handles, &config, per_core_serialized_transfers, writer_kernel_id0, writer_kernel_id1](
+    auto set_runtime_args = [cb_handles, config, per_core_serialized_transfers, writer_kernel_id0, writer_kernel_id1](
                                 tt::tt_metal::Program& program, const Tensor& a, const Tensor& output) {
         for (uint32_t core_idx = 0; core_idx < config.output_cores.size(); core_idx++) {
             std::vector<uint32_t> runtime_args_0 = {config.remote_address};
