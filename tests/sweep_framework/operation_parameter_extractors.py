@@ -580,6 +580,41 @@ class OperationParameterExtractors:
             return None
 
     @staticmethod
+    def extract_tensor_vector_from_unparsed(unparsed_data: Dict) -> Optional[List[Dict]]:
+        """Extract vector of tensors from UnparsedElement for concat operations
+
+        Args:
+            unparsed_data: The UnparsedElement dictionary containing element_info
+
+        Returns:
+            List of tensor dictionaries, or None if extraction fails
+        """
+        element_info = unparsed_data.get("element_info", "")
+        if not element_info:
+            return None
+
+        try:
+            # Extract the JSON array string from element_info
+            # Format: {"arg0": "[{tensor1}, {tensor2}, ...]"}
+            array_match = re.search(r'"arg0"\s*:\s*"(\[.*\])"', element_info, re.DOTALL)
+            if array_match:
+                array_str = array_match.group(1)
+                # Parse the JSON array
+                tensor_array = json.loads(array_str)
+
+                # Extract tensor information from each tensor in the array
+                tensor_configs = []
+                for tensor_obj in tensor_array:
+                    if "tensor_spec" in tensor_obj:
+                        tensor_configs.append(tensor_obj)
+
+                return tensor_configs if tensor_configs else None
+        except Exception as e:
+            # If parsing fails, return None
+            return None
+        return None
+
+    @staticmethod
     def extract_tensor_config(arg_data: Dict) -> Optional[TensorConfig]:
         """Extract tensor configuration from argument data"""
         if not isinstance(arg_data, dict):
@@ -592,6 +627,26 @@ class OperationParameterExtractors:
 
             if element_info and element_info.startswith("{"):
                 try:
+                    # Check if this is a vector of tensors (for concat)
+                    # Format: {"arg0": "[{tensor1}, {tensor2}, ...]"}
+                    if '"arg0"' in element_info and element_info.find("[") != -1:
+                        # This might be a vector - try extracting it
+                        tensor_vector = OperationParameterExtractors.extract_tensor_vector_from_unparsed(unparsed_data)
+                        if tensor_vector and len(tensor_vector) > 0:
+                            # Return the first tensor's config (for single tensor extraction)
+                            # For vector extraction, use extract_tensor_vector_from_unparsed directly
+                            tensor_obj = tensor_vector[0]
+                            tensor_spec = tensor_obj.get("tensor_spec", {})
+                            tensor_layout = tensor_spec.get("tensor_layout", {})
+                            shape = tensor_spec.get("logical_shape", [])
+                            dtype = tensor_layout.get("dtype", "")
+                            layout = tensor_layout.get("layout", "")
+                            memory_config = tensor_layout.get("memory_config", {})
+                            if not layout:
+                                layout = "Layout::TILE"
+                            if shape and dtype and layout and memory_config:
+                                return TensorConfig(shape, dtype, layout, memory_config)
+
                     # Apply regex fixes for C++ style formats
                     fixed_json_str = element_info
                     # Fix C++ style braces in values like "{32, 32}" -> "[32, 32]"

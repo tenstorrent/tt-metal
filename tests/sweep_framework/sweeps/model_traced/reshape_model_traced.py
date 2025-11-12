@@ -1,7 +1,5 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
-#
-# SPDX-License-Identifier: Apache-2.0
-
+# Model traced sweep for reshape
+# Generated automatically - DO NOT EDIT MANUALLY
 
 import torch
 import ttnn
@@ -58,39 +56,11 @@ def run(
     else:
         input_shape_tuple = input_shape
 
-    # Handle target_shape - convert to tuple if needed
-    if isinstance(target_shape, (tuple, list)):
-        target_shape_tuple = tuple(target_shape)
-    else:
-        target_shape_tuple = target_shape
-
-    # Validate that target_shape matches input_shape in total elements
-    import math
-
-    input_elements = math.prod(input_shape_tuple)
-    # Handle -1 in target_shape (means infer from other dimensions)
-    if -1 in target_shape_tuple:
-        # Calculate what -1 should be
-        known_product = math.prod([d for d in target_shape_tuple if d != -1])
-        if known_product == 0:
-            raise ValueError(
-                f"Invalid target_shape {target_shape_tuple}: cannot infer -1 with zero in other dimensions"
-            )
-        inferred_dim = input_elements // known_product
-        target_shape_tuple = tuple([inferred_dim if d == -1 else d for d in target_shape_tuple])
-
-    target_elements = math.prod(target_shape_tuple)
-    if input_elements != target_elements:
-        raise ValueError(
-            f"Invalid reshape: input_shape {input_shape_tuple} has {input_elements} elements, "
-            f"but target_shape {target_shape_tuple} has {target_elements} elements"
-        )
-
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape_tuple)
 
-    torch_output_tensor = torch.reshape(torch_input_tensor_a, target_shape_tuple)
+    torch_output_tensor = torch.reshape(torch_input_tensor_a, target_shape)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -101,7 +71,7 @@ def run(
     )
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.reshape(input_tensor_a, target_shape_tuple, memory_config=output_memory_config)
+    output_tensor = ttnn.reshape(input_tensor_a, target_shape, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(output_tensor)
     e2e_perf = stop_measuring_time(start_time)
 

@@ -26,10 +26,12 @@ model_traced_params = loader.get_suite_parameters("concat", all_cases=False)
 parameters = {
     # Quick sample test with basic configurations for fast validation
     "model_traced_sample": {
-        "input_shape": [(1, 1, 32, 16)],  # Two tensors to concatenate
+        "input_shape": [{"input_a": (1, 1, 32, 16), "input_b": (1, 1, 32, 8)}],  # Two tensors to concatenate
         "input_a_dtype": [ttnn.bfloat16],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "input_b_dtype": [ttnn.bfloat16],
+        "input_b_layout": [ttnn.TILE_LAYOUT],
         "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
     },
@@ -47,6 +49,8 @@ def run(
     input_a_dtype=None,
     input_a_layout=None,
     input_a_memory_config=None,
+    input_b_dtype=None,
+    input_b_layout=None,
     input_b_memory_config=None,
     *,
     device,
@@ -62,26 +66,35 @@ def run(
         raise ValueError("input_a_layout is None - required parameter missing")
     if input_a_memory_config is None:
         raise ValueError("input_a_memory_config is None - required parameter missing")
+    if input_b_dtype is None:
+        raise ValueError("input_b_dtype is None - required parameter missing")
+    if input_b_layout is None:
+        raise ValueError("input_b_layout is None - required parameter missing")
     if input_b_memory_config is None:
         raise ValueError("input_b_memory_config is None - required parameter missing")
 
-    # Handle tuple input_shape
-    if isinstance(input_shape, (tuple, list)):
-        shape = tuple(input_shape)
+    # Handle input_shape - can be dict (from model_traced) or tuple/list (from sample)
+    if isinstance(input_shape, dict):
+        # Extract shapes from dict (input_a, input_b, etc.)
+        shape_a = tuple(input_shape.get("input_a", input_shape.get("input_0", [])))
+        shape_b = tuple(input_shape.get("input_b", input_shape.get("input_1", [])))
+    elif isinstance(input_shape, (tuple, list)):
+        # Legacy format: single shape, create second tensor with modified dim
+        shape_a = tuple(input_shape)
+        shape_b = list(shape_a)
+        # Normalize dim to positive index
+        dim_idx = dim if dim >= 0 else len(shape_a) + dim
+        shape_b[dim_idx] = shape_a[dim_idx] // 2  # Second tensor has half the size along concat dim
+        shape_b = tuple(shape_b)
     else:
-        shape = input_shape
+        raise ValueError(f"input_shape must be dict or tuple/list, got {type(input_shape)}")
 
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
-    )(shape)
+    )(shape_a)
 
-    # Create second tensor with same shape except the dimension being concatenated
-    shape_b = list(shape)
-    # Normalize dim to positive index
-    dim_idx = dim if dim >= 0 else len(shape) + dim
-    shape_b[dim_idx] = shape[dim_idx] // 2  # Second tensor has half the size along concat dim
     torch_input_tensor_b = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
+        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
     )(shape_b)
 
     # Concatenate along specified dimension
@@ -97,8 +110,8 @@ def run(
 
     input_tensor_b = ttnn.from_torch(
         torch_input_tensor_b,
-        dtype=input_a_dtype,
-        layout=input_a_layout,
+        dtype=input_b_dtype,
+        layout=input_b_layout,
         device=device,
         memory_config=input_b_memory_config,
     )

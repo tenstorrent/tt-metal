@@ -1696,13 +1696,12 @@ class MasterConfigLoader:
             for config_idx, config in enumerate(configs):
                 try:
                     # Concat takes a vector of tensors as arg0, dim as arg1, memory_config as arg2
-                    # Since we can't easily extract all tensors from the vector, we'll extract
-                    # what we can from the config - mainly the dim and memory_config
-
-                    # Extract dim from arg1
+                    # Extract vector of tensors from arg0 (may be UnparsedElement)
+                    tensor_configs = []
                     dim = None
                     memory_config = None
 
+                    # Extract dim from arg1
                     for arg in config:
                         if isinstance(arg, dict):
                             if "arg1" in arg:
@@ -1717,16 +1716,91 @@ class MasterConfigLoader:
                                 if isinstance(mem_config_data, dict) and "MemoryConfig" in mem_config_data:
                                     memory_config = self.parse_memory_config(mem_config_data["MemoryConfig"], None)
 
-                    # For concat, we need at least 2 tensors, but we can't extract them from the vector
-                    # So we'll create a minimal config that can be used for testing
-                    # The actual tensor shapes will need to come from the test itself
-                    if dim is not None:
-                        # Use a default shape for now - this is a limitation
-                        # The test will need to handle the actual tensor shapes
+                            # Extract vector of tensors from arg0
+                            if "arg0" in arg:
+                                arg0_data = arg["arg0"]
+                                # Check if it's a string (simplified representation)
+                                if (
+                                    isinstance(arg0_data, str)
+                                    and arg0_data.startswith("[{")
+                                    and "tensor_spec" in arg0_data
+                                ):
+                                    # Try to parse the JSON array string
+                                    try:
+                                        tensor_array = json.loads(arg0_data)
+                                        tensor_configs = tensor_array
+                                    except:
+                                        pass
+
+                            # Check for UnparsedElement in arg0
+                            if "UnparsedElement" in arg:
+                                from tests.sweep_framework.operation_parameter_extractors import (
+                                    OperationParameterExtractors,
+                                )
+
+                                unparsed_data = arg["UnparsedElement"]
+                                tensor_vector = OperationParameterExtractors.extract_tensor_vector_from_unparsed(
+                                    unparsed_data
+                                )
+                                if tensor_vector:
+                                    tensor_configs = tensor_vector
+
+                    # Extract shapes, dtypes, layouts, and memory_configs from tensor vector
+                    if tensor_configs and len(tensor_configs) >= 2 and dim is not None:
+                        # Build input_shape dict with all tensor shapes
+                        input_shape_dict = {}
+                        input_dtypes = []
+                        input_layouts = []
+                        input_memory_configs = []
+
+                        for i, tensor_obj in enumerate(tensor_configs):
+                            if "tensor_spec" in tensor_obj:
+                                tensor_spec = tensor_obj["tensor_spec"]
+                                tensor_layout = tensor_spec.get("tensor_layout", {})
+
+                                shape = tensor_spec.get("logical_shape", [])
+                                dtype_str = tensor_layout.get("dtype", "")
+                                layout_str = tensor_layout.get("layout", "")
+                                mem_config_dict = tensor_layout.get("memory_config", {})
+
+                                # Store shape with key like input_a, input_b, etc.
+                                suffix = chr(97 + i)  # a, b, c, ...
+                                input_shape_dict[f"input_{suffix}"] = shape
+
+                                # Parse and store dtype, layout, memory_config
+                                if dtype_str:
+                                    dtype_str_clean = dtype_str.replace("DataType::", "")
+                                    input_dtypes.append(self.parse_dtype(f"DataType::{dtype_str_clean}"))
+                                else:
+                                    input_dtypes.append(None)
+
+                                if layout_str:
+                                    layout_str_clean = layout_str.replace("Layout::", "")
+                                    input_layouts.append(self.parse_layout(layout_str_clean))
+                                else:
+                                    input_layouts.append(ttnn.TILE_LAYOUT)
+
+                                if mem_config_dict:
+                                    input_memory_configs.append(self.parse_memory_config(mem_config_dict, shape))
+                                else:
+                                    input_memory_configs.append(None)
+
+                        # Create config dict with all extracted information
                         config_dict = {
+                            "input_shape": input_shape_dict,
                             "dim": dim,
                             "output_memory_config": memory_config or ttnn.DRAM_MEMORY_CONFIG,
                         }
+
+                        # Add dtype, layout, memory_config for each input (at least 2)
+                        if len(input_dtypes) >= 2:
+                            config_dict["input_a_dtype"] = input_dtypes[0]
+                            config_dict["input_b_dtype"] = input_dtypes[1]
+                            config_dict["input_a_layout"] = input_layouts[0]
+                            config_dict["input_b_layout"] = input_layouts[1]
+                            config_dict["input_a_memory_config"] = input_memory_configs[0] or ttnn.DRAM_MEMORY_CONFIG
+                            config_dict["input_b_memory_config"] = input_memory_configs[1] or ttnn.DRAM_MEMORY_CONFIG
+
                         paired_configs.append(config_dict)
 
                 except Exception as e:
@@ -1735,13 +1809,29 @@ class MasterConfigLoader:
 
             if paired_configs:
                 print(f"✅ Loaded {len(paired_configs)} traced configurations for {operation_name} (model_traced suite)")
-                print(f"   ⚠️ Note: Concat takes a vector of tensors - tensor shapes not extracted from trace")
 
-                # Build parameter dict
-                param_names = ["dim", "output_memory_config"]
+                # Build parameter dict - include input_shape and all tensor parameters
+                param_names = [
+                    "input_shape",
+                    "dim",
+                    "input_a_dtype",
+                    "input_a_layout",
+                    "input_a_memory_config",
+                    "input_b_dtype",
+                    "input_b_layout",
+                    "input_b_memory_config",
+                    "output_memory_config",
+                ]
                 param_lists = [
-                    [cfg["dim"] for cfg in paired_configs],
-                    [cfg["output_memory_config"] for cfg in paired_configs],
+                    [cfg.get("input_shape") for cfg in paired_configs],
+                    [cfg.get("dim") for cfg in paired_configs],
+                    [cfg.get("input_a_dtype") for cfg in paired_configs],
+                    [cfg.get("input_a_layout") for cfg in paired_configs],
+                    [cfg.get("input_a_memory_config") for cfg in paired_configs],
+                    [cfg.get("input_b_dtype") for cfg in paired_configs],
+                    [cfg.get("input_b_layout") for cfg in paired_configs],
+                    [cfg.get("input_b_memory_config") for cfg in paired_configs],
+                    [cfg.get("output_memory_config") for cfg in paired_configs],
                 ]
 
                 # Create tuples of exact configurations
