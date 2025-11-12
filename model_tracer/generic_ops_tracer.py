@@ -10,11 +10,13 @@ Takes any model test path and extracts ttnn operations by running pytest
 with tracing enabled. No model-specific code or device initialization needed.
 
 Usage:
-    python generic_ops_tracer.py <test_path> [output_dir]
+    python generic_ops_tracer.py <test_path> [--output-dir <dir>] [--store]
 
 Examples:
     python generic_ops_tracer.py models/demos/wormhole/distilbert/demo/demo.py::test_demo
     python generic_ops_tracer.py models/demos/wormhole/resnet50/demo/demo.py::test_demo_sample
+    python generic_ops_tracer.py /path/to/test.py::test_function --store
+    python generic_ops_tracer.py /path/to/test.py::test_function --output-dir ./my_traces --store
 """
 
 import sys
@@ -696,9 +698,9 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python model_tracer/generic_ops_tracer.py models/demos/wormhole/distilbert/demo/demo.py::test_demo
-  python model_tracer/generic_ops_tracer.py /path/to/test.py::test_function --store
-  python model_tracer/generic_ops_tracer.py /path/to/test.py::test_function --output-dir ./my_traces --store
+    python model_tracer/generic_ops_tracer.py models/demos/wormhole/distilbert/demo/demo.py::test_demo
+    python model_tracer/generic_ops_tracer.py /path/to/test.py::test_function --store
+    python model_tracer/generic_ops_tracer.py /path/to/test.py::test_function --output-dir ./my_traces --store
         """,
     )
     parser.add_argument("test_path", help="Path to test file (e.g., /path/to/test.py::test_function)")

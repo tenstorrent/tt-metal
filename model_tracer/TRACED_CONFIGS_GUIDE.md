@@ -25,7 +25,7 @@ Automatically extracts real-world operation configurations from model tests and 
 
 ### Key Files
 
-- **Tracer**: `model_tracer/generic_ops_tracer.py`
+- **Tracer**: `model_tracer/generic_ops_tracer.py` - Employs methodology described in the [graph tracing tech report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/ttnn/graph-tracing.md)
 - **Master JSON**: `model_tracer/traced_operations/ttnn_operations_master.json`
 - **Analyzer**: `model_tracer/analyze_operations.py`
 - **Config Loader**: `tests/sweep_framework/master_config_loader.py`
