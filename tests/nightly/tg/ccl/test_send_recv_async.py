@@ -59,15 +59,15 @@ def run_send_recv_test(
     "per_chip_shape",
     [
         ([1, 32, 2048, 8]),
-        ([1, 1, 64, 8192]),
+        ([1, 1, 64, 4096]),
         ([1, 1, 112, 3128]),
-        ([1, 1, 112, 3136]),
     ],
 )
 @pytest.mark.parametrize(
     "layout",
     [
         ttnn.TILE_LAYOUT,
+        ttnn.ROW_MAJOR_LAYOUT,
     ],
 )
 @pytest.mark.parametrize(
