@@ -82,8 +82,8 @@ void kernel_main() {
     const uint8_t opposite_core_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t opposite_core_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
 
-    uint32_t mm_block_w = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t mm_block_h = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t mm_block_wt = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t mm_block_ht = get_arg_val<uint32_t>(arg_idx++);
     uint32_t mm_cores_y = get_arg_val<uint32_t>(arg_idx++);
 
     bool mux_connection_valid = get_arg_val<uint32_t>(arg_idx++) == 1;
@@ -190,60 +190,58 @@ void kernel_main() {
     uint32_t tiles_per_batch = input_tensor_Wt * input_tensor_Ht;
     uint32_t output_tiles_per_batch = output_tensor_Wt * output_tensor_Ht;
     uint32_t chunks_per_core = div_up(tiles_per_batch, tiles_per_chunk);
-    uint32_t tiles_written = 0;
+
+    uint32_t padded_M_tiles = round_up(input_tensor_Ht, mm_cores_y);
+    uint32_t padded_K_tiles = round_up(output_tensor_Wt, mm_block_wt);
+    uint32_t M_tiles_per_core = padded_M_tiles / mm_cores_y;
+    uint32_t K_blocks = padded_K_tiles / mm_block_wt;
+    uint32_t M_blocks_per_core = div_up(M_tiles_per_core, mm_block_ht);
+
+    uint32_t curr_device = 0;
+    uint32_t curr_device_start = 0;
+    uint32_t curr_device_end = input_tensor_Wt - 1;
+    uint32_t device_k_block_counts[ring_size] = {0};
+    for (uint32_t k_block_iter = 0; k_block_iter < K_blocks; k_block_iter++) {
+        uint32_t curr_k_block_start = k_block_iter * mm_block_wt;
+        uint32_t curr_k_block_end = (k_block_iter + 1) * mm_block_wt - 1;
+        if (curr_k_block_end < curr_device_end) {
+            device_k_block_counts[curr_device]++;
+        } else if (curr_k_block_end == curr_device_end) {
+            device_k_block_counts[curr_device]++;
+            curr_device++;
+            curr_device_start = curr_device_end + 1;
+            curr_device_end = (curr_device + 1) * input_tensor_Wt - 1;
+        } else if (curr_k_block_end > curr_device_end) {
+            device_k_block_counts[curr_device]++;
+            if (curr_device + 1 < ring_size) {
+                device_k_block_counts[curr_device + 1]++;
+            }
+            curr_device++;
+            curr_device_start = curr_device_end + 1;
+            curr_device_end = (curr_device + 1) * input_tensor_Wt - 1;
+        }
+    }
 
     // Write out the local slice to both DRAM and forward and backward
     for (uint32_t b_idx = 0; b_idx < num_batches; b_idx++) {
-        global_tile_index = 0;
-        tiles_written = 0;
-        for (uint32_t chunk_idx = 0; chunk_idx < chunks_per_core; chunk_idx++) {
-            uint32_t chunk_start_tile = global_tile_index;
-            write_chunk(
-                chunk_start_tile,
-                batch_output_tile_offset,
-                cb_output_id,
-                tiles_written,
-                input_tiles_per_core,
-                tiles_per_chunk,
-                mm_block_w,
-                mm_block_h,
-                input_tensor_Ht / mm_cores_y,
-                max_tiles_per_packet,
-                ag_worker_id,
-                ag_worker_cores,
-                output_addrgen,
-                output_page_size,
-                input_tensor_Wt,
-                output_tensor_Wt,
-                my_chip_id,
-                mux_connection,
-                pkt_scatter_hdr,
-                pkt_unicast_hdr,
-                pkt_hdr_sem_inc,
-                out_ready_sem_noc_addr_in_pkt,
-                direction,
-                true);
-
-            if constexpr (fuse_op && direction == 1) {
-                // Synchronize and signal that the local tensor slice is available
-                op_signaler_sender.synchronize_workers_and_signal_op(my_chip_id);
-            }
-
-            // Forward chunks
-            uint32_t slice_writes = 0;
-            uint32_t local_tiles_written = 0;
-            while (slice_writes < writes_expected) {
-                uint32_t actual_sender_chip_id = get_sender_id(direction, my_chip_id, slice_writes, ring_size);
-                chunk_start_tile = global_tile_index;
-                local_tiles_written = write_chunk(
-                    chunk_start_tile,
+        for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
+            // Send out local
+            uint32_t input_chunk_start_tile = global_tile_index;
+            for (uint32_t chunk_idx = 0; chunk_idx < device_k_block_counts[my_chip_id]; chunk_idx++) {
+                uint32_t actual_chunk_w =
+                    next_mm_aligned_chunk_width(input_chunk_start_tile, my_chip_id, input_tensor_Wt, mm_block_wt);
+                uint32_t actual_chunk_h = next_mm_aligned_chunk_height(
+                    input_chunk_start_tile, M_tiles_per_core, input_tensor_Wt, mm_block_ht);
+                uint32_t tiles_in_current_chunk =
+                    actual_chunk_w * actual_chunk_h *
+                    mm_cores_y;  // THIS IS NOT QUITE RIGHT, each mm core might have a different chunk_h
+                write_chunk(
+                    input_chunk_start_tile,
                     batch_output_tile_offset,
                     cb_output_id,
-                    tiles_written,
-                    input_tiles_per_core,
-                    tiles_per_chunk,
-                    mm_block_w,
-                    mm_block_h,
+                    tiles_in_current_chunk,
+                    actual_chunk_w,
+                    actual_chunk_h,
                     input_tensor_Ht / mm_cores_y,
                     max_tiles_per_packet,
                     ag_worker_id,
@@ -252,18 +250,62 @@ void kernel_main() {
                     output_page_size,
                     input_tensor_Wt,
                     output_tensor_Wt,
-                    actual_sender_chip_id,
+                    my_chip_id,
                     mux_connection,
                     pkt_scatter_hdr,
                     pkt_unicast_hdr,
                     pkt_hdr_sem_inc,
                     out_ready_sem_noc_addr_in_pkt,
                     direction,
-                    false);
+                    true);
+            }
+            if constexpr (fuse_op && direction == 1) {
+                // Synchronize and signal that the local tensor slice is available
+                op_signaler_sender.synchronize_workers_and_signal_op(my_chip_id);
+            }
+
+            // Forward chunks
+            uint32_t slice_writes = 0;
+            while (slice_writes < writes_expected) {
+                uint32_t actual_sender_chip_id = get_sender_id(direction, my_chip_id, slice_writes, ring_size);
+
+                for (uint32_t chunk_idx = 0; chunk_idx < device_k_block_counts[actual_sender_chip_id]; chunk_idx++) {
+                    input_chunk_start_tile = global_tile_index;
+                    uint32_t actual_chunk_w = next_mm_aligned_chunk_width(
+                        input_chunk_start_tile, actual_sender_chip_id, input_tensor_Wt, mm_block_wt);
+                    uint32_t actual_chunk_h = next_mm_aligned_chunk_height(
+                        input_chunk_start_tile, M_tiles_per_core, input_tensor_Wt, mm_block_ht);
+                    uint32_t tiles_in_current_chunk =
+                        actual_chunk_w * actual_chunk_h *
+                        mm_cores_y;  // THIS IS NOT QUITE RIGHT, each mm core might have a different chunk_h
+
+                    write_chunk(
+                        input_chunk_start_tile,
+                        batch_output_tile_offset,
+                        cb_output_id,
+                        tiles_in_current_chunk,
+                        actual_chunk_w,
+                        actual_chunk_h,
+                        input_tensor_Ht / mm_cores_y,
+                        max_tiles_per_packet,
+                        ag_worker_id,
+                        ag_worker_cores,
+                        output_addrgen,
+                        output_page_size,
+                        input_tensor_Wt,
+                        output_tensor_Wt,
+                        actual_sender_chip_id,
+                        mux_connection,
+                        pkt_scatter_hdr,
+                        pkt_unicast_hdr,
+                        pkt_hdr_sem_inc,
+                        out_ready_sem_noc_addr_in_pkt,
+                        direction,
+                        false);
+                }
                 slice_writes++;
             }
-            global_tile_index = chunk_start_tile;
-            tiles_written += local_tiles_written;
+            global_tile_index = input_chunk_start_tile;
         }
         batch_output_tile_offset += output_tiles_per_batch;
     }
