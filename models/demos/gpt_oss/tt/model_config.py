@@ -17,6 +17,7 @@ from tqdm import tqdm
 from transformers import AutoConfig, AutoTokenizer
 
 import ttnn
+from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.tt_transformers.tt.load_checkpoints import convert_hf_qkv_to_meta_format
 
 
@@ -109,8 +110,8 @@ class ModelArgs:
             # exmaple : #base_model_name : {device_name : [sequence_lengths]}
         }
 
-        model_name = self.base_model_name
-        device_name = self.device_name
+        model_name = self.model_name
+        device_name = determine_device_name(self.mesh_device)
 
         # Try model-specific sequence lengths first
         result = model_specific_supported_seq_lens.get(model_name, {}).get(device_name)
@@ -215,3 +216,48 @@ class ModelArgs:
     def max_grid_size(self):
         """Return maximum grid size for the device"""
         return ttnn.CoreGrid(y=8, x=8)  # Standard grid size
+
+
+def determine_device_name(mesh_device):
+    """
+    Determine device name based on number of devices and architecture.
+
+    Args:
+        mesh_device (MeshDevice): MeshDevice object
+
+    Returns:
+        str: Device name (e.g., "CPU", "N150", "P100", etc.)
+
+    Raises:
+        ValueError: If architecture or device count is unsupported
+    """
+    num_devices = mesh_device.get_num_devices() if mesh_device else 0
+    arch_name = ttnn.get_arch_name()
+    dram_grid_size = mesh_device.dram_grid_size() if mesh_device else None  # CoreCoord with (x, y)
+
+    if num_devices == 0:
+        return "CPU"
+
+    if is_blackhole():
+        dict_device_names = {
+            1: "P100" if dram_grid_size and dram_grid_size.x == 7 else "P150",  # P100 DRAM grid is 7x1, P150 is 8x1
+            2: "P300",
+            4: "P150x4",
+            8: "P150x8",
+            32: "BHGLX",
+        }
+    elif is_wormhole_b0():
+        dict_device_names = {
+            1: "N150",
+            2: "N300",
+            4: "N150x4",
+            8: "T3K",
+            32: "TG",
+        }
+    else:
+        raise ValueError(f"Unsupported architecture: {arch_name}")
+
+    if num_devices in dict_device_names:
+        return dict_device_names[num_devices]
+    else:
+        raise ValueError(f"Unsupported number of devices: {num_devices} for {arch_name}")
