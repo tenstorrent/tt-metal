@@ -280,15 +280,20 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_loopback_src(
     bool mcast,
     bool linked,
     uint32_t num_dests,
-    bool multicast_path_reserve) {
+    bool multicast_path_reserve,
+    bool posted = false) {
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-        inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
-        inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, num_dests);
+        if (posted) {
+            inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
+        } else {
+            inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
+            inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, num_dests);
+        }
     }
     uint32_t noc_cmd_field =
         NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) | (linked ? NOC_CMD_VC_LINKED : 0x0) |
         (mcast ? ((multicast_path_reserve ? NOC_CMD_PATH_RESERVE : 0) | NOC_CMD_BRCST_PACKET) : 0x0) |
-        NOC_CMD_BRCST_SRC_INCLUDE | NOC_CMD_RESP_MARKED;
+        NOC_CMD_BRCST_SRC_INCLUDE | (posted ? 0 : NOC_CMD_RESP_MARKED);
 
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_addr);
@@ -300,8 +305,12 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_loopback_src(
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, len_bytes);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
     if constexpr (noc_mode == DM_DEDICATED_NOC) {
-        noc_nonposted_writes_num_issued[noc] += 1;
-        noc_nonposted_writes_acked[noc] += num_dests;
+        if (posted) {
+            noc_posted_writes_num_issued[noc] += 1;
+        } else {
+            noc_nonposted_writes_num_issued[noc] += 1;
+            noc_nonposted_writes_acked[noc] += num_dests;
+        }
     }
 }
 
@@ -652,7 +661,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len(
         trid);
 }
 
-template <uint8_t noc_mode = DM_DEDICATED_NOC>
+template <uint8_t noc_mode = DM_DEDICATED_NOC, bool one_packet = false>
 inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len_loopback_src(
     uint32_t noc,
     uint32_t cmd_buf,
@@ -663,27 +672,31 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len_loopbac
     bool mcast,
     bool linked,
     uint32_t num_dests,
-    bool multicast_path_reserve) {
-    while (len_bytes > NOC_MAX_BURST_SIZE) {
-        while (!noc_cmd_buf_ready(noc, cmd_buf));
-        ncrisc_noc_fast_write_loopback_src<noc_mode>(
-            noc,
-            cmd_buf,
-            src_addr,
-            dest_addr,
-            NOC_MAX_BURST_SIZE,
-            vc,
-            mcast,
-            linked,
-            num_dests,
-            multicast_path_reserve);
-        src_addr += NOC_MAX_BURST_SIZE;
-        dest_addr += NOC_MAX_BURST_SIZE;
-        len_bytes -= NOC_MAX_BURST_SIZE;
+    bool multicast_path_reserve,
+    bool posted = false) {
+    if constexpr (!one_packet) {
+        while (len_bytes > NOC_MAX_BURST_SIZE) {
+            while (!noc_cmd_buf_ready(noc, cmd_buf));
+            ncrisc_noc_fast_write_loopback_src<noc_mode>(
+                noc,
+                cmd_buf,
+                src_addr,
+                dest_addr,
+                NOC_MAX_BURST_SIZE,
+                vc,
+                mcast,
+                linked,
+                num_dests,
+                multicast_path_reserve,
+                posted);
+            src_addr += NOC_MAX_BURST_SIZE;
+            dest_addr += NOC_MAX_BURST_SIZE;
+            len_bytes -= NOC_MAX_BURST_SIZE;
+        }
     }
     while (!noc_cmd_buf_ready(noc, cmd_buf));
     ncrisc_noc_fast_write_loopback_src<noc_mode>(
-        noc, cmd_buf, src_addr, dest_addr, len_bytes, vc, mcast, linked, num_dests, multicast_path_reserve);
+        noc, cmd_buf, src_addr, dest_addr, len_bytes, vc, mcast, linked, num_dests, multicast_path_reserve, posted);
 }
 
 template <uint8_t noc_mode = DM_DEDICATED_NOC, bool flush = true>

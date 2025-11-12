@@ -103,33 +103,48 @@ void kernel_main() {
 
         // Test mcast
         if (mcast) {
-            // write mcast
-            noc_async_write_multicast_one_packet(
-                l1_read_addr,
-                noc == noc_index ? mcast_addr_self_noc : mcast_addr_other_noc,
-                page_size,
-                num_dests - 1,
-                false,
-                noc);
-            noc_async_write_multicast(
-                l1_read_addr,
-                noc == noc_index ? mcast_addr_self_noc : mcast_addr_other_noc,
-                page_size,
-                num_dests - 1,
-                false,
-                noc);
-            noc_async_write_multicast_loopback_src(
-                l1_read_addr,
-                noc == noc_index ? mcast_addr_self_noc : mcast_addr_other_noc,
-                page_size,
-                num_dests,
-                false,
-                noc);
-            // semaphore mcast
-            noc_semaphore_set_multicast(
-                l1_read_addr, noc == noc_index ? mcast_addr_self_noc : mcast_addr_other_noc, num_dests - 1, false, noc);
-            noc_semaphore_set_multicast_loopback_src(
-                l1_read_addr, noc == noc_index ? mcast_addr_self_noc : mcast_addr_other_noc, num_dests, false, noc);
+            for (auto posted : {true, false}) {
+                // write mcast
+                noc_async_write_multicast_one_packet(
+                    l1_read_addr,
+                    noc == noc_index ? mcast_addr_self_noc : mcast_addr_other_noc,
+                    page_size,
+                    num_dests - 1,
+                    false,
+                    posted,
+                    noc);
+                noc_async_write_multicast(
+                    l1_read_addr,
+                    noc == noc_index ? mcast_addr_self_noc : mcast_addr_other_noc,
+                    page_size,
+                    num_dests - 1,
+                    false,
+                    posted,
+                    noc);
+                noc_async_write_multicast_loopback_src(
+                    l1_read_addr,
+                    noc == noc_index ? mcast_addr_self_noc : mcast_addr_other_noc,
+                    page_size,
+                    num_dests,
+                    false,
+                    posted,
+                    noc);
+                // semaphore mcast
+                noc_semaphore_set_multicast(
+                    l1_read_addr,
+                    noc == noc_index ? mcast_addr_self_noc : mcast_addr_other_noc,
+                    num_dests - 1,
+                    false,
+                    posted,
+                    noc);
+                noc_semaphore_set_multicast_loopback_src(
+                    l1_read_addr,
+                    noc == noc_index ? mcast_addr_self_noc : mcast_addr_other_noc,
+                    num_dests,
+                    false,
+                    posted,
+                    noc);
+            }
         }
 
 // dw_write skip BH since there's HW issue

@@ -149,6 +149,7 @@ inline constexpr bool has_required_addrgen_traits_v =
 // clang-format off
 /**
  * Get an encoding for a noc address which contains Tensix core grid and L1 address.
+ * This API expects the start and end coordinates to be appropriately ordered for the specific NOC.
  *
  * Return value: uint64_t
  *
@@ -176,6 +177,43 @@ uint64_t get_noc_multicast_addr(
         DYNAMIC_NOC_X(noc, noc_x_end),
         DYNAMIC_NOC_Y(noc, noc_y_end),
         addr);
+}
+
+// clang-format off
+/**
+ * Get an encoding for a noc address which contains Tensix core grid and L1 address.
+ * This API expects the start coordinate to be the top-right core and the end coordinate to be the bottom-left core.
+ *
+ * Return value: uint64_t
+ *
+ * | Argument    | Description                             | Data type | Valid range        | required |
+ * |-------------|-----------------------------------------|-----------|--------------------|----------|
+ * | noc_x_start | Physical x coordinate of the start core | uint32_t  | WH: 0-9, BH: 0-16  | True     |
+ * | noc_y_start | Physical y coordinate of the start core | uint32_t  | WH: 0-11, BH: 0-11 | True     |
+ * | noc_x_end   | Physical x coordinate of the end core   | uint32_t  | WH: 0-9, BH: 0-16  | True     |
+ * | noc_y_end   | Physical y coordinate of the end core   | uint32_t  | WH: 0-11, BH: 0-11 | True     |
+ * | addr        | Address in local L1 memory              | uint32_t  | 0..1MB             | True     |
+ * | noc         | Which NOC to use for the transaction    | uint8_t   | 0 or 1             | False    |
+ */
+// clang-format on
+template <uint8_t noc>
+FORCE_INLINE uint64_t get_noc_multicast_addr(
+    uint32_t noc_x_start, uint32_t noc_y_start, uint32_t noc_x_end, uint32_t noc_y_end, uint32_t addr) {
+    if constexpr (noc == 0) {
+        return NOC_MULTICAST_ADDR(
+            DYNAMIC_NOC_X(noc, noc_x_start),
+            DYNAMIC_NOC_Y(noc, noc_y_start),
+            DYNAMIC_NOC_X(noc, noc_x_end),
+            DYNAMIC_NOC_Y(noc, noc_y_end),
+            addr);
+    } else {
+        return NOC_MULTICAST_ADDR(
+            DYNAMIC_NOC_X(noc, noc_x_end),
+            DYNAMIC_NOC_Y(noc, noc_y_end),
+            DYNAMIC_NOC_X(noc, noc_x_start),
+            DYNAMIC_NOC_Y(noc, noc_y_start),
+            addr);
+    }
 }
 
 // clang-format off

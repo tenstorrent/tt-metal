@@ -823,6 +823,7 @@ FORCE_INLINE void noc_async_write_multicast_one_packet(
     std::uint32_t size,
     std::uint32_t num_dests,
     bool linked = false,
+    bool posted = false,
     uint8_t noc = noc_index) {
     if constexpr (enable_noc_tracing) {
         NOC_TRACE_QUICK_PUSH_IF_LINKED(write_cmd_buf, linked);
@@ -842,7 +843,8 @@ FORCE_INLINE void noc_async_write_multicast_one_packet(
         true /* mcast */,
         linked,
         num_dests,
-        true /* multicast_path_reserve */);
+        true /* multicast_path_reserve */,
+        posted);
 }
 
 // clang-format off
@@ -889,11 +891,13 @@ inline void noc_async_write_multicast(
     uint32_t size,
     uint32_t num_dests,
     bool linked = false,
+    bool posted = false,
     uint8_t noc = noc_index) {
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_MULTICAST, dst_noc_addr_multicast, size, NOC_MULTICAST_WRITE_VC);
 
     if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
-        noc_async_write_multicast_one_packet<false>(src_local_l1_addr, dst_noc_addr_multicast, size, num_dests, linked);
+        noc_async_write_multicast_one_packet<false>(
+            src_local_l1_addr, dst_noc_addr_multicast, size, num_dests, linked, posted, noc);
     } else {
         WAYPOINT("NMWW");
         NOC_TRACE_QUICK_PUSH_IF_LINKED(write_cmd_buf, linked);
@@ -908,7 +912,8 @@ inline void noc_async_write_multicast(
             true /* mcast */,
             linked,
             num_dests,
-            true /* multicast_path_reserve */);
+            true /* multicast_path_reserve */,
+            posted);
         WAYPOINT("NMWD");
     }
 }
@@ -1441,6 +1446,7 @@ inline void noc_semaphore_set_multicast(
     uint64_t dst_noc_addr_multicast,
     uint32_t num_dests,
     bool linked = false,
+    bool posted = false,
     uint8_t noc = noc_index) {
     WAYPOINT("NSNW");
     DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, 4);
@@ -1454,7 +1460,8 @@ inline void noc_semaphore_set_multicast(
         true,
         linked,
         num_dests,
-        true /* multicast_path_reserve */);
+        true /* multicast_path_reserve */,
+        posted);
     WAYPOINT("NSND");
 }
 // clang-format off
@@ -1490,10 +1497,11 @@ inline void noc_semaphore_set_multicast_loopback_src(
     uint64_t dst_noc_addr_multicast,
     uint32_t num_dests,
     bool linked = false,
+    bool posted = false,
     uint8_t noc = noc_index) {
     WAYPOINT("NSLW");
     DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, 4);
-    ncrisc_noc_fast_write_any_len_loopback_src<noc_mode>(
+    ncrisc_noc_fast_write_any_len_loopback_src<noc_mode, true>(
         noc,
         write_reg_cmd_buf,
         src_local_l1_addr,
@@ -1503,7 +1511,8 @@ inline void noc_semaphore_set_multicast_loopback_src(
         true,
         linked,
         num_dests,
-        true /* multicast_path_reserve */);
+        true /* multicast_path_reserve */,
+        posted);
     WAYPOINT("NSLD");
 }
 
@@ -1526,12 +1535,14 @@ inline void noc_semaphore_set_multicast_loopback_src(
  * | noc                               | Which NOC to use for the transaction                                     | uint8_t  | 0 or 1                                     | False    |
  */
 // clang-format on
+template <uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1>
 inline void noc_async_write_multicast_loopback_src(
     std::uint32_t src_local_l1_addr,
     std::uint64_t dst_noc_addr_multicast,
     std::uint32_t size,
     std::uint32_t num_dests,
     bool linked = false,
+    bool posted = false,
     uint8_t noc = noc_index) {
     constexpr bool multicast_path_reserve = true;
 
@@ -1540,7 +1551,8 @@ inline void noc_async_write_multicast_loopback_src(
 
     WAYPOINT("NMLW");
     DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, size);
-    ncrisc_noc_fast_write_any_len_loopback_src<noc_mode>(
+    constexpr bool one_packet = max_page_size <= NOC_MAX_BURST_SIZE;
+    ncrisc_noc_fast_write_any_len_loopback_src<noc_mode, one_packet>(
         noc,
         write_cmd_buf,
         src_local_l1_addr,
@@ -1550,7 +1562,8 @@ inline void noc_async_write_multicast_loopback_src(
         true,
         linked,
         num_dests,
-        multicast_path_reserve);
+        multicast_path_reserve,
+        posted);
     WAYPOINT("NMLD");
 }
 
