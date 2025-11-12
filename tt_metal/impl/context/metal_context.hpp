@@ -85,7 +85,8 @@ public:
         tt_fabric::FabricReliabilityMode reliability_mode =
             tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
         std::optional<uint8_t> num_routing_planes = std::nullopt,
-        tt_fabric::FabricTensixConfig fabric_tensix_config = tt_fabric::FabricTensixConfig::DISABLED);
+        tt_fabric::FabricTensixConfig fabric_tensix_config = tt_fabric::FabricTensixConfig::DISABLED,
+        tt_fabric::FabricUDMMode fabric_udm_mode = tt_fabric::FabricUDMMode::DISABLED);
     void initialize_fabric_config();
     void initialize_fabric_tensix_datamover_config();
     tt_fabric::FabricConfig get_fabric_config() const;
@@ -96,6 +97,9 @@ public:
     // Fabric tensix configuration
     void set_fabric_tensix_config(tt_fabric::FabricTensixConfig fabric_tensix_config);
     tt_fabric::FabricTensixConfig get_fabric_tensix_config() const;
+
+    // Fabric UDM mode configuration
+    tt_fabric::FabricUDMMode get_fabric_udm_mode() const;
 
     // This is used to track the current thread's command queue id stack
     using CommandQueueIdStack = std::vector<uint8_t>;
@@ -181,6 +185,7 @@ private:
     std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane_;
     tt_fabric::FabricConfig fabric_config_ = tt_fabric::FabricConfig::DISABLED;
     tt_fabric::FabricTensixConfig fabric_tensix_config_ = tt_fabric::FabricTensixConfig::DISABLED;
+    tt_fabric::FabricUDMMode fabric_udm_mode_ = tt_fabric::FabricUDMMode::DISABLED;
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;
 
     // We are using a thread_local to allow each thread to have its own command queue id stack.
