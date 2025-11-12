@@ -397,6 +397,12 @@ void FabricEriscDatamoverConfig::configure_skip_connection_flags(Topology topolo
             default: break;
         }
     }
+    // A neighbor exchange topology only has 1 sender channel and 1 receiver channel, and no possibility of deadlock.
+    else if (topology == Topology::NeighborExchange) {
+        this->skip_sender_channel_1_connection = true;
+        this->skip_receiver_channel_1_connection = true;
+        this->skip_sender_vc1_channel_connection = true;
+    }
 }
 
 FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
@@ -422,6 +428,14 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         this->num_used_sender_channels -= 1;
         this->num_used_receiver_channels -= 1;
         this->num_fwd_paths -= 1;
+    }
+
+    // Routers in NeighborExchange topology do not forward messages between non-adjacent devices. Instead, they only
+    // send messages produced by local workers.
+    if (topology == Topology::NeighborExchange) {
+        this->num_used_sender_channels = builder_config::get_accurate_sender_channel_count(topology);
+        this->num_used_receiver_channels = 1;
+        this->num_fwd_paths = 0;
     }
 
     for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
@@ -823,6 +837,16 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     const size_t default_handshake_context_switch_timeout = 4096;
     size_t num_sender_channels = config.num_used_sender_channels;
     size_t num_receiver_channels = config.num_used_receiver_channels;
+    std::cout << "num_sender_channels: " << num_sender_channels << std::endl;
+    std::cout << "num_receiver_channels: " << num_receiver_channels << std::endl;
+    std::cout << "config.num_used_sender_channels: " << config.num_used_sender_channels << std::endl;
+    std::cout << "config.num_used_receiver_channels: " << config.num_used_receiver_channels << std::endl;
+    std::cout << "config.num_fwd_paths: " << config.num_fwd_paths << std::endl;
+    std::cout << "config.skip_receiver_channel_1_connection: " << config.skip_receiver_channel_1_connection
+              << std::endl;
+    std::cout << "config.skip_sender_channel_1_connection: " << config.skip_sender_channel_1_connection << std::endl;
+    std::cout << "config.skip_sender_vc1_channel_connection: " << config.skip_sender_vc1_channel_connection
+              << std::endl;
     auto dispatch_core_type =
         tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config().get_core_type();
     uint32_t my_eth_channel_ = [&]() -> uint32_t {
@@ -982,6 +1006,21 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         is_intramesh_router_on_edge,
         // Special marker to help with identifying misalignment bugs
         0x00c0ffee};
+
+    std::cout << "is_sender_channel_serviced(0): " << config.risc_configs[risc_id].is_sender_channel_serviced(0)
+              << std::endl;
+    std::cout << "is_sender_channel_serviced(1): " << config.risc_configs[risc_id].is_sender_channel_serviced(1)
+              << std::endl;
+    std::cout << "is_sender_channel_serviced(2): " << config.risc_configs[risc_id].is_sender_channel_serviced(2)
+              << std::endl;
+    std::cout << "is_sender_channel_serviced(3): " << config.risc_configs[risc_id].is_sender_channel_serviced(3)
+              << std::endl;
+    std::cout << "is_sender_channel_serviced(4): " << config.risc_configs[risc_id].is_sender_channel_serviced(4)
+              << std::endl;
+    std::cout << "is_receiver_channel_serviced(0): " << config.risc_configs[risc_id].is_receiver_channel_serviced(0)
+              << std::endl;
+    std::cout << "is_receiver_channel_serviced(1): " << config.risc_configs[risc_id].is_receiver_channel_serviced(1)
+              << std::endl;
 
     // Add first part of main arguments to ct_args
     ct_args.insert(ct_args.end(), main_args_part1.begin(), main_args_part1.end());

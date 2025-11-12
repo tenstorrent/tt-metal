@@ -13,6 +13,7 @@ enum class FabricConfig : uint32_t {
     DISABLED = 0,
     FABRIC_1D = 1,           // 1D routing and no deadlock avoidance
     FABRIC_1D_RING = 2,      // 1D routing and deadlock avoidance using datelines
+    FABRIC_1D_NEIGHBOR_EXCHANGE = 8,  // 1D topology with no forwarding between non-adjacent devices
     FABRIC_2D = 3,           // 2D routing
     FABRIC_2D_TORUS_X = 4,   // 2D routing and deadlock avoidance along X axis
     FABRIC_2D_TORUS_Y = 5,   // 2D routing and deadlock avoidance along Y axis

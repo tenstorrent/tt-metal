@@ -371,8 +371,8 @@ void build_tt_fabric_program(
         it++;
         auto dir2 = it->first;
         connect_downstream_builders(dir1, dir2);
-    } else {
-        // 1D Routing
+    } else if (topology != tt::tt_fabric::Topology::NeighborExchange) {
+        // 1D Routing, except for NeighborExchange topology
         connect_downstream_builders(RoutingDirection::N, RoutingDirection::S);
         connect_downstream_builders(RoutingDirection::E, RoutingDirection::W);
     }

@@ -726,6 +726,7 @@ public:
 
     std::vector<RoutingDirection> get_neighbor_directions_for_topology() const {
         switch (topology_) {
+            case Topology::NeighborExchange:
             case Topology::Mesh:
             case Topology::Torus:
                 return {RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W};
@@ -1563,12 +1564,10 @@ private:
         }
 
         mesh_device_ = MeshDevice::create(MeshDeviceConfig(mesh_shape_));
-
         // Now fabric context should be initialized, safe to query wrap_around_mesh
         wrap_around_mesh_ =
             tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().is_wrap_around_mesh(
                 user_meshes[0]);
-
         TT_FATAL(mesh_device_ != nullptr, "Failed to create MeshDevice with shape {}", mesh_shape_);
 
         current_fabric_config_ = fabric_config;

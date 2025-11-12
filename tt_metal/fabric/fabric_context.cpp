@@ -49,6 +49,7 @@ tt::tt_fabric::Topology FabricContext::get_topology_from_config(tt::tt_fabric::F
     switch (fabric_config) {
         case tt::tt_fabric::FabricConfig::FABRIC_1D: return tt::tt_fabric::Topology::Linear;
         case tt::tt_fabric::FabricConfig::FABRIC_1D_RING: return tt::tt_fabric::Topology::Ring;
+        case tt::tt_fabric::FabricConfig::FABRIC_1D_NEIGHBOR_EXCHANGE: return tt::tt_fabric::Topology::NeighborExchange;
         case tt::tt_fabric::FabricConfig::FABRIC_2D: return tt::tt_fabric::Topology::Mesh;
         case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X:
         case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y:
@@ -176,8 +177,12 @@ FabricContext::FabricContext(tt::tt_fabric::FabricConfig fabric_config) {
     }
     this->master_router_chans_.resize(num_devices, UNINITIALIZED_MASTER_ROUTER_CHAN);
     this->num_initialized_routers_.resize(num_devices, UNINITIALIZED_ROUTERS);
+<<<<<<< HEAD
 
     set_routing_mode(this->topology_);
+=======
+    set_routing_mode(this->topology_, this->fabric_config_);
+>>>>>>> 92daddc599 (WIP: Added Neighbor Exchange Topology to Fabric)
 }
 
 bool FabricContext::is_wrap_around_mesh(MeshId mesh_id) const {
