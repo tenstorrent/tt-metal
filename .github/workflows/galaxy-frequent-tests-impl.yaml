@@ -84,6 +84,13 @@ jobs:
               "model": "flux1",
               "timeout": 90,
               "owner_id": "U08TED0JM9D"
+            },
+            {
+              "name": "Galaxy Motif frequent tests",
+              "arch": "wormhole_b0",
+              "model": "motif",
+              "timeout": 90,
+              "owner_id": "U08TED0JM9D"
             }
           ]' --compact-output)
 
