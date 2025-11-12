@@ -47,7 +47,14 @@ jobs:
       ${{ format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label) }}
     steps:
       - name: Verify tt-exalens is installed
-        run: tt-exalens --help
+        run: |
+            set -x
+            env
+            which tt-exalens
+            echo "=== Debug: Library loading information ==="
+            LD_DEBUG=libs tt-exalens --help 2>&1 | grep -E "(find library|opening file|calling init)" | head -20
+            echo "=== Attempting tt-exalens --help ==="
+            tt-exalens --help
       - name: ⬇️  Setup Job
         uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
@@ -56,7 +63,14 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher }}
       - name: Verify tt-exalens is working
-        run: tt-exalens --help
+        run: |
+            set -x
+            env
+            which tt-exalens
+            echo "=== Debug: Library loading information ==="
+            LD_DEBUG=libs tt-exalens --help 2>&1 | grep -E "(find library|opening file|calling init)" | head -20
+            echo "=== Attempting tt-exalens --help ==="
+            tt-exalens --help
       - name: Run triage tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
