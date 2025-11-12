@@ -649,21 +649,44 @@ class OperationParameterExtractors:
 
                     # Apply regex fixes for C++ style formats
                     fixed_json_str = element_info
-                    # Fix C++ style braces in values like "{32, 32}" -> "[32, 32]"
-                    fixed_json_str = re.sub(r':\s*"{\s*([^}]+)\s*}"', r': "[\1]"', fixed_json_str)
-                    # Fix grid format: "grid":{[...], [...]} -> "grid":[[...], [...]]
+
+                    # Step 1: Fix grid ranges INSIDE arrays FIRST (most common issue in matmul)
+                    # Pattern: [{"x":0,"y":0} - {"x":7,"y":1}] -> [{"x":0,"y":0}, {"x":7,"y":1}]
                     fixed_json_str = re.sub(
-                        r'"grid"\s*:\s*\{(\[.*?\](?:\s*,\s*\[.*?\])*)\}', r'"grid":[\1]', fixed_json_str
+                        r'\[(\{"x":\d+,"y":\d+\})\s*-\s*(\{"x":\d+,"y":\d+\})\]', r"[\1, \2]", fixed_json_str
                     )
-                    # Fix grid ranges like {"x":0,"y":0} - {"x":7,"y":7} -> {"x":0,"y":0}, {"x":7,"y":7}
+
+                    # Step 2: Fix grid ranges outside arrays: {"x":0,"y":0} - {"x":7,"y":1} -> {"x":0,"y":0}, {"x":7,"y":1}
                     fixed_json_str = re.sub(
                         r'(\{"x":\d+,"y":\d+\})\s*-\s*(\{"x":\d+,"y":\d+\})', r"\1, \2", fixed_json_str
                     )
 
-                    # Parse the fixed JSON
-                    parsed_data = json.loads(fixed_json_str)
+                    # Step 3: Fix C++ style braces in values like "{32, 32}" -> "[32, 64]" (for shape strings)
+                    fixed_json_str = re.sub(r':\s*"{\s*([^}]+)\s*}"', r': "[\1]"', fixed_json_str)
 
-                    # Extract arg0 (first argument) which contains the tensor
+                    # Step 4: Fix grid format: "grid":{[...], [...]} -> "grid":[[...], [...]]
+                    fixed_json_str = re.sub(
+                        r'"grid"\s*:\s*\{(\[.*?\](?:\s*,\s*\[.*?\])*)\}', r'"grid":[\1]', fixed_json_str
+                    )
+
+                    # Parse the fixed JSON
+                    try:
+                        parsed_data = json.loads(fixed_json_str)
+                    except json.JSONDecodeError as e:
+                        # If still failing, try more aggressive fixes
+                        # Handle nested grid arrays that might have been missed
+                        fixed_json_str = re.sub(
+                            r'"grid":\s*\[(\{"x":\d+,"y":\d+\})\s*-\s*(\{"x":\d+,"y":\d+\})\]',
+                            r'"grid":[\1, \2]',
+                            fixed_json_str,
+                        )
+                        try:
+                            parsed_data = json.loads(fixed_json_str)
+                        except json.JSONDecodeError:
+                            # Last resort: return None if we can't parse
+                            return None
+
+                    # Extract tensor from arg0, arg1, etc. (first argument that contains Tensor)
                     for key, value in parsed_data.items():
                         if isinstance(value, dict) and "Tensor" in value:
                             arg_data = value

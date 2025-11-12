@@ -218,10 +218,6 @@ def run(
     *,
     device,  # unused
 ) -> list:
-    logger.info("STARTING SWEEP")
-
-    logger.info(vars())
-
     # Check if this is a model_traced run (has input_a_memory_config)
     is_model_traced = input_a_memory_config is not None
 
@@ -305,8 +301,6 @@ def run(
         if device_err is not None:
             return False, device_err, None, None
 
-        logger.info("device set up")
-
         if is_model_traced:
             # Create input tensor directly with provided memory config
             tt_input = ttnn.from_torch(
@@ -354,12 +348,8 @@ def run(
             except Exception as e:
                 raise RuntimeError(f"Execution failed: {e}")
 
-            logger.info(f"Done iteration {i}")
-
         for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
-            logger.info("Bringing tensor back to host")
             tt_output_tensor = ttnn.to_torch(t)
-            logger.info("Brought tensor back from host")
 
             if input_dtype == ttnn.bfloat16:
                 eq, output = comp_equal(tt_output_tensor, torch_reference)

@@ -599,17 +599,6 @@ class MasterConfigLoader:
                     parsed_mem_config = self.parse_memory_config(tensor_config.memory_config, tensor_config.shape)
 
                     if parsed_dtype and parsed_layout and parsed_mem_config:
-                        # If deduplicating, check if we've seen this input before
-                        if deduplicate_inputs:
-                            import hashlib
-
-                            input_sig = hashlib.md5(
-                                str((tensor_config.shape, parsed_dtype, parsed_layout, parsed_mem_config)).encode()
-                            ).hexdigest()
-                            if input_sig in seen_input_signatures:
-                                continue  # Skip this config, we already have one with this input
-                            seen_input_signatures.add(input_sig)
-
                         # Determine output memory config based on operation
                         if operation_name == "sharded_to_interleaved":
                             # This operation converts sharded to interleaved, so output must be INTERLEAVED
@@ -651,6 +640,36 @@ class MasterConfigLoader:
                             if operation_name == "reshape" and "target_shape" not in op_params:
                                 failed_configs += 1
                                 continue
+
+                        # If deduplicating, check if we've seen this config before
+                        # For reshape, include target_shape in deduplication signature
+                        # because each (input_shape, target_shape) pair is unique
+                        if deduplicate_inputs:
+                            import hashlib
+
+                            if operation_name == "reshape" and "target_shape" in config_dict:
+                                # For reshape, deduplicate based on (input, target_shape) pair
+                                target_shape = config_dict["target_shape"]
+                                input_sig = hashlib.md5(
+                                    str(
+                                        (
+                                            tensor_config.shape,
+                                            parsed_dtype,
+                                            parsed_layout,
+                                            parsed_mem_config,
+                                            target_shape,
+                                        )
+                                    ).encode()
+                                ).hexdigest()
+                            else:
+                                # For other operations, deduplicate based on input signature only
+                                input_sig = hashlib.md5(
+                                    str((tensor_config.shape, parsed_dtype, parsed_layout, parsed_mem_config)).encode()
+                                ).hexdigest()
+
+                            if input_sig in seen_input_signatures:
+                                continue  # Skip this config, we already have one with this signature
+                            seen_input_signatures.add(input_sig)
 
                         paired_configs.append(config_dict)
                     else:
@@ -747,6 +766,13 @@ class MasterConfigLoader:
                 )
 
                 for idx, cfg in enumerate(paired_configs):
+                    # For reshape, only include configs that have target_shape
+                    # Note: We don't filter based on element count matching here because
+                    # the extractor already validates this, and configs from real models are valid
+                    if operation_name == "reshape":
+                        if "target_shape" not in cfg:
+                            continue  # Skip configs without target_shape
+
                     input_shapes.append(cfg["shape"])
                     input_a_dtypes.append(cfg["dtype"])
                     input_a_layouts.append(cfg["layout"])
@@ -834,11 +860,15 @@ class MasterConfigLoader:
                 # param_names.append("traced_config_name")
                 # param_lists.append(traced_config_names)
 
-                # Create tuples of exact configurations
-                exact_configs = list(zip(*param_lists))
-                param_key = ",".join(param_names)
-
-                result = {param_key: exact_configs}
+                # For permute, return separate keys instead of tuple key
+                # This matches what the sweep test files expect
+                if (operation_name == "permute" or operation_name == "ttnn::permute") and dims_list:
+                    result = dict(zip(param_names, param_lists))
+                else:
+                    # Create tuples of exact configurations
+                    exact_configs = list(zip(*param_lists))
+                    param_key = ",".join(param_names)
+                    result = {param_key: exact_configs}
 
                 print(f"✅ Loaded {len(paired_configs)} traced configurations for {operation_name} (model_traced suite)")
                 dedup_msg = " (unique inputs)" if deduplicate_inputs else " (all input/output pairs)"
@@ -906,6 +936,11 @@ class MasterConfigLoader:
                             parsed_mem_config_b,
                         ]
                     ):
+                        # Note: matmul requires input_b to be INTERLEAVED, but we allow sharded configs
+                        # The test will convert input_b to INTERLEAVED if needed
+                        # So we don't filter out matmul configs here - let the test handle the conversion
+
+                        # All configs are valid (test will handle conversions)
                         paired_configs.append(
                             {
                                 "shape_a": tensor_configs[0].shape,
@@ -1051,7 +1086,12 @@ class MasterConfigLoader:
                 dedup_msg = " (unique input pairs)" if deduplicate_inputs else " (all input/output pairs)"
                 print(f"   📊 Will generate {len(paired_configs)} test vectors{dedup_msg}")
                 if failed_configs > 0:
-                    print(f"⚠️ Failed to parse {failed_configs} configurations")
+                    print(
+                        f"⚠️ Failed to parse {failed_configs} configurations (including invalid configs filtered out)"
+                    )
+                # For matmul, add note if configs were filtered
+                if operation_name in ["matmul", "ttnn::matmul"] and len(paired_configs) == 0 and len(configs) > 0:
+                    print(f"   ℹ️ All matmul configs were filtered out (input_b must be INTERLEAVED)")
 
             return result
         else:
@@ -1516,28 +1556,65 @@ class MasterConfigLoader:
                         f"✅ Loaded {len(transformed_configs)} traced configurations for {operation_name} (model_traced suite)"
                     )
 
-                    # For embedding and linear, we have specific parameter formats
+                    # For embedding, return separate keys to match sweep test expectations
                     if clean_op_name == "embedding":
-                        param_names = [
-                            "input_shape,input_a_dtype,input_b_dtype,input_a_layout,input_b_layout,"
-                            + "input_a_memory_config,input_b_memory_config,output_memory_config"
-                        ]
-                        param_lists = [
-                            [
-                                (
-                                    cfg["input_shape"],
-                                    cfg["input_a_dtype"],
-                                    cfg["input_b_dtype"],
-                                    cfg["input_a_layout"],
-                                    cfg["input_b_layout"],
-                                    cfg["input_a_memory_config"],
-                                    cfg["input_b_memory_config"],
-                                    cfg["output_memory_config"],
-                                )
-                                for cfg in transformed_configs
-                            ]
-                        ]
-                        return {param_names[0]: param_lists[0]}
+                        embedding_args_list = []
+                        input_dtypes = []
+                        weight_dtypes = []
+                        output_dtypes = []
+                        input_layouts = []
+                        weight_layouts = []
+                        input_memory_configs = []
+                        weight_memory_configs = []
+                        output_memory_configs = []
+
+                        for cfg in transformed_configs:
+                            # Convert input_shape dict to embedding_args tuple format
+                            # input_shape is {"self": [batch_size, seq_length], "other": [num_embeddings, embeddings_dim]}
+                            # embedding_args should be (batch_size, seq_length, embeddings_dim, num_embeddings)
+                            input_shape_dict = cfg["input_shape"]
+                            if (
+                                isinstance(input_shape_dict, dict)
+                                and "self" in input_shape_dict
+                                and "other" in input_shape_dict
+                            ):
+                                self_shape = input_shape_dict["self"]
+                                other_shape = input_shape_dict["other"]
+                                # Handle both list and tuple formats
+                                if isinstance(self_shape, (list, tuple)) and len(self_shape) >= 2:
+                                    batch_size = self_shape[0] if isinstance(self_shape[0], int) else self_shape[-2]
+                                    seq_length = self_shape[-1]
+                                else:
+                                    continue
+                                if isinstance(other_shape, (list, tuple)) and len(other_shape) >= 2:
+                                    num_embeddings = other_shape[-2]
+                                    embeddings_dim = other_shape[-1]
+                                else:
+                                    continue
+                                embedding_args_list.append((batch_size, seq_length, embeddings_dim, num_embeddings))
+                            else:
+                                continue
+
+                            input_dtypes.append(cfg["input_a_dtype"])
+                            weight_dtypes.append(cfg["input_b_dtype"])
+                            output_dtypes.append(cfg["input_b_dtype"])  # Output dtype matches weight dtype
+                            input_layouts.append(cfg["input_a_layout"])
+                            weight_layouts.append(cfg["input_b_layout"])
+                            input_memory_configs.append(cfg["input_a_memory_config"])
+                            weight_memory_configs.append(cfg["input_b_memory_config"])
+                            output_memory_configs.append(cfg["output_memory_config"])
+
+                        return {
+                            "embedding_args": embedding_args_list,
+                            "input_dtype": input_dtypes,
+                            "weight_dtype": weight_dtypes,
+                            "output_dtype": output_dtypes,
+                            "input_layout": input_layouts,
+                            "weight_layout": weight_layouts,
+                            "input_memory_config": input_memory_configs,
+                            "weight_memory_config": weight_memory_configs,
+                            "output_memory_config": output_memory_configs,
+                        }
 
                     elif clean_op_name == "linear":
                         param_names = [

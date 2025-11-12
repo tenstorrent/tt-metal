@@ -50,25 +50,26 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
-    # Handle tuple input_shape for sample suite
+    # Handle input_shape - ensure it's always a tuple
+    # This is a simple operation: convert sharded tensor to interleaved
+    # Convert input_shape to tuple - handle all possible types
+    if input_shape is None:
+        raise ValueError("input_shape cannot be None")
+
+    # Handle list/tuple
     if isinstance(input_shape, (tuple, list)):
         shape = tuple(input_shape)
+    # Handle single int/float (invalid, but provide clear error)
+    elif isinstance(input_shape, (int, float)):
+        raise ValueError(f"input_shape must be a list or tuple, got {type(input_shape).__name__}: {input_shape}")
+    # Handle other iterables (numpy arrays, etc.)
     else:
-        shape = input_shape
-
-    # Check if input memory config is actually sharded and in L1
-    # sharded_to_interleaved requires L1 sharded input
-    is_sharded = hasattr(input_a_memory_config, "shard_spec") and input_a_memory_config.shard_spec is not None
-    is_l1 = hasattr(input_a_memory_config, "buffer_type") and input_a_memory_config.buffer_type == ttnn.BufferType.L1
-
-    if not is_sharded or not is_l1:
-        # If traced config is not sharded or not L1, skip this config
-        # The operation requires L1 sharded input
-        raise ValueError(
-            f"sharded_to_interleaved requires L1 sharded input, but got "
-            f"buffer_type={input_a_memory_config.buffer_type if hasattr(input_a_memory_config, 'buffer_type') else 'N/A'}, "
-            f"is_sharded={is_sharded}"
-        )
+        try:
+            shape = tuple(input_shape)
+        except (TypeError, ValueError) as e:
+            raise ValueError(
+                f"Cannot convert input_shape to tuple: {type(input_shape).__name__} = {input_shape}. Error: {e}"
+            )
 
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
@@ -98,8 +99,8 @@ def run(
             )
         raise
 
-    # Run sharded_to_interleaved - no PyTorch reference needed
-    # Just verify the operation completes and produces interleaved output
+    # Run sharded_to_interleaved - create reference by converting back to sharded
+    # Since this is a data movement op, we verify by round-trip conversion
     start_time = start_measuring_time()
     output_tensor = ttnn.sharded_to_interleaved(sharded_tensor, memory_config=output_memory_config)
     e2e_perf = stop_measuring_time(start_time)
@@ -111,13 +112,13 @@ def run(
             f"sharded_to_interleaved should produce interleaved output, but got {output_mem_config.memory_layout}"
         )
 
-    # Convert to torch for shape verification
-    output_torch = ttnn.to_torch(output_tensor)
+    # Convert back to sharded to verify correctness (round-trip test)
+    # This ensures the data movement is correct
+    output_sharded = ttnn.interleaved_to_sharded(output_tensor, input_a_memory_config)
+    output_torch = ttnn.to_torch(output_sharded)
+    input_torch = ttnn.to_torch(sharded_tensor)
 
-    # Verify output shape matches input shape
-    if list(output_torch.shape) != list(shape):
-        raise ValueError(f"Output shape {list(output_torch.shape)} does not match input shape {list(shape)}")
+    # Check with PCC - compare original sharded tensor with round-trip result
+    pcc = check_with_pcc(input_torch, output_torch, 0.999)
 
-    # Return success (PCC = 1.0) since we're just verifying the operation works
-    # The operation is a data movement operation, so correctness is verified by shape and layout
-    return [1.0, e2e_perf]
+    return [pcc, e2e_perf]

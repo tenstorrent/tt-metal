@@ -63,10 +63,38 @@ def run(
 
     torch_output_tensor = torch.reshape(torch_input_tensor_a, target_shape)
 
+    # Check if shard shape is tile-aligned
+    # If shard shape height or width is not divisible by tile size (32), use ROW_MAJOR layout
+    actual_layout = input_a_layout
+    shard_spec = None
+    shard_shape = None
+
+    # Handle both dict (from JSON) and MemoryConfig object
+    if isinstance(input_a_memory_config, dict):
+        # Memory config can be a dict with 'data' key containing the actual config
+        data = input_a_memory_config.get("data", input_a_memory_config)
+        shard_spec = data.get("shard_spec") if isinstance(data, dict) else None
+        if shard_spec is not None and isinstance(shard_spec, dict):
+            shard_shape = shard_spec.get("shape")
+    elif hasattr(input_a_memory_config, "shard_spec"):
+        # MemoryConfig object
+        shard_spec = input_a_memory_config.shard_spec
+        if shard_spec is not None:
+            # ShardSpec object has shape attribute
+            if hasattr(shard_spec, "shape"):
+                shard_shape = shard_spec.shape
+
+    if shard_shape is not None and isinstance(shard_shape, (list, tuple)) and len(shard_shape) >= 2:
+        shard_height, shard_width = shard_shape[0], shard_shape[1]
+        # Check if shard dimensions are tile-aligned (must be divisible by 32)
+        if shard_height % 32 != 0 or shard_width % 32 != 0:
+            # Shard shape is not tile-aligned, use ROW_MAJOR layout
+            actual_layout = ttnn.ROW_MAJOR_LAYOUT
+
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
         dtype=input_a_dtype,
-        layout=input_a_layout,
+        layout=actual_layout,
         device=device,
         memory_config=input_a_memory_config,
     )
