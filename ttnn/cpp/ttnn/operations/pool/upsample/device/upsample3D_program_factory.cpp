@@ -29,7 +29,7 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample3d_multi_core_interleaved(
     tt::tt_metal::Program program{};
 
     // Validate input tensor
-    TT_FATAL(input.get_shape().rank() == 5, "Input tensor must be 5D (N, D, H, W, C)");
+    TT_FATAL(input.logical_shape().rank() == 5, "Input tensor must be 5D (N, D, H, W, C)");
     TT_FATAL(input.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Only row-major layout is supported for 3D upsample");
     TT_FATAL(
         input.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
@@ -37,7 +37,6 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample3d_multi_core_interleaved(
 
     // Get data formats
     const tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    const tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
     // Get tensor shapes
     const auto& input_shape = input.padded_shape();
@@ -65,7 +64,6 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample3d_multi_core_interleaved(
     // Calculate work units
     // Each work unit is one stick (row) of C elements
     const uint32_t input_unit_size = C * input.element_size();  // Size of one stick in bytes
-    const uint32_t output_unit_size = C * output.element_size();
     const uint32_t aligned_input_unit_size = tt::round_up(input_unit_size, tt::tt_metal::hal::get_dram_alignment());
 
     // Total number of sticks in the flattened input tensor
