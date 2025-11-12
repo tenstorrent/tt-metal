@@ -356,11 +356,8 @@ def set_fabric(fabric_config, reliability_mode=None, fabric_tensix_config=None):
 def get_default_fabric_tensix_config():
     import ttnn
 
-    # Default to MUX for Blackhole when fabric is enabled, DISABLED otherwise
-    if ttnn.device.is_blackhole():
-        return ttnn.FabricTensixConfig.MUX
-    else:
-        return ttnn.FabricTensixConfig.DISABLED
+    # Default to DISABLED for all architectures
+    return ttnn.FabricTensixConfig.DISABLED
 
 
 @pytest.fixture(scope="function")
@@ -530,7 +527,10 @@ def bh_1d_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device
     fabric_config = updated_device_params.pop("fabric_config", None)
     fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
     reliability_mode = updated_device_params.pop("reliability_mode", None)
+    if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING:
+        pytest.skip("Skipping 1D ring on blackhole")
     set_fabric(fabric_config, reliability_mode, fabric_tensix_config)
+
     mesh_device = ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape(ttnn.get_num_devices(), 1),
         **updated_device_params,
@@ -560,6 +560,8 @@ def bh_2d_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device
     fabric_config = updated_device_params.pop("fabric_config", None)
     fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
     reliability_mode = updated_device_params.pop("reliability_mode", None)
+    if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING:
+        pytest.skip("Skipping 1D ring on blackhole")
     set_fabric(fabric_config, reliability_mode, fabric_tensix_config)
     if ttnn.get_num_devices() == 8:
         mesh_device = ttnn.open_mesh_device(

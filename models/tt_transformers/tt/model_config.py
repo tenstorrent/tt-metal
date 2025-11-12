@@ -1847,7 +1847,11 @@ class ModelArgs:
         else:
             allowed_seq_lens = [128, 256, 512, 1024, 2048, 4096, 8192]
 
-        return prefill_seq_len in allowed_seq_lens and prefill_seq_len <= self.max_prefill_chunk_size
+        return (
+            prefill_seq_len in allowed_seq_lens
+            and prefill_seq_len <= self.max_prefill_chunk_size
+            and prefill_seq_len <= self.max_seq_len
+        )
 
     def get_state_dict_prefix(self, module_name, layer_num, is_vision=False):
         text_prefix = self.state_dict_text_prefix
@@ -1919,7 +1923,22 @@ class ModelArgs:
                     config.num_hidden_layers = self.n_layers
 
                 model_cls = self.get_hf_model_cls()
-                model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
+
+                try:
+                    # .from_pretrained + _init_weights works faster than .from_config
+                    model = model_cls.from_pretrained(
+                        self.CKPT_DIR,
+                        config=config,
+                        torch_dtype="auto",
+                        trust_remote_code=self.trust_remote_code_hf,
+                        local_files_only=True,
+                    )
+                    model.apply(model._init_weights)
+                except Exception as e:
+                    logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
+                    model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
+
+                # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
                 state_dict = model.state_dict()
             else:
                 reference_model = Transformer(self)
@@ -2534,7 +2553,21 @@ class ModelArgs:
                 else:
                     config.num_layers = self.n_layers
                     config.num_hidden_layers = self.n_layers
-                model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
+
+                try:
+                    # .from_pretrained + _init_weights works faster than .from_config
+                    model = model_cls.from_pretrained(
+                        self.CKPT_DIR,
+                        config=config,
+                        torch_dtype="auto",
+                        trust_remote_code=self.trust_remote_code_hf,
+                        local_files_only=True,
+                    )
+                    model.apply(model._init_weights)
+                except Exception as e:
+                    logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
+                    model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
+                # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
             else:
                 if self.cache_hf_flag and self.cached_hf_model is None:
                     model = model_cls.from_pretrained(
@@ -2588,7 +2621,21 @@ class ModelArgs:
                 config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
                 config.num_layers = self.n_layers
                 config.num_hidden_layers = self.n_layers
-                model = model_cls.from_config(config)
+
+                try:
+                    # .from_pretrained + _init_weights works faster than .from_config
+                    model = model_cls.from_pretrained(
+                        self.CKPT_DIR,
+                        config=config,
+                        torch_dtype="auto",
+                        trust_remote_code=self.trust_remote_code_hf,
+                        local_files_only=True,
+                    )
+                    model.apply(model._init_weights)
+                except Exception as e:
+                    logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
+                    model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
+                # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
             else:
                 if self.cached_hf_model is None:
                     model = model_cls.from_pretrained(self.CKPT_DIR, local_files_only=os.getenv("CI") == "true")
@@ -2988,7 +3035,18 @@ class DecodersPrecision:
             PrecisionSetting.BF16: ttnn.bfloat16,
             None: None,  # this signals that original dtype should be used
         }
-        return precision_setting_lookup[self.decoder_optimizations[decoder_id].tensor_dtype_settings[tensor]]
+        if (
+            decoder_id not in self.decoder_optimizations
+            or tensor not in self.decoder_optimizations[decoder_id].tensor_dtype_settings
+        ):
+            return None
+
+        key = self.decoder_optimizations[decoder_id].tensor_dtype_settings[tensor]
+
+        if key is None or key not in precision_setting_lookup:
+            return None
+
+        return precision_setting_lookup[key]
 
     def get_math_fidelity(self, decoder_id, op: OpGroup, configuration: ModelArgs):
         math_fidelity_setting_lookup = {

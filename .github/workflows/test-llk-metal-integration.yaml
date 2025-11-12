@@ -64,7 +64,7 @@ env:
   WORKFLOW_TIMEOUT: ${{ inputs.workflow_timeout || 720 }}
   METAL_REPO: tenstorrent/tt-metal
   LLK_REPO: tenstorrent/tt-llk
-  GH_TOKEN: ${{ secrets.TEMP_METAL_PAT }}
+  GH_TOKEN: ${{ secrets.LLK_UPLIFT_PAT }}
   MAX_RETRIES: 3
   POLL_INTERVAL: 120
 
@@ -95,7 +95,7 @@ jobs:
         with:
           repository: tenstorrent/tt-metal
           submodules: recursive
-          token: ${{ secrets.TEMP_METAL_PAT }}
+          token: ${{ secrets.LLK_UPLIFT_PAT }}
           fetch-depth: 0
           ref: main
           clean: true
@@ -112,7 +112,7 @@ jobs:
           cd "$SUBMODULE_PATH"
 
           # Ensure correct remote and fetch mirrored branch
-          git remote set-url origin https://${{ secrets.TEMP_METAL_PAT }}@github.com/tenstorrent/tt-llk.git
+          git remote set-url origin https://${{ secrets.LLK_UPLIFT_PAT }}@github.com/tenstorrent/tt-llk.git
           if git fetch origin "$MIRRORED_BRANCH:$MIRRORED_BRANCH" 2>/dev/null; then
             echo "branch-exists=true" >> $GITHUB_OUTPUT
             echo "✅ Mirrored branch '$MIRRORED_BRANCH' exists in submodule"

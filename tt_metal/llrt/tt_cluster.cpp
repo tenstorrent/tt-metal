@@ -221,7 +221,8 @@ Cluster::Cluster(llrt::RunTimeOptions& rtoptions, const tt_metal::Hal& hal) : rt
 
     this->initialize_ethernet_sockets();
 
-    this->tunnels_from_mmio_device = llrt::discover_tunnels_from_mmio_device(this->driver_);
+    TT_FATAL(this->driver_, "UMD cluster object must be initialized and available");
+    this->tunnels_from_mmio_device = llrt::discover_tunnels_from_mmio_device(*this->driver_);
 
     if (this->target_type_ != tt::TargetDevice::Mock){
         this->assert_risc_reset();
@@ -316,7 +317,6 @@ void Cluster::initialize_device_drivers() {
     this->start_driver(default_params);
     this->generate_virtual_to_umd_coord_mapping();
     this->generate_virtual_to_profiler_flat_id_mapping();
-    this->verify_eth_fw_capability();
 }
 
 void Cluster::assert_risc_reset() {
@@ -336,7 +336,9 @@ void Cluster::assign_mem_channels_to_devices(
             continue;
         }
         this->device_to_host_mem_channel_[device_id] = channel++;
-        if ((channel + 1) % 4 == 0) channel++;
+        if ((channel + 1) % 4 == 0) {
+            channel++;
+        }
     }
 }
 
@@ -859,15 +861,16 @@ void Cluster::verify_sw_fw_versions(
     }
 }
 
-void Cluster::verify_eth_fw_capability() const {
-    // get_ethernet_fw_version is not supported in the simulation environment
+bool Cluster::verify_eth_fw_capability() const {
+    // get_ethernet_fw_version is not supported in the simulation environment. assume it's correct!
     if (rtoptions_.get_simulator_enabled()) {
-        return;
+        return true;
     }
     const auto fw_version = this->driver_->get_ethernet_firmware_version();
     if (fw_version) {
-        hal_.verify_eth_fw_version(fw_version.value());
+        return hal_.verify_eth_fw_version(fw_version.value());
     }
+    return true;
 }
 
 // DRAM barrier is used to implement host-to-device synchronization and should be used when all previous writes to DRAM
@@ -911,7 +914,8 @@ uint64_t Cluster::get_pcie_base_addr_from_device(ChipId chip_id) const {
 }
 
 const std::unordered_set<ChipId>& Cluster::get_devices_controlled_by_mmio_device(ChipId mmio_device_id) const {
-    return llrt::get_devices_controlled_by_mmio_device(driver_, mmio_device_id);
+    TT_FATAL(driver_, "UMD cluster object must be initialized and available");
+    return llrt::get_devices_controlled_by_mmio_device(*driver_, mmio_device_id);
 }
 
 std::unordered_map<ChipId, std::vector<CoreCoord>> Cluster::get_ethernet_cores_grouped_by_connected_chips(
