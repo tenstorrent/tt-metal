@@ -74,11 +74,11 @@ def test_conv2d_inference(
     assert (
         len(list(partial_state_dict.keys())) == 1 and "_linear.weight" in partial_state_dict
     ), f"This script expects only the patch embedding weights, but found unexpected keys in partial_state_dict"
-    logger.info(f"Renaming loaded weight for torch compatibility from: {list(partial_state_dict.keys())[0]} to weight")
-    partial_state_dict["weight"] = partial_state_dict[list(partial_state_dict.keys())[0]].reshape(
+    logger.info(f"Renaming loaded weight for torch compatibility from: _linear.weight to weight")
+    partial_state_dict["weight"] = partial_state_dict["_linear.weight"].reshape(
         out_channels, in_channels, kernel_size, kernel_size
     )
-    # torch.nn.conv2d expects a dictionary with a key named "weight" but the weight loader provides a key named "_linear.weight". 
+    # torch.nn.conv2d expects a dictionary with a key named "weight" but the weight loader provides a key named "_linear.weight".
     partial_state_dict["weight"] = partial_state_dict["_linear.weight"].reshape(
         out_channels, in_channels, kernel_size, kernel_size
     )
