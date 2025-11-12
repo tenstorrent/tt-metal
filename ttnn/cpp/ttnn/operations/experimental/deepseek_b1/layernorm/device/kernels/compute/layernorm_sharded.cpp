@@ -121,6 +121,7 @@ void MAIN {
         }
         index_h_offset += block_w;
     }
+    // pack dprint before push_back
     PACK(
         (DPRINT << TileSlice(cb_xmm2, 0, SliceRange{.h0 = 0, .h1 = 2, .hs = 1, .w0 = 0, .w1 = 32, .ws = 2}, true, true)
                 << ENDL()));
@@ -130,6 +131,7 @@ void MAIN {
     reconfig_data_format(cb_xmm, cb_xmm2, cb_xmm, cb_scaler);
 
     cb_wait_front(cb_xmm2, num_tiles_per_block);
+    // unpack dprint after wait_front
 
     // Var(x)
     cb_wait_front(cb_scaler, 1);

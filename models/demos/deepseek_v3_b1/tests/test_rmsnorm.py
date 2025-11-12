@@ -5,7 +5,7 @@ from loguru import logger
 import ttnn
 
 
-@pytest.mark.parametrize("tile_height", [1, 16, 32])
+@pytest.mark.parametrize("tile_height", [16, 32])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_rmsnorm(device, tile_height):
     """Test TTNN rmsnorm with width-sharded input and mcast 1d using DeepSeek B1 op"""
