@@ -6,11 +6,13 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/tt_metal_profiler.hpp>
-#include <hostdevcommon/profiler_common.h>
 #include <tt-metalium/distributed.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
+
+// Local constant for profiler example
+constexpr uint32_t PROFILER_OP_SUPPORT_COUNT = 1000;
 
 void RunCustomCycle(const std::shared_ptr<distributed::MeshDevice>& mesh_device, int fastDispatch) {
     CoreCoord compute_with_storage_size = mesh_device->compute_with_storage_grid_size();
