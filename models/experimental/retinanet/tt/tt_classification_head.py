@@ -228,6 +228,7 @@ def ttnn_retinanet_classification_head(
 
         # Reshape from (N, H, W, 819) to (N, H, W, 9, 91)
         N, H_out, W_out, _ = cls_logits.shape
+        cls_logits = ttnn.to_memory_config(cls_logits, ttnn.DRAM_MEMORY_CONFIG)
         cls_logits = ttnn.reshape(cls_logits, (N, H_out, W_out, num_anchors, num_classes))
 
         # Flatten to (N, H*W*A, K)

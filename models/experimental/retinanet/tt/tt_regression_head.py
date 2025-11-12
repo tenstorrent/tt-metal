@@ -6,8 +6,9 @@ from typing import List
 from typing import Optional
 from dataclasses import dataclass
 from typing import Optional
-import os
+from loguru import logger
 import tt_lib.fallback_ops as fallback_ops
+import os
 
 
 @dataclass
@@ -167,10 +168,11 @@ class Conv2dNormActivation:
         # Store parameters
         self.conv_weight = parameters["weight"]
         self.conv_bias = parameters["bias"]
+        # Store formatted weights for TTNN native GroupNorm
         self.norm_weight = parameters["norm_weight"]
         self.norm_bias = parameters["norm_bias"]
-        # Add fallback flag
-        self.fallback_on_groupnorm = os.environ.get("FALLBACK_ON_GROUPNORM", "0") == "1"
+        # Use standard FALLBACK_ON_GROUPNORM flag (default "1" = PyTorch fallback enabled)
+        self.fallback_on_groupnorm = os.environ.get("FALLBACK_ON_GROUPNORM", "1") == "1"
         # Grid size for GroupNorm
         self.grid_size = grid_size if grid_size is not None else ttnn.CoreGrid(y=8, x=8)
 
@@ -248,20 +250,33 @@ class Conv2dNormActivation:
                 weight=self.norm_weight,
                 bias=self.norm_bias,
             )
+            # CRITICAL: Move tensor back to device after fallback
+            x = x.to(self.device)
             # Convert back to NHWC
             x = ttnn.permute(x, (0, 2, 3, 1))  # NCHW -> NHWC
             x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+
         else:
+            # Use TTNN native GroupNorm (when FALLBACK_ON_GROUPNORM=0)
+            logger.debug(f"{prefix} Using TTNN native GroupNorm")
+
+            # GroupNorm requires H_out * W_out divisible by (grid_size.y * 32)
             spatial_size = H_out * W_out
             required_size = ((spatial_size + self.grid_size.y * 32 - 1) // (self.grid_size.y * 32)) * (
                 self.grid_size.y * 32
             )
 
             if spatial_size != required_size:
+                # Pad spatial dimension to required size
                 pad_amount = required_size - spatial_size
+
+                # Reshape to (N, 1, H*W, C) for padding
                 x_flat = ttnn.reshape(x, (N, 1, spatial_size, C))
+
+                # Pad along spatial dimension
                 x_padded = ttnn.pad(x_flat, padding=((0, 0), (0, 0), (0, pad_amount), (0, 0)), value=0.0)
             else:
+                # Reshape to (N, 1, H*W, C) without padding
                 x_padded = ttnn.reshape(x, (N, 1, spatial_size, C))
 
             # Apply GroupNorm
@@ -284,8 +299,10 @@ class Conv2dNormActivation:
 
             # Reshape back using PRESERVED dimensions
             x = ttnn.reshape(x_normalized, (N, input_height, input_width, C))
-            H_out = input_height
-            W_out = input_width
+
+        H_out = input_height
+        W_out = input_width
+
         # ReLU activation
         x = ttnn.relu(x)
 

@@ -46,7 +46,7 @@ This runs an end-to-end flow that:
 
   - Optionally compares results and saves artifacts.
 
-  - **Note**: GroupNorm in the head is set to fall back to the PyTorch implementation because the TTNN version resulted in lower PCC — around 0.97 for the regression head and 0.88 for the classification head. With the fallback enabled, the PCC improves to approximately 0.99. To enable this behavior, set **export FALLBACK_ON_GROUPNORM=1**
+  - **Note**: GroupNorm in the head is set to fall back to the PyTorch implementation because the TTNN version resulted in lower PCC — around 0.97 for the regression head and 0.88 for the classification head. With the fallback enabled, the PCC improves to approximately 0.99. To disable this behavior, set **export FALLBACK_ON_GROUPNORM=0**
 ### Performance
 
 ### Run Device Performance Test
@@ -54,7 +54,7 @@ This runs an end-to-end flow that:
 # Test full model performance
 pytest models/experimental/retinanet/tests/perf/test_perf.py
 ```
-- FPS is 37.33
+- FPS is 35.75
 ### Run the Demo
 ```bash
 # Process images from a directory
