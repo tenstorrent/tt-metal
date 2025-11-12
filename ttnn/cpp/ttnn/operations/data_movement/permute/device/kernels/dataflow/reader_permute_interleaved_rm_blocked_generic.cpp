@@ -109,7 +109,7 @@ void kernel_main() {
         for (uint32_t x = x_start; x < x_end; ++x) {
             // Compute the address offset for this index
             uint64_t addr_offset = base_addr_offset + x * X_stride;
-            uint64_t src_noc_addr = get_noc_addr(addr_offset, s0, w_offset);
+            uint64_t src_noc_addr = s0.get_noc_addr(addr_offset, w_offset);
 
             // Perform async read of the current line (w_block_len elements) into L1
             noc_async_read(src_noc_addr, src_buffer_l1_addr + page_offset, w_read_size_bytes);

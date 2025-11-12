@@ -49,11 +49,11 @@ jobs:
             owner_id: U03PUAKE719 # Miguel Tairum
           - name: "llama3.1-8b ${{ inputs.runner-label }} batch-1 TP device perf decode"
             arch: blackhole
-            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/tests/test_device_perf.py -k "decode-llama3_8b-2-1024-10-1-1-False"
+            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/tests/test_device_perf.py -k "decode-llama3_8b-2-1024-2-10-1-1-False"
             owner_id: U08GELBB1AP # Ambrose Ling
           - name: "llama3.1-8b ${{ inputs.runner-label }} batch-1 TP device perf prefill"
             arch: blackhole
-            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/tests/test_device_perf.py -k "prefill-llama3_8b-2-1024-10-1-1-False"
+            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/tests/test_device_perf.py -k "prefill-llama3_8b-2-1024-2-10-1-1-False"
             owner_id: U08GELBB1AP # Ambrose Ling
     name: ${{ matrix.test-group.name }}
     runs-on:
@@ -90,6 +90,7 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
+        timeout-minutes: 10
         with:
           runner-label: ${{ inputs.runner-label }}
       - name: Download Llama model weights from LFC
@@ -157,13 +158,13 @@ jobs:
             arch: blackhole
             cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32"
             owner_id: U03PUAKE719 # Miguel Tairum
-          - name: "llama3.3-70b ${{ inputs.runner-label }} batch-1 TP device perf decode"
-            arch: blackhole
-            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct pytest models/tt_transformers/tests/test_device_perf.py -k "prefill-llama3_70b-2-1024-10-1-1-False"
-            owner_id: U08GELBB1AP # Ambrose Ling
           - name: "llama3.3-70b ${{ inputs.runner-label }} batch-1 TP device perf prefill"
             arch: blackhole
-            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct pytest models/tt_transformers/tests/test_device_perf.py -k "decode-llama3_70b-2-1024-10-1-1-False"
+            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct pytest models/tt_transformers/tests/test_device_perf.py -k "prefill-llama3_70b-2-1024-2-10-1-1-False"
+            owner_id: U08GELBB1AP # Ambrose Ling
+          - name: "llama3.3-70b ${{ inputs.runner-label }} batch-1 TP device perf decode"
+            arch: blackhole
+            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct pytest models/tt_transformers/tests/test_device_perf.py -k "decode-llama3_70b-2-1024-2-10-1-1-False"
             owner_id: U08GELBB1AP # Ambrose Ling
     name: ${{ matrix.test-group.name }}
     runs-on:
@@ -197,6 +198,7 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
+        timeout-minutes: 10
         with:
           runner-label: ${{ inputs.runner-label }}
       - name: Run demo regression tests

@@ -49,6 +49,8 @@ HostBuffer create_host_buffer_from_row_major_data(std::vector<T>&& data, const T
 
 }  // namespace
 
+std::atomic<std::uint64_t> Tensor::tensor_id_counter{0};
+
 Tensor::Tensor(
     HostBuffer buffer,
     const tt::tt_metal::Shape& shape,
@@ -83,7 +85,7 @@ Tensor::Tensor(
 Tensor::Tensor(HostBuffer buffer, TensorSpec tensor_spec) :
     Tensor(Storage(HostStorage(std::move(buffer))), std::move(tensor_spec), TensorTopology{}) {}
 
-Tensor::Tensor(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) {
+Tensor::Tensor(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) : tensor_id(Tensor::next_tensor_id()) {
     init(Storage(std::move(storage)), std::move(tensor_spec), std::move(tensor_topology));
 }
 
@@ -108,6 +110,7 @@ Tensor& Tensor::operator=(const Tensor& other) {
 
 Tensor& Tensor::operator=(Tensor&& other) noexcept {
     this->tensor_id = other.tensor_id;
+    other.tensor_id = INVALID_TENSOR_ID;
     if (this->tensor_attributes != other.tensor_attributes) {
         this->tensor_attributes = std::move(other.tensor_attributes);
     }
@@ -143,6 +146,12 @@ void Tensor::deallocate_impl(bool force) {
     }
     // GraphTracker::instance().track_function_end();
 }
+
+std::uint64_t Tensor::get_tensor_id_counter() { return tensor_id_counter.load(std::memory_order_relaxed); }
+
+void Tensor::set_tensor_id_counter(std::uint64_t id) { tensor_id_counter.store(id, std::memory_order_relaxed); }
+
+std::uint64_t Tensor::next_tensor_id() { return tensor_id_counter.fetch_add(1, std::memory_order_relaxed); }
 
 template <typename T>
 Tensor Tensor::from_span(
@@ -186,7 +195,7 @@ Tensor Tensor::from_vector(
         TensorSpec(spec.logical_shape(), TensorLayout(buffer_dtype, spec.page_config(), spec.memory_config()));
     auto res = Tensor(create_host_buffer_from_row_major_data(std::move(buffer), buffer_spec, pad_value), buffer_spec);
     // Convert to datatype from original spec
-    res = ttnn::to_dtype(res, spec.data_type());
+    res = ops::to_dtype(res, spec.data_type());
     if (device) {
         res = res.to_device(device, spec.memory_config(), cq_id);
     }
@@ -400,8 +409,6 @@ Tensor Tensor::to_layout(Layout target_layout) const { return tensor_ops::tensor
 
 std::string Tensor::write_to_string() const { return tensor_impl::to_string_wrapper(*this); }
 
-void Tensor::print() const { tensor_ops::tensor_print(*this); }
-
 Tensor Tensor::pad(
     const tt::tt_metal::Shape& output_padded_shape,
     const tt::tt_metal::Shape& input_tensor_start,
@@ -426,13 +433,11 @@ bool Tensor::is_sharded() const {
 
 uint32_t Tensor::element_size() const { return tensor_impl::element_size_bytes(this->dtype()); }
 
-Tensor Tensor::reshape(const tt::tt_metal::Shape& new_shape) const {
-    return tensor_ops::tensor_reshape(*this, new_shape);
-}
+Tensor Tensor::reshape(const tt::tt_metal::Shape& new_shape) const { return tensor_ops::tensor_view(*this, new_shape); }
 
 Tensor Tensor::reshape(
     const tt::tt_metal::Shape& new_logical_shape, const tt::tt_metal::Shape& new_padded_shape) const {
-    return tensor_ops::tensor_reshape(*this, new_logical_shape, new_padded_shape);
+    return tensor_ops::tensor_view(*this, new_logical_shape, new_padded_shape);
 }
 
 Tensor Tensor::with_tensor_topology(TensorTopology tensor_topology) const {
@@ -648,12 +653,13 @@ void write_tensor(const Tensor& src, Tensor& dst, bool blocking, std::optional<t
     tensor_impl::copy_to_device_wrapper(src, dst, cq_id);
 }
 
+// TODO #32045: Remove this function since IDs are assigned in the constructor.
 Tensor set_tensor_id(const Tensor& tensor) {
     if (not GraphTracker::instance().is_enabled()) {
         return tensor;
     }
     auto output = tensor;
-    output.tensor_id = ttnn::CoreIDs::instance().fetch_and_increment_tensor_id();
+    output.tensor_id = Tensor::next_tensor_id();
     return output;
 };
 
@@ -707,7 +713,14 @@ const std::optional<NdShardSpec>& Tensor::nd_shard_spec() const { return this->m
 const TensorTopology& Tensor::tensor_topology() const { return this->tensor_attributes->get_tensor_topology(); }
 
 namespace ops {
+Tensor view(const Tensor& input_tensor, const Shape& new_shape, const Shape& new_padded_shape) {
+    return tensor_ops::tensor_view(input_tensor, new_shape, new_padded_shape);
+}
+Tensor view(const Tensor& input_tensor, const Shape& new_shape) {
+    return tensor_ops::tensor_view(input_tensor, new_shape);
+}
 Tensor to_dtype(const Tensor& tensor, DataType dtype) { return tensor_ops::tensor_to_dtype(tensor, dtype); }
+
 }  // namespace ops
 
 }  // namespace tt::tt_metal

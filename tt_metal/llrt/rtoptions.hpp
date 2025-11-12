@@ -146,7 +146,6 @@ class RunTimeOptions {
     bool clear_dram = false;
 
     bool skip_loading_fw = false;
-    bool skip_reset_cores_on_init = false;
 
     bool riscv_debug_info_enabled = false;
     uint32_t watcher_debug_delay = 0;
@@ -200,7 +199,7 @@ class RunTimeOptions {
     bool enable_2_erisc_mode_with_fabric = false;
 
     // feature flag to enable 2-erisc mode on Blackhole (general, not fabric-specific)
-    bool enable_2_erisc_mode = false;
+    bool enable_2_erisc_mode = true;
 
     // Log kernels compilation commands
     bool log_kernels_compilation_commands = false;
@@ -221,6 +220,9 @@ class RunTimeOptions {
 
     // Reliability mode override parsed from environment (RELIABILITY_MODE)
     std::optional<tt::tt_fabric::FabricReliabilityMode> reliability_mode = std::nullopt;
+
+    // Force JIT compile even if dependencies are up to date
+    bool force_jit_compile = false;
 
 public:
     RunTimeOptions();
@@ -435,7 +437,6 @@ public:
     void set_clear_dram(bool clear) { clear_dram = clear; }
 
     bool get_skip_loading_fw() const { return skip_loading_fw; }
-    bool get_skip_reset_cores_on_init() const { return skip_reset_cores_on_init; }
 
     // Whether to compile with -g to include DWARF debug info in the binary.
     bool get_riscv_debug_info_enabled() const { return riscv_debug_info_enabled; }
@@ -497,6 +498,8 @@ public:
     // Feature flag to enable 2-erisc mode on Blackhole
     bool get_enable_2_erisc_mode() const { return enable_2_erisc_mode; }
 
+    void set_enable_2_erisc_mode(bool enable) { enable_2_erisc_mode = enable; }
+
     bool is_custom_fabric_mesh_graph_desc_path_specified() const { return is_custom_fabric_mesh_graph_desc_path_set; }
     std::string get_custom_fabric_mesh_graph_desc_path() const { return custom_fabric_mesh_graph_desc_path; }
 
@@ -531,6 +534,9 @@ public:
     // Using MGD 1.0 syntax for mesh graph descriptor in Fabric Control Plane
     // TODO: This will be removed after MGD 1.0 is deprecated
     bool get_use_mesh_graph_descriptor_1_0() const { return use_mesh_graph_descriptor_1_0; }
+
+    bool get_force_jit_compile() const { return force_jit_compile; }
+    void set_force_jit_compile(bool enable) { force_jit_compile = enable; }
 
     // Parse all feature-specific environment variables, after hal is initialized.
     // (Needed because syntax of some env vars is arch-dependent.)

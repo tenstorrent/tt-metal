@@ -323,9 +323,13 @@ RunTimeOptions::RunTimeOptions() {
         this->enable_2_erisc_mode_with_fabric = true;
     }
 
-    if (getenv("TT_METAL_MULTI_AERISC")) {
-        log_info(tt::LogMetal, "Enabling experimental multi-erisc mode");
-        this->enable_2_erisc_mode = true;
+    if (getenv("TT_METAL_DISABLE_MULTI_AERISC")) {
+        log_info(tt::LogMetal, "Disabling multi-erisc mode with TT_METAL_DISABLE_MULTI_AERISC");
+        this->enable_2_erisc_mode = false;
+    }
+    if (this->runtime_target_device_ != tt::TargetDevice::Silicon) {
+        log_info(tt::LogMetal, "Disabling multi-erisc mode with simulator/mock target device");
+        this->enable_2_erisc_mode = false;
     }
 
     if (getenv("TT_METAL_LOG_KERNELS_COMPILE_COMMANDS")) {
@@ -334,6 +338,10 @@ RunTimeOptions::RunTimeOptions() {
 
     if (getenv("TT_METAL_USE_MGD_1_0")) {
         this->use_mesh_graph_descriptor_1_0 = true;
+    }
+
+    if (getenv("TT_METAL_FORCE_JIT_COMPILE")) {
+        this->force_jit_compile = true;
     }
 
     const char* timeout_duration_for_operations_value = std::getenv("TT_METAL_OPERATION_TIMEOUT_SECONDS");

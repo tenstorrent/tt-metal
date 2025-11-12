@@ -8,6 +8,7 @@ import math
 import os
 from datetime import datetime
 from pathlib import Path
+from typing import List
 
 import pytest
 import requests
@@ -21,6 +22,7 @@ from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import (
     PagedAttentionConfig,
     create_tt_model,
+    get_base_model_name,
     preprocess_inputs_prefill,
     sample_host,
 )
@@ -252,6 +254,18 @@ def prepare_generator_args(
     return model_args, model, page_table, tt_kv_cache, tokenizer, processor
 
 
+def set_trace_region_size():
+    # NOTE: temporary until we merge https://github.com/tenstorrent/tt-metal/pull/32086
+    LLAMA_DIR = os.getenv("LLAMA_DIR")
+    HF_MODEL = os.getenv("HF_MODEL")
+    model_name = LLAMA_DIR.strip("/").split("/")[-1] if LLAMA_DIR else HF_MODEL.split("/")[-1]
+    base_model_name = get_base_model_name(model_name)
+    if base_model_name in ["Llama-3.1-70B", "Llama-3.3-70B"]:
+        return 90000000
+    else:
+        return 70000000
+
+
 # List of supported Parameters for demo.py
 #
 # input_prompts (string): input json file with prompts to process. See models/tt_transformers/demo/*.json for list of input files
@@ -285,7 +299,7 @@ def prepare_generator_args(
             200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
             1,
@@ -304,7 +318,11 @@ def prepare_generator_args(
             200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {
+                "temperature": torch.linspace(0.0, 1.0, steps=32).tolist(),
+                "top_p": torch.linspace(0.08, 1.0, steps=32).tolist(),
+                "top_k": torch.arange(1, 33).tolist(),  # 1 to 32 inclusive
+            },  # sampling_params (non-uniform)
             True,  # stop_at_eos
             False,  # ci_only
             1,  # data_parallel
@@ -323,7 +341,7 @@ def prepare_generator_args(
             200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks_per_dp": 2048},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
             1,  # data_parallel
@@ -342,7 +360,7 @@ def prepare_generator_args(
             200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
             1,  # data_parallel
@@ -361,7 +379,7 @@ def prepare_generator_args(
             200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
             1,  # data_parallel
@@ -383,7 +401,7 @@ def prepare_generator_args(
                 "page_block_size": 32,
                 "page_max_num_blocks_per_dp": 1024,
             },  # page_params  # TODO This will be serviced by vLLM
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             False,  # stop_at_eos
             False,  # ci_only
             1,  # data_parallel
@@ -402,7 +420,7 @@ def prepare_generator_args(
             4096,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             False,  # stop_at_eos
             True,  # ci_only
             1,  # data_parallel
@@ -421,7 +439,7 @@ def prepare_generator_args(
             1024,  # max_generated_tokens  # TODO Update this to 4096, and make sure it fits in DRAM with correct page_params
             True,  # paged_attention  # TODO Find the correct paged_attn params to avoid hangs in this config with long context generation
             {"page_block_size": 64, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             False,  # stop_at_eos
             True,  # ci_only
             1,  # data_parallel
@@ -440,7 +458,7 @@ def prepare_generator_args(
             200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
             4,  # data_parallel
@@ -459,7 +477,7 @@ def prepare_generator_args(
             200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
             8,  # data_parallel
@@ -478,7 +496,7 @@ def prepare_generator_args(
             200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
             4,  # data_parallel
@@ -497,7 +515,7 @@ def prepare_generator_args(
             4096,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             False,  # stop_at_eos
             True,  # ci_only
             4,  # data_parallel
@@ -516,7 +534,7 @@ def prepare_generator_args(
             4096,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             False,  # stop_at_eos
             True,  # ci_only
             8,  # data_parallel
@@ -535,7 +553,7 @@ def prepare_generator_args(
             200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             True,  # stop_at_eos
             True,  # ci_only
             16,  # data_parallel
@@ -554,7 +572,7 @@ def prepare_generator_args(
             200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             True,  # stop_at_eos
             True,  # ci_only
             32,  # data_parallel
@@ -573,7 +591,7 @@ def prepare_generator_args(
             50000,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks_per_dp": 2048},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             False,  # stop_at_eos
             True,  # ci_only
             1,  # data_parallel
@@ -592,7 +610,7 @@ def prepare_generator_args(
             500,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             True,  # stop_at_eos
             True,  # ci_only
             1,  # data_parallel
@@ -611,7 +629,7 @@ def prepare_generator_args(
             200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             True,  # stop_at_eos
             True,  # ci_only
             1,  # data_parallel
@@ -630,7 +648,7 @@ def prepare_generator_args(
             200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             True,  # stop_at_eos
             True,  # ci_only
             1,  # data_parallel
@@ -649,7 +667,7 @@ def prepare_generator_args(
             2,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             True,  # stop_at_eos
             True,  # ci_only
             1,  # data_parallel
@@ -692,7 +710,9 @@ def prepare_generator_args(
     ids=["performance", "accuracy"],
 )
 @pytest.mark.parametrize(
-    "device_params", [{"fabric_config": True, "trace_region_size": 70000000, "num_command_queues": 1}], indirect=True
+    "device_params",
+    [{"fabric_config": True, "trace_region_size": set_trace_region_size(), "num_command_queues": 1}],
+    indirect=True,
 )
 @pytest.mark.parametrize(
     "mesh_device",
@@ -734,6 +754,7 @@ def test_demo_text(
     token_accuracy,
     stress_test,
     enable_trace,
+    model_location_generator,
     num_layers,
     mode,
 ):
@@ -983,12 +1004,21 @@ def test_demo_text(
 
         user_done = [False] * global_batch_size  # Keeps track when a user reaches EoD token
 
-        # Currently only supporting greedy decoding (temperature=0) on device
-        argmax_on_device = sampling_params["temperature"] == 0
-        if argmax_on_device:
-            device_sampling_params = SamplingParams(temperature=0.0, top_k=-1, top_p=1.0)
-        else:
-            device_sampling_params = None
+        # Use device sampling for all cases when supported
+
+        device_sampling_params = (
+            SamplingParams(
+                temperature=sampling_params["temperature"],
+                top_k=sampling_params["top_k"],
+                top_p=sampling_params["top_p"],
+            )
+            if model[0]._supports_on_device_sampling
+            else None
+        )
+        if device_sampling_params is None and isinstance(sampling_params["temperature"], List):
+            # host sampling only supports single sample param for all users in a batch
+            sampling_params["temperature"] = sampling_params["temperature"][0]
+            sampling_params["top_p"] = sampling_params["top_p"][0]
 
         # Initial positions
         current_pos = torch.tensor([decoding_pos[b] if mode == "full" else 0 for b in range(global_batch_size)])

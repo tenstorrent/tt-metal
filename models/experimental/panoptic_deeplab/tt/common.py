@@ -253,3 +253,35 @@ def preprocess_nchw_input_tensor(device, torch_input):
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=sharded_memory_config,
     )
+
+
+def reshape_flattened_conv_output(tensor: ttnn.Tensor, batch_size: int = 1, layer_name: str = None) -> ttnn.Tensor:
+    """
+    Reshape a flattened convolution output from [1, 1, NHW, C] to [N, H, W, C].
+
+    This function handles the case where convolutions output flattened format [1, 1, NHW, C]
+    where NHW = N*H*W and W = 2*H. It calculates H and W from NHW and reshapes accordingly.
+
+    Args:
+        tensor: Input tensor that may be in flattened format [1, 1, NHW, C]
+        batch_size: Batch size N (default: 1)
+        layer_name: Optional layer name for debug logging
+
+    Returns:
+        Reshaped tensor [N, H, W, C] if reshape is valid, otherwise original tensor
+    """
+    if tensor.shape[1] == 1 and tensor.shape[2] > 1:
+        # Flattened format: [1, 1, NHW, C] -> [N, H, W, C]
+        NHW = tensor.shape[2]
+        C = tensor.shape[3]
+        # W = 2*H, so NHW = N*H*W = 1*H*2*H = 2*H^2, therefore H = sqrt(NHW/2)
+        H_out = int((NHW // 2) ** 0.5)
+        W_out = 2 * H_out
+        if H_out * W_out == NHW:
+            reshaped = ttnn.reshape(tensor, (batch_size, H_out, W_out, C))
+            if layer_name:
+                logger.debug(
+                    f"{layer_name} reshaped output from [1, 1, {NHW}, {C}] to [{batch_size}, {H_out}, {W_out}, {C}]"
+                )
+            return reshaped
+    return tensor

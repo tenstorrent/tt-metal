@@ -263,7 +263,7 @@ void __attribute__((noinline)) debug_sanitize_post_noc_addr_and_hang(
     // kernel is written. In this case we'll do an early exit back to base FW.
     internal_::disable_erisc_app();
     // Subordinates do not have an erisc exit
-#if (defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0 && defined(ENABLE_2_ERISC_MODE)) || !defined(ARCH_BLACKHOLE)
+#if (defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)) || !defined(ARCH_BLACKHOLE)
     erisc_exit();
 #endif
 #endif

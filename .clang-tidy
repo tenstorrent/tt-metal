@@ -154,7 +154,6 @@ Checks: >
   -portability-template-virtual-member-function,
   -readability-avoid-nested-conditional-operator,
   -readability-avoid-unconditional-preprocessor-if,
-  -readability-braces-around-statements,
   -readability-container-contains,
   -readability-container-data-pointer,
   -readability-convert-member-functions-to-static,

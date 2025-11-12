@@ -353,13 +353,17 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             std::pair<bool, int>(unicast_go_signals, num_virtual_eth_cores));
 
         if (sysmem_manager.get_bypass_mode()) {
-            this->capture_program_trace_on_subgrid(
-                device_range,
-                program_cmd_seq,
-                dispatch_metadata.stall_first,
-                dispatch_metadata.stall_before_program,
-                program.get_runtime_id());
-            active_sub_grids.push_back(device_range);
+            auto local_mesh_range = mesh_device_->get_view().get_local_mesh_coord_range();
+            auto local_device_range = local_mesh_range.intersection(device_range);
+            if (local_device_range.has_value()) {
+                this->capture_program_trace_on_subgrid(
+                    local_device_range.value(),
+                    program_cmd_seq,
+                    dispatch_metadata.stall_first,
+                    dispatch_metadata.stall_before_program,
+                    program.get_runtime_id());
+                active_sub_grids.push_back(local_device_range.value());
+            }
         } else {
             this->write_program_cmds_to_subgrid(
                 device_range,
@@ -384,9 +388,8 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         for (const auto& sub_grid : active_sub_grids) {
             active_sub_grids_set.merge(sub_grid);
         }
-        TT_FATAL(active_sub_grids_set.size() == 1, "Cannot support non convex grids.");
         this->capture_go_signal_trace_on_unused_subgrids(
-            active_sub_grids_set.ranges().front(),
+            active_sub_grids_set,
             sub_device_id,
             expected_num_workers_completed,
             mcast_go_signals,
@@ -991,15 +994,21 @@ void FDMeshCommandQueue::capture_program_trace_on_subgrid(
 }
 
 void FDMeshCommandQueue::capture_go_signal_trace_on_unused_subgrids(
-    const MeshCoordinateRange& active_grid,
+    const MeshCoordinateRangeSet& active_grids_set,
     const SubDeviceId& sub_device_id,
     uint32_t expected_num_workers_completed,
     bool mcast_go_signals,
     bool unicast_go_signals,
     const program_dispatch::ProgramDispatchMetadata& dispatch_md) {
-    MeshCoordinateRange full_grid(mesh_device_->shape());
-    MeshCoordinateRangeSet unused_grids = subtract(full_grid, active_grid);
-    for (const auto& unused_grid : unused_grids.ranges()) {
+    // TODO: #31963 Handle the case where there are multiple active grids.
+    TT_FATAL(active_grids_set.size() <= 1, "Cannot support non convex grids.");
+    MeshCoordinateRange full_grid(mesh_device_->get_view().get_local_mesh_coord_range());
+    MeshCoordinateRangeSet unused_grids_set(full_grid);
+    if (active_grids_set.size() == 1) {
+        MeshCoordinateRange active_grid = active_grids_set.ranges().front();
+        unused_grids_set = subtract(full_grid, active_grid);
+    }
+    for (const auto& unused_grid : unused_grids_set.ranges()) {
         if (!mesh_device_->is_local(unused_grid.start_coord())) {
             continue;
         }

@@ -385,7 +385,7 @@ FabricTensixDatamoverBuilder::FabricTensixDatamoverBuilder(
 
 FabricTensixDatamoverBuilder FabricTensixDatamoverBuilder::build(
     tt::tt_metal::IDevice* device,
-    tt::tt_metal::Program& program,
+    tt::tt_metal::Program& /*program*/,
     tt::tt_fabric::FabricNodeId local_fabric_node_id,
     tt::tt_fabric::FabricNodeId remote_fabric_node_id,
     uint32_t ethernet_channel_id,
