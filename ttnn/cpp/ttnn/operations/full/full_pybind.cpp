@@ -30,7 +30,7 @@ void bind_full_operation(py::module& module) {
 
         Example:
             >>> mesh_device = ttnn.open_device(device_id=0)
-            >>> filled_tensor = ttnn.moreh_full([2, 2], mesh_device, 7.0, dtype=ttnn.bfloat16)
+            >>> filled_tensor = ttnn.moreh_full([2, 2], 7.0, mesh_device, dtype=ttnn.bfloat16)
             >>> print(filled_tensor)
             ttnn.Tensor([[[[7.0,  7.0],
                             [7.0,  7.0]]]], shape=Shape([2, 2]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
