@@ -27,7 +27,7 @@ Tests:
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       size: [32, 64, 128]
-      num_packets: 100
+      num_packets: [100]
 
     defaults:
       ftype: unicast
@@ -52,7 +52,7 @@ Tests:
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       size: [32, 64, 128]
-      num_packets: 100
+      num_packets: [100]
 
     defaults:
       ftype: unicast
