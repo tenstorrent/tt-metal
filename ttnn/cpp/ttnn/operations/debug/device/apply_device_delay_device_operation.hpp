@@ -7,7 +7,6 @@
 #include <variant>
 #include <vector>
 #include <cstdint>
-#include <optional>
 
 #include <ttnn/tensor/tensor.hpp>
 #include <ttnn/core.hpp>
@@ -28,10 +27,7 @@ struct ApplyDeviceDelayDeviceOperation {
         const ttnn::MeshDevice* mesh_device;
     };
 
-    // We need a dummy tensor args that can provide mesh device info
-    struct tensor_args_t {
-        ttnn::Tensor input_tensor;
-    };
+    using tensor_args_t = std::monostate;
 
     // Return a minimal dummy tensor since the infrastructure doesn't support void
     using tensor_return_value_t = std::vector<ttnn::Tensor>;
