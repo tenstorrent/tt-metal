@@ -95,7 +95,7 @@ FORCE_INLINE void broadcast_last_row_to_all_rows_in_cube(
 void kernel_main() {
     const uint32_t output_base_addr = get_arg_val<uint32_t>(0);
     constexpr auto ctas = get_ctas();
-    using output_number_type = std_type_t<get_dataformat(ctas.output_cb)>;
+    // using output_number_type = std_type_t<get_dataformat(ctas.output_cb)>;
     const auto output_addr_gtor = TensorAccessor(ctas.output_args, output_base_addr, get_tile_size(ctas.output_cb));
     constexpr uint32_t num_slices_along_channels = block_depth_ceil(ctas.num_channels, ctas.block_depth);
     constexpr uint32_t num_blocks_in_row = block_depth_ceil(ctas.input_depth, ctas.block_depth);
@@ -116,7 +116,7 @@ void kernel_main() {
                     const uint32_t previous_row_chunk_i = row_chunk_i - 1;
                     receive_upper_block(
                         output_addr_gtor,
-                        ctas.axis_3_buffer_0_cb,
+                        ctas.axis_3_buffer_1_cb,
                         my_channel,
                         column_block_i,
                         previous_row_chunk_i,
@@ -124,13 +124,13 @@ void kernel_main() {
                         num_slices_along_channels,
                         block_depth,
                         ctas.block_depth);
-                    broadcast_last_row_to_all_rows_in_cube<output_number_type, decltype(output_addr_gtor)>(
-                        output_addr_gtor,
-                        ctas.axis_3_buffer_0_cb,
-                        ctas.axis_3_buffer_1_cb,
-                        ctas.tile_height,
-                        ctas.tile_width,
-                        block_depth);
+                    // broadcast_last_row_to_all_rows_in_cube<output_number_type, decltype(output_addr_gtor)>(
+                    //     output_addr_gtor,
+                    //     ctas.axis_3_buffer_0_cb,
+                    //     ctas.axis_3_buffer_1_cb,
+                    //     ctas.tile_height,
+                    //     ctas.tile_width,
+                    //     block_depth);
                 }
                 output_block(
                     output_addr_gtor,
