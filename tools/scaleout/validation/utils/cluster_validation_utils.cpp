@@ -11,6 +11,10 @@
 #include <algorithm>
 #include <random>
 #include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <atomic>
+#include <chrono>
 
 #include "tests/tt_metal/test_utils/test_common.hpp"
 #include "tools/scaleout/validation/utils/ethernet_link_metrics_serialization.hpp"
@@ -39,6 +43,7 @@ struct ConnectionInfo {
     tt::tt_metal::TrayID tray_id;
     tt::tt_metal::ASICLocation asic_location;
     tt::scaleout_tools::PortType port_type;
+    tt::scaleout_tools::PortId port_id;
     tt::tt_metal::AsicID connected_asic_id;
     uint8_t connected_channel;
     std::string connected_host;
@@ -263,14 +268,22 @@ void execute_workloads(
 
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
     distributed_context.barrier();
+
+    // Use condition variable and timeout for thread completion detection
+    std::mutex cv_mutex;
+    std::condition_variable cv;
+
     std::vector<std::thread> threads;
-    threads.reserve(mesh_workloads.size());
+    threads.reserve(total_threads);
     for (auto& [device_id, mesh_workload] : mesh_workloads) {
-        threads.emplace_back([device_id, &mesh_workload, &devices]() {
+        threads.emplace_back([device_id, &mesh_workload, &devices, &completed_threads, &cv]() {
             tt::tt_metal::distributed::EnqueueMeshWorkload(
                 devices.at(device_id)->mesh_command_queue(), mesh_workload, true);
+            completed_threads++;
+            cv.notify_all();
         });
     }
+
     for (auto& thread : threads) {
         thread.join();
     }
@@ -607,6 +620,8 @@ LinkMetricsResult send_traffic_and_validate_links(
 
             execute_workloads(programs, devices);
 
+            //
+
             dump_link_stats(
                 inputs,
                 physical_system_descriptor,
@@ -626,10 +641,14 @@ LinkMetricsResult send_traffic_and_validate_links(
 // Logging Functions (Metrics and Connectivity)
 // ============================================================================
 
-std::unordered_map<tt::tt_metal::AsicID, std::unordered_map<uint8_t, PortType>> generate_port_types(
+struct PortInfo {
+    tt::scaleout_tools::PortType port_type;
+    tt::scaleout_tools::PortId port_id;
+};
+
+std::unordered_map<tt::tt_metal::AsicID, std::unordered_map<uint8_t, PortInfo>> generate_port_info(
     const PhysicalSystemDescriptor& physical_system_descriptor) {
-    std::unordered_map<tt::tt_metal::AsicID, std::unordered_map<tt::tt_fabric::chan_id_t, tt::scaleout_tools::PortType>>
-        port_types;
+    std::unordered_map<tt::tt_metal::AsicID, std::unordered_map<tt::tt_fabric::chan_id_t, PortInfo>> port_info_map;
     const auto& asic_connectivity_graph = physical_system_descriptor.get_system_graph().asic_connectivity_graph;
 
     for (const auto& [asic_id, asic_descriptor] : physical_system_descriptor.get_asic_descriptors()) {
@@ -642,16 +661,16 @@ std::unordered_map<tt::tt_metal::AsicID, std::unordered_map<uint8_t, PortType>> 
             for (const auto& eth_connection : eth_connections) {
                 auto port = board.get_port_for_asic_channel(tt::scaleout_tools::AsicChannel{
                     *(asic_descriptor.asic_location), tt::scaleout_tools::ChanId{eth_connection.src_chan}});
-                port_types[asic_id][eth_connection.src_chan] = port.port_type;
+                port_info_map[asic_id][eth_connection.src_chan] = PortInfo{port.port_type, port.port_id};
             }
         }
     }
-    return port_types;
+    return port_info_map;
 }
 
 void print_ethernet_connectivity(
     bool /*print_connectivity*/, const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) {
-    auto port_types = generate_port_types(physical_system_descriptor);
+    auto port_info_map = generate_port_info(physical_system_descriptor);
 
     // Collect all connections and organize by: connection_type -> hostname -> port_type -> connections
     // Using map with bool key: true = cross-host, false = local
@@ -675,7 +694,8 @@ void print_ethernet_connectivity(
                 for (const auto& eth_connection : asic_connection.second) {
                     auto channel = eth_connection.src_chan;
                     auto connected_channel = eth_connection.dst_chan;
-                    auto port_type_str = enchantum::to_string(port_types.at(asic_id).at(channel));
+                    const auto& port_info = port_info_map.at(asic_id).at(channel);
+                    auto port_type_str = enchantum::to_string(port_info.port_type);
 
                     ConnectionInfo conn_info{
                         .asic_id = asic_id,
@@ -683,7 +703,8 @@ void print_ethernet_connectivity(
                         .host = host,
                         .tray_id = tray_id,
                         .asic_location = asic_location,
-                        .port_type = port_types.at(asic_id).at(channel),
+                        .port_type = port_info.port_type,
+                        .port_id = port_info.port_id,
                         .connected_asic_id = connected_asic_id,
                         .connected_channel = connected_channel,
                         .connected_host = connected_host,
@@ -743,7 +764,7 @@ void print_ethernet_connectivity(
                     std::cout << " [" << conn.host << "] Unique ID: " << std::hex << *conn.asic_id
                               << " Tray: " << std::dec << *conn.tray_id << ", ASIC Location: " << std::dec
                               << *conn.asic_location << ", Ethernet Channel: " << std::dec << +conn.channel
-                              << std::endl;
+                              << ", Port ID: " << std::dec << *conn.port_id << std::endl;
 
                     std::cout << "\tConnected to [" << conn.connected_host << "] Unique ID: " << std::hex
                               << *conn.connected_asic_id << " Tray: " << std::dec << *conn.connected_tray_id
@@ -872,9 +893,9 @@ void log_link_metrics(
 
     // Table header
     std::cout << std::left << std::setw(20) << "Host" << std::setw(6) << "Tray" << std::setw(6) << "ASIC"
-              << std::setw(5) << "Ch" << std::setw(14) << "Unique ID" << std::setw(12) << "Retrains" << std::setw(14)
-              << "CRC Err" << std::setw(18) << "Corrected CW" << std::setw(18) << "Uncorrected CW" << std::setw(16)
-              << "Mismatch Words";
+              << std::setw(5) << "Ch" << std::setw(9) << "Port ID" << std::setw(15) << "Port Type" << std::setw(14)
+              << "Unique ID" << std::setw(12) << "Retrains" << std::setw(14) << "CRC Err" << std::setw(18)
+              << "Corrected CW" << std::setw(18) << "Uncorrected CW" << std::setw(16) << "Mismatch Words";
 
     if (!log_ethernet_metrics) {
         std::cout << std::setw(40) << "Failure Type";
@@ -882,13 +903,20 @@ void log_link_metrics(
 
     std::cout << std::setw(12) << "Pkt Size" << std::setw(12) << "Data Size" << std::endl;
 
-    std::cout << std::string(log_ethernet_metrics ? 153 : 193, '-') << std::endl;
+    std::cout << std::string(log_ethernet_metrics ? 177 : 217, '-') << std::endl;
 
     // Table rows
     for (const auto& row : metric_rows) {
         std::cout << std::left << std::setw(20) << row.channel_id.host << std::setw(6) << *row.channel_id.tray_id
                   << std::setw(6) << *row.channel_id.asic_location << std::setw(5)
                   << static_cast<int>(row.channel_id.channel);
+
+        // Print Port ID
+        std::cout << std::left << std::setw(9) << row.channel_id.port_id;
+
+        // Print Port Type
+        auto port_type = static_cast<tt::scaleout_tools::PortType>(row.channel_id.port_type);
+        std::cout << std::left << std::setw(15) << enchantum::to_string(port_type);
 
         // Print Unique ID in hex
         std::stringstream uid_stream;
@@ -925,7 +953,7 @@ void log_link_metrics(
                   << (std::to_string(row.traffic_params.data_size) + " B") << std::endl;
     }
 
-    std::cout << std::string(log_ethernet_metrics ? 153 : 193, '-') << std::endl << std::endl;
+    std::cout << std::string(log_ethernet_metrics ? 177 : 217, '-') << std::endl << std::endl;
 
     // Write CSV file
     std::filesystem::path csv_path =
@@ -934,7 +962,7 @@ void log_link_metrics(
 
     if (csv_file.is_open()) {
         // CSV header
-        csv_file << "Host,Tray,ASIC,Channel,Unique_ID";
+        csv_file << "Host,Tray,ASIC,Channel,Port_ID,Port_Type,Unique_ID";
         if (!log_ethernet_metrics) {
             csv_file << ",Failure_Type";
         }
@@ -944,8 +972,10 @@ void log_link_metrics(
 
         // CSV rows
         for (const auto& row : metric_rows) {
+            auto port_type = static_cast<tt::scaleout_tools::PortType>(row.channel_id.port_type);
             csv_file << row.channel_id.host << "," << *row.channel_id.tray_id << "," << *row.channel_id.asic_location
-                     << "," << static_cast<int>(row.channel_id.channel) << ","
+                     << "," << static_cast<int>(row.channel_id.channel) << "," << row.channel_id.port_id << ","
+                     << enchantum::to_string(port_type) << ","
                      << "0x" << std::hex << *row.channel_id.asic_id << std::dec;
             if (!log_ethernet_metrics) {
                 csv_file << "," << row.metric_type;
