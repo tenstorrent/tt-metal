@@ -1023,7 +1023,7 @@ std::string SlidingWindowConfig::to_string() const {
            "_dil_h=" + std::to_string(std::get<0>(dilation_hw)) + "_dil_w=" + std::to_string(std::get<1>(dilation_hw)) +
            "_cores_nhw=" + std::to_string(num_cores_nhw) + "_cores_c=" + std::to_string(num_cores_c) +
            "_grid=" + core_range_set.str() + (snap_to_tile ? "_snap_to_tile" : "") + (is_bilinear ? "_bilinear" : "") +
-           (is_transpose ? "_transpose" : "") + (ceil_mode ? "_ceil_mode" : "") + (is_avg_pool ? "_avg_pool" : "");
+           (is_transpose ? "_transpose" : "") + (ceil_mode ? "_ceil_mode" : "");
 }
 
 }  // namespace ttnn::operations::sliding_window
