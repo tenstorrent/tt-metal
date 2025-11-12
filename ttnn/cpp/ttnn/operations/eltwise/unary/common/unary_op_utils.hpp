@@ -58,6 +58,7 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::RDIV:
         case UnaryOpType::EXP:
         case UnaryOpType::SOFTPLUS:
+        case UnaryOpType::LOGSIGMOID:
         case UnaryOpType::ADD_UNARY_SFPU:
         case UnaryOpType::SUB_UNARY_SFPU:
         case UnaryOpType::MUL_UNARY_SFPU:
