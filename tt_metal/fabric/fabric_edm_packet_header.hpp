@@ -614,13 +614,9 @@ struct LowLatencyMeshRoutingFields {
                          // Also used when doing noc inline dword write to update packet header in next hop
                          // router.
         struct {
-            // TODO: 5 bits
             uint16_t hop_index;
-            // TODO: 4 bits
             uint8_t branch_east_offset;  // Referenced when updating hop index for mcast east branch
-            // TODO: 4 bits
             uint8_t branch_west_offset;  // Referenced when updating hop index for mcast east branch
-            // TODO: is_mcast_active 1 bit?
         };
     };
 };
@@ -628,23 +624,22 @@ struct LowLatencyMeshRoutingFields {
 // WARN: 13x13 mesh. want 16x16, want to be same as SINGLE_ROUTE_SIZE_2D
 #define HYBRID_MESH_MAX_ROUTE_BUFFER_SIZE 19
 
+// TODO: https://github.com/tenstorrent/tt-metal/issues/32237
 struct HybridMeshPacketHeader : PacketHeaderBase<HybridMeshPacketHeader> {
     LowLatencyMeshRoutingFields routing_fields;
     uint8_t route_buffer[HYBRID_MESH_MAX_ROUTE_BUFFER_SIZE];
     union {
         struct {
-            uint16_t dst_start_chip_id;  // TODO: 8 bits
+            uint16_t dst_start_chip_id;
             uint16_t dst_start_mesh_id;
         };
         uint32_t dst_start_node_id;  // Used for efficiently writing the dst info
     };
     union {
-        // TODO: 8bit
         uint16_t mcast_params[4];  // Array representing the hops in each direction
-        // TODO: 16bit
         uint64_t mcast_params_64;  // Used for efficiently writing to the mcast_params array
     };
-    uint8_t is_mcast_active;  // TODO: -> can be 1 bit in routing fields
+    uint8_t is_mcast_active;
 
     void to_chip_unicast_impl(uint8_t distance_in_hops) {}
     void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) {}
