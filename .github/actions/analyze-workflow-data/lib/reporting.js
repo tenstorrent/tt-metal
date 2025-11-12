@@ -660,10 +660,15 @@ async function enrichRegressions(regressedDetails, filteredGrouped, errorSnippet
                 ownerSet.set(k, o);
               }
             }
-            if (sn.owner_source && String(sn.owner_source).startsWith('infra_due_to_missing_test') && isGenericExit(sn.snippet) && Array.isArray(sn.original_owners)) {
+            // Always include original pipeline owners if they exist (even when infra is assigned)
+            if (Array.isArray(sn.original_owners)) {
               for (const oo of sn.original_owners) {
                 const nm = (oo && (oo.name || oo.id)) || '';
                 if (nm) genericExitOrigOwners.set(nm, true);
+                if (oo) {
+                  const k2 = `${oo.id || ''}|${oo.name || ''}`;
+                  ownerSet.set(k2, { id: oo.id, name: oo.name });
+                }
               }
             }
           }
