@@ -125,7 +125,7 @@ inline void _llk_unpack_unary_operand_transpose_mop_config_(const uint32_t num_t
 /**
  * @brief Initialized unpacker to unpack a single operand by tiles
  * @tparam UNP_SEL: Selects which unpacker resource to use,
- * values = p_unpacr::UNP_A/p_unpacr::UNP_B
+ * values = p_unpacr::UNP_A/p_unpacr::UNP_B/p_unpacr::UNP_DEST
  * @tparam BUF_DESC_ID: The buffer descriptor ID where the buffer information is
  * stored in the buffer descriptor table, values = 0 - 16
  * @tparam TRANSPOSE_EN: Enables transpose of a tile, supported for SrcA and SrcB
@@ -135,7 +135,7 @@ inline void _llk_unpack_unary_operand_transpose_mop_config_(const uint32_t num_t
 template <uint32_t UNP_SEL, uint32_t BUF_DESC_ID, bool TRANSPOSE_EN, bool IS_32b_DEST_EN>
 inline void _llk_unpack_unary_operand_init_(const uint32_t num_tiles)
 {
-    if constexpr (UNP_SEL == p_unpacr::UNP_A)
+    if constexpr (UNP_SEL == p_unpacr::UNP_A || UNP_SEL == p_unpacr::UNP_DEST)
     {
         cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, TRANSPOSE_EN);
     }
@@ -169,8 +169,8 @@ inline void _llk_unpack_unary_operand_(const uint l1_tile_idx)
 
     // Reset Dest counters for Unpacker to 0
     // Set Source counter to L1 base + offset
-    TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, UNP_SEL, l1_tile_idx);
-    TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, UNP_SEL, 0);
+    TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, UNP_SEL == p_unpacr::UNP_DEST ? p_unpacr::UNP_A : UNP_SEL, l1_tile_idx);
+    TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, UNP_SEL == p_unpacr::UNP_DEST ? p_unpacr::UNP_A : UNP_SEL, 0);
 
     // Runs MOP
     ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
