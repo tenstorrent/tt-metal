@@ -6,6 +6,8 @@ from typing import Optional
 from dataclasses import dataclass
 from typing import Optional
 from loguru import logger
+import os
+import tt_lib.fallback_ops as fallback_ops
 
 
 @dataclass
@@ -182,7 +184,8 @@ class Conv2dNormActivation:
         self.conv_bias = parameters["bias"]
         self.norm_weight = parameters["norm_weight"]
         self.norm_bias = parameters["norm_bias"]
-
+        # Add fallback flag
+        self.fallback_on_groupnorm = os.environ.get("FALLBACK_ON_GROUPNORM", "0") == "1"
         # Grid size for GroupNorm
         self.grid_size = grid_size if grid_size is not None else ttnn.CoreGrid(y=8, x=8)
 
@@ -238,59 +241,74 @@ class Conv2dNormActivation:
             batch_size=batch_size,
             input_height=input_height,
             input_width=input_width,
-            # slice_config=self.slice_config,
+            slice_config=self.slice_config,
             compute_config=self.compute_config,
             conv_config=self.conv_config,
             return_output_dim=True,
             return_weights_and_bias=True,  # ADD THIS
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            slice_config=ttnn.Conv2dL1FullSliceConfig,
         )
 
         # Get output shape after conv
         N, H_out, W_out, C = x.shape
 
-        # GroupNorm requires H_out * W_out divisible by (grid_size.y * 32)
-        spatial_size = H_out * W_out
-        required_size = ((spatial_size + self.grid_size.y * 32 - 1) // (self.grid_size.y * 32)) * (
-            self.grid_size.y * 32
-        )
+        if self.fallback_on_groupnorm:
+            # Fallback to PyTorch GroupNorm
+            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+            x = ttnn.reshape(x, (N, H_out, W_out, C))
+            x = ttnn.permute(x, (0, 3, 1, 2))  # NHWC -> NCHW
 
-        if spatial_size != required_size:
-            # Pad spatial dimension to required size
-            pad_amount = required_size - spatial_size
-
-            # Reshape to (N, 1, H*W, C) for padding
-            x_flat = ttnn.reshape(x, (N, 1, spatial_size, C))
-
-            # Pad along spatial dimension
-            x_padded = ttnn.pad(x_flat, padding=((0, 0), (0, 0), (0, pad_amount), (0, 0)), value=0.0)
+            # Use PyTorch's GroupNorm
+            x = fallback_ops.group_norm(
+                x,
+                num_groups=self.num_groups,
+                weight=self.norm_weight,
+                bias=self.norm_bias,
+            )
+            # Convert back to NHWC
+            x = ttnn.permute(x, (0, 2, 3, 1))  # NCHW -> NHWC
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         else:
-            # Reshape to (N, 1, H*W, C) without padding
-            x_padded = ttnn.reshape(x, (N, 1, spatial_size, C))
+            # GroupNorm requires H_out * W_out divisible by (grid_size.y * 32)
+            spatial_size = H_out * W_out
+            required_size = ((spatial_size + self.grid_size.y * 32 - 1) // (self.grid_size.y * 32)) * (
+                self.grid_size.y * 32
+            )
 
-        # Apply GroupNorm
-        x_normalized = ttnn.group_norm(
-            x_padded,
-            num_groups=self.num_groups,
-            input_mask=self.input_mask,
-            weight=self.norm_weight,
-            bias=self.norm_bias,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            core_grid=self.grid_size,
-            inplace=False,
-            compute_kernel_config=self.compute_config,
-        )
+            if spatial_size != required_size:
+                # Pad spatial dimension to required size
+                pad_amount = required_size - spatial_size
 
-        # Unpad
-        if spatial_size != required_size:
-            # Slice back to original spatial size
-            x_normalized = x_normalized[:, :, :spatial_size, :]
+                # Reshape to (N, 1, H*W, C) for padding
+                x_flat = ttnn.reshape(x, (N, 1, spatial_size, C))
 
-        # Reshape back using PRESERVED dimensions
-        x = ttnn.reshape(x_normalized, (N, input_height, input_width, C))
-        H_out = input_height
-        W_out = input_width
+                # Pad along spatial dimension
+                x_padded = ttnn.pad(x_flat, padding=((0, 0), (0, 0), (0, pad_amount), (0, 0)), value=0.0)
+            else:
+                # Reshape to (N, 1, H*W, C) without padding
+                x_padded = ttnn.reshape(x, (N, 1, spatial_size, C))
+
+            # Apply GroupNorm
+            x_normalized = ttnn.group_norm(
+                x_padded,
+                num_groups=self.num_groups,
+                input_mask=self.input_mask,
+                weight=self.norm_weight,
+                bias=self.norm_bias,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                core_grid=self.grid_size,
+                inplace=False,
+                compute_kernel_config=self.compute_config,
+            )
+
+            # Unpad
+            if spatial_size != required_size:
+                # Slice back to original spatial size
+                x_normalized = x_normalized[:, :, :spatial_size, :]
+
+            # Reshape back using PRESERVED dimensions
+            x = ttnn.reshape(x_normalized, (N, input_height, input_width, C))
+            H_out = input_height
+            W_out = input_width
         # ReLU activation
         x = ttnn.relu(x)
 

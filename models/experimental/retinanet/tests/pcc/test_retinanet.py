@@ -193,18 +193,18 @@ class BackboneTestInfra:
 
         # Add regression head PCC threshold
         valid_pcc = {
-            "0": 0.97,
-            "1": 0.97,
-            "2": 0.97,
-            "p6": 0.97,
-            "p7": 0.97,
-            "regression": 0.94,
-            "classification": 0.86,
+            "0": 0.99,
+            "1": 0.99,
+            "2": 0.99,
+            "p6": 0.99,
+            "p7": 0.99,
+            "regression": 0.99,
+            "classification": 0.99,
         }
 
         self.pcc_passed_all = []
         self.pcc_message_all = []
-
+        pcc_results = {}
         for key in tt_output:
             tt_output_tensor = tt_output[key]
             torch_output_tensor = self.torch_output_tensor[key]
@@ -233,14 +233,16 @@ class BackboneTestInfra:
             pcc_passed, pcc_message = check_with_pcc(torch_output_tensor, tt_output_tensor_torch, pcc=valid_pcc[key])
             self.pcc_passed_all.append(pcc_passed)
             self.pcc_message_all.append(pcc_message)
+            pcc_results[key] = pcc_message
 
         assert all(self.pcc_passed_all), logger.error(f"PCC check failed: {self.pcc_message_all}")
+        pcc_summary = ", ".join([f"{k}={v}" for k, v in pcc_results.items()])
         logger.info(
             f"ResNet52 Backbone + Regression Head - batch_size={self.batch_size}, "
             f"act_dtype={model_config['ACTIVATIONS_DTYPE']}, "
             f"weight_dtype={model_config['WEIGHTS_DTYPE']}, "
             f"math_fidelity={model_config['MATH_FIDELITY']}, "
-            f"PCC={self.pcc_message_all}"
+            f"PCC={pcc_summary}"
         )
 
         return self.pcc_passed_all, self.pcc_message_all
