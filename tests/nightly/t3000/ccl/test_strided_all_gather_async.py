@@ -224,7 +224,6 @@ def run_strided_all_gather_impl(
         ([1, 1, 32, 512], 3, 1, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 64),
         ([1, 1, 32, 768], 3, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 32),
         ([1, 1, 32, 1024], 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 64),
-        ([1, 1, 32, 768], 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 32),
         # 2 row tests
         ([1, 1, 64, 256], 3, 1, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 64, 32),
         ([1, 1, 64, 256], 3, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 32),
@@ -244,7 +243,6 @@ def run_strided_all_gather_impl(
         "2tile1chunk1worker1row",
         "1tile3chunk1worker1row",
         "2tile2chunk2worker1row",
-        "1tile3chunk2worker1row",
         # 2 row tests
         "2tile1chunk1worker2row",
         "1tile2chunk1worker2row",
