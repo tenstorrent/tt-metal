@@ -521,6 +521,7 @@
     { "job-name-component": "ttnn-run-sweeps / embedding.embedding", "owner": { "id": "S09QQRK1CF8", "name": "ops-data-movement" } },
     { "job-name-component": "embedding.embedding", "owner": { "id": "S09QQRK1CF8", "name": "ops-data-movement" } },
     { "job-name-component": "ttnn-run-sweeps / embedding_bw.embedding_bw", "owner": { "id": "S09QQRK1CF8", "name": "ops-data-movement" } },
-    { "job-name-component": "embedding_bw.embedding_bw", "owner": { "id": "S09QQRK1CF8", "name": "ops-data-movement" } }
+    { "job-name-component": "embedding_bw.embedding_bw", "owner": { "id": "S09QQRK1CF8", "name": "ops-data-movement" } },
+    { "job-name-component": "quick-6u-health", "owner": {"id": "U053W15B6JF", "name": "Djordje Ivanovic" } }
   ]
 }
