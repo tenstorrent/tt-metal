@@ -46,6 +46,9 @@ df_p150["dtype_fidelity"] = (
 df_n150["matrix_elements"] = df_n150["m"] * df_n150["k"] * df_n150["n"]
 df_p150["matrix_elements"] = df_p150["m"] * df_p150["k"] * df_p150["n"]
 
+df_n150 = df_n150[~((df_n150["m"] == 3328) & (df_n150["k"] == 2560) & (df_n150["n"] == 2560))].copy()
+df_p150 = df_p150[~((df_p150["m"] == 4160) & (df_p150["k"] == 4160) & (df_p150["n"] == 4160))].copy()
+
 # Combine dataframes
 df = pd.concat([df_n150, df_p150], ignore_index=True)
 

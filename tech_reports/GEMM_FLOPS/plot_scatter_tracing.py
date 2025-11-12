@@ -43,6 +43,12 @@ df["matrix_elements"] = df["m"] * df["k"] * df["n"]
 if df["use_trace"].dtype == object:
     df["use_trace"] = df["use_trace"].astype(str).str.lower() == "true"
 
+# Filter out the 416×320×320 base shape (square) to avoid dips in trace comparison
+# N150: 3328×2560×2560, P150: 4160×4160×4160
+# Keep this shape only in aspect_ratio plot for 1:1:1 comparison
+df = df[~((df["m"] == 3328) & (df["k"] == 2560) & (df["n"] == 2560))].copy()  # N150 square
+df = df[~((df["m"] == 4160) & (df["k"] == 4160) & (df["n"] == 4160))].copy()  # P150 square
+
 for source in ["n150", "p150"]:
     fig, ax = plt.subplots(figsize=(16, 10))
     device_data = df[df["source"] == source].copy()

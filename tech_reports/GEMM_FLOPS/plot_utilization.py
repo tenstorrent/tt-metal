@@ -43,6 +43,9 @@ df = pd.concat([df_n150, df_p150], ignore_index=True)
 # Filter: only non-traced data for clarity
 df = df[df["use_trace"] == False]
 
+df = df[~((df["m"] == 3328) & (df["k"] == 2560) & (df["n"] == 2560))].copy()
+df = df[~((df["m"] == 4160) & (df["k"] == 4160) & (df["n"] == 4160))].copy()
+
 
 # Create dtype-fidelity labels
 def get_dtype_label(row):
