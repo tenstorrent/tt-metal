@@ -38,20 +38,49 @@ def load_partial_state(torch_model: torch.nn.Module, state_dict, layer_name: str
     return torch_model
 
 
-def load_torch_model_state(torch_model: torch.nn.Module = None, layer_name: str = "", model_location_generator=None):
-    if model_location_generator == None or "TT_GH_CI_INFRA" not in os.environ:
+def load_torch_model_state(
+    torch_model: torch.nn.Module = None, layer_name: str = "", model_location_generator=None, weights_path=None
+):
+    """
+    Load model weights from file.
+
+    Args:
+        torch_model: PyTorch model to load weights into
+        layer_name: Optional layer name for partial loading
+        model_location_generator: Optional model location generator for CI environments
+        weights_path: Optional explicit path to weights file. If provided, this takes precedence.
+    """
+    # If explicit weights path is provided, use it
+    if weights_path is not None:
+        if not os.path.exists(weights_path):
+            raise FileNotFoundError(f"Weights file not found at: {weights_path}")
+        logger.info(f"Loading weights from provided path: {weights_path}")
+    elif model_location_generator == None or "TT_GH_CI_INFRA" not in os.environ:
         model_path = "models"
-    else:
-        model_path = model_location_generator("vision-models/efficientdetd0", model_subdir="", download_if_ci_v2=True)
-    if model_path == "models":
-        if not os.path.exists(
-            "models/experimental/efficientdetd0/efficientdet-d0.pth"
-        ):  # check if efficientdet-d0.pth is available
+        # Check resources folder first
+        resources_weights_path = "models/experimental/efficientdetd0/resources/efficientdet-d0.pth"
+        default_weights_path = "models/experimental/efficientdetd0/efficientdet-d0.pth"
+
+        if os.path.exists(resources_weights_path):
+            weights_path = resources_weights_path
+            logger.info(f"Loading weights from resources folder: {weights_path}")
+        elif os.path.exists(default_weights_path):
+            weights_path = default_weights_path
+            logger.info(f"Loading weights from default location: {weights_path}")
+        else:
+            # Download weights if not found
+            logger.info("Weights not found. Downloading...")
             os.system(
                 "models/experimental/efficientdetd0/resources/efficientdetd0_weights_download.sh"
             )  # execute the efficientdetd0_weights_download.sh file
-        weights_path = "models/experimental/efficientdetd0/efficientdet-d0.pth"
+            # After download, check if it's in resources or default location
+            if os.path.exists(resources_weights_path):
+                weights_path = resources_weights_path
+            else:
+                weights_path = default_weights_path
+            logger.info(f"Loading weights from: {weights_path}")
     else:
+        model_path = model_location_generator("vision-models/efficientdetd0", model_subdir="", download_if_ci_v2=True)
         weights_path = os.path.join(model_path, "efficientdet-d0.pth")
 
     # Load checkpoint
