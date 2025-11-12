@@ -21,6 +21,7 @@ Tests:
       topology: Mesh
       routing_type: Dynamic
       mesh_descriptor_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_galaxy_multi_mesh_mgd.yaml"
+      fabric_reliability_mode: RELAXED_SYSTEM_HEALTH_SETUP_MODE
 
     top_level_iterations: 3
 
@@ -46,6 +47,7 @@ Tests:
       topology: Mesh
       routing_type: Dynamic
       mesh_descriptor_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_galaxy_multi_mesh_mgd.yaml"
+      fabric_reliability_mode: RELAXED_SYSTEM_HEALTH_SETUP_MODE
 
     top_level_iterations: 3
 
@@ -71,6 +73,7 @@ Tests:
       topology: Mesh
       routing_type: Dynamic
       mesh_descriptor_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_galaxy_multi_mesh_mgd.yaml"
+      fabric_reliability_mode: RELAXED_SYSTEM_HEALTH_SETUP_MODE
 
     top_level_iterations: 3
 
@@ -102,6 +105,7 @@ Tests:
       topology: Mesh
       routing_type: Dynamic
       mesh_descriptor_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_galaxy_multi_mesh_mgd.yaml"
+      fabric_reliability_mode: RELAXED_SYSTEM_HEALTH_SETUP_MODE
 
     top_level_iterations: 3
 
@@ -132,6 +136,7 @@ Tests:
       topology: Mesh
       routing_type: Dynamic
       mesh_descriptor_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_galaxy_multi_mesh_mgd.yaml"
+      fabric_reliability_mode: RELAXED_SYSTEM_HEALTH_SETUP_MODE
 
     defaults:
       ftype: unicast
