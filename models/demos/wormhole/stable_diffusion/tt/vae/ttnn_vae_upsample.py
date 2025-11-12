@@ -17,8 +17,6 @@ class UpsampleBlock:
         out_channels,
         output_height,
         output_width,
-        conv_in_channel_split_factor,
-        conv_out_channel_split_factor,
         scale_factor=2,
     ):
         self.device = device
@@ -34,8 +32,6 @@ class UpsampleBlock:
             output_height,
             output_width,
             out_channels,
-            conv_in_channel_split_factor,
-            conv_out_channel_split_factor,
         )
 
     def __call__(self, hidden_states):
