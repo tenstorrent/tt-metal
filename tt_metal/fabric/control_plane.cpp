@@ -1783,8 +1783,8 @@ size_t ControlPlane::get_num_available_routing_planes_in_direction(
 }
 
 void ControlPlane::write_fabric_telemetry_to_all_chips(const FabricNodeId& fabric_node_id) const {
-    auto active_ethernet_cores = this->get_active_ethernet_cores(fabric_node_id.chip_id);
     auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(fabric_node_id);
+    auto active_ethernet_cores = this->get_active_ethernet_cores(physical_chip_id);
 
     FabricTelemetry<FabricArch::STATIC_ONLY> fabric_telemetry{};
     fabric_telemetry.static_info.mesh_id = *fabric_node_id.mesh_id;
