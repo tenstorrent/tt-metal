@@ -197,6 +197,20 @@ jobs:
           #   owner_id: U091SNDA4TS, # Tomasz Cheda
           # },
           {
+            name: "[WH-GLX] GPT-OSS-20B",
+            model: "openai/gpt-oss-20b",
+            server-timeout: 120,
+            benchmark-timeout: 120,
+            runner-label: topology-6u,
+            arch: arch-wormhole_b0,
+            mesh-device: TG,
+            multimodal: false,
+            tt-llama-text-ver: "",
+            additional-args: "--max_num_seqs 1 --num_scheduler_steps 1",
+            co-owner-1-id: U08TJ70UFRT, # Harry Andrews
+            co-owner-2-id: U06F3ER8X9A, # Stuti Raizada
+          },
+          {
             name: "[WH-GLX] GPT-OSS-120B",
             model: "openai/gpt-oss-120b",
             server-timeout: 120,
