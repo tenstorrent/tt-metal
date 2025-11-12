@@ -24,6 +24,10 @@ on:
         required: false
         type: boolean
         default: true
+      topology-6u:
+        required: false
+        type: boolean
+        default: true
 
 jobs:
   quick-wh-glx-health:
