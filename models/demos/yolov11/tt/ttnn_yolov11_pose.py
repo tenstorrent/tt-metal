@@ -183,14 +183,123 @@ class TtnnPoseHead:
         # Concatenate all scales (y1, y2, y3 are now interleaved)
         y = ttnn.concat((y1, y2, y3), dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
         y = ttnn.to_layout(y, layout=ttnn.TILE_LAYOUT)
-        # Keep batch dimension for proper splitting: y shape is [B, 116, total_anchors]
+        y = ttnn.squeeze(y, dim=0)
 
-        # ===== SKIP SPLITTING AND CONCATENATION =====
-        # Return the raw concatenated tensor directly to avoid large tensor slicing
-        # All post-processing (splitting, sigmoid, DFL) done in PyTorch CPU
+        # Split concatenated output into bbox logits, confidence, and keypoints
+        bbox_raw = y[:, :, :64]
+        conf_raw = y[:, :, 64:65]
+        keypoints_raw = y[:, :, 65:]
 
-        deallocate_tensors(y1, y2, y3, x1_bbox, x2_bbox, x3_bbox, x1_conf, x2_conf, x3_conf, x1_kpts, x2_kpts, x3_kpts)
+        # ===== Decode bounding boxes (DFL + anchor decode) =====
+        bbox_logits = ttnn.reshape(bbox_raw, (bbox_raw.shape[0], y.shape[1], 4, 16))
+        bbox_logits = ttnn.softmax_in_place(bbox_logits, dim=-1, numeric_stable=False)
+        bbox_logits = ttnn.permute(bbox_logits, (0, 2, 1, 3))
+        bbox_offsets = self.dfl(bbox_logits)
+        ttnn.deallocate(bbox_logits)
 
-        # Return raw concatenated tensor: [B, 116, total_anchors]
-        # Format: [bbox_raw(64) + conf_raw(1) + keypoints_raw(51)]
-        return y
+        bbox_offsets = ttnn.sharded_to_interleaved(bbox_offsets, memory_config=ttnn.L1_MEMORY_CONFIG)
+        bbox_offsets = ttnn.permute(bbox_offsets, (0, 3, 1, 2))
+        bbox_offsets = ttnn.reshape(
+            bbox_offsets,
+            (bbox_offsets.shape[0], 1, 4, int(bbox_offsets.shape[3] / 4)),
+        )
+        bbox_offsets = ttnn.reshape(
+            bbox_offsets,
+            (bbox_offsets.shape[0], bbox_offsets.shape[1] * bbox_offsets.shape[2], bbox_offsets.shape[3]),
+        )
+        bbox_left_top, bbox_right_bottom = bbox_offsets[:, :2, :], bbox_offsets[:, 2:4, :]
+
+        anchor = ttnn.to_memory_config(self.anchors, memory_config=ttnn.L1_MEMORY_CONFIG)
+        strides = ttnn.to_memory_config(self.strides, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+        bbox_left_top = anchor - bbox_left_top
+        bbox_right_bottom = anchor + bbox_right_bottom
+        bbox_wh = bbox_right_bottom - bbox_left_top
+        bbox_center = ttnn.add(bbox_left_top, bbox_right_bottom)
+        bbox_center = ttnn.div(bbox_center, 2)
+        bbox = ttnn.concat((bbox_center, bbox_wh), dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        bbox = ttnn.multiply(bbox, strides)
+        bbox = ttnn.to_layout(bbox, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+        # ===== Confidence processing =====
+        conf = ttnn.permute(conf_raw, (0, 2, 1))
+        conf = ttnn.sigmoid(conf)
+        conf = ttnn.to_layout(conf, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+        # ===== Keypoint decoding =====
+        keypoints = ttnn.permute(keypoints_raw, (0, 2, 1))
+        keypoints = ttnn.reshape(
+            keypoints,
+            (keypoints.shape[0], keypoints.shape[1] // 3, 3, keypoints.shape[2]),
+        )
+        kpt_x = keypoints[:, :, 0, :]
+        kpt_y = keypoints[:, :, 1, :]
+        kpt_v = keypoints[:, :, 2, :]
+
+        kpt_v = ttnn.sigmoid(kpt_v)
+
+        kpt_x = ttnn.multiply(kpt_x, 2.0)
+        kpt_y = ttnn.multiply(kpt_y, 2.0)
+        kpt_x = ttnn.subtract(kpt_x, 0.5)
+        kpt_y = ttnn.subtract(kpt_y, 0.5)
+
+        anchor_x = anchor[:, 0:1, :]
+        anchor_y = anchor[:, 1:2, :]
+        kpt_x = ttnn.add(kpt_x, anchor_x)
+        kpt_y = ttnn.add(kpt_y, anchor_y)
+
+        strides_kp = strides
+        if len(strides_kp.shape) == 2:
+            strides_kp = ttnn.reshape(strides_kp, (strides_kp.shape[0], 1, strides_kp.shape[1]))
+
+        kpt_x = ttnn.multiply(kpt_x, strides_kp)
+        kpt_y = ttnn.multiply(kpt_y, strides_kp)
+
+        kpt_x = ttnn.unsqueeze(kpt_x, dim=2)
+        kpt_y = ttnn.unsqueeze(kpt_y, dim=2)
+        kpt_v = ttnn.unsqueeze(kpt_v, dim=2)
+
+        keypoints_decoded = ttnn.concat((kpt_x, kpt_y, kpt_v), dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        keypoints_decoded = ttnn.reshape(
+            keypoints_decoded,
+            (
+                keypoints_decoded.shape[0],
+                keypoints_decoded.shape[1] * keypoints_decoded.shape[2],
+                keypoints_decoded.shape[3],
+            ),
+        )
+        keypoints_decoded = ttnn.to_layout(keypoints_decoded, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+        # ===== Final concatenation to match PyTorch PoseHead output =====
+        out = ttnn.concat((bbox, conf, keypoints_decoded), dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+        deallocate_tensors(
+            y1,
+            y2,
+            y3,
+            x1_bbox,
+            x2_bbox,
+            x3_bbox,
+            x1_conf,
+            x2_conf,
+            x3_conf,
+            x1_kpts,
+            x2_kpts,
+            x3_kpts,
+            bbox_offsets,
+            bbox_left_top,
+            bbox_right_bottom,
+            bbox_wh,
+            bbox_center,
+            keypoints,
+            kpt_x,
+            kpt_y,
+            kpt_v,
+            anchor,
+            strides,
+            bbox,
+            conf,
+            keypoints_decoded,
+        )
+
+        return out
