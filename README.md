@@ -66,7 +66,7 @@ The Models team is focused on developing the following models, optimizing them f
 | Batch | Hardware | TTFT (MS) | T/S/U | Target<br>T/S/U | T/S | TT-Metalium Release |
 |-------|----------|-----------|-------|-----------------|-----|---------------------|
 | 1 | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole) | 232 | 58.1 | 45 | 58.1 | [v0.59.0-rc52](https://github.com/tenstorrent/tt-metal/tree/v0.59.0-rc52) |
-| 1 | [p150 (Blackhole)](https://tenstorrent.com/hardware/blackhole) | 113 | 101.5 | - | 101.5 | [v0.62.0-dev20251015](https://github.com/tenstorrent/tt-metal/tree/v0.62.0-dev20251015) |
+| 1 | [p150 (Blackhole)](https://tenstorrent.com/hardware/blackhole) | 113 | 101.5 |   | 101.5 | [v0.62.0-dev20251015](https://github.com/tenstorrent/tt-metal/tree/v0.62.0-dev20251015) |
 
 ### [Mixtral 8x7B (TP=8)](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)
 | Batch | Hardware | TTFT (MS) | T/S/U | Target<br>T/S/U | T/S | TT-Metalium Release |
