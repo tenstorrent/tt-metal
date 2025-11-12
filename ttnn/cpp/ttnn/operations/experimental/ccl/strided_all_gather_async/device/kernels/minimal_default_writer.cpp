@@ -257,12 +257,11 @@ void kernel_main() {
                     pkt_hdr_sem_inc,
                     out_ready_sem_noc_addr_in_pkt,
                     direction,
-                    true,
-                    chunk_idx == (device_k_block_counts[my_chip_id] - 1));
-            }
-            if constexpr (fuse_op && direction == 1) {
-                // Synchronize and signal that the local tensor slice is available
-                op_signaler_sender.synchronize_workers_and_signal_op(my_chip_id);
+                    true);
+                if constexpr (fuse_op && direction == 1) {
+                    // Synchronize and signal that the local tensor slice is available
+                    op_signaler_sender.synchronize_workers_and_signal_op(my_chip_id);
+                }
             }
 
             // Forward chunks
@@ -301,8 +300,7 @@ void kernel_main() {
                         pkt_hdr_sem_inc,
                         out_ready_sem_noc_addr_in_pkt,
                         direction,
-                        false,
-                        chunk_idx == (device_k_block_counts[actual_sender_chip_id] - 1));
+                        false);
                 }
                 slice_writes++;
             }
