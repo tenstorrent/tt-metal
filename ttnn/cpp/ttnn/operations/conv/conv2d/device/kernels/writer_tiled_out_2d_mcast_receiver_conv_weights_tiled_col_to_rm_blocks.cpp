@@ -50,15 +50,6 @@ void kernel_main() {
     // When the split reader CB is shared, both readers write to the same circular buffer.
     // Synchronization is required: the main reader signals when CB space is reserved,
     // and the second reader signals when it has finished writing its portion.
-<<<<<<< HEAD
-    constexpr bool split_reader_cb_shared = get_compile_time_arg_val(29) == 1;
-    const uint32_t act_split_reader_reserve_done_semaphore_addr =
-        (split_reader_cb_shared) ? get_semaphore(get_compile_time_arg_val(30)) : 0;
-    const uint32_t act_split_reader_write_done_semaphore_addr =
-        (split_reader_cb_shared) ? get_semaphore(get_compile_time_arg_val(31)) : 0;
-    constexpr uint32_t act_write_offset = get_compile_time_arg_val(32);
-    constexpr uint32_t act_write_offset_last = get_compile_time_arg_val(33);
-=======
     constexpr bool split_reader_cb_shared = get_compile_time_arg_val(31) == 1;
     const uint32_t act_split_reader_reserve_done_semaphore_addr =
         (split_reader_cb_shared) ? get_semaphore(get_compile_time_arg_val(32)) : 0;
@@ -66,7 +57,6 @@ void kernel_main() {
         (split_reader_cb_shared) ? get_semaphore(get_compile_time_arg_val(33)) : 0;
     constexpr uint32_t act_write_offset = get_compile_time_arg_val(34);
     constexpr uint32_t act_write_offset_last = get_compile_time_arg_val(35);
->>>>>>> ae5830b9ae (clean up split reader and conv 3.0 ifdef clauses (#31132))
 
     volatile tt_l1_ptr uint32_t* act_split_reader_reserve_done_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_split_reader_reserve_done_semaphore_addr);
