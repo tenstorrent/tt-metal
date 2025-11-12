@@ -10,7 +10,7 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.demos.yolov11.common import YOLOV11_L1_SMALL_SIZE
-from models.demos.yolov11.reference.yolov11_pose_correct import DWConv as torch_dwconv
+from models.demos.yolov11.reference.yolov11_pose import DWConv as torch_dwconv
 from models.demos.yolov11.tt.common import get_mesh_mappers
 from models.demos.yolov11.tt.model_preprocessing import create_custom_mesh_preprocessor, create_yolov11_input_tensors
 from models.demos.yolov11.tt.ttnn_yolov11_dwconv import TtnnDWConv

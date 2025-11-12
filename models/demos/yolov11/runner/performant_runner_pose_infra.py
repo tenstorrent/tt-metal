@@ -12,7 +12,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import divup, is_wormhole_b0
-from models.demos.yolov11.reference.yolov11_pose_correct import YoloV11Pose
+from models.demos.yolov11.reference.yolov11_pose import YoloV11Pose
 from models.demos.yolov11.tt.model_preprocessing_pose import create_yolov11_pose_model_parameters
 from models.demos.yolov11.tt.ttnn_yolov11_pose_model import TtnnYoloV11Pose
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -65,7 +65,7 @@ class YOLOv11PosePerformanceRunnerInfra:
         # Load PyTorch pose model with pretrained weights
         logger.info("Loading PyTorch pose model with pretrained weights...")
         self.torch_model = YoloV11Pose()
-        weights_path = "models/demos/yolov11/reference/yolov11_pose_pretrained_correct.pth"
+        weights_path = "models/demos/yolov11/reference/yolov11_pose_pretrained.pth"
         self.torch_model.load_state_dict(torch.load(weights_path, map_location="cpu"))
         self.torch_model.eval()
         logger.info("PyTorch pose model loaded")

@@ -15,7 +15,7 @@ import torch
 
 import ttnn
 from models.demos.yolov11.common import YOLOV11_L1_SMALL_SIZE
-from models.demos.yolov11.reference.yolov11_pose_correct import YoloV11Pose
+from models.demos.yolov11.reference.yolov11_pose import YoloV11Pose
 from models.demos.yolov11.tt.model_preprocessing import create_yolov11_input_tensors
 from models.demos.yolov11.tt.model_preprocessing_pose import create_yolov11_pose_model_parameters
 from models.demos.yolov11.tt.ttnn_yolov11_pose_model import TtnnYoloV11Pose
@@ -59,12 +59,12 @@ def test_yolov11_pose_model(device, reset_seeds, resolution, use_pretrained_weig
     # Load pretrained weights if requested
     if use_pretrained_weights:
         try:
-            weights_path = "models/demos/yolov11/reference/yolov11_pose_pretrained_correct.pth"
+            weights_path = "models/demos/yolov11/reference/yolov11_pose_pretrained.pth"
             torch_model_raw.load_state_dict(torch.load(weights_path, map_location="cpu"), strict=False)
             print(f"✓ Loaded pretrained weights from {weights_path}")
         except Exception as e:
             print(f"⚠ Warning: Could not load pretrained weights: {e}")
-            print("  Run: cd models/demos/yolov11/reference && python3 load_weights_correct.py")
+            print("  Run: cd models/demos/yolov11/reference && python3 load_weights.py")
             pytest.skip("Pretrained weights not available")
 
     # Create input tensors

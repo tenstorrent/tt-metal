@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-YOLO11 Pose Estimation Model - Correct Implementation matching Ultralytics
+YOLO11 Pose Estimation Model - Custom Implementation matching Ultralytics
 
 This implementation exactly matches the Ultralytics YOLO11n-pose architecture
 to enable proper weight loading.

@@ -14,7 +14,7 @@ from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d, infer_ttnn_m
 
 import ttnn
 from models.demos.yolov11.reference.yolov11 import Conv  # Conv is same for both
-from models.demos.yolov11.reference.yolov11_pose_correct import YoloV11Pose
+from models.demos.yolov11.reference.yolov11_pose import YoloV11Pose
 from models.demos.yolov11.tt.common import get_mesh_mappers
 from models.demos.yolov11.tt.model_preprocessing import make_anchors
 
@@ -60,7 +60,7 @@ def custom_preprocessor_pose(model, name, mesh_mapper=None):
 
     # Handle DWConv (Depthwise Convolution) - same as Conv but with groups=in_channels
     # The preprocessing is the same as regular Conv
-    from models.demos.yolov11.reference.yolov11_pose_correct import DWConv
+    from models.demos.yolov11.reference.yolov11_pose import DWConv
 
     if isinstance(model, DWConv):
         weight, bias = fold_batch_norm2d_into_conv2d(model.conv, model.bn)

@@ -14,7 +14,7 @@ import pytest
 
 import ttnn
 from models.demos.yolov11.common import YOLOV11_L1_SMALL_SIZE
-from models.demos.yolov11.reference.yolov11_pose_correct import PoseHead as torch_pose_head
+from models.demos.yolov11.reference.yolov11_pose import PoseHead as torch_pose_head
 from models.demos.yolov11.tt.model_preprocessing import create_yolov11_input_tensors
 from models.demos.yolov11.tt.model_preprocessing_pose import create_yolov11_pose_model_parameters_head
 from models.demos.yolov11.tt.ttnn_yolov11_pose import TtnnPoseHead as ttnn_pose_head

@@ -3,17 +3,17 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Load pretrained YOLO11n-pose weights into corrected custom implementation
+Load pretrained YOLO11n-pose weights into our custom implementation
 """
 
 import torch
 from ultralytics import YOLO
-from yolov11_pose_correct import YoloV11Pose
+from yolov11_pose import YoloV11Pose
 
 
 def load_weights():
     print("=" * 70)
-    print("Loading YOLO11n-Pose Weights into Corrected Implementation")
+    print("Loading YOLO11n-Pose Weights into our custom Implementation")
     print("=" * 70)
 
     # Load Ultralytics model
@@ -71,7 +71,7 @@ def load_weights():
 
     # Save model
     print("\n[4/4] Saving model...")
-    output_path = "yolov11_pose_pretrained_correct.pth"
+    output_path = "yolov11_pose_pretrained.pth"
     torch.save(custom_model.state_dict(), output_path)
     print(f"✓ Saved to: {output_path}")
 
@@ -98,7 +98,7 @@ def load_weights():
     print("✓ Complete!")
     print("\nTo use in your demo:")
     print("  model = YoloV11Pose()")
-    print("  model.load_state_dict(torch.load('yolov11_pose_pretrained_correct.pth'))")
+    print("  model.load_state_dict(torch.load('yolov11_pose_pretrained.pth'))")
     print("=" * 70)
 
     return custom_model
