@@ -80,12 +80,12 @@ def run_test(mesh_device, run_op_proc, check_op_proc):
     [
         ([1, 1, 32, 3072], [1, 32, 16, 192], ttnn.TILE_LAYOUT, ttnn.DRAM_MEMORY_CONFIG),
         ([1, 32, 128, 128], [1, 1, 32, 16384], ttnn.TILE_LAYOUT, ttnn.DRAM_MEMORY_CONFIG),
-        # ([1, 1, 32, 3072], [1, 32, 16, 192], ttnn.TILE_LAYOUT, ttnn.DRAM_MEMORY_CONFIG),
-        # ([1, 32, 128, 128], [1, 1, 32, 16384], ttnn.TILE_LAYOUT, ttnn.DRAM_MEMORY_CONFIG),
-        # ([1, 1, 32, 3072], [1, 32, 16, 192], ttnn.TILE_LAYOUT, ttnn.DRAM_MEMORY_CONFIG),
-        # ([1, 32, 128, 128], [1, 1, 32, 16384], ttnn.TILE_LAYOUT, ttnn.DRAM_MEMORY_CONFIG),
-        # ([1, 1, 32, 3072], [1, 32, 16, 192], ttnn.TILE_LAYOUT, ttnn.DRAM_MEMORY_CONFIG),
-        # ([1, 32, 128, 128], [1, 1, 32, 16384], ttnn.TILE_LAYOUT, ttnn.DRAM_MEMORY_CONFIG),
+        # ([1, 1, 32, 3072], [1, 32, 16, 192], ttnn.TILE_LAYOUT, ttnn.DRAM_MEMORY_CONFIG),  # duplicate
+        # ([1, 32, 128, 128], [1, 1, 32, 16384], ttnn.TILE_LAYOUT, ttnn.DRAM_MEMORY_CONFIG),  # duplicate
+        # ([1, 1, 32, 3072], [1, 32, 16, 192], ttnn.TILE_LAYOUT, ttnn.DRAM_MEMORY_CONFIG),  # duplicate
+        # ([1, 32, 128, 128], [1, 1, 32, 16384], ttnn.TILE_LAYOUT, ttnn.DRAM_MEMORY_CONFIG),  # duplicate
+        # ([1, 1, 32, 3072], [1, 32, 16, 192], ttnn.TILE_LAYOUT, ttnn.DRAM_MEMORY_CONFIG),  # duplicate
+        # ([1, 32, 128, 128], [1, 1, 32, 16384], ttnn.TILE_LAYOUT, ttnn.DRAM_MEMORY_CONFIG),  # duplicate
         ([1, 1, 32, 256], [1, 32, 8, 32], ttnn.TILE_LAYOUT, ttnn.L1_MEMORY_CONFIG),
         ([1, 32, 8, 1], [1, 1, 32, 8], ttnn.TILE_LAYOUT, ttnn.L1_MEMORY_CONFIG),
         ([1, 1, 32, 8], [1, 1, 256, 1], ttnn.ROW_MAJOR_LAYOUT, ttnn.DRAM_MEMORY_CONFIG),

@@ -83,7 +83,7 @@ def run_test(mesh_device, run_op_proc, check_op_proc):
         ([1, 1, 1, 4], [1, 32, 1, 1], ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG),
         ([1, 1, 256, 1], [1, 1, 1, 32], ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG),
         ([1, 1, 1, 8], [1, 32, 1, 1], ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG),
-        # ([1, 1, 1, 8], [1, 32, 1, 1], ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG),
+        # ([1, 1, 1, 8], [1, 32, 1, 1], ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG),  # duplicate
         ([1, 1, 128, 7168], [1, 8, 1, 1], ttnn.bfloat16, ttnn.L1_MEMORY_CONFIG),
         ([1, 1, 32, 8], [1, 7168, 1, 1], ttnn.bfloat16, ttnn.L1_MEMORY_CONFIG),
     ],

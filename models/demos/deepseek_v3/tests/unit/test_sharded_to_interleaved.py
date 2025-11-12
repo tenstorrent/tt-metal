@@ -82,26 +82,26 @@ def run_test(mesh_device, run_op_proc, check_op_proc):
         ([1, 32, 16, 64], "H", (2, 2), ttnn.DRAM_MEMORY_CONFIG),
         ([1, 32, 1, 64], "H", (1, 1), ttnn.DRAM_MEMORY_CONFIG),
         ([1, 4, 128, 512], "H", (2, 2), ttnn.DRAM_MEMORY_CONFIG),
-        # ([1, 1, 32, 896],   "W",    (2, 2), ttnn.DRAM_MEMORY_CONFIG),
+        # ([1, 1, 32, 896],   "W",    (2, 2), ttnn.DRAM_MEMORY_CONFIG),  # duplicate
         ([1, 1, 32, 7168], "W", (2, 2), ttnn.DRAM_MEMORY_CONFIG),
-        # ([1, 1, 32, 896],   "W",    (2, 2), ttnn.DRAM_MEMORY_CONFIG),
-        # ([1, 32, 16, 64],   "H",    (2, 2), ttnn.DRAM_MEMORY_CONFIG),
-        # ([1, 32, 1, 64],    "H",    (1, 1), ttnn.DRAM_MEMORY_CONFIG),
-        # ([1, 4, 128, 512],  "H",    (2, 2), ttnn.DRAM_MEMORY_CONFIG),
-        # ([1, 1, 32, 896],   "W",    (2, 2), ttnn.DRAM_MEMORY_CONFIG),
-        # ([1, 1, 32, 7168],  "W",    (2, 2), ttnn.DRAM_MEMORY_CONFIG),
-        # ([1, 1, 32, 896],   "W",    (2, 2), ttnn.DRAM_MEMORY_CONFIG),
-        # ([1, 32, 16, 64],   "H",    (2, 2), ttnn.DRAM_MEMORY_CONFIG),
-        # ([1, 32, 1, 64],    "H",    (1, 1), ttnn.DRAM_MEMORY_CONFIG),
-        # ([1, 4, 128, 512],  "H",    (2, 2), ttnn.DRAM_MEMORY_CONFIG),
-        # ([1, 1, 32, 896],   "W",    (2, 2), ttnn.DRAM_MEMORY_CONFIG),
-        # ([1, 1, 32, 7168],  "W",    (2, 2), ttnn.DRAM_MEMORY_CONFIG),
-        # ([1, 1, 32, 896],   "W",    (2, 2), ttnn.DRAM_MEMORY_CONFIG),
-        # ([1, 32, 16, 64],   "H",    (2, 2), ttnn.DRAM_MEMORY_CONFIG),
-        # ([1, 32, 1, 64],    "H",    (1, 1), ttnn.DRAM_MEMORY_CONFIG),
-        # ([1, 4, 128, 512],  "H",    (2, 2), ttnn.DRAM_MEMORY_CONFIG),
-        # ([1, 1, 32, 896],   "W",    (2, 2), ttnn.DRAM_MEMORY_CONFIG),
-        # ([1, 1, 32, 7168],  "W",    (2, 2), ttnn.DRAM_MEMORY_CONFIG),
+        # ([1, 1, 32, 896],   "W",    (2, 2), ttnn.DRAM_MEMORY_CONFIG),  # duplicate
+        # ([1, 32, 16, 64],   "H",    (2, 2), ttnn.DRAM_MEMORY_CONFIG),  # duplicate
+        # ([1, 32, 1, 64],    "H",    (1, 1), ttnn.DRAM_MEMORY_CONFIG),  # duplicate
+        # ([1, 4, 128, 512],  "H",    (2, 2), ttnn.DRAM_MEMORY_CONFIG),  # duplicate
+        # ([1, 1, 32, 896],   "W",    (2, 2), ttnn.DRAM_MEMORY_CONFIG),  # duplicate
+        # ([1, 1, 32, 7168],  "W",    (2, 2), ttnn.DRAM_MEMORY_CONFIG),  # duplicate
+        # ([1, 1, 32, 896],   "W",    (2, 2), ttnn.DRAM_MEMORY_CONFIG),  # duplicate
+        # ([1, 32, 16, 64],   "H",    (2, 2), ttnn.DRAM_MEMORY_CONFIG),  # duplicate
+        # ([1, 32, 1, 64],    "H",    (1, 1), ttnn.DRAM_MEMORY_CONFIG),  # duplicate
+        # ([1, 4, 128, 512],  "H",    (2, 2), ttnn.DRAM_MEMORY_CONFIG),  # duplicate
+        # ([1, 1, 32, 896],   "W",    (2, 2), ttnn.DRAM_MEMORY_CONFIG),  # duplicate
+        # ([1, 1, 32, 7168],  "W",    (2, 2), ttnn.DRAM_MEMORY_CONFIG),  # duplicate
+        # ([1, 1, 32, 896],   "W",    (2, 2), ttnn.DRAM_MEMORY_CONFIG),  # duplicate
+        # ([1, 32, 16, 64],   "H",    (2, 2), ttnn.DRAM_MEMORY_CONFIG),  # duplicate
+        # ([1, 32, 1, 64],    "H",    (1, 1), ttnn.DRAM_MEMORY_CONFIG),  # duplicate
+        # ([1, 4, 128, 512],  "H",    (2, 2), ttnn.DRAM_MEMORY_CONFIG),  # duplicate
+        # ([1, 1, 32, 896],   "W",    (2, 2), ttnn.DRAM_MEMORY_CONFIG),  # duplicate
+        # ([1, 1, 32, 7168],  "W",    (2, 2), ttnn.DRAM_MEMORY_CONFIG),  # duplicate
         ([1, 1, 32, 7168], "W", (2, 2), ttnn.L1_MEMORY_CONFIG),
     ],
 )

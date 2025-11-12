@@ -82,7 +82,7 @@ def run_test(mesh_device, run_op_proc, check_op_proc):
         ([1, 1, 32, 256], ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG),
         ([1, 8, 128, 7168], ttnn.bfloat16, ttnn.L1_MEMORY_CONFIG),
         ([8, 1, 32, 7168], ttnn.bfloat16, ttnn.L1_MEMORY_CONFIG),
-        # ([8, 1, 32, 7168], ttnn.bfloat16, ttnn.L1_MEMORY_CONFIG),
+        # ([8, 1, 32, 7168], ttnn.bfloat16, ttnn.L1_MEMORY_CONFIG),  # duplicate
     ],
 )
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT])
@@ -118,7 +118,7 @@ def test_tilize(mesh_device, shape, dtype, mem_config, layout):
     "in_shape, out_shape, pad_val, dtype, mem_config",
     [
         ([1, 1, 32, 8], [1, 1, 32, 32], 0, ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG),
-        # ([1, 1, 32, 8], [1, 1, 32, 32], 0, ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG),
+        # ([1, 1, 32, 8], [1, 1, 32, 32], 0, ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG),  # duplicate
     ],
 )
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT])

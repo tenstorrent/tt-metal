@@ -79,7 +79,7 @@ def run_test(mesh_device, run_op_proc, check_op_proc):
     "shape, dtype, mem_config",
     [
         ([1, 1, 4096, 64], ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG),
-        # ([1, 1, 4096, 64], ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG),
+        # ([1, 1, 4096, 64], ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG),  # duplicate
         ([1, 1, 129280, 224], ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG),
         ([1, 1, 32, 7168], ttnn.bfloat16, ttnn.L1_MEMORY_CONFIG),
         ([1, 8, 128, 7168], ttnn.bfloat16, ttnn.L1_MEMORY_CONFIG),
