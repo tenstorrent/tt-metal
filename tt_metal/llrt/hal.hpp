@@ -292,6 +292,7 @@ private:
     std::vector<uint32_t> noc_x_id_translate_table_;
     std::vector<uint32_t> noc_y_id_translate_table_;
     bool coordinate_virtualization_enabled_{};
+    bool supports_64_bit_pcie_addressing_{};
     uint32_t virtual_worker_start_x_{};
     uint32_t virtual_worker_start_y_{};
     bool eth_fw_is_cooperative_ = false;  // set when eth riscs have to context switch
@@ -493,6 +494,7 @@ public:
     uint64_t get_pcie_addr_lower_bound() const;
     // Inclusive upper bound
     uint64_t get_pcie_addr_upper_bound() const;
+    bool get_supports_64_bit_pcie_addressing() const { return supports_64_bit_pcie_addressing_; }
 
     // Verify that the eth version is compatible with the HAL capabilities. Throws an exception if version is
     // not compatible.

@@ -103,8 +103,7 @@ void PinnedMemoryImpl::initialize_from_devices(
 
     // Create one buffer per unique MMIO device, all mapping the same aligned host memory
     std::unordered_map<ChipId, std::unique_ptr<tt::umd::SysmemBuffer>> mmio_buffers;
-    const auto device_arch = devices[0]->arch();
-    if (device_arch == tt::ARCH::BLACKHOLE) {
+    if (MetalContext::instance().hal().get_supports_64_bit_pcie_addressing()) {
         // On Blackhole, we can use 64-bit address space, so we don't need to use the iATU.
         map_to_noc = false;
         use_64bit_address_space_ = true;
