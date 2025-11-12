@@ -7,6 +7,7 @@
 #include "tt-metalium/tensor_accessor_args.hpp"
 #include "tt-metalium/work_split.hpp"
 #include "grid_sample_op.hpp"
+#include "grid_sample_utils.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/pool/pool_utils.hpp"
 
@@ -17,73 +18,12 @@
 
 namespace ttnn::operations::grid_sample {
 
-// Constants
-constexpr uint32_t MAX_TILES_PER_REDUCTION = 8, BUFFERING_FACTOR = 2, REDUCTION_SIZE = 4;
-constexpr uint32_t MAX_ROWS_FOR_REDUCTION = 16;  // Height of one face (always 16)
-constexpr bool ONE_SCALAR_PER_CORE = false;
-constexpr uint32_t DUMMY_CB_ID = 32;
-
-// Function to determine if split reader should be used
-static bool should_use_split_reader(const Tensor& input_tensor, const Tensor& grid_tensor, bool use_precomputed_grid) {
-    // Split reader is only compatible with a sharded grid tensor
-    if (!grid_tensor.is_sharded()) {
-        return false;
-    }
-
-    // In the case when the grid is not precomputed, majority of processing time goes to computing the coordinates and
-    // the weights Processing time is in most cases halved, as both NCRISC and BRISC calculate these weights and
-    // coordinates
-    if (!use_precomputed_grid) {
-        return true;
-    }
-
-    // As one of the NoCs is significantly slower than the other when it comes to DRAM reads, we avoid using split
-    // reader when input tensor is in DRAM
-    if (input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM) {
-        return false;
-    }
-
-    // Get device architecture
-    tt::tt_metal::IDevice* device = input_tensor.device();
-    const auto arch = device->arch();
-
-    // On wormhole, the bottleneck is always the reading of the input image, so split reader is beneficial
-    if (arch == tt::ARCH::WORMHOLE_B0) {
-        return true;
-    }
-
-    // On blackhole, for a lower number of channels, the bottleneck is the reading of the input image, so split reader
-    // is benefitial On higher number of channels, the bottleneck is on the unpacker side, where using split reader also
-    // adds additional overhead, so it slows down the program
-    if (arch == tt::ARCH::BLACKHOLE) {
-        const uint32_t input_channels = input_tensor.padded_shape()[-1];
-        return input_channels <= 224;
-    }
-
-    // Default case for other architectures, currently should be unreachable
-    return false;
-}
-
-// Utility functions
-static uint32_t get_grid_batching_factor(const Tensor& grid_tensor, bool use_precomputed_grid) {
-    return grid_tensor.logical_shape()[-1] /
-           (use_precomputed_grid ? PRECOMPUTED_GRID_ELEMENTS_PER_POINT : STANDARD_GRID_ELEMENTS_PER_POINT);
-}
-
-static uint32_t get_aligned_stick_size(const ttnn::Shape& shape, const Tensor& tensor) {
-    const uint32_t stick_nbytes = shape[-1] * tensor.element_size();
-    const uint32_t alignment = tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
-                                   ? tt::tt_metal::hal::get_dram_alignment()
-                                   : tt::tt_metal::hal::get_l1_alignment();
-    return tt::round_up(stick_nbytes, alignment);
-}
-
-tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
+tt::tt_metal::operation::ProgramWithCallbacks grid_sample_bilinear_program_factory(
     const Tensor& input_tensor,
     const Tensor& grid_tensor,
     const Tensor& output_tensor,
-    const std::string& mode,
     const std::string& padding_mode,
+    bool align_corners,
     bool use_precomputed_grid,
     bool batch_output_channels) {
     const bool is_sharded = grid_tensor.is_sharded();
@@ -103,7 +43,8 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     const uint32_t grid_height = grid_shape[1], grid_width = grid_shape[2];
     const uint32_t grid_hw = grid_height * grid_width;
     const uint32_t grid_batching_factor = get_grid_batching_factor(grid_tensor, use_precomputed_grid);
-    const bool enable_split_reader = should_use_split_reader(input_tensor, grid_tensor, use_precomputed_grid);
+    const bool enable_split_reader =
+        should_use_split_reader(input_tensor, grid_tensor, use_precomputed_grid, "bilinear");
 
     tt::tt_metal::CoreRangeSet all_cores, core_group_1, core_group_2;
     uint32_t num_cores, grid_nsticks_per_core, output_nsticks_per_core = 0;
@@ -430,5 +371,4 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
             }
         }};
 }
-
 }  // namespace ttnn::operations::grid_sample
