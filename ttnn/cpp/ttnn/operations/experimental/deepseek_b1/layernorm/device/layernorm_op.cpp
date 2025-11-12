@@ -62,10 +62,10 @@ void LayerNorm::validate(
             TT_FATAL(
                 gamma.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
             TT_FATAL(a.device() == gamma.value().device(), "Input and gamma tensors must be on same device");
-            TT_FATAL(
-                gamma.value().padded_shape()[-2] == TILE_HEIGHT,
-                "Gamma tensor height must be TILE_HEIGHT (32), got: {}",
-                gamma.value().padded_shape()[-2]);
+            // TT_FATAL(
+            //     gamma.value().padded_shape()[-2] == TILE_HEIGHT,
+            //     "Gamma tensor height must be TILE_HEIGHT (32), got: {}",
+            //     gamma.value().padded_shape()[-2]);
         } else {
             TT_FATAL(
                 gamma.value().layout() == Layout::ROW_MAJOR,
@@ -316,47 +316,12 @@ std::vector<TensorSpec> LayerNorm::compute_output_specs(const std::vector<Tensor
 
     return std::visit(
         [&](const auto& program_config) -> std::vector<TensorSpec> {
-            using ProgramConfigType = std::decay_t<decltype(program_config)>;
-            if constexpr (std::is_same_v<ProgramConfigType, LayerNormShardedMultiCoreProgramConfig>) {
-                if (this->distributed_norm_stage == DistributedLayerNormStage::PRE_ALL_GATHER) {
-                    auto shard_spec = input_tensor.shard_spec().value();
-                    shard_spec.shape[1] = output_shape[3];
-                    CoreCoord grid_start_core = shard_spec.grid.bounding_box().start_coord;
-                    CoreRangeSet output_grid({CoreRange(grid_start_core, grid_start_core)});
-                    shard_spec.grid = output_grid;
-                    auto mem_config = this->output_mem_config.with_shard_spec(shard_spec);
-                    return {TensorSpec(
-                        output_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_config))};
-                } else if (this->distributed_norm_stage == DistributedLayerNormStage::POST_ALL_GATHER) {
-                    auto output_shard_spec = this->output_mem_config.shard_spec().value();
-                    auto input_shard_spec = input_tensor.shard_spec().value();
-                    if (output_shard_spec != input_shard_spec) {
-                        output_padded_shape[3] = output_shard_spec.shape[1] * output_shard_spec.num_cores();
-                    }
-                }
-
-                if (program_config.inplace) {
-                    return {input_tensor.tensor_spec()};
-                }
-
-                auto mem_config = this->output_mem_config;
-                if (!mem_config.shard_spec().has_value()) {
-                    mem_config = mem_config.with_shard_spec(input_tensor.shard_spec());
-                }
-
-                return {ttnn::TensorSpec(
-                    output_shape,
-                    TensorLayout::fromPaddedShape(
-                        this->dtype.value_or(input_tensor.dtype()),
-                        PageConfig(Layout::TILE),
-                        mem_config,
-                        output_shape,
-                        output_padded_shape))};
-            } else {
-                return {TensorSpec(
-                    output_shape,
-                    TensorLayout(input_tensor.dtype(), PageConfig(Layout::TILE), this->output_mem_config))};
-            }
+            return {TensorSpec(
+                output_shape,
+                TensorLayout(
+                    input_tensor.dtype(),
+                    PageConfig(Layout::TILE, input_tensor.tensor_spec().tile()),
+                    this->output_mem_config))};
         },
         this->program_config);
 }
@@ -388,51 +353,31 @@ operation::ProgramWithCallbacks LayerNorm::create_program(
 
     return std::visit(
         [&](const auto& program_config) -> tt::tt_metal::operation::ProgramWithCallbacks {
-            using ProgramConfigType = std::decay_t<decltype(program_config)>;
-            if constexpr (std::is_same_v<ProgramConfigType, LayerNormShardedMultiCoreProgramConfig>) {
-                uint32_t num_cores_x = program_config.compute_with_storage_grid_size.x;
-                uint32_t num_cores_y = program_config.compute_with_storage_grid_size.y;
-                CoreCoord grid_size = CoreCoord(num_cores_x, num_cores_y);
+            uint32_t num_cores_x = 6;
+            uint32_t num_cores_y = 8;
+            CoreCoord grid_size = CoreCoord(num_cores_x, num_cores_y);
 
-                TT_FATAL(
-                    a.is_sharded(),
-                    "ERROR - LayerNormShardedMultiCoreProgramConfig is used with non-sharded input. Please use "
-                    "LayerNormDefaultProgramConfig, or shard the tensors.");
+            TT_FATAL(
+                a.is_sharded(),
+                "ERROR - LayerNormShardedMultiCoreProgramConfig is used with non-sharded input. Please use "
+                "LayerNormDefaultProgramConfig, or shard the tensors.");
 
-                return layernorm_multi_core_sharded(
-                    a,
-                    b,
-                    gamma,
-                    beta,
-                    stats,
-                    output_tensor,
-                    this->distributed_norm_stage,
-                    this->eps,
-                    program_config.compute_with_storage_grid_size,
-                    program_config.subblock_w,
-                    program_config.block_h,
-                    program_config.block_w,
-                    program_config.legacy_reduction,
-                    program_config.legacy_rsqrt,
-                    this->compute_kernel_config);
-            } else if constexpr (std::is_same_v<ProgramConfigType, LayerNormDefaultProgramConfig>) {
-                TT_FATAL(
-                    !a.is_sharded(),
-                    "ERROR - LayerNormDefaultProgramConfig is being used with sharded input. Please use "
-                    "LayerNormShardedMultiCoreProgramConfig, or interleave the tensors.");
-                return layernorm_multi_core(
-                    a,
-                    b,
-                    gamma,
-                    beta,
-                    output_tensor,
-                    this->eps,
-                    program_config.legacy_reduction,
-                    program_config.legacy_rsqrt,
-                    this->compute_kernel_config);
-            } else {
-                TT_THROW("Unsupported program config");
-            }
+            return layernorm_multi_core_sharded(
+                a,
+                b,
+                gamma,
+                beta,
+                stats,
+                output_tensor,
+                this->distributed_norm_stage,
+                this->eps,
+                grid_size,
+                1,
+                1,
+                1,
+                false,
+                false,
+                this->compute_kernel_config);
         },
         this->program_config);
 }

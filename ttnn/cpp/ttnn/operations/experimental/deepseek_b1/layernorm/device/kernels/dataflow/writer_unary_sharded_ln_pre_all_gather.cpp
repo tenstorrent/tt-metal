@@ -8,6 +8,8 @@
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 
 void kernel_main() {
+    // Note: This kernel receives multiple compile-time args but only uses indices 0 and 4
+    // The other args are passed for consistency with other writer kernels but are unused
     constexpr bool is_all_to_all_worker = get_compile_time_arg_val(0) == 1;
     constexpr bool use_welford = get_compile_time_arg_val(4) == 1;
     constexpr uint32_t cb_in_2 = tt::CBIndex::c_2;

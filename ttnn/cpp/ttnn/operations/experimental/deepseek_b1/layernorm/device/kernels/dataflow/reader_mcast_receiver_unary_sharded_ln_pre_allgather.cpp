@@ -24,6 +24,7 @@ void kernel_main() {
     constexpr uint32_t num_blocks_second_stage = get_compile_time_arg_val(13);
     uint32_t reduce_second_stage_semaphore_addr = get_semaphore(get_compile_time_arg_val(14));
     constexpr bool rms_norm = get_compile_time_arg_val(15) == 1;
+    // Note: use_welford at index 16 is passed but not used in RMSNorm
 
     const bool is_last_all_to_all_worker = get_arg_val<uint32_t>(0);
     const uint32_t all_to_all_tile_offset_bytes = get_arg_val<uint32_t>(1);

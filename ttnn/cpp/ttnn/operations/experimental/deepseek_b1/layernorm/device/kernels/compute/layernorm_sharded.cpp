@@ -66,7 +66,17 @@ void MAIN {
     constexpr uint32_t cb_gamma = tt::CBIndex::c_5;
     constexpr uint32_t cb_beta = tt::CBIndex::c_6;
     constexpr uint32_t cb_x = tt::CBIndex::c_24;  // x minus mean
-    constexpr uint32_t cb_xmm = cb_in0;           // x minus mean (RMSNorm only)
+    constexpr uint32_t cb_xmm = cb_in0;           // x minus mean
+    constexpr uint32_t cb_ex_partial = tt::CBIndex::c_8;  // E[x] partial reduce
+    constexpr uint32_t cb_ex = tt::CBIndex::c_9;          // E[x] global reduce
+    constexpr uint32_t cb_ex_external = tt::CBIndex::c_10;
+    constexpr uint32_t cb_ex_partial2 = tt::CBIndex::c_11;  // E[(x-E[x])^2] partial reduce
+    constexpr uint32_t cb_ex2 = tt::CBIndex::c_12;          // E[(x-E[x])^2] global reduce
+    constexpr uint32_t cb_ex_external2 = tt::CBIndex::c_13;
+    constexpr uint32_t cb_ex_global = tt::CBIndex::c_15;  // E[x] global reduce
+    constexpr uint32_t cb_xmm2 = cb_x;                    // xmm^2
+    constexpr uint32_t cb_ex2pe = tt::CBIndex::c_20;      // E[(x-E[x])^2]+eps
+    constexpr uint32_t cb_fusion = tt::CBIndex::c_18;     // stream gamma/beta
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
 
     binary_op_init_common(cb_in0, cb_in0, cb_x);
@@ -83,4 +93,206 @@ void MAIN {
     constexpr uint32_t cb_im = (do_gamma | do_beta) ? cb_x : cb_out;
     constexpr uint32_t cb_outgamma = do_beta ? cb_fusion : cb_out;
 
-    // pre-add x + y
+    // RMSNORM: Skip E[x] computation and x - E[x] subtraction
+    // For RMSNORM, cb_xmm is cb_in0 (input directly)
+
+    // x^2 (for RMSNORM, no mean subtraction), cb_mm2 <-- cb_xmm
+    mul_tiles_init(cb_xmm, cb_xmm);
+    index_h_offset = 0;
+    cb_reserve_back(cb_xmm2, num_tiles_per_block);
+    for (uint32_t i = 0; i < block_h; i++) {
+        index_subblock_w_offset = 0;
+        for (uint32_t j = 0; j < num_subblocks_w; j++) {
+            tile_regs_acquire();
+            for (uint32_t w = 0; w < subblock_w; w++) {
+                index = w + index_subblock_w_offset + index_h_offset;
+                mul_tiles(cb_xmm, cb_xmm, index, index, w);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t i = 0; i < subblock_w; i++) {
+                pack_tile(i, cb_xmm2);
+            }
+            tile_regs_release();
+            index_subblock_w_offset += subblock_w;
+        }
+        index_h_offset += block_w;
+    }
+    cb_push_back(cb_xmm2, num_tiles_per_block);
+
+    reconfig_data_format(cb_xmm, cb_xmm2, cb_xmm, cb_scaler);
+
+    cb_wait_front(cb_xmm2, num_tiles_per_block);
+
+    // Var(x)
+    cb_wait_front(cb_scaler, 1);
+    cb_reserve_back(cb_ex_partial2, block_h);
+    reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_xmm2, cb_scaler, cb_ex_partial2);
+    index_h_offset = 0;
+    for (uint32_t i = 0; i < block_h; i++) {
+        tile_regs_acquire();
+        for (uint32_t w = 0; w < num_reduce_tiles_per_block_h; w++) {
+            reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(
+                cb_xmm2, cb_scaler, w + index_h_offset, scaler0, dst0);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(dst0, cb_ex_partial2);
+        tile_regs_release();
+        index_h_offset += block_w;
+    }
+    reduce_uninit();
+    cb_pop_front(cb_xmm2, num_tiles_per_block);
+    cb_push_back(cb_ex_partial2, block_h);
+
+    // global reduce, cb_ex <-- cb_ex_external, cb_ex_partial
+    if constexpr (is_allgather_worker) {
+        reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_ex_external2, cb_scaler_global, cb_ex2);
+        cb_reserve_back(cb_ex2, num_tiles_per_allgather_worker);
+
+        for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
+            cb_wait_front(cb_scaler_global, 1);
+
+            tile_regs_acquire();
+            for (uint32_t w = 0; w < num_blocks_reduce; w++) {
+                cb_wait_front(cb_ex_external2, 1);
+                reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(
+                    cb_ex_external2, cb_scaler_global, 0, scaler0, dst0);
+                cb_pop_front(cb_ex_external2, 1);
+            }
+            if (use_two_stage_reduce && !is_second_stage_reader) {
+                cb_wait_front(cb_ex_external2, num_blocks_second_stage - 1);
+                cb_pop_front(cb_ex_external2, num_blocks_second_stage - 1);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(dst0, cb_ex2);
+            tile_regs_release();
+        }
+        reduce_uninit();
+        cb_push_back(cb_ex2, num_tiles_per_allgather_worker);
+
+        if (enable_sqrt) {
+            for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
+                // 1/[sqrt(Var + eps)],
+                cb_wait_front(cb_ex2, 1);
+                cb_reserve_back(cb_ex2pe, 1);
+                tile_regs_acquire();
+                add_tiles_init(cb_ex2, cb_eps);
+                add_tiles(cb_ex2, cb_eps, i, 0, dst0);
+                tile_regs_wait();
+                rsqrt_tile_init<LEGACY_RSQRT>();
+                rsqrt_tile<LEGACY_RSQRT>(dst0);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile(dst0, cb_ex2pe);
+                cb_push_back(cb_ex2pe, 1);
+                tile_regs_release();
+            }
+        }
+    }
+
+    if constexpr (do_gamma == 0 && do_beta == 0) {
+        pack_reconfig_data_format(cb_out);
+    }
+
+    // x * 1/[sqrt(Var + eps)] (for RMSNORM, no mean subtraction)
+    if constexpr (FLOAT32_DTYPE) {
+        reconfig_data_format(cb_xmm, cb_ex_global);
+    } else {
+        reconfig_data_format_srca(cb_ex2, cb_xmm);
+    }
+    mul_bcast_cols_init_short(cb_xmm, cb_ex_global);
+    index_h_offset = 0;
+    cb_reserve_back(cb_im, num_tiles_per_block);
+    for (uint32_t i = 0; i < block_h; i++) {
+        index_subblock_w_offset = 0;
+        cb_wait_front(cb_ex_global, 1);
+        for (uint32_t j = 0; j < num_subblocks_w; j++) {
+            tile_regs_acquire();
+            for (uint32_t w = 0; w < subblock_w; w++) {
+                index = w + index_subblock_w_offset + index_h_offset;
+                mul_tiles_bcast_cols(cb_xmm, cb_ex_global, index, 0, w);
+            }
+            tile_regs_commit();
+
+            tile_regs_wait();
+            for (uint32_t i = 0; i < subblock_w; i++) {
+                pack_tile(i, cb_im);
+            }
+            tile_regs_release();
+
+            index_subblock_w_offset += subblock_w;
+        }
+        index_h_offset += block_w;
+        cb_pop_front(cb_ex_global, 1);
+    }
+    cb_push_back(cb_im, num_tiles_per_block);
+
+    cb_pop_front(cb_xmm, num_tiles_per_block);
+    cb_wait_front(cb_im, num_tiles_per_block);
+
+    if constexpr (do_gamma) {
+        reconfig_data_format(cb_im, cb_gamma);
+        if constexpr (do_beta == 0) {
+            pack_reconfig_data_format(cb_out);
+        }
+        mul_bcast_rows_init_short(cb_im, cb_gamma);
+        cb_wait_front(cb_gamma, block_w);
+        index_h_offset = 0;
+        cb_reserve_back(cb_outgamma, num_tiles_per_block);
+        for (uint32_t i = 0; i < block_h; i++) {
+            index_subblock_w_offset = 0;
+            for (uint32_t j = 0; j < num_subblocks_w; j++) {
+                tile_regs_acquire();
+                for (uint32_t w = 0; w < subblock_w; w++) {
+                    index = w + index_subblock_w_offset;
+                    mul_tiles_bcast_rows(cb_im, cb_gamma, index + index_h_offset, index, w);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t i = 0; i < subblock_w; i++) {
+                    pack_tile(i, cb_outgamma);
+                }
+                tile_regs_release();
+                index_subblock_w_offset += subblock_w;
+            }
+            index_h_offset += block_w;
+        }
+        cb_push_back(cb_outgamma, num_tiles_per_block);
+        cb_pop_front(cb_im, num_tiles_per_block);
+        cb_wait_front(cb_outgamma, num_tiles_per_block);
+    }
+
+    if constexpr (do_beta) {
+        reconfig_data_format(cb_fusion, cb_beta);
+        pack_reconfig_data_format(cb_out);
+        add_bcast_rows_init_short(cb_fusion, cb_beta);
+        cb_wait_front(cb_beta, block_w);
+        index_h_offset = 0;
+        cb_reserve_back(cb_out, num_tiles_per_block);
+        for (uint32_t i = 0; i < block_h; i++) {
+            index_subblock_w_offset = 0;
+            for (uint32_t j = 0; j < num_subblocks_w; j++) {
+                tile_regs_acquire();
+                for (uint32_t w = 0; w < subblock_w; w++) {
+                    index = w + index_subblock_w_offset;
+                    add_tiles_bcast_rows(cb_fusion, cb_beta, index + index_h_offset, index, w);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t i = 0; i < subblock_w; i++) {
+                    pack_tile(i, cb_out);
+                }
+                tile_regs_release();
+                index_subblock_w_offset += subblock_w;
+            }
+            index_h_offset += block_w;
+        }
+        cb_push_back(cb_out, num_tiles_per_block);
+        cb_pop_front(cb_fusion, num_tiles_per_block);
+        cb_wait_front(cb_out, num_tiles_per_block);
+    }
+}
+
+}  // namespace NAMESPACE

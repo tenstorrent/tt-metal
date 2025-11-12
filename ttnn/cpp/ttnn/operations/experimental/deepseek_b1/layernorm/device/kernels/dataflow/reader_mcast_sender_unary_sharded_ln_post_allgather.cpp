@@ -8,6 +8,8 @@
 
 // split REDUCE across cores
 void kernel_main() {
+    // Note: This kernel receives 19 compile-time args but only uses indices 1-4, 6-7, and 17
+    // The other args are passed for consistency with other sender kernels but are unused
     uint32_t reduce_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(1));
     constexpr uint32_t num_blocks = get_compile_time_arg_val(2);
     constexpr uint32_t block_h = get_compile_time_arg_val(3);

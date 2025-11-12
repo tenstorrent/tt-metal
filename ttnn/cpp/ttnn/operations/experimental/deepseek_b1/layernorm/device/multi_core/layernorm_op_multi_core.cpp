@@ -307,13 +307,13 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         compute_defines["RMSNORM"] = "1";
     }
 
-    auto reader_kernel_path = use_row_major_kernel
-                                  ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-                                    "reader_unary_interleaved_ln_rm_gb.cpp"
-                                  : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-                                    "reader_unary_interleaved_ln.cpp";
+    auto reader_kernel_path =
+        use_row_major_kernel ? "ttnn/cpp/ttnn/operations/experimental/deepseek_b1/layernorm/device/kernels/dataflow/"
+                               "reader_unary_interleaved_ln_rm_gb.cpp"
+                             : "ttnn/cpp/ttnn/operations/experimental/deepseek_b1/layernorm/device/kernels/dataflow/"
+                               "reader_unary_interleaved_ln.cpp";
     reader_kernel_path = large_tensor_needed
-                             ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+                             ? "ttnn/cpp/ttnn/operations/experimental/deepseek_b1/layernorm/device/kernels/dataflow/"
                                "reader_unary_interleaved_ln_large_tensor.cpp"
                              : reader_kernel_path;
 
@@ -325,7 +325,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
 
     auto writer_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+        "ttnn/cpp/ttnn/operations/experimental/deepseek_b1/layernorm/device/kernels/dataflow/"
         "writer_unary_interleaved_start_id_blocked.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
@@ -338,9 +338,9 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     auto compute_kernels_id = CreateKernel(
         program,
         large_tensor_needed and !use_row_major_kernel
-            ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/"
+            ? "ttnn/cpp/ttnn/operations/experimental/deepseek_b1/layernorm/device/kernels/compute/"
               "layernorm_large_tensor.cpp"
-            : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm.cpp",
+            : "ttnn/cpp/ttnn/operations/experimental/deepseek_b1/layernorm/device/kernels/compute/layernorm.cpp",
         all_cores,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
@@ -1027,7 +1027,8 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         (std::uint32_t)num_blocks_first_stage,
         (std::uint32_t)num_blocks_second_stage,
         (std::uint32_t)reduce_second_stage_semaphore_id,
-        (std::uint32_t)rms_norm};
+        (std::uint32_t)rms_norm,
+        (std::uint32_t)use_welford};
     std::vector<uint32_t> reader_mcast_receiver_compile_time_args = {
         (std::uint32_t)reduce_receiver_semaphore_id,
         (std::uint32_t)reduce_sender_semaphore_id,
@@ -1044,7 +1045,8 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         (std::uint32_t)0,
         (std::uint32_t)0,
         (std::uint32_t)reduce_second_stage_semaphore_id,
-        (std::uint32_t)rms_norm};
+        (std::uint32_t)rms_norm,
+        (std::uint32_t)use_welford};
 
     tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
     tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
@@ -1056,25 +1058,25 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
 
     // reader kernel
     std::string sender_reader_kernel_file =
-        "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+        "ttnn/cpp/ttnn/operations/experimental/deepseek_b1/layernorm/device/kernels/dataflow/"
         "reader_mcast_sender_unary_sharded_ln.cpp";
     std::string receiver_reader_kernel_file =
-        "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+        "ttnn/cpp/ttnn/operations/experimental/deepseek_b1/layernorm/device/kernels/dataflow/"
         "reader_mcast_receiver_unary_sharded_ln.cpp";
 
     if (is_pre_all_gather) {
         sender_reader_kernel_file =
-            "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+            "ttnn/cpp/ttnn/operations/experimental/deepseek_b1/layernorm/device/kernels/dataflow/"
             "reader_mcast_sender_unary_sharded_ln_pre_allgather.cpp";
         receiver_reader_kernel_file =
-            "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+            "ttnn/cpp/ttnn/operations/experimental/deepseek_b1/layernorm/device/kernels/dataflow/"
             "reader_mcast_receiver_unary_sharded_ln_pre_allgather.cpp";
     } else if (is_post_all_gather) {
         sender_reader_kernel_file =
-            "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+            "ttnn/cpp/ttnn/operations/experimental/deepseek_b1/layernorm/device/kernels/dataflow/"
             "reader_mcast_sender_unary_sharded_ln_post_allgather.cpp";
         receiver_reader_kernel_file =
-            "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+            "ttnn/cpp/ttnn/operations/experimental/deepseek_b1/layernorm/device/kernels/dataflow/"
             "reader_mcast_receiver_unary_sharded_ln_post_allgather.cpp";
     }
 
@@ -1135,7 +1137,8 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         0,  // is_all_to_all_worker
         (std::uint32_t)gamma.has_value(),
         (std::uint32_t)beta.has_value(),
-        (std::uint32_t)block_wt};
+        (std::uint32_t)block_wt,
+        (std::uint32_t)use_welford};
     tt::tt_metal::TensorAccessorArgs(gamma ? gamma->buffer() : nullptr)
         .append_to(writer_mcast_receiver_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(beta ? beta->buffer() : nullptr)
@@ -1174,13 +1177,14 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     std::string writer_kernel;
     if (is_pre_all_gather) {
         writer_kernel =
-            "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+            "ttnn/cpp/ttnn/operations/experimental/deepseek_b1/layernorm/device/kernels/dataflow/"
             "writer_unary_sharded_ln_pre_all_gather.cpp";
     } else {
-        writer_kernel = use_row_major_kernel ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/"
-                                               "dataflow/writer_unary_sharded_ln_rm_gb.cpp"
-                                             : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/"
-                                               "dataflow/writer_unary_sharded_ln.cpp";
+        writer_kernel = use_row_major_kernel
+                            ? "ttnn/cpp/ttnn/operations/experimental/deepseek_b1/layernorm/device/kernels/"
+                              "dataflow/writer_unary_sharded_ln_rm_gb.cpp"
+                            : "ttnn/cpp/ttnn/operations/experimental/deepseek_b1/layernorm/device/kernels/"
+                              "dataflow/writer_unary_sharded_ln.cpp";
     }
     auto writer_mcast_sender_kernels_id = CreateKernel(
         program,
@@ -1239,21 +1243,22 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         fp32_dest_acc_en,
         float32_reduction,
         legacy_rsqrt,
-        num_blocks_second_stage};
+        num_blocks_second_stage,
+        use_welford};
 
     // compute kernel
     std::string compute_kernel_file;
     if (is_pre_all_gather) {
         compute_kernel_file =
-            "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/"
+            "ttnn/cpp/ttnn/operations/experimental/deepseek_b1/layernorm/device/kernels/compute/"
             "layernorm_sharded_pre_allgather.cpp";
     } else if (is_post_all_gather) {
         compute_kernel_file =
-            "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/"
+            "ttnn/cpp/ttnn/operations/experimental/deepseek_b1/layernorm/device/kernels/compute/"
             "layernorm_sharded_post_allgather.cpp";
     } else {
         compute_kernel_file =
-            "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sharded.cpp";
+            "ttnn/cpp/ttnn/operations/experimental/deepseek_b1/layernorm/device/kernels/compute/layernorm_sharded.cpp";
     }
 
     KernelHandle compute_kernels_id = -1;

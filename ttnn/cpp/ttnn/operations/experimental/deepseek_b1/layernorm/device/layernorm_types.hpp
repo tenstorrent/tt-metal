@@ -21,7 +21,7 @@ struct LayerNormShardedMultiCoreProgramConfig {
     std::size_t subblock_w{};
     std::size_t block_h{};
     std::size_t block_w{};
-    bool inplace{};
+    bool inplace = true;
     bool legacy_reduction = false;
     bool legacy_rsqrt = false;
 };

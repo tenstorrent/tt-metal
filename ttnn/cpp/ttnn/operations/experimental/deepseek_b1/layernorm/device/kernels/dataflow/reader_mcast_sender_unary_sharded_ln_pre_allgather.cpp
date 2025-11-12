@@ -26,6 +26,7 @@ void kernel_main() {
     constexpr uint32_t num_blocks_second_stage = get_compile_time_arg_val(15);
     uint32_t reduce_second_stage_semaphore_addr = get_semaphore(get_compile_time_arg_val(16));
     constexpr bool rms_norm = get_compile_time_arg_val(17) == 1;
+    // Note: use_welford at index 18 is passed but not used in RMSNorm
 
     const uint32_t mcast_dest_noc_start_x = get_arg_val<uint32_t>(0);
     const uint32_t mcast_dest_noc_start_y = get_arg_val<uint32_t>(1);
