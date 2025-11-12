@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-// Debug printing headers removed for performance
 
 constexpr uint32_t TILE_SIZE = 32;
 
@@ -25,7 +24,6 @@ void kernel_main() {
     constexpr uint32_t cb_out = get_compile_time_arg_val(3);
     constexpr uint32_t num_output_channels_padded = get_compile_time_arg_val(4);  // padded output channels (min 8)
     constexpr uint32_t num_full_tiles = get_compile_time_arg_val(5);
-    // arg 6 now encodes the initial writer stick offset
     constexpr uint32_t initial_l1_write_stick_offset = get_compile_time_arg_val(6);
     constexpr uint32_t element_size_bytes = get_compile_time_arg_val(7);
     constexpr bool is_input_in_dram = get_compile_time_arg_val(8);
@@ -39,12 +37,10 @@ void kernel_main() {
 
     const uint32_t dram_base_read_addr = is_input_in_dram ? get_arg_val<uint32_t>(0) : 0;
 
-    // Parse the new serialized blocked transfer format
     tt_l1_ptr uint32_t* args = (tt_l1_ptr uint32_t*)(get_arg_addr(1));
     uint32_t args_idx = 0;
 
     const uint32_t num_blocks = args[args_idx++];
-    // num_blocks comes from serialized transfers
 
     constexpr uint32_t tile_size_stick_bytes = TILE_SIZE * element_size_bytes;
     constexpr uint32_t initial_l1_write_addr_offset = initial_l1_write_stick_offset * channel_size;
@@ -57,10 +53,8 @@ void kernel_main() {
         if constexpr (is_reader) {
             cb_reserve_back(cb_in_batch, input_block_size_sticks_per_core);
 
-            // Parse the number of transfers in this block group
-            const uint32_t group_size = args[args_idx++];
-
             // Process all transfers in this group
+            const uint32_t group_size = args[args_idx++];
             for (uint32_t transfer_idx = 0; transfer_idx < group_size; transfer_idx++) {
                 uint32_t src_x = args[args_idx++];
                 uint32_t src_y = args[args_idx++];
@@ -83,11 +77,6 @@ void kernel_main() {
 
             noc_async_read_barrier();
             cb_push_back(cb_in_batch, input_block_size_sticks_per_core);
-        } else {
-            // For non-reader kernels, skip over the transfer data
-            const uint32_t group_size = args[args_idx++];
-            args_idx += group_size * 6;  // Skip 6 args per transfer (src_x, src_y, src_offset_bytes, dst_offset_bytes,
-                                         // transfer_size_bytes, bank_id)
         }
 
         for (uint32_t i = 0; i < num_full_tiles; i++) {
