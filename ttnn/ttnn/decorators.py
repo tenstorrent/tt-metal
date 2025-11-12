@@ -203,7 +203,12 @@ def set_tensor_id(tensor, force=False):
     if isinstance(tensor, (ttnn.Tensor, torch.Tensor)):
         if not force and hasattr(tensor, "tensor_id") and tensor.tensor_id is not None:
             return
-        tensor.tensor_id = ttnn._ttnn.fetch_and_increment_tensor_id()
+        if isinstance(tensor, ttnn.Tensor):
+            # For ttnn.Tensor, set_tensor_id modifies the C++ object directly
+            ttnn._ttnn.set_tensor_id(tensor)
+        else:
+            # For torch.Tensor, assign the returned ID as a Python attribute
+            tensor.tensor_id = ttnn._ttnn.set_tensor_id(tensor)
     elif isinstance(tensor, (list, tuple)):
         for element in tensor:
             set_tensor_id(element, force)

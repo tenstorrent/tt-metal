@@ -308,9 +308,19 @@ PYBIND11_MODULE(_ttnn, module) {
         "Increment tensor id and return the previously held id");
 
     module.def(
-        "fetch_and_increment_tensor_id",
-        &tt::tt_metal::Tensor::next_tensor_id,
-        "Atomically fetch and increment the tensor ID counter");
+        "set_tensor_id",
+        [](py::object& tensor_obj) -> std::uint64_t {
+            if (py::isinstance<tt::tt_metal::Tensor>(tensor_obj)) {
+                auto& tensor = tensor_obj.cast<tt::tt_metal::Tensor&>();
+                return tt::tt_metal::Tensor::set_tensor_id(tensor);
+            } else {
+                // For torch.Tensor, create a temporary tensor to get the next ID
+                tt::tt_metal::Tensor temp;
+                return tt::tt_metal::Tensor::set_tensor_id(temp);
+            }
+        },
+        py::arg("tensor"),
+        "Set the tensor ID (for ttnn.Tensor) or fetch and increment (for torch.Tensor)");
 
     module.def(
         "get_device_operation_id",
