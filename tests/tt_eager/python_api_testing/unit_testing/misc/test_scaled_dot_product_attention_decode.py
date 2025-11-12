@@ -1598,15 +1598,23 @@ def test_sdpa_decode_sliding_window(
 
     ttnn.device.DisablePersistentKernelCache()
 
-    # Test different positions to ensure sliding window works correctly
-    test_positions = [
-        sliding_window_size * 2,  # Window fully slides
-        sliding_window_size // 2,  # Window partially filled
-        sliding_window_size - 1,  # Window almost full
-        s // 2,  # Middle of sequence
-        s - 10,  # Near end of sequence
-    ]
+    # Test different window start positions to ensure all fill tile code paths are hit
+    # when generating the sliding window
+    k_values = [5, 10, 20, 30]
 
+    test_positions = [
+        *[
+            (sliding_window_size + offset - 1) + 32 * k
+            for k in k_values
+            for offset in (15, 16, 17)
+            # in first face, in second face (1st face completely filled), in second face (1st face completely filled + 2nd face partially filled)
+        ],
+        sliding_window_size * 2,
+        sliding_window_size // 2,
+        sliding_window_size - 1,
+        s // 2,
+        s - 10,
+    ]
     for cur_pos in test_positions:
         if cur_pos >= s:
             continue

@@ -40,6 +40,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/control_plane.hpp>
+#include "common/tt_backend_api_types.hpp"
 
 using tt::tt_metal::IDevice;
 using tt::tt_metal::distributed::MeshCoordinate;

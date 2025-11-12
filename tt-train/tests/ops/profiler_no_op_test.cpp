@@ -16,6 +16,7 @@
 #include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "ttnn/tensor/to_string.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
 class ProfilerNoOpTest : public ::testing::Test {
@@ -45,9 +46,9 @@ TEST_F(ProfilerNoOpTest, ProfilerNoOpTest_Batch) {
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR);
     std::cout << "Input Logits:\n";
-    input.print();
+    std::cout << ttnn::to_string(input) << "\n";
 
     auto result = ttml::metal::profiler_no_op(input, "identifier");
     std::cout << "Profiler_no_op_test:\nResult:\n";
-    result.print();
+    std::cout << ttnn::to_string(result) << "\n";
 }

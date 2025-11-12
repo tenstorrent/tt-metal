@@ -445,6 +445,9 @@ public:
     static constexpr size_t default_packet_payload_size_bytes = tt::tile_size(tt::DataFormat::Bfp8_b) * 4;
     static constexpr size_t default_mesh_packet_payload_size_bytes = tt::tile_size(tt::DataFormat::Bfp8_b) * 4;
 
+    static_assert(default_packet_payload_size_bytes == 4352, "Packet size must be 4352 bytes");
+    static_assert(default_mesh_packet_payload_size_bytes == 4352, "Mesh packet size must be 4352 bytes");
+
     FabricEriscDatamoverBuilder(
         const CoreCoord& my_eth_core_logical,
         size_t my_noc_x,
