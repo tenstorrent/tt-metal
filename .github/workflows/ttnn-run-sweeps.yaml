@@ -654,18 +654,26 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Entry 1: Manual dispatch - runs only for workflow_dispatch
+          # Entry 1: Manual dispatch with single sweep only
           - arch: ${{ github.event.inputs.arch || 'wormhole_b0' }}
             runner_label: ${{ github.event.inputs['runner-label'] || 'N150' }}
             generate_mode: all
-          # Entry 2: Scheduled/comprehensive - N150 for non-CCL modules
+            exclude_single: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && (github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)')) && 'true' || 'false' }}
+          # Entry 2: Scheduled/comprehensive OR manual dispatch with "ALL SWEEPS" - N150 for non-CCL modules
           - arch: ${{ github.event.inputs.arch || 'wormhole_b0' }}
             runner_label: N150
             generate_mode: non_ccl
-          # Entry 3: Scheduled/comprehensive - n300-llmbox for CCL modules only
+            exclude_split: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' && github.event.inputs.sweep_name != 'ALL SWEEPS (Comprehensive)' && 'true' || 'false' }}
+          # Entry 3: Scheduled/comprehensive OR manual dispatch with "ALL SWEEPS" - n300-llmbox for CCL modules only
           - arch: ${{ github.event.inputs.arch || 'wormhole_b0' }}
             runner_label: n300-llmbox
             generate_mode: ccl_only
+            exclude_split: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' && github.event.inputs.sweep_name != 'ALL SWEEPS (Comprehensive)' && 'true' || 'false' }}
+        exclude:
+          # Exclude Entry 1 for scheduled runs or manual dispatch with "ALL SWEEPS"
+          - exclude_single: 'true'
+          # Exclude Entries 2 and 3 when it's a single sweep (manual dispatch)
+          - exclude_split: 'true'
     container:
       image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       env:
@@ -729,17 +737,8 @@ jobs:
             SKIP_MODULES_FLAG="--skip-modules ccl.generality.all_broadcast,ccl.generality.all_gather,ccl.generality.all_reduce,ccl.generality.all_to_all_combine,ccl.generality.all_to_all_dispatch,ccl.generality.all_to_all,ccl.generality.point_to_point,ccl.generality.reduce_scatter"
           elif [[ "${{ matrix.generate_mode }}" == "ccl_only" ]]; then
             # Generate only CCL modules on n300-llmbox by skipping all non-CCL modules
-            NON_CCL_MODULES=$(python3 - <<'PY'
-            import pathlib
-            sweeps_dir = pathlib.Path("tests/sweep_framework/sweeps")
-            all_modules = []
-            for py_file in sorted(sweeps_dir.glob("**/*.py")):
-                module_name = str(py_file.relative_to(sweeps_dir))[:-3].replace("/", ".")
-                if "__init__" not in module_name and not module_name.startswith("ccl."):
-                    all_modules.append(module_name)
-            print(",".join(all_modules))
-            PY
-            )
+            # Use single-line Python command to avoid YAML parsing issues with multiline strings
+            NON_CCL_MODULES=$(python3 -c "import pathlib; sweeps_dir = pathlib.Path('tests/sweep_framework/sweeps'); all_modules = [str(py_file.relative_to(sweeps_dir))[:-3].replace('/', '.') for py_file in sorted(sweeps_dir.glob('**/*.py')) if '__init__' not in str(py_file.relative_to(sweeps_dir))[:-3].replace('/', '.') and not str(py_file.relative_to(sweeps_dir))[:-3].replace('/', '.').startswith('ccl.')]; print(','.join(all_modules))")
             SKIP_MODULES_FLAG="--skip-modules $NON_CCL_MODULES"
           fi
 
