@@ -942,6 +942,7 @@ public:
                 uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
                 std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_unicast_info =
                     extract_dst_noc_unicast_info(semaphore.core_range_set().ranges(), CoreType::ETH);
+                // comment
                 for (const auto& dst_noc_info : dst_noc_unicast_info) {
                     unicast_cmds.sub_cmds.emplace_back(CQDispatchWritePackedUnicastSubCmd{
                         .noc_xy_addr = device->get_noc_unicast_encoding(
