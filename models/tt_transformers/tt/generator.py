@@ -219,7 +219,7 @@ class Generator:
         kv_cache=None,
         prompt_lens=None,
         empty_slots=None,
-        enable_trace=True,
+        enable_trace=False,
         model_id_warmup=None,
         **kwargs,
     ):
