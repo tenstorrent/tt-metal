@@ -122,17 +122,6 @@ void kernel_main() {
     constexpr uint32_t stride_w_bytes = dilation_w * conv_act_c_read_bytes;
     constexpr bool sliced_inner_dim = window_outer > 1;
 
-    // num tiles = act_block_num_tiles
-    // tile size = act_mcast_tile_size_bytes
-    // noc burst size = NOC_MAX_BURST_SIZE
-    constexpr uint32_t mcast_total_bytes = act_block_num_tiles * act_mcast_tile_size_bytes;
-
-    constexpr uint32_t mcast_group_1_tile_cnt = NOC_MAX_BURST_SIZE / act_mcast_tile_size_bytes;
-    constexpr uint32_t mcast_group_1_size = mcast_group_1_tile_cnt * act_mcast_tile_size_bytes;
-    constexpr uint32_t mcast_group_1_cnt = mcast_total_bytes / mcast_group_1_size;
-    constexpr uint32_t mcast_group_2_size = mcast_total_bytes % mcast_group_1_size;
-    constexpr uint32_t mcast_group_2_cnt = mcast_group_2_size > 0 ? 1 : 0;
-
     // Reset reader_idx to finish act_block_h_datums
     uint32_t reader_idx = 0;
     uint32_t start_reader_idx = 0;
@@ -186,42 +175,12 @@ void kernel_main() {
 
                     noc_semaphore_set(act_mcast_receiver_semaphore_addr_ptr, INVALID);
 
-                    // Now we have the block in the CB address, we can mcast to dests!
-                    uint32_t tilized_act_start_address = get_read_ptr(tilized_in0_cb_id);
-
-                    uint32_t local_write_addr = get_write_ptr(cb_id_act);
-                    uint32_t tile_cnt_wait = mcast_group_1_tile_cnt;
-                    // for loop for noc burst group 1 with constexpr
-                    if constexpr (mcast_group_1_cnt > 0) {
-                        for (uint32_t i = 0; i < mcast_group_1_cnt; i++) {
-                            cb_wait_front(tilized_in0_cb_id, tile_cnt_wait);
-                            multicast_act_data<act_mcast_num_cores>(
-                                is_receiver_core,
-                                tilized_act_start_address,
-                                local_write_addr,
-                                act_multicast_noc_addr,
-                                mcast_group_1_size,
-                                false);
-                            local_write_addr += mcast_group_1_size;
-                            tilized_act_start_address += mcast_group_1_size;
-                            tile_cnt_wait += mcast_group_1_tile_cnt;
-                        }
-                    }
-                    if constexpr (mcast_group_2_size > 0) {
-                        // compute tilizes and pops cb_id_act and pushes to tilized_in0_cb_id
-                        cb_wait_front(tilized_in0_cb_id, act_block_num_tiles);
-                        multicast_act_data<act_mcast_num_cores>(
-                            is_receiver_core,
-                            tilized_act_start_address,
-                            local_write_addr,
-                            act_multicast_noc_addr,
-                            mcast_group_2_size,
-                            true);
-                    } else if constexpr (act_mcast_num_cores == 0) {
-                        if (is_receiver_core) {
-                            noc_async_write_barrier();
-                        }
-                    }
+                    mcast_block<
+                        act_mcast_num_cores,
+                        NOC_MAX_BURST_SIZE,
+                        act_block_num_tiles,
+                        act_mcast_tile_size_bytes>(
+                        is_receiver_core, tilized_in0_cb_id, cb_id_act, act_multicast_noc_addr);
 
                     // Note: no need for write barrier, since these two multicasts are done on the same noc id and
                     // same vc even though cmd bufs are different Also, this only works because we are setting VCs
