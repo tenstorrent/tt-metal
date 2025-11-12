@@ -336,10 +336,6 @@ RunTimeOptions::RunTimeOptions() {
         this->log_kernels_compilation_commands = true;
     }
 
-    if (getenv("TT_METAL_USE_MGD_1_0")) {
-        this->use_mesh_graph_descriptor_1_0 = true;
-    }
-
     if (getenv("TT_METAL_FORCE_JIT_COMPILE")) {
         this->force_jit_compile = true;
     }
