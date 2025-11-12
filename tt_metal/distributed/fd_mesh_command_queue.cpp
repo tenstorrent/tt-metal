@@ -1001,12 +1001,13 @@ void FDMeshCommandQueue::capture_go_signal_trace_on_unused_subgrids(
     bool unicast_go_signals,
     const program_dispatch::ProgramDispatchMetadata& dispatch_md) {
     // TODO: #31963 Handle the case where there are multiple active grids.
-    TT_FATAL(active_grids_set.size() <= 1, "Cannot support non convex grids.");
     MeshCoordinateRange full_grid(mesh_device_->get_view().get_local_mesh_coord_range());
     MeshCoordinateRangeSet unused_grids_set(full_grid);
     if (active_grids_set.size() == 1) {
         MeshCoordinateRange active_grid = active_grids_set.ranges().front();
         unused_grids_set = subtract(full_grid, active_grid);
+    } else {
+        unused_grids_set = {};
     }
     for (const auto& unused_grid : unused_grids_set.ranges()) {
         if (!mesh_device_->is_local(unused_grid.start_coord())) {
