@@ -19,6 +19,27 @@ using std::vector;  // TODO(AP)
 // Reference CPU implementation of reduce_H
 //////////////////////////////////////////////////////////////////////////////////////////
 
+struct TensAddr {
+    TensAddr(const std::vector<std::uint32_t>& shape) : sh(shape) {}
+
+    std::vector<std::uint32_t> sh;
+
+    std::uint32_t numel() const {
+        std::uint32_t prod = 1;
+        for (int j = 0; j < sh.size(); j++) {
+            prod *= sh[j];
+        }
+        return prod;
+    }
+
+    int offs(int n, int c, int h, int w) {
+        TT_ASSERT(
+            std::uint32_t(n) < sh[0] && std::uint32_t(c) < sh[1] && std::uint32_t(h) < sh[2] &&
+            std::uint32_t(w) < sh[3]);
+        return w + (sh[3] * h) + (sh[2] * sh[3] * c) + (sh[1] * sh[2] * sh[3] * n);
+    }
+};
+
 // input shape.x is assumed to have the full number of elements in bfloat16
 // src_vec is expected to be untilized
 // result is also untilized
