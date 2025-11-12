@@ -57,7 +57,6 @@
 #include "get_platform_architecture.hpp"
 #include "common/tt_backend_api_types.hpp"
 
-namespace tt {
 
 namespace tt_metal {
 enum class FabricConfig : uint32_t;
