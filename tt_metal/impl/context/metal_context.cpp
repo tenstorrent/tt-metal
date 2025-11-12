@@ -5,7 +5,6 @@
 #include <cstdint>
 #include <filesystem>
 #include <algorithm>
-#include <execution>
 #include <mutex>
 #include <future>
 #include <vector>
@@ -205,7 +204,7 @@ void MetalContext::initialize(
         for (size_t i = 0; i < futures.size(); ++i) {
             ChipId device_id = device_ids[i];  // Get the corresponding device ID
             try {
-                futures[i].wait();  // This handles synchronization and exception propagation
+                futures[i].get();  // This handles synchronization and exception propagation
             } catch (const std::exception& e) {
                 TT_THROW("Device initialization failed for device {}: {}", device_id, e.what());
             } catch (...) {
@@ -258,7 +257,7 @@ void MetalContext::initialize(
         for (size_t i = 0; i < futures.size(); ++i) {
             ChipId device_id = device_ids[i];
             try {
-                futures[i].wait();
+                futures[i].get();
             } catch (const std::exception& e) {
                 TT_THROW("Device final initialization failed for device {}: {}", device_id, e.what());
             } catch (...) {
@@ -372,23 +371,15 @@ MetalContext::MetalContext() {
     l1_bank_offset_map_.reserve(cluster_->all_chip_ids().size());
     dram_bank_to_noc_xy_.reserve(cluster_->all_chip_ids().size());
     l1_bank_to_noc_xy_.reserve(cluster_->all_chip_ids().size());
+    worker_logical_col_to_virtual_col_.reserve(cluster_->all_chip_ids().size());
+    worker_logical_row_to_virtual_row_.reserve(cluster_->all_chip_ids().size());
     for (ChipId device_id : cluster_->all_chip_ids()) {
         dram_bank_offset_map_.emplace(device_id, std::vector<int32_t>{});
         l1_bank_offset_map_.emplace(device_id, std::vector<int32_t>{});
         dram_bank_to_noc_xy_.emplace(device_id, std::vector<uint16_t>{});
         l1_bank_to_noc_xy_.emplace(device_id, std::vector<uint16_t>{});
-    }
-
-    // Initialize some container members to allow threadsafe operations on them later
-    dram_bank_offset_map_.reserve(cluster_->all_chip_ids().size());
-    l1_bank_offset_map_.reserve(cluster_->all_chip_ids().size());
-    dram_bank_to_noc_xy_.reserve(cluster_->all_chip_ids().size());
-    l1_bank_to_noc_xy_.reserve(cluster_->all_chip_ids().size());
-    for (ChipId device_id : cluster_->all_chip_ids()) {
-        dram_bank_offset_map_.emplace(device_id, std::vector<int32_t>{});
-        l1_bank_offset_map_.emplace(device_id, std::vector<int32_t>{});
-        dram_bank_to_noc_xy_.emplace(device_id, std::vector<uint16_t>{});
-        l1_bank_to_noc_xy_.emplace(device_id, std::vector<uint16_t>{});
+        worker_logical_col_to_virtual_col_.emplace(device_id, std::vector<uint8_t>{});
+        worker_logical_row_to_virtual_row_.emplace(device_id, std::vector<uint8_t>{});
     }
 
     // We do need to call Cluster teardown at the end of the program, use atexit temporarily until we have clarity on
