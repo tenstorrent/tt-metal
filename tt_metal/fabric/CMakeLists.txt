@@ -88,6 +88,8 @@ target_include_directories(fabric SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
 target_link_libraries(
     fabric
+    PUBLIC
+        TT::ScaleoutTools
     PRIVATE
         TT::ScaleoutTools
         Metalium::Metal::LLRT
