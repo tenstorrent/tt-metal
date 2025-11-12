@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 from pathlib import Path
 from typing import Optional
 
@@ -48,6 +49,57 @@ def create_random_image(width, height):
     # Generate random RGB values
     random_array = np.random.randint(0, 256, (height, width, 3), dtype=np.uint8)
     return PIL_Image.fromarray(random_array, "RGB")
+
+
+# load input prompts from json, return as a (list of inputs, number of trace batches)
+def load_inputs(user_input, batch):
+    if isinstance(user_input, (list, tuple)):
+        # multiple sources, e.g. ("data_trace.json", "data.json")
+        user_inputs = []
+        num_trace_batches = 0
+        for input_ in user_input:
+            cur_inputs, n_trace = load_inputs(input_, batch)
+            if n_trace > 0:
+                assert num_trace_batches * batch == len(user_inputs), "trace inputs must go first"
+                num_trace_batches += n_trace
+            user_inputs.extend(cur_inputs)
+
+        return user_inputs, num_trace_batches
+
+    is_trace = False
+    if isinstance(user_input, str):
+        is_trace = "trace" in user_input
+        with open(user_input, "r") as f:
+            user_input = json.load(f)
+
+    for dialog in user_input:
+        for message in dialog:
+            for content in message["content"]:
+                if content["type"] == "image":
+                    if "random" in content:
+                        # [width, height] is stored
+                        img = create_random_image(*content["random"])
+                        del content["random"]
+                    elif "llama_models" in content:
+                        # image_name from llama_models resources is stored
+                        with open(IMG_PATH / content["llama_models"], "rb") as f:
+                            img = PIL_Image.open(f).convert("RGB")
+                    elif "image" in content:
+                        if isinstance(content["image"], str):
+                            with open(content["image"], "rb") as f:
+                                img = PIL_Image.open(f).convert("RGB")
+                        elif isinstance(content["image"], PIL_Image.Image):
+                            img = content["image"]
+                    else:
+                        raise ValueError(f"Unknown image type for {content}")
+
+                    content["image"] = img
+
+    if len(user_input) < batch:
+        user_input *= batch // len(user_input)
+    assert len(user_input) % batch == 0
+
+    return user_input, is_trace * len(user_input) // batch
 
 
 def create_multimodal_model(
@@ -137,13 +189,53 @@ def prepare_generator_args(
     ids=["normal"],
 )
 @pytest.mark.parametrize(
-    "warmup_iters, enable_trace, max_batch_size, include_text_only_prompts",
+    "warmup_iters, enable_trace, max_batch_size, input_prompts",
     [
-        (0, False, 1, False),  # batch1-notrace
-        (0, True, 1, False),  # batch1-trace
-        (0, True, 16, False),  # batch16-trace
-        (0, True, 32, False),  # batch32-trace
-        (0, True, 4, True),  # batch4-trace-with-text-prompts
+        (
+            0,  # warmup_iters
+            False,  # enable_trace
+            1,  # max_batch_size
+            (
+                "models/tt_transformers/demo/sample_prompts/vision_input_data_trace.json",
+                "models/tt_transformers/demo/sample_prompts/vision_input_data.json",
+            ),  # input_prompts
+        ),  # batch1-notrace
+        (
+            0,  # warmup_iters
+            True,  # enable_trace
+            1,  # max_batch_size
+            (
+                "models/tt_transformers/demo/sample_prompts/vision_input_data_trace.json",
+                "models/tt_transformers/demo/sample_prompts/vision_input_data.json",
+            ),  # input_prompts
+        ),  # batch1-trace
+        (
+            0,  # warmup_iters
+            True,  # enable_trace
+            16,  # max_batch_size
+            (
+                "models/tt_transformers/demo/sample_prompts/vision_input_data_trace.json",
+                "models/tt_transformers/demo/sample_prompts/vision_input_data.json",
+            ),  # input_prompts
+        ),  # batch16-trace
+        (
+            0,  # warmup_iters
+            True,  # enable_trace
+            32,  # max_batch_size
+            (
+                "models/tt_transformers/demo/sample_prompts/vision_input_data_trace.json",
+                "models/tt_transformers/demo/sample_prompts/vision_input_data.json",
+            ),  # input_prompts
+        ),  # batch32-trace
+        (
+            0,  # warmup_iters
+            True,  # enable_trace
+            4,  # max_batch_size
+            (
+                "models/tt_transformers/demo/sample_prompts/vision_input_data_trace.json",
+                "models/tt_transformers/demo/sample_prompts/vision_input_data_w_text_only.json",
+            ),  # input_prompts
+        ),  # batch4-trace-with-text-prompts
     ],
     ids=["batch1-notrace", "batch1-trace", "batch16-trace", "batch32-trace", "batch4-trace-with-text-prompts"],
 )
@@ -162,11 +254,12 @@ def test_multimodal_demo_text(
     warmup_iters,
     enable_trace,
     max_batch_size,
-    include_text_only_prompts,
+    input_prompts,
     data_parallel,
     test_type,
     max_seq_len,
     is_ci_env,
+    request,
     temperature: float = 0,
     top_p: float = 0.9,
     max_gen_len: Optional[int] = 500,
@@ -207,134 +300,9 @@ def test_multimodal_demo_text(
 
     xattn_caches = [model.setup_cache(model_args[i].max_batch_size) for i, model in enumerate(generator.model)]
 
-    # Create random images for trace capture with specific dimensions
-    trace_img_560x560 = create_random_image(560, 560)
-    trace_img_1120x560 = create_random_image(1120, 560)
-    trace_img_560x1120 = create_random_image(560, 1120)
-    trace_img_1120x1120 = create_random_image(1120, 1120)
-
-    with open(IMG_PATH / "ocr_image.jpeg", "rb") as f:
-        ocr_image = PIL_Image.open(f).convert("RGB")
-
-    with open(IMG_PATH / "clutter.jpeg", "rb") as f:
-        clutter = PIL_Image.open(f).convert("RGB")
-
-    # Trace capture dialogs with random images
-    trace_dialogs = [
-        [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image", "image": trace_img_560x560},
-                    {"type": "text", "text": "Describe this image."},
-                ],
-            }
-        ],
-        [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image", "image": trace_img_1120x560},
-                    {"type": "text", "text": "What do you see in this image?"},
-                ],
-            }
-        ],
-        [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image", "image": trace_img_560x1120},
-                    {"type": "text", "text": "What do you see in this image?"},
-                ],
-            }
-        ],
-        [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image", "image": trace_img_1120x1120},
-                    {"type": "text", "text": "Analyze this image."},
-                ],
-            }
-        ],
-    ]
-
-    if len(trace_dialogs) < max_batch_size:
-        trace_dialogs *= max_batch_size // len(trace_dialogs)
-
-    num_trace_batches = len(trace_dialogs) // max_batch_size
-
-    if not include_text_only_prompts:
-        with open(IMG_PATH / "dog.jpg", "rb") as f:
-            img = PIL_Image.open(f).convert("RGB")
-        logger.info(f"Dog image dimensions: {img.size} (width x height)")
-
-        with open(IMG_PATH / "pasta.jpeg", "rb") as f:
-            img2 = PIL_Image.open(f).convert("RGB")
-        logger.info(f"Pasta image dimensions: {img2.size} (width x height)")
-
-        # Regular testing dialogs with original images
-        dialogs = [
-            [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image", "image": img},
-                        {"type": "text", "text": "Write a haiku for this image."},
-                    ],
-                }
-            ],
-            [
-                {
-                    "role": "user",
-                    "content": [{"type": "image", "image": img2}, {"type": "text", "text": "What is for dinner?"}],
-                }
-            ],
-            [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image", "image": ocr_image},
-                        {"type": "text", "text": "What is the full text of this image? Do OCR"},
-                    ],
-                }
-            ],
-            [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image", "image": clutter},
-                        {"type": "text", "text": "What objects are in this image?"},
-                    ],
-                }
-            ],
-        ]
-    else:
-        # for text_only_prompts system message could be added. Find "or not image_ns.has_images" in https://huggingface.co/meta-llama/Llama-3.2-11B-Vision-Instruct/blob/main/chat_template.json
-        dialogs = [
-            [{"role": "user", "content": [{"type": "text", "text": "Write a haiku."}]}],
-            [{"role": "user", "content": [{"type": "text", "text": "What is for dinner?"}]}],
-            [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image", "image": ocr_image},
-                        {"type": "text", "text": "What is the full text of this image? Do OCR"},
-                    ],
-                }
-            ],
-            [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image", "image": clutter},
-                        {"type": "text", "text": "What objects are in this image?"},
-                    ],
-                }
-            ],
-        ]
-    if len(dialogs) < max_batch_size:
-        dialogs *= max_batch_size // len(dialogs)
+    # Override parameters from command line if they are provided
+    input_prompts = request.config.getoption("--input_prompts") or input_prompts
+    dialogs, num_trace_batches = load_inputs(input_prompts, max_batch_size)
 
     assert len(dialogs) % max_batch_size == 0
     total_users = len(dialogs)
@@ -346,8 +314,8 @@ def test_multimodal_demo_text(
 
     for iter_num in range(warmup_iters + 1):
         logger.info(f"Iteration {iter_num}")
-        current_dialogs = trace_dialogs + dialogs
-        for batch_idx in range(num_trace_batches + num_batches):
+        current_dialogs = dialogs
+        for batch_idx in range(num_batches):
             batch_dialogs = current_dialogs[batch_idx * max_batch_size : (batch_idx + 1) * max_batch_size]
             for dialog in batch_dialogs:
                 for msg in dialog:
