@@ -10,6 +10,7 @@
 
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt-metalium/fabric_types.hpp>
+#include <tt-metalium/routing_table_generator.hpp>
 
 namespace tt::tt_metal {
 
@@ -195,6 +196,7 @@ public:
     MeshContainer<ChipId> get_chip_ids(MeshId mesh_id, std::optional<MeshHostRankId> host_rank = std::nullopt) const;
 
     IntraMeshConnectivity get_intra_mesh_connectivity(MeshId mesh_id) const;
+
     InterMeshConnectivity get_inter_mesh_connectivity(MeshId mesh_id) const;
 
 private:

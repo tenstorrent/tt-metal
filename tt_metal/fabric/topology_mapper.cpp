@@ -1559,4 +1559,28 @@ void TopologyMapper::print_physical_adjacency_map(
     }
 }
 
+IntraMeshConnectivity TopologyMapper::get_intra_mesh_connectivity(MeshId mesh_id) const {
+    // Passthrough to mesh graph - return the full intra-mesh connectivity structure
+    // The mesh_id parameter is validated by checking bounds against the connectivity structure
+    const auto& connectivity = mesh_graph_.get_intra_mesh_connectivity();
+    TT_FATAL(
+        *mesh_id < connectivity.size(),
+        "TopologyMapper: mesh_id {} not found in mesh graph (connectivity size: {})",
+        mesh_id,
+        connectivity.size());
+    return connectivity;
+}
+
+InterMeshConnectivity TopologyMapper::get_inter_mesh_connectivity(MeshId mesh_id) const {
+    // Passthrough to mesh graph - return the full inter-mesh connectivity structure
+    // The mesh_id parameter is validated by checking bounds against the connectivity structure
+    const auto& connectivity = mesh_graph_.get_inter_mesh_connectivity();
+    TT_FATAL(
+        *mesh_id < connectivity.size(),
+        "TopologyMapper: mesh_id {} not found in mesh graph (connectivity size: {})",
+        mesh_id,
+        connectivity.size());
+    return connectivity;
+}
+
 }  // namespace tt::tt_fabric
