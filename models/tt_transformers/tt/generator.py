@@ -229,19 +229,11 @@ class Generator:
             # Only paged attention is supported for prefill
             enable_trace = False
 
-        tracy_profiler = kwargs.get("profiler", None)
-        if tracy_profiler is not None:
-            tracy_profiler.enable()
-            logger.info("Disabling Tracy Profiler")
-            tracy_profiler.disable()
         self.warmup_prefill_traces(
             page_table,
             kv_cache,
             enable_trace,
         )
-        if tracy_profiler is not None:
-            logger.info("Enabling Tracy Profiler")
-            tracy_profiler.enable()
 
         batch_size, batch_seq_len = tokens.shape
         max_batch_size_per_model = self.model_args[0].max_batch_size
