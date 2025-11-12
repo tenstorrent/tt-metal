@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Optional
 from loguru import logger
 import os
 import torch
@@ -27,7 +27,7 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import (
 @dataclass
 class TtSDXLCombinedPipelineConfig:
     base_config: TtSDXLPipelineConfig
-    refiner_config: TtSDXLImg2ImgPipelineConfig
+    refiner_config: Optional[TtSDXLImg2ImgPipelineConfig] = None
     denoising_split: float = 0.8  # Base does 80%, refiner does 20%. Set to 1.0 to disable refiner
 
     def __post_init__(self):
@@ -41,13 +41,13 @@ class TtSDXLCombinedPipelineConfig:
 
     @property
     def use_refiner(self):
-        """Refiner is used when denoising_split < 1.0"""
-        return self.denoising_split < 1.0
+        """Refiner is used when denoising_split < 1.0 and refiner_config is provided"""
+        return self.refiner_config is not None and self.denoising_split < 1.0
 
 
 class TtSDXLCombinedPipeline:
     """
-    Combined pipeline that orchestrates SDXL base and img2img refiner models.
+    Combined pipeline that orchestrates SDXL base and optionally img2img refiner models.
 
     The base model (TtSDXLPipeline) performs initial denoising up to a specified split point,
     then the refiner model (TtSDXLImg2ImgPipeline) takes over to complete the denoising and decode the final image.
@@ -56,7 +56,14 @@ class TtSDXLCombinedPipeline:
     The combined pipeline ALWAYS creates and manages the shared scheduler internally,
     ensuring proper coordination between base and refiner models.
 
-    Usage:
+    Usage (base-only):
+        combined = TtSDXLCombinedPipeline(
+            ttnn_device=mesh_device,
+            torch_base_pipeline=base,
+            base_config=TtSDXLPipelineConfig(...),
+        )
+
+    Usage (with refiner):
         combined = TtSDXLCombinedPipeline(
             ttnn_device=mesh_device,
             torch_base_pipeline=base,
@@ -71,10 +78,10 @@ class TtSDXLCombinedPipeline:
         self,
         ttnn_device,
         torch_base_pipeline,
-        torch_refiner_pipeline,
         base_config: TtSDXLPipelineConfig,
-        refiner_config: TtSDXLImg2ImgPipelineConfig,
-        denoising_split: float = 0.8,
+        torch_refiner_pipeline=None,
+        refiner_config: Optional[TtSDXLImg2ImgPipelineConfig] = None,
+        denoising_split: float = 1.0,
     ):
         """
         Create a combined pipeline with automatic scheduler sharing.
@@ -84,26 +91,52 @@ class TtSDXLCombinedPipeline:
 
         Args:
             ttnn_device: The TTNN device
-            torch_base_pipeline: Torch DiffusionPipeline for base model
-            torch_refiner_pipeline: Torch StableDiffusionXLImg2ImgPipeline for refiner
-            base_config: Configuration for base pipeline
-            refiner_config: Configuration for refiner pipeline
-            denoising_split: Fraction of denoising done by base (0.0-1.0), default 0.8
+            torch_base_pipeline: Torch DiffusionPipeline for base model (required)
+            base_config: Configuration for base pipeline (required)
+            torch_refiner_pipeline: Optional Torch StableDiffusionXLImg2ImgPipeline for refiner (None for base-only)
+            refiner_config: Optional configuration for refiner pipeline (None for base-only)
+            denoising_split: Fraction of denoising done by base (0.0-1.0), default 1.0 (base-only)
         """
         logger.info("Creating combined pipeline with shared scheduler...")
 
         self.ttnn_device = ttnn_device
 
-        # Create combined pipeline config
+        if torch_refiner_pipeline is None and refiner_config is not None:
+            raise ValueError("refiner_config provided but torch_refiner_pipeline is None")
+        if torch_refiner_pipeline is not None and refiner_config is None:
+            raise ValueError("torch_refiner_pipeline provided but refiner_config is None")
+
+        if torch_refiner_pipeline is None:
+            if denoising_split != 1.0:
+                logger.warning(
+                    f"No refiner pipeline provided, ignoring denoising_split={denoising_split} and setting it to 1.0"
+                )
+                denoising_split = 1.0
+
         self.config = TtSDXLCombinedPipelineConfig(
             base_config=base_config,
             refiner_config=refiner_config,
             denoising_split=denoising_split,
         )
 
+        # Only validate matching steps and configs if refiner is provided
+        if refiner_config is not None:
+            assert base_config.num_inference_steps == refiner_config.num_inference_steps, (
+                f"base_config.num_inference_steps ({base_config.num_inference_steps}) must equal "
+                f"refiner_config.num_inference_steps ({refiner_config.num_inference_steps}). "
+                f"Both should be set to the total number of denoising steps. "
+                f"Use denoising_split={denoising_split} to control how these steps are divided "
+                f"(base will do {int(denoising_split * 100)}%, refiner will do {int((1 - denoising_split) * 100)}%)."
+            )
+
+            assert base_config.use_cfg_parallel == refiner_config.use_cfg_parallel, (
+                f"base_config.use_cfg_parallel ({base_config.use_cfg_parallel}) must equal "
+                f"refiner_config.use_cfg_parallel ({refiner_config.use_cfg_parallel}). "
+                f"Both pipelines must use the same CFG parallel configuration to ensure consistent batch sizing."
+            )
+
         self.batch_size = list(ttnn_device.shape)[1] if base_config.use_cfg_parallel else ttnn_device.get_num_devices()
 
-        # Create a single shared scheduler based on base pipeline's scheduler config
         logger.info("Creating shared scheduler...")
         with ttnn.distribute(ttnn.ReplicateTensorToMesh(ttnn_device)):
             self.shared_scheduler = TtEulerDiscreteScheduler(
@@ -191,7 +224,6 @@ class TtSDXLCombinedPipeline:
         # 4. Compile refiner if enabled
         if self.config.use_refiner:
             logger.info("Allocating device tensors for refiner pipeline...")
-            # Create dummy image tensor for img2img pipeline
             dummy_latents = torch.randn(self.batch_size, 4, 128, 128)
             refiner_dummy_embeds = torch.randn(self.batch_size, 2, MAX_SEQUENCE_LENGTH, 1280)
 
@@ -238,18 +270,13 @@ class TtSDXLCombinedPipeline:
         crop_coords_top_left=None,
         guidance_rescale=None,
     ):
-        batch_size = (
-            list[Any](self.ttnn_device.shape)[1]
-            if self.config.base_config.use_cfg_parallel
-            else self.ttnn_device.get_num_devices()
-        )
         if isinstance(prompts, str):
             prompts = [prompts]
 
         if prompt_2 is not None and isinstance(prompt_2, str):
             prompt_2 = [prompt_2]
 
-        needed_padding = (batch_size - len(prompts) % batch_size) % batch_size
+        needed_padding = (self.batch_size - len(prompts) % self.batch_size) % self.batch_size
         if isinstance(negative_prompts, list):
             assert len(negative_prompts) == len(prompts), "prompts and negative_prompt lists must be the same length"
 
@@ -259,8 +286,6 @@ class TtSDXLCombinedPipeline:
         if isinstance(negative_prompts, list):
             negative_prompts = negative_prompts + [""] * needed_padding
 
-        # Apply runtime parameters if provided and different from config
-        # These must be set BEFORE auto-compile to ensure compilation happens with correct settings
         if guidance_scale is not None and guidance_scale != self.config.base_config.guidance_scale:
             self.base_pipeline.set_guidance_scale(guidance_scale)
             if self.config.use_refiner:
@@ -276,30 +301,22 @@ class TtSDXLCombinedPipeline:
             if self.config.use_refiner:
                 self.refiner_pipeline.set_guidance_rescale(guidance_rescale)
 
-        # Handle num_inference_steps BEFORE auto-compile
-        # When using refiner, we'll set config but manually split timesteps later
-        # When not using refiner, we can set it normally
         if num_inference_steps is not None and num_inference_steps != self.config.base_config.num_inference_steps:
             self.base_pipeline.set_num_inference_steps(num_inference_steps)
 
             if self.config.use_refiner:
                 self.refiner_pipeline.set_num_inference_steps(num_inference_steps)
 
-        # Auto-compile after all runtime parameters are set
         self._auto_compile_if_needed()
 
         profiler.start("combined_generation")
 
-        # Determine effective num_inference_steps
-        effective_num_inference_steps = (
+        num_inference_steps = (
             num_inference_steps if num_inference_steps is not None else self.config.base_config.num_inference_steps
         )
 
-        # Calculate split for base/refiner
         split_idx = (
-            self._calculate_timestep_split(effective_num_inference_steps)
-            if self.config.use_refiner
-            else effective_num_inference_steps
+            self._calculate_timestep_split(num_inference_steps) if self.config.use_refiner else num_inference_steps
         )
 
         # For refiner case, we need to mark that input tensors need regeneration since we updated the config
@@ -309,12 +326,9 @@ class TtSDXLCombinedPipeline:
             and num_inference_steps != self.config.base_config.num_inference_steps
         ):
             logger.info(
-                f"Configuring pipelines: base will use {split_idx} steps, refiner will use {effective_num_inference_steps - split_idx} steps from {effective_num_inference_steps} total"
+                f"Configuring pipelines: base will use {split_idx} steps, refiner will use {num_inference_steps - split_idx} steps from {num_inference_steps} total"
             )
             self.base_pipeline.generated_input_tensors = False
-            # Save originals for restoration later
-            original_base_config_steps = self.base_pipeline.pipeline_config.num_inference_steps
-            original_refiner_config_steps = self.refiner_pipeline.pipeline_config.num_inference_steps
 
         # 1. Encode prompts using base pipeline
         logger.info("Encoding prompts...")
@@ -336,33 +350,27 @@ class TtSDXLCombinedPipeline:
             sigmas=sigmas,
         )
 
-        # 3. Log the split information
+        # 3. Run base pipeline with timesteps[0:split_idx]
         if self.config.use_refiner:
             logger.info(
-                f"Denoising split: base will perform {split_idx}/{effective_num_inference_steps} steps, "
-                f"refiner will perform {effective_num_inference_steps - split_idx}/{effective_num_inference_steps} steps"
+                f"Denoising split: base will perform {split_idx}/{num_inference_steps} steps, "
+                f"refiner will perform {num_inference_steps - split_idx}/{num_inference_steps} steps"
             )
-
-        # 4. Run base pipeline with timesteps[0:split_idx]
-        if self.config.use_refiner and split_idx < effective_num_inference_steps:
-            # Set base pipeline to only run split_idx steps
-            # We set the attribute directly since we're manually managing timesteps
             self.base_pipeline.num_inference_steps = split_idx
 
             logger.info(f"Running base pipeline for {split_idx} steps...")
             self.base_pipeline.prepare_input_tensors([tt_latents, tt_prompt_embeds[0], tt_add_text_embeds[0]])
             base_latents = self.base_pipeline.generate_images(return_latents=True)  # Skip VAE decoding for refiner
 
-            # 5. Run refiner pipeline with timesteps[split_idx:] and base latents
-            logger.info(f"Running refiner pipeline for {effective_num_inference_steps - split_idx} steps...")
+            # 4. Run refiner pipeline with timesteps[split_idx:] and base latents
+            logger.info(f"Running refiner pipeline for {num_inference_steps - split_idx} steps...")
 
-            # Generate input tensors for refiner with base latents
             (
                 refiner_latents,
                 refiner_prompt_embeds,
                 refiner_add_text_embeds,
             ) = self.refiner_pipeline.generate_input_tensors(
-                all_prompt_embeds_torch=torch.randn(batch_size, 2, MAX_SEQUENCE_LENGTH, 1280),
+                all_prompt_embeds_torch=torch.randn(self.batch_size, 2, MAX_SEQUENCE_LENGTH, 1280),
                 torch_add_text_embeds=torch_add_text_embeds,
                 input_latents=base_latents,
                 fixed_seed_for_batch=True,
@@ -373,9 +381,7 @@ class TtSDXLCombinedPipeline:
 
             self.refiner_pipeline.tt_scheduler.set_step_index(split_idx)
 
-            # Now override timesteps and num_inference_steps AFTER generate_input_tensors
-            # to avoid them being reset by _prepare_timesteps
-            self.refiner_pipeline.num_inference_steps = effective_num_inference_steps - split_idx
+            self.refiner_pipeline.num_inference_steps = num_inference_steps - split_idx
 
             self.refiner_pipeline.prepare_input_tensors(
                 [
@@ -386,22 +392,21 @@ class TtSDXLCombinedPipeline:
             )
             images = self.refiner_pipeline.generate_images()
 
-            # Reset scheduler and restore timesteps for next generation
             self.refiner_pipeline.tt_scheduler.set_step_index(0)
         else:
-            # No refiner or split_idx == effective_num_inference_steps, just run base
-            logger.info(f"Running base pipeline only for {effective_num_inference_steps} steps...")
+            logger.info(f"Running base pipeline only for {num_inference_steps} steps...")
             self.base_pipeline.prepare_input_tensors([tt_latents, tt_prompt_embeds[0], tt_add_text_embeds[0]])
             images = self.base_pipeline.generate_images()
 
         profiler.end("combined_generation")
         logger.info("Combined generation completed")
 
-        # Save images to output folder
         if not os.path.exists("output"):
             os.mkdir("output")
 
         for idx, img in enumerate(images):
+            if idx >= self.batch_size - needed_padding:
+                break
             img = img.unsqueeze(0)
             img = self.base_pipeline.torch_pipeline.image_processor.postprocess(img, output_type="pil")[0]
             img.save(f"output/output{idx}.png")
