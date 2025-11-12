@@ -20,6 +20,7 @@ from datetime import datetime
 
 from loguru import logger
 
+from models.tt_transformers.demo.trace_region_config import get_supported_trace_region_size
 from tests.scripts.common import run_process_and_get_result
 from tests.scripts.common import get_updated_device_params
 
@@ -398,6 +399,13 @@ def mesh_device(request, silicon_arch_name, device_params):
         if not ttnn.using_distributed_env() and param > ttnn.get_num_devices():
             pytest.skip("Requested more devices than available. Test not applicable for machine")
         mesh_shape = ttnn.MeshShape(1, param)
+
+    override_trace_region_size = get_supported_trace_region_size(
+        request, request.node.callspec.params.get("MESH_DEVICE")
+    )
+    if override_trace_region_size:
+        device_params["trace_region_size"] = override_trace_region_size
+        logger.info(f"Overriding trace region size to {override_trace_region_size}")
 
     updated_device_params = get_updated_device_params(device_params)
     fabric_config = updated_device_params.pop("fabric_config", None)
