@@ -299,12 +299,44 @@ constexpr bool is_spine_direction(eth_chan_directions direction) {
     return direction == eth_chan_directions::NORTH || direction == eth_chan_directions::SOUTH;
 }
 
+// Map compact index to actual direction (inverse of map_downstream_direction_to_compact_index)
+// For 2D fabric: sender channels 1-3 map to compact indices 0-2, which map to actual directions
+// Examples:
+// - EAST router (my_direction=0): compact 0→WEST(1), 1→NORTH(2), 2→SOUTH(3)
+// - WEST router (my_direction=1): compact 0→EAST(0), 1→NORTH(2), 2→SOUTH(3)
+// - NORTH router (my_direction=2): compact 0→EAST(0), 1→WEST(1), 2→SOUTH(3)
+// - SOUTH router (my_direction=3): compact 0→EAST(0), 1→WEST(1), 2→NORTH(2)
+FORCE_INLINE constexpr eth_chan_directions map_compact_index_to_direction(size_t compact_index) {
+    if constexpr (is_2d_fabric) {
+        if constexpr (my_direction == 0) {
+            // EAST router: compact 0→WEST(1), 1→NORTH(2), 2→SOUTH(3)
+            return static_cast<eth_chan_directions>(compact_index + 1);
+        } else {
+            // For other directions: if compact_index < my_direction, use as-is; else add 1
+            return static_cast<eth_chan_directions>(
+                (compact_index < my_direction) ? compact_index : (compact_index + 1));
+        }
+    } else {
+        // For 1D fabric, no mapping needed
+        return static_cast<eth_chan_directions>(compact_index);
+    }
+}
+
+// Determine which sender channels are "turn" channels (i.e., north/south for east/west routers)
+// Channel 0 is always for local workers, so it's never a turn channel
+// For 2D fabric, channels 1-3 correspond to compact indices 0-2, which map to actual directions
 constexpr auto get_sender_channel_turn_statuses() -> std::array<bool, MAX_NUM_SENDER_CHANNELS> {
     std::array<bool, MAX_NUM_SENDER_CHANNELS> turn_statuses = {};  // Initialize to false
+
+    // Channel 0 is always for local workers, never a turn channel
+    // Only non-spine routers (EAST/WEST) have turn channels
     if constexpr (!is_spine_direction(static_cast<eth_chan_directions>(my_direction))) {
-        for (size_t i = 0; i < MAX_NUM_SENDER_CHANNELS; i++) {
-            bool is_turn_sender_channel = is_spine_direction(static_cast<eth_chan_directions>(i)) && i != my_direction;
-            turn_statuses[i] = is_turn_sender_channel;
+        // Check each sender channel (1-3) to see if it goes to a spine direction (NORTH/SOUTH)
+        // Sender channel i (for i=1,2,3) corresponds to compact index (i-1)
+        for (size_t sender_channel = 1; sender_channel < MAX_NUM_SENDER_CHANNELS; sender_channel++) {
+            size_t compact_index = sender_channel - 1;
+            eth_chan_directions actual_direction = map_compact_index_to_direction(compact_index);
+            turn_statuses[sender_channel] = is_spine_direction(actual_direction);
         }
     }
 
@@ -354,7 +386,7 @@ bool did_something;
 template <uint8_t SENDER_CHANNEL_INDEX>
 FORCE_INLINE void update_packet_header_before_eth_send(volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header) {
 #if defined(FABRIC_2D)
-    constexpr bool IS_FORWARDED_TRAFFIC_FROM_ROUTER = my_direction != SENDER_CHANNEL_INDEX;
+    constexpr bool IS_FORWARDED_TRAFFIC_FROM_ROUTER = SENDER_CHANNEL_INDEX != 0;
     constexpr bool IS_TURN = sender_channels_turn_status[SENDER_CHANNEL_INDEX];
 #if defined(DYNAMIC_ROUTING_ENABLED)
     // Unimplemented for dynamic 2D
@@ -2118,7 +2150,7 @@ void
 template <size_t i>
 constexpr size_t get_credits_init_val() {
     if constexpr (is_2d_fabric) {
-        return i == my_direction ? 0 : SENDER_NUM_BUFFERS_ARRAY[i];
+        return i == 0 ? 0 : SENDER_NUM_BUFFERS_ARRAY[i];
     } else {
         return i == 0 ? 0 : SENDER_NUM_BUFFERS_ARRAY[i];
     }
@@ -2218,9 +2250,34 @@ void
     }
 }
 
-constexpr uint32_t get_vc0_downstream_sender_channel_free_slots_stream_id() {
-    return sender_channel_free_slots_stream_ids[1 + my_direction];
+// For 2D fabric: maps compact index to downstream direction for each my_direction
+// For 1D fabric: only 1 downstream direction per router (EAST forwards to WEST in 1D linear topology)
+#if defined(FABRIC_2D)
+constexpr uint32_t edm_index_to_edm_direction[eth_chan_directions::COUNT][NUM_DOWNSTREAM_SENDERS_VC0] = {
+    {eth_chan_directions::WEST, eth_chan_directions::NORTH, eth_chan_directions::SOUTH},  // EAST router
+    {eth_chan_directions::EAST, eth_chan_directions::NORTH, eth_chan_directions::SOUTH},  // WEST router
+    {eth_chan_directions::EAST, eth_chan_directions::WEST, eth_chan_directions::SOUTH},   // NORTH router
+    {eth_chan_directions::EAST, eth_chan_directions::WEST, eth_chan_directions::NORTH},   // SOUTH router
+};
+#else
+// 1D fabric: only 1 downstream sender per direction (linear topology)
+constexpr uint32_t edm_index_to_edm_direction[eth_chan_directions::COUNT][NUM_DOWNSTREAM_SENDERS_VC0] = {
+    {eth_chan_directions::WEST},  // EAST router forwards to WEST (downstream in 1D line)
+    {0},                          // WEST router (end of line, not typically used as forwarder)
+    {0},                          // NORTH not used in 1D
+    {0},                          // SOUTH not used in 1D
+};
+#endif
+
+constexpr uint32_t get_vc0_downstream_sender_channel_free_slots_stream_id(uint32_t edm_index) {
+    auto ds_edm_direction = edm_index_to_edm_direction[my_direction][edm_index];
+    if (my_direction > ds_edm_direction) {
+        return sender_channel_free_slots_stream_ids[my_direction];
+    } else {
+        return sender_channel_free_slots_stream_ids[(1 + my_direction)];
+    }
 }
+
 constexpr uint32_t get_vc1_downstream_sender_channel_free_slots_stream_id() {
     return sender_channel_free_slots_stream_ids[sender_channel_free_slots_stream_ids.size() - 1];
 }
@@ -2228,21 +2285,8 @@ constexpr uint32_t get_vc1_downstream_sender_channel_free_slots_stream_id() {
 void populate_local_sender_channel_free_slots_stream_id_ordered_map(
     uint32_t has_downstream_edm_vc0_buffer_connection,
     std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids_ordered) {
-    if constexpr (is_2d_fabric) {
-        // setup VC0 credits (we have one extra stream reg for VC0 and hence can do +1)
-        for (size_t i = 0; i < MAX_NUM_SENDER_CHANNELS - 1; i++) {
-            local_sender_channel_free_slots_stream_ids_ordered[i] = sender_channel_free_slots_stream_ids[i + 1];
-        }
-        local_sender_channel_free_slots_stream_ids_ordered[my_direction] = sender_channel_free_slots_stream_ids[0];
-        // setup VC1 credits (only if present)
-        if constexpr (NUM_SENDER_CHANNELS == MAX_NUM_SENDER_CHANNELS) {
-            local_sender_channel_free_slots_stream_ids_ordered[NUM_SENDER_CHANNELS - 1] =
-                vc1_sender_channel_free_slots_stream_id;
-        }
-    } else {
-        for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
-            local_sender_channel_free_slots_stream_ids_ordered[i] = sender_channel_free_slots_stream_ids[i];
-        }
+    for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
+        local_sender_channel_free_slots_stream_ids_ordered[i] = sender_channel_free_slots_stream_ids[i];
     }
 }
 
@@ -2375,15 +2419,9 @@ void kernel_main() {
     init_ptr_val<to_sender_packets_completed_streams[1]>(0);
     init_ptr_val<to_sender_packets_completed_streams[2]>(0);
     // The first sender channel in the array is always for the transient/worker connection
-    // For 2D, the assigned worker channel is into sender channel stream ID [my_direction]
-    // So when we are initializing the starting credit value, we offset by 1 for the non-worker connections
-    // when accessing `SENDER_NUM_BUFFERS_ARRAY` (to get the value for the correct direction)
-    init_ptr_val<sender_channel_free_slots_stream_ids[0]>(
-        is_2d_fabric ? SENDER_NUM_BUFFERS_ARRAY[my_direction] : SENDER_NUM_BUFFERS_ARRAY[0]);  // LOCAL
-    init_ptr_val<sender_channel_free_slots_stream_ids[1]>(
-        is_2d_fabric ? SENDER_NUM_BUFFERS_ARRAY[0] : SENDER_NUM_BUFFERS_ARRAY[1]);  // EAST
-    init_ptr_val<sender_channel_free_slots_stream_ids[2]>(
-        is_2d_fabric ? SENDER_NUM_BUFFERS_ARRAY[1] : SENDER_NUM_BUFFERS_ARRAY[2]);  // WEST
+    init_ptr_val<sender_channel_free_slots_stream_ids[0]>(SENDER_NUM_BUFFERS_ARRAY[0]);  // LOCAL WORKER
+    init_ptr_val<sender_channel_free_slots_stream_ids[1]>(SENDER_NUM_BUFFERS_ARRAY[1]);  // Compact index 0
+    init_ptr_val<sender_channel_free_slots_stream_ids[2]>(SENDER_NUM_BUFFERS_ARRAY[2]);  // Compact index 1
     // TODO: change to per channel downstream buffers.
     init_ptr_val<receiver_channel_0_free_slots_from_east_stream_id>(DOWNSTREAM_SENDER_NUM_BUFFERS_VC0);
     init_ptr_val<receiver_channel_0_free_slots_from_west_stream_id>(DOWNSTREAM_SENDER_NUM_BUFFERS_VC0);
@@ -2396,8 +2434,8 @@ void kernel_main() {
     }
 
     if constexpr (is_2d_fabric) {
-        init_ptr_val<sender_channel_free_slots_stream_ids[3]>(SENDER_NUM_BUFFERS_ARRAY[2]);  // NORTH
-        init_ptr_val<sender_channel_free_slots_stream_ids[4]>(SENDER_NUM_BUFFERS_ARRAY[3]);  // SOUTH
+        init_ptr_val<sender_channel_free_slots_stream_ids[3]>(SENDER_NUM_BUFFERS_ARRAY[3]);  // Compact index 2
+        init_ptr_val<sender_channel_free_slots_stream_ids[4]>(SENDER_NUM_BUFFERS_ARRAY[4]);  // VC1
         init_ptr_val<vc1_sender_channel_free_slots_stream_id>(SENDER_NUM_BUFFERS_ARRAY[VC1_SENDER_CHANNEL]);
         init_ptr_val<to_sender_packets_acked_streams[3]>(0);
         init_ptr_val<to_sender_packets_acked_streams[4]>(0);
@@ -2483,14 +2521,37 @@ void kernel_main() {
     const size_t local_sender_channel_3_connection_buffer_index_id = get_arg_val<uint32_t>(arg_idx++);
     const size_t local_sender_channel_4_connection_buffer_index_id = get_arg_val<uint32_t>(arg_idx++);
 
-    // downstream EDM semaphore location
+    // downstream EDM VC0 connection info
     const auto has_downstream_edm_vc0_buffer_connection = get_arg_val<uint32_t>(arg_idx++);
-    const auto downstream_edm_vc0_buffer_base_address = get_arg_val<uint32_t>(arg_idx++);
+
+    // For 2D: read 3 buffer base addresses, NOC coords, and registration addresses (one per compact index)
+    // For 1D: reads as 1D and only uses first element
+    std::array<uint32_t, NUM_DOWNSTREAM_SENDERS_VC0> downstream_edm_vc0_buffer_base_addresses;
+    if constexpr (is_2d_fabric) {
+        for (size_t i = 0; i < NUM_DOWNSTREAM_SENDERS_VC0; i++) {
+            downstream_edm_vc0_buffer_base_addresses[i] = get_arg_val<uint32_t>(arg_idx++);
+        }
+    } else {
+        downstream_edm_vc0_buffer_base_addresses[0] = get_arg_val<uint32_t>(arg_idx++);
+    }
+
     const auto downstream_edm_vc0_noc_x = get_arg_val<uint32_t>(arg_idx++);
     const auto downstream_edm_vc0_noc_y = get_arg_val<uint32_t>(arg_idx++);
 
-    const auto downstream_edm_vc0_worker_registration_id = get_arg_val<uint32_t>(arg_idx++);
-    const auto downstream_edm_vc0_worker_location_info_address = get_arg_val<uint32_t>(arg_idx++);
+    std::array<uint32_t, NUM_DOWNSTREAM_SENDERS_VC0> downstream_edm_vc0_worker_registration_ids;
+    std::array<uint32_t, NUM_DOWNSTREAM_SENDERS_VC0> downstream_edm_vc0_worker_location_info_addresses;
+    if constexpr (is_2d_fabric) {
+        for (size_t i = 0; i < NUM_DOWNSTREAM_SENDERS_VC0; i++) {
+            downstream_edm_vc0_worker_registration_ids[i] = get_arg_val<uint32_t>(arg_idx++);
+        }
+        for (size_t i = 0; i < NUM_DOWNSTREAM_SENDERS_VC0; i++) {
+            downstream_edm_vc0_worker_location_info_addresses[i] = get_arg_val<uint32_t>(arg_idx++);
+        }
+    } else {
+        downstream_edm_vc0_worker_registration_ids[0] = get_arg_val<uint32_t>(arg_idx++);
+        downstream_edm_vc0_worker_location_info_addresses[0] = get_arg_val<uint32_t>(arg_idx++);
+    }
+
     // unused - to be deleted
     [[maybe_unused]]
     const auto downstream_vc0_noc_interface_buffer_index_local_addr = 0;
@@ -2672,9 +2733,13 @@ void kernel_main() {
                     downstream_direction = static_cast<eth_chan_directions>(compact_index);
                 }
 
+                // Use downstream_direction to select the correct receiver free slots stream ID
+                // receiver_channel_free_slots_stream_ids is indexed by direction (EAST=0, WEST=1, NORTH=2, SOUTH=3)
                 auto receiver_channel_free_slots_stream_id =
-                    is_2d_fabric ? StreamId{receiver_channel_free_slots_stream_ids[downstream_direction]}
-                                 : StreamId{receiver_channel_free_slots_stream_ids[0]};
+                    StreamId{receiver_channel_free_slots_stream_ids[compact_index]};
+                // auto receiver_channel_free_slots_stream_id =
+                //     is_2d_fabric ? StreamId{receiver_channel_free_slots_stream_ids[downstream_direction]}
+                //                  : StreamId{receiver_channel_free_slots_stream_ids[0]};
                 new (&downstream_edm_noc_interfaces_vc0[compact_index]) RouterToRouterSender<
                     DOWNSTREAM_SENDER_NUM_BUFFERS_VC0>(
                     // persistent_mode -> hardcode to false for 1D because for 1D, EDM -> EDM
@@ -2683,10 +2748,10 @@ void kernel_main() {
                     is_persistent_fabric,
                     (downstream_edm_vc0_noc_x >> (compact_index * 8)) & 0xFF,
                     (downstream_edm_vc0_noc_y >> (compact_index * 8)) & 0xFF,
-                    downstream_edm_vc0_buffer_base_address,
+                    downstream_edm_vc0_buffer_base_addresses[compact_index],
                     DOWNSTREAM_SENDER_NUM_BUFFERS_VC0,
-                    downstream_edm_vc0_worker_registration_id,
-                    downstream_edm_vc0_worker_location_info_address,
+                    downstream_edm_vc0_worker_registration_ids[compact_index],
+                    downstream_edm_vc0_worker_location_info_addresses[compact_index],
                     channel_buffer_size,
                     local_sender_channel_connection_buffer_index_id[compact_index],
                     0,  // Unused for Router->Router connections. Router->Router always uses stream registers for
@@ -2703,7 +2768,8 @@ void kernel_main() {
                     // We add 1 because sender_channel[0] is for (non-forwarded) traffic from our local chip's NoC, so
                     // we skip that first one. The first forwarded direction is the next one so we start there.
                     is_2d_fabric
-                        ? get_vc0_downstream_sender_channel_free_slots_stream_id()  // local_sender_channel_free_slots_stream_ids_ordered[my_direction]//edm_index]
+                        ? get_vc0_downstream_sender_channel_free_slots_stream_id(
+                              compact_index)  // local_sender_channel_free_slots_stream_ids_ordered[my_direction]//edm_index]
                         : local_sender_channel_free_slots_stream_ids_ordered[1],
 
                     // This is our local stream register for the copy of the downstream router's
@@ -2788,7 +2854,8 @@ void kernel_main() {
         sizeof(PACKET_HEADER_TYPE));
 
     // initialize the local sender channel worker interfaces
-    constexpr auto sender_channel = is_2d_fabric ? my_direction : 0;
+    // Sender channel 0 is always for local worker in the new design
+    constexpr auto sender_channel = 0;
     if constexpr (is_sender_channel_serviced[sender_channel]) {
         init_local_sender_channel_worker_interfaces(
             local_sender_connection_live_semaphore_addresses,
@@ -3014,15 +3081,10 @@ void kernel_main() {
 
     // we force these values to a non-zero value so that if we run the fabric back to back,
     // and we can reliably probe from host that this kernel has initialized properly.
-    if constexpr (is_2d_fabric) {
-        *reinterpret_cast<volatile uint32_t*>(local_sender_connection_live_semaphore_addresses[my_direction]) = 99;
-        *reinterpret_cast<volatile uint32_t*>(local_sender_channel_connection_buffer_index_id[my_direction]) = 99;
-        *reinterpret_cast<volatile uint32_t*>(local_sender_flow_control_semaphores[my_direction]) = 99;
-    } else {
-        *reinterpret_cast<volatile uint32_t*>(local_sender_channel_0_connection_semaphore_addr) = 99;
-        *reinterpret_cast<volatile uint32_t*>(local_sender_channel_0_connection_buffer_index_addr) = 99;
-        *sender0_worker_semaphore_ptr = 99;
-    }
+    // Sender channel 0 is always for local worker in both 1D and 2D
+    *reinterpret_cast<volatile uint32_t*>(local_sender_channel_0_connection_semaphore_addr) = 99;
+    *reinterpret_cast<volatile uint32_t*>(local_sender_channel_0_connection_buffer_index_addr) = 99;
+    *sender0_worker_semaphore_ptr = 99;
 
     // make sure all the noc transactions are acked before re-init the noc counters
     teardown(termination_signal_ptr, edm_status_ptr, receiver_channel_0_trid_tracker, receiver_channel_1_trid_tracker);

@@ -74,8 +74,7 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
         num_sender_buffer_slots,
         num_remote_sender_buffer_slots,
         num_receiver_buffer_slots,
-        num_remote_receiver_buffer_slots,
-        options.direction);
+        num_remote_receiver_buffer_slots);
 
     log_trace(
         tt::LogFabric,
@@ -159,8 +158,8 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
         // for fabric with tensix extension, only check the vc1 sender channel and worker channel, other
         // channels are skipped
         bool is_2D_routing = FabricContext::is_2D_topology(topology);
-        uint32_t target_channel = get_worker_connected_sender_channel(options.direction, topology);
-        uint32_t vc1_target_channel = get_worker_or_vc1_connected_sender_channel(options.direction, topology);
+        uint32_t target_channel = get_worker_connected_sender_channel();
+        uint32_t vc1_target_channel = get_worker_or_vc1_connected_sender_channel(topology);
         return (idx == get_dateline_sender_channel_skip_idx(is_2D_routing) && is_dateline) ||
                (idx == this->dateline_upstream_sender_channel_skip_idx && is_dateline_upstream) ||
                (idx == this->dateline_upstream_adjcent_sender_channel_skip_idx && is_dateline_upstream_adj_dev) ||
@@ -211,8 +210,7 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
     std::array<size_t, builder_config::num_sender_channels>& num_sender_buffer_slots,
     std::array<size_t, builder_config::num_sender_channels>& num_remote_sender_buffer_slots,
     std::array<size_t, builder_config::num_receiver_channels>& num_receiver_buffer_slots,
-    std::array<size_t, builder_config::num_receiver_channels>& num_remote_receiver_buffer_slots,
-    eth_chan_directions direction) {
+    std::array<size_t, builder_config::num_receiver_channels>& num_remote_receiver_buffer_slots) {
     // fabric with tensix extension uses different buffer slots options, since only one or two sender channels are
     // used by fabric router, while other sender channels are skipped and have 0 buffer slots.
     static const std::vector<std::vector<std::pair<size_t, size_t>>> default_with_tensix_buffer_slot_options = {
@@ -333,8 +331,8 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
                 // extra sender channel for vc1
                 num_sender_channels = this->num_sender_channels_with_tensix_config_deadlock_avoidance;
             }
-            uint32_t target_channel = get_worker_connected_sender_channel(direction, topology);
-            uint32_t vc1_target_channel = get_worker_or_vc1_connected_sender_channel(direction, topology);
+            uint32_t target_channel = get_worker_connected_sender_channel();
+            uint32_t vc1_target_channel = get_worker_or_vc1_connected_sender_channel(topology);
             size_t default_num_sender_buffer_slots;
             size_t default_num_receiver_buffer_slots;
             // get the default buffer slots

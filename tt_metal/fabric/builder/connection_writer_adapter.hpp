@@ -112,15 +112,23 @@ private:
     // array, if forwarding to VC 1, use index 1 in the array
     std::array<size_t, builder_config::num_receiver_channels> downstream_sender_channels_num_buffers = {};
 
-    // holds the base address of the downstream sender channel buffer, by downstream sender/outbound VC index
-    std::array<std::optional<size_t>, builder_config::num_receiver_channels> downstream_edm_vcs_buffer_base_address = {};
+    // For VC0: holds base addresses for up to 3 downstream EDMs (indexed by compact index)
+    // For VC1: only index 0 is used (single VC1 downstream connection)
+    std::array<
+        std::array<std::optional<size_t>, builder_config::max_downstream_edms>,
+        builder_config::num_receiver_channels>
+        downstream_edm_buffer_base_addresses = {};
 
     uint32_t downstream_edms_connected = 0;
 
-    std::array<std::optional<size_t>, builder_config::num_receiver_channels>
-        downstream_edm_vcs_worker_registration_address = {};
-    std::array<std::optional<size_t>, builder_config::num_receiver_channels>
-        downstream_edm_vcs_worker_location_info_address = {};
+    std::array<
+        std::array<std::optional<size_t>, builder_config::max_downstream_edms>,
+        builder_config::num_receiver_channels>
+        downstream_edm_worker_registration_addresses = {};
+    std::array<
+        std::array<std::optional<size_t>, builder_config::max_downstream_edms>,
+        builder_config::num_receiver_channels>
+        downstream_edm_worker_location_info_addresses = {};
 
     bool is_2D_routing = false;
     eth_chan_directions my_direction = eth_chan_directions::EAST;

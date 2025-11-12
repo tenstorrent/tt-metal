@@ -82,8 +82,7 @@ private:
         std::array<size_t, tt::tt_fabric::builder_config::num_sender_channels>& num_sender_buffer_slots,
         std::array<size_t, tt::tt_fabric::builder_config::num_sender_channels>& num_remote_sender_buffer_slots,
         std::array<size_t, tt::tt_fabric::builder_config::num_receiver_channels>& num_receiver_buffer_slots,
-        std::array<size_t, tt::tt_fabric::builder_config::num_receiver_channels>& num_remote_receiver_buffer_slots,
-        tt::tt_fabric::eth_chan_directions direction);
+        std::array<size_t, tt::tt_fabric::builder_config::num_receiver_channels>& num_remote_receiver_buffer_slots);
 
     // Configuration parameters
     size_t num_used_sender_channels = 0;

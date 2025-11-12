@@ -157,7 +157,6 @@ void configure_risc_settings(
 void update_sender_channel_servicing(
     tt::tt_fabric::FabricTensixConfig fabric_tensix_config,
     std::vector<FabricRiscConfig>& risc_configs,
-    eth_chan_directions direction,
     Topology topology) {
     switch (fabric_tensix_config) {
         case tt::tt_fabric::FabricTensixConfig::MUX: break;
@@ -165,10 +164,10 @@ void update_sender_channel_servicing(
     }
 
     // Determine which channel corresponds to the current direction
-    uint32_t target_channel = get_worker_connected_sender_channel(direction, topology);
+    uint32_t target_channel = get_worker_connected_sender_channel();
 
     // For ring/torus topologies, determine VC1 channel (last channel) and service it
-    uint32_t vc1_target_channel = get_worker_or_vc1_connected_sender_channel(direction, topology);
+    uint32_t vc1_target_channel = get_worker_or_vc1_connected_sender_channel(topology);
 
     auto arch = tt::tt_metal::MetalContext::instance().hal().get_arch();
     if (arch == tt::ARCH::WORMHOLE_B0) {
@@ -410,8 +409,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     FabricEriscDatamoverConfig(topology) {
     // Update sender channel servicing based on fabric tensix configuration
     if (options.fabric_tensix_config != tt::tt_fabric::FabricTensixConfig::DISABLED) {
-        // Use default direction (EAST) for the constructor case since direction isn't available here
-        update_sender_channel_servicing(options.fabric_tensix_config, this->risc_configs, options.direction, topology);
+        update_sender_channel_servicing(options.fabric_tensix_config, this->risc_configs, topology);
     }
 
     const bool is_2D_routing = FabricContext::is_2D_topology(topology);
@@ -864,7 +862,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     const auto topology = fabric_context.get_fabric_topology();
     const bool is_2D_routing = FabricContext::is_2D_topology(topology);
 
-    auto sender_channel_to_check = get_worker_connected_sender_channel(direction, topology);
+    auto sender_channel_to_check = get_worker_connected_sender_channel();
 
     const auto remote_routing_direction =
         control_plane.get_forwarding_direction(this->peer_fabric_node_id, this->local_fabric_node_id);
@@ -876,8 +874,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     // false
     if (remote_routing_direction.has_value()) {
         skip_src_ch_id_update = this->has_tensix_extension;
-        auto remote_eth_direction = control_plane.routing_direction_to_eth_direction(remote_routing_direction.value());
-        remote_worker_sender_channel = get_worker_connected_sender_channel(remote_eth_direction, topology);
+        remote_worker_sender_channel = get_worker_connected_sender_channel();
         remote_vc1_sender_channel =
             this->dateline_connection ? remote_worker_sender_channel : get_vc1_connected_sender_channel(topology);
     }
@@ -1416,7 +1413,7 @@ void FabricEriscDatamoverBuilder::connect_to_downstream_edm_impl(
 
             // Setup VC0 connection
             constexpr uint32_t ds_vc0_index = 0;
-            auto ds_vc0_send_chan = get_downstream_edm_sender_channel(is_2D_routing, this->direction);
+            auto ds_vc0_send_chan = get_downstream_edm_sender_channel(is_2D_routing, this->direction, ds_dir);
             setup_downstream_vc_connection(builder, ds_vc0_index, ds_vc0_send_chan, false);
 
             if (!fabric_context.need_deadlock_avoidance_support(this->direction)) {
