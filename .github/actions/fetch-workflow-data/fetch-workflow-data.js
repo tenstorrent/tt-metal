@@ -98,11 +98,11 @@ async function run() {
     let cachedOtherLogsIndex = {};
     let cachedCommits = [];
     let cachedLastSuccessTimestamps = {};
-    let annotationsIndexPath = path.join(workspace, 'annotations', 'annotations-index.json');
-    let gtestLogsIndexPath = path.join(workspace, 'logs', 'gtest', 'gtest-logs-index.json');
-    let otherLogsIndexPath = path.join(workspace, 'logs', 'other', 'other-logs-index.json');
-    let commitsPath = path.join(workspace, 'commits-main.json');
-    let lastSuccessPath = path.join(workspace, 'last-success-timestamps.json');
+    let annotationsIndexPath;
+    let gtestLogsIndexPath;
+    let otherLogsIndexPath;
+    let commitsPath;
+    let lastSuccessPath;
 
     // Find and restore artifacts from previous successful run (unless force-fresh is enabled)
     if (forceFresh) {
