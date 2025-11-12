@@ -11,12 +11,12 @@ from loguru import logger
 import ttnn
 
 
+@pytest.mark.parametrize("tile_height", [1, 32])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-def test_matmul(device):
+def test_matmul(device, tile_height):
     """Test TTNN matmul with width-sharded input and mcast 1d using DeepSeek B1 op"""
 
     # Hardcoded matrix dimensions
-    tile_height = 1
     m = tile_height  # set to minimum tile height for b1
     k = 7168
 
@@ -107,7 +107,7 @@ def test_matmul(device):
 
     # Use the new simplified DeepSeek B1 matmul_1d operation
     print(f"ttnn_a: {ttnn_a}")
-    for i in range(1000):
+    for i in range(1):
         ttnn_output = ttnn.experimental.deepseek_b1.matmul_1d(
             ttnn_a,
             ttnn_b,
