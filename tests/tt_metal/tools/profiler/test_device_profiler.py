@@ -22,7 +22,7 @@ from tracy.common import (
     PROFILER_SCRIPTS_ROOT,
     PROFILER_ARTIFACTS_DIR,
     PROFILER_LOGS_DIR,
-    PROFILER_CPP_DEVICE_OPS_PERF_REPORT,
+    PROFILER_CPP_DEVICE_PERF_REPORT,
     clear_profiler_runtime_artifacts,
 )
 
@@ -896,7 +896,7 @@ def test_sub_device_profiler():
 
 
 def validate_programs_perf_durations(perf_data):
-    cpp_ops_perf_report = pd.read_csv(PROFILER_LOGS_DIR / PROFILER_CPP_DEVICE_OPS_PERF_REPORT).reset_index(drop=True)
+    cpp_ops_perf_report = pd.read_csv(PROFILER_LOGS_DIR / PROFILER_CPP_DEVICE_PERF_REPORT).reset_index(drop=True)
 
     for snapshot in perf_data:
         for device in snapshot:
@@ -929,8 +929,11 @@ def test_get_programs_perf_data():
         do_mid_run_dump=True,
         do_cpp_post_process=True,
     )
-    validate_programs_perf_durations(json.load(open(PROFILER_LOGS_DIR / "test_get_programs_perf_data_latest.json")))
-    validate_programs_perf_durations(json.load(open(PROFILER_LOGS_DIR / "test_get_programs_perf_data_all.json")))
+
+    with open(PROFILER_LOGS_DIR / "test_get_programs_perf_data_latest.json", "r") as f:
+        validate_programs_perf_durations(json.load(f))
+    with open(PROFILER_LOGS_DIR / "test_get_programs_perf_data_all.json", "r") as f:
+        validate_programs_perf_durations(json.load(f))
 
     run_gtest_profiler_test(
         test_get_programs_perf_data_binary,
@@ -938,8 +941,11 @@ def test_get_programs_perf_data():
         do_mid_run_dump=True,
         do_cpp_post_process=True,
     )
-    validate_programs_perf_durations(json.load(open(PROFILER_LOGS_DIR / "test_get_programs_perf_data_latest.json")))
-    validate_programs_perf_durations(json.load(open(PROFILER_LOGS_DIR / "test_get_programs_perf_data_all.json")))
+
+    with open(PROFILER_LOGS_DIR / "test_get_programs_perf_data_latest.json", "r") as f:
+        validate_programs_perf_durations(json.load(f))
+    with open(PROFILER_LOGS_DIR / "test_get_programs_perf_data_all.json", "r") as f:
+        validate_programs_perf_durations(json.load(f))
 
     run_gtest_profiler_test(
         test_get_programs_perf_data_binary,
@@ -947,5 +953,8 @@ def test_get_programs_perf_data():
         do_mid_run_dump=True,
         do_cpp_post_process=True,
     )
-    validate_programs_perf_durations(json.load(open(PROFILER_LOGS_DIR / "test_get_programs_perf_data_latest.json")))
-    validate_programs_perf_durations(json.load(open(PROFILER_LOGS_DIR / "test_get_programs_perf_data_all.json")))
+
+    with open(PROFILER_LOGS_DIR / "test_get_programs_perf_data_latest.json", "r") as f:
+        validate_programs_perf_durations(json.load(f))
+    with open(PROFILER_LOGS_DIR / "test_get_programs_perf_data_all.json", "r") as f:
+        validate_programs_perf_durations(json.load(f))
