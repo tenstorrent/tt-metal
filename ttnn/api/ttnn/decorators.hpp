@@ -70,17 +70,8 @@ concept HasStaticInvoke = requires {
     { Op::invoke(std::declval<Args>()...) };
 };
 
-// Concept to check if return type is supported for lazy execution
 template <typename operation_t>
-concept HasSupportedLazyReturnType =
-    std::same_as<typename operation_t::tensor_return_value_t, Tensor> ||
-    std::same_as<typename operation_t::tensor_return_value_t, std::vector<Tensor>> ||
-    std::same_as<typename operation_t::tensor_return_value_t, std::vector<std::optional<Tensor>>> ||
-    ttnn::experimental::lazy::is_tensor_array_v<typename operation_t::tensor_return_value_t> ||
-    ttnn::experimental::lazy::is_all_tensor_tuple_v<typename operation_t::tensor_return_value_t>;
-
-template <typename operation_t>
-concept CanBeMadeLazy = PrimitiveOperationConcept<operation_t> && HasSupportedLazyReturnType<operation_t>;
+concept CanBeMadeLazy = PrimitiveOperationConcept<operation_t>;
 
 template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t>
 struct registered_operation_t {
@@ -123,14 +114,7 @@ private:
             "Primitive Operation must implement invoke() method to be invoked.");
         auto [operation_attributes, tensors_args] = operation_t::invoke(std::forward<decltype(args)>(args)...);
         if (ttnn::experimental::lazy::is_lazy_enabled()) {
-            if constexpr (CanBeMadeLazy<operation_t>) {
-                return invoke_lazy_device_operation(operation_attributes, tensors_args);
-            } else {
-                TT_THROW(
-                    "Lazy mode not supported for operation {} with return type {}, falling back to eager execution",
-                    std::string{cpp_fully_qualified_name},
-                    tt::stl::get_type_name<typename operation_t::tensor_return_value_t>());
-            }
+            return invoke_lazy_device_operation(operation_attributes, tensors_args);
         }
         // Regular eager execution
         return ttnn::device_operation::detail::invoke<operation_t>(operation_attributes, tensors_args);
