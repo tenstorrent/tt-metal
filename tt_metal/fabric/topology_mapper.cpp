@@ -259,21 +259,6 @@ void TopologyMapper::initialize_chip_topology_info_map() {
     log_debug(tt::LogFabric, "TopologyMapper: Initialized {} chip topology info entries", chip_topology_info_.size());
 }
 
-// Helper function to get physical chip ID from ASIC ID using cluster
-// Only works for ASICs on the current host. Returns 0 if ASIC is not on this host.
-// The physical_chip_id will be filled in by the host that owns this ASIC after receiving the mapping.
-static ChipId get_physical_chip_id_from_asic_id_via_cluster(tt::tt_metal::AsicID asic_id) {
-    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    for (const auto& [physical_chip_id, unique_id] : cluster.get_unique_chip_ids()) {
-        if (unique_id == *asic_id) {
-            return physical_chip_id;
-        }
-    }
-    // ASIC is not on this host, return 0 as placeholder
-    // The physical_chip_id will be filled in by the host that owns this ASIC
-    return 0;
-}
-
 void TopologyMapper::build_mapping() {
     log_debug(tt::LogFabric, "TopologyMapper: Building mapping between fabric node IDs and physical ASIC IDs");
 
@@ -301,6 +286,8 @@ void TopologyMapper::build_mapping() {
         print_physical_adjacency_map(adjacency_map_physical);
 
         // Use sat solver algo to preserve the logical connectivity in the physical topology
+        // Note: physical_chip_id is filled in during populate_fabric_node_id_to_asic_id_mappings
+        // for ASICs that belong to this host, so no separate loop is needed here
         for (const auto& mesh_id : mesh_graph_.get_mesh_ids()) {
             populate_fabric_node_id_to_asic_id_mappings(
                 mesh_id,
@@ -308,22 +295,6 @@ void TopologyMapper::build_mapping() {
                 adjacency_map_logical.at(mesh_id),
                 asic_id_to_mesh_rank.at(mesh_id),
                 fabric_node_id_to_mesh_rank.at(mesh_id));
-        }
-
-        // Fill in physical_chip_id for ASICs that belong to this host
-        // (Some may have been set to 0 if they're on other hosts)
-        auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-        const auto& my_host = physical_system_descriptor_.my_host_name();
-        for (auto& info : chip_topology_info_) {
-            if (info.physical_chip_id == 0 && info.hostname.has_value() && *info.hostname == my_host) {
-                // This ASIC belongs to this host, look up its physical chip ID
-                for (const auto& [physical_chip_id, unique_id] : cluster.get_unique_chip_ids()) {
-                    if (unique_id == *info.asic_id) {
-                        info.physical_chip_id = physical_chip_id;
-                        break;
-                    }
-                }
-            }
         }
 
         // Broadcast the mapping to all hosts
@@ -865,7 +836,6 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
             TT_FATAL(mapping[i] >= 0, "Internal error: fast-path produced incomplete mapping");
             FabricNodeId fn = log_nodes[i];
             tt::tt_metal::AsicID asic = phys_nodes[static_cast<size_t>(mapping[i])];
-            ChipId physical_chip_id = get_physical_chip_id_from_asic_id_via_cluster(asic);
 
             // Find existing entry by ASIC ID and update it
             auto it = asic_id_to_info_.find(asic);
@@ -873,15 +843,13 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
             ChipTopologyInfo& info = *it->second;
 
             // Update fields with mapping information
+            // Note: physical_chip_id was already filled during initialize_chip_topology_info_map()
             info.fabric_node_id = fn;
-            if (physical_chip_id != 0) {
-                info.physical_chip_id = physical_chip_id;
-            }
             info.mesh_coord = mesh_graph_.chip_to_coordinate(mesh_id, fn.chip_id);
             if (asic_id_to_mesh_rank.find(asic) != asic_id_to_mesh_rank.end()) {
                 info.mesh_host_rank = asic_id_to_mesh_rank.at(asic);
             }
-            // hostname should already be set from initialization
+            // hostname and physical_chip_id should already be set from initialization
         }
         // Rebuild lookup maps after updating entries
         rebuild_lookup_maps();
@@ -1218,7 +1186,6 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
     for (size_t i = 0; i < n_log; ++i) {
         FabricNodeId fn = log_nodes[i];
         tt::tt_metal::AsicID asic = phys_nodes[mapping[i]];
-        ChipId physical_chip_id = get_physical_chip_id_from_asic_id_via_cluster(asic);
 
         // Find existing entry by ASIC ID and update it
         auto it = asic_id_to_info_.find(asic);
@@ -1226,15 +1193,13 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
         ChipTopologyInfo& info = *it->second;
 
         // Update fields with mapping information
+        // Note: physical_chip_id was already filled during initialize_chip_topology_info_map()
         info.fabric_node_id = fn;
-        if (physical_chip_id != 0) {
-            info.physical_chip_id = physical_chip_id;
-        }
         info.mesh_coord = mesh_graph_.chip_to_coordinate(mesh_id, fn.chip_id);
         if (asic_id_to_mesh_rank.find(asic) != asic_id_to_mesh_rank.end()) {
             info.mesh_host_rank = asic_id_to_mesh_rank.at(asic);
         }
-        // hostname should already be set from initialization
+        // hostname and physical_chip_id should already be set from initialization
     }
 
     // Rebuild lookup maps after updating entries

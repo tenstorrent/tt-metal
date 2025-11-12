@@ -306,7 +306,7 @@ private:
      * 1. Validates that the logical graph can fit within the physical topology
      * 2. Uses degree-based pruning and forward checking to efficiently search for valid mappings
      * 3. Maintains consistency by ensuring logical edges are present in the physical topology
-     * 4. Creates bidirectional mappings in both fabric_node_id_to_asic_id_ and asic_id_to_fabric_node_id_
+     * 4. Updates chip_topology_info_ entries with mapping information (fabric_node_id, mesh_coord, etc.)
      *
      * @param mesh_id Mesh ID
      * @param adjacency_map_physical Physical adjacency maps for each mesh
@@ -338,14 +338,6 @@ private:
     const LocalMeshBinding& local_mesh_binding_;
     const std::vector<std::pair<AsicPosition, FabricNodeId>> fixed_asic_position_pinnings_;
     bool generate_mapping_locally_ = false;
-
-    // Bidirectional mapping between FabricNodeId and AsicID
-    std::unordered_map<FabricNodeId, tt::tt_metal::AsicID> fabric_node_id_to_asic_id_;
-    std::unordered_map<tt::tt_metal::AsicID, FabricNodeId> asic_id_to_fabric_node_id_;
-
-    // Bidirectional mapping between AsicID and physical chip id for fast lookups
-    std::unordered_map<tt::tt_metal::AsicID, ChipId> asic_id_to_physical_chip_id_;
-    std::unordered_map<ChipId, tt::tt_metal::AsicID> physical_chip_id_to_asic_id_;
 
     // Host-rank metadata for fabric-node-based queries (independent of MeshGraph's storage)
     std::vector<MeshContainer<MeshHostRankId>> mesh_host_ranks_;
