@@ -14,6 +14,54 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
+namespace {
+
+using namespace tt::tt_metal;
+using namespace tt::stl;
+
+enum class IntImgCB : uint32_t {
+    START,
+    INPUT,
+    ACC,
+    CUMSUM_STAGE_0,
+    CUMSUM_STAGE_1,
+    CUMSUM_STAGE_2,
+    CUMSUM_STAGE_3,
+    OUTPUT,
+    AXIS_2_BUFFER,    // memoizing last tile (for the "deeper" block) for propagation along axis 2
+    AXIS_3_BUFFER_0,  // memoizing upper 32 tiles for propagation along axis 3
+    AXIS_3_BUFFER_1,  // dual channel
+};
+
+CBHandle create_cb(
+    Program& program,
+    const DataType& dtype,
+    const IntImgCB& intimg_cb,
+    const CoreRangeSet& core_range_set,
+    const uint32_t& num_tiles) {
+    const uint32_t cb_id{static_cast<uint32_t>(intimg_cb)};
+    const auto cb_data_format{datatype_to_dataformat_converter(dtype)};
+    const uint32_t single_tile_size{tt::tile_size(cb_data_format)};
+    const auto cb_config{CircularBufferConfig{num_tiles * single_tile_size, {{cb_id, cb_data_format}}}.set_page_size(
+        cb_id, single_tile_size)};
+    return CreateCircularBuffer(program, core_range_set, cb_config);
+}
+
+KernelHandle create_kernel(
+    Program& program,
+    const char* kernel_path,
+    const CoreRangeSet& core_range_set,
+    const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config,
+    const std::vector<uint32_t>& runtime_args = {}) {
+    auto kernel_id{CreateKernel(program, kernel_path, core_range_set, config)};
+
+    SetRuntimeArgs(program, kernel_id, core_range_set, runtime_args);
+
+    return kernel_id;
+}
+
+}  // namespace
+
 namespace ttnn::operations::experimental::reduction {
 
 // it is expected that this operator is used primarily on BOS' custom chips, which are 4 rows and 5 columns, however the
@@ -126,33 +174,6 @@ void IntImgProgramFactory::override_runtime_arguments(
             writer_runtime_args[0] = output_buffer_address;
         }
     }
-}
-
-CBHandle IntImgProgramFactory::create_cb(
-    Program& program,
-    const DataType& dtype,
-    const IntImgCB& intimg_cb,
-    const CoreRangeSet& core_range_set,
-    const uint32_t& num_tiles) {
-    const uint32_t cb_id{static_cast<uint32_t>(intimg_cb)};
-    const auto cb_data_format{datatype_to_dataformat_converter(dtype)};
-    const uint32_t single_tile_size{tt::tile_size(cb_data_format)};
-    const auto cb_config{CircularBufferConfig{num_tiles * single_tile_size, {{cb_id, cb_data_format}}}.set_page_size(
-        cb_id, single_tile_size)};
-    return CreateCircularBuffer(program, core_range_set, cb_config);
-}
-
-KernelHandle IntImgProgramFactory::create_kernel(
-    Program& program,
-    const char* kernel_path,
-    const CoreRangeSet& core_range_set,
-    const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config,
-    const std::vector<uint32_t>& runtime_args) {
-    auto kernel_id{CreateKernel(program, kernel_path, core_range_set, config)};
-
-    SetRuntimeArgs(program, kernel_id, core_range_set, runtime_args);
-
-    return kernel_id;
 }
 
 }  // namespace ttnn::operations::experimental::reduction

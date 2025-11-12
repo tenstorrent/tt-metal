@@ -6,7 +6,6 @@ import torch
 import ttnn
 import pytest
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from loguru import logger
 
 
 def ttnn_integral_image_cumsum_channel_last(features_nhwc):

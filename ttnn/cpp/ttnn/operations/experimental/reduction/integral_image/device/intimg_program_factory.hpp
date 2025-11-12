@@ -48,20 +48,6 @@ struct IntImgProgramFactory {
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value);
-
-    static CBHandle create_cb(
-        Program& program,
-        const DataType& dtype,
-        const IntImgCB& accumulation_cb,
-        const CoreRangeSet& core_range_set,
-        const uint32_t& tiles_num);
-
-    static KernelHandle create_kernel(
-        Program& program,
-        const char* kernel_path,
-        const CoreRangeSet& core_range_set,
-        const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config,
-        const std::vector<uint32_t>& runtime_args = {});
 };
 
 }  // namespace ttnn::operations::experimental::reduction

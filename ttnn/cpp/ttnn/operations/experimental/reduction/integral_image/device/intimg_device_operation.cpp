@@ -13,7 +13,18 @@ IntImgDeviceOperation::program_factory_t IntImgDeviceOperation::select_program_f
 }
 
 void IntImgDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {}
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    const auto& input_shape = tensor_args.input_tensor.logical_shape();
+    const auto& input_layout = tensor_args.input_tensor.layout();
+    const auto& input_dtype = tensor_args.input_tensor.dtype();
+    TT_FATAL(
+        input_shape.rank() == 4,
+        "intimg supports only 4D tensors, the input tensor has {} instead",
+        input_shape.rank());
+    TT_FATAL(input_shape[0] == 1, "intimg supports only one batch, found {} instead", input_shape[0]);
+    TT_FATAL(input_layout == Layout::TILE, "only tile layout is supported, {} was provided instead", input_layout);
+    TT_FATAL(input_dtype == DataType::BFLOAT16, "only bf16 dtype is supported, {} was provided instead", input_dtype);
+}
 
 void IntImgDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
