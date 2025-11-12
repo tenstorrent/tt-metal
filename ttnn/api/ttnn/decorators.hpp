@@ -12,6 +12,7 @@
 #include "ttnn/experimental/lazy/lazy_mode.hpp"
 #include "ttnn/experimental/lazy/lazy_device_operation.hpp"
 #include "ttnn/experimental/lazy/lazy_composite_operation.hpp"
+#include "ttnn/experimental/lazy/lazy_utils.hpp"
 
 namespace ttnn {
 namespace decorators {
@@ -71,8 +72,12 @@ concept HasStaticInvoke = requires {
 
 // Concept to check if return type is supported for lazy execution
 template <typename operation_t>
-concept HasSupportedLazyReturnType = std::same_as<typename operation_t::tensor_return_value_t, Tensor> ||
-                                     std::same_as<typename operation_t::tensor_return_value_t, std::vector<Tensor>>;
+concept HasSupportedLazyReturnType =
+    std::same_as<typename operation_t::tensor_return_value_t, Tensor> ||
+    std::same_as<typename operation_t::tensor_return_value_t, std::vector<Tensor>> ||
+    std::same_as<typename operation_t::tensor_return_value_t, std::vector<std::optional<Tensor>>> ||
+    ttnn::experimental::lazy::is_tensor_array_v<typename operation_t::tensor_return_value_t> ||
+    ttnn::experimental::lazy::is_all_tensor_tuple_v<typename operation_t::tensor_return_value_t>;
 
 template <typename operation_t>
 concept CanBeMadeLazy = PrimitiveOperationConcept<operation_t> && HasSupportedLazyReturnType<operation_t>;
@@ -193,20 +198,15 @@ private:
 
         auto lazy_inputs = ttnn::experimental::lazy::make_lazy_device_operation_inputs<operation_t>(tensor_args);
 
-        // Get output specs to create placeholder tensors
-        auto output_specs = lazy_op->compute_output_specs();
+        // Call compute_output_specs and flatten to vector<TensorSpec>
+        auto output_specs = operation_t::compute_output_specs(operation_attributes, tensor_args);
+        auto [flat_specs, is_optional] = ttnn::experimental::lazy::flatten_specs(output_specs);
 
-        // Create lazy tensors based on return type
-        if constexpr (std::same_as<tensor_return_value_t, Tensor>) {
-            // Single tensor output
-            TT_FATAL(!output_specs.empty(), "Expected at least one output spec");
-            return Tensor::make_lazy_tensor(lazy_inputs, lazy_op, output_specs[0]);
-        } else if constexpr (std::same_as<tensor_return_value_t, std::vector<Tensor>>) {
-            // Multiple tensor outputs (vector)
-            return Tensor::make_lazy_tensors(lazy_inputs, lazy_op, output_specs);
-        } else {
-            static_assert(std::same_as<tensor_return_value_t, void>, "Unsupported return type for lazy execution");
-        }
+        // Create lazy tensors using the flat vector
+        auto lazy_tensors = Tensor::make_lazy_tensors(lazy_inputs, lazy_op, flat_specs);
+
+        // Reconstruct the correct return type
+        return ttnn::experimental::lazy::reconstruct_return_value<tensor_return_value_t>(lazy_tensors, is_optional);
     }
 };
 
