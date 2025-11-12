@@ -689,7 +689,7 @@ static_assert(false, "UDM mode does not support 1D routing - use 2D routing inst
 // 2D routing with UDM
 #if (ROUTING_MODE & ROUTING_MODE_LOW_LATENCY) != 0
 #define PACKET_HEADER_TYPE tt::tt_fabric::UDMHybridMeshPacketHeader
-#define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyMeshRoutingFieldsV2
+#define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyMeshRoutingFields
 #else
 static_assert(false, "UDM mode requires LOW_LATENCY routing for 2D fabric");
 #endif

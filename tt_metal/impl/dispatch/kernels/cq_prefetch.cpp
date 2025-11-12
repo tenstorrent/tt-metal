@@ -1699,7 +1699,8 @@ CBReaderWithManualRelease<
     cmddat_q_log_page_size,
     cmddat_q_blocks,
     cmddat_q_pages_per_block,
-    cmddat_q_base>
+    cmddat_q_base,
+    cmddat_q_end>
     h_cmddat_q_reader;
 
 // Used in prefetch_d downstream of a CQ_PREFETCH_CMD_RELAY_LINEAR_H command.
@@ -1714,24 +1715,9 @@ inline void relay_raw_data_to_downstream(
 
     while (remaining > 0) {
         // Ensure at least one upstream page is available
-        if (data_ptr == h_cmddat_q_reader.cb_fence) {
-            h_cmddat_q_reader.get_cb_page(data_ptr);
-        }
+        uint32_t available_data = h_cmddat_q_reader.wait_for_available_data(data_ptr);
 
-        // Compute contiguous bytes available to read now without wrapping
-        uint32_t contiguous_until_wrap = cmddat_q_end - data_ptr;
-        uint32_t contiguous_until_fence;
-        if (data_ptr < h_cmddat_q_reader.cb_fence) {
-            contiguous_until_fence = h_cmddat_q_reader.cb_fence - data_ptr;
-        } else if (data_ptr > h_cmddat_q_reader.cb_fence) {
-            // Fence wrapped but data_ptr has not; only read until end-of-buffer
-            contiguous_until_fence = contiguous_until_wrap;
-        } else {
-            // Should not happen due to ensure above; treat as no data
-            continue;
-        }
-
-        uint32_t can_read_now = contiguous_until_fence;
+        uint32_t can_read_now = available_data;
         if (can_read_now > remaining) {
             can_read_now = remaining;
         }
@@ -1783,10 +1769,7 @@ inline uint32_t relay_cb_get_cmds(uint32_t& data_ptr, uint32_t& downstream_data_
     while (true) {
         // DPRINT << "get_commands: " << data_ptr << " " << fence << " " << cmddat_q_base << " " << cmddat_q_end <<
         // ENDL();
-        if (data_ptr == h_cmddat_q_reader.cb_fence) {
-            // Ensure header is present
-            h_cmddat_q_reader.get_cb_page(data_ptr);
-        }
+        h_cmddat_q_reader.wait_for_available_data(data_ptr);
 
         volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader* cmd_ptr =
             (volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader*)data_ptr;
@@ -1805,7 +1788,7 @@ inline uint32_t relay_cb_get_cmds(uint32_t& data_ptr, uint32_t& downstream_data_
             relay_client.release_pages<my_noc_index, upstream_noc_xy, upstream_cb_sem_id>(pages_to_free);
         } else {
             // Ensure the entire command payload is present before returning
-            uint32_t pages_ready = (h_cmddat_q_reader.cb_fence - data_ptr) >> cmddat_q_log_page_size;
+            uint32_t pages_ready = h_cmddat_q_reader.available_bytes(data_ptr) >> cmddat_q_log_page_size;
             uint32_t pages_needed = (length + cmddat_q_page_size - 1) >> cmddat_q_log_page_size;
             int32_t pages_pending = pages_needed - pages_ready;
             int32_t npages = 0;
@@ -1882,7 +1865,6 @@ void kernel_main_d() {
 
     h_cmddat_q_reader.init();
     uint32_t cmd_ptr = cmddat_q_base;
-    uint32_t& fence = h_cmddat_q_reader.cb_fence;
 
     bool done = false;
     uint32_t heartbeat = 0;
@@ -1932,18 +1914,7 @@ void kernel_main_d() {
             done = process_cmd<true, false>(cmd_ptr, downstream_data_ptr, stride, l1_cache, exec_buf_state);
             amt_processed += stride;
 
-            // This is ugly: relay_inline_cmd code can wrap and this can wrap
-            // They peacefully coexist because we won't wrap there and here at once
-            if (cmd_ptr + stride >= cmddat_q_end) {
-                stride -= cmddat_q_end - cmd_ptr;
-                cmd_ptr = cmddat_q_base;
-                if (fence == cmddat_q_end) {
-                    // We hit the nail on the head, wrap the fence
-                    ASSERT(stride == 0);
-                    fence = cmddat_q_base;
-                }
-            }
-            cmd_ptr += stride;
+            h_cmddat_q_reader.consumed_data(cmd_ptr, stride);
         }
 
         // TODO: evaluate less costly free pattern (blocks?)
