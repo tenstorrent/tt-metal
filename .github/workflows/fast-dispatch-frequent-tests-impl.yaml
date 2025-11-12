@@ -40,7 +40,7 @@ jobs:
             timeout: 15
           - name: "BH P150 pgm dispatch nightly"
             arch: blackhole
-            runs-on: ["cloud-virtual-machine", "P150", "in-service"]
+            runs-on: ["pipeline-perf", "P150", "in-service"]
             run-args: |
               mkdir -p generated/test_reports
               ./build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --benchmark_out_format=json --benchmark_out=pgm_bench.json
@@ -48,7 +48,7 @@ jobs:
             timeout: 15
           - name: "BH P150 dispatch bandwidth nightly"
             arch: blackhole
-            runs-on: ["cloud-virtual-machine", "P150", "in-service"]
+            runs-on: ["pipeline-perf", "P150", "in-service"]
             run-args: |
               mkdir -p generated/test_reports
               ./build/test/tt_metal/perf_microbenchmark/dispatch/benchmark_rw_buffer --benchmark_out_format=json --benchmark_out=buffer_bench.json
