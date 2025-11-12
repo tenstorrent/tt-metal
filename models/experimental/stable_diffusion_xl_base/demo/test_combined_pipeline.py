@@ -11,10 +11,10 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_sdxl_pipeline import TtS
 @torch.no_grad()
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 33000, "trace_region_size": 58386432}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 29248, "trace_region_size": 51429376}],
     indirect=True,
 )
-def test_refiner(mesh_device):
+def test_refiner(mesh_device, is_ci_env):
     # Load base and refiner torch pipelines
     base = DiffusionPipeline.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0",
@@ -22,9 +22,12 @@ def test_refiner(mesh_device):
         use_safetensors=True,
     )
     refiner = StableDiffusionXLImg2ImgPipeline.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0",
+        "stabilityai/stable-diffusion-xl-refiner-1.0",
         torch_dtype=torch.float32,
         use_safetensors=True,
+        local_files_only=is_ci_env,
+        text_encoder_2=base.text_encoder_2,
+        vae=base.vae,
     )
 
     # Create combined pipeline
@@ -52,7 +55,7 @@ def test_refiner(mesh_device):
             strength=0.3,
             aesthetic_score=6.0,
             negative_aesthetic_score=2.5,
-            capture_trace=False,
+            capture_trace=True,
         ),
         denoising_split=0.8,  # Base does 80%, refiner does 20%
     )

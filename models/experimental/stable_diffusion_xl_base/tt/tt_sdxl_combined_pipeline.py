@@ -174,8 +174,8 @@ class TtSDXLCombinedPipeline:
 
         # 2. Allocate device tensors with dummy data for warmup
         logger.info("Allocating device tensors for base pipeline...")
-        dummy_embeds = torch.randn(self.batch_size, 2, MAX_SEQUENCE_LENGTH, CONCATENATED_TEXT_EMBEDINGS_SIZE)
-        dummy_text_embeds = torch.randn(self.batch_size, 2, TEXT_ENCODER_2_PROJECTION_DIM)
+        dummy_embeds = torch.empty(self.batch_size, 2, MAX_SEQUENCE_LENGTH, CONCATENATED_TEXT_EMBEDINGS_SIZE)
+        dummy_text_embeds = torch.empty(self.batch_size, 2, TEXT_ENCODER_2_PROJECTION_DIM)
 
         _, _, _ = self.base_pipeline.generate_input_tensors(
             all_prompt_embeds_torch=dummy_embeds,
@@ -192,10 +192,11 @@ class TtSDXLCombinedPipeline:
         if self.config.use_refiner:
             logger.info("Allocating device tensors for refiner pipeline...")
             # Create dummy image tensor for img2img pipeline
-            dummy_latents = torch.randn(self.batch_size, 4, 128, 128)
+            dummy_latents = torch.empty(self.batch_size, 4, 128, 128)
+            refiner_dummy_embeds = torch.empty(self.batch_size, 2, MAX_SEQUENCE_LENGTH, 1280)
 
             _, _, _ = self.refiner_pipeline.generate_input_tensors(
-                all_prompt_embeds_torch=dummy_embeds,
+                all_prompt_embeds_torch=refiner_dummy_embeds,
                 torch_add_text_embeds=dummy_text_embeds,
                 input_latents=dummy_latents,
                 fixed_seed_for_batch=True,
@@ -361,7 +362,7 @@ class TtSDXLCombinedPipeline:
                 refiner_prompt_embeds,
                 refiner_add_text_embeds,
             ) = self.refiner_pipeline.generate_input_tensors(
-                all_prompt_embeds_torch=all_prompt_embeds_torch,
+                all_prompt_embeds_torch=torch.empty(batch_size, 2, MAX_SEQUENCE_LENGTH, 1280),
                 torch_add_text_embeds=torch_add_text_embeds,
                 input_latents=base_latents,
                 fixed_seed_for_batch=True,
