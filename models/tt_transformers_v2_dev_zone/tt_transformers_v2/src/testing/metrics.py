@@ -52,7 +52,7 @@ def compute_max_abs_error(impl, ref):
             diff = ttnn.subtract(impl, ref)
             abs_diff = ttnn.abs(diff)
             max_val = ttnn.max(abs_diff)
-            # todo)) use to_torch_auto_compose here instead of to_torch
+            # todo)) [device metrics] use to_torch_auto_compose here instead of to_torch
             return ttnn.to_torch(max_val).item()  # Convert only final scalar
         elif _is_ttnn_tensor(impl):
             return (to_torch_auto_compose(impl) - ref).abs().max().item()
@@ -91,7 +91,7 @@ def compute_mean_abs_error(impl, ref):
             diff = ttnn.subtract(impl, ref)
             abs_diff = ttnn.abs(diff)
             mean_val = ttnn.mean(abs_diff)
-            # todo)) use to_torch_auto_compose here instead of to_torch
+            # todo)) [device metrics] use to_torch_auto_compose here instead of to_torch
             return ttnn.to_torch(mean_val).item()
         elif _is_ttnn_tensor(impl):
             return (to_torch_auto_compose(impl) - ref).abs().mean().item()
@@ -258,7 +258,7 @@ def compute_pcc_device(impl, ref):
         # - Both constant → 1.0 if equal, else 0.0
 
         # Any nonzero check (all-zero detection)
-        # todo)) to_torch_auto_compose here instead of to_torch
+        # todo)) [device metrics] to_torch_auto_compose here instead of to_torch
         impl_abs_max = ttnn.to_torch(ttnn.max(ttnn.abs(impl))).item()
         ref_abs_max = ttnn.to_torch(ttnn.max(ttnn.abs(ref))).item()
         impl_has_any = impl_abs_max != 0.0
@@ -267,7 +267,7 @@ def compute_pcc_device(impl, ref):
             return 0.0
 
         # Min/Max scalars for constant and NaN detection
-        # todo)) to_torch_auto_compose here instead of to_torch
+        # todo)) [device metrics] to_torch_auto_compose here instead of to_torch
         impl_min = ttnn.to_torch(ttnn.min(impl)).item()
         impl_max = ttnn.to_torch(ttnn.max(impl)).item()
         ref_min = ttnn.to_torch(ttnn.min(ref)).item()

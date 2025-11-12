@@ -232,16 +232,6 @@ def custom_attention_reference(q, k, v, scale):
     return torch.matmul(attn_weights, v)
 
 
-# todo)) we need an example where both the reference and the decorated function are methods of a class and they share the same member variables!
-# what should we pass to `reference_fn`? the object itself? or a lambda function that takes the object as an argument?
-# idea: maybe we can say that set a rule in place that says if the two functions share the same member variables, we can automatically infer the input_to_torch function!
-# take a module form the deepseek model as an example!
-
-# todo)) add an example where the reference is a file name that we can load output tensors from!
-# idea: validating against tensors -- give us a file name and we can compare our tensor under test against that!
-# - a filename for the tensor
-
-
 @compare_to_torch(
     reference_fn=custom_attention_reference,
     # [INFO]{ when reference function accepts inputs in the same order as the decorated function,
@@ -620,3 +610,8 @@ def _print_validation_report_after_module(request):
 @pytest.fixture(scope="module", autouse=True)
 def _clear_validation_results_before_module():
     clear_validation_results()
+
+
+# todo)) add an example where the reference is a file name that we can load output tensors from!
+# idea: validating against tensors -- give us a file name and we can compare our tensor under test against that!
+# - a filename for the tensor
