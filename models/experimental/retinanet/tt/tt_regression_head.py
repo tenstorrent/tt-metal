@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
+
 import ttnn
 from typing import List
 from typing import Optional
 from dataclasses import dataclass
 from typing import Optional
-from loguru import logger
 import os
 import tt_lib.fallback_ops as fallback_ops
 
@@ -37,7 +37,6 @@ retinanet_head_optimizations = {
             "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             "deallocate_activation": False,
             "reallocate_halo_output": True,
-            # "reshard_if_not_optimal": True,
             "enable_act_double_buffer": True,
             "enable_weights_double_buffer": True,
         },
@@ -46,7 +45,6 @@ retinanet_head_optimizations = {
             "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             "deallocate_activation": False,
             "reallocate_halo_output": True,
-            # "reshard_if_not_optimal": True,
             "enable_act_double_buffer": True,
             "enable_weights_double_buffer": True,
         },
@@ -56,7 +54,6 @@ retinanet_head_optimizations = {
             "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             "deallocate_activation": False,
             "reallocate_halo_output": True,
-            # "reshard_if_not_optimal": True,
             "enable_act_double_buffer": True,
             "enable_weights_double_buffer": True,
         },
@@ -65,7 +62,6 @@ retinanet_head_optimizations = {
             "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             "deallocate_activation": False,
             "reallocate_halo_output": True,
-            # "reshard_if_not_optimal": True,
             "enable_act_double_buffer": True,
             "enable_weights_double_buffer": True,
         },
@@ -75,7 +71,6 @@ retinanet_head_optimizations = {
             "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             "deallocate_activation": False,
             "reallocate_halo_output": True,
-            # "reshard_if_not_optimal": True,
             "enable_act_double_buffer": True,
             "enable_weights_double_buffer": True,
         },
@@ -84,7 +79,6 @@ retinanet_head_optimizations = {
             "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             "deallocate_activation": False,
             "reallocate_halo_output": True,
-            # "reshard_if_not_optimal": True,
             "enable_act_double_buffer": True,
             "enable_weights_double_buffer": True,
         },
@@ -94,7 +88,6 @@ retinanet_head_optimizations = {
             "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             "deallocate_activation": False,
             "reallocate_halo_output": True,
-            # "reshard_if_not_optimal": True,
             "enable_act_double_buffer": True,
             "enable_weights_double_buffer": True,
         },
@@ -103,7 +96,6 @@ retinanet_head_optimizations = {
             "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             "deallocate_activation": False,
             "reallocate_halo_output": True,
-            # "reshard_if_not_optimal": True,
             "enable_act_double_buffer": True,
             "enable_weights_double_buffer": True,
         },
@@ -113,7 +105,6 @@ retinanet_head_optimizations = {
             "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             "deallocate_activation": False,
             "reallocate_halo_output": True,
-            # "reshard_if_not_optimal": True,
             "enable_act_double_buffer": True,
             "enable_weights_double_buffer": True,
         },
@@ -122,7 +113,6 @@ retinanet_head_optimizations = {
             "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             "deallocate_activation": False,
             "reallocate_halo_output": True,
-            # "reshard_if_not_optimal": True,
             "enable_act_double_buffer": True,
             "enable_weights_double_buffer": True,
         },
@@ -133,11 +123,6 @@ retinanet_head_optimizations = {
 class Conv2dNormActivation:
     """
     TTNN implementation of Conv2d + GroupNorm + ReLU block.
-
-    Encapsulates the pattern used in RetinaNet regression head:
-    - Conv2d with DRAM slicing
-    - GroupNorm with tile alignment padding
-    - ReLU activation
     """
 
     def __init__(
@@ -214,6 +199,8 @@ class Conv2dNormActivation:
             batch_size: Batch size
             input_height: Input height
             input_width: Input width
+            fpn_level: FPN level
+            conv_block_idx: Index of the convolution block
 
         Returns:
             Output tensor after Conv2d + GroupNorm + ReLU
@@ -225,8 +212,6 @@ class Conv2dNormActivation:
             if fpn_level is not None and conv_block_idx is not None
             else "[Conv]"
         )
-
-        logger.info(f"{prefix} Starting forward pass")
 
         x, [H_out, W_out], [prepared_weight, prepared_bias] = ttnn.conv2d(
             input_tensor=x,
@@ -252,10 +237,9 @@ class Conv2dNormActivation:
         N, H_out, W_out, C = x.shape
 
         if self.fallback_on_groupnorm:
-            # Fallback to PyTorch GroupNorm
             x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
             x = ttnn.reshape(x, (N, H_out, W_out, C))
-            x = ttnn.permute(x, (0, 3, 1, 2))  # NHWC -> NCHW
+            x = ttnn.permute(x, (0, 3, 1, 2))
 
             # Use PyTorch's GroupNorm
             x = fallback_ops.group_norm(
@@ -268,23 +252,16 @@ class Conv2dNormActivation:
             x = ttnn.permute(x, (0, 2, 3, 1))  # NCHW -> NHWC
             x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         else:
-            # GroupNorm requires H_out * W_out divisible by (grid_size.y * 32)
             spatial_size = H_out * W_out
             required_size = ((spatial_size + self.grid_size.y * 32 - 1) // (self.grid_size.y * 32)) * (
                 self.grid_size.y * 32
             )
 
             if spatial_size != required_size:
-                # Pad spatial dimension to required size
                 pad_amount = required_size - spatial_size
-
-                # Reshape to (N, 1, H*W, C) for padding
                 x_flat = ttnn.reshape(x, (N, 1, spatial_size, C))
-
-                # Pad along spatial dimension
                 x_padded = ttnn.pad(x_flat, padding=((0, 0), (0, 0), (0, pad_amount), (0, 0)), value=0.0)
             else:
-                # Reshape to (N, 1, H*W, C) without padding
                 x_padded = ttnn.reshape(x, (N, 1, spatial_size, C))
 
             # Apply GroupNorm
@@ -370,7 +347,6 @@ def ttnn_retinanet_regression_head(
     # Process each FPN level
     for fpn_idx, feature_map in enumerate(feature_maps):
         N, H, W, C = feature_map.shape
-        logger.info(f"Processing FPN Level {fpn_idx}: H={H}, W={W}")
 
         # Get configs for THIS FPN level
         conv_blocks_config = fpn_conv_configs[fpn_idx]
@@ -379,12 +355,8 @@ def ttnn_retinanet_regression_head(
         # Create Conv2dConfig for this FPN's conv blocks
         if conv_blocks_config is not None:
             conv_config = ttnn.Conv2dConfig(**conv_blocks_config)
-            logger.info(
-                f"[FPN{fpn_idx}] ✓ Conv blocks config: act_block_h={conv_blocks_config.get('act_block_h_override', 'default')}, shard={conv_blocks_config.get('shard_layout', 'auto')}"
-            )
         else:
             conv_config = None
-            logger.info(f"[FPN{fpn_idx}] ⚠ No conv blocks config (using defaults)")
 
         # Create 4 Conv2dNormActivation blocks for THIS FPN level
         conv_blocks = []
@@ -402,27 +374,23 @@ def ttnn_retinanet_regression_head(
                 input_mask=input_mask_tensor,
                 model_config=model_config,
                 compute_config=compute_config,
-                conv_config=conv_config,  # Use THIS FPN's config
+                conv_config=conv_config,
             )
             conv_blocks.append(conv_block)
 
-        # Apply 4 conv blocks to this FPN's feature map
+        # Apply conv blocks to feature map
         x = feature_map
         for conv_idx, conv_block in enumerate(conv_blocks):
             x = conv_block(
                 x, batch_size=batch_size, input_height=H, input_width=W, fpn_level=fpn_idx, conv_block_idx=conv_idx
             )
 
-        # Final bbox_reg conv layer with THIS FPN's config
+        # Final bbox_reg conv layer with config
         bbox_reg_slice_config = ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=4)
         if final_conv_config is not None:
             bbox_reg_config = ttnn.Conv2dConfig(**final_conv_config)
-            logger.info(
-                f"[FPN{fpn_idx}][BBoxReg] ✓ Config: act_block_h={final_conv_config.get('act_block_h_override', 'default')}, shard={final_conv_config.get('shard_layout', 'auto')}"
-            )
         else:
             bbox_reg_config = None
-            logger.info(f"[FPN{fpn_idx}][BBoxReg] ⚠ No config (using defaults)")
 
         bbox_regression = ttnn.conv2d(
             input_tensor=x,

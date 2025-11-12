@@ -7,8 +7,6 @@ from models.experimental.retinanet.tt.tt_bottleneck import TTBottleneck, get_bot
 from models.experimental.retinanet.tt.tt_stem import resnet50Stem, neck_optimisations
 from models.experimental.retinanet.tt.tt_fpn import resnet50Fpn, fpn_optimisations
 
-from loguru import logger
-
 
 class TTBackbone:
     def __init__(self, parameters, model_config, name="backbone"):
@@ -146,6 +144,5 @@ class TTBackbone:
         c5 = ttnn.to_memory_config(c5, ttnn.DRAM_MEMORY_CONFIG)
         out = {"c3": c3, "c4": c4, "c5": c5}
         out = self.fpn(out, device)
-        logger.debug("✅✅✅ FPN Complete ✅✅✅")
 
         return out

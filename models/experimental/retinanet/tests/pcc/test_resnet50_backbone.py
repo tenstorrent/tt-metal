@@ -4,15 +4,12 @@
 import ttnn
 import torch
 import pytest
-
 from loguru import logger
 from ttnn.model_preprocessing import preprocess_model_parameters
 from tests.ttnn.utils_for_testing import check_with_pcc
-
 from torchvision.models.detection import retinanet_resnet50_fpn_v2, RetinaNet_ResNet50_FPN_V2_Weights
 from PIL import Image
 from torchvision import transforms
-
 from models.experimental.retinanet.tt.tt_backbone import TTBackbone
 from models.experimental.retinanet.tt.custom_preprocessor import create_custom_mesh_preprocessor
 
@@ -53,7 +50,7 @@ class BackboneTestInfra:
         img = Image.open("models/experimental/retinanet/resources/dog_800x800.jpg").convert("RGB")
         self.torch_input_tensor = preprocess(img).unsqueeze(0)
 
-        # Get backbone features (golden output)
+        # Get backbone features
         backbone_features = self.torch_backbone(self.torch_input_tensor)
 
         # Store only backbone outputs (FPN levels: "0", "1", "2", "p6", "p7")
@@ -153,11 +150,11 @@ class BackboneTestInfra:
         # Format PCC results with labels
         pcc_summary = ", ".join([f"{k}={v}" for k, v in pcc_results.items()])
         logger.info(
-            f"ResNet50 Backbone (FPN) - batch_size={self.batch_size}, "
-            f"act_dtype={model_config['ACTIVATIONS_DTYPE']}, "
-            f"weight_dtype={model_config['WEIGHTS_DTYPE']}, "
-            f"math_fidelity={model_config['MATH_FIDELITY']}, "
-            f"PCC: {pcc_summary}"
+            f"\nResNet50 Backbone (FPN) - batch_size={self.batch_size}, \n"
+            f"act_dtype={model_config['ACTIVATIONS_DTYPE']}, \n"
+            f"weight_dtype={model_config['WEIGHTS_DTYPE']}, \n"
+            f"math_fidelity={model_config['MATH_FIDELITY']}, \n"
+            f"Backbone FPN levels PCC: {pcc_summary}"
         )
 
         return self.pcc_passed_all, self.pcc_message_all

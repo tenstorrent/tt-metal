@@ -4,7 +4,6 @@
 import ttnn
 from typing import List
 from models.experimental.retinanet.tt.tt_regression_head import Conv2dNormActivation
-from loguru import logger
 from dataclasses import dataclass
 
 
@@ -35,7 +34,6 @@ retinanet_classification_head_optimizations = {
             "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             "deallocate_activation": False,
             "reallocate_halo_output": True,
-            # "reshard_if_not_optimal": True,
             "enable_act_double_buffer": True,
             "enable_weights_double_buffer": True,
         },
@@ -44,7 +42,6 @@ retinanet_classification_head_optimizations = {
             "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             "deallocate_activation": False,
             "reallocate_halo_output": True,
-            # "reshard_if_not_optimal": True,
             "enable_act_double_buffer": True,
             "enable_weights_double_buffer": True,
         },
@@ -54,7 +51,6 @@ retinanet_classification_head_optimizations = {
             "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             "deallocate_activation": False,
             "reallocate_halo_output": True,
-            # "reshard_if_not_optimal": True,
             "enable_act_double_buffer": True,
             "enable_weights_double_buffer": True,
         },
@@ -63,7 +59,6 @@ retinanet_classification_head_optimizations = {
             "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             "deallocate_activation": False,
             "reallocate_halo_output": True,
-            # "reshard_if_not_optimal": True,
             "enable_act_double_buffer": True,
             "enable_weights_double_buffer": True,
         },
@@ -73,7 +68,6 @@ retinanet_classification_head_optimizations = {
             "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             "deallocate_activation": False,
             "reallocate_halo_output": True,
-            # "reshard_if_not_optimal": True,
             "enable_act_double_buffer": True,
             "enable_weights_double_buffer": True,
         },
@@ -82,7 +76,6 @@ retinanet_classification_head_optimizations = {
             "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             "deallocate_activation": False,
             "reallocate_halo_output": True,
-            # "reshard_if_not_optimal": True,
             "enable_act_double_buffer": True,
             "enable_weights_double_buffer": True,
         },
@@ -92,7 +85,6 @@ retinanet_classification_head_optimizations = {
             "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             "deallocate_activation": False,
             "reallocate_halo_output": True,
-            # "reshard_if_not_optimal": True,
             "enable_act_double_buffer": True,
             "enable_weights_double_buffer": True,
         },
@@ -101,7 +93,6 @@ retinanet_classification_head_optimizations = {
             "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             "deallocate_activation": False,
             "reallocate_halo_output": True,
-            # "reshard_if_not_optimal": True,
             "enable_act_double_buffer": True,
             "enable_weights_double_buffer": True,
         },
@@ -111,7 +102,6 @@ retinanet_classification_head_optimizations = {
             "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             "deallocate_activation": False,
             "reallocate_halo_output": True,
-            # "reshard_if_not_optimal": True,
             "enable_act_double_buffer": True,
             "enable_weights_double_buffer": True,
         },
@@ -120,7 +110,6 @@ retinanet_classification_head_optimizations = {
             "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             "deallocate_activation": False,
             "reallocate_halo_output": True,
-            # "reshard_if_not_optimal": True,
             "enable_act_double_buffer": True,
             "enable_weights_double_buffer": True,
         },
@@ -152,7 +141,8 @@ def ttnn_retinanet_classification_head(
         num_classes: Number of classes (91 for COCO)
         batch_size: Batch size
         input_shapes: List of (H, W) tuples for each FPN level
-
+        model_config: Dictionary containing model configuration
+        optimization_profile: Optimization profile to use
     Returns:
         Output tensor of shape (N, total_anchors, num_classes)
     """
@@ -186,10 +176,6 @@ def ttnn_retinanet_classification_head(
     # Process each FPN level
     all_cls_logits = []
     for fpn_idx, (feature_map, (H, W)) in enumerate(zip(feature_maps, input_shapes)):
-        logger.info(f"\n{'='*60}")
-        logger.info(f"Processing FPN Level {fpn_idx}: H={H}, W={W}")
-        logger.info(f"{'='*60}")
-
         # Get per-FPN configurations
         fpn_conv_config_dict = getattr(opt_config, f"fpn{fpn_idx}_conv_blocks")
         fpn_final_config_dict = getattr(opt_config, f"fpn{fpn_idx}_final_conv")
@@ -197,14 +183,6 @@ def ttnn_retinanet_classification_head(
         # Create Conv2dConfig objects for this FPN level
         fpn_conv_config = ttnn.Conv2dConfig(**fpn_conv_config_dict) if fpn_conv_config_dict else None
         fpn_final_config = ttnn.Conv2dConfig(**fpn_final_config_dict) if fpn_final_config_dict else None
-
-        # Log applied configurations
-        if fpn_conv_config:
-            logger.info(
-                f"[FPN{fpn_idx}] ✓ Conv blocks config: act_block_h={fpn_conv_config_dict.get('act_block_h_override', 'auto')}, shard={fpn_conv_config_dict.get('shard_layout', 'auto')}"
-            )
-        else:
-            logger.info(f"[FPN{fpn_idx}] ⚠ Conv blocks config: None (using defaults)")
 
         # Create 4 Conv2dNormActivation blocks for this FPN level
         x = feature_map

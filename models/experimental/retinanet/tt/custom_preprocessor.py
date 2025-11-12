@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-License-Identifier: Apache-2.0
+
 import torch
 import ttnn
 from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d
@@ -23,7 +26,6 @@ def create_custom_mesh_preprocessor(mesh_mapper):
         parameters = {}
 
         if isinstance(model, torch.nn.Conv2d) or isinstance(model, torch.nn.BatchNorm2d):
-            # Skip here — handled in parent scope
             return {}
 
         elif isinstance(model, torch.nn.Module):
@@ -75,8 +77,6 @@ def preprocess_regression_head_parameters(torch_head, device, mesh_mapper, model
     parameters["conv"] = []
     for i in range(4):
         # Conv2d weights
-        # conv_weight = torch_head.conv[i][0].weight.detach().to(torch.bfloat16)  # Was: torch.bfloat16
-        # bias=torch.zeros(conv_weight.shape[0])
         conv_weight = torch_head.conv[i][0].weight.detach().to(torch.bfloat16)
         bias = torch.zeros(conv_weight.shape[0]).to(torch.bfloat16)
 
@@ -224,7 +224,7 @@ def preprocess_classification_head_parameters(torch_head, device, mesh_mapper, m
     parameters["conv"] = []
     for i in range(4):
         # Conv2d weights
-        conv_weight = torch_head.conv[i][0].weight.detach().to(torch.bfloat16)  # Was: torch.bfloat16
+        conv_weight = torch_head.conv[i][0].weight.detach().to(torch.bfloat16)
         bias = torch.zeros(conv_weight.shape[0])
 
         # GroupNorm weights - format using helper function

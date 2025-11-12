@@ -160,7 +160,6 @@ class TTConv2D:
             output_tensor = ttnn.reshape(
                 output_tensor, (input_tensor.shape[0], _out_height, _out_width, output_tensor.shape[-1])
             )
-            # output_tensor = ttnn.permute(output_tensor, (0, 3, 1, 2))
         return output_tensor, (input_tensor.shape[0], _out_height, _out_width, output_tensor.shape[-1])
 
 

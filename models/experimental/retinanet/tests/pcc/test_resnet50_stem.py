@@ -89,9 +89,6 @@ class Resnet50StemTestInfra:
         )
 
         # Prepare golden inputs/outputs
-        # input_shape = (self.batch_size, inplanes, height, width)
-        # self.torch_input_tensor = torch.randn(input_shape, dtype=torch.float)
-
         self.torch_input_tensor = preprocess(img).unsqueeze(0)
         self.torch_output_tensor = torch_model(self.torch_input_tensor)
 
@@ -159,12 +156,12 @@ class Resnet50StemTestInfra:
         assert pcc_passed, logger.error(f"PCC check failed: {pcc_message}")
 
         logger.info(
-            f"ResNet50 Stem Block [{self.name}] - "
-            f"batch_size={self.batch_size}, "
-            f"act_dtype={model_config['ACTIVATIONS_DTYPE']}, "
-            f"weight_dtype={model_config['WEIGHTS_DTYPE']}, "
-            f"math_fidelity={model_config['MATH_FIDELITY']}, "
-            f"PCC={pcc_message}"
+            f"\nResNet50 Stem Block [{self.name}] - "
+            f"\nbatch_size={self.batch_size}, "
+            f"\nact_dtype={model_config['ACTIVATIONS_DTYPE']}, "
+            f"\nweight_dtype={model_config['WEIGHTS_DTYPE']}, "
+            f"\nmath_fidelity={model_config['MATH_FIDELITY']}, "
+            f"\nPCC={pcc_message}"
         )
         return pcc_passed, pcc_message
 
