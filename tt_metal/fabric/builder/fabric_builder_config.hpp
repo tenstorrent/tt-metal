@@ -74,6 +74,7 @@ static constexpr std::size_t num_sender_channels_1d_linear = 2;
 static constexpr std::size_t num_sender_channels_2d_mesh = 4;
 static constexpr std::size_t num_sender_channels_1d_ring = 3;
 static constexpr std::size_t num_sender_channels_2d_torus = 5;
+static constexpr std::size_t num_sender_channels_1d_neighbor_exchange = 1;
 
 static constexpr std::size_t num_sender_channels_1d = 3;
 static constexpr std::size_t num_sender_channels_2d = 5;
@@ -92,6 +93,17 @@ static constexpr std::size_t max_downstream_edms = std::max(num_downstream_edms,
 
 inline uint32_t get_sender_channel_count(const bool is_2D_routing) {
     return is_2D_routing ? builder_config::num_sender_channels_2d : builder_config::num_sender_channels_1d;
+}
+
+inline uint32_t get_accurate_sender_channel_count(const Topology topology) {
+    switch (topology) {
+        case Topology::Linear: return builder_config::num_sender_channels_1d_linear;
+        case Topology::Mesh: return builder_config::num_sender_channels_2d_mesh;
+        case Topology::Ring: return builder_config::num_sender_channels_1d_ring;
+        case Topology::Torus: return builder_config::num_sender_channels_2d_torus;
+        case Topology::NeighborExchange: return builder_config::num_sender_channels_1d_neighbor_exchange;
+        default: return builder_config::num_sender_channels;
+    }
 }
 
 inline uint32_t get_downstream_edm_count(const bool is_2D_routing) {

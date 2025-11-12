@@ -701,7 +701,8 @@ static_assert(sizeof(MeshPacketHeader) == 48, "sizeof(MeshPacketHeader) is not e
 
 #if (                                                                \
     ((ROUTING_MODE & (ROUTING_MODE_1D | ROUTING_MODE_LINE)) != 0) || \
-    ((ROUTING_MODE & (ROUTING_MODE_1D | ROUTING_MODE_RING)) != 0))
+    ((ROUTING_MODE & (ROUTING_MODE_1D | ROUTING_MODE_RING)) != 0) || \
+    ((ROUTING_MODE & (ROUTING_MODE_1D | ROUTING_MODE_NEIGHBOR_EXCHANGE)) != 0))
 // Dynamic Routing with 1D Fabric is not supported
 #if ((ROUTING_MODE & ROUTING_MODE_DYNAMIC)) == ROUTING_MODE_DYNAMIC
 static_assert(false, "ROUTING_MODE_DYNAMIC is not supported yet");

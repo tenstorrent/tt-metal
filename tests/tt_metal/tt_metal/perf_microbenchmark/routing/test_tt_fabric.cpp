@@ -24,6 +24,7 @@ const std::unordered_map<std::pair<Topology, RoutingType>, FabricConfig, tt::tt_
         {{Topology::Ring, RoutingType::LowLatency}, FabricConfig::FABRIC_1D_RING},
         {{Topology::Mesh, RoutingType::LowLatency}, FabricConfig::FABRIC_2D},
         {{Topology::Mesh, RoutingType::Dynamic}, FabricConfig::FABRIC_2D_DYNAMIC},
+        {{Topology::NeighborExchange, RoutingType::LowLatency}, FabricConfig::FABRIC_1D_NEIGHBOR_EXCHANGE},
 };
 
 const std::

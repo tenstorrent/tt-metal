@@ -215,6 +215,9 @@ void FabricTensixDatamoverConfig::calculate_buffer_allocations() {
         case tt::tt_fabric::Topology::Ring:
             num_channels_ = tt::tt_fabric::builder_config::num_sender_channels_1d_linear;
             break;
+        // case tt::tt_fabric::Topology::NeighborExchange:
+        //     num_channels_ = tt::tt_fabric::builder_config::num_sender_channels_1d_neighbor_exchange;
+        //     break;
         case tt::tt_fabric::Topology::Mesh:
         case tt::tt_fabric::Topology::Torus:
             num_channels_ = tt::tt_fabric::builder_config::num_sender_channels_2d_mesh;

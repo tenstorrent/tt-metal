@@ -94,6 +94,7 @@ static const StringEnumMapper<Topology> topology_mapper({
     {"Linear", Topology::Linear},
     {"Mesh", Topology::Mesh},
     {"Torus", Topology::Torus},
+    {"NeighborExchange", Topology::NeighborExchange},
 });
 
 static const StringEnumMapper<RoutingType> routing_type_mapper({
