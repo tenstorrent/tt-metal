@@ -218,7 +218,7 @@ TEST(MultiHost, TestSplit2x2Fabric2DSanity) {
 
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& intermesh_connections = get_all_intermesh_connections(control_plane);
-    EXPECT_EQ(intermesh_connections.size(), 8);  // Bidirectional
+    EXPECT_EQ(intermesh_connections.size(), 4);  // Bidirectional
     for (const auto& [src_node_id, dst_node_id] : intermesh_connections) {
         const auto& direction = control_plane.get_forwarding_direction(src_node_id, dst_node_id);
         EXPECT_TRUE(direction.has_value());
@@ -244,7 +244,7 @@ TEST(MultiHost, TestSplit2x2Fabric1DSanity) {
     // Validate control plane apis
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& intermesh_connections = get_all_intermesh_connections(control_plane);
-    EXPECT_EQ(intermesh_connections.size(), 8);  // Bidirectional
+    EXPECT_EQ(intermesh_connections.size(), 4);  // Bidirectional
     for (const auto& [src_node_id, dst_node_id] : intermesh_connections) {
         const auto& direction = control_plane.get_forwarding_direction(src_node_id, dst_node_id);
         EXPECT_TRUE(direction.has_value());
@@ -502,7 +502,7 @@ TEST(MultiHost, TestBHQB4x4Fabric1DSanity) {
 
     // Intra-mesh adjacency count is determined by the MGD, independent of fabric config
     const auto& intramesh_connections = get_all_intramesh_connections(control_plane);
-    EXPECT_EQ(intramesh_connections.size(), 96);
+    EXPECT_EQ(intramesh_connections.size(), 96);  // MESH. Convert to 128 for TORUS_XY
 
     for (const auto& [src_node_id, dst_node_id] : intramesh_connections) {
         const auto& direction = control_plane.get_forwarding_direction(src_node_id, dst_node_id);

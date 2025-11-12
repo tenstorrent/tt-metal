@@ -128,7 +128,7 @@ TEST_F(ControlPlaneFixture, TestT3kFabricRoutes) {
 TEST_F(ControlPlaneFixture, TestT3k1x8FabricRoutes) {
     const std::filesystem::path t3k_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_1x8_mesh_graph_descriptor.yaml";
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_1x8_mesh_graph_descriptor.textproto";
     auto control_plane = make_control_plane_1d(t3k_mesh_graph_desc_path);
 
     auto valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(FabricNodeId(MeshId{0}, 0), 0);
