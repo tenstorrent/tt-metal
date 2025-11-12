@@ -72,7 +72,7 @@ def test_conv2d_inference(
         bias=bias,
     )
     assert (
-        len(list(partial_state_dict.keys())) == 1
+        len(list(partial_state_dict.keys())) == 1 and "_linear.weight" in partial_state_dict
     ), f"This script expects only the patch embedding weights, but found unexpected keys in partial_state_dict"
     logger.info(f"Renaming loaded weight for torch compatibility from: {list(partial_state_dict.keys())[0]} to weight")
     partial_state_dict["weight"] = partial_state_dict[list(partial_state_dict.keys())[0]].reshape(
