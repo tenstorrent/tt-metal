@@ -183,8 +183,7 @@ FORCE_INLINE uint32_t write_chunk(
     volatile PACKET_HEADER_TYPE* pkt_hdr_sem_inc,
     uint64_t out_ready_sem_noc_addr_in_pkt,
     bool direction,
-    bool write_local,
-    bool write_semaphore) {
+    bool write_local) {
     // TODO WHAT HAPPENS IF WORKER TILES BELOW is ZERO
     uint32_t worker_tiles_in_curr_chunk =
         (tiles_in_chunk / ag_worker_cores) + ((ag_worker_core_id < (tiles_in_chunk % ag_worker_cores)) ? 1 : 0);
@@ -264,13 +263,11 @@ FORCE_INLINE uint32_t write_chunk(
         noc_async_writes_flushed();
         cb_pop_front(cb_output_id, max_tiles_per_packet);
     }
-    if (write_semaphore) {
-        // Write the semaphore packet
-        fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-            &mux_connection,
-            pkt_hdr_sem_inc,
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0, 0});
-    }
+    // Write the semaphore packet
+    fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+        &mux_connection,
+        pkt_hdr_sem_inc,
+        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0, 0});
 
     uint32_t old_chunk_row = chunk_start_tile / input_tensor_Wt;
     uint32_t new_chunk_start_tile = chunk_start_tile + chunk_width;
