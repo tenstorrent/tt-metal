@@ -104,4 +104,13 @@ struct AllShardSpecs {
 tt::tt_metal::ShardSpec adjust_to_shape(
     const tt::tt_metal::ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape);
 
+struct AllShardVolumes {
+    std::optional<std::uint32_t> a_shard_volume;
+    std::optional<std::uint32_t> b_shard_volume;
+    std::optional<std::uint32_t> c_shard_volume;
+};
+
+std::optional<AllShardVolumes> get_shard_volumes(
+    const TensorSpec& a, const std::optional<TensorSpec>& b, const TensorSpec& c);
+
 }  // namespace ttnn::operations::binary_ng

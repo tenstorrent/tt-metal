@@ -34,7 +34,6 @@ void bind_untilize(py::module& module) {
 
             Returns:
                 List of ttnn.Tensor: the output tensor.
-
         )doc";
 
     using OperationType = decltype(ttnn::untilize);
