@@ -117,11 +117,6 @@ async function run() {
         cachedOtherLogsIndex = restored.cachedOtherLogsIndex;
         cachedCommits = restored.cachedCommits;
         cachedLastSuccessTimestamps = restored.cachedLastSuccessTimestamps;
-        annotationsIndexPath = restored.annotationsIndexPath;
-        gtestLogsIndexPath = restored.gtestLogsIndexPath;
-        otherLogsIndexPath = restored.otherLogsIndexPath;
-        commitsPath = restored.commitsPath;
-        lastSuccessPath = restored.lastSuccessPath;
       } else {
         core.info('[CACHE] No previous aggregate run found, starting fresh');
       }
