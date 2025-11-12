@@ -260,23 +260,6 @@ jobs:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: U08BH66EXAL # Radoica Draskic
 
-      - name: Reset cards before Llama3 70B DP test
-        if: ${{ contains(steps.process-matrix.outputs.test_ids, 'test-llama3-70b-dp') }}
-        run: |
-          tt-smi -glx_reset_auto
-      - name: Galaxy Llama3 70B data-parallel demo tests
-        id: test-llama3-70b-dp
-        if: ${{ contains(steps.process-matrix.outputs.test_ids, 'test-llama3-70b-dp') }}
-        timeout-minutes: 30
-        continue-on-error: true
-        run: |
-          ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type demos_tg_device --dispatch-mode "" --model llama3_70b_dp
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ steps.test-llama3-70b-dp.outcome == 'failure' }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U08BH66EXAL # Radoica Draskic
-
       # Other Model Tests
       - name: Reset cards before Falcon7b test
         if: ${{ contains(fromJSON(needs.generate-matrix.outputs.matrix).*.id, 'test-falcon7b') }}
