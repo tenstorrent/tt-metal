@@ -19,7 +19,7 @@ public:
     ~TarReader() = default;
 
     // Read tarball from file
-    void read_from_file(const std::string& filename);
+    void read_from_file(std::string_view filename);
 
     // Get file data by filename
     std::vector<uint8_t> get_file(std::string_view filename) const;

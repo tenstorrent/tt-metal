@@ -63,8 +63,7 @@ void from_bytes(std::span<const uint8_t> bytes, ttnn::Shape& value) {
 
 template <typename T>
 void get_enum(FlatBufferFile& file, std::string_view name, T& value) {
-    int int_value = 0;
-    file.get(std::string(name), int_value);
+    int int_value = file.get_int(std::string(name));
     value = static_cast<T>(int_value);
 }
 
@@ -102,8 +101,7 @@ void read_ttnn_tensor(FlatBufferFile& file, std::string_view name, tt::tt_metal:
     tt::tt_metal::StorageType storage_type{};
 
     auto shape = ttnn::Shape({1, 1, 1, 1});
-    std::vector<uint8_t> bytes;
-    file.get(std::string(name) + "/shape", bytes);
+    std::vector<uint8_t> bytes = file.get_vector_uint8(std::string(name) + "/shape");
     from_bytes<ttnn::Shape>(bytes, shape);
 
     get_enum(file, std::string(name) + "/data_type", data_type);
@@ -111,12 +109,10 @@ void read_ttnn_tensor(FlatBufferFile& file, std::string_view name, tt::tt_metal:
     get_enum(file, std::string(name) + "/storage_type", storage_type);
 
     if (data_type == tt::tt_metal::DataType::BFLOAT16) {
-        std::vector<float> data;
-        file.get(std::string(name) + "/data", data);
+        std::vector<float> data = file.get_vector_float(std::string(name) + "/data");
         tensor = core::from_vector(data, shape, &ttml::autograd::ctx().get_device(), layout);
     } else if (data_type == tt::tt_metal::DataType::UINT32) {
-        std::vector<uint32_t> data;
-        file.get(std::string(name) + "/data", data);
+        std::vector<uint32_t> data = file.get_vector_uint32(std::string(name) + "/data");
         tensor = core::from_vector<uint32_t, tt::tt_metal::DataType::UINT32>(
             data, shape, &ttml::autograd::ctx().get_device(), layout);
     } else {
@@ -142,8 +138,8 @@ void read_autograd_tensor(FlatBufferFile& file, std::string_view name, ttml::aut
     bool requires_grads = false;
     read_ttnn_tensor(file, std::string(name) + "/value", value);
     tensor->set_value(value);
-    file.get(std::string(name) + "/requires_grads", requires_grads);
-    file.get(std::string(name) + "/has_grads", has_grads);
+    requires_grads = file.get_bool(std::string(name) + "/requires_grads");
+    has_grads = file.get_bool(std::string(name) + "/has_grads");
     tensor->set_requires_grad(requires_grads);
     if (has_grads) {
         tt::tt_metal::Tensor grad;
@@ -207,7 +203,7 @@ void write_state_dict(FlatBufferFile& file, std::string_view name, const seriali
 void read_state_dict(FlatBufferFile& file, std::string_view name, serialization::StateDict& state_dict) {
     for (auto& [key, value] : state_dict) {
         if (std::holds_alternative<ValueType>(value)) {
-            file.get(std::string(name) + "/" + key, std::get<ValueType>(value));
+            std::get<ValueType>(value) = file.get_value_type(std::string(name) + "/" + key);
         } else if (std::holds_alternative<ttnn::Tensor>(value)) {
             read_ttnn_tensor(file, std::string(name) + "/" + key, std::get<ttnn::Tensor>(value));
         } else if (std::holds_alternative<ttml::autograd::TensorPtr>(value)) {

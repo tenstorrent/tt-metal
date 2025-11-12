@@ -46,6 +46,10 @@ bool TarReader::parse_header(const uint8_t* header, std::string& filename, size_
     for (size_t i = 0; i < FILENAME_SIZE && header[FILENAME_OFFSET + i] != 0; ++i) {
         filename += static_cast<char>(header[FILENAME_OFFSET + i]);
     }
+    // Trim trailing spaces (tar format may pad with spaces before null)
+    while (!filename.empty() && filename.back() == ' ') {
+        filename.pop_back();
+    }
 
     // Read file size (octal)
     char size_str[SIZE_SIZE + 1] = {0};
@@ -55,17 +59,23 @@ bool TarReader::parse_header(const uint8_t* header, std::string& filename, size_
     return true;
 }
 
-void TarReader::read_from_file(const std::string& filename) {
-    std::ifstream ifs(filename, std::ios::binary);
+void TarReader::read_from_file(std::string_view filename) {
+    std::ifstream ifs(std::string(filename), std::ios::binary);
     if (!ifs.is_open()) {
-        throw std::runtime_error("Unable to open file for reading: " + filename);
+        throw std::runtime_error("Unable to open file for reading: " + std::string(filename));
     }
 
     std::vector<uint8_t> tarball((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
     ifs.close();
 
     if (tarball.empty()) {
-        throw std::runtime_error("Tarball file is empty: " + filename);
+        throw std::runtime_error("Tarball file is empty: " + std::string(filename));
+    }
+
+    // Check if file is too small to be a valid tarball (must be at least one header block)
+    using namespace tar_format;
+    if (tarball.size() < BLOCK_SIZE) {
+        throw std::runtime_error("Invalid tarball: file too small to contain tar header: " + std::string(filename));
     }
 
     m_files.clear();

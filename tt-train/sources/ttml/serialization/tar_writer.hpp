@@ -26,7 +26,7 @@ public:
     std::vector<uint8_t> get_tarball() const;
 
     // Write tarball to file
-    void write_to_file(const std::string& filename) const;
+    void write_to_file(std::string_view filename) const;
 
 private:
     struct FileEntry {

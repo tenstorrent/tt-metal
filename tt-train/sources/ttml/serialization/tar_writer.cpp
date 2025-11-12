@@ -127,15 +127,15 @@ std::vector<uint8_t> TarWriter::get_tarball() const {
     return tarball;
 }
 
-void TarWriter::write_to_file(const std::string& filename) const {
+void TarWriter::write_to_file(std::string_view filename) const {
     auto tarball = get_tarball();
-    std::ofstream ofs(filename, std::ios::binary);
+    std::ofstream ofs(std::string(filename), std::ios::binary);
     if (!ofs.is_open()) {
-        throw std::runtime_error("Unable to open file for writing: " + filename);
+        throw std::runtime_error("Unable to open file for writing: " + std::string(filename));
     }
     ofs.write(reinterpret_cast<const char*>(tarball.data()), static_cast<std::streamsize>(tarball.size()));
     if (!ofs.good()) {
-        throw std::runtime_error("Error writing tarball to file: " + filename);
+        throw std::runtime_error("Error writing tarball to file: " + std::string(filename));
     }
 }
 

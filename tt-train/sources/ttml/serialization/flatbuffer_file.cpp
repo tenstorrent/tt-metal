@@ -18,6 +18,17 @@
 // Include generated FlatBuffer code
 #include "tar_reader.hpp"
 #include "tar_writer.hpp"
+
+namespace {
+// Compile-time strlen for constexpr strings (consteval ensures compile-time evaluation)
+consteval size_t constexpr_strlen(const char* str) {
+    size_t len = 0;
+    while (str[len] != '\0') {
+        ++len;
+    }
+    return len;
+}
+}  // namespace
 #include "ttml_tensor_generated.h"
 
 namespace ttml::serialization {
@@ -50,10 +61,6 @@ public:
     }
 
     void put(std::string_view key, size_t value) {
-        m_data[std::string(key)] = value;
-    }
-
-    void put(std::string_view key, const std::string& value) {
         m_data[std::string(key)] = value;
     }
 
@@ -94,13 +101,12 @@ public:
         m_data[std::string(key)] = value;
     }
 
-    // Serialization method
-    void serialize(const std::string& filename) {
+    // Helper function to build a flatbuffer from a subset of data
+    std::vector<uint8_t> build_flatbuffer(const std::unordered_map<std::string, ValueType>& data_subset) const {
         flatbuffers::FlatBufferBuilder builder;
-
         std::vector<flatbuffers::Offset<ttml::flatbuffer::KeyValuePair>> kv_pairs;
 
-        for (const auto& [key, value] : m_data) {
+        for (const auto& [key, value] : data_subset) {
             auto key_str = builder.CreateString(key);
             flatbuffers::Offset<void> union_offset;
             ttml::flatbuffer::SerializableType union_type;
@@ -193,56 +199,102 @@ public:
         auto root = ttml::flatbuffer::CreateTTMLData(builder, pairs_vector);
         builder.Finish(root);
 
-        // Build flatbuffer in memory
+        // Copy flatbuffer data to vector
         const void* flatbuffer_data = builder.GetBufferPointer();
         size_t flatbuffer_size = builder.GetSize();
-
-        // Create tarball in memory
-        TarWriter tar_writer;
-        tar_writer.add_file("data.flatbuffer", flatbuffer_data, flatbuffer_size);
-
-        // Write tarball to file (single write operation)
-        tar_writer.write_to_file(filename);
+        return std::vector<uint8_t>(
+            reinterpret_cast<const uint8_t*>(flatbuffer_data),
+            reinterpret_cast<const uint8_t*>(flatbuffer_data) + flatbuffer_size);
     }
 
-    // Deserialization method
-    void deserialize(const std::string& filename) {
-        // Read tarball and extract flatbuffer data
-        TarReader tar_reader;
-        tar_reader.read_from_file(filename);
+    // Extract top-level prefix from a key (everything before first '/')
+    std::string get_prefix(std::string_view key) const {
+        size_t pos = key.find('/');
+        if (pos != std::string::npos) {
+            return std::string(key.substr(0, pos));
+        }
+        return "data";  // Default prefix for keys without '/'
+    }
 
-        if (!tar_reader.has_file("data.flatbuffer")) {
-            throw std::runtime_error("Tarball does not contain data.flatbuffer: " + filename);
+    // Serialization method - creates multiple flatbuffer files grouped by prefix
+    void serialize(std::string_view filename) {
+        // Group data by top-level prefix
+        std::unordered_map<std::string, std::unordered_map<std::string, ValueType>> grouped_data;
+
+        for (const auto& [key, value] : m_data) {
+            std::string prefix = get_prefix(key);
+            std::string suffix = key;
+            size_t pos = key.find('/');
+            if (pos != std::string::npos) {
+                suffix = key.substr(pos + 1);  // Remove prefix from key
+            }
+            grouped_data[prefix][suffix] = value;
         }
 
-        std::vector<uint8_t> buffer = tar_reader.get_file("data.flatbuffer");
+        // Create tarball in memory with multiple files
+        TarWriter tar_writer;
 
+        // Build a flatbuffer file for each prefix group
+        bool added_any_files = false;
+        for (const auto& [prefix, data_subset] : grouped_data) {
+            if (data_subset.empty()) {
+                continue;  // Skip empty groups
+            }
+            auto flatbuffer_data = build_flatbuffer(data_subset);
+            if (flatbuffer_data.empty()) {
+                // This shouldn't happen if data_subset is not empty, but check anyway
+                continue;
+            }
+            std::string filename_in_tar = prefix + ".flatbuffer";
+            tar_writer.add_file(filename_in_tar, flatbuffer_data.data(), flatbuffer_data.size());
+            added_any_files = true;
+        }
+
+        // Ensure we have at least one file (should always be true if m_data is not empty)
+        if (!added_any_files && !m_data.empty()) {
+            throw std::runtime_error("Failed to create any flatbuffer files during serialization");
+        }
+
+        // Write tarball to file (single write operation)
+        tar_writer.write_to_file(std::string(filename));
+    }
+
+    // Helper function to deserialize a flatbuffer and merge into m_data with prefix
+    void deserialize_flatbuffer(const std::vector<uint8_t>& buffer, std::string_view prefix) {
         if (buffer.empty()) {
-            throw std::runtime_error("FlatBuffer data is empty in tarball: " + filename);
+            return;
         }
 
         // Verify and get the root
         flatbuffers::Verifier verifier(buffer.data(), buffer.size());
         if (!ttml::flatbuffer::VerifyTTMLDataBuffer(verifier)) {
-            throw std::runtime_error("Invalid FlatBuffer data in tarball: " + filename);
+            throw std::runtime_error("Invalid FlatBuffer data in tarball");
         }
 
         auto* ttml_data = ttml::flatbuffer::GetTTMLData(buffer.data());
 
         if (!ttml_data || !ttml_data->pairs()) {
-            throw std::runtime_error("Invalid FlatBuffer structure in file: " + filename);
+            throw std::runtime_error("Invalid FlatBuffer structure");
         }
 
-        // Clear existing data
-        m_data.clear();
-
-        // Deserialize each key-value pair
+        // Deserialize each key-value pair and add prefix
+        // Note: If prefix is "data" (default for keys without '/'), don't add it back
+        // to preserve the original key structure
         for (const auto* kv_pair : *ttml_data->pairs()) {
             if (!kv_pair || !kv_pair->key()) {
                 continue;
             }
 
-            std::string key(kv_pair->key()->c_str());
+            std::string suffix(kv_pair->key()->c_str());
+            std::string key;
+            if (prefix == "data") {
+                // Keys without '/' were stored with default prefix "data"
+                // Don't add prefix back to preserve original key structure
+                key = suffix;
+            } else {
+                // Keys with '/' were stored with their actual prefix
+                key = std::string(prefix) + "/" + suffix;
+            }
 
             switch (kv_pair->value_type()) {
                 case ttml::flatbuffer::SerializableType::BoolValue: {
@@ -360,69 +412,138 @@ public:
         }
     }
 
+    // Deserialization method - reads multiple flatbuffer files from tarball
+    void deserialize(std::string_view filename) {
+        // Read tarball
+        TarReader tar_reader;
+        try {
+            tar_reader.read_from_file(std::string(filename));
+        } catch (const std::runtime_error& e) {
+            // Re-throw tar reading errors (invalid tarball, empty file, etc.)
+            throw;
+        }
+
+        // Clear existing data
+        m_data.clear();
+
+        // Get list of all files in tarball
+        auto files = tar_reader.list_files();
+
+        // If tarball is empty, that's okay only if it was intentionally empty
+        // (i.e., serialized with no data). But if the file exists and is not empty,
+        // an empty file list might indicate an invalid tarball.
+        // For now, allow empty tarballs (they represent empty serialized data)
+        if (files.empty()) {
+            return;
+        }
+
+        // Deserialize each flatbuffer file
+        bool found_flatbuffer = false;
+        constexpr const char* flatbuffer_ext = ".flatbuffer";
+        constexpr size_t flatbuffer_ext_len = constexpr_strlen(flatbuffer_ext);
+
+        for (const auto& file_name : files) {
+            // Extract prefix from filename (remove .flatbuffer extension)
+            // Filenames should already be trimmed by TarReader, but be defensive
+            std::string clean_name = file_name;
+            while (!clean_name.empty() && (clean_name.back() == ' ' || clean_name.back() == '\0')) {
+                clean_name.pop_back();
+            }
+
+            // Check if filename ends with .flatbuffer using find
+            size_t ext_pos = clean_name.rfind(flatbuffer_ext);
+            if (ext_pos != std::string::npos && ext_pos + flatbuffer_ext_len == clean_name.size()) {
+                found_flatbuffer = true;
+                std::string prefix = clean_name.substr(0, ext_pos);
+
+                // Read and deserialize the flatbuffer file (use original filename for lookup)
+                std::vector<uint8_t> buffer = tar_reader.get_file(file_name);
+                deserialize_flatbuffer(buffer, prefix);
+            }
+        }
+
+        if (!found_flatbuffer) {
+            // Provide more helpful error message
+            std::string file_list;
+            for (const auto& f : files) {
+                if (!file_list.empty())
+                    file_list += ", ";
+                file_list += "'" + f + "'";
+            }
+            throw std::runtime_error(
+                "Tarball does not contain any .flatbuffer files: " + std::string(filename) +
+                ". Files found: " + (files.empty() ? "(empty)" : file_list));
+        }
+    }
+
     // Methods to get values
-    void get(std::string_view key, bool& value) const {
-        get_value(key, value);
+    bool get_bool(std::string_view key) const {
+        return get_value<bool>(key);
     }
 
-    void get(std::string_view key, char& value) const {
-        get_value(key, value);
+    char get_char(std::string_view key) const {
+        return get_value<char>(key);
     }
 
-    void get(std::string_view key, int& value) const {
-        get_value(key, value);
+    int get_int(std::string_view key) const {
+        return get_value<int>(key);
     }
 
-    void get(std::string_view key, float& value) const {
-        get_value(key, value);
+    float get_float(std::string_view key) const {
+        return get_value<float>(key);
     }
 
-    void get(std::string_view key, double& value) const {
-        get_value(key, value);
+    double get_double(std::string_view key) const {
+        return get_value<double>(key);
     }
 
-    void get(std::string_view key, uint32_t& value) const {
-        get_value(key, value);
+    uint32_t get_uint32(std::string_view key) const {
+        return get_value<uint32_t>(key);
     }
 
-    void get(std::string_view key, size_t& value) const {
-        get_value(key, value);
+    size_t get_size_t(std::string_view key) const {
+        return get_value<size_t>(key);
     }
 
-    void get(std::string_view key, std::string& value) const {
-        get_value(key, value);
+    std::string get_string(std::string_view key) const {
+        return get_value<std::string>(key);
     }
 
-    void get(std::string_view key, std::vector<char>& value) const {
-        get_value(key, value);
+    std::vector<char> get_vector_char(std::string_view key) const {
+        return get_value<std::vector<char>>(key);
     }
 
-    void get(std::string_view key, std::vector<uint8_t>& value) const {
-        get_value(key, value);
+    std::vector<uint8_t> get_vector_uint8(std::string_view key) const {
+        return get_value<std::vector<uint8_t>>(key);
     }
 
-    void get(std::string_view key, std::vector<int>& value) const {
-        get_value(key, value);
+    std::vector<int> get_vector_int(std::string_view key) const {
+        return get_value<std::vector<int>>(key);
     }
 
-    void get(std::string_view key, std::vector<float>& value) const {
-        get_value(key, value);
+    std::vector<float> get_vector_float(std::string_view key) const {
+        return get_value<std::vector<float>>(key);
     }
 
-    void get(std::string_view key, std::vector<double>& value) const {
-        get_value(key, value);
+    std::vector<double> get_vector_double(std::string_view key) const {
+        return get_value<std::vector<double>>(key);
     }
 
-    void get(std::string_view key, std::vector<uint32_t>& value) const {
-        get_value(key, value);
+    std::vector<uint32_t> get_vector_uint32(std::string_view key) const {
+        return get_value<std::vector<uint32_t>>(key);
     }
 
-    void get(std::string_view key, std::vector<std::string>& value) const {
-        get_value(key, value);
+    std::vector<std::string> get_vector_string(std::string_view key) const {
+        return get_value<std::vector<std::string>>(key);
     }
 
-    void get(std::string_view key, ValueType& value) const {
-        get_value(key, value);
+    ValueType get_value_type(std::string_view key) const {
+        auto it = m_data.find(std::string(key));
+        if (it != m_data.end()) {
+            return it->second;
+        } else {
+            throw std::runtime_error(fmt::format("Key not found: {}", key));
+        }
     }
 
 private:
@@ -430,23 +551,14 @@ private:
 
     // Helper function to get value from m_data
     template <typename T>
-    void get_value(std::string_view key, T& value) const {
+    T get_value(std::string_view key) const {
         auto it = m_data.find(std::string(key));
         if (it != m_data.end()) {
             if (const auto* pval = std::get_if<T>(&(it->second))) {
-                value = *pval;
+                return *pval;
             } else {
                 throw std::runtime_error(fmt::format("Type mismatch for key: {}", key));
             }
-        } else {
-            throw std::runtime_error(fmt::format("Key not found: {}", key));
-        }
-    }
-
-    void get_value(std::string_view key, ValueType& value) const {
-        auto it = m_data.find(std::string(key));
-        if (it != m_data.end()) {
-            value = it->second;
         } else {
             throw std::runtime_error(fmt::format("Key not found: {}", key));
         }
@@ -531,76 +643,76 @@ void FlatBufferFile::put(std::string_view key, const ValueType& value) {
     m_impl->put(key, value);
 }
 
-void FlatBufferFile::serialize(const std::string& filename) {
+void FlatBufferFile::serialize(std::string_view filename) {
     m_impl->serialize(filename);
 }
 
-void FlatBufferFile::deserialize(const std::string& filename) {
+void FlatBufferFile::deserialize(std::string_view filename) {
     m_impl->deserialize(filename);
 }
 
-void FlatBufferFile::get(std::string_view key, bool& value) const {
-    m_impl->get(key, value);
+bool FlatBufferFile::get_bool(std::string_view key) const {
+    return m_impl->get_bool(key);
 }
 
-void FlatBufferFile::get(std::string_view key, char& value) const {
-    m_impl->get(key, value);
+char FlatBufferFile::get_char(std::string_view key) const {
+    return m_impl->get_char(key);
 }
 
-void FlatBufferFile::get(std::string_view key, int& value) const {
-    m_impl->get(key, value);
+int FlatBufferFile::get_int(std::string_view key) const {
+    return m_impl->get_int(key);
 }
 
-void FlatBufferFile::get(std::string_view key, float& value) const {
-    m_impl->get(key, value);
+float FlatBufferFile::get_float(std::string_view key) const {
+    return m_impl->get_float(key);
 }
 
-void FlatBufferFile::get(std::string_view key, double& value) const {
-    m_impl->get(key, value);
+double FlatBufferFile::get_double(std::string_view key) const {
+    return m_impl->get_double(key);
 }
 
-void FlatBufferFile::get(std::string_view key, uint32_t& value) const {
-    m_impl->get(key, value);
+uint32_t FlatBufferFile::get_uint32(std::string_view key) const {
+    return m_impl->get_uint32(key);
 }
 
-void FlatBufferFile::get(std::string_view key, size_t& value) const {
-    m_impl->get(key, value);
+size_t FlatBufferFile::get_size_t(std::string_view key) const {
+    return m_impl->get_size_t(key);
 }
 
-void FlatBufferFile::get(std::string_view key, std::string& value) const {
-    m_impl->get(key, value);
+std::string FlatBufferFile::get_string(std::string_view key) const {
+    return m_impl->get_string(key);
 }
 
-void FlatBufferFile::get(std::string_view key, std::vector<char>& value) const {
-    m_impl->get(key, value);
+std::vector<char> FlatBufferFile::get_vector_char(std::string_view key) const {
+    return m_impl->get_vector_char(key);
 }
 
-void FlatBufferFile::get(std::string_view key, std::vector<uint8_t>& value) const {
-    m_impl->get(key, value);
+std::vector<uint8_t> FlatBufferFile::get_vector_uint8(std::string_view key) const {
+    return m_impl->get_vector_uint8(key);
 }
 
-void FlatBufferFile::get(std::string_view key, std::vector<int>& value) const {
-    m_impl->get(key, value);
+std::vector<int> FlatBufferFile::get_vector_int(std::string_view key) const {
+    return m_impl->get_vector_int(key);
 }
 
-void FlatBufferFile::get(std::string_view key, std::vector<float>& value) const {
-    m_impl->get(key, value);
+std::vector<float> FlatBufferFile::get_vector_float(std::string_view key) const {
+    return m_impl->get_vector_float(key);
 }
 
-void FlatBufferFile::get(std::string_view key, std::vector<double>& value) const {
-    m_impl->get(key, value);
+std::vector<double> FlatBufferFile::get_vector_double(std::string_view key) const {
+    return m_impl->get_vector_double(key);
 }
 
-void FlatBufferFile::get(std::string_view key, std::vector<uint32_t>& value) const {
-    m_impl->get(key, value);
+std::vector<uint32_t> FlatBufferFile::get_vector_uint32(std::string_view key) const {
+    return m_impl->get_vector_uint32(key);
 }
 
-void FlatBufferFile::get(std::string_view key, std::vector<std::string>& value) const {
-    m_impl->get(key, value);
+std::vector<std::string> FlatBufferFile::get_vector_string(std::string_view key) const {
+    return m_impl->get_vector_string(key);
 }
 
-void FlatBufferFile::get(std::string_view key, ValueType& value) const {
-    m_impl->get(key, value);
+ValueType FlatBufferFile::get_value_type(std::string_view key) const {
+    return m_impl->get_value_type(key);
 }
 
 }  // namespace ttml::serialization
