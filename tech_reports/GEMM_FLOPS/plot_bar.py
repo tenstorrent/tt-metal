@@ -11,7 +11,6 @@ Usage:
 
 import pandas as pd
 import matplotlib.pyplot as plt
-import numpy as np
 import matplotlib.colors as mcolors
 
 # Load N150 and P150 data

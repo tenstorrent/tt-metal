@@ -155,7 +155,6 @@ for source in ["N150", "P150"]:
     fig, ax = plt.subplots(figsize=(16, 8))
 
     # Set up positions: 3 aspect ratios, each with 3 dtypes
-    n_aspects = len(aspect_ratios)
     n_dtypes = len(dtype_configs)
     bar_width = 0.22
     group_gap = 0.5  # Larger gap between aspect ratio groups
@@ -180,7 +179,7 @@ for source in ["N150", "P150"]:
                 value = data_point["avg_tflops"]
                 bar_pos = current_pos + dtype_idx * bar_width
 
-                bar = ax.bar(
+                ax.bar(
                     bar_pos,
                     value,
                     bar_width,

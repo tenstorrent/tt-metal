@@ -196,8 +196,9 @@ legend = ax.legend(
 )
 
 # Make the headers bold
+header_labels = {"Dtype (Math Fidelity)", "Device"}
 for text in legend.get_texts():
-    if ":" in text.get_text():
+    if text.get_text() in header_labels:
         text.set_weight("bold")
 
 plt.tight_layout()
