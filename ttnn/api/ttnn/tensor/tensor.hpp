@@ -208,7 +208,7 @@ public:
     static Tensor make_lazy_tensor(
         const std::shared_ptr<ttnn::experimental::lazy::LazyOperationInputs>& op_inputs,
         const std::shared_ptr<ttnn::experimental::lazy::LazyOperation>& op,
-        TensorSpec tensor_spec);
+        const TensorSpec& tensor_spec);
     static std::vector<Tensor> make_lazy_tensors(
         const std::shared_ptr<ttnn::experimental::lazy::LazyOperationInputs>& op_inputs,
         const std::shared_ptr<ttnn::experimental::lazy::LazyOperation>& op,

@@ -6,6 +6,7 @@
 
 #include "ttnn/experimental/lazy/lazy_operation.hpp"
 #include "ttnn/experimental/lazy/lazy_operation_inputs.hpp"
+#include "ttnn/experimental/lazy/lazy_utils.hpp"
 #include "ttnn/device_operation.hpp"
 #include <tt_stl/reflection.hpp>
 #include <vector>
@@ -37,24 +38,7 @@ public:
     using tensor_return_value_t = typename operation_t::tensor_return_value_t;
 
     LazyDeviceOperation(operation_attributes_t attributes, const tensor_args_t& tensor_args, const std::string& name) :
-        attributes_(attributes),  // Copy first to use in compute_and_convert_specs
-        cached_output_specs_(compute_and_convert_specs(attributes, tensor_args)),
-        name_(name) {}
-
-    static std::vector<ttnn::TensorSpec> compute_and_convert_specs(
-        const operation_attributes_t& attrs, const tensor_args_t& t_args) {
-        if constexpr (requires { operation_t::compute_output_specs(attrs, t_args); }) {
-            auto spec = operation_t::compute_output_specs(attrs, t_args);
-            return convert_spec_to_vector_static(spec);
-        } else {
-            return {};
-        }
-    }
-
-    std::vector<ttnn::TensorSpec> compute_output_specs() const {
-        // Return cached output specs that were computed at construction time
-        return cached_output_specs_;
-    }
+        attributes_(attributes), name_(name) {}
 
     std::string_view name() const override { return std::string_view(name_.c_str()); }
 
@@ -86,30 +70,12 @@ public:
 
 private:
     operation_attributes_t attributes_;
-    std::vector<ttnn::TensorSpec> cached_output_specs_;
     std::string name_;
-
-    // Helper to convert any spec type to vector
-    template <typename SpecType>
-    static std::vector<ttnn::TensorSpec> convert_spec_to_vector_static(const SpecType& spec) {
-        using spec_type = std::decay_t<SpecType>;
-
-        // Handle single TensorSpec
-        if constexpr (std::same_as<spec_type, ttnn::TensorSpec>) {
-            return {spec};
-        }
-        // Handle vector<TensorSpec>
-        else if constexpr (std::same_as<spec_type, std::vector<ttnn::TensorSpec>>) {
-            return spec;
-        } else {
-            TT_THROW("Unsupported spec type");
-        }
-    }
 
     // Convert result from device operation to vector of tensors
     std::vector<tt::tt_metal::metal_tensor::Tensor> convert_result_to_vector(
         const tensor_return_value_t& result) const {
-        // TODO: device operations are supposed to return metal tensors, not tnn::Tensor
+        // TODO: device operations are supposed to return metal tensors, not ttnn::Tensor
         if constexpr (std::same_as<tensor_return_value_t, Tensor>) {
             return {result.get_materialized_tensor()};
         } else if constexpr (std::same_as<tensor_return_value_t, std::vector<Tensor>>) {
@@ -119,6 +85,30 @@ private:
                 metal_tensors.push_back(tensor.get_materialized_tensor());
             }
             return metal_tensors;
+        } else if constexpr (std::same_as<tensor_return_value_t, std::vector<std::optional<Tensor>>>) {
+            // For optional vectors: filter out nullopts, flatten to vector
+            std::vector<tt::tt_metal::metal_tensor::Tensor> metal_tensors;
+            for (const auto& tensor_opt : result) {
+                if (tensor_opt.has_value()) {
+                    metal_tensors.push_back(tensor_opt->get_materialized_tensor());
+                }
+            }
+            return metal_tensors;
+        } else if constexpr (ttnn::experimental::lazy::is_tensor_array_v<tensor_return_value_t>) {
+            // For std::array<Tensor, N>: convert to vector
+            std::vector<tt::tt_metal::metal_tensor::Tensor> metal_tensors;
+            metal_tensors.reserve(result.size());
+            for (const auto& tensor : result) {
+                metal_tensors.push_back(tensor.get_materialized_tensor());
+            }
+            return metal_tensors;
+        } else if constexpr (ttnn::experimental::lazy::is_all_tensor_tuple_v<tensor_return_value_t>) {
+            // For std::tuple<Tensor, ...>: convert to vector using apply
+            return std::apply(
+                [](const auto&... tensors) {
+                    return std::vector<tt::tt_metal::metal_tensor::Tensor>{tensors.get_materialized_tensor()...};
+                },
+                result);
         } else {
             TT_THROW("Unsupported tensor_return_value_t type");
         }

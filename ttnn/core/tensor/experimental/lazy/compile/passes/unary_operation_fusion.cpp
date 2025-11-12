@@ -113,9 +113,6 @@ void UnaryOperationsFusionPass::run(const ttnn::Tensor& tensor) {
             auto* last_unary_op = chain.back();
             auto old_attributes = last_unary_op->attributes();
 
-            // Get the output specs from the last operation (since that's what our fused op will output)
-            auto output_specs = last_unary_op->compute_output_specs();
-
             // Get the input of the first operation in the chain (for graph dependency update)
             auto first_op_inputs = chain_tensors[0]->op_inputs();
             auto first_op_tensor_args =
