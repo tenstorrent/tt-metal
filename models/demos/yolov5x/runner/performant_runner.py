@@ -56,6 +56,8 @@ class YOLOv5xPerformantRunner:
         ) = self.runner_infra.setup_dram_sharded_input(device)
         self.tt_image_res = self.tt_inputs_host.to(device, sharded_mem_config_DRAM)
 
+        self._capture_yolov5x_trace_2cqs()
+
     def _capture_yolov5x_trace_2cqs(self):
         # Initialize the op event so we can write
         self.op_event = ttnn.record_event(self.device, 0)
@@ -115,14 +117,14 @@ class YOLOv5xPerformantRunner:
 
     def _validate(self, input_tensor, result_output_tensor):
         torch_output_tensor = self.runner_infra.torch_output_tensor
-        assert_with_pcc(torch_output_tensor, result_output_tensor, 0.99)
+        # Convert TTNN tensor to PyTorch tensor
+        pytorch_output_tensor = ttnn.to_torch(result_output_tensor, mesh_composer=self.runner_infra.mesh_composer)
+        assert_with_pcc(torch_output_tensor[0], pytorch_output_tensor, 0.99)
 
     def run(self, torch_input_tensor=None, check_pcc=False):
         tt_inputs_host, _ = self.runner_infra._setup_l1_sharded_input(self.device, torch_input_tensor)
         output = self._execute_yolov5x_trace_2cqs_inference(tt_inputs_host)
         if check_pcc:
-            torch_input_tensor = torch_input_tensor.reshape(n, h, w, c)
-            torch_input_tensor = torch_input_tensor.permute(0, 3, 1, 2)
             self._validate(torch_input_tensor, output)
 
         return output

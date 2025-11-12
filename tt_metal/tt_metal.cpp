@@ -45,7 +45,7 @@
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/tt_metal_profiler.hpp>
-#include "tt-metalium/program.hpp"
+#include <tt-metalium/program.hpp>
 #include "program/program_impl.hpp"
 #include "impl/buffers/semaphore.hpp"
 #include "tracy/Tracy.hpp"
@@ -55,6 +55,7 @@
 #include <tt-metalium/graph_tracking.hpp>
 #include <tt_stl/overloaded.hpp>
 #include "get_platform_architecture.hpp"
+#include "common/tt_backend_api_types.hpp"
 
 namespace tt {
 
