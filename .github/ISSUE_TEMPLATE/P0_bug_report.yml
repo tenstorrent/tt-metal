@@ -1,72 +1,97 @@
 name: P0 Bug Report
-description: File a P0 bug or issue
-labels: ["bug", "P0"]
+description: File a P0 bug or critical issue
+labels: ["P0", "bug"]
 body:
   - type: markdown
     attributes:
       value: |
-        :star2: Thanks for taking the time to report this critical issue! Please provide as much detail as possible. :star2:
+        :star2: Thank you for reporting a P0 issue! :star2:
+        
+        P0 bugs represent critical blockers that prevent proper system functionality, affect multiple users, or risk major regressions. 
+        Please provide detailed and accurate information to help us triage and resolve this as quickly as possible.
 
   - type: textarea
     id: reporter-requirements
     attributes:
       label: Reporter Requirements
       description: |
-        Fill in the following information to help triage and reproduce the issue.
+        Provide all necessary information that will help the team reproduce and investigate this issue.
       placeholder: |
-        - Expected vs Actual behaviour
-        - Repro steps
-          - Error messages, stack traces, or screenshots/logs confirming the issue
-          - CI or unit test that has failed
+        - **Expected vs Actual behavior**
+        - **Steps to reproduce**
+          - Include error messages, stack traces, screenshots, or logs
+          - CI or unit test failures
           - Minimal reproducing script (if applicable)
+        - **Relevant configuration or environment details**
+        - Any recent changes that might be related
 
   - type: textarea
     id: impact-statement
     attributes:
       label: Impact Statement (Why This is a P0)
       description: |
-        Explain why this issue is P0. Include scale of impact, affected architecture, number of users, etc.
+        Explain why this issue is classified as P0. Include the scale and severity of the impact.
       placeholder: |
-        - Scale of impact:
-        - Scope: X Architecture, Y Users
+        - **Scale of impact:** (e.g., all users, production systems, critical components)
+        - **Scope:** affected architecture, modules, or teams
+        - **Urgency:** potential for data loss, regression, or downtime
 
   - type: textarea
     id: action-history
     attributes:
       label: Action History
       description: |
-        What has been tried so far to resolve or investigate the issue.
+        Document any steps already taken to troubleshoot or mitigate this issue.
+      placeholder: |
+        - Debugging steps tried
+        - Workarounds applied
+        - Communication with other teams
+        - Links to related issues or PRs
 
   - type: textarea
     id: next-steps
     attributes:
-      label: Next Steps
+      label: Recommended Next Steps
       description: |
-        Recommended next actions and who will take them.
+        Suggest next actions, who will take them, and any priority sequencing.
+      placeholder: |
+        - Immediate mitigation steps
+        - Investigation plan
+        - Responsible team or individual
 
   - type: textarea
     id: suspected-root-cause
     attributes:
       label: Suspected Root Cause
       description: |
-        If known, provide suspected root cause (e.g., bisected commit hash, software layer, etc.)
+        If known, provide suspected root cause details. This helps accelerate triage.
+      placeholder: |
+        - Bisected commit hash (if known)
+        - Software layer or module
+        - Configuration issues
+        - Hardware-related considerations
 
   - type: textarea
     id: system-info
     attributes:
       label: System Information
       description: |
-        Provide relevant system details to reproduce or debug the issue.
+        Provide all system/environment details necessary to reproduce or debug the issue.
       placeholder: |
-        - Host used
-        - Host OS
-        - Chip/Card type
-        - Software package: Metal, UMD/KMD, Forge, Firmware
-        - tt-smi dump? (Yes/No)
+        - Host machine or cluster
+        - OS and version
+        - Chip or card type
+        - Software package/version (Metal, UMD/KMD, Forge, Firmware)
+        - tt-smi dump (Yes/No)
 
   - type: textarea
     id: acceptance-criteria
     attributes:
-      label: Acceptance Criteria (to close P0)
+      label: Acceptance Criteria (to Close P0)
       description: |
-        Define what conditions must be met to close this P0 bug.
+        Define the measurable conditions that must be met for this P0 bug to be considered resolved.
+      placeholder: |
+        - Issue no longer reproducible under defined conditions
+        - All affected systems/components verified
+        - CI tests passing
+        - Code review or PR merged (if applicable)
