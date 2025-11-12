@@ -36,6 +36,7 @@ add_custom_target(
     metalium_GeneratedHeaders
     DEPENDS
         ${API_GENERATED_HEADERS}
+        ${TENSOR_FLATBUFFER_GENERATED_HEADERS}
     COMMENT "Generating all FlatBuffer headers"
 )
 
