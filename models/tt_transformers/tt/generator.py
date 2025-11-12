@@ -339,7 +339,6 @@ class Generator:
                 )
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
-
         return output_logits
 
     def prefill_forward_single_user_text(
