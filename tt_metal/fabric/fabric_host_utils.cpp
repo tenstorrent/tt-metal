@@ -29,17 +29,8 @@ bool is_tt_fabric_config(tt::tt_fabric::FabricConfig fabric_config) {
 }
 
 FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config) {
-    auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
     switch (fabric_config) {
-        // Issue: 32146, Special case for T3k WH devices to use Mesh fabric type instead of Torus_XY
-        // WH T3K currently do not support Torus_XY fabric type, because they do not have wrapping connections.
-        // If you want to use 1D Ring on t3k please use 1x8 MGD.
-        case tt::tt_fabric::FabricConfig::FABRIC_1D_RING: {
-            if (cluster_type == tt::tt_metal::ClusterType::GALAXY) {
-                return FabricType::TORUS_XY;
-            }
-            return FabricType::MESH;
-        }
+        case tt::tt_fabric::FabricConfig::FABRIC_1D_RING:; return FabricType::TORUS_XY;
         case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X: return FabricType::TORUS_X;
         case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y: return FabricType::TORUS_Y;
         case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY: return FabricType::TORUS_XY;

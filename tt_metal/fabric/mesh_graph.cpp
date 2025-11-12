@@ -80,6 +80,7 @@ const tt::stl::Indestructible<FabricToClusterDescriptorMap>& cluster_type_to_mes
         {tt::tt_fabric::FabricType::TORUS_XY,
          ClusterToDescriptorMap{
              {tt::tt_metal::ClusterType::GALAXY, "single_galaxy_torus_xy_graph_descriptor.yaml"},
+             {tt::tt_metal::ClusterType::T3K, "t3k_1x8_mesh_graph_descriptor.yaml"},
          }}});
 
 const tt::stl::Indestructible<FabricToClusterDescriptorMap>& cluster_type_to_mesh_graph_descriptor_mgd2 =
@@ -115,10 +116,11 @@ const tt::stl::Indestructible<FabricToClusterDescriptorMap>& cluster_type_to_mes
         {tt::tt_fabric::FabricType::TORUS_XY,
          ClusterToDescriptorMap{
              {tt::tt_metal::ClusterType::GALAXY, "single_galaxy_torus_xy_graph_descriptor.textproto"},
+             {tt::tt_metal::ClusterType::T3K, "t3k_1x8_mesh_graph_descriptor.textproto"},
          }}});
 
 MeshGraph::MeshGraph(const std::string& mesh_graph_desc_file_path, std::optional<FabricConfig> fabric_config) {
-    log_debug(tt::LogFabric, "mesh_graph_desc_file_path: {}", mesh_graph_desc_file_path);
+    log_critical(tt::LogFabric, "mesh_graph_desc_file_path: {}", mesh_graph_desc_file_path);
     if (mesh_graph_desc_file_path.ends_with(".textproto")) {
         auto filepath = std::filesystem::path(mesh_graph_desc_file_path);
         MeshGraphDescriptor mgd(filepath, true);
@@ -205,6 +207,7 @@ std::unordered_map<ChipId, RouterEdge> MeshGraph::get_valid_connections(
         N = MeshCoordinate((src_mesh_coord[0] - 1 + mesh_shape[0]) % mesh_shape[0], src_mesh_coord[1]);
         S = MeshCoordinate((src_mesh_coord[0] + 1) % mesh_shape[0], src_mesh_coord[1]);
     }
+    ChipId src_chip_id = (src_mesh_coord[0] * mesh_shape[1]) + src_mesh_coord[1];
     for (auto& [coord, direction] :
          {std::pair{N, RoutingDirection::N},
           std::pair{E, RoutingDirection::E},
@@ -212,6 +215,10 @@ std::unordered_map<ChipId, RouterEdge> MeshGraph::get_valid_connections(
           std::pair{W, RoutingDirection::W}}) {
         if (mesh_coord_range.contains(coord)) {
             ChipId fabric_chip_id = (coord[0] * mesh_shape[1]) + coord[1];
+            // Ignore self-connections (can occur with ring topology when mesh dimension size is 1)
+            if (fabric_chip_id == src_chip_id) {
+                continue;
+            }
             valid_connections.insert(
                 {fabric_chip_id,
                  RouterEdge{

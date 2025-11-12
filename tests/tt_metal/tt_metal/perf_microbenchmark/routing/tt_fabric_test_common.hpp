@@ -803,73 +803,131 @@ public:
 
     std::optional<std::pair<FabricNodeId, FabricNodeId>> get_wrap_around_mesh_ring_neighbors(
         const FabricNodeId& src_node, const std::vector<FabricNodeId>& devices) const override {
-        // Get mesh dimensions
-        uint32_t mesh_height = mesh_shape_[NS_DIM];
-        uint32_t mesh_width = mesh_shape_[EW_DIM];
+        const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
-        // Convert chip_id to row/col coordinates (row-major order)
-        uint32_t row = src_node.chip_id / mesh_width;
-        uint32_t col = src_node.chip_id % mesh_width;
+        // For ring topology, find neighbors in all directions using control plane
+        // Note: A node can have multiple neighbors in the same direction (multiple links/planes),
+        // so we collect all neighbors and deduplicate to get unique neighbors
+        std::unordered_map<FabricNodeId, RoutingDirection> unique_neighbors;
 
-        // Check if the device is on the outer ring (perimeter)
-        bool is_perimeter = (row == 0) || (row == mesh_height - 1) || (col == 0) || (col == mesh_width - 1);
+        for (const auto& direction : FabricContext::routing_directions) {
+            const auto& neighbors = control_plane.get_chip_neighbors(src_node, direction);
+            // Check for intra-mesh neighbors (same mesh)
+            auto intra_mesh_neighbors = neighbors.find(src_node.mesh_id);
+            if (intra_mesh_neighbors != neighbors.end() && !intra_mesh_neighbors->second.empty()) {
+                // For each neighbor in this direction, add it to our map
+                // If there are multiple neighbors in the same direction, we take the first one
+                // (they should all be the same physical neighbor, just different links)
+                for (const auto& chip_id : intra_mesh_neighbors->second) {
+                    FabricNodeId neighbor(src_node.mesh_id, chip_id);
+                    // Only add if we haven't seen this neighbor before, or update direction if needed
+                    if (unique_neighbors.find(neighbor) == unique_neighbors.end()) {
+                        unique_neighbors[neighbor] = direction;
+                    }
+                }
+            }
+        }
 
-        // If not on perimeter, return nullopt to indicate no valid ring neighbors
-        if (!is_perimeter) {
+        // For wrap-around mesh ring, we expect exactly 2 unique neighbors (forward and backward)
+        if (unique_neighbors.size() != 2) {
+            // Not on perimeter or not a valid ring node
             return std::nullopt;
         }
 
-        // Calculate ring neighbors based on position on perimeter
-        // forward always try to go right/up first, backward always try to go left/down first
-        ChipId forward_chip_id, backward_chip_id;
+        // Extract the two unique neighbors
+        auto it = unique_neighbors.begin();
+        const auto& [neighbor1, dir1] = *it;
+        ++it;
+        const auto& [neighbor2, dir2] = *it;
 
-        if (row == 0 && col == 0) {
-            // Top-left corner (0): forward=1, backward=4 (4x4 mesh)
-            forward_chip_id = 1;
-            backward_chip_id = mesh_width;
-        } else if (row == 0 && col == mesh_width - 1) {
-            // Top-right corner (3): forward=7, backward=2
-            forward_chip_id = src_node.chip_id + mesh_width;
-            backward_chip_id = src_node.chip_id - 1;
-        } else if (row == mesh_height - 1 && col == mesh_width - 1) {
-            // Bottom-right corner (15): forward=11, backward=14
-            forward_chip_id = src_node.chip_id - mesh_width;
-            backward_chip_id = src_node.chip_id - 1;
-        } else if (row == mesh_height - 1 && col == 0) {
-            // Bottom-left corner (12): forward=13, backward=8
-            forward_chip_id = src_node.chip_id + 1;
-            backward_chip_id = src_node.chip_id - mesh_width;
-        } else if (row == 0) {
-            // Top row (not corners): forward=right, backward=left
-            forward_chip_id = src_node.chip_id + 1;
-            backward_chip_id = src_node.chip_id - 1;
-        } else if (col == mesh_width - 1) {
-            // Right column (not corners): forward=up, backward=down
-            forward_chip_id = src_node.chip_id - mesh_width;
-            backward_chip_id = src_node.chip_id + mesh_width;
-        } else if (row == mesh_height - 1) {
-            // Bottom row (not corners): forward=right, backward=left
-            forward_chip_id = src_node.chip_id + 1;
-            backward_chip_id = src_node.chip_id - 1;
-        } else if (col == 0) {
-            // Left column (not corners): forward=up, backward=down
-            forward_chip_id = src_node.chip_id - mesh_width;
-            backward_chip_id = src_node.chip_id + mesh_width;
+        // Use routing tables to determine forward vs backward
+        // The routing direction from src to each neighbor should match the direction we found them in
+        auto dir_to_neighbor1 = control_plane.get_forwarding_direction(src_node, neighbor1);
+        auto dir_to_neighbor2 = control_plane.get_forwarding_direction(src_node, neighbor2);
+
+        // For 1D fabric ring, determine forward/backward by checking which neighbor
+        // can reach nodes further along the ring using routing tables
+        // We check if routing from one neighbor can reach the other neighbor -
+        // the neighbor that routes to the other in the same direction as we found it
+        // is likely the forward neighbor (ring order)
+
+        // Check if we can route from neighbor1 to neighbor2 and vice versa
+        auto route_1to2 = control_plane.get_forwarding_direction(neighbor1, neighbor2);
+        auto route_2to1 = control_plane.get_forwarding_direction(neighbor2, neighbor1);
+
+        // Initialize forward and backward neighbors based on routing tables
+        // Initialize with defaults that will be overwritten
+        FabricNodeId forward_neighbor(neighbor1.mesh_id, neighbor1.chip_id);
+        FabricNodeId backward_neighbor(neighbor2.mesh_id, neighbor2.chip_id);
+
+        // If routing tables show a clear path from neighbor1 to neighbor2,
+        // and neighbor1 was found in a "forward" direction (E or N),
+        // then neighbor1 is forward
+        // Otherwise, use the routing direction from src to determine order
+        if (dir_to_neighbor1.has_value() && dir_to_neighbor2.has_value()) {
+            // Both routing directions are available - use them to determine order
+            // The routing table reflects the logical-to-physical mapping
+            if (dir_to_neighbor1.value() == dir1 && dir_to_neighbor2.value() == dir2) {
+                // Routing directions match the directions we found neighbors in
+                // For ring topology, typically E/N are forward, W/S are backward
+                // But we should rely on routing tables, not assumptions
+                // Check if one neighbor routes to the other to determine ring order
+                if (route_1to2.has_value() && route_1to2.value() != RoutingDirection::NONE) {
+                    // neighbor1 can route to neighbor2, so neighbor1 is forward in ring order
+                    forward_neighbor = neighbor1;
+                    backward_neighbor = neighbor2;
+                } else if (route_2to1.has_value() && route_2to1.value() != RoutingDirection::NONE) {
+                    // neighbor2 can route to neighbor1, so neighbor2 is forward in ring order
+                    forward_neighbor = neighbor2;
+                    backward_neighbor = neighbor1;
+                } else {
+                    // No direct route between neighbors - use direction from src as tiebreaker
+                    // Prefer E/N as forward (this is a minimal assumption for 1D fabric)
+                    if (dir1 == RoutingDirection::E || dir1 == RoutingDirection::N) {
+                        forward_neighbor = neighbor1;
+                        backward_neighbor = neighbor2;
+                    } else {
+                        forward_neighbor = neighbor2;
+                        backward_neighbor = neighbor1;
+                    }
+                }
+            } else {
+                // Routing directions don't match - use routing table directions directly
+                if (dir_to_neighbor1.value() == RoutingDirection::E ||
+                    dir_to_neighbor1.value() == RoutingDirection::N) {
+                    forward_neighbor = neighbor1;
+                    backward_neighbor = neighbor2;
+                } else {
+                    forward_neighbor = neighbor2;
+                    backward_neighbor = neighbor1;
+                }
+            }
         } else {
-            TT_THROW("Device {} should be on perimeter but logic error occurred", src_node.chip_id);
+            // Routing directions not available - this shouldn't happen for valid ring topology
+            TT_FATAL(
+                false,
+                "Could not determine routing direction from {} to neighbors {} and {}. "
+                "Ring topology should have routing table entries.",
+                src_node,
+                neighbor1,
+                neighbor2);
+            // Initialize to avoid uninitialized variable warning (unreachable but compiler doesn't know)
+            forward_neighbor = neighbor1;
+            backward_neighbor = neighbor2;
         }
 
         log_debug(
             LogTest,
-            "src_node: {}, forward_chip_id: {}, backward_chip_id: {}",
-            src_node.chip_id,
-            forward_chip_id,
-            backward_chip_id);
+            "src_node: {}, forward_neighbor: {} (dir {}), backward_neighbor: {} (dir {})",
+            src_node,
+            forward_neighbor,
+            dir_to_neighbor1.has_value() && forward_neighbor == neighbor1 ? dir_to_neighbor1.value()
+                                                                          : dir_to_neighbor2.value(),
+            backward_neighbor,
+            dir_to_neighbor1.has_value() && backward_neighbor == neighbor1 ? dir_to_neighbor1.value()
+                                                                           : dir_to_neighbor2.value());
 
-        FabricNodeId dst_node_forward = FabricNodeId{src_node.mesh_id, forward_chip_id};
-        FabricNodeId dst_node_backward = FabricNodeId{src_node.mesh_id, backward_chip_id};
-
-        return std::make_pair(dst_node_forward, dst_node_backward);
+        return std::make_pair(forward_neighbor, backward_neighbor);
     }
 
     uint32_t get_num_sync_devices() const {
@@ -1210,186 +1268,174 @@ public:
     }
 
     // Helper function to trace ring path with boundary turning logic
+    // Uses routing tables to determine next hop instead of manual coordinate calculations
     std::vector<std::pair<FabricNodeId, RoutingDirection>> trace_wrap_around_mesh_ring_path(
         const FabricNodeId& src_node_id, RoutingDirection initial_direction, uint32_t total_hops) const {
         std::vector<std::pair<FabricNodeId, RoutingDirection>> path;
         path.reserve(total_hops);
 
-        // Get starting coordinate
-        MeshCoordinate current_coord = get_device_coord(src_node_id);
-        RoutingDirection current_direction = initial_direction;
+        const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
         FabricNodeId current_node = src_node_id;
+        RoutingDirection current_direction = initial_direction;
 
         for (uint32_t hop = 0; hop < total_hops; ++hop) {
-            // Try to move in current direction
-            MeshCoordinate next_coord = current_coord;
-            bool can_move = true;
+            // Get neighbors in the current direction using control plane
+            const auto& neighbors = control_plane.get_chip_neighbors(current_node, current_direction);
+            auto intra_mesh_neighbors = neighbors.find(current_node.mesh_id);
 
-            switch (current_direction) {
-                case RoutingDirection::N:
-                    if (current_coord[NS_DIM] == 0) {
-                        can_move = false;
-                    } else {
-                        next_coord = MeshCoordinate(current_coord[NS_DIM] - 1, current_coord[EW_DIM]);
-                    }
-                    break;
-                case RoutingDirection::S:
-                    if (current_coord[NS_DIM] == mesh_shape_[NS_DIM] - 1) {
-                        can_move = false;
-                    } else {
-                        next_coord = MeshCoordinate(current_coord[NS_DIM] + 1, current_coord[EW_DIM]);
-                    }
-                    break;
-                case RoutingDirection::E:
-                    if (current_coord[EW_DIM] == mesh_shape_[EW_DIM] - 1) {
-                        can_move = false;
-                    } else {
-                        next_coord = MeshCoordinate(current_coord[NS_DIM], current_coord[EW_DIM] + 1);
-                    }
-                    break;
-                case RoutingDirection::W:
-                    if (current_coord[EW_DIM] == 0) {
-                        can_move = false;
-                    } else {
-                        next_coord = MeshCoordinate(current_coord[NS_DIM], current_coord[EW_DIM] - 1);
-                    }
-                    break;
-                default: TT_THROW("routing direction not supported: {}", current_direction);
-            }
+            FabricNodeId next_node(current_node.mesh_id, 0);  // Initialize with default, will be overwritten
+            RoutingDirection next_direction = current_direction;
 
-            // If we hit a boundary, determine next direction based on current position
-            if (!can_move) {
-                if (current_direction == RoutingDirection::E) {
-                    // Hit east boundary - direction depends on current row
-                    if (current_coord[NS_DIM] == 0) {
-                        current_direction = RoutingDirection::S;
-                    } else {
-                        current_direction = RoutingDirection::N;
+            if (intra_mesh_neighbors != neighbors.end() && !intra_mesh_neighbors->second.empty()) {
+                // Found neighbor(s) in current direction
+                // Multiple neighbors in same direction are possible (multiple links/planes to same chip)
+                // Verify they all point to the same physical neighbor chip
+                const auto& neighbor_chip_ids = intra_mesh_neighbors->second;
+                if (neighbor_chip_ids.size() > 1) {
+                    // Check that all neighbors are the same chip ID
+                    // Multiple links/planes to the same chip are allowed, but different chips are not
+                    const auto first_chip_id = neighbor_chip_ids[0];
+                    bool all_same = std::all_of(
+                        neighbor_chip_ids.begin() + 1, neighbor_chip_ids.end(), [first_chip_id](ChipId chip_id) {
+                            return chip_id == first_chip_id;
+                        });
+
+                    TT_FATAL(
+                        all_same,
+                        "Found {} neighbors in direction {} from node {}, but they point to different chips. "
+                        "Neighbors: {}",
+                        neighbor_chip_ids.size(),
+                        current_direction,
+                        current_node,
+                        neighbor_chip_ids);
+                }
+                next_node = FabricNodeId(current_node.mesh_id, neighbor_chip_ids[0]);
+            } else {
+                // Hit a boundary - need to find next direction using routing tables
+                // Try all directions to find which one has a neighbor
+                bool found_next = false;
+                for (const auto& direction : FabricContext::routing_directions) {
+                    if (direction == current_direction) {
+                        continue;  // Already checked this direction
                     }
-                } else if (current_direction == RoutingDirection::W) {
-                    if (current_coord[NS_DIM] == 0) {
-                        current_direction = RoutingDirection::S;
-                    } else {
-                        log_info(
-                            tt::LogTest,
-                            "current_coord {} current_direction {} next direction RoutingDirection::N",
-                            get_fabric_node_id(current_coord),
-                            current_direction);
-                        current_direction = RoutingDirection::N;
-                    }
-                } else if (current_direction == RoutingDirection::S) {
-                    if (current_coord[EW_DIM] == 0) {
-                        current_direction = RoutingDirection::E;
-                    } else {
-                        current_direction = RoutingDirection::W;
-                    }
-                } else if (current_direction == RoutingDirection::N) {
-                    if (current_coord[EW_DIM] == 0) {
-                        current_direction = RoutingDirection::E;
-                    } else {
-                        current_direction = RoutingDirection::W;
+                    const auto& dir_neighbors = control_plane.get_chip_neighbors(current_node, direction);
+                    auto dir_intra_neighbors = dir_neighbors.find(current_node.mesh_id);
+                    if (dir_intra_neighbors != dir_neighbors.end() && !dir_intra_neighbors->second.empty()) {
+                        // Multiple neighbors in same direction are possible (multiple links/planes to same chip)
+                        // Verify they all point to the same physical neighbor chip
+                        const auto& neighbor_chip_ids = dir_intra_neighbors->second;
+                        if (neighbor_chip_ids.size() > 1) {
+                            // Check that all neighbors are the same chip ID
+                            // Multiple links/planes to the same chip are allowed, but different chips are not
+                            const auto first_chip_id = neighbor_chip_ids[0];
+                            bool all_same = std::all_of(
+                                neighbor_chip_ids.begin() + 1,
+                                neighbor_chip_ids.end(),
+                                [first_chip_id](ChipId chip_id) { return chip_id == first_chip_id; });
+
+                            TT_FATAL(
+                                all_same,
+                                "Found {} neighbors in direction {} from node {}, but they point to different chips. "
+                                "Neighbors: {}",
+                                neighbor_chip_ids.size(),
+                                direction,
+                                current_node,
+                                neighbor_chip_ids);
+                        }
+                        next_node = FabricNodeId(current_node.mesh_id, neighbor_chip_ids[0]);
+                        next_direction = direction;
+                        found_next = true;
+                        break;
                     }
                 }
-
-                // Try again with new direction
-                switch (current_direction) {
-                    case RoutingDirection::N:
-                        next_coord = MeshCoordinate(current_coord[NS_DIM] - 1, current_coord[EW_DIM]);
-                        break;
-                    case RoutingDirection::S:
-                        next_coord = MeshCoordinate(current_coord[NS_DIM] + 1, current_coord[EW_DIM]);
-                        break;
-                    case RoutingDirection::E:
-                        next_coord = MeshCoordinate(current_coord[NS_DIM], current_coord[EW_DIM] + 1);
-                        break;
-                    case RoutingDirection::W:
-                        next_coord = MeshCoordinate(current_coord[NS_DIM], current_coord[EW_DIM] - 1);
-                        break;
-                    default: TT_THROW("routing direction not supported: {}", current_direction);
-                }
+                TT_FATAL(
+                    found_next, "Could not find next hop from {} in direction {}", current_node, current_direction);
             }
 
-            // Move to next coordinate
-            current_coord = next_coord;
-            current_node = get_fabric_node_id(current_coord);
             // Record current node and outgoing direction
-            path.emplace_back(current_node, current_direction);
+            path.emplace_back(next_node, next_direction);
+
+            // Update for next iteration
+            current_node = next_node;
+            current_direction = next_direction;
         }
 
         return path;
     }
 
     // Helper function to trace ring path with boundary wraparound logic for non wrap-around meshes
+    // Uses routing tables to determine next hop instead of manual coordinate calculations
     std::vector<std::pair<FabricNodeId, RoutingDirection>> trace_ring_path(
         const FabricNodeId& src_node_id, RoutingDirection initial_direction, uint32_t total_hops) const {
         std::vector<std::pair<FabricNodeId, RoutingDirection>> path;
         path.reserve(total_hops);
 
-        // Get starting coordinate
-        MeshCoordinate current_coord = get_device_coord(src_node_id);
-        RoutingDirection current_direction = initial_direction;
+        const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
         FabricNodeId current_node = src_node_id;
+        RoutingDirection current_direction = initial_direction;
 
         for (uint32_t hop = 0; hop < total_hops; ++hop) {
-            // Try to move in current direction
-            MeshCoordinate next_coord = current_coord;
-            [[maybe_unused]] bool need_wraparound = false;
+            // Get neighbors in the current direction using control plane
+            // For ring topology with wraparound, routing tables should handle the wraparound automatically
+            const auto& neighbors = control_plane.get_chip_neighbors(current_node, current_direction);
+            auto intra_mesh_neighbors = neighbors.find(current_node.mesh_id);
 
-            switch (current_direction) {
-                case RoutingDirection::N:
-                    if (current_coord[NS_DIM] == 0) {
-                        // Wrap around to bottom edge
-                        next_coord = MeshCoordinate(mesh_shape_[NS_DIM] - 1, current_coord[EW_DIM]);
-                        need_wraparound = true;
-                    } else {
-                        next_coord = MeshCoordinate(current_coord[NS_DIM] - 1, current_coord[EW_DIM]);
-                    }
-                    break;
-                case RoutingDirection::S:
-                    if (current_coord[NS_DIM] == mesh_shape_[NS_DIM] - 1) {
-                        // Wrap around to top edge
-                        next_coord = MeshCoordinate(0, current_coord[EW_DIM]);
-                        need_wraparound = true;
-                    } else {
-                        next_coord = MeshCoordinate(current_coord[NS_DIM] + 1, current_coord[EW_DIM]);
-                    }
-                    break;
-                case RoutingDirection::E:
-                    if (current_coord[EW_DIM] == mesh_shape_[EW_DIM] - 1) {
-                        // Wrap around to left edge
-                        next_coord = MeshCoordinate(current_coord[NS_DIM], 0);
-                        need_wraparound = true;
-                    } else {
-                        next_coord = MeshCoordinate(current_coord[NS_DIM], current_coord[EW_DIM] + 1);
-                    }
-                    break;
-                case RoutingDirection::W:
-                    if (current_coord[EW_DIM] == 0) {
-                        // Wrap around to right edge
-                        next_coord = MeshCoordinate(current_coord[NS_DIM], mesh_shape_[EW_DIM] - 1);
-                        need_wraparound = true;
-                    } else {
-                        next_coord = MeshCoordinate(current_coord[NS_DIM], current_coord[EW_DIM] - 1);
-                    }
-                    break;
-                default: TT_THROW("routing direction not supported: {}", current_direction);
+            FabricNodeId next_node(current_node.mesh_id, 0);  // Initialize with default, will be overwritten
+
+            if (intra_mesh_neighbors != neighbors.end() && !intra_mesh_neighbors->second.empty()) {
+                // Found neighbor(s) in current direction
+                // Multiple neighbors in same direction are possible (multiple links/planes to same chip)
+                // Verify they all point to the same physical neighbor chip
+                const auto& neighbor_chip_ids = intra_mesh_neighbors->second;
+                if (neighbor_chip_ids.size() > 1) {
+                    // Check that all neighbors are the same chip ID
+                    // Multiple links/planes to the same chip are allowed, but different chips are not
+                    const auto first_chip_id = neighbor_chip_ids[0];
+                    bool all_same = std::all_of(
+                        neighbor_chip_ids.begin() + 1, neighbor_chip_ids.end(), [first_chip_id](ChipId chip_id) {
+                            return chip_id == first_chip_id;
+                        });
+
+                    TT_FATAL(
+                        all_same,
+                        "Found {} neighbors in direction {} from node {}, but they point to different chips. "
+                        "Neighbors: {}",
+                        neighbor_chip_ids.size(),
+                        current_direction,
+                        current_node,
+                        neighbor_chip_ids);
+                }
+                next_node = FabricNodeId(current_node.mesh_id, neighbor_chip_ids[0]);
+            } else {
+                // For ring with wraparound, if no neighbor in current direction,
+                // the routing tables should have wraparound links
+                // Try to find the next hop by checking routing direction to a node further along
+                // For now, if no direct neighbor, we need to handle wraparound
+                // The routing tables should reflect this, so we check if there's a route
+                // to a node that would require wraparound
+                TT_FATAL(
+                    false,
+                    "No neighbor found in direction {} from node {}. Ring topology should have wraparound links in "
+                    "routing tables.",
+                    current_direction,
+                    current_node);
             }
-
-            // Move to next coordinate
-            current_coord = next_coord;
-            current_node = get_fabric_node_id(current_coord);
 
             log_debug(
                 tt::LogTest,
-                "hop {}: moved from {} to {} in direction {}, wraparound: {}",
+                "hop {}: moved from {} to {} in direction {}",
                 hop,
-                get_device_coord(src_node_id),
-                current_coord,
-                current_direction,
-                need_wraparound);
+                src_node_id,
+                next_node,
+                current_direction);
 
             // Record current node and outgoing direction
-            path.emplace_back(current_node, current_direction);
+            path.emplace_back(next_node, current_direction);
+
+            // Update for next iteration
+            current_node = next_node;
+            // For ring topology, direction typically stays the same unless we hit a turn
+            // The routing tables will reflect the actual path
         }
 
         return path;
