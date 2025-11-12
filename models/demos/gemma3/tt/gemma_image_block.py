@@ -106,20 +106,6 @@ class TtGemmaImageTransformerBlock(LightweightModule):
         if self.gated:
             attn_out = ttnn.mul(attn_out, ttnn.tanh(self.gate_attn))
 
-        if self.num_devices > 1:
-            attn_out = ttnn.experimental.all_gather_async(
-                attn_out,
-                persistent_output_buffer=None,
-                dim=3,
-                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
-                num_links=1,
-                topology=ttnn.Topology.Linear,
-                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-                chunks_per_sync=10,
-                num_workers_per_link=2,
-                num_buffers_per_channel=2,
-            )
-
         # Align x_11SH shape with attn_out
         x_11SH = ttnn.reshape(x_11SH, [batch_size, 1, seq_len, -1])
 
