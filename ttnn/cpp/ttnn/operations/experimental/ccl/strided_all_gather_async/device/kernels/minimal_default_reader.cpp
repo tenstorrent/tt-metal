@@ -156,18 +156,19 @@ void kernel_main() {
 
             // Receive remote chunks
             uint32_t slices_received = 0;
+            uint32_t last_input_chunk_start_tile = global_tile_index;
             while (slices_received < slices_expected) {
                 uint32_t actual_sender_chip_id = get_sender_id(direction, my_chip_id, slices_received, ring_size);
 
-                // Receive the next row of data
-                noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target + 1);
-                sem_target++;
+                input_chunk_start_tile = global_tile_index;
+                for (uint32_t chunk_idx = 0; chunk_idx < device_k_block_counts[actual_sender_chip_id]; chunk_idx++) {
+                    // Receive the next chunk of data
+                    noc_semaphore_wait_min(
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target + 1);
+                    sem_target++;
 
-                if ((topology == Topology::Linear && writes_expected > 0) ||
-                    (topology == Topology::Ring && ((slices_received + 1) < (writes_expected + 1)))) {
-                    input_chunk_start_tile = global_tile_index;
-                    for (uint32_t chunk_idx = 0; chunk_idx < device_k_block_counts[actual_sender_chip_id];
-                         chunk_idx++) {
+                    if ((topology == Topology::Linear && writes_expected > 0) ||
+                        (topology == Topology::Ring && ((slices_received + 1) < (writes_expected + 1)))) {
                         uint32_t actual_chunk_w = next_mm_aligned_chunk_width(
                             input_chunk_start_tile, actual_sender_chip_id, input_tensor_Wt, mm_block_wt);
                         uint32_t actual_chunk_h = next_mm_aligned_chunk_height(
@@ -193,15 +194,16 @@ void kernel_main() {
                             output_tensor_Wt,
                             actual_sender_chip_id,
                             true);
+                        last_input_chunk_start_tile = input_chunk_start_tile;
+                    }
+                    if constexpr (fuse_op) {
+                        // Signal matmul to go
+                        op_signaler.synchronize_workers_and_signal_op(actual_sender_chip_id);
                     }
                 }
                 slices_received++;
-                if constexpr (fuse_op) {
-                    // Signal matmul to go
-                    op_signaler.synchronize_workers_and_signal_op(actual_sender_chip_id);
-                }
             }
-            global_tile_index = input_chunk_start_tile;
+            global_tile_index = last_input_chunk_start_tile;
         }
         batch_input_tile_offset += tiles_per_batch;
     }
