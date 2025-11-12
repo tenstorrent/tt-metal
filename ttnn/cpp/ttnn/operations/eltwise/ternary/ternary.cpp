@@ -97,13 +97,24 @@ Tensor invoke_impl(
     const Tensor& t_false,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
+    auto broadcast_type = ttnn::operations::ternary::get_broadcast_type(
+        predicate.logical_shape(), t_true.logical_shape(), t_false.logical_shape());
     Tensor condition = predicate;
     bool typecast_needed = ternary_utils::typecast_predicate(predicate, t_true, t_false);
     if (typecast_needed) {
         condition = ttnn::typecast(predicate, t_true.dtype());
     }
-    std::optional<DataType> output_dtype = ternary_utils::determine_output_dtype(output, t_true.dtype());
 
+    if (is_invalid_bcast(broadcast_type)) {
+        return ternary_utils::where_impl(
+            predicate,
+            t_true,
+            t_false,
+            ternary_utils::determine_memory_config(memory_config, predicate.memory_config()),
+            output);
+    }
+
+    std::optional<DataType> output_dtype = ternary_utils::determine_output_dtype(output, t_true.dtype());
     log_info(tt::LogOp, "Where LLK - TTT");
     return ttnn::prim::ternary(
         TernaryOpType::WHERE,
