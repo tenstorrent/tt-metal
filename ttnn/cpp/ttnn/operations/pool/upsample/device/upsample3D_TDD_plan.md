@@ -1,7 +1,46 @@
 # Test-Driven Development Plan: Upsample 3D Operation
 
+## Key Updates in This Version
+
+This TDD plan has been updated to follow the official TTNN operation structure:
+
+1. **Proper TTNN Operation Structure**: The plan now explicitly follows the nested struct pattern required for TTNN operations with `operation_attributes_t`, `tensor_args_t`, and program factory structures.
+
+2. **Device Operation Architecture**: Stage 4 has been completely revised to implement the proper device operation with all required static methods (`validate_on_program_cache_miss`, `compute_output_specs`, etc.).
+
+3. **Program Factory Pattern**: Stage 5 now implements the `MultiCoreInterleaved` factory with proper `create()` and `override_runtime_arguments()` methods.
+
+4. **Python Binding Structure**: Stages 1-3 now use `ttnn::bind_registered_operation` with proper registration macros instead of raw pybind11.
+
+5. **Golden Function Attachment**: New Stage 8 adds PyTorch golden function for validation using `ttnn.attach_golden_function()`.
+
 ## Overview
-This document outlines a strict test-driven development (TDD) approach for implementing the upsample 3D operation. The plan follows a reverse approach, starting from Python API tests and progressively implementing deeper layers of the stack. Each stage must pass its tests before proceeding to the next.
+This document outlines a strict test-driven development (TDD) approach for implementing the upsample 3D operation as a proper TTNN operation. The plan follows a reverse approach, starting from Python API tests and progressively implementing deeper layers of the stack according to the official TTNN operation structure. Each stage must pass its tests before proceeding to the next.
+
+**IMPORTANT**: This operation follows the standard TTNN operation structure as documented at https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/adding_new_ttnn_operation.html
+
+## Required File Structure for TTNN Operation
+
+Per the TTNN operation guidelines, the following files must be created:
+
+### C++ Implementation Files
+```
+ttnn/cpp/ttnn/operations/pool/upsample/
+├── upsample3d.hpp                          # Main operation header with ExecuteUpSample3D struct
+├── upsample3d.cpp                          # Implementation of invoke() method
+├── device/
+│   ├── upsample3d_device_operation.hpp    # Device operation with nested structs
+│   ├── upsample3d_device_operation.cpp    # Device operation implementation
+│   └── upsample3d_program_factory.cpp     # Program factory implementations
+```
+
+### Python Binding Files
+```
+ttnn/python/ttnn/operations/pool/
+├── upsample/
+│   └── upsample3d_pybind.hpp              # Python binding for upsample3d
+└── pool_pybind.hpp                        # Category-level bindings
+```
 
 ## Test Organization
 - **Development tests location**: `ttnn/cpp/ttnn/operations/pool/upsample/test_dev/`
@@ -43,21 +82,90 @@ def test_upsample3d_basic_call_fails_gracefully():
         ttnn.close_device(device)
 ```
 
-### Implementation 1.1: Minimal Python Binding
-**File**: `ttnn/cpp/ttnn/operations/pool/upsample/upsample_pybind.cpp`
-Add to existing binding file:
+### Implementation 1.1: Minimal Python Binding Following TTNN Structure
+
+**Step 1: Create Operation Header**
+**File**: `ttnn/cpp/ttnn/operations/pool/upsample/upsample3d.hpp`
 ```cpp
-// Minimal binding that throws NotImplementedError
-m.def("upsample3d",
-    [](const Tensor& input,
-       std::variant<int, std::array<int, 3>> scale_factor,
-       const std::optional<MemoryConfig>& memory_config) {
+#pragma once
+#include "ttnn/decorators.hpp"
+
+namespace ttnn::operations::upsample {
+
+struct ExecuteUpSample3D {
+    // Minimal implementation for Stage 1
+    static Tensor invoke(
+        const Tensor& input,
+        std::variant<int, std::array<int, 3>> scale_factor,
+        std::optional<MemoryConfig> memory_config = std::nullopt) {
         throw std::runtime_error("upsample3d not implemented yet");
-    },
-    py::arg("input"),
-    py::arg("scale_factor"),
-    py::arg("memory_config") = std::nullopt,
-    R"doc(3D upsampling operation - not implemented)doc");
+    }
+};
+
+} // namespace ttnn::operations::upsample
+
+namespace ttnn {
+    // Register the operation with TTNN framework
+    constexpr auto upsample3d = ttnn::register_operation<
+        "ttnn::upsample3d",
+        ttnn::operations::upsample::ExecuteUpSample3D>();
+} // namespace ttnn
+```
+
+**Step 2: Create Python Binding**
+**File**: `ttnn/python/ttnn/operations/pool/upsample/upsample3d_pybind.hpp`
+```cpp
+#pragma once
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
+#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "ttnn/cpp/ttnn/operations/pool/upsample/upsample3d.hpp"
+
+namespace ttnn::operations::upsample {
+
+void bind_upsample3d(pybind11::module& module) {
+    ttnn::bind_registered_operation(
+        module,
+        ttnn::upsample3d,
+        R"doc(
+        3D nearest-neighbor upsampling operation.
+
+        Not yet implemented.
+        )doc",
+        ttnn::pybind_overload_t{
+            [](const Tensor& input,
+               int scale_factor,
+               std::optional<MemoryConfig> memory_config) {
+                return ttnn::upsample3d(input, scale_factor, memory_config);
+            },
+            py::arg("input"),
+            py::arg("scale_factor"),
+            py::arg("memory_config") = std::nullopt
+        },
+        ttnn::pybind_overload_t{
+            [](const Tensor& input,
+               std::array<int, 3> scale_factor,
+               std::optional<MemoryConfig> memory_config) {
+                return ttnn::upsample3d(input, scale_factor, memory_config);
+            },
+            py::arg("input"),
+            py::arg("scale_factor"),
+            py::arg("memory_config") = std::nullopt
+        }
+    );
+}
+
+} // namespace ttnn::operations::upsample
+```
+
+**Step 3: Register in Category Module**
+**File**: `ttnn/python/ttnn/operations/pool/pool_pybind.hpp`
+Add to the module initialization:
+```cpp
+#include "ttnn/python/ttnn/operations/pool/upsample/upsample3d_pybind.hpp"
+
+// In the module definition function:
+ttnn::operations::upsample::bind_upsample3d(module);
 ```
 
 **Success Criteria**: All three tests pass, API is accessible from Python
@@ -348,8 +456,8 @@ ttnn::bind_registered_operation(
 
 ---
 
-## Stage 4: Device Operation Existence Test
-**Goal**: Verify device operation is created and validates inputs
+## Stage 4: Device Operation Structure Test
+**Goal**: Verify device operation follows proper TTNN structure with nested structs
 
 ### Test 4.1: Device Operation Creation
 **File**: `test_dev/test_stage4_device_op.py`
@@ -424,40 +532,94 @@ def test_interleaved_memory_validation(device):
         ttnn.upsample3d(tt_input, scale_factor=2)
 ```
 
-### Implementation 4.1: Device Operation
-**File**: `ttnn/cpp/ttnn/operations/pool/upsample/device/upsample3d_op.hpp`
+### Implementation 4.1: Device Operation Following TTNN Structure
+
+**File**: `ttnn/cpp/ttnn/operations/pool/upsample/device/upsample3d_device_operation.hpp`
 ```cpp
 #pragma once
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/decorators.hpp"
+#include <variant>
 
 namespace ttnn::operations::upsample {
 
-struct UpSample3D {
-    uint32_t scale_factor_d_;
-    uint32_t scale_factor_h_;
-    uint32_t scale_factor_w_;
-    MemoryConfig output_mem_config_;
+// Device operation with proper nested structs per TTNN guidelines
+struct UpSample3DDeviceOperation {
 
-    void validate(const std::vector<Tensor>& inputs) const;
-    std::vector<TensorSpec> compute_output_specs(const std::vector<Tensor>& inputs) const;
-    operation::ProgramWithCallbacks create_program(
-        const std::vector<Tensor>& inputs,
-        std::vector<Tensor>& outputs) const;
+    // Operation attributes (non-tensor parameters)
+    struct operation_attributes_t {
+        uint32_t scale_factor_d;
+        uint32_t scale_factor_h;
+        uint32_t scale_factor_w;
+        MemoryConfig memory_config;
+    };
+
+    // Tensor arguments
+    struct tensor_args_t {
+        const Tensor& input;
+    };
+
+    // Program factory for multi-core interleaved execution
+    struct MultiCoreInterleaved {
+        struct shared_variables_t {
+            KernelHandle reader_kernel;
+            KernelHandle writer_kernel;
+            uint32_t num_cores;
+            uint32_t work_per_core_group_1;
+            uint32_t work_per_core_group_2;
+            CoreRange core_group_1;
+            CoreRange core_group_2;
+        };
+
+        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+
+        static cached_program_t create(
+            const operation_attributes_t& op_attr,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t<Tensor>& output);
+
+        static void override_runtime_arguments(
+            cached_program_t& cached_program,
+            const operation_attributes_t& op_attr,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t<Tensor>& output);
+    };
+
+    // Factory selection
+    using program_factory_t = std::variant<MultiCoreInterleaved>;
+
+    // Required static methods
+    static program_factory_t select_program_factory(const operation_attributes_t& op_attr);
+    static void validate_on_program_cache_miss(const operation_attributes_t& op_attr, const tensor_args_t& tensor_args);
+    static void validate_on_program_cache_hit(const operation_attributes_t& op_attr, const tensor_args_t& tensor_args);
+    static TensorSpec compute_output_specs(const operation_attributes_t& op_attr, const tensor_args_t& tensor_args);
+    static tensor_return_value_t<Tensor> create_output_tensors(const operation_attributes_t& op_attr, const tensor_args_t& tensor_args);
+    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
+        const Tensor& input,
+        uint32_t scale_factor_d,
+        uint32_t scale_factor_h,
+        uint32_t scale_factor_w,
+        const MemoryConfig& memory_config);
 };
 
 } // namespace ttnn::operations::upsample
 ```
 
-**File**: `ttnn/cpp/ttnn/operations/pool/upsample/device/upsample3d_op.cpp`
+**File**: `ttnn/cpp/ttnn/operations/pool/upsample/device/upsample3d_device_operation.cpp`
 ```cpp
-#include "upsample3d_op.hpp"
+#include "upsample3d_device_operation.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
+#include "ttnn/run_operation.hpp"
 
 namespace ttnn::operations::upsample {
 
-void UpSample3D::validate(const std::vector<Tensor>& inputs) const {
-    const auto& input = inputs.at(0);
+// Validation on program cache miss (full validation)
+void UpSample3DDeviceOperation::validate_on_program_cache_miss(
+    const operation_attributes_t& op_attr,
+    const tensor_args_t& tensor_args) {
+
+    const auto& input = tensor_args.input;
 
     TT_FATAL(input.get_shape().rank() == 5,
              "Input must be 5D tensor, got rank {}", input.get_shape().rank());
@@ -472,45 +634,95 @@ void UpSample3D::validate(const std::vector<Tensor>& inputs) const {
 
     TT_FATAL(input.storage_type() == StorageType::DEVICE,
              "Input must be on device, got storage type {}", input.storage_type());
+
+    TT_FATAL(op_attr.scale_factor_d > 0, "Scale factor D must be positive");
+    TT_FATAL(op_attr.scale_factor_h > 0, "Scale factor H must be positive");
+    TT_FATAL(op_attr.scale_factor_w > 0, "Scale factor W must be positive");
 }
 
-std::vector<TensorSpec> UpSample3D::compute_output_specs(
-    const std::vector<Tensor>& inputs) const {
-    const auto& input = inputs.at(0);
+// Validation on program cache hit (lighter validation)
+void UpSample3DDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& op_attr,
+    const tensor_args_t& tensor_args) {
+    // Just verify tensor is on device
+    const auto& input = tensor_args.input;
+    TT_FATAL(input.is_allocated(), "Input tensor must be allocated on device");
+    TT_FATAL(input.storage_type() == StorageType::DEVICE,
+             "Input must be on device");
+}
+
+// Compute output specifications
+TensorSpec UpSample3DDeviceOperation::compute_output_specs(
+    const operation_attributes_t& op_attr,
+    const tensor_args_t& tensor_args) {
+
+    const auto& input = tensor_args.input;
     const auto& input_shape = input.get_shape();
 
     // Calculate output shape: (N, D*scale_d, H*scale_h, W*scale_w, C)
     std::array<uint32_t, 5> output_shape_array = {
-        input_shape[0],                      // N (batch)
-        input_shape[1] * scale_factor_d_,    // D * scale_d
-        input_shape[2] * scale_factor_h_,    // H * scale_h
-        input_shape[3] * scale_factor_w_,    // W * scale_w
-        input_shape[4]                       // C (channels)
+        input_shape[0],                          // N (batch)
+        input_shape[1] * op_attr.scale_factor_d, // D * scale_d
+        input_shape[2] * op_attr.scale_factor_h, // H * scale_h
+        input_shape[3] * op_attr.scale_factor_w, // W * scale_w
+        input_shape[4]                          // C (channels)
     };
 
     auto output_shape = Shape(output_shape_array);
 
-    // Create output tensor spec with same dtype and layout as input
-    return {TensorSpec(
+    // Create output tensor spec
+    return TensorSpec(
         output_shape,
-        TensorLayout(input.get_dtype(), PageConfig(Layout::ROW_MAJOR), output_mem_config_))};
+        TensorLayout(input.get_dtype(), PageConfig(Layout::ROW_MAJOR), op_attr.memory_config));
 }
 
-operation::ProgramWithCallbacks UpSample3D::create_program(
-    const std::vector<Tensor>& inputs,
-    std::vector<Tensor>& outputs) const {
+// Create output tensors
+tensor_return_value_t<Tensor> UpSample3DDeviceOperation::create_output_tensors(
+    const operation_attributes_t& op_attr,
+    const tensor_args_t& tensor_args) {
 
-    // Will be implemented in Stage 5
-    throw std::runtime_error("Program factory not implemented yet");
+    return create_device_tensor(
+        compute_output_specs(op_attr, tensor_args),
+        tensor_args.input.device());
+}
+
+// Select program factory (single option for now)
+UpSample3DDeviceOperation::program_factory_t
+UpSample3DDeviceOperation::select_program_factory(const operation_attributes_t& op_attr) {
+    return MultiCoreInterleaved{};
+}
+
+// Map user arguments to operation attributes and tensor arguments
+std::tuple<UpSample3DDeviceOperation::operation_attributes_t,
+           UpSample3DDeviceOperation::tensor_args_t>
+UpSample3DDeviceOperation::invoke(
+    const Tensor& input,
+    uint32_t scale_factor_d,
+    uint32_t scale_factor_h,
+    uint32_t scale_factor_w,
+    const MemoryConfig& memory_config) {
+
+    return {
+        operation_attributes_t{
+            .scale_factor_d = scale_factor_d,
+            .scale_factor_h = scale_factor_h,
+            .scale_factor_w = scale_factor_w,
+            .memory_config = memory_config
+        },
+        tensor_args_t{
+            .input = input
+        }
+    };
 }
 
 } // namespace ttnn::operations::upsample
 ```
 
-Update `upsample3d.cpp` to use device operation:
+**Update main operation to use device operation:**
+**File**: `ttnn/cpp/ttnn/operations/pool/upsample/upsample3d.cpp`
 ```cpp
 #include "upsample3d.hpp"
-#include "device/upsample3d_op.hpp"
+#include "device/upsample3d_device_operation.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/run_operation.hpp"
 
@@ -521,14 +733,14 @@ Tensor ExecuteUpSample3D::invoke(
     std::variant<int, std::array<int, 3>> scale_factor,
     std::optional<MemoryConfig> memory_config) {
 
-    // Input validation (keep existing)
+    // Input validation
     TT_FATAL(input.get_shape().rank() == 5,
              "Input tensor must be 5D (N, D, H, W, C), got rank {}", input.get_shape().rank());
 
     TT_FATAL(input.get_layout() == Layout::ROW_MAJOR,
              "Only ROW_MAJOR layout is supported for 3D upsample");
 
-    // Parse scale factors (keep existing)
+    // Parse scale factors
     uint32_t scale_d, scale_h, scale_w;
     if (std::holds_alternative<int>(scale_factor)) {
         int scale = std::get<int>(scale_factor);
@@ -546,12 +758,17 @@ Tensor ExecuteUpSample3D::invoke(
     // Use memory config from parameter or input
     auto output_memory_config = memory_config.value_or(input.memory_config());
 
-    // Create and run device operation
-    auto output = operation::run(
-        UpSample3D{scale_d, scale_h, scale_w, output_memory_config},
-        {input}).at(0);
+    // Call device operation using the proper TTNN device operation framework
+    auto [op_attr, tensor_args] = UpSample3DDeviceOperation::invoke(
+        input, scale_d, scale_h, scale_w, output_memory_config);
 
-    return output;
+    // Run the device operation
+    auto output_tensors = ttnn::device_operation::run<UpSample3DDeviceOperation>(
+        UpSample3DDeviceOperation::select_program_factory(op_attr),
+        op_attr,
+        tensor_args);
+
+    return output_tensors;
 }
 
 } // namespace ttnn::operations::upsample
@@ -627,44 +844,27 @@ def test_circular_buffer_creation(device):
     assert "kernel" in str(exc_info.value).lower()
 ```
 
-### Implementation 5.1: Program Factory Structure
-Update `upsample3d_op.cpp`:
+### Implementation 5.1: Program Factory Structure Following TTNN Guidelines
+
+**File**: `ttnn/cpp/ttnn/operations/pool/upsample/device/upsample3d_program_factory.cpp`
 ```cpp
-operation::ProgramWithCallbacks UpSample3D::create_program(
-    const std::vector<Tensor>& inputs,
-    std::vector<Tensor>& outputs) const {
-
-    const auto& input = inputs.at(0);
-    auto& output = outputs.at(0);
-
-    // Forward to program factory
-    return upsample3d_multi_core_interleaved(
-        input, output,
-        scale_factor_d_, scale_factor_h_, scale_factor_w_);
-}
-```
-
-Complete the existing `upsample3D_program_factory.cpp`:
-```cpp
-#include "upsample3D_program_factory.hpp"
+#include "upsample3d_device_operation.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::upsample {
 
-operation::ProgramWithCallbacks upsample3d_multi_core_interleaved(
-    const Tensor& input,
-    Tensor& output,
-    const uint32_t scale_factor_d,
-    const uint32_t scale_factor_h,
-    const uint32_t scale_factor_w) {
+// Implementation of MultiCoreInterleaved factory's create method
+UpSample3DDeviceOperation::MultiCoreInterleaved::cached_program_t
+UpSample3DDeviceOperation::MultiCoreInterleaved::create(
+    const operation_attributes_t& op_attr,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t<Tensor>& output) {
+
+    const auto& input = tensor_args.input;
 
     Program program{};
-
-    // Validate inputs
-    TT_FATAL(input.get_shape().rank() == 5, "Input must be 5D");
-    TT_FATAL(input.layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR supported");
 
     // Get device and grid
     Device* device = input.device();
@@ -703,10 +903,116 @@ operation::ProgramWithCallbacks upsample3d_multi_core_interleaved(
     auto src_buffer = input.buffer();
     auto dst_buffer = output.buffer();
 
-    // TODO: Create kernels in Stage 6
-    throw std::runtime_error("Kernel creation not implemented yet");
+    // Compile time arguments for reader
+    std::vector<uint32_t> reader_compile_time_args = {
+        cb_index,                    // CB index
+        aligned_input_unit_size      // Stick size
+    };
 
-    return {std::move(program), {}};
+    // Compile time arguments for writer (Stage 6 will add more)
+    std::vector<uint32_t> writer_compile_time_args = {
+        cb_index,                    // CB index
+        aligned_input_unit_size,     // Stick size
+        op_attr.scale_factor_d,      // Scale factors
+        op_attr.scale_factor_h,
+        op_attr.scale_factor_w
+    };
+
+    // Create reader kernel
+    KernelHandle reader_kernel = CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
+        all_cores,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = reader_compile_time_args
+        });
+
+    // Create writer kernel (minimal for Stage 5, full in Stage 6)
+    KernelHandle writer_kernel = CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/kernels/dataflow/writer_unary_interleaved.cpp", // Placeholder
+        all_cores,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_1_default,
+            .compile_args = writer_compile_time_args
+        });
+
+    // Set runtime arguments
+    uint32_t curr_stick = 0;
+    auto cores_group_1 = corerange_to_cores(core_group_1, std::nullopt);
+    for (const auto& core : cores_group_1) {
+        SetRuntimeArgs(program, reader_kernel, core,
+            {src_buffer->address(), work_per_core_group_1, curr_stick});
+        SetRuntimeArgs(program, writer_kernel, core,
+            {dst_buffer->address(), work_per_core_group_1, curr_stick});
+        curr_stick += work_per_core_group_1;
+    }
+
+    if (core_group_2.num_cores() > 0) {
+        auto cores_group_2 = corerange_to_cores(core_group_2, std::nullopt);
+        for (const auto& core : cores_group_2) {
+            SetRuntimeArgs(program, reader_kernel, core,
+                {src_buffer->address(), work_per_core_group_2, curr_stick});
+            SetRuntimeArgs(program, writer_kernel, core,
+                {dst_buffer->address(), work_per_core_group_2, curr_stick});
+            curr_stick += work_per_core_group_2;
+        }
+    }
+
+    // Return cached program with shared variables
+    return cached_program_t{
+        std::move(program),
+        shared_variables_t{
+            .reader_kernel = reader_kernel,
+            .writer_kernel = writer_kernel,
+            .num_cores = num_cores,
+            .work_per_core_group_1 = work_per_core_group_1,
+            .work_per_core_group_2 = work_per_core_group_2,
+            .core_group_1 = core_group_1,
+            .core_group_2 = core_group_2
+        }
+    };
+}
+
+// Implementation of override_runtime_arguments method
+void UpSample3DDeviceOperation::MultiCoreInterleaved::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& op_attr,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t<Tensor>& output) {
+
+    const auto& program = cached_program.program;
+    const auto& shared_vars = cached_program.shared_variables;
+
+    auto src_buffer = tensor_args.input.buffer();
+    auto dst_buffer = output.buffer();
+
+    // Update runtime args with new buffer addresses
+    auto reader_runtime_args = GetRuntimeArgs(program, shared_vars.reader_kernel);
+    auto writer_runtime_args = GetRuntimeArgs(program, shared_vars.writer_kernel);
+
+    uint32_t curr_stick = 0;
+    auto cores_group_1 = corerange_to_cores(shared_vars.core_group_1, std::nullopt);
+    for (const auto& core : cores_group_1) {
+        reader_runtime_args[core][0] = src_buffer->address();
+        writer_runtime_args[core][0] = dst_buffer->address();
+        curr_stick += shared_vars.work_per_core_group_1;
+    }
+
+    if (shared_vars.core_group_2.num_cores() > 0) {
+        auto cores_group_2 = corerange_to_cores(shared_vars.core_group_2, std::nullopt);
+        for (const auto& core : cores_group_2) {
+            reader_runtime_args[core][0] = src_buffer->address();
+            writer_runtime_args[core][0] = dst_buffer->address();
+            curr_stick += shared_vars.work_per_core_group_2;
+        }
+    }
+
+    SetRuntimeArgs(program, shared_vars.reader_kernel, reader_runtime_args);
+    SetRuntimeArgs(program, shared_vars.writer_kernel, writer_runtime_args);
 }
 
 } // namespace ttnn::operations::upsample
@@ -1270,13 +1576,177 @@ Ensure kernel is findable by adding to kernel search paths.
 ### Issue: Performance Problems
 **Solution**: Profile with Tracy, check NOC utilization, verify work distribution
 
-## Next Steps After Stage 7
+## Stage 8: Golden Function Attachment
+**Goal**: Attach a PyTorch golden reference function for validation
 
-Once all 7 stages pass:
-1. Create comprehensive final tests (Stage 8)
-2. Add performance optimizations
-3. Support additional features (tiled layout, sharded memory)
-4. Document the operation
+### Test 8.1: Golden Function Validation
+**File**: `test_dev/test_stage8_golden_function.py`
+
+```python
+import pytest
+import torch
+import ttnn
+import numpy as np
+
+@pytest.fixture
+def device():
+    device = ttnn.open_device(device_id=0)
+    yield device
+    ttnn.close_device(device)
+
+def test_golden_function_attached(device):
+    """Test that golden function is attached and callable"""
+    assert hasattr(ttnn.upsample3d, 'golden_function'), "Golden function not attached"
+    assert callable(ttnn.upsample3d.golden_function), "Golden function not callable"
+
+def test_golden_function_validation(device):
+    """Test that golden function produces correct results"""
+    input_shape = (1, 2, 3, 4, 16)
+    scale_factor = 2
+
+    # Create input tensor
+    input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
+
+    # Call golden function directly
+    golden_output = ttnn.upsample3d.golden_function(
+        input_tensor, scale_factor=scale_factor)
+
+    # Expected shape
+    expected_shape = (1, 4, 6, 8, 16)
+    assert golden_output.shape == expected_shape
+
+    # Verify it matches PyTorch's implementation
+    input_ncdhw = input_tensor.permute(0, 4, 1, 2, 3)
+    torch_output = torch.nn.functional.interpolate(
+        input_ncdhw, scale_factor=scale_factor, mode='nearest')
+    torch_output = torch_output.permute(0, 2, 3, 4, 1)
+
+    torch.testing.assert_close(golden_output, torch_output)
+
+def test_ttnn_matches_golden(device):
+    """Test that TTNN implementation matches golden function"""
+    input_shape = (1, 2, 2, 2, 32)
+    scale_factor = 2
+
+    # Create input
+    input_tensor = torch.ones(input_shape, dtype=torch.bfloat16) * 3.14
+
+    # Golden function result
+    golden_output = ttnn.upsample3d.golden_function(
+        input_tensor, scale_factor=scale_factor)
+
+    # TTNN result
+    tt_input = ttnn.from_torch(input_tensor, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+    tt_output = ttnn.upsample3d(tt_input, scale_factor=scale_factor)
+    ttnn_output = ttnn.to_torch(tt_output)
+
+    # Compare with reasonable tolerance for bfloat16
+    torch.testing.assert_close(ttnn_output, golden_output, rtol=1e-1, atol=1e-1)
+```
+
+### Implementation 8.1: Attach Golden Function
+
+**File**: `ttnn/python/ttnn/operations/pool/upsample/upsample3d_golden.py`
+```python
+import torch
+from typing import Union, Tuple
+import ttnn
+
+def upsample3d_golden_function(
+    input_tensor: torch.Tensor,
+    scale_factor: Union[int, Tuple[int, int, int]],
+    memory_config: any = None) -> torch.Tensor:
+    """
+    Golden reference implementation for 3D upsampling using PyTorch.
+
+    Args:
+        input_tensor: 5D tensor with shape (N, D, H, W, C) in NDHWC format
+        scale_factor: Integer or tuple of 3 integers for scaling each spatial dimension
+        memory_config: Ignored for golden function
+
+    Returns:
+        Upsampled tensor with shape (N, D*scale_d, H*scale_h, W*scale_w, C)
+    """
+    # Validate input
+    if input_tensor.dim() != 5:
+        raise ValueError(f"Input must be 5D, got {input_tensor.dim()}D")
+
+    # Parse scale factors
+    if isinstance(scale_factor, int):
+        scale_factors = (scale_factor, scale_factor, scale_factor)
+    else:
+        if len(scale_factor) != 3:
+            raise ValueError(f"Scale factor tuple must have 3 elements, got {len(scale_factor)}")
+        scale_factors = scale_factor
+
+    # Convert NDHWC to NCDHW for PyTorch
+    input_ncdhw = input_tensor.permute(0, 4, 1, 2, 3)
+
+    # Use PyTorch's interpolate for nearest neighbor upsampling
+    output_ncdhw = torch.nn.functional.interpolate(
+        input_ncdhw,
+        scale_factor=scale_factors,
+        mode='nearest'
+    )
+
+    # Convert back to NDHWC
+    output_ndhwc = output_ncdhw.permute(0, 2, 3, 4, 1)
+
+    return output_ndhwc
+
+# Optional: Define preprocessing and postprocessing if needed
+def preprocess_golden_function_inputs(args, kwargs):
+    """Preprocess inputs before passing to golden function"""
+    # Extract input tensor from TTNN tensor if needed
+    input_tensor = args[0]
+    if hasattr(input_tensor, 'to_torch'):
+        input_tensor = input_tensor.to_torch()
+
+    # Return modified args and kwargs
+    return (input_tensor,) + args[1:], kwargs
+
+def postprocess_golden_function_outputs(output, args, kwargs):
+    """Postprocess golden function output if needed"""
+    # Output is already a torch tensor, no conversion needed
+    return output
+```
+
+**File**: `ttnn/python/ttnn/operations/pool/upsample/__init__.py`
+```python
+import ttnn
+from .upsample3d_golden import (
+    upsample3d_golden_function,
+    preprocess_golden_function_inputs,
+    postprocess_golden_function_outputs
+)
+
+# Attach the golden function to the TTNN operation
+ttnn.attach_golden_function(
+    ttnn.upsample3d,
+    golden_function=upsample3d_golden_function,
+    preprocess_inputs=preprocess_golden_function_inputs,
+    postprocess_outputs=postprocess_golden_function_outputs
+)
+```
+
+**Update Python binding to import golden function:**
+Add to `ttnn/python/ttnn/operations/pool/__init__.py`:
+```python
+# Import upsample module to attach golden functions
+from . import upsample
+```
+
+**Success Criteria**: Golden function is attached and validates against PyTorch
+
+---
+
+## Next Steps After Stage 8
+
+Once all 8 stages pass:
+1. Add performance optimizations
+2. Support additional features (tiled layout, sharded memory)
+3. Add comprehensive sweep tests
+4. Document the operation in tech reports
 5. Submit for code review
 
-This plan ensures systematic, test-driven development with clear verification at each stage.
+This plan ensures systematic, test-driven development with clear verification at each stage, following the official TTNN operation structure.
