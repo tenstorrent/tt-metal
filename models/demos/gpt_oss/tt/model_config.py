@@ -7,14 +7,12 @@ GPT-OSS ModelArgs class that's compatible with tt_transformers interface
 """
 
 import os
-from glob import glob
 from pathlib import Path
 
 import torch
 from loguru import logger
-from safetensors.torch import load_file
 from tqdm import tqdm
-from transformers import AutoConfig, AutoTokenizer
+from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
@@ -155,34 +153,25 @@ class ModelArgs:
         else:
             # Load actual GPT-OSS weights directly from safetensors files
             # Check if we have a cached torch_state_dict.pt file
-            torch_state_dict_path = os.path.join(self.weights_path, "torch_state_dict.pt")
-
-            if os.path.exists(torch_state_dict_path):
-                # Load from cached file
-                weights_dict = torch.load(torch_state_dict_path)
-            else:
-                # Load from safetensors files
-                safetensors_filepaths = sorted(glob(f"{self.weights_path}/*.safetensors"))
-                weights_dict = {}
-                for filepath in tqdm(safetensors_filepaths, desc="Loading weights"):
-                    weights_dict.update(load_file(filepath))
-
-                # Cache for future use
-                torch.save(weights_dict, torch_state_dict_path)
-
-            # Convert to bfloat16 if needed
-            if torch.bfloat16 != torch.float32:
-                weights_dict = {
-                    k: v.to(torch.bfloat16) if v.dtype == torch.float32 else v
-                    for k, v in tqdm(weights_dict.items(), desc="Converting to bfloat16")
-                }
-
+            model = AutoModelForCausalLM.from_pretrained(
+                self.weights_path,
+                torch_dtype="auto"
+                # Note that the default setting is torch.dtype.float32, but model weights are
+                # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
+                # unnecessary cast.
+            )
+            state_dict = model.state_dict()
             # Convert HF QKV weights to Meta format for RoPE compatibility (if requested)
             if convert_to_meta_format:
                 logger.info("Converting QKV weights from HuggingFace to Meta format for RoPE")
-                weights_dict = convert_hf_qkv_to_meta_format(weights_dict, self.hf_config.head_dim)
-
-            return weights_dict
+                state_dict = convert_hf_qkv_to_meta_format(state_dict, self.hf_config.head_dim)
+            if state_dict["model.norm.weight"].dtype != torch.bfloat16:
+                # Convert to bfloat16 if needed
+                state_dict = {
+                    k: v.to(torch.bfloat16) if v.dtype == torch.float32 else v
+                    for k, v in tqdm(state_dict.items(), desc="Converting to bfloat16")
+                }
+            return state_dict
 
     def weight_cache_path(self, dtype):
         """Return weight cache path for the model"""
