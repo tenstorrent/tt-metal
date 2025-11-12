@@ -189,6 +189,12 @@ run_tg_sentence_bert_tests() {
 
 }
 
+run_tg_whisper_tests() {
+
+  pytest models/demos/whisper/demo/demo.py::test_demo_for_conditional_generation --timeout=1500 ; fail+=$?
+
+}
+
 run_tg_wan22_demo_tests() {
   fail=0
 
@@ -224,6 +230,8 @@ run_tg_demo_tests() {
     run_tg_flux1_tests
   elif [[ "$1" == "sentence_bert" ]]; then
     run_tg_sentence_bert_tests
+  elif [[ "$1" == "whisper" ]]; then
+    run_tg_whisper_tests
   elif [[ "$1" == "gpt-oss" ]]; then
     run_tg_gpt_oss_tests
   elif [[ "$1" == "wan22" ]]; then

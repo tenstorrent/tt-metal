@@ -87,6 +87,13 @@ jobs:
               "owner_id": "U088413NP0Q"
             },
             {
+              "name": "Galaxy Whisper demo tests",
+              "arch": "wormhole_b0",
+              "model": "whisper",
+              "timeout": 30,
+              "owner_id": "U088413NP0Q"
+            },
+            {
               "name": "Galaxy Stable Diffusion 3.5 Large demo tests",
               "arch": "wormhole_b0",
               "model": "sd35",
