@@ -30,8 +30,15 @@ tt::tt_metal::operation::MeshWorkloadWithCallbacks RecvAsync::create_mesh_worklo
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const std::vector<Tensor>& input_tensors,
     std::vector<Tensor>& output_tensors) const {
+    const auto& socket_connections = mesh_socket.get_config().socket_connection_config;
+    ttnn::MeshCoordinateRangeSet program_coords_range_set;
+    for (const auto& connection : socket_connections) {
+        program_coords_range_set = MeshCoordinateRangeSet(
+            MeshCoordinateRange(connection.receiver_core.device_coord, connection.receiver_core.device_coord));
+        break;
+    }
     return ccl::create_mesh_workload_from_programs(
-        tensor_coords, input_tensors, output_tensors, [&, this](const ttnn::MeshCoordinate& coord) {
+        program_coords_range_set, input_tensors, output_tensors, [&, this](const ttnn::MeshCoordinate& coord) {
             return create_program_at(coord, input_tensors, output_tensors);
         });
 }

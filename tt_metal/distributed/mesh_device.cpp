@@ -59,6 +59,7 @@
 #include "impl/context/metal_context.hpp"
 
 #include <umd/device/types/core_coordinates.hpp>
+#include <tt-metalium/distributed_context.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -290,6 +291,8 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
     // The Device Profiler must be initialized before Fabric is loaded on the Cluster
     DevicePool::instance().init_profiler();
     DevicePool::instance().initialize_fabric_and_dispatch_fw();
+    auto& distributed_context = MetalContext::instance().global_distributed_context();
+    distributed_context.barrier();
     return mesh_device;
 }
 

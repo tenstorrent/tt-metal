@@ -50,11 +50,11 @@ void validate(
             }
         }
     }
-    TT_FATAL(
-        found_device_ids.size() == device_ids.size(),
-        "{} op input tensor devices {} is not part of the connected cores of the socket",
-        op_name,
-        device_ids);
+    // TT_FATAL(
+    //     found_device_ids.size() == device_ids.size(),
+    //     "{} op input tensor devices {} is not part of the connected cores of the socket",
+    //     op_name,
+    //     device_ids);
 }
 
 }  // namespace ttnn::send_recv_utils

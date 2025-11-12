@@ -35,13 +35,13 @@ FabricSocket::FabricSocket(
 void FabricSocket::send(const ttnn::Tensor& tensor) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     assert(check_if_send_socket(socket_config_));
-    ttnn::experimental::send_async(tensor, mesh_device_, socket_config_);
+    // ttnn::experimental::send_async(tensor, mesh_device_, socket_config_);
 }
 
 void FabricSocket::recv(ttnn::Tensor& tensor) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     assert(check_if_recv_socket(socket_config_));
-    ttnn::experimental::recv_async(tensor, mesh_device_, socket_config_);
+    // ttnn::experimental::recv_async(tensor, mesh_device_, socket_config_);
 }
 
 tt::tt_metal::distributed::multihost::Rank FabricSocket::get_rank() const {

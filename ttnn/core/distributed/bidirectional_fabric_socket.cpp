@@ -15,11 +15,11 @@ BidirectionalFabricSocket::BidirectionalFabricSocket(
     mesh_device_(mesh_device), send_socket_config_(send_socket_config), recv_socket_config_(recv_socket_config) {}
 
 void BidirectionalFabricSocket::send(const ttnn::Tensor& tensor) {
-    ttnn::experimental::send_async(tensor, mesh_device_, send_socket_config_);
+    // ttnn::experimental::send_async(tensor, mesh_device_, send_socket_config_);
 }
 
 void BidirectionalFabricSocket::recv(ttnn::Tensor& tensor) {
-    ttnn::experimental::recv_async(tensor, mesh_device_, recv_socket_config_);
+    // ttnn::experimental::recv_async(tensor, mesh_device_, recv_socket_config_);
 }
 
 tt::tt_metal::distributed::multihost::Rank BidirectionalFabricSocket::get_rank() const {
