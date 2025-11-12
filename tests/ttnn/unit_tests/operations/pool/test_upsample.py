@@ -497,3 +497,55 @@ def test_nearest_upsample_with_uneven_input_shards(
 
     assert allclose
     assert passing
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize(
+    "input_shapes",
+    [
+        [1, 2, 2, 2, 8],
+        [1, 2, 4, 4, 16],
+        [2, 4, 8, 8, 32],
+        [1, 4, 4, 8, 16],
+        [1, 8, 8, 8, 8],
+    ],
+)
+@pytest.mark.parametrize("scale_d", [2])
+@pytest.mark.parametrize("scale_h", [2])
+@pytest.mark.parametrize("scale_w", [2])
+def test_upsample3d_nearest_interleaved(device, input_shapes, scale_d, scale_h, scale_w):
+    """Test 3D nearest-neighbor upsampling with row-major interleaved layout"""
+    batch_size, depth, height, width, num_channels = input_shapes
+    torch.manual_seed(0)
+
+    # Create input tensor in PyTorch format (N, C, D, H, W)
+    input_torch = torch.rand([batch_size, num_channels, depth, height, width], dtype=torch.bfloat16)
+
+    # Permute to TTNN format (N, D, H, W, C)
+    tt_input = input_torch.permute(0, 2, 3, 4, 1)
+
+    # Create TTNN tensor with row-major layout
+    input_tensor = ttnn.from_torch(
+        tt_input, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    # Golden reference using PyTorch
+    scale_factor = (scale_d, scale_h, scale_w)
+    torch_upsample = nn.Upsample(scale_factor=scale_factor, mode="nearest")
+    torch_result = torch_upsample(input_torch)
+
+    # Run TTNN upsample3d
+    output_tensor = ttnn.upsample3d(input_tensor, scale_factor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    # Convert torch result to TTNN format (N, D, H, W, C)
+    torch_result = torch_result.permute(0, 2, 3, 4, 1)
+
+    # Verify results
+    pcc_passed, pcc_message = assert_with_pcc(torch_result, output_tensor)
+    logger.info(pcc_message)
+    allclose = torch.allclose(output_tensor, torch_result, atol=1e-2, rtol=1e-2)
+    isclose = torch.all(torch.isclose(output_tensor, torch_result, atol=1e-2, rtol=1e-2))
+
+    assert allclose
+    assert isclose
