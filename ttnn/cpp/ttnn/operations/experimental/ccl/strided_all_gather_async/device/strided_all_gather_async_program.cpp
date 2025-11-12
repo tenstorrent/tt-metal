@@ -149,8 +149,8 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
     std::optional<uint32_t> mm_cores_y,
-    std::optional<uint32_t> mm_block_h,
-    std::optional<uint32_t> mm_block_w) {
+    std::optional<uint32_t> mm_block_ht,
+    std::optional<uint32_t> mm_block_wt) {
     tt::tt_metal::Program program{};
     std::optional<experimental::ccl::AllGatherFusedOpSignaler> empty_fused_op_signaler;
     return strided_all_gather_async_minimal_default_helper(
@@ -173,8 +173,8 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
         num_workers_per_link,
         num_buffers_per_channel,
         mm_cores_y,
-        mm_block_h,
-        mm_block_w,
+        mm_block_ht,
+        mm_block_wt,
         CoreCoord(0, 0));
 }
 
@@ -198,8 +198,8 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
     std::optional<uint32_t> num_workers_per_direction_opt,
     std::optional<uint32_t> num_buffers_per_channel,
     std::optional<uint32_t> mm_cores_y,
-    std::optional<uint32_t> mm_block_h,
-    std::optional<uint32_t> mm_block_w,
+    std::optional<uint32_t> mm_block_ht,
+    std::optional<uint32_t> mm_block_wt,
     const CoreCoord core_grid_offset) {
     // Tensor Info
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
@@ -408,8 +408,8 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
 
                 uint32_t tiles_per_chunk_val = tiles_per_chunk.value_or(0);
                 uint32_t mm_cores_y_val = mm_cores_y.value_or(0);
-                uint32_t mm_block_ht_val = mm_block_h.value_or(0);
-                uint32_t mm_block_wt_val = mm_block_w.value_or(0);
+                uint32_t mm_block_ht_val = mm_block_ht.value_or(0);
+                uint32_t mm_block_wt_val = mm_block_wt.value_or(0);
                 log_trace(tt::LogOp, "DEBUG: tiles_per_chunk__val: {}", tiles_per_chunk_val);
 
                 if (fuse_op) {

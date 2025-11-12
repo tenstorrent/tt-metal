@@ -151,8 +151,8 @@ def run_strided_all_gather_impl(
             num_workers_per_link=num_workers_per_link,
             num_buffers_per_channel=num_buffers_per_channel,
             mm_cores_y=mm_cores_y,
-            mm_block_h=mm_block_h,
-            mm_block_w=mm_block_w,
+            mm_block_ht=mm_block_h // 32,
+            mm_block_wt=mm_block_w // 32,
         )
 
         return tt_all_gather_out_tensor

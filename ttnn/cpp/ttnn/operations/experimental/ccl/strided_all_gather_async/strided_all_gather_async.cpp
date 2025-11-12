@@ -28,8 +28,8 @@ ttnn::Tensor ExecuteStridedAllGatherAsync::invoke(
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
     std::optional<uint32_t> mm_cores_y,
-    std::optional<uint32_t> mm_block_h,
-    std::optional<uint32_t> mm_block_w) {
+    std::optional<uint32_t> mm_block_ht,
+    std::optional<uint32_t> mm_block_wt) {
     return ttnn::operations::experimental::ccl::strided_all_gather_async(
         input_tensor,
         dim,
@@ -44,7 +44,7 @@ ttnn::Tensor ExecuteStridedAllGatherAsync::invoke(
         num_workers_per_link,
         num_buffers_per_channel,
         mm_cores_y,
-        mm_block_h,
-        mm_block_w);
+        mm_block_ht,
+        mm_block_wt);
 }
 }  // namespace ttnn::operations::experimental::ccl
