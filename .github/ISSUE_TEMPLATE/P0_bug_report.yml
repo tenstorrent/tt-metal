@@ -1,0 +1,72 @@
+name: P0 Bug Report
+description: File a P0 bug or issue
+labels: ["bug", "P0"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        :star2: Thanks for taking the time to report this critical issue! Please provide as much detail as possible. :star2:
+
+  - type: textarea
+    id: reporter-requirements
+    attributes:
+      label: Reporter Requirements
+      description: |
+        Fill in the following information to help triage and reproduce the issue.
+      placeholder: |
+        - Expected vs Actual behaviour
+        - Repro steps
+          - Error messages, stack traces, or screenshots/logs confirming the issue
+          - CI or unit test that has failed
+          - Minimal reproducing script (if applicable)
+
+  - type: textarea
+    id: impact-statement
+    attributes:
+      label: Impact Statement (Why This is a P0)
+      description: |
+        Explain why this issue is P0. Include scale of impact, affected architecture, number of users, etc.
+      placeholder: |
+        - Scale of impact:
+        - Scope: X Architecture, Y Users
+
+  - type: textarea
+    id: action-history
+    attributes:
+      label: Action History
+      description: |
+        What has been tried so far to resolve or investigate the issue.
+
+  - type: textarea
+    id: next-steps
+    attributes:
+      label: Next Steps
+      description: |
+        Recommended next actions and who will take them.
+
+  - type: textarea
+    id: suspected-root-cause
+    attributes:
+      label: Suspected Root Cause
+      description: |
+        If known, provide suspected root cause (e.g., bisected commit hash, software layer, etc.)
+
+  - type: textarea
+    id: system-info
+    attributes:
+      label: System Information
+      description: |
+        Provide relevant system details to reproduce or debug the issue.
+      placeholder: |
+        - Host used
+        - Host OS
+        - Chip/Card type
+        - Software package: Metal, UMD/KMD, Forge, Firmware
+        - tt-smi dump? (Yes/No)
+
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance Criteria (to close P0)
+      description: |
+        Define what conditions must be met to close this P0 bug.
