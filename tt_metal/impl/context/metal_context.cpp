@@ -32,6 +32,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
+#include "tt_metal/impl/dispatch/data_collector.hpp"
 
 namespace tt::tt_metal {
 
@@ -134,6 +135,8 @@ void MetalContext::initialize(
         profiler_state_manager_ = std::make_unique<ProfilerStateManager>();
     }
 
+    data_collector_ = std::make_unique<DataCollector>();
+
     // Minimal setup, don't initialize FW/Dispatch/etc.
     if (minimal) {
         return;
@@ -223,6 +226,11 @@ void MetalContext::teardown() {
     // Set internal routing to false to exit active ethernet FW & go back to base FW
     cluster_->set_internal_routing_info_for_ethernet_cores(false);
 
+    if (data_collector_) {
+        data_collector_->DumpData();
+        data_collector_.reset();
+    }
+
     if (dprint_server_) {
         dprint_server_->detach_devices();
         dprint_server_.reset();
@@ -247,6 +255,7 @@ void MetalContext::teardown() {
             mem_map.reset();
         }
     }
+
     dispatch_query_manager_.reset();
     dispatch_core_manager_.reset();
     tt::tt_metal::reset_topology_state();
