@@ -64,14 +64,14 @@ TEST_F(MeshDevice1x4Fixture, AllGatherReturnedTensor) {
     auto aggregated_tensor = tt::tt_metal::experimental::unit_mesh::aggregate(tensors);
 
     // Quiesce parent mesh before all gather
-    mesh_device_->quiesce_submeshes();
+    mesh_device_->quiesce_devices();
 
     auto all_gathered_tensor = ttnn::all_gather(
         aggregated_tensor,
         /* dim */ 0);
 
     // Quiesce parent mesh after all gather
-    mesh_device_->quiesce_submeshes();
+    mesh_device_->quiesce_devices();
 
     auto disaggregated_output_tensors = tt::tt_metal::experimental::unit_mesh::disaggregate(all_gathered_tensor);
     for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
@@ -103,7 +103,7 @@ TEST_F(MeshDevice1x4Fixture, AllGatherPersistentOutput) {
     auto aggregated_output_tensor = tt::tt_metal::experimental::unit_mesh::aggregate(output_tensors);
 
     // Quiesce parent mesh before all gather
-    mesh_device_->quiesce_submeshes();
+    mesh_device_->quiesce_devices();
 
     auto all_gathered_tensor = ttnn::all_gather(
         aggregated_tensor,
@@ -114,7 +114,7 @@ TEST_F(MeshDevice1x4Fixture, AllGatherPersistentOutput) {
         aggregated_output_tensor);
 
     // Quiesce parent mesh after all gather
-    mesh_device_->quiesce_submeshes();
+    mesh_device_->quiesce_devices();
 
     for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
         auto data = output_tensors[dev_idx].to_vector<bfloat16>();
@@ -144,7 +144,7 @@ TEST_F(MeshDevice1x4Fixture, ReduceScatter) {
     auto aggregated_output_tensor = tt::tt_metal::experimental::unit_mesh::aggregate(output_tensors);
 
     // Quiesce parent mesh before reduce scatter
-    mesh_device_->quiesce_submeshes();
+    mesh_device_->quiesce_devices();
     auto reduced = ttnn::reduce_scatter(
         aggregated_tensor,
         /* dim */ 3,
@@ -153,7 +153,7 @@ TEST_F(MeshDevice1x4Fixture, ReduceScatter) {
         std::nullopt,
         aggregated_output_tensor);
     // Quiesce parent mesh after reduce scatter
-    mesh_device_->quiesce_submeshes();
+    mesh_device_->quiesce_devices();
 
     for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
         auto data = output_tensors[dev_idx].to_vector<bfloat16>();
@@ -178,12 +178,12 @@ TEST_F(MeshDevice1x4Fixture, AllReduce) {
     auto aggregated_tensor = tt::tt_metal::experimental::unit_mesh::aggregate(tensors);
 
     // Quiesce parent mesh before all reduce
-    mesh_device_->quiesce_submeshes();
+    mesh_device_->quiesce_devices();
     auto all_reduced_tensor = ttnn::all_reduce(
         aggregated_tensor,
         /* cluster_axis */ 1);
     // Quiesce parent mesh after all reduce
-    mesh_device_->quiesce_submeshes();
+    mesh_device_->quiesce_devices();
 
     auto disaggregated_output_tensors = tt::tt_metal::experimental::unit_mesh::disaggregate(all_reduced_tensor);
     for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
