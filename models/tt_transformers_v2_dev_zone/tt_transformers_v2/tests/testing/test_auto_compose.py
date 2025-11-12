@@ -212,7 +212,7 @@ def test_sharded_2d_basic(
     ttnn_mesh_device: ttnn.MeshDevice, layout, dtype, dims_pair: tuple[int, int], storage: str
 ) -> None:
     mesh_shape = tuple(ttnn_mesh_device.shape)
-    if len(mesh_shape) != 2 or mesh_shape[0] <= 1 or mesh_shape[1] <= 1:
+    if len(mesh_shape) != 2 and torch.prod(torch.tensor(mesh_shape)).item() <= 1:
         pytest.skip("Requires a 2D mesh with both dims > 1")
 
     rank = 4
