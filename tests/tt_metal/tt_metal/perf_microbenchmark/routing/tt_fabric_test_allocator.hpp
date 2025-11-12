@@ -797,8 +797,9 @@ private:
             }
 
             bool has_sync = false;
-            for (const auto& sync : config.global_sync_configs) {
-                if (sync.device == device_id) {
+            for (const auto& sync : config.sync_configs) {
+                const auto& sender_config = sync.sender_config;
+                if (sender_config.device == device_id) {
                     has_sync = true;
                     break;
                 }
@@ -919,7 +920,8 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
     enable_flow_control_ = test_config.enable_flow_control;
 
     // PASS 0: Reserve sync cores for synchronization
-    for (auto& sync_sender : test_config.global_sync_configs) {
+    for (auto& sync_config : test_config.sync_configs) {
+        auto& sync_sender = sync_config.sender_config;
         auto& device_resources = get_or_create_device_resources(sync_sender.device);
         sync_sender.core = device_resources.reserve_sync_core();
     }
