@@ -3,11 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-import csv
-from models.experimental.stable_diffusion_xl_base.demo.demo import test_demo
+from models.experimental.stable_diffusion_xl_base.demo.demo_inpainting import test_demo
 from models.experimental.stable_diffusion_xl_base.utils.clip_encoder import CLIPEncoder
 import os
-import urllib
+from datasets import load_dataset
 from loguru import logger
 import statistics
 from models.experimental.stable_diffusion_xl_base.utils.fid_score import calculate_fid_score
@@ -27,8 +26,8 @@ from models.experimental.stable_diffusion_xl_base.utils.clip_fid_ranges import (
 )
 
 test_demo.__test__ = False
-COCO_CAPTIONS_DOWNLOAD_PATH = "https://github.com/mlcommons/inference/raw/4b1d1156c23965172ae56eacdd8372f8897eb771/text_to_image/coco2014/captions/captions_source.tsv"
 OUT_ROOT, RESULTS_FILE_NAME = "test_reports", "sdxl_test_results.json"
+MAX_N_SAMPLES, MIN_N_SAMPLES = 1260, 2
 
 
 @pytest.mark.parametrize(
@@ -62,6 +61,10 @@ OUT_ROOT, RESULTS_FILE_NAME = "test_reports", "sdxl_test_results.json"
     ((8.0),),
 )
 @pytest.mark.parametrize(
+    "strength",
+    ((0.99),),
+)
+@pytest.mark.parametrize(
     "negative_prompt",
     (("normal quality, low quality, worst quality, low res, blurry, nsfw, nude"),),
 )
@@ -89,9 +92,8 @@ OUT_ROOT, RESULTS_FILE_NAME = "test_reports", "sdxl_test_results.json"
     ],
     ids=("device_encoders", "host_encoders"),
 )
-@pytest.mark.parametrize("captions_path", ["models/experimental/stable_diffusion_xl_base/coco_data/captions.tsv"])
 @pytest.mark.parametrize("coco_statistics_path", ["models/experimental/stable_diffusion_xl_base/coco_data/val2014.npz"])
-def test_accuracy_sdxl(
+def test_accuracy_sdxl_inpaint(
     validate_fabric_compatibility,
     mesh_device,
     is_ci_env,
@@ -99,20 +101,15 @@ def test_accuracy_sdxl(
     vae_on_device,
     capture_trace,
     encoders_on_device,
-    captions_path,
     coco_statistics_path,
     evaluation_range,
     guidance_scale,
     negative_prompt,
     use_cfg_parallel,
+    strength,
 ):
     start_from, num_prompts = evaluation_range
-
-    prompts = sdxl_get_prompts(
-        captions_path,
-        start_from,
-        num_prompts,
-    )
+    input_images, input_masks, prompts = get_dataset_for_inpainting_accuracy(num_prompts)
 
     logger.info(f"Start inference from prompt index: {start_from} to {start_from + num_prompts}")
 
@@ -128,6 +125,7 @@ def test_accuracy_sdxl(
         capture_trace,
         evaluation_range,
         guidance_scale,
+        strength,
         use_cfg_parallel=use_cfg_parallel,
         fixed_seed_for_batch=True,
         prompt_2=None,
@@ -136,6 +134,8 @@ def test_accuracy_sdxl(
         guidance_rescale=0.0,
         timesteps=None,
         sigmas=None,
+        input_images=input_images,
+        input_masks=input_masks,
     )
 
     clip = CLIPEncoder()
@@ -161,8 +161,8 @@ def test_accuracy_sdxl(
     print(f"Standard Deviation of CLIP Scores: {deviation_clip_score}")
 
     avg_gen_end_to_end = profiler.get("end_to_end_generation")
-    model_name = "sdxl-tp" if use_cfg_parallel else "sdxl"
 
+    model_name = "sdxl-inpaint-tp" if use_cfg_parallel else "sdxl-inpaint"
     targets = get_model_targets(model_name)
 
     data = {
@@ -178,6 +178,8 @@ def test_accuracy_sdxl(
             "num_prompts": num_prompts,
             "negative_prompt": negative_prompt,
             "guidance_scale": guidance_scale,
+            "strength": strength,
+            "use_cfg_parallel": use_cfg_parallel,
         },
         "benchmarks_summary": [
             {
@@ -211,28 +213,12 @@ def test_accuracy_sdxl(
                 "device": get_device_name(),
                 "average_clip": average_clip_score,
                 "deviation_clip": deviation_clip_score,
-                "clip_accuracy_check_approx": accuracy_check_clip(
-                    model_name, average_clip_score, num_prompts, mode="approx"
-                ),
-                "clip_accuracy_check_valid": accuracy_check_clip(
-                    model_name, average_clip_score, num_prompts, mode="valid"
-                ),
                 "delta_clip": get_appr_delta_metric(model_name, average_clip_score, num_prompts, score_type="clip"),
                 "fid_score": fid_score,
-                "fid_accuracy_check_approx": accuracy_check_fid(model_name, fid_score, num_prompts, mode="approx"),
-                "fid_accuracy_check_valid": accuracy_check_fid(model_name, fid_score, num_prompts, mode="valid"),
                 "delta_fid": get_appr_delta_metric(model_name, fid_score, num_prompts, score_type="fid"),
                 "accuracy_check": min(
                     accuracy_check_fid(model_name, fid_score, num_prompts, mode="approx"),
                     accuracy_check_clip(model_name, average_clip_score, num_prompts, mode="approx"),
-                ),
-                "accuracy_check_delta": min(
-                    accuracy_check_fid(model_name, fid_score, num_prompts, mode="delta"),
-                    accuracy_check_clip(model_name, average_clip_score, num_prompts, mode="delta"),
-                ),
-                "accuracy_check_valid": min(
-                    accuracy_check_fid(model_name, fid_score, num_prompts, mode="valid"),
-                    accuracy_check_clip(model_name, average_clip_score, num_prompts, mode="valid"),
                 ),
             }
         ],
@@ -242,8 +228,9 @@ def test_accuracy_sdxl(
     trace_flag = "with_trace" if capture_trace else "no_trace"
     vae_flag = "device_vae" if vae_on_device else "host_vae"
     encoders_flag = "device_encoders" if encoders_on_device else "host_encoders"
+    use_cfg_parallel_flag = "cfg_parallel" if use_cfg_parallel else "no_cfg_parallel"
     new_file_name = (
-        f"sdxl_test_results_{trace_flag}_{vae_flag}_{encoders_flag}_{use_cfg_parallel}_{num_inference_steps}.json"
+        f"sdxl_test_results_{trace_flag}_{vae_flag}_{encoders_flag}_{use_cfg_parallel_flag}_{num_prompts}.json"
     )
     with open(f"{OUT_ROOT}/{new_file_name}", "w") as f:
         json.dump(data, f, indent=4)
@@ -256,54 +243,27 @@ def test_accuracy_sdxl(
         json.dump(data, f, indent=4)
 
     logger.info(f"Test results saved to {OUT_ROOT}/{RESULTS_FILE_NAME}")
-
-    check_clip_scores(start_from, num_prompts, prompts, clip_scores)
-
-
-def sdxl_get_prompts(
-    captions_path,
-    start_from,
-    num_prompts,
-):
-    assert (
-        0 <= start_from < 5000 and start_from + num_prompts <= 5000
-    ), "start_from must be between 0 and 4999, and start_from + num_prompts must not exceed 5000."
-
-    prompts = []
-
-    if not os.path.isfile(captions_path):
-        logger.info(f"File {captions_path} not found. Downloading...")
-        os.makedirs(os.path.dirname(captions_path), exist_ok=True)
-        urllib.request.urlretrieve(COCO_CAPTIONS_DOWNLOAD_PATH, captions_path)
-        logger.info("Download complete.")
-
-    with open(captions_path, "r") as tsv_file:
-        reader = csv.reader(tsv_file, delimiter="\t")
-        next(reader)
-        for index, row in enumerate(reader):
-            if index < start_from:
-                continue
-            if index >= start_from + num_prompts:
-                break
-            prompts.append(row[2])
-
-    return prompts
+    print(json.dumps(data, indent=4))
 
 
-def check_clip_scores(start_from, num_prompts, prompts, clip_scores):
-    assert len(clip_scores) == num_prompts == len(prompts), f"Expected {num_prompts} CLIP scores and prompts."
-    num_of_very_low_clip_scores = 0
-    for idx, score in enumerate(clip_scores):
-        if clip_scores[idx] < 27:
-            if clip_scores[idx] < 20:
-                logger.error(
-                    f"Very low CLIP score detected for image {start_from + idx + 1}: {score}, prompt: {prompts[idx]},  \
-                        this indicates a fragmented image or noise or prompt mismatch or something else very wrong."
-                )
-                num_of_very_low_clip_scores += 1
-            else:
-                logger.warning(
-                    f"Low CLIP score detected for image {start_from + idx + 1}: {score}, prompt: {prompts[idx]}"
-                )
+def get_dataset_for_inpainting_accuracy(n_prompts: int):
+    logger.info(f"Reqested {n_prompts} prompts for inpainting accuracy evaluation...")
+    if n_prompts > MAX_N_SAMPLES or n_prompts < MIN_N_SAMPLES:
+        logger.warning(f"Requested number of prompts {n_prompts} is out of bounds [{MIN_N_SAMPLES}, {MAX_N_SAMPLES}]")
+        if n_prompts > MAX_N_SAMPLES:
+            n_prompts = MAX_N_SAMPLES
+        else:
+            n_prompts = MIN_N_SAMPLES
+        logger.warning(f"Setting number of prompts to {n_prompts}")
 
-    assert num_of_very_low_clip_scores == 0, f"Found {num_of_very_low_clip_scores} images with very low CLIP scores"
+    logger.info("Loading InpaintCOCO dataset for inpainting accuracy evaluation...")
+    dataset = load_dataset("phiyodr/InpaintCOCO")
+
+    input_images, input_masks, input_captions = [], [], []
+    for index, item in enumerate(dataset["test"]):  # 'test' is only existing split in phiyodr/InpaintCOCO dataset
+        if index >= n_prompts:
+            break
+        input_images.append(item["coco_image"])
+        input_masks.append(item["mask"])
+        input_captions.append(item["coco_caption"])
+    return input_images, input_masks, input_captions
