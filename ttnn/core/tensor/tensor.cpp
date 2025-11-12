@@ -51,6 +51,8 @@ HostBuffer create_host_buffer_from_row_major_data(std::vector<T>&& data, const T
 
 }  // namespace
 
+std::atomic<std::uint64_t> Tensor::tensor_id_counter{0};
+
 Tensor::Tensor(
     HostBuffer buffer,
     const tt::tt_metal::Shape& shape,
@@ -85,7 +87,7 @@ Tensor::Tensor(
 Tensor::Tensor(HostBuffer buffer, TensorSpec tensor_spec) :
     Tensor(Storage(HostStorage(std::move(buffer))), std::move(tensor_spec), TensorTopology{}) {}
 
-Tensor::Tensor(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) {
+Tensor::Tensor(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) : tensor_id(Tensor::next_tensor_id()) {
     init(Storage(std::move(storage)), std::move(tensor_spec), std::move(tensor_topology));
 }
 
@@ -110,6 +112,7 @@ Tensor& Tensor::operator=(const Tensor& other) {
 
 Tensor& Tensor::operator=(Tensor&& other) noexcept {
     this->tensor_id = other.tensor_id;
+    other.tensor_id = INVALID_TENSOR_ID;
     if (this->tensor_attributes != other.tensor_attributes) {
         this->tensor_attributes = std::move(other.tensor_attributes);
     }
@@ -145,6 +148,12 @@ void Tensor::deallocate_impl(bool force) {
     }
     // GraphTracker::instance().track_function_end();
 }
+
+std::uint64_t Tensor::get_tensor_id_counter() { return tensor_id_counter.load(std::memory_order_relaxed); }
+
+void Tensor::set_tensor_id_counter(std::uint64_t id) { tensor_id_counter.store(id, std::memory_order_relaxed); }
+
+std::uint64_t Tensor::next_tensor_id() { return tensor_id_counter.fetch_add(1, std::memory_order_relaxed); }
 
 template <typename T>
 Tensor Tensor::from_span(
@@ -402,8 +411,6 @@ Tensor Tensor::to_layout(Layout target_layout) const { return tensor_ops::tensor
 
 std::string Tensor::write_to_string() const { return tensor_impl::to_string_wrapper(*this); }
 
-void Tensor::print() const { tensor_ops::tensor_print(*this); }
-
 Tensor Tensor::pad(
     const tt::tt_metal::Shape& output_padded_shape,
     const tt::tt_metal::Shape& input_tensor_start,
@@ -648,12 +655,13 @@ void write_tensor(const Tensor& src, Tensor& dst, bool blocking, std::optional<t
     tensor_impl::copy_to_device_wrapper(src, dst, cq_id);
 }
 
+// TODO #32045: Remove this function since IDs are assigned in the constructor.
 Tensor set_tensor_id(const Tensor& tensor) {
     if (not GraphTracker::instance().is_enabled()) {
         return tensor;
     }
     auto output = tensor;
-    output.tensor_id = ttnn::CoreIDs::instance().fetch_and_increment_tensor_id();
+    output.tensor_id = Tensor::next_tensor_id();
     return output;
 };
 
@@ -715,32 +723,6 @@ Tensor view(const Tensor& input_tensor, const Shape& new_shape) {
 }
 Tensor to_dtype(const Tensor& tensor, DataType dtype) { return tensor_ops::tensor_to_dtype(tensor, dtype); }
 
-std::string to_string(const Tensor& tensor) {
-    const auto& shape = tensor.logical_shape();
-
-    if (!tensor.is_allocated()) {
-        return fmt::format(
-            "{}(<buffer is not allocated>, shape={}, dtype={}, layout={})",
-            "ttnn.Tensor",
-            shape,
-            tensor.dtype(),
-            tensor.layout());
-    }
-
-    if (std::holds_alternative<tt::tt_metal::DeviceStorage>(tensor.storage())) {
-        auto storage = std::get<tt::tt_metal::DeviceStorage>(tensor.storage());
-        if (storage.mesh_buffer != nullptr) {
-            auto* mesh_device = storage.mesh_buffer->device();  // cause crash
-
-            if (mesh_device->num_devices() == 1) {
-                auto cpu_tensor = tensor.cpu();
-                return tt::tt_metal::tensor_impl::to_string_wrapper(
-                    ttnn::distributed::get_device_tensors(cpu_tensor).at(0));
-            }
-        }
-    }
-    return tt::tt_metal::tensor_impl::to_string_wrapper(tensor);
-}
 }  // namespace ops
 
 }  // namespace tt::tt_metal

@@ -41,6 +41,7 @@
 #include <tt-metalium/host_buffer.hpp>
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/span.hpp>
+#include <ttnn/tensor/to_string.hpp>
 
 #include <tracy/Tracy.hpp>
 
@@ -1295,7 +1296,7 @@ void pytensor_module(py::module& m_tensor) {
                     [7, 8, 9]]] dtype=bfloat16 ]
         )doc")
         .def(
-            "__repr__", [](const Tensor& self) { return tt::tt_metal::ops::to_string(self); }, R"doc(
+            "__repr__", [](const Tensor& self) { return ttnn::to_string(self); }, R"doc(
             Prints the tensor as list of nested lists. Number of levels of nesting is equal to tensor rank.
 
             .. code-block:: python
