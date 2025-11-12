@@ -3,7 +3,6 @@
 
 import ttnn
 from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
-from loguru import logger
 
 # ---------------------------
 # TTNN utility modules
@@ -121,9 +120,6 @@ class TTConv2D:
             packer_l1_acc=self.packer_l1_acc,
             math_approx_mode=self.math_approx_mode,
         )
-        logger.info(f"[CONV2D] TTConv2D instance id: {id(self)}")
-        logger.info(f"[CONV2D] Weights object id: {id(self.weights)}")
-        logger.info(f"[CONV2D] Weights storage type: {self.weights.storage_type()}")
         if self.num_cores_nhw is not None:
             shard_grid = get_shard_grid_from_num_cores(self.num_cores_nhw, device)
             conv_config.core_grid = shard_grid
@@ -133,34 +129,6 @@ class TTConv2D:
             conv_config.act_block_h_override = self.act_block_h
         if self.act_block_w is not None:
             conv_config.act_block_w_div = self.act_block_w
-            # Add debug logging before conv2d call (line 133)
-            # Add debug logging before conv2d call
-        logger.info(f"[CONV2D DEBUG] Input tensor:")
-        logger.info(f"  - Shape: {input_tensor.shape}")
-        logger.info(f"  - Volume: {input_tensor.volume()}")
-        logger.info(f"  - Layout: {input_tensor.layout}")
-        # logger.info(f"  - Buffer address: {input_tensor.buffer_address()}")
-        logger.info(f"  - Memory config: {input_tensor.memory_config()}")
-
-        logger.info(f"[CONV2D DEBUG] Weight tensor:")
-        logger.info(f"  - Shape: {self.weights.shape}")
-        logger.info(f"  - Volume: {self.weights.volume()}")
-        logger.info(f"  - Layout: {self.weights.layout}")
-        # logger.info(f"  - Buffer address: {self.weights.buffer_address()}")
-
-        if self.bias is not None:
-            logger.info(f"[CONV2D DEBUG] Bias tensor:")
-            logger.info(f"  - Shape: {self.bias.shape}")
-            logger.info(f"  - Volume: {self.bias.volume()}")
-            logger.info(f"  - Layout: {self.bias.layout}")
-            # logger.info(f"  - Buffer address: {self.bias.buffer_address()}")
-
-        logger.info(f"[CONV2D DEBUG] Conv parameters:")
-        logger.info(f"  - Kernel size: {self.kernel_size}")
-        logger.info(f"  - Stride: {self.stride}")
-        logger.info(f"  - Padding: {self.padding}")
-        logger.info(f"  - Dilation: {self.dilation}")
-        logger.info(f"  - Groups: {self.groups}")
 
         [output_tensor, [_out_height, _out_width], [self.weights, self.bias]] = ttnn.conv2d(
             input_tensor=input_tensor,
