@@ -9,7 +9,7 @@
 # descriptor will be used. Both the ethernet mapping and yaml path are required
 # ======================================================================================
 physical_mesh:
-   mesh_descriptor_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/nano_exabox_mesh_graph_descriptor.yaml"
+   mesh_descriptor_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/nano_exabox_mesh_graph_descriptor.textproto"
    eth_coord_mapping: [
       [
         [0, 0, 0, 0, 0],
