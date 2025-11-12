@@ -50,8 +50,14 @@ def collect_benchmarks(benchmark_obj):
             successed_benchmarks[benchmark["name"]] = float(benchmark["bytes_per_second"])
     return successed_benchmarks, failed_benchmarks
 
+def filter_benchmarks(benchmarks):
+    """Filter benchark results to only include those with 1 repetition or with aggregate_name == "median". """
+    return [benchmark for benchmark in benchmarks if benchmark["repetitions"] == 1 or (benchmark["run_type"] == "aggregate" and benchmark["aggregate_name"] == "median")]
+
 
 def compare_benchmarks(golden_benchmarks, result_benchmarks, result_failed_benchmarks, tolerance):
+    golden_benchmarks = filter_benchmarks(golden_benchmarks)
+    result_benchmarks = filter_benchmarks(result_benchmarks)
     golden_benchmarks_names = set(golden_benchmarks.keys())
     result_benchmarks_names = set(result_benchmarks.keys())
 
