@@ -1111,3 +1111,41 @@ def test_all_gather_async_2x4_non_flat_mesh(mesh_device, input_shape):
     torch_reference = torch_input.repeat([devices, 1, 1, 1])
     eq, output = comp_equal(torch_output, torch_reference)
     assert eq, f"Output mismatch between torch and ttnn all-gather: {output}"
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=True,
+    ids=["fabric_linear"],
+)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        [1, 1, 10240, 128],
+    ],
+)
+@pytest.mark.parametrize("cluster_axis", [1])
+@pytest.mark.parametrize("dim", [2])
+def test_all_gather_async_1x8_dim2(mesh_device, input_shape, cluster_axis, dim):
+    torch.manual_seed(2005)
+    devices = mesh_device.get_num_devices()
+    input_shape[-1] *= devices
+
+    torch_input = torch.rand(input_shape, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=dim),
+        device=mesh_device,
+    )
+
+    tt_output = ttnn.all_gather(tt_input, dim=dim, cluster_axis=cluster_axis)
+
+    torch_output = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+
+    torch_reference = torch_input.repeat([devices, 1, 1, 1])
+    eq, output = comp_equal(torch_output, torch_reference)
+    assert eq, f"Output mismatch between torch and ttnn all-gather: {output}"
