@@ -968,12 +968,12 @@ std::optional<TensorPreparedConversion> prepare_tensor_conversion(
             // The mapping structure is
             // {<Input-Type>, <Target-Type>, <Target-Layout>} -> {<Layout-To-Construct-On-Host>, <Type-To-Cast-On-Host>}
 
+#if false
             {{host_buffer_data_type::BFLOAT16,     DataType::BFLOAT16,  Layout::TILE},      {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
             {{host_buffer_data_type::BFLOAT16,     DataType::BFLOAT16, Layout::ROW_MAJOR},  {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
 
             {{host_buffer_data_type::BFLOAT16,     DataType::FLOAT32,   Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
             {{host_buffer_data_type::BFLOAT16,     DataType::FLOAT32,   Layout::TILE},      {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-#if false
 
             {{host_buffer_data_type::BFLOAT16,     DataType::BFLOAT4_B, Layout::TILE},      {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
             {{host_buffer_data_type::BFLOAT16,     DataType::BFLOAT8_B, Layout::TILE},      {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
