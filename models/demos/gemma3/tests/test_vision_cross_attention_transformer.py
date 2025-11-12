@@ -66,6 +66,7 @@ def test_gemma_vision(
         dtype=dtype,
         configuration=model_args,
         return_intermediate=False,
+        weight_cache_path=model_args.weight_cache_path(dtype),
     )
 
     test_output = test_gemma_vision(input_tensor)
