@@ -21,7 +21,7 @@ constexpr std::uint32_t kFlatbufferAlignment = alignof(std::uint64_t);
 
 namespace ttnn {
 
-void dump_tensor_flatbuffer(const std::string& file_name, const Tensor& tensor) {
+void dump_tensor_flatbuffer(const std::string& file_name, const tt::tt_metal::Tensor& tensor) {
     Tensor cpu_tensor = tensor.cpu();
 
     // Dump tensor to disk from (global) rank 0 host.

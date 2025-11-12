@@ -42,7 +42,8 @@
 #include <tt-metalium/host_buffer.hpp>
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/span.hpp>
-#include <tt-metalium/tensor/core_ids.hpp>
+#include <ttnn/tensor/to_string.hpp>
+
 #include <tracy/Tracy.hpp>
 
 using namespace tt::tt_metal;
@@ -672,9 +673,7 @@ void pytensor_module(py::module& m_tensor) {
                     CMAKE_UNIQUE_NAMESPACE::log_external_operation(operation, input_tensors);
                     auto output = function(*args, **kwargs);
                     TracyOpTTNNExternal(
-                        operation,
-                        input_tensors,
-                        tt::tt_metal::CoreIDs::instance().fetch_and_increment_device_operation_id());
+                        operation, input_tensors, ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id());
                     GraphTracker::instance().track_function_end(output);
                     return output;
                 }));

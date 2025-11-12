@@ -140,7 +140,6 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/tensor/xtensor/conversion_utils.hpp
     api/tt-metalium/tensor/flatbuffer/tensor_spec_flatbuffer.hpp
     api/tt-metalium/tensor/flatbuffer/tensor_flatbuffer.hpp
-    api/tt-metalium/tensor/core_ids.hpp
     api/tt-metalium/tensor/types.hpp
     api/tt-metalium/tensor/tensor_spec.hpp
     api/tt-metalium/tensor/tensor_attributes.hpp

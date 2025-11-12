@@ -79,6 +79,39 @@ class Generator:
         self.trace_ids_decode = defaultdict(lambda: None)  # {device_sampling_bool: {device_id: trace_id}}
         self.trace_inputs_decode = defaultdict(lambda: None)
         self.trace_output_decode = defaultdict(lambda: None)
+        self.prefill_traces_warmup = False
+
+    def warmup_prefill_traces(
+        self,
+        page_table,
+        kv_cache,
+        enable_trace,
+    ):
+        if self.prefill_traces_warmup or not enable_trace:
+            return
+
+        self.prefill_traces_warmup = True
+        for model_id in range(self.data_parallel):
+            for supported_length in [128, 256, 512, 1024, 2048, 4096, 8192]:
+                # Only sequence lengths used by Llama-3.1-8B since we only support trace for Llama-3.1-8B for now
+                warmup_tokens = torch.zeros(1, supported_length, dtype=torch.long)
+                warmup_prompt_lens = torch.tensor([supported_length], dtype=torch.long)
+                warmup_empty_slots = list(range(1))
+
+                # TODO: Currently working on enabling trace for all models that use tt_transformers
+                if not self.model_args[0].can_enable_trace(supported_length):
+                    continue
+
+                logger.info(f"Warming up prefill traces for sequence length: {supported_length}")
+                self.prefill_forward_text(
+                    warmup_tokens,
+                    page_table,
+                    kv_cache,
+                    warmup_prompt_lens,
+                    warmup_empty_slots,
+                    enable_trace,
+                    model_id,
+                )
 
     def _capture_trace_prefill(
         self,
@@ -187,6 +220,7 @@ class Generator:
         prompt_lens=None,
         empty_slots=None,
         enable_trace=True,
+        model_id_warmup=None,
         **kwargs,
     ):
         if page_table is not None:
@@ -194,6 +228,12 @@ class Generator:
         else:
             # Only paged attention is supported for prefill
             enable_trace = False
+
+        self.warmup_prefill_traces(
+            page_table,
+            kv_cache,
+            enable_trace,
+        )
 
         batch_size, batch_seq_len = tokens.shape
         max_batch_size_per_model = self.model_args[0].max_batch_size
@@ -207,7 +247,8 @@ class Generator:
 
         out_list = []
         for idx, user_id in enumerate(empty_slots):
-            model_id = user_id // max_batch_size_per_model
+            # if model_id is not None, it means that prefill is called from warmup_prefill_traces
+            model_id = user_id // max_batch_size_per_model if model_id_warmup is None else model_id_warmup
             group_user_id = user_id % max_batch_size_per_model if page_table is None else 0
             seq_len = int(prompt_lens[idx])
             last_token_idx = seq_len - 1
@@ -290,7 +331,7 @@ class Generator:
                 seq_len = int(prompt_lens[idx])
                 last_token_idx = seq_len - 1
                 user_id = empty_slots[idx]
-                model_id = user_id // max_batch_size_per_model
+                model_id = user_id // max_batch_size_per_model if model_id_warmup is None else model_id_warmup
 
                 # Since we give unpadded_seq_len, only the tile containing the last token is returned
                 output_logits[idx] = self.model[model_id].process_output_prefill(
@@ -579,7 +620,8 @@ class Generator:
         ):
             # If the page table has changed, it means that the inputs have shuffled, so we need to copy them from host again
             reset_inputs = True
-            self.prev_page_table = tuple(pt.clone() for pt in page_table)
+            if page_table is not None:
+                self.prev_page_table = tuple(pt.clone() for pt in page_table)
 
         if reset_inputs:
             for i in range(self.data_parallel):

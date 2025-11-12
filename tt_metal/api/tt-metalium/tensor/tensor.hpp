@@ -42,7 +42,8 @@ class MeshCommandQueue;
 
 class Tensor {
 public:
-    std::optional<std::int64_t> tensor_id = std::nullopt;
+    constexpr static std::uint64_t INVALID_TENSOR_ID = std::numeric_limits<std::uint64_t>::max();
+    std::uint64_t tensor_id{INVALID_TENSOR_ID};
 
     // Shared pointer to all attributes associated with this tensor
     // Can be safely passed between threads when the tensor is copied
@@ -67,7 +68,8 @@ public:
     [[nodiscard]] Tensor(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
 
     // Constructors of `Tensor` that take physical data encoded in `HostBuffer`.
-    // The encoded data type and physical size of the data must match the specified tensor physical shape and data type.
+    // The encoded data type and physical size of the data must match the specified tensor physical shape and data
+    // type.
     [[nodiscard]] Tensor(
         HostBuffer buffer,
         const tt::tt_metal::Shape& shape,
@@ -84,8 +86,9 @@ public:
     [[nodiscard]] Tensor(HostBuffer buffer, TensorSpec tensor_spec);
 
     // Converts a buffer of elements of type `T` to a `Tensor`.
-    // Elements in the buffer are assumed to be stored in row-major order. The size of the buffer and the type of the
-    // elements have to match `spec`; block float formats such as BFLOAT8_B and BFLOAT4_B require `T` equal `float`.
+    // Elements in the buffer are assumed to be stored in row-major order. The size of the buffer and the type of
+    // the elements have to match `spec`; block float formats such as BFLOAT8_B and BFLOAT4_B require `T` equal
+    // `float`.
     //
     // The data in the buffer is copied into a tensor with host storage.
     template <typename T>
@@ -98,8 +101,8 @@ public:
 
     // Creates a `Tensor` with storage "borrowed" from the buffer of elements of type `T`.
     //
-    // The primary use case for this API is to interop with Python, where `MemoryPin` can be set to retain the lifetime
-    // of the Python object that owns the underlying data. For example, in pybind11:
+    // The primary use case for this API is to interop with Python, where `MemoryPin` can be set to retain the
+    // lifetime of the Python object that owns the underlying data. For example, in pybind11:
     //
     // py::object py_tensor = ...;
     // MemoryPin py_data_pin(std::make_shared<py::object>(py_tensor));
@@ -152,8 +155,8 @@ public:
         T pad_value = 0);
 
     // Converts a `Tensor` to a `std::vector<T>`.
-    // Elements in the vector will be stored in row-major order. The type of the requested vector has to match that of
-    // the `Tensor`; block float formats such as BFLOAT8_B and BFLOAT4_B require `T` equal `float`.
+    // Elements in the vector will be stored in row-major order. The type of the requested vector has to match that
+    // of the `Tensor`; block float formats such as BFLOAT8_B and BFLOAT4_B require `T` equal `float`.
     //
     // If the tensor resides on a device, it will be brough back to host.
     template <typename T>
@@ -264,7 +267,16 @@ public:
             this->tensor_attributes->get_storage(), this->tensor_attributes->get_tensor_spec());
     }
 
+    static std::uint64_t get_tensor_id_counter();
+
+    static void set_tensor_id_counter(std::uint64_t id);
+
+    // TODO #32045: Remove this function since IDs are assigned in the constructor.
+    static std::uint64_t next_tensor_id();
+
 private:
+    static std::atomic<std::uint64_t> tensor_id_counter;
+
     void init(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
     void deallocate_impl(bool force);
 };
@@ -309,8 +321,8 @@ void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& r
 // Allocates a tensor on device.
 Tensor allocate_tensor_on_device(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device);
 
-// Allocates a tensor on host. Uses `mesh_device` to allocate sufficient number of host buffers for each multi-device
-// shard.
+// Allocates a tensor on host. Uses `mesh_device` to allocate sufficient number of host buffers for each
+// multi-device shard.
 Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device);
 
 // Writes tensor from `src` to `dst`; supports only host-to-device and device-to-host transfers.
@@ -325,7 +337,6 @@ Tensor view(
 Tensor view(const Tensor& input_tensor, const tt::tt_metal::Shape& new_shape);
 Tensor to_dtype(const Tensor& tensor, DataType dtype);
 
-std::string to_string(const Tensor& tensor);
 }  // namespace ops
 
 }  // namespace tt_metal

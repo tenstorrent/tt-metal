@@ -12,8 +12,6 @@ blackhole:
         start: [0, 0]
         end: [0, 0]
 
-      storage_cores:
-        []
 
       dispatch_cores:
         []
