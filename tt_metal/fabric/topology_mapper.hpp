@@ -46,23 +46,24 @@ using PhysicalAdjacencyMap = std::unordered_map<tt::tt_metal::AsicID, std::vecto
  * @brief Centralized representation of chip topology information
  *
  * This struct contains all information about a chip's topology mapping.
- * Fields can be partially filled out incrementally during mapping construction.
+ * Fields are filled incrementally during mapping construction.
+ * Uninitialized fields remain in their default state until filled.
  */
 struct ChipTopologyInfo {
     // Core mapping information
-    std::optional<FabricNodeId> fabric_node_id;  // Optional - filled during mapping
-    tt::tt_metal::AsicID asic_id;
-    ChipId physical_chip_id;  // May be 0 initially for remote ASICs
+    FabricNodeId fabric_node_id{MeshId{0}, 0};  // Filled during mapping
+    tt::tt_metal::AsicID asic_id{0};
+    ChipId physical_chip_id = 0;  // May be 0 initially for remote ASICs
 
     // Mesh coordinate information
-    std::optional<MeshCoordinate> mesh_coord;
+    MeshCoordinate mesh_coord{0, 0};  // Default to 2D coordinate (0, 0), filled during mapping
 
     // Host information
-    std::optional<MeshHostRankId> mesh_host_rank;
-    std::optional<HostName> hostname;
+    MeshHostRankId mesh_host_rank{0};
+    HostName hostname;
 
-    // Constructor for initialization with ASIC ID only (other fields filled incrementally)
-    ChipTopologyInfo(tt::tt_metal::AsicID a_id) : asic_id(a_id), physical_chip_id(0) {}
+    // Flag to track if this entry has been mapped (fabric_node_id is valid)
+    bool is_mapped = false;
 };
 
 class TopologyMapper {
