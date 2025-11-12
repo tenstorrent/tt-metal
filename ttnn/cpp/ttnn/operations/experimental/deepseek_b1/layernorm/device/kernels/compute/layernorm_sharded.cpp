@@ -2,6 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
+    DPRINT << "======" << ENDL();
+    for (uint8_t r = 0; r < 32; ++r) {
+        SliceRange sr_left = SliceRange{.h0 = r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 16, .ws = 1};
+        SliceRange sr_right = SliceRange{.h0 = r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 17, .w1 = 32, .ws = 1};
+        DPRINT << (uint)r << ": " << TileSlice(cb_id, tile_id, sr_left, false, untilize) << " "
+               << TileSlice(cb_id, tile_id, sr_right, true, untilize) << ENDL();
+    }
+    DPRINT << "++++++" << ENDL();
+}
+
 #define REDUCE_OP PoolType::SUM
 #define REDUCE_DIM ReduceDim::REDUCE_ROW
 
@@ -100,6 +111,7 @@ void MAIN {
     mul_tiles_init(cb_xmm, cb_xmm);
     index_h_offset = 0;
     cb_reserve_back(cb_xmm2, num_tiles_per_block);
+    DPRINT << "num tiles per block: " << num_tiles_per_block << ENDL();
     for (uint32_t i = 0; i < block_h; i++) {
         index_subblock_w_offset = 0;
         for (uint32_t j = 0; j < num_subblocks_w; j++) {
@@ -119,6 +131,7 @@ void MAIN {
         index_h_offset += block_w;
     }
     cb_push_back(cb_xmm2, num_tiles_per_block);
+    print_full_tile(cb_xmm2, 0, true);
 
     reconfig_data_format(cb_xmm, cb_xmm2, cb_xmm, cb_scaler);
 

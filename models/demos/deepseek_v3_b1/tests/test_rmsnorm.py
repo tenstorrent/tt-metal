@@ -15,7 +15,8 @@ def test_rmsnorm(device):
     grid_size = ttnn.CoreGrid(y=8, x=6)
     num_cores = grid_size.num_cores
 
-    torch_input = torch.randn((1, 1536), dtype=torch.bfloat16)
+    # torch_input = torch.randn((1, 1536), dtype=torch.bfloat16)
+    torch_input = torch.ones((1, 1536), dtype=torch.bfloat16)
     torch_weight = torch.ones((1536,), dtype=torch.bfloat16)
     torch_bias = torch.zeros((1536,), dtype=torch.bfloat16)
 
@@ -56,11 +57,15 @@ def test_rmsnorm(device):
         weight=ttnn_weight,
     )
 
+    torch.set_printoptions(threshold=10_000)
+
     # Convert back to torch for comparison
     output_torch = ttnn.to_torch(ttnn_output)
 
     torch_rms = torch.nn.RMSNorm(1536)
     torch_output = torch_rms(torch_input) * torch_weight + torch_bias
+
+    breakpoint()
 
     # Compute PCC (Pearson Correlation Coefficient) for accuracy check
     output_flat = output_torch.flatten().float()
