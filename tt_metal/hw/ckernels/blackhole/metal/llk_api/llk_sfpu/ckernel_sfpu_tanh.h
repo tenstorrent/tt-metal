@@ -25,7 +25,7 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_continued_fraction_(sfpi::vFloat val) {
     sfpi::vFloat numerator = x * (135135.f + x2 * (17326.f + x2 * (378.f + x2)));
 
     constexpr float denominator_coefs[] = {135135.f, 62370.f, 3150.f, 28.f};
-    sfpi::vFloat denominator = PolynomialEvaluator<4, sfpi::vFloat, float>::eval(denominator_coefs, x2);
+    sfpi::vFloat denominator = PolynomialEvaluator::eval(x2, 135135.f, 62370.f, 3150.f, 28.f);
 
     sfpi::vFloat result = numerator * ckernel::sfpu::_sfpu_reciprocal_<2>(denominator);
 
@@ -52,15 +52,25 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_polynomial_(sfpi::vFloat x) {
     // val * (0.999004364013671875 + val * (3.0897438526153564453125e-2 + val * (-0.4890659749507904052734375 + val *
     // (0.281917631626129150390625 + val * (-6.6649019718170166015625e-2 + val *
     // (5.876733921468257904052734375e-3))))));
-    sfpi::vFloat result = POLYVAL7<sfpi::vFloat>(
-        sfpi::vConstFloatPrgm0,
-        sfpi::vConstFloatPrgm1,
-        sfpi::vConstFloatPrgm2,
-        -0.4890659749507904052734375,
-        3.0897438526153564453125e-2,
-        0.999004364013671875,
+    // sfpi::vFloat result = POLYVAL7<sfpi::vFloat>(
+    //     sfpi::vConstFloatPrgm0,
+    //     sfpi::vConstFloatPrgm1,
+    //     sfpi::vConstFloatPrgm2,
+    //     -0.4890659749507904052734375,
+    //     3.0897438526153564453125e-2,
+    //     0.999004364013671875,
+    //     sfpi::vConst0,
+    //     val);
+
+    sfpi::vFloat result = PolynomialEvaluator::eval(
+        val,
         sfpi::vConst0,
-        val);
+        0.999004364013671875,
+        3.0897438526153564453125e-2,
+        -0.4890659749507904052734375,
+        sfpi::vConstFloatPrgm2,
+        sfpi::vConstFloatPrgm1,
+        sfpi::vConstFloatPrgm0);
 
     // For larger x, the polynomial approximation may exceed 1.0.
     // Since tanh(x) is bounded by [-1, 1], we clamp output to 1.0.
