@@ -659,15 +659,18 @@ jobs:
             runner_label: ${{ github.event.inputs['runner-label'] || 'N150' }}
             generate_mode: all
             exclude_single: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && (github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)')) && 'true' || 'false' }}
+            exclude_split: 'false'
           # Entry 2: Scheduled/comprehensive OR manual dispatch with "ALL SWEEPS" - N150 for non-CCL modules
           - arch: ${{ github.event.inputs.arch || 'wormhole_b0' }}
             runner_label: N150
             generate_mode: non_ccl
+            exclude_single: 'false'
             exclude_split: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' && github.event.inputs.sweep_name != 'ALL SWEEPS (Comprehensive)' && 'true' || 'false' }}
           # Entry 3: Scheduled/comprehensive OR manual dispatch with "ALL SWEEPS" - n300-llmbox for CCL modules only
           - arch: ${{ github.event.inputs.arch || 'wormhole_b0' }}
             runner_label: n300-llmbox
             generate_mode: ccl_only
+            exclude_single: 'false'
             exclude_split: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' && github.event.inputs.sweep_name != 'ALL SWEEPS (Comprehensive)' && 'true' || 'false' }}
         exclude:
           # Exclude Entry 1 for scheduled runs or manual dispatch with "ALL SWEEPS"
