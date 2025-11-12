@@ -648,6 +648,10 @@ void MeshDevice::clear_program_cache() {
     program_cache_->clear();
 }
 
+bool MeshDevice::IsProgramCacheEnabled(){
+    return program_cache_->is_enabled();
+}
+
 void MeshDevice::disable_and_clear_program_cache() {
     log_info(tt::LogMetal, "Disabling and clearing program cache on MeshDevice {}", this->id());
     if (program_cache_->is_enabled()) {

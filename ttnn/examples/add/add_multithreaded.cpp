@@ -20,15 +20,16 @@ using namespace ttnn;
 int main(int /*argc*/, char** /*argv*/) {
     // Open device
     auto device = open_mesh_device(/*device_id=*/0, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE);
-
+    std::cout << "Is program cache enabled: " << device.get()->IsProgramCacheEnabled() << std::endl;
     // Enable program cache if environment variable is set
     bool program_cache_enabled = false;
-    const char* enable_cache_env = std::getenv("ENABLE_PROGRAM_CACHE");
-    if (enable_cache_env != nullptr && std::string(enable_cache_env) == "1") {
-        std::cout << "Enabling program cache..." << std::endl;
-        device.get()->enable_program_cache();
+    const char* disable_cache_env = std::getenv("DISABLE_PROGRAM_CACHE");
+    if (disable_cache_env != nullptr && std::string(disable_cache_env) == "1") {
+        std::cout << "Disabling program cache..." << std::endl;
+        device.get()->disable_and_clear_program_cache();
         program_cache_enabled = true;
     }
+    std::cout << "Is program cache enabled after explicit disable: " << device.get()->IsProgramCacheEnabled() << std::endl;
 
     // Create shape for 32x32 tensors
     uint32_t h = 32;
