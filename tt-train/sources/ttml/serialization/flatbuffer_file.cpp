@@ -16,6 +16,8 @@
 #include <vector>
 
 // Include generated FlatBuffer code
+#include "tar_reader.hpp"
+#include "tar_writer.hpp"
 #include "ttml_tensor_generated.h"
 
 namespace ttml::serialization {
@@ -191,36 +193,38 @@ public:
         auto root = ttml::flatbuffer::CreateTTMLData(builder, pairs_vector);
         builder.Finish(root);
 
-        // Write to file
-        std::ofstream ofs(filename, std::ios::binary);
-        if (ofs.is_open()) {
-            ofs.write(
-                reinterpret_cast<const char*>(builder.GetBufferPointer()),
-                static_cast<std::streamsize>(builder.GetSize()));
-            ofs.close();
-        } else {
-            throw std::runtime_error("Unable to open file for writing: " + filename);
-        }
+        // Build flatbuffer in memory
+        const void* flatbuffer_data = builder.GetBufferPointer();
+        size_t flatbuffer_size = builder.GetSize();
+
+        // Create tarball in memory
+        TarWriter tar_writer;
+        tar_writer.add_file("data.flatbuffer", flatbuffer_data, flatbuffer_size);
+
+        // Write tarball to file (single write operation)
+        tar_writer.write_to_file(filename);
     }
 
     // Deserialization method
     void deserialize(const std::string& filename) {
-        // Read the file content
-        std::ifstream ifs(filename, std::ios::binary);
-        if (!ifs.is_open()) {
-            throw std::runtime_error("Unable to open file for reading: " + filename);
+        // Read tarball and extract flatbuffer data
+        TarReader tar_reader;
+        tar_reader.read_from_file(filename);
+
+        if (!tar_reader.has_file("data.flatbuffer")) {
+            throw std::runtime_error("Tarball does not contain data.flatbuffer: " + filename);
         }
-        std::vector<uint8_t> buffer((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
-        ifs.close();
+
+        std::vector<uint8_t> buffer = tar_reader.get_file("data.flatbuffer");
 
         if (buffer.empty()) {
-            throw std::runtime_error("File is empty: " + filename);
+            throw std::runtime_error("FlatBuffer data is empty in tarball: " + filename);
         }
 
         // Verify and get the root
         flatbuffers::Verifier verifier(buffer.data(), buffer.size());
         if (!ttml::flatbuffer::VerifyTTMLDataBuffer(verifier)) {
-            throw std::runtime_error("Invalid FlatBuffer data in file: " + filename);
+            throw std::runtime_error("Invalid FlatBuffer data in tarball: " + filename);
         }
 
         auto* ttml_data = ttml::flatbuffer::GetTTMLData(buffer.data());
