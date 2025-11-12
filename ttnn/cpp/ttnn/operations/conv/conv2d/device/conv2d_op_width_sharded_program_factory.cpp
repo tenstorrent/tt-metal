@@ -447,7 +447,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_width_sharded(
         pack_relu,
         weight_block_w_ntiles <= 8,  // packer_untilize
         packer_l1_acc,
-        has_bias};
+        has_bias,
+        static_cast<uint32_t>(false)};
 
     std::vector<uint32_t> activation_kernel_compile_args = {
         (uint32_t)stride_w,
