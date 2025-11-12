@@ -11,6 +11,8 @@
 namespace ttnn {
 
 std::string to_string(const tt::tt_metal::Tensor& tensor) {
+    tt::tt_metal::GraphTracker::instance().track_function_start("ttnn::to_string", tensor);
+
     const auto& shape = tensor.logical_shape();
 
     if (!tensor.is_allocated()) {
@@ -34,7 +36,9 @@ std::string to_string(const tt::tt_metal::Tensor& tensor) {
             }
         }
     }
-    return tt::tt_metal::tensor_impl::to_string_wrapper(tensor);
+    auto result = tt::tt_metal::tensor_impl::to_string_wrapper(tensor);
+    tt::tt_metal::GraphTracker::instance().track_function_end();
+    return result;
 }
 
 }  // namespace ttnn
