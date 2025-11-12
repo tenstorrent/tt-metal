@@ -1,5 +1,5 @@
 graph_templates {
-  key: "5_wh_galaxy_xy_torus_superpod"
+  key: "wh_galaxy_xy_torus"
   value {
     children {
       name: "node1"
@@ -12,7 +12,7 @@ graph_templates {
 
 # Root instance with concrete host mappings
 root_instance {
-  template_name: "5_wh_galaxy_xy_torus_superpod"
+  template_name: "wh_galaxy_xy_torus"
   child_mappings {
     key: "node1"
     value { host_id: 0 }

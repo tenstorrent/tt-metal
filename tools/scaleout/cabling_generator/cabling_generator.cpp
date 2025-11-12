@@ -14,10 +14,8 @@
 #include <filesystem>
 #include <fstream>
 #include <google/protobuf/text_format.h>
-#include <tt_stl/assert.hpp>
 #include <tt_stl/caseless_comparison.hpp>
 #include <tt_stl/reflection.hpp>
-#include <tt_stl/span.hpp>
 
 // Add protobuf includes
 #include "protobuf/cluster_config.pb.h"
@@ -213,7 +211,7 @@ std::unique_ptr<ResolvedGraphInstance> build_graph_instance_impl(
         if (child_def.has_node_ref()) {
             // Leaf node - create node
             if (child_mapping.mapping_case() != tt::scaleout_tools::cabling_generator::proto::ChildMapping::kHostId) {
-                TT_THROW("Node child must have host_id mapping: {}", child_name);
+                throw std::runtime_error("Node child must have host_id mapping: " + child_name);
             }
 
             HostId host_id = HostId(child_mapping.host_id());
@@ -224,16 +222,13 @@ std::unique_ptr<ResolvedGraphInstance> build_graph_instance_impl(
                 if (*host_id < deployment_descriptor->hosts().size()) {
                     const auto& deployment_host = deployment_descriptor->hosts()[*host_id];
                     if (!deployment_host.node_type().empty() && deployment_host.node_type() != node_descriptor_name) {
-                        TT_THROW(
-                            "Node type mismatch for host {} (host_id {}): deployment specifies '{}' "
-                            "but cluster configuration expects '{}'",
-                            deployment_host.host(),
-                            *host_id,
-                            deployment_host.node_type(),
-                            node_descriptor_name);
+                        throw std::runtime_error(
+                            "Node type mismatch for host " + deployment_host.host() + " (host_id " +
+                            std::to_string(*host_id) + "): deployment specifies '" + deployment_host.node_type() +
+                            "' but cluster configuration expects '" + node_descriptor_name + "'");
                     }
                 } else {
-                    TT_THROW("Host ID {} not found in deployment", *host_id);
+                    throw std::runtime_error("Host ID " + std::to_string(*host_id) + " not found in deployment");
                 }
             }
 
@@ -244,7 +239,7 @@ std::unique_ptr<ResolvedGraphInstance> build_graph_instance_impl(
             // Non-leaf node - recursively build subgraph
             if (child_mapping.mapping_case() !=
                 tt::scaleout_tools::cabling_generator::proto::ChildMapping::kSubInstance) {
-                TT_THROW("Graph child must have sub_instance mapping: {}", child_name);
+                throw std::runtime_error("Graph child must have sub_instance mapping: " + child_name);
             }
 
             resolved->subgraphs[child_name] = build_graph_instance_impl(

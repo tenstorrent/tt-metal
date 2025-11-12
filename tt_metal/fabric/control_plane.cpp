@@ -1514,7 +1514,7 @@ static void write_to_all_cores(
             }
             break;
         }
-        default: TT_THROW("Unsupported core type {}", static_cast<int>(core_type));
+        default: TT_THROW("Unsupported core type {}", enchantum::to_string(core_type));
     }
 }
 
@@ -2776,13 +2776,8 @@ bool ControlPlane::is_fabric_config_valid(tt::tt_fabric::FabricConfig fabric_con
     };
 
     if (torus_fabric_configs.count(fabric_config)) {
-        try {
-            validate_torus_setup(fabric_config);
-            return true;  // Validation passed if no exception was thrown
-        } catch (const std::exception& e) {
-            log_warning(tt::LogFabric, "Fabric configuration validation failed: {}", e.what());
-            return false;
-        }
+        validate_torus_setup(fabric_config);
+        return true;  // Validation passed if no exception was thrown
     }
 
     // Non-torus configurations are valid by default since we always have at least mesh topology,
@@ -2794,7 +2789,7 @@ void ControlPlane::validate_torus_setup(tt::tt_fabric::FabricConfig fabric_confi
     TT_ASSERT(physical_system_descriptor_ != nullptr, "Physical system descriptor not initialized");
 
     auto all_hostnames = physical_system_descriptor_->get_all_hostnames();
-    auto cabling_descriptor_path = get_cabling_descriptor_path(fabric_config);
+    auto cabling_descriptor_path = get_galaxy_cabling_descriptor_path(fabric_config);
     // Check if the cabling descriptor file exists
     TT_ASSERT(std::filesystem::exists(cabling_descriptor_path),
               "Cabling descriptor file not found: {}", cabling_descriptor_path);
@@ -2811,33 +2806,38 @@ void ControlPlane::validate_torus_setup(tt::tt_fabric::FabricConfig fabric_confi
         false                       // assert_on_connection_mismatch
     );
 
-    log_debug(tt::LogFabric, "Torus validation passed for configuration: {}", static_cast<int>(fabric_config));
+    log_debug(tt::LogFabric, "Torus validation passed for configuration: {}", enchantum::to_string(fabric_config));
 }
 
-std::string ControlPlane::get_cabling_descriptor_path(tt::tt_fabric::FabricConfig fabric_config) const {
-    static const std::string X_TORUS_PATH = "tools/tests/scaleout/cabling_descriptors/wh_galaxy_x_torus_superpod.textproto";
-    static const std::string Y_TORUS_PATH = "tools/tests/scaleout/cabling_descriptors/wh_galaxy_y_torus_superpod.textproto";
-    static const std::string XY_TORUS_PATH = "tools/tests/scaleout/cabling_descriptors/wh_galaxy_xy_torus_superpod.textproto";
+std::string ControlPlane::get_galaxy_cabling_descriptor_path(tt::tt_fabric::FabricConfig fabric_config) const {
+    auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
+    TT_FATAL(
+        cluster_type == tt::tt_metal::ClusterType::GALAXY,
+        "get_galaxy_cabling_descriptor_path is only supported on Galaxy systems, but cluster type is {}",
+        enchantum::to_string(cluster_type));
+
+    static constexpr std::string_view X_TORUS_PATH =
+        "tools/tests/scaleout/cabling_descriptors/wh_galaxy_x_torus_superpod.textproto";
+    static constexpr std::string_view Y_TORUS_PATH =
+        "tools/tests/scaleout/cabling_descriptors/wh_galaxy_y_torus_superpod.textproto";
+    static constexpr std::string_view XY_TORUS_PATH =
+        "tools/tests/scaleout/cabling_descriptors/wh_galaxy_xy_torus_superpod.textproto";
 
     // Get fabric type from config and map to cabling descriptor paths
     FabricType fabric_type = get_fabric_type(fabric_config);
 
-    static const std::unordered_map<FabricType, std::string> cabling_map = {
-        {FabricType::TORUS_X, X_TORUS_PATH},
-        {FabricType::TORUS_Y, Y_TORUS_PATH},
-        {FabricType::TORUS_XY, XY_TORUS_PATH}
-    };
+    static constexpr std::array<std::pair<FabricType, std::string_view>, 3> cabling_map = {
+        {{FabricType::TORUS_X, X_TORUS_PATH},
+         {FabricType::TORUS_Y, Y_TORUS_PATH},
+         {FabricType::TORUS_XY, XY_TORUS_PATH}}};
 
-    auto it = cabling_map.find(fabric_type);
-    if (it == cabling_map.end()) {
-        log_warning(tt::LogFabric, "Unknown torus configuration: {}", static_cast<int>(fabric_config));
-        return "";  // Return empty string for unknown configurations
-    }
+    auto it = std::find_if(
+        cabling_map.begin(), cabling_map.end(), [fabric_type](const auto& pair) { return pair.first == fabric_type; });
+    TT_FATAL(it != cabling_map.end(), "Unknown torus configuration: {}", enchantum::to_string(fabric_config));
 
     const auto& root_dir = tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir();
-    return root_dir + it->second;
+    return root_dir + std::string(it->second);
 }
-
 
 ControlPlane::~ControlPlane() = default;
 

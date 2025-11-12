@@ -387,7 +387,7 @@ private:
 
     // This method performs validation through assertions and exceptions.
     void validate_torus_setup(tt::tt_fabric::FabricConfig fabric_config) const;
-    std::string get_cabling_descriptor_path(tt::tt_fabric::FabricConfig fabric_config) const;
+    std::string get_galaxy_cabling_descriptor_path(tt::tt_fabric::FabricConfig fabric_config) const;
 };
 
 }  // namespace tt::tt_fabric
