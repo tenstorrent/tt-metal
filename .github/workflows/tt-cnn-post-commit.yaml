@@ -77,7 +77,6 @@ jobs:
     runs-on: >-
       ${{
         (inputs.runner-label == 'P100') && fromJSON(format('["in-service", "cloud-virtual-machine", "{0}"]', inputs.runner-label))
-        || (inputs.runner-label == 'P150b' && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
         || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
       }}
     container:
