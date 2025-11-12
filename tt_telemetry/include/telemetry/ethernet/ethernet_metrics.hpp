@@ -213,9 +213,9 @@ private:
     std::shared_ptr<FabricTelemetryReader> telemetry_reader_;
 };
 
-class FabricHeartbeatTxMetric: public UIntMetric {
+class FabricTxHeartbeatMetric : public UIntMetric {
 public:
-    FabricHeartbeatTxMetric(
+    FabricTxHeartbeatMetric(
         tt::tt_metal::TrayID tray_id,
         tt::tt_metal::ASICLocation asic_location,
         uint32_t channel,
@@ -275,9 +275,9 @@ private:
     std::shared_ptr<FabricTelemetryReader> telemetry_reader_;
 };
 
-class FabricHeartbeatRxMetric: public UIntMetric {
+class FabricRxHeartbeatMetric : public UIntMetric {
 public:
-    FabricHeartbeatRxMetric(
+    FabricRxHeartbeatMetric(
         tt::tt_metal::TrayID tray_id,
         tt::tt_metal::ASICLocation asic_location,
         uint32_t channel,
