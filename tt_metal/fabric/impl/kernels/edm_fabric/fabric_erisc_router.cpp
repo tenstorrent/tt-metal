@@ -2694,6 +2694,7 @@ void kernel_main() {
     uint32_t local_tensix_relay_worker_registration_id = 0;
     uint32_t local_tensix_relay_worker_location_info_address = 0;
     uint32_t local_tensix_relay_free_slots_stream_id = 0;
+    uint32_t local_tensix_relay_connection_buffer_index_id = 0;
     if constexpr (udm_mode) {
         if (has_local_tensix_relay_connection) {
             local_tensix_relay_buffer_base_address = get_arg_val<uint32_t>(arg_idx++);
@@ -2702,6 +2703,7 @@ void kernel_main() {
             local_tensix_relay_worker_registration_id = get_arg_val<uint32_t>(arg_idx++);
             local_tensix_relay_worker_location_info_address = get_arg_val<uint32_t>(arg_idx++);
             local_tensix_relay_free_slots_stream_id = get_arg_val<uint32_t>(arg_idx++);
+            local_tensix_relay_connection_buffer_index_id = get_arg_val<uint32_t>(arg_idx++);
         }
     }
 
@@ -2943,14 +2945,13 @@ void kernel_main() {
     // Setup local tensix relay connection (UDM mode only)
     // This is a separate connection path from downstream EDM connections
     // Relay handles forwarding packets to local chip workers
-    // Use my_direction for indexing - this direction is not used by other downstream adapters
+    // Uses dedicated stream IDs and L1 locations to avoid assumptions about direction indexing
     // LOCAL_RELAY_NUM_BUFFERS comes from compile-time args (propagated from relay config)
     RouterToRouterSender<LOCAL_RELAY_NUM_BUFFERS> local_relay_interface;
     if constexpr (udm_mode) {
         if (has_local_tensix_relay_connection) {
             // Reuse RouterToRouterSender for relay connection
             // Relay is just another sender interface, but pointing to local tensix instead of remote router
-            // Relay connection is ALWAYS 2D (direction-based), use my_direction for all indexing
 
             new (&local_relay_interface) RouterToRouterSender<LOCAL_RELAY_NUM_BUFFERS>(
                 true,  // persistent_mode - relay is always a persistent connection
@@ -2961,14 +2962,15 @@ void kernel_main() {
                 local_tensix_relay_worker_registration_id,
                 local_tensix_relay_worker_location_info_address,
                 channel_buffer_size,
-                local_sender_channel_connection_buffer_index_id[my_direction],  // Use my_direction index
+                local_tensix_relay_connection_buffer_index_id,  // From runtime args - dedicated L1 location for relay
+                                                                // connection
                 0,        // worker read counter address - unused for Router->Relay (uses stream registers)
                 nullptr,  // teardown semaphore - router never calls close on relay
                 0,        // buffer_index_local_addr - scratch space for noc reads
                 // Remote stream: relay's free slots stream (what relay publishes) - from runtime args
                 StreamId{local_tensix_relay_free_slots_stream_id},
-                // Local stream: our copy of relay's free slots (direction-based for 2D)
-                StreamId{receiver_channel_free_slots_stream_ids[my_direction]},
+                // Local stream: our copy of relay's free slots - dedicated stream ID for relay
+                StreamId{tensix_relay_local_free_slots_stream_id},
                 receiver_channel_forwarding_data_cmd_buf_ids[0],
                 receiver_channel_forwarding_sync_cmd_buf_ids[0]);
 
