@@ -116,6 +116,8 @@ jobs:
       - name: Verify Test 4 Results
         run: |
           echo "Test 4 Results:"
+          echo "  Latest semver: ${{ steps.test-dev.outputs.latest_semver }}"
+          echo "  New version: ${{ steps.test-dev.outputs.new_version }}"
           echo "  Final version: ${{ steps.test-dev.outputs.final_version }}"
 
           # Dev version should have -dev suffix with date
@@ -123,6 +125,13 @@ jobs:
             echo "FAIL: Expected final_version to contain -dev suffix"
             exit 1
           fi
+
+          # Dev tag should always increment minor version from latest (v2.1.0 -> v2.2.0)
+          if [ "${{ steps.test-dev.outputs.new_version }}" != "v2.2.0" ]; then
+            echo "FAIL: Expected dev tag to increment minor version to v2.2.0, got ${{ steps.test-dev.outputs.new_version }}"
+            exit 1
+          fi
+
           echo "PASS: Test 4 passed"
 
   test-version-bumping:
