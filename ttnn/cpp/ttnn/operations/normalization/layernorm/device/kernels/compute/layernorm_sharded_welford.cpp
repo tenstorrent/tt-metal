@@ -15,6 +15,7 @@
 #include "compute_kernel_api/welford.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "ttnn/operations/normalization/kernel_util/compute/combine_welford.h"
+#include "ttnn/operations/normalization/kernel_util/compute/memory.h"
 
 /**
  * @brief This kernel computes layernorm for sharded tensors using
@@ -61,10 +62,10 @@
  * calculation is done using the global mean and 1/sqrt(var + eps) results.
  *
  * @note Depending on the tensor and core grid shape, some cores may
- *       not participate in the reduction (i.e., `is_allgather_worker`
- *       will be false). These cores just receive the multicasted
- *       global results and perform the rest of layernorm for their
- *       row(s) width slices.
+ *       not participate in the combine (i.e., `is_allgather_worker`
+ *       will be false). These cores do their partial reduction and
+ *       receive the multicasted global results and perform
+ *       the rest of layernorm for their row(s) width slices.
  */
 namespace NAMESPACE {
 namespace {
@@ -122,13 +123,13 @@ void MAIN {
     constexpr uint32_t last_tile_w = get_compile_time_arg_val(15);
     constexpr uint32_t W = get_compile_time_arg_val(16);
     constexpr uint32_t eps = get_compile_time_arg_val(17);
+    constexpr uint32_t per_core_recip_lut_size = get_compile_time_arg_val(18);
 
     // ---------------------------------------------------------------------------
     // CB definitions
     // ---------------------------------------------------------------------------
     constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
     constexpr uint32_t cb_in1 = tt::CBIndex::c_1;
-    constexpr uint32_t cb_eps = tt::CBIndex::c_3;
     constexpr uint32_t cb_gamma = tt::CBIndex::c_5;
     constexpr uint32_t cb_beta = tt::CBIndex::c_6;
     constexpr uint32_t cb_x = tt::CBIndex::c_24;          // x minus mean
@@ -141,7 +142,7 @@ void MAIN {
                                                           // (workaround for bug in transpose_wh_dest)
     constexpr uint32_t cb_fusion = tt::CBIndex::c_18;     // stream gamma/beta
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
-
+    constexpr uint32_t cb_reciprocals = tt::CBIndex::c_25;  // LUT of pre-computed reciprocals for Welford's algorithm
     constexpr uint32_t cb_im = (do_gamma | do_beta) ? cb_x : cb_out;
     constexpr uint32_t cb_outgamma = do_beta ? cb_fusion : cb_out;
 #ifdef FUSE_PRE_ADD
@@ -193,6 +194,11 @@ void MAIN {
     constexpr uint32_t welford_input_dst = 0;
     constexpr uint32_t welford_mean_dst = 1;
     constexpr uint32_t welford_var_dst = 2;
+
+    // Pointer to the reciprocal LUT
+
+    using recip_lut_t = std::array<uint32_t, per_core_recip_lut_size>;
+    auto p_reciprocals = norm::kernel_util::compute::memory::get_pointer_to_cb_data<recip_lut_t>(cb_reciprocals, 0);
 
     int index_subblock_w_offset = 0;
     int index_h_offset = 0;
@@ -252,8 +258,8 @@ void MAIN {
         tile_regs_acquire();
         for (uint32_t w = 0; w < num_reduce_tiles_per_block_h; w++) {
             transpose_wh_tile(cb_in, w + index_h_offset, welford_input_dst);
-            welford_tile<welford_input_dst, welford_mean_dst, welford_var_dst, true, 0>(
-                w * tile_width, partial_reduce_W, 0, {});
+            welford_tile<welford_input_dst, welford_mean_dst, welford_var_dst, true, per_core_recip_lut_size>(
+                w * tile_width, partial_reduce_W, 0, *p_reciprocals);
         }
         // We should transpose back to columns here
         // However, transpose_wh_dest() is currently buggy.
@@ -315,7 +321,7 @@ void MAIN {
     // ---------------------------------------------------------------------------
     cb_wait_front(cb_ex_global, num_block_ht_result_tiles);
     cb_reserve_back(cb_transpose, num_block_ht_result_tiles);
-    transpose_wh_init(cb_ex_global, cb_transpose);
+    transpose_wh_init_short(cb_ex_global);
     uint32_t processed_tiles = 0;
     while (processed_tiles < num_block_ht_result_tiles) {
         uint32_t tiles_to_load = std::min(num_block_ht_result_tiles - processed_tiles, num_dest_regs);

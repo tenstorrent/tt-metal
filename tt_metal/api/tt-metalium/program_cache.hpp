@@ -130,7 +130,7 @@ struct ProgramCache {
 private:
     bool is_enabled_ = true;
     bool allow_cache_misses_ = true;
-    std::unordered_map<uint64_t, CachedProgramFactory> cache_{};
+    std::unordered_map<uint64_t, CachedProgramFactory> cache_;
 };
 
 }  // namespace tt::tt_metal::program_cache::detail

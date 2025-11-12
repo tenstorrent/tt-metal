@@ -206,9 +206,9 @@ class WanAttention:
         kv_input = prompt_1BLP if prompt_1BLP is not None else spatial_1BND
 
         # Project spatial
-        q_1BNF = self.to_q(spatial_1BND, core_grid=self.core_grid, compute_kernel_config=self.mm_compute_kernel_config)
-        k_1BNF = self.to_k(kv_input, core_grid=self.core_grid, compute_kernel_config=self.mm_compute_kernel_config)
-        v_1BNF = self.to_v(kv_input, core_grid=self.core_grid, compute_kernel_config=self.mm_compute_kernel_config)
+        q_1BNF = self.to_q(spatial_1BND, compute_kernel_config=self.mm_compute_kernel_config)
+        k_1BNF = self.to_k(kv_input, compute_kernel_config=self.mm_compute_kernel_config)
+        v_1BNF = self.to_v(kv_input, compute_kernel_config=self.mm_compute_kernel_config)
 
         # Norm spatial before splitting heads
         q_1BNF = self.norm_q(q_1BNF, compute_kernel_config=self.rmsnorm_compute_kernel_config)
@@ -268,7 +268,7 @@ class WanAttention:
                     num_links=self.ccl_manager.num_links,
                     cluster_axis=self.parallel_config.sequence_parallel.mesh_axis,
                     mesh_device=self.mesh_device,
-                    topology=self.ccl_manager.topology,
+                    topology=ttnn.Topology.Linear,  # RJA always uses Linear topology
                     subdevice_id=self.ccl_manager.ccl_sub_device_id,
                     ccl_core_grid_offset=(0, self.sdpa_worker_grid[1]),
                 )
@@ -301,8 +301,6 @@ class WanAttention:
                 spatial_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
             )
 
-        spatial_1BND = self.to_out(
-            spatial_1BND, core_grid=self.core_grid, compute_kernel_config=self.mm_compute_kernel_config
-        )
+        spatial_1BND = self.to_out(spatial_1BND, compute_kernel_config=self.mm_compute_kernel_config)
 
         return spatial_1BND

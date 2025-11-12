@@ -13,6 +13,7 @@ jobs:
     secrets: inherit
     with:
       build-wheel: true
+      build-umd-tests: true
       version: 22.04
   galaxy-unit-tests:
     needs: build-artifact

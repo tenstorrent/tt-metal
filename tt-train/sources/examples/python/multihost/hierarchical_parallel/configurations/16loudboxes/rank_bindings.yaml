@@ -1,0 +1,37 @@
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+  - rank: 1
+    mesh_id: 1
+  - rank: 2
+    mesh_id: 2
+  - rank: 3
+    mesh_id: 3
+  - rank: 4
+    mesh_id: 4
+  - rank: 5
+    mesh_id: 5
+  - rank: 6
+    mesh_id: 6
+  - rank: 7
+    mesh_id: 7
+  - rank: 8
+    mesh_id: 8
+  - rank: 9
+    mesh_id: 9
+  - rank: 10
+    mesh_id: 10
+  - rank: 11
+    mesh_id: 11
+  - rank: 12
+    mesh_id: 12
+  - rank: 13
+    mesh_id: 13
+  - rank: 14
+    mesh_id: 14
+  - rank: 15
+    mesh_id: 15
+
+global_env:
+  TT_METAL_HOME: "/home/ttuser/git/tt-metal"
+mesh_graph_desc_path: "configurations/16loudboxes/mgd.yaml"

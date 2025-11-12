@@ -32,9 +32,6 @@
  * https://www.tablesgenerator.com/markdown_tables
  * */
 
-class CoreRange;
-class CoreRangeSet;
-
 namespace tt {
 
 namespace tt_metal {
@@ -48,6 +45,8 @@ class CircularBuffer;
 struct Event;
 class Buffer;
 class GlobalSemaphore;
+class CoreRange;
+class CoreRangeSet;
 
 // ==================================================
 //                  HOST API: Device management
@@ -61,7 +60,7 @@ class GlobalSemaphore;
  *
  * | Argument  | Description                                 | Type                | Valid range | Required |
  * |-----------|---------------------------------------------|---------------------|-------------|----------|
- * | root_dir  | Path to the root directory                  | const std::string & |             | No, will fallback to TT_METAL_HOME Environment Variable     |
+ * | root_dir  | Path to the root directory                  | const std::string & |             | No       |
  */
 // clang-format on
 void SetRootDir(const std::string& root_dir);

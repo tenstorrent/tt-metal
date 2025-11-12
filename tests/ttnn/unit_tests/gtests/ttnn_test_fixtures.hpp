@@ -21,6 +21,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "hostdevcommon/common_values.hpp"
+#include "common/tt_backend_api_types.hpp"
 
 using namespace tt::tt_metal;  // For test
 
@@ -59,7 +60,7 @@ protected:
 
     void TearDown() override { device_->close(); }
 
-    TTNNFixtureWithDevice() : TTNNFixtureBase() {}
+    TTNNFixtureWithDevice() = default;
 
     TTNNFixtureWithDevice(int trace_region_size, int l1_small_size) :
         TTNNFixtureBase(trace_region_size, l1_small_size) {}

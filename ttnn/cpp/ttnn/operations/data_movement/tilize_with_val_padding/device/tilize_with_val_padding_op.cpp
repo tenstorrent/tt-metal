@@ -22,8 +22,9 @@ void TilizeWithValPadding::validate(const std::vector<Tensor>& input_tensors) co
     TT_FATAL(input_tensor_a.layout() == Layout::ROW_MAJOR, "Can only tilize row major data");
     TT_FATAL(
         input_tensor_a.dtype() == DataType::BFLOAT16 or input_tensor_a.dtype() == DataType::INT32 or
-            input_tensor_a.dtype() == DataType::UINT32 or input_tensor_a.dtype() == DataType::FLOAT32,
-        "Can only tilize bfloat16/float32 or int32/uint32 tensors");
+            input_tensor_a.dtype() == DataType::UINT32 or input_tensor_a.dtype() == DataType::FLOAT32 or
+            input_tensor_a.dtype() == DataType::UINT16,
+        "Can only tilize bfloat16/float32 or int32/uint32/uint16 tensors");
 
     TT_FATAL(input_shape.rank() >= 1, "Input tensor must be of rank >= 1, but its shape is {}", input_shape);
 
@@ -55,7 +56,13 @@ void TilizeWithValPadding::validate(const std::vector<Tensor>& input_tensors) co
             "Output tensor must have the same memory layout as input tensor");
         for (uint32_t i = 0; i < input_tensor_a.padded_shape().rank(); i++) {
             if (i != input_shape.rank() - 2) {
-                TT_FATAL(input_shape[i] == this->output_padded_shape[i], "Error");
+                TT_FATAL(
+                    input_shape[i] == this->output_padded_shape[i],
+                    "Input shape[{}] ({}) must equal output padded shape[{}] ({})",
+                    i,
+                    input_shape[i],
+                    i,
+                    this->output_padded_shape[i]);
             }
         }
     }

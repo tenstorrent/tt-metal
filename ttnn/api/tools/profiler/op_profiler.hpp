@@ -387,7 +387,7 @@ inline json get_base_json(
     if (not attributes.empty()) {
         ZoneScopedN("get_attributes_json");
         for (auto&& [name, value] : attributes) {
-            std::string nameStr = "";
+            std::string nameStr;
             nameStr = fmt::format("{}", name);
             attributesObj[nameStr] = fmt::format("{}", value);
         }
@@ -429,7 +429,7 @@ inline json get_base_json(
 
     json attributesObj;
     for (auto&& [name, value] : tt::stl::reflection::get_attributes(operation_attributes)) {
-        std::string nameStr = "";
+        std::string nameStr;
         nameStr = fmt::format("{}", name);
         attributesObj[nameStr] = fmt::format("{}", value);
     }

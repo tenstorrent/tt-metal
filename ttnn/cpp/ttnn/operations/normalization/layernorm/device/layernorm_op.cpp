@@ -180,9 +180,6 @@ void LayerNorm::validate(
                 if (program_config.use_welford) {
                     TT_FATAL(
                         this->norm_type != LayerNormType::RMSNORM, "Welford's algorithm is not supported for RMSNorm");
-                    TT_FATAL(
-                        a.device()->arch() == tt::ARCH::WORMHOLE_B0,
-                        "Welford's algorithm for Layernorm is only supported on Wormhole");
                 }
                 if (this->norm_type == LayerNormType::RMSNORM) {
                     TT_FATAL(!program_config.use_welford, "Welford's algorithm is not supported for RMSNorm");
@@ -191,9 +188,6 @@ void LayerNorm::validate(
                 if (program_config.use_welford) {
                     TT_FATAL(
                         this->norm_type != LayerNormType::RMSNORM, "Welford's algorithm is not supported for RMSNorm");
-                    TT_FATAL(
-                        a.device()->arch() == tt::ARCH::WORMHOLE_B0,
-                        "Welford's algorithm for Layernorm is only supported on Wormhole");
                     TT_FATAL(
                         this->distributed_norm_stage == DistributedLayerNormStage::NOT_DISTRIBUTED,
                         "Welford's algorithm is not supported for distributed layernorm");

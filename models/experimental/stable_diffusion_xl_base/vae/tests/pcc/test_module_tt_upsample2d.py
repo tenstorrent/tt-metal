@@ -24,7 +24,9 @@ from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
 @pytest.mark.parametrize("padding", [(1, 1)])
 @pytest.mark.parametrize("dilation", [(1, 1)])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
-def test_vae_upsample2d(device, input_shape, up_block_id, stride, padding, dilation, is_ci_env, reset_seeds):
+def test_vae_upsample2d(
+    device, input_shape, up_block_id, stride, padding, dilation, debug_mode, is_ci_env, reset_seeds
+):
     vae = AutoencoderKL.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0",
         torch_dtype=torch.float32,
@@ -48,6 +50,7 @@ def test_vae_upsample2d(device, input_shape, up_block_id, stride, padding, dilat
         padding,
         dilation,
         groups,
+        debug_mode=debug_mode,
     )
 
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)

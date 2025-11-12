@@ -85,7 +85,8 @@ public:
         tt_fabric::FabricReliabilityMode reliability_mode =
             tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
         std::optional<uint8_t> num_routing_planes = std::nullopt,
-        tt_fabric::FabricTensixConfig fabric_tensix_config = tt_fabric::FabricTensixConfig::DISABLED);
+        tt_fabric::FabricTensixConfig fabric_tensix_config = tt_fabric::FabricTensixConfig::DISABLED,
+        tt_fabric::FabricUDMMode fabric_udm_mode = tt_fabric::FabricUDMMode::DISABLED);
     void initialize_fabric_config();
     void initialize_fabric_tensix_datamover_config();
     tt_fabric::FabricConfig get_fabric_config() const;
@@ -97,10 +98,16 @@ public:
     void set_fabric_tensix_config(tt_fabric::FabricTensixConfig fabric_tensix_config);
     tt_fabric::FabricTensixConfig get_fabric_tensix_config() const;
 
+    // Fabric UDM mode configuration
+    tt_fabric::FabricUDMMode get_fabric_udm_mode() const;
+
     // This is used to track the current thread's command queue id stack
     using CommandQueueIdStack = std::vector<uint8_t>;
     CommandQueueIdStack& get_command_queue_id_stack_for_thread();
     const CommandQueueIdStack& get_command_queue_id_stack_for_thread() const;
+
+    // Utilities
+    bool is_coord_in_range(CoreCoord coord, CoreType core_type);
 
 private:
     friend class tt::stl::Indestructible<MetalContext>;
@@ -112,6 +119,7 @@ private:
     void clear_launch_messages_on_eth_cores(ChipId device_id);
     void construct_control_plane(const std::filesystem::path& mesh_graph_desc_path);
     void teardown_fabric_config();
+    void teardown_base_objects();
 
     void reset_cores(ChipId device_id);
     void assert_cores(ChipId device_id);
@@ -126,7 +134,10 @@ private:
     // Functions used to init/run firmware on devices
     CoreCoord virtual_noc0_coordinate(ChipId device_id, uint8_t noc_index, CoreCoord coord);
     void generate_device_bank_to_noc_tables(ChipId device_id);
+    void generate_worker_logical_to_virtual_map(ChipId device_id);
     void initialize_device_bank_to_noc_tables(
+        ChipId device_id, const HalProgrammableCoreType& core_type, CoreCoord virtual_core);
+    void initialize_worker_logical_to_virtual_tables(
         ChipId device_id, const HalProgrammableCoreType& core_type, CoreCoord virtual_core);
     void initialize_firmware(
         ChipId device_id,
@@ -158,6 +169,9 @@ private:
     std::unordered_map<ChipId, std::vector<uint16_t>> dram_bank_to_noc_xy_;
     std::unordered_map<ChipId, std::vector<uint16_t>> l1_bank_to_noc_xy_;
 
+    std::unordered_map<ChipId, std::vector<uint8_t>> worker_logical_col_to_virtual_col_;
+    std::unordered_map<ChipId, std::vector<uint8_t>> worker_logical_row_to_virtual_row_;
+
     llrt::RunTimeOptions rtoptions_;
     std::unique_ptr<Cluster> cluster_;
     std::unique_ptr<Hal> hal_;
@@ -171,6 +185,7 @@ private:
     std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane_;
     tt_fabric::FabricConfig fabric_config_ = tt_fabric::FabricConfig::DISABLED;
     tt_fabric::FabricTensixConfig fabric_tensix_config_ = tt_fabric::FabricTensixConfig::DISABLED;
+    tt_fabric::FabricUDMMode fabric_udm_mode_ = tt_fabric::FabricUDMMode::DISABLED;
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;
 
     // We are using a thread_local to allow each thread to have its own command queue id stack.

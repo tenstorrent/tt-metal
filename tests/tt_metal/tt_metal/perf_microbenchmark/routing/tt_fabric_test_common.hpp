@@ -48,6 +48,13 @@ using Shape = tt::tt_metal::Shape;
 using MeshHostRankId = tt::tt_fabric::MeshHostRankId;
 using SystemMesh = tt::tt_metal::distributed::SystemMesh;
 using MeshDeviceConfig = tt::tt_metal::distributed::MeshDeviceConfig;
+using HalProgrammableCoreType = tt::tt_metal::HalProgrammableCoreType;
+using HalL1MemAddrType = tt::tt_metal::HalL1MemAddrType;
+using ShardOrientation = tt::tt_metal::ShardOrientation;
+using ShardSpecBuffer = tt::tt_metal::ShardSpecBuffer;
+using BufferType = tt::tt_metal::BufferType;
+using TensorMemoryLayout = tt::tt_metal::TensorMemoryLayout;
+using BufferShardingArgs = tt::tt_metal::BufferShardingArgs;
 
 using Topology = tt::tt_fabric::Topology;
 
@@ -169,7 +176,11 @@ public:
     }
 
     void run_programs() {
-        tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *mesh_workload_, true);
+        if (mesh_workload_->get_programs().empty()) {
+            return;
+        }
+
+        tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *mesh_workload_, false);
     }
 
     void wait_for_programs() { tt::tt_metal::distributed::Finish(mesh_device_->mesh_command_queue()); }
@@ -220,6 +231,10 @@ public:
     uint32_t get_worker_noc_encoding(const CoreCoord logical_core) const override {
         const auto virtual_core = mesh_device_->worker_core_from_logical_core(logical_core);
         return tt_metal::MetalContext::instance().hal().noc_xy_encoding(virtual_core.x, virtual_core.y);
+    }
+
+    CoreCoord get_virtual_core_from_logical_core(CoreCoord logical_core) const override {
+        return mesh_device_->worker_core_from_logical_core(logical_core);
     }
 
     CoreCoord get_worker_grid_size() const override { return mesh_device_->compute_with_storage_grid_size(); }
@@ -328,18 +343,19 @@ public:
         auto all_cores = CoreRangeSet(all_cores_set);
         auto num_cores = all_cores_set.size();
         auto total_size = size_bytes * num_cores;
-        auto shard_params = tt::tt_metal::ShardSpecBuffer(all_cores, {1, 1}, tt::tt_metal::ShardOrientation::ROW_MAJOR, {1, 1}, {num_cores, 1});
+        auto shard_params = tt::tt_metal::ShardSpecBuffer(
+            all_cores, {1, 1}, tt::tt_metal::ShardOrientation::ROW_MAJOR, {1, 1}, {num_cores, 1});
 
-        auto buffer_distribution_spec =
-            tt::tt_metal::BufferDistributionSpec(Shape{num_cores, 1}, Shape{1, 1}, all_cores, tt::tt_metal::ShardOrientation::ROW_MAJOR);
+        auto buffer_distribution_spec = tt::tt_metal::BufferDistributionSpec(
+            Shape{num_cores, 1}, Shape{1, 1}, all_cores, tt::tt_metal::ShardOrientation::ROW_MAJOR);
 
         auto buffer_page_mapping = buffer_distribution_spec.compute_page_mapping();
 
         DeviceLocalBufferConfig buffer_specs = {
             .page_size = size_bytes,
             .buffer_type = tt::tt_metal::BufferType::L1,
-            .sharding_args =
-                tt::tt_metal::BufferShardingArgs(buffer_distribution_spec, shard_params, tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED),
+            .sharding_args = tt::tt_metal::BufferShardingArgs(
+                buffer_distribution_spec, shard_params, tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED),
             .bottom_up = std::nullopt,
             .sub_device_id = std::nullopt,
         };
@@ -352,12 +368,21 @@ public:
         return mesh_buffer;
     }
 
-    // Data reading helpers
-    std::unordered_map<CoreCoord, std::vector<uint32_t>> read_buffer_from_cores(
+    // Structure to hold read operation state
+    struct ReadBufferOperation {
+        std::shared_ptr<MeshBuffer> mesh_buffer;
+        tt::tt_metal::UncompressedBufferPageMapping buffer_page_mapping;
+        std::vector<uint32_t> data;
+        uint32_t size_bytes = 0;
+    };
+
+    // Start non-blocking read operation
+    ReadBufferOperation initiate_read_buffer_from_cores(
         const MeshCoordinate& device_coord,
         const std::vector<CoreCoord>& cores,
         uint32_t address,
-        uint32_t size_bytes) const override {
+        uint32_t size_bytes) const {
+
         auto mesh_buffer = create_mesh_buffer_helper(cores, address, size_bytes);
 
         const auto& buffer_distribution_spec =
@@ -365,18 +390,33 @@ public:
         TT_FATAL(buffer_distribution_spec.has_value(), "Buffer distribution spec is not set");
         const auto buffer_page_mapping = buffer_distribution_spec->compute_page_mapping();
 
+        // Preallocate data buffer
         auto total_size = size_bytes * buffer_page_mapping.all_cores.size();
-        std::vector<uint32_t> data;
-        data.resize(total_size / sizeof(uint32_t));
-        tt::tt_metal::distributed::ReadShard(mesh_device_->mesh_command_queue(), data, mesh_buffer, device_coord);
+        std::vector<uint32_t> data(total_size / sizeof(uint32_t));
 
-        // splice up data into map
+        // Start non-blocking read
+        tt::tt_metal::distributed::ReadShard(
+            mesh_device_->mesh_command_queue(),
+            data,
+            mesh_buffer,
+            device_coord,
+            false  // blocking=false
+        );
+
+        return {mesh_buffer, buffer_page_mapping, std::move(data), size_bytes};
+    }
+
+    // Process results after barrier_reads() has been called
+    std::unordered_map<CoreCoord, std::vector<uint32_t>> complete_read_buffer_from_cores(
+        const ReadBufferOperation& op) const {
+
+        // Process results (existing splice logic)
         std::unordered_map<CoreCoord, std::vector<uint32_t>> results;
-        auto num_words_per_core = size_bytes / sizeof(uint32_t);
+        auto num_words_per_core = op.size_bytes / sizeof(uint32_t);
 
-        for (auto i = 0; i < buffer_page_mapping.all_cores.size(); i++) {
-            const auto& core = buffer_page_mapping.all_cores[i];
-            const auto& page_indices = buffer_page_mapping.core_host_page_indices[i];
+        for (auto i = 0; i < op.buffer_page_mapping.all_cores.size(); i++) {
+            const auto& core = op.buffer_page_mapping.all_cores[i];
+            const auto& page_indices = op.buffer_page_mapping.core_host_page_indices[i];
             std::vector<uint32_t> core_data;
             core_data.reserve(page_indices.size() * num_words_per_core);
             for (const auto& page_idx : page_indices) {
@@ -385,12 +425,23 @@ public:
                 }
                 auto start_idx = page_idx * num_words_per_core;
                 auto end_idx = start_idx + num_words_per_core;
-                core_data.insert(core_data.end(), data.begin() + start_idx, data.begin() + end_idx);
+                core_data.insert(core_data.end(), op.data.begin() + start_idx, op.data.begin() + end_idx);
             }
             results.emplace(core, core_data);
         }
 
         return results;
+    }
+
+    // Data reading helpers - preserve backward compatibility
+    std::unordered_map<CoreCoord, std::vector<uint32_t>> read_buffer_from_cores(
+        const MeshCoordinate& device_coord,
+        const std::vector<CoreCoord>& cores,
+        uint32_t address,
+        uint32_t size_bytes) const override {
+        auto op = initiate_read_buffer_from_cores(device_coord, cores, address, size_bytes);
+        barrier_reads();  // Wait for read to complete
+        return complete_read_buffer_from_cores(op);
     }
 
     // When blocking is enabled, results_out must be pre-allocated for each core
@@ -421,7 +472,7 @@ public:
         }
     }
 
-    void barrier_reads() {
+    void barrier_reads() const {
         mesh_device_->mesh_command_queue().finish();
     }
 
@@ -677,6 +728,77 @@ public:
         }
 
         return hops;
+    }
+
+    std::vector<RoutingDirection> get_neighbor_directions_for_topology() const {
+        switch (topology_) {
+            case Topology::Mesh:
+            case Topology::Torus:
+                return {RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W};
+            case Topology::Linear: return {RoutingDirection::E, RoutingDirection::W};
+            case Topology::Ring:
+                // Ring topology handled separately - no directional logic
+                return {};
+        }
+        return {};
+    }
+
+    std::vector<std::pair<FabricNodeId, FabricNodeId>> get_neighbor_exchange_pairs() const override {
+        const auto device_ids = get_global_node_ids();
+        std::vector<std::pair<FabricNodeId, FabricNodeId>> pairs;
+
+        auto directions = get_neighbor_directions_for_topology();
+
+        if (!directions.empty()) {
+            // Handle mesh, torus, and linear topologies with directional neighbors
+            for (const auto& src_node : device_ids) {
+                for (const auto& direction : directions) {
+                    // Check if neighbor exists in this direction
+                    const auto& neighbors =
+                        tt::tt_metal::MetalContext::instance().get_control_plane().get_chip_neighbors(
+                            src_node, direction);
+
+                    if (!neighbors.empty()) {
+                        // Get the first (and should be only) neighbor mesh
+                        auto neighbor_mesh_it = neighbors.begin();
+                        const auto& neighbor_chips = neighbor_mesh_it->second;
+
+                        if (!neighbor_chips.empty()) {
+                            // Get the first (and should be only) neighbor chip
+                            FabricNodeId neighbor(neighbor_mesh_it->first, neighbor_chips[0]);
+
+                            // Only add if neighbor exists and is different from source
+                            bool is_valid_neighbor = (neighbor != src_node);
+
+                            // For linear topology, also check if devices are on the same line
+                            if (topology_ == Topology::Linear) {
+                                is_valid_neighbor &= are_devices_linear({src_node, neighbor});
+                            }
+
+                            if (is_valid_neighbor) {
+                                pairs.emplace_back(src_node, neighbor);
+                            }
+                        }
+                    }
+                }
+            }
+        } else if (topology_ == Topology::Ring) {
+            // Handle ring topology with logical ring neighbors
+            for (const auto& src_node : device_ids) {
+                auto ring_neighbors = get_wrap_around_mesh_ring_neighbors(src_node, device_ids);
+                if (ring_neighbors.has_value()) {
+                    auto [forward_neighbor, backward_neighbor] = ring_neighbors.value();
+                    if (forward_neighbor != src_node) {
+                        pairs.emplace_back(src_node, forward_neighbor);
+                    }
+                    if (backward_neighbor != src_node) {
+                        pairs.emplace_back(src_node, backward_neighbor);
+                    }
+                }
+            }
+        }
+
+        return pairs;
     }
 
     std::optional<std::pair<FabricNodeId, FabricNodeId>> get_wrap_around_mesh_ring_neighbors(
@@ -1211,7 +1333,7 @@ public:
         for (uint32_t hop = 0; hop < total_hops; ++hop) {
             // Try to move in current direction
             MeshCoordinate next_coord = current_coord;
-            bool need_wraparound = false;
+            [[maybe_unused]] bool need_wraparound = false;
 
             switch (current_direction) {
                 case RoutingDirection::N:

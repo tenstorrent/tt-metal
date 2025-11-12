@@ -49,9 +49,9 @@ Mac users can install Tracy using Homebrew. Open a terminal and run:
 ..  code-block:: bash
 
     brew uninstall tracy # Remove any old version of Tracy
-    wget -P ~/ --no-check-certificate --no-cache --no-cookies https://raw.githubusercontent.com/tenstorrent-metal/tracy/master/tracy.rb
-    brew install ~/tracy.rb
-    rm ~/tracy.rb
+    brew tap-new $USER/tracy # Create a tap
+    wget -P $(brew --repository)/Library/Taps/$USER/homebrew-tracy/Formula/ --no-check-certificate --no-cache --no-cookies https://raw.githubusercontent.com/tenstorrent-metal/tracy/master/tracy.rb
+    brew install $USER/tracy/tracy # Install from the tap
 
 After installation, start the Tracy GUI with:
 

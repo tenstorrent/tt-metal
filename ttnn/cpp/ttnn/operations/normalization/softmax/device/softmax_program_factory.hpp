@@ -55,12 +55,11 @@ struct SoftmaxProgramFactoryAttentionOptimized {
         tt::tt_metal::KernelHandle reader_kernels_id{};
         tt::tt_metal::KernelHandle writer_kernels_id{};
         tt::tt_metal::KernelHandle softmax_kernels_id{};
-        CoreCoord grid_size{};
+        CoreCoord grid_size;
         bool fp32_dest_acc_en{};
         uint32_t scalar_tile_size{}, in0_tile_size{}, im_tile_size{}, out0_tile_size{}, mask_tile_size{};
         tt::tt_metal::CBHandle cb_in0_id{}, cb_out0_id{}, cb_intermed1_id{}, cb_in2_id{}, cb_intermed0_id{};
-        std::optional<tt::tt_metal::CBHandle> cb_intermed3_id{}, cb_in3_id{}, cb_in4_id{}, cb_intermed2_id{},
-            cb_intermed4_id{};
+        std::optional<tt::tt_metal::CBHandle> cb_intermed3_id, cb_in3_id, cb_in4_id, cb_intermed2_id, cb_intermed4_id;
     };
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
     static cached_program_t create(const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
@@ -72,9 +71,9 @@ struct SoftmaxShardedProgramFactoryAttentionOptimized {
     struct shared_variables_t {
         tt::tt_metal::KernelHandle reader_kernels_id{};
         tt::tt_metal::CBHandle cb_in0_id{}, cb_out0_id{};
-        std::optional<tt::tt_metal::CBHandle> cb_in3_id{};
+        std::optional<tt::tt_metal::CBHandle> cb_in3_id;
         uint32_t num_cores{};
-        CoreCoord grid_size{};
+        CoreCoord grid_size;
     };
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
     static cached_program_t create(const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);

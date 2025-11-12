@@ -21,7 +21,7 @@ void EmbeddingBackward::validate(const std::vector<Tensor> &input_tensors) const
     const auto &index_tensor_shape = index_tensor.padded_shape();
     const auto &grad_tensor_shape = grad_tensor.padded_shape();
 
-    TT_FATAL(index_tensor.layout() == Layout::ROW_MAJOR, "Error");
+    TT_FATAL(index_tensor.layout() == Layout::ROW_MAJOR, "Index tensor layout must be ROW_MAJOR but got {}", index_tensor.layout());
     TT_FATAL(
         index_tensor.dtype() == DataType::UINT32 or index_tensor.dtype() == DataType::BFLOAT16,
         "Index tensor must be UINT32 or BFLOAT16");
@@ -36,7 +36,7 @@ void EmbeddingBackward::validate(const std::vector<Tensor> &input_tensors) const
         index_tensor_shape[-1] % TILE_WIDTH == 0,
         "Number of columns in the index tensor must be divisible by tile width");
 
-    TT_FATAL(grad_tensor.layout() == Layout::TILE, "Error");
+    TT_FATAL(grad_tensor.layout() == Layout::TILE, "Gradient tensor layout must be TILE but got {}", grad_tensor.layout());
     TT_FATAL(
         grad_tensor.dtype() == DataType::BFLOAT16 or grad_tensor.dtype() == DataType::BFLOAT8_B,
         "Output gradient tensor must be BFLOAT16 or BFLOAT8_B");

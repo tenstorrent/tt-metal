@@ -112,10 +112,7 @@ inline void setup_header_noc_unicast_atomic_inc(
     uint8_t noc_x_start,
     uint8_t noc_y_start) {
     packet_header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{
-        get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address),
-        1 /* increment value */,
-        std::numeric_limits<uint16_t>::max(),
-        true /*flush*/});
+        get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address), 1 /* increment value */, true /*flush*/});
 }
 
 inline void send_notification(

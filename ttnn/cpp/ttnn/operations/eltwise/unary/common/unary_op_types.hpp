@@ -237,6 +237,8 @@ using EltwiseFusedActivations = std::vector<ttnn::operations::unary::EltwiseUnar
 
 using FusedActivations = std::vector<ttnn::operations::unary::UnaryWithParam>;
 
+using ScalarVariant = std::variant<std::uint32_t, std::int32_t, float>;
+
 }  // namespace ttnn::operations::unary
 
 template <typename T>

@@ -53,7 +53,7 @@ def main():
         "--process-logs-only",
         dest="processLogsOnly",
         action="store_true",
-        help="Only process the logs avaialble in the default logs folder",
+        help="Only process the logs available in the default logs folder",
         default=False,
     )
     parser.add_option(
@@ -61,6 +61,13 @@ def main():
         dest="profile_dispatch_cores",
         action="store_true",
         help="Collect dispatch cores profiling data",
+        default=False,
+    )
+    parser.add_option(
+        "--cpp-post-process",
+        dest="cpp_post_process",
+        action="store_true",
+        help="Use C++ to post-process profiling data",
         default=False,
     )
     parser.add_option(
@@ -76,6 +83,13 @@ def main():
         action="store_true",
         help="Profile device side trace durations",
         default=[],
+    )
+    parser.add_option(
+        "--device-memory-profiler",
+        dest="device_memory_profiler",
+        action="store_true",
+        help="Profile allocated device L1 and DRAM memory buffers",
+        default=False,
     )
     parser.add_option(
         "--dump-device-data-mid-run",
@@ -176,6 +190,12 @@ def main():
         os.environ["TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH"] = str(
             generate_logs_folder(os.path.abspath(outputFolder))
         )
+
+    if options.cpp_post_process:
+        os.environ["TT_METAL_PROFILER_CPP_POST_PROCESS"] = "1"
+
+    if options.device_memory_profiler:
+        os.environ["TT_METAL_MEM_PROFILER"] = "1"
 
     if len(args) > 0:
         doReport = False

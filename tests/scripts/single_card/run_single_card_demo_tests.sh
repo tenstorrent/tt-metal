@@ -25,7 +25,7 @@ run_qwen7b_func() {
 
 }
 
-run_qwen25_vl_func() {
+run_qwen25_vl_perfunc() {
   fail=0
 
   # install qwen25_vl requirements
@@ -34,18 +34,20 @@ run_qwen25_vl_func() {
   # export PYTEST_ADDOPTS for concise pytest output
   export PYTEST_ADDOPTS="--tb=short"
 
-  # Qwen2.5-VL-3B
-  qwen25_vl_3b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2.5-VL-3B-Instruct/
-  # todo)) Qwen2.5-VL-7B-Instruct
+  # Qwen2.5-VL-3B-Instruct
+  qwen25_vl_3b=Qwen/Qwen2.5-VL-3B-Instruct
+  # Qwen2.5-VL-7B-Instruct
+  qwen25_vl_7b=Qwen/Qwen2.5-VL-7B-Instruct
 
   # simple generation-accuracy tests for qwen25_vl_3b
-  MESH_DEVICE=N300 HF_MODEL=$qwen25_vl_3b pytest -n auto models/demos/qwen25_vl/demo/combined.py -k tt_vision --timeout 1200 || fail=1
+  MESH_DEVICE=N300 HF_MODEL=$qwen25_vl_3b TT_CACHE_PATH=$TT_CACHE_HOME/$qwen25_vl_3b pytest -n auto models/demos/qwen25_vl/demo/combined.py -k tt_vision --timeout 1200 || fail=1
   echo "LOG_METAL: demo/combined.py tests for $qwen25_vl_3b on N300 completed"
 
   # complete demo tests
-  for qwen_dir in "$qwen25_vl_3b"; do
-    MESH_DEVICE=N300 HF_MODEL=$qwen_dir pytest -n auto models/demos/qwen25_vl/demo/demo.py --timeout 600 || fail=1
-    echo "LOG_METAL: Tests for $qwen_dir on N300 completed"
+  for qwen_model in "$qwen25_vl_3b" "$qwen25_vl_7b"; do
+    cache_path=$TT_CACHE_HOME/$qwen_model
+    MESH_DEVICE=N300 HF_MODEL=$qwen_model TT_CACHE_PATH=$cache_path pytest -n auto models/demos/qwen25_vl/demo/demo.py --timeout 900 || fail=1
+    echo "LOG_METAL: Tests for $qwen_model on N300 completed"
   done
 
   if [[ $fail -ne 0 ]]; then
@@ -86,7 +88,7 @@ run_segformer_func() {
 run_sentencebert_func() {
 
   #SentenceBERT Demo
-  pytest models/demos/sentence_bert/demo/demo.py
+  pytest models/demos/wormhole/sentence_bert/demo/demo.py
 
 }
 
@@ -132,7 +134,7 @@ run_llama3_func() {
 
 run_ufld_v2_func() {
   #ufld_v2 demo
-  pytest models/demos/ufld_v2/demo/demo.py
+  pytest models/demos/wormhole/ufld_v2/demo/demo.py
 }
 
 run_vgg_func() {
@@ -181,6 +183,8 @@ run_resnet_func() {
 
 run_sdxl_func() {
   TT_MM_THROTTLE_PERF=5 pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_accuracy.py --start-from=0 --num-prompts=2 -k "device_encoders and device_vae and no_cfg_parallel"
+  TT_MM_THROTTLE_PERF=5 pytest  models/experimental/stable_diffusion_xl_base/demo/demo_img2img.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
+  TT_MM_THROTTLE_PERF=5 pytest  models/experimental/stable_diffusion_xl_base/demo/demo_inpainting.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
 }
 
 run_distilbert_func() {
@@ -315,7 +319,7 @@ run_yolov8s_world_perf() {
 
 run_vanilla_unet_demo() {
  # vanilla_unet demo
- pytest models/demos/vanilla_unet/demo/demo.py
+ pytest models/demos/wormhole/vanilla_unet/demo/demo.py
 }
 
 run_swin_s_demo() {
@@ -365,7 +369,7 @@ run_yolov6l_demo() {
 
 run_vgg_unet_demo() {
  # vgg_unet demo
-  pytest models/demos/vgg_unet/demo/demo.py
+  pytest models/demos/wormhole/vgg_unet/demo/demo.py
 }
 
 
@@ -379,6 +383,12 @@ run_yolov12x_demo() {
 run_vovnet_demo(){
 
  pytest models/experimental/vovnet/demo/demo.py
+
+}
+
+run_vit_demo(){
+
+ pytest models/demos/wormhole/vit/demo/test_demo_vit_ttnn_inference_perf_e2e_2cq_trace.py
 
 }
 

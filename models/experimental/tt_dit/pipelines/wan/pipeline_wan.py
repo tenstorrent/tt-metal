@@ -9,6 +9,7 @@ from typing import Any, Callable, Dict, List, Optional, Union
 
 import ftfy
 import regex as re
+import time
 import torch
 from transformers import AutoTokenizer, UMT5EncoderModel
 
@@ -125,6 +126,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         boundary_ratio: Optional[float] = None,
         expand_timesteps: bool = False,  # Wan2.2 ti2v
         dynamic_load=False,
+        topology: ttnn.Topology = ttnn.Topology.Linear,
     ):
         super().__init__()
 
@@ -147,10 +149,15 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             "Wan-AI/Wan2.2-T2V-A14B-Diffusers", subfolder="transformer_2", trust_remote_code=True
         )
 
-        self.ccl_manager = CCLManager(
+        self.dit_ccl_manager = CCLManager(
             mesh_device=mesh_device,
             num_links=num_links,
-            topology=ttnn.Topology.Linear,
+            topology=topology,
+        )
+        self.vae_ccl_manager = CCLManager(
+            mesh_device=mesh_device,
+            num_links=num_links,
+            topology=ttnn.Topology.Linear,  # NOTE: VAE always uses Linear topology. TODO: enable ring if given.
         )
         self.parallel_config = parallel_config
         self.vae_parallel_config = vae_parallel_config
@@ -171,7 +178,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             out_channels=self.vae.config.out_channels,
             is_residual=self.vae.config.is_residual,
             mesh_device=self.mesh_device,
-            ccl_manager=self.ccl_manager,
+            ccl_manager=self.vae_ccl_manager,
             parallel_config=self.vae_parallel_config,
         )
 
@@ -182,6 +189,9 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         self.vae_scale_factor_temporal = self.vae.config.scale_factor_temporal if getattr(self, "vae", None) else 4
         self.vae_scale_factor_spatial = self.vae.config.scale_factor_spatial if getattr(self, "vae", None) else 8
         self.video_processor = VideoProcessor(vae_scale_factor=self.vae_scale_factor_spatial)
+
+        # Record time information for different steps.
+        self.timing_data = None
 
     def _load_transformer1(self):
         self.transformer = WanTransformer3DModel(
@@ -197,7 +207,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             eps=self.torch_transformer.config.eps,
             rope_max_seq_len=self.torch_transformer.config.rope_max_seq_len,
             mesh_device=self.mesh_device,
-            ccl_manager=self.ccl_manager,
+            ccl_manager=self.dit_ccl_manager,
             parallel_config=self.parallel_config,
             is_fsdp=True,
         )
@@ -207,6 +217,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 model_name="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
                 subfolder="transformer",
                 parallel_config=self.parallel_config,
+                mesh_shape=tuple(self.mesh_device.shape),
                 dtype="bf16",
             )
             # create cache if it doesn't exist
@@ -238,7 +249,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             eps=self.torch_transformer_2.config.eps,
             rope_max_seq_len=self.torch_transformer_2.config.rope_max_seq_len,
             mesh_device=self.mesh_device,
-            ccl_manager=self.ccl_manager,
+            ccl_manager=self.dit_ccl_manager,
             parallel_config=self.parallel_config,
             is_fsdp=True,
         )
@@ -248,6 +259,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 model_name="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
                 subfolder="transformer_2",
                 parallel_config=self.parallel_config,
+                mesh_shape=tuple(self.mesh_device.shape),
                 dtype="bf16",
             )
             # create cache if it doesn't exist
@@ -587,6 +599,9 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 indicating whether the corresponding generated image contains "not-safe-for-work" (nsfw) content.
         """
 
+        self.timing_data = {"text_encoder": 0, "denoising": 0, "vae": 0, "total": 0}
+        pipeline_start_time = time.time()
+
         if isinstance(callback_on_step_end, (PipelineCallback, MultiPipelineCallbacks)):
             callback_on_step_end_tensor_inputs = callback_on_step_end.tensor_inputs
 
@@ -630,6 +645,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             batch_size = prompt_embeds.shape[0]
 
         # 3. Encode input prompt
+        text_encoder_start_time = time.time()
         prompt_embeds, negative_prompt_embeds = self.encode_prompt(
             prompt=prompt,
             negative_prompt=negative_prompt,
@@ -640,6 +656,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             max_sequence_length=max_sequence_length,
             device=device,
         )
+        self.timing_data["text_encoder"] = time.time() - text_encoder_start_time
 
         # transformer_dtype = self.transformer.dtype if self.transformer is not None else self.transformer_2.dtype
         # prompt_embeds = prompt_embeds.to(transformer_dtype)
@@ -680,6 +697,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         else:
             boundary_timestep = None
 
+        denoising_start_time = time.time()
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
                 if self.interrupt:
@@ -760,6 +778,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 # call the callback, if provided
                 if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
                     progress_bar.update()
+        self.timing_data["denoising"] = time.time() - denoising_start_time
 
         self._current_timestep = None
 
@@ -790,7 +809,9 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                     self.vae_parallel_config.width_parallel.mesh_axis: 3,
                 },
             )
+            vae_start_time = time.time()
             tt_video_BCTHW, new_logical_h = self.tt_vae(tt_latents_BTHWC, logical_h)
+            self.timing_data["vae"] = time.time() - vae_start_time
 
             concat_dims = [None, None]
             concat_dims[self.vae_parallel_config.height_parallel.mesh_axis] = 3
@@ -813,4 +834,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         if not return_dict:
             return (video,)
 
-        return WanPipelineOutput(frames=video)
+        pipeline_output = WanPipelineOutput(frames=video)
+        self.timing_data["total"] = time.time() - pipeline_start_time
+        return pipeline_output

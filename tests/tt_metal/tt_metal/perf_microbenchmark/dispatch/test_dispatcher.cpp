@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <chrono>
 #include <fmt/base.h>
 #include <stdint.h>
@@ -265,12 +266,8 @@ void gen_linear_or_packed_write_test(
                 }
 
                 xfer_size_bytes = xfer_size_16B << 4;
-                if (xfer_size_bytes > max_xfer_size_bytes_g) {
-                    xfer_size_bytes = max_xfer_size_bytes_g;
-                }
-                if (xfer_size_bytes < min_xfer_size_bytes_g) {
-                    xfer_size_bytes = min_xfer_size_bytes_g;
-                }
+                xfer_size_bytes = std::min(xfer_size_bytes, max_xfer_size_bytes_g);
+                xfer_size_bytes = std::max(xfer_size_bytes, min_xfer_size_bytes_g);
 
                 total_size_bytes += sizeof(CQDispatchCmdLarge);
                 if (is_linear_multicast) {
@@ -330,12 +327,8 @@ void gen_paged_write_test(
 
     // Treat xfer size test in test as page write page size here. Keep consistend for all cmds.
     uint32_t page_size_bytes = xfer_size_16B << 4;
-    if (page_size_bytes > max_xfer_size_bytes_g) {
-        page_size_bytes = max_xfer_size_bytes_g;
-    }
-    if (page_size_bytes < min_xfer_size_bytes_g) {
-        page_size_bytes = min_xfer_size_bytes_g;
-    }
+    page_size_bytes = std::min(page_size_bytes, max_xfer_size_bytes_g);
+    page_size_bytes = std::max(page_size_bytes, min_xfer_size_bytes_g);
 
     log_info(
         tt::LogTest,

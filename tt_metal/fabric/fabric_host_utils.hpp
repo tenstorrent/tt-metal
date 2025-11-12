@@ -28,6 +28,11 @@ void set_routing_mode(Topology topology, tt::tt_fabric::FabricConfig fabric_conf
 
 FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config);
 
+// Helper to validate that requested FabricType doesn't require more connectivity than available FabricType provides
+// Returns true if requested_type requires more connections than available_type provides
+// mesh_shape: [rows, cols] - used to detect edge cases where 2-row/2-col torus is equivalent to mesh
+bool requires_more_connectivity(FabricType requested_type, FabricType available_type, const MeshShape& mesh_shape);
+
 std::vector<uint32_t> get_forwarding_link_indices_in_direction(
     const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id, RoutingDirection direction);
 
@@ -42,22 +47,5 @@ struct IntraMeshAdjacencyMap {
     std::uint32_t ns_size{};         // North-South size (rows)
     std::uint32_t ew_size{};         // East-West size (columns)
 };
-
-IntraMeshAdjacencyMap build_mesh_adjacency_map(
-    const std::set<ChipId>& user_chip_ids,
-    const tt::tt_metal::distributed::MeshShape& mesh_shape,
-    const std::function<std::vector<ChipId>(ChipId)>& get_adjacent_chips_func,
-    std::optional<ChipId> start_chip_id = std::nullopt);
-
-// Helper: Convert 1D mesh adjacency map to row-major vector representation
-std::vector<ChipId> convert_1d_mesh_adjacency_to_row_major_vector(
-    const IntraMeshAdjacencyMap& topology_info,
-    std::optional<std::function<std::pair<AdjacencyMap, ChipId>(const IntraMeshAdjacencyMap&)>> = std::nullopt);
-
-// Helper: Convert 2D mesh adjacency map to row-major vector representation
-std::vector<ChipId> convert_2d_mesh_adjacency_to_row_major_vector(
-    const IntraMeshAdjacencyMap& topology_info,
-    std::optional<ChipId> nw_corner_chip_id = std::nullopt,
-    std::optional<ChipId> ne_corner_chip_id = std::nullopt);
 
 }  // namespace tt::tt_fabric

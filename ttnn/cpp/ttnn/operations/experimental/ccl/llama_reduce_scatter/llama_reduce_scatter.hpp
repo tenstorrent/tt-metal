@@ -6,6 +6,7 @@
 
 #include "ttnn/decorators.hpp"
 #include "ttnn/global_semaphore.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/fabric_edm_types.hpp>
 

@@ -22,7 +22,7 @@ using ProgCoreMapping =
 
 // A struct to hold device-specific build environment
 struct DeviceBuildEnv {
-    uint32_t build_key = 0;
+    uint64_t build_key() const { return build_env.get_build_key(); }
     JitBuildEnv build_env;
     std::vector<JitBuildState> firmware_build_states;
     std::vector<JitBuildState> kernel_build_states;
@@ -31,7 +31,7 @@ struct DeviceBuildEnv {
 // A struct to hold device-specific build environment info (lightweight version of DeviceBuildEnv)
 struct BuildEnvInfo {
     ChipId device_id;
-    uint32_t build_key;
+    uint64_t build_key;
     std::string firmware_root_path;
 };
 

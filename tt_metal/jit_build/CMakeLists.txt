@@ -2,6 +2,7 @@ set(JIT_BUILD_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/build.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/build_env_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/depend.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/genfiles.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/kernel_args.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/jit_build_options.cpp

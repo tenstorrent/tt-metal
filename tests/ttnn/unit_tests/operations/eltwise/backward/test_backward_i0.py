@@ -18,8 +18,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     ),
 )
 def test_bw_i0(input_shapes, device):
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 199, device)
-    in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device, required_grad=True)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 199, device, seed=0)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device, required_grad=True, seed=42)
     in_data = in_data.float()
 
     tt_output_tensor_on_device = ttnn.i0_bw(grad_tensor, input_tensor)

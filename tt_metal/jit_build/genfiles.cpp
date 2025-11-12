@@ -12,6 +12,8 @@
 #include <filesystem>
 #include <functional>
 #include <iostream>
+#include <ostream>
+#include <fstream>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -41,7 +43,9 @@ namespace {
 
 void gen_kernel_cpp(const string& src, const string& dst_name, const vector<string>& prolog) {
     std::ofstream out(dst_name);
-    for (const string& s : prolog) out << s;
+    for (const string& s : prolog) {
+        out << s;
+    }
     out << src;
 }
 
@@ -125,7 +129,7 @@ void jit_build_genfiles_triscs_src(
 namespace {
 
 std::string data_format_vec_to_string(const vector<DataFormat>& formats) {
-    std::string formats_string = "";
+    std::string formats_string;
     for (int i = 0; i < formats.size(); i++) {
         formats_string += to_string((int)formats[i]) + ",";
     }
@@ -299,7 +303,7 @@ void generate_data_format_descriptors(JitBuildOptions& options, const tt::ARCH a
 }
 
 std::string array_to_string(const uint32_t arr[]) {
-    std::string formats_string = "";
+    std::string formats_string;
     for (int i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
         formats_string += to_string((int)arr[i]) + ",";
     }

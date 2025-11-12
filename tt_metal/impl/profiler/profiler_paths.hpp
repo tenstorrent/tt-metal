@@ -13,6 +13,7 @@ namespace tt_metal {
 
 constexpr std::string_view PROFILER_RUNTIME_ROOT_DIR = "generated/profiler/";
 constexpr std::string_view PROFILER_LOGS_DIR_NAME = ".logs/";
+constexpr std::string_view PROFILER_OPS_PERF_REPORT_NAME = "cpp_ops_device_perf_report.csv";
 
 inline std::string get_profiler_artifacts_dir() {
     std::string artifacts_dir;

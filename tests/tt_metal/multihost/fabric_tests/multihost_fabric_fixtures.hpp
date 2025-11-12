@@ -139,6 +139,8 @@ public:
 
     void TearDown() override {
         if (system_supported()) {
+            const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+            distributed_context.barrier();
             tt::tt_metal::GenericMeshDeviceFabric2DFixture::TearDown();
         }
     }
@@ -251,6 +253,62 @@ using MeshDeviceNanoExabox2x4Fixture = NanoExabox2x4FabricFixture<MultiMeshDevic
 
 using IntermeshNanoExabox1x8FabricFixture = NanoExabox1x8FabricFixture<InterMeshRoutingFabric2DFixture>;
 using MeshDeviceNanoExabox1x8Fixture = NanoExabox1x8FabricFixture<MultiMeshDeviceFabricFixture>;
+
+// Fixture for Exabox systems using Fabric
+class IntermeshExaboxFabricFixture : public BaseFabricFixture {
+public:
+    // This test fixture closes/opens devices on each test
+    static void SetUpTestSuite() {}
+    static void TearDownTestSuite() {}
+    void SetUp() override {
+        if (not system_supported()) {
+            GTEST_SKIP() << "Skipping since this is not a supported system.";
+        }
+
+        this->DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
+    }
+
+    void TearDown() override {
+        if (system_supported()) {
+            BaseFabricFixture::DoTearDownTestSuite();
+        }
+    }
+
+    // The derived fixture must infer if the current system is suitable for the requested
+    // topology in the Mesh Graph, when implementing this function.
+    bool system_supported() {
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        const auto& mesh_graph = tt::tt_metal::MetalContext::instance().get_control_plane().get_mesh_graph();
+        return *(tt::tt_metal::MetalContext::instance().global_distributed_context().size()) ==
+                   mesh_graph.get_mesh_ids().size() &&
+               cluster.get_board_type(0) == BoardType::UBB;
+    }
+};
+
+// Base fixture for Multi-Host MeshDevice tests relying on Inter-Mesh Routing.
+class MeshDeviceExaboxFixture : public tt::tt_metal::GenericMeshDeviceFabric2DFixture {
+public:
+    void SetUp() override {
+        if (not system_supported()) {
+            GTEST_SKIP() << "Skipping since this is not a supported system.";
+        }
+        tt::tt_metal::GenericMeshDeviceFabric2DFixture::SetUp();
+    }
+
+    void TearDown() override {
+        if (system_supported()) {
+            tt::tt_metal::GenericMeshDeviceFabric2DFixture::TearDown();
+        }
+    }
+
+    bool system_supported() {
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        const auto& mesh_graph = tt::tt_metal::MetalContext::instance().get_control_plane().get_mesh_graph();
+        return *(tt::tt_metal::MetalContext::instance().global_distributed_context().size()) ==
+                   mesh_graph.get_mesh_ids().size() &&
+               cluster.get_board_type(0) == BoardType::UBB;
+    }
+};
 
 }  // namespace fabric_router_tests
 }  // namespace tt::tt_fabric
