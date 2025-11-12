@@ -36,6 +36,7 @@ from models.demos.utils.common_demo_utils import get_mesh_mappers
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.common.utility_functions import disable_persistent_kernel_cache, comp_pcc
 
+
 # COCO class names
 COCO_CLASSES = [
     "person",
@@ -49,6 +50,7 @@ COCO_CLASSES = [
     "boat",
     "traffic light",
     "fire hydrant",
+    "",
     "stop sign",
     "parking meter",
     "bench",
@@ -62,8 +64,11 @@ COCO_CLASSES = [
     "bear",
     "zebra",
     "giraffe",
+    "",
     "backpack",
     "umbrella",
+    "",
+    "",
     "handbag",
     "tie",
     "suitcase",
@@ -78,6 +83,7 @@ COCO_CLASSES = [
     "surfboard",
     "tennis racket",
     "bottle",
+    "",
     "wine glass",
     "cup",
     "fork",
@@ -98,8 +104,12 @@ COCO_CLASSES = [
     "couch",
     "potted plant",
     "bed",
+    "",
     "dining table",
+    "",
+    "",
     "toilet",
+    "",
     "tv",
     "laptop",
     "mouse",
@@ -111,6 +121,7 @@ COCO_CLASSES = [
     "toaster",
     "sink",
     "refrigerator",
+    "",
     "book",
     "clock",
     "vase",

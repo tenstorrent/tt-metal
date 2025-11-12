@@ -34,7 +34,6 @@ class Efficientdetd0MBConvBlock:
                 conv_params=conv_params._expand_conv,
                 shard_layout=self.shard_layout,
                 deallocate_activation=deallocate_activation,
-                dtype=ttnn.bfloat8_b,
             )
 
         self._depthwise_conv = TtConv2dDynamicSamePadding(
@@ -43,7 +42,6 @@ class Efficientdetd0MBConvBlock:
             conv_params=conv_params._depthwise_conv,
             shard_layout=shard_layout_depthwise_conv,
             deallocate_activation=deallocate_activation,
-            dtype=ttnn.bfloat8_b,
         )
 
         self._se_reduce = TtConv2dDynamicSamePadding(
@@ -52,7 +50,6 @@ class Efficientdetd0MBConvBlock:
             conv_params=conv_params._se_reduce,
             shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             deallocate_activation=deallocate_activation,
-            dtype=ttnn.bfloat8_b,
         )
 
         self._se_expand = TtConv2dDynamicSamePadding(
@@ -61,7 +58,6 @@ class Efficientdetd0MBConvBlock:
             conv_params=conv_params._se_expand,
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             deallocate_activation=deallocate_activation,
-            dtype=ttnn.bfloat8_b,
         )
 
         self._project_conv = TtConv2dDynamicSamePadding(
@@ -70,7 +66,6 @@ class Efficientdetd0MBConvBlock:
             conv_params=conv_params._project_conv,
             shard_layout=self.shard_layout,
             deallocate_activation=deallocate_activation,
-            dtype=ttnn.bfloat8_b,
         )
 
     def __call__(self, x):
@@ -247,24 +242,9 @@ class Efficientnetb0:
         )
 
     def __call__(self, x):
-        N, C, H, W = x.shape
-        min_channels = 16  # Padding from image channels (3) to min channels (16)
-        if C < min_channels:
-            channel_padding_needed = min_channels - C
-            nchw = ttnn.pad(x, ((0, 0), (0, channel_padding_needed), (0, 0), (0, 0)), value=0.0)
-        else:
-            nchw = x
-        nhwc = ttnn.permute(nchw, (0, 2, 3, 1))
-        ttnn.deallocate(nchw)
-        ttnn.deallocate(x)
-        nhwc = ttnn.reallocate(nhwc)
-        x = ttnn.reshape(nhwc, [1, 1, nhwc.shape[0] * nhwc.shape[1] * nhwc.shape[2], nhwc.shape[-1]])
-        ttnn.deallocate(nhwc)
-
+        x = ttnn.permute(x, (0, 2, 3, 1))
         x = self._conv_stem(x)
-
         x = ttnn.swish(x)
-
         x = self._blocks0(x)
 
         x_1 = self._blocks1(x)

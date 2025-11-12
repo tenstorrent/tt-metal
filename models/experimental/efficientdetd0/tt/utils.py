@@ -28,7 +28,6 @@ class EfficientDetd0Maxpool2D:
         self.kernel_size = maxpool_params.kernel_size
         self.padding = maxpool_params.padding
         self.stride = maxpool_params.stride
-        # self.ceil_mode = maxpool_params.ceil_mode
         self.ceil_mode = ceil_mode
         self.deallocate_activation = deallocate_activation
         self.cache = cache
@@ -164,8 +163,8 @@ class EfficientNetb0Conv2D:
             weights_dtype=self.weights_dtype,
             shard_layout=self.shard_layout,
             deallocate_activation=self.deallocate_activation,
-            enable_act_double_buffer=True,
-            enable_weights_double_buffer=True if self.shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED else False,
+            enable_act_double_buffer=False,
+            enable_weights_double_buffer=False,
             reshard_if_not_optimal=True,
         )
 
@@ -174,7 +173,7 @@ class EfficientNetb0Conv2D:
     def _initialize_compute_config(self):
         return ttnn.init_device_compute_kernel_config(
             self.device.arch(),
-            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,

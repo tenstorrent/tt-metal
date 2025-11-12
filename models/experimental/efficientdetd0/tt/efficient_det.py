@@ -154,13 +154,6 @@ class TtEfficientDetBackbone:
             pyramid_levels=self.pyramid_levels[compound_coef],
         )
 
-        # # Initialize Anchors (CPU-based, no TTNN implementation needed)
-        # self.anchors = Anchors(
-        #     anchor_scale=self.anchor_scale[compound_coef],
-        #     pyramid_levels=(torch.arange(self.pyramid_levels[compound_coef]) + 3).tolist(),
-        #     **kwargs,
-        # )
-
     def __call__(self, inputs: ttnn.Tensor) -> Tuple[Tuple, ttnn.Tensor, ttnn.Tensor, torch.Tensor]:
         """
         Forward pass of EfficientDet.
@@ -199,21 +192,3 @@ class TtEfficientDetBackbone:
             ttnn.deallocate(t2)
 
         return features, regression, classification
-
-        # Generate anchors (CPU-based)
-        # Convert input to torch for anchor generation
-        if isinstance(inputs, ttnn.Tensor):
-            # Get input shape for anchor generation
-            # Note: Anchors are generated on CPU, so we need the input shape
-            # This is a simplified approach - in practice, you might want to pass image shape separately
-            input_torch = ttnn.to_torch(inputs)
-            # Convert from NHWC to NCHW if needed
-            if len(input_torch.shape) == 4:
-                # Assuming NHWC format
-                input_torch = input_torch.permute(0, 3, 1, 2)
-        else:
-            input_torch = inputs
-
-        anchors = self.anchors(input_torch, input_torch.dtype)
-
-        return features, regression, classification, anchors

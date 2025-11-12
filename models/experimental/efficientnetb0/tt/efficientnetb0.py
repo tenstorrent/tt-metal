@@ -66,9 +66,6 @@ class EfficientNetb0Conv2D:
         )
 
     def __call__(self, x):
-        import pdb
-
-        pdb.set_trace()
         [x, [out_h, out_w], [self.weights, self.bias]] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.weights,
@@ -122,7 +119,6 @@ class Conv2dDynamicSamePadding:
         oh, ow = math.ceil(ih / sh), math.ceil(iw / sw)  # change the output size according to stride ! ! !
         self.pad_h = max((oh - 1) * self.stride[0] + (kh - 1) * self.dilation[0] + 1 - ih, 0)
         self.pad_w = max((ow - 1) * self.stride[1] + (kw - 1) * self.dilation[1] + 1 - iw, 0)
-        self.padding = (self.pad_h, self.pad_w)
 
         if self.pad_h > 0 or self.pad_w > 0:
             pad_offset_width = self.pad_w // 2 + self.pad_w - self.pad_w // 2
@@ -256,11 +252,6 @@ class Efficientnetb0:
         self.batch = batch
         self.conv_cache = {}
         self.conv_params = conv_params
-        import pdb
-
-        pdb.set_trace()
-        print(f"parameters: {parameters=}")
-        print(".........................................................")
         self._conv_stem = Conv2dDynamicSamePadding(
             device=device,
             parameters=parameters["_conv_stem"],
