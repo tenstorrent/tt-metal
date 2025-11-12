@@ -126,9 +126,11 @@ private:
         // Capture operation start for tracking
         tt::tt_metal::GraphTracker::instance().track_function_start(cpp_fully_qualified_name, args...);
 
-        // Reset device operation ID only if tracking enabled
+        // Reset device operation ID and serialize arguments if tracking enabled
+        std::string serialized_arguments;
         if (tt::tt_metal::Inspector::is_operation_tracking_enabled()) {
             ttnn::CoreIDs::instance().reset_host_assigned_device_operation_id();
+            serialized_arguments = serialize_arguments(args...);
         }
 
         auto output = invoke(std::forward<args_t>(args)...);
@@ -137,9 +139,8 @@ private:
         if (tt::tt_metal::Inspector::is_operation_tracking_enabled()) {
             auto device_op_id = ttnn::CoreIDs::instance().get_host_assigned_device_operation_id();
             if (device_op_id.has_value()) {
-                auto arguments = serialize_arguments(args...);
                 tt::tt_metal::Inspector::track_operation(
-                    device_op_id, std::string{cpp_fully_qualified_name}, arguments);
+                    device_op_id, std::string{cpp_fully_qualified_name}, serialized_arguments);
             }
         }
 
