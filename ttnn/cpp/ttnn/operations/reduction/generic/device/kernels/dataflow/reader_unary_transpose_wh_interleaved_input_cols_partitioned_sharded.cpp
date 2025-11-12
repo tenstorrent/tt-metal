@@ -23,10 +23,14 @@ void kernel_main() {
     generate_reduce_scaler(cb_id_in2, scalar);
 #endif
 
-    constexpr uint32_t onetile = 1;
-    uint32_t tile_bytes = get_tile_size(cb_id_in0);
+    experimental::CircularBuffer cb0(cb_id_in0);
+    experimental::CircularBuffer cb1(cb_id_in1);
+    experimental::Noc noc(noc_index);
 
-    cb_reserve_back(cb_id_in1, num_tiles);
+    constexpr uint32_t onetile = 1;
+    uint32_t tile_bytes = cb0.get_tile_size();
+
+    cb1.reserve_back(num_tiles);
     uint64_t base_noc_addr = get_noc_addr(get_write_ptr(cb_id_in1));
 
     for (uint32_t b = 0; b < batch; ++b) {
@@ -34,12 +38,12 @@ void kernel_main() {
         for (uint32_t i = 0; i < Wt; ++i) {
             uint64_t curr_noc_addr = col_noc_addr;
             for (uint32_t j = 0; j < Ht; ++j) {
-                cb_reserve_back(cb_id_in0, onetile);
+                cb0.reserve_back(onetile);
                 uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
-                noc_async_read(curr_noc_addr, l1_write_addr, tile_bytes);
+                noc.async_read(curr_noc_addr, l1_write_addr, tile_bytes);
                 curr_noc_addr += row_size_bytes;
-                noc_async_read_barrier();
-                cb_push_back(cb_id_in0, onetile);
+                noc.async_read_barrier();
+                cb0.push_back(onetile);
             }
             col_noc_addr += tile_bytes;
         }
