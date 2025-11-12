@@ -63,9 +63,6 @@ class TrainingConfig:
         self.eval_every = int(tc.get("eval_every", 200))
         self.gradient_accumulation_steps = int(tc.get("gradient_accumulation_steps", 1))
 
-        # self.transformer_config = TransformerConfig(tc.get("transformer_config", {}))
-        # self.seq_len = int(self.transformer_config.max_sequence_length)
-
 
 class TransformerConfig:
     """Configuration for transformer model hyperparameters."""
