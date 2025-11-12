@@ -2221,22 +2221,70 @@ void populate_local_sender_channel_free_slots_stream_id_ordered_map(
 
 constexpr bool IS_TEARDOWN_MASTER() { return MY_ERISC_ID == 0; }
 
-void wait_for_other_local_erisc() {
-    constexpr uint32_t multi_erisc_sync_start_value = 0x0fed;
-    constexpr uint32_t multi_erisc_sync_step2_value = 0x1bad;
+static int local_risc_sync_counter;
+
+void initialize_local_risc_sync_counter() {
+    local_risc_sync_counter = 0;
+    constexpr uint32_t multi_erisc_sync_start_value = 0x0f00;
     if constexpr (IS_TEARDOWN_MASTER()) {
         write_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>(multi_erisc_sync_start_value);
-        while ((read_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>() & 0x1FFF) !=
-               multi_erisc_sync_step2_value) {
-            invalidate_l1_cache();
-        }
-        write_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>(0);
     } else {
         while ((read_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>() & 0x1FFF) !=
                multi_erisc_sync_start_value) {
             invalidate_l1_cache();
         }
-        write_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>(multi_erisc_sync_step2_value);
+        write_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>(multi_erisc_sync_start_value + 1);
+    }
+}
+
+void wait_for_other_local_erisc() {
+    constexpr uint32_t multi_erisc_sync_start_value = 0x0f00;
+    auto last_count = local_risc_sync_counter;
+    local_risc_sync_counter++;
+    auto expected_value_master = [](int count) { return multi_erisc_sync_start_value + (2 * count); };
+    auto expected_value_follower = [](int count) { return multi_erisc_sync_start_value + (2 * count) + 1; };
+
+    if constexpr (IS_TEARDOWN_MASTER()) {
+        // make sure the other erisc is caught up to the previous count
+        auto last_count_expected_value = expected_value_follower(last_count);
+        while ((read_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>() & 0x1FFF) !=
+               last_count_expected_value) {
+            invalidate_l1_cache();
+        }
+
+        // the last phase is definitely complete, we can proceed and increment the count
+        auto next_count_expected_value = expected_value_master(local_risc_sync_counter);
+        write_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>(next_count_expected_value);
+        // while ((read_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>() & 0x1FFF) !=
+        //        multi_erisc_sync_step2_value) {
+        //     invalidate_l1_cache();
+        // }
+        // write_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>(0);
+    } else {
+        // wait for the master core to signal that it is synced up to this point
+        auto expected_master_value = expected_value_master(local_risc_sync_counter);
+        while ((read_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>() & 0x1FFF) != expected_master_value) {
+            invalidate_l1_cache();
+        }
+        // now that the master has signled that it has entered the sync, we can update the count from
+        // our end
+        auto next_count_expected_value = expected_value_follower(local_risc_sync_counter);
+        write_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>(next_count_expected_value);
+    }
+}
+
+void teardown_local_erisc_sync_regs() {
+    constexpr size_t reset_value = 0;
+    if constexpr (IS_TEARDOWN_MASTER()) {
+        write_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>(reset_value);
+        while ((read_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>() & 0x1FFF) != reset_value + 1) {
+            invalidate_l1_cache();
+        }
+    } else {
+        while ((read_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>() & 0x1FFF) != reset_value) {
+            invalidate_l1_cache();
+        }
+        write_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>(reset_value + 1);
     }
 }
 
@@ -2295,6 +2343,7 @@ FORCE_INLINE void teardown(
 
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
         wait_for_other_local_erisc();
+        teardown_local_erisc_sync_regs();
     }
     if constexpr (IS_TEARDOWN_MASTER()) {
         *edm_status_ptr = tt::tt_fabric::EDMStatus::TERMINATED;
@@ -2317,6 +2366,9 @@ void initialize_state_for_txq1_active_mode_sender_side() {
 }
 
 void kernel_main() {
+    if constexpr (NUM_ACTIVE_ERISCS > 1) {
+        initialize_local_risc_sync_counter();
+    }
     set_l1_data_cache<true>();
     eth_txq_reg_write(sender_txq_id, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD);
     static_assert(
