@@ -261,7 +261,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
-  # # Multi-card post-commit tests
+  # Multi-card post-commit tests
   blackhole-multi-card-post-commit-tests:
     needs: build-artifact
     secrets: inherit
