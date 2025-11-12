@@ -56,8 +56,10 @@ tt::tt_metal::operation::ProgramWithCallbacks ema_multi_core(
     // Precompute the alpha and beta bits
     // Used by the EMA SFPU instructions
     // ----------------------------------
+    // For cumsum behavior, we can set both alpha=1.0f and beta=1.0f
+    // This gives: result = 1*prev + 1*input = prev + input (cumsum)
     auto alpha_bits = std::bit_cast<uint32_t>(alpha);
-    auto beta_bits = std::bit_cast<uint32_t>(1.0f - alpha);
+    auto beta_bits = std::bit_cast<uint32_t>(1.0f);
 
     // Create program
     // --------------

@@ -55,3 +55,37 @@ def test_ema(device, T, B, C, cores_y, cores_x):
 
     # Compare with golden output
     assert_with_pcc(golden_output_tensor, torch_output_tensor, pcc=0.9999)
+
+
+@pytest.mark.parametrize(
+    "T, B, C",
+    [
+        (1024, 1, 1024),
+    ],
+)
+def test_ema_as_cumsum(device, T, B, C):
+    """Test EMA behavior with different alpha values compared to cumulative sum."""
+
+    # Create input tensor with values that make cumsum interesting
+    torch_input_tensor = torch.rand((1, B, C, T), dtype=torch.bfloat16)
+
+    # Move to device
+    ttnn_input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    # Run EMA on device
+    tt_output_tensor = ttnn.ema(ttnn_input_tensor, alpha=1.0)
+    ttnn.synchronize_device(device)
+
+    # Get result back to host
+    dev_output_tensor = ttnn.from_device(tt_output_tensor)
+    ema_output = ttnn.to_torch(dev_output_tensor)
+
+    # Calculate cumulative sum as reference
+    cumsum_output = torch.cumsum(torch_input_tensor, dim=-1)
+    assert_with_pcc(cumsum_output, ema_output, pcc=0.9999)
