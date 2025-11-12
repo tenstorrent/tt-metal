@@ -124,9 +124,8 @@ void kernel_main() {
 
             read_tiles(cb_input_idx, input_address_generator, row_tile_idx, current_block_size, tile_bytes);
             read_tiles(cb_gamma_idx, gamma_address_generator, c, current_block_size, tile_bytes);
-            read_tiles(cb_beta_idx, beta_address_generator, c, current_block_size, tile_bytes);
+            read_tiles(cb_beta_idx, beta_address_generator, c, current_block_size, tile_bytes, true);
 
-            noc_async_read_barrier();
             cb_push_back(cb_input_idx, current_block_size);
             cb_push_back(cb_gamma_idx, current_block_size);
             cb_push_back(cb_beta_idx, current_block_size);

@@ -201,7 +201,7 @@ TEST_F(LayerNormBackwardOpTest, MetalLayerNormBw_TwoIncompleteTiles) {
     CompareKernelVsXArray(1, 32, 1, 33);
 }
 
-TEST_F(LayerNormBackwardOpTest, MetalLayerNormBw_LargeFeatures_NoL1Fit) {
+TEST_F(LayerNormBackwardOpTest, NIGHTLY_MetalLayerNormBw_LargeFeatures_NoL1Fit) {
     CompareKernelVsXArray(3, 273, 1, 8462);
 }
 

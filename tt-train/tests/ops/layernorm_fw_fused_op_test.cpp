@@ -138,11 +138,11 @@ TEST_F(LayerNormForwardOpTest, MetalLayerNormFw_OneIncompleteTile) {
     CompareKernelVsXArray(1, 12, 1, 19);
 }
 
-TEST_F(LayerNormForwardOpTest, MetalLayerNormFw_MediumTensor) {
+TEST_F(LayerNormForwardOpTest, NIGHTLY_MetalLayerNormFw_MediumTensorFitsInL1) {
     CompareKernelVsXArray(2, 182, 1, 2083);
 }
 
-TEST_F(LayerNormForwardOpTest, MetalLayerNormFw_LargeTensor) {
+TEST_F(LayerNormForwardOpTest, NIGHTLY_MetalLayerNormFw_LargeTensor_DoesNotFitInL1) {
     CompareKernelVsXArray(4, 324, 1, 9132);
 }
 

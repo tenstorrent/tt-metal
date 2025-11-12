@@ -115,17 +115,13 @@ spec_return_value_t LayerNormForwardDeviceOperation::compute_output_specs(
                     tensor_args.input.dtype(), tt::tt_metal::Layout::TILE, tensor_args.input.memory_config()));
         }
 
-        // rstd - same shape as mean [B, 1, S, 1]
+        // rstd - same shape as mean [B, H, S, 1]
         if (tensor_args.preallocated_rstd.has_value()) {
             output_specs.push_back(tensor_args.preallocated_rstd->tensor_spec());
         } else {
             const auto& input_shape = tensor_args.input.logical_shape();
-            ttnn::SmallVector<uint32_t> rstd_shape;
-            for (size_t i = 0; i < input_shape.rank() - 1; ++i) {
-                rstd_shape.push_back(input_shape[i]);
-            }
-            rstd_shape.push_back(1);  // Last dimension is 1
-
+            auto rstd_shape = input_shape;
+            rstd_shape[-1] = 1U;
             output_specs.emplace_back(
                 ttnn::Shape(rstd_shape),
                 tt::tt_metal::TensorLayout(

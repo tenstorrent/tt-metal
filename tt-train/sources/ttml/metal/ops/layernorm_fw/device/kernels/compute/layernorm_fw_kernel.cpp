@@ -144,7 +144,7 @@ inline void reduce_and_scale_to_mean() {
     const uint32_t mean_register = 0U;
 
     tile_regs_acquire();
-    mm_init(cb_sum_idx, cb_scaler_idx, cb_mean_bcast_idx, 0);
+    mm_init_short(cb_sum_idx, cb_scaler_idx, 0);
     matmul_tiles(
         cb_sum_idx,
         cb_scaler_idx,
@@ -281,7 +281,7 @@ inline void compute_rstd() {
     tile_regs_acquire();
 
     // Reduce variance sum and scale by 1/N
-    mm_init(cb_variance_sum_idx, cb_scaler_idx, cb_variance_sum_idx, 0);
+    mm_init_short(cb_variance_sum_idx, cb_scaler_idx, 0);
     matmul_tiles(
         cb_variance_sum_idx,
         cb_scaler_idx,
@@ -492,6 +492,7 @@ inline void MAIN {
 
     init_sfpu(cb_input_idx, cb_output_idx);
     binary_op_init_common(cb_input_idx, cb_gamma_idx, cb_output_idx);
+    mm_init(cb_sum_idx, cb_scaler_idx, cb_mean_bcast_idx);
 
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
 #ifdef EVERYTHING_FITS_IN_L1

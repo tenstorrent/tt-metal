@@ -242,8 +242,8 @@ LayerNormForwardProgramFactory::cached_program_t LayerNormForwardProgramFactory:
     // -------------------------------------------------------------------------
     const uint32_t twice_block_size = 2U * block_size;
 
-    const bool everything_fits_in_l1 =
-        fits_in_l1_check(Wt, block_size, bfloat16_single_tile_size_bytes, float32_single_tile_size_bytes, device);
+    const bool everything_fits_in_l1 = fits_in_l1_check(
+        Wt, block_size, bfloat16_single_tile_size_bytes, float32_single_tile_size_bytes, device, return_mean_rstd);
 
     const uint32_t num_input_tiles = (everything_fits_in_l1) ? Wt : twice_block_size;
     const uint32_t num_gamma_tiles = (everything_fits_in_l1) ? Wt : twice_block_size;
