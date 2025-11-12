@@ -389,6 +389,7 @@ void Hal::initialize_bh(bool enable_2_erisc_mode) {
     // https://github.com/tenstorrent/tt-isa-documentation/tree/main/BlackholeA0/PCIExpressTile for more details.
     this->pcie_addr_lower_bound_ = 0x0000000000000000ULL;
     this->pcie_addr_upper_bound_ = 0x13FF'FFFF'FFFF'FFFFULL;
+    this->supports_64_bit_pcie_addressing_ = true;
 
     this->noc_x_id_translate_table_ = {
         NOC_CFG(NOC_X_ID_TRANSLATE_TABLE_0),
