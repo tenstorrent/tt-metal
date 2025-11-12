@@ -109,6 +109,7 @@ class CIv2ModelDownloadUtils_:
         timeout_in_s,
         download_dir_suffix="",
         endpoint_prefix="http://large-file-cache.large-file-cache.svc.cluster.local//mldata/model_checkpoints/pytorch/huggingface",
+        download_dir=None,
     ):
         assert model_path, f"model_path cannot be empty when downloading - what is wrong with you?: {model_path}"
 
@@ -117,10 +118,12 @@ class CIv2ModelDownloadUtils_:
         ), f"{timeout_in_s} is not an integer, which it should be because it's a timeout duration"
 
         # RK: Will this be portable? LOL
-        download_dir = Path("/tmp/ttnn_model_cache/") / download_dir_suffix
+        if download_dir is None:
+            download_dir = Path("/tmp/ttnn_model_cache/") / download_dir_suffix
+        else:
+            download_dir = Path(download_dir)
 
         download_dir.mkdir(parents=True, exist_ok=True)
-
         download_dir_str = str(download_dir)
 
         # Add trailing slash to model_path if it doesn't have one, as wget
@@ -293,6 +296,105 @@ def get_tt_cache_path():
             return default_path
 
     return get_tt_cache_path_
+
+
+@pytest.fixture(scope="function")
+def cache_weights_locally(is_ci_env, is_ci_v2_env):
+    def cache_weights_locally_(
+        model_version,
+        ci_v2_timeout_in_s=300,
+        endpoint_prefix="http://aus2-lfcache.aus2.tenstorrent.com//mldata/model_checkpoints/pytorch/huggingface/",
+        download_dir_suffix="model_weights",
+        local_cache_dir=".cache/",
+    ):
+        return_path = None
+        is_local_env = not (is_ci_env or is_ci_v2_env)
+        if is_local_env:
+            temp_path = Path(local_cache_dir) / download_dir_suffix / model_version
+            logger.info(f"Checking for local cache path: {temp_path}")
+            if temp_path.exists():
+                logger.info(f"For model location, using local cache dir: {local_cache_dir}")
+                return_path = temp_path
+            else:
+                path = Path(local_cache_dir) / download_dir_suffix
+                return_path = CIv2ModelDownloadUtils_.download_from_ci_v2_cache(
+                    model_version,
+                    download_dir_suffix=download_dir_suffix,
+                    timeout_in_s=ci_v2_timeout_in_s,
+                    endpoint_prefix=endpoint_prefix,
+                    download_dir=path,
+                )
+                logger.info(f"For model location, using local download path: {return_path}")
+        return return_path, is_local_env
+
+    return cache_weights_locally_
+
+
+@pytest.fixture(scope="function")
+def local_weights_cache():
+    """
+    Simple local caching for development environment only.
+    Does not handle CI environments.
+    """
+
+    def local_weights_cache_(
+        model_version,
+        model_subdir="",
+        endpoint_prefix="http://aus2-lfcache.aus2.tenstorrent.com//mldata/model_checkpoints/pytorch/huggingface/",
+        download_dir_suffix="model_weights",
+        local_cache_dir=".cache/",
+        timeout_in_s=600,
+    ):
+        local_cache_dir = Path(local_cache_dir)
+        cache_path = local_cache_dir / download_dir_suffix / model_version
+
+        # Check cache first
+        if cache_path.exists():
+            logger.info(f"Using local cache: {cache_path}")
+            return cache_path
+
+        # Download and cache
+        logger.info(f"Downloading from: {endpoint_prefix}")
+        downloaded_path = CIv2ModelDownloadUtils_.download_from_ci_v2_cache(
+            model_version,
+            download_dir_suffix=download_dir_suffix,
+            timeout_in_s=timeout_in_s,
+            endpoint_prefix=endpoint_prefix,
+            download_dir=local_cache_dir,
+        )
+        logger.info(f"Downloaded and cached: {downloaded_path}")
+        return downloaded_path
+
+    return local_weights_cache_
+
+
+@pytest.fixture(scope="function")
+def universal_weights(is_ci_env, is_ci_v2_env, model_location_generator, local_weights_cache):
+    """
+    Universal weights fixture that automatically chooses the right strategy:
+    - CI environments: uses model_location_generator
+    - Local development: uses local_weights_cache
+    """
+
+    def universal_weights_(
+        model_version, model_subdir="", download_if_ci_v2=False, **kwargs  # Additional params for local_weights_cache
+    ):
+        is_local_env = not (is_ci_env or is_ci_v2_env)
+
+        if is_local_env:
+            # Local development - use local cache
+            path = local_weights_cache(model_version, model_subdir=model_subdir, **kwargs)
+            return path, is_local_env
+        else:
+            # CI environment - use model_location_generator
+            path = model_location_generator(
+                model_version,
+                model_subdir=model_subdir,
+                download_if_ci_v2=download_if_ci_v2,
+            )
+            return path, is_local_env
+
+    return universal_weights_
 
 
 @pytest.fixture(scope="function")

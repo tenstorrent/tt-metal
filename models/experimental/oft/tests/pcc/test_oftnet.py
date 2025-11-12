@@ -61,6 +61,7 @@ def test_oftnet(
     pcc_dimensions_oft,
     pcc_angles_oft,
     model_location_generator,
+    cache_weights_locally,
 ):
     skip_if_not_blackhole_20_cores(device)
     device.disable_and_clear_program_cache()  # test hangs without this line on P150
@@ -81,7 +82,9 @@ def test_oftnet(
         dtype=model_dtype,
     )
 
-    ref_model = load_checkpoint(ref_model, model_location_generator)
+    ref_model = load_checkpoint(
+        ref_model, model_location_generator=model_location_generator, cache_weights_locally=cache_weights_locally
+    )
     state_dict = create_OFT_model_parameters(ref_model, (input_tensor, calib, grid), device=device)
     model_opt = ModelOptimizations()
     model_opt.apply(state_dict)

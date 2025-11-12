@@ -53,6 +53,7 @@ def test_oftnet(
     pcc_dimensions_oft,
     pcc_angles_oft,
     model_location_generator,
+    cache_weights_locally,
 ):
     # Create output directory for saving visualizations
     output_dir = os.path.join(os.path.dirname(__file__), "outputs")
@@ -82,7 +83,9 @@ def test_oftnet(
         dtype=torch.float32,
     )
 
-    ref_model = load_checkpoint(ref_model, model_location_generator)
+    ref_model = load_checkpoint(
+        ref_model, model_location_generator=model_location_generator, cache_weights_locally=cache_weights_locally
+    )
     ref_encoder = ObjectEncoder(nms_thresh=NMS_THRESH, dtype=torch.float32)
 
     # ========================================================
@@ -95,7 +98,9 @@ def test_oftnet(
         grid_height=GRID_HEIGHT,
         dtype=torch.bfloat16,
     )
-    test_model = load_checkpoint(test_model, model_location_generator)
+    test_model = load_checkpoint(
+        test_model, model_location_generator=model_location_generator, cache_weights_locally=cache_weights_locally
+    )
 
     # ========================================================
     # Run torch fp32 and bfp16 inference pass

@@ -18,38 +18,63 @@ NMS_THRESH = 0.2
 CHECKPOINTS_PATH_ENV = "CHECKPOINTS_PATH"
 
 
-def prepare_checkpoint_path(model_location_generator):
+def test_weights_downloaded(model_location_generator, cache_weights_locally):
+    checkpoints_path = prepare_checkpoint_path(model_location_generator, cache_weights_locally)
+    print(f"Checkpoints path: {checkpoints_path}")
+    assert checkpoints_path is not None
+
+
+def prepare_checkpoint_path(model_location_generator=None, cache_weights_locally=None):
+    """
+    Prepare path to OFT checkpoint file.
+
+    Args:
+        cache_weights: Cache weights fixture for unified download/cache handling
+        model_location_generator: Fallback model location generator
+
+    Returns:
+        Path: Path to checkpoint-0600.pth file
+    """
+    model_version = "vision-models/oft"
+    checkpoint_filename = "checkpoint-0600.pth"
+    is_local_env = False
     checkpoints_path = None
-    if model_location_generator is None or "TT_GH_CI_INFRA" not in os.environ:
-        checkpoints_path = os.environ.get(CHECKPOINTS_PATH_ENV)
-        if checkpoints_path is None:
-            logger.error(f"Environment variable {CHECKPOINTS_PATH_ENV} is not set!")
-            raise RuntimeError(f"Environment variable {CHECKPOINTS_PATH_ENV} is not set!")
+    # first try to download to local weights
+    if cache_weights_locally is not None:
+        weights_path, is_local_env = cache_weights_locally(model_version, model_subdir="")
+        if is_local_env and weights_path is not None:
+            checkpoints_path = os.path.join(weights_path, checkpoint_filename)
+            logger.info(f"Custom model weights function returned path: {checkpoints_path}")
+        else:
+            logger.warning("Custom model weights function did not return a valid path!")
     else:
+        logger.warning("Custom model weights function is None!")
+
+    if not is_local_env and model_location_generator is not None:
         cached_weights_path = "/tmp/ttnn_model_cache/model_weights/vision-models/oft/checkpoint-0600.pth"
         if os.path.exists(cached_weights_path):
             checkpoints_path = cached_weights_path
         else:
-            # Use CI v2 model location generator to download
-            checkpoints_path = (
-                model_location_generator("vision-models/oft", model_subdir="", download_if_ci_v2=True)
-                / "checkpoint-0600.pth"
+            checkpoints_path = model_location_generator(
+                model_version,
+                checkpoint_filename=checkpoint_filename,
+                ci_v2_timeout_in_s=300,
+                endpoint_prefix="tt-metal-models",
+                model_subdir="",
             )
-
-    if checkpoints_path is not None and os.path.isfile(checkpoints_path):
-        logger.info(f"Using model weights from {checkpoints_path}")
+            logger.info(f"Model location generator returned path: {checkpoints_path}")
     else:
-        logger.error(f"Checkpoint path {checkpoints_path} does not exist")
-        raise RuntimeError(f"Checkpoint path {checkpoints_path} does not exist")
-
+        logger.warning("Model location generator is None or running in local environment!")
     return checkpoints_path
 
 
-def load_checkpoint(ref_model, model_location_generator=None):
-    checkpoints_path = prepare_checkpoint_path(model_location_generator)
+def load_checkpoint(ref_model, model_location_generator=None, cache_weights_locally=None):
+    checkpoints_path = prepare_checkpoint_path(
+        model_location_generator=model_location_generator, cache_weights_locally=cache_weights_locally
+    )
     if checkpoints_path is None:
-        logger.error("Environment variable CHECKPOINTS_PATH is not set!")
-        raise RuntimeError("Environment variable CHECKPOINTS_PATH is not set!")
+        logger.error("Checkpoint path is not set!")
+        raise RuntimeError("Checkpoint path is not set!")
     if checkpoints_path is not None and os.path.isfile(checkpoints_path):
         logger.info(f"Loading model weights from {checkpoints_path}")
         checkpoint = torch.load(checkpoints_path, map_location="cpu")
