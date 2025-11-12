@@ -270,10 +270,6 @@ public:
             this->tensor_attributes->get_storage(), this->tensor_attributes->get_tensor_spec());
     }
 
-    static std::uint64_t get_tensor_id_counter();
-
-    static void set_tensor_id_counter(std::uint64_t id);
-
     // TODO #32045: Remove this function since IDs are assigned in the constructor.
     static std::uint64_t next_tensor_id();
 

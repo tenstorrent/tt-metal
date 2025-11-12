@@ -308,13 +308,6 @@ PYBIND11_MODULE(_ttnn, module) {
         "Increment tensor id and return the previously held id");
 
     module.def(
-        "get_tensor_id", &tt::tt_metal::Tensor::get_tensor_id_counter, "Get the current tensor ID counter value");
-    module.def(
-        "set_tensor_id",
-        &tt::tt_metal::Tensor::set_tensor_id_counter,
-        py::arg("id"),
-        "Set the tensor ID counter to a specific value");
-    module.def(
         "fetch_and_increment_tensor_id",
         &tt::tt_metal::Tensor::next_tensor_id,
         "Atomically fetch and increment the tensor ID counter");

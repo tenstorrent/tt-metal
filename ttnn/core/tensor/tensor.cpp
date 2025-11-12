@@ -149,10 +149,6 @@ void Tensor::deallocate_impl(bool force) {
     // GraphTracker::instance().track_function_end();
 }
 
-std::uint64_t Tensor::get_tensor_id_counter() { return tensor_id_counter.load(std::memory_order_relaxed); }
-
-void Tensor::set_tensor_id_counter(std::uint64_t id) { tensor_id_counter.store(id, std::memory_order_relaxed); }
-
 std::uint64_t Tensor::next_tensor_id() { return tensor_id_counter.fetch_add(1, std::memory_order_relaxed); }
 
 template <typename T>
