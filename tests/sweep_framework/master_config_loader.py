@@ -517,6 +517,17 @@ class MasterConfigLoader:
                 return self._get_nlp_create_qkv_heads_decode_suite_parameters(
                     operation_name, configs, all_cases, deduplicate_inputs=not all_cases
                 )
+            elif operation_name in [
+                "paged_scaled_dot_product_attention_decode",
+                "transformer::paged_scaled_dot_product_attention_decode",
+                "ttnn::transformer::paged_scaled_dot_product_attention_decode",
+            ]:
+                print(
+                    f"🔧 Detected paged_scaled_dot_product_attention_decode operation - using operation-specific extractor"
+                )
+                return self._get_operation_suite_parameters(
+                    operation_name, configs, all_cases, deduplicate_inputs=not all_cases
+                )
 
             # Detect the number of tensor inputs
             tensor_count = self._count_tensor_inputs(configs)
@@ -1549,6 +1560,113 @@ class MasterConfigLoader:
                                     cfg["transpose_a"],
                                     cfg["transpose_b"],
                                     cfg["has_bias"],
+                                )
+                                for cfg in transformed_configs
+                            ]
+                        ]
+                        return {param_names[0]: param_lists[0]}
+
+                    # For all_gather_async, we need to return parameters in the correct format
+                    elif clean_op_name == "experimental::all_gather_async" or clean_op_name == "all_gather_async":
+                        # Extract parameters from transformed configs
+                        input_shapes = []
+                        input_a_dtypes = []
+                        input_a_layouts = []
+                        input_a_memory_configs = []
+                        output_memory_configs = []
+
+                        for cfg in transformed_configs:
+                            input_shapes.append(cfg.get("input_shape"))
+                            input_a_dtypes.append(cfg.get("input_dtype"))
+                            input_a_layouts.append(cfg.get("input_layout", ttnn.TILE_LAYOUT))
+                            input_a_memory_configs.append(cfg.get("input_memory_config"))
+                            output_memory_configs.append(cfg.get("output_memory_config"))
+
+                        # Create tuples of exact configurations
+                        param_names = [
+                            "input_shape,input_a_dtype,input_a_layout,input_a_memory_config,output_memory_config"
+                        ]
+                        param_lists = [
+                            [
+                                (
+                                    cfg.get("input_shape"),
+                                    cfg.get("input_dtype"),
+                                    cfg.get("input_layout", ttnn.TILE_LAYOUT),
+                                    cfg.get("input_memory_config"),
+                                    cfg.get("output_memory_config"),
+                                )
+                                for cfg in transformed_configs
+                            ]
+                        ]
+                        return {param_names[0]: param_lists[0]}
+
+                    # For paged_scaled_dot_product_attention_decode, extract parameters from transformed configs
+                    elif (
+                        clean_op_name == "transformer::paged_scaled_dot_product_attention_decode"
+                        or clean_op_name == "paged_scaled_dot_product_attention_decode"
+                    ):
+                        # Extract parameters from transformed configs
+                        input_shapes = []
+                        input_a_dtypes = []
+                        input_a_layouts = []
+                        input_a_memory_configs = []
+                        input_b_dtypes = []
+                        input_b_layouts = []
+                        input_b_memory_configs = []
+                        input_c_dtypes = []
+                        input_c_layouts = []
+                        input_c_memory_configs = []
+                        input_d_dtypes = []
+                        input_d_layouts = []
+                        input_d_memory_configs = []
+                        input_e_dtypes = []
+                        input_e_layouts = []
+                        input_e_memory_configs = []
+                        output_memory_configs = []
+
+                        for cfg in transformed_configs:
+                            input_shapes.append(cfg.get("input_shape"))
+                            input_a_dtypes.append(cfg.get("input_a_dtype"))
+                            input_a_layouts.append(cfg.get("input_a_layout", ttnn.TILE_LAYOUT))
+                            input_a_memory_configs.append(cfg.get("input_a_memory_config"))
+                            input_b_dtypes.append(cfg.get("input_b_dtype"))
+                            input_b_layouts.append(cfg.get("input_b_layout", ttnn.TILE_LAYOUT))
+                            input_b_memory_configs.append(cfg.get("input_b_memory_config"))
+                            input_c_dtypes.append(cfg.get("input_c_dtype"))
+                            input_c_layouts.append(cfg.get("input_c_layout", ttnn.TILE_LAYOUT))
+                            input_c_memory_configs.append(cfg.get("input_c_memory_config"))
+                            input_d_dtypes.append(cfg.get("input_d_dtype"))
+                            input_d_layouts.append(cfg.get("input_d_layout", ttnn.TILE_LAYOUT))
+                            input_d_memory_configs.append(cfg.get("input_d_memory_config"))
+                            input_e_dtypes.append(cfg.get("input_e_dtype"))
+                            input_e_layouts.append(cfg.get("input_e_layout", ttnn.TILE_LAYOUT))
+                            input_e_memory_configs.append(cfg.get("input_e_memory_config"))
+                            output_memory_configs.append(cfg.get("output_memory_config"))
+
+                        # Create tuples of exact configurations
+                        param_names = [
+                            "input_shape,input_a_dtype,input_a_layout,input_a_memory_config,input_b_dtype,input_b_layout,input_b_memory_config,input_c_dtype,input_c_layout,input_c_memory_config,input_d_dtype,input_d_layout,input_d_memory_config,input_e_dtype,input_e_layout,input_e_memory_config,output_memory_config"
+                        ]
+                        param_lists = [
+                            [
+                                (
+                                    cfg.get("input_shape"),
+                                    cfg.get("input_a_dtype"),
+                                    cfg.get("input_a_layout", ttnn.TILE_LAYOUT),
+                                    cfg.get("input_a_memory_config"),
+                                    cfg.get("input_b_dtype"),
+                                    cfg.get("input_b_layout", ttnn.TILE_LAYOUT),
+                                    cfg.get("input_b_memory_config"),
+                                    cfg.get("input_c_dtype"),
+                                    cfg.get("input_c_layout", ttnn.TILE_LAYOUT),
+                                    cfg.get("input_c_memory_config"),
+                                    cfg.get("input_d_dtype"),
+                                    cfg.get("input_d_layout", ttnn.TILE_LAYOUT),
+                                    cfg.get("input_d_memory_config"),
+                                    cfg.get("input_e_dtype"),
+                                    cfg.get("input_e_layout", ttnn.TILE_LAYOUT),
+                                    cfg.get("input_e_memory_config"),
+                                    cfg.get("output_memory_config"),
                                 )
                                 for cfg in transformed_configs
                             ]

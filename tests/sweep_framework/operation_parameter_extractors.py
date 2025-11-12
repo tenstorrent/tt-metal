@@ -798,6 +798,221 @@ class OperationParameterExtractors:
             return None
 
     @staticmethod
+    def _extract_paged_scaled_dot_product_attention_decode_parameters(config: List) -> Optional[Dict]:
+        """Extract parameters for paged_scaled_dot_product_attention_decode operation
+
+        Extracts:
+        - Input tensor configs from arg0, arg1, arg2, arg3, arg6
+        - Output memory config from arg10
+        """
+        try:
+            params = {}
+
+            # Extract input tensor configs
+            input_configs = []
+            for arg_idx in [0, 1, 2, 3, 6]:
+                if len(config) > arg_idx:
+                    arg = config[arg_idx]
+                    if isinstance(arg, dict):
+                        arg_key = f"arg{arg_idx}"
+                        if arg_key in arg:
+                            tensor_config = OperationParameterExtractors.extract_tensor_config(arg[arg_key])
+                            if tensor_config:
+                                input_configs.append(tensor_config)
+                        elif "UnparsedElement" in arg:
+                            # Handle UnparsedElement case (e.g., arg0)
+                            tensor_config = OperationParameterExtractors.extract_tensor_config(arg)
+                            if tensor_config:
+                                input_configs.append(tensor_config)
+
+            # Extract output memory config from arg10
+            output_memory_config = None
+            if len(config) > 10:
+                arg10 = config[10]
+                if isinstance(arg10, dict) and "arg10" in arg10:
+                    arg10_data = arg10["arg10"]
+                    if isinstance(arg10_data, dict) and "MemoryConfig" in arg10_data:
+                        output_memory_config = arg10_data["MemoryConfig"]
+
+            # Build params dict
+            if input_configs:
+                # Use first input's shape as primary input_shape (arg0 is the query tensor)
+                params["input_shape"] = input_configs[0].shape if len(input_configs) > 0 else None
+                params["input_a_dtype"] = input_configs[0].dtype.replace("DataType::", "")
+                params["input_a_layout"] = input_configs[0].layout.replace("Layout::", "")
+                params["input_a_memory_config"] = input_configs[0].memory_config
+
+                # Extract other inputs if available, including their shapes
+                if len(input_configs) > 1:
+                    params["input_b_shape"] = input_configs[1].shape
+                    params["input_b_dtype"] = input_configs[1].dtype.replace("DataType::", "")
+                    params["input_b_layout"] = input_configs[1].layout.replace("Layout::", "")
+                    params["input_b_memory_config"] = input_configs[1].memory_config
+                if len(input_configs) > 2:
+                    params["input_c_shape"] = input_configs[2].shape
+                    params["input_c_dtype"] = input_configs[2].dtype.replace("DataType::", "")
+                    params["input_c_layout"] = input_configs[2].layout.replace("Layout::", "")
+                    params["input_c_memory_config"] = input_configs[2].memory_config
+                if len(input_configs) > 3:
+                    params["input_d_shape"] = input_configs[3].shape
+                    params["input_d_dtype"] = input_configs[3].dtype.replace("DataType::", "")
+                    params["input_d_layout"] = input_configs[3].layout.replace("Layout::", "")
+                    params["input_d_memory_config"] = input_configs[3].memory_config
+                if len(input_configs) > 4:
+                    params["input_e_shape"] = input_configs[4].shape
+                    params["input_e_dtype"] = input_configs[4].dtype.replace("DataType::", "")
+                    params["input_e_layout"] = input_configs[4].layout.replace("Layout::", "")
+                    params["input_e_memory_config"] = input_configs[4].memory_config
+
+            if output_memory_config:
+                params["output_memory_config"] = output_memory_config
+
+            return params if params else None
+        except Exception as e:
+            import traceback
+
+            print(f"Error extracting paged_scaled_dot_product_attention_decode parameters: {e}")
+            traceback.print_exc()
+            return None
+
+    @staticmethod
+    def _transform_paged_scaled_dot_product_attention_decode_parameters(
+        configs: List[Dict],
+        parse_dtype=None,
+        parse_layout=None,
+        parse_memory_config=None,
+    ) -> List[Dict]:
+        """Transform extracted paged_scaled_dot_product_attention_decode parameters to TTNN types"""
+        transformed_configs = []
+
+        for config in configs:
+            try:
+                transformed_config = {}
+
+                # Transform input_shape (use dict format for multi-input)
+                # Build input_shape dict from all available input shapes
+                input_shape_dict = {}
+                if "input_shape" in config:
+                    # input_shape is the first input's shape
+                    input_shape_dict["input_a"] = config["input_shape"]
+                # Try to get other input shapes from the config if available
+                # Note: The extractor extracts shapes from input_configs, but we need to reconstruct them
+                # For now, we'll use the first input's shape for all inputs if others aren't available
+                # This is a limitation - ideally we'd extract all shapes separately
+                if "input_b_shape" in config:
+                    input_shape_dict["input_b"] = config["input_b_shape"]
+                if "input_c_shape" in config:
+                    input_shape_dict["input_c"] = config["input_c_shape"]
+                if "input_d_shape" in config:
+                    input_shape_dict["input_d"] = config["input_d_shape"]
+                if "input_e_shape" in config:
+                    input_shape_dict["input_e"] = config["input_e_shape"]
+                transformed_config["input_shape"] = input_shape_dict
+
+                # Transform dtypes
+                if parse_dtype:
+                    transformed_config["input_a_dtype"] = parse_dtype(
+                        f"DataType::{config.get('input_a_dtype', 'BFLOAT16')}"
+                    )
+                    if "input_b_dtype" in config:
+                        transformed_config["input_b_dtype"] = parse_dtype(f"DataType::{config['input_b_dtype']}")
+                    if "input_c_dtype" in config:
+                        transformed_config["input_c_dtype"] = parse_dtype(f"DataType::{config['input_c_dtype']}")
+                    if "input_d_dtype" in config:
+                        transformed_config["input_d_dtype"] = parse_dtype(f"DataType::{config['input_d_dtype']}")
+                    if "input_e_dtype" in config:
+                        transformed_config["input_e_dtype"] = parse_dtype(f"DataType::{config['input_e_dtype']}")
+                else:
+                    transformed_config["input_a_dtype"] = config.get("input_a_dtype", "BFLOAT16")
+                    if "input_b_dtype" in config:
+                        transformed_config["input_b_dtype"] = config["input_b_dtype"]
+                    if "input_c_dtype" in config:
+                        transformed_config["input_c_dtype"] = config["input_c_dtype"]
+                    if "input_d_dtype" in config:
+                        transformed_config["input_d_dtype"] = config["input_d_dtype"]
+                    if "input_e_dtype" in config:
+                        transformed_config["input_e_dtype"] = config["input_e_dtype"]
+
+                # Transform layouts
+                if parse_layout:
+                    transformed_config["input_a_layout"] = parse_layout(config.get("input_a_layout", "TILE"))
+                    if "input_b_layout" in config:
+                        transformed_config["input_b_layout"] = parse_layout(config["input_b_layout"])
+                    if "input_c_layout" in config:
+                        transformed_config["input_c_layout"] = parse_layout(config["input_c_layout"])
+                    if "input_d_layout" in config:
+                        transformed_config["input_d_layout"] = parse_layout(config["input_d_layout"])
+                    if "input_e_layout" in config:
+                        transformed_config["input_e_layout"] = parse_layout(config["input_e_layout"])
+                else:
+                    transformed_config["input_a_layout"] = config.get("input_a_layout", "TILE")
+                    if "input_b_layout" in config:
+                        transformed_config["input_b_layout"] = config["input_b_layout"]
+                    if "input_c_layout" in config:
+                        transformed_config["input_c_layout"] = config["input_c_layout"]
+                    if "input_d_layout" in config:
+                        transformed_config["input_d_layout"] = config["input_d_layout"]
+                    if "input_e_layout" in config:
+                        transformed_config["input_e_layout"] = config["input_e_layout"]
+
+                # Transform memory configs
+                if parse_memory_config:
+                    input_shape = config.get("input_shape", [])
+                    transformed_config["input_a_memory_config"] = parse_memory_config(
+                        config.get("input_a_memory_config", {}), input_shape
+                    )
+                    if "input_b_memory_config" in config:
+                        # Get shape from config if available, otherwise use input_shape
+                        input_b_shape = config.get("input_b_shape", input_shape)
+                        transformed_config["input_b_memory_config"] = parse_memory_config(
+                            config["input_b_memory_config"], input_b_shape
+                        )
+                    if "input_c_memory_config" in config:
+                        input_c_shape = config.get("input_c_shape", input_shape)
+                        transformed_config["input_c_memory_config"] = parse_memory_config(
+                            config["input_c_memory_config"], input_c_shape
+                        )
+                    if "input_d_memory_config" in config:
+                        input_d_shape = config.get("input_d_shape", input_shape)
+                        transformed_config["input_d_memory_config"] = parse_memory_config(
+                            config["input_d_memory_config"], input_d_shape
+                        )
+                    if "input_e_memory_config" in config:
+                        input_e_shape = config.get("input_e_shape", input_shape)
+                        transformed_config["input_e_memory_config"] = parse_memory_config(
+                            config["input_e_memory_config"], input_e_shape
+                        )
+
+                    # Transform output_memory_config
+                    output_mem_config_dict = config.get("output_memory_config", {})
+                    if output_mem_config_dict:
+                        # Use input shape for output shape (approximation)
+                        transformed_config["output_memory_config"] = parse_memory_config(
+                            output_mem_config_dict, input_shape
+                        )
+                else:
+                    transformed_config["input_a_memory_config"] = config.get("input_a_memory_config", {})
+                    if "input_b_memory_config" in config:
+                        transformed_config["input_b_memory_config"] = config["input_b_memory_config"]
+                    if "input_c_memory_config" in config:
+                        transformed_config["input_c_memory_config"] = config["input_c_memory_config"]
+                    if "input_d_memory_config" in config:
+                        transformed_config["input_d_memory_config"] = config["input_d_memory_config"]
+                    if "input_e_memory_config" in config:
+                        transformed_config["input_e_memory_config"] = config["input_e_memory_config"]
+                    transformed_config["output_memory_config"] = config.get("output_memory_config", {})
+
+                transformed_configs.append(transformed_config)
+            except Exception as e:
+                print(f"Error transforming paged_scaled_dot_product_attention_decode config: {e}")
+                import traceback
+
+                traceback.print_exc()
+                continue
+
+        return transformed_configs
+
+    @staticmethod
     def _extract_tilize_with_val_padding_parameters(config: List) -> Optional[Dict]:
         """Extract parameters for tilize_with_val_padding operation"""
         try:
@@ -813,6 +1028,283 @@ class OperationParameterExtractors:
             return None
         except Exception:
             return None
+
+    @staticmethod
+    def _extract_all_gather_async_parameters(config: List) -> Optional[Dict]:
+        """Extract parameters for all_gather_async operation
+
+        Handles UnparsedElement errors by extracting from element_info using regex.
+        Extracts:
+        - Input tensor config from arg0
+        - Output memory config from arg5
+        - dim from arg2
+        - num_links from arg4
+        """
+        import json
+        import re
+
+        try:
+            params = {}
+
+            # Extract input tensor config from arg0 (handles UnparsedElement)
+            input_shape = None
+            input_dtype = None
+            input_memory_config = None
+
+            if len(config) > 0:
+                arg0 = config[0]
+                if isinstance(arg0, dict):
+                    if "arg0" in arg0:
+                        # Normal case - use extract_tensor_config
+                        tensor_config = OperationParameterExtractors.extract_tensor_config(arg0["arg0"])
+                        if tensor_config:
+                            input_shape = tensor_config.shape
+                            input_dtype = tensor_config.dtype.replace("DataType::", "")
+                            input_memory_config = tensor_config.memory_config
+                    elif "UnparsedElement" in arg0:
+                        # UnparsedElement case - extract from element_info using regex
+                        unparsed = arg0["UnparsedElement"]
+                        element_info = unparsed.get("element_info", "")
+
+                        # Try to use extract_tensor_config first (it handles UnparsedElement)
+                        tensor_config = OperationParameterExtractors.extract_tensor_config(arg0)
+                        if tensor_config:
+                            input_shape = tensor_config.shape
+                            input_dtype = tensor_config.dtype.replace("DataType::", "")
+                            input_memory_config = tensor_config.memory_config
+                        else:
+                            # Fallback to regex extraction
+                            shape_match = re.search(r'"logical_shape":\[([^\]]+)\]', element_info)
+                            if shape_match:
+                                try:
+                                    input_shape = json.loads("[" + shape_match.group(1) + "]")
+                                except:
+                                    pass
+
+                            dtype_match = re.search(r'"dtype":"DataType::([^"]+)"', element_info)
+                            if dtype_match:
+                                input_dtype = dtype_match.group(1)
+
+                            # Extract memory config
+                            if "memory_config" in element_info:
+                                mem_layout_match = re.search(
+                                    r'"memory_layout":"TensorMemoryLayout::([^"]+)"', element_info
+                                )
+                                buffer_type_match = re.search(r'"buffer_type":"BufferType::([^"]+)"', element_info)
+
+                                input_memory_config = {}
+                                if mem_layout_match:
+                                    input_memory_config["memory_layout"] = mem_layout_match.group(1)
+                                if buffer_type_match:
+                                    input_memory_config["buffer_type"] = buffer_type_match.group(1)
+
+                                # Extract shard_spec if present
+                                if "shard_spec" in element_info and "nullopt" not in element_info:
+                                    shard_match = re.search(r'"shard_spec":\{([^}]+)\}', element_info)
+                                    if shard_match:
+                                        shard_info = shard_match.group(1)
+                                        input_memory_config["shard_spec"] = shard_info
+
+            # Extract output memory config from arg5 (handles UnparsedElement)
+            output_memory_config = None
+
+            if len(config) > 5:
+                arg5 = config[5]
+                if isinstance(arg5, dict):
+                    if "arg5" in arg5:
+                        # Normal case - arg5 might be nested
+                        mem_arg = arg5["arg5"]
+                        if isinstance(mem_arg, dict):
+                            if "MemoryConfig" in mem_arg:
+                                output_memory_config = mem_arg["MemoryConfig"]
+                            elif "memory_layout" in mem_arg or "buffer_type" in mem_arg:
+                                # Already extracted format
+                                output_memory_config = mem_arg
+                            else:
+                                # Try to find MemoryConfig deeper in the structure
+                                import json
+
+                                mem_arg_str = json.dumps(mem_arg)
+                                if "MemoryConfig" in mem_arg_str:
+                                    # Try to extract using regex
+                                    mem_layout_match = re.search(
+                                        r'"memory_layout":"TensorMemoryLayout::([^"]+)"', mem_arg_str
+                                    )
+                                    buffer_type_match = re.search(r'"buffer_type":"BufferType::([^"]+)"', mem_arg_str)
+                                    if mem_layout_match or buffer_type_match:
+                                        output_memory_config = {}
+                                        if mem_layout_match:
+                                            output_memory_config["memory_layout"] = mem_layout_match.group(1)
+                                        if buffer_type_match:
+                                            output_memory_config["buffer_type"] = buffer_type_match.group(1)
+                    elif "UnparsedElement" in arg5:
+                        # UnparsedElement case - extract from element_info
+                        unparsed = arg5["UnparsedElement"]
+                        element_info = unparsed.get("element_info", "")
+
+                        if "MemoryConfig" in element_info:
+                            mem_layout_match = re.search(r'"memory_layout":"TensorMemoryLayout::([^"]+)"', element_info)
+                            buffer_type_match = re.search(r'"buffer_type":"BufferType::([^"]+)"', element_info)
+
+                            output_memory_config = {}
+                            if mem_layout_match:
+                                output_memory_config["memory_layout"] = mem_layout_match.group(1)
+                            if buffer_type_match:
+                                output_memory_config["buffer_type"] = buffer_type_match.group(1)
+
+                            # Extract shard_spec if present - handle nested braces
+                            # Check for shard_spec specifically, not just absence of nullopt
+                            shard_spec_start = element_info.find('"shard_spec":{')
+                            if shard_spec_start != -1 and element_info.find('"shard_spec":"std::nullopt"') == -1:
+                                # Find shard_spec start
+                                shard_start = element_info.find('"shard_spec":{')
+                                if shard_start != -1:
+                                    # Find matching closing brace
+                                    brace_count = 0
+                                    start_pos = shard_start + len('"shard_spec":{')
+                                    shard_spec_str = None
+                                    for i in range(start_pos, len(element_info)):
+                                        if element_info[i] == "{":
+                                            brace_count += 1
+                                        elif element_info[i] == "}":
+                                            if brace_count == 0:
+                                                shard_spec_str = element_info[
+                                                    shard_start + len('"shard_spec":') : i + 1
+                                                ]
+                                                break
+                                            brace_count -= 1
+
+                                    if shard_spec_str:
+                                        try:
+                                            # Fix the " - " syntax in grid coordinates
+                                            fixed_shard = re.sub(
+                                                r'(\{"x":\d+,"y":\d+\})\s*-\s*(\{"x":\d+,"y":\d+\})',
+                                                r"[\1, \2]",
+                                                shard_spec_str,
+                                            )
+                                            # Fix shape format "{32, 64}" -> "[32, 64]"
+                                            fixed_shard = re.sub(
+                                                r'"shape":"\{(\d+),\s*(\d+)\}"', r'"shape":[\1, \2]', fixed_shard
+                                            )
+                                            # Parse as JSON
+                                            shard_spec_dict = json.loads(fixed_shard)
+                                            output_memory_config["shard_spec"] = shard_spec_dict
+                                        except Exception as e:
+                                            # Fallback: store as string for parse_memory_config to handle
+                                            output_memory_config["shard_spec"] = shard_spec_str
+
+            # Extract dim from arg2
+            dim = OperationParameterExtractors._extract_int_parameter(config, "arg2")
+
+            # Extract num_links from arg4
+            num_links = OperationParameterExtractors._extract_int_parameter(config, "arg4")
+
+            # Build params dict
+            if input_shape:
+                params["input_shape"] = input_shape
+            if input_dtype:
+                params["input_dtype"] = input_dtype
+            if input_memory_config:
+                params["input_memory_config"] = input_memory_config
+            if output_memory_config:
+                params["output_memory_config"] = output_memory_config
+            if dim is not None:
+                params["dim"] = dim
+            if num_links is not None:
+                params["num_links"] = num_links
+
+            return params if params else None
+        except Exception as e:
+            import traceback
+
+            print(f"Error extracting all_gather_async parameters: {e}")
+            traceback.print_exc()
+            return None
+
+    @staticmethod
+    def _transform_all_gather_async_parameters(
+        configs: List[Dict],
+        parse_dtype=None,
+        parse_layout=None,
+        parse_memory_config=None,
+    ) -> List[Dict]:
+        """Transform extracted all_gather_async parameters to TTNN types"""
+        transformed_configs = []
+
+        for config in configs:
+            try:
+                transformed_config = {}
+
+                # Transform input_shape
+                if "input_shape" in config:
+                    transformed_config["input_shape"] = config["input_shape"]
+
+                # Transform input_dtype
+                input_dtype_str = config.get("input_dtype", "BFLOAT16")
+                if parse_dtype:
+                    transformed_config["input_dtype"] = parse_dtype(f"DataType::{input_dtype_str}")
+                else:
+                    transformed_config["input_dtype"] = input_dtype_str
+
+                # Transform input_layout (default to TILE_LAYOUT)
+                transformed_config["input_layout"] = config.get("input_layout", "TILE")
+
+                # Transform input_memory_config
+                input_mem_config_dict = config.get("input_memory_config", {})
+                if input_mem_config_dict and parse_memory_config:
+                    input_shape = config.get("input_shape")
+                    transformed_config["input_memory_config"] = parse_memory_config(input_mem_config_dict, input_shape)
+                else:
+                    transformed_config["input_memory_config"] = input_mem_config_dict
+
+                # Transform output_memory_config
+                output_mem_config_dict = config.get("output_memory_config", {})
+                if output_mem_config_dict and parse_memory_config:
+                    # Output shape is input shape with width doubled (after gather)
+                    input_shape = config.get("input_shape", [])
+                    output_shape = input_shape.copy() if input_shape else []
+                    if len(output_shape) >= 4:
+                        output_shape[3] = output_shape[3] * 2  # Width doubles after gather
+
+                    # Ensure memory_layout has full format if it's missing the prefix
+                    if isinstance(output_mem_config_dict, dict):
+                        if "memory_layout" in output_mem_config_dict:
+                            mem_layout = output_mem_config_dict["memory_layout"]
+                            if not mem_layout.startswith("TensorMemoryLayout::"):
+                                output_mem_config_dict = output_mem_config_dict.copy()
+                                output_mem_config_dict["memory_layout"] = f"TensorMemoryLayout::{mem_layout}"
+                        if "buffer_type" in output_mem_config_dict:
+                            buf_type = output_mem_config_dict["buffer_type"]
+                            if not buf_type.startswith("BufferType::"):
+                                output_mem_config_dict = output_mem_config_dict.copy()
+                                output_mem_config_dict["buffer_type"] = f"BufferType::{buf_type}"
+
+                    try:
+                        transformed_config["output_memory_config"] = parse_memory_config(
+                            output_mem_config_dict, output_shape
+                        )
+                    except Exception as e:
+                        print(f"Warning: Failed to parse output_memory_config: {e}")
+                        # Fallback to DRAM interleaved
+                        transformed_config["output_memory_config"] = ttnn.DRAM_MEMORY_CONFIG
+                else:
+                    # Fallback to DRAM interleaved if no config provided
+                    transformed_config["output_memory_config"] = (
+                        ttnn.DRAM_MEMORY_CONFIG if parse_memory_config else output_mem_config_dict
+                    )
+
+                # Copy dim and num_links as-is
+                if "dim" in config:
+                    transformed_config["dim"] = config["dim"]
+                if "num_links" in config:
+                    transformed_config["num_links"] = config["num_links"]
+
+                transformed_configs.append(transformed_config)
+            except Exception as e:
+                print(f"Error transforming all_gather_async config: {e}")
+                continue
+
+        return transformed_configs
 
 
 # Register the built-in extractors
@@ -878,6 +1370,37 @@ OperationParameterExtractors.register_extractor(
 OperationParameterExtractors.register_extractor(
     "tilize_with_val_padding",
     extract_func=OperationParameterExtractors._extract_tilize_with_val_padding_parameters,
+)
+
+# Register all_gather_async extractor
+OperationParameterExtractors.register_extractor(
+    "all_gather_async",
+    extract_func=OperationParameterExtractors._extract_all_gather_async_parameters,
+)
+OperationParameterExtractors.register_extractor(
+    "experimental::all_gather_async",
+    extract_func=OperationParameterExtractors._extract_all_gather_async_parameters,
+)
+OperationParameterExtractors.register_extractor(
+    "ttnn::experimental::all_gather_async",
+    extract_func=OperationParameterExtractors._extract_all_gather_async_parameters,
+)
+
+# Register paged_scaled_dot_product_attention_decode extractor
+OperationParameterExtractors.register_extractor(
+    "paged_scaled_dot_product_attention_decode",
+    extract_func=OperationParameterExtractors._extract_paged_scaled_dot_product_attention_decode_parameters,
+    transform_func=OperationParameterExtractors._transform_paged_scaled_dot_product_attention_decode_parameters,
+)
+OperationParameterExtractors.register_extractor(
+    "transformer::paged_scaled_dot_product_attention_decode",
+    extract_func=OperationParameterExtractors._extract_paged_scaled_dot_product_attention_decode_parameters,
+    transform_func=OperationParameterExtractors._transform_paged_scaled_dot_product_attention_decode_parameters,
+)
+OperationParameterExtractors.register_extractor(
+    "ttnn::transformer::paged_scaled_dot_product_attention_decode",
+    extract_func=OperationParameterExtractors._extract_paged_scaled_dot_product_attention_decode_parameters,
+    transform_func=OperationParameterExtractors._transform_paged_scaled_dot_product_attention_decode_parameters,
 )
 
 

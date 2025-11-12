@@ -251,6 +251,42 @@ def run(
 
         # Use provided memory configs directly
         input_memory_config = input_a_memory_config
+
+        # Ensure output_memory_config is a MemoryConfig object
+        # It might come as a string from JSON serialization, so parse it if needed
+        if output_memory_config is None:
+            raise ValueError("output_memory_config is None - required parameter missing")
+        elif isinstance(output_memory_config, str):
+            # Parse the string representation back to a MemoryConfig
+            import json
+            import ast
+
+            # Try to parse as dict (might be a string representation of dict)
+            mem_config_dict = ast.literal_eval(output_memory_config)
+            if not isinstance(mem_config_dict, dict):
+                raise ValueError(
+                    f"Failed to parse output_memory_config string: expected dict, got {type(mem_config_dict)}"
+                )
+            # Use the loader's parse_memory_config to convert dict to MemoryConfig
+            from tests.sweep_framework.master_config_loader import MasterConfigLoader
+
+            loader = MasterConfigLoader()
+            # Output shape is input shape with width doubled
+            output_shape = input_shape.copy() if input_shape else []
+            if len(output_shape) >= 4:
+                output_shape[3] = output_shape[3] * 2
+            output_memory_config = loader.parse_memory_config(mem_config_dict, output_shape)
+        elif isinstance(output_memory_config, dict):
+            # It's a dict, convert to MemoryConfig
+            from tests.sweep_framework.master_config_loader import MasterConfigLoader
+
+            loader = MasterConfigLoader()
+            output_shape = input_shape.copy() if input_shape else []
+            if len(output_shape) >= 4:
+                output_shape[3] = output_shape[3] * 2
+            output_memory_config = loader.parse_memory_config(output_memory_config, output_shape)
+        elif not isinstance(output_memory_config, ttnn.MemoryConfig):
+            raise ValueError(f"output_memory_config is not a MemoryConfig (type: {type(output_memory_config)})")
     else:
         # Original generality/lead_model format
         # Create reference output
@@ -303,13 +339,14 @@ def run(
         for i in range(num_iters):
             try:
                 start_time = start_measuring_time()
+                # Use exact same signature as test_all_gather_config.py which works correctly
                 tt_out_tensor = ttnn.experimental.all_gather_async(
                     tt_input,
-                    dim,
+                    dim=dim,
                     cluster_axis=cluster_axis,
                     mesh_device=device,
                     topology=topology,
-                    multi_device_global_semaphore=semaphores,
+                    multi_device_global_semaphore=semaphores,  # List of semaphores
                     num_links=num_links,
                     memory_config=output_memory_config,
                 )

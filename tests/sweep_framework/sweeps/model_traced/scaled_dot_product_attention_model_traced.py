@@ -92,21 +92,35 @@ def run(
             if shape_q[1] != shape_v[1]:
                 shape_v = (shape_v[0], shape_q[1], shape_v[2], shape_v[3])
 
-    # Use provided dtypes or fallback to input_a_dtype
+    # Use provided dtypes - fail if not provided (no fallbacks)
     dtype_q = input_a_dtype
-    dtype_k = input_b_dtype if input_b_dtype is not None else input_a_dtype
-    dtype_v = input_c_dtype if input_c_dtype is not None else input_a_dtype
+    if input_b_dtype is None:
+        raise ValueError("input_b_dtype is None - required parameter missing")
+    if input_c_dtype is None:
+        raise ValueError("input_c_dtype is None - required parameter missing")
+    dtype_k = input_b_dtype
+    dtype_v = input_c_dtype
 
-    # Use provided layouts or fallback to input_a_layout
+    # Use provided layouts - fail if not provided (no fallbacks)
     layout_q = input_a_layout
-    layout_k = input_b_layout if input_b_layout is not None else input_a_layout
-    layout_v = input_c_layout if input_c_layout is not None else input_a_layout
+    if input_b_layout is None:
+        raise ValueError("input_b_layout is None - required parameter missing")
+    if input_c_layout is None:
+        raise ValueError("input_c_layout is None - required parameter missing")
+    layout_k = input_b_layout
+    layout_v = input_c_layout
 
-    # Use provided memory configs or fallback to input_a_memory_config
+    # Use provided memory configs - fail if not provided (no fallbacks)
     mem_config_q = input_a_memory_config
-    mem_config_k = input_b_memory_config if input_b_memory_config is not None else input_a_memory_config
-    mem_config_v = input_c_memory_config if input_c_memory_config is not None else input_a_memory_config
-    output_mem_config = output_memory_config if output_memory_config is not None else input_a_memory_config
+    if input_b_memory_config is None:
+        raise ValueError("input_b_memory_config is None - required parameter missing")
+    if input_c_memory_config is None:
+        raise ValueError("input_c_memory_config is None - required parameter missing")
+    if output_memory_config is None:
+        raise ValueError("output_memory_config is None - required parameter missing")
+    mem_config_k = input_b_memory_config
+    mem_config_v = input_c_memory_config
+    output_mem_config = output_memory_config
 
     batch_size, num_heads_q, seq_len, head_dim = shape_q
     _, num_heads_k, _, _ = shape_k

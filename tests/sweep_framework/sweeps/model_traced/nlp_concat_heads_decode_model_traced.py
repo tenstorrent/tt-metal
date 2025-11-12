@@ -48,19 +48,9 @@ def run(
     else:
         shape = input_shape
 
-    # num_heads is now required and passed from traced configs
-    # If somehow None, try to infer from shape
+    # num_heads is required and passed from traced configs
     if num_heads is None:
-        if len(shape) >= 2:
-            if len(shape) == 4:
-                if shape[1] == 1:
-                    num_heads = shape[2]  # [B, 1, H, D] -> H is num_heads
-                else:
-                    num_heads = shape[1]  # [B, H, S, D] -> H is num_heads
-            else:
-                num_heads = 16  # Default fallback
-        else:
-            num_heads = 16  # Default fallback
+        raise ValueError("num_heads is None - required parameter missing")
 
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-1, high=1, dtype=torch.float32), input_a_dtype

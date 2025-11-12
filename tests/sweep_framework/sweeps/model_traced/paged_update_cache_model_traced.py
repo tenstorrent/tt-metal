@@ -70,24 +70,44 @@ def run(
             shape = input_shape
         shape_a = shape_b = shape_c = shape_d = shape
 
-    # Use provided dtypes or fallback to input_a_dtype
+    # Use provided dtypes - fail if not provided (no fallbacks)
     dtype_a = input_a_dtype
-    dtype_b = input_b_dtype if input_b_dtype is not None else input_a_dtype
-    dtype_c = input_c_dtype if input_c_dtype is not None else input_a_dtype
-    dtype_d = input_d_dtype if input_d_dtype is not None else input_a_dtype
+    if input_b_dtype is None:
+        raise ValueError("input_b_dtype is None - required parameter missing")
+    if input_c_dtype is None:
+        raise ValueError("input_c_dtype is None - required parameter missing")
+    if input_d_dtype is None:
+        raise ValueError("input_d_dtype is None - required parameter missing")
+    dtype_b = input_b_dtype
+    dtype_c = input_c_dtype
+    dtype_d = input_d_dtype
 
-    # Use provided layouts or fallback to input_a_layout
+    # Use provided layouts - fail if not provided (no fallbacks)
     layout_a = input_a_layout
-    layout_b = input_b_layout if input_b_layout is not None else input_a_layout
-    layout_c = input_c_layout if input_c_layout is not None else input_a_layout
-    layout_d = input_d_layout if input_d_layout is not None else input_a_layout
+    if input_b_layout is None:
+        raise ValueError("input_b_layout is None - required parameter missing")
+    if input_c_layout is None:
+        raise ValueError("input_c_layout is None - required parameter missing")
+    if input_d_layout is None:
+        raise ValueError("input_d_layout is None - required parameter missing")
+    layout_b = input_b_layout
+    layout_c = input_c_layout
+    layout_d = input_d_layout
 
-    # Use provided memory configs or fallback to input_a_memory_config
+    # Use provided memory configs - fail if not provided (no fallbacks)
     mem_config_a = input_a_memory_config
-    mem_config_b = input_b_memory_config if input_b_memory_config is not None else input_a_memory_config
-    mem_config_c = input_c_memory_config if input_c_memory_config is not None else input_a_memory_config
-    mem_config_d = input_d_memory_config if input_d_memory_config is not None else input_a_memory_config
-    output_mem_config = output_memory_config if output_memory_config is not None else input_a_memory_config
+    if input_b_memory_config is None:
+        raise ValueError("input_b_memory_config is None - required parameter missing")
+    if input_c_memory_config is None:
+        raise ValueError("input_c_memory_config is None - required parameter missing")
+    if input_d_memory_config is None:
+        raise ValueError("input_d_memory_config is None - required parameter missing")
+    if output_memory_config is None:
+        raise ValueError("output_memory_config is None - required parameter missing")
+    mem_config_b = input_b_memory_config
+    mem_config_c = input_c_memory_config
+    mem_config_d = input_d_memory_config
+    output_mem_config = output_memory_config
 
     # Create input tensors
     torch_input_tensor_a = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), dtype_a)(

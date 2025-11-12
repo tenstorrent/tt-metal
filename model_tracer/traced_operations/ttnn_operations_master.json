@@ -85,7 +85,7 @@
               "arg3": "Layout::TILE"
             },
             {
-              "arg4": "GENERIC"
+              "arg4": "[ unsupported type , std::reference_wrapper<ttnn::operations::embedding::EmbeddingsType>]"
             },
             {
               "arg5": "nullopt"
@@ -189,7 +189,7 @@
               "arg3": "Layout::TILE"
             },
             {
-              "arg4": "GENERIC"
+              "arg4": "[ unsupported type , std::reference_wrapper<ttnn::operations::embedding::EmbeddingsType>]"
             },
             {
               "arg5": "nullopt"
@@ -286,7 +286,7 @@
               "arg3": "Layout::TILE"
             },
             {
-              "arg4": "GENERIC"
+              "arg4": "[ unsupported type , std::reference_wrapper<ttnn::operations::embedding::EmbeddingsType>]"
             },
             {
               "arg5": "nullopt"
@@ -519,7 +519,7 @@
               }
             },
             {
-              "arg1": "[1, 16, -1, 64]"
+              "arg1": "[ unsupported type , std::reference_wrapper<ttsl::SmallVector<int, 8ul> const>]"
             },
             {
               "arg2": "nullopt"
@@ -528,7 +528,7 @@
               "arg3": "nullopt"
             },
             {
-              "arg4": "CACHE"
+              "arg4": "[ unsupported type , std::reference_wrapper<ttnn::TileReshapeMapMode const>]"
             }
           ],
           "source": "models/tt_transformers/demo/simple_text_demo.py"
@@ -574,7 +574,7 @@
               }
             },
             {
-              "arg1": "[1, 1, 256, 1024]"
+              "arg1": "[ unsupported type , std::reference_wrapper<ttsl::SmallVector<int, 8ul> const>]"
             },
             {
               "arg2": "nullopt"
@@ -583,7 +583,7 @@
               "arg3": "nullopt"
             },
             {
-              "arg4": "CACHE"
+              "arg4": "[ unsupported type , std::reference_wrapper<ttnn::TileReshapeMapMode const>]"
             }
           ],
           "source": "models/tt_transformers/demo/simple_text_demo.py"
@@ -1044,7 +1044,7 @@
               "arg4": "nullopt"
             },
             {
-              "arg5": "CACHE"
+              "arg5": "[ unsupported type , std::reference_wrapper<ttnn::TileReshapeMapMode const>]"
             }
           ],
           "source": "models/tt_transformers/demo/simple_text_demo.py"
@@ -1058,7 +1058,7 @@
               }
             },
             {
-              "arg1": "[1, 1, 32, 1024]"
+              "arg1": "[ unsupported type , std::reference_wrapper<ttsl::SmallVector<int, 8ul> const>]"
             },
             {
               "arg2": "nullopt"
@@ -1067,7 +1067,7 @@
               "arg3": "nullopt"
             },
             {
-              "arg4": "CACHE"
+              "arg4": "[ unsupported type , std::reference_wrapper<ttnn::TileReshapeMapMode const>]"
             }
           ],
           "source": "models/tt_transformers/demo/simple_text_demo.py"
@@ -1128,7 +1128,7 @@
               "arg3": "nullopt"
             },
             {
-              "arg4": "CACHE"
+              "arg4": "[ unsupported type , std::reference_wrapper<ttnn::TileReshapeMapMode const>]"
             }
           ],
           "source": "models/tt_transformers/demo/simple_text_demo.py"
@@ -1178,13 +1178,13 @@
               }
             },
             {
-              "arg1": "[0, 0, 0, 0]"
+              "arg1": "[ unsupported type , std::reference_wrapper<std::array<unsigned int, 4ul> const>]"
             },
             {
-              "arg2": "[1, 1, 256, 64]"
+              "arg2": "[ unsupported type , std::reference_wrapper<std::array<unsigned int, 4ul> const>]"
             },
             {
-              "arg3": "[1, 1, 1, 1]"
+              "arg3": "[ unsupported type , std::reference_wrapper<std::array<unsigned int, 4ul> const>]"
             },
             {
               "arg4": "nullopt"
@@ -1239,13 +1239,13 @@
               }
             },
             {
-              "arg1": "[0, 0, 0, 0]"
+              "arg1": "[ unsupported type , std::reference_wrapper<std::array<unsigned int, 4ul> const>]"
             },
             {
-              "arg2": "[1, 4, 160, 64]"
+              "arg2": "[ unsupported type , std::reference_wrapper<std::array<unsigned int, 4ul> const>]"
             },
             {
-              "arg3": "[1, 1, 1, 1]"
+              "arg3": "[ unsupported type , std::reference_wrapper<std::array<unsigned int, 4ul> const>]"
             },
             {
               "arg4": "nullopt"
@@ -1300,13 +1300,13 @@
               }
             },
             {
-              "arg1": "[0, 0, 128, 0]"
+              "arg1": "[ unsupported type , std::reference_wrapper<ttsl::SmallVector<int, 8ul> const>]"
             },
             {
-              "arg2": "[1, 1, 160, 1024]"
+              "arg2": "[ unsupported type , std::reference_wrapper<ttsl::SmallVector<int, 8ul> const>]"
             },
             {
-              "arg3": "[1, 1, 1, 1]"
+              "arg3": "[ unsupported type , std::reference_wrapper<ttsl::SmallVector<int, 8ul> const>]"
             },
             {
               "arg4": "nullopt"
@@ -1361,13 +1361,13 @@
               }
             },
             {
-              "arg1": "[0, 0, 0, 0]"
+              "arg1": "[ unsupported type , std::reference_wrapper<std::array<unsigned int, 4ul> const>]"
             },
             {
-              "arg2": "[1, 1, 1, 64]"
+              "arg2": "[ unsupported type , std::reference_wrapper<std::array<unsigned int, 4ul> const>]"
             },
             {
-              "arg3": "[1, 1, 1, 1]"
+              "arg3": "[ unsupported type , std::reference_wrapper<std::array<unsigned int, 4ul> const>]"
             },
             {
               "arg4": "nullopt"
@@ -1432,7 +1432,7 @@
               "arg2": "3"
             },
             {
-              "arg3": "[{...}, {...}]"
+              "arg3": "[ unsupported type , std::reference_wrapper<std::vector<tt::tt_metal::GlobalSemaphore, std::allocator<tt::tt_metal::GlobalSemaphore> > const>]"
             },
             {
               "arg4": "1"
@@ -1449,10 +1449,7 @@
               }
             },
             {
-              "UnparsedElement": {
-                "error": "Expecting property name enclosed in double quotes: line 1 column 23 (char 22)",
-                "element_info": "{\"arg6\": {\"Topology\":{...}}}"
-              }
+              "arg6": "[ unsupported type , std::reference_wrapper<tt::tt_fabric::Topology const>]"
             },
             {
               "arg7": "[ unsupported type , std::reference_wrapper<std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> > >]"
@@ -1464,10 +1461,7 @@
               "arg9": "0"
             },
             {
-              "UnparsedElement": {
-                "error": "Expecting property name enclosed in double quotes: line 1 column 31 (char 30)",
-                "element_info": "{\"arg10\": {\"GlobalSemaphore\":{...}}}"
-              }
+              "arg10": "[ unsupported type , std::reference_wrapper<std::optional<tt::tt_metal::GlobalSemaphore> const>]"
             },
             {
               "arg11": "10"
@@ -1531,7 +1525,7 @@
               "arg2": "3"
             },
             {
-              "arg3": "[{...}, {...}]"
+              "arg3": "[ unsupported type , std::reference_wrapper<std::vector<tt::tt_metal::GlobalSemaphore, std::allocator<tt::tt_metal::GlobalSemaphore> > const>]"
             },
             {
               "arg4": "1"
@@ -1548,10 +1542,7 @@
               }
             },
             {
-              "UnparsedElement": {
-                "error": "Expecting property name enclosed in double quotes: line 1 column 23 (char 22)",
-                "element_info": "{\"arg6\": {\"Topology\":{...}}}"
-              }
+              "arg6": "[ unsupported type , std::reference_wrapper<tt::tt_fabric::Topology const>]"
             },
             {
               "arg7": "[ unsupported type , std::reference_wrapper<std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> > >]"
@@ -1563,10 +1554,7 @@
               "arg9": "0"
             },
             {
-              "UnparsedElement": {
-                "error": "Expecting property name enclosed in double quotes: line 1 column 31 (char 30)",
-                "element_info": "{\"arg10\": {\"GlobalSemaphore\":{...}}}"
-              }
+              "arg10": "[ unsupported type , std::reference_wrapper<std::optional<tt::tt_metal::GlobalSemaphore> const>]"
             },
             {
               "arg11": "10"
@@ -1598,7 +1586,7 @@
               "arg2": "3"
             },
             {
-              "arg3": "[{...}, {...}]"
+              "arg3": "[ unsupported type , std::reference_wrapper<std::vector<tt::tt_metal::GlobalSemaphore, std::allocator<tt::tt_metal::GlobalSemaphore> > const>]"
             },
             {
               "arg4": "1"
@@ -1610,10 +1598,7 @@
               }
             },
             {
-              "UnparsedElement": {
-                "error": "Expecting property name enclosed in double quotes: line 1 column 23 (char 22)",
-                "element_info": "{\"arg6\": {\"Topology\":{...}}}"
-              }
+              "arg6": "[ unsupported type , std::reference_wrapper<tt::tt_fabric::Topology const>]"
             },
             {
               "arg7": "[ unsupported type , std::reference_wrapper<std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> > >]"
@@ -1625,10 +1610,7 @@
               "arg9": "0"
             },
             {
-              "UnparsedElement": {
-                "error": "Expecting property name enclosed in double quotes: line 1 column 31 (char 30)",
-                "element_info": "{\"arg10\": {\"GlobalSemaphore\":{...}}}"
-              }
+              "arg10": "[ unsupported type , std::reference_wrapper<std::optional<tt::tt_metal::GlobalSemaphore> const>]"
             },
             {
               "arg11": "10"
@@ -1660,7 +1642,7 @@
               "arg2": "3"
             },
             {
-              "arg3": "[{...}, {...}]"
+              "arg3": "[ unsupported type , std::reference_wrapper<std::vector<tt::tt_metal::GlobalSemaphore, std::allocator<tt::tt_metal::GlobalSemaphore> > const>]"
             },
             {
               "arg4": "1"
@@ -1672,10 +1654,7 @@
               }
             },
             {
-              "UnparsedElement": {
-                "error": "Expecting property name enclosed in double quotes: line 1 column 23 (char 22)",
-                "element_info": "{\"arg6\": {\"Topology\":{...}}}"
-              }
+              "arg6": "[ unsupported type , std::reference_wrapper<tt::tt_fabric::Topology const>]"
             },
             {
               "arg7": "[ unsupported type , std::reference_wrapper<std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> > >]"
@@ -1687,10 +1666,7 @@
               "arg9": "0"
             },
             {
-              "UnparsedElement": {
-                "error": "Expecting property name enclosed in double quotes: line 1 column 31 (char 30)",
-                "element_info": "{\"arg10\": {\"GlobalSemaphore\":{...}}}"
-              }
+              "arg10": "[ unsupported type , std::reference_wrapper<std::optional<tt::tt_metal::GlobalSemaphore> const>]"
             },
             {
               "arg11": "10"
@@ -1801,7 +1777,7 @@
               "arg5": "nullopt"
             },
             {
-              "arg6": "nullopt"
+              "arg6": "[ unsupported type , std::reference_wrapper<std::optional<std::variant<ttnn::operations::normalization::LayerNormDefaultProgramConfig, ttnn::operations::normalization::LayerNormShardedMultiCoreProgramConfig> const> const>]"
             },
             {
               "arg7": {
@@ -1908,7 +1884,7 @@
               "arg5": "nullopt"
             },
             {
-              "arg6": "nullopt"
+              "arg6": "[ unsupported type , std::reference_wrapper<std::optional<std::variant<ttnn::operations::normalization::LayerNormDefaultProgramConfig, ttnn::operations::normalization::LayerNormShardedMultiCoreProgramConfig> const> const>]"
             },
             {
               "arg7": {
@@ -1986,21 +1962,7 @@
               }
             },
             {
-              "arg6": {
-                "LayerNormShardedMultiCoreProgramConfig": {
-                  "compute_with_storage_grid_size": {
-                    "x": 8,
-                    "y": 4
-                  },
-                  "subblock_w": 2,
-                  "block_h": 1,
-                  "block_w": 2,
-                  "inplace": 0,
-                  "legacy_reduction": 0,
-                  "legacy_rsqrt": 0,
-                  "use_welford": 0
-                }
-              }
+              "arg6": "[ unsupported type , std::reference_wrapper<std::optional<std::variant<ttnn::operations::normalization::LayerNormDefaultProgramConfig, ttnn::operations::normalization::LayerNormShardedMultiCoreProgramConfig> const> const>]"
             },
             {
               "arg7": {
@@ -2078,21 +2040,7 @@
               }
             },
             {
-              "arg6": {
-                "LayerNormShardedMultiCoreProgramConfig": {
-                  "compute_with_storage_grid_size": {
-                    "x": 8,
-                    "y": 8
-                  },
-                  "subblock_w": 1,
-                  "block_h": 1,
-                  "block_w": 1,
-                  "inplace": 0,
-                  "legacy_reduction": 0,
-                  "legacy_rsqrt": 0,
-                  "use_welford": 0
-                }
-              }
+              "arg6": "[ unsupported type , std::reference_wrapper<std::optional<std::variant<ttnn::operations::normalization::LayerNormDefaultProgramConfig, ttnn::operations::normalization::LayerNormShardedMultiCoreProgramConfig> const> const>]"
             },
             {
               "arg7": {
@@ -2227,10 +2175,10 @@
               "arg12": "nullopt"
             },
             {
-              "arg13": "nullopt"
+              "arg13": "[ unsupported type , std::reference_wrapper<std::optional<tt::tt_metal::experimental::GlobalCircularBuffer const> const>]"
             },
             {
-              "arg14": "nullopt"
+              "arg14": "[ unsupported type , std::reference_wrapper<std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> > const>]"
             }
           ],
           "source": "models/tt_transformers/demo/simple_text_demo.py"
@@ -2349,10 +2297,10 @@
               "arg12": "nullopt"
             },
             {
-              "arg13": "nullopt"
+              "arg13": "[ unsupported type , std::reference_wrapper<std::optional<tt::tt_metal::experimental::GlobalCircularBuffer const> const>]"
             },
             {
-              "arg14": "nullopt"
+              "arg14": "[ unsupported type , std::reference_wrapper<std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> > const>]"
             }
           ],
           "source": "models/tt_transformers/demo/simple_text_demo.py"
@@ -2471,10 +2419,10 @@
               "arg12": "nullopt"
             },
             {
-              "arg13": "nullopt"
+              "arg13": "[ unsupported type , std::reference_wrapper<std::optional<tt::tt_metal::experimental::GlobalCircularBuffer const> const>]"
             },
             {
-              "arg14": "nullopt"
+              "arg14": "[ unsupported type , std::reference_wrapper<std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> > const>]"
             }
           ],
           "source": "models/tt_transformers/demo/simple_text_demo.py"
@@ -2593,10 +2541,10 @@
               "arg12": "nullopt"
             },
             {
-              "arg13": "nullopt"
+              "arg13": "[ unsupported type , std::reference_wrapper<std::optional<tt::tt_metal::experimental::GlobalCircularBuffer const> const>]"
             },
             {
-              "arg14": "nullopt"
+              "arg14": "[ unsupported type , std::reference_wrapper<std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> > const>]"
             }
           ],
           "source": "models/tt_transformers/demo/simple_text_demo.py"
@@ -2673,10 +2621,10 @@
               "arg12": "nullopt"
             },
             {
-              "arg13": "nullopt"
+              "arg13": "[ unsupported type , std::reference_wrapper<std::optional<tt::tt_metal::experimental::GlobalCircularBuffer const> const>]"
             },
             {
-              "arg14": "nullopt"
+              "arg14": "[ unsupported type , std::reference_wrapper<std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> > const>]"
             }
           ],
           "source": "models/tt_transformers/demo/simple_text_demo.py"
@@ -2753,10 +2701,10 @@
               "arg12": "nullopt"
             },
             {
-              "arg13": "nullopt"
+              "arg13": "[ unsupported type , std::reference_wrapper<std::optional<tt::tt_metal::experimental::GlobalCircularBuffer const> const>]"
             },
             {
-              "arg14": "nullopt"
+              "arg14": "[ unsupported type , std::reference_wrapper<std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> > const>]"
             }
           ],
           "source": "models/tt_transformers/demo/simple_text_demo.py"
@@ -2833,10 +2781,10 @@
               "arg12": "nullopt"
             },
             {
-              "arg13": "nullopt"
+              "arg13": "[ unsupported type , std::reference_wrapper<std::optional<tt::tt_metal::experimental::GlobalCircularBuffer const> const>]"
             },
             {
-              "arg14": "nullopt"
+              "arg14": "[ unsupported type , std::reference_wrapper<std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> > const>]"
             }
           ],
           "source": "models/tt_transformers/demo/simple_text_demo.py"
@@ -2913,10 +2861,10 @@
               "arg12": "nullopt"
             },
             {
-              "arg13": "nullopt"
+              "arg13": "[ unsupported type , std::reference_wrapper<std::optional<tt::tt_metal::experimental::GlobalCircularBuffer const> const>]"
             },
             {
-              "arg14": "nullopt"
+              "arg14": "[ unsupported type , std::reference_wrapper<std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> > const>]"
             }
           ],
           "source": "models/tt_transformers/demo/simple_text_demo.py"
@@ -2993,10 +2941,10 @@
               "arg12": "nullopt"
             },
             {
-              "arg13": "nullopt"
+              "arg13": "[ unsupported type , std::reference_wrapper<std::optional<tt::tt_metal::experimental::GlobalCircularBuffer const> const>]"
             },
             {
-              "arg14": "nullopt"
+              "arg14": "[ unsupported type , std::reference_wrapper<std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> > const>]"
             }
           ],
           "source": "models/tt_transformers/demo/simple_text_demo.py"
@@ -3115,10 +3063,10 @@
               "arg12": "nullopt"
             },
             {
-              "arg13": "nullopt"
+              "arg13": "[ unsupported type , std::reference_wrapper<std::optional<tt::tt_metal::experimental::GlobalCircularBuffer const> const>]"
             },
             {
-              "arg14": "nullopt"
+              "arg14": "[ unsupported type , std::reference_wrapper<std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> > const>]"
             }
           ],
           "source": "models/tt_transformers/demo/simple_text_demo.py"
@@ -3195,10 +3143,10 @@
               "arg12": "nullopt"
             },
             {
-              "arg13": "nullopt"
+              "arg13": "[ unsupported type , std::reference_wrapper<std::optional<tt::tt_metal::experimental::GlobalCircularBuffer const> const>]"
             },
             {
-              "arg14": "nullopt"
+              "arg14": "[ unsupported type , std::reference_wrapper<std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> > const>]"
             }
           ],
           "source": "models/tt_transformers/demo/simple_text_demo.py"
@@ -3271,7 +3219,7 @@
               }
             },
             {
-              "arg6": "nullopt"
+              "arg6": "[ unsupported type , std::reference_wrapper<std::optional<std::vector<std::optional<tt::tt_metal::Tensor>, std::allocator<std::optional<tt::tt_metal::Tensor> > > > >]"
             }
           ],
           "source": "models/tt_transformers/demo/simple_text_demo.py"
@@ -3742,7 +3690,7 @@
               "arg3": "nullopt"
             },
             {
-              "arg4": "nullopt"
+              "arg4": "[ unsupported type , std::reference_wrapper<std::optional<tt::tt_metal::CoreRangeSet> const>]"
             }
           ],
           "source": "models/tt_transformers/demo/simple_text_demo.py"
@@ -3797,7 +3745,7 @@
               "arg3": "nullopt"
             },
             {
-              "arg4": "nullopt"
+              "arg4": "[ unsupported type , std::reference_wrapper<std::optional<tt::tt_metal::CoreRangeSet> const>]"
             }
           ],
           "source": "models/tt_transformers/demo/simple_text_demo.py"
@@ -3852,7 +3800,7 @@
               "arg3": "nullopt"
             },
             {
-              "arg4": "nullopt"
+              "arg4": "[ unsupported type , std::reference_wrapper<std::optional<tt::tt_metal::CoreRangeSet> const>]"
             }
           ],
           "source": "models/tt_transformers/demo/simple_text_demo.py"
@@ -3907,7 +3855,7 @@
               "arg3": "nullopt"
             },
             {
-              "arg4": "nullopt"
+              "arg4": "[ unsupported type , std::reference_wrapper<std::optional<tt::tt_metal::CoreRangeSet> const>]"
             }
           ],
           "source": "models/tt_transformers/demo/simple_text_demo.py"
@@ -4039,7 +3987,7 @@
               "arg5": "nullopt"
             },
             {
-              "arg6": "nullopt"
+              "arg6": "[ unsupported type , std::reference_wrapper<std::optional<std::set<tt::tt_metal::distributed::MeshCoordinate, std::less<tt::tt_metal::distributed::MeshCoordinate>, std::allocator<tt::tt_metal::distributed::MeshCoordinate> > const> >]"
             }
           ],
           "source": "models/tt_transformers/demo/simple_text_demo.py"
@@ -4180,10 +4128,7 @@
               "arg7": "nullopt"
             },
             {
-              "UnparsedElement": {
-                "error": "Expecting property name enclosed in double quotes: line 1 column 49 (char 48)",
-                "element_info": "{\"arg8\": {\"SDPAProgramConfig\":{\"compute_grid\":8,8, \"q_chunk_size\":64, \"k_chunk_size\":64}}}"
-              }
+              "arg8": "[ unsupported type , std::reference_wrapper<std::optional<ttnn::operations::transformer::SDPAProgramConfig> >]"
             },
             {
               "arg9": {
@@ -4364,13 +4309,13 @@
               "arg4": "nullopt"
             },
             {
-              "arg5": "[]"
+              "arg5": "[ unsupported type , std::reference_wrapper<ttsl::SmallVector<ttnn::operations::unary::BasicUnaryWithParam<float, int, unsigned int>, 8ul> const>]"
             },
             {
-              "arg6": "[]"
+              "arg6": "[ unsupported type , std::reference_wrapper<ttsl::SmallVector<ttnn::operations::unary::BasicUnaryWithParam<float, int, unsigned int>, 8ul> const>]"
             },
             {
-              "arg7": "[]"
+              "arg7": "[ unsupported type , std::reference_wrapper<ttsl::SmallVector<ttnn::operations::unary::BasicUnaryWithParam<float, int, unsigned int>, 8ul> const>]"
             },
             {
               "arg8": "nullopt"
@@ -4474,13 +4419,13 @@
               "arg4": "nullopt"
             },
             {
-              "arg5": "[]"
+              "arg5": "[ unsupported type , std::reference_wrapper<ttsl::SmallVector<ttnn::operations::unary::BasicUnaryWithParam<float, int, unsigned int>, 8ul> const>]"
             },
             {
-              "arg6": "[]"
+              "arg6": "[ unsupported type , std::reference_wrapper<ttsl::SmallVector<ttnn::operations::unary::BasicUnaryWithParam<float, int, unsigned int>, 8ul> const>]"
             },
             {
-              "arg7": "[]"
+              "arg7": "[ unsupported type , std::reference_wrapper<ttsl::SmallVector<ttnn::operations::unary::BasicUnaryWithParam<float, int, unsigned int>, 8ul> const>]"
             },
             {
               "arg8": "nullopt"
@@ -4515,13 +4460,13 @@
               "arg4": "nullopt"
             },
             {
-              "arg5": "[]"
+              "arg5": "[ unsupported type , std::reference_wrapper<ttsl::SmallVector<ttnn::operations::unary::BasicUnaryWithParam<float, int, unsigned int>, 8ul> const>]"
             },
             {
-              "arg6": "[]"
+              "arg6": "[ unsupported type , std::reference_wrapper<ttsl::SmallVector<ttnn::operations::unary::BasicUnaryWithParam<float, int, unsigned int>, 8ul> const>]"
             },
             {
-              "arg7": "[]"
+              "arg7": "[ unsupported type , std::reference_wrapper<ttsl::SmallVector<ttnn::operations::unary::BasicUnaryWithParam<float, int, unsigned int>, 8ul> const>]"
             },
             {
               "arg8": "nullopt"
@@ -4556,13 +4501,13 @@
               "arg4": "nullopt"
             },
             {
-              "arg5": "[]"
+              "arg5": "[ unsupported type , std::reference_wrapper<ttsl::SmallVector<ttnn::operations::unary::BasicUnaryWithParam<float, int, unsigned int>, 8ul> const>]"
             },
             {
-              "arg6": "[]"
+              "arg6": "[ unsupported type , std::reference_wrapper<ttsl::SmallVector<ttnn::operations::unary::BasicUnaryWithParam<float, int, unsigned int>, 8ul> const>]"
             },
             {
-              "arg7": "[]"
+              "arg7": "[ unsupported type , std::reference_wrapper<ttsl::SmallVector<ttnn::operations::unary::BasicUnaryWithParam<float, int, unsigned int>, 8ul> const>]"
             },
             {
               "arg8": "nullopt"
@@ -4658,13 +4603,13 @@
               "arg4": "nullopt"
             },
             {
-              "arg5": "[]"
+              "arg5": "[ unsupported type , std::reference_wrapper<ttsl::SmallVector<ttnn::operations::unary::BasicUnaryWithParam<float, int, unsigned int>, 8ul> const>]"
             },
             {
-              "arg6": "[]"
+              "arg6": "[ unsupported type , std::reference_wrapper<ttsl::SmallVector<ttnn::operations::unary::BasicUnaryWithParam<float, int, unsigned int>, 8ul> const>]"
             },
             {
-              "arg7": "[]"
+              "arg7": "[ unsupported type , std::reference_wrapper<ttsl::SmallVector<ttnn::operations::unary::BasicUnaryWithParam<float, int, unsigned int>, 8ul> const>]"
             },
             {
               "arg8": "nullopt"
@@ -4772,13 +4717,13 @@
               "arg4": "nullopt"
             },
             {
-              "arg5": "[]"
+              "arg5": "[ unsupported type , std::reference_wrapper<ttsl::SmallVector<ttnn::operations::unary::BasicUnaryWithParam<float, int, unsigned int>, 8ul> const>]"
             },
             {
-              "arg6": "[{...}]"
+              "arg6": "[ unsupported type , std::reference_wrapper<ttsl::SmallVector<ttnn::operations::unary::BasicUnaryWithParam<float, int, unsigned int>, 8ul> const>]"
             },
             {
-              "arg7": "[]"
+              "arg7": "[ unsupported type , std::reference_wrapper<ttsl::SmallVector<ttnn::operations::unary::BasicUnaryWithParam<float, int, unsigned int>, 8ul> const>]"
             },
             {
               "arg8": "nullopt"
@@ -4813,13 +4758,13 @@
               "arg4": "nullopt"
             },
             {
-              "arg5": "[]"
+              "arg5": "[ unsupported type , std::reference_wrapper<ttsl::SmallVector<ttnn::operations::unary::BasicUnaryWithParam<float, int, unsigned int>, 8ul> const>]"
             },
             {
-              "arg6": "[{...}]"
+              "arg6": "[ unsupported type , std::reference_wrapper<ttsl::SmallVector<ttnn::operations::unary::BasicUnaryWithParam<float, int, unsigned int>, 8ul> const>]"
             },
             {
-              "arg7": "[]"
+              "arg7": "[ unsupported type , std::reference_wrapper<ttsl::SmallVector<ttnn::operations::unary::BasicUnaryWithParam<float, int, unsigned int>, 8ul> const>]"
             },
             {
               "arg8": "nullopt"
@@ -5036,7 +4981,7 @@
         {
           "arguments": [
             {
-              "arg0": "[{...}, {...}]"
+              "arg0": "[ unsupported type , std::reference_wrapper<std::vector<tt::tt_metal::Tensor, std::allocator<tt::tt_metal::Tensor> > const>]"
             },
             {
               "arg1": "-1"
@@ -5229,7 +5174,7 @@
               "arg3": "1"
             },
             {
-              "arg4": "nullopt"
+              "arg4": "[ unsupported type , std::reference_wrapper<std::optional<tt::tt_metal::CoreRangeSet> const>]"
             }
           ],
           "source": "models/tt_transformers/demo/simple_text_demo.py"
@@ -5364,7 +5309,7 @@
               }
             },
             {
-              "arg7": "nullopt"
+              "arg7": "[ unsupported type , std::reference_wrapper<std::optional<std::array<tt::tt_metal::Tensor, 3ul> > >]"
             }
           ],
           "source": "models/tt_transformers/demo/simple_text_demo.py"
@@ -5420,7 +5365,7 @@
               }
             },
             {
-              "arg2": "[]"
+              "arg2": "[ unsupported type , std::reference_wrapper<std::vector<unsigned int, std::allocator<unsigned int> > const>]"
             },
             {
               "arg3": {
@@ -5501,7 +5446,7 @@
               "arg7": "nullopt"
             },
             {
-              "arg8": "nullopt"
+              "arg8": "[ unsupported type , std::reference_wrapper<std::optional<std::set<tt::tt_metal::distributed::MeshCoordinate, std::less<tt::tt_metal::distributed::MeshCoordinate>, std::allocator<tt::tt_metal::distributed::MeshCoordinate> > const> >]"
             }
           ],
           "source": "models/tt_transformers/demo/simple_text_demo.py"
@@ -5690,10 +5635,7 @@
               }
             },
             {
-              "UnparsedElement": {
-                "error": "Expecting property name enclosed in double quotes: line 1 column 50 (char 49)",
-                "element_info": "{\"arg11\": {\"SDPAProgramConfig\":{\"compute_grid\":8,8, \"q_chunk_size\":256, \"k_chunk_size\":256}}}"
-              }
+              "arg11": "[ unsupported type , std::reference_wrapper<std::optional<ttnn::operations::transformer::SDPAProgramConfig> >]"
             },
             {
               "arg12": {
@@ -5807,10 +5749,10 @@
               "arg11": "nullopt"
             },
             {
-              "arg12": "nullopt"
+              "arg12": "[ unsupported type , std::reference_wrapper<std::optional<tt::tt_metal::experimental::GlobalCircularBuffer const> const>]"
             },
             {
-              "arg13": "nullopt"
+              "arg13": "[ unsupported type , std::reference_wrapper<std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> > const>]"
             }
           ],
           "source": "models/tt_transformers/demo/simple_text_demo.py"
@@ -5863,7 +5805,7 @@
               "arg1": "32"
             },
             {
-              "arg2": "-1"
+              "arg2": "[ unsupported type , std::reference_wrapper<signed char const>]"
             },
             {
               "arg3": "1"
@@ -5875,7 +5817,7 @@
               "arg5": "nullopt"
             },
             {
-              "arg6": "nullopt"
+              "arg6": "[ unsupported type , std::reference_wrapper<std::optional<tt::tt_metal::CoreRangeSet> const>]"
             },
             {
               "arg7": {
@@ -5916,7 +5858,7 @@
               }
             },
             {
-              "arg8": "nullopt"
+              "arg8": "[ unsupported type , std::reference_wrapper<std::optional<std::tuple<tt::tt_metal::Tensor, tt::tt_metal::Tensor> > >]"
             }
           ],
           "source": "models/tt_transformers/demo/simple_text_demo.py"
@@ -5962,7 +5904,7 @@
               }
             },
             {
-              "arg1": "nullopt"
+              "arg1": "[ unsupported type , std::reference_wrapper<std::optional<tt::tt_metal::CoreRangeSet> const>]"
             },
             {
               "arg2": "1"
@@ -6008,7 +5950,7 @@
               }
             },
             {
-              "arg1": "nullopt"
+              "arg1": "[ unsupported type , std::reference_wrapper<std::optional<tt::tt_metal::CoreRangeSet> const>]"
             },
             {
               "arg2": "0"
@@ -6023,10 +5965,10 @@
     "models": [
       "models/tt_transformers/demo/simple_text_demo.py"
     ],
-    "total_operations": 7376,
+    "total_operations": 3688,
     "unique_operations": 26,
     "total_configurations": 78,
-    "last_updated": "2025-11-11 08:57:14",
+    "last_updated": "2025-11-11 11:30:57",
     "operation_types": {
       "ttnn::embedding": 3,
       "ttnn::reshape": 15,

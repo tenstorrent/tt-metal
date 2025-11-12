@@ -53,15 +53,15 @@ def run(
 
     # Handle default values if not provided (for model_traced suite)
     if input_shape is None:
-        input_shape = (1, 1, 32, 16)
+        raise ValueError("input_shape is None - required parameter missing")
     if input_a_dtype is None:
-        input_a_dtype = ttnn.bfloat16
+        raise ValueError("input_a_dtype is None - required parameter missing")
     if input_a_layout is None:
-        input_a_layout = ttnn.TILE_LAYOUT
+        raise ValueError("input_a_layout is None - required parameter missing")
     if input_a_memory_config is None:
-        input_a_memory_config = ttnn.DRAM_MEMORY_CONFIG
+        raise ValueError("input_a_memory_config is None - required parameter missing")
     if input_b_memory_config is None:
-        input_b_memory_config = ttnn.DRAM_MEMORY_CONFIG
+        raise ValueError("input_b_memory_config is None - required parameter missing")
 
     # Handle tuple input_shape
     if isinstance(input_shape, (tuple, list)):
