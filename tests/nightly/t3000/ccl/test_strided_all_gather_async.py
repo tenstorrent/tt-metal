@@ -139,7 +139,6 @@ def run_strided_all_gather_impl(
     def run_op(i):
         tt_all_gather_out_tensor = ttnn.experimental.strided_all_gather_async(
             input_tensor_mesh_list[i],
-            persistent_output_buffer=None,
             dim=dim,
             multi_device_global_semaphore=ccl_semaphore_handles[i],
             num_links=num_links,
