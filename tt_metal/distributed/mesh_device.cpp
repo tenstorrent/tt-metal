@@ -284,7 +284,7 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
 
     mesh_device->initialize(num_command_queues, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap);
     // TODO #20966: Remove these calls
-    for (auto device : extract_locals(root_devices)) {
+    for (auto* device : extract_locals(root_devices)) {
         dynamic_cast<Device*>(device)->set_mesh_device(mesh_device);
     }
     // The Device Profiler must be initialized before Fabric is loaded on the Cluster
@@ -424,7 +424,7 @@ std::shared_ptr<MeshDevice> MeshDevice::create_submesh(
         allocator_config.worker_l1_size,
         allocator_config.l1_bank_remap);
     // TODO #20966: Remove these calls
-    for (auto device : submesh->get_devices()) {
+    for (auto* device : submesh->get_devices()) {
         dynamic_cast<Device*>(device)->set_mesh_device(submesh);
     }
 
@@ -467,7 +467,7 @@ MeshDevice::~MeshDevice() {
 }
 
 IDevice* MeshDevice::get_device(ChipId physical_device_id) const {
-    for (auto device : this->get_devices()) {
+    for (auto* device : this->get_devices()) {
         if (device->id() == physical_device_id) {
             return device;
         }
@@ -496,14 +496,14 @@ MeshCommandQueue& MeshDevice::mesh_command_queue(std::optional<uint8_t> cq_id) c
     auto id = cq_id.value_or(GetCurrentCommandQueueIdForThread());
 
     TT_FATAL(id < mesh_command_queues_.size(), "cq_id {} is out of range", id);
-    auto& command_queue = mesh_command_queues_[id];
+    const auto& command_queue = mesh_command_queues_[id];
     TT_FATAL(id == command_queue->id(), "MeshCommandQueue id mismatch, expected {}, got {}", id, command_queue->id());
     return *command_queue;
 }
 
 DeviceIds MeshDevice::get_device_ids() const {
     DeviceIds device_ids;
-    for (auto device : this->get_devices()) {
+    for (auto* device : this->get_devices()) {
         device_ids.push_back(device->id());
     }
     return device_ids;
@@ -597,7 +597,7 @@ bool MeshDevice::close() {
     }
 
     // TODO #20966: Remove these calls
-    for (auto device : view_->get_devices()) {
+    for (auto* device : view_->get_devices()) {
         dynamic_cast<Device*>(device)->set_mesh_device(parent_mesh_);
     }
 

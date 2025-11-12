@@ -89,9 +89,9 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor& a, Tensor
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>& optional_tensors,
                                               const std::vector<Tensor>& output_tensors) {
-        auto src_buffer = input_tensors.at(0).buffer();
+        auto* src_buffer = input_tensors.at(0).buffer();
 
-        auto dst_buffer = output_tensors.at(0).buffer();
+        auto* dst_buffer = output_tensors.at(0).buffer();
 
         CoreCoord core = {0, 0};
 
@@ -120,8 +120,8 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
     const CoreRangeSet& core_group_2,
     uint32_t num_w_sticks_per_core_group_2,
     bool split_work_by_old_sticks) {
-    auto input_buffer = input_tensor.buffer();
-    auto output_buffer = output_tensor.buffer();
+    auto* input_buffer = input_tensor.buffer();
+    auto* output_buffer = output_tensor.buffer();
     auto input_shape = input_tensor.padded_shape();
     auto output_shape = output_tensor.padded_shape();
 

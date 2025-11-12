@@ -21,8 +21,8 @@ void LayerNormPostAllGather::validate(
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
     TT_FATAL(
         input_tensors.size() == 2 and optional_input_tensors.size() <= 2, "Must have between 12 to 4 input tensors");
-    auto& a = input_tensors.at(0);
-    auto& stats = input_tensors.at(1);
+    const auto& a = input_tensors.at(0);
+    const auto& stats = input_tensors.at(1);
     const auto& gamma = optional_input_tensors.at(0);
     const auto& beta = optional_input_tensors.at(1);
 
@@ -157,7 +157,7 @@ void LayerNormPostAllGather::validate(
 }
 
 std::vector<TensorSpec> LayerNormPostAllGather::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
-    auto& input_tensor = input_tensors.at(0);
+    const auto& input_tensor = input_tensors.at(0);
     return {TensorSpec(
         input_tensor.logical_shape(),
         tt::tt_metal::TensorLayout(

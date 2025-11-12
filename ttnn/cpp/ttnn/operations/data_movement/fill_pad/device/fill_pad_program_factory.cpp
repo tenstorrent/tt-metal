@@ -127,7 +127,7 @@ tt::tt_metal::operation::ProgramWithCallbacks fill_pad_multi_core(const Tensor& 
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>&,
                                               const std::vector<Tensor>& output_tensors) {
-        auto tens_buffer = input_tensors.at(0).buffer();
+        auto* tens_buffer = input_tensors.at(0).buffer();
 
         auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id);
 

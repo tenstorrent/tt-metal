@@ -141,7 +141,7 @@ WhereDeviceOperation::invoke(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> output_tensor) {
     CoreRangeSet worker_grid;
-    auto device = condition_tensor.device();
+    auto* device = condition_tensor.device();
     for (const auto& sub_device_id : device->get_sub_device_ids()) {
         const auto& sub_device_workers =
             device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id);

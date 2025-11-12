@@ -280,7 +280,7 @@ RunTimeOptions::RunTimeOptions() {
         this->runtime_target_device_ = tt::TargetDevice::Simulator;
     }
 
-    if (auto str = getenv("TT_METAL_ENABLE_ERISC_IRAM")) {
+    if (auto* str = getenv("TT_METAL_ENABLE_ERISC_IRAM")) {
         bool disabled = strcmp(str, "0") == 0;
         this->erisc_iram_enabled = !disabled;
         this->erisc_iram_enabled_env_var = !disabled;

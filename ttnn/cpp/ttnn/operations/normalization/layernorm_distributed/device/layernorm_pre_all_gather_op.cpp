@@ -19,7 +19,7 @@ namespace ttnn::operations::normalization {
 
 void LayerNormPreAllGather::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensors.size() == 1, "Must have 1 input tensor");
-    auto& tensor = input_tensors.at(0);
+    const auto& tensor = input_tensors.at(0);
 
     TT_FATAL(tensor.layout() == Layout::TILE, "Only tilized inputs supported.");
     TT_FATAL(

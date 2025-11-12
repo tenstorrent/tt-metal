@@ -41,7 +41,7 @@ DispatchSKernel::DispatchSKernel(
 }
 
 void DispatchSKernel::GenerateStaticConfigs() {
-    auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map(GetCoreType());
+    const auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map(GetCoreType());
 
     uint32_t dispatch_s_buffer_base = 0xff;
     if (MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
@@ -81,14 +81,14 @@ void DispatchSKernel::GenerateStaticConfigs() {
 void DispatchSKernel::GenerateDependentConfigs() {
     // Upstream
     TT_ASSERT(upstream_kernels_.size() == 1);
-    auto prefetch_kernel = dynamic_cast<PrefetchKernel*>(upstream_kernels_[0]);
+    auto* prefetch_kernel = dynamic_cast<PrefetchKernel*>(upstream_kernels_[0]);
     TT_ASSERT(prefetch_kernel);
     dependent_config_.upstream_logical_core = prefetch_kernel->GetLogicalCore();
     dependent_config_.upstream_dispatch_cb_sem_id = prefetch_kernel->GetStaticConfig().my_dispatch_s_cb_sem_id;
 
     // Downstream
     TT_ASSERT(downstream_kernels_.size() == 1);
-    auto dispatch_kernel = dynamic_cast<DispatchKernel*>(downstream_kernels_[0]);
+    auto* dispatch_kernel = dynamic_cast<DispatchKernel*>(downstream_kernels_[0]);
     TT_ASSERT(dispatch_kernel);
     dependent_config_.downstream_logical_core = dispatch_kernel->GetLogicalCore();
 }
@@ -169,7 +169,7 @@ void DispatchSKernel::ConfigureCore() {
     }
     // Just need to clear the dispatch message
     std::vector<uint32_t> zero = {0x0};
-    auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map(GetCoreType());
+    const auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map(GetCoreType());
     uint32_t dispatch_s_sync_sem_base_addr =
         my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM);
     for (uint32_t i = 0; i < DispatchSettings::DISPATCH_MESSAGE_ENTRIES; i++) {

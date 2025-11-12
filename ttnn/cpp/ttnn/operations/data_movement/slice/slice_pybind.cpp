@@ -15,7 +15,7 @@ namespace ttnn::operations::data_movement::detail {
 namespace py = pybind11;
 
 void bind_slice(py::module& module) {
-    auto doc =
+    const auto* doc =
         R"doc(
             Returns a sliced tensor. If the input tensor is on host, the slice will be performed on host, and if its on device it will be performed on device.
 

@@ -2363,7 +2363,7 @@ void configure_for_single_chip(
 
 int main(int argc, char** argv) {
     log_info(tt::LogTest, "test_prefetcher.cpp - Test Start");
-    auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    auto* slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
 
     init(argc, argv);

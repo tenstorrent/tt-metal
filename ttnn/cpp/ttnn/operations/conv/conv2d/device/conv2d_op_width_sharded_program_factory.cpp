@@ -611,8 +611,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_width_sharded(
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
-            auto src_buffer_a = input_tensors.at(0).buffer();
-            auto src_buffer_b = input_tensors.at(1).buffer();
+            auto* src_buffer_a = input_tensors.at(0).buffer();
+            auto* src_buffer_b = input_tensors.at(1).buffer();
 
             auto& weights_kernel_runtime_args = GetRuntimeArgs(program, weights_kernel_id);
             for (uint32_t core_index = 0; core_index < total_num_active_cores; core_index++) {

@@ -268,7 +268,7 @@ bool KernelImpl::binaries_exist_on_disk(const IDevice* device) const {
 
 std::vector<std::string> KernelImpl::file_paths(IDevice& device) const {
     std::vector<std::string> file_paths;
-    auto& hal = MetalContext::instance().hal();
+    const auto& hal = MetalContext::instance().hal();
     uint32_t core_type = hal.get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     uint32_t processor_class = enchantum::to_underlying(this->get_kernel_processor_class());
     for (int i = 0; i < this->expected_num_binaries(); i++) {

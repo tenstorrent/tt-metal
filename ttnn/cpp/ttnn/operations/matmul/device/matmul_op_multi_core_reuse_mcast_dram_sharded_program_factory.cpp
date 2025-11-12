@@ -886,11 +886,11 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
             TT_FATAL(
                 output_tensors.size() == 1, "Number of output tensors must be 1, but got {}", output_tensors.size());
 
-            auto src_buffer_a = input_tensors.at(0).buffer();
-            auto src_buffer_b = input_tensors.at(1).buffer();
+            auto* src_buffer_a = input_tensors.at(0).buffer();
+            auto* src_buffer_b = input_tensors.at(1).buffer();
             const auto& bias_tensor = optional_input_tensors.at(0);
 
-            auto dst_buffer = output_tensors.at(0).buffer();
+            auto* dst_buffer = output_tensors.at(0).buffer();
 
             UpdateDynamicCircularBufferAddress(program, cb_src2, *src_buffer_a);
             UpdateDynamicCircularBufferAddress(program, cb_output_reshard, *dst_buffer);
@@ -950,7 +950,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_shard
     tt_metal::Buffer* bias_buffer = nullptr;
     tt::DataFormat bias_data_format = tt::DataFormat::Bfp8_b;  // bias; doesn't matter if bias=nullptr
     if (bias.has_value()) {
-        auto& c = bias.value();
+        const auto& c = bias.value();
         TT_FATAL(
             c.storage_type() == StorageType::DEVICE,
             "Bias tensor must be on device, got storage type: {}",

@@ -469,10 +469,10 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
-            auto src_buffer_a = input_tensors.at(0).buffer();
-            auto src_buffer_b = input_tensors.at(1).buffer();
+            auto* src_buffer_a = input_tensors.at(0).buffer();
+            auto* src_buffer_b = input_tensors.at(1).buffer();
 
-            auto dst_buffer = output_tensors.at(0).buffer();
+            auto* dst_buffer = output_tensors.at(0).buffer();
 
             const bool src0_sharded = input_tensors[0].memory_config().is_sharded();
             const bool src1_sharded = input_tensors[1].memory_config().is_sharded();

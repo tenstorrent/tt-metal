@@ -361,7 +361,7 @@ inline tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
-            auto output_buffer = output_tensors.at(0).buffer();
+            auto* output_buffer = output_tensors.at(0).buffer();
             auto output_buffer_address = output_buffer->address();
             auto input_buffer_address = input_tensors.at(0).buffer()->address();
             auto weights_buffer_address = input_tensors.at(1).buffer()->address();
@@ -599,7 +599,7 @@ inline tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
-            auto output_buffer = output_tensors.at(0).buffer();
+            auto* output_buffer = output_tensors.at(0).buffer();
             auto output_buffer_address = output_buffer->address();
             auto input_buffer_address = input_tensors.at(0).buffer()->address();
             auto weights_buffer_address = input_tensors.at(1).buffer()->address();
@@ -643,7 +643,7 @@ inline tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
     // This should allocate a DRAM buffer on the device
-    auto device = a.device();
+    auto* device = a.device();
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup

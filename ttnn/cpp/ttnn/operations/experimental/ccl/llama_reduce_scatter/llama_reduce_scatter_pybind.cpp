@@ -19,7 +19,7 @@
 namespace ttnn::operations::experimental::ccl {
 
 void py_bind_llama_reduce_scatter(py::module& module) {
-    auto doc =
+    const auto* doc =
         R"doc(
             Reduce_scatter after FF1/3 for Llama70B.
 

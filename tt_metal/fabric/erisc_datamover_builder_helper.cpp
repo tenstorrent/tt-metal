@@ -82,13 +82,13 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
 
     size_t min_link_count = desired_num_links.value_or(std::numeric_limits<size_t>::max());
     for (size_t hop = 0; hop < device_sequence.size() - 1; hop++) {
-        auto src_device = device_sequence[hop];
-        auto dest_device = device_sequence[hop + 1];
+        auto* src_device = device_sequence[hop];
+        auto* dest_device = device_sequence[hop + 1];
         min_link_count = get_min_link_count(src_device, dest_device, min_link_count);
     }
     if (topology == Topology::Ring) {
-        auto src_device = device_sequence.back();
-        auto dest_device = device_sequence.front();
+        auto* src_device = device_sequence.back();
+        auto* dest_device = device_sequence.front();
         min_link_count = get_min_link_count(src_device, dest_device, min_link_count);
     }
 
@@ -223,20 +223,20 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     tt::tt_fabric::FabricEriscDatamoverBuilder* a_builder = nullptr;
     // Construct the builders
     for (size_t hop = 0; hop < device_sequence.size() - 1; hop++) {
-        auto src_device = device_sequence[hop];
-        auto dest_device = device_sequence[hop + 1];
-        auto src_program = programs[hop];
-        auto dest_program = programs[hop + 1];
+        auto* src_device = device_sequence[hop];
+        auto* dest_device = device_sequence[hop + 1];
+        auto* src_program = programs[hop];
+        auto* dest_program = programs[hop + 1];
         build_edm_directions(src_device, dest_device, src_program, dest_program);
         // Move out of loop?
         a_builder = &edm_builders_backward_direction[dest_device->id()].front();
         this->buffer_size_bytes = a_builder->channel_buffer_size;
     }
     if (topology == Topology::Ring) {
-        auto src_device = device_sequence.back();
-        auto dest_device = device_sequence.front();
-        auto src_program = programs.back();
-        auto dest_program = programs.front();
+        auto* src_device = device_sequence.back();
+        auto* dest_device = device_sequence.front();
+        auto* src_program = programs.back();
+        auto* dest_program = programs.front();
         build_edm_directions(src_device, dest_device, src_program, dest_program);
 
         a_builder = &edm_builders_backward_direction[dest_device->id()].front();
@@ -443,10 +443,10 @@ EdmLineFabricOpInterface EdmLineFabricOpInterface::build_program_builder_worker_
 void EdmLineFabricOpInterface::build_kernels() const {
     auto generate_kernels_in_direction =
         [this](tt::tt_metal::IDevice* device, tt::tt_metal::Program* program, Direction direction) {
-            auto& edm_builders =
+            const auto& edm_builders =
                 direction == FORWARD ? edm_builders_forward_direction : edm_builders_backward_direction;
             if (edm_builders.find(device->id()) != edm_builders.end()) {
-                for (auto& edm_builder : edm_builders.at(device->id())) {
+                for (const auto& edm_builder : edm_builders.at(device->id())) {
                     auto noc_ids = std::array<tt::tt_metal::NOC, 2>{tt::tt_metal::NOC::NOC_0, tt::tt_metal::NOC::NOC_1};
                     TT_FATAL(
                         edm_builder.get_configured_risc_count() <= 2,
@@ -533,19 +533,19 @@ EdmLineFabricOpInterface::generate_ordered_termination_info_farthest_to_nearest(
             "Device {} at index {} not found in `edm_builders_forward_direction` but it was expected there",
             i,
             device_sequence[i]->id());
-        auto& farther_edms = edm_builders_backward_direction.at(device_sequence[i + 1]->id());
-        auto& nearer_edms = edm_builders_forward_direction.at(device_sequence[i]->id());
+        const auto& farther_edms = edm_builders_backward_direction.at(device_sequence[i + 1]->id());
+        const auto& nearer_edms = edm_builders_forward_direction.at(device_sequence[i]->id());
 
         TT_ASSERT(farther_edms.size() <= this->num_links);
         TT_ASSERT(nearer_edms.size() <= this->num_links);
         for (size_t l = 0; l < this->num_links; l++) {
-            auto& farther_edm = farther_edms.at(l);
+            const auto& farther_edm = farther_edms.at(l);
             const std::size_t distance_receiver = i + 1;
             edm_termination_infos.push_back(
                 {distance_receiver, farther_edm.my_noc_x, farther_edm.my_noc_y, config.termination_signal_address});
         }
         for (size_t l = 0; l < this->num_links; l++) {
-            auto& nearer_edm = nearer_edms.at(l);
+            const auto& nearer_edm = nearer_edms.at(l);
             const std::size_t distance_sender = i;
             edm_termination_infos.push_back(
                 {distance_sender, nearer_edm.my_noc_x, nearer_edm.my_noc_y, config.termination_signal_address});
@@ -558,12 +558,12 @@ EdmLineFabricOpInterface::generate_ordered_termination_info_farthest_to_nearest(
 void EdmLineFabricOpInterface::teardown_from_host(TerminationSignal termination_signal) const {
     for (tt::tt_metal::IDevice* d : this->device_sequence) {
         if (edm_builders_forward_direction.find(d->id()) != edm_builders_forward_direction.end()) {
-            for (auto& edm_builder : edm_builders_forward_direction.at(d->id())) {
+            for (const auto& edm_builder : edm_builders_forward_direction.at(d->id())) {
                 edm_builder.teardown_from_host(d, termination_signal);
             }
         }
         if (edm_builders_backward_direction.find(d->id()) != edm_builders_backward_direction.end()) {
-            for (auto& edm_builder : edm_builders_backward_direction.at(d->id())) {
+            for (const auto& edm_builder : edm_builders_backward_direction.at(d->id())) {
                 edm_builder.teardown_from_host(d, termination_signal);
             }
         }

@@ -254,10 +254,10 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(
 
             uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
-            auto src_dram_buffer_a = input_tensors.at(0).buffer();
-            auto src_dram_buffer_b = input_tensors.at(1).buffer();
+            auto* src_dram_buffer_a = input_tensors.at(0).buffer();
+            auto* src_dram_buffer_b = input_tensors.at(1).buffer();
 
-            auto dst_dram_buffer = output_tensors.at(0).buffer();
+            auto* dst_dram_buffer = output_tensors.at(0).buffer();
 
             auto ashape = input_tensors.at(0).padded_shape();
             auto bshape = input_tensors.at(1).padded_shape();

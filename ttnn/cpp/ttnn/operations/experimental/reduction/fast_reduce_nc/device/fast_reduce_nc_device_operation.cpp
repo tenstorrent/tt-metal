@@ -37,7 +37,7 @@ Tensor _fast_reduce_nc(
 void FastReduceNCDeviceOperation::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     const auto& input = input_tensors.at(0);
-    auto& output = output_tensors.at(0);
+    const auto& output = output_tensors.at(0);
 
     // validate tensor
     check_tensor(input, "FastReduceNC", "input", {DataType::BFLOAT16, DataType::BFLOAT8_B});
@@ -79,7 +79,7 @@ std::vector<Tensor> FastReduceNCDeviceOperation::create_output_tensors(
 
 operation::ProgramWithCallbacks FastReduceNCDeviceOperation::create_program(
     const std::vector<Tensor>& inputs, std::vector<Tensor>& outputs) const {
-    auto& input = inputs.at(0);
+    const auto& input = inputs.at(0);
     auto& output = outputs.at(0);
 
     return reduce_nc_factory(input, output, dim, this->compute_kernel_config);

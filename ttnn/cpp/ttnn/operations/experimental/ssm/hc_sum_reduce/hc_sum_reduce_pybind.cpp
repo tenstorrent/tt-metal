@@ -17,7 +17,7 @@ namespace py = pybind11;
 void bind_hc_sum_reduce(py::module& module) {
     using OperationType = decltype(ttnn::experimental::hc_sum_reduce);
 
-    const auto doc = R"doc(
+    const auto* const doc = R"doc(
         Performs a custom reduction along dim 3 which is used in the SSM block of the Mamba architecture. Performs the following PyTorch equivalent (where latent_size = 32):
             x = torch.sum(x.reshape(1, 1, shape[2], shape[3] // latent_size, latent_size), dim=-1).reshape(1, 1, shape[2], shape[3] // latent_size)
     )doc";

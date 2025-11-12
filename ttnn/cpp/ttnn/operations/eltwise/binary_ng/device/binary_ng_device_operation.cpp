@@ -63,7 +63,7 @@ CoreRangeSet get_worker_grid(
     const Tensor& input_tensor_a, const Tensor* input_tensor_b, const std::optional<Tensor>& output_tensor) {
     auto get_tensor_grid = [](const Tensor& tensor) -> CoreRangeSet {
         const auto& grid = tensor.shard_spec()->grid;
-        auto device = tensor.device();
+        auto* device = tensor.device();
         for (const auto& sub_device_id : device->get_sub_device_ids()) {
             const auto& sub_device_workers = device->worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
             if (sub_device_workers.intersects(grid)) {
@@ -81,7 +81,7 @@ CoreRangeSet get_worker_grid(
         return get_tensor_grid(*output_tensor);
     }
 
-    auto device = input_tensor_a.device();
+    auto* device = input_tensor_a.device();
     return device->worker_cores(HalProgrammableCoreType::TENSIX, device->get_sub_device_ids().front());
 }
 

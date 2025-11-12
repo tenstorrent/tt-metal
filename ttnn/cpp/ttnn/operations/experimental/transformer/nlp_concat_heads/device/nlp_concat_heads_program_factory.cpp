@@ -194,8 +194,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads(
                                                    const std::vector<Tensor>& input_tensors,
                                                    const std::vector<std::optional<const Tensor>>&,
                                                    const std::vector<Tensor>& output_tensors) {
-        const auto src_buffer = input_tensors.at(0).buffer();
-        const auto dst_buffer = output_tensors.at(0).buffer();
+        auto* const src_buffer = input_tensors.at(0).buffer();
+        auto* const dst_buffer = output_tensors.at(0).buffer();
         const bool in_sharded = input_tensors.at(0).is_sharded();
         const bool out_sharded = output_tensors.at(0).is_sharded();
         if (in_sharded) {

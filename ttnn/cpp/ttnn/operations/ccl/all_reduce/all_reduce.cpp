@@ -34,7 +34,7 @@ ttnn::Tensor ExecuteAllReduce::invoke(
         }
     }
     // Get mesh device from input tensor
-    auto mesh_device = input_tensor.device();
+    auto* mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "Mesh device is required for all_reduce operation");
 
     // Determine topology

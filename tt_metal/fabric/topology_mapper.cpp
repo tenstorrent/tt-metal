@@ -481,8 +481,8 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
     const LogicalAdjacencyMap& adjacency_map_logical,
     const std::unordered_map<tt::tt_metal::AsicID, MeshHostRankId>& asic_id_to_mesh_rank,
     const std::unordered_map<FabricNodeId, MeshHostRankId>& fabric_node_id_to_mesh_rank) {
-    auto& phys_adj = adjacency_map_physical;
-    auto& log_adj = adjacency_map_logical;
+    const auto& phys_adj = adjacency_map_physical;
+    const auto& log_adj = adjacency_map_logical;
 
     std::vector<FabricNodeId> log_nodes;
     for (const auto& p : log_adj) {

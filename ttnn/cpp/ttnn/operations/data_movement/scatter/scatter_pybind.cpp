@@ -13,7 +13,7 @@
 namespace ttnn::operations::data_movement::detail {
 
 void bind_scatter(py::module& module) {
-    auto doc =
+    const auto* doc =
         R"doc(
         Scatters the source tensor's values along a given dimension according to the index tensor.
 

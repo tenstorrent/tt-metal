@@ -300,7 +300,7 @@ void create_worker_kernel(
     const CoreCoord& mux_virtual_core,
     const std::shared_ptr<tt_metal::distributed::MeshDevice>& device,
     tt::tt_metal::Program& program_handle) {
-    auto worker_memory_map = worker_test_config.memory_map;
+    auto* worker_memory_map = worker_test_config.memory_map;
     CoreCoord worker_logical_core = worker_test_config.worker_logical_core;
     auto channel_type = worker_test_config.channel_type;
     auto worker_id = worker_test_config.worker_id;

@@ -126,9 +126,9 @@ inline tt::tt_metal::operation::ProgramWithCallbacks concatenate_heads_multi_cor
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_tensors,
             const std::vector<Tensor>& output_tensors) {
-            auto src_dram_buffer = input_tensors.at(0).buffer();
+            auto* src_dram_buffer = input_tensors.at(0).buffer();
 
-            auto dst_dram_buffer = output_tensors.at(0).buffer();
+            auto* dst_dram_buffer = output_tensors.at(0).buffer();
 
             for (int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
                 for (int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {

@@ -168,9 +168,9 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>&,
                                               const std::vector<Tensor>& output_tensors) {
-        auto src_dram_buffer = input_tensors.at(0).buffer();
+        auto* src_dram_buffer = input_tensors.at(0).buffer();
 
-        auto dst_dram_buffer = output_tensors.at(0).buffer();
+        auto* dst_dram_buffer = output_tensors.at(0).buffer();
 
         auto& reader_runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
         auto& writer_runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);

@@ -12,7 +12,7 @@ namespace ttnn::operations::data_movement::detail {
 namespace py = pybind11;
 
 void bind_sort_operation(py::module& module) {
-    auto doc =
+    const auto* doc =
         R"doc(
             Sorts the elements of the input tensor along the specified dimension in ascending order by default.
             If no dimension is specified, the last dimension of the input tensor is used.

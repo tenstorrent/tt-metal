@@ -15,7 +15,7 @@ namespace ttnn::operations::data_movement::detail {
 namespace py = pybind11;
 
 void bind_permute(py::module& module) {
-    auto doc =
+    const auto* doc =
         R"doc(
             Permutes the dimensions of the input tensor according to the specified permutation.
 

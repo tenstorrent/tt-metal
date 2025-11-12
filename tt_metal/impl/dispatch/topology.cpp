@@ -655,7 +655,7 @@ void populate_cq_static_args(IDevice* device) {
         "Tried to populate static args on nodes without the nodes populated (need to run populate_fd_kernels()");
     // First pass, add device/program to all kernels for this device and generate static configs.
     auto cq_program_ptr = std::make_unique<Program>();
-    for (auto node_and_kernel : node_id_to_kernel) {
+    for (auto* node_and_kernel : node_id_to_kernel) {
         // GetDeviceId() uses Id from topology as IDevice* is not present yet
         if (node_and_kernel->GetDeviceId() == device->id()) {
             node_and_kernel->AddDevice(device);
@@ -678,20 +678,20 @@ void create_cq_program(IDevice* device) {
         device->id());
     empty_cores.clear();
     // Third pass, populate dependent configs and create kernels for each node
-    for (auto node_and_kernel : node_id_to_kernel) {
+    for (auto* node_and_kernel : node_id_to_kernel) {
         if (node_and_kernel->GetDeviceId() == device->id()) {
             node_and_kernel->GenerateDependentConfigs();
         }
     }
 
-    for (auto node_and_kernel : node_id_to_kernel) {
+    for (auto* node_and_kernel : node_id_to_kernel) {
         if (node_and_kernel->GetDeviceId() == device->id()) {
             node_and_kernel->CreateKernel();
         }
     }
 
     // Register core coordinates for this device
-    for (auto node_and_kernel : node_id_to_kernel) {
+    for (auto* node_and_kernel : node_id_to_kernel) {
         if (node_and_kernel->GetDeviceId() != device->id()) {
             continue;
         }
@@ -713,7 +713,7 @@ void create_cq_program(IDevice* device) {
     }
 
     // Register termination info
-    for (auto node_and_kernel : node_id_to_kernel) {
+    for (auto* node_and_kernel : node_id_to_kernel) {
         if (node_and_kernel->GetDeviceId() != device->id()) {
             continue;
         }
@@ -748,7 +748,7 @@ void configure_dispatch_cores(IDevice* device) {
     // Set up completion_queue_writer core. This doesn't actually have a kernel so keep it out of the struct and config
     // it here. TODO: should this be in the struct?
     CoreType dispatch_core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
-    auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map();
+    const auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map();
     uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
     uint32_t cq_size = device->sysmem_manager().get_cq_size();
     std::vector<uint32_t> zero = {0x0};

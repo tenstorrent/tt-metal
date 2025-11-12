@@ -61,7 +61,7 @@ Tensor AutoFormat::move_tensor_to_device(
 
 Tensor AutoFormat::move_tensor_to_mem_config(const Tensor& input, const MemoryConfig& mem_config) {
     if (input.storage_type() != StorageType::DEVICE) {
-        auto default_device = AutoFormat::GetDefaultDevice();
+        auto* default_device = AutoFormat::GetDefaultDevice();
         TT_FATAL(default_device != nullptr, "Default mesh device is not set for AutoFormat operations");
         return input.to_device(default_device, mem_config);
     } else if (input.memory_config() != mem_config) {

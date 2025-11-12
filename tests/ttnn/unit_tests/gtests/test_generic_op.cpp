@@ -74,8 +74,8 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpArgmaxSingleCore) {
         .format_descriptors = {output_format_descriptor},
     };
 
-    const auto src_buffer = device_input_tensor.buffer();
-    const auto dst_buffer = device_output_tensor.buffer();
+    auto* const src_buffer = device_input_tensor.buffer();
+    auto* const dst_buffer = device_output_tensor.buffer();
 
     const auto inner_dim_units = output_last_dim;
     const auto outer_dim_units = input_tensor.logical_volume() / inner_dim_units / red_dim_units;

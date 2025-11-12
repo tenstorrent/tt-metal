@@ -199,10 +199,10 @@ operation::ProgramWithCallbacks multi_core_ssm_prefix_scan(
                                                    const std::vector<Tensor>& input_tensors,
                                                    const std::vector<std::optional<const Tensor>>&,
                                                    const std::vector<Tensor>& output_tensors) {
-        auto& a = input_tensors.at(0);
-        auto& bx = input_tensors.at(1);
-        auto& h = input_tensors.at(2);
-        auto& out = output_tensors.at(0);
+        const auto& a = input_tensors.at(0);
+        const auto& bx = input_tensors.at(1);
+        const auto& h = input_tensors.at(2);
+        const auto& out = output_tensors.at(0);
         set_runtime_args(program, a, bx, h, out);
     };
 

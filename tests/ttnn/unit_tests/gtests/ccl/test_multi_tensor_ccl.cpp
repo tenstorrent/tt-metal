@@ -40,7 +40,7 @@ std::vector<IDevice*> get_line_devices_as_idevice(
     const std::vector<std::shared_ptr<distributed::MeshDevice>>& mesh_devices) {
     std::vector<IDevice*> devices;
     devices.reserve(mesh_devices.size());
-    for (auto& mesh_device : mesh_devices) {
+    for (const auto& mesh_device : mesh_devices) {
         devices.push_back(mesh_device.get());
     }
     return devices;

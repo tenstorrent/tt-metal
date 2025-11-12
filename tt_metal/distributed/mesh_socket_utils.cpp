@@ -35,7 +35,7 @@ group_socket_connections(const SocketConfig& config, SocketEndpoint socket_endpo
             grouped_connections;
     uint32_t conn_idx = 0;
     for (const auto& connection : config.socket_connection_config) {
-        auto& core = is_sender ? connection.sender_core : connection.receiver_core;
+        const auto& core = is_sender ? connection.sender_core : connection.receiver_core;
         grouped_connections[core.device_coord][core.core_coord].push_back(std::make_pair(conn_idx++, connection));
     }
     return grouped_connections;
@@ -271,8 +271,8 @@ void write_socket_configs(
     const SocketPeerDescriptor& local_descriptor,
     const SocketPeerDescriptor& peer_descriptor,
     SocketEndpoint socket_endpoint) {
-    auto mesh_device = config_buffer->device();
-    auto& core_to_core_id = config_buffer->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id;
+    auto* mesh_device = config_buffer->device();
+    const auto& core_to_core_id = config_buffer->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id;
     bool is_sender = socket_endpoint == SocketEndpoint::SENDER;
     const auto& config = peer_descriptor.config;
     auto grouped_connections = group_socket_connections(config, socket_endpoint);
@@ -385,7 +385,7 @@ SocketPeerDescriptor generate_local_endpoint_descriptor(
         .data_buffer_address = is_sender ? 0 : socket_endpoint.get_data_buffer()->address(),
         .exchange_tag = generate_descriptor_exchange_tag(peer_rank, context_id)  // Unique tag for this exchange
     };
-    auto device = socket_endpoint.get_config_buffer()->device();
+    auto* device = socket_endpoint.get_config_buffer()->device();
     for (const auto& [sender_core, recv_core] : config.socket_connection_config) {
         const auto& device_coord = is_sender ? sender_core.device_coord : recv_core.device_coord;
         auto fabric_node_id = device->get_fabric_node_id(device_coord);

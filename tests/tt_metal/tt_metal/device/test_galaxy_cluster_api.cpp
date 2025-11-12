@@ -64,7 +64,7 @@ std::unordered_set<ChipId> get_ethernet_connected_device_ids(const ChipId device
 // which shelf a particular Galaxy chip is on.
 TEST_F(TGFixture, ActiveEthValidateNumLinksBetweenAdjacentGalaxyChips) {
     for (const auto& mesh_device : this->devices_) {
-        auto device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->get_devices()[0];
         const ChipId device_id = device->id();
         if (is_galaxy_device(device_id)) {
             std::unordered_map<ChipId, uint32_t> connected_devices_to_num_links_found;
@@ -101,7 +101,7 @@ TEST_F(TGFixture, ActiveEthValidateNumLinksBetweenAdjacentGalaxyChips) {
 // and that each Galaxy chip links to at most one MMIO chip
 TEST_F(GalaxyFixture, ActiveEthValidateLinksBetweenMMIOAndGalaxyChips) {
     for (const auto& mesh_device : this->devices_) {
-        auto device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->get_devices()[0];
         const ChipId device_id = device->id();
         const std::unordered_set<ChipId>& connected_device_ids = get_ethernet_connected_device_ids(device_id);
         if (is_galaxy_device(device_id)) {
@@ -137,7 +137,7 @@ TEST_F(GalaxyFixture, ActiveEthValidateLinksBetweenMMIOAndGalaxyChips) {
 // Validate that all galaxy chips are unharvested
 TEST_F(GalaxyFixture, ValidateAllGalaxyChipsAreUnharvested) {
     for (const auto& mesh_device : this->devices_) {
-        auto device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->get_devices()[0];
         const ChipId device_id = device->id();
         if (is_galaxy_device(device_id)) {
             const uint32_t harvest_mask =
@@ -151,7 +151,7 @@ TEST_F(GalaxyFixture, ValidateAllGalaxyChipsAreUnharvested) {
 // Validate that all MMIO chips have a single row harvested
 TEST_F(GalaxyFixture, ValidateAllMMIOChipsHaveSingleRowHarvested) {
     for (const auto& mesh_device : this->devices_) {
-        auto device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->get_devices()[0];
         const ChipId device_id = device->id();
         if (!is_galaxy_device(device_id)) {
             uint32_t num_rows_harvested = 0;
@@ -183,7 +183,7 @@ TEST_F(TGFixture, ValidateChipBoardTypes) {
     uint32_t num_n150_chips = 0;
     uint32_t num_galaxy_chips = 0;
     for (const auto& mesh_device : this->devices_) {
-        auto device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->get_devices()[0];
         const ChipId device_id = device->id();
         if (is_galaxy_device(device_id)) {
             num_galaxy_chips++;

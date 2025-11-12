@@ -54,8 +54,8 @@ std::vector<TensorSpec> Prod::compute_output_specs(const std::vector<Tensor>&) c
 
 operation::ProgramWithCallbacks Prod::create_program(
     const std::vector<Tensor>& inputs, std::vector<Tensor>& outputs) const {
-    auto& input = inputs.at(0);
-    auto& output = inputs.at(1);
+    const auto& input = inputs.at(0);
+    const auto& output = inputs.at(1);
 
     return prod_nc_format(input, output, dim);
 }

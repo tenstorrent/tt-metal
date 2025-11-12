@@ -67,7 +67,7 @@ std::pair<std::optional<Tensor>, uint32_t> create_reciprocal_tensor_if_needed(
             std::copy(reciprocals.begin(), reciprocals.begin() + W, reciprocals.begin() + i * W);
         }
 
-        if (auto p_mesh_device = dynamic_cast<distributed::MeshDevice*>(device)) {
+        if (auto* p_mesh_device = dynamic_cast<distributed::MeshDevice*>(device)) {
             recip_tensor = Tensor::from_vector(std::move(reciprocals), tensor_spec, p_mesh_device);
         } else {
             TT_THROW("Cannot cast to MeshDevice");
@@ -364,11 +364,11 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         compute_defines["RMSNORM"] = "1";
     }
 
-    auto reader_kernel_path = use_row_major_kernel
-                                  ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-                                    "reader_unary_interleaved_ln_rm_gb.cpp"
-                                  : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-                                    "reader_unary_interleaved_ln.cpp";
+    const auto* reader_kernel_path = use_row_major_kernel
+                                         ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+                                           "reader_unary_interleaved_ln_rm_gb.cpp"
+                                         : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+                                           "reader_unary_interleaved_ln.cpp";
     reader_kernel_path = large_tensor_needed
                              ? (use_welford_and_not_rms_norm
                                     ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
@@ -569,15 +569,15 @@ operation::ProgramWithCallbacks layernorm_multi_core(
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
-            const auto src_a_dram_buffer = input_tensors.at(0).buffer();
+            auto* const src_a_dram_buffer = input_tensors.at(0).buffer();
             const auto& src_b_tensor = optional_input_tensors.at(0);
             const auto& gamma_tensor = optional_input_tensors.at(1);
             const auto& beta_tensor = optional_input_tensors.at(2);
-            const auto dst_dram_buffer = output_tensors.at(0).buffer();
+            auto* const dst_dram_buffer = output_tensors.at(0).buffer();
 
-            auto src_b_dram_buffer = src_b_tensor.has_value() ? src_b_tensor.value().buffer() : nullptr;
-            auto gamma_dram_buffer = gamma_tensor.has_value() ? gamma_tensor.value().buffer() : nullptr;
-            auto beta_dram_buffer = beta_tensor.has_value() ? beta_tensor.value().buffer() : nullptr;
+            auto* src_b_dram_buffer = src_b_tensor.has_value() ? src_b_tensor.value().buffer() : nullptr;
+            auto* gamma_dram_buffer = gamma_tensor.has_value() ? gamma_tensor.value().buffer() : nullptr;
+            auto* beta_dram_buffer = beta_tensor.has_value() ? beta_tensor.value().buffer() : nullptr;
 
             for (uint32_t i = 0; i < num_cores; ++i) {
                 CoreCoord core = {i % grid_size.x, i / grid_size.x};
@@ -1974,12 +1974,12 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
-            const auto src_buffer_a = input_tensors.at(0).buffer();
+            auto* const src_buffer_a = input_tensors.at(0).buffer();
             const auto& b_tensor = optional_input_tensors.at(0);
             const auto& gamma_tensor = optional_input_tensors.at(1);
             const auto& beta_tensor = optional_input_tensors.at(2);
             const auto& stats_tensor = optional_input_tensors.at(3);
-            const auto dst_buffer = output_tensors.at(0).buffer();
+            auto* const dst_buffer = output_tensors.at(0).buffer();
 
             UpdateDynamicCircularBufferAddress(program, cb_in0, *src_buffer_a);
 

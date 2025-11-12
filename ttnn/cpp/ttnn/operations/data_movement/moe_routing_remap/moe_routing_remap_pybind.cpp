@@ -18,7 +18,7 @@
 namespace ttnn::operations::data_movement::detail {
 
 void py_bind_moe_routing_remap(py::module& module) {
-    auto doc = R"doc(
+    const auto* doc = R"doc(
 
 Remap MoE routing weights to local device routing weights. Partitions groups of non-zero weights, which may be
 non-uniformly distributed, and maps them to devices along the specified cluster axis.

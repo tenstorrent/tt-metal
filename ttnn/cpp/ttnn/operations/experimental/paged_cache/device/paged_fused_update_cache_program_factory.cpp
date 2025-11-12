@@ -163,9 +163,9 @@ operation::ProgramWithCallbacks paged_tiled_fused_update_cache_multi_core(
 
     uint32_t num_input_tiles = input1_shard_spec.value().shape[0] * input1_shard_spec.value().shape[1] / TILE_HW;
 
-    auto in1_buffer_address = input1_shard_spec.has_value() ? input_tensor1.buffer() : nullptr;
+    auto* in1_buffer_address = input1_shard_spec.has_value() ? input_tensor1.buffer() : nullptr;
 
-    auto in2_buffer_address = input2_shard_spec.has_value() ? input_tensor2.buffer() : nullptr;
+    auto* in2_buffer_address = input2_shard_spec.has_value() ? input_tensor2.buffer() : nullptr;
 
     uint32_t num_cache_tiles = 2 * Wt;   // double buffered
     uint32_t num_interm_tiles = 2 * Wt;  // double buffered
@@ -232,9 +232,9 @@ operation::ProgramWithCallbacks paged_tiled_fused_update_cache_multi_core(
         cb_page_table_id = cb_src7;
     }
 
-    auto dst1_buffer = cache_tensor1.buffer();
+    auto* dst1_buffer = cache_tensor1.buffer();
 
-    auto dst2_buffer = cache_tensor2.buffer();
+    auto* dst2_buffer = cache_tensor2.buffer();
 
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)src1_cb_index,
@@ -475,14 +475,14 @@ operation::ProgramWithCallbacks paged_tiled_fused_update_cache_multi_core(
             const std::vector<uint32_t> update_idxs =
                 static_cast<const PagedUpdateCacheDeviceOperation*>(operation)->update_idxs;
 
-            auto src1_buffer = input_tensors.at(1).buffer();
-            auto src2_buffer = input_tensors.at(3).buffer();
+            auto* src1_buffer = input_tensors.at(1).buffer();
+            auto* src2_buffer = input_tensors.at(3).buffer();
 
-            auto dst1_buffer = input_tensors.at(0).buffer();
-            auto dst2_buffer = input_tensors.at(2).buffer();
+            auto* dst1_buffer = input_tensors.at(0).buffer();
+            auto* dst2_buffer = input_tensors.at(2).buffer();
 
-            auto index_tensor_buffer = use_index_tensor ? optional_input_tensors.at(0).value().buffer() : nullptr;
-            auto page_table_buffer = is_paged_cache ? optional_input_tensors.at(1).value().buffer() : nullptr;
+            auto* index_tensor_buffer = use_index_tensor ? optional_input_tensors.at(0).value().buffer() : nullptr;
+            auto* page_table_buffer = is_paged_cache ? optional_input_tensors.at(1).value().buffer() : nullptr;
             auto index_tensor_addr = use_index_tensor ? optional_input_tensors.at(0).value().buffer()->address() : 0;
             auto page_table_tensor_addr = is_paged_cache ? optional_input_tensors.at(1).value().buffer()->address() : 0;
 
@@ -653,8 +653,8 @@ operation::ProgramWithCallbacks paged_row_major_fused_update_cache_multi_core(
 
     const uint32_t num_input_tiles = input1_shard_spec.shape[0] * input1_shard_spec.shape[1] / TILE_HW;
 
-    const auto in1_buffer_address = input_tensor1.buffer();
-    const auto in2_buffer_address = input_tensor2.buffer();
+    auto* const in1_buffer_address = input_tensor1.buffer();
+    auto* const in2_buffer_address = input_tensor2.buffer();
 
     const uint32_t num_cache_tiles = 2 * Wt;   // double buffered
     const uint32_t num_interm_tiles = 2 * Wt;  // double buffered
@@ -719,9 +719,9 @@ operation::ProgramWithCallbacks paged_row_major_fused_update_cache_multi_core(
         cb_page_table_id = cb_src7;
     }
 
-    const auto dst1_buffer = cache_tensor1.buffer();
+    auto* const dst1_buffer = cache_tensor1.buffer();
 
-    const auto dst2_buffer = cache_tensor2.buffer();
+    auto* const dst2_buffer = cache_tensor2.buffer();
 
     std::vector<uint32_t> reader_compile_time_args = {
         src1_cb_index,
@@ -965,14 +965,14 @@ operation::ProgramWithCallbacks paged_row_major_fused_update_cache_multi_core(
             const std::vector<uint32_t> update_idxs =
                 static_cast<const PagedUpdateCacheDeviceOperation*>(operation)->update_idxs;
 
-            const auto src1_buffer = input_tensors.at(1).buffer();
-            const auto src2_buffer = input_tensors.at(3).buffer();
+            auto* const src1_buffer = input_tensors.at(1).buffer();
+            auto* const src2_buffer = input_tensors.at(3).buffer();
 
-            const auto dst1_buffer = input_tensors.at(0).buffer();
-            const auto dst2_buffer = input_tensors.at(2).buffer();
+            auto* const dst1_buffer = input_tensors.at(0).buffer();
+            auto* const dst2_buffer = input_tensors.at(2).buffer();
 
-            auto index_tensor_buffer = use_index_tensor ? optional_input_tensors.at(0).value().buffer() : nullptr;
-            auto page_table_buffer = is_paged_cache ? optional_input_tensors.at(1).value().buffer() : nullptr;
+            auto* index_tensor_buffer = use_index_tensor ? optional_input_tensors.at(0).value().buffer() : nullptr;
+            auto* page_table_buffer = is_paged_cache ? optional_input_tensors.at(1).value().buffer() : nullptr;
             const auto index_tensor_addr =
                 use_index_tensor ? optional_input_tensors.at(0).value().buffer()->address() : 0;
             const auto page_table_tensor_addr =

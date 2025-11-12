@@ -79,7 +79,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_generic_program(
 
     const size_t num_senders_per_link = 1;
     uint32_t num_receivers_per_link = 1;
-    auto topology_type = topology == ttnn::ccl::Topology::Ring ? "RING" : "LINEAR";
+    const auto* topology_type = topology == ttnn::ccl::Topology::Ring ? "RING" : "LINEAR";
 
     const auto [sender_worker_core_range, sender_worker_cores] =
         choose_worker_cores(num_links, num_senders_per_link, device, sub_device_id);

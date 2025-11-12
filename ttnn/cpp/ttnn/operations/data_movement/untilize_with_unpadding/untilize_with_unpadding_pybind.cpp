@@ -14,7 +14,7 @@ namespace ttnn::operations::data_movement::detail {
 namespace py = pybind11;
 
 void bind_untilize_with_unpadding(py::module& module) {
-    auto doc =
+    const auto* doc =
         R"doc(
             Changes data layout of input tensor to ROW_MAJOR and unpads/removes elements from the tensor.
 

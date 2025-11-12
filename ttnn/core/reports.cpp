@@ -43,7 +43,7 @@ DeviceInfo get_device_info(tt::tt_metal::distributed::MeshDevice* device) {
 
 std::vector<BufferInfo> get_buffers(const std::vector<tt::tt_metal::distributed::MeshDevice*>& devices) {
     std::vector<BufferInfo> buffer_infos;
-    for (auto device : devices) {
+    for (auto* device : devices) {
         const auto allocated_buffers = device->allocator()->get_allocated_buffers();
         // NOLINTNEXTLINE(bugprone-nondeterministic-pointer-iteration-order)
         for (const auto& buffer : allocated_buffers) {
@@ -99,7 +99,7 @@ std::vector<BufferInfo> get_buffers(const std::vector<tt::tt_metal::distributed:
 
 std::vector<BufferPageInfo> get_buffer_pages(const std::vector<tt::tt_metal::distributed::MeshDevice*>& devices) {
     std::vector<BufferPageInfo> buffer_page_infos;
-    for (auto device : devices) {
+    for (auto* device : devices) {
         const auto allocated_buffers = device->allocator()->get_allocated_buffers();
         // NOLINTNEXTLINE(bugprone-nondeterministic-pointer-iteration-order)
         for (const auto& buffer : allocated_buffers) {

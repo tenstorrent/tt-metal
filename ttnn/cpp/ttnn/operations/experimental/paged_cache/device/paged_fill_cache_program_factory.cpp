@@ -93,9 +93,9 @@ operation::ProgramWithCallbacks paged_fill_cache_multi_core(
         create_cb(cb_batch_idx_id, program, all_cores, batch_idx_stick_size_B, 1, batch_idx_data_format);
     }
 
-    auto src_buffer = input_tensor.buffer();
-    auto dst_buffer = cache_tensor.buffer();
-    auto page_table_buffer = page_table_tensor.buffer();
+    auto* src_buffer = input_tensor.buffer();
+    auto* dst_buffer = cache_tensor.buffer();
+    auto* page_table_buffer = page_table_tensor.buffer();
 
     std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_cb_index, Wt};
     TensorAccessorArgs(src_buffer).append_to(reader_compile_time_args);
@@ -193,7 +193,7 @@ operation::ProgramWithCallbacks paged_fill_cache_multi_core(
             auto page_table_addr = input_tensors.at(2).buffer()->address();  // page_table_tensor
 
             uint32_t current_kernel_batch_arg;
-            const auto op_specific = static_cast<const PagedUpdateCacheDeviceOperation*>(operation);
+            const auto* const op_specific = static_cast<const PagedUpdateCacheDeviceOperation*>(operation);
 
             if (use_batch_idx_tensor) {
 

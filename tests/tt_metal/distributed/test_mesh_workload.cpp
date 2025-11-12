@@ -128,7 +128,7 @@ void verify_cb_config(
             if (!mesh_device->is_local(coord)) {
                 continue;
             }
-            auto device = mesh_device->get_device(coord);
+            auto* device = mesh_device->get_device(coord);
             uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
             for (const auto& core_range : crs.ranges()) {
                 for (const auto& core_coord : core_range) {
@@ -669,7 +669,7 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSemaphoreSanity) {
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
     Finish(mesh_device_->mesh_command_queue());
 
-    for (const auto device : mesh_device_->get_devices()) {
+    for (auto* const device : mesh_device_->get_devices()) {
         validate_sems(mesh_device_, device, full_grid, mesh_workload, expected_semaphore_values);
     }
 }
@@ -707,7 +707,7 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSemaphoreDifferentPrograms) {
         if (!mesh_device_->is_local(device_coord)) {
             continue;
         }
-        auto device = mesh_device_->get_device(device_coord);
+        auto* device = mesh_device_->get_device(device_coord);
         validate_sems(mesh_device_, device, full_grid, mesh_workload, expected_semaphore_values_0);
     }
 
@@ -715,7 +715,7 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSemaphoreDifferentPrograms) {
         if (!mesh_device_->is_local(device_coord)) {
             continue;
         }
-        auto device = mesh_device_->get_device(device_coord);
+        auto* device = mesh_device_->get_device(device_coord);
         validate_sems(mesh_device_, device, full_grid, mesh_workload, expected_semaphore_values_1);
     }
 }

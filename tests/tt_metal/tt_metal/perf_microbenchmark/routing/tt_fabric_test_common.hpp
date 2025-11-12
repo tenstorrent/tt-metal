@@ -452,7 +452,7 @@ public:
         uint32_t size_bytes,
         bool blocking,
         std::unordered_map<CoreCoord, std::vector<uint32_t>>& results_out) const {
-        auto device = mesh_device_->get_device(device_coord);
+        auto* device = mesh_device_->get_device(device_coord);
         auto num_elements = tt::align(size_bytes, sizeof(uint32_t));
         for (const auto& logical_core : cores) {
             auto virtual_core = device->ethernet_core_from_logical_core(logical_core);
@@ -481,7 +481,7 @@ public:
         const std::vector<CoreCoord>& cores,
         uint32_t address,
         const std::vector<uint8_t>& data) const {
-        auto device = mesh_device_->get_device(device_coord);
+        auto* device = mesh_device_->get_device(device_coord);
         for (const auto& logical_core : cores) {
             auto virtual_core = device->ethernet_core_from_logical_core(logical_core);
 

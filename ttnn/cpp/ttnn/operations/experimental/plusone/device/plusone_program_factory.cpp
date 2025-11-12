@@ -40,7 +40,7 @@ tt::tt_metal::operation::ProgramWithCallbacks plusone_single_core(
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_units = W;
     uint32_t aligned_input_page_size = round_up_to_mul32(num_input_units * input_unit_size);
-    auto src_buffer = input.buffer();
+    auto* src_buffer = input.buffer();
     bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     tt::tt_metal::CircularBufferConfig cb_src0_config =
@@ -75,7 +75,7 @@ tt::tt_metal::operation::ProgramWithCallbacks plusone_single_core(
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>& optional_tensors,
                                               const std::vector<Tensor>& output_tensors) {
-        auto src_buffer = input_tensors.at(0).buffer();
+        auto* src_buffer = input_tensors.at(0).buffer();
 
         for (const auto& core : cores) {
             {

@@ -339,7 +339,7 @@ SenderReceiverConfig get_device_sender_receiver_config_in_ring(
 }
 
 std::vector<IDevice*> get_active_physical_devices(const Tensor& tensor) {
-    auto mesh_device = tensor.device();
+    auto* mesh_device = tensor.device();
     std::vector<IDevice*> devices = {};
     devices.reserve(tensor.device_storage().coords.size());
     for (const auto& coord : tensor.device_storage().coords) {

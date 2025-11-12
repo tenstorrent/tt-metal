@@ -227,7 +227,7 @@ void init(const std::vector<std::string>& input_args, TestInfo& info) {
 
 void set_runtime_args(
     tt_metal::Program& program, tt_metal::KernelHandle kernel_id, vector<uint32_t>& args, const CoreRangeSet& kgset) {
-    for (auto& kg : kgset.ranges()) {
+    for (const auto& kg : kgset.ranges()) {
         for (int core_idx_y = kg.start_coord.y; core_idx_y <= kg.end_coord.y; core_idx_y++) {
             for (int core_idx_x = kg.start_coord.x; core_idx_x <= kg.end_coord.x; core_idx_x++) {
                 CoreCoord core = {(std::size_t)core_idx_x, (std::size_t)core_idx_y};

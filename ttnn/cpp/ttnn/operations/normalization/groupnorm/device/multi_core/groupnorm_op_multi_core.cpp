@@ -482,7 +482,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
             core_index_offset += num_cores_per_batch * num_cores_per_group;
         }
     }
-    for ([[maybe_unused]] auto& coord : mcast_sender_core_ranges) {
+    for ([[maybe_unused]] const auto& coord : mcast_sender_core_ranges) {
         log_debug(tt::LogOp, "mcast sender coord: {} {}", coord.start_coord.x, coord.start_coord.y);
     }
     for (int i = 0; i < num_cores; ++i) {
@@ -491,7 +491,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
             mcast_receiver_core_ranges.insert(CoreRange(core_coords[i]));
         }
     }
-    for ([[maybe_unused]] auto& coord : mcast_receiver_core_ranges) {
+    for ([[maybe_unused]] const auto& coord : mcast_receiver_core_ranges) {
         log_debug(tt::LogOp, "mcast receiver coord: {} {}", coord.start_coord.x, coord.start_coord.y);
     }
     CoreRangeSet mcast_sender_cores = CoreRangeSet(mcast_sender_core_ranges);
@@ -1115,12 +1115,12 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>& optional_input_tensors,
                                               const std::vector<Tensor>& output_tensors) {
-        auto src_buffer_a = input_tensors.at(0).buffer();
+        auto* src_buffer_a = input_tensors.at(0).buffer();
         const auto& gamma_tensor = optional_input_tensors.at(0);
         const auto& beta_tensor = optional_input_tensors.at(1);
         const auto& mask_tensor = optional_input_tensors.at(2);
         const auto& negative_mask_tensor = optional_input_tensors.at(3);
-        auto dst_buffer = output_tensors.at(0).buffer();
+        auto* dst_buffer = output_tensors.at(0).buffer();
 
         UpdateDynamicCircularBufferAddress(program, cb_in0, *src_buffer_a);
         UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
@@ -1546,13 +1546,13 @@ operation::ProgramWithCallbacks groupnorm_multi_core_no_mcast(
         }
         core_index_offset += num_cores_per_batch;
     }
-    for ([[maybe_unused]] auto& coord : mcast_sender_core_ranges_all) {
+    for ([[maybe_unused]] const auto& coord : mcast_sender_core_ranges_all) {
         log_debug(tt::LogOp, "mcast sender coord: {} {}", coord.start_coord.x, coord.start_coord.y);
     }
-    for ([[maybe_unused]] auto& coord : mcast_sender_core_ranges_group_1) {
+    for ([[maybe_unused]] const auto& coord : mcast_sender_core_ranges_group_1) {
         log_debug(tt::LogOp, "mcast sender coord group 1: {} {}", coord.start_coord.x, coord.start_coord.y);
     }
-    for ([[maybe_unused]] auto& coord : mcast_sender_core_ranges_group_2) {
+    for ([[maybe_unused]] const auto& coord : mcast_sender_core_ranges_group_2) {
         log_debug(tt::LogOp, "mcast sender coord group 2: {} {}", coord.start_coord.x, coord.start_coord.y);
     }
     CoreRangeSet mcast_sender_cores_group_1 = CoreRangeSet(mcast_sender_core_ranges_group_1);
@@ -2355,7 +2355,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_no_mcast(
 
         // This is one where reciprocals are used
         if (groupnorm_mode == 2) {
-            auto reciprocals_buffer = reciprocals_tensor.value().buffer();
+            auto* reciprocals_buffer = reciprocals_tensor.value().buffer();
             UpdateDynamicCircularBufferAddress(program, cb_reciprocals_handle, *reciprocals_buffer);
         }
 
@@ -2710,10 +2710,10 @@ operation::ProgramWithCallbacks groupnorm_multi_core_mcast(
         }
         core_index_offset += num_cores_per_batch;
     }
-    for ([[maybe_unused]] auto& coord : mcast_sender_core_ranges_all) {
+    for ([[maybe_unused]] const auto& coord : mcast_sender_core_ranges_all) {
         log_debug(tt::LogOp, "mcast sender coord: {} {}", coord.start_coord.x, coord.start_coord.y);
     }
-    for ([[maybe_unused]] auto& coord : mcast_sender_core_ranges_group_1) {
+    for ([[maybe_unused]] const auto& coord : mcast_sender_core_ranges_group_1) {
         log_debug(tt::LogOp, "mcast sender coord group 1: {} {}", coord.start_coord.x, coord.start_coord.y);
     }
     for (int i = 0; i < num_cores; ++i) {
@@ -2723,10 +2723,10 @@ operation::ProgramWithCallbacks groupnorm_multi_core_mcast(
             mcast_receiver_core_ranges_group_1.insert(CoreRange(core_coords[i]));
         }
     }
-    for ([[maybe_unused]] auto& coord : mcast_receiver_core_ranges_all) {
+    for ([[maybe_unused]] const auto& coord : mcast_receiver_core_ranges_all) {
         log_debug(tt::LogOp, "mcast receiver coord: {} {}", coord.start_coord.x, coord.start_coord.y);
     }
-    for ([[maybe_unused]] auto& coord : mcast_receiver_core_ranges_group_1) {
+    for ([[maybe_unused]] const auto& coord : mcast_receiver_core_ranges_group_1) {
         log_debug(tt::LogOp, "mcast receiver coord group 1: {} {}", coord.start_coord.x, coord.start_coord.y);
     }
     CoreRangeSet mcast_sender_cores_group_1 = CoreRangeSet(mcast_sender_core_ranges_group_1);
@@ -3436,7 +3436,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_mcast(
 
         // This is one where reciprocals are used
         if (groupnorm_mode == 2) {
-            auto reciprocals_buffer = reciprocals_tensor.value().buffer();
+            auto* reciprocals_buffer = reciprocals_tensor.value().buffer();
             UpdateDynamicCircularBufferAddress(program, cb_reciprocals_handle, *reciprocals_buffer);
         }
 

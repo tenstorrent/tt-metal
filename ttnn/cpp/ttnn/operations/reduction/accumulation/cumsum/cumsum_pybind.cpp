@@ -18,7 +18,7 @@ namespace ttnn::operations::reduction::accumulation::detail {
 namespace py = pybind11;
 
 void bind_reduction_cumsum_operation(py::module& module) {
-    auto docstring =
+    const auto* docstring =
         R"doc(
         Returns cumulative sum of :attr:`input` along dimension :attr:`dim`
         For a given :attr:`input` of size N, the :attr:`output` will also contain N elements and be such that:

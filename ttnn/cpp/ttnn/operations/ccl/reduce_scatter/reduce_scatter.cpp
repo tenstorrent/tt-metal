@@ -40,7 +40,7 @@ ttnn::Tensor ExecuteReduceScatter::invoke(
             return tensor;
         }
     }
-    auto mesh_device = input_tensor.device();
+    auto* mesh_device = input_tensor.device();
     uint32_t normalized_dim = input_tensor.logical_shape().get_normalized_index(dim);
     tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
     topology_ = ::ttnn::ccl::convert_2d_to_1d_topology(topology_);

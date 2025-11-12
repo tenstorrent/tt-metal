@@ -23,7 +23,7 @@ void GroupNorm::validate(
         optional_input_tensors.size() <= 5,
         "Must have at most 5 optional input tensors (for a total of 1 to 6 input tensors), got {} optional tensors",
         optional_input_tensors.size());
-    auto& a = input_tensors.at(0);
+    const auto& a = input_tensors.at(0);
     const auto& gamma = optional_input_tensors.at(0);
     const auto& beta = optional_input_tensors.at(1);
     const auto& input_mask = optional_input_tensors.at(2);

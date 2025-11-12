@@ -315,7 +315,7 @@ void HWCommandQueue::enqueue_write_buffer(
     TT_FATAL(!this->manager_.get_bypass_mode(), "Enqueue Write Buffer cannot be used with tracing");
     // Top level API to accept different variants for buffer and src
     // For shared pointer variants, object lifetime is guaranteed at least till the end of this function
-    auto* data = std::visit(
+    const auto* data = std::visit(
         tt::stl::overloaded{
             [](const void* raw_data) -> const void* { return raw_data; },
             [](const auto& data) -> const void* { return data->data(); }},

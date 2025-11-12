@@ -37,8 +37,8 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_rm(
     uint32_t num_sticks_per_core_group_1,
     uint32_t num_sticks_per_core_group_2,
     uint32_t max_read_size) {
-    auto input_buffer = input_tensor.buffer();
-    auto output_buffer = output_tensor.buffer();
+    auto* input_buffer = input_tensor.buffer();
+    auto* output_buffer = output_tensor.buffer();
     auto input_shape = input_tensor.padded_shape();
     auto output_shape = output_tensor.padded_shape();
 
@@ -193,7 +193,7 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
     const ttnn::Shape& output_tensor_end,
     const std::vector<CoreCoord>& cores,
     uint32_t max_read_size) {
-    auto output_buffer = output_tensor.buffer();
+    auto* output_buffer = output_tensor.buffer();
     auto input_shape = input_tensor.logical_shape();
     for (uint32_t i = 0; i < input_shape.rank(); i++) {
         input_shape[i] = output_tensor_end[i] - output_tensor_start[i];
@@ -500,7 +500,7 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
     const ttnn::Shape& output_tensor_start,
     const ttnn::Shape& output_tensor_end,
     const std::vector<CoreCoord>& cores) {
-    auto output_buffer = output_tensor.buffer();
+    auto* output_buffer = output_tensor.buffer();
     auto input_shape = input_tensor.padded_shape();
     auto actual_input_shape = input_tensor.logical_shape();
     for (uint32_t i = 0; i < actual_input_shape.rank(); i++) {
@@ -789,8 +789,8 @@ static operation::ProgramWithCallbacks slice_write_tiled_sharded_input_multi_cor
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>&,
                                               const std::vector<Tensor>& output_tensors) {
-        auto& src_tensor = input_tensors.at(0);
-        auto& dst_tensor = output_tensors.at(0);
+        const auto& src_tensor = input_tensors.at(0);
+        const auto& dst_tensor = output_tensors.at(0);
 
         UpdateDynamicCircularBufferAddress(program, std::get<1>(cb_input_tuple), *src_tensor.buffer());
 

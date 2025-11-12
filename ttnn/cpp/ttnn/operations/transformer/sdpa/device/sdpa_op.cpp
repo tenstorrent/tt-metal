@@ -28,7 +28,7 @@ void ScaledDotProductAttention::validate(
         optional_input_tensors.size() == 1 or optional_input_tensors.size() == 2 or optional_input_tensors.size() == 3,
         "Must have 1, 2, or 3 optional tensors (mask/page_table/attention_sink)");
 
-    for (auto& input_tensor : input_tensors) {
+    for (const auto& input_tensor : input_tensors) {
         TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to SDPA need to be on device");
         TT_FATAL(input_tensor.buffer() != nullptr, "Operands to SDPA need to be allocated in buffers on device");
         TT_FATAL((input_tensor.layout() == Layout::TILE), "Inputs to SDPA must be tilized");
@@ -320,7 +320,7 @@ void ScaledDotProductAttention::validate(
 
 std::vector<TensorSpec> ScaledDotProductAttention::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
-    auto& input = input_tensors.at(0);
+    const auto& input = input_tensors.at(0);
     auto shape = input.logical_shape();
     if (use_mla) {
         shape[3] = this->head_dim_v.value_or(shape[3]);
@@ -340,9 +340,9 @@ operation::ProgramWithCallbacks ScaledDotProductAttention::create_program(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
-    auto& input_tensor_q = input_tensors.at(0);
-    auto& input_tensor_k = input_tensors.at(1);
-    auto& input_tensor_v = this->use_mla.value_or(false) ? input_tensors.at(1) : input_tensors.at(2);
+    const auto& input_tensor_q = input_tensors.at(0);
+    const auto& input_tensor_k = input_tensors.at(1);
+    const auto& input_tensor_v = this->use_mla.value_or(false) ? input_tensors.at(1) : input_tensors.at(2);
     auto& output_tensor = output_tensors.at(0);
     const auto& attn_mask = optional_input_tensors.at(0);
 
@@ -384,9 +384,9 @@ operation::OpPerformanceModel ScaledDotProductAttention::create_op_performance_m
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
-    auto& input_tensor_q = input_tensors.at(0);
-    auto& input_tensor_k = input_tensors.at(1);
-    auto& input_tensor_v = this->use_mla.value_or(false) ? input_tensors.at(1) : input_tensors.at(2);
+    const auto& input_tensor_q = input_tensors.at(0);
+    const auto& input_tensor_k = input_tensors.at(1);
+    const auto& input_tensor_v = this->use_mla.value_or(false) ? input_tensors.at(1) : input_tensors.at(2);
     auto& output_tensor = output_tensors.at(0);
 
     if (output_tensor.storage_type() != StorageType::DEVICE) {

@@ -85,11 +85,11 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherConcat::create_program_at
     log_debug(tt::LogOp, "DEBUG: create_program is called");
 
     const auto& input_tensor = input_tensors[0];
-    auto mesh_device = input_tensor.device();
+    auto* mesh_device = input_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
     TT_FATAL(
         mesh_view.is_mesh_2d(), "all-gather invoked with cluster_axis API on >2D mesh, which is currently unsupported");
-    const auto target_device = mesh_device->get_device(mesh_coord);
+    auto* const target_device = mesh_device->get_device(mesh_coord);
     std::vector<IDevice*> devices = (cluster_axis == 0) ? mesh_view.get_devices_on_column(mesh_coord[1])
                                                         : mesh_view.get_devices_on_row(mesh_coord[0]);
 
