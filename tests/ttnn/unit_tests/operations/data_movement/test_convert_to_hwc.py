@@ -231,8 +231,8 @@ def test_convert_to_hwc_with_l1_input_uneven_sharding(
     assert passed, message
 
 
-@pytest.mark.parametrize("B", [1, 2])
-@pytest.mark.parametrize("C", [1, 2])
+@pytest.mark.parametrize("B", [1, 2, 4])
+@pytest.mark.parametrize("C", [1, 2, 3, 4])
 @pytest.mark.parametrize(
     "HW, input_core_grid, output_core_grid, input_padded_sharded_dim, output_padded_sharded_dim",
     (
@@ -248,6 +248,13 @@ def test_convert_to_hwc_with_l1_input_uneven_sharding(
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
             64,
+            32,
+        ),
+        (
+            128,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
+            128,
             32,
         ),
     ),
@@ -327,6 +334,13 @@ def test_convert_to_hwc_with_l1_input_resharded(
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
             64,
+            64,
+        ),
+        (
+            128,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
+            128,
             64,
         ),
     ),

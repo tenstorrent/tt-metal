@@ -144,6 +144,15 @@ std::vector<GatherTransfer> precompute_gather_transfers(
     const std::vector<CoreCoord>& input_cores,
     const std::vector<CoreCoord>& output_cores);
 
+// Variant that allows overriding the per-output-core width (useful for uneven output sharding)
+std::vector<GatherTransfer> precompute_gather_transfers(
+    uint32_t B,
+    uint32_t C,
+    uint32_t HW,
+    const std::vector<CoreCoord>& input_cores,
+    const std::vector<CoreCoord>& output_cores,
+    uint32_t output_shard_width_override);
+
 /**
  * @brief Convert high-level transfers to low-level transfers with absolute offsets
  *
@@ -166,7 +175,8 @@ std::vector<LowLevelGatherTransfer> lower_gather_transfers(
     uint32_t HW,
     const std::vector<CoreCoord>& input_cores,
     uint32_t num_output_cores,
-    uint32_t element_size_bytes);
+    uint32_t element_size_bytes,
+    uint32_t output_shard_width_override = 0);
 
 /**
  * @brief Group transfers by output column blocks for memory-efficient processing
@@ -302,8 +312,9 @@ void serialize_low_level_transfer(
     output.push_back(transfer.src_offset_bytes);
     output.push_back(transfer.dst_offset_bytes);
     output.push_back(transfer.transfer_size_bytes);
-    // Always serialize bank_id as the 6th value per transfer (0 for L1)
-    output.push_back(transfer.bank_id);
+    // Always serialize bank_id as the 6th value per transfer.
+    // For DRAM, logical_to_worker_core encodes the bank_id in x; for L1, this value is ignored by the kernel.
+    output.push_back(worker_core.x);
 }
 
 std::vector<uint32_t> serialize_blocked_transfer_groups(

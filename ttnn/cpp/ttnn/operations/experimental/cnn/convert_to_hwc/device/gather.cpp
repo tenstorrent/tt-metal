@@ -72,12 +72,11 @@ std::vector<GatherTransfer> precompute_gather_transfers(
 
     // Input validation
     TT_FATAL(HW % num_input_cores == 0, "HW={} must be divisible by num_input_cores={}", HW, num_input_cores);
-    TT_FATAL(
-        (B * HW) % num_output_cores == 0, "B*HW={} must be divisible by num_output_cores={}", B * HW, num_output_cores);
 
     // Calculate sizes
     uint32_t input_shard_width = HW / num_input_cores;
-    uint32_t output_shard_width = B * HW / num_output_cores;
+    // Allow uneven B*HW across output cores by using ceil division
+    uint32_t output_shard_width = (B * HW + num_output_cores - 1) / num_output_cores;
 
     // Variables preserved for documentation and future use:
     // uint32_t input_shard_height = B * C;  // Height of each input shard
@@ -154,6 +153,77 @@ std::vector<GatherTransfer> precompute_gather_transfers(
     return transfers;
 }
 
+// Variant with explicit output shard width override
+std::vector<GatherTransfer> precompute_gather_transfers(
+    uint32_t B,
+    uint32_t C,
+    uint32_t HW,
+    const std::vector<CoreCoord>& input_cores,
+    const std::vector<CoreCoord>& output_cores,
+    uint32_t output_shard_width_override) {
+    std::vector<GatherTransfer> transfers;
+
+    uint32_t num_input_cores = input_cores.size();
+
+    // Input validation
+    TT_FATAL(HW % num_input_cores == 0, "HW={} must be divisible by num_input_cores={}", HW, num_input_cores);
+    TT_FATAL(output_shard_width_override != 0, "output_shard_width_override must be non-zero");
+
+    // Calculate sizes
+    uint32_t input_shard_width = HW / num_input_cores;
+    uint32_t output_shard_width = output_shard_width_override;
+
+    for (uint32_t c = 0; c < C; c++) {
+        for (uint32_t b = 0; b < B; b++) {
+            for (uint32_t hw = 0; hw < HW; hw++) {
+                uint32_t input_col = hw;
+                uint32_t input_core_idx = input_col / input_shard_width;
+                uint32_t input_offset_within_shard = input_col % input_shard_width;
+
+                uint32_t output_col = b * HW + hw;
+                uint32_t output_core_idx = output_col / output_shard_width;
+                uint32_t output_offset_within_shard = output_col % output_shard_width;
+
+                if (!transfers.empty()) {
+                    auto& last_transfer = transfers.back();
+                    if (last_transfer.src_core_idx == input_core_idx && last_transfer.dst_core_idx == output_core_idx &&
+                        last_transfer.channel == c && last_transfer.batch == b &&
+                        last_transfer.src_offset + last_transfer.length == input_offset_within_shard &&
+                        last_transfer.dst_offset + last_transfer.length == output_offset_within_shard) {
+                        last_transfer.length += 1;
+                        continue;
+                    }
+                }
+
+                transfers.emplace_back(
+                    input_core_idx,
+                    output_core_idx,
+                    input_cores[input_core_idx],
+                    output_cores[output_core_idx],
+                    input_offset_within_shard,
+                    output_offset_within_shard,
+                    1,
+                    c,
+                    b);
+            }
+        }
+    }
+
+    std::sort(transfers.begin(), transfers.end(), [C](const GatherTransfer& a, const GatherTransfer& b) {
+        if (a.src_core_idx != b.src_core_idx) {
+            return a.src_core_idx < b.src_core_idx;
+        }
+        uint32_t a_row = a.batch * C + a.channel;
+        uint32_t b_row = b.batch * C + b.channel;
+        if (a_row != b_row) {
+            return a_row < b_row;
+        }
+        return a.src_offset < b.src_offset;
+    });
+
+    return transfers;
+}
+
 std::vector<LowLevelGatherTransfer> lower_gather_transfers(
     const std::vector<GatherTransfer>& transfers,
     uint32_t B,
@@ -161,14 +231,18 @@ std::vector<LowLevelGatherTransfer> lower_gather_transfers(
     uint32_t HW,
     const std::vector<CoreCoord>& input_cores,
     uint32_t num_output_cores,
-    uint32_t element_size_bytes) {
+    uint32_t element_size_bytes,
+    uint32_t output_shard_width_override) {
     std::vector<LowLevelGatherTransfer> low_level_transfers;
 
     uint32_t num_input_cores = input_cores.size();
 
     // Calculate shard dimensions
     uint32_t input_shard_width = HW / num_input_cores;
-    uint32_t output_shard_width = B * HW / num_output_cores;
+    // Allow uneven B*HW across output cores by using ceil division, unless an override is provided
+    uint32_t output_shard_width = (output_shard_width_override != 0)
+                                      ? output_shard_width_override
+                                      : (B * HW + num_output_cores - 1) / num_output_cores;
 
     for (const auto& t : transfers) {
         // Calculate absolute offset in source shard
@@ -220,7 +294,7 @@ std::vector<BlockedTransferGroup> group_transfers_by_output_column_blocks(
 
     // Lower transfers to get flat offsets
     auto low_level_transfers =
-        lower_gather_transfers(transfers, B, C, HW, input_cores, num_output_cores, element_size_bytes);
+        lower_gather_transfers(transfers, B, C, HW, input_cores, num_output_cores, element_size_bytes, block_size);
 
     // Group transfers by which column blocks they write to
     for (size_t i = 0; i < transfers.size(); i++) {

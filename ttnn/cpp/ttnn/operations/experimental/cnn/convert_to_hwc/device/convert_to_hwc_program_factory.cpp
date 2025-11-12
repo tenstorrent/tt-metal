@@ -100,7 +100,9 @@ ConvertToHwcConfig ConvertToHwcConfig::create_from_tensors(const Tensor& input, 
     config.output_shard_height = output.shard_spec()->shape[0];
     config.output_shard_width = output.shard_spec()->shape[1];
     config.l1_input_shard_height = config.is_input_in_dram ? input.logical_shape()[-2] : input.shard_spec()->shape[0];
-    config.l1_input_shard_width = config.is_input_in_dram ? config.output_shard_height : input.shard_spec()->shape[1];
+    // For DRAM inputs, the shard width must reflect the input's padded sharded dim (WIDTH_SHARDED),
+    // not the output shard height. Use input.shard_spec()->shape[1] for both DRAM and L1.
+    config.l1_input_shard_width = input.shard_spec()->shape[1];
 
     log_info(
         tt::LogType::LogAlways,
@@ -150,12 +152,8 @@ ConvertToHwcConfig ConvertToHwcConfig::create_from_tensors(const Tensor& input, 
     // So the gather output has height=C and width=B*HW_effective/num_output_cores
     config.gather_l1_output_shard_height = config.input_channels;
 
-    // For uneven sharding with B=1, use padded capacity instead of logical HW.
-    // Effective HW is computed using the input cores, but gather width per destination core
-    // is B * HW_effective divided by the number of output cores.
-    uint32_t effective_hw = calculate_effective_hw_for_sharding(
-        config.hw_total, config.batch_size, config.l1_input_shard_width, config.l1_input_cores.size());
-    config.gather_l1_output_shard_width = config.batch_size * effective_hw / config.output_cores.size();
+    // Set per-destination-core gather width to the padded B*HW per output core (output shard height)
+    config.gather_l1_output_shard_width = config.output_shard_height;
 
     log_info(
         tt::LogType::LogAlways,
@@ -164,7 +162,7 @@ ConvertToHwcConfig ConvertToHwcConfig::create_from_tensors(const Tensor& input, 
         config.gather_l1_output_shard_width,
         config.input_channels,
         config.batch_size,
-        effective_hw,
+        config.gather_l1_output_shard_width * config.output_cores.size() / std::max(1u, config.batch_size),
         config.output_cores.size());
 
     // Alignment requirements
@@ -692,8 +690,14 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         config.hw_total, config.batch_size, config.l1_input_shard_width, static_cast<uint32_t>(in_cores.size()));
 
     // Gather transfers: FROM input cores TO output cores
+    // Override per-output-core width to match padded output shard height for uneven sharding
     const auto gather_transfers = convert_to_hwc::detail::precompute_gather_transfers(
-        config.batch_size, config.input_channels, effective_hw_for_gather, in_cores, config.output_cores);
+        config.batch_size,
+        config.input_channels,
+        effective_hw_for_gather,
+        in_cores,
+        config.output_cores,
+        config.gather_l1_output_shard_width);
     // Per-destination-core gather width (columns per core for this block)
     const uint32_t block_size_width = config.gather_l1_output_shard_width;
 
