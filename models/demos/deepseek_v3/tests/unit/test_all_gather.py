@@ -11,6 +11,7 @@ import torch
 import ttnn
 from tests.sweep_framework.sweep_utils.ccl_common import get_mem_configs, get_serializable_shard_specs
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal
+from tests.ttnn.utils_for_testing import maybe_trace
 
 
 def _get_tensors(input_shape, mesh_shape, dim, cluster_axis, buffer_type, dtype, layout, shard_specs, device):
@@ -54,7 +55,7 @@ SHARD_SPEC_1 = get_serializable_shard_specs(
     valid_tensor_shapes=[[1, 1, 32, 896]],
 )
 
-MESH_SHAPE = (2, 4)
+MESH_SHAPE = (8, 8)
 LAYOUT = ttnn.TILE_LAYOUT
 
 SHAPE_DTYPE_BUFFER_TYPE_SHARD_SPEC = [
@@ -68,25 +69,30 @@ SHAPE_DTYPE_BUFFER_TYPE_SHARD_SPEC = [
 ]
 
 
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}], indirect=True
+)
 @pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("shape_dtype_buffer_type_shard_spec", SHAPE_DTYPE_BUFFER_TYPE_SHARD_SPEC)
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("dim", [3])
 @pytest.mark.parametrize("cluster_axis", [1])
 @pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
-def test_deepseek(mesh_device, shape_dtype_buffer_type_shard_spec, layout, dim, cluster_axis, topology):
+@pytest.mark.parametrize("enable_trace", [True, False])
+def test_deepseek(mesh_device, shape_dtype_buffer_type_shard_spec, layout, dim, cluster_axis, topology, enable_trace):
     shape, dtype, buffer_type, shard_spec = shape_dtype_buffer_type_shard_spec
 
     tt_input, torch_reference, output_mem_config = _get_tensors(
         shape, tuple(mesh_device.shape), dim, cluster_axis, buffer_type, dtype, layout, shard_spec, mesh_device
     )
 
-    tt_out_tensor = ttnn.all_gather(
-        tt_input, dim, cluster_axis=cluster_axis, topology=topology, memory_config=output_mem_config
-    )
+    def run_op():
+        return ttnn.all_gather(
+            tt_input, dim, cluster_axis=cluster_axis, topology=topology, memory_config=output_mem_config
+        )
 
-    tt_output_tensor = torch.cat([ttnn.to_torch(t) for t in ttnn.get_device_tensors(tt_out_tensor)])
+    tt_output_tensor = maybe_trace(run_op, enable_trace=enable_trace, device=mesh_device)
+    tt_output_tensor = torch.cat([ttnn.to_torch(t) for t in ttnn.get_device_tensors(tt_output_tensor)])
 
     eq, mess = comp_equal(torch_reference, tt_output_tensor)
     assert eq, mess

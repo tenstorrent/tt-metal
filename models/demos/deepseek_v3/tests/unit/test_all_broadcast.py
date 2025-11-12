@@ -8,6 +8,7 @@ import torch
 
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal
+from tests.ttnn.utils_for_testing import maybe_trace
 
 
 def _get_tensors(input_shape, dtype, memory_config, layout, device):
@@ -36,7 +37,9 @@ CLUSTER_AXIS = 1
 MESH_SHAPE = (8, 8)
 
 
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}], indirect=True
+)
 @pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("shape", DEEPSEEK_SHAPES)
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
@@ -46,18 +49,22 @@ MESH_SHAPE = (8, 8)
 @pytest.mark.parametrize("cluster_axis", [CLUSTER_AXIS])
 @pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
 @pytest.mark.parametrize("ring_size", [MESH_SHAPE[CLUSTER_AXIS]])
+@pytest.mark.parametrize("enable_trace", [True, False])
 def test_all_broadcast_deepseek(
-    mesh_device, shape, dtype, mem_config, layout, num_links, cluster_axis, topology, ring_size
+    mesh_device, shape, dtype, mem_config, layout, num_links, cluster_axis, topology, ring_size, enable_trace
 ):
     tt_input, torch_reference = _get_tensors(shape, dtype, mem_config, layout, mesh_device)
 
-    tt_out_tensors = ttnn.all_broadcast(
-        tt_input,
-        num_links=num_links,
-        cluster_axis=cluster_axis,
-        memory_config=mem_config,
-        topology=topology,
-    )
+    def run_op():
+        return ttnn.all_broadcast(
+            tt_input,
+            num_links=num_links,
+            cluster_axis=cluster_axis,
+            memory_config=mem_config,
+            topology=topology,
+        )
+
+    tt_out_tensors = maybe_trace(run_op, enable_trace=enable_trace, device=mesh_device)
 
     for tt_out_tensor in tt_out_tensors:
         for tt_out in ttnn.get_device_tensors(tt_out_tensor):
