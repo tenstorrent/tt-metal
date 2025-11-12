@@ -71,10 +71,6 @@ public:
     void set_python_operation_id(std::int64_t operation_id);
     std::int64_t fetch_and_increment_python_operation_id();
 
-    std::int64_t get_tensor_id();
-    void set_tensor_id(std::int64_t tensor_id);
-    std::int64_t fetch_and_increment_tensor_id();
-
     std::int64_t get_device_operation_id();
     void set_device_operation_id(std::int64_t device_operation_id);
     std::int64_t fetch_and_increment_device_operation_id();
@@ -82,7 +78,6 @@ public:
 private:
     CoreIDs() = default;
     ~CoreIDs() = default;
-    std::atomic<std::int64_t> tensor_id;
     std::atomic<std::int64_t> python_operation_id;
     std::atomic<std::int64_t> device_operation_id = 1;
 };
