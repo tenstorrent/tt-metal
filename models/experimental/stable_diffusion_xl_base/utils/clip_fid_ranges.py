@@ -5,8 +5,8 @@
 import json
 
 TARGET_JSON_PATH = "models/experimental/stable_diffusion_xl_base/targets/targets.json"
-STANDARD_DATASET_SIZES = {100, 1260, 5000}
-SDXL_DATASET_SIZE, SDXL_INPAINT_DATASET_SIZE = 5000, 1260
+SDXL_DATASET_SIZE, SDXL_INPAINT_DATASET_SIZE, QUICK_TEST_DATASET_SIZE = 5000, 1260, 100
+STANDARD_DATASET_SIZES = {SDXL_DATASET_SIZE, SDXL_INPAINT_DATASET_SIZE, QUICK_TEST_DATASET_SIZE}
 
 
 def get_model_targets(model_name):
@@ -25,9 +25,10 @@ get_approx = lambda range_tuple: (range_tuple[0] * 0.97, range_tuple[1] * 1.03)
 
 def using_full_dataset(model_name, num_prompts):
     if model_name in {"sdxl", "sdxl-tp"}:
-        return num_prompts == 5000
+        return num_prompts == SDXL_DATASET_SIZE
     elif model_name in {"sdxl-inpaint", "sdxl-inpaint-tp"}:
-        return num_prompts == 1260
+        return num_prompts == SDXL_INPAINT_DATASET_SIZE
+    assert False, f"Unknown model name {model_name}"
 
 
 def accuracy_check_fid(model_name, score, num_prompts, mode):
