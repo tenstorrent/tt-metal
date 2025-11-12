@@ -3,29 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Gather Operation: Hardware-Optimized Tensor Reordering from [B, C, HW] to [C, B, HW]
- * ===================================================================================
- *
- * This implementation performs efficient data movement for tensor layout transformation,
- * specifically designed for neural network accelerators when transitioning between
- * different tensor layouts (e.g., NCHW to NHWC formats).
- *
- * Key Features:
- * 1. Transfer-based approach: Models distributed memory with explicit DMA transfers
- * 2. Hardware-oriented design: Maps directly to TT-Metal's distributed memory architecture
- * 3. Memory efficiency: Blocked implementation reduces on-chip memory requirements by 8x+
- * 4. Optimized data movement: Transfer coalescing and sorted accesses for bandwidth
- *
- * Data Sharding Model:
- * - Input sharding: Width-sharded across HW dimension [B*C, HW/num_input_cores]
- * - Output sharding: Height-sharded across B*HW dimension [C, B*HW/num_output_cores]
- * - Each core holds a contiguous slice of the tensor in its local memory
- *
- * Hardware Mapping:
- * - Each "core" represents a separate processing element with local SRAM
- * - Transfers model DMA operations between cores
- * - Blocking reduces on-chip SRAM requirements (typically 64KB-256KB per core)
- * - Sorted transfers improve DRAM access patterns and enable prefetching
+ * Gather planning utilities for converting [B, C, HW] -> [C, B, HW].
  */
 
 #include "gather.hpp"
@@ -155,6 +133,11 @@ inline std::pair<uint32_t, uint32_t> compute_block_span(uint32_t start_col, uint
  * list of all transfers required. This is critical for hardware implementation
  * where data movements must be scheduled and optimized.
  *
+ * Layout and sharding:
+ * - Converts logical layout [B, C, HW] to [C, B, HW]
+ * - Input is width-sharded across the HW dimension: [B*C, HW/num_input_cores]
+ * - Output is height-sharded across the B*HW dimension: [C, B*HW/num_output_cores]
+ *
  * Key algorithm insights:
  * - For each (batch, channel) pair, we trace through spatial positions
  * - At each position, we determine source core/offset and dest core/offset
@@ -165,11 +148,6 @@ inline std::pair<uint32_t, uint32_t> compute_block_span(uint32_t start_col, uint
  * - Input shard boundaries (when data spans multiple input cores)
  * - Output shard boundaries (when destination spans multiple output cores)
  * - Both boundaries can be hit in a single transfer (requiring a split)
- *
- * Hardware implications:
- * - Each Transfer maps to a DMA descriptor in hardware
- * - Coalescing reduces DMA overhead and improves bandwidth
- * - Sorting enables prefetching and reduces DRAM page misses
  */
 std::vector<GatherTransfer> precompute_gather_transfers(
     uint32_t B,
@@ -301,9 +279,8 @@ BlockedTransfersWithCount group_transfers_by_output_column_blocks(
         unique_block_indices.insert(group.dst_block_idx);
     }
 
-    // Log the actual number of logical blocks vs transfer groups
-    log_info(
-        tt::LogType::LogAlways,
+    log_debug(
+        tt::LogType::LogOp,
         "group_transfers_by_output_column_blocks: {} transfer groups, {} logical blocks",
         blocked_groups.size(),
         unique_block_indices.size());
@@ -321,8 +298,8 @@ std::vector<BlockedTransferGroup> coalesce_contiguous_transfers(
     for (const auto& group : blocked_groups) {
         total_transfers_before += group.transfers.size();
     }
-    log_info(
-        tt::LogType::LogAlways,
+    log_debug(
+        tt::LogType::LogOp,
         "Coalescing: {} transfer groups with {} total transfers",
         blocked_groups.size(),
         total_transfers_before);
@@ -387,8 +364,8 @@ std::vector<BlockedTransferGroup> coalesce_contiguous_transfers(
 
         // Log the optimization results
         if (optimized_group.transfers.size() != group.transfers.size()) {
-            log_info(
-                tt::LogType::LogAlways,
+            log_debug(
+                tt::LogType::LogOp,
                 "Coalesced block[{}:{}]: {} transfers -> {} transfers (saved {} NOC ops)",
                 group.dst_shard_idx,
                 group.dst_block_idx,
@@ -406,8 +383,8 @@ std::vector<BlockedTransferGroup> coalesce_contiguous_transfers(
         total_transfers_after += group.transfers.size();
     }
 
-    log_info(
-        tt::LogType::LogAlways,
+    log_debug(
+        tt::LogType::LogOp,
         "Coalescing complete: {} total transfers -> {} total transfers (saved {} NOC ops)",
         total_transfers_before,
         total_transfers_after,

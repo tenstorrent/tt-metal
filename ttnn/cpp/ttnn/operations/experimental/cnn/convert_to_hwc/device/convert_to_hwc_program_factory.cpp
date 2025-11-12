@@ -227,8 +227,8 @@ ConvertToHwcConfig ConvertToHwcConfig::create_from_tensors(const Tensor& input, 
     // Alignment requirements
     config.alignment_elements = compute_alignment_requirement_in_elements(output);
 
-    log_info(
-        tt::LogType::LogAlways,
+    log_debug(
+        tt::LogType::LogOp,
         "convert_to_hwc config: B={}, C={}, HW={}, input_in_dram={}, in_cores={}, out_cores={}, out_shard=[{}x{}], "
         "gather_width={}",
         config.batch_size,
