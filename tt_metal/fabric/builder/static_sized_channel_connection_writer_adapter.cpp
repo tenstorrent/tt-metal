@@ -7,7 +7,7 @@
 namespace tt::tt_fabric {
 
 StaticSizedChannelConnectionWriterAdapter::StaticSizedChannelConnectionWriterAdapter(
-    FabricStaticSizedChannelsAllocator& allocator, tt::tt_fabric::Topology topology) :
+    FabricStaticSizedChannelsAllocator& /*allocator*/, tt::tt_fabric::Topology topology) :
     is_2D_routing(topology == tt::tt_fabric::Topology::Mesh || topology == tt::tt_fabric::Topology::Torus) {}
 
 void StaticSizedChannelConnectionWriterAdapter::add_downstream_connection(
@@ -54,7 +54,8 @@ void StaticSizedChannelConnectionWriterAdapter::pack_inbound_channel_rt_args(uin
     std::copy(rt_args.begin(), rt_args.end(), std::back_inserter(args_out));
 }
 
-uint32_t StaticSizedChannelConnectionWriterAdapter::get_downstream_edms_connected(bool is_2d_routing, bool is_vc1) const {
+uint32_t StaticSizedChannelConnectionWriterAdapter::get_downstream_edms_connected(
+    bool /*is_2d_routing*/, bool /*is_vc1*/) const {
     return this->downstream_edms_connected;
 }
 

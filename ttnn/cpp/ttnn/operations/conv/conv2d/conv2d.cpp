@@ -227,6 +227,7 @@ Result conv2d_DRAM(
         in_channels,
         kernel_size,
         stride,
+        dilation,
         padding_n4,
         mm_conv,
         conv_config);
@@ -466,6 +467,7 @@ Result conv2d_L1(
         in_channels,
         kernel_size,
         stride,
+        dilation,
         padding_n4,
         mm_conv,
         conv_config);
@@ -667,7 +669,6 @@ Result conv2d_L1(
                 parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
                 input_tensor_post_tm.memory_config(),
                 true,
-                conv_config.in_place,
                 conv_config.config_tensors_in_dram);
 
             if (conv_config.deallocate_activation) {

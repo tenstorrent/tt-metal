@@ -12,6 +12,10 @@ on:
       build-artifact-name:
         required: true
         type: string
+      model:
+        required: false
+        type: string
+        default: "all"
       extra-tag:
         required: false
         type: string
@@ -22,8 +26,126 @@ on:
         default: "topology-6u"
 
 jobs:
+  generate-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Generate Matrix
+        id: set-matrix
+        run: |
+          # Create full matrix with jq for readability
+          # For Falcon7b, please see issue #31939
+          FULL_MATRIX=$(jq -n '[
+            {
+              "id": "test-llama3",
+              "name": "Galaxy Llama3 demo tests",
+              "arch": "wormhole_b0",
+              "model": "llama3",
+              "timeout": 30,
+              "owner_id": "U053W15B6JF"
+            },
+            {
+              "id": "test-llama3-long",
+              "name": "Galaxy Llama3 long context demo tests",
+              "arch": "wormhole_b0",
+              "model": "llama3_long_context",
+              "timeout": 60,
+              "owner_id": "U03PUAKE719"
+            },
+            {
+              "id": "test-llama3-evals",
+              "name": "Galaxy Llama3 evals tests",
+              "arch": "wormhole_b0",
+              "model": "llama3_evals",
+              "timeout": 45,
+              "owner_id": "U03PUAKE719"
+            },
+            {
+              "id": "test-llama3-8b-dp",
+              "name": "Galaxy Llama3 8B data-parallel demo tests",
+              "arch": "wormhole_b0",
+              "model": "llama3_8b_dp",
+              "timeout": 30,
+              "owner_id": "U08BH66EXAL"
+            },
+            {
+              "id": "test-llama3-70b-dp",
+              "name": "Galaxy Llama3 70B data-parallel demo tests",
+              "arch": "wormhole_b0",
+              "model": "llama3_70b_dp",
+              "timeout": 30,
+              "owner_id": "U08BH66EXAL"
+            },
+            {
+              "id": "test-falcon7b",
+              "name": "Galaxy Falcon7b demo tests",
+              "arch": "wormhole_b0",
+              "model": "falcon7b",
+              "timeout": 30,
+              "owner_id": "U05RWH3QUPM"
+            },
+            {
+              "id": "test-sentence-bert",
+              "name": "Galaxy SentenceBert demo tests",
+              "arch": "wormhole_b0",
+              "model": "sentence_bert",
+              "timeout": 30,
+              "owner_id": "U088413NP0Q"
+            },
+            {
+              "id": "test-sd35",
+              "name": "Galaxy Stable Diffusion 3.5 Large demo tests",
+              "arch": "wormhole_b0",
+              "model": "sd35",
+              "timeout": 30,
+              "owner_id": "U03FJB5TM5Y"
+            },
+            {
+              "id": "test-flux1",
+              "name": "Galaxy Flux.1-dev demo tests",
+              "arch": "wormhole_b0",
+              "model": "flux1",
+              "timeout": 30,
+              "owner_id": "U08TED0JM9D"
+            },
+            {
+              "id": "test-gpt-oss",
+              "name": "Galaxy GPT-OSS demo tests",
+              "arch": "wormhole_b0",
+              "model": "gpt-oss",
+              "timeout": 30,
+              "owner_id": "U06F3ER8X9A"
+            },
+            {
+              "id": "test-wan22",
+              "name": "Galaxy Wan2.2 demo tests",
+              "arch": "wormhole_b0",
+              "model": "wan22",
+              "timeout": 25,
+              "owner_id": "U03FJB5TM5Y"
+            },
+            {
+              "id": "test-mochi",
+              "name": "Galaxy Mochi demo tests",
+              "arch": "wormhole_b0",
+              "model": "mochi",
+              "timeout": 30,
+              "owner_id": "U09ELB03XRU"
+            }
+          ]' --compact-output)
+
+          # Filter matrix based on model selection
+          if [ "${{ inputs.model }}" = "all" ]; then
+            echo "matrix=$FULL_MATRIX" >> $GITHUB_OUTPUT
+          else
+            FILTERED_MATRIX=$(echo "$FULL_MATRIX" | jq --arg model "${{ inputs.model }}" '[.[] | select(.model == $model)]' --compact-output)
+            echo "matrix=$FILTERED_MATRIX" >> $GITHUB_OUTPUT
+          fi
+
   galaxy-demo-tests:
     name: Galaxy Demo Tests (Sequential)
+    needs: generate-matrix
     runs-on:
       - arch-wormhole_b0
       - ${{ inputs.topology }}
@@ -59,10 +181,12 @@ jobs:
 
       # Llama3 Tests
       - name: Reset cards before Llama3 test
+        if: ${{ contains(fromJSON(needs.generate-matrix.outputs.matrix).*.id, 'test-llama3') }}
         run: |
           tt-smi -glx_reset_auto
       - name: Galaxy Llama3 demo tests
         id: test-llama3
+        if: ${{ contains(fromJSON(needs.generate-matrix.outputs.matrix).*.id, 'test-llama3') }}
         timeout-minutes: 30
         continue-on-error: true
         run: |
@@ -74,10 +198,12 @@ jobs:
           owner: U053W15B6JF # Djordje Ivanovic
 
       - name: Reset cards before Llama3 long context test
+        if: ${{ contains(fromJSON(needs.generate-matrix.outputs.matrix).*.id, 'test-llama3-long') }}
         run: |
           tt-smi -glx_reset_auto
       - name: Galaxy Llama3 long context demo tests
         id: test-llama3-long
+        if: ${{ contains(fromJSON(needs.generate-matrix.outputs.matrix).*.id, 'test-llama3-long') }}
         timeout-minutes: 60
         continue-on-error: true
         run: |
@@ -89,10 +215,12 @@ jobs:
           owner: U03PUAKE719 # Miguel Tairum
 
       - name: Reset cards before Llama3 evals test
+        if: ${{ contains(fromJSON(needs.generate-matrix.outputs.matrix).*.id, 'test-llama3-evals') }}
         run: |
           tt-smi -glx_reset_auto
       - name: Galaxy Llama3 evals tests
         id: test-llama3-evals
+        if: ${{ contains(fromJSON(needs.generate-matrix.outputs.matrix).*.id, 'test-llama3-evals') }}
         timeout-minutes: 45
         continue-on-error: true
         run: |
@@ -104,14 +232,28 @@ jobs:
           owner: U03PUAKE719 # Miguel Tairum
 
       - name: Reset cards before Llama3 8B DP test
+        if: ${{ contains(fromJSON(needs.generate-matrix.outputs.matrix).*.id, 'test-llama3-8b-dp') }}
         run: |
           tt-smi -glx_reset_auto
       - name: Galaxy Llama3 8B data-parallel demo tests
         id: test-llama3-8b-dp
+        if: ${{ contains(fromJSON(needs.generate-matrix.outputs.matrix).*.id, 'test-llama3-8b-dp') }}
         timeout-minutes: 30
         continue-on-error: true
         run: |
           ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type demos_tg_device --dispatch-mode "" --model llama3_8b_dp
+
+      - name: Reset cards before Llama3 70B DP test
+        if: ${{ contains(fromJSON(needs.generate-matrix.outputs.matrix).*.id, 'test-llama3-70b-dp') }}
+        run: |
+          tt-smi -glx_reset_auto
+      - name: Galaxy Llama3 70B data-parallel demo tests
+        id: test-llama3-70b-dp
+        if: ${{ contains(fromJSON(needs.generate-matrix.outputs.matrix).*.id, 'test-llama3-70b-dp') }}
+        timeout-minutes: 30
+        continue-on-error: true
+        run: |
+          ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type demos_tg_device --dispatch-mode "" --model llama3_70b_dp
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ steps.test-llama3-8b-dp.outcome == 'failure' }}
         with:
@@ -119,10 +261,12 @@ jobs:
           owner: U08BH66EXAL # Radoica Draskic
 
       - name: Reset cards before Llama3 70B DP test
+        if: ${{ contains(steps.process-matrix.outputs.test_ids, 'test-llama3-70b-dp') }}
         run: |
           tt-smi -glx_reset_auto
       - name: Galaxy Llama3 70B data-parallel demo tests
         id: test-llama3-70b-dp
+        if: ${{ contains(steps.process-matrix.outputs.test_ids, 'test-llama3-70b-dp') }}
         timeout-minutes: 30
         continue-on-error: true
         run: |
@@ -135,10 +279,12 @@ jobs:
 
       # Other Model Tests
       - name: Reset cards before Falcon7b test
+        if: ${{ contains(fromJSON(needs.generate-matrix.outputs.matrix).*.id, 'test-falcon7b') }}
         run: |
           tt-smi -glx_reset_auto
       - name: Galaxy Falcon7b demo tests
         id: test-falcon7b
+        if: ${{ contains(fromJSON(needs.generate-matrix.outputs.matrix).*.id, 'test-falcon7b') }}
         timeout-minutes: 30
         continue-on-error: true
         run: |
@@ -150,10 +296,12 @@ jobs:
           owner: U05RWH3QUPM # Salar Hosseini
 
       - name: Reset cards before SentenceBert test
+        if: ${{ contains(fromJSON(needs.generate-matrix.outputs.matrix).*.id, 'test-sentence-bert') }}
         run: |
           tt-smi -glx_reset_auto
       - name: Galaxy SentenceBert demo tests
         id: test-sentence-bert
+        if: ${{ contains(fromJSON(needs.generate-matrix.outputs.matrix).*.id, 'test-sentence-bert') }}
         timeout-minutes: 30
         continue-on-error: true
         run: |
@@ -165,10 +313,12 @@ jobs:
           owner: U088413NP0Q # Ashai Reddy
 
       - name: Reset cards before SD35 test
+        if: ${{ contains(fromJSON(needs.generate-matrix.outputs.matrix).*.id, 'test-sd35') }}
         run: |
           tt-smi -glx_reset_auto
       - name: Galaxy Stable Diffusion 3.5 Large demo tests
         id: test-sd35
+        if: ${{ contains(fromJSON(needs.generate-matrix.outputs.matrix).*.id, 'test-sd35') }}
         timeout-minutes: 30
         continue-on-error: true
         run: |
@@ -180,10 +330,12 @@ jobs:
           owner: U03FJB5TM5Y # Colman Glagovich
 
       - name: Reset cards before Flux1 test
+        if: ${{ contains(fromJSON(needs.generate-matrix.outputs.matrix).*.id, 'test-flux1') }}
         run: |
           tt-smi -glx_reset_auto
       - name: Galaxy Flux.1-dev demo tests
         id: test-flux1
+        if: ${{ contains(fromJSON(needs.generate-matrix.outputs.matrix).*.id, 'test-flux1') }}
         timeout-minutes: 30
         continue-on-error: true
         run: |
@@ -195,10 +347,12 @@ jobs:
           owner: U08TED0JM9D # Samuel Adesoye
 
       - name: Reset cards before GPT-OSS test
+        if: ${{ contains(fromJSON(needs.generate-matrix.outputs.matrix).*.id, 'test-gpt-oss') }}
         run: |
           tt-smi -glx_reset_auto
       - name: Galaxy GPT-OSS demo tests
         id: test-gpt-oss
+        if: ${{ contains(fromJSON(needs.generate-matrix.outputs.matrix).*.id, 'test-gpt-oss') }}
         timeout-minutes: 30
         continue-on-error: true
         run: |
@@ -210,10 +364,12 @@ jobs:
           owner: U06F3ER8X9A # Stuti Raizada
 
       - name: Reset cards before Wan2.2 test
+        if: ${{ contains(fromJSON(needs.generate-matrix.outputs.matrix).*.id, 'test-wan22') }}
         run: |
           tt-smi -glx_reset_auto
       - name: Galaxy Wan2.2 demo tests
         id: test-wan22
+        if: ${{ contains(fromJSON(needs.generate-matrix.outputs.matrix).*.id, 'test-wan22') }}
         timeout-minutes: 25
         continue-on-error: true
         run: |
@@ -225,10 +381,12 @@ jobs:
           owner: U03FJB5TM5Y # Colman Glagovich
 
       - name: Reset cards before Mochi test
+        if: ${{ contains(fromJSON(needs.generate-matrix.outputs.matrix).*.id, 'test-mochi') }}
         run: |
           tt-smi -glx_reset_auto
       - name: Galaxy Mochi demo tests
         id: test-mochi
+        if: ${{ contains(fromJSON(needs.generate-matrix.outputs.matrix).*.id, 'test-mochi') }}
         timeout-minutes: 30
         continue-on-error: true
         run: |

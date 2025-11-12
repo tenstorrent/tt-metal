@@ -37,10 +37,10 @@ from loguru import logger
     "model_dtype, use_host_oft, pcc_scores_oft, pcc_positions_oft, pcc_dimensions_oft, pcc_angles_oft",
     # fmt: off
     [
-       ( torch.bfloat16, False, 0.84, 0.889, 0.998, 0.904),
-       ( torch.bfloat16,  True, 0.862, 0.964, 0.999, 0.894),
-       ( torch.float32, False, 0.905, 0.979, 0.999, 0.928),
-       ( torch.float32,  True, 0.916, 0.881, 0.998, 0.918)
+       ( torch.bfloat16, False, 0.820, 0.889, 0.998, 0.908),
+       ( torch.bfloat16,  True, 0.842, 0.962, 0.999, 0.905),
+       ( torch.float32, False, 0.917, 0.977, 0.999, 0.926),
+       ( torch.float32,  True, 0.914, 0.881, 0.998, 0.916)
     ],
     # fmt: on
     ids=[

@@ -22,7 +22,7 @@ constexpr uint32_t TILE_WIDTH = 32;
 constexpr uint32_t TILE_HEIGHT = 32;
 
 std::shared_ptr<distributed::MeshBuffer> MakeBuffer(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t size, uint32_t page_size, bool sram) {
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t size, uint32_t /*page_size*/, bool sram) {
     constexpr uint32_t tile_size = sizeof(bfloat16) * TILE_WIDTH * TILE_HEIGHT;
     const uint32_t page_tiles = sram ? size : 1;
     const distributed::DeviceLocalBufferConfig device_local_config{

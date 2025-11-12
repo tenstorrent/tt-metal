@@ -50,6 +50,7 @@ target_sources(
         fabric_context.cpp
         fabric_mux_config.cpp
         fabric_tensix_builder.cpp
+        fabric_types.cpp
         compressed_routing_table.cpp
         compressed_routing_path.cpp
         serialization/router_port_directions.cpp

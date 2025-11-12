@@ -268,6 +268,8 @@ jobs:
       test-docker-image: ${{ needs.build.outputs.ci-test-docker-image }}
       package-artifact-name: ${{ needs.build.outputs.packages-artifact-name }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
+      run-ttsim-integration-tests: true
+      run-metal-cpp-unit-tests: false
 
   docker-image:
     if: github.event_name == 'pull_request' && !github.event.pull_request.draft

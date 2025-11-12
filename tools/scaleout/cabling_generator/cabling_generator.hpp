@@ -134,7 +134,6 @@ private:
         const;
 
     // Caches for optimization
-    std::unordered_map<BoardType, Board> board_templates_;
     std::unordered_map<std::string, Node> node_templates_;  // Templates with host_id=0
 
     std::unique_ptr<ResolvedGraphInstance> root_instance_;

@@ -287,10 +287,34 @@ TEST_F(TopologyMapperTest, BHQB4x4MeshGraphTest) {
     EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_15), asic_id_3));
     EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_3), asic_id_15));
 
-    // Check the host ranks are right
     const MeshId mesh_id{0};
-    const auto& host_ranks = topology_mapper.get_host_ranks(mesh_id);
-    EXPECT_EQ(host_ranks.size(), 4u);
+
+    // Check that the rank bindings line up
+    auto host_ranks = mesh_graph.get_host_ranks(mesh_id);
+    const auto& tp_host_ranks = topology_mapper.get_host_ranks(mesh_id);
+    EXPECT_EQ(host_ranks, tp_host_ranks);
+
+    // Check coord range of host ranks are right
+    for (const auto& [_, host_rank] : host_ranks) {
+        auto coord_range = mesh_graph.get_coord_range(mesh_id, host_rank);
+        auto tp_coord_range = topology_mapper.get_coord_range(mesh_id, host_rank);
+
+        EXPECT_EQ(coord_range, tp_coord_range);
+    }
+
+    // Check chip ids of host ranks are right
+    for (const auto& [_, host_rank] : host_ranks) {
+        auto chip_ids = mesh_graph.get_chip_ids(mesh_id, host_rank);
+        auto tp_chip_ids = topology_mapper.get_chip_ids(mesh_id, host_rank);
+        EXPECT_EQ(chip_ids, tp_chip_ids);
+    }
+
+    // Check mesh shape of host ranks are right
+    for (const auto& [_, host_rank] : host_ranks) {
+        auto mesh_shape = mesh_graph.get_mesh_shape(mesh_id, host_rank);
+        auto tp_mesh_shape = topology_mapper.get_mesh_shape(mesh_id, host_rank);
+        EXPECT_EQ(mesh_shape, tp_mesh_shape);
+    }
 
     // Check the full shape and sub shape are right
     MeshShape full_shape = mesh_graph.get_mesh_shape(mesh_id);
@@ -377,7 +401,7 @@ TEST_F(TopologyMapperTest, PinningHonorsFixedAsicPositionOnDualGalaxyMesh_2pins)
 
     // Choose a real ASIC on this host and pin its (tray, location) to logical node (mesh 0, chip 0)
     auto pinned_asic = AsicPosition{1, 1};
-    auto pinned_asic2 = AsicPosition{1, 2};
+    auto pinned_asic2 = AsicPosition{1, 5};
 
     std::vector<std::pair<AsicPosition, FabricNodeId>> pins = {
         {pinned_asic, FabricNodeId(MeshId{0}, 0)},

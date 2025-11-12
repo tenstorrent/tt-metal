@@ -18,6 +18,12 @@
 #include <tt_stl/assert.hpp>
 #endif
 
+// These functions have different behavior on host or device.
+// This causes problems trying to detect unused parameters.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-parameter"
+
+// NOLINTBEGIN(misc-unused-parameters)
 namespace tt::tt_fabric {
 
 enum TerminationSignal : uint32_t {
@@ -728,3 +734,6 @@ static_assert(false, "non supported ROUTING_MODE: " TOSTRING(ROUTING_MODE));
 #endif  // ROUTING_MODE
 
 }  // namespace tt::tt_fabric
+
+#pragma GCC diagnostic pop
+// NOLINTEND(misc-unused-parameters)

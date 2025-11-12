@@ -154,14 +154,17 @@ ttnn::Tensor SliceOperation::invoke(
             input_tensor.device(),
             memory_config_arg.value_or(input_tensor.memory_config()));
     }
-    auto res =
-        tt::tt_metal::operation::run(
-            SliceDeviceOperation{
-                ttnn::Shape(modified_begins), ttnn::Shape(padded_ends), ttnn::Shape(modified_step), memory_config},
-            {input},
-            {},
-            {optional_output_tensor})
-            .at(0);
+    auto res = tt::tt_metal::operation::run(
+                   SliceDeviceOperation{
+                       ttnn::Shape(modified_begins),
+                       ttnn::Shape(padded_ends),
+                       ttnn::Shape(modified_step),
+                       memory_config,
+                       false},
+                   {input},
+                   {},
+                   {optional_output_tensor})
+                   .at(0);
     res = ttnn::experimental::view(res, actual_shape, final_padded_shape);
 
     auto dim_needs_fill = [&input_shape, &actual_shape, &final_padded_shape](int i) {
@@ -199,7 +202,9 @@ ttnn::Tensor SliceOperation::invoke(
     const std::optional<ttnn::SmallVector<T>>& step,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<float>& pad_value) {
+    const std::optional<float>& pad_value,
+    const std::optional<uint32_t>& slice_dim,
+    const std::optional<uint32_t>& num_devices) {
     TT_FATAL(
         output_tensor_start.logical_shape().rank() == 1,
         "The start tensor for slicing must be in 1D shape, but got {}D",
@@ -209,26 +214,83 @@ ttnn::Tensor SliceOperation::invoke(
         "The end tensor for slicing must be in 1D shape, but got {}D",
         output_tensor_end.logical_shape().rank());
 
-    // convert the Tensor to Vector
-    std::vector<T> output_tensor_start_vector = output_tensor_start.to_vector<T>();
-    std::vector<T> output_tensor_end_vector = output_tensor_end.to_vector<T>();
+    // Check if we can use the device-only tensor args path
+    bool use_device_only_path = true;
 
-    // convert the Vector to Span
-    tt::stl::Span<const T> output_tensor_start_span(
-        output_tensor_start_vector.data(), output_tensor_start_vector.size());
-    tt::stl::Span<const T> output_tensor_end_span(output_tensor_end_vector.data(), output_tensor_end_vector.size());
+    // Check if layout is supported (only TILE layout for now)
+    if (input_tensor.layout() != Layout::TILE) {
+        use_device_only_path = false;
+    }
 
-    // generate the step value if it is not provided
-    ttnn::SmallVector<T> step_value = step.value_or(ttnn::SmallVector<T>(output_tensor_start_span.size(), 1));
+    // Check if step > 1 (only step=1 supported for now)
+    if (step.has_value()) {
+        for (auto s : step.value()) {
+            if (s != 1) {
+                use_device_only_path = false;
+                break;
+            }
+        }
+    }
 
-    return SliceOperation::invoke<T>(
-        input_tensor,
-        output_tensor_start_span,
-        output_tensor_end_span,
-        tt::stl::Span<const T>(step_value),
-        memory_config_arg,
-        optional_output_tensor,
-        pad_value);
+    // Validate tensors are on device for both paths
+    TT_FATAL(
+        input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device for tensor args slice");
+
+    auto memory_config = optional_output_tensor.has_value() ? optional_output_tensor.value().memory_config()
+                                                            : memory_config_arg.value_or(input_tensor.memory_config());
+
+    if (use_device_only_path) {
+        // Validate required parameters for device-only path
+        TT_FATAL(
+            slice_dim.has_value() && num_devices.has_value(),
+            "slice_dim and num_devices must be provided for device-only tensor args slice");
+
+        TT_FATAL(
+            output_tensor_start.storage_type() == StorageType::DEVICE,
+            "Start tensor must be on device for tensor args slice");
+        TT_FATAL(
+            output_tensor_end.storage_type() == StorageType::DEVICE,
+            "End tensor must be on device for tensor args slice");
+
+        // Create dummy shapes for SliceDeviceOperation (will be ignored when use_tensor_args=true)
+        uint32_t input_rank = input_tensor.logical_shape().rank();
+        ttnn::SmallVector<uint32_t> dummy_shape(input_rank, 0);
+        ttnn::SmallVector<uint32_t> dummy_step_shape(input_rank, 1);
+        ttnn::Shape dummy_start(dummy_shape);
+        ttnn::Shape dummy_end(dummy_shape);
+        ttnn::Shape dummy_step(dummy_step_shape);
+
+        // Use SliceDeviceOperation with tensor args flag
+        auto res =
+            tt::tt_metal::operation::run(
+                SliceDeviceOperation{dummy_start, dummy_end, dummy_step, memory_config, true, slice_dim, num_devices},
+                {input_tensor, output_tensor_start, output_tensor_end},
+                {},
+                {optional_output_tensor})
+                .at(0);
+        return res;
+    } else {
+        // convert the Tensor to Vector
+        std::vector<T> output_tensor_start_vector = output_tensor_start.to_vector<T>();
+        std::vector<T> output_tensor_end_vector = output_tensor_end.to_vector<T>();
+
+        // convert the Vector to Span
+        tt::stl::Span<const T> output_tensor_start_span(
+            output_tensor_start_vector.data(), output_tensor_start_vector.size());
+        tt::stl::Span<const T> output_tensor_end_span(output_tensor_end_vector.data(), output_tensor_end_vector.size());
+
+        // generate the step value if it is not provided
+        ttnn::SmallVector<T> step_value = step.value_or(ttnn::SmallVector<T>(output_tensor_start_span.size(), 1));
+
+        return SliceOperation::invoke<T>(
+            input_tensor,
+            output_tensor_start_span,
+            output_tensor_end_span,
+            tt::stl::Span<const T>(step_value),
+            memory_config_arg,
+            optional_output_tensor,
+            pad_value);
+    }
 }
 
 // Template instantiations for SliceOperation::invoke
@@ -268,6 +330,8 @@ template ttnn::Tensor SliceOperation::invoke<uint32_t>(
     const std::optional<ttnn::SmallVector<uint32_t>>& step,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<float>& pad_value);
+    const std::optional<float>& pad_value,
+    const std::optional<uint32_t>& slice_dim,
+    const std::optional<uint32_t>& num_devices);
 
 }  // namespace ttnn::operations::data_movement
