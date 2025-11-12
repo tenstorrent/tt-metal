@@ -1,6 +1,9 @@
 include(CTest)
 enable_testing()
 
+# Include GoogleTest before using gtest_discover_tests
+include(GoogleTest)
+
 set(SOURCES
     core/tensor_utils_test.cpp
     core/n300_utils_test.cpp
@@ -39,6 +42,7 @@ set(SOURCES
     modules/distributed/linear_test.cpp
     serialization/model_serializer_test.cpp
     serialization/msgpack_serializer_test.cpp
+    serialization/flatbuffer_serializer_test.cpp
     serialization/tensor_serializer_test.cpp
     serialization/safetensors_test.cpp
     ops/cross_entropy_fw_op_test.cpp
@@ -103,4 +107,9 @@ else()
 endif()
 
 include(GoogleTest)
-gtest_discover_tests(ttml_tests)
+gtest_discover_tests(
+    ttml_tests
+    PROPERTIES
+        TIMEOUT
+            300
+)

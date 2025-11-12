@@ -184,3 +184,24 @@ if(simd-everywhere_ADDED)
     add_library(simde::simde ALIAS simde)
     target_include_directories(simde SYSTEM INTERFACE ${simd-everywhere_SOURCE_DIR})
 endif()
+
+############################################################################################################################
+# flatbuffers : https://github.com/google/flatbuffers
+############################################################################################################################
+
+CPMAddPackage(
+    NAME flatbuffers
+    GITHUB_REPOSITORY google/flatbuffers
+    GIT_TAG v24.3.25
+    OPTIONS
+        "FLATBUFFERS_BUILD_FLATC ON"
+        "FLATBUFFERS_BUILD_TESTS OFF"
+        "FLATBUFFERS_SKIP_MONSTER_EXTRA ON"
+        "FLATBUFFERS_STRICT_MODE ON"
+)
+
+if(flatbuffers_ADDED)
+    # Few files including idl_gen_dart.cpp:175:18, Possibly related: https://gcc.gnu.org/bugzilla/show_bug.cgi?id=105329
+    target_compile_options(flatc PRIVATE -Wno-restrict)
+    target_compile_options(flatbuffers PRIVATE -Wno-restrict)
+endif()
