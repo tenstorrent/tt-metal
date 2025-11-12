@@ -173,14 +173,21 @@ function resolveOwnersForSnippet(snippet, workflowName) {
       seenOwners.add(k);
       normalized.push({ id, name });
     }
-    // Apply infra policy: if no owners or test missing/NA, infra is sole owner
+    // Apply infra policy: if no owners or test missing/NA, add infra as owner
     const testName = (snippet && snippet.test) ? snippet.test : 'NA';
     const hadOriginalOwners = normalized.length > 0;
     if (!testName || testName === 'NA') {
-      // Missing/NA test: infra is the only owner; preserve original owners for report context
-      snippet.owner = [DEFAULT_INFRA_OWNER];
+      // Missing/NA test: add infra as owner (alongside original owners if any)
+      const infraKey = `${DEFAULT_INFRA_OWNER.id || ''}|${DEFAULT_INFRA_OWNER.name || ''}`;
+      const hasInfra = normalized.some(o => `${o.id || ''}|${o.name || ''}` === infraKey);
+      if (hadOriginalOwners) {
+        snippet.original_owners = normalized;
+        // Add infra if not already present
+        snippet.owner = hasInfra ? normalized : [...normalized, DEFAULT_INFRA_OWNER];
+      } else {
+        snippet.owner = [DEFAULT_INFRA_OWNER];
+      }
       snippet.owner_source = hadOriginalOwners ? 'infra_due_to_missing_test' : 'infra_due_to_missing_test_no_original';
-      if (hadOriginalOwners) snippet.original_owners = normalized;
     } else if (!hadOriginalOwners) {
       // No mapping owners found: default to infra only
       snippet.owner = [DEFAULT_INFRA_OWNER];
