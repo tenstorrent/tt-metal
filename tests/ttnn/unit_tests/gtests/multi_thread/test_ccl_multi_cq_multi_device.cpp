@@ -409,7 +409,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
         for (size_t i = 0; i < devices.size(); ++i) {
             auto device = devices[i];
             auto device_tensor = gathered_tensors[i];
-            boost::asio::post(pool, [&, num_elems, device_tensor]() mutable {
+            boost::asio::post(pool, [&, device, num_elems, device_tensor]() mutable {
                 auto output_data = std::shared_ptr<bfloat16[]>(new bfloat16[device_tensor.physical_volume()]);
                 ttnn::read_buffer(op_cq_id, device_tensor, {output_data});
 
@@ -613,7 +613,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksMultithreadCQ0) {
             auto device = devices[i];
             auto device_tensor = gathered_tensors[i];
 
-            boost::asio::post(pool, [&, num_elems, device_tensor]() mutable {
+            boost::asio::post(pool, [&, device, num_elems, device_tensor]() mutable {
                 auto output_data = std::shared_ptr<bfloat16[]>(new bfloat16[device_tensor.physical_volume()]);
                 ttnn::read_buffer(mem_cq_id, device_tensor, {output_data});
 
