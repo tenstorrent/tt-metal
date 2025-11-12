@@ -311,12 +311,16 @@ PYBIND11_MODULE(_ttnn, module) {
         "Increment tensor id and return the previously held id");
 
     module.def(
-        "get_tensor_id", []() -> std::uint64_t { return ttnn::CoreIDs::instance().get_tensor_id(); }, "Get tensor id");
-    module.def("set_tensor_id", [](std::uint64_t id) { ttnn::CoreIDs::instance().set_tensor_id(id); }, "Set tensor id");
+        "get_tensor_id", &tt::tt_metal::Tensor::get_tensor_id_counter, "Get the current tensor ID counter value");
+    module.def(
+        "set_tensor_id",
+        &tt::tt_metal::Tensor::set_tensor_id_counter,
+        py::arg("id"),
+        "Set the tensor ID counter to a specific value");
     module.def(
         "fetch_and_increment_tensor_id",
-        []() -> std::uint64_t { return ttnn::CoreIDs::instance().fetch_and_increment_tensor_id(); },
-        "Increment tensor id and return the previously held id");
+        &tt::tt_metal::Tensor::next_tensor_id,
+        "Atomically fetch and increment the tensor ID counter");
 
     module.def(
         "get_device_operation_id",
