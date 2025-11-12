@@ -746,7 +746,7 @@ jobs:
       - name: Upload sweep vectors
         uses: actions/upload-artifact@v4
         with:
-          name: sweeps-vectors
+          name: sweeps-vectors-${{ matrix.generate_mode }}
           path: /work/tests/sweep_framework/vectors_export/
           retention-days: 1
   ttnn-compute-module-matrix:
@@ -764,8 +764,16 @@ jobs:
           echo "Run Attempt: ${{ github.run_attempt }}"
       - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         with:
-          name: sweeps-vectors
-          path: /tmp/vectors
+          pattern: sweeps-vectors-*
+          path: /tmp/vectors-download
+          merge-multiple: true
+      - name: Merge vector artifacts
+        shell: bash
+        run: |
+          # Create final vectors directory
+          mkdir -p /tmp/vectors
+          # Move all JSON files from subdirectories to /tmp/vectors
+          find /tmp/vectors-download -name "*.json" -exec mv {} /tmp/vectors/ \;
       - id: set-matrix
         shell: bash
         run: |
@@ -932,8 +940,9 @@ jobs:
       - name: Download sweep vectors
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         with:
-          name: sweeps-vectors
-          path: /work/tests/sweep_framework/vectors_export/
+          pattern: sweeps-vectors-*
+          path: /work/tests/sweep_framework/vectors_export
+          merge-multiple: true
       - name: Run ttnn sweeps (single sweep) ${{ github.event.inputs.runner_label }} ${{ github.event.inputs.sweep_name }} ${{ github.event.inputs.suite_name }}
         run: |
           SKIP_ON_TIMEOUT_FLAG=""
@@ -1025,8 +1034,9 @@ jobs:
       - name: Download sweep vectors
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         with:
-          name: sweeps-vectors
-          path: /work/tests/sweep_framework/vectors_export/
+          pattern: sweeps-vectors-*
+          path: /work/tests/sweep_framework/vectors_export
+          merge-multiple: true
       - name: Run ttnn sweeps (batch)
         run: |
           MODULE_SELECTOR="${{ matrix.module_selector }}"
