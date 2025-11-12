@@ -212,7 +212,7 @@ public:
     static std::vector<Tensor> make_lazy_tensors(
         const std::shared_ptr<ttnn::experimental::lazy::LazyOperationInputs>& op_inputs,
         const std::shared_ptr<ttnn::experimental::lazy::LazyOperation>& op,
-        const std::vector<TensorSpec>& tensor_specs);
+        const std::vector<std::optional<TensorSpec>>& tensor_specs);
 
     void evaluate();
 

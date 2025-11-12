@@ -30,8 +30,8 @@ enum class LazyTensorState {
 };
 
 class LazyTensor {
-    using LazyOperationPtr = std::shared_ptr<ttnn::experimental::lazy::LazyOperation>;
-    using LazyOperationInputsPtr = std::shared_ptr<ttnn::experimental::lazy::LazyOperationInputs>;
+    using LazyOperationPtr = std::shared_ptr<LazyOperation>;
+    using LazyOperationInputsPtr = std::shared_ptr<LazyOperationInputs>;
     using TensorSpec = tt::tt_metal::TensorSpec;
     using MaterializedTensor = tt::tt_metal::metal_tensor::Tensor;
 
@@ -107,7 +107,7 @@ public:
     static std::vector<std::shared_ptr<LazyTensor>> make_lazy_tensors(
         const LazyOperationInputsPtr& op_inputs,
         const LazyOperationPtr& op,
-        const std::vector<TensorSpec>& tensor_specs);
+        const std::vector<std::optional<TensorSpec>>& tensor_specs);
 
     static std::shared_ptr<LazyTensor> make_materialized_tensor(const MaterializedTensor& metal_tensor);
 
