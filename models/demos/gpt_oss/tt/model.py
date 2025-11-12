@@ -40,6 +40,7 @@ class Model:
         paged_attention_config=None,
         mesh_config=None,
         create_kv_cache=True,
+        n_layers=None,
     ):
         """
         Initialize GPT-OSS model
@@ -59,6 +60,7 @@ class Model:
         self.hf_config = hf_config
         self.core_grid = mesh_device.compute_with_storage_grid_size()
         self.head_dim = hf_config.head_dim
+        self.n_layers = n_layers or hf_config.num_hidden_layers
 
         self.ccl_manager = ccl_manager
 
@@ -111,7 +113,7 @@ class Model:
                 create_kv_cache=create_kv_cache,
                 transformation_mats=self.transformation_mats,
             )
-            for layer_idx in range(hf_config.num_hidden_layers)
+            for layer_idx in range(self.n_layers)
         ]
         self.norm = RMSNorm(
             mesh_device,
@@ -163,12 +165,12 @@ class Model:
             paged_attention_config=paged_attention_config,
             mesh_config=mesh_config,
             create_kv_cache=create_kv_cache,
+            n_layers=args.n_layers,
         )
 
         # Add tt_transformers compatible attributes
         instance.args = args
         instance.vocab_size = args.vocab_size
-        instance.n_layers = args.n_layers
         instance.dtype = dtype
 
         return instance

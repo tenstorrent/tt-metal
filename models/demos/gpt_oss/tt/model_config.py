@@ -14,7 +14,7 @@ import torch
 from loguru import logger
 from safetensors.torch import load_file
 from tqdm import tqdm
-from transformers import AutoConfig, AutoTokenizer
+from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 import ttnn
 from models.tt_transformers.tt.load_checkpoints import convert_hf_qkv_to_meta_format
@@ -123,6 +123,25 @@ class ModelArgs:
         else:
             # Load actual GPT-OSS weights directly from safetensors files
             # Check if we have a cached torch_state_dict.pt file
+            model = AutoModelForCausalLM.from_pretrained(
+                self.weights_path,
+                torch_dtype="auto"
+                # Note that the default setting is torch.dtype.float32, but model weights are
+                # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
+                # unnecessary cast.
+            )
+            state_dict = model.state_dict()
+            # Convert HF QKV weights to Meta format for RoPE compatibility (if requested)
+            if convert_to_meta_format:
+                logger.info("Converting QKV weights from HuggingFace to Meta format for RoPE")
+                state_dict = convert_hf_qkv_to_meta_format(state_dict, self.hf_config.head_dim)
+            if state_dict["model.norm.weight"].dtype != torch.bfloat16:
+                # Convert to bfloat16 if needed
+                state_dict = {
+                    k: v.to(torch.bfloat16) if v.dtype == torch.float32 else v
+                    for k, v in tqdm(state_dict.items(), desc="Converting to bfloat16")
+                }
+            return state_dict
             torch_state_dict_path = os.path.join(self.weights_path, "torch_state_dict.pt")
 
             if os.path.exists(torch_state_dict_path):
