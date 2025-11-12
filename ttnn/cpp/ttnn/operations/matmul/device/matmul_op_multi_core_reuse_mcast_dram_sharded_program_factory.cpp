@@ -25,9 +25,9 @@ using ttnn::operations::unary::UnaryWithParam;
 // Treat it as a one off patch to restore functionality that
 // was adjusted to fix one P0 causing another P0.
 // TODO: Proper fix will be implemented in Issue #32205
-tt::tt_metal::IDevice* get_device_for_dram_banks(const Tensor& a, const ttnn::MeshCoordinate& coord) {
-    distributed::MeshDevice* device = a.device();
-    const distributed::MeshDeviceView& view = device->get_view();
+tt::tt_metal::IDevice* get_device_for_dram_banks(const ttnn::Tensor& a, const ttnn::MeshCoordinate& coord) {
+    ttnn::distributed::MeshDevice* device = a.device();
+    const ttnn::distributed::MeshDeviceView& view = device->get_view();
     if (!view.contains(coord) || !view.is_local(coord)) {
         return device;
     }
