@@ -165,8 +165,7 @@ The output tensor will have the same shape as the index tensor. Note that the in
 <ul class="simple">
 <li><p><strong>input</strong> (<em>ttnn.Tensor</em>) – The source tensor from which values are gathered.</p></li>
 <li><p><strong>dim</strong> (<em>int</em>) – The dimension along which values are gathered.</p></li>
-<li><p><strong>index</strong> (<em>ttnn.Tensor</em>) – A tensor containing the indices of elements to gather, with the same number of dimensions as the input tensor.
-The index tensor must be of type uint16 or uint32.</p></li>
+<li><p><strong>index</strong> (<em>ttnn.Tensor</em>) – A tensor containing the indices of elements to gather, with the same number of dimensions as the input tensor.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
@@ -236,27 +235,17 @@ The index tensor must be of type uint16 or uint32.</p></li>
 </ul>
 </dd>
 </dl>
-<p>Example:</p>
+<div class="admonition-example admonition">
+<p class="admonition-title">Example</p>
 <div class="highlight-python notranslate">
-<div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">ttnn</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+<div class="highlight"><pre><span></span><span class="c1"># Create a tensor and an index tensor</span>
+<span class="n">ttnn_input</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">((</span><span class="mi">4</span><span class="p">,</span> <span class="mi">4</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">Layout</span><span class="o">.</span><span class="n">TILE</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<span class="n">ttnn_index</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">((</span><span class="mi">4</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">uint16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">Layout</span><span class="o">.</span><span class="n">TILE</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
 
-<span class="c1"># Create a 2D input tensor</span>
-<span class="n">input_tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">([[</span><span class="mi">10</span><span class="p">,</span> <span class="mi">20</span><span class="p">,</span> <span class="mi">30</span><span class="p">,</span> <span class="mi">40</span><span class="p">],</span>
-                             <span class="p">[</span><span class="mi">50</span><span class="p">,</span> <span class="mi">60</span><span class="p">,</span> <span class="mi">70</span><span class="p">,</span> <span class="mi">80</span><span class="p">]])</span>
-
-<span class="c1"># Create a 2D index tensor</span>
-<span class="n">index_tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">([[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span>
-                             <span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">]])</span>
-
-<span class="c1"># Convert tensors to ttnn format</span>
-<span class="n">input_tensor_ttnn</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">,</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">Layout</span><span class="o">.</span><span class="n">TILE</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
-<span class="n">index_tensor_ttnn</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">index_tensor</span><span class="p">,</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">uint16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">Layout</span><span class="o">.</span><span class="n">TILE</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
-
-<span class="c1"># Perform the gather operation along dimension 1</span>
-<span class="n">gathered_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">gather</span><span class="p">(</span><span class="n">input_tensor_ttnn</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="n">index_tensor_ttnn</span><span class="p">)</span>
-<span class="c1"># Result: gathered_tensor = [[40, 10], [70, 60]]</span>
+<span class="c1"># Gather elements along dimension 1 using the index tensor</span>
+<span class="n">ttnn</span><span class="o">.</span><span class="n">gather</span><span class="p">(</span><span class="n">ttnn_input</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="n">ttnn_index</span><span class="p">)</span>
 </pre></div>
+</div>
 </div>
 </dd>
 </dl>
