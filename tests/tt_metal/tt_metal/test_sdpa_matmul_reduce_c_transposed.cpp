@@ -123,17 +123,6 @@ static bool test_sdpa_reduce_c_transposed(
     const uint32_t K = head_dim * 32;
     const uint32_t N = q_chunk_size * 32;
 
-    // Debug: print golden reduce (1xN)
-    {
-        std::string row_str = "Golden reduce row 0:";
-        row_str.reserve(row_str.size() + N * 10);
-        for (uint32_t j = 0; j < N; ++j) {
-            row_str += " ";
-            row_str += std::to_string(static_cast<float>(golden_max_rm[j]));
-        }
-        log_info(LogTest, "{}", row_str);
-    }
-
     auto cb_df = tt::DataFormat::Float16_b;
     auto cb_tile_size = tt::tile_size(cb_df);
 
@@ -424,9 +413,12 @@ int main(int argc, char** argv) {
      * Parameters to sweep over for correctness.
      */
     // sizes are in terms of tiles (32x32)
-    std::vector<uint32_t> q_chunk_sizes = {1};
-    std::vector<uint32_t> k_chunk_sizes = {2};
-    std::vector<uint32_t> head_dim_sizes = {1};
+
+    // Passing sweep
+    std::vector<uint32_t> q_chunk_sizes = {1, 2, 4};
+    std::vector<uint32_t> k_chunk_sizes = {1, 2, 4};
+    std::vector<uint32_t> head_dim_sizes = {1, 2, 4};
+
     // Excluding fp32_dest_acc_en since SFPU reduce_max overlap will initially only support bf16 dst
     std::vector<bool> fp32_dest_acc_ens = {false};
     // Excluding do_eltwise since SFPU reduce_max overlap will not include eltwise max

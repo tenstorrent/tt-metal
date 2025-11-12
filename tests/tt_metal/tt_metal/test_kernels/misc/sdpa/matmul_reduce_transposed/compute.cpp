@@ -131,11 +131,10 @@ void reduce_c_transposed(uint32_t out_cb) {
         sfpu_reduce_max_sdpa(i, k_chunk_size, (int)VectorMode::RC_custom);
     }
 
-    for (uint32_t i = 0; i < num_tiles; i++) {
+    // Pack only the reduced results: one tile per column (q_chunk_size tiles)
+    for (uint32_t i = 0; i < q_chunk_size; i++) {
         pack_tile(i, out_cb, i);
     }
-
-    PACK((tt::compute::common::print_full_tile(out_cb, 0)));
 
     release_dst();
 }
@@ -175,8 +174,13 @@ void MAIN {
     cb_wait_front(mm_out_cb, k_chunk_size * q_chunk_size);
     cb_reserve_back(max_out_cb, q_chunk_size);
 
+    // PACK(( tt::compute::common::print_full_tile(mm_out_cb  , 0) ));
+    // PACK(( tt::compute::common::print_full_tile(mm_out_cb  , 1) ));
+
     reduce_c_transposed<mm_out_cb, identity_scale_cb, k_chunk_size, q_chunk_size>(max_out_cb);
 
     cb_push_back(max_out_cb, q_chunk_size);
+
+    // PACK(( tt::compute::common::print_full_tile(max_out_cb  , 0) ));
 }
 }  // namespace NAMESPACE
