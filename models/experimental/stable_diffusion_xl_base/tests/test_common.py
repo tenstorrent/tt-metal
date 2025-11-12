@@ -195,6 +195,12 @@ def batch_encode_prompt_on_device(
     prompt_2 = prompt_2 or prompt
     prompt_2 = [prompt_2] if isinstance(prompt_2, str) else prompt_2
 
+    # Convert negative prompts to lists early
+    if negative_prompt is not None:
+        negative_prompt = [negative_prompt] if isinstance(negative_prompt, str) else negative_prompt
+    if negative_prompt_2 is not None:
+        negative_prompt_2 = [negative_prompt_2] if isinstance(negative_prompt_2, str) else negative_prompt_2
+
     num_devices = ttnn_device.get_num_devices()
     num_prompts = len(prompt)
     if use_cfg_parallel and num_prompts < num_devices:
@@ -202,6 +208,12 @@ def batch_encode_prompt_on_device(
         prompt = prompt + [""] * (num_devices - len(prompt))
         if prompt_2 is not None:
             prompt_2 = prompt_2 + [""] * (num_devices - len(prompt_2))
+
+        # Pad negative prompts as well
+        if negative_prompt is not None:
+            negative_prompt = negative_prompt + [""] * (num_devices - len(negative_prompt))
+        if negative_prompt_2 is not None:
+            negative_prompt_2 = negative_prompt_2 + [""] * (num_devices - len(negative_prompt_2))
 
     assert len(prompt) == num_devices, "Prompt length must be equal to number of devices"
     assert lora_scale is None, "Lora scale is not supported currently with on device text encoders"
