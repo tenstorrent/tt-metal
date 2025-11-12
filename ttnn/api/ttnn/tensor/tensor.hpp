@@ -185,7 +185,6 @@ public:
     [[nodiscard]] Tensor unpad_from_tile(const tt::tt_metal::Shape& output_tensor_shape) const;
 
     [[nodiscard]] std::string write_to_string() const;
-    void print() const;
 
     // Deallocates device-side Tensor storage.
     // If the tensor is on host, does nothing.
@@ -327,7 +326,6 @@ Tensor view(
 Tensor view(const Tensor& input_tensor, const tt::tt_metal::Shape& new_shape);
 Tensor to_dtype(const Tensor& tensor, DataType dtype);
 
-std::string to_string(const Tensor& tensor);
 }  // namespace ops
 
 }  // namespace tt_metal

@@ -400,8 +400,6 @@ Tensor Tensor::to_layout(Layout target_layout) const { return tensor_ops::tensor
 
 std::string Tensor::write_to_string() const { return tensor_impl::to_string_wrapper(*this); }
 
-void Tensor::print() const { tensor_ops::tensor_print(*this); }
-
 Tensor Tensor::pad(
     const tt::tt_metal::Shape& output_padded_shape,
     const tt::tt_metal::Shape& input_tensor_start,
@@ -713,32 +711,6 @@ Tensor view(const Tensor& input_tensor, const Shape& new_shape) {
 }
 Tensor to_dtype(const Tensor& tensor, DataType dtype) { return tensor_ops::tensor_to_dtype(tensor, dtype); }
 
-std::string to_string(const Tensor& tensor) {
-    const auto& shape = tensor.logical_shape();
-
-    if (!tensor.is_allocated()) {
-        return fmt::format(
-            "{}(<buffer is not allocated>, shape={}, dtype={}, layout={})",
-            "ttnn.Tensor",
-            shape,
-            tensor.dtype(),
-            tensor.layout());
-    }
-
-    if (std::holds_alternative<tt::tt_metal::DeviceStorage>(tensor.storage())) {
-        auto storage = std::get<tt::tt_metal::DeviceStorage>(tensor.storage());
-        if (storage.mesh_buffer != nullptr) {
-            auto* mesh_device = storage.mesh_buffer->device();  // cause crash
-
-            if (mesh_device->num_devices() == 1) {
-                auto cpu_tensor = tensor.cpu();
-                return tt::tt_metal::tensor_impl::to_string_wrapper(
-                    ttnn::distributed::get_device_tensors(cpu_tensor).at(0));
-            }
-        }
-    }
-    return tt::tt_metal::tensor_impl::to_string_wrapper(tensor);
-}
 }  // namespace ops
 
 }  // namespace tt::tt_metal
