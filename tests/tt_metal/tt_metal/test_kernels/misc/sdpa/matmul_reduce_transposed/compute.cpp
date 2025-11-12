@@ -68,12 +68,6 @@ void matmul_blocks(
             }
             tile_regs_commit();
 
-            // sfpu_reduce_max_sdpa_init(subblock_w);
-
-            // for (uint32_t i = 0; i < subblock_w; i++) {
-            //     sfpu_reduce_max_sdpa(i, subblock_h, (int)VectorMode::RC_custom);
-            // }
-
             tile_regs_wait();
             uint32_t dst_idx = 0;
             uint32_t out_col_offset = in1_subblock * subblock_w;
@@ -84,6 +78,19 @@ void matmul_blocks(
                     dst_idx++;
                 }
             }
+
+            // DO this on same bank packer worked on berfore switching to next bank value
+
+            sfpu_reduce_max_sdpa_init(subblock_w);
+
+            for (uint32_t i = 0; i < subblock_w; i++) {
+                sfpu_reduce_max_sdpa(i, subblock_h, (int)VectorMode::RC_custom);
+            }
+
+            // dummy packs
+            pack_tile<true>(0, out_cb, 0);
+            pack_tile<true>(1, out_cb, 1);
+
             tile_regs_release();
             in1_index_offset += subblock_w;
         }
@@ -96,47 +103,9 @@ template <uint32_t in0_cb, uint32_t scale_cb, uint32_t k_chunk_size, uint32_t q_
 void reduce_c_transposed(uint32_t out_cb) {
     DeviceZoneScopedN("reduce_c");
 
-    constexpr uint32_t num_tiles = k_chunk_size * q_chunk_size;
-
-    // max_tile_init();
-    // constexpr uint32_t reduce_dst_idx = 0;
-    // reduce_init<PoolType::MAX, ReduceDim::REDUCE_COL>(in0_cb, scale_cb, out_cb);
-    // for (uint32_t j = 0; j < q_chunk_size; j++) {
-    //     acquire_dst();
-
-    //     for (uint32_t i = 0; i < k_chunk_size; i++) {
-    //         reduce_tile<PoolType::MAX, ReduceDim::REDUCE_COL>(
-    //             in0_cb, scale_cb, i * q_chunk_size + j, 0, reduce_dst_idx);
-    //     }
-    //     pack_tile(reduce_dst_idx, out_cb);
-    //     release_dst();
-    // }
-    // reduce_uninit();
-
-    // We need to copy tiles to dest then do a reduce on sfpu from packer thread.
-
-    // TODO: not num tiles but use cols and rows instead.
-
-    acquire_dst();
-    copy_tile_to_dst_init_short(in0_cb);
-    for (uint32_t i = 0; i < num_tiles; i++) {
-        copy_tile(in0_cb, i, i);
+    for (uint32_t r = 0; r < q_chunk_size; r++) {
+        pack_tile<true>(r, out_cb, r);
     }
-
-    tile_regs_wait();  // pack thread waits for math thread to finish
-
-    sfpu_reduce_max_sdpa_init(q_chunk_size);
-
-    for (uint32_t i = 0; i < q_chunk_size; i++) {
-        sfpu_reduce_max_sdpa(i, k_chunk_size, (int)VectorMode::RC_custom);
-    }
-
-    // Pack only the reduced results: one tile per column (q_chunk_size tiles)
-    for (uint32_t i = 0; i < q_chunk_size; i++) {
-        pack_tile(i, out_cb, i);
-    }
-
-    release_dst();
 }
 
 namespace NAMESPACE {
@@ -174,13 +143,8 @@ void MAIN {
     cb_wait_front(mm_out_cb, k_chunk_size * q_chunk_size);
     cb_reserve_back(max_out_cb, q_chunk_size);
 
-    // PACK(( tt::compute::common::print_full_tile(mm_out_cb  , 0) ));
-    // PACK(( tt::compute::common::print_full_tile(mm_out_cb  , 1) ));
-
     reduce_c_transposed<mm_out_cb, identity_scale_cb, k_chunk_size, q_chunk_size>(max_out_cb);
 
     cb_push_back(max_out_cb, q_chunk_size);
-
-    // PACK(( tt::compute::common::print_full_tile(max_out_cb  , 0) ));
 }
 }  // namespace NAMESPACE

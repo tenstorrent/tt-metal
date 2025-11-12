@@ -45,16 +45,14 @@ static void create_matmul_inputs(
     uint32_t head_dim,
     std::vector<bfloat16>& tensor_A_rm,
     std::vector<bfloat16>& tensor_B_rm) {
-    SHAPE a_shape = {1, 1, k_chunk_size * 32, head_dim * 32};
-    SHAPE b_shape = {1, 1, head_dim * 32, q_chunk_size * 32};
+    // SHAPE a_shape = {1, 1, k_chunk_size * 32, head_dim * 32};
+    // SHAPE b_shape = {1, 1, head_dim * 32, q_chunk_size * 32};
 
-    tt::deprecated::Tensor<bfloat16> a_tensor =
-        tt::deprecated::initialize_tensor<bfloat16>(a_shape, tt::deprecated::Initialize::RANDOM, -1, 1, 0 /* seed */);
-    tt::deprecated::Tensor<bfloat16> b_tensor =
-        tt::deprecated::initialize_tensor<bfloat16>(b_shape, tt::deprecated::Initialize::RANDOM, -1, 1, 1 /* seed */);
+    size_t a_size = k_chunk_size * 32 * head_dim * 32;
+    size_t b_size = head_dim * 32 * q_chunk_size * 32;
 
-    tensor_A_rm = a_tensor.get_values();
-    tensor_B_rm = b_tensor.get_values();
+    tensor_A_rm.assign(a_size, static_cast<bfloat16>(1.0f));
+    tensor_B_rm.assign(b_size, static_cast<bfloat16>(1.0f));
 }
 
 // Golden reference: compute matmul(A, B) and reduce_max over dim=0 (rows) of the matmul output.
@@ -415,9 +413,13 @@ int main(int argc, char** argv) {
     // sizes are in terms of tiles (32x32)
 
     // Passing sweep
-    std::vector<uint32_t> q_chunk_sizes = {1, 2, 4};
-    std::vector<uint32_t> k_chunk_sizes = {1, 2, 4};
-    std::vector<uint32_t> head_dim_sizes = {1, 2, 4};
+    // std::vector<uint32_t> q_chunk_sizes = {1,2,4,8};
+    // std::vector<uint32_t> k_chunk_sizes = {1,2,4,8,16};
+    // std::vector<uint32_t> head_dim_sizes = {1,2,4};
+
+    std::vector<uint32_t> q_chunk_sizes = {8};
+    std::vector<uint32_t> k_chunk_sizes = {16};
+    std::vector<uint32_t> head_dim_sizes = {4};
 
     // Excluding fp32_dest_acc_en since SFPU reduce_max overlap will initially only support bf16 dst
     std::vector<bool> fp32_dest_acc_ens = {false};
