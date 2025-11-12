@@ -151,7 +151,7 @@ struct MultihostConfig {
     uint32_t num_mh_workers = 0U;
     SocketType socket_type = SocketType::MPI;
     std::optional<ttml::models::distributed::pipeline_parallel_llama::PipelineParallelConfig> pipeline_parallel_config;
-    
+
 };
 
 MultihostConfig parse_multihost_config(const YAML::Node &yaml_config) {
@@ -242,7 +242,7 @@ ModelConfig parse_model_config(const YAML::Node &yaml_config) {
     {
         config.transformer_config = ttml::models::llama::read_config(yaml_config);
     }
-    else 
+    else
     {
         throw std::runtime_error("Unknown model type: " + config.model_type);
     }
