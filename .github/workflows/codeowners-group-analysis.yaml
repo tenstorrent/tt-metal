@@ -1128,8 +1128,8 @@ jobs:
           rm -f "$TEMP_JSON_FILE"
           echo "Comment updated for PR #$PR_NUMBER"
 
-          # If we updated an existing comment, post an acknowledgment
-          if [ "$CREATE_NEW" = "false" ] && [ -n "$EXISTING_COMMENT_ID" ] && [ "$EXISTING_COMMENT_ID" != "null" ]; then
+          # If we updated an existing comment, post an acknowledgment (but not for manual workflow runs)
+          if [ "$CREATE_NEW" = "false" ] && [ -n "$EXISTING_COMMENT_ID" ] && [ "$EXISTING_COMMENT_ID" != "null" ] && [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
             echo "Posting acknowledgment comment for updated summary..."
 
             # Create URL to the updated comment
