@@ -37,6 +37,7 @@ jobs:
           [[
             { name: "mistral7b", runner-label: "N300", performance: true, cmd: run_mistral7b_perf, owner_id: U0896VBAKFC}, # Pratikkumar Prajapati
             { name: "llama3", runner-label: "N300", performance: true, cmd: run_llama3_perf, owner_id: U03PUAKE719}, # Miguel Tairum
+            { name: "qwen25_vl", runner-label: "N300", performance: true, cmd: run_qwen25_vl_perfunc, owner_id: U07RY6B5FLJ},  #Gongyu Wang
           ]]
     steps:
       - name: Compute tests
