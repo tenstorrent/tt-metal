@@ -236,6 +236,10 @@ void record_fabric_header(const volatile PACKET_HEADER_TYPE* fabric_header_ptr) 
                 mcast_write_cmd.size_y);
             break;
         }
+        default: {
+            ASSERT(false);
+            break;
+        }
     }
 
     // following profiler event just stores the routing fields

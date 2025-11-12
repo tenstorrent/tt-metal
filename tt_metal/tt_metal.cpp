@@ -1036,6 +1036,10 @@ KernelHandle CreateDataMovementKernel(
     auto mode = control_plane.get_routing_mode();
     if (mode != ROUTING_MODE_UNDEFINED) {
         kernel->add_defines({{"ROUTING_MODE", std::to_string(static_cast<int>(mode))}});
+        auto udm_mode = tt::tt_metal::MetalContext::instance().get_fabric_udm_mode();
+        if (udm_mode == tt::tt_fabric::FabricUDMMode::ENABLED) {
+            kernel->add_defines({{"UDM_MODE", std::to_string(static_cast<int>(udm_mode))}});
+        }
     }
     return program.impl().add_kernel(kernel, HalProgrammableCoreType::TENSIX);
 }
@@ -1064,6 +1068,10 @@ KernelHandle CreateEthernetKernel(
     auto mode = control_plane.get_routing_mode();
     if (mode != ROUTING_MODE_UNDEFINED) {
         kernel->add_defines({{"ROUTING_MODE", std::to_string(static_cast<int>(mode))}});
+        auto udm_mode = tt::tt_metal::MetalContext::instance().get_fabric_udm_mode();
+        if (udm_mode == tt::tt_fabric::FabricUDMMode::ENABLED) {
+            kernel->add_defines({{"UDM_MODE", std::to_string(static_cast<int>(udm_mode))}});
+        }
     }
 
     TT_FATAL(
