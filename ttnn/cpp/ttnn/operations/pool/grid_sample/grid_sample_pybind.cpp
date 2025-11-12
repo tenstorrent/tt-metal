@@ -47,8 +47,9 @@ void bind_grid_sample(py::module& module) {
                                  - Generated using ttnn.prepare_grid_sample_grid() for K=1, then ttnn.reshape() for K>1, both being done on host side
 
         Keyword Args:
-            mode (str): Interpolation mode. Currently only "bilinear" is supported.
+            mode (str): Interpolation mode.
             padding_mode (str): How to handle out-of-bounds coordinates. Currently only "zeros" is supported.
+            align_corners (bool): Whether to align corners when mapping normalized coordinates to pixel indices.
             use_precomputed_grid (bool): Whether to use precomputed grid coordinates.
                                    When False (default): grid should be normalized coordinates in [-1, 1]
                                    When True: grid should be preprocessed using ttnn.prepare_grid_sample_grid()
@@ -122,6 +123,7 @@ void bind_grid_sample(py::module& module) {
             py::kw_only(),
             py::arg("mode") = "bilinear",
             py::arg("padding_mode") = "zeros",
+            py::arg("align_corners") = false,
             py::arg("use_precomputed_grid") = false,
             py::arg("batch_output_channels") = false,
             py::arg("memory_config") = std::nullopt});
@@ -135,7 +137,9 @@ void bind_prepare_grid_sample_grid(py::module& module) {
         py::arg("grid"),
         py::arg("input_shape"),
         py::kw_only(),
+        py::arg("mode") = "bilinear",
         py::arg("padding_mode") = "zeros",
+        py::arg("align_corners") = false,
         py::arg("output_dtype") = std::nullopt,
         R"doc(
         prepare_grid_sample_grid(grid: ttnn.Tensor, input_shape: List[int], *, padding_mode: str = "zeros", output_dtype: Optional[ttnn.DataType] = None) -> ttnn.Tensor
@@ -153,7 +157,9 @@ void bind_prepare_grid_sample_grid(py::module& module) {
             input_shape (List[int]): Input tensor dimensions [N, H_in, W_in, C] in NHWC format
 
         Keyword Args:
+            mode (str): Nearest or bilinear operation. Currently only "bilinear" is supported.
             padding_mode (str): How to handle out-of-bounds coordinates. Currently only "zeros" is supported.
+            align_corners (bool): Whether to align corners when sampling (default: false)
             output_dtype (ttnn.DataType, optional): Data type for the output tensor. Default: bfloat16
 
         Returns:
@@ -173,7 +179,7 @@ void bind_prepare_grid_sample_grid(py::module& module) {
             >>>
             >>> # Precompute grid for optimized sampling
             >>> precomputed_grid = ttnn.prepare_grid_sample_grid(
-            ...     grid, input_shape, padding_mode="zeros", output_dtype=ttnn.bfloat16
+            ...     grid, input_shape, mode="bilinear", padding_mode="zeros", align_corners=False, output_dtype=ttnn.bfloat16
             ... )
             >>> print(precomputed_grid.shape)  # [1, 8, 8, 6]
             >>>
