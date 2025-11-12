@@ -200,7 +200,7 @@ class RunTimeOptions {
     std::string visible_devices;
 
     // Sets the architecture name (only necessary during simulation)
-    std::string arch_name = "";
+    std::string arch_name;
 
     // Forces Tracy profiler pushes during execution for real-time profiling
     bool tracy_mid_run_push = false;
@@ -354,11 +354,11 @@ public:
         return feature_targets[feature].processors;
     }
     void set_feature_processors(RunTimeDebugFeatures feature, tt_metal::HalProcessorSet processors) {
-        feature_targets[feature].processors = std::move(processors);
+        feature_targets[feature].processors = processors;
     }
     std::string get_feature_file_name(RunTimeDebugFeatures feature) const { return feature_targets[feature].file_name; }
-    void set_feature_file_name(RunTimeDebugFeatures feature, std::string file_name) {
-        feature_targets[feature].file_name = std::move(file_name);
+    void set_feature_file_name(RunTimeDebugFeatures feature, const std::string& file_name) {
+        feature_targets[feature].file_name = file_name;
     }
     bool get_feature_one_file_per_risc(RunTimeDebugFeatures feature) const {
         return feature_targets[feature].one_file_per_risc;
@@ -373,8 +373,8 @@ public:
         feature_targets[feature].prepend_device_core_risc = prepend_device_core_risc;
     }
     TargetSelection get_feature_targets(RunTimeDebugFeatures feature) const { return feature_targets[feature]; }
-    void set_feature_targets(RunTimeDebugFeatures feature, TargetSelection targets) {
-        feature_targets[feature] = std::move(targets);
+    void set_feature_targets(RunTimeDebugFeatures feature, const TargetSelection& targets) {
+        feature_targets[feature] = targets;
     }
 
     bool get_record_noc_transfers() const { return record_noc_transfer_data; }
