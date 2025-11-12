@@ -93,9 +93,17 @@ static const std::unordered_map<KernelLookupKey, KernelConfigEntry, KernelLookup
     {{TernaryOpType::LERP, TernaryVariant::TTT, TernaryBroadcastType::NONE},
      {KernelName::ReaderNoBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcast}},
 
-    // TTT configurations for ADDCMUL - only NONE broadcast type supported initially
+    // TTT configurations for ADDCMUL
     {{TernaryOpType::ADDCMUL, TernaryVariant::TTT, TernaryBroadcastType::NONE},
      {KernelName::ReaderNoBcastTTT, KernelName::ComputeNoBcastAddcmul, KernelName::WriterNoBcast}},
+    {{TernaryOpType::ADDCMUL, TernaryVariant::TTT, TernaryBroadcastType::OUTER_BCAST},
+     {KernelName::ReaderOuterBcastTTT, KernelName::ComputeNoBcastAddcmul, KernelName::WriterNoBcast}},
+    {{TernaryOpType::ADDCMUL, TernaryVariant::TTT, TernaryBroadcastType::ROW_BCAST},
+     {KernelName::ReaderRowBcastTTT, KernelName::ComputeNoBcastAddcmul, KernelName::WriterNoBcast}},
+    {{TernaryOpType::ADDCMUL, TernaryVariant::TTT, TernaryBroadcastType::SCALAR_BCAST},
+     {KernelName::ReaderScalarBcastTTT, KernelName::ComputeBcastAddcmul, KernelName::WriterNoBcast}},
+    {{TernaryOpType::ADDCMUL, TernaryVariant::TTT, TernaryBroadcastType::COL_BCAST},
+     {KernelName::ReaderColBcastTTT, KernelName::ComputeBcastAddcmul, KernelName::WriterColBcastTTT}},
 
     // TTS configurations for LERP
     {{TernaryOpType::LERP, TernaryVariant::TTS, TernaryBroadcastType::COL_BCAST},
@@ -132,7 +140,7 @@ TernaryKernelConfig::TernaryKernelConfig(
     TT_FATAL(false, "Invalid ternary operation type, variant or broadcast type combination");
 }
 
-std::string get_kernel_file_path(KernelName kernel_name) {
+std::string get_kernel_file_path(KernelName kernel_name, bool is_fpu) {
     constexpr std::string_view root = "ttnn/cpp/ttnn/operations/eltwise/ternary/device/kernels";
     constexpr std::string_view dataflow = "{}/dataflow/{}";
     constexpr std::string_view compute = "{}/compute/{}";
@@ -166,7 +174,11 @@ std::string get_kernel_file_path(KernelName kernel_name) {
         case KernelName::ComputeBcastTTS_TST:
             return fmt::format(compute, root, "ternary_sfpu_col_scalar_bcast_tts_tst.cpp");
         case KernelName::ComputeNoBcastTTS_TST: return fmt::format(compute, root, "ternary_sfpu_no_bcast_tts_tst.cpp");
-        case KernelName::ComputeNoBcastAddcmul: return fmt::format(compute, root, "ternary_addcmul.cpp");
+        case KernelName::ComputeNoBcastAddcmul:
+            return fmt::format(compute, root, is_fpu ? "ternary_addcmul_fpu.cpp" : "ternary_addcmul_sfpu.cpp");
+        case KernelName::ComputeBcastAddcmul:
+            return fmt::format(
+                compute, root, is_fpu ? "ternary_addcmul_fpu_bcast.cpp" : "ternary_addcmul_sfpu_bcast.cpp");
         default: __builtin_unreachable();
     }
 }
