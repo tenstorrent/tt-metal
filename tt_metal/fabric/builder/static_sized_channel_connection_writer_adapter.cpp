@@ -82,15 +82,22 @@ void StaticSizedChannelConnectionWriterAdapter::pack_adaptor_to_relay_rt_args(st
     if (!this->relay_connection_info.is_connected) {
         args_out.push_back(0u);  // has_local_tensix_relay_connection = false
     } else {
+        // Query the fabric router config from fabric context
+        const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
+        const auto& fabric_router_config = fabric_context.get_fabric_router_config();
+
         // Pack full relay connection info
+        // Query connection_buffer_index_id from fabric router config (consistent with other adapter connections)
         auto relay_rt_args = std::initializer_list<uint32_t>{
-            1u,                                                        // has_local_tensix_relay_connection = true
-            this->relay_connection_info.buffer_base_address,           // relay_buffer_base_addr
-            this->relay_connection_info.noc_xy.x,                      // relay_noc_x
-            this->relay_connection_info.noc_xy.y,                      // relay_noc_y
-            this->relay_connection_info.worker_registration_address,   // relay_connection_handshake_addr
-            this->relay_connection_info.worker_location_info_address,  // relay_worker_location_info_addr
-            this->relay_connection_info.free_slots_stream_id,          // relay_free_slots_stream_id
+            1u,                                                            // has_local_tensix_relay_connection = true
+            this->relay_connection_info.buffer_base_address,               // relay_buffer_base_addr
+            this->relay_connection_info.noc_xy.x,                          // relay_noc_x
+            this->relay_connection_info.noc_xy.y,                          // relay_noc_y
+            this->relay_connection_info.worker_registration_address,       // relay_connection_handshake_addr
+            this->relay_connection_info.worker_location_info_address,      // relay_worker_location_info_addr
+            this->relay_connection_info.free_slots_stream_id,              // relay_free_slots_stream_id
+            fabric_router_config.tensix_relay_connection_buffer_index_id,  // relay_connection_buffer_index_id (queried
+                                                                           // from fabric context)
         };
 
         args_out.reserve(args_out.size() + relay_rt_args.size());

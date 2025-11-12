@@ -172,6 +172,8 @@ struct StreamRegAssignments {
     static constexpr uint32_t reserved_lite_fabric_3_stream_id = 26;
     static constexpr uint32_t reserved_lite_fabric_4_stream_id = 27;
     static constexpr uint32_t reserved_lite_fabric_5_stream_id = 28;
+    // Local tensix relay free slots stream ID (UDM mode only)
+    static constexpr uint32_t tensix_relay_local_free_slots_stream_id = 29;
     // Multi-RISC teardown synchronization stream ID
     static constexpr uint32_t multi_risc_teardown_sync_stream_id = 31;
 
@@ -199,6 +201,7 @@ struct StreamRegAssignments {
             sender_channel_3_free_slots_stream_id,
             sender_channel_4_free_slots_stream_id,
             vc1_sender_channel_free_slots_stream_id,
+            tensix_relay_local_free_slots_stream_id,
             multi_risc_teardown_sync_stream_id};
         return stream_ids;
     }
@@ -313,6 +316,10 @@ struct FabricEriscDatamoverConfig {
     size_t to_sender_channel_remote_completion_counters_base_addr = 0;
     size_t receiver_channel_remote_ack_counters_base_addr = 0;
     size_t receiver_channel_remote_completion_counters_base_addr = 0;
+
+    // ----------- Local Tensix Relay Connection (UDM mode only)
+    // Connection buffer index for the local tensix relay interface
+    size_t tensix_relay_connection_buffer_index_id = 0;
 
     // Channel Allocations
     std::size_t max_l1_loading_size = 0;
