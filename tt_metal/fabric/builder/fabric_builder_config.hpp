@@ -46,6 +46,7 @@ static constexpr std::size_t MAX_NUM_VCS = 2;
 static constexpr std::size_t num_sender_channels_with_tensix_config = 1;
 
 // num sender channels based on more accurate topology
+static constexpr std::size_t num_sender_channels_1d_neighbor_exchange = 1;
 static constexpr std::size_t num_sender_channels_1d_linear = 2;
 static constexpr std::size_t num_sender_channels_2d_mesh = 4;
 
@@ -74,6 +75,8 @@ uint32_t get_receiver_channel_count(bool is_2D_routing);
 std::array<uint32_t, 2> get_sender_channel_count_per_vc(bool is_2D_routing);
 
 std::array<uint32_t, 2> get_receiver_channel_count_per_vc(bool is_2D_routing);
+
+uint32_t get_num_used_sender_channel_count(const Topology topology);
 
 uint32_t get_num_tensix_sender_channels(Topology topology, tt::tt_fabric::FabricTensixConfig fabric_tensix_config);
 

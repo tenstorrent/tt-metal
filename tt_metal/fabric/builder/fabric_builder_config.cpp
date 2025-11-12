@@ -17,19 +17,21 @@ uint32_t get_receiver_channel_count(const bool is_2D_routing) {
     return is_2D_routing ? builder_config::num_receiver_channels_2d : builder_config::num_receiver_channels_1d;
 }
 
-std::array<uint32_t, 2> get_sender_channel_count_per_vc(const bool is_2D_routing) {
+std::array<uint32_t, 2> get_sender_channel_count_per_vc(const Topology topology) {
+    const bool is_2D_routing = FabricContext::is_2D_topology(topology);
     if (is_2D_routing) {
         // 2D routing: VC0 has 4 sender channels (0-3), VC1 has 3 sender channels (4-6)
         // Channel 7 is reserved for future Z-axis routing
         // Total = 7 channels
         return {4, 3};
     } else {
-        // 1D routing: VC0 has 2 sender channels, VC1 has 0
-        return {builder_config::num_sender_channels_1d, 0};
+        // 1D routing: All sender channels are allocated to VC0
+        return {get_num_used_sender_channel_count(topology), 0};
     }
 }
 
-std::array<uint32_t, 2> get_receiver_channel_count_per_vc(const bool is_2D_routing) {
+std::array<uint32_t, 2> get_receiver_channel_count_per_vc(const Topology topology) {
+    const bool is_2D_routing = FabricContext::is_2D_topology(topology);
     if (is_2D_routing) {
         // 2D routing: VC0 has 1 receiver, VC1 has 1 receiver
         // Total = 2 receivers
@@ -40,6 +42,17 @@ std::array<uint32_t, 2> get_receiver_channel_count_per_vc(const bool is_2D_routi
     }
 }
 
+uint32_t get_num_used_sender_channel_count(const Topology topology) {
+    switch (topology) {
+        case Topology::NeighborExchange: return builder_config::num_sender_channels_1d_neighbor_exchange;
+        case Topology::Linear: return builder_config::num_sender_channels_1d_linear;
+        case Topology::Mesh: return builder_config::num_sender_channels_2d_mesh;
+        case Topology::Ring: return builder_config::num_sender_channels_1d_ring;
+        case Topology::Torus: return builder_config::num_sender_channels_2d_torus;
+        default: TT_THROW("unknown fabric topology: {}", topology); break;
+    }
+}
+
 uint32_t get_num_tensix_sender_channels(Topology topology, tt::tt_fabric::FabricTensixConfig fabric_tensix_config) {
     // TODO: once we support inserting tensix as downstream in UDM mode, add back the channel count for UDM mode
     TT_FATAL(
@@ -47,20 +60,8 @@ uint32_t get_num_tensix_sender_channels(Topology topology, tt::tt_fabric::Fabric
         "get_num_tensix_sender_channels only supports MUX mode, got {}",
         static_cast<uint32_t>(fabric_tensix_config));
 
-    uint32_t num_channels = 0;
     // MUX mode: use topology-based channel count
-    switch (topology) {
-        case tt::tt_fabric::Topology::Linear:
-        case tt::tt_fabric::Topology::Ring:
-            num_channels = tt::tt_fabric::builder_config::num_sender_channels_1d_linear;
-            break;
-        case tt::tt_fabric::Topology::Mesh:
-        case tt::tt_fabric::Topology::Torus:
-            num_channels = tt::tt_fabric::builder_config::num_sender_channels_2d_mesh;
-            break;
-        default: TT_THROW("unknown fabric topology: {}", topology); break;
-    }
-    return num_channels;
+    return get_num_used_sender_channel_count(topology);
 }
 
 uint32_t get_downstream_edm_count(bool is_2D_routing) {
