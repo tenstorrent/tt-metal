@@ -7,7 +7,6 @@
 #include <fmt/format.h>
 #include <gtest/gtest.h>
 
-#include <bit>
 #include <core/ttnn_all_includes.hpp>
 #include <cstdlib>
 
@@ -27,7 +26,7 @@ struct ParityCase {
     std::string name;
 };
 
-// Custom printer for ParityCase to make test output readable
+// Custom printer for ParityCase used by gtest to make test output readable
 void PrintTo(const ParityCase& pc, std::ostream* os) {
     *os << fmt::format(
         "ParityCase(name='{}', shape=[{},{},{},{}], lr={}, momentum={}, dampening={}, weight_decay={}, nesterov={})",
