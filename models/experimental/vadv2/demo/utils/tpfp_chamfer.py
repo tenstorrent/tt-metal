@@ -238,10 +238,11 @@ def custom_polyline_score(pred_lines, gt_lines, linewidth=1.0, metric="chamfer")
         raise NotImplementedError
 
     for i, pline in enumerate(gt_lines_shapely):
-        for o in tree.query(pline):
+        # In shapely 2.0+, query returns indices, not geometries
+        result_indices = tree.query(pline, predicate="intersects")
+        for pred_id in result_indices:
+            o = pred_lines_shapely[pred_id]
             if o.intersects(pline):
-                pred_id = index_by_id[id(o)]
-
                 if metric == "chamfer":
                     dist_mat = distance.cdist(pred_lines[pred_id], gt_lines[i], "euclidean")
                     # import pdb;pdb.set_trace()

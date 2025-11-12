@@ -15,14 +15,14 @@ if ! command -v $PYTHON_CMD &>/dev/null; then
 fi
 
 # Set Python environment directory
-if [ -z "$PYTHON_ENV_DIR" ]; then
-    PYTHON_ENV_DIR=$(pwd)/python_env
-fi
-echo "Creating virtual env in: $PYTHON_ENV_DIR"
+#if [ -z "$PYTHON_ENV_DIR" ]; then
+#    PYTHON_ENV_DIR=$(pwd)/python_env
+#fi
+#echo "Creating virtual env in: $PYTHON_ENV_DIR"
 
 # Create and activate virtual environment
-$PYTHON_CMD -m venv $PYTHON_ENV_DIR
-source $PYTHON_ENV_DIR/bin/activate
+#$PYTHON_CMD -m venv $PYTHON_ENV_DIR
+#source $PYTHON_ENV_DIR/bin/activate
 
 # Import functions for detecting OS
 . ./install_dependencies.sh --source-only

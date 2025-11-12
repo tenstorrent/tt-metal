@@ -1138,10 +1138,15 @@ class VADCustomNuScenesDataset(CustomNuScenesDataset):
                 # but we preserve it for test
                 gt_vecs_pts_loc = gt_vecs_pts_loc
 
-        example[0]["map_gt_labels_3d"] = DC(gt_vecs_label, cpu_only=False)
-        example[0]["map_gt_bboxes_3d"] = DC(gt_vecs_pts_loc, cpu_only=True)
-
-        return example[0]
+        # Handle both list (training) and dict (testing) formats
+        if isinstance(example, list):
+            example[0]["map_gt_labels_3d"] = DC(gt_vecs_label, cpu_only=False)
+            example[0]["map_gt_bboxes_3d"] = DC(gt_vecs_pts_loc, cpu_only=True)
+            return example[0]
+        else:
+            example["map_gt_labels_3d"] = DC(gt_vecs_label, cpu_only=False)
+            example["map_gt_bboxes_3d"] = DC(gt_vecs_pts_loc, cpu_only=True)
+            return example
 
     def prepare_train_data(self, index):
         """

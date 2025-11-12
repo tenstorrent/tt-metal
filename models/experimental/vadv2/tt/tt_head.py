@@ -212,32 +212,68 @@ class TtVADHead:
         bs, num_cam, _, _, _ = mlvl_feats[0].shape
         if not self.as_two_stage:
             object_query_embeds = self.query_embedding.weight
-        self.bbox_coder = CustomNMSFreeCoder(
-            self.bbox_coder["pc_range"],
-            voxel_size=self.bbox_coder["voxel_size"],
-            post_center_range=self.bbox_coder["post_center_range"],
-            max_num=self.bbox_coder["max_num"],
-            num_classes=self.bbox_coder["num_classes"],
-        )
-        self.map_bbox_coder = MapNMSFreeCoder(
-            self.map_bbox_coder["pc_range"],
-            voxel_size=self.map_bbox_coder["voxel_size"],
-            post_center_range=self.map_bbox_coder["post_center_range"],
-            max_num=self.map_bbox_coder["max_num"],
-            num_classes=self.map_bbox_coder["num_classes"],
-        )
+            # Ensure object_query_embeds is on device
+            if hasattr(object_query_embeds, "is_allocated") and not object_query_embeds.is_allocated():
+                object_query_embeds_torch = ttnn.to_torch(object_query_embeds)
+                object_query_embeds = ttnn.from_torch(
+                    object_query_embeds_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
+                )
+        # Only initialize coders once (check if it's still a dict)
+        if isinstance(self.bbox_coder, dict):
+            self.bbox_coder = CustomNMSFreeCoder(
+                self.bbox_coder["pc_range"],
+                voxel_size=self.bbox_coder["voxel_size"],
+                post_center_range=self.bbox_coder["post_center_range"],
+                max_num=self.bbox_coder["max_num"],
+                num_classes=self.bbox_coder["num_classes"],
+            )
+        if isinstance(self.map_bbox_coder, dict):
+            self.map_bbox_coder = MapNMSFreeCoder(
+                self.map_bbox_coder["pc_range"],
+                voxel_size=self.map_bbox_coder["voxel_size"],
+                post_center_range=self.map_bbox_coder["post_center_range"],
+                max_num=self.map_bbox_coder["max_num"],
+                num_classes=self.map_bbox_coder["num_classes"],
+            )
 
         if self.map_query_embed_type == "all_pts":
             map_query_embeds = self.map_query_embedding.weight
+            # Ensure map_query_embeds is on device
+            if hasattr(map_query_embeds, "is_allocated") and not map_query_embeds.is_allocated():
+                map_query_embeds_torch = ttnn.to_torch(map_query_embeds)
+                map_query_embeds = ttnn.from_torch(
+                    map_query_embeds_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
+                )
         elif self.map_query_embed_type == "instance_pts":
-            map_pts_embeds = ttnn.unsqueeze(self.map_pts_embedding.weight, 0)
-            map_instance_embeds = ttnn.unsqueeze(self.map_instance_embedding.weight, 1)
+            # Ensure map embeddings are on device before unsqueezing
+            map_pts_weight = self.map_pts_embedding.weight
+            if hasattr(map_pts_weight, "is_allocated") and not map_pts_weight.is_allocated():
+                map_pts_weight_torch = ttnn.to_torch(map_pts_weight)
+                map_pts_weight = ttnn.from_torch(
+                    map_pts_weight_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
+                )
+            map_instance_weight = self.map_instance_embedding.weight
+            if hasattr(map_instance_weight, "is_allocated") and not map_instance_weight.is_allocated():
+                map_instance_weight_torch = ttnn.to_torch(map_instance_weight)
+                map_instance_weight = ttnn.from_torch(
+                    map_instance_weight_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
+                )
+
+            map_pts_embeds = ttnn.unsqueeze(map_pts_weight, 0)
+            map_instance_embeds = ttnn.unsqueeze(map_instance_weight, 1)
             map_query_embeds = map_pts_embeds + map_instance_embeds
             map_query_embeds = ttnn.reshape(
                 map_query_embeds, (map_query_embeds.shape[0] * map_query_embeds.shape[1], map_query_embeds.shape[2])
             )
 
         bev_queries = self.bev_embedding.weight
+        # Ensure bev_queries is on device - convert if it's a host tensor
+        if hasattr(bev_queries, "is_allocated") and not bev_queries.is_allocated():
+            # It's a ttnn tensor but not on device, need to convert
+            bev_queries_torch = ttnn.to_torch(bev_queries)
+            bev_queries = ttnn.from_torch(
+                bev_queries_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
+            )
 
         bev_mask = ttnn.zeros((bs, self.bev_h, self.bev_w), device=self.device, dtype=ttnn.bfloat16)
         bev_pos = self.positional_encoding(bev_mask)
@@ -271,10 +307,11 @@ class TtVADHead:
                 img_metas=img_metas,
                 prev_bev=prev_bev,
             )
-        ttnn.deallocate(bev_queries)
+        # Don't deallocate bev_queries and map_query_embeds - they are model weights that need to persist
+        # ttnn.deallocate(bev_queries)
         ttnn.deallocate(bev_mask)
         ttnn.deallocate(bev_pos)
-        ttnn.deallocate(map_query_embeds)
+        # ttnn.deallocate(map_query_embeds)
         (
             bev_embed,
             hs,
@@ -839,10 +876,15 @@ class TtVADHead:
             pnum = ttnn.sum(map_idx[i])
             if pnum > batch_max_pnum:
                 batch_max_pnum = pnum
+        # Ensure at least 1 to avoid zero-volume tensor issues
+        batch_max_pnum_int = max(
+            int(batch_max_pnum.item()) if hasattr(batch_max_pnum, "item") else int(batch_max_pnum), 1
+        )
         selected_map_query, selected_map_pos, selected_padding_mask = [], [], []
         for i in range(map_score.shape[0]):
             dim = map_query.shape[-1]
             valid_pnum = ttnn.sum(map_idx[i])
+            valid_pnum_int = int(valid_pnum.item()) if hasattr(valid_pnum, "item") else int(valid_pnum)
             map_query = ttnn.to_torch(map_query)
             min_map_pos = ttnn.to_torch(min_map_pos)
             map_idx = ttnn.to_torch(map_idx, dtype=torch.bool)
@@ -850,11 +892,9 @@ class TtVADHead:
             valid_map_pos = min_map_pos[i, map_idx[i]]
             valid_map_query = ttnn.from_torch(valid_map_query, dtype=ttnn.bfloat16, device=self.device)
             valid_map_pos = ttnn.from_torch(valid_map_pos, dtype=ttnn.bfloat16, device=self.device)
-            pad_pnum = batch_max_pnum - valid_pnum
-            padding_mask = torch.tensor([False], device="cpu")
-            padding_mask = ttnn.from_torch(padding_mask, dtype=ttnn.bfloat16, device=self.device)
-            padding_mask = ttnn.repeat(padding_mask, [int(batch_max_pnum.item())])
-            if pad_pnum.item() != 0:
+            pad_pnum = batch_max_pnum_int - valid_pnum_int
+            padding_mask = torch.tensor([False], device="cpu").repeat(batch_max_pnum_int)
+            if pad_pnum != 0:
                 valid_map_query = ttnn.concat(
                     [valid_map_query, ttnn.zeros((pad_pnum, dim), device=self.device)],
                     dim=0,
@@ -865,7 +905,8 @@ class TtVADHead:
                     dim=0,
                     memory_config=ttnn.L1_MEMORY_CONFIG,
                 )
-                padding_mask[valid_pnum:] = True
+                padding_mask[valid_pnum_int:] = True
+            padding_mask = ttnn.from_torch(padding_mask, dtype=ttnn.bfloat16, device=self.device)
             selected_map_query.append(valid_map_query)
             selected_map_pos.append(valid_map_pos)
             selected_padding_mask.append(padding_mask)
@@ -940,29 +981,33 @@ class TtVADHead:
             qnum = ttnn.sum(query_idx[i])
             if qnum > batch_max_qnum:
                 batch_max_qnum = qnum
+        # Ensure at least 1 to avoid zero-volume tensor issues
+        batch_max_qnum_int = max(
+            int(batch_max_qnum.item()) if hasattr(batch_max_qnum, "item") else int(batch_max_qnum), 1
+        )
 
         selected_query, selected_query_pos, selected_padding_mask = [], [], []
         for i in range(query_score.shape[0]):
             dim = query.shape[-1]
             valid_qnum = ttnn.sum(query_idx[i])
+            valid_qnum_int = int(valid_qnum.item()) if hasattr(valid_qnum, "item") else int(valid_qnum)
             query = ttnn.to_torch(query)
             query_pos = ttnn.to_torch(query_pos)
             query_idx = ttnn.to_torch(query_idx, dtype=torch.bool)
             valid_query = query[i, query_idx[i]]
             valid_query_pos = query_pos[i, query_idx[i]]
-            valid_query = ttnn.from_torch(valid_query, dtype=ttnn.bfloat16, device=self.device)
-            valid_query_pos = ttnn.from_torch(valid_query_pos, dtype=ttnn.bfloat16, device=self.device)
 
-            pad_qnum = batch_max_qnum - valid_qnum
-            padding_mask = torch.tensor([False])
-            padding_mask = ttnn.from_torch(padding_mask, dtype=ttnn.bfloat16, device=self.device)
-            padding_mask = ttnn.repeat(padding_mask, [int(batch_max_qnum.item())])
-            if pad_qnum.item() != 0:
+            pad_qnum = batch_max_qnum_int - valid_qnum_int
+            padding_mask = torch.tensor([False], device="cpu").repeat(batch_max_qnum_int)
+            if pad_qnum != 0:
                 valid_query = torch.cat([valid_query, torch.zeros((pad_qnum, dim), device=query_score.device)], dim=0)
                 valid_query_pos = torch.cat(
                     [valid_query_pos, torch.zeros((pad_qnum, 2), device=query_score.device)], dim=0
                 )
-                padding_mask[valid_qnum:] = True
+                padding_mask[valid_qnum_int:] = True
+            valid_query = ttnn.from_torch(valid_query, dtype=ttnn.bfloat16, device=self.device)
+            valid_query_pos = ttnn.from_torch(valid_query_pos, dtype=ttnn.bfloat16, device=self.device)
+            padding_mask = ttnn.from_torch(padding_mask, dtype=ttnn.bfloat16, device=self.device)
             selected_query.append(valid_query)
             selected_query_pos.append(valid_query_pos)
             selected_padding_mask.append(padding_mask)

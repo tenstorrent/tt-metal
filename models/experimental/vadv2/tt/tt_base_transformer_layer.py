@@ -169,8 +169,9 @@ class TtBaseTransformerLayer:
                     weight=self.params.norms[f"norm{norm_index}"].weight,
                     bias=self.params.norms[f"norm{norm_index}"].bias,
                 )
-                ttnn.deallocate(self.params.norms[f"norm{norm_index}"].weight)
-                ttnn.deallocate(self.params.norms[f"norm{norm_index}"].bias)
+                # Don't deallocate model weights - they need to persist across iterations
+                # ttnn.deallocate(self.params.norms[f"norm{norm_index}"].weight)
+                # ttnn.deallocate(self.params.norms[f"norm{norm_index}"].bias)
                 norm_index += 1
 
             elif layer == "cross_attn":

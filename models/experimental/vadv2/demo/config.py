@@ -53,7 +53,7 @@ total_epochs = 12
 
 
 dataset_type = "mmdet3d.VADCustomNuScenesDataset"
-data_root = "/home/ubuntu/sabira/tt-metal/models/experimental/vadv2/demo/data/nuscenes/"
+data_root = "/home/ubuntu/work/vadv2_test/tt-metal/models/experimental/vadv2/demo/data/"
 file_client_args = dict(backend="disk")
 
 
@@ -126,7 +126,7 @@ val_dataloader = dict(
     # sampler=dict(type='DistributedGroupSampler'),
     dataset=dict(
         type=dataset_type,
-        data_root="/home/ubuntu/sabira/tt-metal/models/experimental/vadv2/demo/data/nuscenes/",
+        data_root=data_root,
         pc_range=point_cloud_range,
         ann_file=data_root + "vad_nuscenes_infos_val.pkl",
         pipeline=test_pipeline,

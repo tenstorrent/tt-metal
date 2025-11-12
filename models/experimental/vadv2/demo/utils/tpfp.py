@@ -304,7 +304,6 @@ def custom_tpfp_gen(gen_lines, gt_lines, threshold=0.5, metric="chamfer"):
         each array is (num_scales, m).
     """
     print("det type:", type(gen_lines), "gt type:", type(gt_lines))
-    ss
     if metric == "chamfer":
         if threshold > 0:
             threshold = -threshold

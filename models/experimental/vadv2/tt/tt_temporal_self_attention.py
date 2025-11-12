@@ -70,8 +70,13 @@ class TtTemporalSelfAttention:
         if value is None:
             assert self.batch_first
             bs, len_bev, c = query.shape
-            value = ttnn.stack([query, query], dim=1)
-            value = ttnn.reshape(value, (bs * 2, len_bev, c))
+            # Stack in torch domain to avoid TILE layout padding issues
+            import torch
+
+            query_torch = ttnn.to_torch(query)
+            value_torch = torch.stack([query_torch, query_torch], dim=1)
+            value_torch = value_torch.reshape(bs * 2, len_bev, c)
+            value = ttnn.from_torch(value_torch, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
 
         if identity is None:
             identity = query
@@ -85,6 +90,8 @@ class TtTemporalSelfAttention:
         _, num_value, _ = value.shape
         assert self.num_bev_queue == 2
 
+        # Ensure both tensors have the same layout for concat
+        value = ttnn.to_layout(value, query.layout)
         query = ttnn.concat([value[:bs], query], dim=-1)
 
         value = ttnn.to_layout(value, ttnn.TILE_LAYOUT)
@@ -104,8 +111,9 @@ class TtTemporalSelfAttention:
         sampling_offsets = ttnn.reallocate(sampling_offsets)
 
         attention_weights = ttnn.linear(query, params.attention_weights.weight, bias=params.attention_weights.bias)
-        ttnn.deallocate(params.attention_weights.weight)
-        ttnn.deallocate(params.attention_weights.bias)
+        # Don't deallocate model weights - they need to persist across iterations
+        # ttnn.deallocate(params.attention_weights.weight)
+        # ttnn.deallocate(params.attention_weights.bias)
         ttnn.deallocate(query)
         attention_weights = ttnn.reshape(
             attention_weights, (bs, num_query, self.num_heads, self.num_bev_queue, self.num_levels * self.num_points)
@@ -176,14 +184,33 @@ class TtTemporalSelfAttention:
         ttnn.deallocate(sampling_locations)
         ttnn.deallocate(sampling_offsets)
         ttnn.deallocate(value)
-        output = ttnn.permute(output, (1, 2, 0))
-        output = ttnn.reshape(output, (num_query, embed_dims, bs, self.num_bev_queue))
+
+        # Track and deallocate intermediate tensors to prevent memory accumulation
+        tmp = output
+        output = ttnn.permute(tmp, (1, 2, 0))
+        ttnn.deallocate(tmp)
+
+        tmp = output
+        output = ttnn.reshape(tmp, (num_query, embed_dims, bs, self.num_bev_queue))
+        ttnn.deallocate(tmp)
+
+        # WORKAROUND: ttnn.mean causes OOM issues (allocates ~5GB for ~5MB operation)
+        # Bug confirmed in test_ttnn_mean_bug.py - works in isolation with DRAM config
+        # but fails in real model context due to existing memory allocations.
+        # Using torch fallback until ttnn.mean memory allocation is fixed.
+        output_torch = ttnn.to_torch(output)
+        ttnn.deallocate(output)
+        output_torch = output_torch.mean(dim=-1, keepdim=False)
+        output = ttnn.from_torch(output_torch, dtype=ttnn.bfloat16, device=self.device, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+        # Convert to TILE_LAYOUT and permute
         output = ttnn.to_layout(output, ttnn.TILE_LAYOUT)
-        output = ttnn.mean(output, dim=-1)
         output = ttnn.permute(output, (2, 0, 1))
+
         output = ttnn.linear(output, params.output_proj.weight, bias=params.output_proj.bias)
-        ttnn.deallocate(params.output_proj.weight)
-        ttnn.deallocate(params.output_proj.bias)
+        # Don't deallocate model weights - they need to persist across iterations
+        # ttnn.deallocate(params.output_proj.weight)
+        # ttnn.deallocate(params.output_proj.bias)
 
         if not self.batch_first:
             output = ttnn.permute(output, (1, 0, 2))

@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+import sys
 import torch
 import copy
 import time
@@ -13,6 +15,10 @@ from mmdet3d.registry import DATASETS
 from models.experimental.vadv2.reference import vad
 from models.experimental.vadv2.common import load_torch_model
 import os.path as osp
+
+# Register custom VAD transforms and datasets
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
+import models.experimental.vadv2.demo.register_custom  # noqa: F401
 from mmengine.utils import ProgressBar
 from mmengine.dist import get_dist_info
 from models.experimental.vadv2.tt.model_preprocessing import (
@@ -46,7 +52,7 @@ def test_tt_demo(device, model_location_generator):
 
     torch_model = load_torch_model(torch_model=torch_model, model_location_generator=model_location_generator)
 
-    cfg = Config.fromfile("/home/ubuntu/sabira/tt-metal/models/experimental/vadv2/demo/config.py")
+    cfg = Config.fromfile(os.path.join(os.path.dirname(__file__), "config.py"))
     # # 2. Build dataloader
     dataloader = Runner.build_dataloader(cfg.val_dataloader)
     # outputs = single_cpu_test(torch_model, dataloader)
@@ -183,7 +189,7 @@ def test_torch_demo(model_location_generator):
 
     torch_model = load_torch_model(torch_model=torch_model, model_location_generator=model_location_generator)
 
-    cfg = Config.fromfile("/home/ubuntu/sabira/tt-metal/models/experimental/vadv2/demo/config.py")
+    cfg = Config.fromfile(os.path.join(os.path.dirname(__file__), "config.py"))
     # # 2. Build dataloader
     dataloader = Runner.build_dataloader(cfg.val_dataloader)
     outputs = single_cpu_test(torch_model, dataloader)
