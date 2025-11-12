@@ -4,6 +4,8 @@
 
 import os
 
+from loguru import logger
+
 import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.tt_transformers.tt.common import get_base_model_name
@@ -46,7 +48,8 @@ def get_mesh_device_name(num_devices, mesh_device_name):
     if num_devices in dict_device_names:
         return dict_device_names[num_devices]
     else:
-        raise ValueError(f"Unsupported number of devices: {num_devices} for {arch_name}")
+        logger.info(f"Unsupported number of devices: {num_devices} for {arch_name}")
+        return None
 
 
 def base_model_name_from_env():
