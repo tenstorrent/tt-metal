@@ -33,7 +33,8 @@ allocation_policies:
 Tests:
   - name: "TestName"
     fabric_setup:
-      topology: Linear/Mesh/Ring/Torus # The logical topology we're testing.
+      topology: Linear/Mesh/Ring/Torus/NeighborExchange # The logical topology we're testing.
+      # NOTE: NeighborExchange topology does not support message forwarding, and so many test patterns will fail
       # LowLatency: Each packet is loaded with an infiniband-style packet header, where a segment is peeled off for each hop.
       # Dynamic: Every time a packet arrives at a router, the router checks its routing table to figure out where to send it.
       (optional) routing_type: LowLatency/Dynamic

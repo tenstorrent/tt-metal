@@ -457,10 +457,9 @@ private:
         resolved_test.patterns = parsed_test.patterns;
         resolved_test.bw_calc_func = parsed_test.bw_calc_func;
         resolved_test.seed = parsed_test.seed;
-        resolved_test.global_sync_configs = parsed_test.global_sync_configs;
+        resolved_test.sync_configs = parsed_test.sync_configs;
         resolved_test.benchmark_mode = parsed_test.benchmark_mode;
         resolved_test.global_sync = parsed_test.global_sync;
-        resolved_test.global_sync_val = parsed_test.global_sync_val;
         resolved_test.enable_flow_control = parsed_test.enable_flow_control;
 
         // Resolve defaults
@@ -836,7 +835,8 @@ private:
 
         // Validate line sync patterns if present
         if (test.global_sync) {
-            for (const auto& sync_sender : test.global_sync_configs) {
+            for (const auto& sync_config : test.sync_configs) {
+                const auto& sync_sender = sync_config.sender_config;
                 for (const auto& sync_pattern : sync_sender.patterns) {
                     validate_sync_pattern(sync_pattern, sync_sender, test);
                 }
@@ -1143,63 +1143,79 @@ private:
 
         // Create sync patterns based on topology - returns multiple patterns per device for mcast
         for (const auto& src_device : all_devices) {
-            const auto& sync_patterns_and_sync_val_pair = create_sync_patterns_for_topology(src_device, all_devices);
+            const auto& sync_patterns_and_sync_val_pair =
+                create_sync_patterns_for_topology(src_device, all_devices, test.fabric_setup.topology);
 
             const auto& sync_patterns = sync_patterns_and_sync_val_pair.first;
             const auto& sync_val = sync_patterns_and_sync_val_pair.second;
 
+            log_debug(
+                LogTest,
+                "Generated {} sync patterns for device {}, with sync value {}",
+                sync_patterns.size(),
+                src_device.chip_id,
+                sync_val);
+            std::cout << "expand sync patterns for device " << src_device.chip_id << " with sync value " << sync_val
+                      << std::endl;
             // Create sender config with all split sync patterns
             // Sync always uses link 0 (no override allowed)
-            SenderConfig sync_sender = {.device = src_device, .patterns = sync_patterns, .link_id = 0};
+            SenderConfig sync_sender = {.device = src_device, .patterns = std::move(sync_patterns), .link_id = 0};
 
-            test.global_sync_configs.push_back(std::move(sync_sender));
-
-            // global sync value
-            test.global_sync_val = sync_val;
+            // Generate a SyncConfig for this device
+            SyncConfig sync_config = {.sync_val = sync_val, .sender_config = std::move(sync_sender)};
+            test.sync_configs.push_back(std::move(sync_config));
         }
 
-        log_debug(
-            LogTest,
-            "Generated {} line sync configurations, line_syn_val: {}",
-            test.global_sync_configs.size(),
-            test.global_sync_val);
+        log_debug(LogTest, "Generated {} line sync configurations", test.sync_configs.size());
     }
 
     std::pair<std::vector<TrafficPatternConfig>, uint32_t> create_sync_patterns_for_topology(
-        const FabricNodeId& src_device, const std::vector<FabricNodeId>& devices) {
+        const FabricNodeId& src_device, const std::vector<FabricNodeId>& devices, tt::tt_fabric::Topology topology) {
         std::vector<TrafficPatternConfig> sync_patterns;
+        uint32_t sync_val = 0;
 
         // Common sync pattern characteristics
         TrafficPatternConfig base_sync_pattern;
-        base_sync_pattern.ftype = ChipSendType::CHIP_MULTICAST;         // Global sync across devices
+        // Edge case: NeighborExchange topology does not support multicast sync patterns, so we create unicast sync
+        // patterns separately
+        base_sync_pattern.ftype = topology == tt::tt_fabric::Topology::NeighborExchange
+                                      ? ChipSendType::CHIP_UNICAST
+                                      : ChipSendType::CHIP_MULTICAST;   // Global sync across devices
         base_sync_pattern.ntype = NocSendType::NOC_UNICAST_ATOMIC_INC;  // Sync signal via atomic increment
         base_sync_pattern.size = 0;                                     // No payload, just sync signal
         base_sync_pattern.num_packets = 1;                              // Single sync signal
         base_sync_pattern.atomic_inc_val = 1;                           // Increment by 1
 
-        // Topology-specific routing - get multi-directional hops first
-        auto [multi_directional_hops, global_sync_val] =
-            this->route_manager_.get_sync_hops_and_val(src_device, devices);
+        // Topology-specific routing
+        // NeighborExchange topology only supports devices synchronizing with their nearest neighbors, so generate their
+        // patterns separately
+        if (topology == tt::tt_fabric::Topology::NeighborExchange) {
+            return {sync_patterns, sync_val};
+        } else {
+            // Start by calculating multi-directional hops
+            auto [multi_directional_hops, multi_directional_sync_val] =
+                this->route_manager_.get_sync_hops_and_val(src_device, devices);
 
-        // Split multi-directional hops into single-direction patterns
-        auto split_hops_vec = this->route_manager_.split_multicast_hops(multi_directional_hops);
+            sync_val = multi_directional_sync_val;
 
-        log_debug(
-            LogTest,
-            "Splitting sync pattern for device {} from 1 multi-directional to {} single-direction patterns",
-            src_device.chip_id,
-            split_hops_vec.size());
+            // Split multi-directional hops into single-direction patterns
+            auto split_hops_vec = this->route_manager_.split_multicast_hops(multi_directional_hops);
 
-        // Create separate sync pattern for each mcast direction. This is required since test infra only handle mcast
-        // for one direction. Ex, mcast to E/W will split into EAST and WEST patterns.
-        sync_patterns.reserve(split_hops_vec.size());
-        for (const auto& single_direction_hops : split_hops_vec) {
-            TrafficPatternConfig sync_pattern = base_sync_pattern;
-            sync_pattern.destination = DestinationConfig{.hops = single_direction_hops};
-            sync_patterns.push_back(std::move(sync_pattern));
+            log_debug(
+                LogTest,
+                "Splitting sync pattern for device {} from 1 multi-directional to {} single-direction patterns",
+                src_device.chip_id,
+                split_hops_vec.size());
+            // Create separate sync pattern for each mcast direction. This is required since test infra only handle
+            // mcast for one direction. Ex, mcast to E/W will split into EAST and WEST patterns.
+            sync_patterns.reserve(split_hops_vec.size());
+            for (const auto& single_direction_hops : split_hops_vec) {
+                TrafficPatternConfig sync_pattern = base_sync_pattern;
+                sync_pattern.destination = DestinationConfig{.hops = single_direction_hops};
+                sync_patterns.push_back(std::move(sync_pattern));
+            }
         }
-
-        return {sync_patterns, global_sync_val};
+        return {sync_patterns, sync_val};
     }
 
     void add_senders_from_pairs(

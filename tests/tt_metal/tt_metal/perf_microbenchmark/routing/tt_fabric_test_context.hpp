@@ -45,6 +45,7 @@ using TrafficParameters = tt::tt_fabric::fabric_tests::TrafficParameters;
 using TestTrafficConfig = tt::tt_fabric::fabric_tests::TestTrafficConfig;
 using TestTrafficSenderConfig = tt::tt_fabric::fabric_tests::TestTrafficSenderConfig;
 using TestTrafficReceiverConfig = tt::tt_fabric::fabric_tests::TestTrafficReceiverConfig;
+using TestTrafficSyncConfig = tt::tt_fabric::fabric_tests::TestTrafficSyncConfig;
 using SenderCreditInfo = tt::tt_fabric::fabric_tests::SenderCreditInfo;
 using ReceiverCreditInfo = tt::tt_fabric::fabric_tests::ReceiverCreditInfo;
 using TestWorkerType = tt::tt_fabric::fabric_tests::TestWorkerType;
@@ -206,14 +207,16 @@ public:
             // set it only after the test_config is built since it needs set the sync value during expand the high-level
             // patterns.
             this->set_global_sync(config.global_sync);
-            this->set_global_sync_val(config.global_sync_val);
             this->set_benchmark_mode(config.benchmark_mode);
 
-            log_debug(tt::LogTest, "Enabled sync, global sync value: {}, ", global_sync_val_);
+            log_debug(tt::LogTest, "Enabled sync");
             log_debug(tt::LogTest, "Ubenchmark mode: {}, ", benchmark_mode_);
 
-            for (const auto& sync_sender : config.global_sync_configs) {
+            for (const auto& sync_config : config.sync_configs) {
                 // currently initializing our sync configs to be on senders local to the current hos
+                const auto& sync_sender = sync_config.sender_config;
+                std::cout << "PROCESSING SYNC CONFIG FOR DEVICE " << sync_sender.device.chip_id << " WITH SYNC VAL "
+                          << sync_config.sync_val << std::endl;
                 if (fixture_->is_local_fabric_node_id(sync_sender.device)) {
                     CoreCoord sync_core = sync_sender.core.value();
                     const auto& device_coord = this->fixture_->get_device_coord(sync_sender.device);
@@ -262,7 +265,7 @@ public:
                                 fixture_->get_mcast_start_node_id(sync_sender.device, single_direction_hops);
                         }
 
-                        TestTrafficSenderConfig sync_config = {
+                        TestTrafficSenderConfig sync_traffic_sender_config = {
                             .parameters = sync_traffic_parameters,
                             .src_node_id = sync_sender.device,
                             .dst_node_ids = dst_node_ids,   // Empty for multicast sync
@@ -274,8 +277,14 @@ public:
                             .dst_noc_encoding = dst_noc_encoding,
                             .link_id = sync_sender.link_id};  // Derive from SenderConfig (always 0 for sync)
 
+                        TestTrafficSyncConfig sync_traffic_sync_config = {
+                            .sync_val = sync_config.sync_val, .sender_config = std::move(sync_traffic_sender_config)};
+
                         // Add sync config to the master sender on this device
-                        this->test_devices_.at(device_coord).add_sender_sync_config(sync_core, std::move(sync_config));
+                        this->test_devices_.at(device_coord)
+                            .add_sender_sync_config(sync_core, std::move(sync_traffic_sync_config));
+                        std::cout << "ADDED SYNC CONFIG FOR DEVICE " << device_coord[0] << ", " << device_coord[1]
+                                  << " WITH SYNC VAL " << sync_traffic_sync_config.sync_val << std::endl;
                     }
                 }
             }
@@ -359,7 +368,6 @@ public:
         for (auto& [coord, test_device] : test_devices_) {
             test_device.set_benchmark_mode(benchmark_mode_);
             test_device.set_global_sync(global_sync_);
-            test_device.set_global_sync_val(global_sync_val_);
             test_device.set_progress_monitoring_enabled(progress_config_.enabled);
 
             auto device_id = test_device.get_node_id();
@@ -525,8 +533,6 @@ public:
 
     void set_global_sync(bool global_sync) { global_sync_ = global_sync; }
 
-    void set_global_sync_val(uint32_t val) { global_sync_val_ = val; }
-
     bool has_test_failures() const { return has_test_failures_; }
 
     const std::vector<std::string>& get_all_failed_tests() const { return all_failed_tests_; }
@@ -621,7 +627,6 @@ private:
     void reset_local_variables() {
         benchmark_mode_ = false;
         global_sync_ = false;
-        global_sync_val_ = 0;
         outgoing_traffic_.clear();
         device_direction_cycles_.clear();
         device_core_cycles_.clear();
@@ -1637,7 +1642,6 @@ private:
     bool benchmark_mode_ = false;     // Benchmark mode for current test
     bool telemetry_enabled_ = false;  // Telemetry enabled for current test
     bool global_sync_ = false;        // Line sync for current test
-    uint32_t global_sync_val_ = 0;
 
     // Performance profiling data
     // TODO: add link index into the result
