@@ -820,8 +820,6 @@ int main(int argc, char **argv) {
 
     const bool needs_to_call_loss = pipeline_needs_to_call_loss(config);
 
-    auto start = std::chrono::steady_clock::now();
-
     for (uint32_t epoch = 0; epoch < num_epochs; ++epoch) {
         for (auto [features, target, masks] : train_dataloader) {
             ttml::autograd::ctx().get_profiler().read_results(device, "dataloader_step_done");
@@ -892,8 +890,6 @@ int main(int argc, char **argv) {
 
                 if (!is_everything_compiled) {
                     ttml::autograd::ctx().get_profiler().read_results(device, "compilation_finished");
-                    fmt::print("Compilation finished at step {}\n", global_step);
-                    start = std::chrono::steady_clock::now();
                     is_everything_compiled = true;
                 }
             }
@@ -910,14 +906,6 @@ int main(int argc, char **argv) {
             break;
         }
     }
-
-    auto end = std::chrono::steady_clock::now();
-    auto duration_steps_only = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
-    fmt::print(
-        "{} Steps training time: {} s, cache entries: {}\n",
-        config.max_steps,
-        (double)duration_steps_only / 1000000.,
-        device->num_program_cache_entries());
 
     if (!config.enable_mpi) {
         // save training state if it's not 3 tier training
