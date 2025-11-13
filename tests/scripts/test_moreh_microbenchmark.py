@@ -296,7 +296,9 @@ def run_dram_read_cmd(k, n, num_blocks, df, num_banks, bank_start_id):
         + str(bank_start_id)
         + " --bypass-check "
     )
-    run_moreh_single_test("DRAM BW test multi-core", command)
+    result = run_moreh_single_test("DRAM BW test multi-core", command)
+    # Check return code - C++ test returns 0 on pass, 1 on fail
+    assert result.returncode == 0, f"DRAM read test failed with return code {result.returncode}"
 
 
 def run_dram_read_l1_write_cmd(k, n, num_blocks, df, num_banks, bank_start_id):
@@ -763,9 +765,11 @@ def test_matmul_single_core_sharded(
     [
         ("wormhole_b0", np.array([32768, 12 * 128]), 1, 8, 0, 12, 0),
         ("wormhole_b0", np.array([32768, 12 * 128]), 1, 8, 1, 12, 0),
+        ("wormhole_b0", np.array([32768, 12 * 256]), 1, 8, 2, 12, 0),
         ("wormhole_b0", np.array([2048, 3840]), 1, 4, 1, 12, 0),  # Padded FF1 shapes for llama 70b on TG
         ("blackhole", np.array([32768, 8 * 128]), 1, 8, 0, 8, 0),
         ("blackhole", np.array([32768, 8 * 128]), 1, 8, 1, 8, 0),
+        ("blackhole", np.array([32768, 8 * 256]), 1, 8, 2, 8, 0),
         ("blackhole", np.array([2048, 3840]), 1, 4, 1, 8, 0),  # Padded FF1 shapes for llama 70b on TG
     ],
 )
@@ -781,6 +785,8 @@ def test_dram_read_all_core(arch, test_vector, num_tests, nblock, data_format, n
             input_size = k * n * 1088 // 1024
         elif data_format == 1:
             input_size = k * n * 2048 // 1024
+        elif data_format == 2:
+            input_size = k * n * 576 // 1024
         run_dram_read_cmd(k, n, nblock, data_format, num_banks, bank_start_id)
         cycle = profile_results_kernel_duration()
         dev_freq = get_device_freq()
@@ -801,8 +807,14 @@ def test_dram_read_all_core(arch, test_vector, num_tests, nblock, data_format, n
     data.append([throughput])
     # check within range
     dev_freq = get_device_freq()
-    bw_lower_bound = 240.0
-    bw_upper_bound = 340.0
+    if arch == "wormhole_b0":
+        bw_lower_bound = 240.0
+        bw_upper_bound = 280.0
+    elif arch == "blackhole":
+        bw_lower_bound = 350.0
+        bw_upper_bound = 380.0
+    else:
+        assert False, f"Unsupported architecture: {arch}"
     assert bw_lower_bound <= throughput
     assert throughput <= bw_upper_bound
 
