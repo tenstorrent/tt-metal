@@ -151,6 +151,7 @@ void GenerateBinaries(IDevice* device, JitBuildOptions& build_options, const std
     // const std::string tracyPrefix = "GenerateBinaries_";
     // ZoneName((tracyPrefix + build_options.name).c_str(), build_options.name.length() + tracyPrefix.length());
     try {
+        // TODO: can we absorb genfiles_descriptors step into JIT build?
         jit_build_genfiles_descriptors(
             BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env, build_options);
         KernelImpl::from(*kernel).generate_binaries(device, build_options);
@@ -1402,16 +1403,10 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 
                     KernelImpl::from(*kernel).register_kernel_elf_paths_with_watcher(*device);
 
-                    if (enable_persistent_kernel_cache && KernelImpl::from(*kernel).binaries_exist_on_disk(device)) {
-                        if (not detail::HashLookup::inst().exists(kernel_hash)) {
-                            detail::HashLookup::inst().add(kernel_hash);
-                            detail::HashLookup::inst().add_generated_bin(kernel_hash);
-                        }
-                    } else if (detail::HashLookup::inst().add(kernel_hash)) {
+                    // TODO(#32208): delete this.
+                    if (!(enable_persistent_kernel_cache && KernelImpl::from(*kernel).binaries_exist_on_disk(device))) {
                         GenerateBinaries(device, build_options, kernel);
-                        detail::HashLookup::inst().add_generated_bin(kernel_hash);
                     }
-                    detail::HashLookup::inst().wait_for_bin_generated(kernel_hash);
 
                     Inspector::program_kernel_compile_finished(this, device, kernel, build_options);
                 },
