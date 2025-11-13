@@ -580,7 +580,7 @@ inline __attribute__((always_inline)) void dynamic_noc_local_state_init() {
     // When the active_erisc is running on ERISC1 (Single ERISC mode), base firmware is running concurrently on ERISC0
     // and we should delegate the execution to base firmware and stall until it completes.
     //
-#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 1) && (COMPILE_FOR_AERISC == 0)
+#if defined(COMPILE_FOR_AERISC)
     base_fw_dynamic_noc_local_state_init();
 #else
     // Pipeline all register reads first to hide latency

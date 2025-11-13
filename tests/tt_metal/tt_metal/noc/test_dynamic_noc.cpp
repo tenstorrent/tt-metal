@@ -18,6 +18,7 @@
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "env_lib.hpp"
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
@@ -168,6 +169,171 @@ void build_and_run_program(
     distributed::Finish(device->mesh_command_queue());
 }
 
+void build_and_run_program_ethernet(
+    const std::shared_ptr<distributed::MeshDevice>& device,
+    bool slow_dispatch,
+    uint32_t NUM_PROGRAMS,
+    uint32_t MAX_LOOP,
+    uint32_t page_size,
+    bool mix_noc_mode) {
+    // Make random
+    auto random_seed = 0;  // (unsigned int)time(NULL);
+    uint32_t seed = tt::parse_env("TT_METAL_SEED", random_seed);
+    log_info(tt::LogTest, "Using Test Seed: {}", seed);
+    srand(seed);
+
+    auto device_0 = device->get_devices()[0];
+
+    // Query the number of ethernet ERISCs
+    const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
+
+    // We need at least 2 ERISCs (ERISC0 and ERISC1) to run this test
+    ASSERT_GE(erisc_count, 2) << "Test requires at least 2 ERISCs, but only " << erisc_count << " available.";
+
+    // Get active ethernet cores
+    const auto& active_eth_cores = device_0->get_active_ethernet_cores(true);
+    ASSERT_FALSE(active_eth_cores.empty()) << "No active ethernet cores available.";
+
+    // Pick the first active ethernet core
+    CoreCoord eth_core = *active_eth_cores.begin();
+    log_info(tt::LogTest, "Using ethernet core {} for testing", eth_core.str());
+
+    log_info(tt::LogTest, "Starting compile of {} ethernet programs now.", NUM_PROGRAMS);
+
+    Program program1;
+    Program program2;
+
+    CircularBufferConfig cb_config =
+        CircularBufferConfig(page_size, {{0, tt::DataFormat::Float16_b}}).set_page_size(0, page_size);
+    // Note: Circular buffers are for worker cores, not needed for basic ethernet NOC tests
+    // But we create them for consistency with the test kernel expectations
+
+    // Add 2 semaphores initialized to 0 for each program, 1 per erisc
+    CoreRangeSet eth_cr_set(CoreRange(eth_core, eth_core));
+    uint32_t program1_semaphore0 = CreateSemaphore(program1, eth_cr_set, 0, CoreType::ETH);
+    uint32_t program1_semaphore1 = CreateSemaphore(program1, eth_cr_set, 0, CoreType::ETH);
+    uint32_t program2_semaphore0 = CreateSemaphore(program2, eth_cr_set, 0, CoreType::ETH);
+    uint32_t program2_semaphore1 = CreateSemaphore(program2, eth_cr_set, 0, CoreType::ETH);
+
+    vector<uint32_t> compile_args = {MAX_LOOP, page_size, 2};
+    tt_metal::TensorAccessorArgs::create_l1_interleaved().append_to(compile_args);
+
+    // Create ERISC0 kernel for program1 (Dynamic NOC)
+    auto eth_erisc0_kernel1 = CreateKernel(
+        program1,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/dynamic_noc_writer.cpp",
+        eth_core,
+        tt_metal::EthernetConfig{
+            .noc = tt_metal::NOC::NOC_0,
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .compile_args = compile_args,
+            .noc_mode = tt_metal::NOC_MODE::DM_DYNAMIC_NOC});
+
+    // Create ERISC1 kernel for program1 (Dynamic NOC)
+    auto eth_erisc1_kernel1 = CreateKernel(
+        program1,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/dynamic_noc_writer.cpp",
+        eth_core,
+        tt_metal::EthernetConfig{
+            .noc = tt_metal::NOC::NOC_1,
+            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+            .compile_args = compile_args,
+            .noc_mode = tt_metal::NOC_MODE::DM_DYNAMIC_NOC});
+
+    // Create ERISC0 kernel for program2 (Dynamic or Dedicated NOC based on mix_noc_mode)
+    auto eth_erisc0_kernel2 = CreateKernel(
+        program2,
+        mix_noc_mode ? "tests/tt_metal/tt_metal/test_kernels/dataflow/dedicated_noc_writer.cpp"
+                     : "tests/tt_metal/tt_metal/test_kernels/dataflow/dynamic_noc_writer.cpp",
+        eth_core,
+        tt_metal::EthernetConfig{
+            .noc = tt_metal::NOC::NOC_0,
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .compile_args = compile_args,
+            .noc_mode = mix_noc_mode ? tt_metal::NOC_MODE::DM_DEDICATED_NOC : tt_metal::NOC_MODE::DM_DYNAMIC_NOC});
+
+    // Create ERISC1 kernel for program2 (Dynamic or Dedicated NOC based on mix_noc_mode)
+    auto eth_erisc1_kernel2 = CreateKernel(
+        program2,
+        mix_noc_mode ? "tests/tt_metal/tt_metal/test_kernels/dataflow/dedicated_noc_writer.cpp"
+                     : "tests/tt_metal/tt_metal/test_kernels/dataflow/dynamic_noc_writer.cpp",
+        eth_core,
+        tt_metal::EthernetConfig{
+            .noc = tt_metal::NOC::NOC_1,
+            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+            .compile_args = compile_args,
+            .noc_mode = mix_noc_mode ? tt_metal::NOC_MODE::DM_DEDICATED_NOC : tt_metal::NOC_MODE::DM_DYNAMIC_NOC});
+
+    log_info(
+        tt::LogTest,
+        "Created ethernet kernels: ERISC0={}, ERISC1={} for both programs",
+        eth_erisc0_kernel1,
+        eth_erisc1_kernel1);
+
+    // Get physical coordinates for ethernet core
+    CoreCoord eth_core_physical = device_0->virtual_core_from_logical_core(eth_core, CoreType::ETH);
+
+    // For ethernet cores, we'll use a worker core as the neighbor for NOC testing
+    CoreCoord worker_core = {0, 0};
+    CoreCoord neighbour_core_physical = device->worker_core_from_logical_core(worker_core);
+
+    // mcast - use worker grid for mcast parameters
+    auto device_grid = device->compute_with_storage_grid_size();
+    CoreCoord top_left_core = {0, 0};
+    CoreCoord top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
+    CoreCoord bottom_right_core = {device_grid.x - 1, device_grid.y - 1};
+    CoreCoord bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
+
+    std::vector<uint32_t> eth_rt_args = {
+        (std::uint32_t)neighbour_core_physical.x,
+        (std::uint32_t)neighbour_core_physical.y,
+        // mcast
+        1,  // Enable mcast
+        top_left_core_physical.x,
+        top_left_core_physical.y,
+        bottom_right_core_physical.x,
+        bottom_right_core_physical.y,
+        device_grid.x * device_grid.y,
+        0,  // risc index (ERISC0)
+        // semaphore IDs for program1
+        program1_semaphore0,   // semaphore 0
+        program1_semaphore1};  // semaphore 1
+
+    // Set runtime args for program1 ethernet kernels
+    tt::tt_metal::SetRuntimeArgs(program1, eth_erisc0_kernel1, eth_core, eth_rt_args);
+    eth_rt_args[8] = 1;  // risc index (ERISC1)
+    tt::tt_metal::SetRuntimeArgs(program1, eth_erisc1_kernel1, eth_core, eth_rt_args);
+
+    // Set runtime args for program2 ethernet kernels
+    eth_rt_args[8] = 0;  // risc index (ERISC0)
+    // Override semaphore IDs for program2
+    eth_rt_args[9] = program2_semaphore0;   // semaphore 0
+    eth_rt_args[10] = program2_semaphore1;  // semaphore 1
+    tt::tt_metal::SetRuntimeArgs(program2, eth_erisc0_kernel2, eth_core, eth_rt_args);
+    eth_rt_args[8] = 1;  // risc index (ERISC1)
+    tt::tt_metal::SetRuntimeArgs(program2, eth_erisc1_kernel2, eth_core, eth_rt_args);
+
+    log_info(
+        tt::LogTest, "Ethernet kernels configured on core {} (physical: {})", eth_core.str(), eth_core_physical.str());
+
+    distributed::MeshWorkload workload1;
+    distributed::MeshWorkload workload2;
+    workload1.add_program(distributed::MeshCoordinateRange(device->shape()), std::move(program1));
+    workload2.add_program(distributed::MeshCoordinateRange(device->shape()), std::move(program2));
+
+    // This loop caches program1 and runs
+    for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
+        log_info(tt::LogTest, "Running ethernet program {} of {}", i + 1, NUM_PROGRAMS);
+        if (i % 2 == 0) {
+            distributed::EnqueueMeshWorkload(device->mesh_command_queue(), workload1, false);
+        } else {
+            distributed::EnqueueMeshWorkload(device->mesh_command_queue(), workload2, false);
+        }
+    }
+    distributed::Finish(device->mesh_command_queue());
+}
+
 TEST_F(MeshDispatchFixture, TestDynamicNoCOneProgram) {
     uint32_t NUM_PROGRAMS = 1;
     uint32_t MAX_LOOP = 65536;
@@ -193,5 +359,35 @@ TEST_F(MeshDispatchFixture, TestDynamicNoCMutlipleProgramMixedMode) {
     bool mix_noc_mode = true;
 
     build_and_run_program(this->devices_[0], this->slow_dispatch_, NUM_PROGRAMS, MAX_LOOP, page_size, mix_noc_mode);
+}
+
+TEST_F(MeshDispatchFixture, TestDynamicNoCEthernetOneProgram) {
+    uint32_t NUM_PROGRAMS = 1;
+    uint32_t MAX_LOOP = 65536;
+    uint32_t page_size = 1024;
+    bool mix_noc_mode = false;
+
+    build_and_run_program_ethernet(
+        this->devices_[0], this->slow_dispatch_, NUM_PROGRAMS, MAX_LOOP, page_size, mix_noc_mode);
+}
+
+TEST_F(MeshDispatchFixture, TestDynamicNoCEthernetMultipleProgram) {
+    uint32_t NUM_PROGRAMS = 3;
+    uint32_t MAX_LOOP = 65536;
+    uint32_t page_size = 1024;
+    bool mix_noc_mode = false;
+
+    build_and_run_program_ethernet(
+        this->devices_[0], this->slow_dispatch_, NUM_PROGRAMS, MAX_LOOP, page_size, mix_noc_mode);
+}
+
+TEST_F(MeshDispatchFixture, TestDynamicNoCEthernetMultipleProgramMixedMode) {
+    uint32_t NUM_PROGRAMS = 5;
+    uint32_t MAX_LOOP = 65536;
+    uint32_t page_size = 1024;
+    bool mix_noc_mode = true;
+
+    build_and_run_program_ethernet(
+        this->devices_[0], this->slow_dispatch_, NUM_PROGRAMS, MAX_LOOP, page_size, mix_noc_mode);
 }
 }  // namespace tt::tt_metal
