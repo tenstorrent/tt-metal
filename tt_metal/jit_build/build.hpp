@@ -4,14 +4,18 @@
 
 #pragma once
 #include <stdint.h>
+#include <memory>
+#include <mutex>
 #include <span>
 #include <tt_stl/aligned_allocator.hpp>
 #include <functional>
 #include <future>
 #include <map>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
+#include "common/executor.hpp"
 #include "hal_types.hpp"
 #include "jit_build_options.hpp"
 #include <umd/device/types/arch.hpp>
@@ -37,6 +41,26 @@ struct JitBuiltStateConfig {
     // In this case Metal FW will need to facilitate context switching to base FW (e.g. code running on WH active
     // eriscs)
     bool is_cooperative = false;
+};
+
+class JitBuildTargetLookup {
+public:
+    void build_once(const std::string& target_name, const std::function<void()>& build_func) {
+        std::shared_future<void>* future = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            auto it = build_futures_.find(target_name);
+            if (it == build_futures_.end()) {
+                it = build_futures_.emplace_hint(it, target_name, detail::async(build_func));
+            }
+            future = &it->second;
+        }
+        future->get();
+    }
+
+private:
+    std::mutex mutex_;
+    std::unordered_map<std::string, std::shared_future<void>> build_futures_;
 };
 
 // The build environment
@@ -82,6 +106,8 @@ private:
     std::string lflags_;
 
     std::uint64_t build_key_{};
+
+    std::unique_ptr<JitBuildTargetLookup> target_lookup_;
 };
 
 // All the state used for a build in an abstract base class
@@ -135,8 +161,7 @@ public:
 
     void build(const JitBuildSettings* settings) const;
     const std::string& get_out_path() const { return this->out_path_; }
-    const std::string& get_target_name() const { return this->target_name_; };
-    ;
+    const std::string& get_target_name() const { return this->target_name_; }
     std::string get_target_out_path(const std::string& kernel_name) const {
         return this->out_path_ + kernel_name + target_full_path_;
     }

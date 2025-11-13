@@ -284,6 +284,8 @@ void JitBuildEnv::init(
     // if it's not already in MetalContext::firmware_built_keys_
     this->out_firmware_root_ = fmt::format("{}{}/firmware/{}/", this->out_root_, build_key_, fw_compile_hash);
     this->out_kernel_root_ = fmt::format("{}{}/kernels/", this->out_root_, build_key_);
+
+    this->target_lookup_ = std::make_unique<JitBuildTargetLookup>();
 }
 
 JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& build_config) :
@@ -580,17 +582,19 @@ void JitBuildState::build(const JitBuildSettings* settings) const {
                          ? this->out_path_ + this->target_name_ + "/"
                          : this->out_path_ + settings->get_full_kernel_name() + this->target_name_ + "/";
 
-    fs::create_directories(out_dir);
-    if (compile(out_dir, settings) > 0 || need_link(out_dir)) {
-        link(out_dir, settings);
-        if (this->is_fw_) {
-            weaken(out_dir);
+    this->env_.target_lookup_->build_once(out_dir, [this, &out_dir, settings] {
+        fs::create_directories(out_dir);
+        if (compile(out_dir, settings) > 0 || need_link(out_dir)) {
+            link(out_dir, settings);
+            if (this->is_fw_) {
+                weaken(out_dir);
+            }
         }
-    }
 
-    // `extract_zone_src_locations` must be called every time, because it writes to a global file
-    // that gets cleared in each run.
-    extract_zone_src_locations(out_dir);
+        // `extract_zone_src_locations` must be called every time, because it writes to a global file
+        // that gets cleared in each run.
+        extract_zone_src_locations(out_dir);
+    });
 }
 
 void jit_build(const JitBuildState& build, const JitBuildSettings* settings) {
