@@ -689,8 +689,9 @@ Tensor to_device(
     TT_FATAL(mesh_device != nullptr, "Need target device in order to move tensor to device!");
 
     std::optional<TensorSpec> tensor_spec_overriden_memory_config;
-    if (memory_config) {
-        tensor_spec_overriden_memory_config = tensor.tensor_spec().with_memory_config(*memory_config);
+    if (memory_config.has_value()) {
+        auto memory_config_value = memory_config.value();
+        tensor_spec_overriden_memory_config = tensor.tensor_spec().with_memory_config(memory_config_value);
     }
 
     const auto* tensor_spec = tensor_spec_overriden_memory_config.has_value()
