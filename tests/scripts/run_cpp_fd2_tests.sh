@@ -99,7 +99,7 @@ echo "Running test_dispatcher with fast dispatch mode (unsetting TT_METAL_SLOW_D
 
 # Unset the variable for these tests
 (
-    #This is temporary until we refractor test_prefetcher.cpp to use FDMeshCommandQueue
+    #This is temporary until we refactor test_prefetcher.cpp to use FDMeshCommandQueue
     unset TT_METAL_SLOW_DISPATCH_MODE
     run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher"
 )
