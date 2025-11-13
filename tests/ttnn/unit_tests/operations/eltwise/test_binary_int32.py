@@ -322,7 +322,7 @@ def test_binary_left_shift(device, ttnn_function, ttnn_dtype):
     z_tt_out = ttnn_function(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_out)
 
-    if ttnn_dtype == ttnn.uint32:  # Simulate teh uint32 output
+    if ttnn_dtype == ttnn.uint32:  # Simulate the uint32 output
         z_torch_uint64 = z_torch.to(torch.int64) & 0xFFFFFFFF
         assert torch.equal(tt_out, z_torch_uint64)
     else:
@@ -383,7 +383,7 @@ def test_bitwise_right_shift(device, ttnn_function, ttnn_dtype):
     z_tt_out = ttnn_function(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_out)
 
-    if ttnn_dtype == ttnn.uint32:  # Simulate teh uint32 output
+    if ttnn_dtype == ttnn.uint32:  # Simulate the uint32 output
         z_torch_uint64 = z_torch.to(torch.int64) & 0xFFFFFFFF
         assert torch.equal(tt_out, z_torch_uint64)
     else:
