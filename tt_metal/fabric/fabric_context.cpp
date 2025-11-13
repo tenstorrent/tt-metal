@@ -185,6 +185,10 @@ FabricContext::FabricContext(tt::tt_fabric::FabricConfig fabric_config) {
     set_routing_mode(this->topology_, this->fabric_config_);
 }
 
+// Used to check whether a physical mesh has wrap-around connections, to enable Ring topology.
+// Note: is_wrap_around_mesh is true if the mesh does NOT have wrap-around connections.
+// Returning true tells the fabric code that it must fold the internal connections on the corner chips in order to form
+// a "wraparound mesh"
 bool FabricContext::is_wrap_around_mesh(MeshId mesh_id) const {
     auto it = this->wrap_around_mesh_.find(mesh_id);
     TT_FATAL(it != this->wrap_around_mesh_.end(), "Querying wrap around mesh for an unknown mesh id");

@@ -2097,26 +2097,21 @@ constexpr size_t get_credits_init_val() {
     }
 };
 
-// SFINAE helper to safely access SENDER_NUM_BUFFERS_ARRAY at compile time
-// This prevents out-of-bounds array access errors when NUM_SENDER_CHANNELS < INDEX
-template <size_t ARRAY_SIZE, size_t INDEX, typename = void>
+// Helper to safely access SENDER_NUM_BUFFERS_ARRAY at compile time
+// Prevents out-of-bounds array access errors when NUM_SENDER_CHANNELS < INDEX
+template <size_t NUM_SENDER_CHANNELS, size_t INDEX, typename = void>
 struct get_sender_num_buffers_safe_impl {
-    // Default template: used when INDEX >= NUM_SENDER_CHANNELS
-    // Returns 0 as a safe default (should never actually be used)
+    // Default template: used when INDEX is out of bounds
     static constexpr size_t value = 0;
 };
-
-// Specialized template: only matches when INDEX < NUM_SENDER_CHANNELS
-template <size_t ARRAY_SIZE, size_t INDEX>
-struct get_sender_num_buffers_safe_impl<ARRAY_SIZE, INDEX, std::enable_if_t<(INDEX < ARRAY_SIZE)>> {
-    // Only this specialization accesses the array - and only when INDEX is valid!
+template <size_t NUM_SENDER_CHANNELS, size_t INDEX>
+struct get_sender_num_buffers_safe_impl<NUM_SENDER_CHANNELS, INDEX, std::enable_if_t<(INDEX < NUM_SENDER_CHANNELS)>> {
     static constexpr size_t value = SENDER_NUM_BUFFERS_ARRAY[INDEX];
 };
 
-// Convenience function wrapper
-template <size_t ARRAY_SIZE, size_t INDEX>
+template <size_t NUM_SENDER_CHANNELS, size_t INDEX>
 constexpr size_t get_sender_num_buffers_safe() {
-    return get_sender_num_buffers_safe_impl<ARRAY_SIZE, INDEX>::value;
+    return get_sender_num_buffers_safe_impl<NUM_SENDER_CHANNELS, INDEX>::value;
 }
 
 template <size_t NUM_SENDER_CHANNELS, typename EdmChannelWorkerIFs>
