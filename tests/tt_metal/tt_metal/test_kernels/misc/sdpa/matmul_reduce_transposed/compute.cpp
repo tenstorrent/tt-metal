@@ -8,6 +8,7 @@
 #define REDUCE_DIM (ReduceDim::REDUCE_COL)
 #include "compute_kernel_api.h"
 #include "compute_kernel_api/eltwise_binary.h"
+#include "compute_kernel_api/binary_max_min.h"
 #include "compute_kernel_api/eltwise_unary/exp.h"
 #include "compute_kernel_api/eltwise_unary/recip.h"
 #include "compute_kernel_api/eltwise_unary/softplus.h"
@@ -25,7 +26,8 @@
 void matmul_blocks(
     const uint32_t& in0_cb,
     const uint32_t& in1_cb,
-    const uint32_t& out_cb,
+    const uint32_t& matmul_out_cb,
+    const uint32_t& reduce_out_cb,
     const uint32_t& M,
     const uint32_t& N,
     const uint32_t& K,
@@ -47,9 +49,12 @@ void matmul_blocks(
     uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
     uint32_t in0_index_offset = 0;
 
-    reconfig_data_format(in1_cb, in0_cb);
-    pack_reconfig_data_format(out_cb);
-    cb_reserve_back(out_cb, output_num_tiles);
+    // reconfig_data_format(in1_cb, in0_cb);
+    // pack_reconfig_data_format(matmul_out_cb);
+    cb_reserve_back(matmul_out_cb, output_num_tiles);
+    // Reserve space for reduced outputs: one tile per output column per in0_subblock
+    uint32_t total_reduce_tiles = in0_num_subblocks * in1_num_subblocks * subblock_w;  // = in0_num_subblocks * N
+    cb_reserve_back(reduce_out_cb, total_reduce_tiles);
 
     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
         uint32_t in1_index_offset = 0;
@@ -74,46 +79,70 @@ void matmul_blocks(
             for (uint32_t r = 0; r < subblock_h; r++) {
                 uint32_t out_row_offset = (r + subblock_h * in0_subblock) * N;
                 for (uint32_t c = 0; c < subblock_w; c++) {
-                    pack_tile<true>(dst_idx, out_cb, out_row_offset + out_col_offset + c);
+                    pack_tile<true>(dst_idx, matmul_out_cb, out_row_offset + out_col_offset + c);
                     dst_idx++;
                 }
             }
 
             // DO this on same bank packer worked on berfore switching to next bank value
 
+            // real sdpa usecase
+            // subblock_w: 2
+            // subblock_h: 4
+
             sfpu_reduce_max_sdpa_init(subblock_w);
 
             for (uint32_t i = 0; i < subblock_w; i++) {
                 sfpu_reduce_max_sdpa(i, subblock_h, (int)VectorMode::RC_custom);
             }
+            // Pack reduced tiles: place them as a matrix of in0_num_subblocks x N tiles
+            for (uint32_t i = 0; i < subblock_w; i++) {
+                uint32_t reduce_tile_index = in0_subblock * N + out_col_offset + i;
+                pack_tile<true>(i, reduce_out_cb, reduce_tile_index);
+            }
 
-            // dummy packs
-            pack_tile<true>(0, out_cb, 0);
-            pack_tile<true>(1, out_cb, 1);
+            // PACK(( tt::compute::common::print_full_tile(reduce_out_cb, in0_subblock * N + out_col_offset + 0) ));
+            // if (subblock_w > 1) {
+            // PACK(( tt::compute::common::print_full_tile(reduce_out_cb, in0_subblock * N + out_col_offset + 1) ));
+            // }
 
             tile_regs_release();
             in1_index_offset += subblock_w;
         }
         in0_index_offset += subblock_h * in0_block_w;
     }
-    cb_push_back(out_cb, output_num_tiles);
+    cb_push_back(matmul_out_cb, output_num_tiles);
+    cb_push_back(reduce_out_cb, total_reduce_tiles);
 }
 
 template <uint32_t in0_cb, uint32_t scale_cb, uint32_t k_chunk_size, uint32_t q_chunk_size>
 void reduce_c_transposed(uint32_t out_cb) {
     DeviceZoneScopedN("reduce_c");
 
-    for (uint32_t r = 0; r < q_chunk_size; r++) {
-        pack_tile<true>(r, out_cb, r);
+    constexpr uint32_t num_tiles = k_chunk_size * q_chunk_size;
+
+    max_tile_init();
+    constexpr uint32_t reduce_dst_idx = 0;
+    reduce_init<PoolType::MAX, ReduceDim::REDUCE_COL>(in0_cb, scale_cb, out_cb);
+    for (uint32_t j = 0; j < q_chunk_size; j++) {
+        acquire_dst();
+
+        for (uint32_t i = 0; i < k_chunk_size; i++) {
+            reduce_tile<PoolType::MAX, ReduceDim::REDUCE_COL>(
+                in0_cb, scale_cb, i * q_chunk_size + j, 0, reduce_dst_idx);
+        }
+        pack_tile(reduce_dst_idx, out_cb);
+        release_dst();
     }
+    reduce_uninit();
 }
 
 namespace NAMESPACE {
 void MAIN {
     constexpr uint32_t k_in_cb = get_compile_time_arg_val(0);
     constexpr uint32_t q_in_cb = get_compile_time_arg_val(1);
-    constexpr uint32_t mm_out_cb = get_compile_time_arg_val(2);
-    constexpr uint32_t max_out_cb = get_compile_time_arg_val(3);
+    constexpr uint32_t cb_matmul_out = get_compile_time_arg_val(2);
+    constexpr uint32_t reduce_out_cb = get_compile_time_arg_val(3);
     constexpr uint32_t identity_scale_cb = get_compile_time_arg_val(4);
     constexpr uint32_t k_chunk_size = get_compile_time_arg_val(5);
     constexpr uint32_t q_chunk_size = get_compile_time_arg_val(6);
@@ -123,12 +152,13 @@ void MAIN {
     constexpr uint32_t subblock_h = get_compile_time_arg_val(10);
     constexpr uint32_t subblock_w = get_compile_time_arg_val(11);
 
-    mm_init(k_in_cb, q_in_cb, mm_out_cb);
+    mm_init(k_in_cb, q_in_cb, cb_matmul_out);
 
     matmul_blocks(
         k_in_cb,
         q_in_cb,
-        mm_out_cb,
+        cb_matmul_out,
+        reduce_out_cb,
         k_chunk_size,
         q_chunk_size,
         head_dim,
@@ -140,11 +170,14 @@ void MAIN {
         true);
 
     // Ensure outputs are produced before exiting
-    cb_wait_front(mm_out_cb, k_chunk_size * q_chunk_size);
-    cb_reserve_back(max_out_cb, q_chunk_size);
+    cb_wait_front(cb_matmul_out, k_chunk_size * q_chunk_size);
+    cb_wait_front(
+        reduce_out_cb, q_chunk_size);  // Now only expect q_chunk_size tiles in reduce_out_cb after final reduce
 
-    reduce_c_transposed<mm_out_cb, identity_scale_cb, k_chunk_size, q_chunk_size>(max_out_cb);
+    reduce_c_transposed<cb_matmul_out, identity_scale_cb, k_chunk_size, q_chunk_size>(reduce_out_cb);
+    cb_push_back(reduce_out_cb, q_chunk_size);
 
-    cb_push_back(max_out_cb, q_chunk_size);
+    // PACK(( tt::compute::common::print_full_tile(reduce_out_cb, 0) ));
+    // PACK(( tt::compute::common::print_full_tile(reduce_out_cb, 1) ));
 }
 }  // namespace NAMESPACE

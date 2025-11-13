@@ -39,20 +39,38 @@ static void transpose_tiles_inplace_row_major(std::vector<bfloat16>& rm, uint32_
 
 // Create inputs for matmul: tensor_A [k_chunk_size*32 x head_dim*32],
 // tensor_B [head_dim*32 x q_chunk_size*32], both in row-major layout.
+// static void create_matmul_inputs(
+//     uint32_t q_chunk_size,
+//     uint32_t k_chunk_size,
+//     uint32_t head_dim,
+//     std::vector<bfloat16>& tensor_A_rm,
+//     std::vector<bfloat16>& tensor_B_rm) {
+//     // SHAPE a_shape = {1, 1, k_chunk_size * 32, head_dim * 32};
+//     // SHAPE b_shape = {1, 1, head_dim * 32, q_chunk_size * 32};
+
+//     size_t a_size = k_chunk_size * 32 * head_dim * 32;
+//     size_t b_size = head_dim * 32 * q_chunk_size * 32;
+
+//     tensor_A_rm.assign(a_size, static_cast<bfloat16>(1.0f));
+//     tensor_B_rm.assign(b_size, static_cast<bfloat16>(1.0f));
+// }
+
 static void create_matmul_inputs(
     uint32_t q_chunk_size,
     uint32_t k_chunk_size,
     uint32_t head_dim,
     std::vector<bfloat16>& tensor_A_rm,
     std::vector<bfloat16>& tensor_B_rm) {
-    // SHAPE a_shape = {1, 1, k_chunk_size * 32, head_dim * 32};
-    // SHAPE b_shape = {1, 1, head_dim * 32, q_chunk_size * 32};
+    SHAPE a_shape = {1, 1, k_chunk_size * 32, head_dim * 32};
+    SHAPE b_shape = {1, 1, head_dim * 32, q_chunk_size * 32};
 
-    size_t a_size = k_chunk_size * 32 * head_dim * 32;
-    size_t b_size = head_dim * 32 * q_chunk_size * 32;
+    tt::deprecated::Tensor<bfloat16> a_tensor =
+        tt::deprecated::initialize_tensor<bfloat16>(a_shape, tt::deprecated::Initialize::RANDOM, -1, 1, 0 /* seed */);
+    tt::deprecated::Tensor<bfloat16> b_tensor =
+        tt::deprecated::initialize_tensor<bfloat16>(b_shape, tt::deprecated::Initialize::RANDOM, -1, 1, 1 /* seed */);
 
-    tensor_A_rm.assign(a_size, static_cast<bfloat16>(1.0f));
-    tensor_B_rm.assign(b_size, static_cast<bfloat16>(1.0f));
+    tensor_A_rm = a_tensor.get_values();
+    tensor_B_rm = b_tensor.get_values();
 }
 
 // Golden reference: compute matmul(A, B) and reduce_max over dim=0 (rows) of the matmul output.
@@ -127,7 +145,6 @@ static bool test_sdpa_reduce_c_transposed(
     uint32_t k_in_num_tiles = k_chunk_size * head_dim;
     uint32_t q_in_num_tiles = head_dim * q_chunk_size;
     uint32_t mm_out_num_tiles = k_chunk_size * q_chunk_size;
-    uint32_t max_out_num_tiles = q_chunk_size;
 
     // Program and core must be created before using globally allocated addresses in CBs
     tt_metal::Program program = tt_metal::CreateProgram();
@@ -172,19 +189,6 @@ static bool test_sdpa_reduce_c_transposed(
             {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
             {k_chunk_size, q_chunk_size})};
 
-    auto max_out_buffer_config = tt::tt_metal::ShardedBufferConfig{
-        .device = device,
-        .size = max_out_num_tiles * cb_tile_size,
-        .page_size = cb_tile_size,
-        .buffer_type = tt::tt_metal::BufferType::L1,
-        .buffer_layout = tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = tt::tt_metal::ShardSpecBuffer(
-            CoreRangeSet(std::set<CoreRange>({CoreRange(core, core)})),
-            {tt::constants::TILE_HEIGHT, q_chunk_size * tt::constants::TILE_WIDTH},
-            tt::tt_metal::ShardOrientation::ROW_MAJOR,
-            {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
-            {1, q_chunk_size})};
-
     auto one_tile_buffer_config_2 = tt::tt_metal::ShardedBufferConfig{
         .device = device,
         .size = cb_tile_size,
@@ -201,7 +205,6 @@ static bool test_sdpa_reduce_c_transposed(
     auto k_in_buffer = CreateBuffer(k_in_buffer_config);
     auto q_in_buffer = CreateBuffer(q_in_buffer_config);
     auto mm_output_buffer = CreateBuffer(mm_output_buffer_config);
-    auto max_out_buffer = CreateBuffer(max_out_buffer_config);
     auto one_tile_buffer = CreateBuffer(one_tile_buffer_config_2);
 
     // Host writes for inputs
@@ -248,13 +251,6 @@ static bool test_sdpa_reduce_c_transposed(
                                 .set_globally_allocated_address(*mm_output_buffer);
     tt_metal::CreateCircularBuffer(program, core, cb_mm_out_config);
 
-    auto cb_max_out_id = tt::CBIndex::c_3;
-    auto cb_max_out_config =
-        tt::tt_metal::CircularBufferConfig(max_out_num_tiles * cb_tile_size, {{cb_max_out_id, cb_df}})
-            .set_page_size(cb_max_out_id, cb_tile_size)
-            .set_globally_allocated_address(*max_out_buffer);
-    tt_metal::CreateCircularBuffer(program, core, cb_max_out_config);
-
     auto cb_identity_scale_id = tt::CBIndex::c_4;
     auto cb_identity_scale_config =
         tt::tt_metal::CircularBufferConfig(1 * cb_tile_size, {{cb_identity_scale_id, cb_df}})
@@ -279,6 +275,30 @@ static bool test_sdpa_reduce_c_transposed(
     const uint32_t in0_num_subblocks = k_chunk_size / out_subblock_h;
     const uint32_t in1_num_subblocks = q_chunk_size / out_subblock_w;
 
+    uint32_t max_out_num_tiles = in0_num_subblocks * q_chunk_size;  // reduce_out tiles
+
+    // Now that blocking is known, create reduce_out buffer and CB
+    auto max_out_buffer_config = tt::tt_metal::ShardedBufferConfig{
+        .device = device,
+        .size = max_out_num_tiles * cb_tile_size,
+        .page_size = cb_tile_size,
+        .buffer_type = tt::tt_metal::BufferType::L1,
+        .buffer_layout = tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
+        .shard_parameters = tt::tt_metal::ShardSpecBuffer(
+            CoreRangeSet(std::set<CoreRange>({CoreRange(core, core)})),
+            {in0_num_subblocks * tt::constants::TILE_HEIGHT, q_chunk_size * tt::constants::TILE_WIDTH},
+            tt::tt_metal::ShardOrientation::ROW_MAJOR,
+            {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
+            {in0_num_subblocks, q_chunk_size})};
+    auto max_out_buffer = CreateBuffer(max_out_buffer_config);
+
+    auto cb_reduce_out_id = tt::CBIndex::c_3;
+    auto cb_reduce_out_config =
+        tt::tt_metal::CircularBufferConfig(max_out_num_tiles * cb_tile_size, {{cb_reduce_out_id, cb_df}})
+            .set_page_size(cb_reduce_out_id, cb_tile_size)
+            .set_globally_allocated_address(*max_out_buffer);
+    tt_metal::CreateCircularBuffer(program, core, cb_reduce_out_config);
+
     log_info(
         tt::LogTest,
         "subblock_h: {}, subblock_w: {}, in0_num_subblocks: {}, in1_num_subblocks: {}",
@@ -291,7 +311,7 @@ static bool test_sdpa_reduce_c_transposed(
         cb_k_in_id,
         cb_q_in_id,
         cb_mm_out_id,
-        cb_max_out_id,
+        cb_reduce_out_id,
         cb_identity_scale_id,
         k_chunk_size,
         q_chunk_size,
@@ -313,10 +333,10 @@ static bool test_sdpa_reduce_c_transposed(
 
     tt_metal::detail::LaunchProgram(device, program, true);
 
-    std::vector<uint32_t> max_out_vec;
-    tt_metal::detail::ReadFromBuffer(max_out_buffer, max_out_vec);
-    auto max_out_bfp16 = unpack_uint32_vec_into_bfloat16_vec(max_out_vec);
-    auto max_out_rm = untilize_nfaces(max_out_bfp16, 32, N);
+    std::vector<uint32_t> reduce_out_vec;
+    tt_metal::detail::ReadFromBuffer(max_out_buffer, reduce_out_vec);
+    auto reduce_out_bfp16 = unpack_uint32_vec_into_bfloat16_vec(reduce_out_vec);
+    auto reduce_out_rm = untilize_nfaces(reduce_out_bfp16, 32, N);
 
     std::vector<uint32_t> mm_out_vec;
     tt_metal::detail::ReadFromBuffer(mm_output_buffer, mm_out_vec);
@@ -342,19 +362,19 @@ static bool test_sdpa_reduce_c_transposed(
         }
     }
 
-    // 2) Reduce-max output: compare the first row (row 0) of 32xN matrix to golden 1xN
+    // 2) Reduce-max output: final reduce_c_transposed emits q_chunk_size tiles; row 0 holds column maxima
     {
         float mse_threshold = 0.02f;
         float max_mse = 0.0f;
         for (uint32_t j = 0; j < N; ++j) {
-            float a = static_cast<float>(max_out_rm[0 * N + j]);
+            float acc = static_cast<float>(reduce_out_rm[0 * N + j]);  // row 0 of the stats tensor
             float b = static_cast<float>(golden_max_rm[j]);
-            float d = a - b;
+            float d = acc - b;
             max_mse += d * d;
         }
         max_mse /= static_cast<float>(N);
         if (max_mse > mse_threshold) {
-            log_error(LogTest, "Reduce-max output MSE: {} > {}", max_mse, mse_threshold);
+            log_error(LogTest, "Reduce-max output (post-combine) MSE: {} > {}", max_mse, mse_threshold);
             pass = false;
         }
     }
