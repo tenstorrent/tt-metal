@@ -1017,7 +1017,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
 void RunTimeOptions::InitializeFromEnvVars() {
     // Use enchantum to automatically iterate over all EnvVarID enum values
     for (const auto [id, name] : enchantum::entries_generator<EnvVarID>) {
-        const char* value = std::getenv(name.data());
+        const char* value = std::getenv(std::string(name).c_str());
 
         // Only process if the environment variable is set
         if (value) {
