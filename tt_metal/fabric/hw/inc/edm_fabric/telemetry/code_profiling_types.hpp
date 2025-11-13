@@ -13,11 +13,12 @@
 enum class CodeProfilingTimerType : uint32_t {
     NONE = 0,
     RECEIVER_CHANNEL_FORWARD = 1 << 0,
+    SENDER_CHANNEL_FORWARD = 1 << 1,
     // Future timers can be added here:
     // SENDER_CHANNEL_PROCESS = 1 << 1,
     // PACKET_ROUTING = 1 << 2,
     // etc.
-    LAST = RECEIVER_CHANNEL_FORWARD << 1  // Sentinel for size calculation
+    LAST = SENDER_CHANNEL_FORWARD << 1  // Sentinel for size calculation
 };
 
 /**
@@ -35,7 +36,7 @@ struct CodeProfilingTimerResult {
 constexpr uint32_t get_num_code_profiling_timer_types() {
     // Count the number of timer types defined
     // Currently only RECEIVER_CHANNEL_FORWARD is defined
-    return 1;
+    return 2;
 }
 
 /**

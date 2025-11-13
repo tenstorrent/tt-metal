@@ -311,8 +311,8 @@ RunTimeOptions::RunTimeOptions() {
         enable_fabric_telemetry = true;
     }
 
-    if (getenv("TT_FABRIC_PROFILE_RX_CH_FWD")) {
-        fabric_profiling_settings.enable_rx_ch_fwd = true;
+    if (const char* tt_fabric_profiler_str = getenv("TT_FABRIC_PROFILER"); tt_fabric_profiler_str != nullptr) {
+        this->set_fabric_code_profiling_timer_str(std::string(tt_fabric_profiler_str));
     }
 
     if (getenv("TT_METAL_FORCE_REINIT")) {

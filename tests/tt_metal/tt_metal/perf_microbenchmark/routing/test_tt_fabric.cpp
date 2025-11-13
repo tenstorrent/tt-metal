@@ -101,6 +101,15 @@ int main(int argc, char** argv) {
         test_context.initialize_bandwidth_results_csv_file();
     }
 
+    // Set code profiling enabled based on rtoptions
+    auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    bool code_profiling_enabled = rtoptions.fabric_code_profiling_enabled();
+
+    // Initialize CSV file for code profiling results if code profiling is enabled
+    if (code_profiling_enabled) {
+        test_context.initialize_code_profiling_results_csv_file();
+    }
+
     cmdline_parser.apply_overrides(raw_test_configs);
 
     if (raw_test_configs.empty()) {
@@ -179,9 +188,18 @@ int main(int argc, char** argv) {
             test_context.set_benchmark_mode(test_config.benchmark_mode);
             test_context.set_telemetry_enabled(test_config.benchmark_mode);
 
-            // Set code profiling enabled based on rtoptions
-            auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-            test_context.set_code_profiling_enabled(rtoptions.get_enable_fabric_code_profiling_rx_ch_fwd());
+            // TODO: Check to see if code profiling can be enabled even without benchmark mode (Issue #32036)
+            if (!test_config.benchmark_mode) {
+                if (code_profiling_enabled) {
+                    log_warning(
+                        tt::LogTest,
+                        "Code profiling is enabled but benchmark mode for this test is not. Code profiling has been "
+                        "disabled.");
+                }
+                test_context.set_code_profiling_enabled(false);
+            } else {
+                test_context.set_code_profiling_enabled(code_profiling_enabled);
+            }
 
             for (auto& built_test : built_tests) {
                 log_info(tt::LogTest, "Running Test: {}", built_test.parametrized_name);
@@ -223,6 +241,7 @@ int main(int argc, char** argv) {
                 if (test_context.get_code_profiling_enabled()) {
                     test_context.read_code_profiling_results();
                     test_context.report_code_profiling_results();
+                    test_context.dump_code_profiling_results_to_csv(built_test);
                 }
 
                 test_context.validate_results();

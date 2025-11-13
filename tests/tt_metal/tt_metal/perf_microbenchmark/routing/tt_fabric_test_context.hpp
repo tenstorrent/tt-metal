@@ -87,6 +87,10 @@ using tt::tt_fabric::fabric_tests::fetch_pattern_ntype;
 using tt::tt_fabric::fabric_tests::fetch_pattern_num_packets;
 using tt::tt_fabric::fabric_tests::fetch_pattern_packet_size;
 
+// Helper functions for code profiling
+using tt::tt_fabric::convert_code_profiling_timer_type_to_str;
+using tt::tt_fabric::convert_to_code_profiling_timer_type;
+
 // Bandwidth Summary Statistics
 // If you want to add new statistics, populate this enum with their names
 enum class BandwidthStatistics {
@@ -616,6 +620,12 @@ public:
     void clear_code_profiling_buffers();
 
     void report_code_profiling_results();
+
+    void initialize_code_profiling_results_csv_file();
+
+    std::string convert_coord_to_string(const ::tt::tt_metal::distributed::MeshCoordinate& coord);
+
+    void dump_code_profiling_results_to_csv(const TestConfig& config);
 
 private:
     void reset_local_variables() {
@@ -1672,6 +1682,9 @@ private:
 
     // Golden CSV comparison statistics
     std::filesystem::path comparison_statistics_csv_file_path_;
+
+    // Code profiling results CSV file path
+    std::filesystem::path code_profiling_csv_file_path_;
 
     // Ethernet core buffer readback helper
     std::unique_ptr<EthCoreBufferReadback> eth_readback_;
