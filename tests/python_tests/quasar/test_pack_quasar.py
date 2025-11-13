@@ -5,7 +5,6 @@ from typing import List
 
 import pytest
 import torch
-from conftest import skip_for_blackhole, skip_for_wormhole
 from helpers.device import (
     collect_results,
     write_stimuli_to_l1,
@@ -73,8 +72,7 @@ PACK_FORMATS = input_output_formats(
 ALL_PACK_COMBINATIONS = generate_qsr_pack_combinations(PACK_FORMATS)
 
 
-@skip_for_blackhole
-@skip_for_wormhole
+@pytest.mark.quasar
 @parametrize(
     test_name="pack_quasar_test",
     formats_dest_acc_input_dims=ALL_PACK_COMBINATIONS,
