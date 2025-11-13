@@ -224,8 +224,6 @@ class RunTimeOptions {
     // Timeout duration for operations
     std::chrono::duration<float> timeout_duration_for_operations = std::chrono::duration<float>(0.0f);
 
-    // Using MGD 1.0 syntax for mesh graph descriptor in Fabric Control Plane
-    bool use_mesh_graph_descriptor_1_0 = false;
     // Using MGD 2.0 syntax for mesh graph descriptor
     bool use_mesh_graph_descriptor_2_0 = false;
 
@@ -549,10 +547,6 @@ public:
     std::chrono::duration<float> get_timeout_duration_for_operations() const { return timeout_duration_for_operations; }
     // Mesh graph descriptor version accessor
     bool get_use_mesh_graph_descriptor_2_0() const { return use_mesh_graph_descriptor_2_0; }
-
-    // Using MGD 1.0 syntax for mesh graph descriptor in Fabric Control Plane
-    // TODO: This will be removed after MGD 1.0 is deprecated
-    bool get_use_mesh_graph_descriptor_1_0() const { return use_mesh_graph_descriptor_1_0; }
 
     bool get_force_jit_compile() const { return force_jit_compile; }
     void set_force_jit_compile(bool enable) { force_jit_compile = enable; }

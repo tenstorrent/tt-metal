@@ -91,7 +91,6 @@ enum class EnvVarID {
     TT_METAL_ENABLE_ERISC_IRAM,             // Enable ERISC IRAM (inverted logic)
     RELIABILITY_MODE,                       // Fabric reliability mode (strict/relaxed)
     TT_METAL_MULTI_AERISC,                  // Enable experimental multi-erisc mode
-    TT_METAL_USE_MGD_1_0,                   // Use mesh graph descriptor 1.0
     TT_METAL_USE_MGD_2_0,                   // Use mesh graph descriptor 2.0
     TT_METAL_FORCE_JIT_COMPILE,             // Force JIT compilation
 
@@ -488,12 +487,6 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             log_info(tt::LogMetal, "Enabling experimental multi-erisc mode");
             this->enable_2_erisc_mode = true;
             break;
-
-        // TT_METAL_USE_MGD_1_0
-        // Enables use of Mesh Graph Descriptor 1.0 format (deprecated, will be removed).
-        // Default: false
-        // Usage: export TT_METAL_USE_MGD_1_0=1
-        case EnvVarID::TT_METAL_USE_MGD_1_0: this->use_mesh_graph_descriptor_1_0 = true; break;
 
         // TT_METAL_USE_MGD_2_0
         // Enables use of Mesh Graph Descriptor 2.0 format for fabric configuration.
