@@ -429,6 +429,7 @@ TernaryDeviceOperation::invoke(
         .broadcast_type = broadcast_type,
         .memory_config = memory_config.value_or(input_b.memory_config()),
         .input_dtype = input_a.dtype(),
+        .worker_grid = get_worker_grid(input_a, &input_b, &input_c, optional_output_tensor),
         .dtype = output_dtype.value_or(input_b.dtype()),
         .compute_kernel_config = std::nullopt,
         .scalar_input_a = scalar,  // Reuse scalar_input_a for ADDCMUL scalar value
