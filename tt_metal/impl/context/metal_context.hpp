@@ -163,9 +163,6 @@ private:
     size_t worker_l1_unreserved_start_ = 0;
     size_t fw_compile_hash_ = 0;  // To check if FW recompilation is needed
 
-    // Used to track which FW has been built already
-    std::unordered_set<uint64_t> firmware_built_keys_;
-
     // Written to device as part of FW init, device-specific
     std::unordered_map<ChipId, std::vector<int32_t>> dram_bank_offset_map_;
     std::unordered_map<ChipId, std::vector<int32_t>> l1_bank_offset_map_;
