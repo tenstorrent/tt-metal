@@ -195,6 +195,10 @@ void physical_system_descriptor_to_proto(
 
     // Set target device type
     proto_desc->set_target_device_type(static_cast<uint32_t>(descriptor.get_target_device_type()));
+    // Set ethernet firmware version
+    proto_desc->mutable_ethernet_firmware_version()->set_major(descriptor.get_ethernet_firmware_version().major);
+    proto_desc->mutable_ethernet_firmware_version()->set_minor(descriptor.get_ethernet_firmware_version().minor);
+    proto_desc->mutable_ethernet_firmware_version()->set_patch(descriptor.get_ethernet_firmware_version().patch);
 }
 
 // Convert protobuf to PhysicalSystemDescriptor
@@ -262,6 +266,11 @@ std::unique_ptr<PhysicalSystemDescriptor> proto_to_physical_system_descriptor(
 
         exit_node_connection_table[proto_table.host_name()] = std::move(exit_connections);
     }
+
+    // Set ethernet firmware version
+    descriptor->get_ethernet_firmware_version().major = proto_desc.ethernet_firmware_version().major();
+    descriptor->get_ethernet_firmware_version().minor = proto_desc.ethernet_firmware_version().minor();
+    descriptor->get_ethernet_firmware_version().patch = proto_desc.ethernet_firmware_version().patch();
 
     return descriptor;
 }

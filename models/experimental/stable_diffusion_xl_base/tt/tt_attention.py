@@ -57,6 +57,8 @@ class TtAttention(LightweightModule):
             packer_l1_acc=True,
         )
 
+        attention_weights_dtype = model_config.attention_weights_dtype
+
         if self.is_self_attention == True:
             self.sdpa_program_config.q_chunk_size = 128
             self.sdpa_program_config.k_chunk_size = 1024
@@ -69,26 +71,25 @@ class TtAttention(LightweightModule):
                 dim=-1,
             )
             self.tt_qkv_weights = ttnn.from_torch(
-                fused_qkv_weights, model_config.attention_weights_dtype, device=device, layout=ttnn.TILE_LAYOUT
+                fused_qkv_weights, attention_weights_dtype, device=device, layout=ttnn.TILE_LAYOUT
             )
         else:
-            self.tt_q_weights, _ = prepare_linear_params(device, q_weights, None, model_config.attention_weights_dtype)
-            self.tt_k_weights, _ = prepare_linear_params(device, k_weights, None, model_config.attention_weights_dtype)
-            self.tt_v_weights, _ = prepare_linear_params(device, v_weights, None, model_config.attention_weights_dtype)
+            self.tt_q_weights, _ = prepare_linear_params(device, q_weights, None, attention_weights_dtype)
+            self.tt_k_weights, _ = prepare_linear_params(device, k_weights, None, attention_weights_dtype)
+            self.tt_v_weights, _ = prepare_linear_params(device, v_weights, None, attention_weights_dtype)
 
             self.k_program_config = model_config.get_matmul_config(f"{module_path}.to_k")
             self.v_program_config = model_config.get_matmul_config(f"{module_path}.to_v")
-            assert self.k_program_config is not None, "k_program_config should not be None"
-            assert self.v_program_config is not None, "v_program_config should not be None"
+
+        self.tt_out_weights, self.tt_out_bias = prepare_linear_params(
+            device, out_weights, out_bias, attention_weights_dtype
+        )
+
         self.q_program_config = model_config.get_matmul_config(f"{module_path}.to_q")
         self.q_compute_kernel_config = model_config.get_mm_compute_config(f"{module_path}.to_q")
 
-        self.tt_out_weights, self.tt_out_bias = prepare_linear_params(
-            device, out_weights, out_bias, model_config.attention_weights_dtype
-        )
         self.dense_out_program_config = model_config.get_matmul_config(f"{module_path}.to_out")
         self.default_compute_kernel_config = model_config.get_mm_compute_config(f"{module_path}.to_out")
-        assert self.dense_out_program_config is not None, "dense_out_program_config should not be None"
 
     def forward(self, hidden_states, attention_mask, encoder_hidden_states=None):
         if encoder_hidden_states is None:
@@ -96,20 +97,23 @@ class TtAttention(LightweightModule):
         B = list(hidden_states.shape)[0]
 
         if self.is_self_attention:
-            if hidden_states.shape[-1] == 640:
-                memory_config = ttnn.create_sharded_memory_config(
-                    shape=(1, 1, 512, 256),
-                    core_grid=ttnn.CoreGrid(y=8, x=8),
-                    strategy=ttnn.ShardStrategy.BLOCK,
-                    use_height_and_width_as_shard_shape=True,
-                )
+            if self.q_program_config is not None:
+                if hidden_states.shape[-1] == 640:
+                    memory_config = ttnn.create_sharded_memory_config(
+                        shape=(1, 1, 512, 256),
+                        core_grid=ttnn.CoreGrid(y=8, x=8),
+                        strategy=ttnn.ShardStrategy.BLOCK,
+                        use_height_and_width_as_shard_shape=True,
+                    )
+                else:
+                    memory_config = ttnn.create_sharded_memory_config(
+                        shape=(1, 1, 1024 // 8, 3840 // 8),
+                        core_grid=ttnn.CoreGrid(y=8, x=8),
+                        strategy=ttnn.ShardStrategy.BLOCK,
+                        use_height_and_width_as_shard_shape=True,
+                    )
             else:
-                memory_config = ttnn.create_sharded_memory_config(
-                    shape=(1, 1, 1024 // 8, 3840 // 8),
-                    core_grid=ttnn.CoreGrid(y=8, x=8),
-                    strategy=ttnn.ShardStrategy.BLOCK,
-                    use_height_and_width_as_shard_shape=True,
-                )
+                memory_config = None
 
             qkv_fused = ttnn.matmul(
                 hidden_states,

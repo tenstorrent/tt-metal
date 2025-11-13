@@ -34,6 +34,7 @@ void py_bind_sdpa(py::module& module) {
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             program_config (SDPAProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
+            attention_sink (ttnn.Tensor, optional): Defaults to `None`. [1 x nqh x 1 x 1]. Single attention sink value per head. The kernel will efficiently replicate this value across all query positions.
 
 
         Returns:
@@ -57,7 +58,8 @@ void py_bind_sdpa(py::module& module) {
                std::optional<uint32_t> sliding_window_size,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<SDPAProgramConfig> program_config,
-               std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+               std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+               std::optional<ttnn::Tensor> attention_sink) {
                 return self(
                     input_tensor_q,
                     input_tensor_k,
@@ -68,7 +70,8 @@ void py_bind_sdpa(py::module& module) {
                     sliding_window_size,
                     memory_config,
                     program_config,
-                    compute_kernel_config);
+                    compute_kernel_config,
+                    attention_sink);
             },
             py::arg("input_tensor_q").noconvert(),
             py::arg("input_tensor_k").noconvert(),
@@ -80,7 +83,8 @@ void py_bind_sdpa(py::module& module) {
             py::arg("sliding_window_size").noconvert() = std::nullopt,
             py::arg("memory_config").noconvert() = std::nullopt,
             py::arg("program_config").noconvert() = std::nullopt,
-            py::arg("compute_kernel_config").noconvert() = std::nullopt});
+            py::arg("compute_kernel_config").noconvert() = std::nullopt,
+            py::arg("attention_sink").noconvert() = std::nullopt});
 
     auto chunked_doc =
         R"doc(

@@ -8,7 +8,7 @@ from loguru import logger
 import ttnn
 import math
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-from tests.ttnn.unit_tests.operations.ccl.test_all_reduce_async import run_all_reduce_with_mesh_tensor_along_row
+from tests.nightly.tg.ccl.test_all_reduce_async import run_all_reduce_with_mesh_tensor_along_row
 
 
 # Enumerate the post-commit cases explicitly

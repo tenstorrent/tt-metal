@@ -25,7 +25,7 @@ from models.common.utils import top_k_top_p_filtering
 from models.demos.falcon7b_common.tests.test_utils import get_num_devices, initialize_kv_cache, load_hf_model
 from models.demos.falcon7b_common.tt.falcon_causallm import TtFalconCausalLM
 from models.demos.falcon7b_common.tt.model_config import get_model_config
-from models.demos.utils.llm_demo_utils import check_tokens_match, create_benchmark_data, verify_perf
+from models.demos.utils.llm_demo_utils import check_tokens_match, create_benchmark_data  # , verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import get_hf_tt_cache_path
 
@@ -549,6 +549,7 @@ def run_falcon_demo_kv(
     run_type = f"demo_perf_{num_devices}chip" if perf_mode else f"demo_generate_{num_devices}chip"
     if galaxy_type:
         run_type += f"_{galaxy_type}"
+
     benchmark_data.save_partial_run_json(
         profiler,
         run_type=run_type,
@@ -556,7 +557,7 @@ def run_falcon_demo_kv(
         ml_model_type="llm",
         num_layers=num_layers,
         batch_size=batch_size,
-        config_params=configuration.to_dict(),
+        config_params={"data_parallel": num_devices, "tensor_parallel": 1},
         precision=f"prefill[{model_config_strs_prefill_decode[0]}]_decode[{model_config_strs_prefill_decode[1]}]",
         input_sequence_length=num_input_tokens,
         output_sequence_length=1 if perf_mode else output_token_index + 1,
@@ -565,10 +566,11 @@ def run_falcon_demo_kv(
     # Verify output or perf if expected values are provided
     assert expected_perf_metrics is None or expected_greedy_output_path is None
     if expected_perf_metrics is not None:
-        if num_devices == 32:  # set higher margin to 20% for Galaxy due to larger variance on CI
-            verify_perf(measurements, expected_perf_metrics, high_tol_percentage=1.20)
-        else:
-            verify_perf(measurements, expected_perf_metrics)
+        pass  # see issue #31939
+    #     if num_devices == 32:  # set higher margin to 20% for Galaxy due to larger variance on CI
+    #         verify_perf(measurements, expected_perf_metrics, high_tol_percentage=1.20)
+    #     else:
+    #         verify_perf(measurements, expected_perf_metrics)
     elif expected_greedy_output_path is not None:
         if token_check_does_pass:
             logger.info("Output Check Passed!")

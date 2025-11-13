@@ -144,7 +144,7 @@ ttnn::Tensor RepeatOperation::invoke(
             repetition_vector.cbegin(),
             repetition_vector.begin(),
             std::multiplies<uint32_t>());
-        return tensor.reshape(ttnn::Shape(repetition_vector));
+        return ttnn::reshape(tensor, ttnn::Shape(repetition_vector));
     }
 
     TT_FATAL(working_tensor.logical_shape().rank() > 0, "repeat does not support rank 0 tensors");

@@ -25,17 +25,24 @@ class PhysicalSystemDescriptor;
 
 }  // namespace tt::tt_metal
 
+namespace tt::umd {
+
+class Cluster;
+
+}   // namespace tt::umd
+
 namespace tt::tt_fabric {
 
 class TopologyMapper;
 
-// TODO: remove this once UMD provides API for UBB ID
+// TODO: remove this once UMD provides API for UBB ID and bus ID
  struct UbbId {
      std::uint32_t tray_id;
      std::uint32_t asic_id;
  };
 
- UbbId get_ubb_id(ChipId chip_id);
+ uint16_t get_bus_id(tt::umd::Cluster& cluster, ChipId chip_id);
+ UbbId get_ubb_id(tt::umd::Cluster& cluster, ChipId chip_id);
 
  class FabricContext;
 
@@ -274,6 +281,10 @@ private:
     void write_routing_tables_to_eth_cores(MeshId mesh_id, ChipId chip_id) const;
     void write_routing_tables_to_tensix_cores(MeshId mesh_id, ChipId chip_id) const;
     void write_fabric_connections_to_tensix_cores(MeshId mesh_id, ChipId chip_id) const;
+    // Helper functions to compute and embed routing path tables
+    void compute_and_embed_1d_routing_path_table(MeshId mesh_id, tensix_routing_l1_info_t& tensix_routing_info) const;
+    void compute_and_embed_2d_routing_path_table(
+        MeshId mesh_id, ChipId chip_id, tensix_routing_l1_info_t& tensix_routing_info) const;
 
     // Helper to populate fabric connection info for both router and mux configurations
     void populate_fabric_connection_info(

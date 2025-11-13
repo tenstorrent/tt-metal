@@ -36,6 +36,7 @@
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/distributed.hpp>
+#include "common/tt_backend_api_types.hpp"
 
 using namespace tt;
 using namespace tt::test_utils;

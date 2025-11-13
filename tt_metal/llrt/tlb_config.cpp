@@ -13,7 +13,8 @@
 
 #include "core_coord.hpp"
 #include "metal_soc_descriptor.h"
-#include "tt_backend_api_types.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "common/tt_backend_api_types.hpp"
 #include <umd/device/arch/blackhole_implementation.hpp>
 #include <umd/device/cluster.hpp>
 #include <umd/device/types/core_coordinates.hpp>

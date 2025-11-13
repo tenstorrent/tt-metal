@@ -181,7 +181,7 @@ FabricMuxConfig::FabricMuxConfig(
 }
 
 std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_main_args(
-    const tt::tt_fabric::FabricEriscDatamoverConfig& fabric_router_config) const {
+    const tt::tt_fabric::FabricEriscDatamoverConfig& /*fabric_router_config*/) const {
     TT_FATAL(fabric_endpoint_channel_num_buffers_ > 0, "fabric_endpoint_channel_num_buffers_ must be larger than 0");
     TT_FATAL(fabric_endpoint_status_address_ != 0, "fabric_endpoint_status_address_ must not be invalid address 0");
     return std::vector<uint32_t>{

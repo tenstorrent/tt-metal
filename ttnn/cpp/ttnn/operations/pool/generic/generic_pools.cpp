@@ -47,7 +47,6 @@ static std::vector<Tensor> pool2d_invoke(
     const std::optional<const MemoryConfig>& memory_config = std::nullopt,
     const std::optional<const TensorMemoryLayout> applied_shard_scheme = std::nullopt,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
-    bool in_place_halo = false,
     bool deallocate_input = false,
     bool reallocate_halo_output = true,
     bool return_indices = false,
@@ -88,7 +87,6 @@ static std::vector<Tensor> pool2d_invoke(
         .padding = {padding_4d.at(0), padding_4d.at(1), padding_4d.at(2), padding_4d.at(3)},
         .dilation_hw = {dilation_h, dilation_w},
         .ceil_mode = ceil_mode,
-        .is_avg_pool = pool_type == Pool2DType::AVG_POOL2D,
     };
     auto output_shape = sliding_window_config.get_output_shape();
     const bool is_input_tensor_in_dram = input_tensor.memory_config().is_dram();
@@ -192,7 +190,7 @@ static std::vector<Tensor> pool2d_invoke(
              input_tensor_shape[2],
              input_tensor_width_snapped_to_channels_alignment});
 
-        input_tensor_flattened = input_tensor_flattened.reshape(input_tensor_shape, input_padded_shape);
+        input_tensor_flattened = ttnn::reshape(input_tensor_flattened, input_tensor_shape, input_padded_shape);
 
         auto sharded_mem_config = conv::create_sharded_memory_config_from_parallel_config(
             input_padded_shape, parallel_config, is_in_tiled ? tt::constants::TILE_HEIGHT : 1);
@@ -246,7 +244,6 @@ static std::vector<Tensor> pool2d_invoke(
         .core_range_set = parallel_config.grid,
         .snap_to_tile = is_out_tiled,
         .ceil_mode = ceil_mode,
-        .is_avg_pool = pool_type == Pool2DType::AVG_POOL2D,
     };
 
     // call the halo uop
@@ -257,8 +254,7 @@ static std::vector<Tensor> pool2d_invoke(
         false,
         parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
         input_tensor_sharded.memory_config(),
-        is_out_tiled,
-        in_place_halo);
+        is_out_tiled);
 
     if (deallocate_input || is_input_tensor_in_dram) {
         input_tensor_sharded.deallocate(/*force*/ true);
@@ -319,7 +315,6 @@ std::vector<Tensor> MaxPool2DOp::invoke(
     bool ceil_mode,
     const std::optional<const MemoryConfig>& memory_config,
     const std::optional<const TensorMemoryLayout> applied_shard_scheme,
-    bool in_place_halo,
     bool deallocate_input,
     bool reallocate_halo_output,
     bool return_indices,
@@ -342,7 +337,6 @@ std::vector<Tensor> MaxPool2DOp::invoke(
         memory_config,
         applied_shard_scheme,
         std::nullopt,  // compute_kernel_config - not needed for max pool
-        in_place_halo,
         deallocate_input,
         reallocate_halo_output,
         return_indices,
@@ -365,7 +359,6 @@ Tensor AvgPool2DOp::invoke(
     const std::optional<const MemoryConfig>& memory_config,
     const std::optional<const TensorMemoryLayout> applied_shard_scheme,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
-    bool in_place_halo,
     bool deallocate_input,
     bool reallocate_halo_output,
     const DataType dtype,
@@ -387,7 +380,6 @@ Tensor AvgPool2DOp::invoke(
         memory_config,
         applied_shard_scheme,
         compute_kernel_config,
-        in_place_halo,
         deallocate_input,
         reallocate_halo_output,
         false,  // return_indices

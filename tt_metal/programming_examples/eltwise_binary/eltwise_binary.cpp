@@ -20,7 +20,7 @@ using namespace tt::tt_metal;
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""
 #endif
-int main(int argc, char** argv) {
+int main(int /*argc*/, char** /*argv*/) {
     bool pass = true;
 
     // clang-format off

@@ -1083,3 +1083,70 @@ def test_binary_sharded_bcast_no_profile(a_shape, b_shape, a_config, b_config, o
     out_pt = torch.add(a_pt, b_pt)
     out_tt = ttnn.add(a_tt, b_tt, memory_config=out_config, use_legacy=None)
     assert_with_pcc(ttnn.to_torch(out_tt), out_pt)
+
+
+@pytest.mark.parametrize(
+    "test_shapes",
+    ([[1, 1, 2304, 1792], [1, 1, 2112, 1792]],),
+)
+# HEIGHT SHARDING test - tests program cache with different shapes
+def test_inplace_sub_height_sharded_different_shapes(test_shapes, device):
+    grid_size = device.compute_with_storage_grid_size()
+
+    if grid_size.x < 5 or grid_size.y < 4:
+        pytest.skip(
+            f"This test is intended to run on devices with at least 5x4 core grid. Core grid: {grid_size.x}x{grid_size.y}"
+        )
+
+    import math
+
+    for iteration, shape in enumerate(test_shapes):
+        # Generate random tensors
+        torch_input_tensor_a = torch.rand(shape, dtype=torch.bfloat16)
+        torch_input_tensor_b = torch.rand(shape, dtype=torch.bfloat16)
+
+        # Calculate shard dimensions
+        total_rows = math.prod(shape[:-1])  # 2304 or 2112
+        total_cols = shape[-1]  # 1792
+
+        num_cores = 20
+
+        shard_height = math.ceil(total_rows / num_cores / 32) * 32
+        shard_width = math.ceil(total_cols / 32) * 32
+
+        # Create HEIGHT_SHARDED memory config
+        sharded_memory_config = ttnn.create_sharded_memory_config(
+            shape=(shard_height, shard_width),
+            core_grid=ttnn.CoreGrid(y=4, x=5),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        # Create tensors on device as HEIGHT_SHARDED
+        input_tensor_a = ttnn.from_torch(
+            torch_input_tensor_a,
+            dtype=ttnn.bfloat16,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=sharded_memory_config,
+        )
+        input_tensor_b = ttnn.from_torch(
+            torch_input_tensor_b,
+            dtype=ttnn.bfloat16,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=sharded_memory_config,
+        )
+
+        ttnn.sub_(input_tensor_a, input_tensor_b)
+        output_tensor = ttnn.to_torch(input_tensor_a)
+
+        # Validate results
+        golden_fn = ttnn.get_golden_function(ttnn.sub_)
+        torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
+        assert_allclose(torch_output_tensor, output_tensor)
+
+        # Cleanup before next iteration
+        ttnn.deallocate(input_tensor_a)
+        ttnn.deallocate(input_tensor_b)

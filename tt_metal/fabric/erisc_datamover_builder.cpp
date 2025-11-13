@@ -198,11 +198,9 @@ bool requires_forced_assignment_to_noc1() {
     // When creating a kernel on erisc0 and 2 erisc mode is disabled, the physical processor is erisc1 while erisc0 is
     // running base firmware. As base firmware may occasionally use noc0 force fabric on "erisc0" to use noc1
     //
-    // When 2 erisc mode is enabled on the runtime, erisc index == noc index is enforced hence the condition
-    // !get_enable_2_erisc_mode() below.
+    // When 2 erisc mode is enabled on the runtime, erisc index == noc index is enforced in tt_metal.cpp
     //
-    return tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE &&
-           get_num_riscv_cores() == 1 && !tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode();
+    return tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE && get_num_riscv_cores() == 1;
 }
 }  // anonymous namespace
 
@@ -657,7 +655,7 @@ void append_worker_to_fabric_edm_sender_rt_args(
     std::ranges::copy(values, std::back_inserter(args_out));
 }
 
-size_t log_worker_to_fabric_edm_sender_rt_args(const std::vector<uint32_t>& args, size_t starting_arg_idx) {
+size_t log_worker_to_fabric_edm_sender_rt_args(const std::vector<uint32_t>& args [[maybe_unused]], size_t starting_arg_idx) {
     log_trace(tt::LogFabric, "Worker to fabric EDM Sender has {} RT Args: {}", args.size(), args);
     log_trace(tt::LogFabric, "arg[{}]: edm_noc_xy {}", starting_arg_idx, args[starting_arg_idx++]);
     log_trace(tt::LogFabric, "arg[{}]: edm_buffer_base_addr {}", starting_arg_idx, args[starting_arg_idx++]);
@@ -1172,7 +1170,7 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
 
 FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     tt::tt_metal::IDevice* device,
-    tt::tt_metal::Program& program,
+    tt::tt_metal::Program& /*program*/,
     const CoreCoord& ethernet_core,
     const FabricNodeId& local_fabric_node_id,
     const FabricNodeId& peer_fabric_node_id,

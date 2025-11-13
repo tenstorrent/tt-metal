@@ -650,7 +650,7 @@ std::unordered_map<tt::tt_metal::AsicID, std::unordered_map<uint8_t, PortType>> 
 }
 
 void print_ethernet_connectivity(
-    bool print_connectivity, const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) {
+    bool /*print_connectivity*/, const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) {
     auto port_types = generate_port_types(physical_system_descriptor);
 
     // Collect all connections and organize by: connection_type -> hostname -> port_type -> connections
