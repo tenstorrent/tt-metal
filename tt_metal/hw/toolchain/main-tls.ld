@@ -99,27 +99,16 @@ ENTRY(_start)
 
 PHDRS {
   attributes 0x70000003;
-  IF_KERNEL(firmtext PT_LOAD; firmtextdel 0x60000000;)
   text PT_LOAD;
-
-  IF_KERNEL(IF_NOT_TLS(firmtdata PT_LOAD; firmtls PT_TLS; firmtdatadel 0x60000000;))
-#if IS_TLS
   tdata PT_LOAD;
   tls PT_TLS;
-#endif
-
-  IF_KERNEL(firmdata PT_LOAD; firmdatadel 0x60000000;)
   data PT_LOAD;
 }
 
 SECTIONS {
 /* Text-like */
 #if TYPE_KERNEL
-  .firmtext TEXT_FIRMWARE_START
-  :
-  {
-    *_object.o(.text)
-  } :firmtext :firmtextdel
+  /DISCARD/ : { *_object.o(.text) }
 #endif
   .text TEXT_START
   :
@@ -134,21 +123,17 @@ SECTIONS {
     *(.gnu.warning)
     . = ALIGN(4);
    } :text
-   IF_KERNEL(IF_TLS(__tdata_lma = .;)IF_NOT_TLS(__data_lma = .;))
+   IF_KERNEL(__tdata_lma = .;)
 
-#if TYPE_KERNEL && !IS_TLS
-  .firmtdata TLS_START
-  :
-  {
-    *_object.o(.tdata .tbss)
-  } :firmtdata :firmtls :firmtdatadel
+#if !IS_TLS
+  /DISCARD/ : { *(.tdata.start .tdata.end .tbss.start .tbss.end) }
 #endif
-#if IS_TLS
-/* TLS-like */
-  .tdata IF_FIRMWARE(TLS_START)IF_KERNEL(TLS_START/*ADDR(.firmtdata) + SIZEOF(.firmtdata)*/)
+  .tdata TLS_START
   : IF_KERNEL(AT(__tdata_lma))
   {
-    IF_KERNEL(IF_TLS(*_object.o(.tdata .tbss)))
+    IF_KERNEL(*_object.o(.tdata .tbss))
+    __tdata_init = .;
+    IF_NOT_TLS(__ldm_data_start = .;)
     *(.tdata.start) /* define __tdata_start as TLS symbol) */
     *(.tdata .tdata.* .gnu.linkonce.td.*)
     . = ALIGN(4);
@@ -157,34 +142,33 @@ SECTIONS {
   .tbss
   : IF_KERNEL(LOAD_AFTER(.tbss,.tdata))
   {
+    IF_NOT_TLS(LONG(0);) /* Force PROGBITS to be in effect.  */
     *(.tbss.start)
     *(.tbss .tbss.* .gnu.linkonce.tb.* .tcommon)
     . = ALIGN(4);
     *(.tbss.end)
   } :tdata :tls
-#else
-  /DISCARD/ : { *(.tdata.start .tdata.end .tbss.start .tbss.end) }
-#endif
-/* Data-like */
-#if TYPE_KERNEL
-  .firmdata DATA_START
-  : AT(TLS_START + TLS_SIZE/*LOADADDR(.firmtdata) + SIZEOF(.firmtdata)*/)
-  {
-    *_object.o(.data .bss)
-  } :firmdata :firmdatadel
-#endif
+
 #if TYPE_KERNEL
   /DISCARD/ : { *_object.o(.empty.ctors.dtors .empty.init_array.fini_array) }
 #endif
-  .data IF_FIRMWARE(DATA_START)
-        IF_KERNEL(IF_TLS(ADDR(.firmdata) + SIZEOF(.firmdata))IF_NOT_TLS(ADDR(.firmtdata) + SIZEOF(.firmtdata)))
-  : IF_KERNEL(IF_TLS(LOAD_AFTER(.data,.tdata))IF_NOT_TLS(AT(__data_lma)))
+
+#if !IS_TLS
+  .firmdata DATA_START
+  : AT(DATA_START)
   {
-    IF_NOT_TLS(__ldm_data_start = .;)
+    *object.o(.data .bss)
+  } :data
+#endif
+
+  .data IF_TLS(DATA_START)IF_NOT_TLS(ADDR(.tbss) + SIZEOF(.tbss))
+  : IF_KERNEL(LOAD_AFTER(.data,IF_TLS(.tdata)IF_NOT_TLS(.tbss)))
+  {
+    *_object.o(.data .bss)
+    IF_TLS(__data_init = .;)
      *(.rodata .rodata.* .gnu.linkonce.r.*)
      *(.rodata1)
 
-    *(.dynamic)
     *(.data.rel.ro.local* .gnu.linkonce.d.rel.ro.local.*) *(.data.rel.ro .data.rel.ro.* .gnu.linkonce.d.rel.ro.*)
 
     *(.srodata.cst16) *(.srodata.cst8) *(.srodata.cst4) *(.srodata.cst2) *(.srodata .srodata.*)
@@ -194,16 +178,15 @@ SECTIONS {
     *(.data .data.* .gnu.linkonce.d.*)
     *(.data1)
 
-    *(.got.plt) *(.igot.plt) *(.got) *(.igot)
     . = ALIGN(4);
     IF_NOT_TLS(__ldm_data_end = .;)
-  } :data
+  } IF_TLS(:data)IF_NOT_TLS(:tdata)
   .empty.ctors.dtors
   : LOAD_AFTER(.empty.ctors.dtors,.data)
   {
     /* We don't use .ctors/.dtors either (this still isn't the '90s), make sure there aren't any.  */
     KEEP (*(.ctors .ctors.* .dtors .dtors.*))
-  } :data
+  } IF_TLS(:data)IF_NOT_TLS(:tdata)
   .empty.init_array.fini_array
   : LOAD_AFTER(.empty.init_array.fini_array,.empty.ctors.dtors)
   {
@@ -213,17 +196,9 @@ SECTIONS {
     KEEP (*(.init_array))
     KEEP (*(SORT_BY_INIT_PRIORITY(.fini_array.*)))
     KEEP (*(.fini_array))
-  } :data
-#if !IF_TLS
-  .empty.tls
-  : LOAD_AFTER(.empty.tls,.empty.init_array.fini_array)
-  {
-    *(.tdata .tdata.* .gnu.linkonce.td.*)
-    *(.tbss .tbss.* .gnu.linkonce.tb.* .tcommon)
-  } :data
-#endif
+  } IF_TLS(:data)IF_NOT_TLS(:tdata)
   .bss
-  : LOAD_AFTER(.bss,IF_TLS(.empty.init_array.fini_array)IF_NOT_TLS(.empty.tls))
+  : LOAD_AFTER(.bss,.empty.init_array.fini_array)
   {
     __ldm_bss_start = .;
     *(.sbss2 .sbss2.* .gnu.linkonce.sb2.*)
@@ -235,21 +210,22 @@ SECTIONS {
     *(COMMON)
     . = ALIGN(4);
     __ldm_bss_end = .;
-  } :data
+  } IF_TLS(:data)IF_NOT_TLS(:tdata)
 
 #if TYPE_KERNEL
   /DISCARD/ : { *_object.o(*) }
 #endif
 
-  /* The loader uses this data to check for size overflows.
-     We don't do it here, as the failure mode would be bad (no executable to examine).
-     These are indexed by non-deleted non-ignored segment numbering. */
-  .phdrs 0 (INFO)
+  /* The loader uses this data to trim segments and check for size overflows.
+     SEGMENT_ADDR:TRIM_BOUND:SIZE_LIMIT */
+  .segments 0 (INFO)
   :
   {
-    LONG(TEXT_SIZE)
-    LONG(TLS_SIZE - STACK_MIN_SIZE - (ADDR(IF_TLS(.tdata)IF_NOT_TLS(.data)) - TLS_START))
-    IF_TLS(LONG(DATA_SIZE - (ADDR(.data) - DATA_START)))
+    LONG(ADDR(.text)) LONG(ADDR(.text)) LONG(TEXT_SIZE)
+    LONG(ADDR(.tdata)) LONG(__tdata_init)
+       LONG(TLS_SIZE - STACK_MIN_SIZE - (__tdata_init - TLS_START))
+    IF_TLS(LONG(ADDR(.data)) LONG(__data_init) LONG(DATA_SIZE - (__data_init - DATA_START)))
+    IF_NOT_TLS(LONG(ADDR(.firmdata)) LONG(ADDR(.firmdata) + SIZEOF(.firmdata)) LONG(0))
   }
 
   .riscv.attributes 0 : { *(.riscv.attributes) } :attributes

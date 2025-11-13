@@ -63,8 +63,10 @@ static constexpr unsigned mask_lo12_s_shift_2 = 25;
 using namespace ll_api;
 
 class ElfFile::Impl {
-protected:
+private:
     ElfFile& owner_;
+
+protected:
     // This is a view of the caller's object, which must remain live
     // for the lifetime of this object. (As that's the case anyway,
     // there's no burden on the caller). See the document on
@@ -84,11 +86,18 @@ public:
 public:
     static Impl* Make(ElfFile& owner, const std::string& path);
 
+    void Finalize();
+
 public:
     virtual void LoadImage() = 0;
     virtual void WeakenDataSymbols(std::span<const std::string_view> strong_names) = 0;
     virtual void ObjectifyExecutable() = 0;
     virtual void XIPify() = 0;
+    virtual std::span<const std::uint32_t> GetSegmentInfo() = 0;
+
+private:
+    [[nodiscard]] auto GetSegments() const -> std::vector<Segment>& { return owner_.segments_; }
+    [[nodiscard]] auto GetContents() const -> std::span<std::byte>& { return owner_.contents_; }
 
 private:
     template <bool Is64>
@@ -107,6 +116,7 @@ public:
 private:
     std::span<Phdr> phdrs_;
     std::span<Shdr> shdrs_;
+    const Shdr* segment_info_ = nullptr;
 
     class Weakener;
 
@@ -118,14 +128,14 @@ public:
     virtual void WeakenDataSymbols(std::span<const std::string_view> strong_names) override;
     virtual void ObjectifyExecutable() override;
     virtual void XIPify() override;
+    virtual std::span<const std::uint32_t> GetSegmentInfo() override;
 
 private:
     [[nodiscard]] auto GetHeader() const -> Ehdr& { return *ByteOffset<Ehdr>(GetContents().data()); }
     [[nodiscard]] auto GetPhdrs() const -> std::span<const Phdr> { return phdrs_; }
     [[nodiscard]] auto GetShdrs() const -> std::span<Shdr> { return shdrs_; }
     [[nodiscard]] auto GetShdr(unsigned ix) const -> const Shdr& { return shdrs_[ix]; }
-    [[nodiscard]] auto GetSegments() const -> std::vector<Segment>& { return owner_.segments_; }
-    [[nodiscard]] auto GetContents() const -> std::span<std::byte>& { return owner_.contents_; }
+    using Impl::GetContents;
     [[nodiscard]] auto GetContents(const Phdr& phdr) const -> std::span<std::byte> {
         return GetContents().subspan(phdr.p_offset, phdr.p_filesz);
     }
@@ -173,6 +183,7 @@ private:
     [[nodiscard]] Segment* FindSegment(const Sym& symbol) const {
         return symbol.st_shndx < GetShdrs().size() ? FindSegment(GetShdr(symbol.st_shndx)) : nullptr;
     }
+    [[nodiscard]] bool IsText(const Segment* seg) { return seg == &GetSegments().front(); }
 
     template <typename T = std::byte>
     [[nodiscard]] static T* ByteOffset(std::byte* base, size_t offset = 0) {
@@ -320,8 +331,50 @@ void ElfFile::ObjectifyExecutable() { pimpl_->ObjectifyExecutable(); }
 
 void ElfFile::MakeExecuteInPlace() { pimpl_->XIPify(); }
 
-void ElfFile::Finalize() {
-    std::erase_if(segments_, [](const Segment& seg) { return seg.IsDeleted(); });
+void ElfFile::Finalize() { pimpl_->Finalize(); }
+
+void ElfFile::Impl::Finalize() {
+    auto info = GetSegmentInfo();
+
+    unsigned segment_ix = 0;
+    for (unsigned ix = 0; ix + 3 <= info.size(); ix += 3) {
+        uint32_t vma = info[ix + 0];
+
+        for (;; segment_ix++) {
+            if (segment_ix == GetSegments().size()) {
+                TT_THROW("{}: cannot find segment at {:#x}", path_, vma);
+                break;
+            }
+
+            auto& seg = GetSegments()[segment_ix];
+            if (seg.address == vma) {
+                uint32_t trim = info[ix + 1] - vma;
+
+                seg.address += trim;
+                seg.membytes -= trim;
+                seg.contents = seg.contents.subspan(trim / sizeof(uint32_t));
+
+                uint32_t limit = info[ix + 2];
+                if (seg.membytes > limit) {
+                    TT_THROW(
+                        "{}: segment[{}] [{:#x},+{:#x}) overflows region:{} limit of {:#x} bytes, reduce the size of "
+                        "{}",
+                        path_,
+                        segment_ix,
+                        seg.address,
+                        seg.membytes,
+                        ix / 3,
+                        limit,
+                        segment_ix == 0                                ? "code"
+                        : segment_ix == 2                              ? "statically allocated variables (e.g, globals)"
+                        : segment_ix == 1 && GetSegments().size() == 2 ? "thread_local variables"
+                                                                       : "globals and/or thread_local variables");
+                }
+                segment_ix++;
+                break;
+            }
+        }
+    }
 }
 
 template <bool Is64>
@@ -351,63 +404,41 @@ void ElfFile::Impl::Elf<Is64>::LoadImage() {
     }
 
     GetSegments().reserve(hdr.e_phnum);
-    bool seenText = false;
     for (unsigned ix = 0; ix != GetPhdrs().size(); ix++) {
         const auto& phdr = GetPhdrs()[ix];
-        auto type = Segment::None;
 
         switch (phdr.p_type) {
-            case PT_GNU_STACK: break;
-            case PT_LOAD: type = seenText ? Segment::Data : Segment::Text; break;
-            case PT_TLS: type = Segment::TLS; break;
-            case 0x60000000:  // Our special 'delete-prev' marker.
-                if (GetSegments().empty() || GetSegments().back().address != phdr.p_vaddr ||
-                    GetSegments().back().lma != phdr.p_paddr) {
-                    TT_THROW("{}: deleting segment {} does not match predecessor", path_, ix);
+            case PT_LOAD: break;
+            case PT_TLS:
+                /* A PT_LOAD segment covering TLS will not contain the
+                   tbss size, so copy that.  */
+                if (!GetSegments().empty()) {
+                    auto& seg = GetSegments().back();
+                    if (seg.membytes + seg.address == phdr.p_vaddr + phdr.p_filesz) {
+                        seg.membytes = phdr.p_memsz;
+                    }
                 }
-                GetSegments().back().SetDeleted();
-                if (GetSegments().size() == 1) {
-                    seenText = false;
-                }
-                continue;
-            case PT_RISCV_ATTRIBUTES:
-                // TODO: verify Arch is ok?
-                continue;
+                [[fallthrough]];
             default: continue;
         }
 
         log_debug(
             tt::LogLLRuntime,
-            "{}: {} segment {}: [{:#x},+{:#x}/{:#x})@{:#x}",
+            "{}: phdr[{}]: [{:#x},+{:#x}/{:#x})@{:#x}",
             path_,
-            unsigned(type),
             ix,
             phdr.p_vaddr,
             phdr.p_filesz,
             phdr.p_memsz,
             phdr.p_offset);
 
-        if (type == Segment::TLS) {
-            if (GetSegments().empty() || GetSegments().back().address != phdr.p_vaddr ||
-                GetSegments().back().lma != phdr.p_paddr) {
-                TT_THROW("{}: TLS segment {} does not match predecessor", path_, ix);
-            }
-            GetSegments().back().type = Segment::TLS;
-            // NO_BITS TLS do not increase the memsz of a PT_LOAD
-            // segment (because usually they're embedded in a whole
-            // data-like segment). Correct for that here.
-            GetSegments().back().membytes = (phdr.p_memsz + sizeof(word_t) - 1) & ~(sizeof(word_t) - 1);
-            continue;
-        }
-
         // Require loadable segments to be nicely aligned
         if (((phdr.p_offset | phdr.p_vaddr | phdr.p_paddr) & (sizeof(word_t) - 1)) ||
             // Only support loading into the first 4GB
             (Is64 && ((phdr.p_vaddr | phdr.p_paddr) + phdr.p_memsz) > UINT32_MAX)) {
             TT_THROW(
-                "{}: {} segment {} is misaligned or misplaced, [{:#x}({:#x}),+{:#x}/{:#x})@{:#x}",
+                "{}: phdr[{}] is misaligned or misplaced, [{:#x}({:#x}),+{:#x}/{:#x})@{:#x}",
                 path_,
-                unsigned(type),
                 ix,
                 phdr.p_vaddr,
                 phdr.p_paddr,
@@ -423,25 +454,15 @@ void ElfFile::Impl::Elf<Is64>::LoadImage() {
         offset_t mem_bytes = (phdr.p_memsz + sizeof(word_t) - 1) & ~(sizeof(word_t) - 1);
         GetSegments().emplace_back(
             std::span(reinterpret_cast<const word_t*>(GetContents(phdr).data()), file_words),
-            type,
             phdr.p_vaddr,
             phdr.p_paddr,
             mem_bytes);
-        if (type == Segment::None) {
-            GetSegments().back().SetDeleted();
-        }
-
-        seenText = true;
     }
 
     // We require the first segment to be text, and that the entry
     // point is the start of that segment.
-    auto text = GetSegments().begin();
-    if (text->IsDeleted()) {
-        ++text;
-    }
-    if (text->GetType() != Segment::Text || hdr.e_entry != text->address) {
-        TT_THROW("{}: first non-deleted segment is not text", path_);
+    if (GetSegments().empty() || GetSegments().front().address != hdr.e_entry) {
+        TT_THROW("{}: first loadable segment is not text", path_);
     }
 
     // Check sections
@@ -479,56 +500,8 @@ void ElfFile::Impl::Elf<Is64>::LoadImage() {
             }
         }
         if (!(section.sh_flags & SHF_ALLOC) && section.sh_type == SHT_PROGBITS &&
-             std::strcmp(GetName(section), ".phdrs") == 0) {
-            // Specifies phdr size limits
-            auto bytes = GetContents(section);
-            auto words = std::span(reinterpret_cast<uint32_t const *>(bytes.data()), bytes.size() / sizeof(uint32_t));
-            unsigned phdr_ix = 0;
-            for (unsigned ix = 0; ix != words.size(); ix++) {
-                for (;; phdr_ix++) {
-                    if (phdr_ix == GetSegments().size()) {
-                        break;
-                    }
-
-                    const auto& seg = GetSegments()[phdr_ix];
-                    if (seg.IsDeleted()) {
-                        continue;
-                    }
-                    auto limit = words[ix];
-                    if (seg.membytes > limit) {
-                        TT_THROW(
-                            "{}: phdr[{}] [{:#x},+{:#x}) overflows region:{} limit of {:#x} bytes, {}",
-                            path_,
-                            phdr_ix,
-                            seg.address,
-                            seg.membytes,
-                            ix,
-                            limit,
-                            seg.GetType() == Segment::Text ? "reduce the code size"
-                            : seg.GetType() == Segment::Data
-                                ? "reduce the number of statically allocated variables (e.g, globals)"
-                            : seg.GetType() == Segment::TLS ? "reduce the number of thread_local variables"
-                                                            : "examine executable for segment details");
-                    }
-                    phdr_ix++;
-                    break;
-                }
-            }
-        }
-
-        if (std::strcmp(GetName(section), ".data") == 0) {
-            // Verify this is at the start of a data segment -- we had a
-            // linker script bug at one point.
-            auto* seg = FindSegment(section);
-            if (!seg || seg->GetType() != Segment::Data || section.sh_addr != seg->address) {
-                TT_THROW(
-                    "{}: .data section at [{:#x},+{:#x}) not at start of data segment at [{:#x},+{:#x})",
-                    path_,
-                    section.sh_addr,
-                    section.sh_size,
-                    seg ? seg->address : 0,
-                    seg ? seg->membytes : 0);
-            }
+            std::strcmp(GetName(section), ".segments") == 0) {
+            segment_info_ = &section;
         }
     }
 }
@@ -566,7 +539,7 @@ public:
                 auto* seg = type == STT_OBJECT || type == STT_NOTYPE || type == STT_TLS || type == STT_COMMON
                                 ? impl.FindSegment(sym)
                                 : nullptr;
-                bind = seg && seg->GetType() == (type == STT_TLS ? Segment::TLS : Segment::Data) ? STB_WEAK : STB_LOCAL;
+                bind = seg && !impl.IsText(seg) ? STB_WEAK : STB_LOCAL;
                 impl.SetSymInfo(sym, bind, type);
                 if (bind == STB_LOCAL) {
                     kind = LOCAL;
@@ -674,6 +647,16 @@ void ElfFile::Impl::Elf<Is64>::ObjectifyExecutable() {
 }
 
 template <bool Is64>
+std::span<const std::uint32_t> ElfFile::Impl::Elf<Is64>::GetSegmentInfo() {
+    if (segment_info_) {
+        auto bytes = GetContents(*segment_info_);
+        return std::span(reinterpret_cast<const uint32_t*>(bytes.data()), bytes.size() / sizeof(uint32_t));
+    } else {
+        return std::span<std::uint32_t>{};
+    }
+}
+
+template <bool Is64>
 void ElfFile::Impl::Elf<Is64>::XIPify() {
     // In general there can be several lo12 relocs for a hi20
     // reloc. This is particularly true for lui/{addi,lw,sw,etc}
@@ -751,7 +734,7 @@ void ElfFile::Impl::Elf<Is64>::XIPify() {
 
         auto symbols = GetSymbols(GetShdr(relocHdr.sh_link));
         auto relocs = GetRelocations(relocHdr);
-        bool is_from_text = seg->GetType() == Segment::Text;
+        bool is_from_text = IsText(seg);
 
         // ADD32/SUB32 pairs are used for switch tables. Make sure
         // they're consistent.
@@ -773,7 +756,7 @@ void ElfFile::Impl::Elf<Is64>::XIPify() {
             auto sym_ix = GetRelocSymIx(reloc);
             auto const* symbol = &symbols[sym_ix];
             auto sym_seg = FindSegment(*symbol);
-            bool is_to_text = sym_seg && sym_seg->GetType() == Segment::Text;
+            bool is_to_text = IsText(sym_seg);
 
             auto throw_unpaired = [&]() {
                 TT_THROW(
@@ -790,7 +773,7 @@ void ElfFile::Impl::Elf<Is64>::XIPify() {
             if (type == R_RISCV_ADD32) {
                 const auto* sub_symbol = &symbols[GetRelocSymIx(*sub_reloc)];
                 auto* sub_seg = FindSegment(*sub_symbol);
-                bool sub_is_to_text = sub_seg && sub_seg->GetType() == Segment::Text;
+                bool sub_is_to_text = IsText(sub_seg);
                 if (is_to_text != sub_is_to_text) {
                     TT_THROW(
                         "{}: mismatched add32/sub32 relocs at {:#x} & {:#x}",
@@ -934,7 +917,7 @@ void ElfFile::Impl::Elf<Is64>::XIPify() {
                 unsigned sym_ix = GetRelocSymIx(*hi_reloc);
                 auto const& symbol = symbols[sym_ix];
                 auto* sym_seg = FindSegment(symbol);
-                bool is_to_text = sym_seg && sym_seg->GetType() == Segment::Text;
+                bool is_to_text = IsText(sym_seg);
                 if (kind == PCREL && is_to_text == is_from_text) {
                     // intra-text PCREL is ok.
                     continue;

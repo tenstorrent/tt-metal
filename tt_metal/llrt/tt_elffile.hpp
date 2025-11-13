@@ -26,30 +26,16 @@ public:
     using word_t = std::uint32_t;     // Contents
 
     struct Segment {
-        enum Type {
-            None,
-            Text,
-            Data,
-            TLS,
-            Mask = 0xf,
-            Deleted = 0x10,
-        };
         std::vector<offset_t> relocs;      // 32-bit relocs to apply
-        std::span<word_t const> contents;  // Non-owning span
-        Type type = None;
+        std::span<const word_t> contents;  // Non-owning span
         address_t address = 0;             // Byte execution address (0 for
                                            // XIP)
         address_t lma = 0;                 // Byte load address
         offset_t membytes = 0;             // Byte size of memory image.
 
     public:
-        Segment(std::span<const word_t> contents, Type t, address_t addr, address_t lma, offset_t membytes) :
-            contents(contents), type(t), address(addr), lma(lma), membytes(membytes) {}
-
-    public:
-        auto GetType() const { return Type(type & Mask); }
-        auto IsDeleted() const { return bool(type & Deleted); }
-        void SetDeleted() { type = Type(type | Deleted); }
+        Segment(std::span<const word_t> contents, address_t addr, address_t lma, offset_t membytes) :
+            contents(contents), address(addr), lma(lma), membytes(membytes) {}
     };
 
     ElfFile() = default;
