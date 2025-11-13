@@ -12,6 +12,8 @@
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
 #include "debug/assert.h"
 
+template <uint32_t t>
+void async_read_row_to_tile(const uint64_t DRAM_src_addr, uint32_t L1_dst_addr);
 void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);     // Source address in dram
     const uint32_t NCHt = get_arg_val<uint32_t>(1);         // Number of NCH tiles
@@ -100,44 +102,53 @@ void kernel_main() {
 #ifdef FUSE_GAMMA
                 {
                     for (uint32_t r = 0; r < blk; r++) {
-                        DPRINT << " pre_wait_front: " << wt + r << ENDL();
                         cb_reserve_back(cb_gamma, 1);
-                        DPRINT << " post_wait_front: " << wt + r << ENDL();
-                        // uint64_t gamma_noc_addr = get_noc_addr(y_offset + wt + r, addrg);
                         uint32_t l1_write_addr = get_write_ptr(cb_gamma);
-                        noc_async_read_page(y_offset + wt + r, addrg, l1_write_addr);
-                        DPRINT << "noc_req sent: " << wt + r << ENDL();
+                        DPRINT << "tile id: " << wt + r << ENDL();
+                        uint64_t gamma_noc_addr = get_noc_addr(wt + r, addrg);
+                        async_read_row_to_tile<0>(gamma_noc_addr, l1_write_addr);
                         noc_async_read_barrier();
                         cb_push_back(cb_gamma, 1);
-                        DPRINT << "noc_req done: " << wt << "-" << wt + r << ENDL();
-                        // noc_async_read(gamma_noc_addr, l1_write_addr, 32 * 2);
-                        // // gamma_noc_addr = get_noc_addr(l1_write_addr + 32);
-                        // noc_async_read_barrier();
-                        // noc_async_read(gamma_noc_addr + 512, l1_write_addr + 512, 32 * 2);
-                        // l1_write_addr += gamma_tile_bytes;
                     }
                 }
-                DPRINT << "done gamma" << ENDL();
 #endif
 
 #ifdef FUSE_BETA
                 {
-                    cb_reserve_back(cb_beta, blk);
-                    uint32_t l1_write_addr = get_write_ptr(cb_beta);
+                    // cb_reserve_back(cb_beta, blk);
+                    // uint32_t l1_write_addr = get_write_ptr(cb_beta);
                     for (uint32_t r = 0; r < blk; r++) {
+                        // uint64_t beta_noc_addr = get_noc_addr(wt + r, addrb);
+                        // noc_async_read(beta_noc_addr, l1_write_addr, 32 * 2);
+                        // beta_noc_addr = get_noc_addr(l1_write_addr + 32);
+                        // noc_async_read_barrier();
+                        // noc_async_read(beta_noc_addr, l1_write_addr + 512, 32);
+                        cb_reserve_back(cb_beta, 1);
+                        uint32_t l1_write_addr = get_write_ptr(cb_beta);
                         uint64_t beta_noc_addr = get_noc_addr(wt + r, addrb);
-                        noc_async_read(beta_noc_addr, l1_write_addr, 32 * 2);
-                        beta_noc_addr = get_noc_addr(l1_write_addr + 32);
+                        async_read_row_to_tile<0>(beta_noc_addr, l1_write_addr);
                         noc_async_read_barrier();
-                        noc_async_read(beta_noc_addr, l1_write_addr + 512, 32);
-                        l1_write_addr += beta_tile_bytes;
+                        cb_push_back(cb_beta, 1);
                     }
-                    noc_async_read_barrier();
-                    cb_push_back(cb_beta, blk);
+                    // noc_async_read_barrier();
+                    // cb_push_back(cb_beta, blk);
                 }
 #endif
             }  // wt loop
         }
 #endif
     }  // ncht loop
+}
+template <uint32_t t>
+void async_read_row_to_tile(const uint64_t DRAM_src_addr, uint32_t L1_dst_addr) {
+    noc_async_read(DRAM_src_addr, L1_dst_addr, 32 * 2);
+    if constexpr (t == 0) {  // TILE LAYOUT
+        noc_async_read(DRAM_src_addr + 512, L1_dst_addr + 512, 64);
+    } else if constexpr (t == 1) {  // ROW MAJOR LAYOUT
+        noc_async_read_barrier();
+        uint64_t noc_addr = get_noc_addr(L1_dst_addr + 32);
+        noc_async_read(noc_addr, L1_dst_addr + 512, 64);
+    } else {
+        static_assert(false, "Layout must be ROW_MAJOR(t == 1) or TILE_LAYOUT(t == 0)");
+    }
 }
