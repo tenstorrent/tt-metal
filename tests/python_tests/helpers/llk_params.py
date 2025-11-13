@@ -195,9 +195,9 @@ class Transpose(Enum):
 
 class MathFidelity(Enum):
     LoFi = 0
-    HiFi2 = 1
-    HiFi3 = 2
-    HiFi4 = 3
+    HiFi2 = 2
+    HiFi3 = 3
+    HiFi4 = 4
 
 
 class NarrowTile(Enum):
