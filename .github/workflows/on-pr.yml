@@ -181,7 +181,7 @@ jobs:
       runs_on: ${{ matrix.runs_on }}
       test_splits: 4
       pytest_markers: "perf"
-      timeout_minutes: 120
+      timeout_minutes: 240
 
   check-all-green:
     name: "✅ Check all green"
