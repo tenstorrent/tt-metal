@@ -30,9 +30,7 @@ def test_layernorm_inference(mesh_device, reset_seeds, ensure_gc):
     width = model_args.vision_dim
     num_chunks = 4
     seq_len = nearest_32(model_args.vision_chunk_ntok) * num_chunks
-    state_dict = (
-        model_args.load_state_dict()
-    )  # torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
+    state_dict = model_args.load_state_dict()
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     first_layer_prefix = "vision_model.vision_encoder.transformer.resblocks.0.ln_1."
