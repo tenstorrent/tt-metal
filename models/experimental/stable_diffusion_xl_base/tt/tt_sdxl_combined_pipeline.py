@@ -5,7 +5,6 @@
 from dataclasses import dataclass
 from typing import Optional
 from loguru import logger
-import os
 import torch
 import ttnn
 
@@ -28,7 +27,7 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import (
 class TtSDXLCombinedPipelineConfig:
     base_config: TtSDXLPipelineConfig
     refiner_config: Optional[TtSDXLImg2ImgPipelineConfig] = None
-    denoising_split: float = 0.8  # Base does 80%, refiner does 20%. Set to 1.0 to disable refiner
+    denoising_split: float = 1.0
 
     def __post_init__(self):
         # Validate denoising_split
@@ -123,7 +122,6 @@ class TtSDXLCombinedPipeline:
             denoising_split=denoising_split,
         )
 
-        # Only validate matching steps and configs if refiner is provided
         if refiner_config is not None:
             assert base_config.num_inference_steps == refiner_config.num_inference_steps, (
                 f"base_config.num_inference_steps ({base_config.num_inference_steps}) must equal "
@@ -169,7 +167,6 @@ class TtSDXLCombinedPipeline:
             logger.info("Disabling VAE on base pipeline since refiner will handle final decoding")
             base_config.vae_on_device = False
 
-        # Create base pipeline with shared scheduler
         logger.info("Creating base pipeline with shared scheduler...")
         self.base_pipeline = TtSDXLPipeline(
             ttnn_device=ttnn_device,
@@ -178,7 +175,6 @@ class TtSDXLCombinedPipeline:
             tt_scheduler=self.shared_scheduler,
         )
 
-        # Create refiner pipeline with shared scheduler if needed
         if self.config.use_refiner:
             logger.info("Creating refiner pipeline with shared scheduler...")
             self.refiner_pipeline = TtSDXLImg2ImgPipeline(
@@ -190,7 +186,6 @@ class TtSDXLCombinedPipeline:
         else:
             self.refiner_pipeline = None
 
-        # Track compilation state
         self._compiled = False
 
         logger.info("Combined pipeline initialized successfully")
@@ -216,8 +211,6 @@ class TtSDXLCombinedPipeline:
         _, _, _ = self.base_pipeline.generate_input_tensors(
             all_prompt_embeds_torch=dummy_embeds,
             torch_add_text_embeds=dummy_text_embeds,
-            fixed_seed_for_batch=True,
-            start_latent_seed=0,
         )
 
         # 3. Compile base image processing
@@ -234,8 +227,6 @@ class TtSDXLCombinedPipeline:
                 all_prompt_embeds_torch=refiner_dummy_embeds,
                 torch_add_text_embeds=dummy_text_embeds,
                 input_latents=dummy_latents,
-                fixed_seed_for_batch=True,
-                start_latent_seed=0,
             )
 
             logger.info("Compiling refiner pipeline image processing...")
@@ -403,16 +394,5 @@ class TtSDXLCombinedPipeline:
 
         profiler.end("combined_generation")
         logger.info("Combined generation completed")
-
-        if not os.path.exists("output"):
-            os.mkdir("output")
-
-        for idx, img in enumerate(images):
-            if idx >= self.batch_size - needed_padding:
-                break
-            img = img.unsqueeze(0)
-            img = self.base_pipeline.torch_pipeline.image_processor.postprocess(img, output_type="pil")[0]
-            img.save(f"output/output{idx}.png")
-            logger.info(f"Image saved to output/output{idx}.png")
 
         return images
