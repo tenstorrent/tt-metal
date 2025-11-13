@@ -119,7 +119,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
         scratch_cb_page_size = tt::align(input_unit_size, dram_alignment);
 
         tt::tt_metal::CircularBufferConfig scratch_cb_out_config =
-            tt::tt_metal::CircularBufferConfig(8 * scratch_cb_page_size, {{scratch_cb_index, input_cb_data_format}})
+            tt::tt_metal::CircularBufferConfig(16 * scratch_cb_page_size, {{scratch_cb_index, input_cb_data_format}})
                 .set_page_size(scratch_cb_index, scratch_cb_page_size);
         tt::tt_metal::CreateCircularBuffer(program, all_cores, scratch_cb_out_config);
     }

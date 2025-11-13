@@ -42,7 +42,7 @@ void kernel_main() {
             SCRATCH_PENDING = 3
         };
 
-        constexpr uint32_t num_trids = 2;
+        constexpr uint32_t num_trids = 4;
         constexpr uint32_t trid_base = 1;
 
         cb_reserve_back(cb_id_in1, num_trids);
