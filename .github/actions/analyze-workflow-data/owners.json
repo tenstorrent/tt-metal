@@ -1,5 +1,6 @@
 {
   "contains": [
+    { "job-name-component": "All post-commit tests / fabric-unit-tests", "owner": { "id": "U03FJB5TM5Y", "name": "Ridvan Song" } },
     { "job-name-component": "vllm-tests / vllm-tests ([WH-T3K] Llama-3.1-8B-Instruct", "owner": [
       { "id": "U08E1JCDVNX", "name": "Pavle Petrovic" },
       { "id": "U08CEGF78ET", "name": "Salar Hosseini Khorasgani" }
