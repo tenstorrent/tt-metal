@@ -65,7 +65,7 @@ The CLI accepts JSON files in either of the following layouts:
 }
 ```
 
-Use `--num-prompts` to truncate large prompt sets. When a prompt file is supplied, generations and timing statistics are written to JSON (default path `<prompts-file-stem>_output.json`) and logged to the console.
+Use `--num-prompts` to truncate large prompt sets. For example, there are 256 total prompts in `models/demos/deepseek_v3/demo/test_prompts.json`, but you can limit it to a subset.
 
 ### Programmatic usage
 
