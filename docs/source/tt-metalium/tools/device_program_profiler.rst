@@ -14,7 +14,7 @@ To use the device profiler, you must first build Metalium with profiling enabled
 
 .. code-block:: bash
 
-    ./build_metal.sh --enable-profiler
+    ./build_metal.sh
 
 This command enables both device-side profiling and Tracy for host-side profiling. For a general overview of profiling in Metalium and how to use the Tracy GUI, see :ref:`tracy_profiler`.
 
@@ -114,7 +114,7 @@ To build and run this example:
 .. code-block:: bash
 
     cd $TT_METAL_HOME
-    build_metal.sh --enable-profiler --build-programming-examples
+    build_metal.sh --build-programming-examples
     TT_METAL_DEVICE_PROFILER=1 ./build/programming_examples/profiler/test_full_buffer
 
 The results will be available in the Tracy GUI and in the ``profile_log_device.csv`` file.
