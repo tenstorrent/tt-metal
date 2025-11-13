@@ -1,0 +1,2 @@
+rank 0=+n0 slots=1
+rank 1=+n1 slots=1

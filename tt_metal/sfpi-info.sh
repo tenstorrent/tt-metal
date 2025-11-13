@@ -129,7 +129,16 @@ fi
 mkdir -p $src
 cd $src
 
-cat >&1 >&2 <<EOF
+# duplicate to stderr if it's different to stdout
+dupstderr () {
+    if [[ $(readlink /dev/fd/1) != $(readlink /dev/fd/2) ]]; then
+	tee -a /dev/fd/2
+    else
+	cat
+    fi
+}
+
+dupstderr <<EOF
 Building SFPI $sfpi_version
 Working Directory: $src
 
@@ -144,33 +153,36 @@ research that from the above clues. If required components are missing
 the build will fail, sometimes with a clueful message. Please report
 any additional packages or issues you encounter by filing an issue at
 https://github.com/tenstorrent/tt-metal/issues
-
 EOF
 
-echo >&1 >&2
-echo "Fetching the repository ..." >&1 >&2
-if ! [[ -d .git ]]; then
-    if tty -s ; then
-	read -p "Confirm you have read and understood the above:" yes
+if ! [[ -d .git ]] && [[ -t 0 ]]; then
+    echo >&2
+    read -p "Confirm you have read and understood the above:" yes
+    if ! [[ $yes =~ ^[Yy] ]]; then
+	echo "Assuming you have anyway" >&2
     fi
-    (set -x; \
-     git clone -b $sfpi_version --depth 1 $sfpi_repo .; \
-     git submodule update --depth 1 --init --recursive; \
-     )
-else
-    (set -x; \
-     git fetch --depth 1 $sfpi_repo $sfpi_version; \
-     git checkout $sfpi_version; \
-     git submodule update --depth 1 --init --recursive; \
-     )
+    echo | dupstderr
+    echo "Cloning the repository ..." | dupstderr
+    (set -x
+     git clone --depth 1 $sfpi_repo .)
 fi
+echo | dupstderr
+echo "Fetching sfpi $sfpi_version ..." | dupstderr
+(set -x
+ git fetch --depth 1 origin "refs/tags/$sfpi_version:refs/tags/$sfpi_version"
+ git fetch --depth 1 origin $sfpi_version
+ git -c "advice.detachedHead=false" checkout $sfpi_version
+ git submodule update --depth 1 --init --recursive)
 
-echo >&1 >&2
-echo "Building ..." >&1 >&2
+echo | dupstderr
+echo "Building ..." | dupstderr
 (set -x; rm -rf build)
 (set -x; scripts/build.sh --test-tt 2>&1)
+
+echo | dupstderr
+echo "Packaging ..." | dupstderr
 (set -x; scripts/release.sh --txz-only 1>&2)
 
 cp build/release/$sfpi_filename ..
 
-echo "SFPI build completed" >&1 >&2
+echo "SFPI build completed" | dupstderr

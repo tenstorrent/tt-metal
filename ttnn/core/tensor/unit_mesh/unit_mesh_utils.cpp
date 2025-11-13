@@ -12,7 +12,7 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt_stl/assert.hpp>
 
-namespace ttnn::experimental::unit_mesh {
+namespace tt::tt_metal::experimental::unit_mesh {
 
 namespace {
 
@@ -133,4 +133,4 @@ std::vector<tt::tt_metal::Tensor> disaggregate(const tt::tt_metal::Tensor& tenso
     return result;
 }
 
-}  // namespace ttnn::experimental::unit_mesh
+}  // namespace tt::tt_metal::experimental::unit_mesh

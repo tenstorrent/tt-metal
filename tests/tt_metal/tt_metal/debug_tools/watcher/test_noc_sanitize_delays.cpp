@@ -178,8 +178,9 @@ void RunDelayTestOnCore(
 }
 
 TEST_F(MeshWatcherDelayFixture, TensixTestWatcherSanitizeInsertDelays) {
-    if (this->slow_dispatch_)
+    if (this->slow_dispatch_) {
         GTEST_SKIP();
+    }
 
     this->RunTestOnDevice(
         [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {

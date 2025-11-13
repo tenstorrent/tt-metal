@@ -48,7 +48,6 @@ def run_max_pool(
     memory_config=None,
     shard_scheme=None,
     ceil_mode=False,
-    in_place=False,
     nightly_skips=True,
     out_dtype=ttnn.bfloat16,
     output_layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -147,7 +146,6 @@ def run_max_pool(
         memory_config=memory_config,
         applied_shard_scheme=shard_scheme,
         ceil_mode=ceil_mode,
-        in_place_halo=in_place,
         deallocate_input=True,
         reallocate_halo_output=True,
         dtype=out_dtype,
@@ -644,9 +642,9 @@ def test_max_pool2d_output_formats_and_layouts(
     "stride",
     ((2, 2),),
 )
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b])
 def test_panoptic_maxpool_sliced(device, input_shape_nchw, kernel_size, padding, dilation, stride, dtype, tensor_map):
-    num_slices = 4
+    num_slices = 2
 
     batch_size, channels, input_h, input_w = input_shape_nchw
     assert channels % num_slices == 0, "Channels must be divisible by num_slices"
@@ -669,7 +667,7 @@ def test_panoptic_maxpool_sliced(device, input_shape_nchw, kernel_size, padding,
     out_h, out_w = torch_output.shape[2], torch_output.shape[3]
 
     ttnn_input_nhwc = ttnn.from_torch(
-        torch_input_nchw.permute(0, 2, 3, 1), device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype
+        torch_input_nchw.permute(0, 2, 3, 1), device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype
     )
     output_slices = []
     for i in range(num_slices):
@@ -692,6 +690,8 @@ def test_panoptic_maxpool_sliced(device, input_shape_nchw, kernel_size, padding,
             padding=list(padding),
             dilation=list(dilation),
             ceil_mode=False,
+            dtype=ttnn.bfloat8_b,
+            output_layout=ttnn.TILE_LAYOUT,
         )
         ttnn.deallocate(x_slice_reshaped)
 

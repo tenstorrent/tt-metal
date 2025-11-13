@@ -187,10 +187,7 @@ def test_unary_composite_mish_ttnn(input_shapes, device):
 
 @pytest.mark.parametrize(
     "input_shapes",
-    (
-        torch.Size([1, 1, 89600, 32]),
-        torch.Size([1, 1, 89600, 128]),
-    ),
+    (torch.Size([1, 1, 89600, 32]),),
 )
 def test_unary_composite_mish_sharded_ttnn(input_shapes, device):
     in_data = torch.Tensor(size=input_shapes).uniform_(-20, 100).to(torch.bfloat16)

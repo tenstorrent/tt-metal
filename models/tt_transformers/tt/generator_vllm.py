@@ -35,7 +35,7 @@ import ttnn
 from models.common.utility_functions import is_wormhole_b0, nearest_32
 from models.tt_transformers.tt.generator import Generator, create_submeshes
 from models.tt_transformers.tt.model import Transformer
-from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
+from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, TensorGroup
 
 
 def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Transformer], tt_cache_path):
@@ -44,7 +44,16 @@ def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Tra
     for mesh_idx, submesh in enumerate(submesh_devices):
         cache_kv = torch.zeros(kv_cache_shape, dtype=dtype)
         kv_tt = []
-        for _ in tqdm(range(num_layers), desc=f"Allocating TT kv caches for each layer (submesh {mesh_idx+1})"):
+        for layer_num in tqdm(range(num_layers), desc=f"Allocating TT kv caches for each layer (submesh {mesh_idx+1})"):
+            # Get the dtype for the kv cache based on the configured optimizations in the model
+            if dp_model[mesh_idx].args.optimizations is not None:
+                kv_cache_dtype = dp_model[mesh_idx].args.optimizations.get_tensor_dtype(
+                    decoder_id=layer_num, tensor=TensorGroup.KV_CACHE
+                )
+            else:
+                kv_cache_dtype = None
+            # Set default to bfloat8_b when no optimizations are configured
+            kv_cache_dtype = ttnn.bfloat8_b if kv_cache_dtype is None else kv_cache_dtype
             kv_tt_i = [
                 ttnn.as_tensor(
                     cache_kv,
@@ -54,7 +63,7 @@ def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Tra
                     mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    dtype=ttnn.bfloat8_b,
+                    dtype=kv_cache_dtype,
                     # Separate cache files for K and V to avoid collision.
                     cache_file_name=tt_cache_path / f"empty_{kv}cache_paged_attention{kv_cache_shape}",
                 )
@@ -567,10 +576,13 @@ class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
         max_seq_len=131072,
         n_layers=None,
         tt_data_parallel=1,
-        optimizations: str = None,
+        optimizations: str = "performance",
     ):
-        assert optimizations is None, "Custom optimizations are not supported for this model"
         from models.demos.gemma3.demo.vision_demo import create_multimodal_model
+
+        optimizations = (
+            DecodersPrecision.from_string(optimizations) if optimizations is not None else DecodersPrecision.performance
+        )
 
         submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
 
@@ -585,6 +597,7 @@ class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
                 max_seq_len=max_seq_len,
                 use_paged_kv_cache=True,
                 checkpoint=state_dict,
+                optimizations=lambda model_args: optimizations(model_args.n_layers, model_args.model_name),
             )
             model_args.append(model_args_i)
             model.append(model_i)

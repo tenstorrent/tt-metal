@@ -36,7 +36,7 @@ class YoloV12x:
             conv=parameters.conv_args[3].conv,
             conv_pth=parameters.model[3].conv,
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
-            config_override={"act_block_h": 32 * 5},
+            config_override={"act_block_h": 32},
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         )  # 3
         self.c3k2_2 = TtnnC3k2(device, parameters.conv_args[4], parameters.model[4])  # 4
@@ -45,10 +45,9 @@ class YoloV12x:
             conv=parameters.conv_args[5].conv,
             conv_pth=parameters.model[5].conv,
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+            config_override={"act_block_h": 32},
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             deallocate_activation=True,
-            enable_split_reader=True,
-            enable_act_double_buffer=True,
         )  # 5
         self.a2c2f_1 = TtnnA2C2f(
             device,
@@ -67,7 +66,6 @@ class YoloV12x:
             use_1d_systolic_array=False,
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             config_override={"act_block_h": 32},
-            mlp_sharding=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         )  # 6
         self.conv5 = TtYOLOv12xConv2D(
             device=device,
@@ -94,7 +92,6 @@ class YoloV12x:
             use_1d_systolic_array=False,
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             config_override={"act_block_h": 32},
-            core_count=None,
         )  # 8
         self.a2c2f_3 = TtnnA2C2f(
             device,
@@ -154,7 +151,6 @@ class YoloV12x:
             e=0.5,
             g=1,
             shortcut=True,
-            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         )  # 17
         self.conv7 = TtYOLOv12xConv2D(
             device=device,
@@ -171,7 +167,6 @@ class YoloV12x:
             parameters.model[20],
             use_1d_systolic_array=False,
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            block_sharded=True,
         )  # 20
         self.detect = TtnnDetect(device, parameters.model_args.model[21], parameters.model[21])  # 21
 
@@ -194,15 +189,15 @@ class YoloV12x:
         x = self.conv5(x)  # 7
         x = self.a2c2f_2(x, i=10)  # 8
         x8 = x
+        x8 = ttnn.to_memory_config(x8, ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.ReadDeviceProfiler(self.device)
 
         x = interleaved_to_sharded(x)
         x = ttnn.upsample(x, scale_factor=2)  # 9
-
         x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1] * x.shape[2], x.shape[-1]))
         x = concat(-1, True, x, x6)  # 10
         ttnn.deallocate(x6)
-        if x.is_sharded():
-            x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
+        x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
         x = self.a2c2f_3(x, i=13)  # 11
         x11 = x
         x11 = ttnn.to_memory_config(x11, ttnn.DRAM_MEMORY_CONFIG)
@@ -225,10 +220,14 @@ class YoloV12x:
         x14 = ttnn.to_memory_config(x14, ttnn.DRAM_MEMORY_CONFIG)
         x = self.conv6(x)  # 15
 
+        if x.layout == ttnn.TILE_LAYOUT:
+            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         x11 = ttnn.to_memory_config(x11, ttnn.L1_MEMORY_CONFIG)
-
+        if x11.layout == ttnn.TILE_LAYOUT:
+            x11 = ttnn.to_layout(x11, ttnn.ROW_MAJOR_LAYOUT)
         x = concat(-1, False, x, x11)  # 16
         ttnn.deallocate(x11)
+        ttnn.ReadDeviceProfiler(self.device)
         x = self.a2c2f_5(x, i=19)  # 17
         x17 = x
         x17 = ttnn.to_memory_config(x17, ttnn.DRAM_MEMORY_CONFIG)
@@ -240,7 +239,7 @@ class YoloV12x:
         x20 = x
         x14 = ttnn.to_memory_config(x14, ttnn.L1_MEMORY_CONFIG)
         x17 = ttnn.to_memory_config(x17, ttnn.L1_MEMORY_CONFIG)
-        # ttnn.ReadDeviceProfiler(self.device)
+        ttnn.ReadDeviceProfiler(self.device)
 
         x = self.detect(x14, x17, x20)  # 21
         return x

@@ -113,6 +113,10 @@ public:
     // Throws if the coordinate is out of bounds of this view.
     bool is_local(const MeshCoordinate& coord) const;
 
+    // Returns the coordinate range of all local devices in this view.
+    // The range is a bounding box that encompasses all local coordinates.
+    MeshCoordinateRange get_local_mesh_coord_range() const;
+
 private:
     DistributedMeshContainer<IDevice*> devices_;
     MeshContainer<tt::tt_fabric::FabricNodeId> fabric_node_ids_;

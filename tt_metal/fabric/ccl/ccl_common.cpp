@@ -16,7 +16,6 @@ namespace {
 // Template helper function for generating EDM kernels
 tt::tt_metal::KernelHandle generate_edm_kernel_impl(
     tt::tt_metal::Program& program,
-    const tt::tt_metal::IDevice* device,
     const tt::tt_fabric::FabricEriscDatamoverBuilder& edm_builder,
     const std::string& kernel_path,
     const CoreCoord& eth_core,
@@ -53,14 +52,13 @@ tt::tt_metal::KernelHandle generate_edm_kernel_impl(
 
 tt::tt_metal::KernelHandle generate_edm_kernel(
     tt::tt_metal::Program& program,
-    const tt::tt_metal::IDevice* device,
+    const tt::tt_metal::IDevice* /*device*/,
     const tt::tt_fabric::FabricEriscDatamoverBuilder& edm_builder,
     const CoreCoord& eth_core,
     const tt::tt_metal::DataMovementProcessor risc_id,
     tt::tt_metal::NOC noc_id) {
     return generate_edm_kernel_impl(
         program,
-        device,
         edm_builder,
         "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp",
         eth_core,

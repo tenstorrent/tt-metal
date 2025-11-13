@@ -3,7 +3,7 @@
 
 import ttnn
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
-from models.experimental.stable_diffusion_35_large.tt.substate import substate
+from models.demos.gpt_oss.utils.substate import substate
 
 from .attention import Attention
 from .mlp import MLP
@@ -23,6 +23,7 @@ class DecoderLayer:
         paged_attention_config=None,
         mesh_config=None,
         create_kv_cache=True,
+        transformation_mats=None,
     ):
         self.input_layernorm = RMSNorm(
             mesh_device,
@@ -60,13 +61,13 @@ class DecoderLayer:
             paged_attention_config=paged_attention_config,
             mesh_config=mesh_config,
             create_kv_cache=create_kv_cache,
+            transformation_mats=transformation_mats,
         )
         self.mesh_device = mesh_device
 
     def __call__(
         self,
         hidden_states,
-        attention_mask=None,
         position_embeddings=None,
         position_idx=None,
         page_table=None,
@@ -76,7 +77,6 @@ class DecoderLayer:
         hidden_states_post_norm = self.input_layernorm(hidden_states)
         hidden_states = self.self_attn(
             x=hidden_states_post_norm,
-            mask=attention_mask,
             rope_mats=position_embeddings,
             position_idx=position_idx,
             page_table=page_table,

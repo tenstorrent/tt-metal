@@ -151,6 +151,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     ttnn::ccl::Topology topology,
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt) {
+    topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, std::nullopt);
     MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
     bool input_is_sharded = input_tensor.memory_config().is_sharded();
     uint32_t dim =
@@ -247,6 +248,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     std::optional<ttnn::ccl::Topology> topology,
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt) {
+    tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
     MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
     bool input_is_sharded = input_tensor.memory_config().is_sharded();
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
@@ -306,7 +308,6 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     log_debug(tt::LogOp, "Using reduce scatter + all gather");
     ttnn::Tensor scattered_tensor;
     if (rs_global_semaphores.has_value() && barrier_semaphores.has_value()) {
-        TT_FATAL(topology.has_value(), "Topology is required for experimental reduce scatter");
         scattered_tensor = ttnn::operations::experimental::ccl::reduce_scatter_minimal_async(
             interleaved_tensor,
             std::nullopt,
@@ -316,7 +317,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
             num_preferred_links.value_or(1),
             change_mem_config ? std::nullopt : std::optional<MemoryConfig>(out_memory_config),
             std::nullopt,
-            topology.value(),
+            topology_,
             worker_subdevice_id_opt,
             cluster_axis);
     } else {
@@ -328,20 +329,19 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
             out_memory_config,
             std::nullopt,
             num_preferred_links,
-            topology);
+            topology_);
     }
     interleaved_tensor.deallocate();
     ttnn::Tensor gathered;
     if (ag_global_semaphores.has_value() && barrier_semaphores.has_value()) {
         TT_FATAL(barrier_semaphores.value().size() == 2, "Barrier semaphores must be of size 2");
-        TT_FATAL(topology.has_value(), "Topology is required for all gather");
         TT_FATAL(cluster_axis.has_value(), "Cluster axis is required for all gather");
         gathered = ttnn::operations::experimental::ccl::all_gather_async(
             scattered_tensor,
             dim,
             cluster_axis.value(),
             mesh_device,
-            topology.value(),
+            topology_,
             ag_global_semaphores.value(),
             std::nullopt,
             change_mem_config ? std::nullopt : std::optional<MemoryConfig>(out_memory_config),
@@ -359,7 +359,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
             out_memory_config,
             std::nullopt,
             num_preferred_links,
-            topology);
+            topology_);
     }
     scattered_tensor.deallocate();
     if (change_mem_config) {
@@ -376,8 +376,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<size_t> num_preferred_links,
     std::optional<ttnn::ccl::Topology> topology) {
-    auto topology_ = topology.value_or(
-        ttnn::ccl::get_usable_topology(input_tensor, tt::tt_fabric::get_fabric_topology(), cluster_axis));
+    auto topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
     auto mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "Mesh device is required");
     return ExecuteAllReduceAsync::invoke(
@@ -407,6 +406,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt,
     bool use_noc1_only,
     bool use_optimal_ccl_for_llama) {
+    topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
     MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
 
     log_debug(tt::LogOp, "Using minimal all_reduce_async");
@@ -438,6 +438,7 @@ std::vector<ttnn::Tensor> ExecuteAllReduceAsync::invoke(
     std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt,
     bool use_noc1_only,
     bool use_optimal_ccl_for_llama) {
+    topology = ::ttnn::ccl::get_usable_topology(input_tensors.at(0), topology, cluster_axis);
     MemoryConfig out_memory_config = memory_config.value_or(input_tensors.at(0).memory_config());
 
     log_debug(tt::LogOp, "Using minimal all_reduce_async with multiple tensors");

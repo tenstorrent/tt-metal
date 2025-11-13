@@ -8,6 +8,7 @@ from loguru import logger
 from models.experimental.panoptic_deeplab.tt.tt_stem import TtStem
 from models.experimental.panoptic_deeplab.tt.tt_bottleneck import TtBottleneck
 from models.common.lightweightmodule import LightweightModule
+from models.experimental.panoptic_deeplab.tt.common import reshape_flattened_conv_output
 
 
 class TtResNet(LightweightModule):
@@ -140,20 +141,26 @@ class TtResNet(LightweightModule):
         outputs = {}
         for layer_name, layer in [("res2", self.res2), ("res3", self.res3), ("res4", self.res4), ("res5", self.res5)]:
             x = self._forward_res_layer(x, layer)
-            if x.is_sharded():
-                x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
-            else:
-                x = ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
 
-            # Reshape if flattened [1, 1, H*W, C] -> [1, H, W, C]
+            # Reshape if flattened [1, 1, NHW, C] -> [1, H, W, C]
+            # For res2 and res3, specific convs output flattened format that needs reshaping
             expected_h, expected_w = spatial_dims[layer_name]
-            if x.shape[1] == 1 and x.shape[2] == expected_h * expected_w:
-                logger.debug(f"{layer_name}: Reshaping from {x.shape} to [1, {expected_h}, {expected_w}, {x.shape[3]}]")
-                x = ttnn.reshape(x, (1, expected_h, expected_w, x.shape[3]))
+            if x.shape[1] == 1 and x.shape[2] > 1:
+                # Check if it's the expected flattened size
+                if x.shape[2] == expected_h * expected_w:
+                    # Exact match with expected dimensions
+                    logger.debug(
+                        f"{layer_name}: Reshaping from {x.shape} to [1, {expected_h}, {expected_w}, {x.shape[3]}]"
+                    )
+                    x = ttnn.reshape(x, (1, expected_h, expected_w, x.shape[3]))
+                elif layer_name in ["res2", "res3"]:
+                    # For res2 and res3, handle flattened format [1,1,NHW,C] where W=2*H
+                    x = reshape_flattened_conv_output(x, batch_size=1, layer_name=layer_name)
 
-            # Clone the output to store independently (backbone outputs are shared between heads)
-            # This prevents deallocation in subsequent stages from affecting stored outputs
-            outputs[layer_name] = ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            # Store output - no clone needed since all consumers are configured
+            # with deallocate_activation=False to preserve backbone features
+            outputs[layer_name] = x
             logger.debug(f"{layer_name} complete - output: {outputs[layer_name].shape}")
 
         return outputs

@@ -1086,6 +1086,10 @@ def run_for_grayskull(reason_str="only runs for Grayskull"):
     return ti_skip(not is_grayskull(), reason=reason_str)
 
 
+def run_for_n_dev(n, reason_str="Test is not meant for this number of devices"):
+    return ti_skip(ttnn.get_num_devices() != n, reason=reason_str)
+
+
 def skip_for_n_dev(n, reason_str="Test is not meant for this number of devices"):
     return ti_skip(ttnn.get_num_devices() == n, reason=reason_str)
 

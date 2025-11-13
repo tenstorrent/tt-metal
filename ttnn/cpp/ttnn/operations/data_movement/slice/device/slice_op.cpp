@@ -164,11 +164,42 @@ std::vector<ttnn::TensorSpec> SliceDeviceOperation::compute_output_specs(
     const auto& input_tensor = input_tensors[0];
     SmallVector<uint32_t> out_shape(input_tensor.logical_shape().rank());
 
-    auto output_dim_i = [this](size_t i) {
-        return (this->slice_end[i] - this->slice_start[i] + this->step[i] - 1) / this->step[i];
-    };
-    for (uint32_t i = 0; i < out_shape.size(); i++) {
-        out_shape[i] = output_dim_i(i);
+    if (this->use_tensor_args) {
+        TT_FATAL(
+            this->slice_dim.has_value() && this->num_devices.has_value(),
+            "slice_dim and num_devices must be provided for tensor args path");
+
+        uint32_t slice_dimension = this->slice_dim.value();
+        uint32_t num_parts = this->num_devices.value();
+
+        for (uint32_t i = 0; i < out_shape.size(); i++) {
+            out_shape[i] = input_tensor.logical_shape()[i];
+        }
+        TT_FATAL(
+            slice_dimension < out_shape.size(),
+            "slice_dim ({}) must be less than tensor rank ({})",
+            slice_dimension,
+            out_shape.size());
+
+        uint32_t original_size = out_shape[slice_dimension];
+        uint32_t slice_size = original_size / num_parts;
+
+        TT_FATAL(
+            original_size % num_parts == 0,
+            "Input dimension {} (size={}) must be evenly divisible by num_devices ({})",
+            slice_dimension,
+            original_size,
+            num_parts);
+
+        out_shape[slice_dimension] = slice_size;
+    } else {
+        // Regular path using slice_start, slice_end, step
+        auto output_dim_i = [this](size_t i) {
+            return (this->slice_end[i] - this->slice_start[i] + this->step[i] - 1) / this->step[i];
+        };
+        for (uint32_t i = 0; i < out_shape.size(); i++) {
+            out_shape[i] = output_dim_i(i);
+        }
     }
     ttnn::Shape output_tensor_shape(std::move(out_shape));
     return {ttnn::TensorSpec(
@@ -193,7 +224,13 @@ operation::ProgramWithCallbacks SliceDeviceOperation::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
-    return detail::slice_multi_core(input_tensor_a, output_tensor, this->slice_start, this->slice_end, this->step);
+    if (this->use_tensor_args) {
+        // Use tensor args device path
+        return detail::slice_multi_core_with_tensor_args(input_tensors, output_tensors);
+    } else {
+        // Use regular path with Shape args
+        return detail::slice_multi_core(input_tensor_a, output_tensor, this->slice_start, this->slice_end, this->step);
+    }
 }
 
 }  // namespace ttnn::operations::data_movement

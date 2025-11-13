@@ -328,3 +328,18 @@ class TypecastConfig(OpConfigBase):
     dtype: ttnn.DataType
     memory_config: ttnn.MemoryConfig | None = None
     sub_core_grids: ttnn.CoreRangeSet | None = None
+
+
+@dataclass
+class SparseMatmulConfig(OpConfigBase):
+    """Common parameters for a ttnn.sparse_matmul op"""
+
+    input_tensor_b: ConfigWeight
+    memory_config: ttnn.MemoryConfig | None = None
+    compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None
+    program_config: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig | None = None
+    is_input_a_sparse: bool | None = None
+    is_input_b_sparse: bool | None = None
+    output_tile: ttnn.Tile | None = None
+    sparsity: ttnn.Tensor | None = None
+    nnz: int | None = None

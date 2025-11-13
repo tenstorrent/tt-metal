@@ -8,6 +8,7 @@ from loguru import logger
 
 from models.tt_cnn.tt.builder import TtConv2d
 from models.common.lightweightmodule import LightweightModule
+from models.experimental.panoptic_deeplab.tt.common import reshape_flattened_conv_output
 
 
 class TtASPP(LightweightModule):
@@ -130,7 +131,10 @@ class TtASPP(LightweightModule):
             else:
                 branch_out = conv(x)
 
-                if branch_out.shape[1] == 1 and branch_out.shape[2] == H * W:
+                # Reshape logic for aspp.convs.0 that now outputs flattened format [1,1,NHW,C] -> [N,H,W,C]
+                if i == 0:
+                    branch_out = reshape_flattened_conv_output(branch_out, batch_size=N, layer_name="aspp.convs.0")
+                elif branch_out.shape[1] == 1 and branch_out.shape[2] == H * W:
                     branch_out = ttnn.reshape(branch_out, (N, H, W, branch_out.shape[3]))
 
                 if needs_manual_relu:
@@ -169,6 +173,8 @@ class TtASPP(LightweightModule):
         # Process pooled branch with conv
         logger.info(f"🔷 Executing conv: aspp.convs.4")
         pooled = self.pool_conv(pooled)
+        # Reshape logic for aspp.convs.4 that now outputs flattened format [1,1,NHW,C] -> [N,H,W,C]
+        pooled = reshape_flattened_conv_output(pooled, batch_size=N, layer_name="aspp.convs.4")
 
         # Upsample pooled branch to match input spatial dimensions
         current_h, current_w = pooled.shape[1], pooled.shape[2]
@@ -206,6 +212,8 @@ class TtASPP(LightweightModule):
         # Project to final output
         logger.info(f"🔷 Executing conv: aspp.project")
         res = self.project_conv(res)
+        # Reshape logic for aspp.project that now outputs flattened format [1,1,NHW,C] -> [N,H,W,C]
+        res = reshape_flattened_conv_output(res, batch_size=N, layer_name="aspp.project")
         logger.debug(f"TtASPP forward pass complete - output shape: {res.shape}")
 
         return res

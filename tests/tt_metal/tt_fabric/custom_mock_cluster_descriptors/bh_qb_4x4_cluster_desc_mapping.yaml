@@ -1,5 +1,5 @@
 rank_to_cluster_mock_cluster_desc:
-  0: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/bh_qb_4x4_cluster_desc_rank_0.yaml"
+  0: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/bh_qb_4x4_cluster_desc_rank_2.yaml"
   1: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/bh_qb_4x4_cluster_desc_rank_1.yaml"
-  2: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/bh_qb_4x4_cluster_desc_rank_2.yaml"
+  2: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/bh_qb_4x4_cluster_desc_rank_0.yaml"
   3: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/bh_qb_4x4_cluster_desc_rank_3.yaml"

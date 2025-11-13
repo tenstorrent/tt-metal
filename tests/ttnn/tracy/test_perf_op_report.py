@@ -12,7 +12,7 @@ from tracy.process_model_log import (
 )
 from models.common.utility_functions import skip_for_blackhole
 from tracy.compare_ops_logs import compare_ops_logs
-from tracy.common import generate_logs_folder, PROFILER_CPP_DEVICE_OPS_PERF_REPORT
+from tracy.common import generate_logs_folder, PROFILER_CPP_DEVICE_PERF_REPORT
 
 
 @pytest.fixture(scope="class")
@@ -135,6 +135,6 @@ class TestCppPostProc:
         request = run_test_do_cpp_post_proc
         python_ops_perf_report = get_latest_ops_log_filename(request.param["name"])
         cpp_ops_perf_report = (
-            generate_logs_folder(get_profiler_folder(request.param["name"])) / PROFILER_CPP_DEVICE_OPS_PERF_REPORT
+            generate_logs_folder(get_profiler_folder(request.param["name"])) / PROFILER_CPP_DEVICE_PERF_REPORT
         )
         compare_ops_logs(python_ops_perf_report=python_ops_perf_report, cpp_ops_perf_report=cpp_ops_perf_report)

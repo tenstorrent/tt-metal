@@ -30,9 +30,9 @@ ttnn::Tensor ExecuteSliceReshardAsync::invoke(
     const auto& mesh_view = mesh_device->get_view();
     // Use the mesh dimensions to determine the ring size
     num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
-
     TT_FATAL(num_devices > 1, "slice_reshard_async op will only work for num_devices > 1, but has {}", num_devices);
-    ttnn::ccl::Topology ccl_topology = topology.value_or(ttnn::ccl::Topology::Linear);
+
+    tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
 
     return tt::tt_metal::operation::run(
                ttnn::SliceReshardAsync(
@@ -45,7 +45,7 @@ ttnn::Tensor ExecuteSliceReshardAsync::invoke(
                    barrier_semaphore,
                    num_preferred_links.value_or(1),
                    memory_config.value_or(input_tensor.memory_config()),
-                   ccl_topology,
+                   topology_,
                    num_devices),
                {input_tensor},
                {},

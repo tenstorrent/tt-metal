@@ -58,7 +58,9 @@ struct SliceOperation {
         const std::optional<ttnn::SmallVector<T>>& step,
         const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        const std::optional<float>& pad_value = std::nullopt);
+        const std::optional<float>& pad_value = std::nullopt,
+        const std::optional<uint32_t>& slice_dim = std::nullopt,
+        const std::optional<uint32_t>& num_devices = std::nullopt);
 };
 
 }  // namespace data_movement

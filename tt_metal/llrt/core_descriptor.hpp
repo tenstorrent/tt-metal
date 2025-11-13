@@ -16,19 +16,17 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
+#include "common/core_coord.hpp"
 
 namespace tt {
 
 struct core_descriptor_t {
     CoreCoord compute_grid_size;
-    std::vector<RelativeCoreCoord> relative_compute_cores;
-    std::vector<RelativeCoreCoord> relative_storage_cores;
-    std::optional<uint32_t> storage_core_bank_size = std::nullopt;
-    std::vector<RelativeCoreCoord> relative_dispatch_cores;
-    std::vector<RelativeCoreCoord> relative_fabric_mux_cores;
+    std::vector<tt_metal::RelativeCoreCoord> relative_compute_cores;
+    std::vector<tt_metal::RelativeCoreCoord> relative_dispatch_cores;
+    std::vector<tt_metal::RelativeCoreCoord> relative_fabric_mux_cores;
 
     std::vector<CoreCoord> logical_compute_cores;
-    std::vector<CoreCoord> logical_storage_cores;
     std::vector<CoreCoord> logical_dispatch_cores;
     std::vector<CoreCoord> logical_fabric_mux_cores;
 };
@@ -48,15 +46,6 @@ const core_descriptor_t& get_core_descriptor_config(
 
 const std::tuple<uint32_t, CoreRange>& get_physical_worker_grid_config(
     ChipId chip, uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig& dispatch_core_config);
-
-std::optional<uint32_t> get_storage_core_bank_size(
-    ChipId device_id, uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig& dispatch_core_config);
-
-inline const std::vector<CoreCoord>& get_logical_storage_cores(
-    ChipId device_id, const uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig& dispatch_core_config) {
-    const core_descriptor_t& core_desc = get_core_descriptor_config(device_id, num_hw_cqs, dispatch_core_config);
-    return core_desc.logical_storage_cores;
-}
 
 inline const CoreCoord& get_compute_grid_size(
     ChipId device_id, const uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig& dispatch_core_config) {

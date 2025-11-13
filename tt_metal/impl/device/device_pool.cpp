@@ -762,6 +762,41 @@ std::vector<IDevice* > DevicePool::get_all_active_devices() const {
     return user_devices;
 }
 
+// Get all active device ids
+// This function needs to be thread-safe as its called in inspector::data on a different thread
+std::vector<ChipId> DevicePool::get_all_active_device_ids() const {
+    std::vector<ChipId> device_ids;
+    std::lock_guard<std::mutex> lock(this->lock);
+    device_ids.reserve(this->devices.size());
+    for (const auto& device : this->devices) {
+        if (device && device->is_initialized()) {
+            device_ids.emplace_back(device->id());
+        }
+    }
+    return device_ids;
+}
+
+// Get all command queue event infos for all active devices
+// The key is the device id and the value is a vector of event ids for each command queue
+// This function needs to be thread-safe as its called in inspector::data on a different thread
+std::unordered_map<ChipId, std::vector<uint32_t>> DevicePool::get_all_command_queue_event_infos() const {
+    std::unordered_map<ChipId, std::vector<uint32_t>> cq_to_event_by_device;
+    std::lock_guard<std::mutex> lock(this->lock);
+    cq_to_event_by_device.reserve(this->devices.size());
+    for (const auto& device : this->devices) {
+        if (device && device->is_initialized()) {
+            auto& vec = cq_to_event_by_device[device->id()];
+            const auto num_hw_cqs = device->num_hw_cqs();
+            vec.resize(num_hw_cqs);
+            for (size_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
+                const auto event_id = device->sysmem_manager().get_last_event(static_cast<uint8_t>(cq_id));
+                vec[cq_id] = event_id;
+            }
+        }
+    }
+    return cq_to_event_by_device;
+}
+
 void DevicePool::teardown_fd(const std::unordered_set<ChipId>& devices_to_close) {
     for (const auto& dev_id : devices_to_close) {
         // Device is still active at this point
@@ -800,7 +835,7 @@ bool DevicePool::close_device(ChipId device_id) {
     return close_devices(devices_to_close);
 }
 
-bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_synchronize) {
+bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool /*skip_synchronize*/) {
     ZoneScoped;
 
     // Ordered, because we need to shutdown tunnels from the farthest to the closest.

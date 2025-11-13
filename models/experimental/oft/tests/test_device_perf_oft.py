@@ -31,7 +31,7 @@ from models.perf.device_perf_utils import run_model_device_perf_test
         ),
         (
             "pytest models/experimental/oft/demo/demo.py::test_demo_inference",
-            207_612_082,
+            206_531_096,
             "oft_full_demo",
             "oft_full_demo",
             1,

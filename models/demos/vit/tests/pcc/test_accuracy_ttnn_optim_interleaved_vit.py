@@ -20,8 +20,8 @@ from models.common.utility_functions import (
     torch2tt_tensor,
 )
 from models.demos.vit.common import load_torch_model
+from models.demos.vit.tests.vit_helper_funcs import get_batch, get_data_loader
 from models.demos.vit.tt import ttnn_optimized_interleaved_vit
-from models.demos.wormhole.vit.demo.vit_helper_funcs import get_batch, get_data_loader
 
 
 def get_expected_times(functional_vit):

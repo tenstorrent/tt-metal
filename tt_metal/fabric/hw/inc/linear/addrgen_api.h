@@ -12,8 +12,13 @@
 
 namespace tt::tt_fabric {
 
+// NOTE: These helper functions are located in linear/addrgen_api.h rather than a common location
+// to avoid CI issues related to increased interleaved addr gen usage. Relocating these helper
+// functions to a more common place is avoided for now.
+
 namespace linear {
 
+// Helper namespace with address generation utilities
 namespace addrgen_detail {
 
 template <bool DRAM>
@@ -160,4 +165,7 @@ FORCE_INLINE void to_noc_unicast_scatter_write(
 
 }  // namespace linear
 
-};  // namespace tt::tt_fabric
+// Alias to allow mesh code to access addrgen_detail at tt::tt_fabric level
+namespace addrgen_detail = linear::addrgen_detail;
+
+}  // namespace tt::tt_fabric

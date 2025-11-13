@@ -50,21 +50,16 @@ void bind_reduction_cumsum_operation(py::module& module) {
                  - Layouts
                  - Ranks
                  - dim
-               * - BFLOAT16, FLOAT32
+               * - BFLOAT16, FLOAT32, INT32, UINT32
                  - TILE
                  - 1, 2, 3, 4, 5
                  - -rank <= dim < rank
-               * - INT32, UINT32
-                 - TILE
-                 - 3, 4, 5
-                 - dim in {0, 1, ..., rank - 3} or dim in {-rank, -rank + 1, ..., -3}
 
         Memory Support:
             - Interleaved: DRAM and L1
 
         Limitations:
             - Preallocated output must have the same shape as the input
-            - Preallocated output for integer types is not supported
 
         Example:
             .. code-block:: python

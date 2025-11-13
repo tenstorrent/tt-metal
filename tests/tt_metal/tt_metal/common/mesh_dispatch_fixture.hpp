@@ -17,6 +17,7 @@
 #include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/distributed.hpp>
 #include "llrt.hpp"
+#include "common/tt_backend_api_types.hpp"
 
 namespace tt::tt_metal {
 

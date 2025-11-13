@@ -251,11 +251,9 @@ bool test_socket_send_recv(
 std::vector<uint32_t> get_neighbor_host_ranks(SystemConfig system_config) {
     std::vector<uint32_t> recv_ranks;
 
-    if (system_config == SystemConfig::NANO_EXABOX) {
-        // Nano-Exabox has 5 hosts. Sender ranks assignment is customized for a particular Rank File.
+    if (system_config == SystemConfig::NANO_EXABOX || system_config == SystemConfig::EXABOX) {
+        // Exabox and Nano-Exabox currently have 5 hosts. Sender ranks assignment is customized for a particular Rank File.
         recv_ranks = {0, 2, 3, 4};
-    } else if (system_config == SystemConfig::EXABOX) {
-        recv_ranks = {0, 2, 3};
     } else if (system_config == SystemConfig::SPLIT_T3K || system_config == SystemConfig::DUAL_T3K) {
         // Only a single recv node is needed for the dual host configurations.
         recv_ranks = {0};

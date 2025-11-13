@@ -292,9 +292,6 @@ void MAIN {
                     pack_reconfig_data_format(cb_out);
                 }
                 cb_wait_front(cb_gamma, blk);
-                if (ncht == 1) {
-                    DPRINT << "\n\n\nFINAL VAL Pre Var Value wt: " << wt << ENDL();
-                }
                 cb_wait_front(cb_xmm, blk);
                 mul_bcast_rows_init_short(cb_xmm, cb_gamma);
                 for (uint32_t j = 0; j < blk; j++) {

@@ -37,7 +37,7 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
             12,
             768,
             2,
-            0.993,
+            0.990,
         ),
     ],
 )

@@ -216,8 +216,8 @@ def test_vit_image_classification_eval(
 ):
     from transformers import ViTForImageClassification
 
+    from models.demos.vit.tests.vit_helper_funcs import get_batch
     from models.demos.vit.tests.vit_performant_imagenet import VitTrace2CQ
-    from models.demos.wormhole.vit.demo.vit_helper_funcs import get_batch
 
     batch_size = batch_size_per_device * mesh_device.get_num_devices()
     if model_type == "torch_model":

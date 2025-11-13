@@ -132,6 +132,16 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
         args.op_chain.begin(), args.op_chain.end(), [](const auto& u) { return utils::get_op_approx_mode(u.type()); });
     std::map<std::string, std::string> unary_defines = utils::get_block_defines(args.op_chain, "0", "0", input.dtype());
 
+    if (input.dtype() == DataType::FLOAT32) {
+        unary_defines["INP_FLOAT32"] = "1";
+    } else if (input.dtype() == DataType::INT32) {
+        unary_defines["INP_INT32"] = "1";
+    } else if (input.dtype() == DataType::UINT32) {
+        unary_defines["INP_UINT32"] = "1";
+    } else {
+        unary_defines["INP_FLOAT"] = "1";
+    }
+
     if (!ops_chain[0].empty()) {
         switch (ops_chain[0].type()) {
             case UnaryOpType::HARDSHRINK:
@@ -140,20 +150,6 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
             case UnaryOpType::WHERE_TSS:
                 packed_scalar1 = utils::pack_scalar_runtime_arg(ops_chain[0], 0, input.dtype());
                 packed_scalar2 = utils::pack_scalar_runtime_arg(ops_chain[0], 1, input.dtype());
-                if (input.dtype() == DataType::INT32 || input.dtype() == DataType::UINT32) {
-                    unary_defines["FILL_INT"] = "fill_tile_int";
-                } else {
-                    unary_defines["FILL_FLOAT"] = "fill_tile";
-                }
-                break;
-            default: break;
-        }
-    } else {
-        switch (ops_chain[0].type()) {
-            case UnaryOpType::CBRT:
-                if (input.dtype() == DataType::FLOAT32) {
-                    unary_defines["CBRT_FLOAT"] = "mul_binary_tile";
-                }
                 break;
             default: break;
         }

@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import argparse
 import math
 import os
 
@@ -14,12 +13,9 @@ import pytest
 import torch
 from loguru import logger
 from skimage import io
-from skimage.io import imsave
-from tqdm import tqdm
 
 import ttnn
-from models.common.utility_functions import disable_persistent_kernel_cache
-from models.demos.vanilla_unet.common import VANILLA_UNET_L1_SMALL_SIZE
+from models.common.utility_functions import disable_persistent_kernel_cache, is_blackhole, is_wormhole_b0
 from models.demos.yolov9c.common import YOLOV9C_L1_SMALL_SIZE
 
 
@@ -74,106 +70,17 @@ def evaluation(
     batch_size=1,
     model_location_generator=None,
 ):
-    if model_name == "vanilla_unet":
-        from collections import defaultdict
-
-        from models.demos.vanilla_unet.demo import demo_utils
-
-        root_dir = "models/demos/segmentation_evaluation/imageset"
-        patient_folders = sorted(os.listdir(root_dir))
-        if model_location_generator == None or "TT_GH_CI_INFRA" not in os.environ:
-            weights_path = "models/demos/vanilla_unet/unet.pt"
-        else:
-            weights_path = (
-                model_location_generator("vision-models/unet_vanilla", model_subdir="", download_if_ci_v2=True)
-                / "unet.pt"
-            )
-        sample_count = 0
-        max_samples = 500
-        all_patient_metrics = defaultdict(list)
-        for patient_id in patient_folders:
-            if sample_count >= max_samples:
-                break
-            patient_path = os.path.join("models/demos/segmentation_evaluation/imageset", patient_id)
-            patient_output_path = os.path.join("models/demos/segmentation_evaluation/pred_image_set", patient_id)
-            args = argparse.Namespace(
-                device="cpu",
-                batch_size=batch_size,
-                weights="models/demos/vanilla_unet/unet.pt",
-                images=patient_path,
-                image_size=res,
-                predictions=patient_output_path,
-            )
-            loader = demo_utils.data_loader_imageset(args)
-            os.makedirs(patient_output_path, exist_ok=True)
-
-            input_list = []
-            pred_list = []
-            true_list = []
-            for i, data in tqdm(enumerate(loader)):
-                x, y_true = data
-                if x.shape[0] < args.batch_size:
-                    logger.info(f"Skipping incomplete batch at index {i}, size {x.shape[0]}")
-                    continue
-                if model_type == "torch_model":
-                    y_pred = model(x)
-                else:
-                    y_pred = model.run(x)
-                    y_pred = ttnn.to_torch(y_pred, mesh_composer=model.runner_infra.output_mesh_composer)
-                    y_pred = y_pred.permute(0, 3, 1, 2).to(torch.float32)
-
-                y_pred_np = y_pred.detach().cpu().numpy()
-                pred_list.extend([y_pred_np[s] for s in range(y_pred_np.shape[0])])
-
-                y_true_np = y_true.detach().cpu().numpy()
-                true_list.extend([y_true_np[s] for s in range(y_true_np.shape[0])])
-
-                x_np = x.detach().cpu().numpy()
-                input_list.extend([x_np[s] for s in range(x_np.shape[0])])
-
-                sample_count += y_pred_np.shape[0]
-            volumes = demo_utils.postprocess_per_volume(
-                input_list,
-                pred_list,
-                true_list,
-                loader.dataset.patient_slice_index,
-                loader.dataset.patients,
-            )
-
-            metrics_list = []
-            for p in volumes:
-                x = volumes[p][0]
-                y_pred = volumes[p][1]
-                y_true = volumes[p][2]
-                y_true = (y_true == 255).astype(np.uint8)  # Convert 255 → 1
-                y_pred = y_pred.astype(np.uint8)
-
-                metrics = {
-                    "IoU": iou(y_true, y_pred) * 100,
-                    "Dice Score": dice_score(y_true, y_pred) * 100,
-                    "Pixel Accuracy": pixel_accuracy(y_true, y_pred) * 100,
-                    "Precision": precision(y_true, y_pred) * 100,
-                    "Recall": recall(y_true, y_pred) * 100,
-                    "F1 Score": f1_score(y_true, y_pred) * 100,
-                }
-
-                for key, value in metrics.items():
-                    all_patient_metrics[key].append(value)
-
-                for s in range(x.shape[0]):
-                    image = demo_utils.gray2rgb(x[s, 1])  # channel 1 is for FLAIR
-                    image = demo_utils.outline(image, y_pred[s, 0], color=[255, 0, 0])
-                    image = demo_utils.outline(image, y_true[s, 0], color=[0, 255, 0])
-                    filename = "{}-{}.png".format(p, str(s).zfill(2))
-                    filepath = os.path.join(args.predictions, filename)
-                    imsave(filepath, image)
-
-        final_avg_metrics = {key: np.mean(vals) for key, vals in all_patient_metrics.items()}
-        for key, val in final_avg_metrics.items():
-            logger.info(f"{key}: {val:.2f}%")
-
     if model_name == "vgg_unet":
-        from models.demos.vgg_unet.demo.demo_utils import prediction, preprocess
+        if is_blackhole():
+            from models.demos.blackhole.vgg_unet.demo.demo_utils import prediction, preprocess
+
+            output_path = "models/demos/blackhole/"
+        elif is_wormhole_b0():
+            from models.demos.wormhole.vgg_unet.demo.demo_utils import prediction, preprocess
+
+            output_path = "models/demos/wormhole/"
+        else:
+            raise RuntimeError("Unsupported device: Only Blackhole and Wormhole are supported for this test.")
 
         path = kagglehub.dataset_download("mateuszbuda/lgg-mri-segmentation")
         for dirname, _, filenames in os.walk("/kaggle/input"):
@@ -193,14 +100,14 @@ def evaluation(
         # Define the output folder
         if model_type == "torch_model":
             if (device.get_num_devices()) > 1:
-                output_folder = "models/demos/vgg_unet/demo/output_images_dp"
+                output_folder = output_path + "vgg_unet/demo/output_images_dp"
             else:
-                output_folder = "models/demos/vgg_unet/demo/output_images"
+                output_folder = output_path + "vgg_unet/demo/output_images"
         else:
             if (device.get_num_devices()) > 1:
-                output_folder = "models/demos/vgg_unet/demo/output_images_ttnn_dp"
+                output_folder = output_path + "vgg_unet/demo/output_images_ttnn_dp"
             else:
-                output_folder = "models/demos/vgg_unet/demo/output_images_ttnn"
+                output_folder = output_path + "vgg_unet/demo/output_images_ttnn"
         if not os.path.exists(output_folder):
             os.makedirs(output_folder)
 
@@ -570,38 +477,6 @@ def evaluation(
         logger.info(f"F1 Score: {np.mean(f1_list):.2f}%")
 
 
-def run_vanilla_unet(device, model_type, res, model_location_generator, reset_seeds, batch_size):
-    from models.demos.vanilla_unet.common import load_torch_model
-    from models.demos.vanilla_unet.runner.performant_runner import VanillaUNetPerformantRunner
-
-    total_batch_size = batch_size * device.get_num_devices()
-    reference_model = load_torch_model(model_location_generator)
-    ttnn_model = VanillaUNetPerformantRunner(
-        device,
-        batch_size,
-        act_dtype=ttnn.bfloat8_b,
-        weight_dtype=ttnn.bfloat8_b,
-        model_location_generator=model_location_generator,
-    )
-
-    if not os.path.exists("models/demos/segmentation_evaluation/imageset"):
-        os.system("python models/demos/segmentation_evaluation/dataset_download.py vanilla_unet")
-
-    model_name = "vanilla_unet"
-    input_dtype = ttnn.bfloat16
-    input_memory_config = ttnn.L1_MEMORY_CONFIG
-    evaluation(
-        device=device,
-        res=res,
-        model_type=model_type,
-        model=ttnn_model if model_type == "tt_model" else reference_model,
-        input_dtype=input_dtype,
-        input_memory_config=input_memory_config,
-        model_name=model_name,
-        batch_size=total_batch_size,
-    )
-
-
 def run_vgg_unet(
     device, model_type, use_pretrained_weight, res, model_location_generator, reset_seeds, device_batch_size
 ):
@@ -639,48 +514,6 @@ def run_vgg_unet(
         model_name=model_name,
         batch_size=batch_size,
     )
-
-
-@pytest.mark.parametrize(
-    "model_type",
-    [
-        ("tt_model"),
-        ("torch_model"),
-    ],
-)
-@pytest.mark.parametrize(
-    "batch_size",
-    ((1),),
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [{"l1_small_size": VANILLA_UNET_L1_SMALL_SIZE, "trace_region_size": 1605632, "num_command_queues": 2}],
-    indirect=True,
-)
-@pytest.mark.parametrize("res", [(480, 640)])
-def test_vanilla_unet(device, model_type, res, model_location_generator, reset_seeds, batch_size):
-    return run_vanilla_unet(device, model_type, res, model_location_generator, reset_seeds, batch_size)
-
-
-@pytest.mark.parametrize(
-    "model_type",
-    [
-        ("tt_model"),
-        ("torch_model"),
-    ],
-)
-@pytest.mark.parametrize(
-    "device_batch_size",
-    ((1),),
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [{"l1_small_size": VANILLA_UNET_L1_SMALL_SIZE, "trace_region_size": 1605632, "num_command_queues": 2}],
-    indirect=True,
-)
-@pytest.mark.parametrize("res", [(480, 640)])
-def test_vanilla_unet_dp(mesh_device, model_type, res, model_location_generator, reset_seeds, device_batch_size):
-    return run_vanilla_unet(mesh_device, model_type, res, model_location_generator, reset_seeds, device_batch_size)
 
 
 @pytest.mark.parametrize(

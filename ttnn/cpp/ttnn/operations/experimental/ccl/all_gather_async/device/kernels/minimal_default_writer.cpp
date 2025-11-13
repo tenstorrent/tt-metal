@@ -32,45 +32,65 @@ constexpr uint32_t page_size = get_compile_time_arg_val(4);
 constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(5);
 constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(6);
 constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(7));
-constexpr bool direction = get_compile_time_arg_val(8);  // 1 is forward, 0 is backward
-constexpr uint32_t gather_dim = get_compile_time_arg_val(9);
-constexpr uint32_t input_batch_head_count = get_compile_time_arg_val(10);
-constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(11);
-constexpr uint32_t input_tensor_Ht = get_compile_time_arg_val(12);
-constexpr uint32_t input_tensor_C = get_compile_time_arg_val(13);
-constexpr uint32_t output_tensor_Wt = get_compile_time_arg_val(14);
-constexpr uint32_t output_tensor_Ht = get_compile_time_arg_val(15);
-constexpr uint32_t output_tensor_C = get_compile_time_arg_val(16);
-constexpr uint32_t input_tile_id_start = get_compile_time_arg_val(17);
-constexpr uint32_t input_tile_id_end = get_compile_time_arg_val(18);
-constexpr uint32_t start_pages_read_in_row = get_compile_time_arg_val(19);
-constexpr uint32_t start_row_offset = get_compile_time_arg_val(20);
-constexpr bool fuse_op = get_compile_time_arg_val(21);
-constexpr uint32_t chunks_per_sync = get_compile_time_arg_val(22);
-constexpr uint32_t reverse = get_compile_time_arg_val(23) == 1;
+constexpr uint32_t gather_dim = get_compile_time_arg_val(8);
+constexpr uint32_t input_batch_head_count = get_compile_time_arg_val(9);
+constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(10);
+constexpr uint32_t input_tensor_Ht = get_compile_time_arg_val(11);
+constexpr uint32_t input_tensor_C = get_compile_time_arg_val(12);
+constexpr uint32_t output_tensor_Wt = get_compile_time_arg_val(13);
+constexpr uint32_t output_tensor_Ht = get_compile_time_arg_val(14);
+constexpr uint32_t output_tensor_C = get_compile_time_arg_val(15);
+constexpr bool fuse_op = get_compile_time_arg_val(16);
+constexpr uint32_t reverse = get_compile_time_arg_val(17) == 1;
+constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(18);
+constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(19);
+constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(20);
+constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(21);
+constexpr uint32_t num_mux_clients = get_compile_time_arg_val(22);
+constexpr uint32_t rt_arg_count = 23;
 
-constexpr bool is_termination_master = get_compile_time_arg_val(24);
-constexpr uint8_t fabric_mux_x = get_compile_time_arg_val(25);
-constexpr uint8_t fabric_mux_y = get_compile_time_arg_val(26);
-constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(27);
-constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(28);
-constexpr size_t fabric_mux_channel_base_address = get_compile_time_arg_val(29);
-constexpr size_t fabric_mux_connection_info_address = get_compile_time_arg_val(30);
-constexpr size_t fabric_mux_connection_handshake_address = get_compile_time_arg_val(31);
-constexpr size_t fabric_mux_flow_control_address = get_compile_time_arg_val(32);
-constexpr size_t fabric_mux_buffer_index_address = get_compile_time_arg_val(33);
-constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(34);
-constexpr uint8_t fabric_mux_channel_id = get_compile_time_arg_val(35);
-constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(36);
+constexpr ccl_routing_utils::line_unicast_route_info_t forward_unicast_route_info =
+    ccl_routing_utils::get_line_unicast_route_info_from_args<rt_arg_count>();
+constexpr ccl_routing_utils::line_multicast_route_info_t forward_barrier_multicast_route_info =
+    ccl_routing_utils::get_line_multicast_route_info_from_args<
+        rt_arg_count + ccl_routing_utils::num_line_unicast_args>();
 
-constexpr ccl_routing_utils::line_unicast_route_info_t unicast_route_info =
-    ccl_routing_utils::get_line_unicast_route_info_from_args<37>();
-constexpr ccl_routing_utils::line_multicast_route_info_t barrier_multicast_route_info =
-    ccl_routing_utils::get_line_multicast_route_info_from_args<37 + ccl_routing_utils::num_line_unicast_args>();
+constexpr ccl_routing_utils::line_unicast_route_info_t backward_unicast_route_info =
+    ccl_routing_utils::get_line_unicast_route_info_from_args<
+        rt_arg_count + ccl_routing_utils::num_line_unicast_args + ccl_routing_utils::num_line_multicast_args>();
+constexpr ccl_routing_utils::line_multicast_route_info_t backward_barrier_multicast_route_info =
+    ccl_routing_utils::get_line_multicast_route_info_from_args<
+        rt_arg_count + 2 * ccl_routing_utils::num_line_unicast_args + ccl_routing_utils::num_line_multicast_args>();
 
 inline constexpr uint32_t sharded_args_start_idx =
-    37 + ccl_routing_utils::num_line_unicast_args + ccl_routing_utils::num_line_multicast_args;
+    rt_arg_count + 2 * (ccl_routing_utils::num_line_unicast_args + ccl_routing_utils::num_line_multicast_args);
 
+namespace detail {
+
+bool valid_targets_forward(const bool direction) {
+    if constexpr (num_targets_forward_direction) {
+        return (direction == 0);
+    } else {
+        return false;
+    }
+}
+
+bool valid_targets_backward(const bool direction) {
+    if constexpr (num_targets_backward_direction) {
+        return (direction == 1);
+    } else {
+        return false;
+    }
+}
+
+bool valid_targets(const bool direction) {
+    if constexpr (num_targets_backward_direction + num_targets_forward_direction == 0) {
+        return false;
+    } else {
+        return (valid_targets_forward(direction) || valid_targets_backward(direction));
+    }
+}
+}  // namespace detail
 void kernel_main() {
     ///////////////////////////////////////////////////
     // RUNTIME ARGS
@@ -87,15 +107,36 @@ void kernel_main() {
     const uint8_t opposite_core_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t opposite_core_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
 
+    const bool direction = get_arg_val<uint32_t>(arg_idx++);  // 0 is forward, 1 is backward
+    const auto input_tile_id_start = get_arg_val<uint32_t>(arg_idx++);
+    const auto input_tile_id_end = get_arg_val<uint32_t>(arg_idx++);
+    const auto start_pages_read_in_row = get_arg_val<uint32_t>(arg_idx++);
+    const auto start_row_offset = get_arg_val<uint32_t>(arg_idx++);
+    const auto chunks_per_sync = get_arg_val<uint32_t>(arg_idx++);
+
     bool mux_connection_valid = get_arg_val<uint32_t>(arg_idx++) == 1;
+    const bool is_termination_master = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t fabric_mux_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t fabric_mux_y = get_arg_val<uint32_t>(arg_idx++);
+    const size_t fabric_mux_channel_base_address = get_arg_val<uint32_t>(arg_idx++);
+    const size_t fabric_mux_connection_info_address = get_arg_val<uint32_t>(arg_idx++);
+    const size_t fabric_mux_connection_handshake_address = get_arg_val<uint32_t>(arg_idx++);
+    const size_t fabric_mux_flow_control_address = get_arg_val<uint32_t>(arg_idx++);
+    const size_t fabric_mux_buffer_index_address = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t fabric_mux_channel_id = get_arg_val<uint32_t>(arg_idx++);
+
     uint32_t termination_sync_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
     uint32_t local_fabric_mux_status_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
     uint32_t local_flow_control_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
     uint32_t local_teardown_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
     uint32_t local_buffer_index_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+
     uint32_t termination_master_noc_x = get_arg_val<uint32_t>(arg_idx++);
     uint32_t termination_master_noc_y = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t num_mux_clients = get_arg_val<uint32_t>(arg_idx++);
+
+    const auto& unicast_route_info = (direction == 0) ? forward_unicast_route_info : backward_unicast_route_info;
+    const auto& barrier_multicast_route_info =
+        (direction == 0) ? forward_barrier_multicast_route_info : backward_barrier_multicast_route_info;
 
 #ifdef OUTPUT_IS_SHARDED
     using tensor_shard_info = ShardedInfo<
@@ -164,9 +205,9 @@ void kernel_main() {
     auto pkt_hdr_sem_inc = PacketHeaderPool::allocate_header();
 
     if (use_barrier_sem) {
-        if constexpr (
-            (direction == 1 && num_targets_backward_direction) || (direction == 0 && num_targets_forward_direction)) {
+        if (detail::valid_targets(direction)) {
             // only initialize if we're actually going to send something over fabric
+
             ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_sem_inc, barrier_multicast_route_info);
             fabric_multicast_noc_unicast_atomic_inc_set_state<
                 UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
@@ -239,8 +280,7 @@ void kernel_main() {
     }
 
     // only initialize if we're actually going to send something over fabric
-    if constexpr (
-        (direction == 1 && num_targets_backward_direction) || (direction == 0 && num_targets_forward_direction)) {
+    if (detail::valid_targets(direction)) {
         fabric_unicast_noc_scatter_write_set_state<
             UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
             pkt_scatter_hdr,
@@ -298,7 +338,7 @@ void kernel_main() {
 
                     auto noc_address1 = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
                         output_addrgen, tile_two_id, 0);
-                    if constexpr (direction == 1) {
+                    if (direction == 1) {
                         if constexpr (num_targets_backward_direction) {
                             fabric_unicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
                                 mux_connection_handle,
@@ -326,8 +366,8 @@ void kernel_main() {
                 }
                 case 1:
                 default: {
-                    if constexpr (direction == 1) {
-                        if (num_targets_backward_direction) {
+                    if (direction == 1) {
+                        if constexpr (num_targets_backward_direction) {
                             fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
                                 mux_connection_handle,
                                 pkt_unicast_hdr,
@@ -350,6 +390,7 @@ void kernel_main() {
                     break;
                 }
             }
+
             noc_async_writes_flushed();
 
             cb_pop_front(cb_output_id, num_tiles_to_write_per_packet);
@@ -357,9 +398,7 @@ void kernel_main() {
             chunk_count++;
             if (chunk_count % chunks_per_sync == 0) {
                 // 2. unicast output ready semaphore
-                if constexpr (
-                    (direction == 1 && num_targets_backward_direction) ||
-                    (direction == 0 && num_targets_forward_direction)) {
+                if (detail::valid_targets(direction)) {
                     fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                         mux_connection_handle,
                         pkt_hdr_sem_inc,
@@ -371,9 +410,7 @@ void kernel_main() {
 
         if (chunk_count % chunks_per_sync != 0) {
             // Write the unicast packet
-            if constexpr (
-                (direction == 1 && num_targets_backward_direction) ||
-                (direction == 0 && num_targets_forward_direction)) {
+            if (detail::valid_targets(direction)) {
                 fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                     mux_connection_handle,
                     pkt_hdr_sem_inc,
@@ -399,23 +436,25 @@ void kernel_main() {
     }
 
     // increment locally
-    if constexpr (fuse_op && direction == 1) {
-        // Synchronize and signal that the local tensor slice is available
-        op_signaler_sender.synchronize_workers_and_signal_op(my_chip_id);
-        uint64_t self_write_done_semaphore_noc_addr =
-            safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, self_write_done_semaphore_addr, 0);
-        noc_semaphore_inc(self_write_done_semaphore_noc_addr, 1);
+    if constexpr (fuse_op) {
+        if (direction == 1) {
+            // Synchronize and signal that the local tensor slice is available
+            op_signaler_sender.synchronize_workers_and_signal_op(my_chip_id);
+            uint64_t self_write_done_semaphore_noc_addr =
+                safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, self_write_done_semaphore_addr, 0);
+            noc_semaphore_inc(self_write_done_semaphore_noc_addr, 1);
+        }
     }
 
     uint32_t writes_expected = 0;
     if constexpr (topology == Topology::Linear) {
-        if constexpr (direction == 1 && num_targets_backward_direction) {
+        if (detail::valid_targets_backward(direction)) {
             writes_expected = num_targets_forward_direction;
-        } else if constexpr (direction == 0 && num_targets_forward_direction) {
+        } else if (detail::valid_targets_forward(direction)) {
             writes_expected = num_targets_backward_direction;
         }
     } else if constexpr (topology == Topology::Ring) {
-        if constexpr (direction == 1) {
+        if (direction == 1) {
             writes_expected = num_targets_backward_direction - 1;
         } else {
             writes_expected = num_targets_forward_direction - 1;
@@ -435,7 +474,7 @@ void kernel_main() {
         // In the ring case, I expect to write to the left num_backward_target times
         int slice_chip_id;
         uint32_t actual_slice_chip_id;
-        if constexpr (direction == 1) {
+        if (direction == 1) {
             slice_chip_id = my_chip_id + slice_writes + 1;
             actual_slice_chip_id = (slice_chip_id >= (int)ring_size) ? slice_chip_id - ring_size : slice_chip_id;
         } else {
@@ -561,7 +600,7 @@ void kernel_main() {
     if (mux_connection_valid) {
         tt::tt_fabric::fabric_client_disconnect(*mux_connection_handle);
 
-        if constexpr (is_termination_master) {
+        if (is_termination_master) {
             auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address);
             noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
             tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
@@ -572,5 +611,6 @@ void kernel_main() {
             noc_async_atomic_barrier();
         }
     }
+
     noc_async_write_barrier();
 }

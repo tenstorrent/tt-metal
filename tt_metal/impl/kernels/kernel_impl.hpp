@@ -168,7 +168,7 @@ public:
         std::function<void(const std::unordered_map<std::string, uint32_t>& named_args)>) const override;
     bool binaries_exist_on_disk(const IDevice* device) const;
 
-    virtual void set_build_options(JitBuildOptions& build_options) const {}
+    virtual void set_build_options(JitBuildOptions& /*build_options*/) const {}
     virtual void generate_binaries(IDevice* device, JitBuildOptions& build_options) const = 0;
     virtual void read_binaries(IDevice* device) = 0;
 

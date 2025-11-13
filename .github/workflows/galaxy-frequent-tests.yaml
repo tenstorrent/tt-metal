@@ -2,6 +2,21 @@ name: "(Galaxy) frequent tests"
 
 on:
   workflow_dispatch:
+    inputs:
+      model:
+        description: 'Select model to test'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - llama3
+          - resnet50
+          - unit
+          - sd35
+          - wan22
+          - mochi
+          - flux1
   schedule:
     - cron: "0 3 * * *"  # Every day at 3:00 UTC
 
@@ -22,4 +37,5 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      model: ${{ inputs.model || 'all' }}
       topology: topology-6u

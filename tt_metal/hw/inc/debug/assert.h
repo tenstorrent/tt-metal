@@ -27,7 +27,7 @@ inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type =
     // This exits to base FW
     internal_::disable_erisc_app();
     // Subordinates do not have an erisc exit
-#if (defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0 && defined(ENABLE_2_ERISC_MODE)) || !defined(ARCH_BLACKHOLE)
+#if (defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)) || !defined(ARCH_BLACKHOLE)
     erisc_exit();
 #endif
 #endif

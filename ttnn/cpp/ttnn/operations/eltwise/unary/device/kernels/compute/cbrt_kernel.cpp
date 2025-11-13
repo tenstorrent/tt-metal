@@ -55,12 +55,14 @@ void MAIN {
 
             sign_tile_init();
             sign_tile(0);
-#ifdef CBRT_FLOAT
+
+#ifdef INP_FLOAT32
             copy_tile_init(cb_tmp0);
             copy_tile(cb_tmp0, 0, 1);
             mul_binary_tile_init();
             mul_binary_tile(0, 1, 0);
-#else
+#endif
+#ifdef INP_FLOAT
             binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_tmp0);
             binary_dest_reuse_tiles<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_tmp0, 0, 0);
 #endif

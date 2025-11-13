@@ -382,6 +382,8 @@ def parse_arguments(scripts: dict[str, TriageScript], script_path: str | None = 
                 script_options = parse_defaults(script.module.__doc__)
                 if len(script_options) > 0:
                     help_message += f"\n{script.module.__doc__}\n"
+        print(help_message)
+        sys.exit(0)
     else:
         help_message = printable_usage(doc)
         for script in scripts.values():

@@ -1,0 +1,87 @@
+# --- Meshes ---------------------------------------------------------------
+
+mesh_descriptors {
+  name: "Galaxy_8x4"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 8, 4 ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels {
+    count: 4
+    policy: STRICT
+  }
+}
+
+# --- Graphs ---------------------------------------------------------------
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+
+  # 5 Galaxy instances (mesh ids 0,1,2,3,4)
+  instances { mesh { mesh_descriptor: "Galaxy_8x4" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "Galaxy_8x4" mesh_id: 1 } }
+  instances { mesh { mesh_descriptor: "Galaxy_8x4" mesh_id: 2 } }
+  instances { mesh { mesh_descriptor: "Galaxy_8x4" mesh_id: 3 } }
+  instances { mesh { mesh_descriptor: "Galaxy_8x4" mesh_id: 4 } }
+
+  # M0 connections
+  connections {
+    nodes { mesh { mesh_descriptor: "Galaxy_8x4" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "Galaxy_8x4" mesh_id: 1 } }
+    channels { count: 4 }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "Galaxy_8x4" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "Galaxy_8x4" mesh_id: 2 } }
+    channels { count: 4 }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "Galaxy_8x4" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "Galaxy_8x4" mesh_id: 3 } }
+    channels { count: 4 }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "Galaxy_8x4" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "Galaxy_8x4" mesh_id: 4 } }
+    channels { count: 4 }
+  }
+
+  # M1 connections
+  connections {
+    nodes { mesh { mesh_descriptor: "Galaxy_8x4" mesh_id: 1 } }
+    nodes { mesh { mesh_descriptor: "Galaxy_8x4" mesh_id: 2 } }
+    channels { count: 4 }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "Galaxy_8x4" mesh_id: 1 } }
+    nodes { mesh { mesh_descriptor: "Galaxy_8x4" mesh_id: 3 } }
+    channels { count: 4 }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "Galaxy_8x4" mesh_id: 1 } }
+    nodes { mesh { mesh_descriptor: "Galaxy_8x4" mesh_id: 4 } }
+    channels { count: 4 }
+  }
+
+  # M2 connections
+  connections {
+    nodes { mesh { mesh_descriptor: "Galaxy_8x4" mesh_id: 2 } }
+    nodes { mesh { mesh_descriptor: "Galaxy_8x4" mesh_id: 3 } }
+    channels { count: 4 }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "Galaxy_8x4" mesh_id: 2 } }
+    nodes { mesh { mesh_descriptor: "Galaxy_8x4" mesh_id: 4 } }
+    channels { count: 4 }
+  }
+
+  # M3 connections
+  connections {
+    nodes { mesh { mesh_descriptor: "Galaxy_8x4" mesh_id: 3 } }
+    nodes { mesh { mesh_descriptor: "Galaxy_8x4" mesh_id: 4 } }
+    channels { count: 4 }
+  }
+}
+
+# --- Instantiation ----------------------------------------------------------
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }

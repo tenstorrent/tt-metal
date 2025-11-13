@@ -24,13 +24,16 @@ void kernel_main() {
     const uint32_t LH = get_arg_val<uint32_t>(13);
     const uint32_t LW = get_arg_val<uint32_t>(14);
     const uint32_t input_cb_page_size = get_arg_val<uint32_t>(15);
-    const uint32_t output_cb_page_size = get_arg_val<uint32_t>(16);
-    const uint32_t start_id = get_arg_val<uint32_t>(17);
-    const uint32_t num_units_per_core = get_arg_val<uint32_t>(18);
+    const uint32_t dram_aligned_input_cb_page_size = get_arg_val<uint32_t>(16);
+    const uint32_t output_cb_page_size = get_arg_val<uint32_t>(17);
+    const uint32_t start_id = get_arg_val<uint32_t>(18);
+    const uint32_t num_units_per_core = get_arg_val<uint32_t>(19);
+    const uint32_t aligned = get_arg_val<uint32_t>(20);
 
     constexpr uint32_t input_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t output_cb_id = get_compile_time_arg_val(1);
-    constexpr auto input_args = TensorAccessorArgs<2>();
+    constexpr uint32_t scratch_cb_id = get_compile_time_arg_val(2);
+    constexpr auto input_args = TensorAccessorArgs<3>();  // Start after 3 manual compile-time args
     constexpr uint32_t onetile = 1;
 
     uint32_t P = kernel_size_h * kernel_size_w;
@@ -75,8 +78,23 @@ void kernel_main() {
                     cb_reserve_back(input_cb_id, onetile);
                     uint32_t l1_write_addr = get_write_ptr(input_cb_id);
                     uint64_t src_noc_addr = get_noc_addr(input_row_id, s0);
-                    noc_async_read(src_noc_addr, l1_write_addr, input_cb_page_size);
-                    noc_async_read_barrier();
+
+                    if (aligned) {
+                        // Direct read when aligned (L1 sources or non-BH DRAM with aligned size)
+                        noc_async_read(src_noc_addr, l1_write_addr, input_cb_page_size);
+                        noc_async_read_barrier();
+                    } else {
+                        // Two-step read via scratch buffer for DRAM alignment
+                        // Read DRAM-aligned size to scratch buffer first
+                        uint32_t scratch_l1_write_addr = get_write_ptr(scratch_cb_id);
+                        uint64_t scratch_l1_noc_read_addr = get_noc_addr(scratch_l1_write_addr);
+                        noc_async_read(src_noc_addr, scratch_l1_write_addr, dram_aligned_input_cb_page_size);
+                        noc_async_read_barrier();
+                        // Then copy actual size from scratch to final destination
+                        noc_async_read(scratch_l1_noc_read_addr, l1_write_addr, input_cb_page_size);
+                        noc_async_read_barrier();
+                    }
+
                     cb_push_back(input_cb_id, onetile);
 
                     cb_wait_front(input_cb_id, onetile);

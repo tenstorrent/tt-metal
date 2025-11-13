@@ -28,12 +28,6 @@ void bind_indexed_fill(pybind11::module& module) {
 
             Returns:
                 ttnn.Tensor: the output tensor.
-
-            Example:
-                >>> batch_id = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.UINT32)), device=device)
-                >>> input_a = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
-                >>> input_b = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device=device)
-                >>> output = ttnn.indexed_fill(batch_id, tensor1, tensor2)
         )doc",
         ttnn::indexed_fill.base_name());
 

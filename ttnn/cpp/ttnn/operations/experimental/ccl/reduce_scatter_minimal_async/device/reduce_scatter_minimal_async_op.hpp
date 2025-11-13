@@ -111,8 +111,8 @@ struct ReduceScatterMinimalAsync {
 };
 
 struct ReduceScatterProgramArtifacts {
-    std::vector<tt::tt_metal::KernelHandle> reader_kernel_ids;
-    std::vector<tt::tt_metal::KernelHandle> writer_kernel_ids;
+    tt::tt_metal::KernelHandle reader_kernel_id;
+    tt::tt_metal::KernelHandle writer_kernel_id;
     std::vector<tt::tt_metal::CoreCoord> all_cores;
     uint32_t num_directions_per_link;
     uint32_t num_workers_per_direction;
@@ -243,8 +243,8 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
 
 void line_reduce_scatter_minimal_async_helper_override_runtime_arguments(
     tt::tt_metal::Program& program,
-    const std::vector<tt::tt_metal::KernelHandle>& reader_kernel_ids,
-    const std::vector<tt::tt_metal::KernelHandle>& writer_kernel_ids,
+    tt::tt_metal::KernelHandle reader_kernel_id,
+    tt::tt_metal::KernelHandle writer_kernel_id,
     const std::vector<tt::tt_metal::CoreCoord>& all_cores,
     uint32_t num_links,
     uint32_t num_directions_per_link,
@@ -259,8 +259,8 @@ void line_reduce_scatter_minimal_async_helper_override_runtime_arguments(
 
 void ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
     tt::tt_metal::Program& program,
-    const std::vector<tt::tt_metal::KernelHandle>& reader_kernel_ids,
-    const std::vector<tt::tt_metal::KernelHandle>& writer_kernel_ids,
+    tt::tt_metal::KernelHandle reader_kernel_id,
+    tt::tt_metal::KernelHandle writer_kernel_id,
     const std::vector<tt::tt_metal::CoreCoord>& all_cores,
     uint32_t num_links,
     uint32_t num_directions_per_link,

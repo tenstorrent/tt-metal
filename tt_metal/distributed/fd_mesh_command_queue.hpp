@@ -61,7 +61,7 @@ private:
     // When running trace, the dispatch commands responsible for forwarding go signals must be
     // captured on these subgrids.
     void capture_go_signal_trace_on_unused_subgrids(
-        const MeshCoordinateRange& active_sub_grids,
+        const MeshCoordinateRangeSet& active_sub_grids_set,
         const SubDeviceId& sub_device_id,
         uint32_t expected_num_workers_completed,
         bool mcast_go_signals,
@@ -271,6 +271,9 @@ public:
     std::pair<bool, size_t> query_prefetcher_cache(uint64_t workload_id, uint32_t lengthB);
     void reset_prefetcher_cache_manager();
     int get_prefetcher_cache_sizeB() const;
+
+    void wait_for_completion(bool reset_launch_msg_state) override;
+    void finish_and_reset_in_use() override;
 };
 
 }  // namespace tt::tt_metal::distributed

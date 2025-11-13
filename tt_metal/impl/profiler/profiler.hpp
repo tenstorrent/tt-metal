@@ -183,6 +183,10 @@ private:
     // Track the smallest timestamp read
     void updateFirstTimestamp(uint64_t timestamp);
 
+    // Generate programs analysis results for device markers
+    void generateAnalysesForDeviceMarkers(
+        const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers) const;
+
     // Dump device results to files
     void writeDeviceResultsToFiles() const;
 
