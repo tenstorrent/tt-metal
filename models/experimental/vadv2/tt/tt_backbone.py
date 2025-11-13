@@ -130,7 +130,6 @@ class TtResnet50:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 ceil_mode=False,
             )
-        print("Maxpool done")
         outputs = []
         # Layer 1
         x = self.layer1_0(x)
