@@ -2331,7 +2331,7 @@ void py_module(py::module& module) {
         R"doc(Computes logical AND of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i \, \& \, \mathrm{{input\_tensor\_b}}_i)doc",
         ". ",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT16)doc",
+        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16)doc",
         "INT32 for tensor-scalar is supported only when use_legacy= False.");
 
     detail::bind_binary_operation(
@@ -2340,7 +2340,7 @@ void py_module(py::module& module) {
         R"doc(Computes logical OR of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i \, | \, \mathrm{{input\_tensor\_b}}_i)doc",
         ". ",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT16)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16)doc");
 
     detail::bind_binary_operation(
         module,
@@ -2372,7 +2372,7 @@ void py_module(py::module& module) {
         R"doc(Computes squared difference of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}} = \verb|squared_difference|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
         ". ",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT16)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16)doc");
 
     detail::bind_binary_operation(
         module,
@@ -2509,28 +2509,28 @@ void py_module(py::module& module) {
         R"doc(Compute logical_xor :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{output\_tensor}_i = (\mathrm{input\_tensor\_a}_i \land \lnot \mathrm{input\_tensor\_b}_i) \lor (\lnot \mathrm{input\_tensor\_a}_i \land \mathrm{input\_tensor\_b}_i))doc",
         ".",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT16)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16)doc");
 
     detail::bind_logical_inplace_operation(
         module,
         ttnn::logical_or_,
         R"doc(Computes inplace logical OR of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{input\_tensor\_a}}_i | \mathrm{{input\_tensor\_b}}_i)doc",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT16)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16)doc");
 
     detail::bind_logical_inplace_operation(
         module,
         ttnn::logical_xor_,
         R"doc(Computes inplace logical XOR of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{input\_tensor\_a}_i \land \lnot \mathrm{input\_tensor\_b}_i) \lor (\lnot \mathrm{input\_tensor\_a}_i \land \mathrm{input\_tensor\_b}_i)doc",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT16)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16)doc");
 
     detail::bind_logical_inplace_operation(
         module,
         ttnn::logical_and_,
         R"doc(Computes inplace logical AND of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{input\_tensor\_a}}_i \& \mathrm{{input\_tensor\_b}}_i)doc",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT16)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16)doc");
 
     detail::bind_binary_gcd_lcm_operation(
         module,
@@ -2710,7 +2710,7 @@ void py_module(py::module& module) {
         ttnn::squared_difference_,
         R"doc(Performs squared_difference in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\verb|squared_difference|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16)doc");
 
     detail::bind_inplace_operation_with_fast_approx(
         module,
