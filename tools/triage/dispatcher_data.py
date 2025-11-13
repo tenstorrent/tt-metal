@@ -324,7 +324,7 @@ class DispatcherData:
                 else:
                     kernel_path = kernel.path + f"/{proc_name.lower()}/{proc_name.lower()}.elf"
             kernel_path = os.path.realpath(kernel_path)
-            # FOR NCRISC we don't have XIP ELF file
+            # For NCRISC we don't have XIP ELF file
             kernel_xip_path = (
                 kernel_path + ".xip.elf" if not (proc_name == "NCRISC" and location._device.is_wormhole()) else None
             )
