@@ -21,16 +21,20 @@
 #include "command_queue_fixture.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "dispatch/device_command_calculator.hpp"
+#include "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/common.h"
 
 // TODO: clean up these globals
-bool use_coherent_data_g = false;
-uint32_t dispatch_buffer_page_size_g = 1 << tt::tt_metal::DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE;
-uint32_t min_xfer_size_bytes_g = 16;
-uint32_t max_xfer_size_bytes_g = 4096;
-bool send_to_all_g = true;
-bool perf_test_g = false;
-uint32_t hugepage_issue_buffer_size_g;
-#include "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/common.h"
+// They are used in common.h and test_prefetcher.cpp
+// In the next refactor, they will be encapsulated in a struct DispatchTestContext
+// that can be passed to common.h and test fixtures.
+bool use_coherent_data_g = false;  // Use sequential test data vs random
+uint32_t dispatch_buffer_page_size_g =
+    1 << tt::tt_metal::DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE;  // Dispatch buffer page size (bytes)
+uint32_t min_xfer_size_bytes_g = 16;                                     // Min transfer size for random commands
+uint32_t max_xfer_size_bytes_g = 4096;                                   // Max transfer size for random commands
+bool send_to_all_g = true;                                               // Send to all cores vs random subset
+bool perf_test_g = false;                                                // Perf mode: use consistent sizes
+uint32_t hugepage_issue_buffer_size_g;                                   // Hugepage issue buffer size (runtime)
 
 namespace tt::tt_dispatch {
 namespace dispatcher_tests {
@@ -58,6 +62,8 @@ struct PackedWriteParams {
 };
 
 // Forward declare the accessor
+// This accessor class provides test access to private members
+// of FDMeshCommandQueue
 class FDMeshCQTestAccessor {
 public:
     static tt_metal::SystemMemoryManager& sysmem(tt_metal::distributed::FDMeshCommandQueue& cq) {
@@ -65,7 +71,10 @@ public:
     }
 };
 
-constexpr uint32_t DEFAULT_ITERATIONS = 1;
+constexpr uint32_t DEFAULT_ITERATIONS_LINEAR_WRITE = 3;
+constexpr uint32_t DEFAULT_ITERATIONS_PAGED_WRITE = 1;
+constexpr uint32_t DEFAULT_ITERATIONS_PACKED_WRITE = 1;
+constexpr uint32_t DEFAULT_ITERATIONS_PACKED_WRITE_LARGE = 1;
 constexpr uint32_t DRAM_DATA_SIZE_BYTES = 16 * 1024 * 1024;
 constexpr uint32_t DRAM_DATA_SIZE_WORDS = DRAM_DATA_SIZE_BYTES / sizeof(uint32_t);
 
@@ -91,14 +100,15 @@ protected:
     uint32_t dispatch_buffer_page_size_ = 0;
     bool send_to_all_ = false;
 
-    // C++11 Random Number Generation (thread-safe)
-    // Replace std::rand() with this thread-safe random number generation
+    // Thread-safe random number generation using C++11 facilities
+    // Provides a shared RNG and mutex for safe concurrent access
     static std::mt19937 s_rng;
     static std::mutex s_rng_mutex;
 
     // Helper for thread-safe random number generation in a range [min, max]
     template <typename T>
     static T get_rand(T min, T max) {
+        static_assert(std::is_integral<T>::value, "T must be an integral type");
         std::lock_guard<std::mutex> lock(s_rng_mutex);
         std::uniform_int_distribution<T> dist(min, max);
         return dist(s_rng);
@@ -238,10 +248,10 @@ std::mutex BaseDispatchTestFixture::s_rng_mutex;
 
 class DispatchLinearWriteTestFixture : public BaseDispatchTestFixture,
                                        public ::testing::WithParamInterface<LinearWriteParams> {
-    uint32_t transfer_size_bytes_;
-    uint32_t num_iterations_;
-    uint32_t dram_data_size_words_;
-    bool is_mcast_;
+    uint32_t transfer_size_bytes_{};
+    uint32_t num_iterations_{};
+    uint32_t dram_data_size_words_{};
+    bool is_mcast_{};
 
 protected:
     struct LinearWriteCommand {
@@ -269,11 +279,11 @@ public:
 // Paged Writes to L1/DRAM
 class DispatchPagedWriteTestFixture : public BaseDispatchTestFixture,
                                       public ::testing::WithParamInterface<PagedWriteParams> {
-    uint32_t page_size_;
-    uint32_t num_pages_;
-    uint32_t num_iterations_;
-    uint32_t dram_data_size_words_;
-    bool is_dram_;
+    uint32_t page_size_{};
+    uint32_t num_pages_{};
+    uint32_t num_iterations_{};
+    uint32_t dram_data_size_words_{};
+    bool is_dram_{};
 
 public:
     void SetUp() override {
@@ -296,16 +306,16 @@ public:
 
 class DispatchPackedWriteTestFixture : public BaseDispatchTestFixture,
                                        public ::testing::WithParamInterface<PackedWriteParams> {
-    uint32_t transfer_size_bytes_;
-    uint32_t num_iterations_;
-    uint32_t dram_data_size_words_;
-    bool is_mcast_;
+    uint32_t transfer_size_bytes_{};
+    uint32_t num_iterations_{};
+    uint32_t dram_data_size_words_{};
+    bool is_mcast_{};
 
 protected:
     struct PackedWriteCommand {
         std::vector<uint32_t> payload;
-        uint32_t common_addr;
-        uint32_t data_copies;
+        uint32_t common_addr{};
+        uint32_t data_copies{};
         bool no_stride = false;
     };
 
@@ -651,7 +661,7 @@ TEST_P(DispatchPagedWriteTestFixture, LinearWritePaged) {
 
     // Generate random payload ONCE (reused for all iterations)
     std::vector<uint32_t> host_payload(transfer_size_words);
-    // Abitrary starting value, avoid 0x0 since matches with DRAM prefill
+    // Arbitrary starting value, avoid 0x0 since matches with DRAM prefill
     uint32_t coherent_count = 0x100;
 
     // Populate device_data (only once outside of iteration loop)
@@ -676,7 +686,7 @@ TEST_P(DispatchPagedWriteTestFixture, LinearWritePaged) {
                     uint32_t datum = (this->use_coherent_data_) ? (((page_id & 0xFF) << 24) | coherent_count++)
                                                                 : this->get_rand_data();
                     device_data.push_one(bank_core, bank_id, datum);
-                    host_payload[payload_offset_words + page * page_size_words + word] = datum;
+                    host_payload[payload_offset_words + (page * page_size_words) + word] = datum;
                 }
                 device_data.pad(bank_core, bank_id, page_size_alignment_bytes);
             }
@@ -867,11 +877,7 @@ TEST_P(DispatchPackedWriteTestFixture, WritePackedUnicast) {
         if (cmd.no_stride) {
             const uint32_t max_allowed = dispatch_cb_page_size_bytes - sizeof(CQDispatchCmd) - sub_cmds_bytes;
             if (xfer_size_bytes > max_allowed) {
-                static bool warned = false;
-                if (!warned) {
-                    log_warning(tt::LogTest, "Clamping packed_write cmd w/ no_stride to fit dispatch page");
-                    warned = true;
-                }
+                log_warning(tt::LogTest, "Clamping packed_write cmd w/ no_stride to fit dispatch page");
                 xfer_size_bytes = max_allowed;
             }
         }
@@ -1269,13 +1275,13 @@ INSTANTIATE_TEST_SUITE_P(
     DispatchLinearWriteTestFixture,
     ::testing::Values(
         // Testcase: 256 * 192 = 49152 bytes (Unicast)
-        LinearWriteParams{49152, DEFAULT_ITERATIONS, DRAM_DATA_SIZE_WORDS, false},
+        LinearWriteParams{49152, DEFAULT_ITERATIONS_LINEAR_WRITE, DRAM_DATA_SIZE_WORDS, false},
         // Testcase: 1024 * 192 = 196608 bytes (Unicast)
-        LinearWriteParams{196608, DEFAULT_ITERATIONS, DRAM_DATA_SIZE_WORDS, false},
+        LinearWriteParams{196608, DEFAULT_ITERATIONS_LINEAR_WRITE, DRAM_DATA_SIZE_WORDS, false},
         // Testcase: 256 * 192 = 49152 bytes (Multicast)
-        LinearWriteParams{49152, DEFAULT_ITERATIONS, DRAM_DATA_SIZE_WORDS, true},
+        LinearWriteParams{49152, DEFAULT_ITERATIONS_LINEAR_WRITE, DRAM_DATA_SIZE_WORDS, true},
         // Testcase: 1024 * 192 = 196608 bytes (Multicast)
-        LinearWriteParams{196608, DEFAULT_ITERATIONS, DRAM_DATA_SIZE_WORDS, true}),
+        LinearWriteParams{196608, DEFAULT_ITERATIONS_LINEAR_WRITE, DRAM_DATA_SIZE_WORDS, true}),
     [](const testing::TestParamInfo<LinearWriteParams>& info) {
         return std::to_string(info.param.transfer_size_bytes) + "B_" + std::to_string(info.param.num_iterations) +
                "iter_" + std::to_string(info.param.dram_data_size_words) + "words_" +
@@ -1286,22 +1292,22 @@ INSTANTIATE_TEST_SUITE_P(
     DispatcherTests,
     DispatchPagedWriteTestFixture,
     ::testing::Values(
-        // Testcase: 512 pages × 16 bytes (DRAM)
-        PagedWriteParams{16, 512, 1, DRAM_DATA_SIZE_WORDS, true},
-        // Testcase: 512 pages × 16 bytes (L1)
-        PagedWriteParams{16, 512, 1, DRAM_DATA_SIZE_WORDS, false},
-        // Testcase: 128 pages × 2048 bytes (DRAM)
-        PagedWriteParams{2048, 128, 1, DRAM_DATA_SIZE_WORDS, true},
-        // Testcase: 128 pages × 2048 bytes (L1)
-        PagedWriteParams{2048, 128, 1, DRAM_DATA_SIZE_WORDS, false},
-        // Testcase: 10 pages × 4128 bytes (non-aligned) (DRAM)
-        PagedWriteParams{4128, 10, 1, DRAM_DATA_SIZE_WORDS, true},
-        // Testcase: 13 pages × 16 bytes (arbitrary non-even numbers) (DRAM)
-        PagedWriteParams{16, 13, 1, DRAM_DATA_SIZE_WORDS, true},
-        // Testcase: 13 pages × 16 bytes (arbitrary non-even numbers) (L1)
-        PagedWriteParams{16, 13, 1, DRAM_DATA_SIZE_WORDS, false},
-        // Testcase: 100 pages × 8192 bytes (high BW) (DRAM)
-        PagedWriteParams{8192, 100, 1, DRAM_DATA_SIZE_WORDS, true}),
+        // Testcase: 512 pages x 16 bytes (DRAM)
+        PagedWriteParams{16, 512, DEFAULT_ITERATIONS_PAGED_WRITE, DRAM_DATA_SIZE_WORDS, true},
+        // Testcase: 512 pages x 16 bytes (L1)
+        PagedWriteParams{16, 512, DEFAULT_ITERATIONS_PAGED_WRITE, DRAM_DATA_SIZE_WORDS, false},
+        // Testcase: 128 pages x 2048 bytes (DRAM)
+        PagedWriteParams{2048, 128, DEFAULT_ITERATIONS_PAGED_WRITE, DRAM_DATA_SIZE_WORDS, true},
+        // Testcase: 128 pages x 2048 bytes (L1)
+        PagedWriteParams{2048, 128, DEFAULT_ITERATIONS_PAGED_WRITE, DRAM_DATA_SIZE_WORDS, false},
+        // Testcase: 10 pages x 4128 bytes (non-aligned) (DRAM)
+        PagedWriteParams{4128, 10, DEFAULT_ITERATIONS_PAGED_WRITE, DRAM_DATA_SIZE_WORDS, true},
+        // Testcase: 13 pages x 16 bytes (arbitrary non-even numbers) (DRAM)
+        PagedWriteParams{16, 13, DEFAULT_ITERATIONS_PAGED_WRITE, DRAM_DATA_SIZE_WORDS, true},
+        // Testcase: 13 pages x 16 bytes (arbitrary non-even numbers) (L1)
+        PagedWriteParams{16, 13, DEFAULT_ITERATIONS_PAGED_WRITE, DRAM_DATA_SIZE_WORDS, false},
+        // Testcase: 100 pages x 8192 bytes (high BW) (DRAM)
+        PagedWriteParams{8192, 100, DEFAULT_ITERATIONS_PAGED_WRITE, DRAM_DATA_SIZE_WORDS, true}),
     [](const testing::TestParamInfo<PagedWriteParams>& info) {
         std::stringstream ss;
         ss << "page_size" << info.param.page_size << "_np" << info.param.num_pages << "_iter"
@@ -1314,9 +1320,9 @@ INSTANTIATE_TEST_SUITE_P(
     DispatchPackedWriteTestFixture,
     ::testing::Values(
         // Testcase: 786432 bytes (Unicast)
-        PackedWriteParams{786432, DEFAULT_ITERATIONS, DRAM_DATA_SIZE_WORDS, false},
+        PackedWriteParams{786432, DEFAULT_ITERATIONS_PACKED_WRITE, DRAM_DATA_SIZE_WORDS, false},
         // Testcase: 819200 bytes (Unicast)
-        PackedWriteParams{819200, DEFAULT_ITERATIONS, DRAM_DATA_SIZE_WORDS, false}),
+        PackedWriteParams{819200, DEFAULT_ITERATIONS_PACKED_WRITE, DRAM_DATA_SIZE_WORDS, false}),
     [](const testing::TestParamInfo<PackedWriteParams>& info) {
         return std::to_string(info.param.transfer_size_bytes) + "B_" + std::to_string(info.param.num_iterations) +
                "iter_" + std::to_string(info.param.dram_data_size_words) + "words_" +
@@ -1328,9 +1334,9 @@ INSTANTIATE_TEST_SUITE_P(
     DispatchPackedWriteLargeTestFixture,
     ::testing::Values(
         // Testcase: 40960 bytes
-        PackedWriteParams{40960, DEFAULT_ITERATIONS, DRAM_DATA_SIZE_WORDS, false},
+        PackedWriteParams{40960, DEFAULT_ITERATIONS_PACKED_WRITE_LARGE, DRAM_DATA_SIZE_WORDS, false},
         // Testcase: 409600 bytes
-        PackedWriteParams{409600, DEFAULT_ITERATIONS, DRAM_DATA_SIZE_WORDS, false}),
+        PackedWriteParams{409600, DEFAULT_ITERATIONS_PACKED_WRITE_LARGE, DRAM_DATA_SIZE_WORDS, false}),
     [](const testing::TestParamInfo<PackedWriteParams>& info) {
         return std::to_string(info.param.transfer_size_bytes) + "B_" + std::to_string(info.param.num_iterations) +
                "iter_" + std::to_string(info.param.dram_data_size_words) + "words_" +
