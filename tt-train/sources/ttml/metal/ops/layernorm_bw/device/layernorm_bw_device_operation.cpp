@@ -173,7 +173,6 @@ LayerNormBackwardDeviceOperation::invoke(
     const ttnn::Tensor& mean_tensor,
     const ttnn::Tensor& rstd_tensor,
     const ttnn::Tensor& dL_dout_tensor,
-    float epsilon,
     const std::optional<ttnn::Tensor>& preallocated_dx,
     const std::optional<ttnn::Tensor>& preallocated_dgamma_components,
     const std::optional<ttnn::Tensor>& preallocated_dbeta_components) {
