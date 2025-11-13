@@ -93,11 +93,13 @@ void MAIN {
     constexpr uint32_t cb_im = (do_gamma | do_beta) ? cb_x : cb_out;
     constexpr uint32_t cb_outgamma = do_beta ? cb_fusion : cb_out;
 
+    reconfig_data_format(cb_in0, cb_in, cb_in1, cb_in);
     // RMSNORM: Skip E[x] computation and x - E[x] subtraction
     // For RMSNORM, cb_xmm is cb_in0 (input directly)
     // UNPACK (( print_full_tile(cb_xmm, 0, true) ));
-    // UNPACK(( DPRINT << TileSlice(cb_xmm, 0, SliceRange{.h0 = 0, .h1 = 2, .hs = 1, .w0 = 0, .w1 = 32, .ws = 2}, true,
-    // true) << ENDL() )); DPRINT << "hi" << ENDL();
+    UNPACK((
+        DPRINT << TileSlice(cb_xmm, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 16, .w0 = 0, .w1 = 32, .ws = 16}, true, true)
+               << ENDL()));
 
     // x^2 (for RMSNORM, no mean subtraction), cb_mm2 <-- cb_xmm
     mul_tiles_init(cb_xmm, cb_xmm);
@@ -122,11 +124,15 @@ void MAIN {
         index_h_offset += block_w;
     }
     // pack dprint before push_back
-    PACK(
-        (DPRINT << TileSlice(cb_xmm2, 0, SliceRange{.h0 = 0, .h1 = 2, .hs = 1, .w0 = 0, .w1 = 32, .ws = 2}, true, true)
-                << ENDL()));
+    // PACK(
+    //     (DPRINT << TileSlice(cb_xmm2, 0, SliceRange{.h0 = 0, .h1 = 2, .hs = 1, .w0 = 0, .w1 = 32, .ws = 2}, true,
+    //     true)
+    //             << ENDL()));
+    // PACK(
+    //     (DPRINT << TileSlice(cb_xmm2, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 2, .w0 = 0, .w1 = 32, .ws = 16}, true,
+    //     true)
+    //             << ENDL()));
     cb_push_back(cb_xmm2, num_tiles_per_block);
-    // print_full_tile(cb_xmm2, 0, true);
 
     reconfig_data_format(cb_xmm, cb_xmm2, cb_xmm, cb_scaler);
 
@@ -152,10 +158,11 @@ void MAIN {
     }
     reduce_uninit();
     cb_pop_front(cb_xmm2, num_tiles_per_block);
-    PACK(
-        (DPRINT << TileSlice(
-                       cb_ex_partial2, 0, SliceRange{.h0 = 0, .h1 = 2, .hs = 1, .w0 = 0, .w1 = 32, .ws = 2}, true, true)
-                << ENDL()));
+    // PACK(
+    //     (DPRINT << TileSlice(
+    //                    cb_ex_partial2, 0, SliceRange{.h0 = 0, .h1 = 16, .hs = 1, .w0 = 0, .w1 = 32, .ws = 16}, true,
+    //                    true)
+    //             << ENDL()));
     cb_push_back(cb_ex_partial2, block_h);
 
     // global reduce, cb_ex <-- cb_ex_external, cb_ex_partial
@@ -165,7 +172,6 @@ void MAIN {
 
         for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
             cb_wait_front(cb_scaler_global, 1);
-
             tile_regs_acquire();
             for (uint32_t w = 0; w < num_blocks_reduce; w++) {
                 cb_wait_front(cb_ex_external2, 1);
@@ -183,6 +189,10 @@ void MAIN {
             tile_regs_release();
         }
         reduce_uninit();
+        // PACK(
+        //     (DPRINT << TileSlice(
+        //         cb_ex2, 0, SliceRange{.h0 = 0, .h1 = 16, .hs = 2, .w0 = 0, .w1 = 32, .ws = 16}, true, true)
+        //             << ENDL()));
         cb_push_back(cb_ex2, num_tiles_per_allgather_worker);
 
         if (enable_sqrt) {
@@ -221,6 +231,10 @@ void MAIN {
     for (uint32_t i = 0; i < block_h; i++) {
         index_subblock_w_offset = 0;
         cb_wait_front(cb_ex_global, 1);
+        // UNPACK(
+        //     (DPRINT << TileSlice(
+        //         cb_ex_global, 0, SliceRange{.h0 = 0, .h1 = 16, .hs = 2, .w0 = 0, .w1 = 32, .ws = 16}, true, true)
+        //             << ENDL()));
         for (uint32_t j = 0; j < num_subblocks_w; j++) {
             tile_regs_acquire();
             for (uint32_t w = 0; w < subblock_w; w++) {

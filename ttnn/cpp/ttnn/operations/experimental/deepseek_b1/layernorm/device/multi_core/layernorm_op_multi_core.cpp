@@ -596,6 +596,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     constexpr bool use_welford = false;  // RMSNorm doesn't use Welford's method
     bool is_pre_all_gather = distributed_norm_stage == DistributedLayerNormStage::PRE_ALL_GATHER;
     bool is_post_all_gather = distributed_norm_stage == DistributedLayerNormStage::POST_ALL_GATHER;
+    block_wt = a.padded_shape()[-1] / TILE_WIDTH;
 
     uint32_t block_wt_resharded = output.shard_spec().value().shape[1] / TILE_WIDTH;
     bool skip_write_back = output.shard_spec().value() == a.shard_spec().value();
@@ -737,7 +738,9 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     }
 
     uint32_t in0_CB_tiles = in0_block_tiles;
+    std::cout << "in0_CB_tiles: " << in0_CB_tiles << std::endl;
     uint32_t in0_CB_size = in0_CB_tiles * in_single_tile_size;
+    std::cout << "in0_CB_size: " << in0_CB_size << std::endl;
     // block size for in1 (tensor b)
     uint32_t in1_CB_size = in0_CB_size;
     // in2 - scaler

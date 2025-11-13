@@ -261,12 +261,5 @@ void kernel_main() {
         }
     };
 
-    if constexpr (!rms_norm) {
-        // Welford processes 2 tiles at a time (mean and var)
-        global_reduce_sender(cb_ex_partial, cb_ex_external, cb_ex, cb_ex_global, cb_ex, use_welford ? 2 : 1);
-    }
-
-    if constexpr (!use_welford) {
-        global_reduce_sender(cb_ex_partial2, cb_ex_external2, cb_ex2pe, cb_ex_global, cb_ex2, 1);
-    }
+    global_reduce_sender(cb_ex_partial2, cb_ex_external2, cb_ex2pe, cb_ex_global, cb_ex2, 1);
 }

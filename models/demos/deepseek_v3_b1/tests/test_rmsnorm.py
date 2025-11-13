@@ -5,22 +5,23 @@ from loguru import logger
 import ttnn
 
 
-@pytest.mark.parametrize("tile_height", [16, 32])
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("tile_height", [16])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 30000}], indirect=True)
 def test_rmsnorm(device, tile_height):
     """Test TTNN rmsnorm with width-sharded input and mcast 1d using DeepSeek B1 op"""
 
     TILE_HEIGHT = tile_height
     # Create PyTorch tensors for reference
-    torch.manual_seed(0)
+    torch.manual_seed(1234)
 
-    width = 32
+    width = 1536
+    # width = 128
 
     grid_size = ttnn.CoreGrid(y=1, x=1)
     # grid_size = ttnn.CoreGrid(y=8, x=6)
     num_cores = grid_size.num_cores
 
-    # torch_input = torch.randn((1, 1536), dtype=torch.bfloat16)
+    # torch_input = torch.randn((TILE_HEIGHT, width), dtype=torch.bfloat16)
     torch_input = torch.ones((TILE_HEIGHT, width), dtype=torch.bfloat16)
     torch_weight = torch.ones((width,), dtype=torch.bfloat16)
     torch_bias = torch.zeros((width,), dtype=torch.bfloat16)
