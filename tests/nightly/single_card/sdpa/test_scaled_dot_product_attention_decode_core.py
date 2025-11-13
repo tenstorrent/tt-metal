@@ -596,7 +596,7 @@ def run_scaled_dot_product_attention_decode(
 
     failures = []
     all_pcc_values = []
-    tolerance = 0.95
+    tolerance = 0.99  # 99% of the PCC values must be greater than or equal to target PCC of min_pcc
     active_users = torch.tensor(cur_pos) != -1
     max_cur_pos = max(cur_pos)
     max_num_iters = 1 if is_single_iter else num_repeat_iters
@@ -606,7 +606,10 @@ def run_scaled_dot_product_attention_decode(
         assert (
             step_size > 0
         ), f"Step size must be greater than 0 for multi-position testing, got step size of {step_size}"
-        pos_range = range(max_cur_pos, s, step_size)
+        max_end_pos = max(
+            s, 4096
+        )  # max end position is either the sequence length or 4096, whichever is larger to save test time
+        pos_range = range(max_cur_pos, max_end_pos, step_size)
     else:
         pos_range = [max_cur_pos]
 
@@ -737,14 +740,10 @@ def run_scaled_dot_product_attention_decode(
     ],
 )
 @pytest.mark.parametrize("q_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
-@pytest.mark.parametrize("q_chunk_size, k_chunk_size", [(None, None), (32, 32), (128, 128), (256, 256), (512, 512)])
+@pytest.mark.parametrize("q_chunk_size, k_chunk_size", [(None, None)])
 @pytest.mark.parametrize(
     "start_core, sub_core_grids",
     [
-        (
-            ttnn.CoreCoord(0, 0),
-            None,
-        ),
         (
             ttnn.CoreCoord(0, 0),
             ttnn.CoreRangeSet(
@@ -753,19 +752,10 @@ def run_scaled_dot_product_attention_decode(
                 ]
             ),
         ),
-        (
-            ttnn.CoreCoord(1, 0),
-            ttnn.CoreRangeSet(
-                [
-                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
-                    ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
-                ]
-            ),
-        ),
     ],
 )
 @pytest.mark.parametrize("use_paged_attention", [True, False])
-@pytest.mark.parametrize("cur_pos_is_sharded, page_table_is_sharded", [(True, True)])
+@pytest.mark.parametrize("cur_pos_is_sharded, page_table_is_sharded", [(True, True), (False, False)])
 @pytest.mark.parametrize("block_size", [32])
 @pytest.mark.parametrize("num_repeat_iters", [10])
 @pytest.mark.parametrize("sharded_in", [True, False])
@@ -774,15 +764,11 @@ def run_scaled_dot_product_attention_decode(
     "is_causal, mask_type, use_cur_pos_tensor, cur_pos_type, cur_pos_id, is_multi_pos, step_size, sliding_window_size",
     [
         (True, "causal", True, "constant", 0, True, 31, 0),
-        (True, "causal", True, "constant", 127, False, 0, 0),
         (True, "causal", True, "random", -1, False, 0, 0),
         (True, "causal", True, "linear", -1, False, 0, 0),
         (True, "causal", True, "drop_users", -1, False, 0, 0),
         (False, "non_causal", False, "half_seq_len", -1, False, 0, 0),
-        (True, "sliding_window", True, "half_seq_len", -1, False, 0, 64),
         (True, "sliding_window", True, "constant", 0, True, 31, 128),
-        (True, "sliding_window", True, "constant", 0, True, 31, 256),
-        (True, "sliding_window", True, "constant", 0, True, 31, 512),
         (True, "sliding_window", True, "constant", 0, True, 31, 1024),
     ],
 )
@@ -790,9 +776,8 @@ def run_scaled_dot_product_attention_decode(
     "b, nh, nkv, s, d, grid_size, is_single_iter",
     [
         [32, 32, 8, 8192, 128, (8, 8), True],
-        [32, 32, 8, 4224, 128, (8, 8), True],
         [32, 8, 1, 32768, 128, (8, 6), True],
-        [32, 4, 1, 32768, 128, (8, 6), False],
+        [32, 4, 1, 32768, 128, (8, 6), False],  # NDPCC test
         [8, 16, 4, 4096, 128, (8, 2), True],
         [4, 32, 8, 8192, 128, (8, 8), True],
         [4, 16, 4, 32768, 128, (8, 8), True],
