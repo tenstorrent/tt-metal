@@ -26,18 +26,16 @@ pytest --disable-warnings tests/nightly/single_card/vit/test_ttnn_optimized_shar
 To run the demo for ViT model, follow these instructions:
 -  For overall runtime inference (end-2-end), use the following command to run the demo:
 ```sh
-pytest --disable-warnings models/demos/wormhole/vit/demo/test_demo_vit_ttnn_inference_perf_e2e_2cq_trace.py
+pytest --disable-warnings models/demos/wormhole/vit/tests/test_demo_vit_ttnn_inference_perf_e2e_2cq_trace.py
 ```
 
 -  For inference device OPs analysis, use the following command to run the demo:
 ```sh
-# Build with ./build_metal.sh
-
 # To manually inspect ops
-./tools/tracy/profile_this.py -n vit -c "pytest --disable-warnings models/demos/wormhole/vit/demo/test_vit_device_perf.py::test_vit_device_ops"
+./tools/tracy/profile_this.py -n vit -c "pytest --disable-warnings models/demos/wormhole/vit/tests/test_vit_device_perf.py::test_vit_device_ops"
 
 # For an automated device perf report(samples/s)
-pytest models/demos/wormhole/vit/demo/test_vit_device_perf.py::test_vit_perf_device
+pytest models/demos/wormhole/vit/tests/test_vit_device_perf.py::test_vit_perf_device
 ```
 
 ## Testing
@@ -47,7 +45,7 @@ pytest --disable-warnings models/demos/wormhole/vit/demo/demo_vit_performant_ima
 ```
 
 ## Details
-- Entry point for the model is `vit` in `models/demos/vit/tt/ttnn_optimized_sharded_vit_wh.py`
+- Entry point for the model is `vit` in `models/demos/wormhole/vit/tt/ttnn_optimized_sharded_vit_wh.py`
 - Batch Size: 8
 - Sequence size: 224
 - Dataset Used: `ImageNet-21k dataset`.

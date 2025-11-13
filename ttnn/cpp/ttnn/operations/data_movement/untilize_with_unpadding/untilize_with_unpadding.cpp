@@ -60,8 +60,7 @@ ttnn::Tensor ExecuteUntilizeWithUnpadding::invoke(
     const std::optional<MemoryConfig>& memory_config,
     bool use_multicore,
     bool use_pack_untilize) {
-    // MT: Currently only uint32 is moved to DST directly, fp32 is converted to fp16b
-    bool fp32_dest_acc_en = input_tensor.dtype() == DataType::UINT32;
+    bool fp32_dest_acc_en = input_tensor.dtype() == DataType::UINT32 || input_tensor.dtype() == DataType::FLOAT32;
 
     ttnn::SmallVector<uint32_t> output_end_vector;
     ttnn::Shape output_end;
