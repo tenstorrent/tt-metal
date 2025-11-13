@@ -55,29 +55,26 @@ def check_binary_integrity(
                 )
 
     # Check kernel ELF binary state on the device
-    kernel_path: str = (
-        dispatcher_core_data.kernel_xip_path if risc_name != "ncrisc" else dispatcher_core_data.kernel_path
-    )
-    if kernel_path is not None:
+    if dispatcher_core_data.kernel_xip_path is not None:
         log_check(
-            os.path.exists(kernel_path),
-            f"Kernel ELF file {kernel_path} does not exist.",
+            os.path.exists(dispatcher_core_data.kernel_xip_path),
+            f"Kernel ELF file {dispatcher_core_data.kernel_xip_path} does not exist.",
         )
 
         # We cannot read 0xFFC00000 address on wormhole as we don't have debug hardware on NCRISC (only NCRISC has private code memory at that address).
         if (
-            os.path.exists(kernel_path)
+            os.path.exists(dispatcher_core_data.kernel_xip_path)
             and dispatcher_core_data.kernel_offset is not None
             and dispatcher_core_data.kernel_offset != 0xFFC00000
         ):
-            elf_file = elfs_cache[kernel_path].elf
+            elf_file = elfs_cache[dispatcher_core_data.kernel_xip_path].elf
             sections_to_verify = [".text"]
             for section_name in sections_to_verify:
                 section = elf_file.get_section_by_name(section_name)
                 if section is None:
                     log_check(
                         False,
-                        f"Section {section_name} not found in ELF file {kernel_path}.",
+                        f"Section {section_name} not found in ELF file {dispatcher_core_data.kernel_xip_path}.",
                     )
                 else:
                     data: bytes = section.data()
@@ -85,7 +82,7 @@ def check_binary_integrity(
                     read_data = read_from_device(location, address, num_bytes=len(data))
                     log_check(
                         read_data == data,
-                        f"{location.to_user_str()}: Data mismatch in section {section_name} at address 0x{address:08x} in ELF file {kernel_path}.",
+                        f"{location.to_user_str()}: Data mismatch in section {section_name} at address 0x{address:08x} in ELF file {dispatcher_core_data.kernel_xip_path}.",
                     )
 
 
