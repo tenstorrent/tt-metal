@@ -84,13 +84,6 @@ std::vector<TensorSpec> HaloDeviceOperation::compute_output_specs(const std::vec
             input_core_w == output_core_w, "Input core width {} != Output core width {}", input_core_w, output_core_w);
     }
 
-    if (this->in_place_) {
-        log_info(tt::LogOp, "halo_device_operation - Using in-place mode so deallocating input buffer");
-        // TODO: `input_tensor` is const qualified, but Tensor::deallocate() is not.
-        // Find a nicer way to do this.
-        input_tensor.mesh_buffer()->deallocate();
-    }
-
     std::array<uint32_t, 2> shard_shape = {
         tt::div_up(output_shape[0] * output_shape[2], config_.num_cores_nhw),
         input_tensor.memory_config().shard_spec()->shape[1]};
@@ -121,144 +114,63 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
     const uint32_t input_shard_height = input_tensor.memory_config().shard_spec()->shape[0];
     auto tensor_metadata = sliding_window::generate_tensor_metadata(pad_metadata, config_, input_shard_height);
 
-    Program program = CreateProgram();
-
     uint32_t num_cores_x = input_tensor.memory_config().shard_spec()->grid.bounding_box().grid_size().x;
 
-    if (this->in_place_) {
-        // after untilize bfloat8 is converted to bfloat16
-        const tt::tt_metal::DataType dtype = input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT8_B
-                                                 ? tt::tt_metal::DataType::BFLOAT16
-                                                 : input_tensor.dtype();
-        const tt::DataFormat data_format = datatype_to_dataformat_converter(dtype);
-        const uint32_t nbytes = datum_size(data_format);
-        const uint32_t input_shard_width = input_tensor.memory_config().shard_spec()->shape[1];
-        const uint32_t output_shard_width = output_tensor.memory_config().shard_spec()->shape[1];
-        const uint32_t input_width_bytes = input_shard_width * nbytes;
-        const uint32_t output_width_bytes = output_shard_width * nbytes;
-        // for small stick sizes alignment can cause the shards to be larger than the number of sticks, thus
-        // we must account for alignment when computing the size delta between input and output shards
-        uint32_t aligned_delta_size =
-            (align_buffer(this->max_out_nsticks_per_core_ * output_width_bytes) / output_width_bytes) -
-            (align_buffer(this->in_nsticks_per_core_ * input_width_bytes) / input_width_bytes);
-        int32_t in_out_shard_size_delta = (this->in_place_ && is_in_tiled)
-                                              ? 0
-                                              : aligned_delta_size;  // for in place with tilized data we untilize
-                                                                     // directly into the output buffer so delta is zero
+    auto kernel_config = sliding_window::generate_halo_kernel_config_tensors(
+        tensor_metadata,
+        shard_boundaries,
+        is_block_sharded,
+        transpose_mcast_,
+        remote_read_,
+        device,
+        num_cores_x,
+        is_in_tiled,
+        UNTILIZE_BLOCK_SIZE);
 
-        auto kernel_config = sliding_window::generate_inplace_halo_kernel_config_tensors(
-            tensor_metadata,
-            shard_boundaries,
-            is_block_sharded,
-            transpose_mcast_,
-            remote_read_,
-            is_in_tiled,
-            device,
-            num_cores_x,
-            max_out_nsticks_per_core_,
-            in_nsticks_per_core_,
-            this->in_place_,
-            in_out_shard_size_delta);
+    const auto& pad_config0 = kernel_config.pad_config0;
+    const auto& pad_config1 = kernel_config.pad_config1;
+    const auto& gather_config0 = kernel_config.gather_config0;
+    const auto& gather_config1 = kernel_config.gather_config1;
 
-        const auto& pad_config1 = std::get<0>(kernel_config)[0];
-        const auto& local_config1 = std::get<0>(kernel_config)[2];
-        const auto& remote_config1 = std::get<0>(kernel_config)[4];
-        const auto& max_ref_size = std::get<1>(kernel_config);
+    const auto pad_config_tensor0 =
+        sliding_window::construct_on_host_config_tensor(pad_config0, this->parallel_config_, config_tensors_in_dram_);
+    const auto pad_config_tensor1 =
+        sliding_window::construct_on_host_config_tensor(pad_config1, this->parallel_config_, config_tensors_in_dram_);
+    const auto gather_config_tensor0 = sliding_window::construct_on_host_config_tensor(
+        gather_config0, this->parallel_config_, config_tensors_in_dram_);
+    const auto gather_config_tensor1 = sliding_window::construct_on_host_config_tensor(
+        gather_config1, this->parallel_config_, config_tensors_in_dram_);
 
-        auto pad_config_tensor1 = sliding_window::construct_on_host_config_tensor(
-            pad_config1, this->parallel_config_, config_tensors_in_dram_);
-        auto local_config_tensor1 = sliding_window::construct_on_host_config_tensor(
-            local_config1, this->parallel_config_, config_tensors_in_dram_);
-        auto remote_config_tensor1 = sliding_window::construct_on_host_config_tensor(
-            remote_config1, this->parallel_config_, config_tensors_in_dram_);
+    auto pad_config_device_tensor0 = sliding_window::move_config_tensor_to_device(
+        pad_config_tensor0, parallel_config_, is_block_sharded, device, config_tensors_in_dram_);
+    auto pad_config_device_tensor1 = sliding_window::move_config_tensor_to_device(
+        pad_config_tensor1, parallel_config_, is_block_sharded, device, config_tensors_in_dram_);
+    auto gather_config_device_tensor0 = sliding_window::move_config_tensor_to_device(
+        gather_config_tensor0, parallel_config_, is_block_sharded, device, config_tensors_in_dram_);
+    auto gather_config_device_tensor1 = sliding_window::move_config_tensor_to_device(
+        gather_config_tensor1, parallel_config_, is_block_sharded, device, config_tensors_in_dram_);
 
-        auto pad_config_device_tensor1 = sliding_window::move_config_tensor_to_device(
-            pad_config_tensor1, parallel_config_, is_block_sharded, device, config_tensors_in_dram_);
-        auto local_config_device_tensor1 = sliding_window::move_config_tensor_to_device(
-            local_config_tensor1, parallel_config_, is_block_sharded, device, config_tensors_in_dram_);
-        auto remote_config_device_tensor1 = sliding_window::move_config_tensor_to_device(
-            remote_config_tensor1, parallel_config_, is_block_sharded, device, config_tensors_in_dram_);
+    const auto number_of_blocks_per_core = sliding_window::remap_nhw_scalar_argument_across_full_grid(
+        kernel_config.number_of_blocks_per_core, this->parallel_config_);
 
-        int pad_h = config_.get_pad_h() + config_.get_ceil_pad_h();
-        int pad_w = config_.get_pad_w() + config_.get_ceil_pad_w();
-        bool padding_exists = pad_h > 0 || pad_w > 0;
+    Program program = CreateProgram();
 
-        return {data_movement::detail::inplace_untilize_with_halo_multi_core(
-            program,
-            input_tensor,
-            pad_val_,
-            padding_exists,
-            config_.num_cores_nhw,
-            config_.num_cores_c,
-            num_cores_x,
-            max_out_nsticks_per_core_,
-            max_ref_size,
-            in_out_shard_size_delta,
-            pad_config_device_tensor1,
-            local_config_device_tensor1,
-            remote_config_device_tensor1,
-            remote_read_,
-            transpose_mcast_,
-            output_tensor,
-            config_tensors_in_dram_)};
-
-    } else {
-        auto kernel_config = sliding_window::generate_halo_kernel_config_tensors(
-            tensor_metadata,
-            shard_boundaries,
-            is_block_sharded,
-            transpose_mcast_,
-            remote_read_,
-            device,
-            num_cores_x,
-            is_in_tiled,
-            UNTILIZE_BLOCK_SIZE);
-
-        const auto& pad_config0 = kernel_config.pad_config0;
-        const auto& pad_config1 = kernel_config.pad_config1;
-        const auto& gather_config0 = kernel_config.gather_config0;
-        const auto& gather_config1 = kernel_config.gather_config1;
-
-        const auto pad_config_tensor0 = sliding_window::construct_on_host_config_tensor(
-            pad_config0, this->parallel_config_, config_tensors_in_dram_);
-        const auto pad_config_tensor1 = sliding_window::construct_on_host_config_tensor(
-            pad_config1, this->parallel_config_, config_tensors_in_dram_);
-        const auto gather_config_tensor0 = sliding_window::construct_on_host_config_tensor(
-            gather_config0, this->parallel_config_, config_tensors_in_dram_);
-        const auto gather_config_tensor1 = sliding_window::construct_on_host_config_tensor(
-            gather_config1, this->parallel_config_, config_tensors_in_dram_);
-
-        auto pad_config_device_tensor0 = sliding_window::move_config_tensor_to_device(
-            pad_config_tensor0, parallel_config_, is_block_sharded, device, config_tensors_in_dram_);
-        auto pad_config_device_tensor1 = sliding_window::move_config_tensor_to_device(
-            pad_config_tensor1, parallel_config_, is_block_sharded, device, config_tensors_in_dram_);
-        auto gather_config_device_tensor0 = sliding_window::move_config_tensor_to_device(
-            gather_config_tensor0, parallel_config_, is_block_sharded, device, config_tensors_in_dram_);
-        auto gather_config_device_tensor1 = sliding_window::move_config_tensor_to_device(
-            gather_config_tensor1, parallel_config_, is_block_sharded, device, config_tensors_in_dram_);
-
-        const auto number_of_blocks_per_core = sliding_window::remap_nhw_scalar_argument_across_full_grid(
-            kernel_config.number_of_blocks_per_core, this->parallel_config_);
-
-        Program program = CreateProgram();
-
-        return {data_movement::detail::untilize_with_halo_multi_core(
-            program,
-            input_tensor,
-            pad_val_,
-            config_.num_cores_nhw,
-            max_out_nsticks_per_core_,
-            pad_config_device_tensor0,
-            pad_config_device_tensor1,
-            gather_config_device_tensor0,
-            gather_config_device_tensor1,
-            number_of_blocks_per_core,
-            remote_read_,
-            transpose_mcast_,
-            output_tensor,
-            UNTILIZE_BLOCK_SIZE,
-            config_tensors_in_dram_)};
-    }
+    return {data_movement::detail::untilize_with_halo_multi_core(
+        program,
+        input_tensor,
+        pad_val_,
+        config_.num_cores_nhw,
+        max_out_nsticks_per_core_,
+        pad_config_device_tensor0,
+        pad_config_device_tensor1,
+        gather_config_device_tensor0,
+        gather_config_device_tensor1,
+        number_of_blocks_per_core,
+        remote_read_,
+        transpose_mcast_,
+        output_tensor,
+        UNTILIZE_BLOCK_SIZE,
+        config_tensors_in_dram_)};
 }
 
 Tensor halo_op(
@@ -269,7 +181,6 @@ Tensor halo_op(
     bool transpose_mcast,
     const MemoryConfig& output_memory_config,
     bool is_out_tiled,
-    bool in_place,
     bool config_tensors_in_dram) {
     TT_FATAL(input_tensor.memory_config().is_sharded(), "Halo expects sharded input tensor");
     TT_FATAL(
@@ -296,14 +207,6 @@ Tensor halo_op(
     p_config.shard_scheme = input_tensor.memory_config().memory_layout();
     p_config.shard_orientation = input_tensor.shard_spec().value().orientation;
 
-    if (in_place && in_nsticks_per_core > max_out_nsticks_per_core) {
-        log_info(
-            tt::LogOp,
-            "halo_device_operation - in place operation is not supported for parameterizations with "
-            "input shard size larger than output shard size, falling back to normal operation");
-        in_place = false;
-    }
-
     return operation::run(
                HaloDeviceOperation{
                    .config_ = config,
@@ -315,7 +218,6 @@ Tensor halo_op(
                    .in_nsticks_per_core_ = in_nsticks_per_core,
                    .output_memory_config_ = output_memory_config,
                    .is_out_tiled_ = is_out_tiled,
-                   .in_place_ = in_place,
                    .config_tensors_in_dram_ = config_tensors_in_dram},
                {input_tensor})
         .at(0);

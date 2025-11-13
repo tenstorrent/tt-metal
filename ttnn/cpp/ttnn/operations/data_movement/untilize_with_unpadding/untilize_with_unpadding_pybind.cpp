@@ -16,24 +16,24 @@ namespace py = pybind11;
 void bind_untilize_with_unpadding(py::module& module) {
     auto doc =
         R"doc(
-            Changes data layout of input tensor to ROW_MAJOR and unpads/removes elements from the tensor.
+        Changes data layout of input tensor to ROW_MAJOR and unpads/removes elements from the tensor.
 
-            Input tensor must be on TT accelerator device, in TILE layout, and have BFLOAT16 data type.
+        Input tensor must be on TT accelerator device, in TILE layout, and have BFLOAT16 data type.
 
-            Output tensor will be on TT accelerator device, in ROW_MAJOR layout, and have BFLOAT16 data type.
+        Output tensor will be on TT accelerator device, in ROW_MAJOR layout, and have BFLOAT16 data type.
 
-            Args:
-                input_tensor (ttnn.Tensor): the input tensor
-                output_tensor_end (shape): End indices of input tensor in output tensor.
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor
+            output_tensor_end (shape): End indices of input tensor in output tensor.
 
-            Keyword Args:
-                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-                use_multicore (bool, optional): Whether to use multicore. Defaults to `True`.
-                use_pack_untilize (bool, optional): Whether to use pack untilize. Defaults to `True`.
+        Keyword Args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            use_multicore (bool, optional): Whether to use multicore. Defaults to `True`.
+            use_pack_untilize (bool, optional): Whether to use pack untilize. Defaults to `True`.
 
-            Returns:
-                List of ttnn.Tensor: the output tensor.
-        )doc";
+        Returns:
+            List of ttnn.Tensor: the output tensor.
+    )doc";
 
     using OperationType = decltype(ttnn::untilize_with_unpadding);
     ttnn::bind_registered_operation(

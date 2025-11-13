@@ -6,11 +6,12 @@ import pytest
 import ttnn
 
 from tests.nightly.t3000.ccl.test_minimal_all_gather_async import run_all_gather_impl
-from models.common.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
+from models.common.utility_functions import skip_for_wormhole_b0, run_for_n_dev
 from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gather_nightly import validate_test
 
 
 # Test uses 3.932GB of space per device to nearly fill the dram
+@run_for_n_dev(4)
 @skip_for_wormhole_b0()
 @pytest.mark.parametrize("num_links", [2])  # Check over all four links
 @pytest.mark.parametrize(
@@ -102,6 +103,7 @@ def test_ccl_ddr_smoke_test(
 
 # P300 with 2 harvested columns so 110 cores are available.
 # Test utilizes 1'478'492.16 bytes per core to nearly maximize 1.5MB size
+@run_for_n_dev(4)
 @skip_for_wormhole_b0()
 @pytest.mark.parametrize("num_links", [2])
 @pytest.mark.parametrize(
@@ -164,7 +166,7 @@ def test_ccl_ddr_smoke_test(
 @pytest.mark.parametrize("num_workers_per_link", [2])
 @pytest.mark.parametrize("num_buffers_per_channel", [2])
 def test_ccl_other_smoke_test(
-    bh_2d_mesh_device,
+    bh_1d_mesh_device,
     num_devices,
     ag_output_shape,
     dim,
@@ -180,8 +182,8 @@ def test_ccl_other_smoke_test(
     num_workers_per_link,
     num_buffers_per_channel,
 ):
-    validate_test(num_devices, all_gather_topology, bh_2d_mesh_device.shape, 0)
-    submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
+    validate_test(num_devices, all_gather_topology, bh_1d_mesh_device.shape, 0)
+    submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     run_all_gather_impl(
         submesh_device,
         num_devices,

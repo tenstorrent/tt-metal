@@ -39,7 +39,6 @@ void bind_adaptive_avg_pool2d_operation(py::module& module) {
             memory_config (ttnn.MemoryConfig, optional): the memory configuration for the output tensor. Defaults to `None`.
             applied_shard_scheme (ttnn.TensorMemoryLayout, optional): the sharding scheme to apply to a non-pre-sharded input tensor. Defaults to `None`.
             compute_kernel_config (DeviceComputeKernelConfig, optional): the device compute kernel configuration. Defaults to `None`.
-            in_place_halo (bool, optional): whether to perform the halo operation in place. Defaults to `False`.
             deallocate_input (bool, optional): whether to deallocate the input tensor. Defaults to `False`.
             reallocate_output (bool, optional): whether to reallocate the output tensor. Defaults to `True`.
             queue_id (int, optional): the queue id to use for the operation. Defaults to `0`.
@@ -67,7 +66,6 @@ void bind_adaptive_avg_pool2d_operation(py::module& module) {
                             output_size=[1, 1],  # Global adaptive pooling
                             memory_config=None,
                             applied_shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-                            in_place_halo=False,
                         )
         )doc",
         ttnn::pybind_overload_t{
@@ -81,7 +79,6 @@ void bind_adaptive_avg_pool2d_operation(py::module& module) {
                const std::optional<const MemoryConfig>& memory_config,
                const std::optional<const ttnn::TensorMemoryLayout> applied_shard_scheme,
                const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
-               bool in_place_halo,
                bool deallocate_input,
                bool reallocate_output) -> ttnn::Tensor {
                 return self(
@@ -94,7 +91,6 @@ void bind_adaptive_avg_pool2d_operation(py::module& module) {
                     memory_config,
                     applied_shard_scheme,
                     compute_kernel_config,
-                    in_place_halo,
                     deallocate_input,
                     reallocate_output);
             },
@@ -108,7 +104,6 @@ void bind_adaptive_avg_pool2d_operation(py::module& module) {
             py::arg("memory_config") = std::nullopt,
             py::arg("applied_shard_scheme") = std::nullopt,
             py::arg("compute_kernel_config") = std::nullopt,
-            py::arg("in_place_halo") = false,
             py::arg("deallocate_input") = false,
             py::arg("reallocate_output") = true});
 }
@@ -133,7 +128,6 @@ void bind_adaptive_max_pool2d_operation(py::module& module) {
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): the memory configuration for the output tensor. Defaults to `None`.
             applied_shard_scheme (ttnn.TensorMemoryLayout, optional): the sharding scheme to apply to a non-pre-sharded input tensor. Defaults to `None`.
-            in_place_halo (bool, optional): whether to perform the halo operation in place. Defaults to `False`.
             deallocate_input (bool, optional): whether to deallocate the input tensor. Defaults to `False`.
             reallocate_output (bool, optional): whether to reallocate the output tensor. Defaults to `True`.
             queue_id (int, optional): the queue id to use for the operation. Defaults to `0`.
@@ -161,7 +155,6 @@ void bind_adaptive_max_pool2d_operation(py::module& module) {
                             output_size=[7, 7],  # Classifier head size
                             memory_config=None,
                             applied_shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-                            in_place_halo=False,
                         )
         )doc",
         ttnn::pybind_overload_t{
@@ -174,7 +167,6 @@ void bind_adaptive_max_pool2d_operation(py::module& module) {
                std::array<uint32_t, 2> output_size,
                const std::optional<const MemoryConfig>& memory_config,
                const std::optional<const ttnn::TensorMemoryLayout> applied_shard_scheme,
-               bool in_place_halo,
                bool deallocate_input,
                bool reallocate_output) -> ttnn::Tensor {
                 return self(
@@ -186,7 +178,6 @@ void bind_adaptive_max_pool2d_operation(py::module& module) {
                     output_size,
                     memory_config,
                     applied_shard_scheme,
-                    in_place_halo,
                     deallocate_input,
                     reallocate_output);
             },
@@ -199,7 +190,6 @@ void bind_adaptive_max_pool2d_operation(py::module& module) {
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("applied_shard_scheme") = std::nullopt,
-            py::arg("in_place_halo") = false,
             py::arg("deallocate_input") = false,
             py::arg("reallocate_output") = true});
 }

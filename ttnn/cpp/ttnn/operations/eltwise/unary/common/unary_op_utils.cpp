@@ -659,6 +659,8 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype.value() == DataType::INT32) {
                 op_init_and_name = {"mul_int32_tile_init();", fmt::format("mul_int32_tile({0}, {0}, {0});", idst)};
+            } else if (input_dtype.value() == DataType::UINT32) {
+                op_init_and_name = {"mul_int32_tile_init();", fmt::format("mul_uint32_tile({0}, {0}, {0});", idst)};
             } else if (input_dtype.value() == DataType::UINT16) {
                 op_init_and_name = {"mul_int_tile_init();", fmt::format("mul_uint16_tile({0}, {0}, {0});", idst)};
             } else {
@@ -1054,9 +1056,6 @@ std::string get_compute_kernel_path(
 
 template <typename T>
 uint32_t pack_scalar_runtime_arg_impl(const T& param, DataType dtype) {
-    // if ((dtype == DataType::UINT32 || dtype == DataType::INT32) && std::same_as<T, float>) {
-    //     return std::bit_cast<uint32_t>(static_cast<int32_t>(param));
-    // }
     if constexpr (std::same_as<T, uint32_t>) {
         return param;
     } else {
