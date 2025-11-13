@@ -5,7 +5,6 @@ from typing import List
 
 import pytest
 import torch
-from conftest import skip_for_blackhole, skip_for_wormhole
 from helpers.device import (
     collect_results,
     write_stimuli_to_l1,
@@ -99,8 +98,7 @@ ALL_UNPACK_UNARY_OPERAND_COMBINATIONS = generate_unpack_unary_operand_combinatio
 )
 
 
-@skip_for_blackhole
-@skip_for_wormhole
+@pytest.mark.quasar
 @parametrize(
     test_name="unpack_unary_operand_quasar_test",
     formats_dest_acc_transpose_unpack_sel_dims=ALL_UNPACK_UNARY_OPERAND_COMBINATIONS,

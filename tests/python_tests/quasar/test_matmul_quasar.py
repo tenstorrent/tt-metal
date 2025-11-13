@@ -4,7 +4,6 @@
 
 import pytest
 import torch
-from conftest import skip_for_blackhole, skip_for_wormhole
 from helpers.device import BootMode, collect_results, write_stimuli_to_l1
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
@@ -68,8 +67,7 @@ DEST_SYNC_MODES = [DestSync.Half, DestSync.Full]
 TRANSPOSE_MODES = [Transpose.No]
 
 
-@skip_for_blackhole
-@skip_for_wormhole
+@pytest.mark.quasar
 @parametrize(
     test_name="matmul_quasar_test",
     implied_math_format=IMPLIED_MATH_FORMAT,

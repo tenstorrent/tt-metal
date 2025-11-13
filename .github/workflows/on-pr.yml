@@ -148,7 +148,7 @@ jobs:
       docker_image: ${{ needs.build-images.outputs.docker-image }}
       runs_on: tt-ubuntu-2204-n150-stable
       test_splits: 4
-      pytest_markers: "not perf and not nightly"
+      pytest_markers: "not perf and not nightly and not quasar"
 
   setup-and-test-blackhole:
     name: "🕳️ Perform checks (Blackhole)"
@@ -161,7 +161,7 @@ jobs:
       docker_image: ${{ needs.build-images.outputs.docker-image }}
       runs_on: tt-ubuntu-2204-p150b-stable
       test_splits: 4
-      pytest_markers: "not perf and not nightly"
+      pytest_markers: "not perf and not nightly and not quasar"
 
   perf-tests:
     name: "⚡ Performance tests (${{ matrix.target }})"

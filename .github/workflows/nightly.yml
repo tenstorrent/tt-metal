@@ -31,7 +31,7 @@ jobs:
       docker_image: ${{ needs.build-images.outputs.docker-image }}
       runs_on: tt-ubuntu-2204-n150-stable
       test_splits: 10
-      pytest_markers: ${{ inputs.pytest_markers || 'not perf' }}
+      pytest_markers: ${{ inputs.pytest_markers || 'not perf and not quasar' }}
       random_order: true
       timeout_minutes: 240
 
@@ -43,7 +43,7 @@ jobs:
       docker_image: ${{ needs.build-images.outputs.docker-image }}
       runs_on: tt-ubuntu-2204-p150b-stable
       test_splits: 10
-      pytest_markers: ${{ inputs.pytest_markers || 'not perf' }}
+      pytest_markers: ${{ inputs.pytest_markers || 'not perf and not quasar' }}
       random_order: true
       timeout_minutes: 240
 
