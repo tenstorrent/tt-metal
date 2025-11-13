@@ -38,6 +38,7 @@
 #include "ttnn/operations/data_movement/fill_rm/fill_rm.hpp"
 #include "ttnn/operations/data_movement/gather/gather.hpp"
 #include "ttnn/operations/data_movement/sort/sort.hpp"
+#include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads/nlp_create_qkv_heads.hpp"
 
 namespace ttnn {
 namespace test {
@@ -104,13 +105,14 @@ TEST_F(LazyModeFixture, LazyTensorCreation) {
         << "Lazy tensor should be in materialized state";
     ASSERT_EQ(random_eager.lazy()->tensor_spec(), random_eager.tensor_spec())
         << "Lazy tensor should have the same tensor spec as the materialized tensor";
-    ASSERT_EQ(random_eager.lazy()->op()->name(), "MaterializedLazyOperation")
-        << "Lazy tensor created from materialized tensor should have MaterializedLazyOperation operation";
+    ASSERT_EQ(random_eager.lazy()->op()->name(), "ttnn::prim::typecast")
+        << "Lazy tensor created from materialized tensor should have ttnn::prim::typecast operation";
     ASSERT_EQ(
-        random_eager.lazy()->op()->operation_type_id(), lazy::get_operation_type_id<lazy::MaterializedLazyOperation>())
-        << "Lazy tensor created from materialized tensor should have MaterializedLazyOperation operation";
+        random_eager.lazy()->op()->operation_type_id(),
+        lazy::get_operation_type_id<ttnn::operations::copy::TypecastDeviceOperation>())
+        << "Lazy tensor created from materialized tensor should have ttnn::prim::typecast operation";
     ASSERT_TRUE(random_eager.lazy()->is_materialized()) << "Lazy tensor should be materialized";
-    ASSERT_EQ(random_eager.lazy()->op_inputs()->size(), 0) << "Lazy tensor should have no op inputs";
+    ASSERT_EQ(random_eager.lazy()->op_inputs()->size(), 1) << "Lazy tensor should have no op inputs";
     ASSERT_EQ(random_eager.lazy()->siblings().size(), 0) << "Lazy tensor should have no siblings";
     ASSERT_EQ(random_eager.lazy()->materialized_tensors().size(), 1)
         << "Lazy tensor should have one materialized tensor";
@@ -1418,6 +1420,137 @@ TEST_F(LazyModeFixture, LazyToDeviceOperation) {
 
     const auto view_result_to_cpu = ttnn::from_device(view_result_device, true, std::nullopt);
     ASSERT_TRUE(view_result_to_cpu.lazy()->is_materialized()) << "view_result_to_cpu should be materialized";
+}
+
+// Test: NlpCreateQKVHeads operation in lazy mode (returns std::tuple<Tensor, Tensor, Tensor>)
+TEST_F(LazyModeFixture, NlpCreateQKVHeadsOperationLazy) {
+    log_info(tt::LogTest, "==== Starting NlpCreateQKVHeadsOperationLazy test ====");
+
+    // Run in eager mode
+    log_info(tt::LogTest, "Running NlpCreateQKVHeads operation in EAGER mode for baseline...");
+    lazy::disable();
+    ASSERT_FALSE(lazy::is_lazy_enabled()) << "Lazy mode should be disabled";
+
+    // Create input tensor with fused QKV format: [batch, 1, seq_len, (num_q_heads + 2*num_kv_heads) * head_dim]
+    uint32_t batch_size = 1;
+    uint32_t seq_len = 128;
+    uint32_t num_q_heads = 8;
+    uint32_t num_kv_heads = 8;
+    uint32_t head_dim = 64;
+    bool transpose_k_heads = false;
+
+    // Input shape: [1, 1, 128, (8 + 2*8) * 64] = [1, 1, 128, 1536]
+    uint32_t input_dim = (num_q_heads + 2 * num_kv_heads) * head_dim;
+    ttnn::Shape input_shape({batch_size, 1, seq_len, input_dim});
+
+    // Create tensor with small varied values to avoid overflow in subsequent operations
+    auto spec = TensorSpec(
+        input_shape,
+        TensorLayout(
+            DataType::BFLOAT16,
+            PageConfig(ttnn::TILE_LAYOUT),
+            MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM)));
+    std::vector<bfloat16> data(input_shape.volume());
+    for (size_t i = 0; i < data.size(); i++) {
+        // Use much smaller values to avoid overflow: values between -0.1 and 0.1
+        data[i] = static_cast<float>((i % 100) - 50) / 500.0f;
+    }
+    const auto input_eager = Tensor::from_vector(data, spec, device_);
+
+    auto [q_eager, k_eager, v_eager] = ttnn::experimental::nlp_create_qkv_heads(
+        input_eager,
+        std::nullopt,  // input_tensor_kv (not using separate KV tensor)
+        num_q_heads,
+        num_kv_heads,
+        transpose_k_heads,
+        std::nullopt);  // memory_config
+
+    log_info(tt::LogTest, "NlpCreateQKVHeads returned Q, K, V tensors");
+
+    // Expected output shapes
+    ttnn::Shape expected_q_shape({batch_size, num_q_heads, seq_len, head_dim});
+    ttnn::Shape expected_k_shape({batch_size, num_kv_heads, seq_len, head_dim});
+    ttnn::Shape expected_v_shape({batch_size, num_kv_heads, seq_len, head_dim});
+
+    ASSERT_EQ(q_eager.logical_shape(), expected_q_shape) << "Q tensor should have expected shape";
+    ASSERT_EQ(k_eager.logical_shape(), expected_k_shape) << "K tensor should have expected shape";
+    ASSERT_EQ(v_eager.logical_shape(), expected_v_shape) << "V tensor should have expected shape";
+
+    // Apply safe operations that won't overflow
+    // Use abs + small constant to avoid negative values in subsequent ops
+    auto q_result_eager = ttnn::add(ttnn::abs(q_eager), 0.1f);
+    auto k_result_eager = ttnn::add(ttnn::abs(k_eager), 0.1f);
+    auto v_result_eager = ttnn::multiply(ttnn::relu(v_eager), 2.0f);
+
+    auto eager_q_result = q_result_eager.cpu();
+    auto eager_k_result = k_result_eager.cpu();
+    auto eager_v_result = v_result_eager.cpu();
+
+    // Run in lazy mode
+    log_info(tt::LogTest, "Running NlpCreateQKVHeads operation in LAZY mode...");
+    lazy::enable();
+    ASSERT_TRUE(lazy::is_lazy_enabled()) << "Lazy mode should be enabled";
+
+    const auto input_lazy = Tensor::from_vector(data, spec, device_);
+    auto [q_lazy, k_lazy, v_lazy] = ttnn::experimental::nlp_create_qkv_heads(
+        input_lazy,
+        std::nullopt,  // input_tensor_kv
+        num_q_heads,
+        num_kv_heads,
+        transpose_k_heads,
+        std::nullopt);  // memory_config
+
+    ASSERT_TRUE(input_lazy.lazy()->is_materialized()) << "Input tensor should be materialized";
+    ASSERT_FALSE(q_lazy.lazy()->is_materialized()) << "Q tensor should not be materialized";
+    ASSERT_FALSE(k_lazy.lazy()->is_materialized()) << "K tensor should not be materialized";
+    ASSERT_FALSE(v_lazy.lazy()->is_materialized()) << "V tensor should not be materialized";
+
+    // Apply the same safe operations
+    auto q_result_lazy = ttnn::add(ttnn::abs(q_lazy), 0.1f);
+    auto k_result_lazy = ttnn::add(ttnn::abs(k_lazy), 0.1f);
+    auto v_result_lazy = ttnn::multiply(ttnn::relu(v_lazy), 2.0f);
+
+    ASSERT_FALSE(q_result_lazy.lazy()->is_materialized()) << "Q result should not be materialized";
+    ASSERT_FALSE(k_result_lazy.lazy()->is_materialized()) << "K result should not be materialized";
+    ASSERT_FALSE(v_result_lazy.lazy()->is_materialized()) << "V result should not be materialized";
+
+    log_info(
+        tt::LogTest,
+        "q_lazy id: {}, k_lazy id: {}, v_lazy id: {}, q_result_lazy id: {}, k_result_lazy id: {}, v_result_lazy id: {}",
+        q_lazy.lazy()->id(),
+        k_lazy.lazy()->id(),
+        v_lazy.lazy()->id(),
+        q_result_lazy.lazy()->id(),
+        k_result_lazy.lazy()->id(),
+        v_result_lazy.lazy()->id());
+
+    log_info(tt::LogTest, "Executing lazy graph...");
+    q_result_lazy.evaluate();
+    k_result_lazy.evaluate();
+    v_result_lazy.evaluate();
+
+    ASSERT_TRUE(q_lazy.lazy()->is_materialized()) << "Q tensor should be materialized";
+    ASSERT_TRUE(k_lazy.lazy()->is_materialized()) << "K tensor should be materialized";
+    ASSERT_TRUE(v_lazy.lazy()->is_materialized()) << "V tensor should be materialized";
+    ASSERT_TRUE(q_result_lazy.lazy()->is_materialized()) << "Q result should be materialized";
+    ASSERT_TRUE(k_result_lazy.lazy()->is_materialized()) << "K result should be materialized";
+    ASSERT_TRUE(v_result_lazy.lazy()->is_materialized()) << "V result should be materialized";
+
+    auto lazy_q_result = q_result_lazy.cpu();
+    auto lazy_k_result = k_result_lazy.cpu();
+    auto lazy_v_result = v_result_lazy.cpu();
+
+    // Compare results
+    log_info(tt::LogTest, "Comparing lazy and eager results...");
+    ASSERT_TRUE(ttnn::allclose<::bfloat16>(lazy_q_result, eager_q_result))
+        << "Lazy and eager Q tensor results should match";
+    ASSERT_TRUE(ttnn::allclose<::bfloat16>(lazy_k_result, eager_k_result))
+        << "Lazy and eager K tensor results should match";
+    ASSERT_TRUE(ttnn::allclose<::bfloat16>(lazy_v_result, eager_v_result))
+        << "Lazy and eager V tensor results should match";
+
+    log_info(tt::LogTest, "✓ Lazy and eager results match!");
+    log_info(tt::LogTest, "==== Finished NlpCreateQKVHeadsOperationLazy test ====");
 }
 
 }  // namespace test
