@@ -110,6 +110,7 @@ class ResNetFeatures(nn.Module):
         self.inplanes = 64
         self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False, dtype=dtype)
         self.bn1 = nn.GroupNorm(16, 64)  # GroupNorm doesn't have dtype parameter
+        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
         self.dtype = dtype
         self.return_intermediates = return_intermediates
 
@@ -163,7 +164,7 @@ class ResNetFeatures(nn.Module):
         ref_gn = gn.clone()
         conv1 = F.relu(gn, inplace=True)
         ref_conv1 = conv1.clone()
-        conv1 = F.max_pool2d(conv1, 3, stride=2, padding=1)
+        conv1 = self.maxpool(conv1)
         ref_conv1_maxpool = conv1.clone()
 
         if self.return_intermediates:
