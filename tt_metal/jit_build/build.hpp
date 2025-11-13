@@ -73,13 +73,16 @@ private:
 
     // Tools
     std::string gpp_;
+    std::string gpp_llvm_;  // LLVM compiler path (optional)
     std::string gpp_include_dir_;
 
     // Compilation options
     std::string cflags_;
+    std::string cflags_llvm_;  // LLVM compiler flags (optional)
     std::string defines_;
     std::string includes_;
     std::string lflags_;
+    std::string lflags_llvm_;  // LLVM linker flags (optional)
 
     std::uint64_t build_key_{};
 };
