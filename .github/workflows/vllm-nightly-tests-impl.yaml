@@ -199,8 +199,8 @@ jobs:
           {
             name: "[WH-GLX] GPT-OSS-20B",
             model: "openai/gpt-oss-20b",
-            server-timeout: 120,
-            benchmark-timeout: 120,
+            server-timeout: 35,
+            benchmark-timeout: 10,
             runner-label: topology-6u,
             arch: arch-wormhole_b0,
             mesh-device: TG,
@@ -213,8 +213,8 @@ jobs:
           {
             name: "[WH-GLX] GPT-OSS-120B",
             model: "openai/gpt-oss-120b",
-            server-timeout: 120,
-            benchmark-timeout: 120,
+            server-timeout: 35,
+            benchmark-timeout: 10,
             runner-label: topology-6u,
             arch: arch-wormhole_b0,
             mesh-device: TG,
