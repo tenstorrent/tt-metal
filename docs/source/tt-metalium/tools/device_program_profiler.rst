@@ -18,10 +18,6 @@ Profiling support is enabled by default when building Metalium. Simply build usi
 
 This enables both device-side profiling and Tracy for host-side profiling. For a general overview of profiling in Metalium and how to use the Tracy GUI, see :ref:`tracy_profiler`.
 
-.. note::
-
-    If you need to disable profiling support (e.g., to reduce build overhead), you can use the ``--disable-profiler`` flag when building.
-
 Device profiling is disabled by default at runtime to avoid unnecessary runtime overhead. To enable profiling, set the environment variable before running your application. You can do this either in your shell session or inline when launching your program:
 
 .. code-block:: bash
