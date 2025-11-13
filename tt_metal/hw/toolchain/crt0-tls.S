@@ -9,8 +9,8 @@
 	.popsection
 	.endm
 
-	tls __tdata_start, .tdata.start
-	tls __tdata_end, .tdata.end
+	tls __ldm_tdata_start, .tdata.start
+	tls __ldm_tdata_end, .tdata.end
 
-	tls __tbss_start, .tbss.start
-	tls __tbss_end, .tbss.end
+	tls __ldm_tbss_start, .tbss.start
+	tls __ldm_tbss_end, .tbss.end

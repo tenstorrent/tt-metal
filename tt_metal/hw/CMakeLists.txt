@@ -199,6 +199,7 @@ foreach(ARCH IN LISTS ARCHS)
                         ${PROJECT_SOURCE_DIR}/${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE}
                         ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/erisc-b0-${SCRIPT_TYPE}.ld
                     DEPENDS
+                        ${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt
                         ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/erisc-b0-${SCRIPT_TYPE}.ld
                         ${HW_INCLUDE}/dev_mem_map.h
                         ${HW_INCLUDE}/tensix_dev_map.h
@@ -229,6 +230,7 @@ foreach(ARCH IN LISTS ARCHS)
                     -I${HW_INCLUDE} -E -P -x c -o ${PROJECT_SOURCE_DIR}/${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/main.ld
                 DEPENDS
+                    ${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt
                     ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/main.ld
                     ${HW_INCLUDE}/dev_mem_map.h
                     ${HW_INCLUDE}/tensix_dev_map.h
@@ -287,6 +289,7 @@ foreach(ARCH_CPU IN LISTS TLS_ARCH_CPUS)
                         -I${HW_INCLUDE} -E -P -x c -o ${PROJECT_SOURCE_DIR}/${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE}
                         ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/main-tls.ld
                     DEPENDS
+                        ${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt
                         ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/main-tls.ld
                         ${HW_INCLUDE}/dev_mem_map.h
                         ${HW_INCLUDE}/tensix_dev_map.h
@@ -401,12 +404,12 @@ foreach(ARCH IN LISTS ARCHS)
                 ${GPP_CMD} ${GPP_FLAGS} ${GPP_DEFINES} ${GPP_INCLUDES} -c -o ${HW_OUTPUT_FILE}
                 ${PROJECT_SOURCE_DIR}/${HWSRC}
             DEPENDS
+                ${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt
                 ${PROJECT_SOURCE_DIR}/${HWSRC}
-                # If the compiler changes, rebuild
-                ../sfpi-version
             COMMENT "Building ${ARCH} hw lib ${HWOBJ}"
             VERBATIM
         )
+
         list(APPEND OBJ_FILES ${HW_OUTPUT_FILE})
     endforeach()
 endforeach()
@@ -474,9 +477,8 @@ foreach(ARCH_CPU IN LISTS TLS_ARCH_CPUS)
                     ${GPP_CMD} ${GPP_FLAGS} ${GPP_DEFINES} ${GPP_INCLUDES} -c -o ${HW_OBJ_DIR}/${HW_OBJ_FILE}
                     ${PROJECT_SOURCE_DIR}/${HWSRC}
                 DEPENDS
+                    ${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt
                     ${PROJECT_SOURCE_DIR}/${HWSRC}
-                    # If the compiler changes, rebuild
-                    ../sfpi-version
                 COMMENT "Building ${ARCH}:${CPU} hw lib ${HW_OBJ_FILE} from ${HWSRC}"
                 VERBATIM
             )
