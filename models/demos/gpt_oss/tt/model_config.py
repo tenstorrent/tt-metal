@@ -142,34 +142,6 @@ class ModelArgs:
                     for k, v in tqdm(state_dict.items(), desc="Converting to bfloat16")
                 }
             return state_dict
-            torch_state_dict_path = os.path.join(self.weights_path, "torch_state_dict.pt")
-
-            if os.path.exists(torch_state_dict_path):
-                # Load from cached file
-                weights_dict = torch.load(torch_state_dict_path)
-            else:
-                # Load from safetensors files
-                safetensors_filepaths = sorted(glob(f"{self.weights_path}/*.safetensors"))
-                weights_dict = {}
-                for filepath in tqdm(safetensors_filepaths, desc="Loading weights"):
-                    weights_dict.update(load_file(filepath))
-
-                # Cache for future use
-                torch.save(weights_dict, torch_state_dict_path)
-
-            # Convert to bfloat16 if needed
-            if torch.bfloat16 != torch.float32:
-                weights_dict = {
-                    k: v.to(torch.bfloat16) if v.dtype == torch.float32 else v
-                    for k, v in tqdm(weights_dict.items(), desc="Converting to bfloat16")
-                }
-
-            # Convert HF QKV weights to Meta format for RoPE compatibility (if requested)
-            if convert_to_meta_format:
-                logger.info("Converting QKV weights from HuggingFace to Meta format for RoPE")
-                weights_dict = convert_hf_qkv_to_meta_format(weights_dict, self.hf_config.head_dim)
-
-            return weights_dict
 
     def weight_cache_path(self, dtype):
         """Return weight cache path for the model"""
