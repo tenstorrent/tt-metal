@@ -22,7 +22,6 @@
 #include <memory>
 #include <optional>
 #include <source_location>
-#include <unordered_map>
 #include <utility>
 
 #include "allocator.hpp"
@@ -46,7 +45,6 @@
 #include "tt_metal/distributed/sd_mesh_command_queue.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
-#include "tt_metal/distributed/distributed_coordinate_translator.hpp"
 
 #include "llrt/hal.hpp"
 #include <env_lib.hpp>
@@ -54,7 +52,6 @@
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include "tt_metal/impl/debug/inspector/inspector.hpp"
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
-#include "dispatch/launch_message_ring_buffer_state.hpp"
 #include "sub_device/sub_device_manager_tracker.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include "impl/context/metal_context.hpp"
@@ -64,7 +61,6 @@
 #include <llrt/tt_cluster.hpp>
 #include <umd/device/cluster.hpp>
 #include <umd/device/pcie/pci_device.hpp>
-#include <limits>
 
 namespace tt {
 namespace tt_metal {
@@ -233,20 +229,7 @@ MeshDevice::MeshDevice(
 
     // Cache memory pinning parameters at construction time
     // Use UMD Cluster to determine IOMMU and NOC mapping support and arch
-    bool iommu_enabled = false;
-    try {
-        tt::umd::Cluster umd_cluster;
-        auto mmio_ids = umd_cluster.get_target_mmio_device_ids();
-        if (!mmio_ids.empty()) {
-            ChipId mmio_id = *mmio_ids.begin();
-            auto pci = umd_cluster.get_tt_device(mmio_id)->get_pci_device();
-            if (pci) {
-                iommu_enabled = pci->is_iommu_enabled();
-            }
-        }
-    } catch (...) {
-        iommu_enabled = false;
-    }
+    bool iommu_enabled = MetalContext::instance().get_cluster().is_iommu_enabled();
 
     if (!iommu_enabled) {
         memory_pinning_params_ = experimental::MemoryPinningParameters{0u, 0u, false};
@@ -255,12 +238,8 @@ MeshDevice::MeshDevice(
         const auto device_arch = this->arch();
         memory_pinning_params_.max_pins = hal.get_max_pinned_memory_count();
         memory_pinning_params_.max_total_pin_size = hal.get_total_pinned_memory_size();
-        if (device_arch == tt::ARCH::BLACKHOLE) {
-            memory_pinning_params_.can_map_to_noc = true;
-        } else {
-            // Disable NOC mapping for until this is tested.
-            memory_pinning_params_.can_map_to_noc = false;
-        }
+        // Disable NOC mapping until tested, except on Blackhole where it's supported.
+        memory_pinning_params_.can_map_to_noc = (device_arch == tt::ARCH::BLACKHOLE);
     }
 }
 

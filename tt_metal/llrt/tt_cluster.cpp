@@ -33,6 +33,7 @@
 #include <umd/device/cluster.hpp>
 #include <umd/device/cluster_descriptor.hpp>
 #include <umd/device/simulation/simulation_chip.hpp>
+#include <umd/device/pcie/pci_device.hpp>
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/cluster_types.hpp>
@@ -203,6 +204,10 @@ bool Cluster::is_base_routing_fw_enabled(tt::tt_metal::ClusterType cluster_type)
         cluster_type == tt::tt_metal::ClusterType::TG);
 }
 
+bool Cluster::is_iommu_enabled() const {
+    return this->iommu_enabled_;
+}
+
 Cluster::Cluster(llrt::RunTimeOptions& rtoptions, const tt_metal::Hal& hal) : rtoptions_(rtoptions), hal_(hal) {
     ZoneScoped;
     log_info(tt::LogDevice, "Opening user mode device driver");
@@ -316,6 +321,23 @@ void Cluster::initialize_device_drivers() {
     this->start_driver(default_params);
     this->generate_virtual_to_umd_coord_mapping();
     this->generate_virtual_to_profiler_flat_id_mapping();
+
+    // Cache IOMMU status (expensive to query repeatedly)
+    this->iommu_enabled_ = false;
+    try {
+        if (this->target_type_ == tt::TargetDevice::Silicon) {
+            const auto& mmio_ids = this->driver_->get_target_mmio_device_ids();
+            if (!mmio_ids.empty()) {
+                ChipId mmio_id = *mmio_ids.begin();
+                auto pci = this->driver_->get_chip(mmio_id)->get_tt_device()->get_pci_device();
+                if (pci) {
+                    this->iommu_enabled_ = pci->is_iommu_enabled();
+                }
+            }
+        }
+    } catch (...) {
+        this->iommu_enabled_ = false;
+    }
 }
 
 void Cluster::assert_risc_reset() {
