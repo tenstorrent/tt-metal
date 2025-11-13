@@ -202,9 +202,9 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
     const auto& mean_shape = mean.logical_shape();
     TT_FATAL(mean_shape.rank() == 4, "Mean tensor must be 4D [B, N, S, 1], got shape {}", mean_shape);
 
-    // Check rstd shape is [B, 1, S, 1]
+    // Check rstd shape is [B, N, S, 1]
     const auto& rstd_shape = rstd.logical_shape();
-    TT_FATAL(rstd_shape.rank() == 4, "Rstd tensor must be 2D [B*N*S, 1], got shape {}", rstd_shape);
+    TT_FATAL(rstd_shape.rank() == 4, "Rstd tensor must be 4D [B, N, S, 1], got shape {}", rstd_shape);
 
     // Check dL_dout shape is [B, N, S, C]
     const auto& dL_dout_shape = dLdout.logical_shape();
