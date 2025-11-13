@@ -622,7 +622,7 @@ struct LowLatencyMeshRoutingFields {
 };
 
 // WARN: 13x13 mesh. want 16x16, want to be same as SINGLE_ROUTE_SIZE_2D
-#define HYBRID_MESH_MAX_ROUTE_BUFFER_SIZE 19
+#define HYBRID_MESH_MAX_ROUTE_BUFFER_SIZE 32
 
 // TODO: https://github.com/tenstorrent/tt-metal/issues/32237
 struct HybridMeshPacketHeader : PacketHeaderBase<HybridMeshPacketHeader> {
@@ -647,7 +647,7 @@ struct HybridMeshPacketHeader : PacketHeaderBase<HybridMeshPacketHeader> {
     void to_chip_unicast_impl(uint8_t distance_in_hops) volatile {}
     void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) volatile {}
 } __attribute__((packed));
-static_assert(sizeof(HybridMeshPacketHeader) == 64, "sizeof(HybridMeshPacketHeader) is not equal to 64B");
+static_assert(sizeof(HybridMeshPacketHeader) == 80, "sizeof(HybridMeshPacketHeader) is not equal to 80B");
 
 struct UDMHybridMeshPacketHeader : public HybridMeshPacketHeader {
     UDMControlFields udm_control;
@@ -658,7 +658,7 @@ struct UDMHybridMeshPacketHeader : public HybridMeshPacketHeader {
         return get_payload_size_excluding_header() + sizeof(UDMHybridMeshPacketHeader);
     }
 } __attribute__((packed));
-static_assert(sizeof(UDMHybridMeshPacketHeader) == 80, "sizeof(UDMHybridMeshPacketHeader) is not equal to 80B");
+static_assert(sizeof(UDMHybridMeshPacketHeader) == 96, "sizeof(UDMHybridMeshPacketHeader) is not equal to 80B");
 
 // TODO: When we remove the 32B padding requirement, reduce to 16B size check
 static_assert(sizeof(PacketHeader) == 32, "sizeof(PacketHeader) is not equal to 32B");
