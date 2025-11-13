@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
-from typing import Optional
 from loguru import logger
 import torch
 import ttnn
@@ -25,8 +24,28 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import (
 
 @dataclass
 class TtSDXLCombinedPipelineConfig:
-    base_config: TtSDXLPipelineConfig
-    refiner_config: Optional[TtSDXLImg2ImgPipelineConfig] = None
+    """
+    Unified configuration for the combined SDXL pipeline.
+    This config contains all parameters and creates configs for base and refiner pipelines.
+    """
+
+    # Common parameters (apply to both base and refiner)
+    num_inference_steps: int
+    guidance_scale: float
+    is_galaxy: bool
+    use_cfg_parallel: bool
+    vae_on_device: bool
+    encoders_on_device: bool
+    capture_trace: bool
+    crop_coords_top_left: tuple = (0, 0)
+    guidance_rescale: float = 0.0
+
+    # Refiner-specific parameters
+    use_refiner: bool = False
+    strength: float = 0.3
+    aesthetic_score: float = 6.0
+    negative_aesthetic_score: float = 2.5
+
     denoising_split: float = 1.0
 
     def __post_init__(self):
@@ -38,10 +57,43 @@ class TtSDXLCombinedPipelineConfig:
             0.0 <= self.denoising_split <= 1.0
         ), f"denoising_split must be in range [0.0, 1.0] but is {self.denoising_split}"
 
-    @property
-    def use_refiner(self):
-        """Refiner is used when denoising_split < 1.0 and refiner_config is provided"""
-        return self.refiner_config is not None and self.denoising_split < 1.0
+        if not self.use_refiner and self.denoising_split != 1.0:
+            logger.warning(
+                f"use_refiner=False but denoising_split={self.denoising_split}. Setting denoising_split to 1.0"
+            )
+            self.denoising_split = 1.0
+
+    def create_base_config(self) -> TtSDXLPipelineConfig:
+        return TtSDXLPipelineConfig(
+            num_inference_steps=self.num_inference_steps,
+            guidance_scale=self.guidance_scale,
+            is_galaxy=self.is_galaxy,
+            use_cfg_parallel=self.use_cfg_parallel,
+            encoders_on_device=self.encoders_on_device,
+            vae_on_device=self.vae_on_device,
+            capture_trace=self.capture_trace,
+            crop_coords_top_left=self.crop_coords_top_left,
+            guidance_rescale=self.guidance_rescale,
+        )
+
+    def create_refiner_config(self) -> TtSDXLImg2ImgPipelineConfig:
+        if not self.use_refiner:
+            raise ValueError("Cannot create refiner config when use_refiner=False")
+
+        return TtSDXLImg2ImgPipelineConfig(
+            num_inference_steps=self.num_inference_steps,
+            guidance_scale=self.guidance_scale,
+            is_galaxy=self.is_galaxy,
+            use_cfg_parallel=self.use_cfg_parallel,
+            vae_on_device=self.vae_on_device,
+            encoders_on_device=self.encoders_on_device,
+            strength=self.strength,
+            aesthetic_score=self.aesthetic_score,
+            negative_aesthetic_score=self.negative_aesthetic_score,
+            capture_trace=self.capture_trace,
+            crop_coords_top_left=self.crop_coords_top_left,
+            guidance_rescale=self.guidance_rescale,
+        )
 
 
 class TtSDXLCombinedPipeline:
@@ -56,20 +108,41 @@ class TtSDXLCombinedPipeline:
     ensuring proper coordination between base and refiner models.
 
     Usage (base-only):
+        config = TtSDXLCombinedPipelineConfig(
+            num_inference_steps=50,
+            guidance_scale=5.0,
+            is_galaxy=True,
+            use_cfg_parallel=True,
+            vae_on_device=True,
+            encoders_on_device=True,
+            capture_trace=True,
+        )
         combined = TtSDXLCombinedPipeline(
             ttnn_device=mesh_device,
             torch_base_pipeline=base,
-            base_config=TtSDXLPipelineConfig(...),
+            config=config,
         )
 
     Usage (with refiner):
+        config = TtSDXLCombinedPipelineConfig(
+            num_inference_steps=50,
+            guidance_scale=5.0,
+            is_galaxy=True,
+            use_cfg_parallel=True,
+            vae_on_device=True,
+            encoders_on_device=True,
+            capture_trace=True,
+            use_refiner=True,
+            denoising_split=0.8,
+            strength=0.3,
+            aesthetic_score=6.0,
+            negative_aesthetic_score=2.5,
+        )
         combined = TtSDXLCombinedPipeline(
             ttnn_device=mesh_device,
             torch_base_pipeline=base,
             torch_refiner_pipeline=refiner,
-            base_config=TtSDXLPipelineConfig(...),
-            refiner_config=TtSDXLImg2ImgPipelineConfig(...),
-            denoising_split=0.8
+            config=config,
         )
     """
 
@@ -77,10 +150,8 @@ class TtSDXLCombinedPipeline:
         self,
         ttnn_device,
         torch_base_pipeline,
-        base_config: TtSDXLPipelineConfig,
+        config: TtSDXLCombinedPipelineConfig,
         torch_refiner_pipeline=None,
-        refiner_config: Optional[TtSDXLImg2ImgPipelineConfig] = None,
-        denoising_split: float = 1.0,
     ):
         """
         Create a combined pipeline with automatic scheduler sharing.
@@ -91,53 +162,25 @@ class TtSDXLCombinedPipeline:
         Args:
             ttnn_device: The TTNN device
             torch_base_pipeline: Torch DiffusionPipeline for base model (required)
-            base_config: Configuration for base pipeline (required)
-            torch_refiner_pipeline: Optional Torch StableDiffusionXLImg2ImgPipeline for refiner (None for base-only)
-            refiner_config: Optional configuration for refiner pipeline (None for base-only)
-            denoising_split: Fraction of denoising done by base (0.0-1.0), default 1.0 (base-only)
+            config: Unified configuration for the combined pipeline (required)
+            torch_refiner_pipeline: Optional Torch StableDiffusionXLImg2ImgPipeline for refiner
+                                   (required if config.use_refiner=True)
         """
         logger.info("Creating combined pipeline with shared scheduler...")
 
-        if base_config.use_cfg_parallel:
+        if config.use_cfg_parallel:
             assert ttnn_device.get_num_devices() % 2 == 0, "TT device must have even number of devices"
             ttnn_device.reshape(ttnn.MeshShape(2, ttnn_device.get_num_devices() // 2))
 
         self.ttnn_device = ttnn_device
+        self.config = config
 
-        if torch_refiner_pipeline is None and refiner_config is not None:
-            raise ValueError("refiner_config provided but torch_refiner_pipeline is None")
-        if torch_refiner_pipeline is not None and refiner_config is None:
-            raise ValueError("torch_refiner_pipeline provided but refiner_config is None")
+        if config.use_refiner and torch_refiner_pipeline is None:
+            raise ValueError("config.use_refiner=True but torch_refiner_pipeline is None")
+        if not config.use_refiner and torch_refiner_pipeline is not None:
+            logger.warning("torch_refiner_pipeline provided but config.use_refiner=False, refiner will not be used")
 
-        if torch_refiner_pipeline is None:
-            if denoising_split != 1.0:
-                logger.warning(
-                    f"No refiner pipeline provided, ignoring denoising_split={denoising_split} and setting it to 1.0"
-                )
-                denoising_split = 1.0
-
-        self.config = TtSDXLCombinedPipelineConfig(
-            base_config=base_config,
-            refiner_config=refiner_config,
-            denoising_split=denoising_split,
-        )
-
-        if refiner_config is not None:
-            assert base_config.num_inference_steps == refiner_config.num_inference_steps, (
-                f"base_config.num_inference_steps ({base_config.num_inference_steps}) must equal "
-                f"refiner_config.num_inference_steps ({refiner_config.num_inference_steps}). "
-                f"Both should be set to the total number of denoising steps. "
-                f"Use denoising_split={denoising_split} to control how these steps are divided "
-                f"(base will do {int(denoising_split * 100)}%, refiner will do {int((1 - denoising_split) * 100)}%)."
-            )
-
-            assert base_config.use_cfg_parallel == refiner_config.use_cfg_parallel, (
-                f"base_config.use_cfg_parallel ({base_config.use_cfg_parallel}) must equal "
-                f"refiner_config.use_cfg_parallel ({refiner_config.use_cfg_parallel}). "
-                f"Both pipelines must use the same CFG parallel configuration to ensure consistent batch sizing."
-            )
-
-        self.batch_size = list(ttnn_device.shape)[1] if base_config.use_cfg_parallel else ttnn_device.get_num_devices()
+        self.batch_size = list(ttnn_device.shape)[1] if config.use_cfg_parallel else ttnn_device.get_num_devices()
 
         logger.info("Creating shared scheduler...")
         with ttnn.distribute(ttnn.ReplicateTensorToMesh(ttnn_device)):
@@ -163,7 +206,10 @@ class TtSDXLCombinedPipeline:
             )
         logger.info("Shared scheduler created")
 
-        if self.config.use_refiner and base_config.vae_on_device:
+        logger.info("Creating base pipeline config from unified config...")
+        base_config = config.create_base_config()
+
+        if config.use_refiner and base_config.vae_on_device:
             logger.info("Disabling VAE on base pipeline since refiner will handle final decoding")
             base_config.vae_on_device = False
 
@@ -175,7 +221,10 @@ class TtSDXLCombinedPipeline:
             tt_scheduler=self.shared_scheduler,
         )
 
-        if self.config.use_refiner:
+        if config.use_refiner:
+            logger.info("Creating refiner pipeline config from unified config...")
+            refiner_config = config.create_refiner_config()
+
             logger.info("Creating refiner pipeline with shared scheduler...")
             self.refiner_pipeline = TtSDXLImg2ImgPipeline(
                 ttnn_device=ttnn_device,
@@ -199,7 +248,7 @@ class TtSDXLCombinedPipeline:
         logger.info("=" * 80)
 
         # 1. Compile text encoders if on device
-        if self.config.base_config.encoders_on_device:
+        if self.config.encoders_on_device:
             logger.info("Compiling text encoders...")
             self.base_pipeline.compile_text_encoding()
 
@@ -232,7 +281,7 @@ class TtSDXLCombinedPipeline:
             logger.info("Compiling refiner pipeline image processing...")
             self.refiner_pipeline.compile_image_processing()
 
-        if self.config.base_config.capture_trace:
+        if self.config.capture_trace:
             self.base_pipeline._TtSDXLPipeline__trace_image_processing()
 
         self._compiled = True
@@ -280,22 +329,22 @@ class TtSDXLCombinedPipeline:
         if isinstance(negative_prompts, list):
             negative_prompts = negative_prompts + [""] * needed_padding
 
-        if guidance_scale is not None and guidance_scale != self.config.base_config.guidance_scale:
+        if guidance_scale is not None and guidance_scale != self.config.guidance_scale:
             self.base_pipeline.set_guidance_scale(guidance_scale)
             if self.config.use_refiner:
                 self.refiner_pipeline.set_guidance_scale(guidance_scale)
 
-        if crop_coords_top_left is not None and crop_coords_top_left != self.config.base_config.crop_coords_top_left:
+        if crop_coords_top_left is not None and crop_coords_top_left != self.config.crop_coords_top_left:
             self.base_pipeline.set_crop_coords_top_left(crop_coords_top_left)
             if self.config.use_refiner:
                 self.refiner_pipeline.set_crop_coords_top_left(crop_coords_top_left)
 
-        if guidance_rescale is not None and guidance_rescale != self.config.base_config.guidance_rescale:
+        if guidance_rescale is not None and guidance_rescale != self.config.guidance_rescale:
             self.base_pipeline.set_guidance_rescale(guidance_rescale)
             if self.config.use_refiner:
                 self.refiner_pipeline.set_guidance_rescale(guidance_rescale)
 
-        if num_inference_steps is not None and num_inference_steps != self.config.base_config.num_inference_steps:
+        if num_inference_steps is not None and num_inference_steps != self.config.num_inference_steps:
             self.base_pipeline.set_num_inference_steps(num_inference_steps)
 
             if self.config.use_refiner:
@@ -306,7 +355,7 @@ class TtSDXLCombinedPipeline:
         profiler.start("combined_generation")
 
         num_inference_steps = (
-            num_inference_steps if num_inference_steps is not None else self.config.base_config.num_inference_steps
+            num_inference_steps if num_inference_steps is not None else self.config.num_inference_steps
         )
 
         split_idx = (
@@ -317,7 +366,7 @@ class TtSDXLCombinedPipeline:
         if (
             self.config.use_refiner
             and num_inference_steps is not None
-            and num_inference_steps != self.config.base_config.num_inference_steps
+            and num_inference_steps != self.config.num_inference_steps
         ):
             logger.info(
                 f"Configuring pipelines: base will use {split_idx} steps, refiner will use {num_inference_steps - split_idx} steps from {num_inference_steps} total"
