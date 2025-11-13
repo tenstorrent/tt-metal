@@ -45,19 +45,23 @@ For example, when changing the precision of the matrix, for a given size of matr
 
 ### Matrix Multiplication TFLOPS on Wormhole/Blackhole (WH/BH)
 
-The WH matrix engine performs 8x16 x 16x16 = 8x16 in a single cycle.
+The matrix engine performs 8x16 x 16x16 = 8x16 in a single cycle.
 - This is 2*8\*16\*16 = 4096 multiply-adds in a single cycle.
-- At 1GHz, this is 4 TFLOPS per matrix engine.
+- At 1.35GHz (BH), this is 5.4 TFLOPS per matrix engine.
+- At 1GHz (WH), this is 4 TFLOPS per matrix engine.
 - The 8x16 is the smallest matrix that can be fed into in0, and 16x16 is the smallest matrix that can be fed into in1.
 
 If the input matrices fed into the engine are "shorter" than 8x16, for example 1x16, the engine will still perform 8x16 x 16x16 = 8x16, but the effective throughput will be 1/8.
-Thus, for 1x16 x 16x16 matrices, the effective throughput is 0.5 TFLOPS per matrix engine.
+Thus, for 1x16 x 16x16 matrices, the effective throughput is 0.5 TFLOPS per matrix engine (WH) or 0.675 TFLOPS per matrix engine (BH).
 
 MATH_FIDELITY is used for higher precision, and TFLOPS are calculated by dividing by the MATH_FIDELITY value.
-- LoFi ->  ~4 TFLOPS
-- HiFi2 -> ~2 TFLOPS
-- HiFi3 -> ~1.33 TFLOPS
-- HiFi4 -> ~1 TFLOPS
+
+| Math Fidelity | BH (1.35GHz) | WH (1GHz) |
+|---------------|--------------|-----------|
+| LoFi          | ~5.4 TFLOPS  | ~4 TFLOPS |
+| HiFi2         | ~2.7 TFLOPS  | ~2 TFLOPS |
+| HiFi4         | ~1.35 TFLOPS | ~1 TFLOPS |
+
 
 ### Manually Tuned Performance
 Here we show the peak results we can get from manually selected matmul configurations, including packer L1 enablement, math fidelity, input/output sharding, and input/output L1/DRAM selection.
