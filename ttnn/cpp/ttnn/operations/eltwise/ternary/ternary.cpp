@@ -107,7 +107,7 @@ Tensor invoke_impl(
 
     if (is_invalid_bcast(broadcast_type)) {
         return ternary_utils::where_impl(
-            predicate,
+            condition,
             t_true,
             t_false,
             ternary_utils::determine_memory_config(memory_config, predicate.memory_config()),
