@@ -4,12 +4,12 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ReadMeshDeviceProfilerResults &mdash; TT-Metalium  documentation</title>
+  <title>GetAllProgramsPerfData &mdash; TT-Metalium  documentation</title>
       <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../../../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../../../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../../../_static/favicon.png"/>
-    <link rel="canonical" href="/tt-metal/latest/tt-metalium/tt_metal/apis/host_apis/profiler/ReadMeshDeviceProfilerResults.html" />
+    <link rel="canonical" href="/tt-metal/latest/tt-metalium/tt_metal/apis/host_apis/profiler/GetAllProgramsPerfData.html" />
   <!--[if lt IE 9]>
     <script src="../../../../_static/js/html5shiv.min.js"></script>
   <![endif]-->
@@ -24,8 +24,8 @@
     <script src="../../../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../../../genindex.html" />
     <link rel="search" title="Search" href="../../../../search.html" />
-    <link rel="next" title="GetLatestProgramsPerfData" href="GetLatestProgramsPerfData.html" />
-    <link rel="prev" title="Profiler" href="profiler.html" /> 
+    <link rel="next" title="Kernel APIs" href="../../kernel_apis.html" />
+    <link rel="prev" title="GetLatestProgramsPerfData" href="GetLatestProgramsPerfData.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -69,9 +69,9 @@
 <li class="toctree-l3"><a class="reference internal" href="../kernels/kernels.html">Kernels</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../runtime_args/runtime_args.html">Runtime Arguments</a></li>
 <li class="toctree-l3 current"><a class="reference internal" href="profiler.html">Profiler</a><ul class="current">
-<li class="toctree-l4 current"><a class="current reference internal" href="#">ReadMeshDeviceProfilerResults</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ReadMeshDeviceProfilerResults.html">ReadMeshDeviceProfilerResults</a></li>
 <li class="toctree-l4"><a class="reference internal" href="GetLatestProgramsPerfData.html">GetLatestProgramsPerfData</a></li>
-<li class="toctree-l4"><a class="reference internal" href="GetAllProgramsPerfData.html">GetAllProgramsPerfData</a></li>
+<li class="toctree-l4 current"><a class="current reference internal" href="#">GetAllProgramsPerfData</a></li>
 </ul>
 </li>
 </ul>
@@ -105,9 +105,9 @@
           <li class="breadcrumb-item"><a href="../../index.html">APIs</a></li>
           <li class="breadcrumb-item"><a href="../../host_apis.html">Host APIs</a></li>
           <li class="breadcrumb-item"><a href="profiler.html">Profiler</a></li>
-      <li class="breadcrumb-item active">ReadMeshDeviceProfilerResults</li>
+      <li class="breadcrumb-item active">GetAllProgramsPerfData</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../../../_sources/tt_metal/apis/host_apis/profiler/ReadMeshDeviceProfilerResults.rst.txt" rel="nofollow"> View page source</a>
+            <a href="../../../../_sources/tt_metal/apis/host_apis/profiler/GetAllProgramsPerfData.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -115,53 +115,17 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
              
-  <section id="readmeshdeviceprofilerresults">
-<span id="id1"></span><h1>ReadMeshDeviceProfilerResults<a class="headerlink" href="#readmeshdeviceprofilerresults" title="Permalink to this heading"></a>
+  <section id="getallprogramsperfdata">
+<h1>GetAllProgramsPerfData<a class="headerlink" href="#getallprogramsperfdata" title="Permalink to this heading"></a>
 </h1>
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4N2tt8tt_metal29ReadMeshDeviceProfilerResultsERN11distributed10MeshDeviceE17ProfilerReadStateRKNSt8optionalI24ProfilerOptionalMetadataEE">
-<span class="target" id="namespacett_1_1tt__metal_1aa446a2c4518c25bcd72ac5ee1d7a1cf9"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">tt</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">tt_metal</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">ReadMeshDeviceProfilerResults</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">distributed</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">MeshDevice</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">mesh_device</span></span>, <span class="n"><span class="pre">ProfilerReadState</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">state</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">ProfilerReadState</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">NORMAL</span></span>, <span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">optional</span></span><span class="p"><span class="pre">&lt;</span></span><span class="n"><span class="pre">ProfilerOptionalMetadata</span></span><span class="p"><span class="pre">&gt;</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">metadata</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="p"><span class="pre">{</span></span><span class="p"><span class="pre">}</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N2tt8tt_metal29ReadMeshDeviceProfilerResultsERN11distributed10MeshDeviceE17ProfilerReadStateRKNSt8optionalI24ProfilerOptionalMetadataEE" title="Permalink to this definition"></a><br>
+<dt class="sig sig-object cpp" id="_CPPv4N2tt8tt_metal12experimental22GetAllProgramsPerfDataEv">
+<span class="target" id="namespacett_1_1tt__metal_1_1experimental_1a73e7fd7b5eda8fa3fe9f4d20aaa91cf8"></span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">map</span></span><span class="p"><span class="pre">&lt;</span></span><span class="n"><span class="pre">ChipId</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">set</span></span><span class="p"><span class="pre">&lt;</span></span><span class="n"><span class="pre">ProgramAnalysisData</span></span><span class="p"><span class="pre">&gt;</span></span><span class="p"><span class="pre">&gt;</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">tt</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">tt_metal</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">experimental</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">GetAllProgramsPerfData</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N2tt8tt_metal12experimental22GetAllProgramsPerfDataEv" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
-<p>Read device side profiler data for all devices in the mesh device</p>
+<p>Get performance results for all programs that have been read so far across all calls to <code class="docutils literal notranslate"><a class="reference internal" href="ReadMeshDeviceProfilerResults.html#namespacett_1_1tt__metal_1aa446a2c4518c25bcd72ac5ee1d7a1cf9"><span class="std std-ref"><span class="pre">ReadMeshDeviceProfilerResults()</span></span></a></code>.</p>
 <p>This function only works in PROFILER builds. Please refer to the “Device Program Profiler” section for more information.</p>
-<p>Return value: void</p>
-<p></p>
-<table class="docutils align-default">
-<thead>
-<tr class="row-odd">
-<th class="head"><p>Argument   </p></th>
-<th class="head"><p>Description   </p></th>
-<th class="head"><p>Type   </p></th>
-<th class="head"><p>Valid Range   </p></th>
-<th class="head"><p>Required    </p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even">
-<td><p>mesh_device   </p></td>
-<td><p>The mesh device containing the devices to be profiled   </p></td>
-<td><p>MeshDevice&amp;   </p></td>
-<td><p></p></td>
-<td><p>Yes    </p></td>
-</tr>
-<tr class="row-odd">
-<td><p>state   </p></td>
-<td><p>The state to use for this profiler read   </p></td>
-<td><p>ProfilerReadState   </p></td>
-<td><p></p></td>
-<td><p>No    </p></td>
-</tr>
-<tr class="row-even">
-<td><p>metadata   </p></td>
-<td><p>Metadata to include in the profiler results   </p></td>
-<td><p>ProfilerOptionalMetadata   </p></td>
-<td><p></p></td>
-<td><p>No   </p></td>
-</tr>
-</tbody>
-</table>
-
+<p>Return value: std::map&lt;ChipId, std::set&lt;ProgramAnalysisData&gt;&gt; </p>
 </dd>
 </dl>
 
@@ -172,8 +136,8 @@
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="profiler.html" class="btn btn-neutral float-left" title="Profiler" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="GetLatestProgramsPerfData.html" class="btn btn-neutral float-right" title="GetLatestProgramsPerfData" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="GetLatestProgramsPerfData.html" class="btn btn-neutral float-left" title="GetLatestProgramsPerfData" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="../../kernel_apis.html" class="btn btn-neutral float-right" title="Kernel APIs" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>
