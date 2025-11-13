@@ -32,7 +32,6 @@ jobs:
       env:
         LOGURU_LEVEL: INFO
         PYTHONPATH: /work
-        LD_LIBRARY_PATH: /work/build/lib
         GTEST_OUTPUT: xml:/work/generated/test_reports/
         LSAN_OPTIONS: suppressions=/usr/share/tt-metalium/lsan.supp
       volumes:
@@ -55,7 +54,7 @@ jobs:
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
-          #wheel-artifact-name: ${{ inputs.wheel-artifact-name }}  # This is causing issues with tt-exalens installation
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher }}
       - name: Verify tt-exalens is working
         run: |

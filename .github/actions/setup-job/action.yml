@@ -24,12 +24,6 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - name: Verify tt-exalens is working (1)
-      run: |
-          env
-          tt-exalens --help
-      shell: bash
-
     - name: 🧬 Checkout Repository
       uses: actions/checkout@v4
       with:
@@ -37,23 +31,11 @@ runs:
         submodules: recursive
         path: ${{ inputs.path }}
 
-    - name: Verify tt-exalens is working (2)
-      run: |
-          env
-          tt-exalens --help
-      shell: bash
-
     - name: 🧪 Check Required Tools
       run: |
         echo "🔍 Verifying tools..."
         command -v tar >/dev/null 2>&1 && tar --version || { echo "❌ tar not found"; exit 1; }
         command -v pip3 >/dev/null 2>&1 && pip3 --version || { echo "❌ pip3 not found"; exit 1; }
-      shell: bash
-
-    - name: Verify tt-exalens is working (3)
-      run: |
-          env
-          tt-exalens --help
       shell: bash
 
     - name: 📦 Download Build Artifact
@@ -63,22 +45,10 @@ runs:
         name: ${{ inputs.build-artifact-name }}
         path: ${{ inputs.path }}
 
-    - name: Verify tt-exalens is working (4)
-      run: |
-          env
-          tt-exalens --help
-      shell: bash
-
     - name: 📂 Extract Build Files
       if: ${{ inputs.build-artifact-name != '' }}
       working-directory: ${{ inputs.path }}
       run: tar --zstd -xf ttm_any.tar.zst
-      shell: bash
-
-    - name: Verify tt-exalens is working (5)
-      run: |
-          env
-          tt-exalens --help
       shell: bash
 
     - name: 🧪 Download Python Wheel
@@ -87,12 +57,6 @@ runs:
       with:
         name: ${{ inputs.wheel-artifact-name }}
         path: ${{ inputs.path }}
-
-    - name: Verify tt-exalens is working (6)
-      run: |
-          env
-          tt-exalens --help
-      shell: bash
 
     - name: 💿 Install Wheel
       if: ${{ inputs.wheel-artifact-name != '' }}
@@ -106,12 +70,6 @@ runs:
         pip3 install "$WHEEL_FILENAME"
       shell: bash
 
-    - name: Verify tt-exalens is working (7)
-      run: |
-          env
-          tt-exalens --help
-      shell: bash
-
     - name: Set up env vars for watcher
       if: ${{ inputs.enable-watcher == 'true' }}
       working-directory: ${{ inputs.path }}
@@ -120,10 +78,4 @@ runs:
         echo "TT_METAL_WATCHER=1" >> $GITHUB_ENV
         echo "TT_METAL_WATCHER_APPEND=1" >> $GITHUB_ENV
         echo "TT_METAL_WATCHER_NOINLINE=1" >> $GITHUB_ENV
-      shell: bash
-
-    - name: Verify tt-exalens is working (8)
-      run: |
-          env
-          tt-exalens --help
       shell: bash
