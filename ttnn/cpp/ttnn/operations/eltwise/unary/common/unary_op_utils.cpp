@@ -433,14 +433,8 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             break;
         }
         case UnaryOpType::LOGSIGMOID: {
-            TT_ASSERT(params.size() == 2, "Expected logsigmoid to take 2 parameters");
-            float param1 = params[1];  // threshold
             op_init_and_name = {
-                "logsigmoid_tile_init();",
-                fmt::format(
-                    "logsigmoid_tile(0, 1, 0, {:#x}u, {:#x}u);",  // Two inputs, output to dst[0]
-                    std::bit_cast<uint32_t>(param0),              // beta
-                    std::bit_cast<uint32_t>(param1))};            // threshold
+                "logsigmoid_tile_init();", "logsigmoid_tile(0, 1, 0);"};  // Two inputs (x, exp(-x)), output to dst[0]
             break;
         }
         case UnaryOpType::PRELU_SFPU: {
