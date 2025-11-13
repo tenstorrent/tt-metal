@@ -256,6 +256,7 @@ def default_postprocess_golden_function_outputs(output, function_args, function_
 
 
 TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR = {}
+INVALID_TENSOR_ID = 2**64 - 1  # std::numeric_limits<std::uint64_t>::max()
 
 
 def preprocess_global_golden_function_inputs(function_args, function_kwargs):
@@ -264,7 +265,7 @@ def preprocess_global_golden_function_inputs(function_args, function_kwargs):
     def recursive_preprocess_golden_function_inputs(object_value):
         nonlocal input_index
         if isinstance(object_value, ttnn.Tensor):
-            if object_value.tensor_id is None:
+            if object_value.tensor_id == INVALID_TENSOR_ID:
                 raise RuntimeError(f"Input tensor does not have a tensor_id")
             if object_value.tensor_id not in TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR:
                 if (

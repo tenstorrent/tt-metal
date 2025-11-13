@@ -272,7 +272,7 @@ public:
 private:
     static std::atomic<std::uint64_t> tensor_id_counter;
 
-    std::uint64_t tensor_id;
+    std::uint64_t tensor_id{std::numeric_limits<std::uint64_t>::max()};
 
     void init(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
     void deallocate_impl(bool force);
