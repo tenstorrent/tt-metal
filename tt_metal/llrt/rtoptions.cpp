@@ -479,6 +479,14 @@ void RunTimeOptions::ParseInspectorEnv() {
             inspector_settings.rpc_server_enabled = false;
         }
     }
+
+    const char* inspector_track_operations_str = getenv("TT_METAL_INSPECTOR_TRACK_OPERATIONS");
+    if (inspector_track_operations_str != nullptr) {
+        inspector_settings.track_operations = true;
+        if (strcmp(inspector_track_operations_str, "0") == 0) {
+            inspector_settings.track_operations = false;
+        }
+    }
 }
 
 void RunTimeOptions::ParseFeatureEnv(RunTimeDebugFeatures feature, const tt_metal::Hal& hal) {

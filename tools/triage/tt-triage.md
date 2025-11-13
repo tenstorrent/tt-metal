@@ -65,6 +65,67 @@ You can control the output with two independent flags:
 
 This keeps the default output clean while allowing detailed inspection when needed.
 
+#### dump_ops: Operation tracking with callstacks
+
+The `dump_ops` script shows operations currently running on each device/core, with source-level callstacks for both Python and C++ code. It supports both live hang scenarios (host program still running) and post-timeout analysis (after program exit, using Inspector serialization). This is particularly useful for:
+- Diagnosing hangs by identifying which operations haven't completed
+- Understanding the code path that triggered an operation
+- Debugging issues in both Python and C++ code that calls ttnn operations
+
+**Usage scenarios:**
+
+Inspector is enabled by default and captures operation data automatically. No setup is required.
+
+1. **Live hang** (program still running):
+   ```bash
+   # Terminal 1: Run your program
+   python your_script.py
+
+   # Terminal 2: While it's hanging, run dump_ops
+   ./tools/tt-triage.py --run=dump_ops
+   ```
+
+2. **Post-timeout** (after program exits):
+   ```bash
+   # Run your program with operation timeout (Inspector serializes on timeout)
+   TT_METAL_OPERATION_TIMEOUT_SECONDS=30 python your_script.py
+
+   # After timeout/exit, analyze the serialized data
+   ./tools/tt-triage.py --run=dump_ops
+   ```
+
+   Note: You can optionally set a custom Inspector log path with `TT_METAL_INSPECTOR_LOG_PATH` if needed.
+
+**Important:** `dump_ops` only works when there are operations captured by Inspector:
+- During a live hang (program still running)
+- After a timeout (operations serialized to disk)
+
+If your program completes successfully and exits normally, there will be no operation data to display, and `dump_ops` will report an error. This is expected behavior.
+
+**Options:**
+- `--verbose`: Show full raw argument information (default shows summary)
+- `--generate-test`: Generate test files for operations that could be causing hangs
+- `--max-width=<width>`: Maximum column width for wrapping text (default: 120)
+
+**Example output:**
+
+```
+╭────────────┬─────────────┬─────────────────────────────────────────────────────────╮
+│ Device/Core│ Operation   │ Details                                                 │
+├────────────┼─────────────┼─────────────────────────────────────────────────────────┤
+│ 0 / 0,0    │ ttnn::add   │ Callstack:                                              │
+│            │             │   #0 tests/ttnn/tools/triage/run_operation_chain.cpp:36 │
+│            │             │   #1 tests/ttnn/tools/triage/run_operation_chain.cpp:43 │
+│            │             │   #2 tests/ttnn/tools/triage/run_operation_chain.cpp:60 │
+│            │             │   #3 tests/ttnn/tools/triage/run_operation_chain.cpp:93 │
+│            │             │ Arguments:                                              │
+│            │             │   Tensor[1, 1, 32, 64] (BFLOAT16, INTERLEAVED, DRAM)    │
+│            │             │   1.2                                                   │
+╰────────────┴─────────────┴─────────────────────────────────────────────────────────╯
+```
+
+Callstacks are automatically resolved to source file locations (Python: file.py:line, C++: file.cpp:line when debug symbols are available), making it easy to trace back to your code. Frames from internal decorators and runtime startup code are filtered out to show only relevant user code.
+
 To enable rich visualization, a checker script should return data as a tagged `@dataclass` or a list of tagged `@dataclass` objects of the same type. Visualization in `tt-triage` is achieved by serializing data fields in a way that describes how they should appear in the output. You control this by using tagging methods and their arguments to specify how each field should be serialized and thus visualized:
 - `triage_field(serialized_name, serializer, verbose=0)` – The field will be serialized (and visualized) as `serialized_name` (or the original field name if not provided) using the specified `serializer` (or `default_serializer`). The `verbose` parameter controls at which verbosity level the field is shown (0=always, 1=with `-v`, 2=with `-vv`). This controls how the field appears in the visualization.
 - `recurse_field(verbose=0)` – This will cause expansion of a field that is tagged as a `@dataclass`, so its internal fields are visualized as part of the parent. The `verbose` parameter controls the minimum verbosity level for this recursion.
