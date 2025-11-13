@@ -53,7 +53,7 @@ class DispatcherCoreData:
     launch_msg_rd_ptr: int = triage_field("RD PTR", verbose=2)
     kernel_config_base: int = triage_field("Base", hex_serializer, verbose=2)
     kernel_text_offset: int = triage_field("Offset", hex_serializer, verbose=2)
-    kernel_xip_path: str = triage_field("Kernel XIP Path", verbose=2)
+    kernel_xip_path: str | None = triage_field("Kernel XIP Path", verbose=2)
 
 
 class DispatcherData:
