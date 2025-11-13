@@ -53,6 +53,7 @@ class DispatcherCoreData:
     launch_msg_rd_ptr: int = triage_field("RD PTR", verbose=2)
     kernel_config_base: int = triage_field("Base", hex_serializer, verbose=2)
     kernel_text_offset: int = triage_field("Offset", hex_serializer, verbose=2)
+    kernel_xip_path: str = triage_field("Kernel XIP Path", verbose=2)
 
 
 class DispatcherData:
@@ -323,6 +324,8 @@ class DispatcherData:
                 else:
                     kernel_path = kernel.path + f"/{proc_name.lower()}/{proc_name.lower()}.elf"
             kernel_path = os.path.realpath(kernel_path)
+            # FOR NCRISC we don't have XIP ELF file
+            kernel_xip_path = kernel_path + ".xip.elf" if proc_name != "NCRISC" else None
             if proc_name == "NCRISC" and location._device.is_wormhole():
                 kernel_offset = 0xFFC00000
             # In wormhole we only use text offset to calculate the kernel offset for active ETH
@@ -332,6 +335,7 @@ class DispatcherData:
                 kernel_offset = kernel_config_base + kernel_text_offset
         else:
             kernel_path = None
+            kernel_xip_path = None
             kernel_offset = None
         go_state = go_data
         go_data_state = self._go_message_states.get(go_state, str(go_state))
@@ -339,6 +343,7 @@ class DispatcherData:
         return DispatcherCoreData(
             firmware_path=firmware_path,
             kernel_path=kernel_path,
+            kernel_xip_path=kernel_xip_path,
             host_assigned_id=host_assigned_id,
             previous_kernel_name=previous_kernel.name if previous_kernel else None,
             kernel_offset=kernel_offset,
