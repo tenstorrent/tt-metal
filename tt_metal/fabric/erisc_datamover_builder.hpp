@@ -159,6 +159,7 @@ struct StreamRegAssignments {
     static constexpr uint32_t receiver_channel_0_free_slots_from_south_stream_id = 15;
     static constexpr uint32_t receiver_channel_1_free_slots_from_downstream_stream_id = 16;
     // Sender channel free slots stream IDs
+    static constexpr uint32_t sender_channel_0_free_slots_stream_id = 17;
     static constexpr uint32_t sender_channel_1_free_slots_stream_id = 18;
     static constexpr uint32_t sender_channel_2_free_slots_stream_id = 19;
     static constexpr uint32_t sender_channel_3_free_slots_stream_id = 20;
