@@ -54,8 +54,8 @@ jobs:
             tt-exalens --help
             echo "=== Debug: Library loading information ==="
             LD_DEBUG=libs tt-exalens --help
-            echo "=== Same thing, but this time filtered ==="
-            LD_DEBUG=libs tt-exalens --help 2>&1 | grep -E "(find library|opening file|calling init)" | head -20
+            # echo "=== Same thing, but this time filtered ==="
+            # LD_DEBUG=libs tt-exalens --help 2>&1 | grep -E "(find library|opening file|calling init)" | head -20
             echo "=== Attempting tt-exalens --help ==="
             tt-exalens --help
       - name: ⬇️  Setup Job
@@ -71,7 +71,8 @@ jobs:
             env
             which tt-exalens
             echo "=== Debug: Library loading information ==="
-            LD_DEBUG=libs tt-exalens --help 2>&1 | grep -E "(find library|opening file|calling init)" | head -20
+            LD_DEBUG=libs tt-exalens --help
+            # LD_DEBUG=libs tt-exalens --help 2>&1 | grep -E "(find library|opening file|calling init)" | head -20
             echo "=== Attempting tt-exalens --help ==="
             tt-exalens --help
       - name: Run triage tests
