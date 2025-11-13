@@ -32,10 +32,8 @@ set(PERF_MICROBENCH_TESTS_SRCS
 # These tests use SIMD intrinsics and are not portable.
 set(X86_64_ONLY_TESTS
     dispatch/test_prefetcher.cpp
-    dispatch/test_prefetcher_refractor.cpp
     dispatch/test_bw_and_latency.cpp
     dispatch/test_dispatcher.cpp
-    dispatch/test_dispatcher_refractor.cpp
     3_pcie_transfer/test_pull_from_pcie.cpp
 )
 
@@ -86,7 +84,6 @@ foreach(TEST_SRC ${PERF_MICROBENCH_TESTS_SRCS})
             ${PROJECT_SOURCE_DIR}/tests
             ${PROJECT_SOURCE_DIR}/tests/tt_metal/test_utils
             ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
-            ${PROJECT_SOURCE_DIR}/tt_metal/hostdevcommon/common_values.hpp
             ${CMAKE_CURRENT_SOURCE_DIR}
     )
     set_target_properties(
