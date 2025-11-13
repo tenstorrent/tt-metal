@@ -32,18 +32,6 @@ Tracy profiling support is **enabled by default** when building Metalium. Simply
     ninja
     ninja install
 
-If you need to disable Tracy to reduce build overhead, you can use:
-
-..  code-block:: bash
-
-    # Via build script
-    ./build_metal.sh --disable-profiler
-
-    # Or via CMake flags
-    cmake . -DENABLE_TRACY=OFF
-    ninja
-    ninja install
-
 Note that Tracy support is not included in prebuilt binaries or release builds by default. You must build from source to use these features.
 
 GUI
