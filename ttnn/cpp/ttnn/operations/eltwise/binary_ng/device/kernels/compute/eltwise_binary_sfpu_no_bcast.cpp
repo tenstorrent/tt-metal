@@ -63,46 +63,6 @@ void MAIN {
 #endif
         tile_regs_acquire();
 
-#if (WHERE_TST) || (WHERE_TTS)
-        // the dst_regs used here are under assumption that num_tiles_per_cycle = 1
-        // this should be changed if num_tiles_per_cycle > 1
-        // Always copy condition to dst_reg 0
-        copy_tile_to_dst_init_short(cb_post_lhs);
-        copy_tile(cb_post_lhs, 0, 0);  // Copy condition to dst_reg 0
-        copy_tile_to_dst_init_short(cb_post_rhs);
-        // TTS: tensor is true value, goes to dst_reg 1
-#if WHERE_TTS
-        copy_tile(cb_post_rhs, 0, 1);  // Copy true tensor to dst_reg 1
-        fill_tile_init();
-        // TTS: scalar is false value, goes to dst_reg 2
-#ifdef FILL_WITH_VALUE_FLOAT
-        FILL_LLK(2, *scalar_val);
-#endif
-#ifdef FILL_WITH_VALUE_INT
-        FILL_LLK(2, scalar_value);
-#endif
-#endif
-// TST: tensor is false value, goes to dst_reg 2
-#if WHERE_TST
-        copy_tile(cb_post_rhs, 0, 2);  // Copy false tensor to dst_reg 2
-        fill_tile_init();
-        // TTS: scalar is true value, goes to dst_reg 1
-#ifdef FILL_WITH_VALUE_FLOAT
-        FILL_LLK(1, *scalar_val);
-#endif
-#ifdef FILL_WITH_VALUE_INT
-        FILL_LLK(1, scalar_value);
-#endif
-#endif
-
-        BINARY_SFPU_OP(0, 1, 2, 0);
-        tile_regs_commit();
-        tile_regs_wait();
-
-        pack_tile(0, cb_out);
-        tile_regs_release();
-
-#else
         copy_tile_to_dst_init_short_with_dt(cb_post_rhs, cb_post_lhs);
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             copy_tile(cb_post_lhs, i, i * 2);
@@ -123,7 +83,6 @@ void MAIN {
             pack_tile(i * 2, cb_out);
         }
         tile_regs_release();
-#endif
 
         cb_push_back(cb_out, num_tiles_per_cycle);
         cb_pop_front(cb_post_lhs, num_tiles_per_cycle);
