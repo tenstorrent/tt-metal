@@ -21,7 +21,7 @@ std::tuple<xt::xarray<float>, xt::xarray<float>, xt::xarray<float>> layernorm_fo
     const xt::xarray<float>& beta,
     uint32_t batch_size,
     uint32_t features,
-    float eps = 1e-5f) {
+    float eps = 1e-6f) {
     // Reshape input to (batch_size, features) for easier manipulation
     auto x_reshaped = xt::reshape_view(x, {batch_size, features});
 
@@ -90,7 +90,7 @@ static void CompareKernelVsXArray(
 
         // Compute reference results
         auto [y_ref, mu_ref, rstd_ref] =
-            layernorm_forward_reference_(x_data, gamma_data, beta_data, combined_batch, features, 1e-5f);
+            layernorm_forward_reference_(x_data, gamma_data, beta_data, combined_batch, features, 1e-6f);
 
         // Copy and reshape data to 4D for device tensors (copy to avoid corrupting reference data)
         xt::xarray<float> x_4d = x_data;
@@ -107,7 +107,7 @@ static void CompareKernelVsXArray(
 
         // Run metal kernel
         auto output_tensors = metal::ops::layernorm_fw::LayerNormForwardOperation::invoke(
-            input_tensor, gamma_tensor, beta_tensor, 1e-5f, true);
+            input_tensor, gamma_tensor, beta_tensor, 1e-6f, true);
 
         auto metal_y_xtensor = core::to_xtensor(output_tensors[0].value());
         auto metal_mu_xtensor = core::to_xtensor(output_tensors[1].value());

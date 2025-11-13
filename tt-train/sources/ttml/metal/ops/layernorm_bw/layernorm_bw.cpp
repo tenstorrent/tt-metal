@@ -13,18 +13,15 @@ namespace ttml::metal::ops::layernorm_bw {
 std::vector<std::optional<ttnn::Tensor>> LayerNormBackwardOperation::invoke(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& gamma_tensor,
-    const ttnn::Tensor& x_hat_tensor,
+    const ttnn::Tensor& mean_tensor,
     const ttnn::Tensor& rstd_tensor,
     const ttnn::Tensor& dL_dout_tensor) {
     // Call the device operation
     // Returns: [dx, dgamma_components, dbeta_components]
-    auto result = ttnn::prim::ttml_layernorm_bw(input_tensor, gamma_tensor, x_hat_tensor, rstd_tensor, dL_dout_tensor);
+    auto result = ttnn::prim::ttml_layernorm_bw(input_tensor, gamma_tensor, mean_tensor, rstd_tensor, dL_dout_tensor);
 
     // dL_dgamma and dL_dbeta require sum over batches so we cannot perform this sum in the kernel.
     // Instead we return the components and reduce them here.
-    ttml::autograd::ctx().get_profiler().read_results(
-        &autograd::ctx().get_device(), "dgamma and dbeta reductions started");
-
     return {
         result[0],  // dx - already complete
         ttnn::reshape(

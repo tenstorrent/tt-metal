@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -35,7 +35,7 @@ std::tuple<xt::xarray<float>, LayerNormCache> layernorm_forward_reference(
     const xt::xarray<float>& beta,
     uint32_t batch_size,
     uint32_t features,
-    float eps = 1e-5f) {
+    float eps = 1e-6f) {
     // Reshape input to (batch_size, features) for easier manipulation
     auto x_reshaped = xt::reshape_view(x, {batch_size, features});
 
@@ -141,7 +141,7 @@ static void CompareKernelVsXArray(
 
         // Compute reference results
         auto [y_ref, cache] =
-            layernorm_forward_reference(x_data, gamma_data, beta_data, combined_batch, features, 1e-5f);
+            layernorm_forward_reference(x_data, gamma_data, beta_data, combined_batch, features, 1e-6f);
         auto [dx_ref, dgamma_ref, dbeta_ref] = layernorm_backward_reference(dy_data, cache);
 
         // Copy and reshape data to 4D for device tensors (copy to avoid corrupting reference data)
