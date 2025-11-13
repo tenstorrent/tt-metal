@@ -120,10 +120,6 @@ static_assert(fuse_receiver_flush_and_completion_ptr == 1, "fuse_receiver_flush_
 static_assert(
     !enable_deadlock_avoidance || NUM_RECEIVER_CHANNELS > 1,
     "Deadlock avoidance requires at least 2 receiver channels");
-// TODO: Pipe from host
-// constexpr size_t NUM_USED_RECEIVER_CHANNELS = NUM_FORWARDING_PATHS;
-// constexpr size_t NUM_USED_RECEIVER_CHANNELS_VC0 =
-//    enable_deadlock_avoidance ? NUM_FORWARDING_PATHS - 1 : NUM_FORWARDING_PATHS;
 
 constexpr size_t VC0_RECEIVER_CHANNEL = dateline_connection ? 1 : 0;
 // On a dateline connection, we would never forward through the dateline on VC1
@@ -494,9 +490,6 @@ constexpr size_t VC1_RECEIVER_CHANNEL = 1;
 
 constexpr size_t sender_channel_base_id = 0;
 constexpr size_t receiver_channel_base_id = NUM_SENDER_CHANNELS;
-
-// NUM_DOWNSTREAM_SENDERS_VC0 now comes from compile-time args (passed from host as num_downstream_edms_vc0 or
-// num_downstream_edms_2d_vc0) For 1D: 1 downstream EDM, For 2D: 3 downstream EDMs (excluding router's own direction)
 
 // TRANSACTION IDS
 // TODO: Pass this value from host
