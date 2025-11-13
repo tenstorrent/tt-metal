@@ -25,6 +25,8 @@ namespace ttnn::operations::transformer::detail {
 operation::ProgramWithCallbacks ring_joint_sdpa(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor_q,
+    const Tensor& input_tensor_k,
+    const Tensor& input_tensor_v,
     const Tensor& gathered_input_tensor_k,
     const Tensor& gathered_input_tensor_v,
     const Tensor& joint_tensor_q,
@@ -323,6 +325,8 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
         q_num_chunks};
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input_tensor_v.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(gathered_input_tensor_k.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(gathered_input_tensor_v.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(joint_tensor_q.buffer()).append_to(reader_compile_time_args);
@@ -563,8 +567,10 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     CreateCircularBuffer(program, core_grid, c_out1_config);
 
     uint32_t q_addr = input_tensor_q.buffer()->address();
-    uint32_t k_addr = gathered_input_tensor_k.buffer()->address();
-    uint32_t v_addr = gathered_input_tensor_v.buffer()->address();
+    uint32_t k_addr = input_tensor_k.buffer()->address();
+    uint32_t v_addr = input_tensor_v.buffer()->address();
+    uint32_t gathered_k_addr = gathered_input_tensor_k.buffer()->address();
+    uint32_t gathered_v_addr = gathered_input_tensor_v.buffer()->address();
     uint32_t joint_q_addr = joint_tensor_q.buffer()->address();
     uint32_t joint_k_addr = joint_tensor_k.buffer()->address();
     uint32_t joint_v_addr = joint_tensor_v.buffer()->address();
@@ -593,6 +599,8 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
             q_addr,
             k_addr,
             v_addr,
+            gathered_k_addr,
+            gathered_v_addr,
             joint_q_addr,
             joint_k_addr,
             joint_v_addr,
@@ -635,9 +643,11 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
             auto q_buffer = input_tensors.at(0).buffer();
             auto k_buffer = input_tensors.at(1).buffer();
             auto v_buffer = input_tensors.at(2).buffer();
-            auto joint_q_buffer = input_tensors.at(3).buffer();
-            auto joint_k_buffer = input_tensors.at(4).buffer();
-            auto joint_v_buffer = input_tensors.at(5).buffer();
+            auto gathered_k_buffer = input_tensors.at(3).buffer();
+            auto gathered_v_buffer = input_tensors.at(4).buffer();
+            auto joint_q_buffer = input_tensors.at(5).buffer();
+            auto joint_k_buffer = input_tensors.at(6).buffer();
+            auto joint_v_buffer = input_tensors.at(7).buffer();
 
             // Get addresses for output tensors
             auto out_buffer = output_tensors.at(0).buffer();
@@ -647,6 +657,8 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
             uint32_t q_addr = q_buffer->address();
             uint32_t k_addr = k_buffer->address();
             uint32_t v_addr = v_buffer->address();
+            uint32_t gathered_k_addr = gathered_k_buffer->address();
+            uint32_t gathered_v_addr = gathered_v_buffer->address();
             uint32_t joint_q_addr = joint_q_buffer->address();
             uint32_t joint_k_addr = joint_k_buffer->address();
             uint32_t joint_v_addr = joint_v_buffer->address();
@@ -667,9 +679,11 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
                 reader_args[0] = q_addr;
                 reader_args[1] = k_addr;
                 reader_args[2] = v_addr;
-                reader_args[3] = joint_q_addr;
-                reader_args[4] = joint_k_addr;
-                reader_args[5] = joint_v_addr;
+                reader_args[3] = gathered_k_addr;
+                reader_args[4] = gathered_v_addr;
+                reader_args[5] = joint_q_addr;
+                reader_args[6] = joint_k_addr;
+                reader_args[7] = joint_v_addr;
 
                 // Update writer args
                 writer_args[0] = out_addr;

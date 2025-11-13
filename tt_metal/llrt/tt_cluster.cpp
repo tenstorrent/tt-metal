@@ -317,7 +317,6 @@ void Cluster::initialize_device_drivers() {
     this->start_driver(default_params);
     this->generate_virtual_to_umd_coord_mapping();
     this->generate_virtual_to_profiler_flat_id_mapping();
-    this->verify_eth_fw_capability();
 }
 
 void Cluster::assert_risc_reset() {
@@ -337,7 +336,9 @@ void Cluster::assign_mem_channels_to_devices(
             continue;
         }
         this->device_to_host_mem_channel_[device_id] = channel++;
-        if ((channel + 1) % 4 == 0) channel++;
+        if ((channel + 1) % 4 == 0) {
+            channel++;
+        }
     }
 }
 
@@ -860,15 +861,16 @@ void Cluster::verify_sw_fw_versions(
     }
 }
 
-void Cluster::verify_eth_fw_capability() const {
-    // get_ethernet_fw_version is not supported in the simulation environment
+bool Cluster::verify_eth_fw_capability() const {
+    // get_ethernet_fw_version is not supported in the simulation environment. assume it's correct!
     if (rtoptions_.get_simulator_enabled()) {
-        return;
+        return true;
     }
     const auto fw_version = this->driver_->get_ethernet_fw_version();
     if (fw_version) {
-        hal_.verify_eth_fw_version(tt::umd::semver_t(fw_version.value().str()));
+        return hal_.verify_eth_fw_version(fw_version.value());
     }
+    return true;
 }
 
 // DRAM barrier is used to implement host-to-device synchronization and should be used when all previous writes to DRAM

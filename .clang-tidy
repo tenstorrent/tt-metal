@@ -159,7 +159,6 @@ Checks: >
   -readability-avoid-nested-conditional-operator,
   -readability-avoid-return-with-void-value,
   -readability-avoid-unconditional-preprocessor-if,
-  -readability-braces-around-statements,
   -readability-container-contains,
   -readability-container-data-pointer,
   -readability-convert-member-functions-to-static,
