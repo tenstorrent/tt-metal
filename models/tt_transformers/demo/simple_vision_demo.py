@@ -51,6 +51,10 @@ def create_random_image(width, height):
     return PIL_Image.fromarray(random_array, "RGB")
 
 
+def _is_trace(filename):
+    return "trace" in filename
+
+
 # load input prompts from json, return as a (list of inputs, number of trace batches)
 def load_inputs(user_input, batch):
     if isinstance(user_input, (list, tuple)):
@@ -68,7 +72,7 @@ def load_inputs(user_input, batch):
 
     is_trace = False
     if isinstance(user_input, str):
-        is_trace = "trace" in user_input
+        is_trace = _is_trace(user_input)
         with open(user_input, "r") as f:
             user_input = json.load(f)
 
@@ -100,6 +104,34 @@ def load_inputs(user_input, batch):
     assert len(user_input) % batch == 0
 
     return user_input, is_trace * len(user_input) // batch
+
+
+def load_expected_text(input_prompts, model_name, batch):
+    if "Llama-3.2-11B" in model_name:
+        model_suffix = "llama32_11B"
+    elif "Llama-3.2-90B" in model_name:
+        model_suffix = "llama32_90B"
+    else:
+        raise ValueError(f"Model {model_name} not supported")
+
+    expected_output = []
+    for path in input_prompts:
+        if _is_trace(path):
+            continue
+
+        directory, filename = os.path.split(path)
+        filename = os.path.splitext(filename)[0]
+        filename = f"expected_{filename}_{model_suffix}.json"
+        path = os.path.join(directory, filename)
+        with open(path, "r") as f:
+            output = json.load(f)
+
+        if len(output) < batch:
+            output *= batch // len(output)
+        assert len(output) % batch == 0
+
+        expected_output.extend(output)
+    return expected_output
 
 
 def create_multimodal_model(
@@ -312,6 +344,8 @@ def test_multimodal_demo_text(
     _num_prefill_tokens = 0
     _num_decode_tokens = 0
 
+    non_trace_generated_texts = []
+
     for iter_num in range(warmup_iters + 1):
         logger.info(f"Iteration {iter_num}")
         current_dialogs = dialogs
@@ -429,12 +463,15 @@ def test_multimodal_demo_text(
                 )  # gen_idx is (num_tokens - 1) to avoid counting compile iter
 
             # Log full text output for each user in batch
-            vision_token = processor.image_token_id
-
             for user_id in range(max_batch_size):
                 tokens_out = [t for t in tokens[user_id].tolist()[: position_id[user_id] + 2]]
                 text = tokenizer.decode(tokens_out)
                 logger.info(f"User {user_id} full text: {text}")
+                if batch_idx >= num_trace_batches:
+                    generated_text = tokenizer.decode(tokens_out[prefill_lens[user_id] :])
+                    if tokenizer.eos_token in generated_text:
+                        generated_text = generated_text[: generated_text.index(tokenizer.eos_token)]
+                    non_trace_generated_texts.append(generated_text)
 
             prefill_time_ms = (prefill_end - prefill_start) * 1000
             logger.info(f"Prefill time: {prefill_time_ms:.2f} ms")
@@ -445,6 +482,28 @@ def test_multimodal_demo_text(
 
     # End profiling
     profiler.end("run")
+
+    if is_ci_env and mesh_device.get_num_devices() <= 2:
+        # TODO: fix issue that models on T3K "don't see images" https://github.com/tenstorrent/tt-metal/issues/32284
+        expected_output = load_expected_text(input_prompts, model_args[0].base_model_name, max_batch_size)
+        from bert_score import score as bert_score
+
+        candidates = non_trace_generated_texts
+        references = expected_output
+        assert len(candidates) == len(references)
+        P0, R0, F10 = bert_score(
+            candidates,
+            references,
+            lang="en",
+            model_type="microsoft/deberta-xlarge-mnli",
+            rescale_with_baseline=False,
+            batch_size=64,
+        )
+        for i, (p, r, f) in enumerate(zip(P0, R0, F10)):
+            logger.info(f"BERTScore (rescaled) P/R/F1 for sample {i}: {p.item():.3f}/{r.item():.3f}/{f.item():.3f}")
+        # TODO: create separate targets for different samples and investigate issue with different outputs for different batch_size (4 vs 16)
+        assert F10.min().item() > 0.55, f"min BERTScore F1 ({F10.min().item()}) is lower than expected (0.55)."
+        assert F10.mean().item() > 0.75, f"mean BERTScore F1 ({F10.mean().item()}) is lower than expected (0.75)."
 
     # Calculate measurements
     compile_prefill_time = profiler.get_duration("compile_prefill")
