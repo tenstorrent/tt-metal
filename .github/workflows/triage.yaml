@@ -51,7 +51,7 @@ jobs:
             env
             tt-exalens --help
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@a7693b1d5f92ff261a765649c886578250d3700d
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
