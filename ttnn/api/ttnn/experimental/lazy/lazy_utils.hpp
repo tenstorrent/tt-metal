@@ -162,7 +162,10 @@ ReturnType reconstruct_return_value(
             return tensors;
         }
     } else {
-        static_assert(std::same_as<return_t, void>, "Unsupported return type");
+        static_assert(
+            std::same_as<return_t, void>,
+            "Unsupported return type. Supported return types are Tensor, optional<Tensor>, tuple<Tensor, ...>, "
+            "array<Tensor, ...>, vector<Tensor> and vector<optional<Tensor>>.");
     }
 }
 

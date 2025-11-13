@@ -109,15 +109,38 @@ private:
     template <typename... args_t>
         requires PrimitiveOperationConcept<operation_t> && HasStaticInvoke<operation_t, args_t&&...>
     auto invoke(args_t&&... args) const {
+        using tensor_return_value_t = typename operation_t::tensor_return_value_t;
         static_assert(
             requires { operation_t::invoke(std::forward<decltype(args)>(args)...); },
             "Primitive Operation must implement invoke() method to be invoked.");
+        using namespace ttnn::experimental;
         auto [operation_attributes, tensors_args] = operation_t::invoke(std::forward<decltype(args)>(args)...);
-        if (ttnn::experimental::lazy::is_lazy_enabled()) {
-            return invoke_lazy_device_operation(operation_attributes, tensors_args);
+        auto lazy_op = lazy::make_lazy_device_operation<operation_t>(
+            operation_attributes,
+            tensors_args,
+            std::string(cpp_fully_qualified_name.data, cpp_fully_qualified_name.size()));
+
+        auto lazy_inputs = lazy::make_lazy_device_operation_inputs<operation_t>(tensors_args);
+
+        if (lazy::is_lazy_enabled()) {
+            // We need to convert spec_return_value_t to vector<optional<TensorSpec>> to create lazy tensors
+            std::vector<std::optional<TensorSpec>> output_specs = lazy_op->compute_output_specs(tensors_args);
+            auto lazy_tensors = Tensor::make_lazy_tensors(lazy_inputs, lazy_op, output_specs);
+
+            // Reconstruct tensor_return_value_t from lazy tensors
+            return lazy::reconstruct_return_value<tensor_return_value_t>(lazy_tensors, output_specs);
         }
+        // TODO: Make sure that there is no noticeable overhead in eager mode
         // Regular eager execution
-        return ttnn::device_operation::detail::invoke<operation_t>(operation_attributes, tensors_args);
+        auto outputs = device_operation::detail::invoke<operation_t>(operation_attributes, tensors_args);
+        tt::stl::reflection::visit_object_of_type<Tensor>(
+            [&](const Tensor& t) {
+                // TODO: We should probably update siblings too, but it seems a bit complex and expensive to do so
+                t.lazy()->set_op(lazy_op);
+                t.lazy()->set_op_inputs(lazy_inputs);
+            },
+            outputs);
+        return outputs;
     }
 
     template <typename... args_t>
@@ -167,30 +190,6 @@ private:
     template <typename... args_t>
     auto invoke_composite(args_t&&... args) const {
         return operation_t::invoke(std::forward<decltype(args)>(args)...);
-    }
-
-    template <typename operation_attributes_t, typename tensor_args_t>
-    auto invoke_lazy_device_operation(
-        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) const {
-        using tensor_return_value_t = typename operation_t::tensor_return_value_t;
-
-        // Create lazy operation wrapper
-        auto lazy_op = ttnn::experimental::lazy::make_lazy_device_operation<operation_t>(
-            operation_attributes,
-            tensor_args,
-            std::string(cpp_fully_qualified_name.data, cpp_fully_qualified_name.size()));
-
-        auto lazy_inputs = ttnn::experimental::lazy::make_lazy_device_operation_inputs<operation_t>(tensor_args);
-
-        // Call compute_output_specs and flatten to vector<optional<TensorSpec>>
-        auto output_specs = operation_t::compute_output_specs(operation_attributes, tensor_args);
-        auto flat_specs = ttnn::experimental::lazy::flatten_specs(output_specs);
-
-        // Create lazy tensors using the flat vector
-        auto lazy_tensors = Tensor::make_lazy_tensors(lazy_inputs, lazy_op, flat_specs);
-
-        // Reconstruct the correct return type
-        return ttnn::experimental::lazy::reconstruct_return_value<tensor_return_value_t>(lazy_tensors, flat_specs);
     }
 };
 

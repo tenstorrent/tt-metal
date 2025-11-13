@@ -57,6 +57,11 @@ public:
 
     tt::stl::hash::hash_t operation_type_id() const override { return tt::stl::hash::type_hash<operation_t>; }
 
+    std::vector<std::optional<TensorSpec>> compute_output_specs(const tensor_args_t& tensor_args) const {
+        auto specs = operation_t::compute_output_specs(attributes_, tensor_args);
+        return flatten_specs(specs);
+    }
+
     // Required for hashing support
     tt::stl::hash::hash_t to_hash() const {
         // Hash based on the operation type and attributes
