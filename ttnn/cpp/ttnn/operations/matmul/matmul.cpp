@@ -92,8 +92,8 @@ static bool get_post_process_bias(
     const std::optional<const MatmulProgramConfig>& program_config,
     const std::optional<const CoreCoord>& user_core_coord,
     const MemoryConfig& output_mem_config,
-    const ttnn::Tensor& input_tensor_a_adjusted,
-    const ttnn::Tensor& input_tensor_b_adjusted) {
+    const ttnn::Tensor& input_tensor_a,
+    const ttnn::Tensor& input_tensor_b) {
     // Determine if we should post-process bias based on the program config
     // MatmulMultiCoreProgramConfig doesn't support bias fusion, so we need to apply it as a post-process
     bool post_process_bias = false;
@@ -118,14 +118,14 @@ static bool get_post_process_bias(
             // Be conservative and post-process bias for non-DRAM outputs
             if (output_mem_config.buffer_type() != BufferType::DRAM) {
                 post_process_bias = true;
-            } else if (!input_tensor_a_adjusted.is_sharded()) {
+            } else if (!input_tensor_a.is_sharded()) {
                 // For DRAM output, check if all tensors are DRAM interleaved
                 bool all_dram_interleaved =
-                    input_tensor_a_adjusted.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
-                    input_tensor_b_adjusted.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
+                    input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
+                    input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
                     output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED &&
-                    input_tensor_a_adjusted.memory_config().buffer_type() == BufferType::DRAM &&
-                    input_tensor_b_adjusted.memory_config().buffer_type() == BufferType::DRAM;
+                    input_tensor_a.memory_config().buffer_type() == BufferType::DRAM &&
+                    input_tensor_b.memory_config().buffer_type() == BufferType::DRAM;
 
                 // If not all DRAM interleaved, MatmulMultiCoreProgramConfig is more likely
                 if (!all_dram_interleaved) {
@@ -180,7 +180,7 @@ ttnn::Tensor bound_matmul(
         parameters.program_config,
         parameters.user_core_coord,
         parameters.output_mem_config,
-        input_tensor_a_adjusted,
+        input_tensor_a,
         input_tensor_b_adjusted);
 
     auto output_tensor = matmul(
