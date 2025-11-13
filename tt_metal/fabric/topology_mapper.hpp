@@ -48,7 +48,7 @@ using PhysicalAdjacencyMap = std::unordered_map<tt::tt_metal::AsicID, std::vecto
  * Fields are filled incrementally during mapping construction.
  * Uninitialized fields remain in their default state until filled.
  */
-struct ChipTopologyInfo {
+struct MappedChipInfo {
     // Core mapping information
     FabricNodeId fabric_node_id{MeshId{0}, 0};  // Filled during mapping
     tt::tt_metal::AsicID asic_id{0};
@@ -229,7 +229,7 @@ private:
     /**
      * @brief Initialize chip_topology_info_ map with all ASICs from physical system descriptor
      *
-     * Creates ChipTopologyInfo entries for all ASICs in the system, indexed by ASIC ID.
+     * Creates MappedChipInfo entries for all ASICs in the system, indexed by ASIC ID.
      * Fills in available information (asic_id, hostname, physical_chip_id for local ASICs).
      * Other fields are left empty and filled incrementally during mapping.
      */
@@ -335,16 +335,16 @@ private:
     /**
      * @brief Centralized container for chip topology information
      *
-     * Contains all ChipTopologyInfo entries, populated incrementally during mapping construction.
+     * Contains all MappedChipInfo entries, populated incrementally during mapping construction.
      */
-    std::vector<ChipTopologyInfo> chip_topology_info_;
+    std::vector<MappedChipInfo> chip_topology_info_;
 
     /**
      * @brief Lookup maps with references/pointers to chip_topology_info_ for fast access
      */
-    std::unordered_map<FabricNodeId, ChipTopologyInfo*> fabric_node_id_to_info_;
-    std::unordered_map<tt::tt_metal::AsicID, ChipTopologyInfo*> asic_id_to_info_;
-    std::unordered_map<ChipId, ChipTopologyInfo*> physical_chip_id_to_info_;
+    std::unordered_map<FabricNodeId, MappedChipInfo*> fabric_node_id_to_info_;
+    std::unordered_map<tt::tt_metal::AsicID, MappedChipInfo*> asic_id_to_info_;
+    std::unordered_map<ChipId, MappedChipInfo*> physical_chip_id_to_info_;
 
     /**
      * @brief Build lookup maps from chip_topology_info_ container
