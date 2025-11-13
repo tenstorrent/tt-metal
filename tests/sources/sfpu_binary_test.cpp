@@ -39,6 +39,7 @@ void run_kernel()
 
 #include "ckernel_defs.h"
 #include "ckernel_sfpu.h"
+#include "ckernel_sfpu_add_top_row.h"
 #include "ckernel_sfpu_binary.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_binary_sfpu.h"
@@ -68,6 +69,15 @@ void call_binary_sfpu_operation(BinaryOp operation)
             break;
         case BinaryOp::LOGICAL_RSHFT:
             _calculate_logical_right_shift_<false, 32, INT32, false>(0, 1, 0);
+            break;
+        case BinaryOp::ADD_TOP_ROW:
+            _init_add_top_row_();
+            // Use actual format when compiling for ADD_TOP_ROW tests, otherwise use Float32 as safe default for static assert
+            {
+                constexpr DataFormat add_top_row_format =
+                    (SFPU_BINARY_OPERATION == BinaryOp::ADD_TOP_ROW) ? static_cast<DataFormat>(formats.math) : DataFormat::Float32;
+                _calculate_add_top_row_<add_top_row_format>(0, 1, 0);
+            }
             break;
         default:
             return;

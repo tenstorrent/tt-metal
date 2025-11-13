@@ -240,6 +240,7 @@ def data_formats(
     num_iterations: int,
     unpacking_to_dest: bool = False,
     chip_arch: Optional[ChipArchitecture] = None,
+    disable_format_inference: bool = False,
 ) -> List[FormatConfig]:
     """
     Entry point for computing a list of FormatConfig objects.
@@ -254,6 +255,8 @@ def data_formats(
         num_iterations: The number of pipeline runs (iterations), determines list length
         unpacking_to_dest: Whether unpacking targets the destination register (default: False)
         chip_arch: The chip architecture (Wormhole or Blackhole). If None, will be detected automatically.
+        disable_format_inference: When True, disables automatic data format inference and conversions, ensuring input formats are the same in dest.
+                                  Used for testing specific math kernels with explicit format requirements.
 
     Returns:
         A list of FormatConfig objects of length num_iterations
@@ -262,7 +265,7 @@ def data_formats(
     if chip_arch is None:
         chip_arch = get_chip_architecture()
 
-    if chip_arch == ChipArchitecture.QUASAR:
+    if chip_arch == ChipArchitecture.QUASAR or disable_format_inference:
         # Data Format Inference is not supported for Quasar architecture, so we return a single FormatConfig where all formats are the same.
         return [
             FormatConfig(

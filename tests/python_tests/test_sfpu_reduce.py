@@ -9,7 +9,11 @@ from helpers.device import (
     write_stimuli_to_l1,
 )
 from helpers.format_config import DataFormat
-from helpers.golden_generators import UnarySFPUGolden, get_golden_generator
+from helpers.golden_generators import (
+    BinarySFPUGolden,
+    UnarySFPUGolden,
+    get_golden_generator,
+)
 from helpers.llk_params import (
     ApproximationMode,
     DestAccumulation,
@@ -48,6 +52,7 @@ dimension_combinations = [
     negative_number=[False, True],
     reduce_pool=[ReducePool.Sum, ReducePool.Average],
     dimension_combinations=dimension_combinations,
+    add_top_row=[False, True],
 )
 def test_sfpu_reduce(
     test_name,
@@ -57,6 +62,7 @@ def test_sfpu_reduce(
     reduce_pool,
     negative_number,
     dimension_combinations,
+    add_top_row,
 ):
     if negative_number and formats.input_format == DataFormat.UInt32:
         pytest.skip(
@@ -85,6 +91,19 @@ def test_sfpu_reduce(
         reduce_pool,
     )
 
+    if add_top_row:
+        # Add the top rows of all the tiles we reduced in dst register, accumulate the result in add_top_row_golden_tensor
+        add_top_row_golden_tensor = torch.zeros(32, dtype=torch_format)
+        generate_golden = get_golden_generator(BinarySFPUGolden)
+        for i in range(tile_cnt):
+            start, end = i * 32, (i + 1) * 32
+            add_top_row_golden_tensor = generate_golden(
+                MathOperation.SfpuAddTopRow,
+                add_top_row_golden_tensor,
+                golden_tensor[start:end],
+                formats.output_format,
+            )
+
     test_config = {
         "formats": formats,
         "testname": test_name,
@@ -96,6 +115,8 @@ def test_sfpu_reduce(
         "approx_mode": ApproximationMode.No,
         "unpack_to_dest": True,
         "tile_cnt": tile_cnt,
+        "disable_format_inference": True,
+        "add_top_row": add_top_row,
     }
 
     res_address = write_stimuli_to_l1(

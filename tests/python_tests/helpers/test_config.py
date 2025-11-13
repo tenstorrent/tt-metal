@@ -350,6 +350,7 @@ def generate_build_header(test_config):
         num_iterations=l1_to_l1_iterations,
         unpacking_to_dest=unpack_to_dest == "true",
         chip_arch=get_chip_architecture(),
+        disable_format_inference=test_config.get("disable_format_inference", False),
     )
 
     if l1_to_l1_iterations > 1:
@@ -500,6 +501,11 @@ def generate_build_header(test_config):
         header_content.append(f"constexpr uint32_t CT_DIM = {test_config['ct_dim']};")
     if "kt_dim" in test_config:
         header_content.append(f"constexpr uint32_t KT_DIM = {test_config['kt_dim']};")
+
+    # Add top row flag
+    add_top_row = test_config.get("add_top_row", False)
+    if add_top_row:
+        header_content.append("constexpr bool ADD_TOP_ROW = true;")
 
     header_content.append("")
 
