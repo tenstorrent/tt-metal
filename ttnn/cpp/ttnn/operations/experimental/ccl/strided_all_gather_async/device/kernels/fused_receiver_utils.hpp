@@ -19,6 +19,8 @@ struct MinimalMatmulOpReceiver {
     std::array<uint32_t, 3> sem_targets = {};
     uint32_t curr_k_block_dir = 0;
     uint32_t device_id = 0;
+    uint32_t device_chunk_id = 0;
+    uint32_t devices_received = 0;
 
     MinimalMatmulOpReceiver() {}
 
@@ -48,30 +50,57 @@ struct MinimalMatmulOpReceiver {
         }
     }
 
+    void reset(uint32_t* k_block_device_received, uint32_t num_k_blocks) {
+        device_id = my_chip_id;
+        device_chunk_id = 0;
+        curr_k_block_dir = 2;  // start with self
+        devices_received = 0;
+
+        for (uint32_t k = 0; k < num_k_blocks; k++) {
+            k_block_device_received[k] = 0;
+        }
+    }
+
+    uint32_t get_num_devices() { return num_devices; }
+
     // TODO: Don't compute the mapping every time, you know the device order, compute it once
-    uint32_t compute_actual_k_block_iter(const uint32_t& curr_k_block_iter) {
-        uint32_t chunk_id = curr_k_block_iter / num_devices;
-        uint32_t device_iter = curr_k_block_iter % num_devices;
-        if (device_iter == 0) {
-            curr_k_block_dir = 2;
-            device_id = my_chip_id;
-        } else if (device_iter % 2) {
-            curr_k_block_dir = 0;
-            int32_t unwrapped_device_id = my_chip_id - (device_iter / 2 + 1);
-            device_id = (unwrapped_device_id < 0) ? num_devices + unwrapped_device_id : unwrapped_device_id;
-        } else {
-            curr_k_block_dir = 1;
-            uint32_t unwrapped_device_id = my_chip_id + (device_iter / 2);
-            device_id = unwrapped_device_id >= num_devices ? unwrapped_device_id - num_devices : unwrapped_device_id;
+    uint32_t compute_actual_k_block_iter(
+        uint32_t* k_block_device_expected,
+        uint32_t* k_block_device_received,
+        uint32_t* device_k_block_counts,
+        uint32_t* device_k_block_start_ids) {
+        uint32_t k_block_received = 0;
+        while (true) {
+            if (wait_for_op_signal) {
+                volatile tt_l1_ptr uint32_t* semaphore = signal_op_semaphore_addr_ptrs[curr_k_block_dir];
+                uint32_t sem_target = sem_targets[curr_k_block_dir];
+                noc_semaphore_wait_min(semaphore, sem_target + 1);
+                sem_targets[curr_k_block_dir]++;
+            }
+
+            k_block_received = device_k_block_start_ids[device_id] + device_chunk_id;
+            k_block_device_received[k_block_received]++;
+            device_chunk_id++;
+            if (device_chunk_id >= device_k_block_counts[device_id]) {
+                // Move to next device
+                devices_received++;
+                device_chunk_id = 0;
+                if (curr_k_block_dir > 0) {  // currently self or forward, next is backwards
+                    curr_k_block_dir = 0;
+                    int32_t unwrapped_device_id = my_chip_id - (devices_received / 2 + 1);
+                    device_id = (unwrapped_device_id < 0) ? num_devices + unwrapped_device_id : unwrapped_device_id;
+                } else {  // currently backwards, next is forwards
+                    curr_k_block_dir = 1;
+                    uint32_t unwrapped_device_id = my_chip_id + (devices_received / 2);
+                    device_id =
+                        unwrapped_device_id >= num_devices ? unwrapped_device_id - num_devices : unwrapped_device_id;
+                }
+            }
+            if (k_block_device_received[k_block_received] == k_block_device_expected[k_block_received]) {
+                break;
+            }
         }
 
-        if (wait_for_op_signal) {
-            volatile tt_l1_ptr uint32_t* semaphore = signal_op_semaphore_addr_ptrs[curr_k_block_dir];
-            uint32_t sem_target = sem_targets[curr_k_block_dir];
-            noc_semaphore_wait_min(semaphore, sem_target + 1);
-            sem_targets[curr_k_block_dir]++;
-        }
-
-        return (device_id * num_k_blocks_per_device) + chunk_id;
+        return k_block_received;
     }
 };
