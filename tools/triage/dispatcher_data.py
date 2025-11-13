@@ -53,6 +53,7 @@ class DispatcherCoreData:
     launch_msg_rd_ptr: int = triage_field("RD PTR", verbose=2)
     kernel_config_base: int = triage_field("Base", hex_serializer, verbose=2)
     kernel_text_offset: int = triage_field("Offset", hex_serializer, verbose=2)
+    kernel_xip_path: str | None = triage_field("Kernel XIP Path", verbose=2)
 
 
 class DispatcherData:
@@ -181,27 +182,27 @@ class DispatcherData:
 
     def get_core_data(self, location: OnChipCoordinate, risc_name: str) -> DispatcherCoreData:
         loc_mem_access = MemoryAccess.get(location.noc_block.get_risc_debug(risc_name))
-        if location._device.get_block_type(location) == "functional_workers":
+        if location.device.get_block_type(location) == "functional_workers":
             # For tensix, use the brisc elf
             fw_elf = self._brisc_elf
             programmable_core_type = self._ProgrammableCoreTypes_TENSIX
             enum_values = self._enum_values_tenisx
-        elif location in location._device.idle_eth_block_locations:
+        elif location in location.device.idle_eth_block_locations:
             # For idle eth, use the idle erisc elf
             fw_elf = self._idle_erisc_elf
             programmable_core_type = self._ProgrammableCoreTypes_IDLE_ETH
             enum_values = self._enum_values_eth
-        elif location in location._device.active_eth_block_locations:
+        elif location in location.device.active_eth_block_locations:
             # For active eth, use the active erisc elf
             fw_elf = self._active_erisc_elf
             programmable_core_type = self._ProgrammableCoreTypes_ACTIVE_ETH
             enum_values = self._enum_values_eth
         else:
-            raise TTTriageError(f"Unsupported block type: {location._device.get_block_type(location)}")
+            raise TTTriageError(f"Unsupported block type: {location.device.get_block_type(location)}")
 
         # Get the build_env for the device to get the correct firmware path
         # Each device may have different firmware paths based on its build configuration
-        device_id = location._device._id
+        device_id = location.device_id
         build_env = self._get_build_env_for_device(device_id)
         proc_name = risc_name.upper()
         proc_type = enum_values["ProcessorTypes"][proc_name]
@@ -212,7 +213,7 @@ class DispatcherData:
 
         log_check(
             launch_msg_rd_ptr < self._launch_msg_buffer_num_entries,
-            f"On device {location._device._id} at {location.to_user_str()}, launch message read pointer {launch_msg_rd_ptr} >= {self._launch_msg_buffer_num_entries}.",
+            f"On device {location.device_id} at {location.to_user_str()}, launch message read pointer {launch_msg_rd_ptr} >= {self._launch_msg_buffer_num_entries}.",
         )
 
         previous_launch_msg_rd_ptr = (launch_msg_rd_ptr - 1) % self._launch_msg_buffer_num_entries
@@ -280,7 +281,7 @@ class DispatcherData:
 
         # Construct the firmware path from the build_env instead of relative paths
         # This ensures we get the correct firmware path for this device and build config
-        if location in location._device.active_eth_block_locations:
+        if location in location.device.active_eth_block_locations:
             if proc_name.lower() == "erisc":
                 firmware_path = os.path.join(build_env.firmwarePath, "erisc", "erisc.elf")
             elif proc_name.lower() == "erisc0":
@@ -304,7 +305,7 @@ class DispatcherData:
         firmware_path = os.path.realpath(firmware_path)
 
         if kernel:
-            if location in location._device.active_eth_block_locations:
+            if location in location.device.active_eth_block_locations:
                 if proc_name.lower() == "erisc":
                     kernel_path = kernel.path + "/erisc/erisc.elf"
                 elif proc_name.lower() == "erisc0":
@@ -323,15 +324,20 @@ class DispatcherData:
                 else:
                     kernel_path = kernel.path + f"/{proc_name.lower()}/{proc_name.lower()}.elf"
             kernel_path = os.path.realpath(kernel_path)
-            if proc_name == "NCRISC" and location._device.is_wormhole():
+            # For NCRISC we don't have XIP ELF file
+            kernel_xip_path = (
+                kernel_path + ".xip.elf" if not (proc_name == "NCRISC" and location.device.is_wormhole()) else None
+            )
+            if proc_name == "NCRISC" and location.device.is_wormhole():
                 kernel_offset = 0xFFC00000
             # In wormhole we only use text offset to calculate the kernel offset for active ETH
-            elif location in location._device.active_eth_block_locations and location._device.is_wormhole():
+            elif location in location.device.active_eth_block_locations and location.device.is_wormhole():
                 kernel_offset = kernel_text_offset
             else:
                 kernel_offset = kernel_config_base + kernel_text_offset
         else:
             kernel_path = None
+            kernel_xip_path = None
             kernel_offset = None
         go_state = go_data
         go_data_state = self._go_message_states.get(go_state, str(go_state))
@@ -339,6 +345,7 @@ class DispatcherData:
         return DispatcherCoreData(
             firmware_path=firmware_path,
             kernel_path=kernel_path,
+            kernel_xip_path=kernel_xip_path,
             host_assigned_id=host_assigned_id,
             previous_kernel_name=previous_kernel.name if previous_kernel else None,
             kernel_offset=kernel_offset,
