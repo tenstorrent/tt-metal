@@ -20,7 +20,7 @@ from models.demos.deepseek_v3.tt.rope import RotarySetup
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, get_weight_config
 from models.demos.deepseek_v3.utils.hf_model_utils import load_model_weights
 from models.demos.deepseek_v3.utils.run_config import create_run_config
-from models.demos.deepseek_v3.utils.test_utils import add_inv_scale_to_state_dict, get_rope_tensors
+from models.demos.deepseek_v3.utils.test_utils import add_inv_scale_to_state_dict
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
 
@@ -92,6 +92,7 @@ class DeepseekGenerator:
         self.hf_config = (
             hf_config if hf_config is not None else AutoConfig.from_pretrained(self.model_path, trust_remote_code=True)
         )
+        self.hf_config.num_hidden_layers = 5
         # self._ensure_max_seq_len(self.hf_config)
         self.hf_config.max_seq_len = 1024  # TODO: Change this when needed?
         # Optional overrides for layer counts before building states
@@ -133,9 +134,16 @@ class DeepseekGenerator:
         self._trace_id: int | None = None
         self._trace_tokens: ttnn.Tensor | None = None
         self._trace_positions: ttnn.Tensor | None = None
+        self._trace_rot_idxs: ttnn.Tensor | None = None  # Add this
         self._trace_output: ttnn.Tensor | None = None
         self.enable_trace = enable_trace
         logger.info(f"Enable trace: {self.enable_trace}")
+
+        # Initialize rope_setup once
+        self.rope_setup = RotarySetup(
+            device=self.mesh_device, batch_size_per_row=self.batch_size_per_row, hf_config=self.hf_config
+        )
+
         self._prepare_weight_configs(cache_dir)
 
     @staticmethod
@@ -329,8 +337,8 @@ class DeepseekGenerator:
 
         # Clean up RoPE setup
         try:
-            if hasattr(self, "rope") and self.rope is not None:
-                del self.rope
+            if hasattr(self, "rope_setup") and self.rope_setup is not None:
+                del self.rope_setup
         except Exception as e:
             logger.warning(f"Failed to cleanup RoPE setup: {e}")
 
@@ -408,11 +416,29 @@ class DeepseekGenerator:
         )
         return rope_tensors, tt_positions
 
-    def _decode_step(self, tokens_step: torch.Tensor, positions: torch.Tensor, batch_size_per_row: int) -> torch.Tensor:
-        """Run a single decode step and return logits on host as torch tensor [1, 1, B, V]."""
+    def _decode_step(
+        self, tokens_step: torch.Tensor, positions: torch.Tensor, batch_size_per_row: int, return_rot_idxs: bool = False
+    ) -> torch.Tensor | Tuple[torch.Tensor, ttnn.Tensor]:
+        """Run a single decode step and return logits on host as torch tensor [1, 1, B, V].
+
+        Args:
+            tokens_step: Input tokens
+            positions: Position indices
+            batch_size_per_row: Batch size per row
+
+        Returns:
+            logits tensor
+        """
         # Prepare TT inputs
         tt_tokens = self._tt_from_tokens_step(tokens_step)
-        rope_tensors = get_rope_tensors(self.hf_config, batch_size_per_row, 1, positions, self.mesh_device)
+
+        # Get rot_idxs from positions (this uses ttnn.as_tensor, which is like from_torch)
+        rot_idxs = self.rope_setup.get_rot_idxs(positions)
+
+        # Generate rotation matrices from rot_idxs (all ttnn ops)
+        rope_tensors = self.rope_setup.get_rot_mats_from_rot_idxs(rot_idxs)
+
+        # Create TTNN position tensor
         tt_positions = ttnn.from_torch(
             positions,
             device=self.mesh_device,
@@ -602,7 +628,7 @@ class DeepseekGenerator:
         avg_time_to_first_token = prefill_time / num_of_prompts if num_of_prompts > 0 else 0
 
         if self.enable_trace and max_new_tokens >= 128:
-            trace_execution_time_for_128th_token = profiler.get_duration("execute_trace_127")
+            trace_execution_time_for_128th_token = profiler.get_duration("trace_execution_127")
             trace_execution_tokens_per_sec_per_user_128th_token = 1 / trace_execution_time_for_128th_token
         else:
             trace_execution_tokens_per_sec_per_user_128th_token = None
@@ -709,6 +735,7 @@ class DeepseekGenerator:
         # 1) Warm-up compile run (no trace) to keep compilation out of capture
         logger.info("Running warm-up decode step (no trace)...")
         _ = self._decode_step(init_tokens, positions, batch_size_per_row=batch_size_per_row)
+        ttnn.synchronize_device(self.mesh_device)
 
         # 2) Allocate persistent device inputs
         self._trace_tokens = self._tt_from_tokens_step(init_tokens)
@@ -719,11 +746,18 @@ class DeepseekGenerator:
             dtype=ttnn.int32,
         )
 
+        self._trace_rot_idxs = self.rope_setup.get_rot_idxs(positions)
+        ttnn.synchronize_device(self.mesh_device)
+
         # 3) Capture decode graph
         self.ccl.reset_sem_counters()
         logger.info("Begin capturing decode trace...")
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
-        rope_tensors = get_rope_tensors(self.hf_config, batch_size_per_row, 1, positions, self.mesh_device)
+
+        # Only capture the rot_mats generation from rot_idxs (all ttnn ops, no from_torch)
+        rope_tensors = self.rope_setup.get_rot_mats_from_rot_idxs(self._trace_rot_idxs)
+        logger.info(f"Rope tensors done")
+
         self._trace_output = RowBatchedModel.forward_decode(
             x=self._trace_tokens,
             position_idxs=self._trace_positions,
@@ -762,7 +796,12 @@ class DeepseekGenerator:
 
             logger.info(f"Decode trace already captured, updating persistent inputs and executing")
             # Update persistent inputs and execute
-            assert self._trace_tokens is not None and self._trace_positions is not None and self._trace_id is not None
+            assert (
+                self._trace_tokens is not None
+                and self._trace_positions is not None
+                and self._trace_rot_idxs is not None
+                and self._trace_id is not None
+            )
             torch_input = tokens.view(1, 1, -1).to(torch.int32)
             host_tokens = ttnn.from_torch(
                 torch_input,
@@ -774,6 +813,7 @@ class DeepseekGenerator:
             )
 
             ttnn.copy_host_to_device_tensor(host_tokens, self._trace_tokens)
+
             host_positions = ttnn.from_torch(
                 positions,
                 device=None,
@@ -782,10 +822,17 @@ class DeepseekGenerator:
             )
 
             ttnn.copy_host_to_device_tensor(host_positions, self._trace_positions)
+
+            host_rot_idxs = self.rope_setup.get_rot_idxs(positions, on_host=True)
+            ttnn.copy_host_to_device_tensor(host_rot_idxs, self._trace_rot_idxs)
+
             self.ccl.reset_sem_counters()
             profiler.start(f"trace_execution_{gen_idx}")
             ttnn.execute_trace(self.mesh_device, self._trace_id, cq_id=0, blocking=True)
             profiler.end(f"trace_execution_{gen_idx}")
+            logger.info(
+                f"Trace execution t/s/user @ {gen_idx}th token: {1/profiler.get_duration(f'trace_execution_{gen_idx}')}"
+            )
             assert self._trace_output is not None
             logits = ttnn.to_torch(
                 self._trace_output,
