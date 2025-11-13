@@ -39,6 +39,7 @@ permissions:
 # should-create-release is used to avoid creating a duplicate release
 # if we are running on main branch, don't upload any artifacts or create a gh release
 # if we are promoting a release candidate, don't rerun the tests
+# we need to check if should-create-release is needed
 
 jobs:
   release-precheck:
