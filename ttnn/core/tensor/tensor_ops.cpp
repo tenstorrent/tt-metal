@@ -114,7 +114,6 @@ Tensor tensor_pad_to_tile(const Tensor& input_tensor, float pad_value) {
 
     auto output = input_tensor.pad(
         tt::tt_metal::Shape(std::move(padded_shape)), tt::tt_metal::Shape{std::move(input_tensor_start)}, pad_value);
-    tt::tt_metal::Tensor::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
 }
@@ -141,7 +140,6 @@ Tensor tensor_unpad_from_tile(const Tensor& input_tensor, const tt::tt_metal::Sh
         output_tensor_end[index] = output_tensor_shape[index];
     }
     auto output = input_tensor.unpad(output_tensor_start, output_tensor_end);
-    tt::tt_metal::Tensor::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
 }
@@ -246,7 +244,6 @@ Tensor tensor_view(const Tensor& input_tensor, const Shape& new_logical_shape, c
             }
         },
         input_tensor.storage());
-    tt::tt_metal::Tensor::set_tensor_id(output);
     tt::tt_metal::GraphTracker::instance().track_function_end(output);
     return output;
 }

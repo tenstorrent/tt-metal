@@ -85,7 +85,7 @@ Tensor::Tensor(HostBuffer buffer, TensorSpec tensor_spec) :
     Tensor(Storage(HostStorage(std::move(buffer))), std::move(tensor_spec), TensorTopology{}) {}
 
 Tensor::Tensor(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) {
-    set_tensor_id(*this);
+    tensor_id = tensor_id_counter.fetch_add(1, std::memory_order_relaxed);
     init(Storage(std::move(storage)), std::move(tensor_spec), std::move(tensor_topology));
 }
 
@@ -151,11 +151,6 @@ void Tensor::deallocate_impl(bool force) {
 }
 
 std::uint64_t Tensor::get_tensor_id() const { return tensor_id; }
-
-std::uint64_t Tensor::set_tensor_id(Tensor& tensor) {
-    tensor.tensor_id = tensor_id_counter.fetch_add(1, std::memory_order_relaxed);
-    return tensor.tensor_id;
-}
 
 template <typename T>
 Tensor Tensor::from_span(
@@ -493,7 +488,6 @@ Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device) {
     Tensor output;
     distributed::MeshDevice* mesh_device = dynamic_cast<distributed::MeshDevice*>(device);
     output = allocate_tensor_on_device(tensor_spec, mesh_device);
-    tt::tt_metal::Tensor::set_tensor_id(output);
 
     GraphTracker::instance().track_function_end(output);
 

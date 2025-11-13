@@ -363,7 +363,6 @@ Tensor convert_python_tensor_to_tt_tensor(
         pad_value,
         mesh_mapper);
 
-    tt::tt_metal::Tensor::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
 }

@@ -197,25 +197,6 @@ def get_all_tensors(object_value):
     return get_tensors(object_value, (ttnn.Tensor, torch.Tensor))
 
 
-def set_tensor_id(tensor, force=False):
-    import torch
-
-    if isinstance(tensor, (ttnn.Tensor, torch.Tensor)):
-        if not force and hasattr(tensor, "tensor_id") and tensor.tensor_id is not None:
-            return
-        if isinstance(tensor, ttnn.Tensor):
-            # For ttnn.Tensor, set_tensor_id modifies the C++ object directly
-            ttnn._ttnn.set_tensor_id(tensor)
-        else:
-            # For torch.Tensor, assign the returned ID as a Python attribute
-            tensor.tensor_id = ttnn._ttnn.set_tensor_id(tensor)
-    elif isinstance(tensor, (list, tuple)):
-        for element in tensor:
-            set_tensor_id(element, force)
-    else:
-        raise RuntimeError(f"Unsupported input to set_tensor_id: {type(tensor)}")
-
-
 OPERATION_CALL_STACK = []
 
 
@@ -441,7 +422,6 @@ class Operation:
                 output = function(*function_args, **function_kwargs)
                 output_tensors = get_all_tensors(output)
                 # Set new tensor id to store the outputs of in-place operations correctly
-                set_tensor_id(output_tensors, force=True)
                 return output
 
             return call_wrapper
@@ -504,7 +484,6 @@ class Operation:
                     )
 
                 if local_golden_function_output is not None:
-                    set_tensor_id(local_golden_function_output)
                     local_tensor_comparison_records = compare_tensors_using_pcc(
                         self.python_fully_qualified_name,
                         local_golden_function_output,
@@ -515,7 +494,6 @@ class Operation:
                     )
 
                 if global_golden_function_output is not None:
-                    set_tensor_id(global_golden_function_output)
                     postprocess_global_golden_function_outputs(output, global_golden_function_output)
                     global_tensor_comparison_records = compare_tensors_using_pcc(
                         self.python_fully_qualified_name,
@@ -582,7 +560,6 @@ class Operation:
 
                 if ttnn.CONFIG.enable_logging or ttnn.CONFIG.enable_comparison_mode:
                     input_tensors = get_all_tensors((function_args, function_kwargs))
-                    set_tensor_id(input_tensors)
                     decorated_function = set_output_tensor_id_decorator(decorated_function)
 
                 if ttnn.CONFIG.enable_logging:

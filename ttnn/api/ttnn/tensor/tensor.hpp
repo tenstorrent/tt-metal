@@ -271,8 +271,6 @@ public:
             this->tensor_attributes->get_storage(), this->tensor_attributes->get_tensor_spec());
     }
 
-    static std::uint64_t set_tensor_id(Tensor& tensor);
-
 private:
     static std::atomic<std::uint64_t> tensor_id_counter;
 
