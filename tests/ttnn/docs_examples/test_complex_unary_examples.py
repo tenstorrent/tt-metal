@@ -7,7 +7,7 @@ import ttnn
 import torch
 
 
-@pytest.mark.skip("Non-working example from the documentation. GH issue: ")
+@pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
 def test_real(device):
     # Create a complex tensor
     tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device=device)
@@ -17,7 +17,7 @@ def test_real(device):
     print(f"Real part: {output}")
 
 
-@pytest.mark.skip("Non-working example from the documentation. GH issue: ")
+@pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
 def test_imag(device):
     # Create a complex tensor
     tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device=device)
@@ -27,7 +27,7 @@ def test_imag(device):
     print(f"Imaginary part: {output}")
 
 
-@pytest.mark.skip("Non-working example from the documentation. GH issue: ")
+@pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
 def test_angle(device):
     # Create a complex tensor
     tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device=device)
@@ -37,7 +37,7 @@ def test_angle(device):
     print(f"Angle: {output}")
 
 
-@pytest.mark.skip("Non-working example from the documentation. GH issue: ")
+@pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
 def test_is_imag(device):
     # Create a complex tensor
     tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device=device)
@@ -47,7 +47,7 @@ def test_is_imag(device):
     print(f"Is imaginary: {output}")
 
 
-@pytest.mark.skip("Non-working example from the documentation. GH issue: ")
+@pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
 def test_is_real(device):
     # Create a complex tensor
     tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device=device)
@@ -57,7 +57,7 @@ def test_is_real(device):
     print(f"Is real: {output}")
 
 
-@pytest.mark.skip("Non-working example from the documentation. GH issue: ")
+@pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
 def test_conj(device):
     # Create a complex tensor
     tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device=device)
@@ -67,7 +67,7 @@ def test_conj(device):
     print(f"Complex conjugate: {output}")
 
 
-@pytest.mark.skip("Non-working example from the documentation. GH issue: ")
+@pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
 def test_polar(device):
     # Create a complex tensor
     tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device=device)
@@ -77,7 +77,7 @@ def test_polar(device):
     print(f"Polar form: {output}")
 
 
-@pytest.mark.skip("Non-working example from the documentation. GH issue: ")
+@pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
 def test_alt_complex_rotate90(device):
     # Create a tensor with alternating complex layout
     tensor = ttnn.rand([2, 2], dtype=torch.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
