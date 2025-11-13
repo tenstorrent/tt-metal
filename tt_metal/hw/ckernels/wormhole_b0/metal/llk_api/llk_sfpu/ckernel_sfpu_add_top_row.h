@@ -23,4 +23,3 @@ inline void init_add_top_row() {
 }
 
 }  // namespace ckernel::sfpu
-

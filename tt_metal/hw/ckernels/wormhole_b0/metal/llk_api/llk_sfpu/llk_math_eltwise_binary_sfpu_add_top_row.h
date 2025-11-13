@@ -28,4 +28,3 @@ inline void llk_math_eltwise_binary_sfpu_add_top_row(
 }
 
 }  // namespace ckernel
-
