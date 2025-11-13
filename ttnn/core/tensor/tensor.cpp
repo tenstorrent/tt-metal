@@ -113,7 +113,7 @@ Tensor& Tensor::operator=(const Tensor& other) {
 
 Tensor& Tensor::operator=(Tensor&& other) noexcept {
     this->tensor_id = other.tensor_id;
-    other.tensor_id = INVALID_TENSOR_ID;
+    other.tensor_id = tensor_id_counter.fetch_add(1, std::memory_order_relaxed);
     if (this->tensor_attributes != other.tensor_attributes) {
         this->tensor_attributes = std::move(other.tensor_attributes);
     }

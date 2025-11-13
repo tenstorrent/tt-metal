@@ -47,8 +47,6 @@ class MeshCommandQueue;
 
 class Tensor {
 public:
-    constexpr static std::uint64_t INVALID_TENSOR_ID = std::numeric_limits<std::uint64_t>::max();
-
     // Shared pointer to all attributes associated with this tensor
     // Can be safely passed between threads when the tensor is copied
     std::shared_ptr<TensorAttributes> tensor_attributes = nullptr;
@@ -274,7 +272,7 @@ public:
 private:
     static std::atomic<std::uint64_t> tensor_id_counter;
 
-    std::uint64_t tensor_id{INVALID_TENSOR_ID};
+    std::uint64_t tensor_id;
 
     void init(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
     void deallocate_impl(bool force);
