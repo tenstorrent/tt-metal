@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include <algorithm>
 
 #define REDUCE_OP (PoolType::MAX)
 #define REDUCE_DIM (ReduceDim::REDUCE_COL)
@@ -101,11 +102,6 @@ void matmul_blocks(
                 pack_tile<true>(i, reduce_out_cb, reduce_tile_index);
             }
 
-            // PACK(( tt::compute::common::print_full_tile(reduce_out_cb, in0_subblock * N + out_col_offset + 0) ));
-            // if (subblock_w > 1) {
-            // PACK(( tt::compute::common::print_full_tile(reduce_out_cb, in0_subblock * N + out_col_offset + 1) ));
-            // }
-
             tile_regs_release();
             in1_index_offset += subblock_w;
         }
@@ -113,6 +109,7 @@ void matmul_blocks(
     }
     cb_push_back(matmul_out_cb, output_num_tiles);
     cb_push_back(reduce_out_cb, total_reduce_tiles);
+    // UNPACK(( DPRINT << "[matmul_blocks] packed intermediate reduce tiles: " << total_reduce_tiles << ENDL() ));
 }
 
 template <uint32_t in0_cb, uint32_t scale_cb, uint32_t k_chunk_size, uint32_t q_chunk_size>
@@ -122,17 +119,30 @@ void reduce_c_transposed(uint32_t out_cb) {
     constexpr uint32_t num_tiles = k_chunk_size * q_chunk_size;
 
     max_tile_init();
-    constexpr uint32_t reduce_dst_idx = 0;
     reduce_init<PoolType::MAX, ReduceDim::REDUCE_COL>(in0_cb, scale_cb, out_cb);
-    for (uint32_t j = 0; j < q_chunk_size; j++) {
-        acquire_dst();
 
+    // UNPACK(( DPRINT << "k_chunk_size " << k_chunk_size << " q_chunk_size " << q_chunk_size << ENDL() ));
+
+    // Process columns in blocks to improve locality and reduce DST acquire/release overhead
+    constexpr uint32_t COLS_PER_BLOCK = (q_chunk_size >= 16) ? 16 : ((q_chunk_size >= 8) ? 8 : 4);
+    for (uint32_t j0 = 0; j0 < q_chunk_size; j0 += COLS_PER_BLOCK) {
+        uint32_t block_cols = std::min<uint32_t>(COLS_PER_BLOCK, q_chunk_size - j0);
+        tile_regs_acquire();
         for (uint32_t i = 0; i < k_chunk_size; i++) {
-            reduce_tile<PoolType::MAX, ReduceDim::REDUCE_COL>(
-                in0_cb, scale_cb, i * q_chunk_size + j, 0, reduce_dst_idx);
+            // Stream a contiguous run of tiles for row i and columns [j0, j0+block_cols)
+            for (uint32_t b = 0; b < block_cols; b++) {
+                uint32_t j = j0 + b;
+                reduce_tile<PoolType::MAX, ReduceDim::REDUCE_COL>(in0_cb, scale_cb, i * q_chunk_size + j, 0, b);
+            }
         }
-        pack_tile(reduce_dst_idx, out_cb);
-        release_dst();
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t b = 0; b < block_cols; b++) {
+            pack_tile(b, out_cb);
+        }
+        tile_regs_release();
+        // UNPACK(( DPRINT << "[reduce_c_transposed] packed block cols [" << j0 << "," << (j0 + block_cols) << ")" <<
+        // ENDL() ));
     }
     reduce_uninit();
 }
@@ -176,6 +186,7 @@ void MAIN {
 
     reduce_c_transposed<cb_matmul_out, identity_scale_cb, k_chunk_size, q_chunk_size>(reduce_out_cb);
     cb_push_back(reduce_out_cb, q_chunk_size);
+    // UNPACK(( DPRINT << "[reduce_c_transposed] packed final reduce tiles: " << q_chunk_size << ENDL() ));
 
     // PACK(( tt::compute::common::print_full_tile(reduce_out_cb, 0) ));
     // PACK(( tt::compute::common::print_full_tile(reduce_out_cb, 1) ));
