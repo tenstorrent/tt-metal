@@ -191,9 +191,9 @@ def test_transformer_split_query_key_value_and_split_heads(
 
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [1024])
-@pytest.mark.parametrize("num_heads", [4, 16])
-@pytest.mark.parametrize("head_size", [64, 128])
-@pytest.mark.parametrize("num_kv_heads", [None])
+@pytest.mark.parametrize("num_heads", [24])
+@pytest.mark.parametrize("head_size", [128])
+@pytest.mark.parametrize("num_kv_heads", [8])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG])
 def test_transformer_split_query_key_value_and_split_heads_with_kv_input_tensor(
@@ -202,7 +202,7 @@ def test_transformer_split_query_key_value_and_split_heads_with_kv_input_tensor(
     torch.manual_seed(0)
 
     input_shape = (batch_size, sequence_size, num_heads * head_size)
-    kv_input_shape = (batch_size, sequence_size, num_heads * 2 * head_size)
+    kv_input_shape = (batch_size, sequence_size, num_kv_heads * 2 * head_size)
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.bfloat16)
     torch_kv_input_tensor = torch_random(kv_input_shape, -0.1, 0.1, dtype=torch.bfloat16)
     golden_function = ttnn.get_golden_function(ttnn.transformer.split_query_key_value_and_split_heads)
@@ -211,7 +211,9 @@ def test_transformer_split_query_key_value_and_split_heads_with_kv_input_tensor(
         torch_query_tensor,
         torch_key_tensor,
         torch_value_tensor,
-    ) = golden_function(torch_input_tensor, torch_kv_input_tensor, num_heads=num_heads, num_kv_heads=num_kv_heads)
+    ) = golden_function(
+        torch_input_tensor, torch_kv_input_tensor, num_heads=num_heads, num_kv_heads=num_kv_heads, transpose_key=False
+    )
 
     input_tensor = ttnn.from_torch(
         torch_input_tensor,
@@ -229,7 +231,7 @@ def test_transformer_split_query_key_value_and_split_heads_with_kv_input_tensor(
     )
 
     query_tensor, key_tensor, value_tensor = ttnn.transformer.split_query_key_value_and_split_heads(
-        input_tensor, kv_input_tensor, num_heads=num_heads, num_kv_heads=num_kv_heads
+        input_tensor, kv_input_tensor, num_heads=num_heads, num_kv_heads=num_kv_heads, transpose_key=False
     )
     query_tensor = ttnn.to_torch(query_tensor)
     key_tensor = ttnn.to_torch(key_tensor)
