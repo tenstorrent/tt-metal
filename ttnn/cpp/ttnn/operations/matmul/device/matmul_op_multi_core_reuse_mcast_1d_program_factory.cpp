@@ -67,11 +67,8 @@ uint32_t get_preferred_noc(
  * @param transpose_a Whether tensor A is transposed
  * @return uint32_t The last K tile width
  */
-uint32_t compute_in0_last_ktile_w(const tt::tt_metal::Tensor& a, const tt::tt_metal::Tile& in0_tile, bool transpose_a) {
-    if (transpose_a) {
-        return a.logical_shape()[-2] % in0_tile.get_width();
-    }
-    return a.logical_shape()[-1] % in0_tile.get_width();
+uint32_t compute_in0_last_ktile_w(const tt::tt_metal::Shape& ashape, const tt::tt_metal::Tile& in0_tile) {
+    return ashape[-1] % in0_tile.get_width();
 }
 
 ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t
@@ -288,7 +285,18 @@ process_mcast_in0_program_and_create_override_variables(
 
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
-    uint32_t in0_last_ktile_w = compute_in0_last_ktile_w(a, in0_tile, transpose_a);
+    const auto& a_shape_logical = get_matmul_tensor_logical_shape(a, transpose_a);
+    uint32_t in0_last_ktile_w = compute_in0_last_ktile_w(a_shape_logical, in0_tile);
+
+    const auto in0_tensor_stride_w = transpose_a ? M : 1;
+    const auto in0_tensor_stride_h = transpose_a ? 1 : K;
+    const auto in0_tensor_next_block_stride = in0_block_w * in0_tensor_stride_w;
+    const auto in0_tensor_next_h_dim_block_stride = in0_block_h * in0_tensor_stride_h;
+
+    const auto in1_tensor_stride_w = transpose_b ? K : 1;
+    const auto in1_tensor_stride_h = transpose_b ? 1 : N;
+    const auto in1_tensor_next_block_stride = in0_block_w * in1_tensor_stride_h;
+    const auto in1_tensor_next_w_dim_block_stride = in1_block_w * in1_tensor_stride_w;
 
     std::vector<uint32_t> in0_sender_compile_time_args;
     if (in0_is_sharded) {
@@ -323,10 +331,10 @@ process_mcast_in0_program_and_create_override_variables(
     } else {
         in0_sender_compile_time_args = {
             // in0 tensor args
-            (std::uint32_t)1,                // in0_tensor_stride_w
-            (std::uint32_t)K,                // in0_tensor_stride_h
-            (std::uint32_t)in0_block_w,      // in0_tensor_next_block_stride
-            (std::uint32_t)K * in0_block_h,  // in0_tensor_next_h_dim_block_stride
+            (std::uint32_t)in0_tensor_stride_w,
+            (std::uint32_t)in0_tensor_stride_h,
+            (std::uint32_t)in0_tensor_next_block_stride,
+            (std::uint32_t)in0_tensor_next_h_dim_block_stride,
             // in0 block args
             (std::uint32_t)in0_block_w,          // in0_block_w
             (std::uint32_t)in0_block_h,          // in0_block_h
@@ -361,10 +369,10 @@ process_mcast_in0_program_and_create_override_variables(
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
         // READER
         // in1 tensor args
-        (std::uint32_t)1,                // in1_tensor_stride_w
-        (std::uint32_t)N,                // in1_tensor_stride_h
-        (std::uint32_t)in0_block_w * N,  // in1_tensor_next_block_stride
-        (std::uint32_t)in1_block_w,      // in1_tensor_next_w_dim_block_stride
+        (std::uint32_t)in1_tensor_stride_w,
+        (std::uint32_t)in1_tensor_stride_h,
+        (std::uint32_t)in1_tensor_next_block_stride,
+        (std::uint32_t)in1_tensor_next_w_dim_block_stride,
         // in1 block args
         (std::uint32_t)in1_block_w,                // in1_block_w
         (std::uint32_t)in0_block_w,                // in1_block_h
@@ -1067,7 +1075,8 @@ process_mcast_in1_program_and_create_override_variables(
     }
     uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
 
-    uint32_t in0_last_ktile_w = compute_in0_last_ktile_w(a, in0_tile, transpose_a);
+    const auto& a_shape_logical = get_matmul_tensor_logical_shape(a, transpose_a);
+    uint32_t in0_last_ktile_w = compute_in0_last_ktile_w(a_shape_logical, in0_tile);
 
     bool extract_shard_sub_blocks = false;
     uint32_t in0_shard_height_in_tiles = 0;
@@ -1140,12 +1149,22 @@ process_mcast_in1_program_and_create_override_variables(
     auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
     auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
 
+    const auto in0_tensor_stride_w = transpose_a ? M : 1;
+    const auto in0_tensor_stride_h = transpose_a ? 1 : K;
+    const auto in0_tensor_next_block_stride = in0_block_w * in0_tensor_stride_w;
+    const auto in0_tensor_next_h_dim_block_stride = in0_block_h * in0_tensor_stride_h;
+
+    const auto in1_tensor_stride_w = transpose_b ? K : 1;
+    const auto in1_tensor_stride_h = transpose_b ? 1 : N;
+    const auto in1_tensor_next_block_stride = in0_block_w * in1_tensor_stride_h;
+    const auto in1_tensor_next_w_dim_block_stride = in1_block_w * in1_tensor_stride_w;
+
     std::vector<uint32_t> in0_sender_compile_time_args = {
         // in0 tensor args
-        (std::uint32_t)1,                // in0_tensor_stride_w
-        (std::uint32_t)K,                // in0_tensor_stride_h
-        (std::uint32_t)in0_block_w,      // in0_tensor_next_block_stride
-        (std::uint32_t)K * in0_block_h,  // in0_tensor_next_h_dim_block_stride
+        (std::uint32_t)in0_tensor_stride_w,
+        (std::uint32_t)in0_tensor_stride_h,
+        (std::uint32_t)in0_tensor_next_block_stride,
+        (std::uint32_t)in0_tensor_next_h_dim_block_stride,
         // in0 block args
         (std::uint32_t)in0_block_w,                // in0_block_w
         (std::uint32_t)in0_block_h,                // in0_block_h
@@ -1181,10 +1200,10 @@ process_mcast_in1_program_and_create_override_variables(
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
         // READER
         // in1 tensor args
-        (std::uint32_t)1,                // in1_tensor_stride_w
-        (std::uint32_t)N,                // in1_tensor_stride_h
-        (std::uint32_t)in0_block_w * N,  // in1_tensor_next_block_stride
-        (std::uint32_t)in1_block_w,      // in1_tensor_next_w_dim_block_stride
+        (std::uint32_t)in1_tensor_stride_w,
+        (std::uint32_t)in1_tensor_stride_h,
+        (std::uint32_t)in1_tensor_next_block_stride,
+        (std::uint32_t)in1_tensor_next_w_dim_block_stride,
         // in1 block args
         (std::uint32_t)in1_block_w,                // in1_block_w
         (std::uint32_t)in0_block_w,                // in1_block_h
@@ -1760,6 +1779,8 @@ process_gather_in0_program_and_create_override_variables(
     uint32_t N,
     uint32_t K,
     bool bcast_batch,
+    bool transpose_a,
+    bool transpose_b,
     uint32_t in0_block_w,
     uint32_t out_subblock_h,
     uint32_t out_subblock_w,
@@ -1849,7 +1870,9 @@ process_gather_in0_program_and_create_override_variables(
     uint32_t in1_shard_height_in_tiles = 0;
     uint32_t in1_shard_width_in_tiles = 0;
     uint32_t in1_CB_tiles = 0;
-    uint32_t in1_tensor_width_in_tiles = b.padded_shape()[-1] / in1_tile.get_width();
+
+    const auto& bshape = get_matmul_tensor_padded_shape(b, transpose_b);
+    uint32_t in1_tensor_width_in_tiles = bshape[-1] / in1_tile.get_width();
 
     if (in1_is_dram_sharded || in1_is_dram_interleaved) {
         in1_CB_tiles = 2 * in0_shard_width_in_tiles * per_core_N;  // Double buffered
@@ -2706,14 +2729,11 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
     ////////////////////////////////////////////////////////////////////////////
     // NOTE: Pads matmul input dims to 512 x 512 multiples (ie. multiples of 16*32 x 16*32)
     // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])
-    uint32_t B = get_batch_size(ashape);
-    uint32_t Mt = get_M_dim(a, transpose_a, in0_tile, fuse_batch);
-    uint32_t Kt = get_K_dim(a, transpose_a, in0_tile);
-    uint32_t Nt = get_N_dim(b, transpose_b, in1_tile);
+    const auto B = fuse_batch ? 1 : get_batch_size(ashape);
+    const auto Mt = get_M_dim(ashape, in0_tile, fuse_batch);
+    const auto Kt = get_K_dim(ashape, in0_tile);
+    const auto Nt = get_N_dim(bshape, in1_tile);
 
-    if (fuse_batch) {
-        B = 1;
-    }
     TT_FATAL(Kt % in0_block_w == 0, "Kt ({}) must be divisible by in0_block_w ({})", Kt, in0_block_w);
 
     // This should allocate a DRAM buffer on the device
@@ -2772,6 +2792,8 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
             Nt,
             Kt,
             bcast_batch,
+            transpose_a,
+            transpose_b,
             in0_block_w,
             out_subblock_h,
             out_subblock_w,
@@ -3125,11 +3147,9 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
         batchA = get_batch_size(ashape);
     }
 
-    // NOTE: Pads matmul input dims to 512 x 512 multiples (ie. multiples of 16*32 x 16*32)
-    // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])
-    const uint32_t Mt = get_M_dim(a, /*transpose_a=*/false, in0_tile, /*fuse_batch=*/false);
-    const uint32_t Kt = get_K_dim(a, /*transpose_a=*/false, in0_tile);
-    const uint32_t Nt = get_N_dim(b, /*transpose_b=*/false, in1_tile);
+    const auto Mt = get_M_dim(ashape, in0_tile, /*fuse_batch=*/false);
+    const auto Kt = get_K_dim(ashape, in0_tile);
+    const auto Nt = get_N_dim(bshape, in1_tile);
 
     TT_FATAL(Kt % in0_block_w == 0, "Kt ({}) must be divisible by in0_block_w ({})", Kt, in0_block_w);
 
@@ -3257,15 +3277,29 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
 
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
-    uint32_t in0_last_ktile_w = reuse_mcast_1d_optimized_helpers::compute_in0_last_ktile_w(a, in0_tile, false);
+    const auto& a_shape_logical = get_matmul_tensor_logical_shape(a, /*transpose_a=*/false);
+    uint32_t in0_last_ktile_w = reuse_mcast_1d_optimized_helpers::compute_in0_last_ktile_w(a_shape_logical, in0_tile);
+
+    // We keep this as a placeholder for now and we will plumb this later.
+    const auto transpose_a = false;
+    const auto transpose_b = false;
+    const auto in0_tensor_stride_w = transpose_a ? Mt : 1;
+    const auto in0_tensor_stride_h = transpose_a ? 1 : Kt;
+    const auto in0_tensor_next_block_stride = in0_block_w * in0_tensor_stride_w;
+    const auto in0_tensor_next_h_dim_block_stride = in0_block_h * in0_tensor_stride_h;
+
+    const auto in1_tensor_stride_w = transpose_b ? Kt : 1;
+    const auto in1_tensor_stride_h = transpose_b ? 1 : Nt;
+    const auto in1_tensor_next_block_stride = in0_block_w * in1_tensor_stride_h;
+    const auto in1_tensor_next_w_dim_block_stride = in1_block_w * in1_tensor_stride_w;
 
     std::vector<uint32_t> in0_sender_compile_time_args;
     in0_sender_compile_time_args = {
         // in0 tensor args
-        (std::uint32_t)1,                 // in0_tensor_stride_w
-        (std::uint32_t)Kt,                // in0_tensor_stride_h
-        (std::uint32_t)in0_block_w,       // in0_tensor_next_block_stride
-        (std::uint32_t)Kt * in0_block_h,  // in0_tensor_next_h_dim_block_stride
+        (std::uint32_t)in0_tensor_stride_w,
+        (std::uint32_t)in0_tensor_stride_h,
+        (std::uint32_t)in0_tensor_next_block_stride,
+        (std::uint32_t)in0_tensor_next_h_dim_block_stride,
         // in0 block args
         (std::uint32_t)in0_block_w,          // in0_block_w
         (std::uint32_t)in0_block_h,          // in0_block_h
@@ -3301,10 +3335,10 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
         // READER
         // in1 tensor args
-        (std::uint32_t)1,                 // in1_tensor_stride_w
-        (std::uint32_t)Nt,                // in1_tensor_stride_h
-        (std::uint32_t)in0_block_w * Nt,  // in1_tensor_next_block_stride
-        (std::uint32_t)in1_block_w,       // in1_tensor_next_w_dim_block_stride
+        (std::uint32_t)in1_tensor_stride_w,
+        (std::uint32_t)in1_tensor_stride_h,
+        (std::uint32_t)in1_tensor_next_block_stride,
+        (std::uint32_t)in1_tensor_next_w_dim_block_stride,
         // in1 block args
         (std::uint32_t)in1_block_w,                // in1_block_w
         (std::uint32_t)in0_block_w,                // in1_block_h

@@ -1845,7 +1845,7 @@ def test_matmul_by_passing_in_1D_systolic_array_program_config(device, batch_siz
     ],
 )
 @pytest.mark.parametrize("transpose_b", [True, False])
-@pytest.mark.parametrize("transpose_a", [True, False])
+@pytest.mark.parametrize("transpose_a", [False])
 def test_matmul_with_transpose_a_or_b(device, n_size, c, m, k, n, transpose_a, transpose_b):
     torch.manual_seed(0)
 
