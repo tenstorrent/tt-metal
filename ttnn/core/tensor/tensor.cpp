@@ -282,14 +282,14 @@ std::shared_ptr<TensorAttributes> Tensor::tensor_attributes() const {
 Tensor Tensor::make_lazy_tensor(
     const std::shared_ptr<ttnn::experimental::lazy::LazyOperationInputs>& op_inputs,
     const std::shared_ptr<ttnn::experimental::lazy::LazyOperation>& op,
-    TensorSpec tensor_spec) {
-    return Tensor(LazyTensor::make_lazy_tensor(op_inputs, op, std::move(tensor_spec)));
+    const TensorSpec& tensor_spec) {
+    return Tensor(LazyTensor::make_lazy_tensor(op_inputs, op, tensor_spec));
 }
 
 std::vector<Tensor> Tensor::make_lazy_tensors(
     const std::shared_ptr<ttnn::experimental::lazy::LazyOperationInputs>& op_inputs,
     const std::shared_ptr<ttnn::experimental::lazy::LazyOperation>& op,
-    const std::vector<TensorSpec>& tensor_specs) {
+    const std::vector<std::optional<TensorSpec>>& tensor_specs) {
     auto lazy_tensors = LazyTensor::make_lazy_tensors(op_inputs, op, tensor_specs);
     std::vector<Tensor> tensors;
     tensors.reserve(lazy_tensors.size());

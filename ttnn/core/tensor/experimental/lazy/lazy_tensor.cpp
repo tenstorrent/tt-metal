@@ -46,11 +46,15 @@ std::shared_ptr<LazyTensor> LazyTensor::make_materialized_tensor(
 }
 
 std::vector<std::shared_ptr<LazyTensor>> LazyTensor::make_lazy_tensors(
-    const LazyOperationInputsPtr& op_inputs, const LazyOperationPtr& op, const std::vector<TensorSpec>& tensor_specs) {
+    const LazyOperationInputsPtr& op_inputs,
+    const LazyOperationPtr& op,
+    const std::vector<std::optional<TensorSpec>>& tensor_specs) {
     std::vector<std::shared_ptr<LazyTensor>> lazy_tensors;
     lazy_tensors.reserve(tensor_specs.size());
-    for (const auto& tensor_spec : tensor_specs) {
-        lazy_tensors.push_back(make_lazy_tensor(op_inputs, op, tensor_spec));
+    for (const auto& tensor_spec_opt : tensor_specs) {
+        if (tensor_spec_opt.has_value()) {
+            lazy_tensors.push_back(make_lazy_tensor(op_inputs, op, tensor_spec_opt.value()));
+        }
     }
     for (size_t i = 0; i < lazy_tensors.size(); i++) {
         std::vector<std::shared_ptr<LazyTensor>> siblings;
