@@ -53,6 +53,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/distributed_host_buffer.hpp
     api/tt-metalium/edm_fabric_counters.hpp
     api/tt-metalium/event.hpp
+    api/tt-metalium/experimental/profiler.hpp
     api/tt-metalium/fabric.hpp
     api/tt-metalium/fabric_edm_types.hpp
     api/tt-metalium/fabric_types.hpp
