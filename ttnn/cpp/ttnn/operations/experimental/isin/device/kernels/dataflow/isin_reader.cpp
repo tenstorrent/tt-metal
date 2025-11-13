@@ -41,6 +41,17 @@ FORCE_INLINE void isin_subchunks(
     }
 }
 
+void zero_buffer(uint32_t write_addr, int bytes) {
+    uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
+    while (bytes > 0) {
+        uint32_t curr_bytes = std::min(bytes, MEM_ZEROS_SIZE);
+        noc_async_read(zeros_noc_addr, write_addr, curr_bytes);
+        write_addr += curr_bytes;
+        bytes -= curr_bytes;
+    }
+    noc_async_read_barrier();
+}
+
 /*
     When a core begins processing of a given chunk, the output chunk is fully erased with zeroes
     (or filled with ones, if the invert flag is set) - this makes sure that the output chunk is properly filled
@@ -50,10 +61,24 @@ FORCE_INLINE void isin_subchunks(
 */
 template <typename elements_number_type>
 FORCE_INLINE void prefill_output(uint32_t output_l1_write_addr, uint32_t output_subchunk_size, bool invert) {
-    volatile tt_l1_ptr elements_number_type* output_chunk_begin_ptr =
-        reinterpret_cast<volatile tt_l1_ptr elements_number_type*>(output_l1_write_addr);
-    for (uint32_t i = 0; i < output_subchunk_size; ++i) {
-        output_chunk_begin_ptr[i] = invert ? 0xFFFFFFFF : 0x00000000;
+    if (invert) {
+        volatile tt_l1_ptr elements_number_type* output_chunk_begin_ptr =
+            reinterpret_cast<volatile tt_l1_ptr elements_number_type*>(output_l1_write_addr);
+        for (uint32_t i = 0; i < output_subchunk_size; ++i) {
+            output_chunk_begin_ptr[i] = 0xFFFFFFFF;
+        }
+    } else {
+        zero_buffer(output_l1_write_addr, output_subchunk_size * sizeof(uint32_t));
+        //         void zero_buffer(uint32_t write_addr, int bytes) {
+        //     uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
+        //     while (bytes > 0) {
+        //         uint32_t curr_bytes = std::min(bytes, MEM_ZEROS_SIZE);
+        //         noc_async_read(zeros_noc_addr, write_addr, curr_bytes);
+        //         write_addr += curr_bytes;
+        //         bytes -= curr_bytes;
+        //     }
+        //     noc_async_read_barrier();
+        // }
     }
 }
 

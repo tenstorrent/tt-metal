@@ -30,8 +30,8 @@ namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
 struct IsInPreprocessingResult {
-    Tensor preprocessed_elements_tensor{};
-    Tensor preprocessed_test_elements_tensor{};
+    Tensor preprocessed_elements_tensor;
+    Tensor preprocessed_test_elements_tensor;
     Shape original_elements_shape{};
     Layout original_elements_layout{};
     uint32_t elements_size{};
