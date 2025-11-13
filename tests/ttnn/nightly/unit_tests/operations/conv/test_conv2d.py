@@ -837,7 +837,7 @@ def test_conv_dram(
         input_layout=input_layout,
         output_layout=input_layout,
         packer_l1_acc=packer_l1_acc,
-        run_twice=False,
+        run_twice=True,
         fast_compare=True,
         throttle_level=throttle,
         use_dram_slicing=True,

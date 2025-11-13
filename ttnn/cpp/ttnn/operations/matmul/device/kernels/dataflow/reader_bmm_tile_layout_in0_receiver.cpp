@@ -44,7 +44,7 @@ void kernel_main() {
             // This means we have unstructured sparsity.
             // The compute kernel needs to be made aware whether this batch is valid or not.
             // We do this by passing the value to the compute kernel via nnz_cb_id.
-            // But first, lets wait for the sparisty data to be multicast to us.
+            // But first, lets wait for the sparsity data to be multicast to us.
             // Set in0 semaphore value to INVALID
             noc_semaphore_set(in0_mcast_receiver_semaphore_addr_ptr, INVALID);
             // Atomic increment source core counter

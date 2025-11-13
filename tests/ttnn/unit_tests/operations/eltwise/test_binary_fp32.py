@@ -1,5 +1,5 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
-
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+#
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
@@ -10,6 +10,7 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
     data_gen_with_range,
     compare_pcc,
 )
+from tests.ttnn.utils_for_testing import assert_with_ulp, assert_allclose
 
 
 @pytest.mark.parametrize(
@@ -97,8 +98,7 @@ def test_div_fp32(device, ttnn_function):
     z_tt_div = ttnn_function(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_div)
 
-    status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.999
-    assert status
+    assert_allclose(z_torch, tt_out, atol=1e-10, rtol=1e-6)
 
 
 @pytest.mark.parametrize(
@@ -107,10 +107,8 @@ def test_div_fp32(device, ttnn_function):
         ttnn.divide,
     ],
 )
-# Torch: num/ 0 = inf and 0/0  nan;
-# TT: num/ 0 = inf but 0/0= 0 not nan and 1/0 is 170141183460469231731687303715884105728.000000000000000 not inf;
-# input_b must be non-zero
-def test_div_bf16(device, ttnn_function):
+# Test division when input_b is non-zero
+def test_div_bf16_nonzero(device, ttnn_function):
     x_torch = torch.tensor(
         [
             [
@@ -118,9 +116,6 @@ def test_div_bf16(device, ttnn_function):
                 -3,
                 16,
                 -5,
-                14,
-                -12,
-                0,
                 0,
                 15,
             ]
@@ -134,18 +129,15 @@ def test_div_bf16(device, ttnn_function):
                 3,
                 -4,
                 -5,
-                0,
-                0,
-                0,
                 1,
                 10,
             ]
         ],
         dtype=torch.bfloat16,
     )
-    # torch out in ttnn TorchTensor([[ 0.500000000000000, -1.000000000000000, -4.000000000000000,  1.000000000000000,                inf,               -inf,                nan,  0.000000000000000,  1.500000000000000]],
+    # torch out in ttnn TorchTensor([[ 0.500000000000000, -1.000000000000000, -4.000000000000000,  1.000000000000000, 0.000000000000000,  1.500000000000000]],
     #         dtype=torch.bfloat16)
-    # tt out in torch TorchTensor([[ 0.500000000000000, -1.000000000000000, -4.000000000000000,  1.000000000000000,                inf,               -inf,  0.000000000000000,  0.000000000000000,  1.500000000000000]],
+    # tt out in torch TorchTensor([[ 0.500000000000000, -1.000000000000000, -4.000000000000000,  1.000000000000000, 0.000000000000000,  1.500000000000000]],
     #         dtype=torch.bfloat16)
     golden_fn = ttnn.get_golden_function(ttnn_function)
     z_torch = golden_fn(x_torch, y_torch)
@@ -154,8 +146,7 @@ def test_div_bf16(device, ttnn_function):
     z_tt_div = ttnn_function(x_tt, y_tt)  # bf16 runs FPU
     tt_out = ttnn.to_torch(z_tt_div)
 
-    status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.999
-    assert status
+    assert_with_ulp(z_torch, tt_out, 1, allow_nonfinite=True)
 
 
 @pytest.mark.parametrize(
