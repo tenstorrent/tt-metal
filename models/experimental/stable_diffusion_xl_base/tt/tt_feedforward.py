@@ -43,8 +43,4 @@ class TtFeedForward(LightweightModule):
             compute_kernel_config=self.default_compute_kernel_config,
         )
 
-        if list(hidden_states.shape)[-1] == 640 or self.ff2_model_config is None:
-            # due to block sharded mm constraints, if we block shard the input tensor, we can only run it on 56 cores
-            # hence using DRAM memory config instead
-            hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
         return hidden_states
