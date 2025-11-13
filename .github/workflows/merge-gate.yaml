@@ -322,12 +322,7 @@ jobs:
       timeout: 11
 
   incremental-build-test:
-    # if: ${{ github.ref_name == 'main' ||
-    #         needs.find-changes.outputs.cmake-changed == 'true' ||
-    #         needs.find-changes.outputs.any-code-changed == 'true' ||
-    #         needs.find-changes.outputs.build-workflows-changed == 'true'
-    #     }}
-    needs: [find-changes, build]
+    needs: build
     uses: ./.github/workflows/incremental-build-test.yaml
     secrets: inherit
     with:
