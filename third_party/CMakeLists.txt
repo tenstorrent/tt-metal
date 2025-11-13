@@ -72,6 +72,18 @@ CPMAddPackage(
         protobuf_noreturn.patch
 )
 
+if(CMAKE_VERSION VERSION_LESS 3.25)
+    # CMake 3.24 didn't yet have add_subdirectory(... SYSTEM), libprotobuf doesn't publish its interface dirs as SYSTEM
+    # and headers in it run afoul certain compiler warnings.  That all combines to failed builds.  Work around it here.
+    get_target_property(PROTOBUF_INCLUDES protobuf::libprotobuf INTERFACE_INCLUDE_DIRECTORIES)
+    set_target_properties(
+        libprotobuf
+        PROPERTIES
+            INTERFACE_SYSTEM_INCLUDE_DIRECTORIES
+                "${PROTOBUF_INCLUDES}"
+    )
+endif()
+
 # Setting visibility to hidden to avoid symbol conflicts with other protobuf libraries when tt-metal package is used
 set_target_properties(
     libprotobuf
