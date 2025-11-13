@@ -103,4 +103,5 @@ enum class SfpuType
     asinh,
     acosh,
     reduce,
+    add_top_row,
 };

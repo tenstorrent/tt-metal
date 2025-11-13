@@ -76,6 +76,19 @@ void run_kernel()
         ckernel::sfpu::_calculate_reduce_<POOL_TYPE, REDUCE_DIM, static_cast<DataFormat>(formats.math)>();
     }
 
+#ifdef ADD_TOP_ROW
+    _llk_math_eltwise_binary_sfpu_init_<SfpuType::add_top_row>();
+    _llk_math_eltwise_binary_sfpu_start_<DstSync::SyncHalf>(0);
+    ckernel::sfpu::_init_add_top_row_();
+
+    for (int i = 1; i < TILE_CNT; ++i)
+    {
+        // Add the top rows of all the tiles we reduced in dst register
+        ckernel::sfpu::_calculate_add_top_row_<static_cast<DataFormat>(formats.math)>(0, i, 0); // accumulate the result in tile at index 0
+    }
+
+#endif
+
     _llk_math_eltwise_unary_sfpu_done_();
     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }

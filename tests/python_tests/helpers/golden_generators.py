@@ -1163,6 +1163,7 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 MathOperation.SfpuElwRightShift: self._right_shift,
                 MathOperation.SfpuElwLeftShift: self._left_shift,
                 MathOperation.SfpuElwLogicalRightShift: self._logical_right_shift,
+                MathOperation.SfpuAddTopRow: self._add_top_row,
             }
         )
 
@@ -1199,6 +1200,13 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         t1_uint = t1.to(torch.int64) & 0xFFFFFFFF
         result = (t1_uint >> t2).to(torch.int32)
         return result
+
+    def _add_top_row(self, t1, t2):
+        """
+        Add top row operation for tile pairs.
+        Takes the element t1 of top row of tile 0 and adds it with element t2 of top row of tile 1.
+        """
+        return t1 + t2
 
 
 @register_golden
