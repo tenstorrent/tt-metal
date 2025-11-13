@@ -1809,9 +1809,22 @@ class VADCustomNuScenesDataset(CustomNuScenesDataset):
             result_dict["EPA_" + cls] = (
                 all_metric_dict["hit_" + cls] - alpha * all_metric_dict["fp_" + cls]
             ) / all_metric_dict["gt_" + cls]
-            result_dict["ADE_" + cls] = all_metric_dict["ADE_" + cls] / all_metric_dict["cnt_ade_" + cls]
-            result_dict["FDE_" + cls] = all_metric_dict["FDE_" + cls] / all_metric_dict["cnt_fde_" + cls]
-            result_dict["MR_" + cls] = all_metric_dict["MR_" + cls] / all_metric_dict["cnt_fde_" + cls]
+            # Handle division by zero when model produces no valid predictions
+            result_dict["ADE_" + cls] = (
+                all_metric_dict["ADE_" + cls] / all_metric_dict["cnt_ade_" + cls]
+                if all_metric_dict["cnt_ade_" + cls] > 0
+                else float("inf")
+            )
+            result_dict["FDE_" + cls] = (
+                all_metric_dict["FDE_" + cls] / all_metric_dict["cnt_fde_" + cls]
+                if all_metric_dict["cnt_fde_" + cls] > 0
+                else float("inf")
+            )
+            result_dict["MR_" + cls] = (
+                all_metric_dict["MR_" + cls] / all_metric_dict["cnt_fde_" + cls]
+                if all_metric_dict["cnt_fde_" + cls] > 0
+                else 1.0
+            )
 
         print("\n")
         print("-------------- Motion Prediction --------------")
@@ -1834,9 +1847,13 @@ class VADCustomNuScenesDataset(CustomNuScenesDataset):
                 for k in res["metric_results"].keys():
                     metric_dict[k] += res["metric_results"][k]
 
-        for k in metric_dict:
-            metric_dict[k] = metric_dict[k] / num_valid
-            print("{}:{}".format(k, metric_dict[k]))
+        # Handle case where no valid predictions exist
+        if metric_dict is not None and num_valid > 0:
+            for k in metric_dict:
+                metric_dict[k] = metric_dict[k] / num_valid
+                print("{}:{}".format(k, metric_dict[k]))
+        else:
+            print("WARNING: No valid planning predictions to evaluate")
 
         result_files, tmp_dir = self.format_results(results, jsonfile_prefix)
 

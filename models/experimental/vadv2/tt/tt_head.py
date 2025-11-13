@@ -7,7 +7,9 @@ import torch
 from models.experimental.vadv2.tt.tt_lanenet import TtLaneNet
 from models.experimental.vadv2.tt.tt_decoder import TtCustomTransformerDecoder
 from models.experimental.vadv2.tt.tt_transformer import TtVADPerceptionTransformer
-from models.experimental.vadv2.reference.base_box3d import LiDARInstance3DBoxes
+
+# Use mmdet3d's complete LiDARInstance3DBoxes implementation (not the stub in reference/)
+from mmdet3d.structures import LiDARInstance3DBoxes
 from models.experimental.vadv2.tt.tt_utils import inverse_sigmoid, bbox_xyxy_to_cxcywh
 from models.experimental.vadv2.reference.nms_free_coder import MapNMSFreeCoder, CustomNMSFreeCoder
 

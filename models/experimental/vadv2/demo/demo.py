@@ -117,6 +117,27 @@ def test_tt_demo(device, model_location_generator):
 
     ttnn_outputs = single_cpu_test_tt(tt_model, dataloader, device)
 
+    # Add evaluation (same as test_torch_demo)
+    tmp = {}
+    tmp["bbox_results"] = ttnn_outputs
+    ttnn_outputs = tmp
+    rank, _ = get_dist_info()
+    kwargs = {}
+    kwargs["jsonfile_prefix"] = osp.join("test", "vad_tt_results", time.ctime().replace(" ", "_").replace(":", "_"))
+    eval_kwargs = cfg.get("evaluation", {}).copy()
+    # hard-code way to remove EvalHook args
+    for key in ["interval", "tmpdir", "start", "gpu_collect", "save_best", "rule"]:
+        eval_kwargs.pop(key, None)
+    eval_kwargs.update(dict(metric="bbox", **kwargs))
+
+    print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@  TT-Metal Evaluation outputs")
+    dataloader_cfg = copy.deepcopy(cfg.val_dataloader)
+    dataset_cfg = dataloader_cfg.pop("dataset")
+    if isinstance(dataset_cfg, dict):
+        dataset = DATASETS.build(dataset_cfg)
+
+    print(dataset.evaluate(ttnn_outputs["bbox_results"], **eval_kwargs))
+
 
 def single_cpu_test_tt(tt_model, dataloader, device):
     results = []
