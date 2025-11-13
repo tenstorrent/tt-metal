@@ -132,7 +132,8 @@ tt::stl::hash::hash_t BinaryNgDeviceOperation::operation_attributes_t::to_hash()
         compute_kernel_config,
         subtile_broadcast_type,
         is_sfpu,
-        is_quant_op);
+        is_quant_op,
+        is_where_op);
 }
 
 DataType BinaryNgDeviceOperation::operation_attributes_t::get_dtype() const {

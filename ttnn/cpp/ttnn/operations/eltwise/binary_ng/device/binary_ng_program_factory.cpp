@@ -567,6 +567,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     const auto& b = tensor_args.input_tensor_b;
     const bool is_sfpu_op = operation_attributes.is_sfpu;
     const bool is_quant_op = operation_attributes.is_quant_op;
+    const bool is_where_op = operation_attributes.is_where_op;
     // TODO: For mixed dtypes we need to set this value to the appropriate dtype depending on which LLK is meant to be
     // used.
     const auto input_dtype = operation_attributes.input_dtype;
@@ -781,7 +782,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         CMAKE_UNIQUE_NAMESPACE::is_native_L1_sharding(tensor_args.input_tensor_a, tensor_args.input_tensor_b, c)));
     tt::tt_metal::KernelHandle writer_kernel_id = tt_metal::CreateKernel(
         program,
-        get_kernel_file_path(writer_kernel, is_sfpu_op),
+        get_kernel_file_path(writer_kernel, is_sfpu_op, is_where_op),
         all_device_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args, std::move(writer_defines)));
 
@@ -837,10 +838,10 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     }
     compute_kernel_defines["WHERE_TTS"] = (op_type == BinaryOpType::WHERE_TTS) ? "1" : "0";
     compute_kernel_defines["WHERE_TST"] = (op_type == BinaryOpType::WHERE_TST) ? "1" : "0";
-    std::cout << "compute_kernel " << get_kernel_file_path(compute_kernel, is_sfpu_op) << std::endl;
+    std::cout << "compute_kernel " << get_kernel_file_path(compute_kernel, is_sfpu_op, is_where_op) << std::endl;
     auto compute_kernel_id = tt_metal::CreateKernel(
         program,
-        get_kernel_file_path(compute_kernel, is_sfpu_op),
+        get_kernel_file_path(compute_kernel, is_sfpu_op, is_where_op),
         all_device_cores,
         tt_metal::ComputeConfig{
             .fp32_dest_acc_en = fp32_dest_acc_en,
@@ -857,7 +858,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         CMAKE_UNIQUE_NAMESPACE::is_native_L1_sharding(tensor_args.input_tensor_a, tensor_args.input_tensor_b, c)));
     tt::tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
         program,
-        get_kernel_file_path(kernel_config.reader_kernel, is_sfpu_op),
+        get_kernel_file_path(kernel_config.reader_kernel, is_sfpu_op, is_where_op),
         all_device_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args, std::move(reader_defines)));
 
