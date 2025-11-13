@@ -2305,6 +2305,7 @@ void UDMFabricUnicastCommon(
     auto dest_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(dst_physical_device_id);
 
     auto sender_device = fixture->get_device(src_physical_device_id);
+    CoreCoord sender_virtual_core = sender_device->worker_core_from_logical_core(sender_logical_core);
     CoreCoord receiver_virtual_core = receiver_device->worker_core_from_logical_core(receiver_logical_core);
 
     tt_metal::Program sender_program = tt_metal::CreateProgram();
@@ -2384,6 +2385,14 @@ void UDMFabricUnicastCommon(
 
     // Add req_notification_size_bytes for both read and write operations
     receiver_compile_time_args.push_back(req_notification_size_bytes);
+
+    // For read operations, receiver needs sender's NOC coordinates and fabric IDs to send notifications
+    if (noc_send_type == NOC_UNICAST_READ) {
+        receiver_compile_time_args.push_back(sender_virtual_core.x);
+        receiver_compile_time_args.push_back(sender_virtual_core.y);
+        receiver_compile_time_args.push_back(src_fabric_node_id.chip_id);
+        receiver_compile_time_args.push_back(src_fabric_node_id.mesh_id.get());
+    }
 
     // Select receiver kernel based on operation type
     const char* receiver_kernel_path =
