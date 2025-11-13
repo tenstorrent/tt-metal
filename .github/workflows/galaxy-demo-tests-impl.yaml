@@ -106,7 +106,7 @@ jobs:
               "model": "gpt-oss",
               "timeout": 30,
               "owner_id": "U06F3ER8X9A"
-            }, 
+            },
             {
               "name": "Galaxy Wan2.2 demo tests",
               "arch": "wormhole_b0",
