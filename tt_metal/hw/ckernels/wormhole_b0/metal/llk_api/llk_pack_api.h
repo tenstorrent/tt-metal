@@ -18,6 +18,7 @@
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "llk_pack_untilize.h"
+#include "llk_pack_rows.h"
 
 /*************************************************************************
  * LLK PACK
@@ -468,4 +469,27 @@ inline void llk_pack_reduce_config_v2(uint32_t icb_out) {
     } else {
         _llk_pack_reduce_mask_config_<untilize, dim>();
     }
+}
+
+/*************************************************************************
+ * LLK PACK ROWS
+ *************************************************************************/
+
+template <std::uint32_t row_num_datums = TILE_C_DIM>
+inline void llk_pack_rows_init(std::uint32_t output, const std::uint32_t num_rows) {
+    const std::uint32_t output_id = get_output_id(output);
+
+    _llk_pack_rows_init_<row_num_datums>(pack_dst_format[output_id], num_rows, true);
+}
+
+template <std::uint32_t row_num_datums = TILE_C_DIM>
+inline void llk_pack_rows(std::uint32_t tile_index, std::uint32_t output) {
+    const std::uint32_t output_id = get_output_id(output);
+
+    std::uint32_t pack_tile_addr =
+        get_local_cb_interface(output_id).fifo_wr_ptr + get_local_cb_interface(output_id).fifo_wr_tile_ptr - 1;
+
+    _llk_pack_rows_<row_num_datums>(tile_index, pack_tile_addr);
+
+    get_local_cb_interface(output_id).fifo_wr_tile_ptr += get_local_cb_interface(output_id).fifo_page_size;
 }
