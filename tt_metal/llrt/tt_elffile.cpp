@@ -65,6 +65,7 @@ using namespace ll_api;
 class ElfFile::Impl {
 private:
     ElfFile& owner_;
+    bool xipped_ = false;
 
 protected:
     // This is a view of the caller's object, which must remain live
@@ -333,6 +334,8 @@ void ElfFile::MakeExecuteInPlace() { pimpl_->XIPify(); }
 
 void ElfFile::Finalize() { pimpl_->Finalize(); }
 
+void ElfFile::Impl::XIPify() { xipped_ = true; }
+
 void ElfFile::Impl::Finalize() {
     auto info = GetSegmentInfo();
 
@@ -374,6 +377,11 @@ void ElfFile::Impl::Finalize() {
                 break;
             }
         }
+    }
+
+    if (xipped_) {
+        // The text segment is now XIP
+        GetSegments().front().address = 0;
     }
 }
 
@@ -997,8 +1005,7 @@ void ElfFile::Impl::Elf<Is64>::XIPify() {
         TT_THROW("{}: there are no relocation sections", path_);
     }
 
-    // The text segment is now XIP
-    GetSegments().front().address = 0;
+    Impl::XIPify();  // success
 }
 
 #ifdef ELF_STANDALONE

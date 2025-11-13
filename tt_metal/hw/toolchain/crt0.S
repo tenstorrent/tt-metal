@@ -23,11 +23,7 @@ _start:
 	add	tp,tp,s2
 	add	sp,tp,sp
 
-	/* Just in case someone thinks main has useful argument values.  */
-	mv a0,zero
-	mv a1,zero
-	mv a2,zero
-	call main
-	tail exit
+	/* Enter high-level start.  */
+	tail _start1
 
 	.size _start, .-_start
