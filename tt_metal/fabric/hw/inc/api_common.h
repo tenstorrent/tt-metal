@@ -224,15 +224,29 @@ static FORCE_INLINE void populate_unicast_scatter_write_fields(
             "UnicastScatterWriteUpdateMask requires command_header but std::nullptr_t was provided");
     }
     if constexpr (has_flag(UpdateMask, UnicastScatterWriteUpdateMask::DstAddrs)) {
-        for (int i = 0; i < NOC_SCATTER_WRITE_MAX_CHUNKS; i++) {
+        constexpr int kAddrCount =
+            static_cast<int>(sizeof(command_header.noc_address) / sizeof(command_header.noc_address[0]));
+        for (int i = 0; i < kAddrCount; i++) {
             auto comps = get_noc_address_components(command_header.noc_address[i]);
             auto noc_addr = safe_get_noc_addr(comps.first.x, comps.first.y, comps.second, edm_to_local_chip_noc);
             packet_header->command_fields.unicast_scatter_write.noc_address[i] = noc_addr;
         }
     }
     if constexpr (has_flag(UpdateMask, UnicastScatterWriteUpdateMask::ChunkSizes)) {
-        for (int i = 0; i < NOC_SCATTER_WRITE_MAX_CHUNKS - 1; i++) {
-            packet_header->command_fields.unicast_scatter_write.chunk_size[i] = command_header.chunk_size[i];
+        constexpr int kSizeCount =
+            static_cast<int>(sizeof(command_header.chunk_size) / sizeof(command_header.chunk_size[0]));
+        constexpr int kPoolSize = static_cast<int>(
+            sizeof(packet_header->command_fields.unicast_scatter_write.chunk_size) /
+            sizeof(packet_header->command_fields.unicast_scatter_write.chunk_size[0]));
+        bool seen_sentinel = false;
+        for (int i = 0; i < kPoolSize; i++) {
+            const uint16_t src = (i < kSizeCount) ? command_header.chunk_size[i] : SCATTER_WRITE_INVALID_CHUNK_SIZE;
+            const uint16_t out =
+                (seen_sentinel || src == SCATTER_WRITE_INVALID_CHUNK_SIZE) ? SCATTER_WRITE_INVALID_CHUNK_SIZE : src;
+            packet_header->command_fields.unicast_scatter_write.chunk_size[i] = out;
+            if (out == SCATTER_WRITE_INVALID_CHUNK_SIZE) {
+                seen_sentinel = true;
+            }
         }
     }
     if constexpr (has_flag(UpdateMask, UnicastScatterWriteUpdateMask::PayloadSize)) {

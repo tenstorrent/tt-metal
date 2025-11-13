@@ -124,10 +124,10 @@ void kernel_main() {
                             route_id,
                             source_l1_buffer_address,
                             packet_payload_size_bytes,
-                            tt::tt_fabric::NocUnicastScatterCommandHeader{
+                            tt::tt_fabric::NocUnicastScatterCommandHeader<2>{
                                 {get_noc_addr(noc_x_start, noc_y_start, target_address),
                                  get_noc_addr(noc_x_start, noc_y_start, target_address + first_chunk_size)},
-                                first_chunk_size},
+                                {static_cast<uint16_t>(first_chunk_size)}},
                             hop_info.mcast.start_distance,
                             hop_info.mcast.range);
                     }
@@ -188,10 +188,10 @@ void kernel_main() {
                             route_id,
                             source_l1_buffer_address,
                             packet_payload_size_bytes,
-                            tt::tt_fabric::NocUnicastScatterCommandHeader{
+                            tt::tt_fabric::NocUnicastScatterCommandHeader<2>{
                                 {get_noc_addr(noc_x_start, noc_y_start, target_address),
                                  get_noc_addr(noc_x_start, noc_y_start, target_address + first_chunk_size)},
-                                first_chunk_size},
+                                {static_cast<uint16_t>(first_chunk_size)}},
                             hop_info.ucast.num_hops);
                     }
                 } break;
@@ -245,7 +245,7 @@ void kernel_main() {
                             connections,
                             route_id,
                             source_l1_buffer_address,
-                            tt::tt_fabric::NocUnicastScatterCommandHeader{
+                            tt::tt_fabric::NocUnicastScatterCommandHeader<2>{
                                 {get_noc_addr(noc_x_start, noc_y_start, target_address),
                                  get_noc_addr(
                                      noc_x_start, noc_y_start, target_address + packet_payload_size_bytes / 2)}});
@@ -256,11 +256,11 @@ void kernel_main() {
                             ranges,
                             source_l1_buffer_address,
                             packet_payload_size_bytes,
-                            tt::tt_fabric::NocUnicastScatterCommandHeader{
-                                {get_noc_addr(noc_x_start, noc_y_start, target_address),
-                                 get_noc_addr(
-                                     noc_x_start, noc_y_start, target_address + packet_payload_size_bytes / 2)},
-                                static_cast<uint16_t>(packet_payload_size_bytes / 2)});
+                            tt::tt_fabric::NocUnicastScatterCommandHeader<2>{
+                                {{get_noc_addr(noc_x_start, noc_y_start, target_address),
+                                  get_noc_addr(
+                                      noc_x_start, noc_y_start, target_address + packet_payload_size_bytes / 2)}},
+                                {static_cast<uint16_t>(packet_payload_size_bytes / 2)}});
                     }
                 } break;
                 default: {
@@ -317,10 +317,10 @@ void kernel_main() {
                             route_id,
                             source_l1_buffer_address,
                             packet_payload_size_bytes,
-                            tt::tt_fabric::NocUnicastScatterCommandHeader{
-                                {get_noc_addr(noc_x_start, noc_y_start, target_address),
-                                 get_noc_addr(noc_x_start, noc_y_start, target_address + first_chunk_size)},
-                                first_chunk_size});
+                            tt::tt_fabric::NocUnicastScatterCommandHeader<2>{
+                                {{get_noc_addr(noc_x_start, noc_y_start, target_address),
+                                  get_noc_addr(noc_x_start, noc_y_start, target_address + first_chunk_size)}},
+                                {static_cast<uint16_t>(first_chunk_size)}});
                     }
                 } break;
                 default: {

@@ -383,7 +383,7 @@ FORCE_INLINE void fabric_unicast_noc_unicast_atomic_inc_set_state(
  * | noc_unicast_scatter_command_header    | Scatter write command header            | tt::tt_fabric::NocUnicastScatterCommandHeader  | True     |
  */
 // clang-format on
-template <typename FabricSenderType>
+template <typename FabricSenderType, size_t N>
 FORCE_INLINE void fabric_unicast_noc_scatter_write(
     tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
@@ -391,7 +391,7 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write(
     uint16_t dst_mesh_id,
     uint32_t src_addr,
     uint32_t size,
-    tt::tt_fabric::NocUnicastScatterCommandHeader noc_unicast_scatter_command_header) {
+    tt::tt_fabric::NocUnicastScatterCommandHeader<N> noc_unicast_scatter_command_header) {
     [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
 
     fabric_set_unicast_route(packet_header, dst_dev_id, dst_mesh_id);
@@ -416,12 +416,13 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write(
  * | noc_unicast_scatter_command_header    | Scatter write command header             | tt::tt_fabric::NocUnicastScatterCommandHeader  | True     |
  */
 // clang-format on
+template <size_t N>
 FORCE_INLINE void fabric_unicast_noc_scatter_write(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     uint32_t src_addr,
     uint32_t size,
-    tt::tt_fabric::NocUnicastScatterCommandHeader noc_unicast_scatter_command_header) {
+    tt::tt_fabric::NocUnicastScatterCommandHeader<N> noc_unicast_scatter_command_header) {
     PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
         auto& slot = connection_manager.get(i);
         fabric_unicast_noc_scatter_write(
@@ -1287,7 +1288,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc_set_state(
  * | noc_unicast_scatter_command_header    | Scatter write command header            | tt::tt_fabric::NocUnicastScatterCommandHeader  | True     |
  */
 // clang-format on
-template <typename FabricSenderType>
+template <typename FabricSenderType, size_t N>
 FORCE_INLINE void fabric_multicast_noc_scatter_write(
     tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
@@ -1296,7 +1297,7 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write(
     const MeshMcastRange& ranges,
     uint32_t src_addr,
     uint32_t size,
-    tt::tt_fabric::NocUnicastScatterCommandHeader noc_unicast_scatter_command_header) {
+    tt::tt_fabric::NocUnicastScatterCommandHeader<N> noc_unicast_scatter_command_header) {
     [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
 
     fabric_set_mcast_route(packet_header, dst_dev_id, dst_mesh_id, ranges.e, ranges.w, ranges.n, ranges.s);
@@ -1322,13 +1323,14 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write(
  * | noc_unicast_scatter_command_header    | Scatter write command header            | tt::tt_fabric::NocUnicastScatterCommandHeader | True     |
  */
 // clang-format on
+template <size_t N>
 FORCE_INLINE void fabric_multicast_noc_scatter_write(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     const MeshMcastRange* ranges,
     uint32_t src_addr,
     uint32_t size,
-    tt::tt_fabric::NocUnicastScatterCommandHeader noc_unicast_scatter_command_header) {
+    tt::tt_fabric::NocUnicastScatterCommandHeader<N> noc_unicast_scatter_command_header) {
     PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
         auto& slot = connection_manager.get(i);
         fabric_multicast_noc_scatter_write(

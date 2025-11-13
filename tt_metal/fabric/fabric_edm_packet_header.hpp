@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <climits>
 #include <limits>
+#include <array>
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
 #include "debug/assert.h"
@@ -98,11 +99,53 @@ static_assert(
 struct NocUnicastCommandHeader {
     uint64_t noc_address;
 };
-#define NOC_SCATTER_WRITE_MAX_CHUNKS 2
+#define SCATTER_WRITE_INVALID_CHUNK_SIZE 0xFFFF
+template <size_t NOC_SCATTER_WRITE_MAX_CHUNKS = 2>
 struct NocUnicastScatterCommandHeader {
+    static_assert(
+        2 <= NOC_SCATTER_WRITE_MAX_CHUNKS && NOC_SCATTER_WRITE_MAX_CHUNKS <= 4,
+        "NOC_SCATTER_WRITE_MAX_CHUNKS must be between 2 and 4");
     uint64_t noc_address[NOC_SCATTER_WRITE_MAX_CHUNKS];
     uint16_t chunk_size[NOC_SCATTER_WRITE_MAX_CHUNKS - 1];  // last chunk size is implicit
+
+    // Allow default construction for legacy flows that fill fields later.
+    constexpr NocUnicastScatterCommandHeader() = default;
+
+    // General constructor: arrays of addresses and sizes with validation and sentinel normalization.
+    template <size_t N = NOC_SCATTER_WRITE_MAX_CHUNKS>
+    constexpr NocUnicastScatterCommandHeader(
+        const std::array<uint64_t, N>& addrs, const std::array<uint16_t, N - 1>& sizes) noexcept {
+        for (size_t i = 0; i < N; ++i) {
+            noc_address[i] = addrs[i];
+        }
+        bool seen_sentinel = false;
+        for (size_t i = 0; i < N - 1; ++i) {
+            const uint16_t v = sizes[i];
+            if (seen_sentinel || v == SCATTER_WRITE_INVALID_CHUNK_SIZE) {
+                chunk_size[i] = SCATTER_WRITE_INVALID_CHUNK_SIZE;
+                seen_sentinel = true;
+            } else {
+                chunk_size[i] = v;
+            }
+        }
+    }
+
+    // General constructor: arrays of addresses and sizes with validation and sentinel normalization.
+    template <size_t N = NOC_SCATTER_WRITE_MAX_CHUNKS>
+    constexpr NocUnicastScatterCommandHeader(const std::array<uint64_t, N>& addrs) noexcept {
+        for (size_t i = 0; i < N; ++i) {
+            noc_address[i] = addrs[i];
+        }
+        for (size_t i = 0; i < N - 1; ++i) {
+            chunk_size[i] = SCATTER_WRITE_INVALID_CHUNK_SIZE;
+        }
+    }
 };
+
+// CTAD guides
+template <size_t N>
+NocUnicastScatterCommandHeader(const std::array<uint64_t, N>&, const std::array<uint16_t, N - 1>&)
+    -> NocUnicastScatterCommandHeader<N>;
 struct NocUnicastInlineWriteCommandHeader {
     uint64_t noc_address;
     uint32_t value;
@@ -149,6 +192,8 @@ static_assert(
     sizeof(NocUnicastAtomicIncFusedCommandHeader) == 24, "NocUnicastAtomicIncFusedCommandHeader size is not 24 bytes");
 static_assert(
     sizeof(NocMulticastAtomicIncCommandHeader) == 12, "NocMulticastAtomicIncCommandHeader size is not 12 bytes");
+static_assert(
+    sizeof(NocUnicastScatterCommandHeader<4>) == 40, "NocUnicastScatterCommandHeader<4> size is not 32 bytes");
 union NocCommandFields {
     NocUnicastCommandHeader unicast_write;
     NocUnicastInlineWriteCommandHeader unicast_inline_write;
@@ -156,9 +201,9 @@ union NocCommandFields {
     NocUnicastAtomicIncCommandHeader unicast_seminc;
     NocUnicastAtomicIncFusedCommandHeader unicast_seminc_fused;
     NocMulticastAtomicIncCommandHeader mcast_seminc;
-    NocUnicastScatterCommandHeader unicast_scatter_write;
+    NocUnicastScatterCommandHeader<4> unicast_scatter_write;
 };
-static_assert(sizeof(NocCommandFields) == 24, "CommandFields size is not 24 bytes");
+static_assert(sizeof(NocCommandFields) == 40, "CommandFields size is not 24 bytes");
 
 struct UDMWriteControlHeader {
     uint8_t src_chip_id;
@@ -336,21 +381,35 @@ struct PacketHeaderBase {
         return static_cast<volatile Derived*>(this);
     }
 
+    template <size_t NOC_SCATTER_WRITE_MAX_CHUNKS = 2>
     volatile Derived* to_noc_unicast_scatter_write(
-        const NocUnicastScatterCommandHeader& noc_unicast_scatter_command_header, size_t payload_size_bytes) volatile {
+        const NocUnicastScatterCommandHeader<NOC_SCATTER_WRITE_MAX_CHUNKS>& noc_unicast_scatter_command_header,
+        size_t payload_size_bytes) volatile {
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
         this->noc_send_type = NOC_UNICAST_SCATTER_WRITE;
-        for (int i = 0; i < NOC_SCATTER_WRITE_MAX_CHUNKS; i++) {
-            auto noc_address_components = get_noc_address_components(noc_unicast_scatter_command_header.noc_address[i]);
-            auto noc_addr = safe_get_noc_addr(
-                noc_address_components.first.x,
-                noc_address_components.first.y,
-                noc_address_components.second,
-                edm_to_local_chip_noc);
-            this->command_fields.unicast_scatter_write.noc_address[i] = noc_addr;
-            if (i < NOC_SCATTER_WRITE_MAX_CHUNKS - 1) {
+        // Single pass: convert/copy addresses, copy available sizes, sentinel-fill remaining size slots
+        constexpr int kPoolSize = static_cast<int>(
+            sizeof(this->command_fields.unicast_scatter_write.chunk_size) /
+            sizeof(this->command_fields.unicast_scatter_write.chunk_size[0]));
+        constexpr int kAddrCount = static_cast<int>(NOC_SCATTER_WRITE_MAX_CHUNKS);
+        constexpr int kCopySizeCount = static_cast<int>(NOC_SCATTER_WRITE_MAX_CHUNKS) - 1;
+        constexpr int kIters = (kAddrCount > kPoolSize) ? kAddrCount : kPoolSize;
+        for (int i = 0; i < kIters; ++i) {
+            if (i < kAddrCount) {
+                auto noc_address_components =
+                    get_noc_address_components(noc_unicast_scatter_command_header.noc_address[i]);
+                auto noc_addr = safe_get_noc_addr(
+                    noc_address_components.first.x,
+                    noc_address_components.first.y,
+                    noc_address_components.second,
+                    edm_to_local_chip_noc);
+                this->command_fields.unicast_scatter_write.noc_address[i] = noc_addr;
+            }
+            if (i < kCopySizeCount) {
                 this->command_fields.unicast_scatter_write.chunk_size[i] =
                     noc_unicast_scatter_command_header.chunk_size[i];
+            } else if (i < kPoolSize) {
+                this->command_fields.unicast_scatter_write.chunk_size[i] = SCATTER_WRITE_INVALID_CHUNK_SIZE;
             }
         }
         this->payload_size_bytes = payload_size_bytes;
@@ -714,7 +773,7 @@ struct HybridMeshPacketHeader : PacketHeaderBase<HybridMeshPacketHeader> {
     void to_chip_unicast_impl(uint8_t distance_in_hops) volatile {}
     void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) volatile {}
 } __attribute__((packed));
-static_assert(sizeof(HybridMeshPacketHeader) == 64, "sizeof(HybridMeshPacketHeader) is not equal to 64B");
+static_assert(sizeof(HybridMeshPacketHeader) == 80, "sizeof(HybridMeshPacketHeader) is not equal to 64B");
 
 struct UDMHybridMeshPacketHeader : public HybridMeshPacketHeader {
     UDMControlFields udm_control;
@@ -725,14 +784,14 @@ struct UDMHybridMeshPacketHeader : public HybridMeshPacketHeader {
         return get_payload_size_excluding_header() + sizeof(UDMHybridMeshPacketHeader);
     }
 } __attribute__((packed));
-static_assert(sizeof(UDMHybridMeshPacketHeader) == 80, "sizeof(UDMHybridMeshPacketHeader) is not equal to 80B");
+static_assert(sizeof(UDMHybridMeshPacketHeader) == 96, "sizeof(UDMHybridMeshPacketHeader) is not equal to 80B");
 
 // TODO: When we remove the 32B padding requirement, reduce to 16B size check
-static_assert(sizeof(PacketHeader) == 32, "sizeof(PacketHeader) is not equal to 32B");
+static_assert(sizeof(PacketHeader) == 48, "sizeof(PacketHeader) is not equal to 32B");
 // Host code still hardcoded to sizeof(PacketHeader) so we need to keep this check
 static_assert(
     sizeof(LowLatencyPacketHeader) == sizeof(PacketHeader), "sizeof(LowLatencyPacketHeader) is not equal to 32B");
-static_assert(sizeof(MeshPacketHeader) == 48, "sizeof(MeshPacketHeader) is not equal to 48B");
+static_assert(sizeof(MeshPacketHeader) == 64, "sizeof(MeshPacketHeader) is not equal to 48B");
 
 #define STRINGIFY(x) #x
 #define TOSTRING(x) STRINGIFY(x)
