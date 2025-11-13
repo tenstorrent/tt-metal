@@ -1,0 +1,256 @@
+name: Incremental Build Test
+
+# This workflow tests incremental build performance to ensure ccache effectiveness
+# and fast developer iteration cycles. It validates that small changes don't cause
+# excessive rebuild times.
+
+on:
+  workflow_call:
+    inputs:
+      docker-image:
+        required: false
+        type: string
+        description: "Docker image to use for the build"
+        default: "harbor.ci.tenstorrent.net/tt-metalium-ci/ubuntu-22.04-amd64:latest"
+  workflow_dispatch:
+    inputs:
+      docker-image:
+        required: false
+        type: string
+        description: "Docker image to use for the build"
+        default: "harbor.ci.tenstorrent.net/tt-metalium-ci/ubuntu-22.04-amd64:latest"
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  find-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      any-code-changed: ${{ steps.find-changes.outputs.any-code-changed }}
+      cmake-changed: ${{ steps.find-changes.outputs.cmake-changed }}
+      build-workflows-changed: ${{ steps.find-changes.outputs.build-workflows-changed }}
+    steps:
+      - id: find-changes
+        uses: tenstorrent/tt-metal/.github/actions/find-changed-files@main
+
+  incremental-build-test:
+    if: ${{ github.ref_name == 'main' ||
+            needs.find-changes.outputs.cmake-changed == 'true' ||
+            needs.find-changes.outputs.any-code-changed == 'true' ||
+            needs.find-changes.outputs.build-workflows-changed == 'true'
+        }}
+    needs: [find-changes]
+    name: "Incremental Build Performance Test"
+    timeout-minutes: 45
+    runs-on: tt-ubuntu-2204-large-stable
+    environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
+    container:
+      image: ${{ inputs.docker-image || 'harbor.ci.tenstorrent.net/tt-metalium-ci/ubuntu-22.04-amd64:latest' }}
+      env:
+        CCACHE_REMOTE_ONLY: "true"
+        CCACHE_TEMPDIR: /tmp/ccache
+        CARGO_HOME: /tmp/.cargo
+        TT_FROM_PRECOMPILED_DIR: /work
+        TRACY_NO_INVARIANT_CHECK: 1
+        TRACY_NO_ISA_EXTENSIONS: 1
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+        - /home/ubuntu/.ccache-ci:/github/home/.ccache
+      options: >
+        --group-add 1457
+        --tmpfs /tmp
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+
+    steps:
+      - name: Check Redis credentials
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+        run: |
+          if [ -z "${{ secrets.REDIS_PASSWORD }}" ]; then
+            echo "Redis password is missing. Did you forget 'secrets: inherit'?"
+            exit 1
+          fi
+          CCACHE_REMOTE_STORAGE="redis://${{ vars.REDIS_USER }}:${{ secrets.REDIS_PASSWORD }}@${{ vars.REDIS_HOST }}:${{ vars.REDIS_PORT }}|read-only=${{ vars.REDIS_IS_READONLY }}"
+          echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
+
+      - name: Checkout main branch (baseline)
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          submodules: recursive
+          fetch-depth: 0
+          fetch-tags: true
+          path: docker-job
+
+      - name: Create ccache tmpdir
+        run: mkdir -p /tmp/ccache
+
+      - name: Store current PR info
+        run: |
+          echo "PR_SHA=${{ github.sha }}" >> $GITHUB_ENV
+          echo "PR_REF=${{ github.ref }}" >> $GITHUB_ENV
+          echo "Current PR SHA: ${{ github.sha }}"
+          echo "Current PR ref: ${{ github.ref }}"
+
+      - name: Configure and build main branch (baseline)
+        run: |
+          echo "=== Configuring and building main branch baseline ==="
+          ./build_metal.sh \
+            --build-dir build_incremental \
+            --build-type Release \
+            --build-ttnn-tests \
+            --enable-ccache \
+            --disable-profiler
+          echo "Baseline build completed on main branch"
+
+      - name: Initialize ccache stats for incremental test
+        run: |
+          ccache -z
+          echo "=== Ccache stats after main build ==="
+          ccache -s
+
+      - name: Apply PR changes over main
+        run: |
+          echo "=== Applying PR changes over main branch baseline ==="
+          git fetch origin ${{ github.ref }}
+          echo "Current branch: $(git branch --show-current)"
+          echo "Current commit: $(git rev-parse HEAD)"
+
+          # Create and switch to a test branch
+          git checkout -b incremental-test-branch
+
+          # Apply the PR changes
+          echo "Merging PR changes..."
+          git merge --no-ff ${{ github.sha }} -m "Merge PR changes for incremental build test"
+
+          echo "After merge:"
+          echo "Current branch: $(git branch --show-current)"
+          echo "Current commit: $(git rev-parse HEAD)"
+
+          # Show what files changed
+          echo "Files changed from main to PR:"
+          git diff --name-only main HEAD || echo "No differences or diff command failed"
+
+      - name: Test incremental build with PR changes
+        run: |
+          echo "=== Testing incremental build with PR changes ==="
+          start_time=$(date +%s)
+          cmake --build build_incremental --target ttnn_test_basics -- -j$(nproc)
+          end_time=$(date +%s)
+          pr_changes_duration=$((end_time - start_time))
+          echo "PR changes incremental build time: ${pr_changes_duration}s"
+          echo "INCREMENTAL_BUILD_PR_CHANGES=${pr_changes_duration}" >> $GITHUB_ENV
+
+      - name: Test no-change build (cache effectiveness)
+        run: |
+          echo "=== Testing no-change build to verify cache effectiveness ==="
+          start_time=$(date +%s)
+          cmake --build build_incremental --target ttnn_test_basics -- -j$(nproc)
+          end_time=$(date +%s)
+          no_change_duration=$((end_time - start_time))
+          echo "No-change incremental build time: ${no_change_duration}s"
+          echo "INCREMENTAL_BUILD_NO_CHANGE=${no_change_duration}" >> $GITHUB_ENV
+
+      - name: Final ccache stats
+        run: |
+          echo "=== Final ccache stats ==="
+          ccache -s
+
+      - name: Incremental build performance summary
+        run: |
+          echo '## Incremental Build Performance Results' >> $GITHUB_STEP_SUMMARY
+          echo '' >> $GITHUB_STEP_SUMMARY
+          echo '### Build Times' >> $GITHUB_STEP_SUMMARY
+          echo "- **PR changes build** (main + PR changes): ${INCREMENTAL_BUILD_PR_CHANGES}s" >> $GITHUB_STEP_SUMMARY
+          echo "- **No-change build** (cache effectiveness): ${INCREMENTAL_BUILD_NO_CHANGE}s" >> $GITHUB_STEP_SUMMARY
+          echo '' >> $GITHUB_STEP_SUMMARY
+          echo '### Performance Analysis' >> $GITHUB_STEP_SUMMARY
+
+          # Performance validation for PR changes
+          if [ "${INCREMENTAL_BUILD_PR_CHANGES}" -gt 300 ]; then
+            echo '**Warning**: PR changes build took longer than 5 minutes' >> $GITHUB_STEP_SUMMARY
+            echo 'This may indicate issues with incremental compilation for your changes' >> $GITHUB_STEP_SUMMARY
+          else
+            echo 'PR changes incremental build performance is acceptable' >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # Performance validation for no-change builds (ccache effectiveness)
+          if [ "${INCREMENTAL_BUILD_NO_CHANGE}" -gt 60 ]; then
+            echo '**Warning**: No-change build took longer than 60s' >> $GITHUB_STEP_SUMMARY
+            echo 'This may indicate ccache is not working effectively' >> $GITHUB_STEP_SUMMARY
+          else
+            echo 'Ccache effectiveness is good (no-change build < 60s)' >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo '' >> $GITHUB_STEP_SUMMARY
+          echo '### Ccache Statistics' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          ccache -s >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Test build speed with multiple targets
+        run: |
+          echo "=== Testing build speed with multiple targets ==="
+          # Test building multiple small targets to verify incremental performance
+          start_time=$(date +%s)
+          cmake --build build_incremental --target ttnn_test_operations -- -j$(nproc) || echo "Target not available, continuing..."
+          end_time=$(date +%s)
+          multi_target_duration=$((end_time - start_time))
+          echo "Multi-target build time: ${multi_target_duration}s"
+
+          echo '' >> $GITHUB_STEP_SUMMARY
+          echo "- **Multi-target build**: ${multi_target_duration}s" >> $GITHUB_STEP_SUMMARY
+
+      - name: Fail if performance is unacceptable
+        run: |
+          # Fail the job if incremental build performance is too slow
+          if [ "${INCREMENTAL_BUILD_PR_CHANGES}" -gt 600 ]; then
+            echo "PR changes incremental build performance is unacceptable (${INCREMENTAL_BUILD_PR_CHANGES}s > 600s)"
+            echo "This indicates a serious regression in incremental build performance for your changes"
+            exit 1
+          fi
+
+          if [ "${INCREMENTAL_BUILD_NO_CHANGE}" -gt 120 ]; then
+            echo "No-change build performance is unacceptable (${INCREMENTAL_BUILD_NO_CHANGE}s > 120s)"
+            echo "This indicates ccache is not working properly"
+            exit 1
+          fi
+
+          echo "All incremental build performance checks passed"
+          echo "PR changes build time: ${INCREMENTAL_BUILD_PR_CHANGES}s"
+          echo "No-change build time: ${INCREMENTAL_BUILD_NO_CHANGE}s"
+
+  workflow-status:
+    name: Incremental Build Test Status
+    if: always() && (contains(join(needs.*.result, ','), 'success') || contains(join(needs.*.result, ','), 'failure'))
+    needs: [find-changes, incremental-build-test]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check if all jobs passed
+        run: |
+          echo "=== Workflow Status Check ==="
+          echo "find-changes: ${{ needs.find-changes.result }}"
+          echo "incremental-build-test: ${{ needs.incremental-build-test.result }}"
+
+          if [[ "${{ needs.incremental-build-test.result }}" == "failure" ]]; then
+            echo "Incremental build test failed"
+            exit 1
+          elif [[ "${{ needs.find-changes.result }}" == "failure" ]]; then
+            echo "Change detection failed"
+            exit 1
+          else
+            echo "All jobs completed successfully"
+          fi
