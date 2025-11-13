@@ -172,7 +172,7 @@ struct __attribute__((packed)) intra_mesh_routing_path_t {
     void calculate_chip_to_all_routing_fields(const FabricNodeId& src_fabric_node_id, uint16_t num_chips);
 #else
     // Device-side methods (declared here, implemented in fabric_routing_path_interface.h):
-    inline bool decode_route_to_buffer(
+    inline int decode_route_to_buffer(
         uint16_t dst_chip_id, volatile uint8_t* out_route_buffer, bool prepend_one_hop = false) const;
 #endif
 };

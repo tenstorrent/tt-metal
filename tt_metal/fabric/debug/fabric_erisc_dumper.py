@@ -45,7 +45,8 @@ import csv
 from datetime import datetime
 
 # ttexalens imports
-from ttexalens.tt_exalens_init import init_ttexalens
+# from ttexalens.tt_exalens_init import init_ttexalens
+from ttexalens.tt_exalens_init import init_ttexalens_remote
 from ttexalens.context import Context
 from ttexalens.device import Device
 from ttexalens.coordinate import OnChipCoordinate
@@ -79,7 +80,8 @@ class ERISCDumper:
 
     def __init__(self):
         """Initialize the ERISC dumper with ttexalens context."""
-        self.context = init_ttexalens()
+        # self.context = init_ttexalens()
+        self.context = init_ttexalens_remote("localhost", 5678)
         print("Initialized ttexalens context")
 
     def format_value(self, value: int, use_decimal: bool = False) -> str:

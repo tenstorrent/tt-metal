@@ -661,6 +661,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) bool can_forward_packet_co
     using eth_chan_directions::NORTH;
     using eth_chan_directions::SOUTH;
     using eth_chan_directions::WEST;
+    // auto dump = reinterpret_cast<tt_l1_ptr uint32_t*>(ROUTING_PATH_BASE_1D);
 
     switch (hop_cmd) {
         case LowLatencyMeshRoutingFields::NOOP: break;
@@ -684,6 +685,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) bool can_forward_packet_co
         case LowLatencyMeshRoutingFields::FORWARD_SOUTH:
             ret_val = downstreams_have_space<rx_channel_id, DownstreamSenderVC0T, DownstreamSenderVC1T, SOUTH>(
                 downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
+            // dump[10] = 0xC0FEE110 | (uint32_t)ret_val;
             break;
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NS:
             // Line Mcast North<->South
@@ -737,6 +739,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) bool can_forward_packet_co
             // 2D Mcast Branch: East
             ret_val = downstreams_have_space<rx_channel_id, DownstreamSenderVC0T, DownstreamSenderVC1T, EAST, NORTH>(
                 downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
+            // dump[10] = 0xC0FEE220 | (uint32_t)ret_val;
             break;
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NW:
             // 2D Mcast Trunk: Last hop South
@@ -844,6 +847,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             return downstream_edm_interfaces_vc0[edm_index];
         }
     };
+    auto dump = reinterpret_cast<tt_l1_ptr uint32_t*>(ROUTING_PATH_BASE_1D);
 
     switch (hop_cmd) {
         case LowLatencyMeshRoutingFields::NOOP: break;
@@ -911,12 +915,21 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
             } else {
                 constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, SOUTH>();
+                dump[11] = 0xBBBB0000 | edm_index;
+                auto downstream_interface = get_downstream_interface.template operator()<edm_index>();
+                // while (true) {}
+                // if (packet_start->mcast_params_64 != 0) {
+                //     if (cached_routing_fields.hop_index == 0) {
+                // while (true) {}
+                //     }
+                // }
                 forward_payload_to_downstream_edm<enable_deadlock_avoidance, vc1_has_different_downstream_dest, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
                     get_downstream_interface.template operator()<edm_index>(),
-                    transaction_id);
+                    transaction_id,
+                    true);
             }
             break;
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NS:
@@ -1224,6 +1237,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             }
             {
                 constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, EAST>();
+                dump[11] = 0xBBBB0000 | edm_index;
                 forward_payload_to_downstream_edm<
                     enable_deadlock_avoidance,
                     vc1_has_different_downstream_dest,
@@ -1397,6 +1411,18 @@ FORCE_INLINE void run_sender_channel_step_impl(
         if constexpr (!UPDATE_PKT_HDR_ON_RX_CH) {
             update_packet_header_before_eth_send<sender_channel_index>(pkt_header);
         }
+        // auto dump = reinterpret_cast<tt_l1_ptr uint32_t*>(ROUTING_PATH_BASE_1D);
+#ifdef FABRIC_2D
+        // if (pkt_header->mcast_params_64 != 0 && pkt_header->route_buffer[0] ==
+        // LowLatencyMeshRoutingFields::FORWARD_SOUTH) {
+        //     dump[0] = pkt_header->route_buffer[0];
+        //     dump[1] = pkt_header->route_buffer[1];
+        //     dump[2] = pkt_header->route_buffer[2];
+        //     dump[3] = pkt_header->route_buffer[3];
+        //     dump[15] = 0xFFFFFFFF;
+        //     while (true) {}
+        // }
+#endif
         send_next_data<sender_channel_index, to_receiver_pkts_sent_id, SKIP_CONNECTION_LIVENESS_CHECK>(
             local_sender_channel,
             local_sender_channel_worker_interface,
@@ -1544,6 +1570,23 @@ FORCE_INLINE void run_receiver_channel_step_impl(
             hop_cmd = get_cmd_with_mesh_boundary_adjustment(packet_header, cached_routing_fields, routing_table);
             can_send_to_all_local_chip_receivers = can_forward_packet_completely<receiver_channel>(
                 hop_cmd, downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
+            // if (packet_header->mcast_params_64 != 0 && routing_table.my_mesh_id == 1) {
+            if (packet_header->mcast_params_64 != 0) {
+                auto dump = reinterpret_cast<tt_l1_ptr uint32_t*>(ROUTING_PATH_BASE_1D);
+                dump[0] = reinterpret_cast<uint32_t>(packet_header);
+                dump[2] = (packet_header->route_buffer[0] << 24) | (packet_header->route_buffer[1] << 16) |
+                          (packet_header->route_buffer[2] << 8) | (packet_header->route_buffer[3]);
+                dump[3] = 0xDDDDDDDD;
+                dump[4] = (packet_header->mcast_params[0] << 24) | (packet_header->mcast_params[1] << 16) |
+                          (packet_header->mcast_params[2] << 8) | (packet_header->mcast_params[3]);
+                dump[6] = (cached_routing_fields.hop_index << 16) | hop_cmd;
+                dump[7] = (can_send_to_all_local_chip_receivers << 16) | my_direction;
+                dump[12] = packet_header->routing_fields.branch_east_offset << 16 |
+                           packet_header->routing_fields.branch_west_offset;
+                dump[13] = routing_table.my_mesh_id << 16 | routing_table.my_device_id;
+                dump[14] = packet_header->dst_start_mesh_id << 16 | packet_header->dst_start_chip_id;
+                dump[15] = 0xDEADBEEF;
+            }
 #endif
         } else {
 #ifndef FABRIC_2D
