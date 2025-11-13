@@ -51,8 +51,6 @@ void AdamWFused::step() {
         print_stats();
     }
 
-    m_steps++;
-
     for (const auto& [name, theta_ptr] : m_parameters) {
         if (!theta_ptr->is_grad_initialized()) {
             continue;
@@ -61,25 +59,8 @@ void AdamWFused::step() {
         auto gradients = theta_ptr->get_grad();
         auto param = theta_ptr->get_value(autograd::PreferredPrecision::FULL);
 
-        auto it_first = m_first_moment.find(name);
-        auto it_second = m_second_moment.find(name);
-
-        if (it_first == m_first_moment.end()) {
-            auto buf = autograd::create_tensor(
-                core::zeros_like(param),
-                /* requires_grad */ false);
-            it_first = m_first_moment.emplace(name, std::move(buf)).first;
-        }
-
-        if (it_second == m_second_moment.end()) {
-            auto buf = autograd::create_tensor(
-                core::zeros_like(param),
-                /* requires_grad */ false);
-            it_second = m_second_moment.emplace(name, std::move(buf)).first;
-        }
-
-        auto first_moment = it_first->second->get_value(autograd::PreferredPrecision::FULL);
-        auto second_moment = it_second->second->get_value(autograd::PreferredPrecision::FULL);
+        const auto& first_moment = m_first_moment.at(name)->get_value(autograd::PreferredPrecision::FULL);
+        const auto& second_moment = m_second_moment.at(name)->get_value(autograd::PreferredPrecision::FULL);
 
         ttml::metal::adamw_fused(
             param,
@@ -93,6 +74,7 @@ void AdamWFused::step() {
             m_config.weight_decay,
             m_steps);
     }
+    m_steps++;
 }
 
 serialization::StateDict AdamWFused::get_state_dict() const {
