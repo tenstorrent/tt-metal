@@ -226,8 +226,7 @@ static_assert(
     get_compile_time_arg_val(DOWNSTREAM_SENDER_NUM_BUFFERS_SPECIAL_TAG_IDX) == 0xabaddad7,
     "DOWNSTREAM_SENDER_NUM_BUFFERS_SPECIAL_TAG_IDX not found. This implies some arguments were misaligned between host and device. Double check the CT args.");
 
-// constexpr size_t NUM_DOWNSTREAM_CHANNELS = NUM_FORWARDING_PATHS;
-//  Downstream sender num buffers comes after channel mappings
+// Downstream sender num buffers comes after channel mappings
 constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_IDX = DOWNSTREAM_SENDER_NUM_BUFFERS_SPECIAL_TAG_IDX + 1;
 constexpr std::array<size_t, NUM_DOWNSTREAM_CHANNELS> DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY =
     fill_array_with_next_n_args<size_t, DOWNSTREAM_SENDER_NUM_BUFFERS_IDX, NUM_DOWNSTREAM_CHANNELS>();
