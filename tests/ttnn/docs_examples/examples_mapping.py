@@ -118,7 +118,7 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     "ttnn.relu_max": eltwise_unary.test_relu_max,
     "ttnn.relu_min": eltwise_unary.test_relu_min,
     "ttnn.relu6": eltwise_unary.test_relu6,
-    "ttnn.reminder": eltwise_unary.test_remainder,
+    "ttnn.remainder": eltwise_unary.test_remainder,
     "ttnn.round": eltwise_unary.test_round,
     "ttnn.rpow": eltwise_unary.test_rpow,
     "ttnn.rsqrt": eltwise_unary.test_rsqrt,

@@ -186,7 +186,7 @@ def test_rdiv_bw(device):
     print(f"Reverse Division Backward: {output}")
 
 
-@pytest.mark.skip("Non-working example from the documentation. GH issue: ")
+@pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
 def test_repeat_bw(device):
     # Create sample tensors for backward repeat operation
     grad_tensor = ttnn.from_torch(
@@ -335,20 +335,6 @@ def test_prod_bw(device):
     # Call the prod_bw function for all dimensions
     all_dims_output = ttnn.prod_bw(grad_tensor, input_tensor)
     print(f"Prod Backward (all dims): {all_dims_output}")
-
-
-def test_fill_bw(device):
-    # Create sample tensors for backward fill operation
-    grad_tensor = ttnn.from_torch(
-        torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device
-    )
-    input_tensor = ttnn.from_torch(
-        torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device
-    )
-
-    # Call the fill_bw function
-    output = ttnn.fill_bw(grad_tensor, input_tensor)
-    print(f"Fill Backward: {output}")
 
 
 def test_hardsigmoid_bw(device):
@@ -1056,7 +1042,7 @@ def test_polygamma_bw(device):
 
 
 # Complex backward operations
-@pytest.mark.skip("Non-working example from the documentation. GH issue: ")
+@pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
 def test_polar_bw(device):
     # Create sample tensors for backward polar coordinate operation
     grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
@@ -1067,7 +1053,7 @@ def test_polar_bw(device):
     print(f"Polar Backward: {output}")
 
 
-@pytest.mark.skip("Non-working example from the documentation. GH issue: ")
+@pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
 def test_imag_bw(device):
     # Create sample tensors for backward imaginary part operation
     grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
@@ -1078,7 +1064,7 @@ def test_imag_bw(device):
     print(f"Imaginary Part Backward: {output}")
 
 
-@pytest.mark.skip("Non-working example from the documentation. GH issue: ")
+@pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
 def test_real_bw(device):
     # Create sample tensors for backward real part operation
     grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
@@ -1089,7 +1075,7 @@ def test_real_bw(device):
     print(f"Real Part Backward: {output}")
 
 
-@pytest.mark.skip("Non-working example from the documentation. GH issue: ")
+@pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
 def test_angle_bw(device):
     # Create sample tensors for backward angle operation
     grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
@@ -1100,7 +1086,7 @@ def test_angle_bw(device):
     print(f"Angle Backward: {output}")
 
 
-@pytest.mark.skip("Non-working example from the documentation. GH issue: ")
+@pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
 def test_conj_bw(device):
     # Create sample tensors for backward complex conjugate operation
     grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)

@@ -1147,7 +1147,7 @@ def test_rdiv(device):
     print(f"Reverse division: {output}")
 
 
-@pytest.mark.skip("Non-working example from the documentation. GH issue: ")
+@pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
 def test_bitwise_left_shift(device):
     # Create tensors with specific integer values
     tensor1 = ttnn.from_torch(
@@ -1162,7 +1162,7 @@ def test_bitwise_left_shift(device):
     print(f"Bitwise left shift: {output}")
 
 
-@pytest.mark.skip("Non-working example from the documentation. GH issue: ")
+@pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
 def test_bitwise_right_shift(device):
     # Create tensors with specific integer values
     tensor1 = ttnn.from_torch(
@@ -1177,7 +1177,7 @@ def test_bitwise_right_shift(device):
     print(f"Bitwise right shift: {output}")  # Check
 
 
-@pytest.mark.skip("Non-working example from the documentation. GH issue: ")
+@pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
 def test_prelu(device):
     # Create tensors for PReLU activation function
     tensor1 = ttnn.from_torch(torch.rand([1, 2, 32, 32], dtype=torch.bfloat16), device=device)
@@ -1189,7 +1189,7 @@ def test_prelu(device):
     print(f"PReLU: {output}")
 
 
-@pytest.mark.skip("Non-working example from the documentation. GH issue: ")
+@pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
 def test_remainder(device):
     # Create tensors for remainder operation
     tensor1 = ttnn.from_torch(
