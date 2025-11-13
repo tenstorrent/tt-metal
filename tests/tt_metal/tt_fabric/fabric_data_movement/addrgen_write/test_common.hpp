@@ -16,18 +16,21 @@ using ChipId = tt::tt_metal::distributed::ChipId;
 
 // API variants for addrgen overload testing
 enum class AddrgenApiVariant {
-    UnicastWrite,                  // fabric_unicast_noc_unicast_write
-    UnicastWriteWithState,         // fabric_unicast_noc_unicast_write_with_state
-    UnicastWriteSetState,          // fabric_unicast_noc_unicast_write_set_state + _with_state
-    FusedAtomicIncWrite,           // fabric_unicast_noc_fused_unicast_with_atomic_inc
-    FusedAtomicIncWriteWithState,  // fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state
-    FusedAtomicIncWriteSetState,   // fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state + _with_state
-    MulticastWrite,                // fabric_multicast_noc_unicast_write
-    MulticastWriteWithState,       // fabric_multicast_noc_unicast_write_with_state
-    MulticastWriteSetState,        // fabric_multicast_noc_unicast_write_set_state + _with_state
-    ScatterWrite,                  // fabric_unicast_noc_scatter_write
-    ScatterWriteWithState,         // fabric_unicast_noc_scatter_write_with_state
-    ScatterWriteSetState           // fabric_unicast_noc_scatter_write_set_state + _with_state
+    UnicastWrite,                    // fabric_unicast_noc_unicast_write
+    UnicastWriteWithState,           // fabric_unicast_noc_unicast_write_with_state
+    UnicastWriteSetState,            // fabric_unicast_noc_unicast_write_set_state + _with_state
+    FusedAtomicIncWrite,             // fabric_unicast_noc_fused_unicast_with_atomic_inc
+    FusedAtomicIncWriteWithState,    // fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state
+    FusedAtomicIncWriteSetState,     // fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state + _with_state
+    MulticastWrite,                  // fabric_multicast_noc_unicast_write
+    MulticastWriteWithState,         // fabric_multicast_noc_unicast_write_with_state
+    MulticastWriteSetState,          // fabric_multicast_noc_unicast_write_set_state + _with_state
+    MulticastScatterWrite,           // fabric_multicast_noc_scatter_write
+    MulticastScatterWriteWithState,  // fabric_multicast_noc_scatter_write_with_state
+    MulticastScatterWriteSetState,   // fabric_multicast_noc_scatter_write_set_state + _with_state
+    ScatterWrite,                    // fabric_unicast_noc_scatter_write
+    ScatterWriteWithState,           // fabric_unicast_noc_scatter_write_with_state
+    ScatterWriteSetState             // fabric_unicast_noc_scatter_write_set_state + _with_state
 };
 
 // Test parameters for addrgen write correctness tests
