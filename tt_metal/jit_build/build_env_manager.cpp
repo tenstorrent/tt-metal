@@ -90,36 +90,7 @@ std::map<std::string, std::string> initialize_device_kernel_defines(ChipId devic
     return device_kernel_defines;
 }
 
-uint64_t compute_build_key(ChipId device_id, uint8_t num_hw_cqs) {
-    const auto& dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
-
-    // Collect all the parameters that affect the build configuration
-    std::size_t hash = 0;
-
-    // Hash the dispatch core configuration
-    std::hash<uint32_t> uint32_hasher;
-    hash ^= uint32_hasher(static_cast<uint32_t>(dispatch_core_config.get_dispatch_core_type()));
-    hash ^= uint32_hasher(static_cast<uint32_t>(dispatch_core_config.get_dispatch_core_axis())) << 1;
-
-    // Hash the number of hardware command queues
-    hash ^= uint32_hasher(static_cast<uint32_t>(num_hw_cqs)) << 2;
-
-    // Hash the harvesting configuration based on whether coordinate virtualization is enabled
-    if (not MetalContext::instance().hal().is_coordinate_virtualization_enabled()) {
-        // Coordinate virtualization is not enabled. For a single program, its associated binaries will vary across
-        // devices with different cores harvested.
-        hash ^= uint32_hasher(tt::tt_metal::MetalContext::instance().get_cluster().get_harvesting_mask(device_id)) << 3;
-    } else {
-        // Coordinate Virtualization is enabled. Track only the number of harvested cores, instead of the exact
-        // harvesting configuration (this is not needed).
-        uint32_t harvested_core_count = std::bitset<32>(
-            tt::tt_metal::MetalContext::instance().get_cluster().get_harvesting_mask(device_id)
-        ).count();
-        hash ^= uint32_hasher(harvested_core_count) << 4;
-    }
-
-    return static_cast<uint64_t>(hash);
-}
+uint64_t compute_build_key(ChipId, uint8_t) { return 0; }
 
 std::vector<JitBuildState> create_build_state(JitBuildEnv& build_env, ChipId /*device_id*/, bool is_fw) {
     // Get the dispatch message address for this device
