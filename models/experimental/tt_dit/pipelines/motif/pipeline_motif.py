@@ -248,8 +248,8 @@ class MotifPipeline:
         default_config = {
             (2, 4): {
                 "cfg_config": (2, 0),
-                "sp": (2, 0),
-                "tp": (2, 1),
+                "sp": (1, 0),
+                "tp": (4, 1),
                 "encoder_tp": (4, 1),
                 "vae_tp": (4, 1),
                 "num_links": 1,

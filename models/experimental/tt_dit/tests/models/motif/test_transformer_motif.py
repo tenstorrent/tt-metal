@@ -40,11 +40,12 @@ def test_transformer_motif(
     sp_axis_first: bool,
     num_links: int,
     batch_size: int,
+    model_location_generator,
 ) -> None:
     sp_axis, tp_axis = (0, 1) if sp_axis_first else (1, 0)
 
     model_checkpoint_path = huggingface_hub.hf_hub_download(
-        repo_id="Motif-Technologies/Motif-Image-6B-Preview",
+        repo_id=model_location_generator("Motif-Technologies/Motif-Image-6B-Preview"),
         filename="motif_image_preview.bin",
         subfolder="checkpoints",
         revision="update_new_ckpt",

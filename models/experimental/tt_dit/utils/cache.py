@@ -26,7 +26,7 @@ def get_cache_path(model_name, subfolder, parallel_config, mesh_shape, dtype="bf
     cache_dir = os.environ.get("TT_DIT_CACHE_DIR")
     assert cache_dir is not None, "TT_DIT_CACHE_DIR environment variable must be set if using caching."
 
-    model_path = os.path.join(cache_dir, model_name)
+    model_path = os.path.join(os.path.abspath(cache_dir), model_name)
     model_path = os.path.join(model_path, subfolder)
     parallel_name = f"{config_id(parallel_config)}mesh{mesh_shape[0]}x{mesh_shape[1]}_{dtype}"
     cache_path = os.path.join(model_path, parallel_name) + os.sep
