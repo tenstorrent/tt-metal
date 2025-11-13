@@ -165,6 +165,10 @@ class TtSDXLCombinedPipeline:
             )
         logger.info("Shared scheduler created")
 
+        if self.config.use_refiner and base_config.vae_on_device:
+            logger.info("Disabling VAE on base pipeline since refiner will handle final decoding")
+            base_config.vae_on_device = False
+
         # Create base pipeline with shared scheduler
         logger.info("Creating base pipeline with shared scheduler...")
         self.base_pipeline = TtSDXLPipeline(
@@ -183,11 +187,6 @@ class TtSDXLCombinedPipeline:
                 pipeline_config=refiner_config,
                 tt_scheduler=self.shared_scheduler,
             )
-
-            # When using refiner, disable VAE on base pipeline since refiner will handle final decoding
-            if self.base_pipeline.pipeline_config.vae_on_device:
-                logger.info("Disabling VAE on base pipeline since refiner will handle final decoding")
-                self.base_pipeline.pipeline_config.vae_on_device = False
         else:
             self.refiner_pipeline = None
 
