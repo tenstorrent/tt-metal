@@ -286,7 +286,7 @@ bool execute_workloads(
             TIMEOUT_DURATION - std::chrono::duration_cast<std::chrono::seconds>(elapsed), std::chrono::seconds(0));
 
         if (future.wait_for(remaining) != std::future_status::ready) {
-            log_output_rank0("ERROR: Workload execution timed out after 30 seconds BBBBBBB");
+            log_output_rank0("ERROR: Workload execution timed out after 30 seconds");
             // Don't wait for futures to complete because they're stuck. Just abandon them.
             // Static storage prevents destructor from blocking.
             return false;
@@ -1011,14 +1011,9 @@ LinkMetricsResult send_traffic_and_validate_links(
 
             bool local_success = execute_workloads(programs, devices);
 
-            // If local execution timed out, exit immediately without distributed coordination
-            // (MPI operations will hang if ethernet links are down)
-            if (!local_success) {
-                handle_workload_timeout(physical_system_descriptor, asic_id_to_chip_id, statuses_per_link, devices);
-                return LinkMetricsResult{};
-            }
+            handle_workload_timeout(physical_system_descriptor, asic_id_to_chip_id, statuses_per_link, devices);
 
-            // Check if ALL ranks succeeded using all_reduce with logical AND
+            // Check if all ranks succeeded
             const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
             bool global_success;
             distributed_context.all_reduce(
