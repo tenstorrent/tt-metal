@@ -269,6 +269,10 @@ public:
     // Get relay termination signal address (for mux to write during teardown)
     size_t get_relay_termination_signal_address() const { return termination_signal_region_.get_address(); }
 
+    // Get UDM memory pool base address and size
+    size_t get_udm_memory_pool_base_address() const { return udm_memory_pool_region_.get_address(); }
+    size_t get_udm_memory_pool_size() const { return udm_memory_pool_region_.get_total_size(); }
+
 private:
     // ==================================================================================
     // Relay-specific memory regions for relay → mux connection
@@ -295,6 +299,9 @@ private:
     // - Unused: Passed to relay's adapter constructor but never stored or accessed
     // - The relay only uses mux's buffer_index_region_ (edm_copy_of_wr_counter_addr) for sync
     MemoryRegion mux_relay_buffer_index_semaphore_region_{};
+
+    // Memory pool for storing read response data temporarily
+    MemoryRegion udm_memory_pool_region_{};
 };
 
 /**

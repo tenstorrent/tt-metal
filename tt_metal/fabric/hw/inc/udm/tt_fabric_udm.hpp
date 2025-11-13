@@ -401,24 +401,30 @@ FORCE_INLINE void fabric_fast_atomic_inc(
 }
 
 /**
- * @brief Send a write acknowledgment back to the sender using atomic increment
+ * @brief Send an acknowledgment back to the sender using atomic increment
  *
- * This function sends an atomic increment to the sender's NONPOSTED_WRITES_ACKED counter
- * to acknowledge receipt of a write packet. It extracts the sender's information from
+ * This function sends an atomic increment to the sender's counter to acknowledge
+ * receipt of a packet (write, atomic, etc.). It extracts the sender's information from
  * the received packet's UDM control fields and sends an atomic increment to the
- * appropriate counter. The dm_id is extracted from the packet header's risc_id field.
+ * appropriate counter based on the FabricBarrierType template parameter.
  *
+ * @tparam BarrierType The type of barrier counter to increment (e.g., NONPOSTED_WRITES_ACKED, NONPOSTED_ATOMICS_ACKED)
+ * @tparam FabricConnectionType The connection type
+ * @param connection adaptor connection to mux kernel
  * @param received_header Pointer to the received packet header containing UDM control fields
  * @param increment_value The value to increment the counter by (default 1)
  * @param flush Whether to flush the atomic operation (default false)
  */
-FORCE_INLINE void fabric_fast_write_ack(
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* received_header, uint32_t increment_value = 1, bool flush = false) {
-    // if this is a posted write then we simply exit
+template <FabricBarrierType BarrierType, typename FabricConnectionType>
+FORCE_INLINE void fabric_fast_ack(
+    FabricConnectionType& connection,
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* received_header,
+    uint32_t increment_value = 1,
+    bool flush = false) {
+    // if this is a posted operation then we simply exit
     if (received_header->udm_control.write.posted) {
         return;
     }
-    auto [connection, is_init] = get_or_open_fabric_connection();
     volatile tt_l1_ptr PACKET_HEADER_TYPE* ack_header = get_or_allocate_header();
 
     uint8_t src_chip_id = received_header->udm_control.write.src_chip_id;
@@ -427,7 +433,7 @@ FORCE_INLINE void fabric_fast_write_ack(
     uint8_t src_noc_y = received_header->udm_control.write.src_noc_y;
     uint8_t src_risc_id = received_header->udm_control.write.risc_id;
 
-    uint32_t counter_addr = get_fabric_counter_address<FabricBarrierType::NONPOSTED_WRITES_ACKED>(src_risc_id);
+    uint32_t counter_addr = get_fabric_counter_address<BarrierType>(src_risc_id);
 
     ack_header->to_noc_unicast_atomic_inc(
         NocUnicastAtomicIncCommandHeader(get_noc_addr(src_noc_x, src_noc_y, counter_addr), increment_value, flush));
@@ -435,43 +441,36 @@ FORCE_INLINE void fabric_fast_write_ack(
 
     connection.wait_for_empty_write_slot();
     connection.send_payload_blocking_from_address(reinterpret_cast<uint32_t>(ack_header), sizeof(PACKET_HEADER_TYPE));
+
+    noc_async_writes_flushed();
+}
+
+/**
+ * @brief Send a write acknowledgment back to the sender
+ *
+ * Wrapper function that calls fabric_fast_ack with NONPOSTED_WRITES_ACKED barrier type.
+ */
+template <typename FabricConnectionType>
+FORCE_INLINE void fabric_fast_write_ack(
+    FabricConnectionType& connection,
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* received_header,
+    uint32_t increment_value = 1,
+    bool flush = false) {
+    fabric_fast_ack<FabricBarrierType::NONPOSTED_WRITES_ACKED>(connection, received_header, increment_value, flush);
 }
 
 /**
  * @brief Send an atomic increment acknowledgment back to the sender
  *
- * This function sends an atomic increment to the sender's NONPOSTED_ATOMICS_ACKED counter
- * to acknowledge receipt of an atomic increment packet. It extracts the sender's information from
- * the received packet's UDM control fields and sends an atomic increment to the appropriate counter.
- * Since atomic increments reuse the write control header structure, we access udm_control.write fields.
- *
- * @param received_header Pointer to the received packet header containing UDM control fields
- * @param increment_value The value to increment the counter by (default 1)
- * @param flush Whether to flush the atomic operation (default false)
+ * Wrapper function that calls fabric_fast_ack with NONPOSTED_ATOMICS_ACKED barrier type.
  */
+template <typename FabricConnectionType>
 FORCE_INLINE void fabric_fast_atomic_ack(
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* received_header, uint32_t increment_value = 1, bool flush = false) {
-    // if this is a posted atomic then we simply exit
-    if (received_header->udm_control.write.posted) {
-        return;
-    }
-    auto [connection, is_init] = get_or_open_fabric_connection();
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* ack_header = get_or_allocate_header();
-
-    uint8_t src_chip_id = received_header->udm_control.write.src_chip_id;
-    uint16_t src_mesh_id = received_header->udm_control.write.src_mesh_id;
-    uint8_t src_noc_x = received_header->udm_control.write.src_noc_x;
-    uint8_t src_noc_y = received_header->udm_control.write.src_noc_y;
-    uint8_t src_risc_id = received_header->udm_control.write.risc_id;
-
-    uint32_t counter_addr = get_fabric_counter_address<FabricBarrierType::NONPOSTED_ATOMICS_ACKED>(src_risc_id);
-
-    ack_header->to_noc_unicast_atomic_inc(
-        NocUnicastAtomicIncCommandHeader(get_noc_addr(src_noc_x, src_noc_y, counter_addr), increment_value, flush));
-    fabric_write_set_unicast_route(ack_header, src_chip_id, src_mesh_id, 0, 1);  // trid=0, posted=1
-
-    connection.wait_for_empty_write_slot();
-    connection.send_payload_blocking_from_address(reinterpret_cast<uint32_t>(ack_header), sizeof(PACKET_HEADER_TYPE));
+    FabricConnectionType& connection,
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* received_header,
+    uint32_t increment_value = 1,
+    bool flush = false) {
+    fabric_fast_ack<FabricBarrierType::NONPOSTED_ATOMICS_ACKED>(connection, received_header, increment_value, flush);
 }
 
 /**
@@ -500,7 +499,7 @@ FORCE_INLINE void fabric_fast_read_any_len(
 
     fabric_read_set_unicast_route(packet_header, dst_dev_id, dst_mesh_id, src_l1_addr, size_bytes, trid);
     // TODO: remove the 16B once we properly support reads in fabric router
-    packet_header->to_noc_unicast_write(NocUnicastCommandHeader{dest_addr}, 16);
+    packet_header->to_noc_unicast_read(NocUnicastCommandHeader{dest_addr}, 16);
     connection.wait_for_empty_write_slot();
     connection.send_payload_blocking_from_address(
         reinterpret_cast<uint32_t>(packet_header), sizeof(PACKET_HEADER_TYPE));
@@ -519,9 +518,9 @@ FORCE_INLINE void fabric_fast_read_any_len(
  * @param len_bytes Number of bytes to write
  * @param counter_noc_addr NOC address of the counter to increment (only used if use_fused_atomic is true)
  */
-template <bool use_fused_atomic = false>
+template <bool use_fused_atomic, typename FabricConnectionType>
 FORCE_INLINE void fabric_fast_read_ack(
-    WorkerToFabricEdmSender& connection,
+    FabricConnectionType& connection,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
     uint32_t src_addr,
     uint64_t dest_addr,
@@ -551,9 +550,9 @@ FORCE_INLINE void fabric_fast_read_ack(
  * @param received_header Pointer to the received read request packet header
  * @param src_addr Local source address where the requested data is stored
  */
+template <typename FabricConnectionType>
 FORCE_INLINE void fabric_fast_read_any_len_ack(
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* received_header, uint32_t src_addr) {
-    auto [connection, is_init] = get_or_open_fabric_connection();
+    FabricConnectionType& connection, volatile tt_l1_ptr PACKET_HEADER_TYPE* received_header, uint32_t src_addr) {
     volatile tt_l1_ptr PACKET_HEADER_TYPE* response_header = get_or_allocate_header();
 
     // Extract read request parameters from the received header
@@ -580,6 +579,8 @@ FORCE_INLINE void fabric_fast_read_any_len_ack(
         size_bytes -= max_fabric_payload_size;
     }
     fabric_fast_read_ack<true>(connection, response_header, src_addr, dest_addr, size_bytes, counter_noc_addr);
+
+    noc_async_writes_flushed();
 }
 
 }  // namespace tt::tt_fabric::udm

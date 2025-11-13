@@ -386,6 +386,10 @@ FabricTensixDatamoverRelayConfig::FabricTensixDatamoverRelayConfig(
     mux_relay_buffer_index_semaphore_region_ = MemoryRegion(current_address, noc_aligned_address_size_bytes_, 1);
     current_address = mux_relay_buffer_index_semaphore_region_.get_end_address();
 
+    constexpr size_t udm_memory_pool_size = 32 * 1024;  // 32KB as default memory pool size
+    udm_memory_pool_region_ = MemoryRegion(current_address, udm_memory_pool_size, 1);
+    current_address = udm_memory_pool_region_.get_end_address();
+
     memory_map_end_address_ = current_address;
 
     const auto& hal = tt_metal::MetalContext::instance().hal();
@@ -437,13 +441,15 @@ std::vector<uint32_t> FabricTensixDatamoverRelayConfig::get_compile_time_args() 
             channel_type, mux_relay_channel_id),                                   // 13: mux_worker_location_info_addr
         mux_config->get_buffer_size_bytes(channel_type),                           // 14: mux_buffer_size_bytes
         mux_config->get_buffer_index_address(channel_type, mux_relay_channel_id),  // 15: mux_buffer_index_addr
-        mux_relay_flow_control_semaphore_region_.get_address(),  // 16: mux_relay_flow_control_semaphore_addr
-        mux_relay_teardown_semaphore_region_.get_address(),      // 17: mux_relay_teardown_semaphore_addr
-        mux_relay_buffer_index_semaphore_region_.get_address(),  // 18: mux_relay_buffer_index_semaphore_addr
-        mux_relay_stream_id,                                     // 19: mux_free_slots_stream_id
-        mux_config->get_status_address(),                        // 20: local_mux_status_address
+        mux_relay_flow_control_semaphore_region_.get_address(),           // 16: mux_relay_flow_control_semaphore_addr
+        mux_relay_teardown_semaphore_region_.get_address(),               // 17: mux_relay_teardown_semaphore_addr
+        mux_relay_buffer_index_semaphore_region_.get_address(),           // 18: mux_relay_buffer_index_semaphore_addr
+        mux_relay_stream_id,                                              // 19: mux_free_slots_stream_id
+        mux_config->get_status_address(),                                 // 20: local_mux_status_address
+        udm_memory_pool_region_.get_address(),                            // 21: udm_memory_pool_base_address
+        static_cast<uint32_t>(udm_memory_pool_region_.get_total_size()),  // 22: udm_memory_pool_size
     };
-    // Note: router NOC coords and sync address (21-23) will be added by the builder
+    // Note: router NOC coords and sync address (23-25) will be added by the builder
 }
 
 // ==================================================================================================
@@ -741,17 +747,17 @@ std::vector<uint32_t> FabricTensixDatamoverRelayBuilder::get_compile_time_args()
         fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::UDM,
         "Relay builder should only be used in UDM mode");
 
-    // 0-20: All relay channel configuration, mux connection info, and semaphore addresses from config
+    // 0-22: All relay channel configuration, mux connection info, semaphore addresses, and UDM memory pool from config
     auto ct_args = config_->get_compile_time_args();
 
-    // 21-22: Fabric router NOC coordinates
-    ct_args.push_back(router_noc_x_);  // 21: router_noc_x
-    ct_args.push_back(router_noc_y_);  // 22: router_noc_y
+    // 23-24: Fabric router NOC coordinates
+    ct_args.push_back(router_noc_x_);  // 23: router_noc_x
+    ct_args.push_back(router_noc_y_);  // 24: router_noc_y
 
-    // 23: fabric_router_sync_address
+    // 25: fabric_router_sync_address
     const auto& fabric_router_config = fabric_context.get_fabric_router_config(
         fabric_tensix_config);
-    ct_args.push_back(fabric_router_config.edm_local_tensix_sync_address);  // 23: fabric_router_sync_address
+    ct_args.push_back(fabric_router_config.edm_local_tensix_sync_address);  // 25: fabric_router_sync_address
 
     return ct_args;
 }
