@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 Motif Technologies
 
-# SPDX-License-Identifier: MIT License
+# SPDX-License-Identifier: MIT
 
 """Diffusion Transformer (MMDiT) backbone and attention modules for Motif Image 6B Preview.
 
@@ -159,9 +159,9 @@ class LatentPatchModule(nn.Module):
         self.latent_channels = latent_channels
 
     def forward(self, x):
-        assert x.shape[1] == SD3_LATENT_CHANNEL, (
-            f"VAE-Latent channel is not matched with '{SD3_LATENT_CHANNEL}'. current shape: {x.shape}"
-        )
+        assert (
+            x.shape[1] == SD3_LATENT_CHANNEL
+        ), f"VAE-Latent channel is not matched with '{SD3_LATENT_CHANNEL}'. current shape: {x.shape}"
         patches = self.projection_SD3(x)  # Shape: (B, embedding_dim, num_patches_h, num_patches_w)
         patches = patches.contiguous()
         patches = patches.flatten(2)  # Shape: (B, embedding_dim, num_patches)

@@ -1,10 +1,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 Motif Technologies
 
-# SPDX-License-Identifier: MIT License
+# SPDX-License-Identifier: MIT
 
 from typing import List, Optional, Tuple, Union
 
-import numpy as np
 import torch
 import torch.nn as nn
 import torchvision.transforms as T
@@ -12,7 +11,7 @@ import tqdm
 from diffusers.models import AutoencoderKL
 from diffusers.utils.torch_utils import randn_tensor
 from loguru import logger
-from PIL import Image, ImageFilter
+from PIL import Image
 from transformers import CLIPTextModel, CLIPTokenizerFast, T5EncoderModel, T5Tokenizer
 
 from .modeling_dit import MotifDiT
