@@ -11,10 +11,6 @@
 #include <algorithm>
 #include <random>
 #include <thread>
-#include <mutex>
-#include <condition_variable>
-#include <atomic>
-#include <chrono>
 
 #include "tests/tt_metal/test_utils/test_common.hpp"
 #include "tools/scaleout/validation/utils/ethernet_link_metrics_serialization.hpp"
@@ -268,22 +264,14 @@ void execute_workloads(
 
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
     distributed_context.barrier();
-
-    // Use condition variable and timeout for thread completion detection
-    std::mutex cv_mutex;
-    std::condition_variable cv;
-
     std::vector<std::thread> threads;
-    threads.reserve(total_threads);
+    threads.reserve(mesh_workloads.size());
     for (auto& [device_id, mesh_workload] : mesh_workloads) {
-        threads.emplace_back([device_id, &mesh_workload, &devices, &completed_threads, &cv]() {
+        threads.emplace_back([device_id, &mesh_workload, &devices]() {
             tt::tt_metal::distributed::EnqueueMeshWorkload(
                 devices.at(device_id)->mesh_command_queue(), mesh_workload, true);
-            completed_threads++;
-            cv.notify_all();
         });
     }
-
     for (auto& thread : threads) {
         thread.join();
     }
@@ -469,6 +457,33 @@ LinkMetricsResult process_link_statuses(
     return result;
 }
 
+struct PortInfo {
+    tt::scaleout_tools::PortType port_type;
+    tt::scaleout_tools::PortId port_id;
+};
+
+std::unordered_map<tt::tt_metal::AsicID, std::unordered_map<uint8_t, PortInfo>> generate_port_info(
+    const PhysicalSystemDescriptor& physical_system_descriptor) {
+    std::unordered_map<tt::tt_metal::AsicID, std::unordered_map<tt::tt_fabric::chan_id_t, PortInfo>> port_info_map;
+    const auto& asic_connectivity_graph = physical_system_descriptor.get_system_graph().asic_connectivity_graph;
+
+    for (const auto& [asic_id, asic_descriptor] : physical_system_descriptor.get_asic_descriptors()) {
+        auto board_type = asic_descriptor.board_type;
+        auto board = tt::scaleout_tools::create_board(board_type);
+        // PhysicalSystemDescriptor internally validates that hostnames across asic descriptors are part of the graph
+        // This can't throw
+        const auto& asic_edges = asic_connectivity_graph.at(asic_descriptor.host_name).at(asic_id);
+        for (const auto& [dst_asic_id, eth_connections] : asic_edges) {
+            for (const auto& eth_connection : eth_connections) {
+                auto port = board.get_port_for_asic_channel(tt::scaleout_tools::AsicChannel{
+                    *(asic_descriptor.asic_location), tt::scaleout_tools::ChanId{eth_connection.src_chan}});
+                port_info_map[asic_id][eth_connection.src_chan] = PortInfo{port.port_type, port.port_id};
+            }
+        }
+    }
+    return port_info_map;
+}
+
 void dump_link_stats(
     std::vector<uint32_t>& inputs,
     PhysicalSystemDescriptor& physical_system_descriptor,
@@ -483,6 +498,7 @@ void dump_link_stats(
     const auto& asic_topology = physical_system_descriptor.get_asic_topology(host_name);
     const auto& asic_descriptors = physical_system_descriptor.get_asic_descriptors();
     auto local_ethernet_metrics = physical_system_descriptor.query_local_ethernet_metrics();
+    auto port_info_map = generate_port_info(physical_system_descriptor);
 
     for (const auto& [asic_id, asic_connections] : asic_topology) {
         auto chip_id = asic_id_to_chip_id[*asic_id];
@@ -507,12 +523,15 @@ void dump_link_stats(
                     }
                 }
 
+                const auto& port_info = port_info_map.at(asic_id).at(src_chan);
                 statuses_per_link[EthChannelIdentifier{
                                       .host = host_name,
                                       .asic_id = asic_descriptors.at(asic_id).unique_id,
                                       .tray_id = asic_descriptors.at(asic_id).tray_id,
                                       .asic_location = asic_descriptors.at(asic_id).asic_location,
                                       .channel = src_chan,
+                                      .port_id = *port_info.port_id,
+                                      .port_type = static_cast<uint32_t>(port_info.port_type),
                                   }]
                     .push_back(LinkStatus{
                         .metrics = local_ethernet_metrics.at(asic_id).at(src_chan),
@@ -640,33 +659,6 @@ LinkMetricsResult send_traffic_and_validate_links(
 // ============================================================================
 // Logging Functions (Metrics and Connectivity)
 // ============================================================================
-
-struct PortInfo {
-    tt::scaleout_tools::PortType port_type;
-    tt::scaleout_tools::PortId port_id;
-};
-
-std::unordered_map<tt::tt_metal::AsicID, std::unordered_map<uint8_t, PortInfo>> generate_port_info(
-    const PhysicalSystemDescriptor& physical_system_descriptor) {
-    std::unordered_map<tt::tt_metal::AsicID, std::unordered_map<tt::tt_fabric::chan_id_t, PortInfo>> port_info_map;
-    const auto& asic_connectivity_graph = physical_system_descriptor.get_system_graph().asic_connectivity_graph;
-
-    for (const auto& [asic_id, asic_descriptor] : physical_system_descriptor.get_asic_descriptors()) {
-        auto board_type = asic_descriptor.board_type;
-        auto board = tt::scaleout_tools::create_board(board_type);
-        // PhysicalSystemDescriptor internally validates that hostnames across asic descriptors are part of the graph
-        // This can't throw
-        const auto& asic_edges = asic_connectivity_graph.at(asic_descriptor.host_name).at(asic_id);
-        for (const auto& [dst_asic_id, eth_connections] : asic_edges) {
-            for (const auto& eth_connection : eth_connections) {
-                auto port = board.get_port_for_asic_channel(tt::scaleout_tools::AsicChannel{
-                    *(asic_descriptor.asic_location), tt::scaleout_tools::ChanId{eth_connection.src_chan}});
-                port_info_map[asic_id][eth_connection.src_chan] = PortInfo{port.port_type, port.port_id};
-            }
-        }
-    }
-    return port_info_map;
-}
 
 void print_ethernet_connectivity(
     bool /*print_connectivity*/, const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) {
