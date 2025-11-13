@@ -118,8 +118,8 @@ void kernel_main() {
         uint32_t curr_device_start = 0;
         uint32_t curr_device_end = input_tensor_Wt - 1;
         for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
-            uint32_t curr_k_block_start = k_block_iter * M_block_tiles;
-            uint32_t curr_k_block_end = (k_block_iter + 1) * M_block_tiles - 1;
+            uint32_t curr_k_block_start = k_block_iter * K_block_tiles;
+            uint32_t curr_k_block_end = (k_block_iter + 1) * K_block_tiles - 1;
             if (curr_k_block_end < curr_device_end) {
                 k_block_device_expected[k_block_iter]++;
                 device_k_block_counts[curr_device]++;
