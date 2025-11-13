@@ -96,6 +96,11 @@ def create_parser() -> argparse.ArgumentParser:
         default="bp",
         help="Select generator implementation: default = bp (batch parallel), pp (pipeline parallel).",
     )
+    p.add_argument(
+        "--enable-trace",
+        action="store_true",
+        help=("Enable tracing for decode."),
+    )
     return p
 
 
@@ -211,6 +216,7 @@ def run_demo(
     tf_prompt_len: int | None = None,
     early_print_first_user: bool = True,
     generator: str = "bp",
+    enable_trace: bool = False,
 ) -> dict:
     """Programmatic entrypoint for the DeepSeek-V3 demo.
 
@@ -233,7 +239,13 @@ def run_demo(
     logger.info("Setting fabric config to FABRIC_1D for demo run")
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
     logger.info(f"Opening mesh device with shape {mesh_shape}")
-    mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape)
+    if enable_trace:
+        logger.info("Enabling trace for decode forward pass")
+        trace_region_size = 41435136 + int(0.20 * 41435136)  # 20% additional
+        logger.info(f"Trace region size set to {trace_region_size}")
+        mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, trace_region_size=trace_region_size)
+    else:
+        mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape)
 
     # Load tokenizer only for full-model mode; in random-weights mode we synthesize token ids
     tokenizer = None
@@ -276,8 +288,11 @@ def run_demo(
                 dense_layers=(1 if random_weights and single_layer else None),
                 override_num_layers=(1 if random_weights else None),
                 single_layer=(single_layer if random_weights else None),
+                enable_trace=enable_trace,
             )
         else:  # generator == "pp"
+            if enable_trace:
+                raise SystemExit("Tracing is not supported for pipeline parallel generator.")
             gen = DeepseekGeneratorPP(
                 mesh_device=mesh_device,
                 model_path=Path(model_path),
@@ -366,6 +381,7 @@ def main() -> None:
         tf_prompt_len=args.tf_prompt_len,
         early_print_first_user=args.early_print_first_user,
         generator=args.generator,
+        enable_trace=args.enable_trace,
     )
 
     # If prompts were loaded from a JSON file, save output to JSON file instead of printing
