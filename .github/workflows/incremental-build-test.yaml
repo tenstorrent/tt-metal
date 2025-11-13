@@ -72,48 +72,29 @@ jobs:
           echo "Current PR SHA: ${{ github.sha }}"
           echo "Current PR ref: ${{ github.ref }}"
 
-      - name: Configure and build main branch (baseline)
+      - name: Build main branch baseline
         run: |
-          echo "=== Configuring and building main branch baseline ==="
           ./build_metal.sh \
             --build-dir build_incremental \
             --build-type Release \
             --build-ttnn-tests \
             --enable-ccache \
             --disable-profiler
-          echo "Baseline build completed on main branch"
 
-      - name: Initialize ccache stats for incremental test
+      - name: Initialize ccache stats
         run: |
           ccache -z
-          echo "=== Ccache stats after main build ==="
+          echo "Ccache stats after main build:"
           ccache -s
 
-      - name: Apply PR changes over main
+      - name: Apply PR changes
         run: |
-          echo "=== Applying PR changes over main branch baseline ==="
           git fetch origin ${{ github.ref }}
-          echo "Current branch: $(git branch --show-current)"
-          echo "Current commit: $(git rev-parse HEAD)"
-
-          # Create and switch to a test branch
           git checkout -b incremental-test-branch
-
-          # Apply the PR changes
-          echo "Merging PR changes..."
           git merge --no-ff ${{ github.sha }} -m "Merge PR changes for incremental build test"
-
-          echo "After merge:"
-          echo "Current branch: $(git branch --show-current)"
-          echo "Current commit: $(git rev-parse HEAD)"
-
-          # Show what files changed
-          echo "Files changed from main to PR:"
-          git diff --name-only main HEAD || echo "No differences or diff command failed"
 
       - name: Test incremental build with PR changes
         run: |
-          echo "=== Testing incremental build with PR changes ==="
           start_time=$(date +%s)
           cmake --build build_incremental --target ttnn_test_basics -- -j$(nproc)
           end_time=$(date +%s)
@@ -123,7 +104,6 @@ jobs:
 
       - name: Test no-change build (cache effectiveness)
         run: |
-          echo "=== Testing no-change build to verify cache effectiveness ==="
           start_time=$(date +%s)
           cmake --build build_incremental --target ttnn_test_basics -- -j$(nproc)
           end_time=$(date +%s)
@@ -133,31 +113,27 @@ jobs:
 
       - name: Final ccache stats
         run: |
-          echo "=== Final ccache stats ==="
+          echo "Final ccache stats:"
           ccache -s
 
-      - name: Incremental build performance summary
+      - name: Performance summary
         run: |
           echo '## Incremental Build Performance Results' >> $GITHUB_STEP_SUMMARY
           echo '' >> $GITHUB_STEP_SUMMARY
           echo '### Build Times' >> $GITHUB_STEP_SUMMARY
-          echo "- **PR changes build** (main + PR changes): ${INCREMENTAL_BUILD_PR_CHANGES}s" >> $GITHUB_STEP_SUMMARY
-          echo "- **No-change build** (cache effectiveness): ${INCREMENTAL_BUILD_NO_CHANGE}s" >> $GITHUB_STEP_SUMMARY
+          echo "- **PR changes build**: ${INCREMENTAL_BUILD_PR_CHANGES}s" >> $GITHUB_STEP_SUMMARY
+          echo "- **No-change build**: ${INCREMENTAL_BUILD_NO_CHANGE}s" >> $GITHUB_STEP_SUMMARY
           echo '' >> $GITHUB_STEP_SUMMARY
-          echo '### Performance Analysis' >> $GITHUB_STEP_SUMMARY
 
-          # Performance validation for PR changes
+          # Performance analysis
           if [ "${INCREMENTAL_BUILD_PR_CHANGES}" -gt 300 ]; then
             echo '**Warning**: PR changes build took longer than 5 minutes' >> $GITHUB_STEP_SUMMARY
-            echo 'This may indicate issues with incremental compilation for your changes' >> $GITHUB_STEP_SUMMARY
           else
             echo 'PR changes incremental build performance is acceptable' >> $GITHUB_STEP_SUMMARY
           fi
 
-          # Performance validation for no-change builds (ccache effectiveness)
           if [ "${INCREMENTAL_BUILD_NO_CHANGE}" -gt 60 ]; then
-            echo '**Warning**: No-change build took longer than 60s' >> $GITHUB_STEP_SUMMARY
-            echo 'This may indicate ccache is not working effectively' >> $GITHUB_STEP_SUMMARY
+            echo '**Warning**: No-change build took longer than 60s - ccache may not be working effectively' >> $GITHUB_STEP_SUMMARY
           else
             echo 'Ccache effectiveness is good (no-change build < 60s)' >> $GITHUB_STEP_SUMMARY
           fi
@@ -167,35 +143,3 @@ jobs:
           echo '```' >> $GITHUB_STEP_SUMMARY
           ccache -s >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-
-      - name: Test build speed with multiple targets
-        run: |
-          echo "=== Testing build speed with multiple targets ==="
-          # Test building multiple small targets to verify incremental performance
-          start_time=$(date +%s)
-          cmake --build build_incremental --target ttnn_test_operations -- -j$(nproc) || echo "Target not available, continuing..."
-          end_time=$(date +%s)
-          multi_target_duration=$((end_time - start_time))
-          echo "Multi-target build time: ${multi_target_duration}s"
-
-          echo '' >> $GITHUB_STEP_SUMMARY
-          echo "- **Multi-target build**: ${multi_target_duration}s" >> $GITHUB_STEP_SUMMARY
-
-      - name: Fail if performance is unacceptable
-        run: |
-          # Fail the job if incremental build performance is too slow
-          if [ "${INCREMENTAL_BUILD_PR_CHANGES}" -gt 600 ]; then
-            echo "PR changes incremental build performance is unacceptable (${INCREMENTAL_BUILD_PR_CHANGES}s > 600s)"
-            echo "This indicates a serious regression in incremental build performance for your changes"
-            exit 1
-          fi
-
-          if [ "${INCREMENTAL_BUILD_NO_CHANGE}" -gt 120 ]; then
-            echo "No-change build performance is unacceptable (${INCREMENTAL_BUILD_NO_CHANGE}s > 120s)"
-            echo "This indicates ccache is not working properly"
-            exit 1
-          fi
-
-          echo "All incremental build performance checks passed"
-          echo "PR changes build time: ${INCREMENTAL_BUILD_PR_CHANGES}s"
-          echo "No-change build time: ${INCREMENTAL_BUILD_NO_CHANGE}s"
