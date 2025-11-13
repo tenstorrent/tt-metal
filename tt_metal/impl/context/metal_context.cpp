@@ -153,10 +153,24 @@ void MetalContext::initialize(
 
     // Clear state, build FW
     auto all_devices = cluster_->all_chip_ids();
-    
+
     std::vector<std::future<void>> futures;
     std::vector<ChipId> device_ids;  // Store device IDs in the same order as futures
-    
+
+    // Lambda to wait for async tasks and handle exceptions
+    auto wait_for_async_tasks = [&](std::string_view operation_name) {
+        for (size_t i = 0; i < futures.size(); ++i) {
+            ChipId device_id = device_ids[i];
+            try {
+                futures[i].get();
+            } catch (const std::exception& e) {
+                TT_THROW("{} failed for device {}: {}", operation_name, device_id, e.what());
+            } catch (...) {
+                TT_THROW("{} failed for device {} with unknown exception", operation_name, device_id);
+            }
+        }
+    };
+
     {
         ZoneScoped;
         std::string zoneName = "Parallel Device Initialization";
@@ -209,16 +223,7 @@ void MetalContext::initialize(
         }
 
         // Wait for all async tasks to complete
-        for (size_t i = 0; i < futures.size(); ++i) {
-            ChipId device_id = device_ids[i];  // Get the corresponding device ID
-            try {
-                futures[i].get();  // This handles synchronization and exception propagation
-            } catch (const std::exception& e) {
-                TT_THROW("Device initialization failed for device {}: {}", device_id, e.what());
-            } catch (...) {
-                TT_THROW("Device initialization failed for device {} with unknown exception", device_id);
-            }
-        }
+        wait_for_async_tasks("Device initialization");
     }
 
     // Populate FD topology across all devices
@@ -260,16 +265,7 @@ void MetalContext::initialize(
         }
 
         // Wait for all async tasks to complete
-        for (size_t i = 0; i < futures.size(); ++i) {
-            ChipId device_id = device_ids[i];
-            try {
-                futures[i].get();
-            } catch (const std::exception& e) {
-                TT_THROW("Device final initialization failed for device {}: {}", device_id, e.what());
-            } catch (...) {
-                TT_THROW("Device final initialization failed for device {} with unknown exception", device_id);
-            }
-        }
+        wait_for_async_tasks("FW initialization and launch");
     }
     // Watcher needs to init before FW since FW needs watcher mailboxes to be set up, and needs to attach after FW
     // starts since it also writes to watcher mailboxes.
