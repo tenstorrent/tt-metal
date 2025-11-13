@@ -71,16 +71,6 @@ public:
     }
 };
 
-// LogicalCommand encapsulates a command size and its serialization logic,
-// allowing us to separate command generation from command serialization
-struct LogicalCommand {
-    // How much space this command will take in the buffer
-    uint32_t command_size_bytes{};
-
-    // A function that knows how to write this specific command
-    std::function<void(HugepageDeviceCommand&)> serialize;
-};
-
 constexpr uint32_t DEFAULT_ITERATIONS_LINEAR_WRITE = 3;
 constexpr uint32_t DEFAULT_ITERATIONS_PAGED_WRITE = 1;
 constexpr uint32_t DEFAULT_ITERATIONS_PACKED_WRITE = 1;
@@ -270,7 +260,7 @@ public:
     // Helper function to generate LogicalCommands for linear writes
     // Encapsulates all logic for chunking, payload generation,
     // expectation model (DeviceData) updates, and serialization
-    std::vector<LogicalCommand> generate_linear_write_commands(
+    std::vector<HostMemDeviceCommand> generate_linear_write_commands(
         uint32_t total_target_bytes,
         bool is_mcast,
         const CoreRange& worker_range,
@@ -279,7 +269,7 @@ public:
         DeviceData& device_data  // Pass by ref to update the expectation model
     ) {
         // This vector stores commands related information for each iteration
-        std::vector<LogicalCommand> commands_per_iteration;
+        std::vector<HostMemDeviceCommand> commands_per_iteration;
 
         uint32_t remaining_bytes = total_target_bytes;
         uint32_t coherent_count = 0;
@@ -347,21 +337,21 @@ public:
                 device_data.relevel(tt::CoreType::WORKER);
             }
 
-            // Create the LogicalCommand
-            LogicalCommand cmd;
-            cmd.command_size_bytes = chunk_size_calculator(xfer_size_bytes);
+            // Calculate the command size
+            const uint32_t command_size_bytes = chunk_size_calculator(xfer_size_bytes);
+
+            // Create the HostMemDeviceCommand
+            HostMemDeviceCommand cmd(command_size_bytes);
 
             // The serialize lambda captures all necessary data by value
             // to ensure it's self-contained and safe to call later.
-            cmd.serialize = [=](HugepageDeviceCommand& dc) {
-                dc.add_dispatch_write_linear<true, true>(
-                    is_mcast ? worker_range.size() : 0,  // num_mcast_dests
-                    noc_xy,                              // NOC coordinates
-                    l1_addr,                             // destination address
-                    xfer_size_bytes,                     // data size
-                    payload.data()                       // payload data
-                );
-            };
+            cmd.add_dispatch_write_linear<true, true>(
+                is_mcast ? worker_range.size() : 0,  // num_mcast_dests
+                noc_xy,                              // NOC coordinates
+                l1_addr,                             // destination address
+                xfer_size_bytes,                     // data size
+                payload.data()                       // payload data
+            );
 
             commands_per_iteration.push_back(std::move(cmd));
             remaining_bytes -= xfer_size_bytes;
@@ -407,7 +397,7 @@ public:
     // Encapsulates all logic for chunking (to respect max_fetch_bytes),
     // payload generation, expectation model (DeviceData) updates,
     // and serialization
-    std::vector<LogicalCommand> generate_paged_write_commands(
+    std::vector<HostMemDeviceCommand> generate_paged_write_commands(
         uint32_t num_pages_per_cmd,
         uint32_t page_size_bytes,
         bool is_dram,
@@ -418,7 +408,7 @@ public:
         DeviceData& device_data  // Pass by ref to update the expectation model
     ) {
         // This vector stores commands related information for each iteration
-        std::vector<LogicalCommand> commands_per_iteration;
+        std::vector<HostMemDeviceCommand> commands_per_iteration;
         const uint32_t page_size_words = page_size_bytes / sizeof(uint32_t);
 
         // Arbitrary starting value from original test to avoid 0x0
@@ -475,22 +465,20 @@ public:
             const uint32_t base_addr = device_data.get_base_result_addr(core_type) + bank_offset;
             const uint16_t start_page_cmd = absolute_start_page % num_banks;
 
-            // Create the LogicalCommand
-            LogicalCommand cmd;
-            cmd.command_size_bytes = chunk_size_calculator(pages_in_chunk);
+            // Calculate the command size
+            const uint32_t command_size_bytes = chunk_size_calculator(pages_in_chunk);
 
-            // Capture this chunk's payload and serialization info by value
-            cmd.serialize = [=](HugepageDeviceCommand& dc) {
-                dc.add_dispatch_write_paged<true>(
-                    true,                           // flush_prefetch (inline data)
-                    static_cast<uint8_t>(is_dram),  // is_dram
-                    start_page_cmd,                 // start_page
-                    base_addr,                      // base_addr
-                    page_size_bytes,                // page_size
-                    pages_in_chunk,                 // pages
-                    chunk_payload.data()            // payload for this chunk
-                );
-            };
+            // Create the HostMemDeviceCommand
+            HostMemDeviceCommand cmd(command_size_bytes);
+            cmd.add_dispatch_write_paged<true>(
+                true,                           // flush_prefetch (inline data)
+                static_cast<uint8_t>(is_dram),  // is_dram
+                start_page_cmd,                 // start_page
+                base_addr,                      // base_addr
+                page_size_bytes,                // page_size
+                pages_in_chunk,                 // pages
+                chunk_payload.data()            // payload for this chunk
+            );
 
             commands_per_iteration.push_back(std::move(cmd));
 
@@ -536,7 +524,7 @@ public:
     // Helper function to generate LogicalCommands for packed unicast writes
     // Encapsulates all logic for chunking, payload generation,
     // expectation model (DeviceData) updates, and serialization
-    std::vector<LogicalCommand> generate_packed_write_commands(
+    std::vector<HostMemDeviceCommand> generate_packed_write_commands(
         uint32_t total_target_bytes,
         std::vector<CoreCoord>& worker_cores,
         std::vector<CQDispatchWritePackedUnicastSubCmd>& sub_cmds,
@@ -545,7 +533,7 @@ public:
         uint32_t packed_write_max_unicast_sub_cmds,
         DeviceData& device_data) {
         // This vector stores commands related information for each iteration
-        std::vector<LogicalCommand> commands_per_iteration;
+        std::vector<HostMemDeviceCommand> commands_per_iteration;
 
         uint32_t remaining_bytes = total_target_bytes;
         uint32_t coherent_count = 0;
@@ -651,35 +639,35 @@ public:
             const uint32_t data_bytes = data_copies * tt::align(payload_size_bytes, l1_alignment);
             const uint32_t payload_bytes = tt::align(sizeof(CQDispatchCmd) + sub_cmds_bytes, l1_alignment) + data_bytes;
 
-            // Create the LogicalCommand
-            LogicalCommand cmd;
-            cmd.command_size_bytes = chunk_size_calculator(payload_size_bytes, no_stride);
+            // Calculate the command size
+            const uint32_t command_size_bytes = chunk_size_calculator(payload_size_bytes, no_stride);
 
-            // The serialize lambda captures all necessary data by value
-            cmd.serialize = [=](HugepageDeviceCommand& dc) {
-                // Re-build data_collection inside the lambda.
-                // This is safe because it points to the lambda's *captured* payload.
-                std::vector<std::pair<const void*, uint32_t>> data_collection;
-                const void* payload_data = payload.data();
+            // Create the HostMemDeviceCommand
+            HostMemDeviceCommand cmd(command_size_bytes);
 
-                if (no_stride) {
-                    data_collection.emplace_back(payload_data, payload_size_bytes);
-                } else {
-                    data_collection.resize(num_sub_cmds, {payload_data, payload_size_bytes});
-                }
-                dc.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
-                    0,                                          // type
-                    num_sub_cmds,                               // num_sub_cmds
-                    common_addr,                                // common_addr
-                    static_cast<uint16_t>(payload_size_bytes),  // packed_data_sizeB
-                    payload_bytes,                              // payload_sizeB
-                    sub_cmds,                                   // sub_cmds
-                    data_collection,                            // data_collection
-                    packed_write_max_unicast_sub_cmds,          // packed_write_max_unicast_sub_cmds
-                    0,                                          // offset_idx
-                    no_stride,                                  // no_stride
-                    0);
-            };
+            // Re-build data_collection inside the lambda.
+            // This is safe because it points to the lambda's *captured* payload.
+            std::vector<std::pair<const void*, uint32_t>> data_collection;
+            const void* payload_data = payload.data();
+
+            if (no_stride) {
+                data_collection.emplace_back(payload_data, payload_size_bytes);
+            } else {
+                data_collection.resize(num_sub_cmds, {payload_data, payload_size_bytes});
+            }
+
+            cmd.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
+                0,                                          // type
+                num_sub_cmds,                               // num_sub_cmds
+                common_addr,                                // common_addr
+                static_cast<uint16_t>(payload_size_bytes),  // packed_data_sizeB
+                payload_bytes,                              // payload_sizeB
+                sub_cmds,                                   // sub_cmds
+                data_collection,                            // data_collection
+                packed_write_max_unicast_sub_cmds,          // packed_write_max_unicast_sub_cmds
+                0,                                          // offset_idx
+                no_stride,                                  // no_stride
+                0);
 
             // Add command to batch
             commands_per_iteration.push_back(std::move(cmd));
@@ -706,10 +694,10 @@ protected:
     // Helper function to generate LogicalCommands for packed large writes
     // Encapsulates all logic for chunking, payload generation,
     // expectation model (DeviceData) updates, and serialization.
-    std::vector<LogicalCommand> generate_packed_large_write_commands(
+    std::vector<HostMemDeviceCommand> generate_packed_large_write_commands(
         uint32_t total_target_bytes, const CoreRange& worker_range, uint32_t l1_alignment, DeviceData& device_data) {
         // Generate multiple packed-large commands with random transactions
-        std::vector<LogicalCommand> logical_commands;
+        std::vector<HostMemDeviceCommand> commands_per_iteration;
         uint32_t remaining_bytes = total_target_bytes;
         uint32_t coherent_count = 0;
         const CoreCoord virtual_start =
@@ -836,50 +824,44 @@ protected:
             }
 
             // Calculate and validate final command size
-            const uint32_t actual_cmd_size = calculate_command_size(sub_cmds.size(), cumulative_payload_bytes);
-            // ASSERT_LE(actual_cmd_size, this->max_fetch_bytes_)
-            // << "Generated command size " << actual_cmd_size << " exceeds max_fetch_bytes " << this->max_fetch_bytes_;
+            const uint32_t command_size_bytes = calculate_command_size(sub_cmds.size(), cumulative_payload_bytes);
 
-            LogicalCommand logical_cmd;
-            logical_cmd.command_size_bytes = actual_cmd_size;
+            // Create the HostMemDeviceCommand
+            HostMemDeviceCommand cmd(command_size_bytes);
 
-            // Capture the vectors for this multi-transaction command by value
-            logical_cmd.serialize = [=](HugepageDeviceCommand& dc) {
-                // Rebuild data_spans inside the lambda from the captured payloads
-                std::vector<tt::stl::Span<const uint8_t>> data_spans;
-                data_spans.reserve(payloads.size());
+            // Rebuild data_spans inside the lambda from the captured payloads
+            std::vector<tt::stl::Span<const uint8_t>> data_spans;
+            data_spans.reserve(payloads.size());
 
-                for (const auto& pld : payloads) {
-                    data_spans.emplace_back(
-                        reinterpret_cast<const uint8_t*>(pld.data()), pld.size() * sizeof(uint32_t));
-                }
+            for (const auto& pld : payloads) {
+                data_spans.emplace_back(reinterpret_cast<const uint8_t*>(pld.data()), pld.size() * sizeof(uint32_t));
+            }
 
-                dc.add_dispatch_write_packed_large(
-                    CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_TYPE_UNKNOWN,
-                    static_cast<uint16_t>(l1_alignment),
-                    sub_cmds.size(),
-                    sub_cmds,
-                    data_spans,
-                    nullptr,
-                    0,
-                    0);
-            };
+            cmd.add_dispatch_write_packed_large(
+                CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_TYPE_UNKNOWN,
+                static_cast<uint16_t>(l1_alignment),
+                sub_cmds.size(),
+                sub_cmds,
+                data_spans,
+                nullptr,
+                0,
+                0);
 
             log_info(
                 tt::LogTest,
                 "Generated packed-large command {} with {} transactions, {} bytes (cmd size: {})",
-                logical_commands.size() + 1,
+                commands_per_iteration.size() + 1,
                 sub_cmds.size(),
                 cumulative_payload_bytes,
-                actual_cmd_size);
+                command_size_bytes);
 
-            logical_commands.push_back(std::move(logical_cmd));
+            commands_per_iteration.push_back(std::move(cmd));
         }
 
-        // ASSERT_FALSE(logical_commands.empty()) << "No commands generated - increase max_transfer_bytes";
-        log_info(tt::LogTest, "Generated {} packed-large commands total", logical_commands.size());
+        // ASSERT_FALSE(commands_per_iteration.empty()) << "No commands generated - increase max_transfer_bytes";
+        log_info(tt::LogTest, "Generated {} packed-large commands total", commands_per_iteration.size());
 
-        return logical_commands;
+        return commands_per_iteration;
     }
 };
 
@@ -951,7 +933,7 @@ TEST_P(DispatchLinearWriteTestFixture, LinearWrite) {
     // ============================================================
     uint64_t per_iter_total = 0;
     for (const auto& cmd : commands_per_iteration) {
-        per_iter_total += cmd.command_size_bytes;
+        per_iter_total += cmd.size_bytes();
     }
 
     const uint64_t total_cmd_bytes = num_iterations * per_iter_total;
@@ -962,6 +944,8 @@ TEST_P(DispatchLinearWriteTestFixture, LinearWrite) {
     // ============================================================
     // PHASE 3: Reserve and write commands
     // ============================================================
+
+    // Reserve command buffer
     void* cmd_buffer_base = this->reserve_cmd_buffer(total_cmd_bytes);
     ASSERT_TRUE(cmd_buffer_base != nullptr) << "Failed to reserve issue queue space";
 
@@ -976,8 +960,8 @@ TEST_P(DispatchLinearWriteTestFixture, LinearWrite) {
     for (uint32_t iter = 0; iter < num_iterations; ++iter) {
         for (const auto& cmd : commands_per_iteration) {
             const uint32_t before = dc.write_offset_bytes();
-            // Abstract call to the command's serialize function
-            cmd.serialize(dc);
+            // Add the command data to the command buffer
+            dc.add_data(cmd.data(), cmd.size_bytes(), cmd.size_bytes());
             this->mark_entry(dc, before, entry_sizes);
         }
     }
@@ -1072,7 +1056,7 @@ TEST_P(DispatchPagedWriteTestFixture, LinearWritePaged) {
     // Calculate total size from the pre-computed chunk sizes
     uint64_t per_iter_bytes = 0;
     for (const auto& cmd : commands_per_iteration) {
-        per_iter_bytes += cmd.command_size_bytes;
+        per_iter_bytes += cmd.size_bytes();
     }
 
     const uint64_t total_cmd_bytes = num_iterations * per_iter_bytes;
@@ -1095,12 +1079,12 @@ TEST_P(DispatchPagedWriteTestFixture, LinearWritePaged) {
     std::vector<uint32_t> entry_sizes;
     entry_sizes.reserve(num_iterations * commands_per_iteration.size());
 
-    // Generate commands for all iterations
+    // Write commands for all iterations
     for (uint32_t iter = 0; iter < num_iterations; ++iter) {
         for (const auto& cmd : commands_per_iteration) {
             const uint32_t before = dc.write_offset_bytes();
-            // Abstract call to the command's serialize function
-            cmd.serialize(dc);
+            // Add the command data to the command buffer
+            dc.add_data(cmd.data(), cmd.size_bytes(), cmd.size_bytes());
             this->mark_entry(dc, before, entry_sizes);
         }
     }
@@ -1188,7 +1172,7 @@ TEST_P(DispatchPackedWriteTestFixture, WritePackedUnicast) {
     const uint32_t wait_bytes = wait_calc.write_offset_bytes();
 
     for (const auto& cmd : commands_per_iteration) {
-        per_iter_total += cmd.command_size_bytes;
+        per_iter_total += cmd.size_bytes();
     }
 
     // Add barrier wait command
@@ -1202,6 +1186,8 @@ TEST_P(DispatchPackedWriteTestFixture, WritePackedUnicast) {
     // ============================================================
     // PHASE 3: Reserve and write commands
     // ============================================================
+
+    // Reserve command buffer
     void* cmd_buffer_base = this->reserve_cmd_buffer(total_cmd_bytes);
     ASSERT_TRUE(cmd_buffer_base != nullptr) << "Failed to reserve issue queue space";
 
@@ -1212,11 +1198,12 @@ TEST_P(DispatchPackedWriteTestFixture, WritePackedUnicast) {
     std::vector<uint32_t> entry_sizes;
     entry_sizes.reserve(num_iterations * (commands_per_iteration.size() + 1));  // +1 for barrier wait
 
+    // Write commands for all iterations
     for (uint32_t iter = 0; iter < num_iterations; ++iter) {
         for (const auto& cmd : commands_per_iteration) {
             const uint32_t before = dc.write_offset_bytes();
-            // Abstract call to the command's serialize function
-            cmd.serialize(dc);
+            // Add the command data to the command buffer
+            dc.add_data(cmd.data(), cmd.size_bytes(), cmd.size_bytes());
             this->mark_entry(dc, before, entry_sizes);
         }
 
@@ -1285,7 +1272,7 @@ TEST_P(DispatchPackedWriteLargeTestFixture, WriteLargePackedUnicast) {
     // Calculate total command buffer size needed
     uint64_t per_iter_total = 0;
     for (const auto& cmd : commands_per_iteration) {
-        per_iter_total += cmd.command_size_bytes;
+        per_iter_total += cmd.size_bytes();
     }
     per_iter_total += wait_bytes;
     const uint64_t total_cmd_bytes = num_iterations * per_iter_total;
@@ -1312,8 +1299,8 @@ TEST_P(DispatchPackedWriteLargeTestFixture, WriteLargePackedUnicast) {
         // Write all packed-large commands
         for (const auto& cmd : commands_per_iteration) {
             const uint32_t before = dc.write_offset_bytes();
-            // Abstract call to the command's serialize function
-            cmd.serialize(dc);
+            // Add the command data to the command buffer
+            dc.add_data(cmd.data(), cmd.size_bytes(), cmd.size_bytes());
             this->mark_entry(dc, before, entry_sizes);
         }
 
