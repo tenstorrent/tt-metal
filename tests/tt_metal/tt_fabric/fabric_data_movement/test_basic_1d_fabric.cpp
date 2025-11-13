@@ -2296,6 +2296,200 @@ void FabricUnicastCommon(
     }
 }
 
+void UDMFabricUnicastCommon(
+    BaseFabricFixture* fixture,
+    NocSendType noc_send_type,
+    const std::tuple<RoutingDirection, uint32_t>& pair_ordered_dir) {
+    CoreCoord sender_logical_core = {0, 0};
+    CoreCoord receiver_logical_core = {1, 0};
+    uint32_t num_packets = 10;
+    uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
+
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto topology = control_plane.get_fabric_context().get_fabric_topology();
+
+    // Single direction configuration
+    auto [dir, num_hops] = pair_ordered_dir;
+
+    // Find a source device and receiver for the selected direction
+    FabricNodeId src_fabric_node_id(MeshId{0}, 0);
+    std::unordered_map<RoutingDirection, uint32_t> fabric_hops;
+    fabric_hops[dir] = num_hops;
+
+    std::unordered_map<RoutingDirection, std::vector<FabricNodeId>> end_fabric_node_ids_by_dir;
+    ChipId src_physical_device_id;
+    std::unordered_map<RoutingDirection, std::vector<ChipId>> physical_end_device_ids_by_dir;
+    if (!find_device_with_neighbor_in_multi_direction(
+            fixture,
+            src_fabric_node_id,
+            end_fabric_node_ids_by_dir,
+            src_physical_device_id,
+            physical_end_device_ids_by_dir,
+            fabric_hops)) {
+        GTEST_SKIP() << "No path found for requested direction";
+    }
+
+    // Get destination device at the num_hops-th neighbor
+    uint32_t dst_index = num_hops - 1;
+    auto dst_physical_device_id = physical_end_device_ids_by_dir[dir][dst_index];
+    auto receiver_device = fixture->get_device(dst_physical_device_id);
+    auto dest_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(dst_physical_device_id);
+
+    auto sender_device = fixture->get_device(src_physical_device_id);
+    CoreCoord receiver_virtual_core = receiver_device->worker_core_from_logical_core(receiver_logical_core);
+
+    tt_metal::Program sender_program = tt_metal::CreateProgram();
+
+    auto worker_mem_map = generate_worker_mem_map(sender_device, topology);
+
+    if (noc_send_type == NOC_UNICAST_INLINE_WRITE or noc_send_type == NOC_UNICAST_ATOMIC_INC) {
+        worker_mem_map.packet_payload_size_bytes = 16;  // l1 aligned
+    } else {
+        auto single_payload_size_bytes = worker_mem_map.packet_payload_size_bytes;
+        worker_mem_map.packet_payload_size_bytes = single_payload_size_bytes * 2 - 16;
+    }
+
+    // Define req_notification_size_bytes for read operations
+    // Must include full packet header (80B max) + sync data (48B)
+    constexpr uint32_t req_notification_size_bytes = 128;
+
+    std::vector<uint32_t> compile_time_args = {
+        worker_mem_map.test_results_address,
+        worker_mem_map.test_results_size_bytes,
+        worker_mem_map.notification_mailbox_address,
+        worker_mem_map.target_address,
+        noc_send_type,
+        worker_mem_map.source_l1_buffer_address,
+        worker_mem_map.packet_payload_size_bytes,
+        num_packets,
+        time_seed,
+        receiver_virtual_core.x,
+        receiver_virtual_core.y,
+        dest_fabric_node_id.chip_id,
+        dest_fabric_node_id.mesh_id.get()};
+
+    // Add req_notification_size_bytes for both read and write operations
+    compile_time_args.push_back(req_notification_size_bytes);
+
+    // Set up fabric connection runtime args
+    uint32_t sender_link_idx = 0;
+    std::vector<uint32_t> sender_runtime_args;
+    append_fabric_connection_rt_args(
+        src_fabric_node_id,
+        dest_fabric_node_id,
+        sender_link_idx,
+        sender_program,
+        sender_logical_core,
+        sender_runtime_args);
+
+    // Select sender kernel based on operation type
+    const char* sender_kernel_path =
+        (noc_send_type == NOC_UNICAST_READ)
+            ? "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_udm_read_sender.cpp"
+            : "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_udm_sender.cpp";
+
+    auto sender_kernel = tt_metal::CreateKernel(
+        sender_program,
+        sender_kernel_path,
+        {sender_logical_core},
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .compile_args = compile_time_args});
+
+    tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
+
+    // Create receiver program
+    tt_metal::Program receiver_program = tt_metal::CreateProgram();
+
+    // Create receiver compile time args
+    std::vector<uint32_t> receiver_compile_time_args = {
+        worker_mem_map.test_results_address,
+        worker_mem_map.test_results_size_bytes,
+        worker_mem_map.notification_mailbox_address,
+        worker_mem_map.target_address,
+        noc_send_type,
+        worker_mem_map.packet_payload_size_bytes,
+        num_packets,
+        time_seed};
+
+    // Add req_notification_size_bytes for both read and write operations
+    receiver_compile_time_args.push_back(req_notification_size_bytes);
+
+    // Select receiver kernel based on operation type
+    const char* receiver_kernel_path =
+        (noc_send_type == NOC_UNICAST_READ)
+            ? "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_udm_read_receiver.cpp"
+            : "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_udm_receiver.cpp";
+
+    auto receiver_kernel = tt_metal::CreateKernel(
+        receiver_program,
+        receiver_kernel_path,
+        {receiver_logical_core},
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .compile_args = receiver_compile_time_args});
+
+    // Set up fabric connection runtime args for receiver to send ACKs back to sender
+    std::vector<uint32_t> receiver_runtime_args;
+    uint32_t receiver_link_idx = 0;
+    append_fabric_connection_rt_args(
+        dest_fabric_node_id,
+        src_fabric_node_id,
+        receiver_link_idx,
+        receiver_program,
+        receiver_logical_core,
+        receiver_runtime_args);
+
+    tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_logical_core, receiver_runtime_args);
+
+    // Clear target L1 memory for atomic increments since we expect initial values to be 0
+    if (noc_send_type == NOC_UNICAST_ATOMIC_INC) {
+        uint32_t total_size_to_clear = num_packets * worker_mem_map.packet_payload_size_bytes;
+        std::vector<uint32_t> zeros(total_size_to_clear / sizeof(uint32_t), 0);
+        tt_metal::detail::WriteToDeviceL1(
+            receiver_device->get_devices()[0],
+            receiver_logical_core,
+            worker_mem_map.target_address,
+            zeros,
+            CoreType::WORKER);
+    }
+
+    // Run programs
+    fixture->RunProgramNonblocking(receiver_device, receiver_program);
+    fixture->RunProgramNonblocking(sender_device, sender_program);
+    fixture->WaitForSingleProgramDone(sender_device, sender_program);
+    fixture->WaitForSingleProgramDone(receiver_device, receiver_program);
+
+    // Check results
+    std::vector<uint32_t> sender_status;
+    tt_metal::detail::ReadFromDeviceL1(
+        sender_device->get_devices()[0],
+        sender_logical_core,
+        worker_mem_map.test_results_address,
+        worker_mem_map.test_results_size_bytes,
+        sender_status,
+        CoreType::WORKER);
+    EXPECT_EQ(sender_status[TT_FABRIC_STATUS_INDEX], TT_FABRIC_STATUS_PASS);
+
+    std::vector<uint32_t> receiver_status;
+    tt_metal::detail::ReadFromDeviceL1(
+        receiver_device->get_devices()[0],
+        receiver_logical_core,
+        worker_mem_map.test_results_address,
+        worker_mem_map.test_results_size_bytes,
+        receiver_status,
+        CoreType::WORKER);
+    EXPECT_EQ(receiver_status[TT_FABRIC_STATUS_INDEX], TT_FABRIC_STATUS_PASS);
+
+    uint64_t sender_words =
+        ((uint64_t)sender_status[TT_FABRIC_WORD_CNT_INDEX + 1] << 32) | sender_status[TT_FABRIC_WORD_CNT_INDEX];
+    uint64_t receiver_words =
+        ((uint64_t)receiver_status[TT_FABRIC_WORD_CNT_INDEX + 1] << 32) | receiver_status[TT_FABRIC_WORD_CNT_INDEX];
+    EXPECT_EQ(sender_words, receiver_words);
+}
+
 void Fabric2DMulticastCommon(
     BaseFabricFixture* fixture,
     NocSendType noc_send_type,

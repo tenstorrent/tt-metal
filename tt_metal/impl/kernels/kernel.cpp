@@ -403,18 +403,26 @@ RuntimeArgsData& Kernel::common_runtime_args_data() { return this->common_runtim
 void Kernel::validate_runtime_args_size(
     size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord& logical_core) {
     uint32_t total_rt_args = (num_unique_rt_args + num_common_rt_args);
-    uint32_t idle_eth_max_runtime_args = MetalContext::instance().hal().get_dev_size(
-                                             HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::KERNEL_CONFIG) /
-                                         sizeof(uint32_t);
-    uint32_t max_rt_args = is_idle_eth() ? idle_eth_max_runtime_args : max_runtime_args;
+    uint32_t expected_max_rt_args = 0;
 
-    if (total_rt_args > max_rt_args) {
+    switch (this->get_kernel_programmable_core_type()) {
+        case HalProgrammableCoreType::TENSIX: expected_max_rt_args = max_runtime_args; break;
+        case HalProgrammableCoreType::ACTIVE_ETH:
+        case HalProgrammableCoreType::IDLE_ETH:
+            expected_max_rt_args = MetalContext::instance().hal().get_dev_size(
+                                       this->get_kernel_programmable_core_type(), HalL1MemAddrType::KERNEL_CONFIG) /
+                                   sizeof(uint32_t);
+            break;
+        default: TT_THROW("Invalid programmable core type: {}", this->get_kernel_programmable_core_type());
+    }
+
+    if (total_rt_args > expected_max_rt_args) {
         TT_THROW(
             "{} unique+common runtime args targeting kernel {} on {} are too large. Max allowable is {}",
             total_rt_args,
             this->name(),
             logical_core.str(),
-            max_runtime_args);
+            expected_max_rt_args);
     }
 }
 
