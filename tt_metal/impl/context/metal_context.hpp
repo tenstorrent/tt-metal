@@ -36,6 +36,7 @@ namespace inspector {
 class Data;
 }
 
+class DataCollector;
 // A class to manage one-time initialization and teardown (FW, dispatch, fabric, cluster) and access to related state.
 // Dispatch-independent state (Cluster) is initialized with the creation of MetalContext and accessible right after.
 // Dispatch-dependent state (FW, dispatch, fabric) is initialized explicitly with a MetalContext::initialize() call, and
@@ -64,6 +65,7 @@ public:
     std::unique_ptr<WatcherServer>& watcher_server() { return watcher_server_; }
 
     std::unique_ptr<ProfilerStateManager>& profiler_state_manager() { return profiler_state_manager_; }
+    std::unique_ptr<DataCollector>& data_collector() { return data_collector_; }
 
     void initialize(
         const DispatchCoreConfig& dispatch_core_config,
@@ -85,7 +87,8 @@ public:
         tt_fabric::FabricReliabilityMode reliability_mode =
             tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
         std::optional<uint8_t> num_routing_planes = std::nullopt,
-        tt_fabric::FabricTensixConfig fabric_tensix_config = tt_fabric::FabricTensixConfig::DISABLED);
+        tt_fabric::FabricTensixConfig fabric_tensix_config = tt_fabric::FabricTensixConfig::DISABLED,
+        tt_fabric::FabricUDMMode fabric_udm_mode = tt_fabric::FabricUDMMode::DISABLED);
     void initialize_fabric_config();
     void initialize_fabric_tensix_datamover_config();
     tt_fabric::FabricConfig get_fabric_config() const;
@@ -96,6 +99,9 @@ public:
     // Fabric tensix configuration
     void set_fabric_tensix_config(tt_fabric::FabricTensixConfig fabric_tensix_config);
     tt_fabric::FabricTensixConfig get_fabric_tensix_config() const;
+
+    // Fabric UDM mode configuration
+    tt_fabric::FabricUDMMode get_fabric_udm_mode() const;
 
     // This is used to track the current thread's command queue id stack
     using CommandQueueIdStack = std::vector<uint8_t>;
@@ -115,6 +121,7 @@ private:
     void clear_launch_messages_on_eth_cores(ChipId device_id);
     void construct_control_plane(const std::filesystem::path& mesh_graph_desc_path);
     void teardown_fabric_config();
+    void teardown_base_objects();
 
     void reset_cores(ChipId device_id);
     void assert_cores(ChipId device_id);
@@ -176,10 +183,13 @@ private:
     std::unique_ptr<DPrintServer> dprint_server_;
     std::unique_ptr<WatcherServer> watcher_server_;
     std::unique_ptr<ProfilerStateManager> profiler_state_manager_;
+    std::unique_ptr<DataCollector> data_collector_;
+
     std::array<std::unique_ptr<DispatchMemMap>, static_cast<size_t>(CoreType::COUNT)> dispatch_mem_map_;
     std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane_;
     tt_fabric::FabricConfig fabric_config_ = tt_fabric::FabricConfig::DISABLED;
     tt_fabric::FabricTensixConfig fabric_tensix_config_ = tt_fabric::FabricTensixConfig::DISABLED;
+    tt_fabric::FabricUDMMode fabric_udm_mode_ = tt_fabric::FabricUDMMode::DISABLED;
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;
 
     // We are using a thread_local to allow each thread to have its own command queue id stack.
