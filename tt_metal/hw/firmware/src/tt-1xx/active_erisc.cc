@@ -198,6 +198,7 @@ int __attribute__((noinline)) main(void) {
 
     disable_interrupts();
     update_next_link_status_check_timestamp();
+    base_fw_dynamic_noc_local_state_init();
 
     noc_index = 0;
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;

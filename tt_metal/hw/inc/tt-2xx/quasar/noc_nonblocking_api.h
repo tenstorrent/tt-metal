@@ -14,9 +14,14 @@
 #if defined(COMPILE_FOR_BRISC)
 constexpr std::underlying_type_t<TensixProcessorTypes> proc_type =
     static_cast<std::underlying_type_t<TensixProcessorTypes>>(TensixProcessorTypes::DM0);
-#else
+#elif defined(COMPILE_FOR_NCRISC)
 constexpr std::underlying_type_t<TensixProcessorTypes> proc_type =
     static_cast<std::underlying_type_t<TensixProcessorTypes>>(TensixProcessorTypes::DM1);
+#elif defined(COMPILE_FOR_AERISC) || defined(COMPILE_FOR_IDLE_ERISC)
+constexpr std::underlying_type_t<EthProcessorTypes> proc_type =
+    static_cast<std::underlying_type_t<EthProcessorTypes>>(PROCESSOR_INDEX);
+#else
+#error "Unknown processor type for noc_nonblocking_api.h"
 #endif
 
 // Helper functions to convert NoC coordinates to NoC-0 coordinates, used in metal as "physical" coordinates.
@@ -77,15 +82,37 @@ enum class NocBarrierType : uint8_t {
 
 static constexpr uint8_t NUM_BARRIER_TYPES = static_cast<uint32_t>(NocBarrierType::COUNT);
 
+struct BarrierCounter {
+    uint32_t barrier[NUM_BARRIER_TYPES];
+};
+
+struct RiscBarrierCounter {
+    BarrierCounter risc[MaxDMProcessorsPerCoreType];
+};
+
+struct NocBarrierCounter {
+    RiscBarrierCounter noc[NUM_NOCS];
+};
+
+static_assert(sizeof(NocBarrierCounter) == 80, "NocBarrierCounter size is not 80 bytes");
+
 template <uint8_t proc_t, NocBarrierType barrier_type>
 inline __attribute__((always_inline)) uint32_t get_noc_counter_address(uint32_t noc) {
     static_assert(proc_t < MaxDMProcessorsPerCoreType);
     static_assert(static_cast<std::underlying_type_t<NocBarrierType>>(barrier_type) < NUM_BARRIER_TYPES);
-    constexpr uint32_t offset =
-        MEM_NOC_COUNTER_BASE +
-        (proc_t * NUM_BARRIER_TYPES + static_cast<std::underlying_type_t<NocBarrierType>>(barrier_type)) * NUM_NOCS *
-            MEM_NOC_COUNTER_SIZE;
-    return offset + noc * MEM_NOC_COUNTER_SIZE;
+
+    constexpr uint32_t base = MEM_NOC_COUNTER_BASE;
+    constexpr uint32_t size = MEM_NOC_COUNTER_SIZE;
+
+    // Calculate most of the offset at compile time. Only the noc is variable at runtime.
+    constexpr uint32_t compile_time_offset =
+        offsetof(NocBarrierCounter, noc) + proc_t * sizeof(decltype(std::declval<NocBarrierCounter>().noc[0].risc[0])) +
+        static_cast<std::underlying_type_t<NocBarrierType>>(barrier_type) *
+            sizeof(decltype(std::declval<NocBarrierCounter>().noc[0].risc[0].barrier[0]));
+
+    constexpr uint32_t noc_stride = sizeof(decltype(std::declval<NocBarrierCounter>().noc[0]));
+
+    return base + noc * noc_stride + compile_time_offset;
 }
 
 // noc_nonposted_writes_acked
