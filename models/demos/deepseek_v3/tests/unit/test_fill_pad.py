@@ -31,13 +31,10 @@ DEEPSEEK_SHAPE_DTYPE_FILL_LIST = [
     ((1, 1, 32, 8), ttnn.bfloat16, 0),
 ]
 
-MESH_SHAPE = (8, 8)
-
 
 @pytest.mark.parametrize(
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}], indirect=True
 )
-@pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("shape_dtype_fill", DEEPSEEK_SHAPE_DTYPE_FILL_LIST)
 @pytest.mark.parametrize("mem_config", [ttnn.L1_MEMORY_CONFIG])
 @pytest.mark.parametrize("enable_trace", [True, False])

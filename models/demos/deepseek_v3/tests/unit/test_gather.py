@@ -12,13 +12,9 @@ from tests.ttnn.utils_for_testing import assert_allclose, maybe_trace
 DEEPSEEK_SHAPES_DTYPES = [[(1, 1, 32, 256), ttnn.bfloat16, (1, 1, 32, 8), ttnn.uint16]]
 
 
-MESH_SHAPE = (2, 4)
-
-
 @pytest.mark.parametrize(
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}], indirect=True
 )
-@pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("shapes_dtypes", DEEPSEEK_SHAPES_DTYPES)
 @pytest.mark.parametrize("dim", [3])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])

@@ -55,7 +55,6 @@ SHARD_SPEC_1 = get_serializable_shard_specs(
     valid_tensor_shapes=[[1, 1, 32, 896]],
 )
 
-MESH_SHAPE = (8, 8)
 LAYOUT = ttnn.TILE_LAYOUT
 
 SHAPE_DTYPE_BUFFER_TYPE_SHARD_SPEC = [
@@ -72,7 +71,6 @@ SHAPE_DTYPE_BUFFER_TYPE_SHARD_SPEC = [
 @pytest.mark.parametrize(
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}], indirect=True
 )
-@pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("shape_dtype_buffer_type_shard_spec", SHAPE_DTYPE_BUFFER_TYPE_SHARD_SPEC)
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("dim", [3])

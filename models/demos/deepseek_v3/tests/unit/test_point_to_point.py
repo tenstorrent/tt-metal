@@ -16,14 +16,11 @@ DEEPSEEK_REC_SEND_SHAPE_DTYPE_MEM = [
     ((1, 1), (0, 1), (1, 1, 32, 7168), ttnn.bfloat16, ttnn.L1_MEMORY_CONFIG),
 ]
 
-MESH_SHAPE = (4, 2)
-
 
 def _linear_coord(coord, mesh_shape):
     return coord[0] * mesh_shape[1] + coord[1]
 
 
-@pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize(
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}], indirect=True
 )

@@ -111,13 +111,10 @@ DEEPSEEK_MEM_CONFIG_SHAPE_DTYPE_MEM_CONFIG = [
     ),
 ]
 
-MESH_SHAPE = (2, 4)
-
 
 @pytest.mark.parametrize(
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}], indirect=True
 )
-@pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("test_config", DEEPSEEK_MEM_CONFIG_SHAPE_DTYPE_MEM_CONFIG)
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("enable_trace", [True, False])

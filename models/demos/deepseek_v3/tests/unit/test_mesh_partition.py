@@ -48,13 +48,11 @@ DEEPSEEK_SHAPES = [
 
 DIM = 1
 CLUSTER_AXIS = 1
-MESH_SHAPE = (2, 4)
 
 
 @pytest.mark.parametrize(
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}], indirect=True
 )
-@pytest.mark.parametrize("mesh_device", MESH_SHAPE, indirect=True)
 @pytest.mark.parametrize("dim", [DIM])
 @pytest.mark.parametrize("shape", DEEPSEEK_SHAPES)
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
