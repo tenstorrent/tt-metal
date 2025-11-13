@@ -504,11 +504,12 @@ TestSync::TestSync(CoreCoord logical_core, TestDevice* test_device_ptr, std::opt
     // TODO: init mem map?
 }
 
-void TestSync::add_config(TestTrafficSenderConfig sync_config) {
+void TestSync::add_config(TestTrafficSyncConfig sync_config) {
+    const auto& sender_config = sync_config.sender_config;
     // Sync configs should always have hops specified (multicast pattern)
-    TT_FATAL(sync_config.hops.has_value(), "Sync config on core {} should have hops specified", this->logical_core_);
+    TT_FATAL(sender_config.hops.has_value(), "Sync config on core {} should have hops specified", this->logical_core_);
 
-    const auto outgoing_direction = this->test_device_ptr_->get_forwarding_direction(sync_config.hops.value());
+    const auto outgoing_direction = this->test_device_ptr_->get_forwarding_direction(sender_config.hops.value());
 
     // Use common helper to register sync fabric connection
     auto fabric_connection_key = this->test_device_ptr_->register_fabric_connection(
@@ -516,7 +517,7 @@ void TestSync::add_config(TestTrafficSenderConfig sync_config) {
         TestWorkerType::SYNC,
         this->test_device_ptr_->get_sync_connection_manager(),
         outgoing_direction,
-        sync_config.link_id);
+        sender_config.link_id);
 
     this->configs_.emplace_back(std::move(sync_config), fabric_connection_key);
 }
@@ -651,7 +652,7 @@ void TestDevice::add_sender_traffic_config(CoreCoord logical_core, TestTrafficSe
     this->senders_.at(logical_core).add_config(std::move(config));
 }
 
-void TestDevice::add_sender_sync_config(CoreCoord logical_core, TestTrafficSenderConfig sync_config) {
+void TestDevice::add_sender_sync_config(CoreCoord logical_core, TestTrafficSyncConfig sync_config) {
     if (this->sync_workers_.find(logical_core) == this->sync_workers_.end()) {
         this->add_worker(TestWorkerType::SYNC, logical_core);
     }
@@ -769,8 +770,16 @@ void TestDevice::create_sync_kernel() {
     // Local args (all the rest go to local args buffer)
     std::vector<uint32_t> local_args;
 
-    // Expected sync value for global sync
-    local_args.push_back(this->global_sync_val_);
+    // Push in sync val first before pushing in rest of sync args
+    // All sync configs for a device have been assigned the same sync val in
+    // tt_fabric_test_context.hpp:process_traffic_config So we can just use the first sync config to get the sync val
+    TT_FATAL(sync_worker.configs_.size() > 0, "No sync configs found for core {}", sync_core.str());
+    const auto& sync_val = sync_worker.configs_.front().first.sync_val;
+    std::cout << "NUMBER OF SYNC CONFIGS: " << sync_worker.configs_.size() << std::endl;
+    for (const auto& [sync_config, _] : sync_worker.configs_) {
+        std::cout << "SYNC VAL: " << sync_config.sync_val << std::endl;
+    }
+    local_args.push_back(sync_val);
 
     // Add sync config to fabric connection mapping (same pattern as sender traffic configs)
     // This mapping tells each LineSyncConfig which fabric connection index to use
@@ -784,7 +793,8 @@ void TestDevice::create_sync_kernel() {
 
     // Add sync routing args for each sync config
     for (const auto& [sync_config, _] : sync_worker.configs_) {
-        auto sync_traffic_args = sync_config.get_args(true /* is_sync_config */);
+        const auto& sender_config = sync_config.sender_config;
+        auto sync_traffic_args = sender_config.get_args(true /* is_sync_config */);
         local_args.insert(local_args.end(), sync_traffic_args.begin(), sync_traffic_args.end());
     }
 
