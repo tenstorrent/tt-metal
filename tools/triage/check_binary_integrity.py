@@ -61,23 +61,24 @@ def check_binary_integrity(
             f"Kernel ELF file {dispatcher_core_data.kernel_xip_path} does not exist.",
         )
 
-        elf_file = elfs_cache[dispatcher_core_data.kernel_xip_path].elf
-        sections_to_verify = [".text"]
-        for section_name in sections_to_verify:
-            section = elf_file.get_section_by_name(section_name)
-            if section is None:
-                log_check(
-                    False,
-                    f"Section {section_name} not found in ELF file {dispatcher_core_data.kernel_xip_path}.",
-                )
-            else:
-                data: bytes = section.data()
-                address: int = dispatcher_core_data.kernel_offset
-                read_data = read_from_device(location, address, num_bytes=len(data))
-                log_check(
-                    read_data == data,
-                    f"{location.to_user_str()}: Data mismatch in section {section_name} at address 0x{address:08x} in ELF file {dispatcher_core_data.kernel_xip_path}.",
-                )
+        if os.path.exists(dispatcher_core_data.kernel_xip_path):
+            elf_file = elfs_cache[dispatcher_core_data.kernel_xip_path].elf
+            sections_to_verify = [".text"]
+            for section_name in sections_to_verify:
+                section = elf_file.get_section_by_name(section_name)
+                if section is None:
+                    log_check(
+                        False,
+                        f"Section {section_name} not found in ELF file {dispatcher_core_data.kernel_xip_path}.",
+                    )
+                else:
+                    data: bytes = section.data()
+                    address: int = dispatcher_core_data.kernel_offset
+                    read_data = read_from_device(location, address, num_bytes=len(data))
+                    log_check(
+                        read_data == data,
+                        f"{location.to_user_str()}: Data mismatch in section {section_name} at address 0x{address:08x} in ELF file {dispatcher_core_data.kernel_xip_path}.",
+                    )
 
 
 def run(args, context: Context):
