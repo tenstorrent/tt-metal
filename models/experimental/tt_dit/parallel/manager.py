@@ -266,7 +266,9 @@ class CCLManager:
 
         tensor = ttnn.experimental.all_gather_async(
             tensor,
-            persistent_output_buffer=self.get_ag_ping_pong_buffer(tensor.shape, dim, mesh_axis),
+            persistent_output_buffer=self.get_ag_ping_pong_buffer(
+                tensor.shape, dim, mesh_axis, dtype=tensor.get_dtype()
+            ),
             dim=dim,
             multi_device_global_semaphore=self.get_ag_ping_pong_semaphore(mesh_axis),
             num_links=self.num_links,

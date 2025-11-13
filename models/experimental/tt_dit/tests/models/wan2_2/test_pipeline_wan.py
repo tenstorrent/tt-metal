@@ -86,6 +86,7 @@ def test_pipeline_inference(
         boundary_ratio=0.875,
         dynamic_load=dynamic_load,
         topology=topology,
+        quantization_config=None,
     )
 
     # Run inference

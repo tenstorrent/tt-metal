@@ -7,7 +7,6 @@ import ttnn
 from ....layers.normalization import DistributedRMSNorm
 from ....layers.linear import ColParallelLinear
 from ....utils.substate import substate
-from ....utils.tensor import bf16_tensor
 
 
 class WanAttention:
@@ -21,6 +20,7 @@ class WanAttention:
         ccl_manager=None,
         parallel_config=None,
         is_fsdp=False,
+        quantization_config=None,
     ):
         assert dim % num_heads == 0
         self.dim = dim
@@ -89,7 +89,18 @@ class WanAttention:
             ccl_manager=ccl_manager,
         )
 
-        self.dummy_joint_input = bf16_tensor(torch.zeros((1, self.n_local_heads, 0, self.head_dim)), device=mesh_device)
+        quant_config = quantization_config if quantization_config is not None else {}
+        self.qkv_dtype = quant_config.get("qkv_dtype", None)
+        self.gather1_dtype = quant_config.get("gather1_dtype", None)
+        self.gather2_dtype = quant_config.get("gather2_dtype", None)
+
+        self.dummy_joint_input = ttnn.from_torch(
+            torch.zeros((1, self.n_local_heads, 0, self.head_dim)),
+            layout=ttnn.TILE_LAYOUT,
+            dtype=self.qkv_dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            device=self.mesh_device,
+        )
 
         full_grid = self.mesh_device.compute_with_storage_grid_size()
         self.sdpa_worker_grid = (full_grid.x, full_grid.y - 1)
@@ -101,7 +112,7 @@ class WanAttention:
         )
         self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=quantization_config.get("sdpa_math_fidelity", ttnn.MathFidelity.HiFi2),
             math_approx_mode=False,
             fp32_dest_acc_en=False,  # NOTE: Set to True if there's a correctness issue
         )
@@ -198,10 +209,16 @@ class WanAttention:
         spatial_1BND: fractured N on SP, fractured D on TP
         """
 
+        if self.gather1_dtype is not None and self.gather1_dtype != ttnn.bfloat16:
+            spatial_1BND = ttnn.typecast(spatial_1BND, dtype=self.gather1_dtype)
+
         if self.parallel_config.tensor_parallel.factor > 1:
             spatial_1BND = self.ccl_manager.all_gather_persistent_buffer(
                 spatial_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
             )
+
+        if spatial_1BND.get_dtype() != ttnn.bfloat16:
+            spatial_1BND = ttnn.typecast(spatial_1BND, dtype=ttnn.bfloat16)
 
         kv_input = prompt_1BLP if prompt_1BLP is not None else spatial_1BND
 
@@ -243,6 +260,11 @@ class WanAttention:
         if prompt_1BLP is None:
             # Self attention
             if self.parallel_config.sequence_parallel.factor > 1:
+                if self.qkv_dtype is not None and self.qkv_dtype != ttnn.bfloat16:
+                    q_BHNE = ttnn.typecast(q_BHNE, self.qkv_dtype)
+                    k_BHNE = ttnn.typecast(k_BHNE, self.qkv_dtype)
+                    v_BHNE = ttnn.typecast(v_BHNE, self.qkv_dtype)
+
                 # HACK: pass null joint inputs to take advantage of ring attention, even though this is self-attention.
                 spatial_BHNE, prompt_BHLE, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                     q_BHNE,
@@ -295,11 +317,17 @@ class WanAttention:
         spatial_1BND = ttnn.transformer.concatenate_heads(spatial_BHNE)
         spatial_1BND = ttnn.unsqueeze(spatial_1BND, 0)
 
+        if self.gather2_dtype is not None and self.gather2_dtype != ttnn.bfloat16:
+            spatial_1BND = ttnn.typecast(spatial_1BND, dtype=self.gather2_dtype)
+
         if self.parallel_config.tensor_parallel.factor > 1:
             # Gather spatial on TP axis before projection
             spatial_1BND = self.ccl_manager.all_gather_persistent_buffer(
                 spatial_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
             )
+
+        if spatial_1BND.get_dtype() != ttnn.bfloat16:
+            spatial_1BND = ttnn.typecast(spatial_1BND, dtype=ttnn.bfloat16)
 
         spatial_1BND = self.to_out(spatial_1BND, compute_kernel_config=self.mm_compute_kernel_config)
 
