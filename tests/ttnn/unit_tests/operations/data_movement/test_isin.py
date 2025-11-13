@@ -6,8 +6,6 @@ import pytest
 import torch
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_allclose
-
 
 def select_torch_dtype(ttnn_dtype):
     if ttnn_dtype is ttnn.bfloat16:
@@ -24,6 +22,7 @@ def select_torch_dtype(ttnn_dtype):
         return (
             torch.int64
         )  # !!! there is a strict requirement for the index tensor in Torch to be int64, and there is no int64 in ttnn
+    raise TypeError("unsupported ttnn dtype: {ttnn_dtype}")
 
 
 @pytest.mark.parametrize(
