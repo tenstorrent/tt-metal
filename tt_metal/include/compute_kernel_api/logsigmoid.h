@@ -6,11 +6,7 @@
 
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_unary_sfpu_logsigmoid.h"
-#define MAIN math_main()
-#define MATH(x) x
-#else
-#define MATH(x)
+#include "llk_math_eltwise_binary_sfpu_logsigmoid.h"
 #endif
 
 namespace ckernel {
@@ -32,10 +28,8 @@ namespace ckernel {
  * uint32_t                                      | uint32_t | Float value bit-cast to uint32_t                      |
  * True     |
  */
-ALWI void logsigmoid_tile(uint32_t idst_in0, uint32_t idst_in1, uint32_t idst_out, uint32_t param0, uint32_t param1) {
-#ifdef TRISC_MATH
-    MATH((llk_math_eltwise_unary_sfpu_logsigmoid<APPROX>(idst_in0, idst_in1, idst_out, param0, param1)));
-#endif
+ALWI void logsigmoid_tile(uint32_t idst_in0, uint32_t idst_in1, uint32_t idst_out) {
+    MATH((llk_math_eltwise_binary_sfpu_logsigmoid<APPROX>(idst_in0, idst_in1, idst_out)));
 }
 
 /**
@@ -44,10 +38,6 @@ ALWI void logsigmoid_tile(uint32_t idst_in0, uint32_t idst_in1, uint32_t idst_ou
  *
  * Return value: None
  */
-ALWI void logsigmoid_tile_init() {
-#ifdef TRISC_MATH
-    MATH((llk_math_eltwise_unary_sfpu_logsigmoid_init<APPROX>()));
-#endif
-}
+ALWI void logsigmoid_tile_init() { MATH((llk_math_eltwise_binary_sfpu_logsigmoid_init<APPROX>())); }
 
 }  // namespace ckernel
