@@ -53,7 +53,7 @@ jobs:
           }, # Ata Tuzuner
           {
             arch: blackhole,
-            runs-on: ["BH", "pipeline-perf", "in-service"],
+            runs-on: ["BH", "pipeline-perf", "P150", "in-service"],
             name: "BH P150 DRAM ubench",
             cmd: "./tests/scripts/run_moreh_microbenchmark.sh",
           }, # Yu Gao
