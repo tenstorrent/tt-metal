@@ -229,7 +229,7 @@ set_target_properties(
 add_executable(
     test_addrgen_write
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/addrgen_write/test_main.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/addrgen_write/runner.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/addrgen_write/unicast_runner.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/addrgen_write/multicast_runner.cpp
 )
 

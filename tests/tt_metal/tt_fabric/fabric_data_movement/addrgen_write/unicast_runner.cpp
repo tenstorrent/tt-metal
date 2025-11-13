@@ -112,7 +112,7 @@ inline void verify_payload_words(const std::vector<uint32_t>& rx, const std::vec
 }  // anonymous namespace
 
 // ----------------------------------- program -----------------------------------
-void run_addrgen_write_test(HelpersFixture* fixture, const AddrgenTestParams& p) {
+void run_unicast_write_test(HelpersFixture* fixture, const AddrgenTestParams& p) {
     const auto& cp = tt::tt_metal::MetalContext::instance().get_control_plane();
     namespace Dist = tt::tt_metal::distributed;
 

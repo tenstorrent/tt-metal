@@ -8,7 +8,7 @@
 
 // Forward declaration of test runners
 namespace tt::tt_fabric::test {
-void run_addrgen_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, const AddrgenTestParams& p);
+void run_unicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, const AddrgenTestParams& p);
 void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, const AddrgenTestParams& p);
 }
 
@@ -63,7 +63,7 @@ TEST_P(AddrgenApiVariantTest, Write) {
     if (is_multicast) {
         tt::tt_fabric::test::run_multicast_write_test(&fixture, p);
     } else {
-        tt::tt_fabric::test::run_addrgen_write_test(&fixture, p);
+        tt::tt_fabric::test::run_unicast_write_test(&fixture, p);
     }
 }
 
