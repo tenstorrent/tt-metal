@@ -645,8 +645,7 @@ ALWI void sfpu_reduce_init() {
  * available on the compute engine.
  *
  * Only 32x32 tile dimensions are supported.
- * - This kernel is optimized for 32x32 tile dimensions and uses VectorMode::RC_custom for customized addition
- * Only dst tiles within the destination register are supported.
+ * All three tile indices must refer to tiles in the DST register
  *
  * | Argument        | Description                                                              | Type      | Valid Range                                           | Required |
  * |-----------------|--------------------------------------------------------------------------|-----------|-------------------------------------------------------|----------|
@@ -668,7 +667,7 @@ ALWI void sfpu_add_top_row(uint32_t dst_tile_a, uint32_t dst_tile_b, uint32_t ds
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void sfpu_add_top_row_init() {        
+ALWI void sfpu_add_top_row_init() {
     MATH((llk_math_eltwise_binary_sfpu_add_top_row_init<true>()));
 }
 
