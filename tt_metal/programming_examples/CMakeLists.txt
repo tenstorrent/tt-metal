@@ -16,6 +16,7 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/eltwise_sfpu)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/hello_world_compute_kernel)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/hello_world_datamovement_kernel)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/hello_world_datatypes_kernel)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/llk_init_uninit_ttsim_tensix_dump)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/loopback)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/matmul)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/pad_multi_core)
@@ -43,6 +44,7 @@ install(
         hello_world_compute_kernel
         hello_world_datamovement_kernel
         hello_world_datatypes_kernel
+        llk_init_uninit_ttsim_tensix_dump
         loopback
         matmul
         shard_data_rm
@@ -71,6 +73,7 @@ install(
         hello_world_compute_kernel
         hello_world_datamovement_kernel
         hello_world_datatypes_kernel
+        llk_init_uninit_ttsim_tensix_dump
         loopback
         matmul
         shard_data_rm

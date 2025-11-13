@@ -43,6 +43,7 @@
 #include "llrt.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_backend_api_types.hpp"
+#include <umd/device/simulation/tt_sim_chip.hpp>
 
 using std::flush;
 using std::int32_t;
@@ -732,6 +733,19 @@ void DPrintServer::Impl::attach_device(ChipId device_id) {
         device_to_core_range_.count(device_id) == 0, "Device {} added to DPRINT server more than once!", device_id);
     device_to_core_range_[device_id] = print_cores_sanitized;
     device_to_core_range_lock_.unlock();
+
+    // if TTSIM is enabled, allow the cores enabled for DPRINT to perform a TENSIX_DUMP
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled()) {
+        for (const auto& core_desc : print_cores_sanitized) {
+            uint32_t x = core_desc.coord.x;
+            uint32_t y = core_desc.coord.y;
+            auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+            tt::umd::Chip* chip = cluster.get_driver()->get_chip(device_id);
+            if (auto* sim = dynamic_cast<tt::umd::TTSimChip*>(chip)) {
+                sim->set_debug_core(x, y);
+            }
+        }
+    }
     log_info(tt::LogMetal, "DPRINT Server attached device {}", device_id);
 }  // attach_device
 
