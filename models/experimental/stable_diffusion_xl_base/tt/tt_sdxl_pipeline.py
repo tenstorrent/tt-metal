@@ -492,7 +492,6 @@ class TtSDXLPipeline(LightweightModule):
         fixed_seed_for_batch=False,
         timesteps=None,
         sigmas=None,
-        input_latents=None,
     ):
         # Generate user input tensors for the TT model.
 
@@ -514,30 +513,26 @@ class TtSDXLPipeline(LightweightModule):
             start_latent_seed, int
         ), "start_latent_seed must be an integer or None"
 
-        if input_latents is not None:
-            # Use provided latents (e.g., from base pipeline for refiner)
-            tt_latents = input_latents
-        else:
-            # Generate random latents
-            latents_list = []
-            for index in range(self.batch_size):
-                if start_latent_seed is not None:
-                    torch.manual_seed(start_latent_seed if fixed_seed_for_batch else start_latent_seed + index)
-                latents = self.torch_pipeline.prepare_latents(
-                    1,
-                    num_channels_latents,
-                    height,
-                    width,
-                    all_prompt_embeds_torch.dtype,
-                    self.cpu_device,
-                    None,
-                    None,
-                )
-                B, C, H, W = latents.shape  # 1, 4, 128, 128
-                latents = torch.permute(latents, (0, 2, 3, 1))  # [1, H, W, C]
-                latents = latents.reshape(B, 1, H * W, C)  # [1, 1, H*W, C]
-                latents_list.append(latents)
-            tt_latents = torch.cat(latents_list, dim=0)  # [batch_size, 1, H*W, C]
+        # Generate random latents
+        latents_list = []
+        for index in range(self.batch_size):
+            if start_latent_seed is not None:
+                torch.manual_seed(start_latent_seed if fixed_seed_for_batch else start_latent_seed + index)
+            latents = self.torch_pipeline.prepare_latents(
+                1,
+                num_channels_latents,
+                height,
+                width,
+                all_prompt_embeds_torch.dtype,
+                self.cpu_device,
+                None,
+                None,
+            )
+            B, C, H, W = latents.shape  # 1, 4, 128, 128
+            latents = torch.permute(latents, (0, 2, 3, 1))  # [1, H, W, C]
+            latents = latents.reshape(B, 1, H * W, C)  # [1, 1, H*W, C]
+            latents_list.append(latents)
+        tt_latents = torch.cat(latents_list, dim=0)  # [batch_size, 1, H*W, C]
 
         self.extra_step_kwargs = self.torch_pipeline.prepare_extra_step_kwargs(None, 0.0)
         text_encoder_projection_dim = self.torch_pipeline.text_encoder_2.config.projection_dim
