@@ -151,6 +151,7 @@ static_assert(
     sizeof(NocMulticastAtomicIncCommandHeader) == 12, "NocMulticastAtomicIncCommandHeader size is not 12 bytes");
 union NocCommandFields {
     NocUnicastCommandHeader unicast_write;
+    NocUnicastCommandHeader unicast_read;
     NocUnicastInlineWriteCommandHeader unicast_inline_write;
     NocMulticastCommandHeader mcast_write;
     NocUnicastAtomicIncCommandHeader unicast_seminc;
