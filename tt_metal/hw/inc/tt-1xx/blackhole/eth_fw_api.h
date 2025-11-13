@@ -175,7 +175,7 @@ struct eth_api_table_t {
     uint32_t* send_eth_msg_ptr;           // Pointer to the send eth msg function
     uint32_t* service_eth_msg_ptr;        // Pointer to the service eth msg function
     uint32_t* eth_link_status_check_ptr;  // Pointer to the eth link status check function
-    uint32_t* eth_flush_icache_ptr;       // Pointer to the eth flush icache function
+    uint32_t* eth_dynamic_noc_init_ptr;   // Pointer to the eth flush icache function
     uint32_t spare[16 - 4];
 };
 
@@ -293,6 +293,7 @@ FORCE_INLINE bool is_link_up() {
 }
 
 FORCE_INLINE void base_fw_dynamic_noc_local_state_init() {
+#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 1)
     constexpr uint32_t risc1_mailbox_addr = MEM_SYSENG_ETH_MAILBOX_ADDR + (MAILBOX_RISC1 * sizeof(eth_mailbox_t));
 
     volatile tt_l1_ptr uint32_t* risc1_mailbox_msg_ptr =
@@ -312,6 +313,11 @@ FORCE_INLINE void base_fw_dynamic_noc_local_state_init() {
         invalidate_l1_cache();
         risc1_mailbox_val = *risc1_mailbox_msg_ptr;
     } while ((risc1_mailbox_val & MEM_SYSENG_ETH_MSG_STATUS_MASK) == MEM_SYSENG_ETH_MSG_CALL);
+#else
+    // Directly call the function
+    reinterpret_cast<void (*)()>(
+        (uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->eth_dynamic_noc_init_ptr))();
+#endif
 }
 
 FORCE_INLINE bool is_port_up() {
