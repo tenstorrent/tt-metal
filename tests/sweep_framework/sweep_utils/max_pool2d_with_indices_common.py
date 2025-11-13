@@ -130,6 +130,7 @@ def run_max_pool2d_with_indices(
     sharding=None,
     ceil_mode=False,
     memory_config=None,
+    in_place=False,
     run_twice=False,
 ):
     kernel_size = [kernel_h, kernel_w]
@@ -186,6 +187,7 @@ def run_max_pool2d_with_indices(
         dilation=dilation,
         applied_shard_scheme=sharding,
         ceil_mode=ceil_mode,
+        in_place_halo=in_place,
         deallocate_input=False,
         reallocate_halo_output=True,
         return_indices=True,
@@ -206,6 +208,7 @@ def run_max_pool2d_with_indices(
             dilation=dilation,
             applied_shard_scheme=sharding,
             ceil_mode=ceil_mode,
+            in_place_halo=in_place,
             deallocate_input=False,
             reallocate_halo_output=True,
             return_indices=True,
