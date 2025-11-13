@@ -13,6 +13,8 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/compile_time_arg_tmp.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
+#include "tt_metal/fabric/hw/inc/udm/tt_fabric_udm.hpp"
+#include "tt_metal/fabric/hw/inc/udm/udm_memory_pool.hpp"
 
 #include <cstddef>
 #include <array>
@@ -34,7 +36,7 @@ using WorkerToFabricRelaySender = WorkerToFabricEdmSenderImpl<false, FABRIC_RELA
 using FabricRelayStatus = EDMStatus;
 
 template <uint8_t NUM_EDM_BUFFERS>
-using FabricRelayToMuxSender = WorkerToFabricEdmSenderImpl<false, NUM_EDM_BUFFERS>;
+using FabricRelayToMuxSender = WorkerToFabricEdmSenderImpl<true, NUM_EDM_BUFFERS>;
 }  // namespace tt::tt_fabric
 
 constexpr uint8_t NUM_BUFFERS = get_compile_time_arg_val(0);
@@ -59,9 +61,11 @@ constexpr size_t mux_relay_teardown_semaphore_addr = get_compile_time_arg_val(17
 constexpr size_t mux_relay_buffer_index_semaphore_addr = get_compile_time_arg_val(18);
 constexpr size_t mux_free_slots_stream_id = get_compile_time_arg_val(19);
 constexpr size_t local_mux_status_address = get_compile_time_arg_val(20);
-constexpr size_t router_noc_x = get_compile_time_arg_val(21);
-constexpr size_t router_noc_y = get_compile_time_arg_val(22);
-constexpr size_t fabric_router_sync_address = get_compile_time_arg_val(23);
+constexpr size_t udm_memory_pool_base_address = get_compile_time_arg_val(21);
+constexpr size_t udm_memory_pool_size = get_compile_time_arg_val(22);
+constexpr size_t router_noc_x = get_compile_time_arg_val(23);
+constexpr size_t router_noc_y = get_compile_time_arg_val(24);
+constexpr size_t fabric_router_sync_address = get_compile_time_arg_val(25);
 
 template <uint8_t NUM_BUFFERS>
 void wait_for_static_connection_to_ready(
@@ -101,61 +105,96 @@ void setup_channel(
     channel_connection_established = false;
 }
 
+template <typename RelayToMuxSenderType>
 __attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_noc_txn_to_local_chip(
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* const packet_header) {
+    RelayToMuxSenderType& mux_connection, volatile tt_l1_ptr PACKET_HEADER_TYPE* const packet_header) {
     const auto& header = *packet_header;
     uint16_t payload_size_bytes = header.payload_size_bytes;
     uint32_t payload_start_address = reinterpret_cast<size_t>(packet_header) + sizeof(PACKET_HEADER_TYPE);
 
     tt::tt_fabric::NocSendType noc_send_type = header.noc_send_type;
-    if (noc_send_type > tt::tt_fabric::NocSendType::NOC_SEND_TYPE_LAST) {
-        __builtin_unreachable();
-    }
     switch (noc_send_type) {
         case tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE: {
             const auto noc_addr = header.command_fields.unicast_write.noc_address;
-            auto noc_addr_components = get_noc_address_components(noc_addr);
-            const auto dest_noc_x = noc_addr_components.first.x;
-            const auto dest_noc_y = noc_addr_components.first.y;
-            const auto dest_address = noc_addr_components.second;
-            DPRINT << "Relay Send NOC_UNICAST_WRITE to noc_x:" << (uint)dest_noc_x << " noc_y:" << (uint)dest_noc_y
-                   << " addr:" << dest_address << " payload_size_bytes:" << payload_size_bytes << ENDL();
             noc_async_write_one_packet(payload_start_address, noc_addr, payload_size_bytes);
             // temporarily place here until we have txn id support
             noc_async_writes_flushed();
-            DPRINT << "Relay Send NOC_UNICAST_WRITE Done" << ENDL();
+            // writes done, send ack back
+            tt::tt_fabric::udm::fabric_fast_write_ack(mux_connection, packet_header);
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_UNICAST_ATOMIC_INC: {
             const auto noc_addr = header.command_fields.unicast_seminc.noc_address;
-            auto noc_addr_components = get_noc_address_components(noc_addr);
-            const auto dest_noc_x = noc_addr_components.first.x;
-            const auto dest_noc_y = noc_addr_components.first.y;
-            const auto dest_address = noc_addr_components.second;
             const auto increment = header.command_fields.unicast_seminc.val;
-            DPRINT << "Relay Send NOC_UNICAST_ATOMIC_INC to noc_x:" << (uint)dest_noc_x << " noc_y:" << (uint)dest_noc_y
-                   << " addr:" << dest_address << " increment:" << increment << ENDL();
             if (header.command_fields.unicast_seminc.flush) {
                 noc_async_write_barrier();
             }
             noc_semaphore_inc<true>(noc_addr, increment);
             // temporarily place here until we have txn id support
             noc_async_atomic_barrier();
+            // writes done, send ack back
+            tt::tt_fabric::udm::fabric_fast_atomic_ack(mux_connection, packet_header);
 
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_UNICAST_INLINE_WRITE: {
             const auto noc_addr = header.command_fields.unicast_inline_write.noc_address;
-            auto noc_addr_components = get_noc_address_components(noc_addr);
-            const auto dest_noc_x = noc_addr_components.first.x;
-            const auto dest_noc_y = noc_addr_components.first.y;
-            const auto dest_address = noc_addr_components.second;
             const auto value = header.command_fields.unicast_inline_write.value;
-            DPRINT << "Relay Send NOC_UNICAST_INLINE_WRITE to noc_x:" << (uint)dest_noc_x
-                   << " noc_y:" << (uint)dest_noc_y << " addr:" << dest_address << " value:" << value << ENDL();
             noc_inline_dw_write<InlineWriteDst::DEFAULT, true>(noc_addr, value);
             // temporarily place here until we have txn id support
             noc_async_writes_flushed();
+            // writes done, send ack back
+            tt::tt_fabric::udm::fabric_fast_write_ack(mux_connection, packet_header);
+        } break;
+
+        case tt::tt_fabric::NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC: {
+            const auto dest_address = header.command_fields.unicast_seminc_fused.noc_address;
+            noc_async_write_one_packet(payload_start_address, dest_address, payload_size_bytes);
+
+            const uint64_t semaphore_dest_address = header.command_fields.unicast_seminc_fused.semaphore_noc_address;
+            const auto increment = header.command_fields.unicast_seminc_fused.val;
+            if (header.command_fields.unicast_seminc_fused.flush) {
+                noc_async_write_barrier();
+            }
+            noc_semaphore_inc<true>(semaphore_dest_address, increment);
+            // temporarily place here until we have txn id support
+            noc_async_atomic_barrier();
+            // writes done, send ack back - Do we also need to send atomic inc response back?
+            tt::tt_fabric::udm::fabric_fast_write_ack(mux_connection, packet_header);
+        } break;
+
+        case tt::tt_fabric::NocSendType::NOC_UNICAST_SCATTER_WRITE: {
+            size_t offset = 0;
+            size_t chunk_size;
+            for (size_t i = 0; i < NOC_SCATTER_WRITE_MAX_CHUNKS; ++i) {
+                if (i == NOC_SCATTER_WRITE_MAX_CHUNKS - 1) {
+                    chunk_size = payload_size_bytes - offset;
+                } else {
+                    chunk_size = header.command_fields.unicast_scatter_write.chunk_size[i];
+                }
+                const auto dest_address = header.command_fields.unicast_scatter_write.noc_address[i];
+                noc_async_write_one_packet(payload_start_address + offset, dest_address, chunk_size);
+                offset += chunk_size;
+            }
+            // temporarily place here until we have txn id support
+            noc_async_writes_flushed();
+            // writes done, send ack back
+            tt::tt_fabric::udm::fabric_fast_write_ack(mux_connection, packet_header);
+        } break;
+
+        case tt::tt_fabric::NocSendType::NOC_UNICAST_READ: {
+            const auto noc_addr = header.command_fields.unicast_read.noc_address;
+            const auto size_bytes = header.udm_control.read.size_bytes;
+            // allocate a chunk of memory for storing read response
+            uint32_t read_response_memory_pool_addr = tt::tt_fabric::udm::UDMMemoryPool::allocate_memory(size_bytes);
+            noc_async_read(noc_addr, read_response_memory_pool_addr, size_bytes);
+            // temporarily place here until we have txn id support
+            noc_async_read_barrier();
+            // reads done, send ack back
+            tt::tt_fabric::udm::fabric_fast_read_any_len_ack(
+                mux_connection, packet_header, read_response_memory_pool_addr);
+            // free memory chunk
+            tt::tt_fabric::udm::UDMMemoryPool::deallocate_memory(size_bytes);
         } break;
         default: {
             ASSERT(false);
@@ -176,7 +215,7 @@ void forward_data(
         invalidate_l1_cache();
         auto packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(buffer_address);
 
-        execute_noc_txn_to_local_chip(packet_header);
+        execute_noc_txn_to_local_chip(mux_connection, packet_header);
 
         worker_interface.local_write_counter.increment();
         worker_interface.local_read_counter.increment();
@@ -193,6 +232,9 @@ void kernel_main() {
 
     auto status_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(status_address);
     status_ptr[0] = tt::tt_fabric::FabricRelayStatus::STARTED;
+
+    // Initialize UDM memory pool for read response data
+    tt::tt_fabric::udm::UDMMemoryPool::init(udm_memory_pool_base_address, udm_memory_pool_size);
 
     // clear out memory regions
     auto num_regions_to_clear = get_arg_val<uint32_t>(rt_args_idx++);
