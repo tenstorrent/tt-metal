@@ -182,6 +182,9 @@ target_sources(
             fabric/mesh_graph_descriptors/single_galaxy_torus_x_graph_descriptor.textproto
             fabric/mesh_graph_descriptors/single_galaxy_torus_y_graph_descriptor.textproto
             fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
+            fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_mesh_graph_descriptor.textproto
+            fabric/mesh_graph_descriptors/single_bh_galaxy_torus_x_mesh_graph_descriptor.textproto
+            fabric/mesh_graph_descriptors/single_bh_galaxy_torus_y_mesh_graph_descriptor.textproto
             fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.textproto
             fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.textproto
             fabric/fabric_edm_packet_header.hpp
