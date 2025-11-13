@@ -333,9 +333,14 @@ void build_tt_fabric_program(
                 auto eth_chan_dir1 = eth_chans_dir1[link];
                 auto eth_chan_dir2 = eth_chans_dir2[link];
 
+<<<<<<< HEAD
                 auto& router_builder1 = router_builders.at(eth_chan_dir1);
                 auto& router_builder2 = router_builders.at(eth_chan_dir2);
 
+=======
+                auto& edm_builder1 = edm_builders.at(eth_chan_dir1);
+                auto& edm_builder2 = edm_builders.at(eth_chan_dir2);
+>>>>>>> fc6f71d751 (Disabled downstream EDM connection for NeighborExchange + Commenting changes)
                 build_downstream_connections(eth_chan_dir1, eth_chan_dir2);
 
                 // select VC based on the current link
@@ -356,25 +361,31 @@ void build_tt_fabric_program(
         }
     };
 
-    if (is_2D_routing) {
-        // 2D Routing
-        connect_downstream_builders(RoutingDirection::N, RoutingDirection::S);
-        connect_downstream_builders(RoutingDirection::E, RoutingDirection::W);
-        connect_downstream_builders(RoutingDirection::N, RoutingDirection::E);
-        connect_downstream_builders(RoutingDirection::N, RoutingDirection::W);
-        connect_downstream_builders(RoutingDirection::S, RoutingDirection::E);
-        connect_downstream_builders(RoutingDirection::S, RoutingDirection::W);
-    } else if (wrap_around_mesh && num_intra_chip_neighbors == 2) {
-        // 1D Routing wrap the corner chips, fold the internal connections
-        auto it = chip_neighbors.begin();
-        auto dir1 = it->first;
-        it++;
-        auto dir2 = it->first;
-        connect_downstream_builders(dir1, dir2);
-    } else if (topology != tt::tt_fabric::Topology::NeighborExchange) {
-        // 1D Routing, except for NeighborExchange topology
-        connect_downstream_builders(RoutingDirection::N, RoutingDirection::S);
-        connect_downstream_builders(RoutingDirection::E, RoutingDirection::W);
+    // Connect fabric routers on the same chip together, to enable forwarding of messages between adjacent chips
+    // Note: NeighborExchange topology does not support message forwarding
+    if (topology != tt::tt_fabric::Topology::NeighborExchange) {
+        if (is_2D_routing) {
+            // 2D Routing
+            connect_downstream_builders(RoutingDirection::N, RoutingDirection::S);
+            connect_downstream_builders(RoutingDirection::E, RoutingDirection::W);
+            connect_downstream_builders(RoutingDirection::N, RoutingDirection::E);
+            connect_downstream_builders(RoutingDirection::N, RoutingDirection::W);
+            connect_downstream_builders(RoutingDirection::S, RoutingDirection::E);
+            connect_downstream_builders(RoutingDirection::S, RoutingDirection::W);
+        } else if (wrap_around_mesh && num_intra_chip_neighbors == 2) {
+            // This edge case handles meshes that don't actually support wrap-around connections for Ring topologies.
+            // Instead, we connect orthogonal directions on the corner chips, to form a "wraparound mesh"
+            // 1D Routing wrap the corner chips, fold the internal connections
+            auto it = chip_neighbors.begin();
+            auto dir1 = it->first;
+            it++;
+            auto dir2 = it->first;
+            connect_downstream_builders(dir1, dir2);
+        } else {
+            // 1D Routing, except for NeighborExchange topology
+            connect_downstream_builders(RoutingDirection::N, RoutingDirection::S);
+            connect_downstream_builders(RoutingDirection::E, RoutingDirection::W);
+        }
     }
 }
 
