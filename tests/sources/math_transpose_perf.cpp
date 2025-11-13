@@ -44,11 +44,20 @@ void run_kernel()
     {
         ZONE_SCOPED("TILE_LOOP")
 
-        for (uint32_t tile = 0; tile < TILE_CNT; tile++)
+        for (uint32_t block_start = 0; block_start < TILE_CNT; block_start += MAX_TILES_DEST)
         {
-            _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-                PERF_ADDRESS(PERF_INPUT_A, tile), UNPACK_TRANSPOSE_FACES, formats.unpack_src, formats.unpack_dst);
-            _llk_unpack_set_srcb_dummy_valid_();
+            uint32_t block_tiles = std::min(TILE_CNT - block_start, MAX_TILES_DEST);
+
+            for (uint32_t block_tile = 0; block_tile < block_tiles; block_tile++)
+            {
+                _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+                    PERF_ADDRESS(PERF_INPUT_A, block_start + block_tile), UNPACK_TRANSPOSE_FACES, formats.unpack_src, formats.unpack_dst);
+            }
+
+            for (uint32_t block_tile = 0; block_tile < block_tiles; block_tile++)
+            {
+                _llk_unpack_set_srcb_dummy_valid_();
+            }
         }
         PROFILER_SYNC();
     }
@@ -97,7 +106,11 @@ void run_kernel()
             _llk_math_transpose_dest_init_<MATH_TRANSPOSE_FACES, is_fp32_dest_acc_en>();
             for (uint32_t block_tile = 0; block_tile < block_tiles; block_tile++)
             {
+#ifdef ARCH_BLACKHOLE
+                _llk_math_transpose_dest_<is_fp32_dest_acc_en, MATH_TRANSPOSE_FACES, is_fp32_dest_acc_en>(block_tile);
+#else
                 _llk_math_transpose_dest_<MATH_TRANSPOSE_FACES, is_fp32_dest_acc_en>(block_tile);
+#endif
             }
 
             _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();

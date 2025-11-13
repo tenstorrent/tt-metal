@@ -2,15 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from conftest import skip_for_blackhole, skip_for_wormhole
 from helpers.format_config import DataFormat
 from helpers.llk_params import DestAccumulation, Transpose
 from helpers.param_config import input_output_formats, parametrize
 from helpers.perf import PerfRunType, perf_benchmark, update_report
 
 
-@skip_for_blackhole
-@skip_for_wormhole
 @pytest.mark.perf
 @parametrize(
     test_name="math_transpose_perf",
@@ -27,6 +24,8 @@ def test_perf_math_transpose(
     unpack_transpose_faces,
     math_transpose_faces,
 ):
+    if formats.input_format != formats.output_format:
+        pytest.skip("Prevent mixing INT and FP in math transpose")
 
     if math_transpose_faces == Transpose.No and not formats.input_format.is_32_bit():
         pytest.skip(
