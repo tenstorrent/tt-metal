@@ -14,7 +14,7 @@ def get_model_targets(model_name):
         model_targets_json = json.load(f)
 
     model_targets = model_targets_json[model_name]
-    if model_name[-3:] == "-tp":
+    if model_name.endswith("-tp"):
         model_targets["perf"] = model_targets.pop("perf-tp")
 
     return model_targets

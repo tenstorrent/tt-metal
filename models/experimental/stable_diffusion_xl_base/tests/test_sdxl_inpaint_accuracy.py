@@ -247,7 +247,7 @@ def test_accuracy_sdxl_inpaint(
 
 
 def get_dataset_for_inpainting_accuracy(n_prompts: int):
-    logger.info(f"Reqested {n_prompts} prompts for inpainting accuracy evaluation...")
+    logger.info(f"Requested {n_prompts} prompts for inpainting accuracy evaluation...")
     if n_prompts > MAX_N_SAMPLES or n_prompts < MIN_N_SAMPLES:
         logger.warning(f"Requested number of prompts {n_prompts} is out of bounds [{MIN_N_SAMPLES}, {MAX_N_SAMPLES}]")
         if n_prompts > MAX_N_SAMPLES:
