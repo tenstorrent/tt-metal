@@ -167,6 +167,233 @@ def create_global_semaphores(mesh_device, cores, initial_value):
     return ccl_semaphore_handles
 
 
+# def run_reduce_scatter_impl(
+#     mesh_device,
+#     num_devices,
+#     rs_input_shape,
+#     dim,
+#     num_links,
+#     rs_input_dtype,
+#     layout,
+#     mem_config_input,
+#     mem_config_rs,
+#     rs_topology,
+#     num_iters=1,
+#     enable_trace=True,
+#     ones_tensor=False,
+#     mem_config_intermediate=None,
+#     cluster_axis=None,
+#     use_barrier=False,
+#     use_persistent_buffers=True,
+#     chunks_per_sync=None,
+#     num_workers_per_link=None,
+#     num_buffers_per_channel=None,
+#     verify_output=True,
+#     use_new=False,
+# ):
+#     torch.manual_seed(0)
+
+#     tile = (32, 32)
+
+#     ##### Fabric setup #####
+#     compute_grid_size = mesh_device.compute_with_storage_grid_size()
+#     ccl_sub_device_crs = ttnn.CoreRangeSet(
+#         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
+#     )
+#     worker_sub_device = ttnn.SubDevice(
+#         [
+#             ccl_sub_device_crs,
+#         ]
+#     )
+#     worker_sub_device_id = ttnn.SubDeviceId(0)
+#     sub_device_stall_group = [worker_sub_device_id]
+
+#     sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
+#     mesh_device.load_sub_device_manager(sub_device_manager)
+#     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
+
+#     # create global semaphore handles
+#     ccl_semaphore_handles = [create_global_semaphores(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)]
+
+#     barrier_semaphore_handles = [
+#         ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
+#     ]
+
+#     ### Create persistent output buffers
+#     logger.info("Creating persistent buffers")
+#     intermediate_shape = rs_input_shape[:]
+#     if rs_topology == ttnn.Topology.Linear:
+#         # Line RS requires double-sized input for forward/backward
+#         intermediate_shape.insert(0, 2)
+#     if use_persistent_buffers:
+#         persistent_intermediate_buffers = [
+#             ttnn.from_torch(
+#                 torch.zeros(intermediate_shape),
+#                 device=mesh_device,
+#                 layout=ttnn.TILE_LAYOUT,
+#                 dtype=rs_input_dtype,
+#                 memory_config=mem_config_intermediate,
+#                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+#             )
+#             for _ in range(num_iters)
+#         ]
+#     rs_output_shape = rs_input_shape[:]
+#     rs_output_shape[dim] //= num_devices
+#     if use_persistent_buffers:
+#         persistent_output_buffers = [
+#             ttnn.from_torch(
+#                 torch.zeros(rs_output_shape),
+#                 device=mesh_device,
+#                 layout=ttnn.TILE_LAYOUT,
+#                 dtype=rs_input_dtype,
+#                 memory_config=mem_config_rs,
+#                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+#             )
+#             for _ in range(num_iters)
+#         ]
+
+#     logger.info("Done creating persistent buffers")
+
+#     ##### All gather input setup #####
+#     logger.info(f"Reduce scatter shape: {rs_input_shape}")
+#     logger.info(f"Reduce scatter dim: {dim}")
+#     logger.info(f"input mem config: {mem_config_input}")
+#     logger.info(f"Reduce input mem config: {mem_config_rs}")
+#     logger.info(f"intermediate mem config: {mem_config_intermediate}")
+#     logger.info(f"topology: {rs_topology}")
+
+#     tt_input_tensor_mesh_list = []
+#     torch_input_tensor_list = []
+
+#     for i in range(num_iters):
+#         rs_global_input_shape = rs_input_shape[:]
+#         rs_global_input_shape[dim] *= num_devices
+#         if ones_tensor:
+#             rs_input_tensor = torch.ones(rs_global_input_shape).bfloat16()
+#         else:
+#             rs_input_tensor = torch.rand(rs_global_input_shape).bfloat16()
+#         input_tensors = torch.chunk(rs_input_tensor, num_devices, dim)
+#         torch_input_tensor_list.append(input_tensors)
+
+#         input_tensor_mesh = ttnn.from_torch(
+#             rs_input_tensor,
+#             device=mesh_device,
+#             layout=layout,
+#             dtype=rs_input_dtype,
+#             memory_config=mem_config_input,
+#             mesh_mapper=ttnn.create_mesh_mapper(
+#                 mesh_device,
+#                 ttnn.MeshMapperConfig(
+#                     [ttnn.PlacementReplicate(), ttnn.PlacementShard(dim)], ttnn.MeshShape(1, num_devices)
+#                 ),
+#             ),
+#         )
+
+#         tt_input_tensor_mesh_list.append(input_tensor_mesh)
+
+#     ##### Perform torch ops #####
+#     torch_reduce_scatter_output_list = []
+#     for i in range(num_iters):
+#         reduce_output = torch.sum(torch.stack(torch_input_tensor_list[i]), dim=0)
+#         scatter_output = torch.chunk(reduce_output, num_devices, dim)
+#         torch_reduce_scatter_output_list.append(scatter_output)
+
+#     ##### Perform the TT ops #####
+#     tt_reduce_scatter_output_list = []
+
+#     def run_op(i):
+#         if use_new:
+#             logger.info(f"Using new reduce scatter")
+#             tt_reduce_scatter_output_tensor = ttnn.reduce_scatter(
+#                 tt_input_tensor_mesh_list[i],
+#                 dim=dim,
+#                 num_links=num_links,
+#                 memory_config=mem_config_rs,
+#                 topology=rs_topology,
+#                 subdevice_id=worker_sub_device_id,
+#                 cluster_axis=cluster_axis,
+#             )
+#         else:
+#             logger.info(f"Using experimental reduce scatter")
+#             tt_reduce_scatter_output_tensor = ttnn.experimental.reduce_scatter_minimal_async(
+#                 tt_input_tensor_mesh_list[i],
+#                 persistent_output_buffers=[persistent_intermediate_buffers[i], persistent_output_buffers[i]]
+#                 if use_persistent_buffers
+#                 else None,
+#                 dim=dim,
+#                 multi_device_global_semaphore=ccl_semaphore_handles[i],
+#                 barrier_semaphore=barrier_semaphore_handles[i] if use_barrier else None,
+#                 num_links=num_links,
+#                 memory_config=mem_config_rs,
+#                 intermediate_memory_config=mem_config_intermediate,
+#                 topology=rs_topology,
+#                 subdevice_id=worker_sub_device_id,
+#                 cluster_axis=cluster_axis,
+#                 chunks_per_sync=chunks_per_sync,
+#                 num_workers_per_link=num_workers_per_link,
+#                 num_buffers_per_channel=num_buffers_per_channel,
+#             )
+
+#         return tt_reduce_scatter_output_tensor
+
+#     if enable_trace:
+#         # Compile the op
+#         tt_reduce_scatter_output_trace_list = []
+#         for i in range(num_iters):
+#             tt_reduce_scatter_output_tensor = run_op(i)
+#         logger.info(f"Done compiling Op")
+
+#         # Capture the trace
+#         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+#         for i in range(num_iters):
+#             tt_reduce_scatter_output_tensor = run_op(i)
+#             tt_reduce_scatter_output_trace_list.append(tt_reduce_scatter_output_tensor)
+#         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+#         logger.info(f"Done capturing trace")
+
+#         # Execute trace
+#         ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+#         logger.info(f"Done executing trace")
+
+#         # Synchronize the devices
+#         ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+#         for tt_tensor in tt_reduce_scatter_output_trace_list:
+#             tt_rs_out = ttnn.from_device(tt_tensor)
+#             tt_rs_out = ttnn.to_torch(tt_rs_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=dim))
+#             tt_tensor.deallocate(True)
+#             tt_reduce_scatter_output_list.append(tt_rs_out)
+#     else:
+#         for i in range(num_iters):
+#             tt_reduce_scatter_output_tensor = run_op(i)
+#             tt_rs_out = ttnn.from_device(tt_reduce_scatter_output_tensor)
+#             tt_rs_out = ttnn.to_torch(tt_rs_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=dim))
+#             tt_reduce_scatter_output_tensor.deallocate(True)
+#             tt_reduce_scatter_output_list.append(tt_rs_out)
+
+#             logger.info(f"Waiting for op")
+#             ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+#             logger.info(f"Done op")
+
+#             logger.info(f"Done iteration {i}")
+
+#     if verify_output:
+#         for i in range(num_iters):
+#             tt_rs_out = tt_reduce_scatter_output_list[i]
+#             torch_rs_out_tensor = torch_reduce_scatter_output_list[i]
+
+#             torch_rs_out = torch.cat(torch_rs_out_tensor, dim)
+
+#             if ones_tensor:
+#                 eq, output = comp_equal(tt_rs_out, torch_rs_out)
+#             else:
+#                 eq, output = comp_pcc(tt_rs_out, torch_rs_out)
+
+#             logger.info(f"{output}, iteration {i}")
+#             assert eq, f"{i} FAILED ag: {output}"
+
+
+#     mesh_device.reset_sub_device_stall_group()
+#     mesh_device.clear_loaded_sub_device_manager()
 def run_reduce_scatter_impl(
     mesh_device,
     num_devices,
@@ -191,6 +418,7 @@ def run_reduce_scatter_impl(
     verify_output=True,
     use_new=False,
 ):
+    use_sub_devices = False
     torch.manual_seed(0)
 
     tile = (32, 32)
@@ -208,8 +436,9 @@ def run_reduce_scatter_impl(
     worker_sub_device_id = ttnn.SubDeviceId(0)
     sub_device_stall_group = [worker_sub_device_id]
 
-    sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
-    mesh_device.load_sub_device_manager(sub_device_manager)
+    if use_sub_devices:
+        sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
+        mesh_device.load_sub_device_manager(sub_device_manager)
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
     # create global semaphore handles
@@ -392,7 +621,8 @@ def run_reduce_scatter_impl(
             assert eq, f"{i} FAILED ag: {output}"
 
     mesh_device.reset_sub_device_stall_group()
-    mesh_device.clear_loaded_sub_device_manager()
+    if use_sub_devices:
+        mesh_device.clear_loaded_sub_device_manager()
 
 
 def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Transformer], tt_cache_path):
@@ -785,8 +1015,43 @@ class LlamaForCausalLM:
         return cls(mesh_device, max_batch_size)
 
     def prefill_forward(self, *args, **kwargs):
-        logger.info("Running minimal reduce scatter async test, requires 2x4 mesh device")
+        # logger.info("Running minimal reduce scatter async test, requires 2x4 mesh device")
+        # num_links = 1
+        # rs_input_shape = [1, 1, 8, 7168]
+        # dim = 3
+        # layout = ttnn.TILE_LAYOUT
+        # rs_input_dtype = ttnn.bfloat16
+        # mem_config_input = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+        # mem_config_rs = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+        # enable_trace = False
+        # num_iters = 3
+        # use_barrier = True
+        # use_persistent_buffers = False
+        # rs_topology = ttnn.Topology.Linear
+        # cluster_axis = 1
+
+        # submesh_device = self.mesh_device.create_submesh(ttnn.MeshShape((1, 4)))
+        # run_reduce_scatter_impl(
+        #     submesh_device,
+        #     submesh_device.get_num_devices(),
+        #     rs_input_shape,
+        #     dim,
+        #     num_links,
+        #     rs_input_dtype,
+        #     layout,
+        #     mem_config_input,
+        #     mem_config_rs,
+        #     rs_topology=rs_topology,
+        #     enable_trace=enable_trace,
+        #     num_iters=num_iters,
+        #     ones_tensor=False,
+        #     use_barrier=use_barrier,
+        #     use_persistent_buffers=use_persistent_buffers,
+        #     cluster_axis=cluster_axis,
+        # )
+        logger.info("Running minimal reduce scatter async test, requires 8x8 mesh device")
         num_links = 1
+        num_devices = 8
         rs_input_shape = [1, 1, 8, 7168]
         dim = 3
         layout = ttnn.TILE_LAYOUT
@@ -794,16 +1059,13 @@ class LlamaForCausalLM:
         mem_config_input = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
         mem_config_rs = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
         enable_trace = False
-        num_iters = 3
-        use_barrier = True
-        use_persistent_buffers = False
+        num_iters = 1
         rs_topology = ttnn.Topology.Linear
-        cluster_axis = 1
-
-        submesh_device = self.mesh_device.create_submesh(ttnn.MeshShape((1, 4)))
+        cluster_axis = None
+        submesh_device = self.mesh_device.create_submesh(ttnn.MeshShape((1, num_devices)))
         run_reduce_scatter_impl(
             submesh_device,
-            submesh_device.get_num_devices(),
+            num_devices,
             rs_input_shape,
             dim,
             num_links,
@@ -814,9 +1076,6 @@ class LlamaForCausalLM:
             rs_topology=rs_topology,
             enable_trace=enable_trace,
             num_iters=num_iters,
-            ones_tensor=False,
-            use_barrier=use_barrier,
-            use_persistent_buffers=use_persistent_buffers,
             cluster_axis=cluster_axis,
         )
         logger.info("Minimal reduce scatter async test completed")
