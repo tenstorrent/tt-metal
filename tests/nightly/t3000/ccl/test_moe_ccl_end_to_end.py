@@ -66,7 +66,7 @@ def gen_tensors_integration(
 @pytest.mark.parametrize(
     "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
 )
-def test_integration(mesh_device, mesh_shape):
+def test_integration(mesh_device, mesh_shape, silicon_arch_wormhole_b0):
     mesh_device.enable_program_cache()
     devices = mesh_shape[0] * mesh_shape[1]
     batch = 1 * devices
