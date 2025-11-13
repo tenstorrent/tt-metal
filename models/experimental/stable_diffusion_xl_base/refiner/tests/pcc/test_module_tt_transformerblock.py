@@ -21,8 +21,8 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
         ((1, 4096, 768), (1, 77, 1280), 1, 1, 768, 12, 768, 0.999, "down_blocks"),
         ((1, 1024, 1536), (1, 77, 1280), 2, 0, 1536, 24, 1536, 0.999, "down_blocks"),
         ((1, 1024, 1536), (1, 77, 1280), 2, 1, 1536, 24, 1536, 0.998, "down_blocks"),
-        ((1, 256, 1536), (1, 77, 1280), -1, 0, 1536, 24, 1536, 0.999, "mid_block"),
-        ((1, 256, 1536), (1, 77, 1280), -1, 1, 1536, 24, 1536, 0.998, "mid_block"),
+        ((1, 256, 1536), (1, 77, 1280), -1, 0, 1536, 24, 1536, 0.998, "mid_block"),
+        ((1, 256, 1536), (1, 77, 1280), -1, 1, 1536, 24, 1536, 0.999, "mid_block"),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
