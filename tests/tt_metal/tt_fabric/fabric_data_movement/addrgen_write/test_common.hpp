@@ -24,17 +24,27 @@ enum class AddrgenApiVariant {
     FusedAtomicIncWriteSetState    // fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state + _with_state
 };
 
+// ---- Reusable defaults for addrgen tests ----
+inline constexpr uint32_t kDefaultMeshId = 0;
+inline constexpr ChipId kDefaultSrcChip = 0;
+inline constexpr ChipId kDefaultDstChip = 1;
+inline constexpr bool kDefaultUseDramDst = false;
+inline constexpr uint32_t kDefaultTensorBytes = 1u << 20;  // 1 MiB
+inline constexpr uint32_t kDefaultPageSize = 4096;         // 4 KiB
+inline constexpr tt::tt_metal::CoreCoord kDefaultCore = {0, 0};
+inline constexpr AddrgenApiVariant kDefaultApiVariant = AddrgenApiVariant::UnicastWrite;
+
 // Test parameters for addrgen write correctness tests
 struct AddrgenTestParams {
-    uint32_t mesh_id;
-    ChipId src_chip;
-    ChipId dst_chip;
-    bool use_dram_dst;
-    uint32_t tensor_bytes;
-    uint32_t page_size;
-    tt::tt_metal::CoreCoord sender_core;
-    tt::tt_metal::CoreCoord receiver_core;
-    AddrgenApiVariant api_variant;  // Which API variant to test
+    uint32_t mesh_id = kDefaultMeshId;
+    ChipId src_chip = kDefaultSrcChip;
+    ChipId dst_chip = kDefaultDstChip;
+    bool use_dram_dst = kDefaultUseDramDst;
+    uint32_t tensor_bytes = kDefaultTensorBytes;
+    uint32_t page_size = kDefaultPageSize;
+    tt::tt_metal::CoreCoord sender_core = kDefaultCore;
+    tt::tt_metal::CoreCoord receiver_core = kDefaultCore;
+    AddrgenApiVariant api_variant = kDefaultApiVariant;  // Which API variant to test
 };
 
 }  // namespace tt::tt_fabric::test
