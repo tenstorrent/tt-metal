@@ -24,7 +24,7 @@ from models.experimental.panoptic_deeplab.tt.common import (
 )
 from models.experimental.panoptic_deeplab.tests.pcc.common import check_ttnn_output
 from models.experimental.panoptic_deeplab.tt.common import preprocess_nchw_input_tensor
-from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
+from tests.ttnn.unit_tests.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 
 
 @pytest.mark.parametrize(
