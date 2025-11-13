@@ -440,6 +440,7 @@ void WriteToDeviceSharded(Buffer& buffer, tt::stl::Span<const uint8_t> host_buff
         buffer.size());
 
     uint32_t page_size = buffer.page_size();
+    uint32_t aligned_page_size = buffer.aligned_page_size();
     TT_ASSERT(page_size == 0 ? buffer.size() == 0 : buffer.size() % page_size == 0);
 
     auto device = buffer.device();
@@ -451,16 +452,15 @@ void WriteToDeviceSharded(Buffer& buffer, tt::stl::Span<const uint8_t> host_buff
         auto bank_id = allocator->get_bank_ids_from_logical_core(buffer.buffer_type(), core)[0];
         auto bank_offset = allocator->get_bank_offset(buffer.buffer_type(), bank_id);
         auto data_index = mapped_page.host_page * page_size;
-        std::span<const std::uint8_t> page(host_buffer.data() + data_index, page_size);
+        std::span<const std::uint8_t> page(host_buffer.data() + data_index, aligned_page_size);
         if (buffer.is_l1()) {
-            auto absolute_address =
-                buffer.address() + bank_offset + (mapped_page.device_page * buffer.aligned_page_size());
+            auto absolute_address = buffer.address() + bank_offset + (mapped_page.device_page * aligned_page_size);
             auto core_coordinates =
                 device->worker_core_from_logical_core(buffer.allocator()->get_logical_core_from_bank_id(bank_id));
             tt::tt_metal::MetalContext::instance().get_cluster().write_core(
                 device->id(), core_coordinates, page, absolute_address);
         } else {
-            auto bank_local_address = buffer.address() + (mapped_page.device_page * buffer.aligned_page_size());
+            auto bank_local_address = buffer.address() + (mapped_page.device_page * aligned_page_size);
             WriteToDeviceDRAMChannel(device, bank_id, bank_local_address, page);
         }
     }
@@ -493,6 +493,7 @@ void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<cons
         buffer.size());
 
     size_t page_size = buffer.page_size();
+    size_t aligned_page_size = buffer.aligned_page_size();
     size_t num_pages = buffer.num_pages();
 
     auto device = buffer.device();
@@ -501,7 +502,7 @@ void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<cons
     size_t data_index = 0;
     for (size_t page_index = 0; page_index < num_pages; page_index++) {
         const DeviceAddr address = CalculateAddressDeviceInterleavedContiguous(buffer, bank_index, page_index);
-        std::span<const uint8_t> page(host_buffer.data() + data_index, page_size);
+        std::span<const uint8_t> page(host_buffer.data() + data_index, aligned_page_size);
         switch (buffer.buffer_type()) {
             case BufferType::DRAM: WriteToDeviceDRAMChannel(device, bank_index, address, page); break;
             case BufferType::L1:
@@ -544,6 +545,7 @@ void WriteToBuffer(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
 
 void ReadFromDeviceInterleavedContiguous(const Buffer& buffer, uint8_t* host_buffer) {
     size_t page_size = buffer.page_size();
+    size_t aligned_page_size = buffer.aligned_page_size();
     size_t num_pages = buffer.num_pages();
 
     auto device = buffer.device();
@@ -551,7 +553,7 @@ void ReadFromDeviceInterleavedContiguous(const Buffer& buffer, uint8_t* host_buf
 
     size_t host_idx = 0;
     size_t bank_index = 0;
-    std::vector<uint8_t> page(page_size);
+    std::vector<uint8_t> page(aligned_page_size);
     for (size_t page_index = 0; page_index < num_pages; page_index++) {
         const DeviceAddr address = CalculateAddressDeviceInterleavedContiguous(buffer, bank_index, page_index);
         switch (buffer.buffer_type()) {
@@ -564,7 +566,7 @@ void ReadFromDeviceInterleavedContiguous(const Buffer& buffer, uint8_t* host_buf
                 auto core_coordinates = device->worker_core_from_logical_core(
                     buffer.allocator()->get_logical_core_from_bank_id(bank_index));
                 tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-                    page.data(), page_size, tt_cxy_pair(device->id(), core_coordinates), address);
+                    page.data(), aligned_page_size, tt_cxy_pair(device->id(), core_coordinates), address);
             } break;
             default: TT_THROW("Unsupported buffer type to read from device!");
         }
@@ -586,18 +588,19 @@ void read_pages_to_host_helper(
     const uint32_t& core_page_id,
     const uint32_t& bank_id) {
     uint64_t host_buffer_start = uint64_t(host_page_id) * page_size;
+    size_t aligned_page_size = dev_buffer.aligned_page_size();
+    std::vector<uint8_t> page(aligned_page_size);
     if (dev_buffer.is_l1()) {
         auto core_coordinates =
             device->worker_core_from_logical_core(dev_buffer.allocator()->get_logical_core_from_bank_id(bank_id));
         auto bank_offset = device->allocator()->get_bank_offset(dev_buffer.buffer_type(), bank_id);
-        auto absolute_address = dev_buffer.address() + bank_offset + (core_page_id * dev_buffer.aligned_page_size());
+        auto absolute_address = dev_buffer.address() + bank_offset + (core_page_id * aligned_page_size);
         tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-            host_buffer + host_buffer_start, page_size, tt_cxy_pair(device->id(), core_coordinates), absolute_address);
+            page.data(), aligned_page_size, tt_cxy_pair(device->id(), core_coordinates), absolute_address);
+        std::memcpy(host_buffer + host_buffer_start, page.data(), page_size);
     } else {
-        std::vector<uint32_t> page;
-        page.resize(page_size / sizeof(uint32_t));
-        auto bank_local_address = dev_buffer.address() + (core_page_id * dev_buffer.aligned_page_size());
-        ReadFromDeviceDRAMChannel(device, bank_id, bank_local_address, page_size, page);
+        auto bank_local_address = dev_buffer.address() + (core_page_id * aligned_page_size);
+        ReadFromDeviceDRAMChannel(device, bank_id, bank_local_address, std::span<uint8_t>(page.data(), page.size()));
         std::memcpy(host_buffer + host_buffer_start, page.data(), page_size);
     }
 }
@@ -606,7 +609,6 @@ void ReadFromDeviceSharded(Buffer& buffer, uint8_t* host_buffer) {
     auto device = buffer.device();
 
     uint32_t page_size = buffer.page_size();
-
     const auto& buffer_page_mapping = *buffer.get_buffer_page_mapping();
     for (auto mapped_page : buffer_page_mapping) {
         auto core = buffer_page_mapping.all_cores[mapped_page.core_id];
