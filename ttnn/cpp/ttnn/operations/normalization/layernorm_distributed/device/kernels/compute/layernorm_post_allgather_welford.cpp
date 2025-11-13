@@ -162,9 +162,8 @@ void MAIN {
         }
         cb_pop_front(cb_recip_sqrt_var, 1);
 
-        DPRINT << "here" << ENDL();
         if constexpr (do_gamma) {
-            DPRINT << "do_gamma" << ENDL();
+            // DPRINT << "do_gamma" << ENDL();
             /*
              * x_normed * gamma
              */
@@ -194,11 +193,13 @@ void MAIN {
                 pack_reconfig_data_format(cb_out);
                 cb_wait_front(cb_beta, Wt);
                 add_bcast_rows_init_short(cb_times_gamma_out, cb_beta);
+                // DPRINT << "===========BETA============="<< ENDL();
                 for (uint32_t wt = 0; wt < Wt; wt += blk) {
                     cb_wait_front(cb_times_gamma_out, blk);
                     cb_reserve_back(cb_out, blk);
                     ACQ();
                     for (uint32_t wtr = 0; wtr < blk; wtr++) {
+                        UNPACK(tt::compute::common::print_full_tile(cb_beta, wt + wtr, true));
                         add_tiles_bcast_rows(cb_times_gamma_out, cb_beta, wtr, wt + wtr, wtr);
                         pack_tile(wtr, cb_out);
                     }

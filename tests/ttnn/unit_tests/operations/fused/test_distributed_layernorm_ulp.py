@@ -144,19 +144,29 @@ def test_distributed_norm_comparison(
 
     N_DEV = 8
     ttnn_weight = ttnn.from_torch(
-        torch_weight.reshape(N_DEV, 1, -1, 32),
+        torch_weight.reshape(1, 1, 1, hidden_dim),
         dtype=ttnn.bfloat16,
         device=mesh_device,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
     )
+    breakpoint()
+    ttnn_weight_back = ttnn.to_torch(ttnn_weight, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
+    torch.set_printoptions(profile="full")
+
+    with open("pre_ttnn.txt", "w") as f:
+        f.write(str(torch_weight))
+    with open("post_ttnn.txt", "w") as f:
+        f.write(str(ttnn_weight_back))
+
+    ttnn.visualize_tensor(ttnn_weight)
     if norm_type == "layer_norm":
         ttnn_bias = ttnn.from_torch(
-            torch_bias.reshape(N_DEV, 1, -1, 32),
+            torch_bias.reshape(1, 1, 1, hidden_dim),
             dtype=ttnn.bfloat16,
             device=mesh_device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
         )
 
     # Use highest precision compute kernel config for comparison
@@ -244,6 +254,10 @@ def test_distributed_norm_comparison(
         )
     pcc_passed, pcc_value = comp_pcc(torch_output, ttnn_output_torch, pcc=0.99)
     max_error = calculate_max_error(torch_output, ttnn_output_torch)
+    with open("ttnn_tensor_output.txt", "w") as f:
+        f.write(str(ttnn_output_torch[0][0][0]))
+    with open("torch_tensor_output.txt", "w") as f:
+        f.write(str(torch_output[0][0][0]))
 
     passes_allclose = torch.allclose(torch_output, ttnn_output_torch)
 
