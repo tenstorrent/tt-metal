@@ -386,6 +386,7 @@ class QwenImagePipeline:
             tt_prompt_rope_cos_list = []
             tt_prompt_rope_sin_list = []
             for i, submesh_device in enumerate(self._submesh_devices):
+                # TODO: redundant?
                 tt_prompt_embeds_device = tensor.from_torch(
                     prompt_embeds[i : i + 1] if cfg_factor == 2 else prompt_embeds,
                     device=submesh_device,
