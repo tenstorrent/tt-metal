@@ -9,11 +9,9 @@
 #include <variant>
 #include <optional>
 #include <string>
-
 #include <pybind11/cast.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
-
 #include "ttnn-pybind/decorators.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
@@ -31,6 +29,118 @@ void py_bind_conv2d(py::module& module) {
         module,
         ttnn::conv2d,
         R"doc(
+        Performs a 2D convolution between the input tensor and weight tensor. A 2D kernel (weights tensor) traverses the image (4D input tensor) and a dot product is computed over the overlapping region.
+        For more information, refer to [CNNs on Tenstorrent Architectures](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/CNNs/ttcnn.md) tech report.
+
+        :param ttnn.Tensor input_tensor: The input tensor in [N, H, W, C] format. The tensor can be on either the host or the device.
+        :param ttnn.Tensor weight_tensor: The convolution weights, typically in [out_channels, in_channels // groups, kernel_height, kernel_width] format.
+        :param ttnn.IDevice device: This is a Tenstorrent-specific parameter. The device which will run the operation.
+        :param int in_channels: Number of channels in the input tensor.
+        :param int out_channels: Number of channels produced by the convolution.
+        :param int batch_size: The batch size of the input tensor.
+        :param int input_height: This is a Tenstorrent-specific parameter. The height of the input tensor.
+        :param int input_width: This is a Tenstorrent-specific parameter. The width of the input tensor.
+        :param tuple[int, int] kernel_size: The size of the convolving kernel.
+        :param tuple[int, int] stride: The stride of the convolution. Default: (1, 1).
+        :param tuple[int, int], optional padding: Zero-padding added to both sides of the input. Default: (0, 0). [pad_height, pad_width] or [pad_top, pad_bottom, pad_left, pad_right].
+        :param tuple[int, int], optional dilation: The spacing between kernel elements. Default: (1, 1).
+        :param int groups: Number of blocked connections from input channels to output channels. Default: 1.
+        :param ttnn.DataType, optional dtype: The data type of the output tensor. If not provided, it is inferred from the input tensor.
+        :param ttnn.Tensor, optional bias_tensor: The bias tensor to be added. Default: None.
+        :param ttnn.Conv2dConfig, None conv_config: Configuration for convolution. Default: None.
+        :param ttnn.DeviceComputeKernelConfig, None compute_config: Configuration for compute kernel. Default: None.
+        :param ttnn.MemoryConfig, None memory_config: Output Tensor's Memory Configuration. Default: None.
+        :param ttnn.Conv2dSliceConfig, None slice_config: Configuration for slicing input & output tensors in DRAM. If set to None input is in DRAM, DRAM slicing is automatically enabled. Default: None.
+
+        :return: The output tensor, output height and width, and the preprocessed weights and bias.
+
+        :rtype: [ttnn.Tensor]: Default. The output tensor, when return_output_dim = False and return_weights_and_bias = False
+        :rtype: [ttnn.Tensor, Tuple[int, int]]: The output tensor, and it's height and width, if return_output_dim = True
+        :rtype: [ttnn.Tensor, Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]]: The output tensor, and preprocessed weight and bias tensors that are both on device, if return_weights_and_bias = True
+        :rtype: [ttnn.Tensor, Tuple[int, int], Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]]: If true, the op also returns the preprocessed weight and bias on the device. Weight and bias should be used for the same convolution next time it is called to avoid preparing weights and bias multiple times. Default: false.
+
+        Note:
+
+            The :attr: `input_tensor` supports the following data type and layout:
+
+            .. list-table:: input_tensor
+                :header-rows: 1
+
+                * - dtype
+                  - layout
+                * - FLOAT32
+                  - ROW_MAJOR, TILE
+                * - BFLOAT16
+                  - ROW_MAJOR, TILE
+                * - BFLOAT8_B
+                  - TILE
+
+            The :attr: `output_tensor` supports the following data type and layout:
+
+            .. list-table:: output_tensor
+                :header-rows: 1
+
+                * - dtype
+                  - layout
+                * - FLOAT32
+                  - ROW_MAJOR, TILE
+                * - BFLOAT16
+                  - ROW_MAJOR, TILE
+                * - BFLOAT8_B
+                  - TILE
+
+            The :attr: `weights_tensor` on the host, supports the following data type and layout:
+
+            .. list-table:: weights_tensor (host)
+                :header-rows: 1
+
+                * - dtype
+                  - layout
+                * - FLOAT32
+                  - ROW_MAJOR
+                * - BFLOAT16
+                  - ROW_MAJOR
+
+            The :attr: `weights_tensor` prepared on device, supports the following data type and layout:
+
+            .. list-table:: weights_tensor (prepared on device)
+                :header-rows: 1
+
+                * - dtype
+                  - layout
+                * - FLOAT32
+                  - TILE
+                * - BFLOAT16
+                  - TILE
+                * - BFLOAT8_B
+                  - TILE
+
+            The :attr: `bias_tensor` on the host, supports the following data type and layout:
+
+            .. list-table:: bias_tensor (host)
+                :header-rows: 1
+
+                * - dtype
+                  - layout
+                * - FLOAT32
+                  - ROW_MAJOR
+                * - BFLOAT16
+                  - ROW_MAJOR
+
+            The :attr: `bias_tensor` prepared on device, supports the following data type and layout:
+
+            .. list-table:: bias_tensor (prepared on device)
+                :header-rows: 1
+
+                * - dtype
+                  -layout
+                * - FLOAT32
+                  - TILE
+                * - BFLOAT16
+                  - TILE
+                * - BFLOAT8_B
+                  - TILE
+
         Applies a 2D convolution over an input signal composed of several input planes.
 
         For more information, refer to `this tech report. <https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/CNNs/ttcnn.md>`_
@@ -68,6 +178,7 @@ void py_bind_conv2d(py::module& module) {
             - tuple[ttnn.Tensor, tuple[ttnn.Tensor, ttnn.Tensor]]: The output tensor, and its height and width, if return_weights_and_bias = True
             - tuple[ttnn.Tensor, tuple[int, int], tuple[ttnn.Tensor, ttnn.Tensor]]: The output tensor, and its height and width, if return_output_dim = True and return_weights_and_bias = True
         )doc",
+
         ttnn::pybind_overload_t{
             [](const decltype(ttnn::conv2d)& self,
                const ttnn::Tensor& input_tensor,
