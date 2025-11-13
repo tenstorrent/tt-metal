@@ -17,6 +17,7 @@ run_profiling_test() {
 
   export TT_METAL_CLEAR_L1=1
 
+  # Below tests are disabled currently as some of them needs fix to keep pipeline green
   # pytest --capture=tee-sys $TT_METAL_HOME/tests/scripts/test_moreh_microbenchmark.py::test_pcie_h2d_dram --timeout=720
   # pytest --capture=tee-sys $TT_METAL_HOME/tests/scripts/test_moreh_microbenchmark.py::test_pcie_d2h_dram --timeout=720
   # pytest --capture=tee-sys $TT_METAL_HOME/tests/scripts/test_moreh_microbenchmark.py::test_pcie_h2d_l1 -k $ARCH_NAME
