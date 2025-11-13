@@ -1122,7 +1122,7 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
             info.mesh_host_rank = asic_id_to_mesh_rank.at(asic);
         }
         info.is_mapped = true;
-        // hostname and physical_chip_id should already be set from initialization
+        // hostname should already be set from initialization; physical_chip_id is only set for local ASICs
     }
 
     // Rebuild lookup maps after updating entries
