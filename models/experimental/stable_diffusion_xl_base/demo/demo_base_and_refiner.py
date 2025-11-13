@@ -17,9 +17,10 @@ import os
 from models.common.utility_functions import profiler
 from conftest import is_galaxy
 
-from models.experimental.stable_diffusion_xl_base.tt.tt_sdxl_combined_pipeline import TtSDXLCombinedPipeline
-from models.experimental.stable_diffusion_xl_base.tt.tt_sdxl_img2img_pipeline import TtSDXLImg2ImgPipelineConfig
-from models.experimental.stable_diffusion_xl_base.tt.tt_sdxl_pipeline import TtSDXLPipelineConfig
+from models.experimental.stable_diffusion_xl_base.tt.tt_sdxl_combined_pipeline import (
+    TtSDXLCombinedPipeline,
+    TtSDXLCombinedPipelineConfig,
+)
 
 
 @torch.no_grad()
@@ -36,6 +37,7 @@ def run_demo_inference(
     guidance_scale,
     use_cfg_parallel,
     fixed_seed_for_batch,
+    use_refiner,
     denoising_split,
     refiner_strength,
     refiner_aesthetic_score,
@@ -69,47 +71,42 @@ def run_demo_inference(
         use_safetensors=True,
         local_files_only=is_ci_env,
     )
-    refiner_pipeline = StableDiffusionXLImg2ImgPipeline.from_pretrained(
-        "stabilityai/stable-diffusion-xl-refiner-1.0",
-        torch_dtype=torch.float32,
-        use_safetensors=True,
-        local_files_only=is_ci_env,
-        text_encoder_2=base_pipeline.text_encoder_2,
-        vae=base_pipeline.vae,
-    )
+
+    refiner_pipeline = None
+    if use_refiner:
+        refiner_pipeline = StableDiffusionXLImg2ImgPipeline.from_pretrained(
+            "stabilityai/stable-diffusion-xl-refiner-1.0",
+            torch_dtype=torch.float32,
+            use_safetensors=True,
+            local_files_only=is_ci_env,
+            text_encoder_2=base_pipeline.text_encoder_2,
+            vae=base_pipeline.vae,
+        )
     profiler.end("diffusion_pipeline_from_pretrained")
 
-    # 2. Create combined pipeline
+    # 2. Create unified config and combined pipeline
+    config = TtSDXLCombinedPipelineConfig(
+        num_inference_steps=num_inference_steps,
+        guidance_scale=guidance_scale,
+        is_galaxy=is_galaxy(),
+        use_cfg_parallel=use_cfg_parallel,
+        vae_on_device=vae_on_device,
+        encoders_on_device=encoders_on_device,
+        capture_trace=capture_trace,
+        crop_coords_top_left=crop_coords_top_left,
+        guidance_rescale=guidance_rescale,
+        use_refiner=use_refiner,
+        denoising_split=denoising_split,
+        strength=refiner_strength,
+        aesthetic_score=refiner_aesthetic_score,
+        negative_aesthetic_score=refiner_negative_aesthetic_score,
+    )
+
     tt_sdxl_combined = TtSDXLCombinedPipeline(
         ttnn_device=ttnn_device,
         torch_base_pipeline=base_pipeline,
         torch_refiner_pipeline=refiner_pipeline,
-        base_config=TtSDXLPipelineConfig(
-            num_inference_steps=num_inference_steps,
-            guidance_scale=guidance_scale,
-            is_galaxy=is_galaxy(),
-            use_cfg_parallel=use_cfg_parallel,
-            encoders_on_device=encoders_on_device,
-            vae_on_device=vae_on_device,
-            capture_trace=capture_trace,
-            crop_coords_top_left=crop_coords_top_left,
-            guidance_rescale=guidance_rescale,
-        ),
-        refiner_config=TtSDXLImg2ImgPipelineConfig(
-            num_inference_steps=num_inference_steps,
-            guidance_scale=guidance_scale,
-            is_galaxy=is_galaxy(),
-            use_cfg_parallel=use_cfg_parallel,
-            vae_on_device=vae_on_device,
-            encoders_on_device=encoders_on_device,
-            strength=refiner_strength,
-            aesthetic_score=refiner_aesthetic_score,
-            negative_aesthetic_score=refiner_negative_aesthetic_score,
-            capture_trace=capture_trace,
-            crop_coords_top_left=crop_coords_top_left,
-            guidance_rescale=guidance_rescale,
-        ),
-        denoising_split=denoising_split,
+        config=config,
     )
 
     logger.info("=" * 80)
@@ -261,11 +258,16 @@ def prepare_device(mesh_device, use_cfg_parallel):
     ids=("with_trace", "no_trace"),
 )
 @pytest.mark.parametrize(
+    "use_refiner",
+    [
+        (True),
+    ],
+)
+@pytest.mark.parametrize(
     "denoising_split",
     [
         (0.8),
     ],
-    ids=["split_80_20"],
 )
 @pytest.mark.parametrize(
     "refiner_strength, refiner_aesthetic_score, refiner_negative_aesthetic_score",
@@ -295,6 +297,7 @@ def test_demo_base_and_refiner(
     guidance_scale,
     use_cfg_parallel,
     fixed_seed_for_batch,
+    use_refiner,
     denoising_split,
     refiner_strength,
     refiner_aesthetic_score,
@@ -320,6 +323,7 @@ def test_demo_base_and_refiner(
         guidance_scale,
         use_cfg_parallel,
         fixed_seed_for_batch,
+        use_refiner,
         denoising_split,
         refiner_strength,
         refiner_aesthetic_score,
