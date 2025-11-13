@@ -303,7 +303,7 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
     std::vector<uint32_t> writer_rt = {
         (uint32_t)dst_buf->address(), (uint32_t)rx_xy.x, (uint32_t)rx_xy.y, (uint32_t)gsem_done->address()};
 
-    // Phase A hops: bounding box of all receivers relative to sender
+    // Multicast hop counts: bounding box of all receivers relative to sender
     uint16_t e_hops = 0, w_hops = 0, n_hops = 0, s_hops = 0;
     int src_r = src_coord[0], src_c = src_coord[1];
     int min_r = src_r, max_r = src_r, min_c = src_c, max_c = src_c;

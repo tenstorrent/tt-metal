@@ -31,7 +31,7 @@ using namespace tt::tt_fabric::mesh::experimental;
 //   2:  rx_noc_y       (u32)
 //   3:  sem_l1_addr    (u32)   // same L1 offset on every chip
 //   … fabric-connection args … (inserted by append_fabric_connection_rt_args on host)
-//   … then optional Phase-A diagnostics:
+//   … then multicast hop counts:
 //      e_hops (u32), w_hops (u32), n_hops (u32), s_hops (u32)
 
 void kernel_main() {
@@ -72,7 +72,7 @@ void kernel_main() {
         senderS = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(idx);
     }
 
-    // Phase A diagnostics (optional): hops were appended by the host
+    // Multicast hop counts (E/W/N/S) appended by the host
     // AFTER the fabric-connection args, so read them now.
     const uint16_t e_hops = static_cast<uint16_t>(get_arg_val<uint32_t>(idx++));
     const uint16_t w_hops = static_cast<uint16_t>(get_arg_val<uint32_t>(idx++));
@@ -138,7 +138,7 @@ void kernel_main() {
                 &senderE, right_packet_header, 0, 0, ranges_e, src_l1_addr, dst_acc, i);
         }
 
-        // --- Branch 3: NORTH trunk (optional) ---
+        // --- Branch 3: NORTH trunk ---
         if (n_hops > 0) {
             MeshMcastRange ranges_n{
                 static_cast<uint8_t>(e_hops),
@@ -149,7 +149,7 @@ void kernel_main() {
                 &senderN, north_packet_header, 0, 0, ranges_n, src_l1_addr, dst_acc, i);
         }
 
-        // --- Branch 4: SOUTH trunk (optional) ---
+        // --- Branch 4: SOUTH trunk ---
         if (s_hops > 0) {
             MeshMcastRange ranges_s{
                 static_cast<uint8_t>(e_hops),
