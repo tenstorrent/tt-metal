@@ -8,55 +8,22 @@ on:
   workflow_call:
     inputs:
       docker-image:
-        required: false
+        required: true
         type: string
         description: "Docker image to use for the build"
-        default: "harbor.ci.tenstorrent.net/tt-metalium-ci/ubuntu-22.04-amd64:latest"
-  workflow_dispatch:
-    inputs:
-      docker-image:
-        required: false
-        type: string
-        description: "Docker image to use for the build"
-        default: "harbor.ci.tenstorrent.net/tt-metalium-ci/ubuntu-22.04-amd64:latest"
-  pull_request:
-    types:
-      - opened
-      - reopened
-      - synchronize
-      - ready_for_review
-  push:
-    branches:
-      - main
 
 permissions:
   contents: read
   packages: write
 
 jobs:
-  find-changes:
-    runs-on: ubuntu-latest
-    outputs:
-      any-code-changed: ${{ steps.find-changes.outputs.any-code-changed }}
-      cmake-changed: ${{ steps.find-changes.outputs.cmake-changed }}
-      build-workflows-changed: ${{ steps.find-changes.outputs.build-workflows-changed }}
-    steps:
-      - id: find-changes
-        uses: tenstorrent/tt-metal/.github/actions/find-changed-files@main
-
   incremental-build-test:
-    if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.cmake-changed == 'true' ||
-            needs.find-changes.outputs.any-code-changed == 'true' ||
-            needs.find-changes.outputs.build-workflows-changed == 'true'
-        }}
-    needs: [find-changes]
     name: "Incremental Build Performance Test"
     timeout-minutes: 45
     runs-on: tt-ubuntu-2204-large-stable
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     container:
-      image: ${{ inputs.docker-image || 'harbor.ci.tenstorrent.net/tt-metalium-ci/ubuntu-22.04-amd64:latest' }}
+      image: ${{ inputs.docker-image }}
       env:
         CCACHE_REMOTE_ONLY: "true"
         CCACHE_TEMPDIR: /tmp/ccache
@@ -232,25 +199,3 @@ jobs:
           echo "All incremental build performance checks passed"
           echo "PR changes build time: ${INCREMENTAL_BUILD_PR_CHANGES}s"
           echo "No-change build time: ${INCREMENTAL_BUILD_NO_CHANGE}s"
-
-  workflow-status:
-    name: Incremental Build Test Status
-    if: always() && (contains(join(needs.*.result, ','), 'success') || contains(join(needs.*.result, ','), 'failure'))
-    needs: [find-changes, incremental-build-test]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check if all jobs passed
-        run: |
-          echo "=== Workflow Status Check ==="
-          echo "find-changes: ${{ needs.find-changes.result }}"
-          echo "incremental-build-test: ${{ needs.incremental-build-test.result }}"
-
-          if [[ "${{ needs.incremental-build-test.result }}" == "failure" ]]; then
-            echo "Incremental build test failed"
-            exit 1
-          elif [[ "${{ needs.find-changes.result }}" == "failure" ]]; then
-            echo "Change detection failed"
-            exit 1
-          else
-            echo "All jobs completed successfully"
-          fi
