@@ -1,0 +1,65 @@
+name: "Test pre-built artifacts"
+
+on:
+  push:
+    branches: ["pre-install-artifacts"]
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+  pages: write
+  id-token: write
+  packages: write
+  checks: write
+
+run-name: Test pre-built artifacts
+jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      build-type: ${{ inputs.build-type || 'Release' }}
+      build-wheel: true
+      tracy: true
+      version: ${{ inputs.version || '22.04' }}
+      skip-tt-train: false
+      build-evaluation-image: true
+  
+  fabric-unit-tests:
+    needs: build-artifact
+    secrets: inherit
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          { arch: wormhole_b0, runner-label: N300 },
+        ]
+    uses: ./.github/workflows/fabric-build-and-unit-tests.yaml
+    with:
+      arch: ${{ matrix.test-group.arch }}
+      runner-label: ${{ matrix.test-group.runner-label }}
+      docker-image: ${{ needs.build-artifact.outputs.evaluation-docker-image }}
+      build-artifact-name: "aint-needed"
+      wheel-artifact-name: "aint-needed"
+
+#  cpp-unit-tests:
+#    needs: build-artifact
+#    secrets: inherit
+#    strategy:
+#      fail-fast: false
+#      matrix:
+#        test-group: [
+#          { arch: wormhole_b0, runner-label: N150 },
+#          { arch: wormhole_b0, runner-label: N300 },
+#        ]
+#    uses: ./.github/workflows/cpp-post-commit.yaml
+#    with:
+#      arch: ${{ matrix.test-group.arch }}
+#      runner-label: ${{ matrix.test-group.runner-label }}
+#      docker-image: ${{ needs.build-artifact.outputs.evaluation-docker-image }}
+#      build-artifact-name: "aint-needed"
+#      wheel-artifact-name: "aint-needed"
+#      gtest_filter: "*-*NIGHTLY_*"
