@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 Motif Technologies
 
-# SPDX-License-Identifier: MIT License
+# SPDX-License-Identifier: MIT
 
 """Configuration dataclass for Motif Image (MMDiT + encoders/decoder).
 
