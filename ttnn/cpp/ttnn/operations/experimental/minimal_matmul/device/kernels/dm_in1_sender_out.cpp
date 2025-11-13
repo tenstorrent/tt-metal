@@ -102,9 +102,56 @@ void kernel_main() {
     uint32_t defer_write_n_tile_end = 0;
     bool defer_write = false;
 
+#ifdef FUSE_AG
+    uint32_t k_block_device_expected[K_num_blocks] = {0};
+    uint32_t k_block_device_received[K_num_blocks] = {0};
+    uint32_t device_k_block_counts[fused_op_receiver.get_num_devices()] = {0};
+    uint32_t device_k_block_start_ids[fused_op_receiver.get_num_devices()] = {0};
+    if constexpr (is_injector_core) {
+        uint32_t input_tensor_Wt = K_tiles / fused_op_receiver.get_num_devices();
+        uint32_t curr_device = 0;
+        uint32_t curr_device_start = 0;
+        uint32_t curr_device_end = input_tensor_Wt - 1;
+        for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
+            uint32_t curr_k_block_start = k_block_iter * M_block_tiles;
+            uint32_t curr_k_block_end = (k_block_iter + 1) * M_block_tiles - 1;
+            if (curr_k_block_end < curr_device_end) {
+                k_block_device_expected[k_block_iter]++;
+                device_k_block_counts[curr_device]++;
+            } else if (curr_k_block_end == curr_device_end) {
+                k_block_device_expected[k_block_iter]++;
+                device_k_block_counts[curr_device]++;
+                curr_device++;
+                curr_device_start = curr_device_end + 1;
+                curr_device_end = (curr_device + 1) * input_tensor_Wt - 1;
+                if (curr_device < fused_op_receiver.get_num_devices()) {
+                    device_k_block_start_ids[curr_device] = k_block_iter + 1;
+                }
+            } else if (curr_k_block_end > curr_device_end) {
+                k_block_device_expected[k_block_iter]++;
+                device_k_block_counts[curr_device]++;
+                if (curr_device + 1 < fused_op_receiver.get_num_devices()) {
+                    k_block_device_expected[k_block_iter]++;
+                    device_k_block_counts[curr_device + 1]++;
+                    device_k_block_start_ids[curr_device + 1] = k_block_iter;
+                }
+                curr_device++;
+                curr_device_start = curr_device_end + 1;
+                curr_device_end = (curr_device + 1) * input_tensor_Wt - 1;
+            }
+        }
+    }
+#endif
+
     for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
         uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles;
         uint32_t m_tile_end = std::min(m_tile + M_block_tiles, M_end_tile);
+#ifdef FUSE_AG
+        if constexpr (is_injector_core) {
+            fused_op_receiver.reset(k_block_device_received, K_num_blocks);
+        }
+#endif
+
         for (uint32_t n_block_iter = 0; n_block_iter < N_blocks_per_core; n_block_iter++) {
             uint32_t n_tile = n_forward ? N_start_tile + n_block_iter * N_block_tiles
                                         : N_start_tile + (N_blocks_per_core - 1 - n_block_iter) * N_block_tiles;
@@ -140,7 +187,11 @@ void kernel_main() {
                 if constexpr (is_injector_core) {
 #ifdef FUSE_AG
                     if (is_injector_core && n_block_iter == 0) {
-                        k_block = fused_op_receiver.compute_actual_k_block_iter(k_block_iter);
+                        k_block = fused_op_receiver.compute_actual_k_block_iter(
+                            k_block_device_expected,
+                            k_block_device_received,
+                            device_k_block_counts,
+                            device_k_block_start_ids);
                     }
 #endif
                     read_in1_block_sync<K_block_tiles, N_block_tiles>(
