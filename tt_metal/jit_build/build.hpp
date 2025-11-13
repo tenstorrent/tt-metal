@@ -12,6 +12,7 @@
 #include <string>
 #include <vector>
 
+#include "common/executor.hpp"
 #include "hal_types.hpp"
 #include "jit_build_options.hpp"
 #include <umd/device/types/arch.hpp>
@@ -37,6 +38,27 @@ struct JitBuiltStateConfig {
     // In this case Metal FW will need to facilitate context switching to base FW (e.g. code running on WH active
     // eriscs)
     bool is_cooperative = false;
+};
+
+class JitBuildTargetLookup {
+public:
+    void build_once(const std::string& target_name, const std::function<void()>& build_func) {
+        // TODO: can use std::once_flag instead.
+        std::shared_future<void>* future = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            auto it = build_futures_.find(target_name);
+            if (it == build_futures_.end()) {
+                it = build_futures_.emplace_hint(it, target_name, detail::async(build_func));
+            }
+            future = &it->second;
+        }
+        future->get();
+    }
+
+private:
+    std::mutex mutex_;
+    std::unordered_map<std::string, std::shared_future<void>> build_futures_;
 };
 
 // The build environment
