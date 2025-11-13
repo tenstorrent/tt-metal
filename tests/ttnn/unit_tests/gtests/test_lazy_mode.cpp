@@ -481,8 +481,8 @@ TEST_F(LazyModeFixture, MatmulWithElementwiseLazy) {
     auto final_eager = ttnn::multiply(exp_result_eager, matmul_result_eager);
     auto eager_result = final_eager.cpu();
 
-    // Clean up eager tensors to free device memory before running lazy mode
-    log_info(tt::LogTest, "Cleaning up eager tensors...");
+    log_info(tt::LogTest, "Printing eager graph...");
+    lazy::print_graph(final_eager.lazy());
 
     // ========== Now run LAZY mode and compare ==========
     log_info(tt::LogTest, "Running same operations in LAZY mode...");
