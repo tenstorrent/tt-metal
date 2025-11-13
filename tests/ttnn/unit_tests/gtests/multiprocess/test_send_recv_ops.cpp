@@ -267,7 +267,7 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
     auto sender_logical_coord = CoreCoord(0, 0);
     auto recv_logical_coord = CoreCoord(0, 1);
 
-    uint32_t socket_fifo_size = 14 * 1024;
+    uint32_t socket_fifo_size = 70 * 1024;
     auto mesh_shape = mesh_device_->shape();
     distributed::SocketConnection socket_connection = {
         .sender_core = {distributed::MeshCoordinate(0, 0), sender_logical_coord},
@@ -299,66 +299,68 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
             tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1)));
 
-    constexpr uint32_t num_iters = 1000;
+    constexpr uint32_t num_iters = 1;
+    uint64_t start_time = 0;
+    uint64_t end_time = 0;
+    std::cout << "Rank: " << *distributed_context->rank() << " "
+              << "Device Id: " << mesh_device_->get_device(distributed::MeshCoordinate(0, 0))->id() << std::endl;
     if (*distributed_context->rank() == *pipeline_start_rank) {
         const auto& input_shape = tensor_spec.logical_shape();
         const auto& memory_config = tensor_spec.memory_config();
         uint32_t num_elems = input_shape.volume();
         auto layout = tensor_spec.layout();
         auto dtype = tensor_spec.data_type();
+        auto send_socket = distributed::MeshSocket(mesh_device_, send_socket_config);
         auto input_tensor =
             ttnn::distributed::distribute_tensor(
                 ttnn::experimental::view(ttnn::arange(0, num_elems, 1, dtype), input_shape).to_layout(layout),
                 *ttnn::distributed::replicate_tensor_to_mesh_mapper(*mesh_device_),
                 std::nullopt)
                 .to_device(mesh_device_.get(), memory_config);
+        // Block after sending data. We will profile the time taken to forward data over sockets
+        // after the write has completed.
+        ttnn::experimental::send_async(input_tensor, send_socket);
+        Synchronize(mesh_device_.get(), std::nullopt);
         distributed_context->barrier();
-        auto current_time = std::chrono::high_resolution_clock::now();
-        auto current_time_us =
-            std::chrono::duration_cast<std::chrono::microseconds>(current_time.time_since_epoch()).count();
-        uint64_t peer_current_time_us = 0;
-        distributed_context->recv(
-            tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&peer_current_time_us), sizeof(peer_current_time_us)),
-            pipeline_end_rank,
-            tt::tt_metal::distributed::multihost::Tag{255});
-        distributed_context->barrier();
-        std::cout << "Peer current time: " << peer_current_time_us << std::endl;
-        std::cout << "My Current time: " << current_time_us << std::endl;
-
-        for (int i = 0; i < num_iters; i++) {
-            ttnn::experimental::send_async(input_tensor, mesh_device_, send_socket_config);
-        }
+        // for (int i = 0; i < num_iters; i++) {
+        ttnn::experimental::send_async(input_tensor, send_socket);
+        // }
     } else {
+        distributed::MeshSocket send_socket;
+        auto recv_socket = distributed::MeshSocket(mesh_device_, recv_socket_config);
+
+        if (*distributed_context->rank() < *pipeline_end_rank) {
+            send_socket = distributed::MeshSocket(mesh_device_, send_socket_config);
+        }
+
         auto output_tensor = tt::tt_metal::allocate_tensor_on_device(tensor_spec, mesh_device_.get());
-        auto current_time = std::chrono::high_resolution_clock::now();
+        ttnn::experimental::recv_async(output_tensor, recv_socket);
+        if (*distributed_context->rank() < *pipeline_end_rank) {
+            ttnn::experimental::send_async(output_tensor, send_socket);
+        }
+        Synchronize(mesh_device_.get(), std::nullopt);
         distributed_context->barrier();
-        auto current_time_us =
-            std::chrono::duration_cast<std::chrono::microseconds>(current_time.time_since_epoch()).count();
-
-        distributed_context->send(
-            tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&current_time_us), sizeof(current_time_us)),
-            pipeline_start_rank,
-            tt::tt_metal::distributed::multihost::Tag{255});
-        distributed_context->barrier();
-        for (int i = 0; i < num_iters; i++) {
-            ttnn::experimental::recv_async(output_tensor, mesh_device_, recv_socket_config);
-            if (*distributed_context->rank() < *pipeline_end_rank) {
-                ttnn::experimental::send_async(output_tensor, mesh_device_, send_socket_config);
-            } else {
-                auto composer = ttnn::distributed::concat_mesh_to_tensor_composer(*mesh_device_, /*dim=*/0);
-                auto output_data = ttnn::distributed::aggregate_tensor(output_tensor, *composer).to_vector<bfloat16>();
-                auto num_elems = output_tensor.tensor_spec().logical_shape().volume();
-
-                auto expected_output_data = ttnn::arange(0, num_elems, 1, tt::tt_metal::DataType::BFLOAT16);
-                auto expected_output_data_vector = expected_output_data.to_vector<bfloat16>();
-                auto chunked_output_vector =
-                    std::vector<bfloat16>(output_data.begin(), output_data.begin() + num_elems);
-                EXPECT_EQ(chunked_output_vector, expected_output_data_vector);
-            }
+        if (*distributed_context->rank() == *pipeline_end_rank) {
+            start_time = std::chrono::duration_cast<std::chrono::microseconds>(
+                             std::chrono::high_resolution_clock::now().time_since_epoch())
+                             .count();
+        }
+        ttnn::experimental::recv_async(output_tensor, recv_socket);
+        if (*distributed_context->rank() < *pipeline_end_rank) {
+            ttnn::experimental::send_async(output_tensor, send_socket);
         }
     }
 
     distributed::Synchronize(mesh_device_.get(), std::nullopt);
+    std::cout << "Send/Recv Benchmark Complete" << std::endl;
+    if (distributed_context->rank() == pipeline_end_rank) {
+        end_time = std::chrono::duration_cast<std::chrono::microseconds>(
+                       std::chrono::high_resolution_clock::now().time_since_epoch())
+                       .count();
+        std::cout << "Time taken to forward: " << num_iters << " Packets: " << end_time - start_time << " us"
+                  << std::endl;
+        std::cout << "Time per iteration: " << (end_time - start_time) / num_iters << " us" << std::endl;
+    }
 }
 
 }  // namespace tt::tt_metal

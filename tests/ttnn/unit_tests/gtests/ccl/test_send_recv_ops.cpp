@@ -122,4 +122,58 @@ TEST_P(FabricSendRecv2x4Fixture, SendRecvAsync) {
 
 INSTANTIATE_TEST_SUITE_P(FabricSendRecv2x4Tests, FabricSendRecv2x4Fixture, ::testing::ValuesIn(get_socket_test_args()));
 
+TEST_F(FabricSendRecv2x4Fixture, SRTest) {
+    auto mesh_device = get_mesh_device();
+
+    auto sender_logical_coord = CoreCoord(0, 0);
+    auto recv_logical_coord = CoreCoord(0, 1);
+    auto socket_fifo_size = 28 * 1024;
+    distributed::SocketConnection socket_connection = {
+        .sender_core = {distributed::MeshCoordinate(0, 0), sender_logical_coord},
+        .receiver_core = {distributed::MeshCoordinate(0, 1), recv_logical_coord}};
+    distributed::SocketMemoryConfig socket_mem_config = {
+        .socket_storage_type = BufferType::L1,
+        .fifo_size = socket_fifo_size,
+    };
+
+    distributed::SocketConfig socket_config = {
+        .socket_connection_config = {socket_connection},
+        .socket_mem_config = socket_mem_config,
+    };
+
+    auto input_tensor_spec = TensorSpec(
+        ttnn::Shape({1, 1, 1, 7168}),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
+            tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1)));
+
+    const auto output_tensor_spec = TensorSpec(
+        ttnn::Shape({1, 1, 1, 7168}),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
+            tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1)));
+
+    const auto& input_shape = input_tensor_spec.logical_shape();
+    const auto& memory_config = input_tensor_spec.memory_config();
+    uint32_t num_elems = input_shape.volume();
+    auto layout = input_tensor_spec.layout();
+    auto dtype = input_tensor_spec.data_type();
+    const Tensor input_tensor =
+        ttnn::distributed::distribute_tensor(
+            ttnn::experimental::view(ttnn::arange(0, num_elems, 1, dtype), input_shape).to_layout(layout),
+            *ttnn::distributed::replicate_tensor_to_mesh_mapper(*mesh_device),
+            std::nullopt)
+            .to_device(mesh_device.get(), memory_config);
+    auto output_tensor = allocate_tensor_on_device(output_tensor_spec, mesh_device.get());
+
+    auto [send_socket, recv_socket] =
+        distributed::MeshSocket::create_socket_pair(mesh_device, mesh_device, socket_config);
+
+    ttnn::experimental::send_async(input_tensor, send_socket);
+    ttnn::experimental::recv_async(output_tensor, recv_socket);
+    distributed::Synchronize(mesh_device.get(), std::nullopt);
+}
+
 }  // namespace tt::tt_metal

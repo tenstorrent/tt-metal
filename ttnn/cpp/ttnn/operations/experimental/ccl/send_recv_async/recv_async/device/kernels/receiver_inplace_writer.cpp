@@ -52,47 +52,49 @@ void kernel_main() {
     auto output_addr_gen = TensorAccessor(output_addr_gen_args, output_base_addr, output_page_size);
 
     // Small pages. We write multiple pages from a single packet.
-    uint32_t page_index = 0;
-    if constexpr (num_pages_per_packet > 0) {
-        for (uint32_t i = 0; i < num_whole_packets; ++i) {
-            socket_wait_for_pages(receiver_socket, 1);
-            uint32_t l1_read_addr = receiver_socket.read_ptr;
-            for (uint32_t j = 0; j < num_pages_per_packet; ++j) {
-                auto noc_write_addr = output_addr_gen.get_noc_addr(page_index);
-                noc_async_write<output_page_size>(l1_read_addr, noc_write_addr, output_page_size);
-                page_index++;
-                l1_read_addr += socket_page_size;
+    for (int i = 0; i < 10000000; i++) {
+        uint32_t page_index = 0;
+        if constexpr (num_pages_per_packet > 0) {
+            for (uint32_t i = 0; i < num_whole_packets; ++i) {
+                socket_wait_for_pages(receiver_socket, 1);
+                uint32_t l1_read_addr = receiver_socket.read_ptr;
+                for (uint32_t j = 0; j < num_pages_per_packet; ++j) {
+                    auto noc_write_addr = output_addr_gen.get_noc_addr(page_index);
+                    noc_async_write<output_page_size>(l1_read_addr, noc_write_addr, output_page_size);
+                    page_index++;
+                    l1_read_addr += socket_page_size;
+                }
+                socket_pop_pages(receiver_socket, 1);
+                noc_async_writes_flushed();
+                fabric_socket_notify_sender(receiver_socket, fabric_connection, socket_packet_header_addr);
             }
-            socket_pop_pages(receiver_socket, 1);
-            noc_async_writes_flushed();
-            fabric_socket_notify_sender(receiver_socket, fabric_connection, socket_packet_header_addr);
-        }
 
-        if (num_pages_remainder > 0) {
-            socket_wait_for_pages(receiver_socket, 1);
-            uint32_t l1_read_addr = receiver_socket.read_ptr;
-            for (uint32_t j = 0; j < num_pages_remainder; ++j) {
-                auto noc_write_addr = output_addr_gen.get_noc_addr(page_index);
-                noc_async_write<output_page_size>(l1_read_addr, noc_write_addr, output_page_size);
-                page_index++;
-                l1_read_addr += socket_page_size;
+            if (num_pages_remainder > 0) {
+                socket_wait_for_pages(receiver_socket, 1);
+                uint32_t l1_read_addr = receiver_socket.read_ptr;
+                for (uint32_t j = 0; j < num_pages_remainder; ++j) {
+                    auto noc_write_addr = output_addr_gen.get_noc_addr(page_index);
+                    noc_async_write<output_page_size>(l1_read_addr, noc_write_addr, output_page_size);
+                    page_index++;
+                    l1_read_addr += socket_page_size;
+                }
+                socket_pop_pages(receiver_socket, 1);
+                noc_async_writes_flushed();
+                fabric_socket_notify_sender(receiver_socket, fabric_connection, socket_packet_header_addr);
             }
-            socket_pop_pages(receiver_socket, 1);
-            noc_async_writes_flushed();
-            fabric_socket_notify_sender(receiver_socket, fabric_connection, socket_packet_header_addr);
-        }
 
-    }
-    // Large pages. We write page chunks from multiple packets.
-    else {
-        for (uint32_t i = 0; i < num_pages; ++i) {
-            auto noc_write_addr = output_addr_gen.get_noc_addr(page_index);
-            socket_wait_for_pages(receiver_socket, 1);
-            noc_async_write<output_page_size>(receiver_socket.read_ptr, noc_write_addr, output_page_size);
-            page_index++;
-            socket_pop_pages(receiver_socket, 1);
-            noc_async_writes_flushed();
-            fabric_socket_notify_sender(receiver_socket, fabric_connection, socket_packet_header_addr);
+        }
+        // Large pages. We write page chunks from multiple packets.
+        else {
+            for (uint32_t i = 0; i < num_pages; ++i) {
+                auto noc_write_addr = output_addr_gen.get_noc_addr(page_index);
+                socket_wait_for_pages(receiver_socket, 1);
+                noc_async_write<output_page_size>(receiver_socket.read_ptr, noc_write_addr, output_page_size);
+                page_index++;
+                socket_pop_pages(receiver_socket, 1);
+                noc_async_writes_flushed();
+                fabric_socket_notify_sender(receiver_socket, fabric_connection, socket_packet_header_addr);
+            }
         }
     }
     update_socket_config(receiver_socket);
