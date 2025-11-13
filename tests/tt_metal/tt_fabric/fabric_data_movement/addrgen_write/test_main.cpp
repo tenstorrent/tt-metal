@@ -46,7 +46,7 @@ TEST_P(AddrgenApiVariantTest, Write) {
     // Hardcoded parameters - minimal test case
     tt::tt_fabric::test::AddrgenTestParams p{
         .mesh_id = 0,
-        .src_chip = is_multicast ? 1 : 0,
+        .src_chip = is_multicast ? 2 : 0,
         .dst_chip = is_multicast ? 0 : 1,
         .use_dram_dst = false,
         .tensor_bytes = is_multicast ? 4096 : 16384,  // 2 pages for multicast, 4 for unicast
@@ -54,8 +54,8 @@ TEST_P(AddrgenApiVariantTest, Write) {
         .sender_core = {0, 0},
         .receiver_core = {1, 0},
         .api_variant = api_variant,  // Test parameter
-        .mesh_rows = is_multicast ? 1 : 0,
-        .mesh_cols = is_multicast ? 1 : 0};
+        .mesh_rows = is_multicast ? 2 : 0,
+        .mesh_cols = is_multicast ? 2 : 0};
 
     // Run appropriate test
     if (is_multicast) {
