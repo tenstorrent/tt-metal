@@ -4,6 +4,10 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <algorithm>
+#include <mutex>
+#include <future>
+#include <vector>
 
 #include <enchantum/enchantum.hpp>
 #include <tracy/Tracy.hpp>
@@ -149,40 +153,72 @@ void MetalContext::initialize(
 
     // Clear state, build FW
     auto all_devices = cluster_->all_chip_ids();
-    for (ChipId device_id : all_devices) {
-        // Clear L1/DRAM if requested
-        if (rtoptions_.get_clear_l1()) {
-            clear_l1_state(device_id);
-        }
-        if (rtoptions_.get_clear_dram()) {
-            clear_dram_state(device_id);
-        }
-        [[maybe_unused]] int ai_clk = cluster_->get_device_aiclk(device_id);
-        log_debug(tt::LogMetal, "AI CLK for device {} is:   {} MHz", device_id, ai_clk);
-        generate_device_bank_to_noc_tables(device_id);
-        generate_worker_logical_to_virtual_map(device_id);
+    
+    std::vector<std::future<void>> futures;
+    std::vector<ChipId> device_ids;  // Store device IDs in the same order as futures
+    
+    {
+        ZoneScoped;
+        std::string zoneName = "Parallel Device Initialization";
+        ZoneName(zoneName.c_str(), zoneName.size());
 
-        // Create build env for this device, and build FW if it's not built already
-        BuildEnvManager::get_instance().add_build_env(device_id, num_hw_cqs_);
-        // fw_build_key is a combination of build_key and fw_compile_hash
-        // If fw_compile_hash changes, the fw_build_key will change and FW will be rebuilt
-        // if it's not already in firmware_built_keys_
-        // Combine build_key and fw_compile_hash using XOR to create unique firmware build key
-        // Uses full 64-bit fw_compile_hash for proper change detection
-        uint64_t fw_build_key =
-            BuildEnvManager::get_instance().get_device_build_env(device_id).build_key() ^ fw_compile_hash;
+        futures.reserve(all_devices.size());
+        device_ids.reserve(all_devices.size());
 
-        if (!firmware_built_keys_.contains(fw_build_key)) {
-            BuildEnvManager::get_instance().build_firmware(device_id);
-            firmware_built_keys_.insert(fw_build_key);
+        // Launch async tasks for each device
+        for (ChipId device_id : all_devices) {
+            device_ids.emplace_back(device_id);
+            futures.emplace_back(std::async(std::launch::async, [this, device_id, fw_compile_hash]() {
+                // Clear L1/DRAM if requested
+                if (rtoptions_.get_clear_l1()) {
+                    clear_l1_state(device_id);
+                }
+                if (rtoptions_.get_clear_dram()) {
+                    clear_dram_state(device_id);
+                }
+                [[maybe_unused]] int ai_clk = cluster_->get_device_aiclk(device_id);
+                log_debug(tt::LogMetal, "AI CLK for device {} is:   {} MHz", device_id, ai_clk);
+                generate_device_bank_to_noc_tables(device_id);
+                generate_worker_logical_to_virtual_map(device_id);
+
+                // Create build env for this device, and build FW if it's not built already
+                BuildEnvManager::get_instance().add_build_env(device_id, num_hw_cqs_);
+                // fw_build_key is a combination of build_key and fw_compile_hash
+                // If fw_compile_hash changes, the fw_build_key will change and FW will be rebuilt
+                // if it's not already in firmware_built_keys_
+                // Combine build_key and fw_compile_hash using XOR to create unique firmware build key
+                // Uses full 64-bit fw_compile_hash for proper change detection
+                uint64_t fw_build_key =
+                    BuildEnvManager::get_instance().get_device_build_env(device_id).build_key() ^ fw_compile_hash;
+
+                {
+                    std::lock_guard<std::mutex> lock(firmware_built_keys_mutex_);
+                    if (!firmware_built_keys_.contains(fw_build_key)) {
+                        BuildEnvManager::get_instance().build_firmware(device_id);
+                        firmware_built_keys_.insert(fw_build_key);
+                    }
+                }
+
+                // Clear the entire launch message ring buffer on ethernet cores before application firmware is
+                // activated. This is required since ethernet cores context switch between application and routing
+                // firmware. If ERISC application firmware is activated before the launch messages are cleared, it can
+                // enter an undefined state by reading a corrupted launch message. Routing firmware will never run in
+                // this case, causing UMD issued transactions to hang.
+                clear_launch_messages_on_eth_cores(device_id);
+            }));
         }
 
-        // Clear the entire launch message ring buffer on ethernet cores before application firmware is activated.
-        // This is required since ethernet cores context switch between application and routing firmware.
-        // If ERISC application firmware is activated before the launch messages are cleared, it can enter an undefined
-        // state by reading a corrupted launch message. Routing firmware will never run in this case, causing UMD issued
-        // transactions to hang.
-        clear_launch_messages_on_eth_cores(device_id);
+        // Wait for all async tasks to complete
+        for (size_t i = 0; i < futures.size(); ++i) {
+            ChipId device_id = device_ids[i];  // Get the corresponding device ID
+            try {
+                futures[i].get();  // This handles synchronization and exception propagation
+            } catch (const std::exception& e) {
+                TT_THROW("Device initialization failed for device {}: {}", device_id, e.what());
+            } catch (...) {
+                TT_THROW("Device initialization failed for device {} with unknown exception", device_id);
+            }
+        }
     }
 
     // Populate FD topology across all devices
@@ -200,12 +236,40 @@ void MetalContext::initialize(
         dprint_server_->attach_devices();
     }
     watcher_server_->init_devices();
-    for (ChipId device_id : all_devices) {
-        ClearNocData(device_id);
 
-        reset_cores(device_id);
+    // Parallelize device initialization
+    {
+        ZoneScoped;
+        std::string zoneName = "Parallel Device Final Initialization";
+        ZoneName(zoneName.c_str(), zoneName.size());
 
-        initialize_and_launch_firmware(device_id);
+        // Clear and reuse existing task group vectors
+        futures.clear();
+        device_ids.clear();
+
+        // Launch async tasks for each device
+        for (ChipId device_id : all_devices) {
+            device_ids.emplace_back(device_id);
+            futures.emplace_back(std::async(std::launch::async, [this, device_id]() {
+                ClearNocData(device_id);
+
+                reset_cores(device_id);
+
+                initialize_and_launch_firmware(device_id);
+            }));
+        }
+
+        // Wait for all async tasks to complete
+        for (size_t i = 0; i < futures.size(); ++i) {
+            ChipId device_id = device_ids[i];
+            try {
+                futures[i].get();
+            } catch (const std::exception& e) {
+                TT_THROW("Device final initialization failed for device {}: {}", device_id, e.what());
+            } catch (...) {
+                TT_THROW("Device final initialization failed for device {} with unknown exception", device_id);
+            }
+        }
     }
     // Watcher needs to init before FW since FW needs watcher mailboxes to be set up, and needs to attach after FW
     // starts since it also writes to watcher mailboxes.
@@ -329,6 +393,22 @@ MetalContext::MetalContext() {
         rtoptions_.set_enable_2_erisc_mode(false);
         teardown_base_objects();
         initialize_objects();
+    }
+
+    // Initialize some container members to allow threadsafe operations on them later
+    dram_bank_offset_map_.reserve(cluster_->all_chip_ids().size());
+    l1_bank_offset_map_.reserve(cluster_->all_chip_ids().size());
+    dram_bank_to_noc_xy_.reserve(cluster_->all_chip_ids().size());
+    l1_bank_to_noc_xy_.reserve(cluster_->all_chip_ids().size());
+    worker_logical_col_to_virtual_col_.reserve(cluster_->all_chip_ids().size());
+    worker_logical_row_to_virtual_row_.reserve(cluster_->all_chip_ids().size());
+    for (ChipId device_id : cluster_->all_chip_ids()) {
+        dram_bank_offset_map_.emplace(device_id, std::vector<int32_t>{});
+        l1_bank_offset_map_.emplace(device_id, std::vector<int32_t>{});
+        dram_bank_to_noc_xy_.emplace(device_id, std::vector<uint16_t>{});
+        l1_bank_to_noc_xy_.emplace(device_id, std::vector<uint16_t>{});
+        worker_logical_col_to_virtual_col_.emplace(device_id, std::vector<uint8_t>{});
+        worker_logical_row_to_virtual_row_.emplace(device_id, std::vector<uint8_t>{});
     }
 
     // We do need to call Cluster teardown at the end of the program, use atexit temporarily until we have clarity on
@@ -466,8 +546,9 @@ void MetalContext::clear_launch_messages_on_eth_cores(ChipId device_id) {
 }
 
 tt::tt_fabric::ControlPlane& MetalContext::get_control_plane() {
+    std::lock_guard<std::mutex> lock(control_plane_mutex_);
     if (!control_plane_) {
-        this->initialize_control_plane();
+        this->initialize_control_plane_impl();
     }
     return *control_plane_;
 }
@@ -624,6 +705,11 @@ void MetalContext::construct_control_plane(const std::filesystem::path& mesh_gra
 }
 
 void MetalContext::initialize_control_plane() {
+    std::lock_guard<std::mutex> lock(control_plane_mutex_);
+    initialize_control_plane_impl();
+}
+
+void MetalContext::initialize_control_plane_impl() {
     if (custom_mesh_graph_desc_path_.has_value()) {
         log_debug(tt::LogDistributed, "Using custom mesh graph descriptor: {}", custom_mesh_graph_desc_path_.value());
         std::filesystem::path mesh_graph_desc_path = std::filesystem::path(custom_mesh_graph_desc_path_.value());
