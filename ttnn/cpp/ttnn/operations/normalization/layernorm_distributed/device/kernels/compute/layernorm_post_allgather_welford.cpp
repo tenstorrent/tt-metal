@@ -41,6 +41,12 @@ void MAIN {
     constexpr uint32_t do_gamma = get_compile_time_arg_val(4);
     constexpr uint32_t do_beta = get_compile_time_arg_val(5);
     constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(6) == 1;
+    DPRINT << "do_gamma" << do_gamma << ENDL();
+    DPRINT << "do_beta" << do_beta << ENDL();
+    DPRINT << "Wt" << Wt << ENDL();
+    DPRINT << "W" << W << ENDL();
+    DPRINT << "blk" << blk << ENDL();
+    DPRINT << "NCHt" << NCHt << ENDL();
 
     constexpr uint32_t onetile = 1;
 
@@ -81,6 +87,13 @@ void MAIN {
 
     cb_wait_front(cb_reduce, 1);  // comes from the reader
     cb_wait_front(cb_eps, 1);     // comes from the reader
+
+    DPRINT << "==============\n\n\n\n" << ENDL();
+    if (0 < NCHt) {
+        DPRINT << "0 < NCHt is true" << ENDL();
+    } else {
+        DPRINT << "0 < NCHt is false" << ENDL();
+    }
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         constexpr int onetile = 1;
@@ -161,12 +174,12 @@ void MAIN {
             cb_pop_front(cb_norm_x_input, blk);
         }
         cb_pop_front(cb_recip_sqrt_var, 1);
-
         if constexpr (do_gamma) {
             // DPRINT << "do_gamma" << ENDL();
             /*
              * x_normed * gamma
              */
+
             reconfig_data_format(cb_x_normed, cb_gamma);
             pack_reconfig_data_format(cb_times_gamma_out);
             cb_wait_front(cb_gamma, Wt);
@@ -200,6 +213,7 @@ void MAIN {
                     ACQ();
                     for (uint32_t wtr = 0; wtr < blk; wtr++) {
                         UNPACK(tt::compute::common::print_full_tile(cb_beta, wt + wtr, true));
+
                         add_tiles_bcast_rows(cb_times_gamma_out, cb_beta, wtr, wt + wtr, wtr);
                         pack_tile(wtr, cb_out);
                     }
@@ -210,6 +224,7 @@ void MAIN {
             }
         }
     }
+
     cb_pop_front(cb_eps, 1);
     cb_pop_front(cb_reduce, 1);
     cb_pop_front(cb_gamma, Wt);
