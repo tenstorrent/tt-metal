@@ -579,7 +579,9 @@ def convert_pos_embeddings(state_dict):
 
 
 def invert_pre_compute_positional_embedding(precomputed_embeddings):
-    """Inverts https://github.com/huggingface/transformers/blob/41980ce93e775f6c88500c51c8db7946fc6a2add/src/transformers/models/mllama/convert_mllama_weights_to_hf.py#L122-L148"""
+    """Inverts https://github.com/huggingface/transformers/blob/41980ce93e775f6c88500c51c8db7946fc6a2add/src/transformers/models/mllama/convert_mllama_weights_to_hf.py#L122-L148
+    Note: original embeddings can't be reconstructed since non-used parts (non-supported aspect ratios) are random numbers
+    """
 
     # TBD: remove hardcode
     if tuple(precomputed_embeddings.shape) == (9, 5120):
