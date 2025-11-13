@@ -22,6 +22,7 @@
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
 #include "compute_kernel_api/compute_kernel_hw_startup.h"
 #include "compute_kernel_api/transpose_wh_dest.h"
+#include "debug/dprint_pages.h"
 
 namespace NAMESPACE {
 template <typename To, typename From>
@@ -63,24 +64,24 @@ void MAIN {
 
         reconfig_data_format(cb_inp, cb_inp);
         pack_reconfig_data_format(cb_x2);
-        transpose_wh_init_short(cb_inp);
-        welford_init();
 
         tile_regs_acquire();
         uint32_t start_N = 0;
+        transpose_wh_init_short(cb_inp);
+        welford_init();
         for (uint32_t wt = 0; wt < (Wt - 1); wt++) {
             cb_wait_front(cb_inp, 1);  // cumulative wait
             transpose_wh_tile(cb_inp, 0, dst0);
             // welford_tile<dst0, dst1, dst2, true, 0>((wt) * 32, W, 0, {});
-            welford_tile<W>(dst0, start_N, *p_reciprocals);
+            welford_update<W>(dst0, start_N, *p_reciprocals);
             start_N += 32;
             cb_pop_front(cb_inp, 1);
         }
         cb_wait_front(cb_inp, 1);  // cumulative wait
         transpose_wh_tile(cb_inp, 0, dst0);
-        welford_partial_tile<W>(dst0, start_N, 0, last_tile_rows, *p_reciprocals);
+        welford_update_rows<W>(dst0, start_N, 0, last_tile_rows, *p_reciprocals);
         cb_pop_front(cb_inp, 1);
-        welford_store_mean_var_to_dst_row<W>(dst1, W - 1, *p_reciprocals);
+        welford_finalize_to_row<W>(dst1, W - 1, *p_reciprocals);
         // tt-llk/issues/549
         // BUG: using transpose_dest here causes a bug. where the kernel hangs
         //  transpose_wh_dest_init_short();
