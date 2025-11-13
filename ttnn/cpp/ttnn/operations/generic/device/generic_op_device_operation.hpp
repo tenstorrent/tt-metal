@@ -28,7 +28,7 @@ struct GenericOpDeviceOperation {
 
     struct GenericProgram {
         struct shared_variables_t {
-            std::vector<tt::tt_metal::KernelHandle> kernel_handles;
+            uint32_t num_kernel_handles;
             std::vector<tt::tt_metal::CBHandle> cb_handles;
         };
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
@@ -68,14 +68,7 @@ struct GenericOpDeviceOperation {
 
     // Note: will either compute a program hash, or simply return user provided custom program hash
     static tt::stl::hash::hash_t compute_program_hash(
-        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-        if (operation_attributes.custom_program_hash) {
-            return *operation_attributes.custom_program_hash;
-        }
-
-        return tt::stl::hash::hash_objects_with_default_seed(
-            tt::stl::hash::type_hash<GenericOpDeviceOperation>, operation_attributes, tensor_args);
-    }
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 };  // struct GenericOpDeviceOperation
 
 }  // namespace ttnn::operations::generic

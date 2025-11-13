@@ -24,12 +24,9 @@ GenericOpDeviceOperation::GenericProgram::cached_program_t GenericOpDeviceOperat
     auto cbs = program.circular_buffers();
     shared_vars.cb_handles.reserve(cbs.size());
     for (const auto& cb : cbs) {
-        shared_vars.cb_handles.push_back(cb->id());
+        shared_vars.cb_handles.push_back(static_cast<tt::tt_metal::CBHandle>(cb->id()));
     }
-    shared_vars.kernel_handles.reserve(operation_attributes.kernels.size());
-    for (size_t i = 0; i < operation_attributes.kernels.size(); ++i) {
-        shared_vars.kernel_handles.push_back(i);
-    }
+    shared_vars.num_kernel_handles = operation_attributes.kernels.size();
 
     return {std::move(program), std::move(shared_vars)};
 }
@@ -43,9 +40,13 @@ void GenericOpDeviceOperation::GenericProgram::override_runtime_arguments(
     auto& shared_vars = cached_program.shared_variables;
 
     // Update kernel runtime args.
-    for (size_t kernel_idx = 0; kernel_idx < operation_attributes.kernels.size(); ++kernel_idx) {
-        const auto& kernel_desc = operation_attributes.kernels[kernel_idx];
-        auto kernel_handle = shared_vars.kernel_handles[kernel_idx];
+    TT_ASSERT(
+        shared_vars.num_kernel_handles == operation_attributes.kernels.size(),
+        "Number of kernel handles mismatch: cached {} vs new program {}",
+        shared_vars.num_kernel_handles,
+        operation_attributes.kernels.size());
+    for (size_t kernel_handle = 0; kernel_handle < shared_vars.num_kernel_handles; ++kernel_handle) {
+        const auto& kernel_desc = operation_attributes.kernels[kernel_handle];
 
         for (size_t i = 0; i < kernel_desc.runtime_args.size(); i++) {
             for (size_t j = 0; j < kernel_desc.runtime_args[i].size(); j++) {
