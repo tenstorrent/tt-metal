@@ -37,7 +37,8 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          {name: tt-train, cmd: ctest -E NIGHTLY --no-tests=error --output-on-failure  --output-junit generated/test_reports/ctest_report.xml},
+          {name: tt-train, cmd: ctest -E NIGHTLY --no-tests=error --output-on-failure  --output-junit generated/test_reports/ctest_report.xml, type: ctest},
+          {name: tt-train-autograd, cmd: pytest tt-train/tests/python/test_autograd.py -xv, type: pytest},
         ]
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     # tt-train in N300 is timing out on CIv2-viommu: https://github.com/tenstorrent/tt-metal/issues/29443
@@ -74,10 +75,17 @@ jobs:
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
-          cd /work/build/tt-train
-          mkdir -p generated/test_reports
-          ldd tests/ttml_tests || true
-          ${{ matrix.test-group.cmd }}
+          if [[ "${{ matrix.test-group.type }}" == "ctest" ]]; then
+            cd /work/build/tt-train
+            mkdir -p generated/test_reports
+            ldd tests/ttml_tests || true
+            ${{ matrix.test-group.cmd }}
+          elif [[ "${{ matrix.test-group.type }}" == "pytest" ]]; then
+            cd /work
+            mkdir -p build/tt-train/generated/test_reports
+            source python_env/bin/activate
+            ${{ matrix.test-group.cmd }} --junitxml=build/tt-train/generated/test_reports/pytest_report.xml
+          fi
 
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
