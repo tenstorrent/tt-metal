@@ -12,7 +12,6 @@
 #include "llrt/tt_target_device.hpp"
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -315,6 +314,9 @@ public:
     // Returns Wormhole chip board type.
     BoardType get_board_type(ChipId chip_id) const;
 
+    // Returns whether IOMMU is enabled on the system (cached at init time)
+    bool is_iommu_enabled() const;
+
     tt::tt_metal::ClusterType get_cluster_type() const;
 
     tt::TargetDevice get_target_device_type() const { return this->target_type_; }
@@ -384,6 +386,9 @@ private:
 
     // There is a single device driver for all connected chips. It might contain multiple MMIO devices/cards.
     std::unique_ptr<tt::umd::Cluster> driver_;
+
+    // Cached system IOMMU status to avoid slow queries at MeshDevice construction
+    bool iommu_enabled_ = false;
 
     // Need to hold reference to cluster descriptor to detect total number of devices available in cluster
     // UMD static APIs `detect_available_device_ids` and `detect_number_of_chips` only returns number of MMIO mapped
