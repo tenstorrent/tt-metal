@@ -97,9 +97,9 @@ Tensor invoke_impl(
     const Tensor& t_false,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
-    auto broadcast_type = ttnn::operations::ternary::get_broadcast_type(
-        predicate.logical_shape(), t_true.logical_shape(), t_false.logical_shape());
     Tensor condition = predicate;
+    auto broadcast_type = ttnn::operations::ternary::get_broadcast_type(
+        condition.logical_shape(), t_true.logical_shape(), t_false.logical_shape());
     bool typecast_needed = ternary_utils::typecast_predicate(predicate, t_true, t_false);
     if (typecast_needed) {
         condition = ttnn::typecast(predicate, t_true.dtype());
@@ -107,7 +107,7 @@ Tensor invoke_impl(
 
     if (is_invalid_bcast(broadcast_type)) {
         return ternary_utils::where_impl(
-            predicate,
+            condition,
             t_true,
             t_false,
             ternary_utils::determine_memory_config(memory_config, predicate.memory_config()),
