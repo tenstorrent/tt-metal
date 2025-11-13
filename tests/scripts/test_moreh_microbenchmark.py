@@ -792,9 +792,10 @@ def test_dram_read_all_core(arch, test_vector, num_tests, nblock, data_format, n
         dev_freq = get_device_freq()
         time = cycle / dev_freq / 1000.0 / 1000.0
         throughput = input_size / cycle * dev_freq / 1000.0
+        logger.info("dev_freq: " + str(dev_freq))
         logger.info("DRAM read cycle: " + str(cycle))
         logger.info("DRAM read time: " + str(time))
-        logger.info("DRAM read throughput: " + str(throughput) + " Gb/s")
+        logger.info("DRAM read throughput: " + str(throughput) + " GB/s")
         cycle_list.append(cycle)
         time_list.append(time)
         throughput_list.append(throughput)
@@ -803,7 +804,7 @@ def test_dram_read_all_core(arch, test_vector, num_tests, nblock, data_format, n
     throughput = sum(throughput_list) / len(throughput_list)
     logger.info("DRAM read cycle: " + str(cycle))
     logger.info("DRAM read time: " + str(time))
-    logger.info("DRAM read throughput: " + str(throughput) + " Gb/s")
+    logger.info("DRAM read throughput: " + str(throughput) + " GB/s")
     data.append([throughput])
     # check within range
     dev_freq = get_device_freq()
