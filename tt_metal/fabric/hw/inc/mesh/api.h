@@ -2078,6 +2078,56 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc(
 
 // clang-format off
 /**
+ * Multicast fused unicast write + atomic increment: TensorAccessor overload.
+ *
+ * Return value: None
+ *
+ * | Argument                              | Description                             | Type                                          | Required |
+ * |---------------------------------------|-----------------------------------------|-----------------------------------------------|----------|
+ * | client_interface                      | Fabric sender interface              | tt_l1_ptr FabricSenderType*                      | True     |
+ * | packet_header                         | Packet header to use                 | volatile PACKET_HEADER_TYPE*                     | True     |
+ * | dst_dev_id                            | Destination device ID                | uint8_t                                          | True     |
+ * | dst_mesh_id                           | Destination mesh ID                  | uint16_t                                         | True     |
+ * | ranges                                | Multicast hop counts (E/W/N/S)       | const MeshMcastRange&                            | True     |
+ * | src_addr                              | Source L1 address                    | uint32_t                                         | True     |
+ * | addrgen                               | TensorAccessor for NOC address       | const AddrGenType&                               | True     |
+ * | page_id                               | Page ID for address generation       | uint32_t                                         | True     |
+ * | semaphore_noc_address                 | Semaphore NOC address                | uint64_t                                         | True     |
+ * | val                                   | Increment value                      | uint16_t                                         | True     |
+ * | offset                                | Offset within page                   | uint32_t                                         | False    |
+ * | flush                                 | Flush after write                    | bool                                             | False    |
+ */
+// clang-format on
+template <typename FabricSenderType, typename AddrGenType>
+FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc(
+    tt_l1_ptr FabricSenderType* client_interface,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint8_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    const MeshMcastRange& ranges,
+    uint32_t src_addr,
+    const AddrGenType& addrgen,
+    uint32_t page_id,
+    uint64_t semaphore_noc_address,
+    uint16_t val,
+    uint32_t offset = 0,
+    bool flush = true) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
+
+    fabric_multicast_noc_fused_unicast_with_atomic_inc(
+        client_interface,
+        packet_header,
+        dst_dev_id,
+        dst_mesh_id,
+        ranges,
+        src_addr,
+        page_size,
+        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{noc_address, semaphore_noc_address, val, flush});
+}
+
+// clang-format off
+/**
  * Multicast fused unicast write + atomic increment (stateful): updates only masked fields, then submits payload.
  *
  * Return value: None

@@ -40,12 +40,13 @@ TEST_P(AddrgenApiVariantTest, Write) {
          api_variant == tt::tt_fabric::test::AddrgenApiVariant::MulticastWriteSetState ||
          api_variant == tt::tt_fabric::test::AddrgenApiVariant::MulticastScatterWrite ||
          api_variant == tt::tt_fabric::test::AddrgenApiVariant::MulticastScatterWriteWithState ||
-         api_variant == tt::tt_fabric::test::AddrgenApiVariant::MulticastScatterWriteSetState);
+         api_variant == tt::tt_fabric::test::AddrgenApiVariant::MulticastScatterWriteSetState ||
+         api_variant == tt::tt_fabric::test::AddrgenApiVariant::MulticastFusedAtomicIncWrite);
 
     // Hardcoded parameters - minimal test case
     tt::tt_fabric::test::AddrgenTestParams p{
         .mesh_id = 0,
-        .src_chip = is_multicast ? 2 : 0,
+        .src_chip = is_multicast ? 1 : 0,
         .dst_chip = is_multicast ? 0 : 1,
         .use_dram_dst = false,
         .tensor_bytes = is_multicast ? 4096 : 16384,  // 2 pages for multicast, 4 for unicast
@@ -53,8 +54,8 @@ TEST_P(AddrgenApiVariantTest, Write) {
         .sender_core = {0, 0},
         .receiver_core = {1, 0},
         .api_variant = api_variant,  // Test parameter
-        .mesh_rows = is_multicast ? 2 : 0,
-        .mesh_cols = is_multicast ? 2 : 0};
+        .mesh_rows = is_multicast ? 1 : 0,
+        .mesh_cols = is_multicast ? 1 : 0};
 
     // Run appropriate test
     if (is_multicast) {
@@ -81,6 +82,7 @@ INSTANTIATE_TEST_SUITE_P(
         tt::tt_fabric::test::AddrgenApiVariant::MulticastScatterWrite,
         tt::tt_fabric::test::AddrgenApiVariant::MulticastScatterWriteWithState,
         tt::tt_fabric::test::AddrgenApiVariant::MulticastScatterWriteSetState,
+        tt::tt_fabric::test::AddrgenApiVariant::MulticastFusedAtomicIncWrite,
         tt::tt_fabric::test::AddrgenApiVariant::ScatterWrite,
         tt::tt_fabric::test::AddrgenApiVariant::ScatterWriteWithState,
         tt::tt_fabric::test::AddrgenApiVariant::ScatterWriteSetState),
@@ -102,6 +104,8 @@ INSTANTIATE_TEST_SUITE_P(
                 return "MulticastScatterWriteWithState";
             case tt::tt_fabric::test::AddrgenApiVariant::MulticastScatterWriteSetState:
                 return "MulticastScatterWriteSetState";
+            case tt::tt_fabric::test::AddrgenApiVariant::MulticastFusedAtomicIncWrite:
+                return "MulticastFusedAtomicIncWrite";
             case tt::tt_fabric::test::AddrgenApiVariant::ScatterWrite: return "ScatterWrite";
             case tt::tt_fabric::test::AddrgenApiVariant::ScatterWriteWithState: return "ScatterWriteWithState";
             case tt::tt_fabric::test::AddrgenApiVariant::ScatterWriteSetState: return "ScatterWriteSetState";

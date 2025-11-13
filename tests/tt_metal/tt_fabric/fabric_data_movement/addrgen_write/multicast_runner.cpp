@@ -195,6 +195,10 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
         (p.api_variant == AddrgenApiVariant::MulticastScatterWrite ||
          p.api_variant == AddrgenApiVariant::MulticastScatterWriteWithState ||
          p.api_variant == AddrgenApiVariant::MulticastScatterWriteSetState);
+    const bool is_fused_atomic_inc = (p.api_variant == AddrgenApiVariant::MulticastFusedAtomicIncWrite);
+
+    // Move NUM_PAGES calculation before receiver setup
+    const uint32_t NUM_PAGES = (p.tensor_bytes + p.page_size - 1) / p.page_size;
 
     for (size_t i = 0; i < dst_coords.size(); ++i) {
         receiver_progs.emplace_back(tt::tt_metal::CreateProgram());
@@ -206,7 +210,9 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = tt::tt_metal::NOC::RISCV_0_default,
                 .defines = defines});
-        tt::tt_metal::SetRuntimeArgs(receiver_progs.back(), rx_wait_k, p.receiver_core, {gsem_done->address(), 1u});
+        const uint32_t sem_wait_value = is_fused_atomic_inc ? NUM_PAGES : 1u;
+        tt::tt_metal::SetRuntimeArgs(
+            receiver_progs.back(), rx_wait_k, p.receiver_core, {gsem_done->address(), sem_wait_value});
     }
 
     // Ensure the same logical worker maps to the same physical XY across all receiver chips
@@ -221,9 +227,6 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
 
     // Sender program: READER (RISCV_0) + WRITER (RISCV_1)
     tt::tt_metal::Program sender_prog = tt::tt_metal::CreateProgram();
-
-    // For scatter, NUM_PAGES represents total pages, but loop increments by 2
-    const uint32_t NUM_PAGES = (p.tensor_bytes + p.page_size - 1) / p.page_size;
     const uint32_t CB_ID = tt::CBIndex::c_0;
     auto cb_cfg = tt::tt_metal::CircularBufferConfig(8 * p.page_size, {{CB_ID, tt::DataFormat::Float16}})
                       .set_page_size(CB_ID, p.page_size);
@@ -255,7 +258,9 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
 
     // Select writer kernel based on variant
     std::string writer_kernel_name;
-    if (is_scatter) {
+    if (is_fused_atomic_inc) {
+        writer_kernel_name = "multicast_fused_atomic_inc_tx_writer_addrgen.cpp";
+    } else if (is_scatter) {
         if (is_set_state) {
             writer_kernel_name = "multicast_scatter_tx_writer_set_state_addrgen.cpp";
         } else if (is_with_state) {
