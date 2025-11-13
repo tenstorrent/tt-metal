@@ -1000,6 +1000,7 @@ class LlamaForCausalLM:
     def __init__(self, mesh_device, max_batch_size):
         self.mesh_device = mesh_device
         self.max_batch_size = max_batch_size
+        self.submesh_device = self.mesh_device.create_submesh(ttnn.MeshShape((1, 8)))
 
     @classmethod
     def initialize_vllm_model(
@@ -1062,9 +1063,9 @@ class LlamaForCausalLM:
         num_iters = 1
         rs_topology = ttnn.Topology.Linear
         cluster_axis = None
-        submesh_device = self.mesh_device.create_submesh(ttnn.MeshShape((1, num_devices)))
+        # submesh_device = self.mesh_device.create_submesh(ttnn.MeshShape((1, num_devices)))
         run_reduce_scatter_impl(
-            submesh_device,
+            self.submesh_device,
             num_devices,
             rs_input_shape,
             dim,
