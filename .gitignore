@@ -16,6 +16,7 @@ tt_debug
 build
 build_*
 /python_env/
+/python_env_vllm/
 CMakeUserPresets.json
 /llk_out/
 /out/

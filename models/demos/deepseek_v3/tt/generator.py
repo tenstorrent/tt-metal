@@ -375,9 +375,7 @@ class DeepseekGenerator:
     def _tt_from_tokens_step(self, tokens_step: torch.Tensor) -> ttnn.Tensor:
         """Tokens step: [B] -> TTNN tensor [1, 1, B] uint32, replicated to mesh."""
         assert tokens_step.dim() == 1
-        logger.info(f"_tt_from_tokens_step tokens_step shape: {tokens_step.shape}")
         x = tokens_step.view(1, 1, -1).to(torch.int32)
-        logger.info(f"_tt_from_tokens_step x: {x}")
         # return ttnn.from_torch(
         #     x,
         #     device=self.mesh_device,
@@ -573,8 +571,11 @@ class DeepseekGenerator:
                 next_tokens, positions, self.batch_size_per_row, enable_trace=self.enable_trace
             )
             profiler.end(f"decode_time_{gen_idx}")
+            logger.info(f"logits.shape: {logits.shape}")
             self.ccl.reset_sem_counters()
+            logger.info(f"resetting sem counters...done")
             pred_tokens = self._sample_greedy(logits)
+            logger.info(f"pred_tokens.shape: {pred_tokens.shape}")
             if teacher_forcing is not None:
                 forced = teacher_forcing.collect_predicted_tokens(int(pred_tokens[0].item()))
                 pred_tokens[0] = int(forced)
@@ -590,7 +591,7 @@ class DeepseekGenerator:
 
         profiler.end("inference_decode")
         profiler.end("run")
-
+        logger.info(f"profiler.get_duration('inference_decode'): {profiler.get_duration('inference_decode')}")
         if early_print_first_user:
             logger.info("\n===== Done =====")
 
@@ -729,7 +730,7 @@ class DeepseekGenerator:
         # 1) Warm-up compile run (no trace) to keep compilation out of capture
         logger.info("Running warm-up decode step (no trace)...")
         _ = self._decode_step(init_tokens, positions, batch_size_per_row=batch_size_per_row)
-
+        logger.info("Running warm-up decode step (no trace)...done")
         # 2) Allocate persistent device inputs
         self._trace_tokens = self._tt_from_tokens_step(init_tokens)
         self._trace_positions = ttnn.from_torch(
@@ -763,7 +764,9 @@ class DeepseekGenerator:
         else:
             # Capture trace and return trace output
             if self._trace_id is None:
+                ttnn.synchronize_device(self.mesh_device)
                 self._capture_decode_trace(tokens, positions, batch_size_per_row)
+                ttnn.synchronize_device(self.mesh_device)
                 # First call: return the captured run's output
                 assert self._trace_output is not None
                 logits = ttnn.to_torch(
@@ -778,35 +781,39 @@ class DeepseekGenerator:
             # Update persistent inputs and execute
             assert self._trace_tokens is not None and self._trace_positions is not None and self._trace_id is not None
             torch_input = tokens.view(1, 1, -1).to(torch.int32)
+
             host_tokens = ttnn.from_torch(
                 torch_input,
                 device=None,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, self.mesh_device.shape, (-1, None)),
                 dtype=ttnn.uint32,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
             )
-
-            # host_tokens = ttnn.from_torch(
-            #     torch_input,
-            #     device=None,
-            #     mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, self.mesh_device.shape, (-1, None)),
-            #     dtype=ttnn.uint32,
-            #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            #     layout=ttnn.ROW_MAJOR_LAYOUT,
-            # )
+            logger.info(f"host_tokens.shape: {host_tokens.shape}")
+            logger.info(f"self._trace_tokens.shape: {self._trace_tokens.shape}")
 
             ttnn.copy_host_to_device_tensor(host_tokens, self._trace_tokens)
+
             host_positions = ttnn.from_torch(
                 positions,
                 device=None,
                 mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
                 dtype=ttnn.int32,
             )
-
+            logger.info(f"host_positions.shape: {host_positions.shape}")
+            logger.info(f"self._trace_positions.shape: {self._trace_positions.shape}")
             ttnn.copy_host_to_device_tensor(host_positions, self._trace_positions)
             self.ccl.reset_sem_counters()
-            ttnn.execute_trace(self.mesh_device, self._trace_id, cq_id=0, blocking=False)
+            logger.info(f"Synchronizing device...")
+            ttnn.synchronize_device(self.mesh_device)
+            logger.info(f"Synchronizing device...done")
+            logger.info(f"Executing trace...")
+            ttnn.execute_trace(self.mesh_device, self._trace_id, cq_id=0, blocking=True)
+            logger.info(f"Executing trace...done")
+            logger.info(f"Synchronizing device...")
+            ttnn.synchronize_device(self.mesh_device)
+            logger.info(f"Synchronizing device...done")
             assert self._trace_output is not None
             logits = ttnn.to_torch(
                 self._trace_output,

@@ -5,7 +5,6 @@
 from pathlib import Path
 
 import torch
-from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
@@ -109,7 +108,7 @@ class EmbeddingDP(Embedding1D):
         # logger.info(f"embedding_dp forward x shape: {x.shape}")
         # TODO: remove this padding once all gather async supports subtile gathering
         # Add padding so that the batch dimension is divisible by TILE_SIZE
-        logger.info(f"embedding_dp forward x shape: {x.shape}")
+        # logger.info(f"embedding_dp forward x shape: {x.shape}")
         _, _, original_seq_len = x.shape
         block_size = ttnn.TILE_SIZE
         if original_seq_len % block_size == 0:
@@ -125,5 +124,5 @@ class EmbeddingDP(Embedding1D):
         embeddings_tc = ttnn.typecast(embeddings, **cfg["typecast"])
         ttnn.deallocate(embeddings)
 
-        logger.info(f"embedding_dp forward embeddings_tc shape: {embeddings_tc.shape}")
+        # logger.info(f"embedding_dp forward embeddings_tc shape: {embeddings_tc.shape}")
         return embeddings_tc
