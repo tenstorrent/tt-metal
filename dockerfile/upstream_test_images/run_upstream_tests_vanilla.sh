@@ -116,11 +116,7 @@ test_suite_bh_multi_pcie_metal_unit_tests() {
         sleep 5
     done
     ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
-
-    # Remove this once https://github.com/tenstorrent/tt-metal/issues/28352 is fixed
-    if [[ "$hw_topology" != "blackhole_qb_ge" ]]; then
-        ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
-    fi
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
 
     ./build/test/tt_metal/unit_tests_eth
     if [[ "$hw_topology" == "blackhole_llmbox" ]]; then
