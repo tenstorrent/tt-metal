@@ -138,6 +138,7 @@ public:
             params.processor_class == HalProcessorClassType::DM ? "-mcpu=tt-qsr64 " : "-mcpu=tt-qsr32-tensixbh ";
         cflags += "-fno-rvtt-sfpu-replay ";
         cflags += "-fno-extern-tls-init ";
+        cflags += "-ftls-model=local-exec ";
         if (!(params.core_type == HalProgrammableCoreType::TENSIX &&
               params.processor_class == HalProcessorClassType::COMPUTE)) {
             cflags += "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
