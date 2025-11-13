@@ -155,7 +155,6 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-    if: ${{ inputs.t3000-frequent }}
   t3000-nightly-tests:
     if: ${{ needs.determine-tests.outputs.run-nightly == 'true' }}
     needs: [build-artifact, determine-tests]
