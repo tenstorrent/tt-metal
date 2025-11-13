@@ -45,6 +45,11 @@ def parse_args():
 def collect_benchmarks(benchmark_obj):
     successed_benchmarks, failed_benchmarks = {}, {}
     for benchmark in benchmark_obj["benchmarks"]:
+        if benchmark["repetitions"] != 1 and not (
+            benchmark["run_type"] == "aggregate" and benchmark["aggregate_name"] == "median"
+        ):
+            # Only process results with 1 repetition or the median aggregate.
+            continue
         if "error_occurred" in benchmark and benchmark["error_occurred"]:
             failed_benchmarks[benchmark["name"]] = benchmark["error_message"]
         else:
@@ -52,19 +57,7 @@ def collect_benchmarks(benchmark_obj):
     return successed_benchmarks, failed_benchmarks
 
 
-def filter_benchmarks(benchmarks):
-    """Filter benchark results to only include those with 1 repetition or with aggregate_name == "median"."""
-    return [
-        benchmark
-        for benchmark in benchmarks
-        if benchmark["repetitions"] == 1
-        or (benchmark["run_type"] == "aggregate" and benchmark["aggregate_name"] == "median")
-    ]
-
-
 def compare_benchmarks(golden_benchmarks, result_benchmarks, result_failed_benchmarks, tolerance, ignore_times):
-    golden_benchmarks = filter_benchmarks(golden_benchmarks)
-    result_benchmarks = filter_benchmarks(result_benchmarks)
     golden_benchmarks_names = set(golden_benchmarks.keys())
     result_benchmarks_names = set(result_benchmarks.keys())
 
