@@ -4,7 +4,7 @@
 import ttnn
 
 from .config import AttentionConfig, ProgramConfig
-from .operations import apply_allreduce, apply_rope
+from .operations import apply_rope
 from .weights import AttentionWeights
 
 
@@ -50,13 +50,26 @@ def decode_forward(
     if seq_len != 1:
         raise ValueError(f"Decode mode requires seq_len=1, got {seq_len}")
 
+    # QKV projection with 2D sharding (includes all-reduce along rows)
     # QKV projection
+    mem = ttnn.create_sharded_memory_config(
+        shape=(1, 1, 32, 32),  # hidden_size_per_device_distributed_ln//num_cores_ln),
+        core_grid=ttnn.CoreGrid(y=4, x=5),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        use_height_and_width_as_shard_shape=True,
+    )
     xqkv_fused = ttnn.matmul(
-        hidden_states, weights.wqkv, dtype=ttnn.bfloat16, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+        hidden_states, weights.wqkv, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
     )
     xqkv_fused = ttnn.add(xqkv_fused, weights.wqkv_bias, output_tensor=xqkv_fused)
+    print(xqkv_fused.memory_config())
+    xqkv_fused = ttnn.all_reduce(
+        xqkv_fused, num_links=1, topology=ttnn.Topology.Linear, cluster_axis=0, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    print(xqkv_fused.memory_config())
+    xqkv_fused = ttnn.typecast(xqkv_fused, ttnn.bfloat16)
 
-    # Split into Q, K, V heads
+    # Split into Q, K, V heads using standard (non-fused) operation
     num_local_heads = mesh_config.shard_size(config.num_heads)
     num_local_kv_heads = mesh_config.shard_size(config.num_kv_heads)
     head_dim = config.head_dim
@@ -67,14 +80,13 @@ def decode_forward(
         num_kv_heads=num_local_kv_heads,
         memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
     )
-
     xqkv_fused.deallocate(True)
 
-    # Apply RoPE
+    # Apply RoPE separately to Q and K (non-fused)
     tt_q = apply_rope(tt_q, rope_mats, transformation_mat, is_decode_mode=True)
     tt_k = apply_rope(tt_k, rope_mats, transformation_mat, is_decode_mode=True)
 
-    # Update KV cache
+    # Update KV cache separately (non-fused)
     k_cache, v_cache = kv_cache
     tt_k = ttnn.to_memory_config(tt_k, kv_mem_cfg)
     tt_v = ttnn.to_memory_config(tt_v, kv_mem_cfg)
@@ -138,24 +150,35 @@ def decode_forward(
         )
     tt_q.deallocate(True)
 
-    # Concat heads and apply output projection
-
+    # Concat heads and apply output projection (with 2D sharding all-reduce)
     tt_sdpa_out = ttnn.experimental.nlp_concat_heads_decode(tt_sdpa_tensor, num_heads=num_local_heads)
     tt_sdpa_tensor.deallocate(True)
-
     tt_out = ttnn.linear(
         tt_sdpa_out, weights.o_proj, dtype=ttnn.bfloat16, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
     )
     tt_sdpa_out.deallocate(True)
     tt_out = ttnn.add(tt_out, weights.o_proj_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
     tt_out = ttnn.typecast(tt_out, ttnn.bfloat8_b)
-    tt_out = ttnn.reshape(
-        tt_out,
-        (batch_size, seq_len, hidden_size),
-        (batch_size, 32, hidden_size),
-    )
 
     # Tensor parallel allreduce
-    tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, batch_size, seq_len, hidden_size)
+    mem = ttnn.create_sharded_memory_config(
+        shape=(1, 1, 32, 32),  # hidden_size_per_device_distributed_ln//num_cores_ln),
+        core_grid=ttnn.CoreGrid(y=3, x=8),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        use_height_and_width_as_shard_shape=True,
+    )
+    tt_out = ttnn.all_reduce(
+        tt_out, num_links=4, topology=ttnn.Topology.Ring, cluster_axis=1, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    # tt_out = ttnn.to_memory_config(tt_out, mem)
 
+    # mesh_config.allreduce_cols(tt_out, ccl_manager, memory_config=mem)
+    # (tt_out, mesh_config, ccl_manager, batch_size, seq_len, hidden_size)
+
+    # tt_out = ttnn.all_gather(tt_out, cluster_axis=0, dim=-1)
+    # tt_out = ttnn.reshape(
+    #     tt_out,
+    #     #ttnn.Shape([batch_size, 1, hidden_size]),
+    #     ttnn.Shape([batch_size, 32, hidden_size]),
+    # )
     return tt_out

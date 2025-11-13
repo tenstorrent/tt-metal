@@ -54,10 +54,13 @@ def load_attention_weights(
     k_proj_weight = substate(state_dict, "k_proj")["weight"]  # [num_kv_heads * head_dim, hidden_size]
     v_proj_weight = substate(state_dict, "v_proj")["weight"]  # [num_kv_heads * head_dim, hidden_size]
 
-    o_proj = substate(state_dict, "o_proj")["weight"].transpose(-1, -2)
-    o_proj_bias = substate(state_dict, "o_proj")["bias"]
+    o_proj = torch.randn(4096, 2944)  # substate(state_dict, "o_proj")["weight"].transpose(-1, -2)
+    o_proj_bias = torch.randn(2944)  # substate(state_dict, "o_proj")["bias"]
 
-    # Create fused QKV weight
+    print(o_proj.shape, o_proj_bias.shape)
+
+    # Create fused QKV weight for 2D sharding
+    # For 2D sharding: don't pre-chunk, let mesh_mapper handle distribution
     # Split Q, K, V across devices, then concatenate per device
     qkv_list = []
     for i in range(mesh_config.tp):
@@ -76,24 +79,33 @@ def load_attention_weights(
         qkv_list.append(qkv)
 
     # Concatenate across devices: [hidden_size, total_qkv_dim]
-    qkv_cat = torch.cat(qkv_list, dim=-1).unsqueeze(0).unsqueeze(0)  # [1, 1, hidden_size, total_qkv_dim]
+    # qkv_cat = torch.cat(qkv_list, dim=-1).unsqueeze(0).unsqueeze(0)  # [1, 1, hidden_size, total_qkv_dim]
 
-    # Clean mesh mapping using MeshConfig
+    qkv_cat = torch.randn(1, 1, 2944, 5120)
+    print("qkv_cat", qkv_cat.shape)
+
+    # 2D sharding mappers
+    # QKV: input dim (hidden) across ROWS, output dim (qkv) across COLUMNS
+    qkv_2d_mapper = mesh_config.attention_2d_qkv(mesh_device)
+    # WO: input dim (hidden) across COLUMNS, output dim (hidden) across ROWS
+    wo_2d_mapper = mesh_config.attention_2d_wo(mesh_device)
+
+    # For biases and other 1D-sharded tensors
     col_mesh_mapper = mesh_config.column_parallel(mesh_device)
     row_mesh_mapper = mesh_config.row_parallel(mesh_device)
 
-    # Load QKV weight
+    # Load QKV weight with 2D sharding
     wqkv = ttnn.as_tensor(
         qkv_cat,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=weight_dtype,
-        mesh_mapper=col_mesh_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, "wqkv"),
+        mesh_mapper=qkv_2d_mapper,
+        cache_file_name=get_cache_file_name(tensor_cache_path, "wqkv_2d"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    # Handle biases - create fused QKV bias
+    # Handle biases - column-sharded for output dimension
     q_proj_bias = substate(state_dict, "q_proj")["bias"]
     k_proj_bias = substate(state_dict, "k_proj")["bias"]
     v_proj_bias = substate(state_dict, "v_proj")["bias"]
@@ -113,7 +125,7 @@ def load_attention_weights(
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=bias_dtype,
-        mesh_mapper=col_mesh_mapper,
+        mesh_mapper=col_mesh_mapper,  # Column-sharded on output dimension
         cache_file_name=get_cache_file_name(tensor_cache_path, "wqkv_bias"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
@@ -125,17 +137,35 @@ def load_attention_weights(
     )
     decode_sinks /= config.scaling
 
-    # Output projection
-    if mesh_config.tp > 1:
+    # Output projection with 2D sharding
+    num_rows = mesh_config.mesh_shape[0]
+
+    # Handle bias for 2D sharding
+    # After WO matmul + allreduce_cols, output is: row-sharded, column-replicated
+    # So bias needs to be: row-sharded, column-replicated (same sharding pattern)
+    #
+    # For row-parallel output: only first row should have actual bias, others get zeros
+    if num_rows > 1:
+        # Create row-wise pattern: [bias, zeros, zeros, ...] for the rows
+        # o_proj_bias = torch.cat([o_proj_bias] + [torch.zeros_like(o_proj_bias)] * (num_rows - 1), dim=-1)
+        # Now o_proj_bias has size: hidden_size * num_rows
+        # We need to shard dim=-1 across mesh axis 0 (rows), replicate across mesh axis 1 (cols)
+        # dims=(-1, None) means: shard tensor dim -1 on mesh axis 0, replicate on mesh axis 1
+        print("setting o bias mesh mapper", o_proj_bias.shape)
+        o_bias_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_config.mesh_shape, dims=(-1, None))
+    else:
         o_proj_bias = torch.cat([o_proj_bias] + [torch.zeros_like(o_proj_bias)] * (mesh_config.tp - 1), dim=-1)
 
+        # For 1D mesh: just column-parallel (TP) sharding
+        o_bias_mapper = col_mesh_mapper
+
     o_proj_tt = ttnn.as_tensor(
-        o_proj,
+        o_proj.unsqueeze(0).unsqueeze(0),  # [1, 1, hidden_size, hidden_size]
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=weight_dtype,
-        mesh_mapper=row_mesh_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, "o_proj"),
+        mesh_mapper=wo_2d_mapper,  # 2D sharding: input across cols, output across rows
+        cache_file_name=get_cache_file_name(tensor_cache_path, "o_proj_2d"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
@@ -144,10 +174,11 @@ def load_attention_weights(
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=bias_dtype,
-        mesh_mapper=col_mesh_mapper,
+        mesh_mapper=o_bias_mapper,  # Choose based on mesh shape
         cache_file_name=get_cache_file_name(tensor_cache_path, "o_proj_bias"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+    print("o_proj_bias_tt", o_proj_bias_tt.shape)
 
     decode_sinks_tt = ttnn.as_tensor(
         decode_sinks,

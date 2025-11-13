@@ -111,8 +111,12 @@ def load_expert_weights(
     )
 
     # Load down projection
-    down_proj = state_dict["down_proj"].reshape(1, config.num_experts, config.intermediate_size, config.hidden_size)
-    down_proj_bias = state_dict["down_proj_bias"].reshape(1, config.num_experts, config.hidden_size)
+    down_proj = torch.randn(
+        1, config.num_experts, config.intermediate_size, 3072
+    )  # state_dict["down_proj"].reshape(1, config.num_experts, config.intermediate_size, config.hidden_size)
+    down_proj_bias = torch.randn(
+        1, config.num_experts, 3072
+    )  # state_dict["down_proj_bias"].reshape(1, config.num_experts, config.hidden_size)
 
     down_proj_tt = ttnn.as_tensor(
         down_proj,

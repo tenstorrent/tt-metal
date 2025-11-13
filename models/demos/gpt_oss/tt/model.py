@@ -96,6 +96,7 @@ class Model:
             layout=ttnn.ROW_MAJOR_LAYOUT,
             cache_file_name=get_cache_file_name(tensor_cache_path, "model.embed_tokens.weight"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=self.mesh_config.row_parallel(mesh_device),
         )
         self.layers = [
             DecoderLayer(

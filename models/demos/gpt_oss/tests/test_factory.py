@@ -121,7 +121,7 @@ def parametrize_mesh_with_fabric():
     fabric_params = [
         pytest.param(
             {
-                "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+                # "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
                 "trace_region_size": 30000000,
             },
