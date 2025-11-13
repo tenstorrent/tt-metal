@@ -50,12 +50,12 @@ using PhysicalAdjacencyMap = std::unordered_map<tt::tt_metal::AsicID, std::vecto
  */
 struct MappedChipInfo {
     // Core mapping information
-    FabricNodeId fabric_node_id{MeshId{0}, 0};  // Filled during mapping
+    FabricNodeId fabric_node_id{MeshId{0}, 0};
     tt::tt_metal::AsicID asic_id{0};
-    ChipId physical_chip_id = 0;  // May be 0 initially for remote ASICs
+    ChipId physical_chip_id = 0;
 
     // Mesh coordinate information
-    MeshCoordinate mesh_coord{0, 0};  // Default to 2D coordinate (0, 0), filled during mapping
+    MeshCoordinate mesh_coord{0, 0};
 
     // Host information
     MeshHostRankId mesh_host_rank{0};
@@ -227,13 +227,13 @@ private:
     void build_asic_physical_chip_id_mappings();
 
     /**
-     * @brief Initialize chip_topology_info_ map with all ASICs from physical system descriptor
+     * @brief Initialize chip_topology_mapping_ map with all ASICs from physical system descriptor
      *
      * Creates MappedChipInfo entries for all ASICs in the system, indexed by ASIC ID.
      * Fills in available information (asic_id, hostname, physical_chip_id for local ASICs).
      * Other fields are left empty and filled incrementally during mapping.
      */
-    void initialize_chip_topology_info_map();
+    void initialize_chip_topology_mapping_map();
 
     /**
      * @brief Build the mapping between host ranks and host names
@@ -295,7 +295,7 @@ private:
      * 1. Validates that the logical graph can fit within the physical topology
      * 2. Uses degree-based pruning and forward checking to efficiently search for valid mappings
      * 3. Maintains consistency by ensuring logical edges are present in the physical topology
-     * 4. Updates chip_topology_info_ entries with mapping information (fabric_node_id, mesh_coord, etc.)
+     * 4. Updates chip_topology_mapping_ entries with mapping information (fabric_node_id, mesh_coord, etc.)
      *
      * @param mesh_id Mesh ID
      * @param adjacency_map_physical Physical adjacency maps for each mesh
@@ -337,21 +337,21 @@ private:
      *
      * Contains all MappedChipInfo entries, populated incrementally during mapping construction.
      */
-    std::vector<MappedChipInfo> chip_topology_info_;
+    std::vector<MappedChipInfo> chip_topology_mapping_;
 
     /**
-     * @brief Lookup maps with references/pointers to chip_topology_info_ for fast access
+     * @brief Lookup maps with references/pointers to chip_topology_mapping_ for fast access
      */
-    std::unordered_map<FabricNodeId, MappedChipInfo*> fabric_node_id_to_info_;
-    std::unordered_map<tt::tt_metal::AsicID, MappedChipInfo*> asic_id_to_info_;
-    std::unordered_map<ChipId, MappedChipInfo*> physical_chip_id_to_info_;
+    std::unordered_map<FabricNodeId, MappedChipInfo*> fabric_node_id_to_mapping_;
+    std::unordered_map<tt::tt_metal::AsicID, MappedChipInfo*> asic_id_to_mapping_;
+    std::unordered_map<ChipId, MappedChipInfo*> physical_chip_id_to_mapping_;
 
     /**
-     * @brief Build lookup maps from chip_topology_info_ container
+     * @brief Build lookup maps from chip_topology_mapping_ container
      */
     void rebuild_lookup_maps();
 
-    // Rebuild host-rank containers purely from chip_topology_info_ container
+    // Rebuild host-rank containers purely from chip_topology_mapping_ container
     void rebuild_host_rank_structs_from_mapping();
 
     void print_logical_adjacency_map(const std::unordered_map<MeshId, LogicalAdjacencyMap>& adj_map) const;
