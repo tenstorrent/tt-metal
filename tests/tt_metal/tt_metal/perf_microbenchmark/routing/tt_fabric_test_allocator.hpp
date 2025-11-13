@@ -449,8 +449,6 @@ inline TestDeviceResources& GlobalAllocator::get_or_create_device_resources(cons
     return *inserted_it->second;
 }
 
-<<<<<<< HEAD
-=======
 /**
  * Manages dynamic allocation policy computation and caching.
  *
@@ -687,7 +685,6 @@ private:
     static constexpr uint32_t MAX_RECV_CORES_PER_LINK_WITH_MUX = 20;
 };
 
->>>>>>> 0475d0d1ce (Enable unused-but-set-variable compiler warning (#31638))
 inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
     // PASS 0: Reserve sync cores for synchronization
     for (auto& sync_sender : test_config.global_sync_configs) {
