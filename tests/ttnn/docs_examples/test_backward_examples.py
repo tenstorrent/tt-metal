@@ -319,7 +319,7 @@ def test_fill_bw(device):
 
 def test_prod_bw(device):
     # Create sample tensors for backward product operation
-    grad_tensor = grad_tensor = ttnn.from_torch(
+    grad_tensor = ttnn.from_torch(
         torch.rand([1, 1, 32, 32], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device
     )
     input_tensor = ttnn.from_torch(
@@ -335,20 +335,6 @@ def test_prod_bw(device):
     # Call the prod_bw function for all dimensions
     all_dims_output = ttnn.prod_bw(grad_tensor, input_tensor)
     print(f"Prod Backward (all dims): {all_dims_output}")
-
-
-def test_lgamma_bw(device):
-    # Create sample tensors for backward log gamma operation
-    grad_tensor = ttnn.from_torch(
-        torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device
-    )
-    input_tensor = ttnn.from_torch(
-        torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device
-    )
-
-    # Call the lgamma_bw function
-    output = ttnn.lgamma_bw(grad_tensor, input_tensor)
-    print(f"Log Gamma Backward: {output}")
 
 
 def test_fill_bw(device):
