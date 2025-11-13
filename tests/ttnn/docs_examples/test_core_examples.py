@@ -22,7 +22,7 @@ def test_from_torch(device):
 
 def test_to_torch(device):
     # Create a TT-NN tensor and convert it to a Torch tensor
-    ttnn_tensor = ttnn.rand((2, 3), dtype=ttnn.bfloat16)
+    ttnn_tensor = ttnn.rand((2, 3), dtype=ttnn.bfloat16, device=device)
     torch_tensor = ttnn.to_torch(ttnn_tensor)
 
     print("Torch tensor shape", torch_tensor.shape)
@@ -34,8 +34,8 @@ def test_to_device(device):
     # device = ttnn.open_device(device_id=device_id)
 
     # Create a TT-NN tensor and move it to the specified device
-    ttnn_tensor = ttnn.rand((2, 3), dtype=ttnn.bfloat16)
-    ttnn_tensor = ttnn.to_device(ttnn_tensor, device=device)
+    tensor_on_host = ttnn.from_torch(torch.randn((10, 64, 32)), dtype=ttnn.bfloat16)
+    ttnn_tensor = ttnn.to_device(tensor_on_host, device=device)
 
     print("TT-NN tensor shape after moving to device", ttnn_tensor.shape)
 
@@ -63,15 +63,15 @@ def test_to_layout(device):
 def test_dump_tensor(device):
     # Create a TT-NN tensor and dump its contents
     ttnn_tensor = ttnn.rand((2, 3), dtype=ttnn.bfloat16, device=device)
-    ttnn.dump_tensor(file_name=str(ttnn_tensor.tensorbin), tensor=ttnn_tensor)
+    ttnn.dump_tensor(file_name="ttnn_tensor.tensorbin", tensor=ttnn_tensor)
 
 
 def test_load_tensor(device):
     # Create a TT-NN tensor, dump its contents, and load it back
     ttnn_tensor = ttnn.rand((2, 3), dtype=ttnn.bfloat16, device=device)
-    ttnn.dump_tensor(file_name=str(ttnn_tensor.tensorbin), tensor=ttnn_tensor)
+    ttnn.dump_tensor(file_name="ttnn_tensor.tensorbin", tensor=ttnn_tensor)
 
-    loaded_tensor = ttnn.load_tensor(file_name=str(ttnn_tensor.tensorbin), device=device)
+    loaded_tensor = ttnn.load_tensor(file_name="ttnn_tensor.tensorbin", device=device)
     print("Loaded TT-NN tensor shape", loaded_tensor.shape)
 
 
