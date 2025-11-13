@@ -862,11 +862,11 @@ void Cluster::verify_sw_fw_versions(
 }
 
 bool Cluster::verify_eth_fw_capability() const {
-    // get_ethernet_fw_version is not supported in the simulation environment. assume it's correct!
+    // get_ethernet_firmware_version is not supported in the simulation environment. assume it's correct!
     if (rtoptions_.get_simulator_enabled()) {
         return true;
     }
-    const auto fw_version = this->driver_->get_ethernet_fw_version();
+    const auto fw_version = this->driver_->get_ethernet_firmware_version();
     if (fw_version) {
         return hal_.verify_eth_fw_version(fw_version.value());
     }
