@@ -716,6 +716,7 @@ def test_all_to_all_combine_no_trace(
     topology,
     dtype,
     test_skew,
+    silicon_arch_wormhole_b0,
 ):
     devices = mesh_shape[0] * mesh_shape[1]
     batch = batches_per_device * devices

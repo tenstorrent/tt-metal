@@ -330,6 +330,7 @@ def test_all_broadcast_trace(
     mem_config,
     num_iters,
     function_level_defaults,
+    silicon_arch_wormhole_b0,
 ):
     if layout == ttnn.ROW_MAJOR_LAYOUT and input_dtype == ttnn.bfloat8_b:
         pytest.skip("bfloat8_b not supported for row-major")
@@ -544,7 +545,7 @@ def test_all_broadcast_sharded_2x4(
         [1, 1, 1, 32],
     ],
 )
-def test_all_broadcast_2x4_non_flat_mesh(mesh_device, input_shape):
+def test_all_broadcast_2x4_non_flat_mesh(mesh_device, input_shape, silicon_arch_wormhole_b0):
     torch.manual_seed(2005)
     devices = mesh_device.get_num_devices()
     logger.info(f"devices: {devices}")

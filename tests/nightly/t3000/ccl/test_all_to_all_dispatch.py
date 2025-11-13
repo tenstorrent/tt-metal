@@ -565,6 +565,7 @@ def test_all_to_all_dispatch_no_trace(
     num_links,
     dtype,
     device_params,
+    silicon_arch_wormhole_b0,
 ):
     if cluster_axis is None:
         dispatch_devices = mesh_shape[0] * mesh_shape[1]
@@ -658,6 +659,7 @@ def test_all_to_all_dispatch_trace(
     input_memory_config,
     output_memory_config,
     device_params,
+    silicon_arch_wormhole_b0,
 ):
     if cluster_axis is None:
         dispatch_devices = mesh_shape[0] * mesh_shape[1]
