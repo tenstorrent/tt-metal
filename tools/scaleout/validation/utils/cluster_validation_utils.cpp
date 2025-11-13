@@ -10,7 +10,8 @@
 #include <sstream>
 #include <algorithm>
 #include <random>
-#include <thread>
+#include <future>
+#include <chrono>
 
 #include "tests/tt_metal/test_utils/test_common.hpp"
 #include "tools/scaleout/validation/utils/ethernet_link_metrics_serialization.hpp"
@@ -249,7 +250,7 @@ void configure_cross_host_kernels(
     }
 }
 
-void execute_workloads(
+bool execute_workloads(
     std::unordered_map<ChipId, tt::tt_metal::Program>& programs,
     std::map<int, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>>& devices) {
     std::unordered_map<ChipId, tt::tt_metal::distributed::MeshWorkload> mesh_workloads;
@@ -264,17 +265,37 @@ void execute_workloads(
 
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
     distributed_context.barrier();
-    std::vector<std::thread> threads;
-    threads.reserve(mesh_workloads.size());
+
+    // Launch async tasks
+    constexpr std::chrono::seconds TIMEOUT_DURATION{30};
+    static std::vector<std::future<void>> futures;  // Static to avoid destructor blocking
+    futures.clear();
+    futures.reserve(mesh_workloads.size());
     for (auto& [device_id, mesh_workload] : mesh_workloads) {
-        threads.emplace_back([device_id, &mesh_workload, &devices]() {
+        futures.push_back(std::async(std::launch::async, [device_id, &mesh_workload, &devices]() {
             tt::tt_metal::distributed::EnqueueMeshWorkload(
                 devices.at(device_id)->mesh_command_queue(), mesh_workload, true);
-        });
+        }));
     }
-    for (auto& thread : threads) {
-        thread.join();
+
+    // All futures are expected to complete within the timeout duration
+    auto start_time = std::chrono::steady_clock::now();
+    for (auto& future : futures) {
+        auto elapsed = std::chrono::steady_clock::now() - start_time;
+        auto remaining = std::max(
+            TIMEOUT_DURATION - std::chrono::duration_cast<std::chrono::seconds>(elapsed), std::chrono::seconds(0));
+
+        if (future.wait_for(remaining) != std::future_status::ready) {
+            log_output_rank0("ERROR: Workload execution timed out after 30 seconds");
+            // Don't wait for futures to complete because they're stuck. Just abandon them.
+            // Static storage prevents destructor from blocking.
+            return false;
+        }
+        // Get the result to propagate any exceptions
+        future.get();
     }
+
+    return true;
 }
 
 // ============================================================================
@@ -564,96 +585,6 @@ std::vector<ValueType> generate_uniform_random_vector(
         std::generate(results.begin(), results.end(), [&]() { return ValueType(dis(gen)); });
     }
     return results;
-}
-
-// ============================================================================
-// Traffic Validation Functions
-// ============================================================================
-
-LinkMetricsResult send_traffic_and_validate_links(
-    PhysicalSystemDescriptor& physical_system_descriptor,
-    uint32_t num_iterations,
-    bool log_ethernet_metrics,
-    bool sweep_traffic_configs,
-    uint32_t packet_size_bytes,
-    uint32_t data_size,
-    std::unordered_map<uint64_t, ChipId>& asic_id_to_chip_id) {
-    std::vector<TrafficConfig> traffic_configs;
-    if (sweep_traffic_configs) {
-        traffic_configs = generate_sweep_traffic_configs();
-        log_output_rank0(
-            "Sweeping traffic configurations across detected links. Num Iterations: " + std::to_string(num_iterations));
-    } else {
-        traffic_configs = {{data_size, packet_size_bytes}};
-        log_output_rank0(
-            "Sending traffic across detected links. Num Iterations: " + std::to_string(num_iterations) +
-            " Packet Size (Bytes): " + std::to_string(packet_size_bytes) +
-            " Total Data Size: (Bytes): " + std::to_string(data_size));
-    }
-
-    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-
-    std::vector<ChipId> device_ids;
-    for (auto chip : cluster.all_chip_ids()) {
-        device_ids.push_back(chip);
-    }
-
-    auto devices = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(
-        device_ids,
-        DEFAULT_L1_SMALL_SIZE,
-        DEFAULT_TRACE_REGION_SIZE,
-        1,
-        tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config());
-
-    std::unordered_map<EthChannelIdentifier, std::vector<LinkStatus>> statuses_per_link;
-    bool fwd = true;
-    for (int i = 0; i < num_iterations; i++) {
-        for (const auto& traffic_config : traffic_configs) {
-            std::size_t pkt_size_bytes = traffic_config.packet_size_bytes;
-            std::size_t pkt_size_words = pkt_size_bytes >> 4;
-            std::size_t d_size = traffic_config.data_size;
-
-            std::unordered_map<ChipId, tt::tt_metal::Program> programs;
-            auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, d_size / sizeof(uint32_t));
-            configure_local_kernels(
-                physical_system_descriptor,
-                asic_id_to_chip_id,
-                devices,
-                inputs,
-                programs,
-                pkt_size_bytes,
-                pkt_size_words,
-                d_size,
-                fwd);
-
-            configure_cross_host_kernels(
-                physical_system_descriptor,
-                asic_id_to_chip_id,
-                devices,
-                inputs,
-                programs,
-                pkt_size_bytes,
-                pkt_size_words,
-                d_size,
-                fwd);
-
-            execute_workloads(programs, devices);
-
-            //
-
-            dump_link_stats(
-                inputs,
-                physical_system_descriptor,
-                asic_id_to_chip_id,
-                statuses_per_link,
-                devices,
-                d_size,
-                pkt_size_bytes);
-            fwd = !fwd;  // Toggle direction to test bidirectional traffic across links
-        }
-    }
-
-    return process_link_statuses(statuses_per_link, log_ethernet_metrics);
 }
 
 // ============================================================================
@@ -987,6 +918,129 @@ void log_link_metrics(
     }
 }
 
+void handle_workload_timeout(
+    PhysicalSystemDescriptor& physical_system_descriptor,
+    std::unordered_map<uint64_t, ChipId>& asic_id_to_chip_id,
+    std::unordered_map<EthChannelIdentifier, std::vector<LinkStatus>>& statuses_per_link,
+    std::map<int, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>>& devices) {
+    log_output_rank0("ERROR: Workload execution timed out after 30 seconds");
+    log_output_rank0("Cluster is not in a healthy state.");
+
+    log_output_rank0("Current ethernet link status:");
+    std::vector<uint32_t> empty_inputs = {};
+    dump_link_stats(empty_inputs, physical_system_descriptor, asic_id_to_chip_id, statuses_per_link, devices, 0, 0);
+    auto current_result = process_link_statuses(statuses_per_link, true);
+    log_link_metrics(current_result.all_link_metrics, std::filesystem::current_path(), true);
+
+    log_output_rank0("Re-running discovery to check for link failures");
+    physical_system_descriptor.run_discovery(true, true);
+
+    log_output_rank0("Link status after re-discovery:");
+    std::unordered_map<EthChannelIdentifier, std::vector<LinkStatus>> fresh_statuses;
+    dump_link_stats(empty_inputs, physical_system_descriptor, asic_id_to_chip_id, fresh_statuses, devices, 0, 0);
+    auto fresh_result = process_link_statuses(fresh_statuses, true);
+    log_link_metrics(fresh_result.all_link_metrics, std::filesystem::current_path(), true);
+}
+
+LinkMetricsResult send_traffic_and_validate_links(
+    PhysicalSystemDescriptor& physical_system_descriptor,
+    uint32_t num_iterations,
+    bool log_ethernet_metrics,
+    bool sweep_traffic_configs,
+    uint32_t packet_size_bytes,
+    uint32_t data_size,
+    std::unordered_map<uint64_t, ChipId>& asic_id_to_chip_id) {
+    std::vector<TrafficConfig> traffic_configs;
+    if (sweep_traffic_configs) {
+        traffic_configs = generate_sweep_traffic_configs();
+        log_output_rank0(
+            "Sweeping traffic configurations across detected links. Num Iterations: " + std::to_string(num_iterations));
+    } else {
+        traffic_configs = {{data_size, packet_size_bytes}};
+        log_output_rank0(
+            "Sending traffic across detected links. Num Iterations: " + std::to_string(num_iterations) +
+            " Packet Size (Bytes): " + std::to_string(packet_size_bytes) +
+            " Total Data Size: (Bytes): " + std::to_string(data_size));
+    }
+
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+
+    std::vector<ChipId> device_ids;
+    for (auto chip : cluster.all_chip_ids()) {
+        device_ids.push_back(chip);
+    }
+
+    auto devices = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(
+        device_ids,
+        DEFAULT_L1_SMALL_SIZE,
+        DEFAULT_TRACE_REGION_SIZE,
+        1,
+        tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config());
+
+    std::unordered_map<EthChannelIdentifier, std::vector<LinkStatus>> statuses_per_link;
+    bool fwd = true;
+    for (int i = 0; i < num_iterations; i++) {
+        for (const auto& traffic_config : traffic_configs) {
+            std::size_t pkt_size_bytes = traffic_config.packet_size_bytes;
+            std::size_t pkt_size_words = pkt_size_bytes >> 4;
+            std::size_t d_size = traffic_config.data_size;
+
+            std::unordered_map<ChipId, tt::tt_metal::Program> programs;
+            auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, d_size / sizeof(uint32_t));
+            configure_local_kernels(
+                physical_system_descriptor,
+                asic_id_to_chip_id,
+                devices,
+                inputs,
+                programs,
+                pkt_size_bytes,
+                pkt_size_words,
+                d_size,
+                fwd);
+
+            configure_cross_host_kernels(
+                physical_system_descriptor,
+                asic_id_to_chip_id,
+                devices,
+                inputs,
+                programs,
+                pkt_size_bytes,
+                pkt_size_words,
+                d_size,
+                fwd);
+
+            bool local_success = execute_workloads(programs, devices);
+
+            handle_workload_timeout(physical_system_descriptor, asic_id_to_chip_id, statuses_per_link, devices);
+
+            // Check if all ranks succeeded
+            const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+            bool global_success;
+            distributed_context.all_reduce(
+                tt::stl::Span<bool>(&local_success, 1),
+                tt::stl::Span<bool>(&global_success, 1),
+                tt::tt_metal::distributed::multihost::ReduceOp::LAND);
+
+            if (!global_success) {
+                handle_workload_timeout(physical_system_descriptor, asic_id_to_chip_id, statuses_per_link, devices);
+                return LinkMetricsResult{};
+            }
+
+            dump_link_stats(
+                inputs,
+                physical_system_descriptor,
+                asic_id_to_chip_id,
+                statuses_per_link,
+                devices,
+                d_size,
+                pkt_size_bytes);
+            fwd = !fwd;  // Toggle direction to test bidirectional traffic across links
+        }
+    }
+
+    return process_link_statuses(statuses_per_link, log_ethernet_metrics);
+}
+
 void point_to_point_barrier(const ResetPair& reset_pair) {
     auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
     TT_FATAL(
@@ -1312,6 +1366,11 @@ bool generate_link_metrics(
             packet_size_bytes,
             data_size,
             asic_id_to_chip_id);
+
+        // Check if we got an empty result (indicates timeout occurred)
+        if (result.all_link_metrics.empty() && result.unhealthy_links.empty()) {
+            TT_THROW("Workload execution timed out. Cluster validation failed.");
+        }
     } else if (log_ethernet_metrics) {
         std::unordered_map<EthChannelIdentifier, std::vector<LinkStatus>> statuses_per_link;
         std::vector<uint32_t> inputs = {};
