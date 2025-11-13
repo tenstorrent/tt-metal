@@ -24,7 +24,7 @@ inline void llk_math_eltwise_binary_sfpu_add_top_row(
         dst_index_in_0,
         dst_index_in_1,
         dst_index_out,
-        (int)VectorMode::RC_custom);
+        static_cast<int>(VectorMode::RC_custom));
 }
 
 }  // namespace ckernel
