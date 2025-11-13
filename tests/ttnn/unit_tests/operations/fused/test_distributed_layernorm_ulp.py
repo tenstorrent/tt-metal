@@ -150,7 +150,7 @@ def test_distributed_norm_comparison(
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
     )
-    breakpoint()
+    # breakpoint()
     ttnn_weight_back = ttnn.to_torch(ttnn_weight, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
     torch.set_printoptions(profile="full")
 
