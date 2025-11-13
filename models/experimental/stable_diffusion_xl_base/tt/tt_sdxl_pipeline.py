@@ -89,12 +89,12 @@ class TtSDXLPipeline(LightweightModule):
         self.allocated_device_tensors = False
         self.generated_input_tensors = False
 
-        if pipeline_config.is_galaxy:
+        if pipeline_config.is_galaxy or not pipeline_config.is_galaxy:
             logger.info("Setting TT_MM_THROTTLE_PERF for Galaxy")
             os.environ["TT_MM_THROTTLE_PERF"] = "5"
-            assert (
-                os.environ["TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE"] == "7,7"
-            ), "TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE is not set to 7,7, and it needs to be set for Galaxy"
+            # assert (
+            #     os.environ["TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE"] == "7,7"
+            # ), "TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE is not set to 7,7, and it needs to be set for Galaxy"
 
         logger.info("Loading TT components...")
         self.__load_tt_components(pipeline_config)

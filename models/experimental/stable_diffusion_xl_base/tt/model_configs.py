@@ -121,6 +121,7 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=0,
+            force_subblock_1x1=True,  # needs subblock forcing as there is 56 or 64 cores doing compute
         )
 
         self.conv_configs["ABH_0_ADB_WDB_NO_DEALLOC_BS"] = ttnn.Conv2dConfig(
@@ -155,6 +156,7 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=128,
+            force_subblock_1x1=False,  # needs subblock forcing as there is 56 cores doing compute
         )
         self.conv_configs["ABH_128_ADB_WDB_MOVE_BS"] = ttnn.Conv2dConfig(
             weights_dtype=self.conv_ws_dtype,
@@ -166,6 +168,7 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=128,
+            force_subblock_1x1=False,  # does not need subblock forcing as there is 40 cores doing compute
         )
         self.conv_configs["ABH_256_NO_ADB_BS"] = ttnn.Conv2dConfig(
             weights_dtype=self.conv_w_dtype,
@@ -200,6 +203,20 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=256,
+            force_subblock_1x1=False,  # does not need subblock forcing as there is 40 cores doing compute
+        )
+
+        self.conv_configs["ABH_256_ADB_WDB_BS_SUBBLOCK_1x1"] = ttnn.Conv2dConfig(
+            weights_dtype=self.conv_ws_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            deallocate_activation=True,
+            reallocate_halo_output=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=256,
+            force_subblock_1x1=True,  # needs subblock forcing as there is 56 cores doing compute
         )
 
         self.conv_configs["ABH_512_NO_ADB_BS"] = ttnn.Conv2dConfig(
@@ -260,6 +277,7 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=1024,
+            force_subblock_1x1=False,  # does not need subblock forcing as there is 40 cores doing compute
         )
 
         # DEFAULT CONF
@@ -820,127 +838,190 @@ class ModelOptimisations:
 
             # DOWN BLOCK 0
             elif ("down_blocks.0.resnets" in conv_path) and ("conv2" in conv_path):
+                print("path 1")
+                # covered
                 return self.conv_configs["ABH_1024_ADB_WDB_BS"]
             elif "down_blocks.0.resnets" in conv_path:
+                print("path 2")
+                # covered
                 return self.conv_configs["ABH_1024_ADB_WDB_BS"]
             elif "down_blocks.0.downsamplers.0" == conv_path:
+                print("path 3")
                 return self.conv_configs["ABH_512_ADB_WDB_NO_DEALLOC_BS"]
 
             # DOWN BLOCK 1
             elif "down_blocks.1.resnets.0.conv1" == conv_path:
+                print("path 4")
+                # covered
                 return self.conv_configs["ABH_0_ADB_WDB_BS"]
             elif ("down_blocks.1.resnets.0.conv2" == conv_path) or ("down_blocks.1.resnets.1" in conv_path):
+                print("path 5")
+                # covered
                 return self.conv_configs["ABH_0_ADB_WDB_BS"]
             elif "down_blocks.1.downsamplers.0" == conv_path:
+                print("path 6")
                 return self.conv_configs["ABH_0_ADB_WDB_NO_DEALLOC_BS"]
 
             # DOWN BLOCK 2
             elif "down_blocks.2.resnets.1.conv1" == conv_path:
+                print("path 7")
+                # covered
                 return self.conv_configs["ABH_0_ADB_WDB_BS"]
             elif "down_blocks.2.resnets.0.conv1" == conv_path:
+                # covered
+                print("path 8")
                 return self.conv_configs["ABH_0_ADB_WDB_BS"]
             elif ("down_blocks.2.resnets.0.conv2" == conv_path) or ("down_blocks.2.resnets.1.conv2" == conv_path):
+                # covered
+                print("path 9")
                 return self.conv_configs["ABH_0_ADB_WDB_BS"]
 
             # MID BLOCK
             elif "mid_block" in conv_path:
+                print("path 10")
                 return self.conv_configs["ABH_0_ADB_WDB_BS"]
 
             # UP BLOCK 0
             elif ("up_blocks.0.resnets.0.conv1" == conv_path) or ("up_blocks.0.resnets.1.conv1" == conv_path):
+                print("path 11")
+                # covered
                 return self.conv_configs["ABH_0_ADB_WDB_BS"]
             elif "up_blocks.0.upsamplers.0" == conv_path:
+                print("path 12")
                 return self.conv_configs["ABH_256_ADB_WDB_BS"]
             elif ("up_blocks.0.resnets" in conv_path) and ("conv2" in conv_path):
+                print("path 13")
+                # covered
                 return self.conv_configs["ABH_0_ADB_WDB_BS"]
             elif "up_blocks.0.resnets.2.conv1" == conv_path:
+                print("path 14")
+                # covered
                 return self.conv_configs["ABH_0_ADB_WDB_BS"]
 
             # UP BLOCK 1
             elif "up_blocks.1.resnets.0.conv1" == conv_path:
+                print("path 15")
+                # covered
                 return self.conv_configs["ABH_128_ADB_WDB_BS"]
             elif "up_blocks.1.resnets.1.conv1" == conv_path:
-                return self.conv_configs["ABH_256_ADB_WDB_BS"]
+                print("path 16")
+                # covered
+                return self.conv_configs["ABH_256_ADB_WDB_BS_SUBBLOCK_1x1"]
             elif "up_blocks.1.resnets.2.conv1" == conv_path:
-                return self.conv_configs["ABH_256_ADB_WDB_BS"]
+                print("path 17")
+                # covered
+                return self.conv_configs["ABH_256_ADB_WDB_BS_SUBBLOCK_1x1"]
             elif ("up_blocks.1.resnets" in conv_path) and ("conv2" in conv_path):
+                print("path 18")
+                # covered
                 return self.conv_configs["ABH_0_ADB_WDB_BS"]
             elif "up_blocks.1.upsamplers.0" == conv_path:
+                print("path 19")
                 return self.conv_configs["ABH_256_ADB_WDB_BS"]
 
             # UP BLOCK 2
             elif "up_blocks.2.resnets.0.conv1" == conv_path:
+                print("path 20")
+                # covered
                 return self.conv_configs["ABH_128_ADB_WDB_MOVE_BS"]
             elif ("up_blocks.2.resnets" in conv_path) and ("conv2" in conv_path):
+                print("path 21")
+                # covered
                 return self.conv_configs["ABH_1024_ADB_WDB_BS"]
             elif "up_blocks.2.resnets.1.conv1" == conv_path:
+                print("path 22")
+                # covered
                 return self.conv_configs["ABH_256_ADB_WDB_BS"]
             elif "up_blocks.2.resnets.2.conv1" == conv_path:
+                print("path 23")
                 return self.conv_configs["ABH_256_ADB_WDB_BS"]
 
             elif "conv_out" == conv_path:
+                print("path 24")
                 return self.conv_configs["ABH_128_NO_ADB_HS"]
             else:
+                print("path 25")
                 return self.conv_configs["DEFAULT"]
         else:
             # VAE
             # DECODER CONV IN
             if "decoder.conv_in" == conv_path:
+                print("path 26")
                 return self.conv_configs["ABH_0_ADB_HS"]
             # MID BLOCK (ENCODER + DECODER) and UP BLOCK 0
             elif "mid_block.resnet" in conv_path or "decoder.up_blocks.0.resnet" in conv_path:
+                print("path 27")
                 return self.conv_configs["ABH_512_NO_ADB_BS"]
             elif "decoder.up_blocks.0.upsamplers" in conv_path:
+                print("path 28")
                 return self.conv_configs["ABH_256_NO_ADB_BS"]
             # UP BLOCK 1
             elif "decoder.up_blocks.1.resnet" in conv_path:
+                print("path 29")
                 return self.conv_configs["ABH_256_NO_ADB_BS"]
             elif "decoder.up_blocks.1.upsamplers" in conv_path:
+                print("path 30")
                 return self.conv_configs["ABH_256_NO_ADB_BS"]
             # UP BLOCK 2
             elif "decoder.up_blocks.2.resnet" in conv_path:
+                print("path 31")
                 return self.conv_configs["ABH_512_NO_ADB_BS"]
             elif "decoder.up_blocks.2.upsamplers" in conv_path:
+                print("path 32")
                 return self.conv_configs["ABH_512_NO_ADB_BS"]
             # UP BLOCK 3
             elif "decoder.up_blocks.3.resnet" in conv_path:
+                print("path 33")
                 return self.conv_configs["ABH_32_ADB_HS"]
             # DECODER CONV OUT
             elif "decoder.conv_out" == conv_path:
+                print("path 34")
                 return self.conv_configs["ABH_256_NO_ADB_HS"]
             # ENCODER DOWNSAMPLERS
             elif "downsamplers" in conv_path:
                 if "down_blocks.0" in conv_path:
+                    print("path 35")
                     return self.conv_configs["ABH_256_NO_ADB_HS"]
                 elif "down_blocks.1" in conv_path:
+                    print("path 36")
                     return self.conv_configs["ABH_1024_NO_ADB_BS"]
                 elif "down_blocks.2" in conv_path:
+                    print("path 37")
                     return self.conv_configs["ABH_512_NO_ADB_BS"]
             # DOWN BLCOK 0
             elif "down_blocks.0" in conv_path:
+                print("path 38")
                 return self.conv_configs["ABH_32_ADB_HS"]
             # DOWN BLOCK 1
             elif "down_blocks.1" in conv_path:
                 if "resnets.0" in conv_path and "conv1" in conv_path:
+                    print("path 39")
                     return self.conv_configs["ABH_64_NO_ADB_HS"]
                 else:
+                    print("path 40")
                     return self.conv_configs["ABH_512_NO_ADB_BS"]
             # DOWN BLOCK 2
             elif "down_blocks.2" in conv_path:
                 if "resnets.0" in conv_path and "conv1" in conv_path:
+                    print("path 41")
                     return self.conv_configs["ABH_1024_NO_ADB_BS"]
                 else:
+                    print("path 42")
                     return self.conv_configs["ABH_256_NO_ADB_BS"]
             # DOWN BLOCK 3
             elif "down_blocks.3" in conv_path:
+                print("path 43")
                 return self.conv_configs["ABH_512_NO_ADB_BS"]
             # ENCODER CONV IN
             elif "encoder.conv_in" == conv_path:
+                print("path 44")
                 return self.conv_configs["ABH_1024_NO_ADB_HS"]
             # ENCODER CONV OUT
             elif "encoder.conv_out" == conv_path:
+                print("path 45")
                 return self.conv_configs["ABH_0_NO_ADB_HS"]
             else:
+                print("path 46")
                 return self.conv_configs["DEFAULT_DRAM"]
 
     def get_conv_compute_config(self, module_path):
