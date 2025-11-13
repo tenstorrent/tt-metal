@@ -51,7 +51,7 @@ TEST_P(AddrgenApiVariantTest, Write) {
         .src_chip = is_multicast ? 2 : 0,
         .dst_chip = is_multicast ? 0 : 1,
         .use_dram_dst = false,
-        .tensor_bytes = is_multicast ? 4096 : 16384,  // 2 pages for multicast, 4 for unicast
+        .tensor_bytes = 16384,
         .page_size = 2048,
         .sender_core = {0, 0},
         .receiver_core = {1, 0},
