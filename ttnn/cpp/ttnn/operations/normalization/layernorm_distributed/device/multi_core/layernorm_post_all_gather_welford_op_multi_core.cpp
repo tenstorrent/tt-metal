@@ -291,7 +291,7 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_welford_m
         all_cores = all_cores_result;
         core_group_1 = core_group_1_result;
         core_group_2 = core_group_2_result;
-        // num_tile_rows_per_core_group_1 = num_tile_rows_per_core_group_1_result;
+        num_tile_rows_per_core_group_1 = num_tile_rows_per_core_group_1_result;
         num_tile_rows_per_core_group_2 = num_tile_rows_per_core_group_2_result;
 
         // log_debug(tt::LogOp, "num_cores: {}", num_cores);
