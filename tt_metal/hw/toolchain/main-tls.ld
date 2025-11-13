@@ -132,7 +132,7 @@ SECTIONS {
   : IF_KERNEL(AT(__tdata_lma))
   {
     IF_KERNEL(*_object.o(.tdata .tbss))
-    __tdata_init = .;
+    __ldm_tdata_init = .;
     IF_NOT_TLS(__ldm_data_start = .;)
     *(.tdata.start) /* define __tdata_start as TLS symbol) */
     *(.tdata .tdata.* .gnu.linkonce.td.*)
@@ -165,7 +165,7 @@ SECTIONS {
   : IF_KERNEL(LOAD_AFTER(.data,IF_TLS(.tdata)IF_NOT_TLS(.tbss)))
   {
     *_object.o(.data .bss)
-    IF_TLS(__data_init = .;)
+    IF_TLS(__ldm_data_init = .;)
      *(.rodata .rodata.* .gnu.linkonce.r.*)
      *(.rodata1)
 
@@ -222,9 +222,9 @@ SECTIONS {
   :
   {
     LONG(ADDR(.text)) LONG(ADDR(.text)) LONG(TEXT_SIZE)
-    LONG(ADDR(.tdata)) LONG(__tdata_init)
-       LONG(TLS_SIZE - STACK_MIN_SIZE - (__tdata_init - TLS_START))
-    IF_TLS(LONG(ADDR(.data)) LONG(__data_init) LONG(DATA_SIZE - (__data_init - DATA_START)))
+    LONG(ADDR(.tdata)) LONG(__ldm_tdata_init)
+       LONG(TLS_SIZE - STACK_MIN_SIZE - (__ldm_tdata_init - TLS_START))
+    IF_TLS(LONG(ADDR(.data)) LONG(__ldm_data_init) LONG(DATA_SIZE - (__ldm_data_init - DATA_START)))
     IF_NOT_TLS(LONG(ADDR(.firmdata)) LONG(ADDR(.firmdata) + SIZEOF(.firmdata)) LONG(0))
   }
 
