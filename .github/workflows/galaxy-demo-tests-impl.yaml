@@ -109,14 +109,14 @@ jobs:
               "timeout": 30,
               "owner_id": "U08TED0JM9D"
             },
-            {
-              "id": "test-gpt-oss",
-              "name": "Galaxy GPT-OSS demo tests",
-              "arch": "wormhole_b0",
-              "model": "gpt-oss",
-              "timeout": 30,
-              "owner_id": "U06F3ER8X9A"
-            },
+            # {
+            #   "id": "test-gpt-oss",
+            #   "name": "Galaxy GPT-OSS demo tests",
+            #   "arch": "wormhole_b0",
+            #   "model": "gpt-oss",
+            #   "timeout": 30,
+            #   "owner_id": "U06F3ER8X9A"
+            # }, #See issue #32321
             {
               "id": "test-wan22",
               "name": "Galaxy Wan2.2 demo tests",
