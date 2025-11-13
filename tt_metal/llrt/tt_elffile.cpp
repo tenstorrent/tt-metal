@@ -339,41 +339,45 @@ void ElfFile::Impl::XIPify() { xipped_ = true; }
 void ElfFile::Impl::Finalize() {
     auto info = GetSegmentInfo();
 
-    unsigned segment_ix = 0;
-    for (unsigned ix = 0; ix + 3 <= info.size(); ix += 3) {
+    auto segment_iter = GetSegments().end();
+    for (unsigned ix = info.size() / 3 * 3; ix;) {
+        ix -= 3;
         uint32_t vma = info[ix + 0];
 
-        for (;; segment_ix++) {
-            if (segment_ix == GetSegments().size()) {
+        for (;;) {
+            if (segment_iter == GetSegments().begin()) {
                 TT_THROW("{}: cannot find segment at {:#x}", path_, vma);
                 break;
             }
 
-            auto& seg = GetSegments()[segment_ix];
-            if (seg.address == vma) {
+            --segment_iter;
+            if (segment_iter->address == vma) {
                 uint32_t trim = info[ix + 1] - vma;
 
-                seg.address += trim;
-                seg.membytes -= trim;
-                seg.contents = seg.contents.subspan(trim / sizeof(uint32_t));
+                segment_iter->address += trim;
+                segment_iter->membytes -= trim;
+                segment_iter->contents = segment_iter->contents.subspan(trim / sizeof(uint32_t));
 
                 uint32_t limit = info[ix + 2];
-                if (seg.membytes > limit) {
+                if (segment_iter->membytes > limit) {
+                    unsigned seg_ix = segment_iter - GetSegments().begin();
                     TT_THROW(
                         "{}: segment[{}] [{:#x},+{:#x}) overflows region:{} limit of {:#x} bytes, reduce the size of "
                         "{}",
                         path_,
-                        segment_ix,
-                        seg.address,
-                        seg.membytes,
+                        seg_ix,
+                        segment_iter->address,
+                        segment_iter->membytes,
                         ix / 3,
                         limit,
-                        segment_ix == 0                                ? "code"
-                        : segment_ix == 2                              ? "statically allocated variables (e.g, globals)"
-                        : segment_ix == 1 && GetSegments().size() == 2 ? "thread_local variables"
-                                                                       : "globals and/or thread_local variables");
+                        seg_ix == 0                                ? "code"
+                        : seg_ix == 2                              ? "statically allocated variables (e.g, globals)"
+                        : seg_ix == 1 && GetSegments().size() == 2 ? "thread_local variables"
+                                                                   : "globals and/or thread_local variables");
                 }
-                segment_ix++;
+                if (segment_iter->contents.empty()) {
+                    GetSegments().erase(segment_iter);
+                }
                 break;
             }
         }
