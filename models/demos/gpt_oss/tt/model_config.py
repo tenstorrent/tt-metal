@@ -17,6 +17,7 @@ from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.tt_transformers.tt.load_checkpoints import convert_hf_qkv_to_meta_format
+from models.tt_transformers.tt.model_config import determine_device_name
 
 
 class ModelArgs:
@@ -40,6 +41,7 @@ class ModelArgs:
         self.optimizations = optimizations
         self.cache_hf = cache_hf
         self.can_enable_trace = lambda seqlen: False
+        self.device_name = determine_device_name(self.mesh_device)
 
         # GPT-OSS specific paths - use HF_MODEL environment variable (tt_transformers standard)
         # Default paths are internal CI paths for automated testing
@@ -175,7 +177,14 @@ class ModelArgs:
 
     def weight_cache_path(self, dtype):
         """Return weight cache path for the model"""
-        cache_dir = Path(self.model_path)  # Use same directory as model
+        CACHE_PATH = os.getenv("TT_CACHE_PATH")
+        if CACHE_PATH:
+            cache_dir = Path(CACHE_PATH).joinpath(
+                self.device_name
+            )  # If we specify a TT_CACHE_PATH, use that for the cache
+        else:
+            cache_dir = Path(self.model_path)  # Use same directory as model
+        logger.info(f"Cache directory: {cache_dir}")
         dtype_str = {ttnn.bfloat16: "bf16", ttnn.bfloat8_b: "bfp8"}[dtype]
 
         if self.instruct:
