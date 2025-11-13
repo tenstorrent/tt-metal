@@ -23,6 +23,8 @@ enum class AddrgenApiVariant {
     FusedAtomicIncWriteWithState,  // fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state
     FusedAtomicIncWriteSetState,   // fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state + _with_state
     MulticastWrite,                // fabric_multicast_noc_unicast_write
+    MulticastWriteWithState,       // fabric_multicast_noc_unicast_write_with_state
+    MulticastWriteSetState,        // fabric_multicast_noc_unicast_write_set_state + _with_state
     ScatterWrite,                  // fabric_unicast_noc_scatter_write
     ScatterWriteWithState,         // fabric_unicast_noc_scatter_write_with_state
     ScatterWriteSetState           // fabric_unicast_noc_scatter_write_set_state + _with_state

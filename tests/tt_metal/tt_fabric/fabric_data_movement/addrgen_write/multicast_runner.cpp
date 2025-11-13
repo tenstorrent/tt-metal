@@ -184,6 +184,10 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
 
     constexpr const char* KDIR = "tests/tt_metal/tt_fabric/fabric_data_movement/addrgen_write/kernels/multicast/";
 
+    // Variant detection
+    const bool is_with_state = (p.api_variant == AddrgenApiVariant::MulticastWriteWithState);
+    const bool is_set_state = (p.api_variant == AddrgenApiVariant::MulticastWriteSetState);
+
     for (size_t i = 0; i < dst_coords.size(); ++i) {
         receiver_progs.emplace_back(tt::tt_metal::CreateProgram());
         auto rx_wait_k = tt::tt_metal::CreateKernel(
@@ -240,9 +244,19 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
     writer_cta.push_back(NUM_PAGES);
     writer_cta.push_back(p.page_size);
 
+    // Select writer kernel based on variant
+    std::string writer_kernel_name;
+    if (is_set_state) {
+        writer_kernel_name = "multicast_tx_writer_set_state_addrgen.cpp";
+    } else if (is_with_state) {
+        writer_kernel_name = "multicast_tx_writer_with_state_addrgen.cpp";
+    } else {
+        writer_kernel_name = "multicast_tx_writer_cb_to_dst_addrgen.cpp";
+    }
+
     auto writer_k = tt::tt_metal::CreateKernel(
         sender_prog,
-        std::string(KDIR) + "multicast_tx_writer_cb_to_dst_addrgen.cpp",
+        std::string(KDIR) + writer_kernel_name,
         p.sender_core,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
