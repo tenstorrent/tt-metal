@@ -41,7 +41,9 @@ TEST_P(AddrgenApiVariantTest, Write) {
          api_variant == tt::tt_fabric::test::AddrgenApiVariant::MulticastScatterWrite ||
          api_variant == tt::tt_fabric::test::AddrgenApiVariant::MulticastScatterWriteWithState ||
          api_variant == tt::tt_fabric::test::AddrgenApiVariant::MulticastScatterWriteSetState ||
-         api_variant == tt::tt_fabric::test::AddrgenApiVariant::MulticastFusedAtomicIncWrite);
+         api_variant == tt::tt_fabric::test::AddrgenApiVariant::MulticastFusedAtomicIncWrite ||
+         api_variant == tt::tt_fabric::test::AddrgenApiVariant::MulticastFusedAtomicIncWriteWithState ||
+         api_variant == tt::tt_fabric::test::AddrgenApiVariant::MulticastFusedAtomicIncWriteSetState);
 
     // Hardcoded parameters - minimal test case
     tt::tt_fabric::test::AddrgenTestParams p{
@@ -83,6 +85,8 @@ INSTANTIATE_TEST_SUITE_P(
         tt::tt_fabric::test::AddrgenApiVariant::MulticastScatterWriteWithState,
         tt::tt_fabric::test::AddrgenApiVariant::MulticastScatterWriteSetState,
         tt::tt_fabric::test::AddrgenApiVariant::MulticastFusedAtomicIncWrite,
+        tt::tt_fabric::test::AddrgenApiVariant::MulticastFusedAtomicIncWriteWithState,
+        tt::tt_fabric::test::AddrgenApiVariant::MulticastFusedAtomicIncWriteSetState,
         tt::tt_fabric::test::AddrgenApiVariant::ScatterWrite,
         tt::tt_fabric::test::AddrgenApiVariant::ScatterWriteWithState,
         tt::tt_fabric::test::AddrgenApiVariant::ScatterWriteSetState),
@@ -106,6 +110,10 @@ INSTANTIATE_TEST_SUITE_P(
                 return "MulticastScatterWriteSetState";
             case tt::tt_fabric::test::AddrgenApiVariant::MulticastFusedAtomicIncWrite:
                 return "MulticastFusedAtomicIncWrite";
+            case tt::tt_fabric::test::AddrgenApiVariant::MulticastFusedAtomicIncWriteWithState:
+                return "MulticastFusedAtomicIncWriteWithState";
+            case tt::tt_fabric::test::AddrgenApiVariant::MulticastFusedAtomicIncWriteSetState:
+                return "MulticastFusedAtomicIncWriteSetState";
             case tt::tt_fabric::test::AddrgenApiVariant::ScatterWrite: return "ScatterWrite";
             case tt::tt_fabric::test::AddrgenApiVariant::ScatterWriteWithState: return "ScatterWriteWithState";
             case tt::tt_fabric::test::AddrgenApiVariant::ScatterWriteSetState: return "ScatterWriteSetState";

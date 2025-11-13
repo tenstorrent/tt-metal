@@ -187,15 +187,20 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
     // Variant detection
     const bool is_with_state =
         (p.api_variant == AddrgenApiVariant::MulticastWriteWithState ||
-         p.api_variant == AddrgenApiVariant::MulticastScatterWriteWithState);
+         p.api_variant == AddrgenApiVariant::MulticastScatterWriteWithState ||
+         p.api_variant == AddrgenApiVariant::MulticastFusedAtomicIncWriteWithState);
     const bool is_set_state =
         (p.api_variant == AddrgenApiVariant::MulticastWriteSetState ||
-         p.api_variant == AddrgenApiVariant::MulticastScatterWriteSetState);
+         p.api_variant == AddrgenApiVariant::MulticastScatterWriteSetState ||
+         p.api_variant == AddrgenApiVariant::MulticastFusedAtomicIncWriteSetState);
     const bool is_scatter =
         (p.api_variant == AddrgenApiVariant::MulticastScatterWrite ||
          p.api_variant == AddrgenApiVariant::MulticastScatterWriteWithState ||
          p.api_variant == AddrgenApiVariant::MulticastScatterWriteSetState);
-    const bool is_fused_atomic_inc = (p.api_variant == AddrgenApiVariant::MulticastFusedAtomicIncWrite);
+    const bool is_fused_atomic_inc =
+        (p.api_variant == AddrgenApiVariant::MulticastFusedAtomicIncWrite ||
+         p.api_variant == AddrgenApiVariant::MulticastFusedAtomicIncWriteWithState ||
+         p.api_variant == AddrgenApiVariant::MulticastFusedAtomicIncWriteSetState);
 
     // Move NUM_PAGES calculation before receiver setup
     const uint32_t NUM_PAGES = (p.tensor_bytes + p.page_size - 1) / p.page_size;
@@ -259,7 +264,13 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
     // Select writer kernel based on variant
     std::string writer_kernel_name;
     if (is_fused_atomic_inc) {
-        writer_kernel_name = "multicast_fused_atomic_inc_tx_writer_addrgen.cpp";
+        if (is_set_state) {
+            writer_kernel_name = "multicast_fused_atomic_inc_tx_writer_set_state_addrgen.cpp";
+        } else if (is_with_state) {
+            writer_kernel_name = "multicast_fused_atomic_inc_tx_writer_with_state_addrgen.cpp";
+        } else {
+            writer_kernel_name = "multicast_fused_atomic_inc_tx_writer_addrgen.cpp";
+        }
     } else if (is_scatter) {
         if (is_set_state) {
             writer_kernel_name = "multicast_scatter_tx_writer_set_state_addrgen.cpp";
