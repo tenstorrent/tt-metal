@@ -12,10 +12,9 @@ from ttnn.model_preprocessing import (
     fold_batch_norm2d_into_conv2d,
     convert_torch_model_to_ttnn_model,
 )
-from models.experimental.efficientdetd0.reference.efficientnetb0 import Efficientnetb0
+from models.experimental.efficientdetd0.reference.efficientnetb0 import EfficientNet
 from models.experimental.efficientdetd0.reference.efficientdet import EfficientDetBackbone
-from models.experimental.efficientdetd0.reference.modules import Regressor, Classifier, BiFPN
-from models.experimental.efficientdetd0.reference.modules import SeparableConvBlock
+from models.experimental.efficientdetd0.reference.modules import BiFPN, Regressor, Classifier, SeparableConvBlock
 
 
 def _preprocess_conv_bn_parameter(conv, bn, *, dtype=ttnn.bfloat16, mesh_mapper=None):
@@ -130,7 +129,7 @@ def custom_preprocessor(
             parameters["p7_w2"] = ttnn.from_torch(
                 model.p7_w2.data, dtype=weight_dtype, mesh_mapper=mesh_mapper, layout=ttnn.TILE_LAYOUT
             )
-    elif isinstance(model, Efficientnetb0):
+    elif isinstance(model, EfficientNet):
         parameters = {}
         parameters["_conv_stem"] = _preprocess_conv_bn_parameter(
             model._conv_stem, model._bn0, dtype=weight_dtype, mesh_mapper=mesh_mapper
@@ -138,7 +137,7 @@ def custom_preprocessor(
         blocks_params = {}
         for i in range(0, 16):
             block_parameters = {}
-            block = model.__getattr__(f"_blocks{i}")
+            block = model._blocks[i]
             if i != 0:
                 block_parameters["_expand_conv"] = _preprocess_conv_bn_parameter(
                     block._expand_conv, block._bn0, dtype=weight_dtype, mesh_mapper=mesh_mapper

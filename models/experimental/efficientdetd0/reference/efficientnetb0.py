@@ -3,176 +3,244 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import torch.nn as nn
-import math
-import torch.nn.functional as F
+from torch import nn
+from torch.nn import functional as F
 
-
-class Efficientnetb0(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self._conv_stem = Conv2dDynamicSamePadding(3, 32, kernel_size=(3, 3), stride=(2, 2), bias=False)
-        self._bn0 = nn.BatchNorm2d(32, eps=0.001, momentum=0.010000000000000009, affine=True, track_running_stats=True)
-        self._blocks0 = MBConvBlock([32, 32, 8, 32], [32, 8, 32, 16], [3, 1], is_depthwise_first=True)
-        self._blocks1 = MBConvBlock([16, 96, 96, 4, 96], [96, 96, 4, 96, 24], [3, 2])
-        self._blocks2 = MBConvBlock([24, 144, 144, 6, 144], [144, 144, 6, 144, 24], [3, 1])
-        self._blocks3 = MBConvBlock([24, 144, 144, 6, 144], [144, 144, 6, 144, 40], [5, 2])
-        self._blocks4 = MBConvBlock([40, 240, 240, 10, 240], [240, 240, 10, 240, 40], [5, 1])
-        self._blocks5 = MBConvBlock([40, 240, 240, 10, 240], [240, 240, 10, 240, 80], [3, 2])
-        self._blocks6 = MBConvBlock([80, 480, 480, 20, 480], [480, 480, 20, 480, 80], [3, 1])
-        self._blocks7 = MBConvBlock([80, 480, 480, 20, 480], [480, 480, 20, 480, 80], [3, 1])
-        self._blocks8 = MBConvBlock([80, 480, 480, 20, 480], [480, 480, 20, 480, 112], [5, 1])
-        self._blocks9 = MBConvBlock([112, 672, 672, 28, 672], [672, 672, 28, 672, 112], [5, 1])
-        self._blocks10 = MBConvBlock([112, 672, 672, 28, 672], [672, 672, 28, 672, 112], [5, 1])
-        self._blocks11 = MBConvBlock([112, 672, 672, 28, 672], [672, 672, 28, 672, 192], [5, 2])
-        self._blocks12 = MBConvBlock([192, 1152, 1152, 48, 1152], [1152, 1152, 48, 1152, 192], [5, 1])
-        self._blocks13 = MBConvBlock([192, 1152, 1152, 48, 1152], [1152, 1152, 48, 1152, 192], [5, 1])
-        self._blocks14 = MBConvBlock([192, 1152, 1152, 48, 1152], [1152, 1152, 48, 1152, 192], [5, 1])
-        self._blocks15 = MBConvBlock([192, 1152, 1152, 48, 1152], [1152, 1152, 48, 1152, 320], [3, 1])
-
-        self._conv_head = Conv2dDynamicSamePadding(320, 1280, kernel_size=(1, 1), stride=(1, 1), bias=False)
-        self._avg_pooling = nn.AdaptiveAvgPool2d(output_size=1)
-        self._bn1 = nn.BatchNorm2d(
-            1280, eps=0.001, momentum=0.010000000000000009, affine=True, track_running_stats=True
-        )
-        self._fc = nn.Linear(in_features=1280, out_features=1000, bias=True)
-
-    def forward(self, x):
-        x = self._conv_stem(x)
-        x = self._bn0(x)
-        x = x * torch.sigmoid(x)
-        x = self._blocks0(x)
-        x_1 = self._blocks1(x)
-        x = self._blocks2(x_1)
-        x = x + x_1
-        x_3 = self._blocks3(x)
-        x = self._blocks4(x_3)
-        x = x + x_3
-        x_5 = self._blocks5(x)
-        x = self._blocks6(x_5)
-        x_7_in = x + x_5
-        x = self._blocks7(x_7_in)
-        x = x_7_in + x
-        x_8 = self._blocks8(x)
-        x = self._blocks9(x_8)
-        x_10_in = x + x_8
-        x = self._blocks10(x_10_in)
-        x = x + x_10_in
-        x_11 = self._blocks11(x)
-        x = self._blocks12(x_11)
-        x_13_in = x + x_11
-        x = self._blocks13(x_13_in)
-        x_14_in = x + x_13_in
-        x = self._blocks14(x_14_in)
-        x = x_14_in + x
-        x = self._blocks15(x)
-        x = self._conv_head(x)
-        x = self._bn1(x)
-        x = x * torch.sigmoid(x)
-        x = self._avg_pooling(x)
-        x = x.flatten(start_dim=1)
-        x = self._fc(x)
-
-        return x
-
-
-class Conv2dDynamicSamePadding(nn.Conv2d):
-    """2D Convolutions like TensorFlow, for a dynamic image size.
-    The padding is operated in forward function by calculating dynamically.
-    """
-
-    def __init__(self, in_channels, out_channels, kernel_size, stride=(1, 1), dilation=(1, 1), groups=1, bias=True):
-        super().__init__(in_channels, out_channels, kernel_size, stride, 0, dilation, groups, bias)
-
-        self.in_channels = in_channels
-        self.out_channels = out_channels
-        self.kernel_size = kernel_size
-        self.stride = stride
-        self.dilation = dilation
-        self.groups = groups
-
-    def forward(self, x):
-        ih, iw = x.size()[-2:]
-        kh, kw = self.kernel_size
-        sh, sw = self.stride
-        oh, ow = math.ceil(ih / sh), math.ceil(iw / sw)  # change the output size according to stride ! ! !
-        pad_h = max((oh - 1) * self.stride[0] + (kh - 1) * self.dilation[0] + 1 - ih, 0)
-        pad_w = max((ow - 1) * self.stride[1] + (kw - 1) * self.dilation[1] + 1 - iw, 0)
-        if pad_h > 0 or pad_w > 0:
-            x = F.pad(x, [pad_w // 2, pad_w - pad_w // 2, pad_h // 2, pad_h - pad_h // 2])
-
-        return F.conv2d(x, self.weight, self.bias, self.stride, self.padding, self.dilation, self.groups)
+from .utils import (
+    round_filters,
+    round_repeats,
+    drop_connect,
+    get_same_padding_conv2d,
+    get_model_params,
+    efficientnet_params,
+    load_pretrained_weights,
+    Swish,
+    MemoryEfficientSwish,
+)
 
 
 class MBConvBlock(nn.Module):
-    def __init__(self, in_channel, out_channel, params, is_depthwise_first=False):
+    """
+    Mobile Inverted Residual Bottleneck Block
+
+    Args:
+        block_args (namedtuple): BlockArgs, see above
+        global_params (namedtuple): GlobalParam, see above
+
+    Attributes:
+        has_se (bool): Whether the block contains a Squeeze and Excitation layer.
+    """
+
+    def __init__(self, block_args, global_params):
         super().__init__()
-        self.is_depthwise_first = is_depthwise_first
-        self._avg_pooling = nn.AdaptiveAvgPool2d(output_size=1)
-        if is_depthwise_first:
-            self._depthwise_conv = Conv2dDynamicSamePadding(
-                in_channel[0],
-                out_channel[0],
-                kernel_size=(params[0], params[0]),
-                stride=(params[1], params[1]),
-                groups=out_channel[0],
-                bias=False,
-            )
-            self._bn1 = nn.BatchNorm2d(
-                out_channel[0], eps=0.001, momentum=0.010000000000000009, affine=True, track_running_stats=True
-            )
-            self._se_reduce = Conv2dDynamicSamePadding(in_channel[1], out_channel[1], kernel_size=(1, 1), stride=(1, 1))
-            self._se_expand = Conv2dDynamicSamePadding(in_channel[2], out_channel[2], kernel_size=(1, 1), stride=(1, 1))
-            self._project_conv = Conv2dDynamicSamePadding(
-                in_channel[3], out_channel[3], kernel_size=(1, 1), stride=(1, 1), bias=False
-            )
-            self._bn2 = nn.BatchNorm2d(
-                out_channel[3], eps=0.001, momentum=0.010000000000000009, affine=True, track_running_stats=True
-            )
+        self._block_args = block_args
+        self._bn_mom = 1 - global_params.batch_norm_momentum
+        self._bn_eps = global_params.batch_norm_epsilon
+        self.has_se = (self._block_args.se_ratio is not None) and (0 < self._block_args.se_ratio <= 1)
+        self.id_skip = block_args.id_skip  # skip connection and drop connect
 
-        else:
-            self._expand_conv = Conv2dDynamicSamePadding(
-                in_channel[0], out_channel[0], kernel_size=(1, 1), stride=(1, 1), bias=False
-            )
-            self._bn0 = nn.BatchNorm2d(
-                out_channel[0], eps=0.001, momentum=0.010000000000000009, affine=True, track_running_stats=True
-            )
-            self._depthwise_conv = Conv2dDynamicSamePadding(
-                in_channel[1],
-                out_channel[1],
-                kernel_size=(params[0], params[0]),
-                stride=(params[1], params[1]),
-                groups=out_channel[1],
-                bias=False,
-            )
-            self._bn1 = nn.BatchNorm2d(
-                out_channel[1], eps=0.001, momentum=0.010000000000000009, affine=True, track_running_stats=True
-            )
-            self._se_reduce = Conv2dDynamicSamePadding(in_channel[2], out_channel[2], kernel_size=(1, 1), stride=(1, 1))
-            self._se_expand = Conv2dDynamicSamePadding(in_channel[3], out_channel[3], kernel_size=(1, 1), stride=(1, 1))
-            self._project_conv = Conv2dDynamicSamePadding(
-                in_channel[4], out_channel[4], kernel_size=(1, 1), stride=(1, 1), bias=False
-            )
-            self._bn2 = nn.BatchNorm2d(
-                out_channel[4], eps=0.001, momentum=0.010000000000000009, affine=True, track_running_stats=True
-            )
+        # Get static or dynamic convolution depending on image size
+        Conv2d = get_same_padding_conv2d(image_size=global_params.image_size)
 
-    def forward(self, x):
-        if not self.is_depthwise_first:
-            x = self._expand_conv(x)
+        # Expansion phase
+        inp = self._block_args.input_filters  # number of input channels
+        oup = self._block_args.input_filters * self._block_args.expand_ratio  # number of output channels
+        if self._block_args.expand_ratio != 1:
+            self._expand_conv = Conv2d(in_channels=inp, out_channels=oup, kernel_size=1, bias=False)
+            self._bn0 = nn.BatchNorm2d(num_features=oup, momentum=self._bn_mom, eps=self._bn_eps)
+
+        # Depthwise convolution phase
+        k = self._block_args.kernel_size
+        s = self._block_args.stride
+        self._depthwise_conv = Conv2d(
+            in_channels=oup,
+            out_channels=oup,
+            groups=oup,  # groups makes it depthwise
+            kernel_size=k,
+            stride=s,
+            bias=False,
+        )
+        self._bn1 = nn.BatchNorm2d(num_features=oup, momentum=self._bn_mom, eps=self._bn_eps)
+
+        # Squeeze and Excitation layer, if desired
+        if self.has_se:
+            num_squeezed_channels = max(1, int(self._block_args.input_filters * self._block_args.se_ratio))
+            self._se_reduce = Conv2d(in_channels=oup, out_channels=num_squeezed_channels, kernel_size=1)
+            self._se_expand = Conv2d(in_channels=num_squeezed_channels, out_channels=oup, kernel_size=1)
+
+        # Output phase
+        final_oup = self._block_args.output_filters
+        self._project_conv = Conv2d(in_channels=oup, out_channels=final_oup, kernel_size=1, bias=False)
+        self._bn2 = nn.BatchNorm2d(num_features=final_oup, momentum=self._bn_mom, eps=self._bn_eps)
+        self._swish = MemoryEfficientSwish()
+
+    def forward(self, inputs, drop_connect_rate=None):
+        """
+        :param inputs: input tensor
+        :param drop_connect_rate: drop connect rate (float, between 0 and 1)
+        :return: output of block
+        """
+
+        # Expansion and Depthwise Convolution
+        x = inputs
+        if self._block_args.expand_ratio != 1:
+            # print(f"Expanded")
+            x = self._expand_conv(inputs)
             x = self._bn0(x)
-            x = x * torch.sigmoid(x)
+            x = self._swish(x)
+
         x = self._depthwise_conv(x)
         x = self._bn1(x)
-        x = x * torch.sigmoid(x)
-        mul1 = x
-        x = self._avg_pooling(x)
-        x = self._se_reduce(x)
-        x = x * torch.sigmoid(x)
-        x = self._se_expand(x)
-        x = torch.sigmoid(x)
-        x = x * mul1
+        x = self._swish(x)
+
+        # Squeeze and Excitation
+        if self.has_se:
+            x_squeezed = F.adaptive_avg_pool2d(x, 1)
+            x_squeezed = self._se_reduce(x_squeezed)
+            x_squeezed = self._swish(x_squeezed)
+            x_squeezed = self._se_expand(x_squeezed)
+            x = torch.sigmoid(x_squeezed) * x
+
         x = self._project_conv(x)
         x = self._bn2(x)
 
+        # Skip connection and drop connect
+        input_filters, output_filters = self._block_args.input_filters, self._block_args.output_filters
+        if self.id_skip and self._block_args.stride == 1 and input_filters == output_filters:
+            if drop_connect_rate:
+                x = drop_connect(x, p=drop_connect_rate, training=self.training)
+            x = x + inputs  # skip connection
         return x
+
+    def set_swish(self, memory_efficient=True):
+        """Sets swish function as memory efficient (for training) or standard (for export)"""
+        self._swish = MemoryEfficientSwish() if memory_efficient else Swish()
+
+
+class EfficientNet(nn.Module):
+    """
+    An EfficientNet model. Most easily loaded with the .from_name or .from_pretrained methods
+
+    Args:
+        blocks_args (list): A list of BlockArgs to construct blocks
+        global_params (namedtuple): A set of GlobalParams shared between blocks
+
+    Example:
+        model = EfficientNet.from_pretrained('efficientnet-b0')
+
+    """
+
+    def __init__(self, blocks_args=None, global_params=None):
+        super().__init__()
+        assert isinstance(blocks_args, list), "blocks_args should be a list"
+        assert len(blocks_args) > 0, "block args must be greater than 0"
+        self._global_params = global_params
+        self._blocks_args = blocks_args
+
+        # Get static or dynamic convolution depending on image size
+        Conv2d = get_same_padding_conv2d(image_size=global_params.image_size)
+
+        # Batch norm parameters
+        bn_mom = 1 - self._global_params.batch_norm_momentum
+        bn_eps = self._global_params.batch_norm_epsilon
+
+        # Stem
+        in_channels = 3  # rgb
+        out_channels = round_filters(32, self._global_params)  # number of output channels
+        self._conv_stem = Conv2d(in_channels, out_channels, kernel_size=3, stride=2, bias=False)
+        self._bn0 = nn.BatchNorm2d(num_features=out_channels, momentum=bn_mom, eps=bn_eps)
+
+        # Build blocks
+        self._blocks = nn.ModuleList([])
+        for block_args in self._blocks_args:
+            # Update block input and output filters based on depth multiplier.
+            block_args = block_args._replace(
+                input_filters=round_filters(block_args.input_filters, self._global_params),
+                output_filters=round_filters(block_args.output_filters, self._global_params),
+                num_repeat=round_repeats(block_args.num_repeat, self._global_params),
+            )
+
+            # The first block needs to take care of stride and filter size increase.
+            self._blocks.append(MBConvBlock(block_args, self._global_params))
+            if block_args.num_repeat > 1:
+                block_args = block_args._replace(input_filters=block_args.output_filters, stride=1)
+            for _ in range(block_args.num_repeat - 1):
+                self._blocks.append(MBConvBlock(block_args, self._global_params))
+
+        # Head
+        in_channels = block_args.output_filters  # output of final block
+        out_channels = round_filters(1280, self._global_params)
+        self._conv_head = Conv2d(in_channels, out_channels, kernel_size=1, bias=False)
+        self._bn1 = nn.BatchNorm2d(num_features=out_channels, momentum=bn_mom, eps=bn_eps)
+
+        # Final linear layer
+        self._avg_pooling = nn.AdaptiveAvgPool2d(1)
+        self._dropout = nn.Dropout(self._global_params.dropout_rate)
+        self._fc = nn.Linear(out_channels, self._global_params.num_classes)
+        self._swish = MemoryEfficientSwish()
+
+    def set_swish(self, memory_efficient=True):
+        """Sets swish function as memory efficient (for training) or standard (for export)"""
+        self._swish = MemoryEfficientSwish() if memory_efficient else Swish()
+        for block in self._blocks:
+            block.set_swish(memory_efficient)
+
+    def extract_features(self, inputs):
+        """Returns output of the final convolution layer"""
+
+        # Stem
+        x = self._swish(self._bn0(self._conv_stem(inputs)))
+
+        # Blocks
+        for idx, block in enumerate(self._blocks):
+            drop_connect_rate = self._global_params.drop_connect_rate
+            if drop_connect_rate:
+                drop_connect_rate *= float(idx) / len(self._blocks)
+            x = block(x, drop_connect_rate=drop_connect_rate)
+        # Head
+        x = self._swish(self._bn1(self._conv_head(x)))
+
+        return x
+
+    def forward(self, inputs):
+        """Calls extract_features to extract features, applies final linear layer, and returns logits."""
+        bs = inputs.size(0)
+        # Convolution layers
+        x = self.extract_features(inputs)
+
+        # Pooling and final linear layer
+        x = self._avg_pooling(x)
+        x = x.view(bs, -1)
+        x = self._dropout(x)
+        x = self._fc(x)
+        return x
+
+    @classmethod
+    def from_name(cls, model_name, override_params=None):
+        cls._check_model_name_is_valid(model_name)
+        blocks_args, global_params = get_model_params(model_name, override_params)
+        return cls(blocks_args, global_params)
+
+    @classmethod
+    def from_pretrained(cls, model_name, load_weights=True, advprop=False, num_classes=1000, in_channels=3):
+        model = cls.from_name(model_name, override_params={"num_classes": num_classes})
+        if load_weights:
+            load_pretrained_weights(model, model_name, load_fc=(num_classes == 1000), advprop=advprop)
+        if in_channels != 3:
+            Conv2d = get_same_padding_conv2d(image_size=model._global_params.image_size)
+            out_channels = round_filters(32, model._global_params)
+            model._conv_stem = Conv2d(in_channels, out_channels, kernel_size=3, stride=2, bias=False)
+        return model
+
+    @classmethod
+    def get_image_size(cls, model_name):
+        cls._check_model_name_is_valid(model_name)
+        _, _, res, _ = efficientnet_params(model_name)
+        return res
+
+    @classmethod
+    def _check_model_name_is_valid(cls, model_name):
+        """Validates model name."""
+        valid_models = ["efficientnet-b" + str(i) for i in range(9)]
+        if model_name not in valid_models:
+            raise ValueError("model_name should be one of: " + ", ".join(valid_models))

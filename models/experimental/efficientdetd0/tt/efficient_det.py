@@ -6,7 +6,7 @@ import ttnn
 import torch
 from typing import Tuple
 
-from models.experimental.efficientdetd0.tt.efficient_netb0 import Efficientnetb0 as TtEfficientnetb0
+from models.experimental.efficientdetd0.tt.efficientnetb0 import TtnnEfficientNet
 from models.experimental.efficientdetd0.tt.bifpn import TtBiFPN
 from models.experimental.efficientdetd0.tt.regressor import Regressor as TtRegressor
 from models.experimental.efficientdetd0.tt.classifier import Classifier as TtClassifier
@@ -88,24 +88,10 @@ class TtEfficientDetBackbone:
         self.aspect_ratios = kwargs.get("ratios", [(1.0, 1.0), (1.4, 0.7), (0.7, 1.4)])
         self.num_scales = len(kwargs.get("scales", [2**0, 2 ** (1.0 / 3.0), 2 ** (2.0 / 3.0)]))
 
-        conv_channel_coef = {
-            # the channels of P3/P4/P5.
-            0: [40, 112, 320],
-            1: [40, 112, 320],
-            2: [48, 120, 352],
-            3: [48, 136, 384],
-            4: [56, 160, 448],
-            5: [64, 176, 512],
-            6: [72, 200, 576],
-            7: [72, 200, 576],
-            8: [80, 224, 640],
-        }
-
-        num_anchors = len(self.aspect_ratios) * self.num_scales
         backbone_params = parameters.backbone_net.model
         backbone_conv_params = conv_params.backbone_net.model
 
-        self.backbone_net = TtEfficientnetb0(
+        self.backbone_net = TtnnEfficientNet(
             device=device,
             parameters=backbone_params,
             conv_params=backbone_conv_params,
@@ -171,7 +157,7 @@ class TtEfficientDetBackbone:
         p3, p4, p5 = self.backbone_net(inputs)
 
         # Convert to tuple for BiFPN
-        features = [p3, p4, p5]
+        features = (p3, p4, p5)
 
         # Process through BiFPN layers
         for bifpn in self.bifpn_layers:

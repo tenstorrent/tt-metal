@@ -2,17 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
 import torch
+from torch import nn
 from torchvision.ops.boxes import nms as nms_torch
-from efficientnet_pytorch import EfficientNet
-from models.experimental.efficientdetd0.reference.efficientnetb0 import Efficientnetb0 as EffNet
+
 from .utils import (
-    MemoryEfficientSwish,
     Swish,
+    MemoryEfficientSwish,
     Conv2dStaticSamePadding,
     MaxPool2dStaticSamePadding,
 )
+from models.experimental.efficientdetd0.reference.efficientnetb0 import EfficientNet as EffNet
 
 
 def nms(dets, thresh):
@@ -445,40 +445,34 @@ class EfficientNet(nn.Module):
 
     def __init__(self, compound_coef, load_weights=False):
         super(EfficientNet, self).__init__()
-        model = EffNet()
+        model = EffNet.from_pretrained(f"efficientnet-b{compound_coef}", load_weights)
         del model._conv_head
         del model._bn1
         del model._avg_pooling
+        del model._dropout
         del model._fc
         self.model = model
 
     def forward(self, x):
         x = self.model._conv_stem(x)
         x = self.model._bn0(x)
-        x = x * torch.sigmoid(x)
-        x = self.model._blocks0(x)
-        x_1 = self.model._blocks1(x)
-        x = self.model._blocks2(x_1)
-        x = x + x_1
-        x_3 = self.model._blocks3(x)
-        x = self.model._blocks4(x_3)
-        x = x + x_3
-        x_5 = self.model._blocks5(x)
-        x = self.model._blocks6(x_5)
-        x_7_in = x + x_5
-        x = self.model._blocks7(x_7_in)
-        x = x_7_in + x
-        x_8 = self.model._blocks8(x)
-        x = self.model._blocks9(x_8)
-        x_10_in = x + x_8
-        x = self.model._blocks10(x_10_in)
-        x = x + x_10_in
-        x_11 = self.model._blocks11(x)
-        x = self.model._blocks12(x_11)
-        x_13_in = x + x_11
-        x = self.model._blocks13(x_13_in)
-        x_14_in = x + x_13_in
-        x = self.model._blocks14(x_14_in)
-        x = x_14_in + x
-        x = self.model._blocks15(x)
-        return x_3, x_8, x
+        x = self.model._swish(x)
+        feature_maps = []
+
+        # TODO: temporarily storing extra tensor last_x and del it later might not be a good idea,
+        #  try recording stride changing when creating efficientnet,
+        #  and then apply it here.
+        last_x = None
+        for idx, block in enumerate(self.model._blocks):
+            drop_connect_rate = self.model._global_params.drop_connect_rate
+            if drop_connect_rate:
+                drop_connect_rate *= float(idx) / len(self.model._blocks)
+            x = block(x, drop_connect_rate=drop_connect_rate)
+
+            if block._depthwise_conv.stride == [2, 2]:
+                feature_maps.append(last_x)
+            elif idx == len(self.model._blocks) - 1:
+                feature_maps.append(x)
+            last_x = x
+        del last_x
+        return feature_maps[1:]
