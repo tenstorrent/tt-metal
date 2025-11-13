@@ -20,6 +20,15 @@ constexpr uint32_t num_packets = get_compile_time_arg_val(6);
 constexpr uint32_t time_seed_init = get_compile_time_arg_val(7);
 constexpr uint32_t req_notification_size_bytes = get_compile_time_arg_val(8);
 
+// Helper function to poll for a value at a specific L1 address
+inline void poll_for_value(volatile tt_l1_ptr uint32_t* poll_addr, uint32_t expected_val) {
+    WAYPOINT("FPW");
+    while (expected_val != *poll_addr) {
+        invalidate_l1_cache();
+    }
+    WAYPOINT("FPD");
+}
+
 /*
  * This test kernel is a kernel to test the functionality that will be implemented in a fabric relay kernel.
  * The relay kernel would handle read/write acknowledgement and related functionality, so  the building
@@ -35,11 +44,11 @@ void kernel_main() {
     uint32_t dest_dram_addr;
 
     tt_l1_ptr uint32_t* start_addr = reinterpret_cast<tt_l1_ptr uint32_t*>(target_address);
+    volatile tt_l1_ptr uint32_t* poll_addr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(target_address + packet_payload_size_bytes - 4);
     uint32_t mismatch_addr, mismatch_val, expected_val;
     bool match = true;
     uint64_t bytes_received = 0;
-
-    uint32_t notification_addr = notification_mailbox_address;  // Where we receive notifications
 
     zero_l1_buf(test_results, test_results_size_bytes);
     test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_STARTED;
@@ -48,15 +57,11 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_packets; i++) {
         time_seed = prng_next(time_seed);
 
-        // Wait for the notification from sender
-        uint32_t curr_notification_addr = notification_addr + i * req_notification_size_bytes;
-        volatile tt_l1_ptr PACKET_HEADER_TYPE* received_header =
-            wait_for_notification(curr_notification_addr, time_seed, req_notification_size_bytes);
-
         switch (noc_send_type) {
             case NOC_UNICAST_WRITE: {
-                // Send write ACK back to the sender
-                tt::tt_fabric::udm::fabric_fast_write_ack(received_header);
+                // Wait for the packet data to arrive by polling on the last word
+                expected_val = time_seed + (packet_payload_size_bytes / 16) - 1;
+                poll_for_value(poll_addr, expected_val);
 
                 // Check for data correctness
                 match = check_packet_data(
@@ -64,31 +69,29 @@ void kernel_main() {
 
             } break;
             case NOC_UNICAST_INLINE_WRITE: {
-                // Send write ACK back to the sender
-                tt::tt_fabric::udm::fabric_fast_write_ack(received_header);
+                // Wait for the inline write to arrive by polling on the value
+                expected_val = time_seed;
+                poll_for_value(start_addr, expected_val);
 
                 // Check data correctness for a single uint32_t
                 uint32_t received_value = *start_addr;
-                uint32_t expected_value = time_seed;
-                if (received_value != expected_value) {
+                if (received_value != expected_val) {
                     match = false;
                     mismatch_addr = reinterpret_cast<uint32_t>(start_addr);
                     mismatch_val = received_value;
-                    expected_val = expected_value;
                     break;
                 }
             } break;
             case NOC_UNICAST_ATOMIC_INC: {
-                // Send atomic ACK back to the sender
-                tt::tt_fabric::udm::fabric_fast_atomic_ack(received_header);
+                // Wait for the atomic increment to arrive by polling on the value
+                expected_val = time_seed;
+                poll_for_value(start_addr, expected_val);
 
                 uint32_t received_value = *start_addr;
-                uint32_t expected_value = time_seed;
-                if (received_value != expected_value) {
+                if (received_value != expected_val) {
                     match = false;
                     mismatch_addr = reinterpret_cast<uint32_t>(start_addr);
                     mismatch_val = received_value;
-                    expected_val = expected_value;
                     break;
                 }
             } break;
@@ -100,6 +103,7 @@ void kernel_main() {
             break;
         }
         start_addr += packet_payload_size_bytes / 4;
+        poll_addr += packet_payload_size_bytes / 4;
         bytes_received += packet_payload_size_bytes;
     }
 
