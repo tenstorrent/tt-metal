@@ -38,7 +38,6 @@ using AsicPosition = std::pair<tt::tt_metal::TrayID, tt::tt_metal::ASICLocation>
  * them to the ASIC IDs of the physical descriptor.
  */
 
-using HostMeshMapping = std::unordered_map<MeshId, std::unordered_set<HostName>>;
 using LogicalAdjacencyMap = std::unordered_map<tt::tt_fabric::FabricNodeId, std::vector<tt::tt_fabric::FabricNodeId>>;
 using PhysicalAdjacencyMap = std::unordered_map<tt::tt_metal::AsicID, std::vector<tt::tt_metal::AsicID>>;
 
@@ -237,16 +236,6 @@ private:
     void initialize_chip_topology_info_map();
 
     /**
-     * @brief Build the mapping between mesh IDs and host ranks
-     *
-     * This method iterates through all meshes in the mesh graph and creates mappings
-     * based on the mesh IDs and fabric chip IDs from the mesh_container, mapping them
-     * to the ASIC IDs of the physical descriptor. Uses MPI through distributed context
-     * to gather the mappings from all ranks.
-     */
-    HostMeshMapping build_host_mesh_mapping() const;
-
-    /**
      * @brief Build the mapping between host ranks and host names
      *
      * This method iterates through all hosts in the physical system descriptor and creates mappings
@@ -275,11 +264,9 @@ private:
      * the intra-mesh connectivity from the mesh graph and creates a mapping of FabricNodeId to
      * its vector of adjacent FabricNodeIds.
      *
-     * @param mesh_id_to_host_names Mapping of mesh IDs to the set of host names participating in each mesh
      * @return std::unordered_map<MeshId, LogicalAdjacencyMap> Map from mesh ID to logical adjacency map
      */
-    std::unordered_map<MeshId, LogicalAdjacencyMap> build_adjacency_map_logical(
-        HostMeshMapping& mesh_id_to_host_names) const;
+    std::unordered_map<MeshId, LogicalAdjacencyMap> build_adjacency_map_logical() const;
 
     /**
      * @brief Build physical adjacency maps from system descriptor connectivity
@@ -289,11 +276,12 @@ private:
      * neighbors from the physical system descriptor and filters them to only include neighbors that are also part of
      * the same mesh. The resulting map contains ASIC IDs mapped to their vectors of adjacent ASIC IDs within the mesh.
      *
-     * @param mesh_id_to_host_names Mapping of mesh IDs to the set of host names participating in each mesh
+     * @param asic_id_to_mesh_rank Mapping of mesh IDs to ASIC IDs and their corresponding mesh host ranks
      * @return std::unordered_map<MeshId, PhysicalAdjacencyMap> Map from mesh ID to physical adjacency map
      */
     std::unordered_map<MeshId, PhysicalAdjacencyMap> build_adjacency_map_physical(
-        HostMeshMapping& mesh_id_to_host_names) const;
+        const std::unordered_map<MeshId, std::unordered_map<tt::tt_metal::AsicID, MeshHostRankId>>&
+            asic_id_to_mesh_rank) const;
 
     /**
      * @brief Create bidirectional mappings between logical fabric nodes and physical ASIC IDs

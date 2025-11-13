@@ -266,8 +266,6 @@ void TopologyMapper::build_mapping() {
 
     generate_mapping_locally_ = (mesh_graph_.get_mesh_ids().size() == 1) &&
                                 (mesh_graph_.get_host_ranks(local_mesh_binding_.mesh_ids[0]).size() == 1);
-    // Build host-to-mesh mapping via distributed all-gather of local bindings.
-    auto mesh_id_host_names = build_host_mesh_mapping();
 
     auto asic_id_to_mesh_rank = build_asic_id_to_mesh_rank_mapping();
     auto fabric_node_id_to_mesh_rank = build_fabric_node_id_to_mesh_rank_mapping();
@@ -275,8 +273,8 @@ void TopologyMapper::build_mapping() {
     // Only 1 host builds the mapping the rest will wait and use the mapping from the 1st host
     if (generate_mapping_locally_ || *tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 0) {
         // Build logical and physical adjacency maps
-        auto adjacency_map_logical = build_adjacency_map_logical(mesh_id_host_names);
-        auto adjacency_map_physical = build_adjacency_map_physical(mesh_id_host_names);
+        auto adjacency_map_logical = build_adjacency_map_logical();
+        auto adjacency_map_physical = build_adjacency_map_physical(asic_id_to_mesh_rank);
 
         print_logical_adjacency_map(adjacency_map_logical);
         print_physical_adjacency_map(adjacency_map_physical);
@@ -307,76 +305,6 @@ void TopologyMapper::build_mapping() {
 
     // Build host rank containers now that mapping is complete
     rebuild_host_rank_structs_from_mapping();
-}
-
-std::unordered_map<MeshId, std::unordered_set<HostName>> TopologyMapper::build_host_mesh_mapping() const {
-    std::unordered_map<MeshId, std::unordered_set<HostName>> mesh_id_to_hosts;
-
-    // Gather (mesh_id, host_rank) for ALL meshes owned by each rank, but only if multi-host.
-    auto global_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
-    const std::size_t world_size = *global_context->size();
-
-    // Single-host or uninitialized distributed context: compute mapping locally without any collectives
-    if (world_size == 1 || generate_mapping_locally_) {
-        for (const auto& mesh_id : local_mesh_binding_.mesh_ids) {
-            mesh_id_to_hosts[mesh_id].insert(physical_system_descriptor_.my_host_name());
-        }
-        return mesh_id_to_hosts;
-    }
-
-    // Build MPI rank -> host name map using PhysicalSystemDescriptor's rank mapping.
-    std::vector<HostName> rank_to_host(world_size);
-    for (const auto& host : physical_system_descriptor_.get_all_hostnames()) {
-        auto rank = physical_system_descriptor_.get_rank_for_hostname(host);
-        if (rank < rank_to_host.size()) {
-            rank_to_host[rank] = host;
-        }
-    }
-
-    // 1) All-gather counts (how many meshes each rank owns)
-    const std::uint32_t local_count = static_cast<std::uint32_t>(local_mesh_binding_.mesh_ids.size());
-    std::vector<std::uint32_t> counts(world_size, 0);
-    all_gather_with_timeout(
-        global_context,
-        ttsl::Span<std::byte>(
-            reinterpret_cast<std::byte*>(const_cast<std::uint32_t*>(&local_count)), sizeof(std::uint32_t)),
-        ttsl::as_writable_bytes(ttsl::Span<std::uint32_t>(counts.data(), counts.size())),
-        "mesh count all_gather");
-
-    const std::uint32_t max_count = counts.empty() ? 0 : *std::max_element(counts.begin(), counts.end());
-
-    // 2) All-gather fixed-width list of encoded (mesh_id, host_rank) per rank
-    const std::uint64_t sentinel = std::numeric_limits<std::uint64_t>::max();
-    std::vector<std::uint64_t> send_values(max_count, sentinel);
-    for (std::uint32_t i = 0; i < local_count; ++i) {
-        send_values[i] = encode_mesh_id_and_rank(local_mesh_binding_.mesh_ids[i], local_mesh_binding_.host_rank);
-    }
-
-    std::vector<std::uint64_t> gathered(static_cast<std::size_t>(world_size) * max_count, sentinel);
-    if (max_count > 0) {
-        all_gather_with_timeout(
-            global_context,
-            ttsl::Span<std::byte>(
-                reinterpret_cast<std::byte*>(send_values.data()), send_values.size() * sizeof(std::uint64_t)),
-            ttsl::as_writable_bytes(ttsl::Span<std::uint64_t>(gathered.data(), gathered.size())),
-            "mesh binding all_gather");
-    }
-
-    // 3) Populate mesh_id_to_hosts using gathered data and counts
-    for (std::size_t mpi_rank = 0; mpi_rank < world_size; ++mpi_rank) {
-        const auto entries_for_rank = counts[mpi_rank];
-        for (std::uint32_t j = 0; j < entries_for_rank; ++j) {
-            const auto encoded = gathered[(mpi_rank * max_count) + j];
-            if (encoded == sentinel) {
-                continue;
-            }
-            const auto [mesh_id, host_rank] = decode_mesh_id_and_rank(encoded);
-            const auto& host_name = rank_to_host.at(mpi_rank);
-            mesh_id_to_hosts[mesh_id].insert(host_name);
-        }
-    }
-
-    return mesh_id_to_hosts;
 }
 
 std::unordered_map<MeshId, std::unordered_map<FabricNodeId, MeshHostRankId>>
@@ -461,8 +389,7 @@ TopologyMapper::build_asic_id_to_mesh_rank_mapping() const {
     return mapping;
 }
 
-std::unordered_map<MeshId, LogicalAdjacencyMap> TopologyMapper::build_adjacency_map_logical(
-    HostMeshMapping& mesh_id_to_host_names) const {
+std::unordered_map<MeshId, LogicalAdjacencyMap> TopologyMapper::build_adjacency_map_logical() const {
     std::unordered_map<MeshId, LogicalAdjacencyMap> adjacency_map;
 
     auto get_local_adjacents = [&](tt::tt_fabric::FabricNodeId fabric_node_id, MeshId mesh_id) {
@@ -475,7 +402,7 @@ std::unordered_map<MeshId, LogicalAdjacencyMap> TopologyMapper::build_adjacency_
         return adjacents;
     };
 
-    for (const auto& [mesh_id, _] : mesh_id_to_host_names) {
+    for (const auto& mesh_id : mesh_graph_.get_mesh_ids()) {
         LogicalAdjacencyMap logical_adjacency_map;
         for (const auto& [_, chip_id] : mesh_graph_.get_chip_ids(mesh_id)) {
             auto fabric_node_id = tt::tt_fabric::FabricNodeId(mesh_id, chip_id);
@@ -488,27 +415,22 @@ std::unordered_map<MeshId, LogicalAdjacencyMap> TopologyMapper::build_adjacency_
 }
 
 std::unordered_map<MeshId, PhysicalAdjacencyMap> TopologyMapper::build_adjacency_map_physical(
-    HostMeshMapping& mesh_id_to_host_names) const {
+    const std::unordered_map<MeshId, std::unordered_map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank)
+    const {
     std::unordered_map<MeshId, PhysicalAdjacencyMap> adjacency_map;
 
-    auto get_local_adjacents =
-        [&](tt::tt_metal::AsicID asic_id, MeshId /*mesh_id*/, const std::unordered_set<HostName>& mesh_hostnames) {
+    for (const auto& [mesh_id, asic_to_rank_map] : asic_id_to_mesh_rank) {
+        PhysicalAdjacencyMap physical_adjacency_map;
+        // For each ASIC in this mesh, get its neighbors and filter to only include neighbors in the same mesh
+        for (const auto& [asic_id, _] : asic_to_rank_map) {
             std::vector<tt::tt_metal::AsicID> adjacents;
             for (const auto& neighbor : physical_system_descriptor_.get_asic_neighbors(asic_id)) {
-                // Make sure that the neighbor is in the mesh
-                if (mesh_hostnames.contains(physical_system_descriptor_.get_host_name_for_asic(neighbor))) {
+                // Make sure that the neighbor is in the same mesh
+                if (asic_to_rank_map.find(neighbor) != asic_to_rank_map.end()) {
                     adjacents.push_back(neighbor);
                 }
             }
-            return adjacents;
-        };
-
-    for (const auto& [mesh_id, mesh_hostnames] : mesh_id_to_host_names) {
-        PhysicalAdjacencyMap physical_adjacency_map;
-        for (const auto& host_name : mesh_hostnames) {
-            for (const auto& asic_id : physical_system_descriptor_.get_asics_connected_to_host(host_name)) {
-                physical_adjacency_map[asic_id] = get_local_adjacents(asic_id, mesh_id, mesh_hostnames);
-            }
+            physical_adjacency_map[asic_id] = adjacents;
         }
         adjacency_map[mesh_id] = physical_adjacency_map;
     }
