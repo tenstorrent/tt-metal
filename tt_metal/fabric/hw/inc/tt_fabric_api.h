@@ -98,7 +98,7 @@ void fabric_set_route(
 }
 
 template <bool called_from_router = false, eth_chan_directions my_direction = eth_chan_directions::COUNT>
-bool fabric_set_unicast_route(
+int fabric_set_unicast_route(
     volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
     uint16_t dst_dev_id,
     uint16_t dst_mesh_id = MAX_NUM_MESHES);
@@ -115,18 +115,28 @@ void fabric_set_mcast_route(
     uint32_t spine_hops = 0;
     uint32_t mcast_branch = 0;
     packet_header->routing_fields.value = 0;
+    int num_cmd = fabric_set_unicast_route<called_from_router>(packet_header, dst_dev_id, dst_mesh_id);
+    spine_hops = num_cmd - 1;
+    // auto dump =
+    //     reinterpret_cast<tt_l1_ptr uint32_t*>(ROUTING_PATH_BASE_1D);
+    // dump[4] = 0xDDDDDDDD;
+    // dump[5] = packet_header->route_buffer[0];
+    // dump[6] = packet_header->route_buffer[1];
+    // dump[7] = packet_header->route_buffer[2];
+    // dump[8] = num_cmd;
     if constexpr (!called_from_router) {
         tt_l1_ptr tensix_routing_l1_info_t* routing_table =
             reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(ROUTING_TABLE_BASE);
-        packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
+        // packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
         packet_header->mcast_params_64 = ((uint64_t)s_num_hops << 48) | ((uint64_t)n_num_hops << 32) |
                                          ((uint64_t)w_num_hops << 16) | ((uint64_t)e_num_hops);
         packet_header->is_mcast_active = 0;
+        // fabric_set_unicast_route(packet_header, dst_dev_id, dst_mesh_id);
         if (routing_table->my_mesh_id != dst_mesh_id) {
             // TODO: refactoring
-            fabric_set_unicast_route(packet_header, dst_dev_id, dst_mesh_id);
-            packet_header->mcast_params_64 = ((uint64_t)s_num_hops << 48) | ((uint64_t)n_num_hops << 32) |
-                                             ((uint64_t)w_num_hops << 16) | ((uint64_t)e_num_hops);
+            // fabric_set_unicast_route(packet_header, dst_dev_id, dst_mesh_id);
+            // packet_header->mcast_params_64 = ((uint64_t)s_num_hops << 48) | ((uint64_t)n_num_hops << 32) |
+            //                                  ((uint64_t)w_num_hops << 16) | ((uint64_t)e_num_hops);
             return;
         }
     }
@@ -143,12 +153,12 @@ void fabric_set_mcast_route(
 
     if (n_num_hops) {
         // Is a 2D mcast if mcast_branch != 0
-        fabric_set_route<true>(packet_header, eth_chan_directions::NORTH, mcast_branch, 0, n_num_hops);
-        spine_hops = n_num_hops;
+        fabric_set_route<true>(packet_header, eth_chan_directions::NORTH, mcast_branch, spine_hops, n_num_hops);
+        spine_hops += n_num_hops;
     } else if (s_num_hops) {
         // Is a 2D mcast if mcast_branch != 0
-        fabric_set_route<true>(packet_header, eth_chan_directions::SOUTH, mcast_branch, 0, s_num_hops);
-        spine_hops = s_num_hops;
+        fabric_set_route<true>(packet_header, eth_chan_directions::SOUTH, mcast_branch, spine_hops, s_num_hops);
+        spine_hops += s_num_hops;
     }
     if (e_num_hops) {
         // Is a line mcast if spine_hops == 0
@@ -191,7 +201,7 @@ uint8_t get_router_direction(uint32_t eth_channel) {
 
 // Overload: Fill route_buffer of HybridMeshPacketHeader and initialize hop_index/branch offsets for 2D.
 template <bool called_from_router, eth_chan_directions my_direction>
-bool fabric_set_unicast_route(
+int fabric_set_unicast_route(
     volatile tt_l1_ptr HybridMeshPacketHeader* packet_header, uint16_t dst_dev_id, uint16_t dst_mesh_id) {
     if constexpr (!called_from_router) {
         packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
@@ -206,7 +216,7 @@ bool fabric_set_unicast_route(
         dst_dev_id = exit_node_table->nodes[dst_mesh_id];
         dst_mesh_id = routing_table->my_mesh_id;
     }
-    bool ok = false;
+    int num_cmd = 0;
     if constexpr (called_from_router) {
         // This is to prepend additional one step, which is not needed for worker sender.
         auto set_forward = [&](eth_chan_directions dir) {
@@ -230,7 +240,7 @@ bool fabric_set_unicast_route(
         if (next_direction < eth_chan_directions::COUNT) {
             // when arrive at another mesh, but dst chip is not itself. -> go to next chip -> prepend FORWARD_<DIR> ->
             // add route
-            ok = routing_info->decode_route_to_buffer(dst_dev_id, packet_header->route_buffer, true);
+            num_cmd = routing_info->decode_route_to_buffer(dst_dev_id, packet_header->route_buffer, true);
         } else {
             if (routing_table->my_mesh_id == packet_header->dst_start_mesh_id) {
                 // when arrive at destination mesh, and dst chip is itself. -> DRAIN -> prepend FORWARD_<DIR> -> done
@@ -243,10 +253,10 @@ bool fabric_set_unicast_route(
                 set_forward(next_direction);
             }
             packet_header->route_buffer[1] = LowLatencyMeshRoutingFields::NOOP;
-            return true;  // early return, route_buffer[0] is enough
+            return 1;
         }
     } else {
-        ok = routing_info->decode_route_to_buffer(dst_dev_id, packet_header->route_buffer);
+        num_cmd = routing_info->decode_route_to_buffer(dst_dev_id, packet_header->route_buffer);
     }
     packet_header->routing_fields.value = 0;
 
@@ -275,7 +285,7 @@ bool fabric_set_unicast_route(
         packet_header->routing_fields.branch_west_offset = 1;
     }
 
-    return ok;
+    return num_cmd;
 }
 
 // Overload: For 1D LowLatencyPacketHeader
@@ -283,7 +293,7 @@ bool fabric_set_unicast_route(
 // TODO: compare performance of compressed true/false
 //       https://github.com/tenstorrent/tt-metal/issues/29449
 template <bool target_as_dev = true, bool compressed = true>
-bool fabric_set_unicast_route(volatile tt_l1_ptr LowLatencyPacketHeader* packet_header, uint16_t target_num) {
+int fabric_set_unicast_route(volatile tt_l1_ptr LowLatencyPacketHeader* packet_header, uint16_t target_num) {
     if constexpr (compressed) {
         if constexpr (target_as_dev) {
             return decode_route_to_buffer_by_dev(target_num, (volatile uint8_t*)&packet_header->routing_fields.value);

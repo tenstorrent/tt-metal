@@ -756,6 +756,8 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             return downstream_edm_interfaces_vc0[edm_index];
         }
     };
+    auto dump = reinterpret_cast<tt_l1_ptr uint32_t*>(ROUTING_PATH_BASE_1D);
+    dump[8] = hop_cmd;
 
     switch (hop_cmd) {
         case LowLatencyMeshRoutingFields::NOOP: break;
@@ -823,12 +825,23 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
             } else {
                 constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, SOUTH>();
+                dump[9] = 0xBBBB0000 | edm_index;
+                auto downstream_interface = get_downstream_interface.template operator()<edm_index>();
+                // while (true) {}
+                // if (packet_start->mcast_params_64 != 0) {
+                //     if (cached_routing_fields.hop_index == 0) {
+                // while (true) {}
+                //     }
+                // }
                 forward_payload_to_downstream_edm<enable_deadlock_avoidance, vc1_has_different_downstream_dest, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
                     get_downstream_interface.template operator()<edm_index>(),
-                    transaction_id);
+                    transaction_id,
+                    true);
+                dump[10] = 0xAAAAAAAA;
+                // dump[10] = 0xAAAAAAAA;
             }
             break;
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NS:
@@ -1309,6 +1322,18 @@ FORCE_INLINE void run_sender_channel_step_impl(
         if constexpr (!UPDATE_PKT_HDR_ON_RX_CH) {
             update_packet_header_before_eth_send<sender_channel_index>(pkt_header);
         }
+        auto dump = reinterpret_cast<tt_l1_ptr uint32_t*>(ROUTING_PATH_BASE_1D);
+#ifdef FABRIC_2D
+        // if (pkt_header->mcast_params_64 != 0 && pkt_header->route_buffer[0] ==
+        // LowLatencyMeshRoutingFields::FORWARD_SOUTH) {
+        //     dump[0] = pkt_header->route_buffer[0];
+        //     dump[1] = pkt_header->route_buffer[1];
+        //     dump[2] = pkt_header->route_buffer[2];
+        //     dump[3] = pkt_header->route_buffer[3];
+        //     dump[15] = 0xFFFFFFFF;
+        //     while (true) {}
+        // }
+#endif
         send_next_data<sender_channel_index, to_receiver_pkts_sent_id, SKIP_CONNECTION_LIVENESS_CHECK>(
             local_sender_channel,
             local_sender_channel_worker_interface,
@@ -1456,6 +1481,25 @@ FORCE_INLINE void run_receiver_channel_step_impl(
             hop_cmd = get_cmd_with_mesh_boundary_adjustment(packet_header, cached_routing_fields, routing_table);
             can_send_to_all_local_chip_receivers = can_forward_packet_completely<receiver_channel>(
                 hop_cmd, downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
+            if (packet_header->mcast_params_64 != 0) {
+                auto dump = reinterpret_cast<tt_l1_ptr uint32_t*>(ROUTING_PATH_BASE_1D);
+                dump[0] = packet_header->route_buffer[0];
+                dump[1] = packet_header->route_buffer[1];
+                dump[2] = packet_header->route_buffer[2];
+                dump[3] = packet_header->route_buffer[3];
+                dump[4] = 0xDDDDDDDD;
+                dump[5] = cached_routing_fields.hop_index;
+                dump[6] = hop_cmd;
+                dump[7] = can_send_to_all_local_chip_receivers;
+                dump[12] = packet_header->routing_fields.branch_east_offset << 16 |
+                           packet_header->routing_fields.branch_west_offset;
+                dump[13] = routing_table.my_mesh_id << 16 | routing_table.my_device_id;
+                dump[14] = packet_header->dst_start_mesh_id << 16 | packet_header->dst_start_chip_id;
+                if (cached_routing_fields.hop_index == 0) {
+                    dump[11] = 0xdead0000;
+                    // while (true) {}
+                }
+            }
 #endif
         } else {
 #ifndef FABRIC_2D
