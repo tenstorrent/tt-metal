@@ -351,6 +351,8 @@ std::map<std::string, std::string> get_defines_fp32(
         case BinaryOpType::SQUARED_DIFFERENCE:
             if (input_a_dtype == DataType::INT32 && input_b_dtype == DataType::INT32) {
                 op_name = "sub_int32_tile";
+            } else if (input_a_dtype == DataType::UINT32 && input_b_dtype == DataType::UINT32) {
+                op_name = "sub_uint32_tile";
             } else if (input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) {
                 op_name = "sub_uint16_tile";
             } else {

@@ -23,6 +23,7 @@ struct ExecuteGridSample {
      *   grid: Sampling grid of shape (N, H_out, W_out, 2) with coordinates in [-1, 1]
      *   mode: Interpolation mode, currently only "bilinear" is supported
      *   padding_mode: How to handle out-of-bounds coordinates, currently only "zeros" is supported
+     *   align_corners: Whether to align corners when mapping normalized coordinates to pixel indices
      *   use_precomputed_grid: Whether to use precomputed grid coordinates, currently only false is supported
      *   memory_config: Memory configuration for the output tensor
      *
@@ -34,6 +35,7 @@ struct ExecuteGridSample {
         const ttnn::Tensor& grid,
         const std::string& mode = "bilinear",
         const std::string& padding_mode = "zeros",
+        bool align_corners = false,
         bool use_precomputed_grid = false,
         bool batch_output_channels = false,
         const std::optional<MemoryConfig>& memory_config = std::nullopt);
