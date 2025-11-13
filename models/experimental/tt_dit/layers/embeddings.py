@@ -462,3 +462,16 @@ class WanPatchEmbed(Module):
         )
 
         return latent_1BND
+
+
+class Embedding(Module):
+    def __init__(self, num_embeddings: int, embedding_dim: int, *, device: ttnn.MeshDevice) -> None:
+        super().__init__()
+
+        self.weight = Parameter(total_shape=[num_embeddings, embedding_dim], device=device)
+
+        self.num_embeddings = num_embeddings
+        self.embedding_dim = embedding_dim
+
+    def forward(self, x: ttnn.Tensor, /) -> ttnn.Tensor:
+        return ttnn.embedding(x, self.weight.data, layout=ttnn.TILE_LAYOUT)
