@@ -3,6 +3,15 @@ name: "(T3K) Choose your pipeline"
 on:
   workflow_dispatch:
     inputs:
+      trigger_type:
+        description: "Trigger type. 'manual' = custom selection below; other options = predefined configs. ⚠️ Resource intensive!"
+        required: true
+        type: choice
+        options:
+          - manual
+          - model-pr
+          - models-accuracy
+        default: "manual"
       build-type:
         required: false
         type: choice
@@ -49,18 +58,76 @@ on:
 
 run-name: ${{ inputs.description }}
 jobs:
+  # Centralized logic to determine what should run
+  determine-tests:
+    runs-on: ubuntu-latest
+    outputs:
+      run-unit: ${{ steps.logic.outputs.run-unit }}
+      run-demo: ${{ steps.logic.outputs.run-demo }}
+      run-frequent: ${{ steps.logic.outputs.run-frequent }}
+      run-nightly: ${{ steps.logic.outputs.run-nightly }}
+      run-model-perf: ${{ steps.logic.outputs.run-model-perf }}
+      run-profiler: ${{ steps.logic.outputs.run-profiler }}
+      run-perplexity: ${{ steps.logic.outputs.run-perplexity }}
+    steps:
+      - name: Determine test execution
+        id: logic
+        run: |
+          case "${{ inputs.trigger_type }}" in
+            "manual")
+            # TODO: adapt to binary or choice types
+              echo "run-unit=${{ inputs.t3000-unit }}" >> $GITHUB_OUTPUT
+              echo "run-demo=${{ inputs.t3000-demo != 'disabled' }}" >> $GITHUB_OUTPUT
+              echo "run-frequent=${{ inputs.t3000-frequent }}" >> $GITHUB_OUTPUT
+              echo "run-nightly=${{ inputs.t3000-nightly }}" >> $GITHUB_OUTPUT
+              echo "run-model-perf=${{ inputs.t3000-model-perf }}" >> $GITHUB_OUTPUT
+              echo "run-profiler=${{ inputs.t3000-profiler }}" >> $GITHUB_OUTPUT
+              echo "run-perplexity=${{ inputs.t3000-perplexity }}" >> $GITHUB_OUTPUT
+              ;;
+            "model-pr")
+              echo "run-unit=false" >> $GITHUB_OUTPUT
+              echo "run-demo=false" >> $GITHUB_OUTPUT
+              echo "run-frequent=false" >> $GITHUB_OUTPUT
+              echo "run-nightly=false" >> $GITHUB_OUTPUT
+              echo "run-model-perf=false" >> $GITHUB_OUTPUT
+              echo "run-profiler=false" >> $GITHUB_OUTPUT
+              echo "run-perplexity=false" >> $GITHUB_OUTPUT
+              ;;
+            "models-accuracy")
+              echo "run-unit=false" >> $GITHUB_OUTPUT
+              echo "run-demo=false" >> $GITHUB_OUTPUT
+              echo "run-frequent=false" >> $GITHUB_OUTPUT
+              echo "run-nightly=false" >> $GITHUB_OUTPUT
+              echo "run-model-perf=false" >> $GITHUB_OUTPUT
+              echo "run-profiler=false" >> $GITHUB_OUTPUT
+              echo "run-perplexity=false" >> $GITHUB_OUTPUT
+              ;;
+            *)
+              echo "run-quick=true" >> $GITHUB_OUTPUT
+
+              echo "run-unit=false" >> $GITHUB_OUTPUT
+              echo "run-demo=false" >> $GITHUB_OUTPUT
+              echo "run-frequent=false" >> $GITHUB_OUTPUT
+              echo "run-nightly=false" >> $GITHUB_OUTPUT
+              echo "run-model-perf=false" >> $GITHUB_OUTPUT
+              echo "run-profiler=false" >> $GITHUB_OUTPUT
+              echo "run-perplexity=false" >> $GITHUB_OUTPUT
+              ;;
+          esac
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
     secrets: inherit
+    needs: determine-tests
     with:
       version: 22.04
       build-type: ${{ inputs.build-type }}
       build-wheel: true
-      tracy: true
+      tracy: ${{ needs.determine-tests.outputs.run-model-perf == 'true' }}
   t3000-unit-tests:
-    needs: build-artifact
+    if: ${{ needs.determine-tests.outputs.run-unit == 'true' }}
+    needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/t3000-unit-tests-impl.yaml
     with:
@@ -68,9 +135,9 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-    if: ${{ inputs.t3000-unit }}
   t3000-demo-tests:
-    needs: build-artifact
+    if: ${{ needs.determine-tests.outputs.run-demo == 'true' }}
+    needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/t3000-demo-tests-impl.yaml
     with:
@@ -78,9 +145,9 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-    if: ${{ inputs.t3000-demo }}
   t3000-frequent-tests:
-    needs: build-artifact
+    if: ${{ needs.determine-tests.outputs.run-frequent == 'true' }}
+    needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/t3000-frequent-tests-impl.yaml
     with:
@@ -90,7 +157,8 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
     if: ${{ inputs.t3000-frequent }}
   t3000-nightly-tests:
-    needs: build-artifact
+    if: ${{ needs.determine-tests.outputs.run-nightly == 'true' }}
+    needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/t3000-nightly-tests-impl.yaml
     with:
@@ -98,9 +166,9 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-    if: ${{ inputs.t3000-nightly }}
   t3000-model-perf-tests:
-    needs: build-artifact
+    if: ${{ needs.determine-tests.outputs.run-model-perf == 'true' }}
+    needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/t3000-model-perf-tests-impl.yaml
     with:
@@ -108,9 +176,9 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-    if: ${{ inputs.t3000-model-perf }}
   t3000-profiler-tests:
-    needs: build-artifact
+    if: ${{ needs.determine-tests.outputs.run-profiler == 'true' }}
+    needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/profiler-tests-impl.yaml
     with:
@@ -120,9 +188,9 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       topology: config-t3000
       test-script: ./tests/scripts/t3000/run_t3000_profiler_tests.sh
-    if: ${{ inputs.t3000-profiler }}
   t3000-perplexity-tests:
-    needs: build-artifact
+    if: ${{ needs.determine-tests.outputs.run-perplexity == 'true' }}
+    needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/t3000-perplexity-tests-impl.yaml
     with:
@@ -130,4 +198,3 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-    if: ${{ inputs.t3000-perplexity }}
