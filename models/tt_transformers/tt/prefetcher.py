@@ -1,0 +1,278 @@
+import math
+from dataclasses import dataclass
+from typing import List, Optional, Union
+
+import torch
+
+import ttnn
+from models.common.lightweightmodule import LightweightModule
+from models.common.utility_functions import is_blackhole, is_wormhole_b0
+
+
+@dataclass
+class PrefetcherCoreConfig:
+    """
+    Defines the core locations of the sender cores and receiver cores of the prefetcher
+    """
+
+    num_receiver_cores: int
+    mesh_device: ttnn.MeshDevice
+
+    def __post_init__(self):
+        left_start_col = 1  # 0th column is the sender column (WH and BH)
+        left_end_col = 4 if is_wormhole_b0() else 6
+        right_start_col = (
+            5 if is_wormhole_b0() else 8
+        )  # 7th column is the sender column for BH, 4th column is the sender column for WH
+        right_end_col = 8 if is_wormhole_b0() else 12
+
+        def get_sender_range(active: Optional[bool] = None):
+            left_sender_range = ([] if active == False else [0, 4, 5, 9]) + (
+                [] if active == True else [1, 2, 3, 6, 7, 8]
+            )
+            right_sender_range = ([] if active == False else [0, 1, 2, 4] + [] if is_blackhole() else [5, 6, 7, 9]) + (
+                [] if active == True else [3, 5, 6, 7, 8, 9] if is_blackhole() else [3, 8]
+            )
+            return left_sender_range, right_sender_range
+
+        def get_receiver_range(active: Optional[bool] = None):
+            left_recv_range = (
+                [] if active == False else list(range(left_start_col, self.num_receiver_cores + left_start_col))
+            ) + ([] if active == True else list(range(self.num_receiver_cores + left_start_col, left_end_col)))
+            right_recv_range = (
+                [] if active == False else list(range(right_start_col, self.num_receiver_cores + right_start_col))
+            ) + ([] if active == True else list(range(self.num_receiver_cores + right_start_col, right_end_col)))
+            return left_recv_range, right_recv_range
+
+        # Prefetcher sender cores (cores adjacent to dram cores/banks)
+        def wh_sender_cores(active: Optional[bool] = None):
+            self.left_sender_range, self.right_sender_range = [list(r) for r in get_sender_range(active)]
+            return [ttnn.CoreCoord(0, i) for i in self.left_sender_range] + [
+                ttnn.CoreCoord(4, i) for i in self.right_sender_range
+            ]
+
+        def bh_sender_cores(active: Optional[bool] = None):
+            self.left_sender_range, self.right_sender_range = [list(r) for r in get_sender_range(active)]
+            return [ttnn.CoreCoord(0, i) for i in self.left_sender_range] + [
+                ttnn.CoreCoord(7, i) for i in self.right_sender_range
+            ]
+
+        # Prefetcher receiver cores (num_receiver_cores worker cores adjacent to sender cores)
+        def wh_receiver_cores(sender_active: Optional[bool] = None, receiver_active: Optional[bool] = None):
+            self.left_sender_range, self.right_sender_range = get_sender_range(sender_active)
+            self.left_recv_range, self.right_recv_range = get_receiver_range(receiver_active)
+            return [
+                ttnn.CoreRange(ttnn.CoreCoord(self.left_recv_range[0], i), ttnn.CoreCoord(self.left_recv_range[-1], i))
+                for i in self.left_sender_range
+            ] + [
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(self.right_recv_range[0], i), ttnn.CoreCoord(self.right_recv_range[-1], i)
+                )
+                for i in self.right_sender_range
+            ]
+
+        def bh_receiver_cores(sender_active: Optional[bool] = None, receiver_active: Optional[bool] = None):
+            self.left_sender_range, self.right_sender_range = get_sender_range(sender_active)
+            self.left_recv_range, self.right_recv_range = get_receiver_range(receiver_active)
+            return [
+                ttnn.CoreRange(ttnn.CoreCoord(self.left_recv_range[0], i), ttnn.CoreCoord(self.left_recv_range[-1], i))
+                for i in self.left_sender_range
+            ] + [
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(self.right_recv_range[0], i), ttnn.CoreCoord(self.right_recv_range[-1], i)
+                )
+                for i in self.right_sender_range
+            ]
+
+        self.sender_cores = wh_sender_cores if is_wormhole_b0() else bh_sender_cores
+        self.receiver_cores = wh_receiver_cores if is_wormhole_b0() else bh_receiver_cores
+
+
+### Helper class to manage subdevices for the Prefetcher
+# The class PrefetcherSubDevice provides an interface for creating subdevices
+class PrefetcherSubDevice:
+    def __init__(self, mesh_device):
+        self.mesh_device = mesh_device
+        self.num_sub_devices = 0
+        self.sub_devices: List[ttnn.SubDevice] = []
+        self.sub_devices_id: List[ttnn.SubDeviceId] = []
+
+    def add_sub_device(self, core_range_set: ttnn.CoreRangeSet):
+        self.sub_devices.append(ttnn.SubDevice([core_range_set]))
+        self.sub_devices_id.append(ttnn.SubDeviceId(len(self.sub_devices_id)))
+
+    def init_sub_device_manager(self):
+        assert len(self.sub_devices) > 0, "No subdevices have been created. Cannot create sub device manager."
+        self.manager_id = self.mesh_device.create_sub_device_manager(self.sub_devices, 0)
+        self.mesh_device.load_sub_device_manager(self.manager_id)
+        self.mesh_device.set_sub_device_stall_group(self.sub_devices_id)
+
+
+class Prefetcher(LightweightModule):
+    def __init__(
+        self, mesh_device: ttnn.MeshDevice, num_tensors: int, num_receiver_cores: int, num_layers: int, mode: str
+    ):
+        """
+        Prefetcher class that prefetches tensors from DRAM to
+        """
+        ### Device, Global CB, Parameters
+        self.global_cb = None
+        self.mesh_device = mesh_device
+        self.num_tensors = num_tensors
+        self.num_layers = num_layers
+        self.enable_performance_mode = True
+        self.worker_sub_device_id = None
+        self.global_cb_size = 0
+        self.num_receiver_cores = num_receiver_cores
+        self.max_num_receiver_cores = 6 if is_blackhole() else 3
+        self.ring_size = num_receiver_cores * self.mesh_device.dram_grid_size().x
+        assert (
+            self.num_receiver_cores < self.max_num_receiver_cores
+        ), f"Number of receiver cores {self.num_receiver_cores} is greater than the maximum number of receiver cores {self.max_num_receiver_cores}"
+        self.width_cores = self.mesh_device.compute_with_storage_grid_size().x
+        self.height_cores = self.mesh_device.compute_with_storage_grid_size().y
+        # Only ring size of 24 has been tested on WH
+
+        ### Prefetcher Subdevices
+        self.prefetcher_sub_device = PrefetcherSubDevice(self.mesh_device)
+
+        ### Prefetched Tensors
+        self.prefetched_tensors = []
+        self.prefetched_tensor_addr = []
+        self.prefetched_tt_addr_tensor = None
+
+        ### Core Ranges
+        self.sender_cores = None
+        self.receiver_cores = None
+        self.all_cores = None
+
+        ### Initialize sub device manager
+        self.init(mode)
+        self.worker_sub_device_id = self.prefetcher_sub_device.sub_devices_id[-1]
+
+    def to_core_range_set(
+        self, cores: Union[List[ttnn.CoreCoord], List[ttnn.CoreRange]], return_list: bool = False
+    ) -> ttnn.CoreRangeSet:
+        if isinstance(cores[0], ttnn.CoreCoord):
+            return ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in cores])
+        elif isinstance(cores[0], ttnn.CoreRange):
+            if return_list:  # Return a list of CoreRangeSets (used for creating sender receiver mapping)
+                return [ttnn.CoreRangeSet([core]) for core in cores]
+            else:  # Return a single CoreRangeSet
+                return ttnn.CoreRangeSet(cores)
+        else:
+            raise ValueError(f"Provided cores {cores} is not a list of CoreCoords or CoreRanges")
+
+    def init(self, mode: str = "decode") -> None:
+        """ """
+        # Get the sender and receiver cores
+        self.sender_cores = PrefetcherCoreConfig(
+            num_receiver_cores=self.num_receiver_cores, mesh_device=self.mesh_device
+        ).sender_cores
+
+        self.receiver_cores = PrefetcherCoreConfig(
+            num_receiver_cores=self.num_receiver_cores, mesh_device=self.mesh_device
+        ).receiver_cores
+
+        self.all_cores = [ttnn.CoreCoord(i, j) for i in range(self.width_cores) for j in range(self.height_cores)]
+        self.all_sender_cores = [ttnn.CoreCoord(0, i) for i in range(self.height_cores)] + [
+            ttnn.CoreCoord(7, i) for i in range(self.height_cores)
+        ]
+        self.all_worker_cores = [ttnn.CoreCoord(j, i) for i in range(self.height_cores) for j in range(1, 7)] + [
+            ttnn.CoreCoord(j, i) for i in range(self.height_cores) for j in range(8, self.width_cores)
+        ]
+
+        self.sender_receiver_mapping = list(
+            zip(
+                self.sender_cores(active=True),
+                self.to_core_range_set(self.receiver_cores(sender_active=None, receiver_active=True), return_list=True),
+            )
+        )
+        breakpoint()
+        match mode:
+            case "decode":
+                self.prefetcher_sub_device.add_sub_device(self.to_core_range_set(self.sender_cores(active=True)))
+                self.prefetcher_sub_device.add_sub_device(
+                    self.to_core_range_set(self.receiver_cores(sender_active=None, receiver_active=True))
+                )
+                breakpoint()
+                self.prefetcher_sub_device.init_sub_device_manager()
+            case "prefill":
+                self.prefetcher_sub_device.add_sub_device(self.to_core_range_set(self.all_cores))
+                self.prefetcher_sub_device.init_sub_device_manager()
+            case _:
+                raise ValueError(f"Provided mode {mode} is not supported, only `prefill` and `decode` are supported")
+
+    def create_address_tensor(self):
+        """
+        Creates a ttnn tensor which holds the addresses of the tensors to be prefetched
+        The addresses are replicated on each sender core
+        """
+        assert (
+            len(self.prefetched_tensor_addr) == self.num_tensors * self.num_layers,
+            "No tensor addresses have been inserted",
+        )
+        tensor_addrs = torch.tensor(self.prefetched_tensor_addr)
+        tensor_addrs = tensor_addrs.repeat(self.mesh_device.dram_grid_size().x, 1)
+        tensor_addrs_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                self.to_core_range_set(self.sender_cores(active=True)),
+                [tensor_addrs.shape[0] // self.mesh_device.dram_grid_size().x, tensor_addrs.shape[1]],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+        tt_tensor_addrs = ttnn.as_tensor(
+            tensor_addrs,
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            memory_config=tensor_addrs_mem_config,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        return tt_tensor_addrs
+
+    def insert_tensor(self, tensor: ttnn.Tensor):
+        """
+        Populates the tensor addressess that need to be prefetched
+        """
+        # breakpoint()
+        bytes_in_tile = {ttnn.bfloat4_b: 576, ttnn.bfloat8_b: 1088, ttnn.bfloat16: 2048}
+        self.global_cb_size += (
+            math.ceil(tensor.volume() / (ttnn.TILE_SIZE * ttnn.TILE_SIZE)) * bytes_in_tile[tensor.dtype] * 2
+        )  # Double buffered weights
+        self.prefetched_tensors.append(tensor)
+        self.prefetched_tensor_addr.append(tensor.buffer_address())
+
+    def run(self):
+        """
+        Start prefetching weights into global CB with dram_prefetcher op
+        """
+        # Create global cb buffer if it was not
+        breakpoint()
+        if self.global_cb is None:
+            self.global_cb_size = 896 * 1088
+            self.global_cb = ttnn.create_global_circular_buffer(
+                self.mesh_device,
+                self.sender_receiver_mapping,
+                self.global_cb_size,
+            )
+
+        # Create address tensor if it was not created yet
+        if self.prefetched_tt_addr_tensor is None:
+            self.prefetched_tt_addr_tensor = self.create_address_tensor()
+
+        # Run prefetcher op
+        self.garbage = ttnn.dram_prefetcher(
+            self.prefetched_tensors[: self.num_tensors] + [self.prefetched_tt_addr_tensor],
+            num_layers=self.num_layers,
+            global_cb=self.global_cb,
+            enable_performance_mode=self.enable_performance_mode,
+        )
+        # Set worker sub device stall group
+        self.mesh_device.set_sub_device_stall_group([self.prefetcher_sub_device.sub_devices_id[-1]])
+        return
+
+    def stop(self):
+        ttnn.deallocate(self.garbage)
+        return
