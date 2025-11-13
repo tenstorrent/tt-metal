@@ -14,7 +14,6 @@
 #include "tt-metalium/bfloat16.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
-#include "ttnn/tensor/layout/layout.hpp"
 #include "ttnn/tensor/types.hpp"
 
 namespace ttml::nanobind::util {

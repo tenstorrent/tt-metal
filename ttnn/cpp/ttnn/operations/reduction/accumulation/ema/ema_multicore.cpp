@@ -15,6 +15,7 @@
 namespace ttnn::operations::reduction::accumulation {
 
 constexpr auto ema_buffer_depth = 2;
+using namespace tt::tt_metal;
 
 tt::tt_metal::operation::ProgramWithCallbacks ema_multi_core(
     const Tensor& a,

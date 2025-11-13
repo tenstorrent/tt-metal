@@ -4,7 +4,7 @@
 
 #include <gtest/gtest.h>
 
-#include <ttnn/tensor/xtensor/xtensor_all_includes.hpp>
+#include <tt-metalium/tensor/xtensor/xtensor_all_includes.hpp>
 
 #include "core/xtensor_utils.hpp"
 

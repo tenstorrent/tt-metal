@@ -6,7 +6,6 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/untilize/untilize.hpp"
 #include "ttnn/operations/functions.hpp"
-#include "ttnn/tensor/layout/layout.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/experimental/slice_write/slice_write.hpp"

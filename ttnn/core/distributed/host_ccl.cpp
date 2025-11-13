@@ -10,11 +10,11 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/system_mesh.hpp>
-#include <ttnn/tensor/storage.hpp>
+
 #include <ttnn/tensor/tensor.hpp>
 
 #include "tt_stl/span.hpp"
-#include "ttnn/tensor/tensor_impl.hpp"
+#include <tt-metalium/tensor/tensor_impl.hpp>
 
 namespace ttnn::distributed::host_ccl {
 
@@ -42,7 +42,8 @@ Tensor all_gather(const Tensor& tensor) {
     constexpr int kShardAbsent = 0;
 
     // Note the use of `std::set` is required to ensure the ordering of the shard coordinates.
-    const std::set<distributed::MeshCoordinate>& shard_coords = tensor.host_storage().buffer().shard_coords();
+    const std::set<tt::tt_metal::distributed::MeshCoordinate>& shard_coords =
+        tensor.host_storage().buffer().shard_coords();
     std::vector<int> local_shard_info;
     local_shard_info.reserve(1 + shard_coords.size());
     local_shard_info.push_back(this_rank);

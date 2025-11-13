@@ -10,11 +10,10 @@
 #include <tt-metalium/buffer_types.hpp>
 #include "gtest/gtest.h"
 #include <tt-metalium/shape.hpp>
-#include "ttnn/tensor/layout/page_config.hpp"
-#include "ttnn/tensor/layout/tensor_layout.hpp"
+
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/tensor_spec.hpp"
+
 #include "ttnn/tensor/types.hpp"
 #include "ttnn_test_fixtures.hpp"
 

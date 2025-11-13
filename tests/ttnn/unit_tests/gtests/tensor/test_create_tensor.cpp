@@ -22,13 +22,12 @@
 #include <tt-metalium/shape.hpp>
 #include "ttnn/async_runtime.hpp"
 #include "ttnn/common/queue_id.hpp"
-#include "ttnn/tensor/layout/page_config.hpp"
-#include "ttnn/tensor/layout/tensor_layout.hpp"
+
 #include "ttnn/tensor/shape/shape.hpp"
-#include "ttnn/tensor/storage.hpp"
+
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/tensor_impl.hpp"
-#include "ttnn/tensor/tensor_spec.hpp"
+#include <tt-metalium/tensor/tensor_impl.hpp>
+
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn_test_fixtures.hpp"

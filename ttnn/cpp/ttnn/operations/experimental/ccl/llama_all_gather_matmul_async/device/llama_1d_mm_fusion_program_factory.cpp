@@ -17,6 +17,7 @@
 #include "ttnn/operations/compute_throttle_utils.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/tensor/tensor_utils.hpp>
 
 using namespace tt;
 using namespace tt::constants;

@@ -6,7 +6,7 @@
 
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
+#include "tt-metalium/tensor/tensor_utils.hpp"
 #include "tools/profiler/op_profiler.hpp"
 
 using namespace tt::tt_metal;
@@ -120,7 +120,7 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
             computed_output_shape,
             preallocated_output_shape);
 
-        if(!input_tensor.is_sharded()){
+        if (!input_tensor.is_sharded()) {
             TT_FATAL(
                 (preallocated_output_tensor.value().layout() == Layout::TILE),
                 "Unary operation requires output tensor to be in Tile layout when working with non-sharded tensor.");
@@ -158,11 +158,7 @@ tt::stl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
 
     auto program_factory = select_program_factory(args, tensor_args);
     operation::Hash hash = operation::hash_operation<UnaryDeviceOperation>(
-        args,
-        program_factory.index(),
-        input_tensor.dtype(),
-        input_tensor.memory_config(),
-        input_shape.volume());
+        args, program_factory.index(), input_tensor.dtype(), input_tensor.memory_config(), input_shape.volume());
 
     return hash;
 }

@@ -11,7 +11,6 @@
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <ttnn/tensor/tensor.hpp>
-#include <ttnn/tensor/layout/tensor_layout.hpp>
 #include <ttnn/distributed/distributed_tensor.hpp>
 #include <ttnn/distributed/api.hpp>
 #include <ttnn/distributed/host_ccl.hpp>

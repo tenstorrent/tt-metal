@@ -11,7 +11,7 @@
 
 #include <vector>
 
-#include "ttnn/tensor/xtensor/conversion_utils.hpp"
+#include <tt-metalium/tensor/xtensor/conversion_utils.hpp>
 
 namespace ttnn {
 namespace {

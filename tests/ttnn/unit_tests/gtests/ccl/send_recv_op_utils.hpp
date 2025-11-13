@@ -5,7 +5,6 @@
 #pragma once
 
 #include <array>
-#include "ttnn/tensor/tensor_spec.hpp"
 
 namespace tt::tt_metal {
 

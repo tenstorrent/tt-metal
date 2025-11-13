@@ -1,9 +1,13 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
-
 #pragma once
+#include <tt-metalium/tensor/tensor.hpp>
+#include <tt-metalium/tensor/types.hpp>
+#include <ttnn/tensor/types.hpp>
 
+#ifdef false  // TODO: Remove when migration to tt-metal is complete
+              // https://github.com/tenstorrent/tt-metal/issues/32315
 #include <array>
 #include <random>
 #include <tuple>
@@ -69,7 +73,8 @@ public:
     [[nodiscard]] Tensor(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
 
     // Constructors of `Tensor` that take physical data encoded in `HostBuffer`.
-    // The encoded data type and physical size of the data must match the specified tensor physical shape and data type.
+    // The encoded data type and physical size of the data must match the specified tensor physical shape and data
+    // type.
     [[nodiscard]] Tensor(
         HostBuffer buffer,
         const tt::tt_metal::Shape& shape,
@@ -86,8 +91,9 @@ public:
     [[nodiscard]] Tensor(HostBuffer buffer, TensorSpec tensor_spec);
 
     // Converts a buffer of elements of type `T` to a `Tensor`.
-    // Elements in the buffer are assumed to be stored in row-major order. The size of the buffer and the type of the
-    // elements have to match `spec`; block float formats such as BFLOAT8_B and BFLOAT4_B require `T` equal `float`.
+    // Elements in the buffer are assumed to be stored in row-major order. The size of the buffer and the type of
+    // the elements have to match `spec`; block float formats such as BFLOAT8_B and BFLOAT4_B require `T` equal
+    // `float`.
     //
     // The data in the buffer is copied into a tensor with host storage.
     template <typename T>
@@ -100,8 +106,8 @@ public:
 
     // Creates a `Tensor` with storage "borrowed" from the buffer of elements of type `T`.
     //
-    // The primary use case for this API is to interop with Python, where `MemoryPin` can be set to retain the lifetime
-    // of the Python object that owns the underlying data. For example, in pybind11:
+    // The primary use case for this API is to interop with Python, where `MemoryPin` can be set to retain the
+    // lifetime of the Python object that owns the underlying data. For example, in pybind11:
     //
     // py::object py_tensor = ...;
     // MemoryPin py_data_pin(std::make_shared<py::object>(py_tensor));
@@ -154,8 +160,8 @@ public:
         T pad_value = 0);
 
     // Converts a `Tensor` to a `std::vector<T>`.
-    // Elements in the vector will be stored in row-major order. The type of the requested vector has to match that of
-    // the `Tensor`; block float formats such as BFLOAT8_B and BFLOAT4_B require `T` equal `float`.
+    // Elements in the vector will be stored in row-major order. The type of the requested vector has to match that
+    // of the `Tensor`; block float formats such as BFLOAT8_B and BFLOAT4_B require `T` equal `float`.
     //
     // If the tensor resides on a device, it will be brough back to host.
     template <typename T>
@@ -320,8 +326,8 @@ void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& r
 // Allocates a tensor on device.
 Tensor allocate_tensor_on_device(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device);
 
-// Allocates a tensor on host. Uses `mesh_device` to allocate sufficient number of host buffers for each multi-device
-// shard.
+// Allocates a tensor on host. Uses `mesh_device` to allocate sufficient number of host buffers for each
+// multi-device shard.
 Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device);
 
 // Writes tensor from `src` to `dst`; supports only host-to-device and device-to-host transfers.
@@ -341,6 +347,8 @@ Tensor to_dtype(const Tensor& tensor, DataType dtype);
 }  // namespace tt_metal
 
 }  // namespace tt
+
+#endif
 
 namespace ttnn {
 

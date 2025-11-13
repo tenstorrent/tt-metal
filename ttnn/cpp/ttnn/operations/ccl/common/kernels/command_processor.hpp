@@ -10,8 +10,6 @@
 #include "ttnn/operations/ccl/common/uops/ccl_command_device.hpp"
 #include "ttnn/operations/ccl/common/types/ccl_types.hpp"
 
-#include "api/ttnn/tensor/layout/layout.hpp"
-
 #include "dataflow_api.h"  // for interleaved addrgen
 #include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 #include "ttnn/operations/ccl/common/interpreter_backends/kernel_common/algorithms.hpp"
@@ -22,7 +20,7 @@ using address_t = uint32_t;
 #ifdef DEBUG_PRINT_ENABLED
 #include "debug/dprint.h"
 
-void dprint(ttnn::ccl::cmd::CclCommandTensor const& command_tensor) {
+void dprint(const ttnn::ccl::cmd::CclCommandTensor& command_tensor) {
     DPRINT << "\ttensor_shape.w: " << (uint32_t)command_tensor.tensor_shape.w << "\n";
     DPRINT << "\ttensor_shape.z: " << (uint32_t)command_tensor.tensor_shape.z << "\n";
     DPRINT << "\ttensor_shape.y: " << (uint32_t)command_tensor.tensor_shape.y << "\n";
@@ -43,7 +41,7 @@ void dprint(ttnn::ccl::cmd::CclCommandTensor const& command_tensor) {
 }
 #endif
 
-void print_tensor_command(uint32_t command_index, ttnn::ccl::cmd::CclCommandTensor const& command_tensor) {
+void print_tensor_command(uint32_t command_index, const ttnn::ccl::cmd::CclCommandTensor& command_tensor) {
 #ifdef DEBUG_PRINT_ENABLED
     DPRINT << "cmd[" << (uint32_t)command_index << "]:\n";
     dprint(command_tensor);
@@ -54,30 +52,33 @@ void print_tensor_command(uint32_t command_index, ttnn::ccl::cmd::CclCommandTens
  * Convert a flattened worker offset coord value (assumed 0,0,0, worker offset in pages into tensor slice)
  * into a 4D coordinate value
  */
-FORCE_INLINE shape_t worker_wrapped_offset_to_coord(shape_t const& slice_shape, shape_t const& worker_slice_offset) {
+FORCE_INLINE shape_t worker_wrapped_offset_to_coord(const shape_t& slice_shape, const shape_t& worker_slice_offset) {
     static_assert(
-        sizeof(ttnn::ccl::coord_t) == 2 * sizeof(uint32_t), "worker_wrapped_offset_to_coord not updated to work with 4d shape");
-    auto const y = worker_slice_offset.x / slice_shape.x;
+        sizeof(ttnn::ccl::coord_t) == 2 * sizeof(uint32_t),
+        "worker_wrapped_offset_to_coord not updated to work with 4d shape");
+    const auto y = worker_slice_offset.x / slice_shape.x;
     return shape_t(0, 0, y, worker_slice_offset.x - (y * slice_shape.x));
 }
-
-
 
 namespace v2 {
 /*
  * Convert a flattened worker offset coord value (assumed 0,0,0, worker offset in pages into tensor slice)
  * into a 4D coordinate value
  */
-FORCE_INLINE shape_t worker_wrapped_offset_to_coord(shape_t const& slice_shape, shape_t const& worker_slice_offset) {
+FORCE_INLINE shape_t worker_wrapped_offset_to_coord(const shape_t& slice_shape, const shape_t& worker_slice_offset) {
     static_assert(
-        sizeof(ttnn::ccl::coord_t) == 2 * sizeof(uint32_t), "worker_wrapped_offset_to_coord not updated to work with 4d shape");
-    auto const y = worker_slice_offset.x / slice_shape.x;
+        sizeof(ttnn::ccl::coord_t) == 2 * sizeof(uint32_t),
+        "worker_wrapped_offset_to_coord not updated to work with 4d shape");
+    const auto y = worker_slice_offset.x / slice_shape.x;
     return shape_t(0, 0, y, worker_slice_offset.x - (y * slice_shape.x));
 }
 
 }  // namespace v2
 
-template <tt::tt_metal::TensorMemoryLayout tensor_layout, tt::tt_metal::BufferType buffer_type, tt::tt_metal::Layout page_layout>
+template <
+    tt::tt_metal::TensorMemoryLayout tensor_layout,
+    tt::tt_metal::BufferType buffer_type,
+    tt::tt_metal::Layout page_layout>
 struct source_tensor_addrgen {
     static constexpr char name[] = "Uninitialized";
 };

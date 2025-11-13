@@ -10,7 +10,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
+#include "tt-metalium/tensor/tensor_utils.hpp"
 
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/run_operation.hpp"

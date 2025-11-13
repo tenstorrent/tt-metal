@@ -4,7 +4,7 @@
 
 #include "untilize_with_unpadding_op.hpp"
 
-#include "ttnn/tensor/tensor_utils.hpp"
+#include "tt-metalium/tensor/tensor_utils.hpp"
 #include "ttnn/run_operation.hpp"
 #include "untilize_with_unpadding_program_factory.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"

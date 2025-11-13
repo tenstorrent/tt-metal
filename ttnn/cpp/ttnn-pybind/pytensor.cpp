@@ -23,7 +23,7 @@
 #include <pybind11/stl.h>
 #include <pybind11/numpy.h>
 
-#include "ttnn/tensor/tensor_impl_wrapper.hpp"
+#include <tt-metalium/tensor/tensor_impl_wrapper.hpp>
 #include "tools/profiler/op_profiler.hpp"
 #include "ttnn-pybind/small_vector_caster.hpp"  // NOLINT - for pybind11 SmallVector binding support.
 #include "ttnn/common/queue_id.hpp"
@@ -33,10 +33,11 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/tensor_impl.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/to_string.hpp"
+
+#include "tt-metalium/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
-#include "ttnn/tensor/storage.hpp"
+
 #include <tt-metalium/graph_tracking.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tt_stl/overloaded.hpp>

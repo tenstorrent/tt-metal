@@ -4,7 +4,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include "ttnn/operations/math.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
+#include "tt-metalium/tensor/tensor_utils.hpp"
 #include "ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_op.hpp"
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 
