@@ -17,3 +17,4 @@
 #include "ops/softmax/softmax.hpp"
 #include "ops/swiglu_fw/swiglu_fw.hpp"
 #include "optimizers/sgd_fused/sgd_fused.hpp"
+#include "optimizers/adamw_fused/adamw_fused.hpp"
