@@ -50,6 +50,7 @@ public:
 void DispatchData::Update(uint32_t transaction_size, std::optional<HalProcessorIdentifier> processor) {
     data[processor][transaction_size]++;
 }
+
 void DispatchData::Merge(const DispatchData& other) {
     for (auto& [processor, processor_data] : other.data) {
         for (auto& [size, count] : processor_data) {
@@ -125,6 +126,10 @@ void DataCollector::RecordKernelGroup(
 void DataCollector::RecordProgramRun(uint64_t program_id) { program_id_to_call_count[program_id]++; }
 
 void DataCollector::DumpData() {
+    if (program_id_to_dispatch_data.empty() && program_id_to_kernel_groups.empty() &&
+        program_id_to_call_count.empty()) {
+        return;
+    }
     std::ofstream outfile = std::ofstream("dispatch_data.txt");
 
     // Extra DispatchData objects to collect data across programs
