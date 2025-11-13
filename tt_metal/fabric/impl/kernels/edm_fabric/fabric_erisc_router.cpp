@@ -2247,15 +2247,6 @@ constexpr uint32_t edm_index_to_edm_direction[eth_chan_directions::COUNT][NUM_DO
     {eth_chan_directions::EAST, eth_chan_directions::WEST, eth_chan_directions::SOUTH},   // NORTH router
     {eth_chan_directions::EAST, eth_chan_directions::WEST, eth_chan_directions::NORTH},   // SOUTH router
 };
-#else
-// 1D fabric: only 1 downstream sender per direction (linear topology)
-constexpr uint32_t edm_index_to_edm_direction[eth_chan_directions::COUNT][NUM_DOWNSTREAM_SENDERS_VC0] = {
-    {eth_chan_directions::WEST},  // EAST router forwards to WEST (downstream in 1D line)
-    {0},                          // WEST router (end of line, not typically used as forwarder)
-    {0},                          // NORTH not used in 1D
-    {0},                          // SOUTH not used in 1D
-};
-#endif
 
 constexpr uint32_t get_vc0_downstream_sender_channel_free_slots_stream_id(uint32_t edm_index) {
     auto ds_edm_direction = edm_index_to_edm_direction[my_direction][edm_index];
@@ -2265,6 +2256,7 @@ constexpr uint32_t get_vc0_downstream_sender_channel_free_slots_stream_id(uint32
         return sender_channel_free_slots_stream_ids[(1 + my_direction)];
     }
 }
+#endif
 
 constexpr uint32_t get_vc1_downstream_sender_channel_free_slots_stream_id() {
     return sender_channel_free_slots_stream_ids[sender_channel_free_slots_stream_ids.size() - 1];
@@ -2709,52 +2701,52 @@ void kernel_main() {
 #else
                 auto receiver_channel_free_slots_stream_id = StreamId{receiver_channel_free_slots_stream_ids[0]};
 #endif
-                new (&downstream_edm_noc_interfaces_vc0[compact_index]) RouterToRouterSender<
-                    DOWNSTREAM_SENDER_NUM_BUFFERS_VC0>(
-                    // persistent_mode -> hardcode to false for 1D because for 1D, EDM -> EDM
-                    // connections we must always use semaphore lookup
-                    // For 2D, downstream_edm_vc0_semaphore_id is an address.
-                    is_persistent_fabric,
-                    (downstream_edm_vc0_noc_x >> (compact_index * 8)) & 0xFF,
-                    (downstream_edm_vc0_noc_y >> (compact_index * 8)) & 0xFF,
+                new (&downstream_edm_noc_interfaces_vc0[compact_index])
+                    RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC0>(
+                        // persistent_mode -> hardcode to false for 1D because for 1D, EDM -> EDM
+                        // connections we must always use semaphore lookup
+                        // For 2D, downstream_edm_vc0_semaphore_id is an address.
+                        is_persistent_fabric,
+                        (downstream_edm_vc0_noc_x >> (compact_index * 8)) & 0xFF,
+                        (downstream_edm_vc0_noc_y >> (compact_index * 8)) & 0xFF,
 #if defined(FABRIC_2D)
-                    downstream_edm_vc0_buffer_base_addresses[compact_index],
+                        downstream_edm_vc0_buffer_base_addresses[compact_index],
 #else
-                    downstream_edm_vc0_buffer_base_address,
+                        downstream_edm_vc0_buffer_base_address,
 #endif
-                    DOWNSTREAM_SENDER_NUM_BUFFERS_VC0,
+                        DOWNSTREAM_SENDER_NUM_BUFFERS_VC0,
 #if defined(FABRIC_2D)
-                    downstream_edm_vc0_worker_registration_ids[compact_index],
-                    downstream_edm_vc0_worker_location_info_addresses[compact_index],
+                        downstream_edm_vc0_worker_registration_ids[compact_index],
+                        downstream_edm_vc0_worker_location_info_addresses[compact_index],
 #else
-                    downstream_edm_vc0_worker_registration_id,
-                    downstream_edm_vc0_worker_location_info_address,
+                        downstream_edm_vc0_worker_registration_id,
+                        downstream_edm_vc0_worker_location_info_address,
 #endif
-                    channel_buffer_size,
-                    local_sender_channel_connection_buffer_index_id[compact_index],
-                    0,  // Unused for Router->Router connections. Router->Router always uses stream registers for
-                        // credits. Used by Worker->Router connections. This is an address in the worker's L1. The
-                        // Router that a Worker adapter is connected to writes its read counter to this address. The
-                        // worker uses this to calculate free slots in the router's sender channel.
-                    reinterpret_cast<volatile uint32_t* const>(teardown_sem_address),
-                    downstream_vc0_noc_interface_buffer_index_local_addr,  // keep common, since its a scratch noc read
-                                                                           // dest.
+                        channel_buffer_size,
+                        local_sender_channel_connection_buffer_index_id[compact_index],
+                        0,  // Unused for Router->Router connections. Router->Router always uses stream registers for
+                            // credits. Used by Worker->Router connections. This is an address in the worker's L1. The
+                            // Router that a Worker adapter is connected to writes its read counter to this address. The
+                            // worker uses this to calculate free slots in the router's sender channel.
+                        reinterpret_cast<volatile uint32_t* const>(teardown_sem_address),
+                        downstream_vc0_noc_interface_buffer_index_local_addr,  // keep common, since its a scratch noc
+                                                                               // read dest.
                     // Since we are the same direction, we're always going to send to the same stream
                     // reg for each downstream router because we are allocating sender channels by
                     // producer direction.
                     //
                     // We add 1 because sender_channel[0] is for (non-forwarded) traffic from our local chip's NoC, so
                     // we skip that first one. The first forwarded direction is the next one so we start there.
-                    is_2d_fabric
-                        ? get_vc0_downstream_sender_channel_free_slots_stream_id(
-                              compact_index)  // local_sender_channel_free_slots_stream_ids_ordered[my_direction]//edm_index]
-                        : local_sender_channel_free_slots_stream_ids_ordered[1],
-
-                    // This is our local stream register for the copy of the downstream router's
-                    // free slots
-                    receiver_channel_free_slots_stream_id,
-                    receiver_channel_forwarding_data_cmd_buf_ids[0],
-                    receiver_channel_forwarding_sync_cmd_buf_ids[0]);
+#if defined(FABRIC_2D)
+                        get_vc0_downstream_sender_channel_free_slots_stream_id(compact_index),
+#else
+                        local_sender_channel_free_slots_stream_ids_ordered[1],
+#endif
+                        // This is our local stream register for the copy of the downstream router's
+                        // free slots
+                        receiver_channel_free_slots_stream_id,
+                        receiver_channel_forwarding_data_cmd_buf_ids[0],
+                        receiver_channel_forwarding_sync_cmd_buf_ids[0]);
                 // Only receiver channel servicing cores should be setting up the noc cmd buf.
                 if constexpr (NUM_ACTIVE_ERISCS == 1 && !FORCE_ALL_PATHS_TO_USE_SAME_NOC) {
                     downstream_edm_noc_interfaces_vc0[compact_index]
