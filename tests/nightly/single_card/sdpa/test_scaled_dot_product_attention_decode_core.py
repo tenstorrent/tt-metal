@@ -477,6 +477,7 @@ def run_scaled_dot_product_attention_decode(
     logger.debug(f"Is Cur Position Sharded: {cur_pos_is_sharded}")
     logger.debug(f"Is Page Table Sharded: {page_table_is_sharded}")
     logger.debug(f"Is Single Iter: {is_single_iter}")
+    logger.debug(f"Is Multi Position: {is_multi_pos}")
     logger.debug(f"Block Size: {block_size}")
     logger.debug(f"Cur Position Type: {cur_pos_type}")
     logger.debug(f"Cur Position ID: {cur_pos_id}")
@@ -606,7 +607,7 @@ def run_scaled_dot_product_attention_decode(
         assert (
             step_size > 0
         ), f"Step size must be greater than 0 for multi-position testing, got step size of {step_size}"
-        max_end_pos = max(
+        max_end_pos = min(
             s, 4096
         )  # max end position is either the sequence length or 4096, whichever is larger to save test time
         pos_range = range(max_cur_pos, max_end_pos, step_size)
@@ -839,6 +840,12 @@ def test_sdpa_decode_core(
 
     if not use_paged_attention and (cur_pos_is_sharded or page_table_is_sharded):
         pytest.skip("Non-paged attention is not supported for sharded cur_pos or page table.")
+
+    if nkv > 1 and q_dtype != ttnn.bfloat16:
+        pytest.skip("For Grouped Query Attention (nkv > 1) we require q_dtype to be bfloat16.")
+
+    if nkv > 1 and sharded_out:
+        pytest.skip("Sharded output is not supported for Grouped Query Attention (nkv > 1).")
 
     run_scaled_dot_product_attention_decode(
         device,
