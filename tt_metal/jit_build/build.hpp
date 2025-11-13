@@ -46,6 +46,7 @@ struct JitBuiltStateConfig {
 class JitBuildTargetLookup {
 public:
     void build_once(const std::string& target_name, const std::function<void()>& build_func) {
+        // TODO: can use std::once_flag instead.
         std::shared_future<void>* future = nullptr;
         {
             std::lock_guard<std::mutex> lock(mutex_);
