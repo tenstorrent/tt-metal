@@ -231,20 +231,6 @@ def run_ring_joint_sdpa(
                 subdevice_id=worker_sub_device_id,
                 ccl_core_grid_offset=ccl_core_grid_offset,
             )
-            # tensor_1 = ttnn.to_torch(
-            #    tt_out,
-            #    dtype=torch.float32,
-            #    mesh_composer=ttnn.concat_mesh_to_tensor_composer(submesh, dim=0),
-            # )
-            # tensor_2 = ttnn.to_torch(
-            #    tt_joint_out,
-            #    dtype=torch.float32,
-            #    mesh_composer=ttnn.concat_mesh_to_tensor_composer(submesh, dim=0),
-            # )
-            # print(f" HERE output1[:10]={tensor_1.flatten()[:10]}")
-            # print(f" HERE output2[:10]={tensor_2.flatten()[:10]}")
-            # import sys
-            # sys.exit(1)
 
             tt_out_list.append(tt_out)
             tt_joint_out_list.append(tt_joint_out)

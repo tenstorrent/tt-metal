@@ -230,11 +230,9 @@ std::vector<TensorSpec> RingJointScaledDotProductAttention::compute_output_specs
 
     return {
         TensorSpec(
-            input.logical_shape(),
-            TensorLayout(/*input.dtype()*/ DataType::BFLOAT16, PageConfig(Layout::TILE), output_mem_config)),
+            input.logical_shape(), TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), output_mem_config)),
         TensorSpec(
-            joint_input.logical_shape(),
-            TensorLayout(/*joint_input.dtype()*/ DataType::BFLOAT16, PageConfig(Layout::TILE), output_mem_config)),
+            joint_input.logical_shape(), TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), output_mem_config)),
         TensorSpec(lse_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), output_mem_config))};
 }
 

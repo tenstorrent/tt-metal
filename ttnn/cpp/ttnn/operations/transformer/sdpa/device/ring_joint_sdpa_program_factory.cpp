@@ -502,9 +502,8 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     CreateCircularBuffer(program, core_grid, c_in5_config);
 
     // lse input
-    auto c_in6_config =
-        CircularBufferConfig(statistics_tiles * im_tile_size /*out_tile_size*/, {{tt::CBIndex::c_6, im_df /*out_df*/}})
-            .set_page_size(tt::CBIndex::c_6, im_tile_size /*out_tile_size*/);
+    auto c_in6_config = CircularBufferConfig(statistics_tiles * im_tile_size, {{tt::CBIndex::c_6, im_df}})
+                            .set_page_size(tt::CBIndex::c_6, im_tile_size);
     CreateCircularBuffer(program, core_grid, c_in6_config);
 
     // previous block output as input
@@ -563,9 +562,8 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     CreateCircularBuffer(program, core_grid, c_out0_config);
 
     // lse output
-    auto c_out1_config =
-        CircularBufferConfig(statistics_tiles * im_tile_size /*out_tile_size*/, {{tt::CBIndex::c_17, im_df /*out_df*/}})
-            .set_page_size(tt::CBIndex::c_17, im_tile_size /*out_tile_size*/);
+    auto c_out1_config = CircularBufferConfig(statistics_tiles * im_tile_size, {{tt::CBIndex::c_17, im_df}})
+                             .set_page_size(tt::CBIndex::c_17, im_tile_size);
     CreateCircularBuffer(program, core_grid, c_out1_config);
 
     uint32_t q_addr = input_tensor_q.buffer()->address();
