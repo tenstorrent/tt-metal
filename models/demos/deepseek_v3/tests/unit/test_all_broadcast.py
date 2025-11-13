@@ -46,10 +46,9 @@ CLUSTER_AXIS = 1
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("cluster_axis", [CLUSTER_AXIS])
 @pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
-@pytest.mark.parametrize("ring_size", [MESH_SHAPE[CLUSTER_AXIS]])
 @pytest.mark.parametrize("enable_trace", [True, False])
 def test_all_broadcast_deepseek(
-    mesh_device, shape, dtype, mem_config, layout, num_links, cluster_axis, topology, ring_size, enable_trace
+    mesh_device, shape, dtype, mem_config, layout, num_links, cluster_axis, topology, enable_trace
 ):
     tt_input, torch_reference = _get_tensors(shape, dtype, mem_config, layout, mesh_device)
 

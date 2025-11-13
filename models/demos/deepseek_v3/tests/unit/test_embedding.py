@@ -1,4 +1,4 @@
-#  SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+#  SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 #
 #  SPDX-License-Identifier: Apache-2.0
 
@@ -42,7 +42,6 @@ def test_embedding(
     torch_weights = torch.rand(weights_shape[-2:]).bfloat16()
     torch_reference = torch.nn.functional.embedding(torch_input_tensor, torch_weights)
 
-    torch_output_buffer = torch.zeros_like(torch_reference)
     torch_reference = torch_reference.repeat([prod(mesh_device.shape)] + [1] * (len(input_shape) - 2))
 
     tt_input_tensor = ttnn.from_torch(
