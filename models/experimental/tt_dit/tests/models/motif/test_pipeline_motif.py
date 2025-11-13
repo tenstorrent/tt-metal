@@ -81,6 +81,7 @@ def test_motif_pipeline(
     mesh_test_id: str,
     use_cache: bool,
     is_ci_env: bool,
+    model_location_generator,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     pipeline = MotifPipeline.create_pipeline(
@@ -97,6 +98,7 @@ def test_motif_pipeline(
         topology=topology,
         width=width,
         height=height,
+        model_checkpoint_path=model_location_generator("Motif-Technologies/Motif-Image-6B-Preview"),
     )
 
     # Setup CI environment
