@@ -48,7 +48,6 @@ void matmul_blocks(
 
     uint32_t output_num_tiles = M * N;
     uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
-    uint32_t in0_index_offset = 0;
 
     // reconfig_data_format(in1_cb, in0_cb);
     // pack_reconfig_data_format(matmul_out_cb);
@@ -57,14 +56,14 @@ void matmul_blocks(
     uint32_t total_reduce_tiles = in0_num_subblocks * in1_num_subblocks * subblock_w;  // = in0_num_subblocks * N
     cb_reserve_back(reduce_out_cb, total_reduce_tiles);
 
-    for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
-        uint32_t in1_index_offset = 0;
-        for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; ++in1_subblock) {
+    // Width-first traversal: iterate column subblocks outer, row subblocks inner
+    for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; ++in1_subblock) {
+        for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
             tile_regs_acquire();
 
             uint32_t dst_index = 0;
-            uint32_t in0_index = in0_index_offset;
-            uint32_t in1_index = in1_index_offset;
+            uint32_t in0_index = in0_subblock * subblock_h * in0_block_w;
+            uint32_t in1_index = in1_subblock * subblock_w;
 
             for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
                 matmul_block(
@@ -95,17 +94,12 @@ void matmul_blocks(
 
             for (uint32_t i = 0; i < subblock_w; i++) {
                 sfpu_reduce_max_sdpa(i, subblock_h, (int)VectorMode::RC_custom);
-            }
-            // Pack reduced tiles: place them as a matrix of in0_num_subblocks x N tiles
-            for (uint32_t i = 0; i < subblock_w; i++) {
                 uint32_t reduce_tile_index = in0_subblock * N + out_col_offset + i;
                 pack_tile<true>(i, reduce_out_cb, reduce_tile_index);
             }
 
             tile_regs_release();
-            in1_index_offset += subblock_w;
         }
-        in0_index_offset += subblock_h * in0_block_w;
     }
     cb_push_back(matmul_out_cb, output_num_tiles);
     cb_push_back(reduce_out_cb, total_reduce_tiles);
@@ -118,7 +112,6 @@ void reduce_c_transposed(uint32_t out_cb) {
 
     constexpr uint32_t num_tiles = k_chunk_size * q_chunk_size;
 
-    max_tile_init();
     reduce_init<PoolType::MAX, ReduceDim::REDUCE_COL>(in0_cb, scale_cb, out_cb);
 
     // UNPACK(( DPRINT << "k_chunk_size " << k_chunk_size << " q_chunk_size " << q_chunk_size << ENDL() ));
@@ -144,7 +137,7 @@ void reduce_c_transposed(uint32_t out_cb) {
         // UNPACK(( DPRINT << "[reduce_c_transposed] packed block cols [" << j0 << "," << (j0 + block_cols) << ")" <<
         // ENDL() ));
     }
-    reduce_uninit();
+    // reduce_uninit();
 }
 
 namespace NAMESPACE {
