@@ -809,8 +809,8 @@ def test_dram_read_all_core(arch, test_vector, num_tests, nblock, data_format, n
     # check within range
     dev_freq = get_device_freq()
     if arch == "wormhole_b0":
-        bw_lower_bound = 240.0
-        bw_upper_bound = 280.0
+        bw_lower_bound = 250.0
+        bw_upper_bound = 270.0
     elif arch == "blackhole":
         bw_lower_bound = 350.0
         bw_upper_bound = 380.0
