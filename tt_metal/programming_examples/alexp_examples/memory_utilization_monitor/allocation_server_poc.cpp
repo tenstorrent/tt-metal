@@ -21,6 +21,7 @@
 #include <signal.h>
 #include <cstring>
 #include <algorithm>
+#include <string>
 
 // TT-Metal includes for device detection
 #include <tt-metalium/host_api.hpp>
@@ -29,6 +30,21 @@
 
 #define TT_ALLOC_SERVER_SOCKET "/tmp/tt_allocation_server.sock"
 #define MAX_DEVICES 8
+
+namespace {
+class NullBuffer : public std::streambuf {
+public:
+    int overflow(int c) override { return c; }
+};
+
+class NullStream : public std::ostream {
+public:
+    NullStream() : std::ostream(&buffer_) {}
+
+private:
+    NullBuffer buffer_;
+};
+}  // namespace
 
 // Message protocol - MUST match Python struct format exactly!
 // Use __attribute__((packed)) to avoid padding issues
@@ -924,7 +940,27 @@ void signal_handler(int sig) {
     exit(0);
 }
 
-int main() {
+int main(int argc, char** argv) {
+    bool quiet_mode = false;
+
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "-q" || arg == "--quiet") {
+            quiet_mode = true;
+        } else if (arg == "-h" || arg == "--help") {
+            std::cout << "Usage: " << argv[0] << " [--quiet|-q]" << std::endl;
+            return 0;
+        }
+    }
+
+    NullStream null_stream;
+    std::streambuf* original_cout_buf = nullptr;
+    std::streambuf* original_cerr_buf = nullptr;
+    if (quiet_mode) {
+        original_cout_buf = std::cout.rdbuf(null_stream.rdbuf());
+        original_cerr_buf = std::cerr.rdbuf(null_stream.rdbuf());
+    }
+
     // Disable stdout buffering to ensure immediate output
     setbuf(stdout, NULL);
     setbuf(stderr, NULL);
@@ -949,6 +985,15 @@ int main() {
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << std::endl;
         return 1;
+    }
+
+    if (quiet_mode) {
+        if (original_cout_buf != nullptr) {
+            std::cout.rdbuf(original_cout_buf);
+        }
+        if (original_cerr_buf != nullptr) {
+            std::cerr.rdbuf(original_cerr_buf);
+        }
     }
 
     return 0;
