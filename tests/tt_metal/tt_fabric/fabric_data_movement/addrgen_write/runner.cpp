@@ -232,14 +232,7 @@ Notes:
          p.api_variant == AddrgenApiVariant::ScatterWriteWithState ||
          p.api_variant == AddrgenApiVariant::ScatterWriteSetState);
 
-    std::string KDIR;
-    if (is_fused_atomic_inc) {
-        KDIR = "tests/tt_metal/tt_fabric/fabric_data_movement/addrgen_write/kernels/fused_atomic_inc/";
-    } else if (is_scatter) {
-        KDIR = "tests/tt_metal/tt_fabric/fabric_data_movement/addrgen_write/kernels/scatter/";
-    } else {
-        KDIR = "tests/tt_metal/tt_fabric/fabric_data_movement/addrgen_write/kernels/unicast/";
-    }
+    const std::string KDIR = "tests/tt_metal/tt_fabric/fabric_data_movement/addrgen_write/kernels/";
 
     // Helper to select writer kernel based on API variant
     auto get_writer_kernel_path = [&KDIR](AddrgenApiVariant variant) -> std::string {

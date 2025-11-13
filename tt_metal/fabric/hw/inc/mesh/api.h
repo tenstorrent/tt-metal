@@ -561,93 +561,6 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write_set_state(
             packet_header, slot.dst_dev_id, slot.dst_mesh_id, command_header, packet_size_bytes);
     });
 }
-
-// Scatter Write Addrgen Overloads
-template <typename FabricSenderType, typename AddrGenType>
-FORCE_INLINE void fabric_unicast_noc_scatter_write(
-    tt_l1_ptr FabricSenderType* client_interface,
-    volatile PACKET_HEADER_TYPE* packet_header,
-    uint8_t dst_dev_id,
-    uint16_t dst_mesh_id,
-    uint32_t src_addr,
-    const AddrGenType& addrgen,
-    uint32_t page_id0,
-    uint32_t page_id1,
-    uint32_t offset0 = 0,
-    uint32_t offset1 = 0) {
-    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
-    auto noc_address0 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id0, offset0);
-    auto noc_address1 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id1, offset1);
-
-    fabric_unicast_noc_scatter_write(
-        client_interface,
-        packet_header,
-        dst_dev_id,
-        dst_mesh_id,
-        src_addr,
-        page_size * 2,  // Total payload size (both chunks)
-        tt::tt_fabric::NocUnicastScatterCommandHeader{{noc_address0, noc_address1}, static_cast<uint16_t>(page_size)});
-}
-
-// Scatter Write With State Addrgen Overload
-template <
-    UnicastScatterWriteUpdateMask UpdateMask = UnicastScatterWriteUpdateMask::DstAddrs |
-                                               UnicastScatterWriteUpdateMask::ChunkSizes |
-                                               UnicastScatterWriteUpdateMask::PayloadSize,
-    typename FabricSenderType,
-    typename AddrGenType,
-    typename = std::enable_if_t<is_addrgen<AddrGenType>::value>>
-FORCE_INLINE void fabric_unicast_noc_scatter_write_with_state(
-    tt_l1_ptr FabricSenderType* client_interface,
-    volatile PACKET_HEADER_TYPE* packet_header,
-    uint8_t dst_dev_id,
-    uint16_t dst_mesh_id,
-    uint32_t src_addr,
-    const AddrGenType& addrgen,
-    uint32_t page_id0,
-    uint32_t page_id1,
-    uint32_t offset0 = 0,
-    uint32_t offset1 = 0) {
-    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
-    auto noc_address0 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id0, offset0);
-    auto noc_address1 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id1, offset1);
-
-    fabric_unicast_noc_scatter_write_with_state<UpdateMask>(
-        client_interface,
-        packet_header,
-        src_addr,
-        tt::tt_fabric::NocUnicastScatterCommandHeader{{noc_address0, noc_address1}, static_cast<uint16_t>(page_size)},
-        page_size * 2);
-}
-
-// Scatter Write Set State Addrgen Overload
-template <
-    UnicastScatterWriteUpdateMask UpdateMask = UnicastScatterWriteUpdateMask::DstAddrs |
-                                               UnicastScatterWriteUpdateMask::ChunkSizes |
-                                               UnicastScatterWriteUpdateMask::PayloadSize,
-    typename AddrGenType,
-    typename = std::enable_if_t<is_addrgen<AddrGenType>::value>>
-FORCE_INLINE void fabric_unicast_noc_scatter_write_set_state(
-    volatile PACKET_HEADER_TYPE* packet_header,
-    uint8_t dst_dev_id,
-    uint16_t dst_mesh_id,
-    const AddrGenType& addrgen,
-    uint32_t page_id0,
-    uint32_t page_id1,
-    uint32_t offset0 = 0,
-    uint32_t offset1 = 0) {
-    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
-    auto noc_address0 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id0, offset0);
-    auto noc_address1 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id1, offset1);
-
-    fabric_unicast_noc_scatter_write_set_state<UpdateMask>(
-        packet_header,
-        dst_dev_id,
-        dst_mesh_id,
-        tt::tt_fabric::NocUnicastScatterCommandHeader{{noc_address0, noc_address1}, static_cast<uint16_t>(page_size)},
-        page_size * 2);
-}
-
 // clang-format off
 /**
  * Issues a unicast inline write (32-bit) to a destination NOC address.
@@ -1049,31 +962,6 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write(
  * | offset             | Offset within page                      | uint32_t                                   | False    |
  */
 // clang-format on
-template <typename FabricSenderType, typename AddrGenType>
-FORCE_INLINE void fabric_multicast_noc_unicast_write(
-    tt_l1_ptr FabricSenderType* client_interface,
-    volatile PACKET_HEADER_TYPE* packet_header,
-    uint8_t dst_dev_id,
-    uint16_t dst_mesh_id,
-    const MeshMcastRange& ranges,
-    uint32_t src_addr,
-    const AddrGenType& addrgen,
-    uint32_t page_id,
-    uint32_t offset = 0) {
-    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
-    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
-
-    fabric_multicast_noc_unicast_write(
-        client_interface,
-        packet_header,
-        dst_dev_id,
-        dst_mesh_id,
-        ranges,
-        src_addr,
-        page_size,
-        tt::tt_fabric::NocUnicastCommandHeader{noc_address});
-}
-
 // clang-format off
 /**
  * Multicast unicast write (route variant): issues writes for all headers in the route using multicast routing metadata.
@@ -1250,28 +1138,6 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write_set_state(
  * | offset                     | Offset within page                      | uint32_t                         | False    |
  */
 // clang-format on
-template <
-    UnicastWriteUpdateMask UpdateMask = UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize,
-    typename FabricSenderType,
-    typename AddrGenType,
-    typename = std::enable_if_t<is_addrgen<AddrGenType>::value>>
-FORCE_INLINE void fabric_multicast_noc_unicast_write_with_state(
-    tt_l1_ptr FabricSenderType* client_interface,
-    volatile PACKET_HEADER_TYPE* packet_header,
-    uint8_t dst_dev_id,
-    uint16_t dst_mesh_id,
-    const MeshMcastRange& ranges,
-    uint32_t src_addr,
-    const AddrGenType& addrgen,
-    uint32_t page_id,
-    uint32_t offset = 0) {
-    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
-    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
-
-    fabric_multicast_noc_unicast_write_with_state<UpdateMask>(
-        client_interface, packet_header, src_addr, tt::tt_fabric::NocUnicastCommandHeader{noc_address}, page_size);
-}
-
 // clang-format off
 /**
  * Multicast unicast write (set-state) with TensorAccessor: pre-configures headers for repeated use with address generator.
@@ -1289,25 +1155,6 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write_with_state(
  * | offset          | Offset within page                      | uint32_t                         | False    |
  */
 // clang-format on
-template <
-    UnicastWriteUpdateMask UpdateMask = UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize,
-    typename AddrGenType,
-    typename = std::enable_if_t<is_addrgen<AddrGenType>::value>>
-FORCE_INLINE void fabric_multicast_noc_unicast_write_set_state(
-    volatile PACKET_HEADER_TYPE* packet_header,
-    uint8_t dst_dev_id,
-    uint16_t dst_mesh_id,
-    const MeshMcastRange& ranges,
-    const AddrGenType& addrgen,
-    uint32_t page_id,
-    uint32_t offset = 0) {
-    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
-    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
-
-    fabric_multicast_noc_unicast_write_set_state<UpdateMask>(
-        packet_header, dst_dev_id, dst_mesh_id, ranges, tt::tt_fabric::NocUnicastCommandHeader{noc_address}, page_size);
-}
-
 // clang-format off
 /**
  * Multicast unicast atomic increment: issues a unicast atomic inc with chip-level multicast routing metadata.
@@ -1702,34 +1549,6 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write_set_state(
  * | offset1         | Offset within second page               | uint32_t                         | False    |
  */
 // clang-format on
-template <typename FabricSenderType, typename AddrGenType>
-FORCE_INLINE void fabric_multicast_noc_scatter_write(
-    tt_l1_ptr FabricSenderType* client_interface,
-    volatile PACKET_HEADER_TYPE* packet_header,
-    uint8_t dst_dev_id,
-    uint16_t dst_mesh_id,
-    const MeshMcastRange& ranges,
-    uint32_t src_addr,
-    const AddrGenType& addrgen,
-    uint32_t page_id0,
-    uint32_t page_id1,
-    uint32_t offset0 = 0,
-    uint32_t offset1 = 0) {
-    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
-    auto noc_address0 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id0, offset0);
-    auto noc_address1 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id1, offset1);
-
-    fabric_multicast_noc_scatter_write(
-        client_interface,
-        packet_header,
-        dst_dev_id,
-        dst_mesh_id,
-        ranges,
-        src_addr,
-        page_size * 2,
-        tt::tt_fabric::NocUnicastScatterCommandHeader{{noc_address0, noc_address1}, static_cast<uint16_t>(page_size)});
-}
-
 // clang-format off
 /**
  * Multicast scatter write (with-state) with TensorAccessor: updates masked header fields with address generation.
@@ -1751,37 +1570,6 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write(
  * | offset1         | Offset within second page               | uint32_t                         | False    |
  */
 // clang-format on
-template <
-    UnicastScatterWriteUpdateMask UpdateMask = UnicastScatterWriteUpdateMask::DstAddrs |
-                                               UnicastScatterWriteUpdateMask::ChunkSizes |
-                                               UnicastScatterWriteUpdateMask::PayloadSize,
-    typename FabricSenderType,
-    typename AddrGenType,
-    typename = std::enable_if_t<is_addrgen<AddrGenType>::value>>
-FORCE_INLINE void fabric_multicast_noc_scatter_write_with_state(
-    tt_l1_ptr FabricSenderType* client_interface,
-    volatile PACKET_HEADER_TYPE* packet_header,
-    uint8_t dst_dev_id,
-    uint16_t dst_mesh_id,
-    const MeshMcastRange& ranges,
-    uint32_t src_addr,
-    const AddrGenType& addrgen,
-    uint32_t page_id0,
-    uint32_t page_id1,
-    uint32_t offset0 = 0,
-    uint32_t offset1 = 0) {
-    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
-    auto noc_address0 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id0, offset0);
-    auto noc_address1 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id1, offset1);
-
-    fabric_multicast_noc_scatter_write_with_state<UpdateMask>(
-        client_interface,
-        packet_header,
-        src_addr,
-        tt::tt_fabric::NocUnicastScatterCommandHeader{{noc_address0, noc_address1}, static_cast<uint16_t>(page_size)},
-        page_size * 2);
-}
-
 // clang-format off
 /**
  * Multicast scatter write (set-state) with TensorAccessor: pre-configures headers with address generation.
@@ -1801,35 +1589,6 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write_with_state(
  * | offset1         | Offset within second page               | uint32_t                         | False    |
  */
 // clang-format on
-template <
-    UnicastScatterWriteUpdateMask UpdateMask = UnicastScatterWriteUpdateMask::DstAddrs |
-                                               UnicastScatterWriteUpdateMask::ChunkSizes |
-                                               UnicastScatterWriteUpdateMask::PayloadSize,
-    typename AddrGenType,
-    typename = std::enable_if_t<is_addrgen<AddrGenType>::value>>
-FORCE_INLINE void fabric_multicast_noc_scatter_write_set_state(
-    volatile PACKET_HEADER_TYPE* packet_header,
-    uint8_t dst_dev_id,
-    uint16_t dst_mesh_id,
-    const MeshMcastRange& ranges,
-    const AddrGenType& addrgen,
-    uint32_t page_id0,
-    uint32_t page_id1,
-    uint32_t offset0 = 0,
-    uint32_t offset1 = 0) {
-    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
-    auto noc_address0 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id0, offset0);
-    auto noc_address1 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id1, offset1);
-
-    fabric_multicast_noc_scatter_write_set_state<UpdateMask>(
-        packet_header,
-        dst_dev_id,
-        dst_mesh_id,
-        ranges,
-        tt::tt_fabric::NocUnicastScatterCommandHeader{{noc_address0, noc_address1}, static_cast<uint16_t>(page_size)},
-        page_size * 2);
-}
-
 // clang-format off
 /**
  * Multicast unicast inline write: issues a 32-bit inline write with multicast routing metadata.
@@ -2098,34 +1857,6 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc(
  * | flush                                 | Flush after write                    | bool                                             | False    |
  */
 // clang-format on
-template <typename FabricSenderType, typename AddrGenType>
-FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc(
-    tt_l1_ptr FabricSenderType* client_interface,
-    volatile PACKET_HEADER_TYPE* packet_header,
-    uint8_t dst_dev_id,
-    uint16_t dst_mesh_id,
-    const MeshMcastRange& ranges,
-    uint32_t src_addr,
-    const AddrGenType& addrgen,
-    uint32_t page_id,
-    uint64_t semaphore_noc_address,
-    uint16_t val,
-    uint32_t offset = 0,
-    bool flush = true) {
-    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
-    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
-
-    fabric_multicast_noc_fused_unicast_with_atomic_inc(
-        client_interface,
-        packet_header,
-        dst_dev_id,
-        dst_mesh_id,
-        ranges,
-        src_addr,
-        page_size,
-        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{noc_address, semaphore_noc_address, val, flush});
-}
-
 // clang-format off
 /**
  * Multicast fused unicast write + atomic increment (stateful): updates only masked fields, then submits payload.
@@ -2269,33 +2000,6 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state(
  * | flush                                 | Flush after write                    | bool                                             | False    |
  */
 // clang-format on
-template <
-    UnicastFusedAtomicIncUpdateMask UpdateMask = UnicastFusedAtomicIncUpdateMask::WriteDstAddr |
-                                                 UnicastFusedAtomicIncUpdateMask::SemaphoreAddr,
-    typename FabricSenderType,
-    typename AddrGenType,
-    typename = std::enable_if_t<is_addrgen<AddrGenType>::value>>
-FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state(
-    tt_l1_ptr FabricSenderType* client_interface,
-    volatile PACKET_HEADER_TYPE* packet_header,
-    uint32_t src_addr,
-    const AddrGenType& addrgen,
-    uint32_t page_id,
-    uint64_t semaphore_noc_address,
-    uint16_t val,
-    uint32_t offset = 0,
-    bool flush = true) {
-    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
-    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
-
-    fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state<UpdateMask>(
-        client_interface,
-        packet_header,
-        src_addr,
-        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{noc_address, semaphore_noc_address, val, flush},
-        page_size);
-}
-
 // clang-format off
 /**
  * Multicast fused unicast write + atomic increment set state: TensorAccessor overload.
@@ -2317,33 +2021,6 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state(
  * | flush                                 | Flush after write                    | bool                                             | False    |
  */
 // clang-format on
-template <
-    UnicastFusedAtomicIncUpdateMask UpdateMask = UnicastFusedAtomicIncUpdateMask::None,
-    typename AddrGenType,
-    typename = std::enable_if_t<is_addrgen<AddrGenType>::value>>
-FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state(
-    volatile PACKET_HEADER_TYPE* packet_header,
-    uint8_t dst_dev_id,
-    uint16_t dst_mesh_id,
-    const MeshMcastRange& ranges,
-    const AddrGenType& addrgen,
-    uint32_t page_id,
-    uint64_t semaphore_noc_address,
-    uint16_t val,
-    uint32_t offset = 0,
-    bool flush = true) {
-    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
-    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
-
-    fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state<UpdateMask>(
-        packet_header,
-        dst_dev_id,
-        dst_mesh_id,
-        ranges,
-        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{noc_address, semaphore_noc_address, val, flush},
-        page_size);
-}
-
 // ============================================================================
 // Addrgen API Overloads
 // ============================================================================
@@ -2748,6 +2425,343 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state(
         packet_header,
         dst_dev_id,
         dst_mesh_id,
+        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{noc_address, semaphore_noc_address, val, flush},
+        page_size);
+}
+
+// ============================================================================
+// TensorAccessor Addrgen API Overloads
+// ============================================================================
+
+// Unicast Scatter Write Addrgen Overloads
+
+// Scatter Write Addrgen Overloads
+template <typename FabricSenderType, typename AddrGenType>
+FORCE_INLINE void fabric_unicast_noc_scatter_write(
+    tt_l1_ptr FabricSenderType* client_interface,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint8_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    uint32_t src_addr,
+    const AddrGenType& addrgen,
+    uint32_t page_id0,
+    uint32_t page_id1,
+    uint32_t offset0 = 0,
+    uint32_t offset1 = 0) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address0 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id0, offset0);
+    auto noc_address1 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id1, offset1);
+
+    fabric_unicast_noc_scatter_write(
+        client_interface,
+        packet_header,
+        dst_dev_id,
+        dst_mesh_id,
+        src_addr,
+        page_size * 2,  // Total payload size (both chunks)
+        tt::tt_fabric::NocUnicastScatterCommandHeader{{noc_address0, noc_address1}, static_cast<uint16_t>(page_size)});
+}
+
+// Scatter Write With State Addrgen Overload
+template <
+    UnicastScatterWriteUpdateMask UpdateMask = UnicastScatterWriteUpdateMask::DstAddrs |
+                                               UnicastScatterWriteUpdateMask::ChunkSizes |
+                                               UnicastScatterWriteUpdateMask::PayloadSize,
+    typename FabricSenderType,
+    typename AddrGenType,
+    typename = std::enable_if_t<is_addrgen<AddrGenType>::value>>
+FORCE_INLINE void fabric_unicast_noc_scatter_write_with_state(
+    tt_l1_ptr FabricSenderType* client_interface,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint8_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    uint32_t src_addr,
+    const AddrGenType& addrgen,
+    uint32_t page_id0,
+    uint32_t page_id1,
+    uint32_t offset0 = 0,
+    uint32_t offset1 = 0) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address0 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id0, offset0);
+    auto noc_address1 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id1, offset1);
+
+    fabric_unicast_noc_scatter_write_with_state<UpdateMask>(
+        client_interface,
+        packet_header,
+        src_addr,
+        tt::tt_fabric::NocUnicastScatterCommandHeader{{noc_address0, noc_address1}, static_cast<uint16_t>(page_size)},
+        page_size * 2);
+}
+
+// Scatter Write Set State Addrgen Overload
+template <
+    UnicastScatterWriteUpdateMask UpdateMask = UnicastScatterWriteUpdateMask::DstAddrs |
+                                               UnicastScatterWriteUpdateMask::ChunkSizes |
+                                               UnicastScatterWriteUpdateMask::PayloadSize,
+    typename AddrGenType,
+    typename = std::enable_if_t<is_addrgen<AddrGenType>::value>>
+FORCE_INLINE void fabric_unicast_noc_scatter_write_set_state(
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint8_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    const AddrGenType& addrgen,
+    uint32_t page_id0,
+    uint32_t page_id1,
+    uint32_t offset0 = 0,
+    uint32_t offset1 = 0) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address0 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id0, offset0);
+    auto noc_address1 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id1, offset1);
+
+    fabric_unicast_noc_scatter_write_set_state<UpdateMask>(
+        packet_header,
+        dst_dev_id,
+        dst_mesh_id,
+        tt::tt_fabric::NocUnicastScatterCommandHeader{{noc_address0, noc_address1}, static_cast<uint16_t>(page_size)},
+        page_size * 2);
+}
+
+// Multicast Unicast Write Basic Addrgen Overload
+template <typename FabricSenderType, typename AddrGenType>
+FORCE_INLINE void fabric_multicast_noc_unicast_write(
+    tt_l1_ptr FabricSenderType* client_interface,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint8_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    const MeshMcastRange& ranges,
+    uint32_t src_addr,
+    const AddrGenType& addrgen,
+    uint32_t page_id,
+    uint32_t offset = 0) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
+
+    fabric_multicast_noc_unicast_write(
+        client_interface,
+        packet_header,
+        dst_dev_id,
+        dst_mesh_id,
+        ranges,
+        src_addr,
+        page_size,
+        tt::tt_fabric::NocUnicastCommandHeader{noc_address});
+}
+
+// Multicast Unicast Write WithState Addrgen Overload
+template <
+    UnicastWriteUpdateMask UpdateMask = UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize,
+    typename FabricSenderType,
+    typename AddrGenType,
+    typename = std::enable_if_t<is_addrgen<AddrGenType>::value>>
+FORCE_INLINE void fabric_multicast_noc_unicast_write_with_state(
+    tt_l1_ptr FabricSenderType* client_interface,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint8_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    const MeshMcastRange& ranges,
+    uint32_t src_addr,
+    const AddrGenType& addrgen,
+    uint32_t page_id,
+    uint32_t offset = 0) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
+
+    fabric_multicast_noc_unicast_write_with_state<UpdateMask>(
+        client_interface, packet_header, src_addr, tt::tt_fabric::NocUnicastCommandHeader{noc_address}, page_size);
+}
+
+// Multicast Unicast Write SetState Addrgen Overload
+template <
+    UnicastWriteUpdateMask UpdateMask = UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize,
+    typename AddrGenType,
+    typename = std::enable_if_t<is_addrgen<AddrGenType>::value>>
+FORCE_INLINE void fabric_multicast_noc_unicast_write_set_state(
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint8_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    const MeshMcastRange& ranges,
+    const AddrGenType& addrgen,
+    uint32_t page_id,
+    uint32_t offset = 0) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
+
+    fabric_multicast_noc_unicast_write_set_state<UpdateMask>(
+        packet_header, dst_dev_id, dst_mesh_id, ranges, tt::tt_fabric::NocUnicastCommandHeader{noc_address}, page_size);
+}
+
+// Multicast Scatter Write Basic Addrgen Overload
+template <typename FabricSenderType, typename AddrGenType>
+FORCE_INLINE void fabric_multicast_noc_scatter_write(
+    tt_l1_ptr FabricSenderType* client_interface,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint8_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    const MeshMcastRange& ranges,
+    uint32_t src_addr,
+    const AddrGenType& addrgen,
+    uint32_t page_id0,
+    uint32_t page_id1,
+    uint32_t offset0 = 0,
+    uint32_t offset1 = 0) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address0 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id0, offset0);
+    auto noc_address1 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id1, offset1);
+
+    fabric_multicast_noc_scatter_write(
+        client_interface,
+        packet_header,
+        dst_dev_id,
+        dst_mesh_id,
+        ranges,
+        src_addr,
+        page_size * 2,
+        tt::tt_fabric::NocUnicastScatterCommandHeader{{noc_address0, noc_address1}, static_cast<uint16_t>(page_size)});
+}
+
+// Multicast Scatter Write WithState Addrgen Overload
+template <
+    UnicastScatterWriteUpdateMask UpdateMask = UnicastScatterWriteUpdateMask::DstAddrs |
+                                               UnicastScatterWriteUpdateMask::ChunkSizes |
+                                               UnicastScatterWriteUpdateMask::PayloadSize,
+    typename FabricSenderType,
+    typename AddrGenType,
+    typename = std::enable_if_t<is_addrgen<AddrGenType>::value>>
+FORCE_INLINE void fabric_multicast_noc_scatter_write_with_state(
+    tt_l1_ptr FabricSenderType* client_interface,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint8_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    const MeshMcastRange& ranges,
+    uint32_t src_addr,
+    const AddrGenType& addrgen,
+    uint32_t page_id0,
+    uint32_t page_id1,
+    uint32_t offset0 = 0,
+    uint32_t offset1 = 0) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address0 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id0, offset0);
+    auto noc_address1 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id1, offset1);
+
+    fabric_multicast_noc_scatter_write_with_state<UpdateMask>(
+        client_interface,
+        packet_header,
+        src_addr,
+        tt::tt_fabric::NocUnicastScatterCommandHeader{{noc_address0, noc_address1}, static_cast<uint16_t>(page_size)},
+        page_size * 2);
+}
+
+// Multicast Scatter Write SetState Addrgen Overload
+template <
+    UnicastScatterWriteUpdateMask UpdateMask = UnicastScatterWriteUpdateMask::DstAddrs |
+                                               UnicastScatterWriteUpdateMask::ChunkSizes |
+                                               UnicastScatterWriteUpdateMask::PayloadSize,
+    typename AddrGenType,
+    typename = std::enable_if_t<is_addrgen<AddrGenType>::value>>
+FORCE_INLINE void fabric_multicast_noc_scatter_write_set_state(
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint8_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    const MeshMcastRange& ranges,
+    const AddrGenType& addrgen,
+    uint32_t page_id0,
+    uint32_t page_id1,
+    uint32_t offset0 = 0,
+    uint32_t offset1 = 0) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address0 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id0, offset0);
+    auto noc_address1 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id1, offset1);
+
+    fabric_multicast_noc_scatter_write_set_state<UpdateMask>(
+        packet_header,
+        dst_dev_id,
+        dst_mesh_id,
+        ranges,
+        tt::tt_fabric::NocUnicastScatterCommandHeader{{noc_address0, noc_address1}, static_cast<uint16_t>(page_size)},
+        page_size * 2);
+}
+
+// Multicast Fused Atomic Inc Basic Addrgen Overload
+template <typename FabricSenderType, typename AddrGenType>
+FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc(
+    tt_l1_ptr FabricSenderType* client_interface,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint8_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    const MeshMcastRange& ranges,
+    uint32_t src_addr,
+    const AddrGenType& addrgen,
+    uint32_t page_id,
+    uint64_t semaphore_noc_address,
+    uint16_t val,
+    uint32_t offset = 0,
+    bool flush = true) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
+
+    fabric_multicast_noc_fused_unicast_with_atomic_inc(
+        client_interface,
+        packet_header,
+        dst_dev_id,
+        dst_mesh_id,
+        ranges,
+        src_addr,
+        page_size,
+        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{noc_address, semaphore_noc_address, val, flush});
+}
+
+// Multicast Fused Atomic Inc WithState Addrgen Overload
+template <
+    UnicastFusedAtomicIncUpdateMask UpdateMask = UnicastFusedAtomicIncUpdateMask::WriteDstAddr |
+                                                 UnicastFusedAtomicIncUpdateMask::SemaphoreAddr,
+    typename FabricSenderType,
+    typename AddrGenType,
+    typename = std::enable_if_t<is_addrgen<AddrGenType>::value>>
+FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state(
+    tt_l1_ptr FabricSenderType* client_interface,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint32_t src_addr,
+    const AddrGenType& addrgen,
+    uint32_t page_id,
+    uint64_t semaphore_noc_address,
+    uint16_t val,
+    uint32_t offset = 0,
+    bool flush = true) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
+
+    fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state<UpdateMask>(
+        client_interface,
+        packet_header,
+        src_addr,
+        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{noc_address, semaphore_noc_address, val, flush},
+        page_size);
+}
+
+// Multicast Fused Atomic Inc SetState Addrgen Overload
+template <
+    UnicastFusedAtomicIncUpdateMask UpdateMask = UnicastFusedAtomicIncUpdateMask::None,
+    typename AddrGenType,
+    typename = std::enable_if_t<is_addrgen<AddrGenType>::value>>
+FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state(
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint8_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    const MeshMcastRange& ranges,
+    const AddrGenType& addrgen,
+    uint32_t page_id,
+    uint64_t semaphore_noc_address,
+    uint16_t val,
+    uint32_t offset = 0,
+    bool flush = true) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
+
+    fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state<UpdateMask>(
+        packet_header,
+        dst_dev_id,
+        dst_mesh_id,
+        ranges,
         tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{noc_address, semaphore_noc_address, val, flush},
         page_size);
 }
