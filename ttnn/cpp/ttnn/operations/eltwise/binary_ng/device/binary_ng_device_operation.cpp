@@ -19,14 +19,10 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
         case MUL:
         case EQ:
         case NE:
-            return (
-                (a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32) || (a == UINT32 && b == UINT32) ||
-                (a == UINT16 && b == UINT16));
         case LOGICAL_AND:
         case LOGICAL_OR:
         case LOGICAL_XOR:
-        case SQUARED_DIFFERENCE:
-            return ((a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32) || (a == UINT16 && b == UINT16));
+        case SQUARED_DIFFERENCE: return a == b && (a == FLOAT32 || a == INT32 || a == UINT32 || a == UINT16);
         case LOGADDEXP:
         case LOGADDEXP2:
         case LDEXP:
@@ -44,8 +40,7 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
         case LOGICAL_RIGHT_SHIFT: return ((a == INT32 || a == UINT32) && (b == INT32 || b == UINT32));
         case BITWISE_XOR:
         case BITWISE_OR:
-        case BITWISE_AND:
-            return ((a == INT32 && b == INT32) || (a == UINT16 && b == UINT16) || (a == UINT32 && b == UINT32));
+        case BITWISE_AND: return a == b && (a == INT32 || a == UINT32 || a == UINT16);
         case QUANT:
         case REQUANT:
         case DEQUANT:
@@ -389,12 +384,16 @@ tt::stl::hash::hash_t BinaryNgDeviceOperation::compute_program_hash(
             "Unexpected type {}",
             tt::stl::get_active_type_name_in_variant(input_tensor_b->storage()));
 
+        const auto shard_volumes = get_shard_volumes(
+            input_tensor_a.tensor_spec(), input_tensor_b->tensor_spec(), compute_output_specs(attributes, tensor_args));
+
         return operation::hash_operation<BinaryNgDeviceOperation>(
             attributes,
             input_tensor_a.dtype(),
             input_tensor_a.memory_config(),
             input_tensor_b->dtype(),
-            input_tensor_b->memory_config());
+            input_tensor_b->memory_config(),
+            shard_volumes);
     }
 
     return operation::hash_operation<BinaryNgDeviceOperation>(

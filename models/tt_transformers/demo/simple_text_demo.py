@@ -697,7 +697,9 @@ def prepare_generator_args(
     ids=["performance", "accuracy"],
 )
 @pytest.mark.parametrize(
-    "device_params", [{"fabric_config": True, "trace_region_size": 70000000, "num_command_queues": 1}], indirect=True
+    "device_params",
+    [{"fabric_config": True, "trace_region_size": 50000000, "num_command_queues": 1}],
+    indirect=True,
 )
 @pytest.mark.parametrize(
     "mesh_device",
@@ -739,6 +741,7 @@ def test_demo_text(
     token_accuracy,
     stress_test,
     enable_trace,
+    model_location_generator,
     num_layers,
     mode,
 ):
