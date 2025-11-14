@@ -1540,7 +1540,7 @@ SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_
         // for dateline upstream channel 1 is removed and we need to use channel 2.
         // Need to look into the allocator to get the localized index
         // auto const& sender_channel_to_pool_index = static_channel_allocator->get_sender_local_to_global_index_map();
-        config.print_sender_channel_allocor_info();
+        // config.print_sender_channel_allocor_info();
         tt::tt_fabric::FabricStaticSizedChannelsAllocator* downstream_static_channel_allocator = nullptr;
         switch (this->fabric_edm_type) {
             case FabricEriscDatamoverType::DatelineUpstream: {

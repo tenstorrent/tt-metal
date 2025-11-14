@@ -54,11 +54,13 @@ void StaticSizedChannelConnectionWriterAdapter::pack_inbound_channel_rt_args_imp
         this->downstream_edm_vcs_worker_location_info_address.size() > vc_idx,
         "VC index is out of bounds for downstream_edm_vcs_worker_location_info_address");
 
-    log_info(tt::LogFabric, "VC1 base address: {}", this->downstream_edm_vcs_buffer_base_address[vc_idx].value_or(0));
-    for (size_t i = 0; i < this->downstream_edm_vcs_buffer_base_address.size(); i++) {
-        log_info(
-            tt::LogFabric, "\tVC{} base address: {}", i, this->downstream_edm_vcs_buffer_base_address[i].value_or(0));
-    }
+    // log_info(tt::LogFabric, "VC1 base address: {}",
+    // this->downstream_edm_vcs_buffer_base_address[vc_idx].value_or(0)); for (size_t i = 0; i <
+    // this->downstream_edm_vcs_buffer_base_address.size(); i++) {
+    //     log_info(
+    //         tt::LogFabric, "\tVC{} base address: {}", i,
+    //         this->downstream_edm_vcs_buffer_base_address[i].value_or(0));
+    // }
 
     args_out.push_back(this->downstream_edm_vcs_buffer_base_address[vc_idx].value_or(0));
 }

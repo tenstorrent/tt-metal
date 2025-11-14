@@ -634,7 +634,7 @@ void FabricStaticSizedChannelsAllocator::emit_ct_args(
 
 void FabricStaticSizedChannelsAllocator::remove_sender_channel(size_t channel_id) {
     TT_FATAL(channel_id < num_used_sender_channels, "Sender channel ID {} out of bounds", channel_id);
-    log_info(tt::LogMetal, "\tFabricStaticSizedChannelsAllocator::remove_sender_channel {}", channel_id);
+    // log_info(tt::LogMetal, "\tFabricStaticSizedChannelsAllocator::remove_sender_channel {}", channel_id);
 
     for (size_t i = 0; i < this->num_used_sender_channels; ++i) {
         for (size_t j = 0; j < this->num_used_receiver_channels; ++j) {
@@ -648,28 +648,28 @@ void FabricStaticSizedChannelsAllocator::remove_sender_channel(size_t channel_id
 
     // Mark the channel to be removed by zeroing it out
     auto new_free_address_base_address = sender_channels_base_address[channel_id];
-    log_info(tt::LogMetal, "\t\t\tnew_free_address_base_address={}", new_free_address_base_address);
+    // log_info(tt::LogMetal, "\t\t\tnew_free_address_base_address={}", new_free_address_base_address);
     auto channel_size_bytes = sender_channels_size_bytes[channel_id];
     auto expected_next_used_address = new_free_address_base_address + channel_size_bytes;
-    log_info(tt::LogMetal, "\t\t\texpected_next_used_address={}", expected_next_used_address);
-    log_info(tt::LogMetal, "\t\t\tchannel_addresses_before_deletion:");
+    // log_info(tt::LogMetal, "\t\t\texpected_next_used_address={}", expected_next_used_address);
+    // log_info(tt::LogMetal, "\t\t\tchannel_addresses_before_deletion:");
     for (size_t i = 0; i < num_used_sender_channels; ++i) {
-        log_info(
-            tt::LogMetal,
-            "\t\t\t\ts channel {} address={}, size={}, num_buffers={}",
-            i,
-            sender_channels_base_address.at(i),
-            sender_channels_size_bytes.at(i),
-            sender_channels_num_buffers.at(i));
+        // log_info(
+        //     tt::LogMetal,
+        //     "\t\t\t\ts channel {} address={}, size={}, num_buffers={}",
+        //     i,
+        //     sender_channels_base_address.at(i),
+        //     sender_channels_size_bytes.at(i),
+        //     sender_channels_num_buffers.at(i));
     }
     for (size_t i = 0; i < num_used_receiver_channels; ++i) {
-        log_info(
-            tt::LogMetal,
-            "\t\t\t\tr channel {} address={}, size={}, num_buffers={}",
-            i,
-            receiver_channels_base_address.at(i),
-            receiver_channels_size_bytes.at(i),
-            receiver_channels_num_buffers.at(i));
+        // log_info(
+        //     tt::LogMetal,
+        //     "\t\t\t\tr channel {} address={}, size={}, num_buffers={}",
+        //     i,
+        //     receiver_channels_base_address.at(i),
+        //     receiver_channels_size_bytes.at(i),
+        //     receiver_channels_num_buffers.at(i));
     }
     std::vector<size_t> sender_channels_to_shift_down = {};
     std::vector<size_t> receiver_channels_to_shift_down = {};
@@ -696,21 +696,21 @@ void FabricStaticSizedChannelsAllocator::remove_sender_channel(size_t channel_id
     } while (did_something);
     for (auto ch : sender_channels_to_shift_down) {
         sender_channels_base_address[ch] -= channel_size_bytes;
-        log_info(
-            tt::LogMetal,
-            "\t\t\tshift down sender channel {} by {} to {}",
-            ch,
-            channel_size_bytes,
-            sender_channels_base_address[ch]);
+        // log_info(
+        //     tt::LogMetal,
+        //     "\t\t\tshift down sender channel {} by {} to {}",
+        //     ch,
+        //     channel_size_bytes,
+        //     sender_channels_base_address[ch]);
     }
     for (auto ch : receiver_channels_to_shift_down) {
         receiver_channels_base_address[ch] -= channel_size_bytes;
-        log_info(
-            tt::LogMetal,
-            "\t\t\tshift down receiver channel {} by {} to {}",
-            ch,
-            channel_size_bytes,
-            receiver_channels_base_address[ch]);
+        // log_info(
+        //     tt::LogMetal,
+        //     "\t\t\tshift down receiver channel {} by {} to {}",
+        //     ch,
+        //     channel_size_bytes,
+        //     receiver_channels_base_address[ch]);
     }
 
     TT_FATAL(
@@ -726,7 +726,7 @@ void FabricStaticSizedChannelsAllocator::remove_sender_channel(size_t channel_id
     remote_sender_channels_size_bytes.erase(remote_sender_channels_size_bytes.begin() + channel_id);
     remote_sender_channels_num_buffers.erase(remote_sender_channels_num_buffers.begin() + channel_id);
     this->num_used_sender_channels--;
-    log_info(tt::LogMetal, "\t\t\tnum_used_sender_channels={}", this->num_used_sender_channels);
+    // log_info(tt::LogMetal, "\t\t\tnum_used_sender_channels={}", this->num_used_sender_channels);
 
     for (size_t i = 0; i < this->num_used_sender_channels; ++i) {
         for (size_t j = 0; j < this->num_used_receiver_channels; ++j) {
@@ -946,10 +946,10 @@ FabricStaticSizedChannelsAllocator::create_dedicated_sender_channel_allocator(si
     // dedicated_allocator->remote_sender_channels_size_bytes[0] = remote_sender_channels_size_bytes[channel_index];
     // dedicated_allocator->remote_sender_channels_num_buffers[0] = remote_sender_channels_num_buffers[channel_index];
 
-    log_info(tt::LogFabric, "Dedicated sender channel allocator created. Channel index: {}", channel_index);
-    log_info(tt::LogFabric, "\tSender channel base address: {}", dedicated_allocator->sender_channels_base_address[0]);
-    log_info(
-        tt::LogFabric, "\tSender channel number of slots: {}", dedicated_allocator->sender_channels_num_buffers[0]);
+    // log_info(tt::LogFabric, "Dedicated sender channel allocator created. Channel index: {}", channel_index);
+    // log_info(tt::LogFabric, "\tSender channel base address: {}",
+    // dedicated_allocator->sender_channels_base_address[0]); log_info(
+    //     tt::LogFabric, "\tSender channel number of slots: {}", dedicated_allocator->sender_channels_num_buffers[0]);
 
     // Update the sender channel local to global index map
     // dedicated_allocator->sender_channel_local_to_global_index_map[0] =

@@ -119,8 +119,8 @@ public:
         };
 
         auto expanded_senders = expand(0, sender_channel_to_pool_index_);
-        log_info(tt::LogFabric, "\tunexpanded_senders: {}", expanded_senders);
-        log_info(tt::LogFabric, "\texpanded_senders: {}", expanded_senders);
+        // log_info(tt::LogFabric, "\tunexpanded_senders: {}", expanded_senders);
+        // log_info(tt::LogFabric, "\texpanded_senders: {}", expanded_senders);
         sender_channel_to_pool_index_ = std::move(expanded_senders);
         for (size_t i = 1; i < sender_channel_to_pool_index_.size(); i++) {
             TT_FATAL(
@@ -131,8 +131,8 @@ public:
         }
         // This will not work for elastic channels
         auto expanded_receivers = expand(num_sender_channels, receiver_channel_to_pool_index_);
-        log_info(tt::LogFabric, "\tunexpanded_receivers: {}", expanded_receivers);
-        log_info(tt::LogFabric, "\texpanded_receivers: {}", expanded_receivers);
+        // log_info(tt::LogFabric, "\tunexpanded_receivers: {}", expanded_receivers);
+        // log_info(tt::LogFabric, "\texpanded_receivers: {}", expanded_receivers);
         receiver_channel_to_pool_index_ = std::move(expanded_receivers);
 
         std::vector<ChannelPoolDefinition> expanded_pool_definitions;
