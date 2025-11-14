@@ -9,6 +9,7 @@
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/untilize.h"
 #include "compute_kernel_api/pack_untilize.h"
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.h"
 
 template <uint32_t Wt, uint32_t Ht, uint32_t HtWt>
 ALWI void transpose_with_untilize(uint32_t cb_tilize, uint32_t cb_untilize, uint32_t cb_out) {
@@ -151,16 +152,8 @@ void MAIN {
     unary_op_init_common(cb_in, cb_out);
 
     for (uint32_t n = 0; n < num_hw_blocks_per_core; n++) {
-        // tilize input
-        tilize_init(cb_in, Wt, cb_tilize);
-        for (uint32_t h = 0; h < Ht; ++h) {
-            cb_wait_front(cb_in, Wt);
-            cb_reserve_back(cb_tilize, Wt);
-            tilize_block(cb_in, Wt, cb_tilize);
-            cb_push_back(cb_tilize, Wt);
-            cb_pop_front(cb_in, Wt);
-        }
-        tilize_uninit(cb_in, cb_tilize);
+        // Tilize input with activation pattern (Ht rows × Wt tiles)
+        compute_kernel_lib::tilize(cb_in, Wt, cb_tilize, 1, Ht);
 
         // transpose
         cb_wait_front(cb_tilize, HtWt);

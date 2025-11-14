@@ -58,7 +58,11 @@ target_sources(
         FILE_SET jit_api
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES cpp/ttnn/kernel/kernel_common_utils.hpp cpp/ttnn/kernel/kernel_utils.hpp api/ttnn/tensor/layout/layout.hpp
+        FILES
+            cpp/ttnn/kernel/kernel_common_utils.hpp
+            cpp/ttnn/kernel/kernel_utils.hpp
+            cpp/ttnn/kernel_lib/tilize_helpers.h
+            api/ttnn/tensor/layout/layout.hpp
     PRIVATE
         ${TENSOR_FLATBUFFER_GENERATED_HEADERS}
         core/async_runtime.cpp
