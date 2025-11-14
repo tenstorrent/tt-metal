@@ -1173,6 +1173,8 @@ private:
         std::vector<TrafficPatternConfig> sync_patterns;
         uint32_t sync_val = 0;
 
+        // this->route_manager_.get_nearest_neighbor_node_ids(src_device);
+
         // Common sync pattern characteristics
         TrafficPatternConfig base_sync_pattern;
         // Edge case: NeighborExchange topology does not support multicast sync patterns, so we create unicast sync
