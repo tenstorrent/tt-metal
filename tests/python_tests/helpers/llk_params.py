@@ -269,6 +269,11 @@ class EltwiseBinaryReuseDestType(Enum):
     DEST_TO_SRCB = 2
 
 
+class DataCopyType(Enum):
+    A2D = "A2D"
+    B2D = "B2D"
+
+
 # ******** QUASAR specific ********
 class ImpliedMathFormat(Enum):
     No = "false"
