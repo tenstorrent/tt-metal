@@ -321,7 +321,7 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
     auto src_fn = tt::tt_fabric::FabricNodeId{tt::tt_fabric::MeshId{p.mesh_id}, p.src_chip};
 
     auto pick_link = [&](Dist::MeshCoordinate mc, uint32_t& out_link_idx) {
-        auto dst_fn = coord_to_fabric_id(mc);
+        auto dst_fn = coord_to_fabric_id(std::move(mc));
         auto links = tt::tt_fabric::get_forwarding_link_indices(src_fn, dst_fn);
         if (links.empty()) {
             ADD_FAILURE() << "No forwarding link from src to representative";
