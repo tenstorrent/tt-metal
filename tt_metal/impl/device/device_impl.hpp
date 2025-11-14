@@ -177,6 +177,10 @@ public:
         this->mesh_device = mesh_device;
     };
 
+    // Kernel binary path prefix for pre-compiled kernels (experimental)
+    void set_kernel_binary_path_prefix(const std::string& prefix) override { kernel_binary_path_prefix_ = prefix; }
+    const std::string& get_kernel_binary_path_prefix() const override { return kernel_binary_path_prefix_; }
+
 private:
     static constexpr uint32_t DEFAULT_NUM_SUB_DEVICES = 1;
 
@@ -219,6 +223,9 @@ private:
 
     uint32_t completion_queue_reader_core_ = 0;
     std::unique_ptr<SystemMemoryManager> sysmem_manager_;
+
+    // Kernel binary path prefix for pre-compiled kernels (experimental)
+    std::string kernel_binary_path_prefix_;
     uint8_t num_hw_cqs_ = 1;
 
     // SystemMemoryManager is the interface to the hardware command queue
