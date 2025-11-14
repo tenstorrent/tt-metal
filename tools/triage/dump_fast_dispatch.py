@@ -115,16 +115,22 @@ class MultiCategoryCoreLookup:
 # This function builds a lookup map for core info for a given kernel name
 def build_core_lookup_map(inspector_data: InspectorData) -> dict[tuple[int, int, int], MultiCategoryCoreLookup]:
     """
-    Build lookup map for core info for a given kernel name
+    Build lookup map for core info for a given kernel name using unique_id as chip key.
 
-    Returns a dictionary mapping (chip, x, y) to a MultiCategoryCoreLookup object
+    Returns a dictionary mapping (unique_id, x, y) to a MultiCategoryCoreLookup object
     MultiCategoryCoreLookup object contains dispatch_info, dispatch_s_info, and prefetch_info
     """
+    # Get chip_id to unique_id mapping from Inspector RPC
+    chip_id_to_unique_id: dict[int, int] = {}
+    unique_ids_result = inspector_data.getChipUniqueIds()
+    for mapping in unique_ids_result.mappings:
+        chip_id_to_unique_id[mapping.chipId] = mapping.uniqueId
+
     # Get all core info from inspector data
     all_cores = inspector_data.getAllDispatchCoreInfos()
 
     # Convert to dictionary for faster lookup
-    # key is (chip, x, y) and value is a MultiCategoryCoreLookup object
+    # key is (unique_id, x, y) and value is a MultiCategoryCoreLookup object
     # MultiCategoryCoreLookup object contains dispatch_info, dispatch_s_info, and prefetch_info
     lookup: dict[tuple[int, int, int], MultiCategoryCoreLookup] = {}
 
@@ -132,7 +138,12 @@ def build_core_lookup_map(inspector_data: InspectorData) -> dict[tuple[int, int,
         category = category_group.category  # "dispatch", "dispatchS", or "prefetch"
 
         for core_entry in category_group.entries:
-            key = (core_entry.key.chip, core_entry.key.x, core_entry.key.y)
+            # core_entry.key.chip is logical device_id - convert to unique_id
+            logical_chip_id = core_entry.key.chip
+            unique_id = chip_id_to_unique_id[logical_chip_id]
+
+            # Use unique_id as the key
+            key = (unique_id, core_entry.key.x, core_entry.key.y)
 
             # Get or create entry for this core
             if key not in lookup:
@@ -245,11 +256,8 @@ def read_wait_globals(
 
     # Get virtual coordinate for this specific core
     virtual_coord = location.to("translated")
-    # This device._id might mismatch with the tt_cxy_pair::chip_id
-    # due to TT_METAL_VISIBLE_DEVICES env variable
-    # Avoid using UMD device id in tt-triage because of the mapping problem
-    # TODO: replace device._id with unique_id once it's available
-    chip_id = location._device._id
+    # Use unique_id instead of device._id to avoid mapping issues with TT_METAL_VISIBLE_DEVICES
+    chip_id = location._device.unique_id
     x, y = virtual_coord
 
     # Lookup core info for the given kernel name based on virtual coordinates
@@ -299,20 +307,18 @@ def run(args, context: Context):
     dispatch_core_pairs = []
     # Relevant dispatcher kernel names
     dispatcher_kernel_names = {"cq_dispatch", "cq_dispatch_subordinate", "cq_prefetch"}
-    # Map chip ID to device for lookup
-    chip_to_device = {device._id: device for device in run_checks.devices}
+    # Map unique_id to device for lookup
+    unique_id_to_device = {device.unique_id: device for device in run_checks.devices}
 
-    # Go through all cores in the core_lookup
+    # Go through all cores in the core_lookup (now keyed by unique_id)
     # And check if they have dispatcher kernels loaded
-    for (chip, x, y), info in core_lookup.items():
+    for (chip_unique_id, x, y), info in core_lookup.items():
         if not info.has_any_info():
             continue
 
+        # Get device by unique_id
+        device = unique_id_to_device.get(chip_unique_id)
         # Create OnChipCoordinate for this dispatcher core location
-        device = chip_to_device.get(chip)
-        # TODO: Handle chip ID mapping issues when inspector chip != device._id
-        # due to TT_METAL_VISIBLE_DEVICES. This will be resolved when unique_id
-        # is available instead of device._id
         location = OnChipCoordinate(x, y, "translated", device)
 
         # Check all RISC cores at this location for dispatcher kernels
