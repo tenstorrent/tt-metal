@@ -72,13 +72,11 @@ public:
      *
      * @param other The other router builder to connect to
      * @param vc Virtual channel ID
-     * @param sender_channel_idx Logical sender channel index within the VC
      * @param receiver_channel_idx Logical receiver channel index within the VC on the other router
      */
-    void connect_to_downstream_router(
+    void connect_to_downstream_router_over_ethernet(
         FabricRouterBuilder& other,
         uint32_t vc,
-        uint32_t sender_channel_idx,
         uint32_t receiver_channel_idx);
 
     /**

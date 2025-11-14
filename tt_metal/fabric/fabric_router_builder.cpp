@@ -80,10 +80,9 @@ std::unique_ptr<FabricRouterBuilder> FabricRouterBuilder::build(
 }
 
 
-void FabricRouterBuilder::connect_to_downstream_router(
+void FabricRouterBuilder::connect_to_downstream_router_over_ethernet(
     FabricRouterBuilder& other,
     uint32_t vc,
-    [[maybe_unused]] uint32_t sender_channel_idx,
     uint32_t receiver_channel_idx) {
     // auto sender_mapping = channel_mapping_.get_sender_mapping(vc, sender_channel_idx);
     auto receiver_mapping = other.channel_mapping_.get_receiver_mapping(vc, receiver_channel_idx);

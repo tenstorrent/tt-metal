@@ -311,9 +311,9 @@ void build_tt_fabric_program(
         auto& router_builder1 = router_builders.at(eth_chan_dir1);
         auto& router_builder2 = router_builders.at(eth_chan_dir2);
 
-        uint32_t vc0_sender_channel = is_2D_routing ? 0 : 1;
-        router_builder1->connect_to_downstream_router(*router_builder2, 0, vc0_sender_channel, 0);
-        router_builder2->connect_to_downstream_router(*router_builder1, 0, vc0_sender_channel, 0);
+        uint32_t vc0_receiver_channel = 0; // no special handling/channel mapping until the logic is pulled from erisc datamover builder.
+        router_builder1->connect_to_downstream_router_over_ethernet(*router_builder2, 0, vc0_receiver_channel);
+        router_builder2->connect_to_downstream_router_over_ethernet(*router_builder1, 0, vc0_receiver_channel);
     };
 
     auto connect_downstream_builders = [&](RoutingDirection dir1, RoutingDirection dir2) {
