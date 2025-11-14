@@ -103,8 +103,6 @@ jobs:
               echo "run-perplexity=false" >> $GITHUB_OUTPUT
               ;;
             *)
-              echo "run-quick=true" >> $GITHUB_OUTPUT
-
               echo "run-unit=false" >> $GITHUB_OUTPUT
               echo "run-demo=false" >> $GITHUB_OUTPUT
               echo "run-frequent=false" >> $GITHUB_OUTPUT
