@@ -41,7 +41,7 @@ def test_gate(device):
 
     # Create memory config for input activations
     # Using single core for simplicity
-    grid_size = ttnn.CoreGrid(y=1, x=1)
+    grid_size = ttnn.CoreGrid(y=8, x=6)
     num_cores = grid_size.num_cores
 
     k_tiles = k // 32  # 224 tiles
@@ -65,7 +65,8 @@ def test_gate(device):
     )
 
     # Create memory config for router weights [7168, 256]
-    router_shard_shape = (k, router_experts)
+    # router_shard_shape = (k, router_experts)
+    router_shard_shape = (k, 32)
     router_shard_spec = ttnn.ShardSpec(
         ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}),
         router_shard_shape,
@@ -83,7 +84,7 @@ def test_gate(device):
     )
 
     # Create memory config for expert bias [1, 256]
-    bias_shard_shape = (m, router_experts)
+    bias_shard_shape = (m, 32)
     bias_shard_spec = ttnn.ShardSpec(
         ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}),
         bias_shard_shape,
@@ -103,7 +104,7 @@ def test_gate(device):
 
     # Create output memory config
     # Output shape will be [1, 256] after router computation
-    output_shard_shape = (m, router_experts)
+    output_shard_shape = (m, 32)
     output_shard_spec = ttnn.ShardSpec(
         ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}),
         output_shard_shape,
