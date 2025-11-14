@@ -5,6 +5,8 @@
 #include "unary_device_operation.hpp"
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "tools/profiler/op_profiler.hpp"
@@ -90,11 +92,18 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
         input_tensor.buffer() != nullptr,
         "Operands to eltwise unary need to be allocated in buffers on the device. Buffer is null.");
 
-    TT_FATAL(
-        input_tensor.memory_config().memory_layout() == out_memory_config.memory_layout(),
-        "Unary operation requires Input and Output memory layout to match. Input layout: {}, Output layout: {}",
-        static_cast<int>(input_tensor.memory_config().memory_layout()),
-        static_cast<int>(out_memory_config.memory_layout()));
+    // Allow sharded output from non-sharded input if shard_spec can be created automatically
+    bool allow_sharded_output = out_memory_config.is_sharded() &&
+                                (!out_memory_config.shard_spec().has_value() ||
+                                 (input_tensor.is_sharded() && input_tensor.shard_spec().has_value()));
+
+    if (!allow_sharded_output) {
+        TT_FATAL(
+            input_tensor.memory_config().memory_layout() == out_memory_config.memory_layout(),
+            "Unary operation requires Input and Output memory layout to match. Input layout: {}, Output layout: {}",
+            static_cast<int>(input_tensor.memory_config().memory_layout()),
+            static_cast<int>(out_memory_config.memory_layout()));
+    }
 
     if (!input_tensor.is_sharded()) {
         TT_FATAL(
@@ -135,12 +144,195 @@ spec_return_value_t UnaryDeviceOperation::compute_output_specs(
     }
 
     auto output_layout = Layout::TILE;
-    if (args.output_memory_config.is_sharded()) {
+    auto output_memory_config = args.output_memory_config;
+
+    // If output memory config is sharded but doesn't have a shard_spec,
+    // automatically create one from the input tensor
+    if (output_memory_config.is_sharded() && !output_memory_config.shard_spec().has_value()) {
+        if (tensor_args.input.is_sharded() && tensor_args.input.shard_spec().has_value()) {
+            // Use input tensor's shard_spec if available
+            output_memory_config = output_memory_config.with_shard_spec(tensor_args.input.shard_spec().value());
+        } else {
+            // Create a default shard_spec based on input shape and memory layout
+            const auto& input = tensor_args.input;
+            const auto& input_shape = input.padded_shape();
+            const auto& device = input.device();
+            const auto memory_layout = output_memory_config.memory_layout();
+
+            // Get device compute grid
+            CoreCoord grid_size = device->compute_with_storage_grid_size();
+
+            // Calculate shard shape based on memory layout
+            // Shard dimensions must satisfy:
+            // 1. Tile alignment: multiples of tile size (32x32)
+            // 2. L1 alignment: (shard_width * datum_size) % L1_alignment == 0
+            constexpr uint32_t TILE_WIDTH = 32;
+            constexpr uint32_t TILE_HEIGHT = 32;
+
+            // Get L1 alignment requirement and datum size for alignment calculation
+            uint32_t l1_alignment = hal::get_l1_alignment();
+            DataType input_dtype = input.dtype();
+            tt::DataFormat input_df = tt::tt_metal::datatype_to_dataformat_converter(input_dtype);
+            uint32_t datum_size_bytes = datum_size(input_df);
+            // Calculate minimum shard width in elements to satisfy L1 alignment
+            // L1 alignment is in bytes, so we need: shard_width_elements * datum_size_bytes >= l1_alignment
+            // and shard_width_elements * datum_size_bytes % l1_alignment == 0
+            uint32_t min_shard_width_for_l1 = tt::div_up(l1_alignment, datum_size_bytes);
+            // Round up to tile boundary for L1-aligned shard width
+            uint32_t l1_aligned_tile_multiple = tt::round_up(min_shard_width_for_l1, TILE_WIDTH);
+
+            std::array<uint32_t, 2> shard_shape;
+            uint32_t num_cores = 0;
+            uint32_t total_height = input.physical_volume() / input_shape[-1];
+            uint32_t total_width = input_shape[-1];
+
+            switch (memory_layout) {
+                case TensorMemoryLayout::WIDTH_SHARDED: {
+                    // For width sharding, try to maximize parallelism while ensuring alignment
+                    uint32_t max_grid_cores = static_cast<uint32_t>(grid_size.x * grid_size.y);
+                    // Start with trying to use all available cores
+                    uint32_t target_cores = std::min(max_grid_cores, total_width / l1_aligned_tile_multiple);
+                    target_cores = std::max(1u, target_cores); // At least use 1 core
+
+                    // Calculate shard width that maximizes core usage while satisfying alignment
+                    uint32_t shard_width = tt::round_up(total_width / target_cores, l1_aligned_tile_multiple);
+                    shard_width = std::max(shard_width, l1_aligned_tile_multiple); // Ensure minimum
+                    shard_shape = {total_height, shard_width};
+                    num_cores = tt::div_up(total_width, shard_shape[1]);
+                    break;
+                }
+                case TensorMemoryLayout::HEIGHT_SHARDED: {
+                    // For height sharding, divide height across available cores
+                    uint32_t max_grid_cores = static_cast<uint32_t>(grid_size.x * grid_size.y);
+                    uint32_t target_cores = std::min(max_grid_cores, total_height / TILE_HEIGHT);
+                    target_cores = std::max(1u, target_cores);
+
+                    uint32_t shard_height = tt::round_up(total_height / target_cores, TILE_HEIGHT);
+                    shard_height = std::max(shard_height, TILE_HEIGHT);
+                    shard_shape = {shard_height, total_width};
+                    num_cores = tt::div_up(total_height, shard_shape[0]);
+                    break;
+                }
+                case TensorMemoryLayout::BLOCK_SHARDED: {
+                    // For block sharding, divide both dimensions across grid
+                    // For COL_MAJOR orientation: num_shards_along_width <= grid.y, num_shards_along_height <= grid.x
+                    uint32_t grid_y = static_cast<uint32_t>(grid_size.y);  // rows
+                    uint32_t grid_x = static_cast<uint32_t>(grid_size.x);   // columns
+
+                    // Calculate initial shard dimensions conservatively
+                    uint32_t max_grid_cores = static_cast<uint32_t>(grid_size.x * grid_size.y);
+                    uint32_t conservative_max_shards = std::min(grid_x, grid_y);
+                    conservative_max_shards = std::max(1u, conservative_max_shards);
+
+                    uint32_t min_shard_height = tt::div_up(total_height, conservative_max_shards);
+                    uint32_t shard_height = tt::round_up(min_shard_height, TILE_HEIGHT);
+                    shard_height = std::max(shard_height, TILE_HEIGHT);
+                    uint32_t num_shards_height = tt::div_up(total_height, shard_height);
+
+                    uint32_t min_shard_width = tt::div_up(total_width, conservative_max_shards);
+                    uint32_t shard_width = tt::round_up(min_shard_width, l1_aligned_tile_multiple);
+                    shard_width = std::max(shard_width, l1_aligned_tile_multiple);
+                    uint32_t num_shards_width = tt::div_up(total_width, shard_width);
+
+                    // Iteratively adjust to satisfy actual grid constraints
+                    bool row_wise = false;  // COL_MAJOR for BLOCK_SHARDED
+                    CoreRangeSet temp_grid_set;
+                    uint32_t actual_grid_x = 0;
+                    uint32_t actual_grid_y = 0;
+                    uint32_t max_iterations = 20;
+
+                    for (uint32_t iter = 0; iter < max_iterations; iter++) {
+                        // Calculate num_cores and create CoreRangeSet
+                        num_cores = num_shards_height * num_shards_width;
+                        num_cores = std::min(num_cores, max_grid_cores);
+                        temp_grid_set = tt::tt_metal::num_cores_to_corerangeset(num_cores, grid_size, row_wise);
+                        CoreCoord actual_shard_grid = temp_grid_set.bounding_box().grid_size();
+                        actual_grid_x = static_cast<uint32_t>(actual_shard_grid.x);
+                        actual_grid_y = static_cast<uint32_t>(actual_shard_grid.y);
+
+                        // Check if constraints are satisfied
+                        bool height_ok = (num_shards_height <= actual_grid_x);
+                        bool width_ok = (num_shards_width <= actual_grid_y);
+
+                        if (height_ok && width_ok) {
+                            break;  // Constraints satisfied
+                        }
+
+                        // Adjust shard dimensions to satisfy constraints
+                        if (!height_ok && shard_height < total_height) {
+                            // Increase shard_height to reduce num_shards_height
+                            uint32_t target_num_shards = actual_grid_x;
+                            if (target_num_shards == 0) target_num_shards = 1;
+                            uint32_t new_min_shard_height = tt::div_up(total_height, target_num_shards);
+                            shard_height = tt::round_up(new_min_shard_height, TILE_HEIGHT);
+                            shard_height = std::max(shard_height, TILE_HEIGHT);
+                            num_shards_height = tt::div_up(total_height, shard_height);
+                        }
+
+                        if (!width_ok && shard_width < total_width) {
+                            // Increase shard_width to reduce num_shards_width
+                            uint32_t target_num_shards = actual_grid_y;
+                            if (target_num_shards == 0) target_num_shards = 1;
+                            uint32_t new_min_shard_width = tt::div_up(total_width, target_num_shards);
+                            shard_width = tt::round_up(new_min_shard_width, l1_aligned_tile_multiple);
+                            shard_width = std::max(shard_width, l1_aligned_tile_multiple);
+                            num_shards_width = tt::div_up(total_width, shard_width);
+                        }
+                    }
+
+                    // Final verification
+                    TT_FATAL(num_shards_height <= actual_grid_x, "Number of shards along height {} must not exceed grid columns {}", num_shards_height, actual_grid_x);
+                    TT_FATAL(num_shards_width <= actual_grid_y, "Number of shards along width {} must not exceed grid rows {} for COL_MAJOR orientation", num_shards_width, actual_grid_y);
+
+                    shard_shape = {shard_height, shard_width};
+                    break;
+                }
+                default:
+                    TT_FATAL(false, "Unsupported sharding scheme for automatic shard_spec creation");
+            }
+
+            // Limit number of cores to available grid (if not already done in BLOCK_SHARDED case)
+            if (memory_layout != TensorMemoryLayout::BLOCK_SHARDED) {
+                uint32_t max_grid_cores = static_cast<uint32_t>(grid_size.x * grid_size.y);
+                num_cores = std::min(num_cores, max_grid_cores);
+            }
+
+            // Create core range set
+            CoreRangeSet grid_set;
+            if (memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+                // For BLOCK_SHARDED, create a rectangular grid directly
+                // The grid should be (num_shards_height, num_shards_width) for COL_MAJOR
+                // We need to get num_shards_height and num_shards_width from the shard_shape
+                uint32_t num_shards_h = tt::div_up(total_height, shard_shape[0]);
+                uint32_t num_shards_w = tt::div_up(total_width, shard_shape[1]);
+                // Ensure we don't exceed device grid
+                uint32_t grid_h = std::min(num_shards_h, static_cast<uint32_t>(grid_size.x));
+                uint32_t grid_w = std::min(num_shards_w, static_cast<uint32_t>(grid_size.y));
+                // Create a single rectangular CoreRange
+                CoreRange block_range({0, 0}, {grid_h - 1, grid_w - 1});
+                grid_set = CoreRangeSet({block_range});
+            } else {
+                bool row_wise = (memory_layout == TensorMemoryLayout::WIDTH_SHARDED);
+                grid_set = tt::tt_metal::num_cores_to_corerangeset(num_cores, grid_size, row_wise);
+            }
+
+            // Determine shard orientation
+            ShardOrientation shard_orientation = (memory_layout == TensorMemoryLayout::WIDTH_SHARDED)
+                ? ShardOrientation::ROW_MAJOR
+                : ShardOrientation::COL_MAJOR;
+
+            // Create shard spec
+            ShardSpec shard_spec(grid_set, shard_shape, shard_orientation);
+            output_memory_config = output_memory_config.with_shard_spec(shard_spec);
+        }
+    }
+
+    if (output_memory_config.is_sharded()) {
         output_layout = tensor_args.input.layout();
     }
 
     const auto output_shape = tensor_args.input.logical_shape();
-    return TensorSpec(output_shape, TensorLayout(args.output_dtype, output_layout, args.output_memory_config));
+    return TensorSpec(output_shape, TensorLayout(args.output_dtype, output_layout, output_memory_config));
 }
 
 tensor_return_value_t UnaryDeviceOperation::create_output_tensors(
