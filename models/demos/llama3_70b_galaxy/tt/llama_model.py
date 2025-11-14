@@ -276,6 +276,8 @@ class TtTransformer(LightweightModule):
     ):
         tt_tokens = self.embd(tokens)
         tt_tokens = ttnn.unsqueeze_to_4D(tt_tokens)
+        tt_tokens = ttnn.typecast(tt_tokens, dtype=ttnn.bfloat8_b, memory_config=tt_tokens.memory_config())
+
         return tt_tokens, user_id, page_table, chunk_page_table
 
     def prepare_inputs_prefill(
@@ -414,6 +416,8 @@ class TtTransformer(LightweightModule):
         # print("tokens", tokens.shape, tokens.memory_config)
         tt_rot_mats = self.rope_setup.get_rm_rot_mats(rope_idxs)
         tt_tokens = self.embd(tokens)
+        tt_tokens = ttnn.typecast(tt_tokens, dtype=ttnn.bfloat8_b, memory_config=tt_tokens.memory_config())
+
         return tt_tokens, current_pos, tt_rot_mats, page_table
 
     def process_output_prefill(self, tt_out, last_token_idx, tt_out_logits_saved=None):
@@ -641,6 +645,7 @@ class TtTransformer(LightweightModule):
 
         h = None
         # x needs to be in bfloat16_b as it gets reused as the residual tensor
+        # x = ttnn.typecast(x, dtype=ttnn.bfloat8_b, memory_config=x.memory_config())
         for i, layer in enumerate(self.layers):
             x, h = layer(
                 x,
