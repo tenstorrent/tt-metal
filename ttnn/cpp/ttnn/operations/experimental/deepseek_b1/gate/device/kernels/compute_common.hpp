@@ -84,6 +84,10 @@ inline void router_compute_sigmoid() {
         in1_index += in1_block_w;  // stride down by 1
     }
 
+    // Apply sigmoid activation to each output tile
+    sigmoid_tile_init();
+    sigmoid_tile(dst_index);
+
     // Commit tile register writes
     tile_regs_commit();
 

@@ -9,6 +9,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import comp_pcc
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
@@ -29,14 +30,16 @@ def test_gate(device):
 
     # Create PyTorch tensors for input activations, router weights, and expert bias
     torch.manual_seed(0)
-    torch_activations = torch.randn((m, k), dtype=torch.bfloat16)
-    torch_router_weights = torch.randn((k, router_experts), dtype=torch.bfloat16)
+    torch_activations = torch.randn((m, k), dtype=torch.bfloat16) / 10
+    torch_router_weights = torch.randn((k, router_experts), dtype=torch.bfloat16) / 10
     torch_expert_bias = torch.randn((m, router_experts), dtype=torch.bfloat16)
 
     # For reference, compute the expected output
     # (The actual gate op will do matmul + bias + sigmoid + top-k + normalize internally)
     torch_matmul_output = torch.matmul(torch_activations.float(), torch_router_weights.float())
+    print(f"torch_matmul_output: {torch_matmul_output}")
     torch_sigmoid_output = torch.sigmoid(torch_matmul_output)
+    print(f"torch_sigmoid_output: {torch_sigmoid_output}")
     torch_reference_output = (torch_sigmoid_output + torch_expert_bias.float()).bfloat16()
 
     # Create memory config for input activations
@@ -126,10 +129,11 @@ def test_gate(device):
         grid_size,
         memory_config=output_mem_config,
     )
-    print(ttnn_output)
-
     # Convert back to torch for comparison
     output_torch = ttnn.to_torch(ttnn_output)
+    print(output_torch)
+    print(comp_pcc(torch_sigmoid_output, output_torch))
+    # print(comp_pcc(torch_matmul_output, output_torch))
 
     logger.info(f"Output shape: {output_torch.shape}")
     logger.info(
