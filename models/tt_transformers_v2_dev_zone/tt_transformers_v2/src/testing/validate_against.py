@@ -397,37 +397,6 @@ def _prepare_metric_config(metric_tolerances_input):
     return metrics_map, hib, tol_map, logs_local
 
 
-def _align_ref_output_to_impl(ref_output: Any, impl_output: Any) -> Any:
-    """Convert reference output to have the same type/distribution as impl output.
-
-    Fast-paths only for common single-output cases; otherwise pass through ref.
-    """
-    # Same type – return as-is
-    if isinstance(ref_output, ttnn.Tensor) and isinstance(impl_output, ttnn.Tensor):
-        return ref_output
-    if torch.is_tensor(ref_output) and torch.is_tensor(impl_output):
-        return ref_output
-
-    # Impl is TTNN, ref is Torch: distribute ref like impl
-    if isinstance(impl_output, ttnn.Tensor) and torch.is_tensor(ref_output):
-        try:
-            return from_torch_dist_as(ref_output, impl_output)
-        except Exception:
-            # Fallback: basic from_torch to default device/layout
-            dev = getattr(impl_output, "device", None) or ttnn.GetDefaultDevice()
-            return ttnn.from_torch(ref_output, device=dev)
-
-    # Impl is Torch, ref is TTNN: compose to Torch
-    if torch.is_tensor(impl_output) and isinstance(ref_output, ttnn.Tensor):
-        try:
-            return to_torch_auto_compose(ref_output)
-        except Exception:
-            return ttnn.to_torch(ref_output)
-
-    # Unknown structures – default to reference
-    return ref_output
-
-
 # todo)) also allow raise an exception from the a failed metric!
 
 # todo)) add support for multiple outputs from the reference function and the decorated function!

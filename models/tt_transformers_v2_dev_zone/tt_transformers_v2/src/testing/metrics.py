@@ -391,7 +391,7 @@ def compute_pcc_device(impl, ref):
             return 0.0
         return pcc
     except Exception as e:
-        # todo)) return a string for logging: f"Error computing PCC on device: {e}, impl: {impl}, ref: {ref}"
+        # todo)) maybe return a string for logging: f"Error computing PCC on device: {e}, impl: {impl}, ref: {ref}"
         return 0.0
 
 
