@@ -42,8 +42,7 @@ ttnn::Tensor ExecuteReduceScatter::invoke(
     }
     auto mesh_device = input_tensor.device();
     uint32_t normalized_dim = input_tensor.logical_shape().get_normalized_index(dim);
-    tt::tt_fabric::Topology topology_ = topology.value_or(
-        ::ttnn::ccl::get_usable_topology(input_tensor, tt::tt_fabric::get_fabric_topology(), cluster_axis));
+    tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
     topology_ = ::ttnn::ccl::convert_2d_to_1d_topology(topology_);
 
     auto memory_config_ = memory_config.value_or(input_tensor.memory_config());

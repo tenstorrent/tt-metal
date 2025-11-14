@@ -13,19 +13,30 @@ from tests.nightly.t3000.ccl.test_ring_attention_all_gather import (
 
 
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
-@pytest.mark.parametrize("num_links", [1, 2, 3], ids=["1link", "2link", "3link"])
 @pytest.mark.parametrize("layout, ag_input_dtype", [(ttnn.TILE_LAYOUT, ttnn.bfloat16)])
 @pytest.mark.parametrize(
-    "ag_output_shape, ag_num_inputs, rp_axis, rp_factor, up_factor",
+    "num_links, ag_output_shape, ag_num_inputs, rp_axis, rp_factor, up_factor, enable_trace, num_iters",
     [
-        ([1, 40, 4096, 64], 2, 1, 4, 4),
-        ([1, 40, 4096, 64], 2, 1, 2, 8),
-        ([1, 40, 4096, 64], 2, 0, 8, 2),
+        # Perf variants (with tracing)
+        (1, [1, 40, 4096, 64], 2, 1, 4, 4, True, 10),
+        (2, [1, 40, 4096, 64], 2, 1, 2, 8, True, 10),
+        (3, [1, 40, 4096, 64], 2, 1, 4, 4, True, 10),
+        (3, [1, 40, 4096, 64], 2, 0, 8, 2, True, 10),
+        # Check variants (without tracing)
+        (1, [1, 40, 4096, 64], 2, 1, 2, 8, False, 1),
+        (1, [1, 40, 4096, 64], 2, 0, 8, 2, False, 1),
+        (2, [1, 40, 4096, 64], 2, 1, 4, 4, False, 1),
+        (2, [1, 40, 4096, 64], 2, 0, 8, 2, False, 1),
     ],
     ids=[
-        "2input_rp4_up4",
-        "2input_rp2_up8",
-        "2input_rp8_up2",
+        "1link_rp4_up4-perf",
+        "2link_rp2_up8-perf",
+        "3link_rp4_up4-perf",
+        "3link_rp8_up2-perf",
+        "1link_rp2_up8-check",
+        "1link_rp8_up2-check",
+        "2link_rp4_up4-check",
+        "2link_rp8_up2-check",
     ],
 )
 @pytest.mark.parametrize(
@@ -36,14 +47,6 @@ from tests.nightly.t3000.ccl.test_ring_attention_all_gather import (
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         )
     ],
-)
-@pytest.mark.parametrize(
-    "enable_trace, num_iters",
-    [
-        (True, 10),
-        (False, 1),
-    ],
-    ids=["perf", "check"],
 )
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",

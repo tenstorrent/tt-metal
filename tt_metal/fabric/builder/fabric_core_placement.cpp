@@ -15,7 +15,9 @@ void run_default_galaxy_optimizer(
     const CorePlacementContext& ctx,
     tt::tt_fabric::FabricEriscDatamoverBuilder& edm_builder1,
     tt::tt_fabric::FabricEriscDatamoverBuilder& edm_builder2) {
-    if (!ctx.is_galaxy) return;
+    if (!ctx.is_galaxy) {
+        return;
+    }
 
     constexpr uint32_t ring_noc_selection_link_threshold = 3;
     constexpr uint32_t line_noc_selection_link_threshold = 2;
