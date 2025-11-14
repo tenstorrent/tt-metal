@@ -4,6 +4,7 @@
 
 import ttnn
 import torch
+from loguru import logger
 
 
 def test_matmul(device):
@@ -11,37 +12,37 @@ def test_matmul(device):
     tensor1 = ttnn.rand((64, 32), dtype=ttnn.bfloat16, device=device)
     tensor2 = ttnn.rand((32, 64), dtype=ttnn.bfloat16, device=device)
     output = ttnn.matmul(tensor1, tensor2)
-    print(f"Output matrix shape: {output.shape}")  # Output matrix shape: Shape([64, 64])
+    logger.info(f"Output matrix shape: {output.shape}")  # Output matrix shape: Shape([64, 64])
 
     # extended matrix x extended matrix - all batch dimensions of size 1
     tensor1 = ttnn.rand((1, 1, 64, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     tensor2 = ttnn.rand((1, 1, 32, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     output = ttnn.matmul(tensor1, tensor2)
-    print(f"Output matrix shape: {output.shape}")  # Output matrix shape: Shape([1, 1, 64, 64])
+    logger.info(f"Output matrix shape: {output.shape}")  # Output matrix shape: Shape([1, 1, 64, 64])
 
     # extended matrix x extended matrix - all batch dimensions of size 1
     tensor1 = ttnn.rand((1, 1, 64, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     tensor2 = ttnn.rand((1, 32, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     output = ttnn.matmul(tensor1, tensor2)
-    print(f"Output matrix shape: {output.shape}")  # Output matrix shape: Shape([1, 1, 64, 64])
+    logger.info(f"Output matrix shape: {output.shape}")  # Output matrix shape: Shape([1, 1, 64, 64])
 
     # batched matrix x broadcasted matrix - first input has batch dimensions not of size 1
     tensor1 = ttnn.rand((10, 64, 32), dtype=ttnn.bfloat16, device=device)
     tensor2 = ttnn.rand((32, 64), dtype=ttnn.bfloat16, device=device)
     output = ttnn.matmul(tensor1, tensor2)
-    print(f"Output matrix shape: {output.shape}")  # Output matrix shape: Shape([10, 64, 64])
+    logger.info(f"Output matrix shape: {output.shape}")  # Output matrix shape: Shape([10, 64, 64])
 
     # batched matrix x batched matrix - both inputs have batch dimensions
     tensor1 = ttnn.rand((10, 64, 32), dtype=ttnn.bfloat16, device=device)
     tensor2 = ttnn.rand((10, 32, 128), dtype=ttnn.bfloat16, device=device)
     output = tensor1 @ tensor2  # alternative to ttnn.matmul(tensor1, tensor2)
-    print(f"Output matrix shape: {output.shape}")  # Output matrix shape: Shape([10, 64, 128])
+    logger.info(f"Output matrix shape: {output.shape}")  # Output matrix shape: Shape([10, 64, 128])
 
     # batched matrix x broadcasted extended matrix - first input has batch dimensions not of size 1
     tensor1 = ttnn.rand((10, 64, 32), dtype=ttnn.bfloat16, device=device)
     tensor2 = ttnn.rand((1, 1, 32, 128), dtype=ttnn.bfloat16, device=device)
     output = tensor1 @ tensor2
-    print(f"Output matrix shape: {output.shape}")  # Output matrix shape: Shape([1, 10, 64, 128])
+    logger.info(f"Output matrix shape: {output.shape}")  # Output matrix shape: Shape([1, 10, 64, 128])
 
 
 def test_linear(device):
@@ -52,7 +53,7 @@ def test_linear(device):
     # Perform linear transformation
 
     output = ttnn.linear(activations, weight, bias=bias)
-    print(f"Output tensor shape: {output.shape}")  # Output tensor shape: Shape([10, 64, 128])
+    logger.info(f"Output tensor shape: {output.shape}")  # Output tensor shape: Shape([10, 64, 128])
 
 
 def test_addmm(device):
@@ -63,7 +64,7 @@ def test_addmm(device):
 
     # Perform addmm operation
     output = ttnn.addmm(input_tensor, tensor1, tensor2, beta=1.0, alpha=1.0)
-    print(f"Output tensor shape: {output.shape}")  # Output tensor shape: Shape([10, 64, 128])
+    logger.info(f"Output tensor shape: {output.shape}")  # Output tensor shape: Shape([10, 64, 128])
 
 
 def test_sparse_matmul(device):
@@ -101,7 +102,7 @@ def test_sparse_matmul(device):
         is_input_b_sparse=True,
         program_config=config,
     )
-    print(f"Output shape: {output.shape}")  # Output shape: Shape([1, 8, 64, 64])
+    logger.info(f"Output shape: {output.shape}")  # Output shape: Shape([1, 8, 64, 64])
 
     # When nnz is not provided, it will be inferred from the sparsity tensor at runtime
     output = ttnn.sparse_matmul(
@@ -112,7 +113,7 @@ def test_sparse_matmul(device):
         is_input_b_sparse=True,
         program_config=config,
     )
-    print(f"Output shape: {output.shape}")  # Output shape: Shape([1, 8, 64, 64])
+    logger.info(f"Output shape: {output.shape}")  # Output shape: Shape([1, 8, 64, 64])
 
     #
     # Case 2: When `is_input_a_sparse` is False and `is_input_b_sparse` is True
@@ -132,7 +133,7 @@ def test_sparse_matmul(device):
         is_input_b_sparse=True,
         program_config=config,
     )
-    print(f"Output shape: {output.shape}")  # Output shape: Shape([2, 16, 1, 8, 64, 64])
+    logger.info(f"Output shape: {output.shape}")  # Output shape: Shape([2, 16, 1, 8, 64, 64])
 
     # When nnz is not provided, it will be inferred from the sparsity tensor at runtime
     output = ttnn.sparse_matmul(
@@ -143,7 +144,7 @@ def test_sparse_matmul(device):
         is_input_b_sparse=True,
         program_config=config,
     )
-    print(f"Output shape: {output.shape}")  # Output shape: Shape([2, 16, 1, 8, 64, 64])
+    logger.info(f"Output shape: {output.shape}")  # Output shape: Shape([2, 16, 1, 8, 64, 64])
 
     #
     # Case 3: When `is_input_a_sparse` is True and `is_input_b_sparse` is False
@@ -163,7 +164,7 @@ def test_sparse_matmul(device):
         is_input_b_sparse=False,
         program_config=config,
     )
-    print(f"Output shape: {output.shape}")  # Output shape: Shape([4, 8, 64, 64])
+    logger.info(f"Output shape: {output.shape}")  # Output shape: Shape([4, 8, 64, 64])
     # When nnz is not provided, it will be inferred from the sparsity tensor at runtime
     output = ttnn.sparse_matmul(
         tensor1,
@@ -173,7 +174,7 @@ def test_sparse_matmul(device):
         is_input_b_sparse=False,
         program_config=config,
     )
-    print(f"Output shape: {output.shape}")  # Output shape: Shape([4, 8, 64, 64])
+    logger.info(f"Output shape: {output.shape}")  # Output shape: Shape([4, 8, 64, 64])
 
     #
     # Case 4: When `is_input_a_sparse` is False and `is_input_b_sparse` is False

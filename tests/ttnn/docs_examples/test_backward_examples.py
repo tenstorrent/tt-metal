@@ -5,6 +5,7 @@
 import pytest
 import ttnn
 import torch
+from loguru import logger
 
 
 def test_clamp_bw(device):
@@ -21,7 +22,7 @@ def test_clamp_bw(device):
 
     # Call the clamp_bw function
     output = ttnn.clamp_bw(grad_tensor, input_tensor, min_val, max_val)
-    print(f"Clamped Output Backward: {output}")
+    logger.info(f"Clamped Output Backward: {output}")
 
 
 def test_clip_bw(device):
@@ -38,7 +39,7 @@ def test_clip_bw(device):
 
     # Call the clip_bw function
     output = ttnn.clip_bw(grad_tensor, input_tensor, min_val, max_val)
-    print(f"Clip Backward: {output}")
+    logger.info(f"Clip Backward: {output}")
 
 
 def test_hardtanh_bw(device):
@@ -52,7 +53,7 @@ def test_hardtanh_bw(device):
 
     # Call the hardtanh_bw function with min and max values
     output = ttnn.hardtanh_bw(grad_tensor, input_tensor, min=-1.0, max=1.0)
-    print(f"Hard Tanh Backward: {output}")
+    logger.info(f"Hard Tanh Backward: {output}")
 
 
 def test_hardshrink_bw(device):
@@ -66,7 +67,7 @@ def test_hardshrink_bw(device):
 
     # Call the hardshrink_bw function with lambda parameter
     output = ttnn.hardshrink_bw(grad_tensor, input_tensor, lambd=0.5)
-    print(f"Hard Shrink Backward: {output}")
+    logger.info(f"Hard Shrink Backward: {output}")
 
 
 def test_softshrink_bw(device):
@@ -80,7 +81,7 @@ def test_softshrink_bw(device):
 
     # Call the softshrink_bw function with lambda parameter
     output = ttnn.softshrink_bw(grad_tensor, input_tensor, lambd=0.5)
-    print(f"Soft Shrink Backward: {output}")
+    logger.info(f"Soft Shrink Backward: {output}")
 
 
 def test_leaky_relu_bw(device):
@@ -94,7 +95,7 @@ def test_leaky_relu_bw(device):
 
     # Call the leaky_relu_bw function with negative slope parameter
     output = ttnn.leaky_relu_bw(grad_tensor, input_tensor, negative_slope=0.01)
-    print(f"Leaky ReLU Backward: {output}")
+    logger.info(f"Leaky ReLU Backward: {output}")
 
 
 def test_elu_bw(device):
@@ -108,7 +109,7 @@ def test_elu_bw(device):
 
     # Call the elu_bw function with alpha parameter
     output = ttnn.elu_bw(grad_tensor, input_tensor, alpha=1.0)
-    print(f"ELU Backward: {output}")
+    logger.info(f"ELU Backward: {output}")
 
 
 def test_celu_bw(device):
@@ -122,7 +123,7 @@ def test_celu_bw(device):
 
     # Call the celu_bw function with alpha parameter
     output = ttnn.celu_bw(grad_tensor, input_tensor, alpha=1.0)
-    print(f"CELU Backward: {output}")
+    logger.info(f"CELU Backward: {output}")
 
 
 def test_logiteps_bw(device):
@@ -136,7 +137,7 @@ def test_logiteps_bw(device):
 
     # Call the logiteps_bw function with epsilon parameter
     output = ttnn.logiteps_bw(grad_tensor, input_tensor, eps=0.0)
-    print(f"Logit Eps Backward: {output}")
+    logger.info(f"Logit Eps Backward: {output}")
 
 
 def test_threshold_bw(device):
@@ -153,7 +154,7 @@ def test_threshold_bw(device):
 
     # Call the threshold_bw function
     output = ttnn.threshold_bw(grad_tensor, input_tensor, threshold, value)
-    print(f"Threshold Backward: {output}")
+    logger.info(f"Threshold Backward: {output}")
 
 
 def test_softplus_bw(device):
@@ -167,7 +168,7 @@ def test_softplus_bw(device):
 
     # Call the softplus_bw function with beta and threshold parameters
     output = ttnn.softplus_bw(grad_tensor, input_tensor, beta=1.0, threshold=20.0)
-    print(f"Softplus Backward: {output}")
+    logger.info(f"Softplus Backward: {output}")
 
 
 def test_rdiv_bw(device):
@@ -183,7 +184,7 @@ def test_rdiv_bw(device):
 
     # Call the rdiv_bw function with scalar and round mode
     output = ttnn.rdiv_bw(grad_tensor, input_tensor, scalar, round_mode=None)
-    print(f"Reverse Division Backward: {output}")
+    logger.info(f"Reverse Division Backward: {output}")
 
 
 @pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
@@ -200,7 +201,7 @@ def test_repeat_bw(device):
 
     # Call the repeat_bw function
     output = ttnn.repeat_bw(grad_tensor, input_tensor, shape)
-    print(f"Repeat Backward: {output}")
+    logger.info(f"Repeat Backward: {output}")
 
 
 def test_gelu_bw(device):
@@ -214,7 +215,7 @@ def test_gelu_bw(device):
 
     # Call the gelu_bw function with approximation method
     output = ttnn.gelu_bw(grad_tensor, input_tensor, approximate="none")
-    print(f"GELU Backward: {output}")
+    logger.info(f"GELU Backward: {output}")
 
 
 def test_pow_bw(device):
@@ -230,7 +231,7 @@ def test_pow_bw(device):
 
     # Call the pow_bw function
     output = ttnn.pow_bw(grad_tensor, input_tensor, exponent)
-    print(f"Power Backward: {output}")
+    logger.info(f"Power Backward: {output}")
 
 
 def test_exp_bw(device):
@@ -244,7 +245,7 @@ def test_exp_bw(device):
 
     # Call the exp_bw function
     output = ttnn.exp_bw(grad_tensor, input_tensor)
-    print(f"Exponential Backward: {output}")
+    logger.info(f"Exponential Backward: {output}")
 
 
 def test_tanh_bw(device):
@@ -258,7 +259,7 @@ def test_tanh_bw(device):
 
     # Call the tanh_bw function
     output = ttnn.tanh_bw(grad_tensor, input_tensor)
-    print(f"Hyperbolic Tangent Backward: {output}")
+    logger.info(f"Hyperbolic Tangent Backward: {output}")
 
 
 def test_sqrt_bw(device):
@@ -272,7 +273,7 @@ def test_sqrt_bw(device):
 
     # Call the sqrt_bw function
     output = ttnn.sqrt_bw(grad_tensor, input_tensor)
-    print(f"Square Root Backward: {output}")
+    logger.info(f"Square Root Backward: {output}")
 
 
 def test_multigammaln_bw(device):
@@ -286,7 +287,7 @@ def test_multigammaln_bw(device):
 
     # Call the multigammaln_bw function
     output = ttnn.multigammaln_bw(grad_tensor, input_tensor)
-    print(f"Multivariate Log Gamma Backward: {output}")
+    logger.info(f"Multivariate Log Gamma Backward: {output}")
 
 
 def test_lgamma_bw(device):
@@ -300,7 +301,7 @@ def test_lgamma_bw(device):
 
     # Call the lgamma_bw function
     output = ttnn.lgamma_bw(grad_tensor, input_tensor)
-    print(f"Log Gamma Backward: {output}")
+    logger.info(f"Log Gamma Backward: {output}")
 
 
 def test_fill_bw(device):
@@ -314,7 +315,7 @@ def test_fill_bw(device):
 
     # Call the fill_bw function
     output = ttnn.fill_bw(grad_tensor, input_tensor)
-    print(f"Fill Backward: {output}")
+    logger.info(f"Fill Backward: {output}")
 
 
 def test_prod_bw(device):
@@ -330,11 +331,11 @@ def test_prod_bw(device):
 
     # Call the prod_bw function with specific dimension
     output = ttnn.prod_bw(grad_tensor, input_tensor, dim=dim)
-    print(f"Prod Backward (dim={dim}): {output}")
+    logger.info(f"Prod Backward (dim={dim}): {output}")
 
     # Call the prod_bw function for all dimensions
     all_dims_output = ttnn.prod_bw(grad_tensor, input_tensor)
-    print(f"Prod Backward (all dims): {all_dims_output}")
+    logger.info(f"Prod Backward (all dims): {all_dims_output}")
 
 
 def test_hardsigmoid_bw(device):
@@ -348,7 +349,7 @@ def test_hardsigmoid_bw(device):
 
     # Call the hardsigmoid_bw function
     output = ttnn.hardsigmoid_bw(grad_tensor, input_tensor)
-    print(f"Hard Sigmoid Backward: {output}")
+    logger.info(f"Hard Sigmoid Backward: {output}")
 
 
 def test_cos_bw(device):
@@ -362,7 +363,7 @@ def test_cos_bw(device):
 
     # Call the cos_bw function
     output = ttnn.cos_bw(grad_tensor, input_tensor)
-    print(f"Cosine Backward: {output}")
+    logger.info(f"Cosine Backward: {output}")
 
 
 def test_acosh_bw(device):
@@ -376,7 +377,7 @@ def test_acosh_bw(device):
 
     # Call the acosh_bw function
     output = ttnn.acosh_bw(grad_tensor, input_tensor)
-    print(f"Hyperbolic Arccosine Backward: {output}")
+    logger.info(f"Hyperbolic Arccosine Backward: {output}")
 
 
 def test_acos_bw(device):
@@ -390,7 +391,7 @@ def test_acos_bw(device):
 
     # Call the acos_bw function
     output = ttnn.acos_bw(grad_tensor, input_tensor)
-    print(f"Arccosine Backward: {output}")
+    logger.info(f"Arccosine Backward: {output}")
 
 
 def test_atan_bw(device):
@@ -404,7 +405,7 @@ def test_atan_bw(device):
 
     # Call the atan_bw function
     output = ttnn.atan_bw(grad_tensor, input_tensor)
-    print(f"Arctangent Backward: {output}")
+    logger.info(f"Arctangent Backward: {output}")
 
 
 def test_rad2deg_bw(device):
@@ -418,7 +419,7 @@ def test_rad2deg_bw(device):
 
     # Call the rad2deg_bw function
     output = ttnn.rad2deg_bw(grad_tensor, input_tensor)
-    print(f"Radians to Degrees Backward: {output}")
+    logger.info(f"Radians to Degrees Backward: {output}")
 
 
 def test_frac_bw(device):
@@ -432,7 +433,7 @@ def test_frac_bw(device):
 
     # Call the frac_bw function
     output = ttnn.frac_bw(grad_tensor, input_tensor)
-    print(f"Fractional Part Backward: {output}")
+    logger.info(f"Fractional Part Backward: {output}")
 
 
 def test_trunc_bw(device):
@@ -446,7 +447,7 @@ def test_trunc_bw(device):
 
     # Call the trunc_bw function
     output = ttnn.trunc_bw(grad_tensor, input_tensor)
-    print(f"Truncation Backward: {output}")
+    logger.info(f"Truncation Backward: {output}")
 
 
 def test_log_sigmoid_bw(device):
@@ -460,7 +461,7 @@ def test_log_sigmoid_bw(device):
 
     # Call the log_sigmoid_bw function
     output = ttnn.log_sigmoid_bw(grad_tensor, input_tensor)
-    print(f"Log Sigmoid Backward: {output}")
+    logger.info(f"Log Sigmoid Backward: {output}")
 
 
 def test_fill_zero_bw(device):
@@ -474,7 +475,7 @@ def test_fill_zero_bw(device):
 
     # Call the fill_zero_bw function
     output = ttnn.fill_zero_bw(grad_tensor, input_tensor)
-    print(f"Fill Zero Backward: {output}")
+    logger.info(f"Fill Zero Backward: {output}")
 
 
 def test_i0_bw(device):
@@ -488,7 +489,7 @@ def test_i0_bw(device):
 
     # Call the i0_bw function
     output = ttnn.i0_bw(grad_tensor, input_tensor)
-    print(f"Bessel I0 Backward: {output}")
+    logger.info(f"Bessel I0 Backward: {output}")
 
 
 def test_tan_bw(device):
@@ -502,7 +503,7 @@ def test_tan_bw(device):
 
     # Call the tan_bw function
     output = ttnn.tan_bw(grad_tensor, input_tensor)
-    print(f"Tangent Backward: {output}")
+    logger.info(f"Tangent Backward: {output}")
 
 
 def test_sigmoid_bw(device):
@@ -516,7 +517,7 @@ def test_sigmoid_bw(device):
 
     # Call the sigmoid_bw function
     output = ttnn.sigmoid_bw(grad_tensor, input_tensor)
-    print(f"Sigmoid Backward: {output}")
+    logger.info(f"Sigmoid Backward: {output}")
 
 
 def test_rsqrt_bw(device):
@@ -530,7 +531,7 @@ def test_rsqrt_bw(device):
 
     # Call the rsqrt_bw function
     output = ttnn.rsqrt_bw(grad_tensor, input_tensor)
-    print(f"Reciprocal Square Root Backward: {output}")
+    logger.info(f"Reciprocal Square Root Backward: {output}")
 
 
 def test_neg_bw(device):
@@ -544,7 +545,7 @@ def test_neg_bw(device):
 
     # Call the neg_bw function
     output = ttnn.neg_bw(grad_tensor, input_tensor)
-    print(f"Negation Backward: {output}")
+    logger.info(f"Negation Backward: {output}")
 
 
 def test_relu_bw(device):
@@ -558,7 +559,7 @@ def test_relu_bw(device):
 
     # Call the relu_bw function
     output = ttnn.relu_bw(grad_tensor, input_tensor)
-    print(f"ReLU Backward: {output}")
+    logger.info(f"ReLU Backward: {output}")
 
 
 def test_logit_bw(device):
@@ -572,7 +573,7 @@ def test_logit_bw(device):
 
     # Call the logit_bw function
     output = ttnn.logit_bw(grad_tensor, input_tensor)
-    print(f"Logit Backward: {output}")
+    logger.info(f"Logit Backward: {output}")
 
 
 def test_floor_bw(device):
@@ -586,7 +587,7 @@ def test_floor_bw(device):
 
     # Call the floor_bw function
     output = ttnn.floor_bw(grad_tensor, input_tensor)
-    print(f"Floor Backward: {output}")
+    logger.info(f"Floor Backward: {output}")
 
 
 def test_rpow_bw(device):
@@ -602,7 +603,7 @@ def test_rpow_bw(device):
 
     # Call the rpow_bw function
     output = ttnn.rpow_bw(grad_tensor, input_tensor, exponent)
-    print(f"Reverse Power Backward: {output}")
+    logger.info(f"Reverse Power Backward: {output}")
 
 
 def test_round_bw(device):
@@ -616,7 +617,7 @@ def test_round_bw(device):
 
     # Call the round_bw function
     output = ttnn.round_bw(grad_tensor, input_tensor)
-    print(f"Round Backward: {output}")
+    logger.info(f"Round Backward: {output}")
 
 
 def test_log_bw(device):
@@ -630,7 +631,7 @@ def test_log_bw(device):
 
     # Call the log_bw function
     output = ttnn.log_bw(grad_tensor, input_tensor)
-    print(f"Natural Logarithm Backward: {output}")
+    logger.info(f"Natural Logarithm Backward: {output}")
 
 
 def test_relu6_bw(device):
@@ -644,7 +645,7 @@ def test_relu6_bw(device):
 
     # Call the relu6_bw function
     output = ttnn.relu6_bw(grad_tensor, input_tensor)
-    print(f"ReLU6 Backward: {output}")
+    logger.info(f"ReLU6 Backward: {output}")
 
 
 def test_abs_bw(device):
@@ -658,7 +659,7 @@ def test_abs_bw(device):
 
     # Call the abs_bw function
     output = ttnn.abs_bw(grad_tensor, input_tensor)
-    print(f"Absolute Value Backward: {output}")
+    logger.info(f"Absolute Value Backward: {output}")
 
 
 def test_silu_bw(device):
@@ -672,7 +673,7 @@ def test_silu_bw(device):
 
     # Call the silu_bw function
     output = ttnn.silu_bw(grad_tensor, input_tensor)
-    print(f"SiLU Backward: {output}")
+    logger.info(f"SiLU Backward: {output}")
 
 
 def test_selu_bw(device):
@@ -686,7 +687,7 @@ def test_selu_bw(device):
 
     # Call the selu_bw function
     output = ttnn.selu_bw(grad_tensor, input_tensor)
-    print(f"SELU Backward: {output}")
+    logger.info(f"SELU Backward: {output}")
 
 
 def test_square_bw(device):
@@ -700,7 +701,7 @@ def test_square_bw(device):
 
     # Call the square_bw function
     output = ttnn.square_bw(grad_tensor, input_tensor)
-    print(f"Square Backward: {output}")
+    logger.info(f"Square Backward: {output}")
 
 
 def test_hardswish_bw(device):
@@ -714,7 +715,7 @@ def test_hardswish_bw(device):
 
     # Call the hardswish_bw function
     output = ttnn.hardswish_bw(grad_tensor, input_tensor)
-    print(f"Hard Swish Backward: {output}")
+    logger.info(f"Hard Swish Backward: {output}")
 
 
 def test_tanhshrink_bw(device):
@@ -728,7 +729,7 @@ def test_tanhshrink_bw(device):
 
     # Call the tanhshrink_bw function
     output = ttnn.tanhshrink_bw(grad_tensor, input_tensor)
-    print(f"Tanh Shrink Backward: {output}")
+    logger.info(f"Tanh Shrink Backward: {output}")
 
 
 def test_atanh_bw(device):
@@ -742,7 +743,7 @@ def test_atanh_bw(device):
 
     # Call the atanh_bw function
     output = ttnn.atanh_bw(grad_tensor, input_tensor)
-    print(f"Hyperbolic Arctangent Backward: {output}")
+    logger.info(f"Hyperbolic Arctangent Backward: {output}")
 
 
 def test_asin_bw(device):
@@ -756,7 +757,7 @@ def test_asin_bw(device):
 
     # Call the asin_bw function
     output = ttnn.asin_bw(grad_tensor, input_tensor)
-    print(f"Arcsine Backward: {output}")
+    logger.info(f"Arcsine Backward: {output}")
 
 
 def test_asinh_bw(device):
@@ -770,7 +771,7 @@ def test_asinh_bw(device):
 
     # Call the asinh_bw function
     output = ttnn.asinh_bw(grad_tensor, input_tensor)
-    print(f"Hyperbolic Arcsine Backward: {output}")
+    logger.info(f"Hyperbolic Arcsine Backward: {output}")
 
 
 def test_sin_bw(device):
@@ -784,7 +785,7 @@ def test_sin_bw(device):
 
     # Call the sin_bw function
     output = ttnn.sin_bw(grad_tensor, input_tensor)
-    print(f"Sine Backward: {output}")
+    logger.info(f"Sine Backward: {output}")
 
 
 def test_sinh_bw(device):
@@ -798,7 +799,7 @@ def test_sinh_bw(device):
 
     # Call the sinh_bw function
     output = ttnn.sinh_bw(grad_tensor, input_tensor)
-    print(f"Hyperbolic Sine Backward: {output}")
+    logger.info(f"Hyperbolic Sine Backward: {output}")
 
 
 def test_log10_bw(device):
@@ -812,7 +813,7 @@ def test_log10_bw(device):
 
     # Call the log10_bw function
     output = ttnn.log10_bw(grad_tensor, input_tensor)
-    print(f"Base-10 Logarithm Backward: {output}")
+    logger.info(f"Base-10 Logarithm Backward: {output}")
 
 
 def test_log1p_bw(device):
@@ -826,7 +827,7 @@ def test_log1p_bw(device):
 
     # Call the log1p_bw function
     output = ttnn.log1p_bw(grad_tensor, input_tensor)
-    print(f"Log(1+x) Backward: {output}")
+    logger.info(f"Log(1+x) Backward: {output}")
 
 
 def test_erfc_bw(device):
@@ -840,7 +841,7 @@ def test_erfc_bw(device):
 
     # Call the erfc_bw function
     output = ttnn.erfc_bw(grad_tensor, input_tensor)
-    print(f"Complementary Error Function Backward: {output}")
+    logger.info(f"Complementary Error Function Backward: {output}")
 
 
 def test_ceil_bw(device):
@@ -854,7 +855,7 @@ def test_ceil_bw(device):
 
     # Call the ceil_bw function
     output = ttnn.ceil_bw(grad_tensor, input_tensor)
-    print(f"Ceiling Backward: {output}")
+    logger.info(f"Ceiling Backward: {output}")
 
 
 def test_softsign_bw(device):
@@ -868,7 +869,7 @@ def test_softsign_bw(device):
 
     # Call the softsign_bw function
     output = ttnn.softsign_bw(grad_tensor, input_tensor)
-    print(f"Softsign Backward: {output}")
+    logger.info(f"Softsign Backward: {output}")
 
 
 def test_cosh_bw(device):
@@ -882,7 +883,7 @@ def test_cosh_bw(device):
 
     # Call the cosh_bw function
     output = ttnn.cosh_bw(grad_tensor, input_tensor)
-    print(f"Hyperbolic Cosine Backward: {output}")
+    logger.info(f"Hyperbolic Cosine Backward: {output}")
 
 
 def test_log2_bw(device):
@@ -896,7 +897,7 @@ def test_log2_bw(device):
 
     # Call the log2_bw function
     output = ttnn.log2_bw(grad_tensor, input_tensor)
-    print(f"Base-2 Logarithm Backward: {output}")
+    logger.info(f"Base-2 Logarithm Backward: {output}")
 
 
 def test_sign_bw(device):
@@ -910,7 +911,7 @@ def test_sign_bw(device):
 
     # Call the sign_bw function
     output = ttnn.sign_bw(grad_tensor, input_tensor)
-    print(f"Sign Backward: {output}")
+    logger.info(f"Sign Backward: {output}")
 
 
 def test_div_no_nan_bw(device):
@@ -925,7 +926,7 @@ def test_div_no_nan_bw(device):
 
     # Call the div_no_nan_bw function
     output = ttnn.div_no_nan_bw(grad_tensor, input_tensor, scalar)
-    print(f"Division No NaN Backward: {output}")
+    logger.info(f"Division No NaN Backward: {output}")
 
 
 def test_exp2_bw(device):
@@ -939,7 +940,7 @@ def test_exp2_bw(device):
 
     # Call the exp2_bw function
     output = ttnn.exp2_bw(grad_tensor, input_tensor)
-    print(f"Base-2 Exponential Backward: {output}")
+    logger.info(f"Base-2 Exponential Backward: {output}")
 
 
 def test_expm1_bw(device):
@@ -953,7 +954,7 @@ def test_expm1_bw(device):
 
     # Call the expm1_bw function
     output = ttnn.expm1_bw(grad_tensor, input_tensor)
-    print(f"Exp(x)-1 Backward: {output}")
+    logger.info(f"Exp(x)-1 Backward: {output}")
 
 
 def test_reciprocal_bw(device):
@@ -967,7 +968,7 @@ def test_reciprocal_bw(device):
 
     # Call the reciprocal_bw function
     output = ttnn.reciprocal_bw(grad_tensor, input_tensor)
-    print(f"Reciprocal Backward: {output}")
+    logger.info(f"Reciprocal Backward: {output}")
 
 
 def test_digamma_bw(device):
@@ -981,7 +982,7 @@ def test_digamma_bw(device):
 
     # Call the digamma_bw function
     output = ttnn.digamma_bw(grad_tensor, input_tensor)
-    print(f"Digamma Backward: {output}")
+    logger.info(f"Digamma Backward: {output}")
 
 
 def test_erfinv_bw(device):
@@ -995,7 +996,7 @@ def test_erfinv_bw(device):
 
     # Call the erfinv_bw function
     output = ttnn.erfinv_bw(grad_tensor, input_tensor)
-    print(f"Inverse Error Function Backward: {output}")
+    logger.info(f"Inverse Error Function Backward: {output}")
 
 
 def test_erf_bw(device):
@@ -1009,7 +1010,7 @@ def test_erf_bw(device):
 
     # Call the erf_bw function
     output = ttnn.erf_bw(grad_tensor, input_tensor)
-    print(f"Error Function Backward: {output}")
+    logger.info(f"Error Function Backward: {output}")
 
 
 def test_deg2rad_bw(device):
@@ -1023,7 +1024,7 @@ def test_deg2rad_bw(device):
 
     # Call the deg2rad_bw function
     output = ttnn.deg2rad_bw(grad_tensor, input_tensor)
-    print(f"Degrees to Radians Backward: {output}")
+    logger.info(f"Degrees to Radians Backward: {output}")
 
 
 def test_polygamma_bw(device):
@@ -1038,7 +1039,7 @@ def test_polygamma_bw(device):
 
     # Call the polygamma_bw function
     output = ttnn.polygamma_bw(grad_tensor, input_tensor, n)
-    print(f"Polygamma Backward: {output}")
+    logger.info(f"Polygamma Backward: {output}")
 
 
 # Complex backward operations
@@ -1050,7 +1051,7 @@ def test_polar_bw(device):
 
     # Call the polar_bw function
     output = ttnn.polar_bw(grad_tensor, tensor)
-    print(f"Polar Backward: {output}")
+    logger.info(f"Polar Backward: {output}")
 
 
 @pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
@@ -1061,7 +1062,7 @@ def test_imag_bw(device):
 
     # Call the imag_bw function
     output = ttnn.imag_bw(grad_tensor, tensor)
-    print(f"Imaginary Part Backward: {output}")
+    logger.info(f"Imaginary Part Backward: {output}")
 
 
 @pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
@@ -1072,7 +1073,7 @@ def test_real_bw(device):
 
     # Call the real_bw function
     output = ttnn.real_bw(grad_tensor, tensor)
-    print(f"Real Part Backward: {output}")
+    logger.info(f"Real Part Backward: {output}")
 
 
 @pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
@@ -1083,7 +1084,7 @@ def test_angle_bw(device):
 
     # Call the angle_bw function
     output = ttnn.angle_bw(grad_tensor, tensor)
-    print(f"Angle Backward: {output}")
+    logger.info(f"Angle Backward: {output}")
 
 
 @pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
@@ -1094,4 +1095,4 @@ def test_conj_bw(device):
 
     # Call the conj_bw function
     output = ttnn.conj_bw(grad_tensor, tensor)
-    print(f"Complex Conjugate Backward: {output}")
+    logger.info(f"Complex Conjugate Backward: {output}")
