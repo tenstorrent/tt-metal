@@ -167,7 +167,7 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
         ADD_FAILURE() << "Receiver set is empty (rectangle excludes all but sender).";
         return;
     }
-    for (auto c : dst_coords) {
+    for (const auto& c : dst_coords) {
         Dist::WriteShard(mcq, dst_buf, zeros, c, /*blocking=*/true);
     }
     Dist::WriteShard(mcq, dst_buf, zeros, src_coord, /*blocking=*/true);
