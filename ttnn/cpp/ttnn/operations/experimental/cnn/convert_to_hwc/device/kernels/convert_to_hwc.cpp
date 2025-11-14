@@ -7,6 +7,7 @@
 #include "compute_kernel_api/pack_untilize.h"
 #include "compute_kernel_api/transpose_wh.h"
 #include "compute_kernel_api/tilize.h"
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.h"
 
 
 
@@ -32,16 +33,7 @@ FORCE_INLINE void transpose(uint32_t cb_in, uint32_t cb_out) {
     cb_pop_front(cb_in, BatchSize);
 }
 
-FORCE_INLINE void tilize(
-    uint32_t cb_in, uint32_t total_tiles_per_block, uint32_t total_sticks_per_block, uint32_t cb_out) {
-    cb_wait_front(cb_in, total_sticks_per_block);
-    cb_reserve_back(cb_out, total_tiles_per_block);
-
-    tilize_block(cb_in, total_tiles_per_block, cb_out);
-
-    cb_pop_front(cb_in, total_sticks_per_block);
-    cb_push_back(cb_out, total_tiles_per_block);
-}
+// Removed: Now using compute_kernel_lib::tilize with asymmetric input_count
 
 namespace NAMESPACE {
 void MAIN {
