@@ -72,6 +72,24 @@ namespace tt::tt_fabric {
  * @param is_receiver_channel_serviced Output parameter for receiver channel service flags
  */
 namespace {
+// Returns true when fabric 2-ERISC should be considered enabled for builders.
+// Effective if either the explicit env override is present, or when running on
+// Blackhole with 2 ERISCs available and Fabric Tensix MUX config is enabled.
+bool is_fabric_two_erisc_enabled() {
+    auto &mc = tt::tt_metal::MetalContext::instance();
+    // Force-disable if the override is present
+    if (mc.rtoptions().get_disable_fabric_2_erisc_mode()) {
+        return false;
+    }
+    const auto &hal = mc.hal();
+    if (hal.get_arch() != tt::ARCH::BLACKHOLE) {
+        return false;
+    }
+    if (mc.get_fabric_tensix_config() != tt::tt_fabric::FabricTensixConfig::MUX) {
+        return false;
+    }
+    return hal.get_num_risc_processors(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH) >= 2;
+}
 void configure_risc_settings(
     size_t num_riscv_cores,
     size_t risc_id,
@@ -158,16 +176,15 @@ void update_sender_channel_servicing(
 }
 
 size_t get_num_riscv_cores() {
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_is_fabric_2_erisc_mode_enabled()) {
+    if (is_fabric_two_erisc_enabled()) {
         size_t nriscs = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
             tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
         if (nriscs > 1) {
             log_warning(tt::LogFabric, "Launching fabric in experimental 2-erisc mode.");
         }
         return nriscs;
-    } else {
-        return 1;
     }
+    return 1;
 }
 
 
@@ -236,7 +253,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
 
     // issue: https://github.com/tenstorrent/tt-metal/issues/29073. TODO: Re-enable after hang is resolved.
     // Ethernet txq IDs on WH are 0,1 and on BH are 0,1,2.
-    if (tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE && tt::tt_metal::MetalContext::instance().rtoptions().get_is_fabric_2_erisc_mode_enabled()) {
+    if (is_fabric_two_erisc_enabled()) {
         this->receiver_txq_id = 1;
     }
     this->num_riscv_cores = get_num_riscv_cores();
