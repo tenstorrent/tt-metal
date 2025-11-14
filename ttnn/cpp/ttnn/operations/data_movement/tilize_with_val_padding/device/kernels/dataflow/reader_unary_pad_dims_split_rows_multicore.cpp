@@ -80,7 +80,7 @@ void kernel_main() {
             cb_reserve_back(cb_id_in0, num_tiles_per_row);
             uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
             // pad the tile by reading values from zero buffer in L1
-            fill_with_val<elem_size>(l1_write_addr, padded_X_size << 5, pad_value);  // "<< 5" = "* tile_height"
+            fill_with_val<4>(l1_write_addr, padded_X_size << 5, pad_value);  // "<< 5" = "* tile_height"
             cb_push_back(cb_id_in0, num_tiles_per_row);
         }
     };
@@ -97,14 +97,14 @@ void kernel_main() {
             // Read from DRAM to tmp buffer
             noc_async_read(src_noc_addr, l1_write_addr, unpadded_X_size);
 
-            fill_with_val<elem_size>(l1_write_addr + unpadded_X_size, padded_X_size - unpadded_X_size, pad_value);
+            fill_with_val<4>(l1_write_addr + unpadded_X_size, padded_X_size - unpadded_X_size, pad_value);
 
             // Block before copying data from tmp to cb buffer
             noc_async_read_barrier();
             l1_write_addr += padded_X_size;
         }
 
-        fill_with_val<elem_size>(l1_write_addr, padding_rows * padded_X_size, pad_value);
+        fill_with_val<4>(l1_write_addr, padding_rows * padded_X_size, pad_value);
         cb_push_back(cb_id_in0, num_tiles_per_row * has_rows);
     };
 
