@@ -597,7 +597,7 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory_helper(
             defer_write_k_block,
         };
         if (fuse_op) {
-            fused_op_signaler->push_matmul_fused_op_rt_args(in0_args, false);
+            fused_op_signaler->push_matmul_fused_op_rt_args(in0_args);
         }
         if (in1_idx == 0) {
             // in0 sender
@@ -623,7 +623,7 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory_helper(
             defer_write_k_block,
         };
         if (fuse_op) {
-            fused_op_signaler->push_matmul_fused_op_rt_args(in1_args, true);
+            fused_op_signaler->push_matmul_fused_op_rt_args(in1_args);
         }
         if (in0_idx == 0) {
             // in1 sender
