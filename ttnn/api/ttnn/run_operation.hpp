@@ -41,24 +41,6 @@ inline auto run(
     }
 }
 
-template <class OutputTensors = Tensors>
-OutputTensors run_without_autoformat(
-    DeviceOperation<OutputTensors>&& operation,
-    const Tensors& input_tensors,
-    const OptionalConstTensors& optional_input_tensors = {},
-    const OptionalTensors& optional_output_tensors = {});
-template <typename ConcreteOperation>
-inline auto run_without_autoformat(
-    ConcreteOperation&& concrete_op,
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors = {},
-    const std::vector<std::optional<Tensor>>& optional_output_tensors = {}) -> ProgramOutputTensors<ConcreteOperation> {
-    using OutputTensors = ProgramOutputTensors<ConcreteOperation>;
-    auto operation = DeviceOperation<OutputTensors>(std::forward<ConcreteOperation>(concrete_op));
-    return run_without_autoformat<OutputTensors>(
-        std::move(operation), input_tensors, optional_input_tensors, optional_output_tensors);
-}
-
 Tensors run_with_autoformat(
     DeviceOperation<Tensors>&& operation,
     const Tensors& input_tensors,

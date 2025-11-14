@@ -14,9 +14,6 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tracy/Tracy.hpp>
 #include <tt_stl/reflection.hpp>
-#include "tools/profiler/op_profiler.hpp"
-#include "ttnn/config.hpp"
-#include "ttnn/device_operation.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 
@@ -89,49 +86,6 @@ template Tensors run(
     const OptionalTensors& optional_output_tensors);
 
 template OptionalTensors run(
-    DeviceOperation<OptionalTensors>&& operation,
-    const Tensors& input_tensors,
-    const OptionalConstTensors& optional_input_tensors,
-    const OptionalTensors& optional_output_tensors);
-
-template <class OutputTensors>
-OutputTensors run_without_autoformat(
-    DeviceOperation<OutputTensors>&& operation,
-    const Tensors& input_tensors,
-    const OptionalConstTensors& optional_input_tensors,
-    const OptionalTensors& optional_output_tensors) {
-    using ttnn::operations::experimental::auto_format::AutoFormat;
-    distributed::MeshDevice* device = detail::get_device(input_tensors, optional_input_tensors);
-    Tensors input_tensors_on_dev;
-    input_tensors_on_dev.reserve(input_tensors.size());
-    for (auto& input_tensor : input_tensors) {
-        if (input_tensor.storage_type() != StorageType::DEVICE) {
-            input_tensors_on_dev.push_back(AutoFormat::move_tensor_to_device(input_tensor, device));
-        } else {
-            input_tensors_on_dev.push_back(input_tensor);
-        }
-    }
-    OptionalConstTensors optional_input_tensors_on_dev;
-    optional_input_tensors_on_dev.reserve(optional_input_tensors.size());
-    for (auto& optional_input_tensor : optional_input_tensors) {
-        if (optional_input_tensor.has_value() and optional_input_tensor.value().storage_type() != StorageType::DEVICE) {
-            optional_input_tensors_on_dev.push_back(
-                AutoFormat::move_tensor_to_device(optional_input_tensor.value(), device));
-        } else {
-            optional_input_tensors_on_dev.push_back(optional_input_tensor);
-        }
-    }
-    return run<OutputTensors>(
-        std::move(operation), input_tensors_on_dev, optional_input_tensors_on_dev, optional_output_tensors);
-}
-
-template Tensors run_without_autoformat<Tensors>(
-    DeviceOperation<Tensors>&& operation,
-    const Tensors& input_tensors,
-    const OptionalConstTensors& optional_input_tensors,
-    const OptionalTensors& optional_output_tensors);
-
-template OptionalTensors run_without_autoformat<OptionalTensors>(
     DeviceOperation<OptionalTensors>&& operation,
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors,

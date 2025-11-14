@@ -85,7 +85,7 @@ Tensor conv2d(
 
     conv_op.pre_op_l1_allocation_size_bytes =
         device->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
-    return tt::tt_metal::operation::run_without_autoformat(conv_op, {a, b}, {bias}).at(0);
+    return tt::tt_metal::operation::run(conv_op, {a, b}, {bias}).at(0);
 }
 
 void Conv2d::validate(
