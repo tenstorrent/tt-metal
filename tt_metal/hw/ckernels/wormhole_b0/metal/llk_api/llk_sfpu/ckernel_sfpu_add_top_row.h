@@ -5,9 +5,7 @@
 #pragma once
 
 #include "ckernel.h"
-#include "ckernel_defs.h"
 #include "sfpu/ckernel_sfpu_add_top_row.h"
-#include "ckernel_instr_params.h"
 
 namespace ckernel::sfpu {
 
