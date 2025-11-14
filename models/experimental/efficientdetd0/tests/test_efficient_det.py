@@ -41,7 +41,7 @@ def test_efficient_det(batch, channels, height, width, device):
     # Run PyTorch forward pass
     torch_inputs = torch.randn(batch, channels, height, width)
     with torch.no_grad():
-        torch_features, torch_regression, torch_classification = torch_model(torch_inputs)
+        torch_features, torch_regression, torch_classification, _ = torch_model(torch_inputs)
 
     inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer = get_mesh_mappers(device)
     parameters = preprocess_model_parameters(

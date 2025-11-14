@@ -133,11 +133,10 @@ def custom_preprocessor(
         parameters["_conv_stem"] = _preprocess_conv_bn_parameter(
             model._conv_stem, model._bn0, dtype=weight_dtype, mesh_mapper=mesh_mapper
         )
-        blocks_params = {}
-        for i in range(0, 16):
+        parameters["_blocks"] = {}
+        for idx, block in enumerate(model._blocks):
             block_parameters = {}
-            block = model._blocks[i]
-            if i != 0:
+            if hasattr(block, "_expand_conv"):
                 block_parameters["_expand_conv"] = _preprocess_conv_bn_parameter(
                     block._expand_conv, block._bn0, dtype=weight_dtype, mesh_mapper=mesh_mapper
                 )
@@ -153,12 +152,8 @@ def custom_preprocessor(
             block_parameters["_project_conv"] = _preprocess_conv_bn_parameter(
                 block._project_conv, block._bn2, dtype=weight_dtype, mesh_mapper=mesh_mapper
             )
-            blocks_params[f"_blocks{i}"] = block_parameters
-        parameters["blocks"] = blocks_params
-    elif isinstance(
-        model,
-        (EfficientDetBackbone,),
-    ):
+            parameters["_blocks"][idx] = block_parameters
+    elif isinstance(model, EfficientDetBackbone):
         # Let the sub-modules handle their own preprocessing
         for child_name, child in model.named_children():
             parameters[child_name] = convert_torch_model_to_ttnn_model(

@@ -462,7 +462,7 @@ def run_efficient_det_demo(
 
     # Run PyTorch forward pass for reference
     with torch.no_grad():
-        torch_features, torch_regression, torch_classification = torch_model(torch_inputs)
+        torch_features, torch_regression, torch_classification, torch_anchors = torch_model(torch_inputs)
 
     # Preprocess model parameters for TTNN
     _, weights_mesh_mapper, _ = get_mesh_mappers(device)
@@ -540,7 +540,7 @@ def run_efficient_det_demo(
     torch_preds = postprocess(
         torch_regression,
         torch_classification,
-        anchors,
+        torch_anchors,
         regressBoxes,
         clipBoxes,
         torch_inputs,
