@@ -232,9 +232,7 @@ void kernel_main() {
                     next_mm_aligned_chunk_width(input_chunk_start_tile, my_chip_id, input_tensor_Wt, mm_block_wt);
                 uint32_t actual_chunk_h = next_mm_aligned_chunk_height(
                     input_chunk_start_tile, M_tiles_per_core, input_tensor_Wt, mm_block_ht);
-                uint32_t tiles_in_current_chunk =
-                    actual_chunk_w * actual_chunk_h *
-                    mm_cores_y;  // THIS IS NOT QUITE RIGHT, each mm core might have a different chunk_h
+                uint32_t tiles_in_current_chunk = actual_chunk_w * actual_chunk_h * mm_cores_y;
                 write_chunk(
                     input_chunk_start_tile,
                     batch_output_tile_offset,
@@ -249,6 +247,7 @@ void kernel_main() {
                     output_addrgen,
                     output_page_size,
                     input_tensor_Wt,
+                    input_tensor_Ht,
                     output_tensor_Wt,
                     my_chip_id,
                     mux_connection,
@@ -274,9 +273,7 @@ void kernel_main() {
                         input_chunk_start_tile, actual_sender_chip_id, input_tensor_Wt, mm_block_wt);
                     uint32_t actual_chunk_h = next_mm_aligned_chunk_height(
                         input_chunk_start_tile, M_tiles_per_core, input_tensor_Wt, mm_block_ht);
-                    uint32_t tiles_in_current_chunk =
-                        actual_chunk_w * actual_chunk_h *
-                        mm_cores_y;  // THIS IS NOT QUITE RIGHT, each mm core might have a different chunk_h
+                    uint32_t tiles_in_current_chunk = actual_chunk_w * actual_chunk_h * mm_cores_y;
 
                     write_chunk(
                         input_chunk_start_tile,
@@ -292,6 +289,7 @@ void kernel_main() {
                         output_addrgen,
                         output_page_size,
                         input_tensor_Wt,
+                        input_tensor_Ht,
                         output_tensor_Wt,
                         actual_sender_chip_id,
                         mux_connection,
