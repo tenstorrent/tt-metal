@@ -65,8 +65,7 @@ class FabricRouterChannelMapping {
 public:
     FabricRouterChannelMapping(
         Topology topology,
-        eth_chan_directions direction,
-        bool has_tensix_extension);
+        eth_chan_directions direction);
 
     /**
      * Get the internal sender channel mapping for a logical sender channel
@@ -80,8 +79,8 @@ public:
 
 private:
     Topology topology_;
-    eth_chan_directions direction_;
-    bool has_tensix_extension_;
+    // will become used when Z-link support is added
+    [[maybe_unused]] eth_chan_directions direction_;
 
     std::map<LogicalSenderChannelKey, InternalSenderChannelMapping> sender_channel_map_;
     std::map<LogicalReceiverChannelKey, InternalReceiverChannelMapping> receiver_channel_map_;

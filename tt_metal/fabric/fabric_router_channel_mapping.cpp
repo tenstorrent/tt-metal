@@ -10,8 +10,8 @@
 namespace tt::tt_fabric {
 
 FabricRouterChannelMapping::FabricRouterChannelMapping(
-    Topology topology, eth_chan_directions direction, bool has_tensix_extension) :
-    topology_(topology), direction_(direction), has_tensix_extension_(has_tensix_extension) {
+    Topology topology, eth_chan_directions direction) :
+    topology_(topology), direction_(direction) {
     initialize_mappings();
 }
 

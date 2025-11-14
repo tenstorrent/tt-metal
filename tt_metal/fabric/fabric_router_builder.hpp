@@ -75,7 +75,7 @@ public:
      * @param sender_channel_idx Logical sender channel index within the VC
      * @param receiver_channel_idx Logical receiver channel index within the VC on the other router
      */
-    void connect_to_local_router_over_noc(
+    void connect_to_downstream_local_router_over_noc(
         FabricRouterBuilder& other,
         uint32_t vc,
         uint32_t sender_channel_idx,
@@ -91,8 +91,8 @@ public:
      * @param sender_channel_idx Logical sender channel index within the VC
      * @param receiver_channel_idx Logical receiver channel index within the VC on the other router
      */
-    void connect_to_remote_router_over_ethernet(
-        FabricRouterBuilder& other,
+    void connect_to_downstream_remote_router_over_ethernet(
+        FabricRouterBuilder& other,   
         uint32_t vc,
         uint32_t sender_channel_idx,
         uint32_t receiver_channel_idx);
@@ -105,16 +105,6 @@ public:
      * @return SenderWorkerAdapterSpec for external connections
      */
     SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t vc, uint32_t sender_channel_idx);
-
-    /**
-     * Build connection to fabric receiver channel (for receiver channels, if needed)
-     *
-     * @param vc Virtual channel ID
-     * @param receiver_channel_idx Logical receiver channel index within the VC
-     * @return Connection specification (implementation depends on use case)
-     */
-    // Note: Receiver channel connection building may not be needed in all cases
-    // This is a placeholder for future use
 
     // Getters/delegators for wrapped builder properties
     eth_chan_directions get_direction() const;
@@ -141,13 +131,6 @@ private:
     std::unique_ptr<FabricEriscDatamoverBuilder> erisc_builder_;
     std::optional<FabricTensixDatamoverBuilder> tensix_builder_;
     FabricRouterChannelMapping channel_mapping_;
-
-    // Helper methods for connection logic
-    void connect_sender_to_receiver(
-        const InternalSenderChannelMapping& sender_mapping,
-        const InternalReceiverChannelMapping& receiver_mapping,
-        FabricRouterBuilder& other,
-        bool is_noc_connection);
 };
 
 }  // namespace tt::tt_fabric

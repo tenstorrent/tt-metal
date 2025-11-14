@@ -63,49 +63,63 @@ std::unique_ptr<FabricRouterBuilder> FabricRouterBuilder::build(
 
     // Create tensix builder if needed
     std::optional<tt::tt_fabric::FabricTensixDatamoverBuilder> tensix_builder_opt;
-    bool has_tensix = false;
     if (fabric_tensix_extension_enabled) {
         // Only create tensix builder if this channel is not used by dispatch
         if (!dispatch_link) {
             auto tensix_builder = tt::tt_fabric::FabricTensixDatamoverBuilder::build(
                 device, fabric_program, fabric_node_id, remote_fabric_node_id, eth_chan, eth_direction);
             tensix_builder_opt = tensix_builder;
-            has_tensix = true;
         }
     }
 
     // Create channel mapping
-    auto channel_mapping = tt::tt_fabric::FabricRouterChannelMapping(
-        topology, eth_direction, has_tensix);
+    auto channel_mapping = tt::tt_fabric::FabricRouterChannelMapping(topology, eth_direction);
 
     return std::make_unique<tt::tt_fabric::FabricRouterBuilder>(
         std::move(edm_builder), tensix_builder_opt, std::move(channel_mapping));
 }
 
-void FabricRouterBuilder::connect_to_local_router_over_noc(
+void FabricRouterBuilder::connect_to_downstream_local_router_over_noc(
     FabricRouterBuilder& other,
     uint32_t vc,
-    uint32_t sender_channel_idx,
+    [[maybe_unused]] uint32_t sender_channel_idx ,
     uint32_t receiver_channel_idx) {
     // Get mappings for sender and receiver channels
-    auto sender_mapping = channel_mapping_.get_sender_mapping(vc, sender_channel_idx);
     auto receiver_mapping = other.channel_mapping_.get_receiver_mapping(vc, receiver_channel_idx);
 
     // Connect sender to receiver over NOC
-    connect_sender_to_receiver(sender_mapping, receiver_mapping, other, true);
+    bool both_have_tensix = this->tensix_builder_.has_value() && other.tensix_builder_.has_value();
+
+    // Initialize variants directly - cannot default-construct variant with reference_wrapper
+    auto get_downstream_builder = [&]() -> FabricDatamoverBuilder {
+        if (both_have_tensix) {
+            return std::ref(other.tensix_builder_.value());
+        } else if (receiver_mapping.builder_type == BuilderType::TENSIX) {
+            TT_FATAL(other.tensix_builder_.has_value(), "Other router's tensix builder not available");
+            return std::ref(other.tensix_builder_.value());
+        } else {
+            return std::ref(*other.erisc_builder_);
+        }
+    };
+    FabricDatamoverBuilder downstream_builder = get_downstream_builder();
+    FabricDatamoverBuilder vc1_downstream_builder = std::ref(*other.erisc_builder_);
+
+    if (both_have_tensix) {
+        erisc_builder_->connect_to_downstream_edm(downstream_builder, vc1_downstream_builder);
+    } else {
+        erisc_builder_->connect_to_downstream_edm(downstream_builder);
+    }
 }
 
-void FabricRouterBuilder::connect_to_remote_router_over_ethernet(
+void FabricRouterBuilder::connect_to_downstream_remote_router_over_ethernet(
     FabricRouterBuilder& other,
     uint32_t vc,
     uint32_t sender_channel_idx,
-    uint32_t receiver_channel_idx) {
-    // Get mappings for sender and receiver channels
+    [[maybe_unused]] uint32_t receiver_channel_idx) {
     auto sender_mapping = channel_mapping_.get_sender_mapping(vc, sender_channel_idx);
-    auto receiver_mapping = other.channel_mapping_.get_receiver_mapping(vc, receiver_channel_idx);
 
-    // Connect sender to receiver over Ethernet
-    connect_sender_to_receiver(sender_mapping, receiver_mapping, other, false);
+    TT_FATAL(sender_mapping.builder_type == BuilderType::ERISC, "Internal Error. Tried to connect to a downstream router over Ethernet, but the source is not an erisc fabric builder.");
+    erisc_builder_->connect_to_downstream_edm(*other.erisc_builder_);
 }
 
 SenderWorkerAdapterSpec FabricRouterBuilder::build_connection_to_fabric_channel(
@@ -121,79 +135,6 @@ SenderWorkerAdapterSpec FabricRouterBuilder::build_connection_to_fabric_channel(
         return tensix_builder_->build_connection_to_fabric_channel(sender_mapping.internal_sender_channel_id);
     } else {
         TT_FATAL(false, "Unknown builder type");
-    }
-}
-
-void FabricRouterBuilder::connect_sender_to_receiver(
-    const InternalSenderChannelMapping& sender_mapping,
-    const InternalReceiverChannelMapping& receiver_mapping,
-    FabricRouterBuilder& other,
-    bool is_noc_connection) {
-    // For Ethernet connections, use connect_to_downstream_edm
-    // Note: The current connect_to_downstream_edm API connects all channels (VC0 and VC1).
-    // The mapping ensures we're connecting the right logical channels at a high level.
-    // Future refinement may allow more fine-grained per-channel control.
-    if (!is_noc_connection) {
-        if (sender_mapping.builder_type == BuilderType::ERISC) {
-            // Create FabricDatamoverBuilder variant for the downstream builder
-            // If both routers have tensix builders, connect VC0 to tensix (performance optimization)
-            // Otherwise, use the receiver_mapping to determine which builder to connect to
-            bool both_have_tensix = this->tensix_builder_.has_value() && other.tensix_builder_.has_value();
-
-            // Initialize variants directly - cannot default-construct variant with reference_wrapper
-            auto make_downstream_builder = [&]() -> FabricDatamoverBuilder {
-                if (both_have_tensix) {
-                    return std::ref(other.tensix_builder_.value());
-                } else if (receiver_mapping.builder_type == BuilderType::TENSIX) {
-                    TT_FATAL(other.tensix_builder_.has_value(), "Other router's tensix builder not available");
-                    return std::ref(other.tensix_builder_.value());
-                } else {
-                    return std::ref(*other.erisc_builder_);
-                }
-            };
-            FabricDatamoverBuilder downstream_builder = make_downstream_builder();
-            FabricDatamoverBuilder vc1_downstream_builder = std::ref(*other.erisc_builder_);
-
-            // If both routers have tensix builders, use the two-argument version
-            // (connects VC0 to tensix, VC1 to erisc)
-            // Otherwise, use the single-argument version (connects both VC0 and VC1 to erisc)
-            if (both_have_tensix) {
-                erisc_builder_->connect_to_downstream_edm(downstream_builder, vc1_downstream_builder);
-            } else {
-                erisc_builder_->connect_to_downstream_edm(downstream_builder);
-            }
-        } else {
-            TT_FATAL(false, "Tensix sender connections over Ethernet not yet implemented");
-        }
-    } else {
-        // For NOC connections (intra-device), the connection logic is similar
-        // but may use different underlying mechanisms
-        // For now, use the same approach as Ethernet
-        if (sender_mapping.builder_type == BuilderType::ERISC) {
-            bool both_have_tensix = this->tensix_builder_.has_value() && other.tensix_builder_.has_value();
-
-            // Initialize variants directly - cannot default-construct variant with reference_wrapper
-            auto make_downstream_builder = [&]() -> FabricDatamoverBuilder {
-                if (both_have_tensix) {
-                    return std::ref(other.tensix_builder_.value());
-                } else if (receiver_mapping.builder_type == BuilderType::TENSIX) {
-                    TT_FATAL(other.tensix_builder_.has_value(), "Other router's tensix builder not available");
-                    return std::ref(other.tensix_builder_.value());
-                } else {
-                    return std::ref(*other.erisc_builder_);
-                }
-            };
-            FabricDatamoverBuilder downstream_builder = make_downstream_builder();
-            FabricDatamoverBuilder vc1_downstream_builder = std::ref(*other.erisc_builder_);
-
-            if (both_have_tensix) {
-                erisc_builder_->connect_to_downstream_edm(downstream_builder, vc1_downstream_builder);
-            } else {
-                erisc_builder_->connect_to_downstream_edm(downstream_builder);
-            }
-        } else {
-            TT_FATAL(false, "Tensix sender connections over NOC not yet implemented");
-        }
     }
 }
 
