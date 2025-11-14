@@ -93,6 +93,6 @@ jobs:
           push: true
           tags: ${{ inputs.evaluation-image-name }}
           build-args: |
-            "BASE_IMAGE=${{ inputs.base-image-name }}"
+            BASE_IMAGE=${{ inputs.base-image-name }}
           cache-to: type=inline
           pull: true
