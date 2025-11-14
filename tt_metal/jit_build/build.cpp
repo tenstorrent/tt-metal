@@ -193,7 +193,9 @@ void JitBuildEnv::init(
         // NOTE: -flto is NOT used because we need to link LLVM .o files with GCC-compiled .o files (noc.o, substitutes.o)
         // LTO produces bitcode that can't be linked with regular ELF objects
         string llvm_common_flags = "-std=c++17 -ffast-math -fno-exceptions ";
-        llvm_common_flags += "-target riscv32 -march=rv32imc -mabi=ilp32 ";
+        // Match GCC's -mcpu=tt-bh which uses rv32im (without 'c' compressed extension)
+        // This avoids relocation alignment issues caused by 2-byte compressed instructions
+        llvm_common_flags += "-target riscv32 -march=rv32im -mabi=ilp32 ";
         llvm_common_flags += "-ffreestanding -nostdlib ";
         
         // Add GCC's RISC-V toolchain headers so LLVM can find <cstdint>, <unistd.h>, etc.
@@ -221,7 +223,8 @@ void JitBuildEnv::init(
             "-Wno-unused-function "
             "-Wno-unknown-attributes "  // LLVM doesn't know GCC's custom attributes like rvtt_l1_ptr
             "-Wno-microsoft-anon-tag "
-            "-Wno-empty-body ";         // LLVM complains about empty while loops
+            "-Wno-empty-body "          // LLVM complains about empty while loops
+            "-falign-functions=4 ";     // Force 4-byte alignment to avoid misaligned relocations
         
         // Linker uses base flags but WITHOUT -flto (we're linking with GCC-compiled .o files)
         this->lflags_llvm_ = llvm_common_flags;
@@ -236,6 +239,10 @@ void JitBuildEnv::init(
         // gpp_include_dir_ is /path/to/sfpi/include, so go to ../compiler/lib/gcc/...
         std::string sfpi_root = this->gpp_include_dir_.substr(0, this->gpp_include_dir_.rfind("/include"));
         std::string libgcc_path = sfpi_root + "/compiler/lib/gcc/riscv-tt-elf/15.1.0/bh-ilp32";
+        // Use GCC's linker (ld.bfd) instead of LLVM's linker (ld.lld) for better RISC-V support
+        // This avoids relocation alignment issues specific to ld.lld
+        std::string gcc_linker_path = sfpi_root + "/compiler/bin/riscv-tt-elf-ld";
+        this->lflags_llvm_ += "-fuse-ld=" + gcc_linker_path + " ";
         // Strip debug info to avoid DWARF 5 relocation incompatibilities between GCC and LLVM
         this->lflags_llvm_ += "-L" + libgcc_path + " -lgcc -Wl,--strip-debug ";
     }
