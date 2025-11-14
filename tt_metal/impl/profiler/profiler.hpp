@@ -108,13 +108,6 @@ private:
     // Storage for all core's L1 data buffers
     std::unordered_map<CoreCoord, std::vector<uint32_t>> core_l1_data_buffers;
 
-    // Storage for all noc trace data
-    std::vector<std::unordered_map<RuntimeID, nlohmann::json::array_t>> noc_trace_data;
-
-    // Storage for all noc trace markers that have been converted to json to ensure that the same marker isn't processed
-    // twice
-    std::unordered_set<tracy::TTDeviceMarker> noc_trace_markers_processed;
-
     // Output directory for noc trace data
     std::filesystem::path noc_trace_data_output_dir;
 
