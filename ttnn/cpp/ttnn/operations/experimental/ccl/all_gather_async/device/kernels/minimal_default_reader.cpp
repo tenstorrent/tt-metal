@@ -36,6 +36,7 @@ constexpr bool fuse_op = get_compile_time_arg_val(16);
 constexpr uint32_t reverse = get_compile_time_arg_val(17) == 1;
 
 void kernel_main() {
+    DPRINT << "Starting reader kernel" << ENDL();
     ///////////////////////////////////////////////////
     // RUNTIME ARGS
     ///////////////////////////////////////////////////

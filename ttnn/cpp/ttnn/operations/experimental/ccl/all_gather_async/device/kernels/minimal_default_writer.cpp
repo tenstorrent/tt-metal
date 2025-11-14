@@ -92,6 +92,7 @@ bool valid_targets(const bool direction) {
 }
 }  // namespace detail
 void kernel_main() {
+    DPRINT << "Starting writer kernel" << ENDL();
     ///////////////////////////////////////////////////
     // RUNTIME ARGS
     ///////////////////////////////////////////////////
@@ -250,6 +251,11 @@ void kernel_main() {
             } else {
                 ASSERT(false);
             }
+        }
+        while (*(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem)) < ring_size - 1) {
+            DPRINT << "Expecting barrier semaphore of value "
+                   << *(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem)) << " to be " << ring_size - 1
+                   << ENDL();
         }
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), ring_size - 1);
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);

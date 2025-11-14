@@ -516,7 +516,7 @@ def test_all_gather_async_wan_galaxy_4x32(
 @pytest.mark.parametrize(
     "input_shape, gather_dim, cluster_axis,layout, ag_input_dtype",
     [
-        ([1, 10, 640, 128], 3, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        ([1, 10, 640, 128], 2, None, ttnn.TILE_LAYOUT, ttnn.bfloat16),
     ],
     ids=[
         "wan_all_gather_1",
@@ -543,7 +543,7 @@ def test_all_gather_async_wan_galaxy_4x32(
     [
         (
             {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D_DYNAMIC,
                 "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
                 "trace_region_size": 190112,
             },
@@ -575,13 +575,15 @@ def test_all_gather_run_impl_assert_repro(
     input_shape[gather_dim] *= devices
 
     torch_input = torch.rand(input_shape, dtype=torch.bfloat16)
+    use_submesh = False
+    submesh_device = mesh_device.create_submesh(ttnn.MeshShape((1, 32))) if use_submesh else mesh_device
     tt_input = ttnn.from_torch(
         torch_input,
         layout=layout,
         dtype=ag_input_dtype,
         memory_config=mem_config_input,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=gather_dim),
-        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensorToMesh(submesh_device, dim=gather_dim),
+        device=submesh_device,
     )
 
     logger.info(f"Starting all-gather")
@@ -593,7 +595,7 @@ def test_all_gather_run_impl_assert_repro(
         num_links=num_links,
         memory_config=mem_config_ag,
     )
-    # logger.info(f"All-gather completed")
+    logger.info(f"All-gather completed")
     # logger.info(f"tt_output.shape = {tt_output.shape}")
     # torch_output = ttnn.to_torch(
     #     tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)

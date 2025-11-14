@@ -1108,6 +1108,7 @@ KernelHandle CreateKernel(
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
+    log_debug(tt::LogOp, "Creating kernel from file: {}", file_name);
     CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
     KernelSource kernel_src(file_name, KernelSource::FILE_PATH);
     KernelHandle kernel = std::visit(
