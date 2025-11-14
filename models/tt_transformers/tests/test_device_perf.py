@@ -27,7 +27,7 @@ from tools.tracy.process_model_log import get_latest_ops_log_filename
 @pytest.mark.parametrize("export_measurements", [True, False])
 @pytest.mark.parametrize("batch_size", [1, 32])
 @pytest.mark.parametrize("data_parallel", [1, 2, 4, 8])
-@pytest.mark.parametrize("num_layers", [10])
+@pytest.mark.parametrize("num_layers", [2, 10])
 @pytest.mark.parametrize("num_runs", [2])
 @pytest.mark.parametrize("max_seq_len", [1024])
 @pytest.mark.parametrize("max_generated_tokens", [2])
