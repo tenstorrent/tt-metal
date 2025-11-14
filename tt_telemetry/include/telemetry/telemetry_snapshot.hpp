@@ -146,6 +146,9 @@ private:
      * Validation path: merge with comprehensive validation checks
      */
     void merge_from_with_validation(const TelemetrySnapshot& other) {
+        // Track successfully merged paths for label validation
+        std::unordered_set<std::string> successfully_merged_paths;
+
         // Validate and merge unit label maps
         if (!other.metric_unit_display_label_by_code.empty() || !other.metric_unit_full_label_by_code.empty()) {
             // Validate display label map
@@ -195,6 +198,7 @@ private:
                 continue;  // Skip this update
             }
             bool_metrics[path] = value;
+            successfully_merged_paths.insert(path);
         }
 
         // Merge bool metadata
@@ -218,6 +222,7 @@ private:
                 continue;  // Skip this update
             }
             uint_metrics[path] = value;
+            successfully_merged_paths.insert(path);
         }
 
         // Merge uint metadata
@@ -244,6 +249,7 @@ private:
                 continue;  // Skip this update
             }
             double_metrics[path] = value;
+            successfully_merged_paths.insert(path);
         }
 
         // Merge double metadata
@@ -271,6 +277,7 @@ private:
                 continue;  // Skip this update
             }
             string_metrics[path] = value;
+            successfully_merged_paths.insert(path);
             merged_string_paths.insert(path);
         }
 
@@ -286,30 +293,34 @@ private:
             }
         }
 
-        // Validate and merge custom labels
+        // Validate and merge custom labels - only for successfully merged metrics
         for (const auto& [path, labels] : other.metric_labels) {
-            // Check if path exists in any metric type (prevent orphaned labels)
-            bool path_exists = path_exists_in_any_map(path, bool_metrics, uint_metrics, double_metrics, string_metrics);
-
-            if (!path_exists) {
-                log_error(tt::LogAlways, "Label orphaned: path '{}' has labels but no metric", path);
+            // Only merge labels for metrics that were successfully merged (not rejected due to type conflicts)
+            if (successfully_merged_paths.find(path) == successfully_merged_paths.end()) {
+                log_error(tt::LogAlways, "Label orphaned: path '{}' has labels but metric was not merged", path);
                 continue;
             }
 
-            // Check for conflicting label values
+            // Check for conflicting label values and reject if found
             auto existing = metric_labels.find(path);
             if (existing != metric_labels.end()) {
+                bool has_conflict = false;
                 for (const auto& [label_key, label_value] : labels) {
                     auto existing_label = existing->second.find(label_key);
                     if (existing_label != existing->second.end() && existing_label->second != label_value) {
                         log_error(
                             tt::LogAlways,
-                            "Label conflict for path '{}', key '{}': existing='{}', new='{}'",
+                            "Label conflict for path '{}', key '{}': existing='{}', new='{}' - rejecting merge",
                             path,
                             label_key,
                             existing_label->second,
                             label_value);
+                        has_conflict = true;
+                        break;
                     }
+                }
+                if (has_conflict) {
+                    continue;  // Skip merging conflicting labels
                 }
             }
 

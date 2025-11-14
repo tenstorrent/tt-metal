@@ -15,10 +15,9 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
-#include <cctype>
 
 #include <fmt/ranges.h>
-#include <tt_stl/assert.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <third_party/umd/device/api/umd/device/cluster.hpp>
 
 enum class MetricUnit : uint16_t {
@@ -101,22 +100,28 @@ public:
     // Labels are mutable; when updated they are marked as changed so deltas can be transmitted.
 
 private:
+    // Helper: Check if character is ASCII letter (locale-independent)
+    static constexpr bool is_ascii_alpha(char c) noexcept { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); }
+
+    // Helper: Check if character is ASCII alphanumeric (locale-independent)
+    static constexpr bool is_ascii_alnum(char c) noexcept { return is_ascii_alpha(c) || (c >= '0' && c <= '9'); }
+
     static bool is_valid_prometheus_label_key(std::string_view key) {
         if (key.empty()) {
             return false;
         }
-        // First character must be letter or underscore
-        if (!std::isalpha(static_cast<unsigned char>(key[0])) && key[0] != '_') {
+        // First character must be ASCII letter or underscore
+        // Use explicit ASCII checks to avoid locale-dependent behavior
+        if (!is_ascii_alpha(key[0]) && key[0] != '_') {
             return false;
         }
-        // Remaining characters must be alphanumeric or underscore
+        // Remaining characters must be ASCII alphanumeric or underscore
         for (size_t i = 1; i < key.size(); ++i) {
-            char c = key[i];
-            if (!std::isalnum(static_cast<unsigned char>(c)) && c != '_') {
+            if (!is_ascii_alnum(key[i]) && key[i] != '_') {
                 return false;
             }
         }
-        // Warn about reserved prefix (not an error, but discouraged)
+        // Reject reserved "__" prefix (Prometheus internal use)
         if (key.size() >= 2 && key[0] == '_' && key[1] == '_') {
             return false;  // Reserved for Prometheus internal use
         }
@@ -125,10 +130,14 @@ private:
 
 public:
     void set_label(std::string_view key, std::string value) {
-        TT_ASSERT(
-            is_valid_prometheus_label_key(key),
-            "Invalid Prometheus label key '{}': must match [a-zA-Z_][a-zA-Z0-9_]* and not start with '__'",
-            key);
+        // Validate in both debug and release builds for data integrity
+        if (!is_valid_prometheus_label_key(key)) {
+            log_error(
+                tt::LogAlways,
+                "Invalid Prometheus label key '{}': must match [a-zA-Z_][a-zA-Z0-9_]* and not start with '__'",
+                key);
+            return;  // Skip invalid labels
+        }
         auto it = custom_labels_.find(std::string(key));
         if (it != custom_labels_.end()) {
             if (it->second != value) {
