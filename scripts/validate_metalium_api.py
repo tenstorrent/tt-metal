@@ -24,7 +24,6 @@ ALLOWED_PREFIXES = {
     "enchantum",
     "nlohmann",
     "tt-logger",
-    "tracy",
     "xtensor",
 }
 

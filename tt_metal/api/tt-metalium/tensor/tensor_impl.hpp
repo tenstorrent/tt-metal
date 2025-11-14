@@ -13,8 +13,6 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/mesh_device.hpp>
 
-#include <tracy/Tracy.hpp>
-
 #include <tt-metalium/tensor/host_buffer/functions.hpp>
 #include <tt-metalium/tensor/tensor.hpp>
 #include <tt-metalium/tensor/tensor_utils.hpp>
