@@ -48,17 +48,17 @@ The EfficientDet D0 model consists of three main components:
 - **Reference Implementation**: [Yet-Another-EfficientDet-Pytorch](https://github.com/zylo117/Yet-Another-Efficient-Pytorch)
 - **EfficientNet Paper**: [EfficientNet: Rethinking Model Scaling for Convolutional Neural Networks](https://arxiv.org/abs/1905.11946)
 
-## Performance
+## Performance(on N150)
 
 ### Inference Performance
 
 ##### FPS (Frames Per Second)
 
-- **Batch Size 1, 512×512**: TBD
+- **Batch Size 1, 512×512**: 36
 
 ##### Device Time
 
-- **Total Inference Time**: <TBD> ms
+- **Total Inference Time**: 27160 ms
 
 **Measurement Configuration:**
 - Input size: 512×512
@@ -94,7 +94,7 @@ models/experimental/efficientdetd0/
 │   ├── test_bifpn.py                 # BiFPN component test
 │   ├── test_classifier.py            # Classifier component test
 │   ├── test_regressor.py             # Regressor component test
-│   └── README_VERIFICATION.md        # Verification documentation
+│   └── evaluate_coco.py              # COCO evaluation script
 │
 └── tt/                                # TTNN implementation
     ├── efficient_det.py              # Main TTNN EfficientDet model
@@ -156,7 +156,7 @@ python models/experimental/efficientdetd0/demo/demo.py \
 python models/experimental/efficientdetd0/demo/demo.py \
     --image-path models/experimental/efficientdetd0/resources/vid_4_10500.jpg \
     --weights-path models/experimental/efficientdetd0/resources/efficientdet-d0.pth \
-    --output-dir models/experimental/efficientdetd0/demo/output
+    --output-dir models/experimental/efficientdetd0/demo/output \
     --threshold 0.2 \
     --iou-threshold 0.2
 ```
@@ -178,8 +178,9 @@ The demo will:
 1. Load and preprocess the input image
 2. Run inference on both PyTorch reference and TTNN models
 3. Post-process outputs to get bounding boxes
-4. Visualize detections and save output images
-5. Display PCC (Pearson Correlation Coefficient) comparisons
+4. Display PCC (Pearson Correlation Coefficient) comparisons (threshold: 0.92)
+5. Show detection summary (count of detections for PyTorch and TTNN)
+6. Visualize detections and save output images (if input image is provided)
 
 ### Running Tests
 
@@ -202,6 +203,57 @@ pytest models/experimental/efficientdetd0/tests/test_efficient_det.py \
 - `test_bifpn.py`: BiFPN component test
 - `test_classifier.py`: Classifier component test
 - `test_regressor.py`: Regressor component test
+
+### COCO Evaluation
+
+To evaluate the model on COCO validation set and get standard COCO metrics (mAP, AP@0.5, AP@0.75, AR, etc.):
+
+**Prerequisites:**
+```bash
+pip install pycocotools
+```
+
+**Download COCO Dataset:**
+1. Download COCO 2017 validation images and annotations from [COCO website](https://cocodataset.org/#download)
+2. Extract the dataset to a directory (e.g., `/path/to/coco/`)
+
+**Run Evaluation:**
+```bash
+# Evaluate TTNN implementation
+python models/experimental/efficientdetd0/tests/evaluate_coco.py \
+    --coco-annotations /path/to/coco/annotations/instances_val2017.json \
+    --coco-images /path/to/coco/val2017 \
+    --weights-path models/experimental/efficientdetd0/resources/efficientdet-d0.pth \
+    --device-id 0 \
+    --num-samples 5000
+
+# Evaluate PyTorch reference (for comparison)
+python models/experimental/efficientdetd0/tests/evaluate_coco.py \
+    --coco-annotations /path/to/coco/annotations/instances_val2017.json \
+    --coco-images /path/to/coco/val2017 \
+    --weights-path models/experimental/efficientdetd0/resources/efficientdet-d0.pth \
+    --pytorch-only \
+    --num-samples 5000
+```
+
+**Evaluation Arguments:**
+- `--coco-annotations`: Path to COCO annotations JSON file (required)
+- `--coco-images`: Path to COCO validation images directory (required)
+- `--weights-path`: Path to model weights file
+- `--device-id`: Device ID to use (default: 0)
+- `--num-samples`: Number of samples to evaluate (default: all)
+- `--batch-size`: Batch size (default: 1)
+- `--height`: Input image height (default: 512)
+- `--width`: Input image width (default: 512)
+- `--threshold`: Score threshold for detections (default: 0.05)
+- `--iou-threshold`: IoU threshold for NMS (default: 0.5)
+- `--pytorch-only`: Use PyTorch reference instead of TTNN
+
+**Expected Output Format:**
+The evaluation script outputs metrics in the same format as the [reference benchmark](https://github.com/zylo117/Yet-Another-EfficientDet-Pytorch/blob/master/benchmark/coco_eval_result)
+
+**Reference Benchmark Results:**
+According to the [official benchmark](https://github.com/zylo117/Yet-Another-EfficientDet-Pytorch/blob/master/benchmark/coco_eval_result)
 
 ## Model Components
 
@@ -303,10 +355,11 @@ To get final detections:
    - Adjust L1 small size parameter
    - Check available device memory
 
-4. **PCC below threshold**
+4. **PCC below threshold (0.92)**
    - Verify model weights are loaded correctly
    - Check input preprocessing matches reference
    - Ensure device is properly configured
+   - Note: PCC threshold is set to 0.92 for the demo
 
 
 
