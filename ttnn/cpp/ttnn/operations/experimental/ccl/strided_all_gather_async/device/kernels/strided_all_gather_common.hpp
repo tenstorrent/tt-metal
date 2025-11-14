@@ -27,7 +27,7 @@ FORCE_INLINE uint32_t round_up(uint32_t a, uint32_t b) { return b * div_up(a, b)
 // The returned tile index will be in the unpadded space.
 // chunk size is k_block_tiles * mm_core_grid.y
 // subchunk height is k_block height
-FORCE_INLINE uint32_t get_next_chunk_tile(
+FORCE_INLINE int32_t get_next_chunk_tile(
     uint32_t tile_iter,
     uint32_t input_chunk_start_tile_index,
     uint32_t chunk_width,      // This is the k_block width, unless the block is not full, then it's the partial width.
@@ -36,6 +36,7 @@ FORCE_INLINE uint32_t get_next_chunk_tile(
     uint32_t worker_tile_offset,
     uint32_t num_workers,
     uint32_t input_tensor_Wt,   // this should be the unpadded width
+    uint32_t input_tensor_Ht,   // this should be the unpadded height
     uint32_t output_tensor_Wt,  // this should be the unpadded width
     uint32_t device_index,
     bool read_from_output) {
@@ -46,8 +47,12 @@ FORCE_INLINE uint32_t get_next_chunk_tile(
     chunk_row = subchunk_height_stride * subchunk_index + subchunk_row;
     uint32_t chunk_col = chunk_linear_index % chunk_width;
     uint32_t input_tile_index = input_chunk_start_tile_index + chunk_row * input_tensor_Wt + chunk_col;
+    uint32_t input_row = input_tile_index / input_tensor_Wt;
+    if (input_row >= input_tensor_Ht) {
+        DPRINT << "RETURNED " << ENDL();
+        return -1;
+    }
     if (read_from_output) {
-        uint32_t input_row = input_tile_index / input_tensor_Wt;
         uint32_t input_col = input_tile_index % input_tensor_Wt;
         return input_row * output_tensor_Wt + device_index * input_tensor_Wt +
                input_col;  // TODO should pass device_index*input_tensor_Wt to prevent recalculating them
@@ -109,6 +114,7 @@ FORCE_INLINE uint32_t read_chunk(
     uint32_t input_tensor_page_size,
     AddrGenType output_tensor_addrgen,
     uint32_t input_tensor_Wt,
+    uint32_t input_tensor_Ht,
     uint32_t output_tensor_Wt,
     uint32_t actual_sender_chip_id,
     bool read_output) {
@@ -125,7 +131,7 @@ FORCE_INLINE uint32_t read_chunk(
         cb_reserve_back(cb_output_id, max_tiles_per_packet);
         size_t l1_write_addr = get_write_ptr(cb_output_id);
         for (uint32_t j = 0; j < tiles_to_read_in_packet; ++j) {
-            uint32_t tile_id = get_next_chunk_tile(
+            int32_t tile_id = get_next_chunk_tile(
                 chunk_tile_iter,
                 chunk_start_tile,
                 chunk_width,
@@ -134,14 +140,18 @@ FORCE_INLINE uint32_t read_chunk(
                 worker_tile_offset,
                 ag_worker_cores,
                 input_tensor_Wt,
+                input_tensor_Ht,
                 output_tensor_Wt,
                 actual_sender_chip_id,
                 read_output);
 
-            uint64_t noc_read_addr = get_noc_addr(tile_id, read_output ? output_tensor_addrgen : input_tensor_addrgen);
-            noc_async_read(noc_read_addr, l1_write_addr, input_tensor_page_size);
+            if (tile_id >= 0) {
+                uint64_t noc_read_addr =
+                    get_noc_addr(tile_id, read_output ? output_tensor_addrgen : input_tensor_addrgen);
+                noc_async_read(noc_read_addr, l1_write_addr, input_tensor_page_size);
 
-            l1_write_addr += input_tensor_page_size;
+                l1_write_addr += input_tensor_page_size;
+            }
             chunk_tile_iter++;
         }
 
@@ -175,6 +185,7 @@ FORCE_INLINE uint32_t write_chunk(
     AddrGenType output_addrgen,
     uint32_t output_page_size,
     uint32_t input_tensor_Wt,
+    uint32_t input_tensor_Ht,
     uint32_t output_tensor_Wt,
     uint32_t actual_sender_chip_id,
     tt::tt_fabric::WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS>& mux_connection,
@@ -197,7 +208,8 @@ FORCE_INLINE uint32_t write_chunk(
         cb_wait_front(cb_output_id, max_tiles_per_packet);
         size_t l1_read_addr = get_read_ptr(cb_output_id);
 
-        uint32_t tile_one_id = get_next_chunk_tile(
+        uint32_t padded_tiles = 0;
+        int32_t tile_one_id = get_next_chunk_tile(
             chunk_tile_iter,
             chunk_start_tile,
             chunk_width,
@@ -206,11 +218,15 @@ FORCE_INLINE uint32_t write_chunk(
             worker_tile_offset,
             ag_worker_cores,
             input_tensor_Wt,
+            input_tensor_Ht,
             output_tensor_Wt,
             actual_sender_chip_id,
             true);
+        if (tile_one_id < 0) {
+            padded_tiles++;
+        }
         chunk_tile_iter++;
-        uint32_t tile_two_id = tile_one_id;
+        int32_t tile_two_id = tile_one_id;
         if (tiles_to_write_in_packet == 2) {
             tile_two_id = get_next_chunk_tile(
                 chunk_tile_iter,
@@ -221,17 +237,24 @@ FORCE_INLINE uint32_t write_chunk(
                 worker_tile_offset,
                 ag_worker_cores,
                 input_tensor_Wt,
+                input_tensor_Ht,
                 output_tensor_Wt,
                 actual_sender_chip_id,
                 true);
+            if (tile_two_id < 0) {
+                padded_tiles++;
+            }
             chunk_tile_iter++;
         }
-        auto noc_address0 = tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addrgen, tile_one_id, 0);
-        auto noc_address1 = tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addrgen, tile_two_id, 0);
 
+        tiles_to_write_in_packet = tiles_to_write_in_packet - padded_tiles;
         // Will have more cases once scatter-write supports more than 2 distinct addresses
         switch (tiles_to_write_in_packet) {
             case 2: {
+                auto noc_address0 =
+                    tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addrgen, tile_one_id, 0);
+                auto noc_address1 =
+                    tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addrgen, tile_two_id, 0);
                 fabric_unicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
                     &mux_connection,
                     pkt_scatter_hdr,
@@ -248,8 +271,9 @@ FORCE_INLINE uint32_t write_chunk(
                 }
                 break;
             }
-            case 1:
-            default: {
+            case 1: {
+                auto noc_address0 =
+                    tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addrgen, tile_one_id, 0);
                 fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
                     &mux_connection, pkt_unicast_hdr, l1_read_addr, NocUnicastCommandHeader{noc_address0});
                 if (direction == 1 && write_local) {
@@ -257,6 +281,10 @@ FORCE_INLINE uint32_t write_chunk(
                     noc_async_write(l1_read_addr, local_noc0_dest_noc_addr, output_page_size);
                     noc_async_write_barrier();
                 }
+                break;
+            }
+            case 0:
+            default: {
                 break;
             }
         }
