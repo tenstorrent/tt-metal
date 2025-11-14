@@ -529,7 +529,7 @@ py::object convert_tt_tensor_to_torch_tensor(const RowMajorHostBuffer& row_major
     }();
 
     // torch does not support unsigned integers. To preserve the full range of the TTNN tensor,
-    // for uint16/32 read with dtype matching element width (no copy), then widen the data and
+    // for uint16/32 read with dtype matching element width, then widen the data and
     // fix up the values
     if (row_major_host_buffer.data_type == DataType::UINT16) {
         auto bitwise_and = torch.attr("bitwise_and");
