@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/buffer_page_mapping.hpp>
-
+// #include <iostream>
 namespace tt::tt_metal {
 
 namespace {
@@ -20,9 +20,9 @@ std::vector<BufferCorePageMapping::ContiguousHostPages> to_host_page_ranges(
         uint32_t start_host_page = host_page_indices[start_host_page_idx];
         uint32_t end_host_page = host_page_indices[end_host_page_idx - 1];
         result.push_back({
-            .device_page_offset = start_host_page_idx,
-            .host_page_start = start_host_page,
-            .num_pages = end_host_page - start_host_page + 1,
+            .device_page_offset = start_host_page_idx,         // 0, 5
+            .host_page_start = start_host_page,                // 0, 2
+            .num_pages = end_host_page - start_host_page + 1,  // 2, 3
         });
     };
 
@@ -66,6 +66,10 @@ BufferPageMapping::BufferPageMapping(const UncompressedBufferPageMapping& page_m
         if (core_host_page_indices.empty()) {
             continue;
         }
+        // std::cout<<core_host_page_indices[0]<<" "<<core_host_page_indices[1]<<" "<<core_host_page_indices[2]<<"
+        // "<<core_host_page_indices[3]<<" "<<core_host_page_indices[4]<<" "<<core_host_page_indices[5]<<"
+        // "<<core_host_page_indices[6]<<" "<<core_host_page_indices[7]<<" "<<core_host_page_indices[8]<<"
+        // "<<core_host_page_indices[9]<<std::endl;//" "<<core_host_page_indices[10]<<std::endl;
         auto host_ranges = CMAKE_UNIQUE_NAMESPACE::to_host_page_ranges(core_host_page_indices);
         if (host_ranges.empty()) {
             continue;
@@ -169,8 +173,18 @@ BufferCorePageMapping::Iterator::Range BufferCorePageMapping::Iterator::next_ran
         return result;
     }
     const auto& host_range = mapping_->host_ranges[range_index_];
+    // std::cout<<"range_index_: "<<range_index_<<" device_page_offset_: "<<device_page_offset_<<"
+    // end_device_page_offset: "<<end_device_page_offset<<" host_range.num_pages: "<<host_range.num_pages<<"
+    // host_range.device_page_offset: "<<host_range.device_page_offset<<" host_range.host_page_start:
+    // "<<host_range.host_page_start<<std::endl;
+    if (device_page_offset_ < host_range.device_page_offset) {  // we are in padding.
+        device_page_offset_ = host_range.device_page_offset;
+    }
     uint32_t num_pages_left = host_range.num_pages - (device_page_offset_ - host_range.device_page_offset);
     uint32_t num_pages = std::min(num_pages_left, end_device_page_offset - device_page_offset_);
+    // std::cout<<"num_pages: "<<num_pages<<" num_pages_left: "<<num_pages_left<<std::endl;
+    // std::cout<<"START of next_range device_page_offset_: "<<device_page_offset_<<" host_range.device_page_offset:
+    // "<<host_range.device_page_offset<<" host_range.host_page_start: "<<host_range.host_page_start<<std::endl;
     result = Range{
         .device_page_offset = device_page_offset_,
         .host_page_start = host_range.host_page_start + device_page_offset_ - host_range.device_page_offset,
