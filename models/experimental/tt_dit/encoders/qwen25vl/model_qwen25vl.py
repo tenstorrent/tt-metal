@@ -262,7 +262,6 @@ class Qwen25VlAttention(Module):
         self._ccl_manager = ctx.ccl_manager
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        # Rearrange QKV projections such column-fracturing shards the heads
         def _merge_tensors(q: ttnn.Tensor, k: ttnn.Tensor, v: ttnn.Tensor) -> ttnn.Tensor:
             # if self.padding_config is not None:
             #     q = pad_weight_tensor(q, self.padding_config, pad_output_dim=True)
@@ -274,15 +273,14 @@ class Qwen25VlAttention(Module):
 
             # repeat KV heads
             n = self._repeat_kv_heads
-            k = k.unflatten(0, [-1, self._head_dim]).repeat([1, n, 1]).flatten(0, 1)
-            v = v.unflatten(0, [-1, self._head_dim]).repeat([1, n, 1]).flatten(0, 1)
+            k = k.unflatten(0, [-1, self._head_dim]).repeat_interleave(n, dim=0).flatten(0, 1)
+            v = v.unflatten(0, [-1, self._head_dim]).repeat_interleave(n, dim=0).flatten(0, 1)
 
             # fuse
             q = q.unflatten(0, [self._tp_factor, self._num_local_heads, self._head_dim])
             k = k.unflatten(0, [self._tp_factor, self._num_local_kv_heads, self._head_dim])
             v = v.unflatten(0, [self._tp_factor, self._num_local_kv_heads, self._head_dim])
-            qkv = torch.cat([q, k, v], dim=1)
-            return qkv.flatten(0, 2)
+            return torch.cat([q, k, v], dim=1).flatten(0, 2)
 
         if "q_proj.weight" in state and "k_proj.weight" in state and "v_proj.weight" in state:
             state["qkv_proj.weight"] = _merge_tensors(
@@ -291,10 +289,8 @@ class Qwen25VlAttention(Module):
 
         if "q_proj.bias" in state and "k_proj.bias" in state and "v_proj.bias" in state:
             state["qkv_proj.bias"] = _merge_tensors(
-                state.pop("q_proj.bias").unsqueeze(-1),
-                state.pop("k_proj.bias").unsqueeze(-1),
-                state.pop("v_proj.bias").unsqueeze(-1),
-            ).squeeze(-1)
+                state.pop("q_proj.bias"), state.pop("k_proj.bias"), state.pop("v_proj.bias")
+            )
 
     def forward(
         self,
