@@ -355,7 +355,7 @@ uint32_t noc_atomic_read_updates_completed();
   that the noc copy operations have completed.
  */
 
-volatile uint32_t noc_wr_ack_received();
+uint32_t noc_wr_ack_received();
 
 /*
   Returns the number of read responses received
@@ -366,7 +366,7 @@ volatile uint32_t noc_wr_ack_received();
   that the noc copy operations (from remote to local) have completed.
  */
 
-volatile uint32_t noc_rd_resp_received();
+uint32_t noc_rd_resp_received();
 /*
   Returns true if the active command buffer is presently available (i.e., no pending
   request that is being backpressured by the NOC).

@@ -113,7 +113,7 @@ FORCE_INLINE void recordRoutingFields1D(uint32_t routing_fields) {
 // how slow is this? alternative is sotring entire route buffer which isn't ideal either...
 template <uint32_t STATIC_ID = 12345>
 FORCE_INLINE void recordRoutingFields2D(
-    const volatile tt::tt_fabric::LowLatencyMeshRoutingFieldsV2 routing_fields, const volatile uint8_t* route_buffer) {
+    const tt::tt_fabric::LowLatencyMeshRoutingFieldsV2 routing_fields, const uint8_t* route_buffer) {
     KernelProfilerNocEventMetadata ev_md;
     auto& routing_fields_2d = ev_md.data.fabric_routing_fields_2d;
     routing_fields_2d.noc_xfer_type = KernelProfilerNocEventMetadata::NocEventType::FABRIC_ROUTING_FIELDS_2D;

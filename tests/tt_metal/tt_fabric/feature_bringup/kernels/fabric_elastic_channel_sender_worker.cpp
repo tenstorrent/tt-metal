@@ -82,7 +82,7 @@ void kernel_main() {
                 timer_open = false;
                 uint64_t idle_end_cycles = read_wall_clock();
                 worker_timing_stats->total_idle_cycles += (idle_end_cycles - idle_start_cycles);
-                worker_timing_stats->idle_count++;
+                worker_timing_stats->idle_count += 1;
             }
             fabric_writer_adapter.update_to_new_chunk();
         } else if (sent_once && !timer_open) {

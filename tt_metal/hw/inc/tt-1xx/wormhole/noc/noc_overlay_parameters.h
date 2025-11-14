@@ -50,9 +50,8 @@
 #define NCRISC_STREAM_RANGE_2_END 11
 #define NCRISC_PIC_CONFIG_PHASE_DEFAULT 0
 
-#define NOC_STREAM_WRITE_REG(stream_id, reg_id, val) \
-    ((*((volatile uint32_t*)(STREAM_REG_ADDR(stream_id, reg_id)))) = (val))
-#define NOC_STREAM_READ_REG(stream_id, reg_id) (*((volatile uint32_t*)(STREAM_REG_ADDR(stream_id, reg_id))))
+#define NOC_STREAM_WRITE_REG(stream_id, reg_id, val) ((*((uint32_t*)(STREAM_REG_ADDR(stream_id, reg_id)))) = (val))
+#define NOC_STREAM_READ_REG(stream_id, reg_id) (*((uint32_t*)(STREAM_REG_ADDR(stream_id, reg_id))))
 
 #define NOC_STREAM_WRITE_REG_FIELD(stream_id, reg_id, field, val)                 \
     (NOC_STREAM_WRITE_REG(                                                        \
