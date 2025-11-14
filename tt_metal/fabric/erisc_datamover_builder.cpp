@@ -73,8 +73,8 @@ namespace tt::tt_fabric {
  */
 namespace {
 // Returns true when fabric 2-ERISC should be considered enabled for builders.
-// Effective if either the explicit env override is present, or when running on
-// Blackhole with 2 ERISCs available and Fabric Tensix MUX config is enabled.
+// This is disabled for Wormhole and enabled for Blackhole when 2-eriscs can be dispatched to
+// and if we are not building with the tensix mux extension (due to stack size issue).
 bool is_fabric_two_erisc_enabled() {
     auto &mc = tt::tt_metal::MetalContext::instance();
     // Force-disable if the override is present
@@ -85,7 +85,7 @@ bool is_fabric_two_erisc_enabled() {
     if (hal.get_arch() != tt::ARCH::BLACKHOLE) {
         return false;
     }
-    if (mc.get_fabric_tensix_config() != tt::tt_fabric::FabricTensixConfig::MUX) {
+    if (mc.get_fabric_tensix_config() == tt::tt_fabric::FabricTensixConfig::MUX) {
         return false;
     }
     return hal.get_num_risc_processors(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH) >= 2;
@@ -179,9 +179,6 @@ size_t get_num_riscv_cores() {
     if (is_fabric_two_erisc_enabled()) {
         size_t nriscs = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
             tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
-        if (nriscs > 1) {
-            log_warning(tt::LogFabric, "Launching fabric in experimental 2-erisc mode.");
-        }
         return nriscs;
     }
     return 1;
