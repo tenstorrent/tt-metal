@@ -7,12 +7,10 @@ GPT-OSS ModelArgs class that's compatible with tt_transformers interface
 """
 
 import os
-from glob import glob
 from pathlib import Path
 
 import torch
 from loguru import logger
-from safetensors.torch import load_file
 from tqdm import tqdm
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
@@ -145,7 +143,12 @@ class ModelArgs:
 
     def weight_cache_path(self, dtype):
         """Return weight cache path for the model"""
-        cache_dir = Path(self.model_path)  # Use same directory as model
+        cache_dir = os.getenv("TT_CACHE_PATH")
+        if cache_dir:
+            cache_dir = Path(cache_dir)  # If we specify a TT_CACHE_PATH, use that for the cache
+        else:
+            cache_dir = Path(self.model_path)  # Use same directory as model
+        logger.info(f"Cache directory: {cache_dir}")
         dtype_str = {ttnn.bfloat16: "bf16", ttnn.bfloat8_b: "bfp8"}[dtype]
 
         if self.instruct:
