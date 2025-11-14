@@ -15,8 +15,10 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <cctype>
 
 #include <fmt/ranges.h>
+#include <tt_stl/assert.hpp>
 #include <third_party/umd/device/api/umd/device/cluster.hpp>
 
 enum class MetricUnit : uint16_t {
@@ -64,6 +66,7 @@ public:
 
     void mark_transmitted() {
         changed_since_transmission_ = false;
+        labels_changed_since_transmission_ = false;
     }
 
     virtual ~Metric() {
@@ -73,6 +76,82 @@ public:
         return timestamp_;
     }
 
+    // Custom label support for Prometheus
+    // Labels are key-value pairs that appear in Prometheus output alongside path-derived labels.
+    //
+    // IMPORTANT: Label keys must follow Prometheus naming conventions:
+    //   - Must match [a-zA-Z_][a-zA-Z0-9_]*
+    //   - Reserved prefixes "__" (double underscore) are for Prometheus internal use
+    //   - Values are automatically escaped for special characters (\, ", \n)
+    //   - Validation is enforced via assertion in debug builds
+    //
+    // Example usage:
+    //   class MyMetric : public UIntMetric {
+    //       void update(...) {
+    //           set_value(42);
+    //           set_label("user", "alice");
+    //           set_label("process", "python3");
+    //       }
+    //   };
+    //
+    // Prometheus output:
+    //   my_metric{hostname="...",device="0",user="alice",process="python3"} 42
+    //
+    // Labels can be set in constructor (static) or update() (dynamic).
+    // Labels are mutable; when updated they are marked as changed so deltas can be transmitted.
+
+private:
+    static bool is_valid_prometheus_label_key(std::string_view key) {
+        if (key.empty()) {
+            return false;
+        }
+        // First character must be letter or underscore
+        if (!std::isalpha(static_cast<unsigned char>(key[0])) && key[0] != '_') {
+            return false;
+        }
+        // Remaining characters must be alphanumeric or underscore
+        for (size_t i = 1; i < key.size(); ++i) {
+            char c = key[i];
+            if (!std::isalnum(static_cast<unsigned char>(c)) && c != '_') {
+                return false;
+            }
+        }
+        // Warn about reserved prefix (not an error, but discouraged)
+        if (key.size() >= 2 && key[0] == '_' && key[1] == '_') {
+            return false;  // Reserved for Prometheus internal use
+        }
+        return true;
+    }
+
+public:
+    void set_label(std::string_view key, std::string value) {
+        TT_ASSERT(
+            is_valid_prometheus_label_key(key),
+            "Invalid Prometheus label key '{}': must match [a-zA-Z_][a-zA-Z0-9_]* and not start with '__'",
+            key);
+        auto it = custom_labels_.find(std::string(key));
+        if (it != custom_labels_.end()) {
+            if (it->second != value) {
+                it->second = std::move(value);
+                labels_changed_since_transmission_ = true;
+            }
+        } else {
+            custom_labels_.emplace(std::string(key), std::move(value));
+            labels_changed_since_transmission_ = true;
+        }
+    }
+
+    void set_labels(std::unordered_map<std::string, std::string> labels) {
+        if (custom_labels_ != labels) {
+            custom_labels_ = std::move(labels);
+            labels_changed_since_transmission_ = true;
+        }
+    }
+
+    const std::unordered_map<std::string, std::string>& labels() const { return custom_labels_; }
+
+    bool labels_changed_since_transmission() const { return labels_changed_since_transmission_; }
+
 protected:
     void set_timestamp_now() {
         timestamp_ =
@@ -81,7 +160,9 @@ protected:
     }
 
     bool changed_since_transmission_ = false;
+    bool labels_changed_since_transmission_ = false;
     uint64_t timestamp_ = 0;  // Unix timestamp in milliseconds, 0 = never set
+    std::unordered_map<std::string, std::string> custom_labels_;
 };
 
 class BoolMetric: public Metric {
