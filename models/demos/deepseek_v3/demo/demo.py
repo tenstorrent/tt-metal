@@ -19,15 +19,7 @@ from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
 
 def _default_mesh_shape() -> ttnn.MeshShape:
     device_ids = ttnn.get_device_ids()
-    mesh_device_env = os.getenv("MESH_DEVICE")
-    if mesh_device_env == "DUAL":
-        default_mesh_shape = ttnn.MeshShape(8, 8)  # If running on DUAL system
-    elif mesh_device_env == "QUAD":
-        default_mesh_shape = ttnn.MeshShape(16, 8)  # If running on QUAD system
-    elif mesh_device_env == "TG" or len(device_ids) == 32:  # If running on Galaxy system
-        default_mesh_shape = ttnn.MeshShape(4, 8)
-    else:
-        default_mesh_shape = ttnn.MeshShape(1, len(device_ids))
+    default_mesh_shape = ttnn.MeshShape(8, 8)  # If running on DUAL system
     return default_mesh_shape
 
 
