@@ -1024,14 +1024,14 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             break;
 
         // ========================================
-        // NUMA THREAD BINDING
+        // DEVICE MANAGER
         // ========================================
         // TT_METAL_NUMA_BASED_AFFINITY
         // Specifies thread binding in DeviceManager
         // Default: disabled
-        // Usage: export TT_METAL_NUMA_BASED_AFFINITY 1
+        // Usage: export TT_METAL_NUMA_BASED_AFFINITY=1
         case EnvVarID::TT_METAL_NUMA_BASED_AFFINITY: {
-            this->numa_based_affinity = true;
+            this->numa_based_affinity = is_env_enabled(value);
             break;
         }
     }
