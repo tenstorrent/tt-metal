@@ -62,11 +62,6 @@ def reshape_output(tt_output, N, D_out, H_out, W_out, out_channels, device):
 
 
 def create_conv3d_config(
-    out_channels,
-    kernel_size,
-    stride,
-    padding,
-    padding_mode,
     T_out_block=1,
     W_out_block=1,
     H_out_block=1,
@@ -84,12 +79,6 @@ def create_conv3d_config(
         H_out_block=H_out_block,
         C_out_block=C_out_block,
         C_in_block=C_in_block,
-        output_channels=out_channels,
-        kernel_size=kernel_size,
-        stride=stride,
-        padding=padding,
-        padding_mode=padding_mode,
-        groups=1,
         compute_with_storage_grid_size=compute_with_storage_grid_size,
     )
 
@@ -153,6 +142,12 @@ def run_conv3d_test(device, input_shape, out_channels, kernel_size, stride, padd
         input_tensor=tt_input,
         weight_tensor=tt_weight,
         bias_tensor=tt_bias,
+        output_channels=out_channels,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=padding,
+        padding_mode=padding_mode,
+        groups=1,
         config=config,
         compute_kernel_config=kernel_config,
     )
