@@ -6,6 +6,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <algorithm>
 #include <chrono>
+#include <functional>
 #include <iomanip>
 #include <optional>
 #include <sstream>
@@ -154,8 +155,11 @@ void process_metrics(
     std::stringstream& output,
     const std::unordered_map<std::string, ValueType>& metrics,
     const std::unordered_map<std::string, uint64_t>& timestamps,
-    const std::unordered_map<std::string, uint16_t>* units,
+    std::optional<std::reference_wrapper<const std::unordered_map<std::string, uint16_t>>> units,
     const std::unordered_map<uint16_t, std::string>& unit_labels,
+    std::optional<
+        std::reference_wrapper<const std::unordered_map<std::string, std::unordered_map<std::string, std::string>>>>
+        custom_labels,
     std::string_view help_text,
     ValueConverter value_converter) {
     std::unordered_set<std::string> written_metric_names;
@@ -164,6 +168,17 @@ void process_metrics(
         try {
             // Parse metric path to extract name and labels (including hostname)
             ParsedMetric parsed = parse_metric_path(path);
+
+            // Merge custom labels if provided
+            if (custom_labels.has_value()) {
+                auto custom_it = custom_labels->get().find(path);
+                if (custom_it != custom_labels->get().end()) {
+                    // Merge custom labels into parsed labels (custom labels override path labels if conflict)
+                    for (const auto& [key, val] : custom_it->second) {
+                        parsed.labels[key] = val;
+                    }
+                }
+            }
 
             // Convert value (converter may mutate parsed.labels for string metrics)
             std::string value_str = value_converter(value, parsed);
@@ -177,9 +192,9 @@ void process_metrics(
 
             // Get unit label (if units map provided)
             std::string unit_label;
-            if (units != nullptr) {
-                auto unit_it = units->find(path);
-                if (unit_it != units->end()) {
+            if (units.has_value()) {
+                auto unit_it = units->get().find(path);
+                if (unit_it != units->get().end()) {
                     auto label_it = unit_labels.find(unit_it->second);
                     if (label_it != unit_labels.end()) {
                         unit_label = label_it->second;
@@ -222,8 +237,9 @@ std::string format_snapshot_as_prometheus(const TelemetrySnapshot& snapshot) {
         output,
         snapshot.bool_metrics,
         snapshot.bool_metric_timestamps,
-        nullptr,  // No units for bool metrics
+        std::nullopt,  // No units for bool metrics
         snapshot.metric_unit_display_label_by_code,
+        snapshot.metric_labels,  // Custom labels
         "Boolean metric from Tenstorrent Metal",
         [](bool v, ParsedMetric&) { return std::to_string(v ? 1 : 0); });
 
@@ -232,8 +248,9 @@ std::string format_snapshot_as_prometheus(const TelemetrySnapshot& snapshot) {
         output,
         snapshot.uint_metrics,
         snapshot.uint_metric_timestamps,
-        &snapshot.uint_metric_units,
+        snapshot.uint_metric_units,
         snapshot.metric_unit_display_label_by_code,
+        snapshot.metric_labels,  // Custom labels
         "Unsigned integer metric from Tenstorrent Metal",
         [](uint64_t v, ParsedMetric&) { return std::to_string(v); });
 
@@ -242,8 +259,9 @@ std::string format_snapshot_as_prometheus(const TelemetrySnapshot& snapshot) {
         output,
         snapshot.double_metrics,
         snapshot.double_metric_timestamps,
-        &snapshot.double_metric_units,
+        snapshot.double_metric_units,
         snapshot.metric_unit_display_label_by_code,
+        snapshot.metric_labels,  // Custom labels
         "Floating-point metric from Tenstorrent Metal",
         [](double v, ParsedMetric&) { return std::to_string(v); });
 
@@ -253,8 +271,9 @@ std::string format_snapshot_as_prometheus(const TelemetrySnapshot& snapshot) {
         output,
         snapshot.string_metrics,
         snapshot.string_metric_timestamps,
-        nullptr,  // No units for string metrics
+        std::nullopt,  // No units for string metrics
         snapshot.metric_unit_display_label_by_code,
+        snapshot.metric_labels,  // Custom labels
         "String metric from Tenstorrent Metal (value stored in label)",
         [](const std::string& v, ParsedMetric& parsed) {
             parsed.labels["value"] = v;

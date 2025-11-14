@@ -203,6 +203,10 @@ static void send_initial_snapshot(const std::vector<std::shared_ptr<TelemetrySub
         std::string path = get_cluster_wide_telemetry_path(*bool_metrics_[i]);
         snapshot->bool_metrics[path] = bool_metrics_[i]->value();
         snapshot->bool_metric_timestamps[path] = bool_metrics_[i]->timestamp();
+        const auto& labels = bool_metrics_[i]->labels();
+        if (!labels.empty()) {
+            snapshot->metric_labels[path] = labels;
+        }
     }
 
     for (size_t i = 0; i < uint_metrics_.size(); i++) {
@@ -210,6 +214,10 @@ static void send_initial_snapshot(const std::vector<std::shared_ptr<TelemetrySub
         snapshot->uint_metrics[path] = uint_metrics_[i]->value();
         snapshot->uint_metric_units[path] = static_cast<uint16_t>(uint_metrics_[i]->units);
         snapshot->uint_metric_timestamps[path] = uint_metrics_[i]->timestamp();
+        const auto& labels = uint_metrics_[i]->labels();
+        if (!labels.empty()) {
+            snapshot->metric_labels[path] = labels;
+        }
     }
 
     for (size_t i = 0; i < double_metrics_.size(); i++) {
@@ -217,6 +225,10 @@ static void send_initial_snapshot(const std::vector<std::shared_ptr<TelemetrySub
         snapshot->double_metrics[path] = double_metrics_[i]->value();
         snapshot->double_metric_units[path] = static_cast<uint16_t>(double_metrics_[i]->units);
         snapshot->double_metric_timestamps[path] = double_metrics_[i]->timestamp();
+        const auto& labels = double_metrics_[i]->labels();
+        if (!labels.empty()) {
+            snapshot->metric_labels[path] = labels;
+        }
     }
 
     for (size_t i = 0; i < string_metrics_.size(); i++) {
@@ -224,6 +236,10 @@ static void send_initial_snapshot(const std::vector<std::shared_ptr<TelemetrySub
         snapshot->string_metrics[path] = string_metrics_[i]->value();
         snapshot->string_metric_units[path] = static_cast<uint16_t>(string_metrics_[i]->units);
         snapshot->string_metric_timestamps[path] = string_metrics_[i]->timestamp();
+        const auto& labels = string_metrics_[i]->labels();
+        if (!labels.empty()) {
+            snapshot->metric_labels[path] = labels;
+        }
     }
 
     // Populate unit label maps for initial snapshot
@@ -237,45 +253,93 @@ static void send_initial_snapshot(const std::vector<std::shared_ptr<TelemetrySub
 
 static void update_delta_snapshot_with_local_telemetry(std::shared_ptr<TelemetrySnapshot> snapshot) {
     for (size_t i = 0; i < bool_metrics_.size(); i++) {
-        if (!bool_metrics_[i]->changed_since_transmission()) {
+        bool value_changed = bool_metrics_[i]->changed_since_transmission();
+        bool labels_changed = bool_metrics_[i]->labels_changed_since_transmission();
+        if (!value_changed && !labels_changed) {
             continue;
         }
         std::string path = get_cluster_wide_telemetry_path(*bool_metrics_[i]);
-        snapshot->bool_metrics[path] = bool_metrics_[i]->value();
-        snapshot->bool_metric_timestamps[path] = bool_metrics_[i]->timestamp();
+
+        // Only send value if it changed
+        if (value_changed) {
+            snapshot->bool_metrics[path] = bool_metrics_[i]->value();
+            snapshot->bool_metric_timestamps[path] = bool_metrics_[i]->timestamp();
+        }
+
+        // Only send labels if they changed
+        if (labels_changed) {
+            snapshot->metric_labels[path] = bool_metrics_[i]->labels();
+        }
+
         bool_metrics_[i]->mark_transmitted();
     }
 
     for (size_t i = 0; i < uint_metrics_.size(); i++) {
-        if (!uint_metrics_[i]->changed_since_transmission()) {
+        bool value_changed = uint_metrics_[i]->changed_since_transmission();
+        bool labels_changed = uint_metrics_[i]->labels_changed_since_transmission();
+        if (!value_changed && !labels_changed) {
             continue;
         }
         std::string path = get_cluster_wide_telemetry_path(*uint_metrics_[i]);
-        snapshot->uint_metrics[path] = uint_metrics_[i]->value();
-        snapshot->uint_metric_units[path] = static_cast<uint16_t>(uint_metrics_[i]->units);
-        snapshot->uint_metric_timestamps[path] = uint_metrics_[i]->timestamp();
+
+        // Only send value if it changed
+        if (value_changed) {
+            snapshot->uint_metrics[path] = uint_metrics_[i]->value();
+            snapshot->uint_metric_units[path] = static_cast<uint16_t>(uint_metrics_[i]->units);
+            snapshot->uint_metric_timestamps[path] = uint_metrics_[i]->timestamp();
+        }
+
+        // Only send labels if they changed
+        if (labels_changed) {
+            snapshot->metric_labels[path] = uint_metrics_[i]->labels();
+        }
+
         uint_metrics_[i]->mark_transmitted();
     }
 
     for (size_t i = 0; i < double_metrics_.size(); i++) {
-        if (!double_metrics_[i]->changed_since_transmission()) {
+        bool value_changed = double_metrics_[i]->changed_since_transmission();
+        bool labels_changed = double_metrics_[i]->labels_changed_since_transmission();
+        if (!value_changed && !labels_changed) {
             continue;
         }
         std::string path = get_cluster_wide_telemetry_path(*double_metrics_[i]);
-        snapshot->double_metrics[path] = double_metrics_[i]->value();
-        snapshot->double_metric_units[path] = static_cast<uint16_t>(double_metrics_[i]->units);
-        snapshot->double_metric_timestamps[path] = double_metrics_[i]->timestamp();
+
+        // Only send value if it changed
+        if (value_changed) {
+            snapshot->double_metrics[path] = double_metrics_[i]->value();
+            snapshot->double_metric_units[path] = static_cast<uint16_t>(double_metrics_[i]->units);
+            snapshot->double_metric_timestamps[path] = double_metrics_[i]->timestamp();
+        }
+
+        // Only send labels if they changed
+        if (labels_changed) {
+            snapshot->metric_labels[path] = double_metrics_[i]->labels();
+        }
+
         double_metrics_[i]->mark_transmitted();
     }
 
     for (size_t i = 0; i < string_metrics_.size(); i++) {
-        if (!string_metrics_[i]->changed_since_transmission()) {
+        bool value_changed = string_metrics_[i]->changed_since_transmission();
+        bool labels_changed = string_metrics_[i]->labels_changed_since_transmission();
+        if (!value_changed && !labels_changed) {
             continue;
         }
         std::string path = get_cluster_wide_telemetry_path(*string_metrics_[i]);
-        snapshot->string_metrics[path] = string_metrics_[i]->value();
-        snapshot->string_metric_units[path] = static_cast<uint16_t>(string_metrics_[i]->units);
-        snapshot->string_metric_timestamps[path] = string_metrics_[i]->timestamp();
+
+        // Only send value if it changed
+        if (value_changed) {
+            snapshot->string_metrics[path] = string_metrics_[i]->value();
+            snapshot->string_metric_units[path] = static_cast<uint16_t>(string_metrics_[i]->units);
+            snapshot->string_metric_timestamps[path] = string_metrics_[i]->timestamp();
+        }
+
+        // Only send labels if they changed
+        if (labels_changed) {
+            snapshot->metric_labels[path] = string_metrics_[i]->labels();
+        }
+
         string_metrics_[i]->mark_transmitted();
     }
 
