@@ -5,43 +5,45 @@
 #include "dataflow_api.h"
 #include "accessor/tensor_accessor.h"
 #include "accessor/tensor_accessor_args.h"
+#include "kernel_common.hpp"
 
 //
-// Reader (sender-side) kernel — batched DRAM→L1 copies into CB.
+// Unified reader (sender-side) kernel — consolidates 4 variants.
+// Pulls tensor pages from the source buffer into the local L1 Circular Buffer (CB c_0).
+// Works in small groups: reserve CB space, queue N async reads, wait once, then publish N pages.
+// Grouping avoids a barrier per page and lets the writer drain the CB while we fetch the next group.
 //
-// What this does:
-// - Pulls tensor pages from the source buffer into the local L1 Circular Buffer (CB c_0).
-// - Works in small groups (4 pages): reserve CB space, queue N async reads, wait once, then publish N pages.
-// - Grouping avoids a barrier per page and lets the writer drain the CB while we fetch the next group.
+// CT args:
+//   0: OPERATION_TYPE (OperationType enum: BasicWrite, Scatter, FusedAtomicInc)
+//   1: SRC_IS_DRAM (0=L1, 1=DRAM)
+//   2: NUM_PAGES
+//   3: PAGE_SIZE
 //
-// How it works (per group):
-//   1) cb_reserve_back(CB_ID, N) + get_write_ptr() → reserve N pages in CB and get an L1 base pointer.
-//   2) Issue N noc_async_read() calls back-to-back into that reserved L1 range.
-//   3) noc_async_read_barrier() → wait until all N reads complete.
-//   4) cb_push_back(CB_ID, N) → make the N pages visible to the writer.
-//
-// Notes:
-// - The CB lives in L1. The host sizes it large enough (8 pages) so reader and writer can overlap.
-// - NUM_PAGES and PAGE_SIZE come from compile-time args. src_base comes from runtime args.
-//
+// RT args:
+//   0: src_base (u32)
 
 void kernel_main() {
     constexpr auto ta_args = TensorAccessorArgs<0>();
     constexpr uint32_t CTA_BASE = ta_args.next_compile_time_args_offset();
-    constexpr bool SRC_IS_DRAM = get_compile_time_arg_val(CTA_BASE + 0) == 1;
-    constexpr uint32_t NUM_PAGES = get_compile_time_arg_val(CTA_BASE + 1);
-    constexpr uint32_t PAGE_SIZE = get_compile_time_arg_val(CTA_BASE + 2);
+    constexpr uint32_t OPERATION_TYPE = get_compile_time_arg_val(CTA_BASE + 0);
+    constexpr bool SRC_IS_DRAM = get_compile_time_arg_val(CTA_BASE + 1) == 1;
+    constexpr uint32_t NUM_PAGES = get_compile_time_arg_val(CTA_BASE + 2);
+    constexpr uint32_t PAGE_SIZE = get_compile_time_arg_val(CTA_BASE + 3);
     constexpr uint32_t CB_ID = tt::CBIndex::c_0;
 
-    // Process pages in groups of 4; CB capacity will be sized larger on the host.
-    constexpr uint32_t GROUP_PAGES = 4;
+    // Cast to enum type for clearer comparison
+    constexpr auto operation_type = static_cast<OperationType>(OPERATION_TYPE);
+
+    // Process pages in groups: Scatter uses 2 pages (to match writer consumption rate),
+    // BasicWrite and FusedAtomicInc use 4 pages; CB capacity will be sized larger on the host.
+    constexpr uint32_t GROUP_PAGES = (operation_type == OperationType::Scatter) ? 2 : 4;
 
     const uint32_t src_base = get_arg_val<uint32_t>(0);
     const auto src_acc = TensorAccessor(ta_args, /*bank_base=*/src_base, /*page_size=*/PAGE_SIZE);
 
     uint32_t sent = 0;
     while (sent < NUM_PAGES) {
-        // how many pages in this group (last group may be smaller than 4)
+        // how many pages in this group (last group may be smaller than GROUP_PAGES)
         uint32_t this_group = GROUP_PAGES;
         uint32_t remaining = NUM_PAGES - sent;
         if (remaining < this_group) {
