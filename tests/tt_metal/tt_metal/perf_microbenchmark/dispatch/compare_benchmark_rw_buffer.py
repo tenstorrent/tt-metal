@@ -37,13 +37,19 @@ def parse_args():
         help="Tolerance for benchmark results.",
         default=DEFAULT_BANDWIDTH_VARIANCE_TOLERANCE_PCT,
     )
+    parser.add_argument("--ignore-times", action="store_true", help="Ignore times when determining success/failure")
     args = parser.parse_args()
-    return args.golden, args.json, args.tolerance
+    return args.golden, args.json, args.tolerance, args.ignore_times
 
 
 def collect_benchmarks(benchmark_obj):
     successed_benchmarks, failed_benchmarks = {}, {}
     for benchmark in benchmark_obj["benchmarks"]:
+        if benchmark["repetitions"] != 1 and not (
+            benchmark["run_type"] == "aggregate" and benchmark["aggregate_name"] == "median"
+        ):
+            # Only process results with 1 repetition or the median aggregate.
+            continue
         if "error_occurred" in benchmark and benchmark["error_occurred"]:
             failed_benchmarks[benchmark["name"]] = benchmark["error_message"]
         else:
@@ -51,7 +57,7 @@ def collect_benchmarks(benchmark_obj):
     return successed_benchmarks, failed_benchmarks
 
 
-def compare_benchmarks(golden_benchmarks, result_benchmarks, result_failed_benchmarks, tolerance):
+def compare_benchmarks(golden_benchmarks, result_benchmarks, result_failed_benchmarks, tolerance, ignore_times):
     golden_benchmarks_names = set(golden_benchmarks.keys())
     result_benchmarks_names = set(result_benchmarks.keys())
 
@@ -70,7 +76,7 @@ def compare_benchmarks(golden_benchmarks, result_benchmarks, result_failed_bench
 
     success = (
         golden_benchmarks_names == result_benchmarks_names
-        and not underperforming_benchmarks
+        and (ignore_times or not underperforming_benchmarks)
         and not result_failed_benchmarks
     )
 
@@ -109,7 +115,7 @@ def compare_benchmarks(golden_benchmarks, result_benchmarks, result_failed_bench
 
 
 if __name__ == "__main__":
-    golden_file, result_file, tolerance = parse_args()
+    golden_file, result_file, tolerance, ignore_times = parse_args()
 
     golden_benchmarks, golden_failed_benchmarks = collect_benchmarks(json.load(golden_file))
     result_benchmarks, result_failed_benchmarks = collect_benchmarks(json.load(result_file))
@@ -119,7 +125,8 @@ if __name__ == "__main__":
     print(f"Comparing throughput benchmarks ({golden_file} vs {result_file})...")
     print("Note: Benchmark name follows: Function/ Page Size/ Transfer Size/ Device ID")
     print(f"Tolerance is {tolerance}%.")
+    print(f"Ignoring times: {ignore_times}")
     print("----------------------------------------------------")
 
-    if not compare_benchmarks(golden_benchmarks, result_benchmarks, result_failed_benchmarks, tolerance):
+    if not compare_benchmarks(golden_benchmarks, result_benchmarks, result_failed_benchmarks, tolerance, ignore_times):
         sys.exit("Some benchmarks did not meet the golden values. Please review the output above.")
