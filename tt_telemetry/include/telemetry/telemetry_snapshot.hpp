@@ -293,11 +293,18 @@ private:
             }
         }
 
-        // Validate and merge custom labels - only for successfully merged metrics
+        // Validate and merge custom labels - only for existing or successfully merged metrics
         for (const auto& [path, labels] : other.metric_labels) {
-            // Only merge labels for metrics that were successfully merged (not rejected due to type conflicts)
-            if (successfully_merged_paths.find(path) == successfully_merged_paths.end()) {
-                log_error(tt::LogAlways, "Label orphaned: path '{}' has labels but metric was not merged", path);
+            // Check if path was successfully merged OR already exists in base snapshot
+            bool path_exists_in_base =
+                path_exists_in_any_map(path, bool_metrics, uint_metrics, double_metrics, string_metrics);
+            bool was_just_merged = successfully_merged_paths.find(path) != successfully_merged_paths.end();
+
+            if (!was_just_merged && !path_exists_in_base) {
+                log_error(
+                    tt::LogAlways,
+                    "Label orphaned: path '{}' has labels but metric was not merged and does not exist in base",
+                    path);
                 continue;
             }
 
