@@ -234,6 +234,9 @@ void dprint_tensix_dest_reg(int tile_id = 0) {
                     case (uint32_t)DataFormat::Float16_b:
                         dprint_tensix_dest_reg_row_float16(data_format_reg_field_value, row);
                         break;
+                    case (uint32_t)DataFormat::Bfp8_b:
+                        dprint_tensix_dest_reg_row_float16(data_format_reg_field_value, row);
+                        break;
                     default:
                         DPRINT << "Unsupported data format: " << data_format_reg_field_value << ENDL();
                         break;
