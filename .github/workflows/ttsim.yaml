@@ -299,6 +299,9 @@ jobs:
           - arch: blackhole
             build_suffix: release_bh
             soc_desc: blackhole_140_arch.yaml
+          - arch: quasar
+            build_suffix: release_quasar
+            soc_desc: quasar_1_arch.yaml
     container:
       image: harbor.ci.tenstorrent.net/${{ inputs.test-docker-image || 'docker-image-unresolved!'}}
       volumes:
@@ -341,7 +344,9 @@ jobs:
       - name: C++ tests
         timeout-minutes: 5
         run: |
-          if [[ "${{ matrix.arch }}" != "quasar" ]]; then
+          if [[ "${{ matrix.arch }}" == "quasar" ]]; then
+            ./build/test/tt_metal/test_single_dm_l1_write
+          else
             ./build/test/tt_metal/unit_tests_api --gtest_filter="MeshDeviceFixture.IdleEthTestNocStreamRegs"
             ./build/test/tt_metal/unit_tests_api --gtest_filter="MeshDispatchFixture.IdleEthDRAMLoopbackSingleCore"
             ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="DPrintMeshFixture.IdleEthTestPrint"
@@ -358,8 +363,6 @@ jobs:
             ./build/test/tt_metal/unit_tests_eth --gtest_filter="BlackholeSingleCardFixture.IdleEthKernelOnIdleErisc0"
             ./build/test/tt_metal/unit_tests_eth --gtest_filter="BlackholeSingleCardFixture.IdleEthKernelOnIdleErisc1"
             ./build/test/tt_metal/unit_tests_eth --gtest_filter="BlackholeSingleCardFixture.IdleEthKernelOnBothIdleEriscs"
-          else
-            ./build/test/tt_metal/test_single_dm_l1_write
           fi
   ttsim-galaxy-cpp-unit-tests:
     if: ${{ inputs.run-metal-cpp-unit-tests }}
