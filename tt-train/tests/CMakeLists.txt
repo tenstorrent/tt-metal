@@ -55,6 +55,7 @@ set(SOURCES
     ops/softmax_test.cpp
     ops/silu_op_test.cpp
     ops/sdpa_fw_op_test.cpp
+    ops/examples/mean_all_cores_op_test.cpp
 )
 
 add_executable(ttml_tests ${SOURCES})
