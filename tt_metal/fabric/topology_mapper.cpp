@@ -1548,8 +1548,7 @@ HostName TopologyMapper::get_hostname_for_switch(SwitchId switch_id) const {
     TT_FATAL(switch_exists, "Switch ID {} not found in mesh graph", *switch_id);
 
     // Convert SwitchId to MeshId and use the consolidated mesh hostname function
-    MeshId switch_mesh_id = mesh_graph_.get_mesh_id_for_switch(switch_id);
-    return get_hostname_for_mesh(switch_mesh_id);
+    return get_hostname_for_mesh(MeshId(*switch_id));
 }
 
 HostName TopologyMapper::get_hostname_for_fabric_node_id(FabricNodeId fabric_node_id) const {

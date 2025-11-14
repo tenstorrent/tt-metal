@@ -544,9 +544,7 @@ TEST(MultiHost, TestClosetBox3PodTTSwitchAPIs) {
 
     SwitchId switch_id = switch_ids[0];
 
-    // Test get_mesh_id_for_switch()
-    MeshId switch_mesh_id = mesh_graph.get_mesh_id_for_switch(switch_id);
-    EXPECT_EQ(*switch_mesh_id, 3) << "Switch should have a mapped mesh_id";
+    EXPECT_EQ(*switch_id, 3) << "Switch should have a mapped mesh_id";
 
     // Verify switch mesh_id is unique (not used by regular meshes)
     const auto& all_mesh_ids = mesh_graph.get_mesh_ids();

@@ -975,10 +975,6 @@ TEST(MeshGraphValidation, TestSwitchMeshGraphQueryAPIs) {
     SwitchId switch_id = switch_ids[0];
     EXPECT_EQ(*switch_id, 2) << "Switch ID should be 2";
 
-    // Test mesh_id mapping
-    MeshId switch_mesh_id = mesh_graph.get_mesh_id_for_switch(switch_id);
-    EXPECT_GE(*switch_mesh_id, 2) << "Switch should have a mapped mesh_id";
-
     // Test connected meshes
     const auto& connected_meshes = mesh_graph.get_meshes_connected_to_switch(switch_id);
     EXPECT_EQ(connected_meshes.size(), 2) << "Switch should be connected to 2 meshes";

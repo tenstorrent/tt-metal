@@ -369,7 +369,7 @@ TEST_F(TopologyMapperTest, ClosetBox3PodTTSwitchHostnameAPIs) {
     ASSERT_EQ(switch_ids.size(), 1) << "Should have exactly 1 switch";
 
     SwitchId switch_id = switch_ids[0];
-    MeshId switch_mesh_id = mesh_graph.get_mesh_id_for_switch(switch_id);
+    EXPECT_EQ(*switch_id, 3) << "Switch ID should be 3";
 
     HostName switch_hostname = topology_mapper.get_hostname_for_switch(switch_id);
     EXPECT_FALSE(switch_hostname.empty()) << "Switch hostname should not be empty";

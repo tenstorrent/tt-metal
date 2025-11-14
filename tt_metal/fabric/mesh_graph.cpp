@@ -918,8 +918,6 @@ std::unordered_set<MeshId> MeshGraph::get_meshes_connected_to_switch(SwitchId sw
     return {};
 }
 
-MeshId MeshGraph::get_mesh_id_for_switch(SwitchId switch_id) const { return MeshId(*switch_id); }
-
 bool MeshGraph::is_mesh_connected_to_switch(MeshId mesh_id, SwitchId switch_id) const {
     // Convert SwitchId to MeshId for internal lookup
     MeshId switch_mesh_id(*switch_id);

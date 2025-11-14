@@ -130,7 +130,6 @@ public:
 
     // Switch query APIs (internal representation uses MeshId, API uses SwitchId)
     std::vector<SwitchId> get_switch_ids() const;
-    MeshId get_mesh_id_for_switch(SwitchId switch_id) const;
     std::unordered_set<MeshId> get_meshes_connected_to_switch(SwitchId switch_id) const;
     bool is_mesh_connected_to_switch(MeshId mesh_id, SwitchId switch_id) const;
     std::optional<SwitchId> get_switch_for_mesh(MeshId mesh_id) const;
