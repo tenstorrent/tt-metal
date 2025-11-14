@@ -6,72 +6,8 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import profiler
+from models.demos.deepseek_v3.tests.unit.utils import random_torch_tensor, run_test
 from tests.ttnn.utils_for_testing import assert_with_pcc
-
-
-def random_torch_tensor(dtype, shape):
-    torch.manual_seed(1234)
-    if dtype == ttnn.uint8:
-        return torch.randint(0, 100, shape).to(torch.int16)
-    if dtype == ttnn.uint16:
-        return torch.randint(0, 100, shape).to(torch.int16)
-    if dtype == ttnn.int32:
-        return torch.randint(-(2**31), 2**31, shape, dtype=torch.int32)
-    if dtype == ttnn.uint32:
-        return torch.randint(0, 2**31, shape, dtype=torch.int32)
-    if dtype == ttnn.float32:
-        return torch.rand(shape, dtype=torch.float32)
-    if dtype == ttnn.bfloat16:
-        return torch.rand(shape, dtype=torch.bfloat16)
-    # return torch.rand(shape).bfloat16().float()
-    assert False, f"Unsupported dtype {dtype}"
-
-
-def run_test(mesh_device, run_op_proc, check_op_proc):
-    ####################### NON-TRACE RUN #######################
-
-    # Run the op
-    tt_output = run_op_proc()
-    tt_output = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
-
-    # Every device executes the same op, check that each device returned the
-    # same result
-    N = tt_output.shape[0] // mesh_device.get_num_devices()
-    for dev in range(mesh_device.get_num_devices()):
-        i = dev * N
-        j = (dev + 1) * N
-        check_op_proc(tt_output[i:j, ...])
-
-    ####################### TRACE RUN #######################
-
-    # Compile the op
-    tt_output = run_op_proc()
-    tt_output.deallocate(True)
-
-    # Capture the trace
-    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    tt_output = run_op_proc()
-    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-
-    # Execute trace
-    profiler.start("op_perf")
-    ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
-    profiler.end("op_perf")
-    ttnn.release_trace(mesh_device, trace_id)
-
-    # Get results
-    tt_output = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
-    # op_time = profiler.get("op_perf")
-    profiler.print(units="us")
-
-    # Every device executes the same op, check that each device returned the
-    # same result
-    N = tt_output.shape[0] // mesh_device.get_num_devices()
-    for dev in range(mesh_device.get_num_devices()):
-        i = dev * N
-        j = (dev + 1) * N
-        check_op_proc(tt_output[i:j, ...])
 
 
 @pytest.mark.parametrize("mesh_device", [(8, 8)], indirect=True)
@@ -86,14 +22,23 @@ def run_test(mesh_device, run_op_proc, check_op_proc):
 @pytest.mark.parametrize("mem_config", [ttnn.DRAM_MEMORY_CONFIG])
 @pytest.mark.parametrize("index_layout", [ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("index_mem_config", [ttnn.L1_MEMORY_CONFIG])
+@pytest.mark.parametrize("enable_trace", [False, True])
 @pytest.mark.parametrize(
     "device_params", [{"trace_region_size": 10000, "fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True
 )
 def test_scatter(
-    mesh_device, in_shape, dim, index_shape, src_shape, dtype, layout, mem_config, index_layout, index_mem_config
+    mesh_device,
+    in_shape,
+    dim,
+    index_shape,
+    src_shape,
+    dtype,
+    layout,
+    mem_config,
+    index_layout,
+    index_mem_config,
+    enable_trace,
 ):
-    profiler.clear()
-
     # Index tensor generation is somewhat hardcoded
     index_dtype = ttnn.uint16
     index_torch_dtype = torch.int64  # torch.scatter expects int64 for index tensor
@@ -145,4 +90,4 @@ def test_scatter(
     def check_op(tt_output):
         assert_with_pcc(torch_output, tt_output, 0.9999)
 
-    run_test(mesh_device, run_op, check_op)
+    run_test(mesh_device, run_op, check_op, enable_trace)
