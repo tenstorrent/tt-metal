@@ -20,8 +20,6 @@ from matplotlib import pyplot as plt
 from tqdm import tqdm
 from typing import Optional
 
-# Add TT-Metal path
-sys.path.append(f"{os.environ['TT_METAL_HOME']}/tt-train/sources/ttml")
 import ttml
 from ttml.common.config import get_config, TrainingConfig, SchedulerConfig, DeviceConfig
 from ttml.common.model_factory import TransformerModelFactory
@@ -133,7 +131,6 @@ class CollateFn:
 
             else:
                 # Normal case: concatenate question + answer
-
                 data_np[i, : len(x_tokens)] = x_tokens
                 data_np[i, len(x_tokens) : len(x_tokens) + len(y_tokens)] = y_tokens
 
@@ -167,10 +164,6 @@ class CollateFn:
 
 def get_batch_generator(
     dataloader,
-    batch_size,
-    max_sequence_length,
-    padded_vocab_size,
-    tokenizer,
     device_config=None,
 ):
     """Custom data generator for GSM8K dataset."""
@@ -526,19 +519,11 @@ def train():
 
     train_batch_generator = get_batch_generator(
         training_dataloader,
-        batch_size,
-        max_sequence_length,
-        padded_vocab_size,
-        tokenizer,
         device_config,
     )
 
     val_batch_generator = get_batch_generator(
         testing_dataloader,
-        training_config.validation_batch_size * num_devices,
-        max_sequence_length,
-        padded_vocab_size,
-        tokenizer,
         device_config,
     )
 
