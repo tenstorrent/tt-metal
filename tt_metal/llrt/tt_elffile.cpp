@@ -386,7 +386,7 @@ void ElfFile::Impl::TrimSegments(std::span<const std::uint32_t> info) {
                         : seg_ix == 1 && GetSegments().size() == 2 ? "thread_local variables"
                                                                    : "globals and/or thread_local variables");
                 }
-                if (segment_iter->contents.empty()) {
+                if (!segment_iter->membytes) {
                     GetSegments().erase(segment_iter);
                 }
                 break;
@@ -624,8 +624,9 @@ public:
         // Weaken or hide globals
         for (auto& sym : syms_in_) {
             auto kind = GLOBAL;
+            auto name = impl.GetName(sym, shdr_.sh_link);
             auto bind = impl.GetSymBind(sym);
-            if ((bind == STB_GLOBAL || bind == STB_WEAK) && !name_matches(impl.GetName(sym, shdr_.sh_link), strong)) {
+            if ((bind == STB_GLOBAL || bind == STB_WEAK) && !name_matches(name, strong)) {
                 auto type = impl.GetSymType(sym);
                 auto* seg = type == STT_OBJECT || type == STT_NOTYPE || type == STT_TLS || type == STT_COMMON
                                 ? impl.FindSegment(sym)
