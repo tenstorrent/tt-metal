@@ -319,51 +319,20 @@ void build_tt_fabric_program(
             const auto& curr_edm_config =
                 get_fabric_router_config(fabric_tensix_extension_enabled, dispatch_link, eth_direction);
 
-            bool has_tensix_extension = false;
-            if (fabric_tensix_extension_enabled && !dispatch_link) {
-                has_tensix_extension = true;
-            }
-
-            auto edm_builder = std::make_unique<tt::tt_fabric::FabricEriscDatamoverBuilder>(
-                tt::tt_fabric::FabricEriscDatamoverBuilder::build(
-                    device,
-                    *fabric_program_ptr,
-                    eth_logical_core,
-                    fabric_node_id,
-                    remote_fabric_node_id,
-                    curr_edm_config,
-                    false, /* build_in_worker_connection_mode */
-                    fabric_edm_type,
-                    eth_direction,
-                    has_tensix_extension));
-
-            if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::BLACKHOLE &&
-                tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode()) {
-                // Enable updates at a fixed interval for link stability and link status updates
-                constexpr uint32_t k_BlackholeFabricRouterContextSwitchInterval = 32;
-                edm_builder->set_firmware_context_switch_interval(k_BlackholeFabricRouterContextSwitchInterval);
-                edm_builder->set_firmware_context_switch_type(FabricEriscDatamoverContextSwitchType::INTERVAL);
-            }
-
-            // Create tensix builder if needed
-            std::optional<tt::tt_fabric::FabricTensixDatamoverBuilder> tensix_builder_opt;
-            bool has_tensix = false;
-            if (fabric_tensix_extension_enabled) {
-                // Only create tensix builder if this channel is not used by dispatch
-                if (!dispatch_link) {
-                    auto tensix_builder = tt::tt_fabric::FabricTensixDatamoverBuilder::build(
-                        device, *fabric_program_ptr, fabric_node_id, remote_fabric_node_id, eth_chan, eth_direction);
-                    tensix_builder_opt = tensix_builder;
-                    has_tensix = true;
-                }
-            }
-
-            // Immediately wrap in router_builder
             const auto topology = fabric_context.get_fabric_topology();
-            auto channel_mapping = tt::tt_fabric::FabricRouterChannelMapping(
-                topology, eth_direction, has_tensix);
-            auto router_builder = std::make_unique<tt::tt_fabric::FabricRouterBuilder>(
-                std::move(edm_builder), tensix_builder_opt, std::move(channel_mapping));
+            auto router_builder = tt::tt_fabric::FabricRouterBuilder::build(
+                device,
+                *fabric_program_ptr,
+                eth_logical_core,
+                fabric_node_id,
+                remote_fabric_node_id,
+                curr_edm_config,
+                fabric_edm_type,
+                eth_direction,
+                fabric_tensix_extension_enabled,
+                dispatch_link,
+                eth_chan,
+                topology);
             router_builders.insert({eth_chan, std::move(router_builder)});
         }
 

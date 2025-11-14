@@ -35,6 +35,37 @@ public:
         FabricRouterChannelMapping channel_mapping);
 
     /**
+     * Build a FabricRouterBuilder with all necessary components
+     * 
+     * @param device The device to build on
+     * @param fabric_program The fabric program
+     * @param eth_logical_core The ethernet logical core
+     * @param fabric_node_id The local fabric node ID
+     * @param remote_fabric_node_id The remote fabric node ID
+     * @param edm_config The EDM configuration
+     * @param fabric_edm_type The fabric EDM type
+     * @param eth_direction The ethernet direction
+     * @param fabric_tensix_extension_enabled Whether fabric tensix extension is enabled
+     * @param dispatch_link Whether this is a dispatch link
+     * @param eth_chan The ethernet channel (for tensix builder)
+     * @param topology The fabric topology
+     * @return A unique_ptr to the constructed FabricRouterBuilder
+     */
+    static std::unique_ptr<FabricRouterBuilder> build(
+        tt::tt_metal::IDevice* device,
+        tt::tt_metal::Program& fabric_program,
+        umd::CoreCoord eth_logical_core,
+        FabricNodeId fabric_node_id,
+        FabricNodeId remote_fabric_node_id,
+        const tt::tt_fabric::FabricEriscDatamoverConfig& edm_config,
+        tt::tt_fabric::FabricEriscDatamoverType fabric_edm_type,
+        tt::tt_fabric::eth_chan_directions eth_direction,
+        bool fabric_tensix_extension_enabled,
+        bool dispatch_link,
+        tt::tt_fabric::chan_id_t eth_chan,
+        tt::tt_fabric::Topology topology);
+
+    /**
      * Connect to a local router over NOC (intra-device connection)
      * 
      * Establishes one-way connection: sender channel on this router → receiver channel on other router over NOC
