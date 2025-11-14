@@ -789,21 +789,39 @@ private:
 
     void validate_sync_pattern(
         const TrafficPatternConfig& pattern, const SenderConfig& sender, const TestConfig& test) const {
-        TT_FATAL(
-            pattern.ftype.has_value() && pattern.ftype.value() == ChipSendType::CHIP_MULTICAST,
-            "Test '{}': Line sync pattern for sender on device {} must use CHIP_MULTICAST.",
-            test.name,
-            sender.device);
+        // The NeighborExchange topology uses unicast sync patterns, so we perform a different check
+        if (test.fabric_setup.topology == tt::tt_fabric::Topology::NeighborExchange) {
+            TT_FATAL(
+                pattern.ftype.has_value() && pattern.ftype.value() == ChipSendType::CHIP_UNICAST,
+                "Test '{}': Line sync pattern for sender on device {} must use CHIP_UNICAST for NeighborExchange "
+                "topology.",
+                test.name,
+                sender.device);
+
+            TT_FATAL(
+                pattern.destination.has_value() && pattern.destination->device.has_value(),
+                "Test '{}': Line sync pattern for sender on device {} must have destination specified by 'device' for "
+                "NeighborExchange topology.",
+                test.name,
+                sender.device);
+
+        } else {
+            TT_FATAL(
+                pattern.ftype.has_value() && pattern.ftype.value() == ChipSendType::CHIP_MULTICAST,
+                "Test '{}': Line sync pattern for sender on device {} must use CHIP_MULTICAST.",
+                test.name,
+                sender.device);
+
+            TT_FATAL(
+                pattern.destination.has_value() && pattern.destination->hops.has_value(),
+                "Test '{}': Line sync pattern for sender on device {} must have destination specified by 'hops'.",
+                test.name,
+                sender.device);
+        }
 
         TT_FATAL(
             pattern.ntype.has_value() && pattern.ntype.value() == NocSendType::NOC_UNICAST_ATOMIC_INC,
             "Test '{}': Line sync pattern for sender on device {} must use NOC_UNICAST_ATOMIC_INC.",
-            test.name,
-            sender.device);
-
-        TT_FATAL(
-            pattern.destination.has_value() && pattern.destination->hops.has_value(),
-            "Test '{}': Line sync pattern for sender on device {} must have destination specified by 'hops'.",
             test.name,
             sender.device);
 
@@ -1063,6 +1081,10 @@ private:
         log_debug(LogTest, "Expanding neighbor_exchange pattern for test: {}", test.name);
         auto neighbor_pairs = this->route_manager_.get_neighbor_exchange_pairs();
         if (!neighbor_pairs.empty()) {
+            for (const auto& pair : neighbor_pairs) {
+                std::cout << "Neighbor exchange pair: " << pair.first.chip_id << " -> " << pair.second.chip_id
+                          << std::endl;
+            }
             add_senders_from_pairs(test, neighbor_pairs, base_pattern);
         }
     }
@@ -1174,8 +1196,6 @@ private:
         std::vector<TrafficPatternConfig> sync_patterns;
         uint32_t sync_val = 0;
 
-        // this->route_manager_.get_nearest_neighbor_node_ids(src_device);
-
         // Common sync pattern characteristics
         TrafficPatternConfig base_sync_pattern;
         // Edge case: NeighborExchange topology does not support multicast sync patterns, so we create unicast sync
@@ -1192,8 +1212,22 @@ private:
         // NeighborExchange topology only supports devices synchronizing with their nearest neighbors, so generate their
         // patterns separately
         if (topology == tt::tt_fabric::Topology::NeighborExchange) {
+            // Get the IDs of all devices adjacent to the source device
+            const auto& nearest_neighbor_node_ids = this->route_manager_.get_nearest_neighbor_node_ids(src_device);
+            sync_val = nearest_neighbor_node_ids.size();
+
+            // Create a separate traffic pattern for each neighbor
+            for (const auto& [_, neighbor_node_id] : nearest_neighbor_node_ids) {
+                TrafficPatternConfig sync_pattern = base_sync_pattern;
+                sync_pattern.destination = DestinationConfig{.device = neighbor_node_id};
+                sync_patterns.push_back(std::move(sync_pattern));
+            }
+
             return {sync_patterns, sync_val};
-        } else {
+        }
+
+        // For all other topologies, we can use the same pattern for all neighbors
+        else {
             // Start by calculating multi-directional hops
             auto [multi_directional_hops, multi_directional_sync_val] =
                 this->route_manager_.get_sync_hops_and_val(src_device, devices);

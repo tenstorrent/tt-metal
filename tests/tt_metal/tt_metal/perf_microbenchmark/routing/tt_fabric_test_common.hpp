@@ -1139,10 +1139,8 @@ public:
             src_node_id,
             direction);
 
-        const auto& neighbor_chips = neighbors.begin()->second;
-
         // Case 2: No neighbor chips found.
-        if (neighbor_chips.empty()) {
+        if (neighbors.begin() == neighbors.end()) {
             // If hard exit is enabled, we throw an error.
             if (hard_exit) {
                 TT_FATAL(false, "No neighbor chips found for {} in direction: {}", src_node_id, direction);
@@ -1155,7 +1153,7 @@ public:
         }
 
         // Case 3: Valid neighbor chips returned.
-        return FabricNodeId(neighbors.begin()->first, neighbor_chips[0]);
+        return FabricNodeId(neighbors.begin()->first, neighbors.begin()->second[0]);
     }
 
     std::vector<uint32_t> get_forwarding_link_indices_in_direction(
@@ -1497,6 +1495,23 @@ public:
     void barrier() const override {
         const auto& distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
         distributed_context->barrier();
+    }
+
+    // Returns a map of the nearest neighbors for a node in all directions. If there is no neighbor in a direction, the
+    // key will not be present in the map.
+    std::unordered_map<RoutingDirection, FabricNodeId> get_nearest_neighbor_node_ids(
+        const FabricNodeId& src_device) const override {
+        std::unordered_map<RoutingDirection, FabricNodeId> nearest_neighbor_node_ids;
+        const bool hard_exit = false;
+        for (const auto& direction :
+             {RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W}) {
+            const FabricNodeId neighbor_node_id = get_neighbor_node_id(src_device, direction, hard_exit);
+            // If there is no neighbor, function will return src_device
+            if (neighbor_node_id != src_device) {
+                nearest_neighbor_node_ids.emplace(direction, neighbor_node_id);
+            }
+        }
+        return nearest_neighbor_node_ids;
     }
 
 private:
