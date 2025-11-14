@@ -325,23 +325,11 @@ Conv2dParallelizationConfig determine_conv_op_parallel_config_from_conv_output_m
 }
 
 static std::pair<uint32_t, uint32_t> determine_largest_subblock_size(
-    uint32_t block_height, uint32_t block_width, uint32_t num_compute_cores, bool fp32_accum, bool force_subblock_1x1) {
+    uint32_t block_height, uint32_t block_width, bool fp32_accum) {
     constexpr std::array<std::pair<uint32_t, uint32_t>, 20> subblocks = {{
         {2, 4}, {4, 2}, {1, 8}, {8, 1}, {1, 7}, {7, 1}, {2, 3}, {3, 2}, {1, 6}, {6, 1},
         {1, 5}, {5, 1}, {2, 2}, {1, 4}, {4, 1}, {1, 3}, {3, 1}, {1, 2}, {2, 1}, {1, 1},
     }};
-    if (force_subblock_1x1 && num_compute_cores > 48) {
-        log_info(
-            tt::LogOp,
-            "Using 1x1 subblockk for conv2d due to force_subblock_1x1==True and num_compute_cores = {}",
-            num_compute_cores);
-        return {1, 1};
-    } else if (force_subblock_1x1 && num_compute_cores <= 48) {
-        log_info(
-            tt::LogOp,
-            "Ignoring 1x1 subblock command due to force_subblock_1x1==True and num_compute_cores = {}",
-            num_compute_cores);
-    }
 
     uint32_t subblock_h = 0;
     uint32_t subblock_w = 0;
@@ -449,8 +437,17 @@ Conv2dBlockConfig determine_per_core_conv_block_config(
     uint32_t act_block_w_ntiles = act_block_w / tt::constants::TILE_HEIGHT;
 
     uint32_t weight_block_w_ntiles = conv_op_parallel_config.per_core_out_matrix_width_ntile;
-    auto [out_subblock_h_ntiles, out_subblock_w_ntiles] = determine_largest_subblock_size(
-        act_block_h_ntiles, weight_block_w_ntiles, num_compute_cores, fp32_accum, force_subblock_1x1);
+    uint32_t out_subblock_h_ntiles = 1;
+    uint32_t out_subblock_w_ntiles = 1;
+    if (force_subblock_1x1 == true && num_compute_cores > 48) {
+        log_debug(
+            tt::LogOp,
+            "Using 1x1 subblock due to force_subblock flag being set and num_compute_cores = {}",
+            num_compute_cores);
+    } else {
+        std::tie(out_subblock_h_ntiles, out_subblock_w_ntiles) =
+            determine_largest_subblock_size(act_block_h_ntiles, weight_block_w_ntiles, fp32_accum);
+    }
 
     return {
         .act_block_h_ntiles = act_block_h_ntiles,

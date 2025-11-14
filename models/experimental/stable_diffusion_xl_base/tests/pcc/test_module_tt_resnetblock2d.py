@@ -18,78 +18,18 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
 @pytest.mark.parametrize(
     "input_shape, temb_shape, down_block_id, resnet_id, conv_shortcut, split_in, block, pcc",
     [
-        # conv1 and conv2 are both on 40 cores, using same config ABH_1024_ADB_WDB_BS
-        # conv1 & conv2 regular perf = 690k
-        # conv1 & conv2 throttle perf = 1.395 mil
-        # conv1 & conv2 subblock 1x1 perf = 890k
-        # does not need throttle or subblock forcing as there is 40 cores
-        # ((1, 320, 128, 128), (1, 1280), 0, 0, False, 1, "down_blocks", 0.999),
-        # conv1 and conv2 are both on 56 cores, using same config ABH_0_ADB_WDB_BS
-        # regular perf: conv1 = 246k conv2 = 475k
-        # throttle perf: conv1 = 500k conv2 = 1.04mil
-        # subblock 1x1 perf: conv1 = 312k conv2 = 707k
-        # needs subblock forcing as there is 56 cores doing compute
-        # ((1, 320, 64, 64), (1, 1280), 1, 0, True, 1, "down_blocks", 0.999),
-        # conv1 and conv2 are both on 56 cores, using same config ABH_0_ADB_WDB_BS
-        # regular perf: conv1 = 475k conv2 = 475k
-        # throttle perf: conv1 = 1.04mil conv2 = 1.04mil
-        # subblock 1x1 perf: conv1 = 707k conv2 = 707k
-        # needs subblock forcing as there is 56 cores doing compute
-        # ((1, 640, 64, 64), (1, 1280), 1, 1, False, 1, "down_blocks", 0.999),
-        # conv1 and conv2 are both on 64 cores, using same config ABH_0_ADB_WDB_BS
-        # regular perf: conv1 = 163k conv2 = 290k
-        # throttle perf: conv1 = 400k conv2 = 735k
-        # subblock 1x1 perf: conv1 = 244k conv2 = 440k
-        # needs subblock forcing as there is 64 cores doing compute
-        # ((1, 640, 32, 32), (1, 1280), 2, 0, True, 1, "down_blocks", 0.999),
-        # conv1 and conv2 are both on 64 cores, using same config ABH_0_ADB_WDB_BS
-        # regular perf: conv1 = 290k conv2 = 290k
-        # throttle perf: conv1 = 735k conv2 = 735k
-        # subblock 1x1 perf: conv1 = 440k conv2 = 440k
-        # needs subblock forcing as there is 64 cores doing compute
-        # ((1, 1280, 32, 32), (1, 1280), 2, 1, False, 1, "down_blocks", 0.999),
-        # conv1 and conv2 are both on 40 cores, conv1 is using ABH_128_ADB_WDB_MOVE_BS and conv2 is using ABH_1024_ADB_WDB_BS
-        # regular perf: conv1 = 2.170mil conv2 = 858k
-        # throttle perf: conv1 = 4.17mil conv2 = 1.54mil
-        # subblock 1x1 perf: conv1 = 2.8mil  conv2 = 1.2mil
-        # does not need throttle or subblock forcing as there is 40 cores
-        # ((1, 960, 128, 128), (1, 1280), 2, 0, True, 1, "up_blocks", 0.998),
-        # conv1 and conv2 are both on 40 cores, conv1 is using ABH_1024_ADB_WDB_BS and conv2 is using ABH_256_ADB_WDB_BS
-        # regular perf: conv1 = 1.50mil conv2 = 850k
-        # throttle perf: conv1 = 2.8mil conv2 = 1.5mil
-        # subblock 1x1 perf: conv1 = 2mil   conv2 =  1.2mil
-        # does not need throttle or subblock forcing as there is 40 cores
-        # ((1, 640, 128, 128), (1, 1280), 2, 1, True, 1, "up_blocks", 0.998),
-        # conv1 and conv2 are both on 64 cores, both are using ABH_0_ADB_WDB_BS
-        # regular perf: conv1 = 560k conv2 = 290k
-        # throttle perf: conv1 = 1.4mil conv2 = 747k
-        # subblock 1x1 perf: conv1 = 858k   conv2 =  440k
-        # needs subblock forcing as there is 64 cores doing compute
-        # ((1, 2560, 32, 32), (1, 1280), 0, 0, True, 1, "up_blocks", 0.999),
-        # conv1 and conv2 are both on 64 cores, both are using ABH_0_ADB_WDB_BS
-        # regular perf: conv1 = 430k conv2 = 290k
-        # throttle perf: conv1 = 1.1mil conv2 = 737k
-        # subblock 1x1 perf: conv1 = 662k  conv2 =  440k
-        # needs subblock forcing as there is 64 cores doing compute
-        # ((1, 1920, 32, 32), (1, 1280), 0, 2, True, 1, "up_blocks", 0.999),
-        # conv1 and conv2 are both on 56 cores, conv1 is using ABH_128_ADB_WDB_BS and conv2 is using ABH_0_ADB_WDB_BS
-        # regular perf: conv1 = 1.18mil conv2 = 476k
-        # throttle perf: conv1 = 2.8mil conv2 = 1.04mil
-        # subblock 1x1 perf: conv1 = 1.78mil  conv2 =  708k
-        # needs subblock forcing as there is 56 cores doing compute
-        # ((1, 1920, 64, 64), (1, 1280), 1, 0, True, 1, "up_blocks", 0.999),
-        # conv1 and conv2 are both on 56 cores, conv1 is using ABH_256_ADB_WDB_BS_SUBBLOCK_1x1 and conv2 is using ABH_0_ADB_WDB_BS
-        # regular perf: conv1 = 802k conv2 = 476k
-        # throttle perf: conv1 = 1.8mil conv2 = 1.04mil
-        # subblock 1x1 perf: conv1 = 1.2mil conv2 = 708k
-        # needs subblock forcing as there is 56 cores doing compute
-        # ((1, 1280, 64, 64), (1, 1280), 1, 1, True, 1, "up_blocks", 0.999),
-        # conv1 and conv2 are both on 56 cores, conv1 is using ABH_256_ADB_WDB_BS_SUBBLOCK_1x1 and conv2 is using ABH_0_ADB_WDB_BS
-        # regular perf: conv1 = 660k conv2 = 478k
-        # throttle perf: conv1 = 1.5mil conv2 = 1.04mil
-        # subblock 1x1 perf: conv1 = 990k conv2 = 710k
-        # needs subblock forcing as there is 56 cores doing compute
-        # ((1, 960, 64, 64), (1, 1280), 1, 2, True, 1, "up_blocks", 0.999),
+        ((1, 320, 128, 128), (1, 1280), 0, 0, False, 1, "down_blocks", 0.999),
+        ((1, 320, 64, 64), (1, 1280), 1, 0, True, 1, "down_blocks", 0.999),
+        ((1, 640, 64, 64), (1, 1280), 1, 1, False, 1, "down_blocks", 0.999),
+        ((1, 640, 32, 32), (1, 1280), 2, 0, True, 1, "down_blocks", 0.999),
+        ((1, 1280, 32, 32), (1, 1280), 2, 1, False, 1, "down_blocks", 0.999),
+        ((1, 960, 128, 128), (1, 1280), 2, 0, True, 1, "up_blocks", 0.998),
+        ((1, 640, 128, 128), (1, 1280), 2, 1, True, 1, "up_blocks", 0.998),
+        ((1, 2560, 32, 32), (1, 1280), 0, 0, True, 1, "up_blocks", 0.999),
+        ((1, 1920, 32, 32), (1, 1280), 0, 2, True, 1, "up_blocks", 0.999),
+        ((1, 1920, 64, 64), (1, 1280), 1, 0, True, 1, "up_blocks", 0.999),
+        ((1, 1280, 64, 64), (1, 1280), 1, 1, True, 1, "up_blocks", 0.999),
+        ((1, 960, 64, 64), (1, 1280), 1, 2, True, 1, "up_blocks", 0.999),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)

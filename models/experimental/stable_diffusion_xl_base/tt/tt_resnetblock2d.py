@@ -109,7 +109,6 @@ class TtResnetBlock2D(LightweightModule):
 
         self.conv_output_dtype = model_config.get_conv_output_dtype()
         self.conv1_config = model_config.get_conv_config(conv_path=f"{module_path}.conv1")
-        print("conv1_config path is: ", f"{module_path}.conv1")
         self.compute1_config = model_config.get_conv_compute_config(module_path=f"{module_path}.conv1")
         if self.split_conv:
             (
@@ -134,7 +133,6 @@ class TtResnetBlock2D(LightweightModule):
                 self.conv1_config.weights_dtype,
             )
         self.conv2_config = model_config.get_conv_config(conv_path=f"{module_path}.conv2")
-        print("conv2_config path is: ", f"{module_path}.conv2")
         self.compute2_config = model_config.get_conv_compute_config(module_path=f"{module_path}.conv2")
 
         (
