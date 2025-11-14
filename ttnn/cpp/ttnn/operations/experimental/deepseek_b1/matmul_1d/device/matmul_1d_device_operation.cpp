@@ -99,13 +99,16 @@ tt::tt_metal::operation::ProgramWithCallbacks Matmul1DDeviceOperation::create_pr
     const auto& input_tensor_b = input_tensors.at(1);
     auto& output_tensor = output_tensors.at(0);
 
+    auto kernel_config_val =
+        init_device_compute_kernel_config(input_tensor_a.device()->arch(), compute_kernel_config, MathFidelity::HiFi4);
+
     // Call our local program factory with simplified signature
     return deepseek_b1_matmul_multi_core_reuse_mcast_1d_optimized(
         input_tensor_a,
         input_tensor_b,
         output_tensor,
         program_config.compute_with_storage_grid_size,
-        compute_kernel_config.value_or(DeviceComputeKernelConfig{}));
+        compute_kernel_config.value_or(kernel_config_val));
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_b1::matmul_1d

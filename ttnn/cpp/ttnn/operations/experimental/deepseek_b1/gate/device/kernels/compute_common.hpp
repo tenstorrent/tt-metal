@@ -44,7 +44,7 @@ template <
     uint32_t out_subblock_w,
     uint32_t out_subblock_num_tiles,
     bool untilize_out>
-inline void router_compute() {
+inline void router_compute_sigmoid() {
     constexpr uint32_t mm_out_cb_id = untilize_out ? cb_mm_partials : cb_out;
     constexpr bool in1_transpose_tile = false;
 

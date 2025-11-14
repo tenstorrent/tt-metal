@@ -4,9 +4,11 @@
 
 #pragma once
 
+#include "compute_kernel_api.h"
 #include "compute_kernel_api/common.h"
 #ifdef TRISC_MATH
 #include "llk_math_matmul_api.h"
+#include "llk_math_eltwise_unary_sfpu_sigmoid.h"
 #endif
 #ifdef TRISC_UNPACK
 #include "llk_unpack_AB_matmul_api.h"
@@ -168,6 +170,27 @@ ALWI void mm_block_init(
     PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>()));
 }
 
+ALWI void mm_sigmoid_block_init(
+    uint32_t in0_cb_id,
+    uint32_t in1_cb_id,
+    uint32_t out_cb_id,
+    const uint32_t transpose = 0,
+    uint32_t ct_dim = 1,
+    uint32_t rt_dim = 1,
+    uint32_t kt_dim = 1) {
+    UNPACK((llk_unpack_AB_matmul_hw_configure_disaggregated<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id)));
+    UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
+
+    MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
+    MATH((llk_math_eltwise_unary_sfpu_sigmoid_init<false>()));
+    MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
+    MATH((llk_math_hw_configure_disaggregated(in0_cb_id, in1_cb_id)));
+
+    PACK((llk_pack_hw_configure_disaggregated<DST_ACCUM_MODE, false>(out_cb_id)));
+    PACK((llk_pack_init<false, false>(out_cb_id)));
+    PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>()));
+}
+
 // clang-format off
 /**
  * Performs block-sized matrix multiplication *C=A\*B* between the blocks in two
@@ -202,6 +225,21 @@ ALWI void matmul_block(
     uint32_t kt_dim) {
     UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
     MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst, transpose, ct_dim, rt_dim, kt_dim)));
+}
+
+ALWI void matmul_block_sigmoid(
+    uint32_t in0_cb_id,
+    uint32_t in1_cb_id,
+    uint32_t in0_tile_index,
+    uint32_t in1_tile_index,
+    uint32_t idst,
+    const uint32_t transpose,
+    uint32_t ct_dim,
+    uint32_t rt_dim,
+    uint32_t kt_dim) {
+    UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
+    MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst, transpose, ct_dim, rt_dim, kt_dim)));
+    MATH((llk_math_eltwise_unary_sfpu_sigmoid<false>(idst, (int)VectorMode::RC)));
 }
 
 // clang-format off

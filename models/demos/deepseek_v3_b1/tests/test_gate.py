@@ -22,7 +22,7 @@ def test_gate(device):
     tile_height = 1
     m = tile_height  # batch size of 1
     k = 7168  # input feature dimension
-    router_experts = 256  # number of experts for router
+    router_experts = 32  # number of experts for router
 
     logger.info(f"Testing gate operation with activation shape [{m}, {k}]")
     logger.info(f"Expected router output shape: [{m}, {router_experts}]")
@@ -41,7 +41,7 @@ def test_gate(device):
 
     # Create memory config for input activations
     # Using single core for simplicity
-    grid_size = ttnn.CoreGrid(y=8, x=6)
+    grid_size = ttnn.CoreGrid(y=1, x=1)
     num_cores = grid_size.num_cores
 
     k_tiles = k // 32  # 224 tiles

@@ -27,10 +27,10 @@ void MAIN {
 
     // Profiling scope for the matmul computation
     {
-        DeviceZoneScopedN("router_compute");
+        DeviceZoneScopedN("router_compute_sigmoid");
 
         // Call the templated router compute function
-        router_compute<
+        router_compute_sigmoid<
             in0_cb_id,
             in1_cb_id,
             out_cb_id,
