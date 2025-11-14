@@ -294,8 +294,11 @@ class TtBiFPN:
         if self.first_time:
             p7_upsampled = self._upsample(p7_in, scale_factor=2, input_shape=self.p6_to_p7.dynamic_maxpool.output_shape)
         else:
-            p7_upsampled = self._upsample(p7_in, scale_factor=2)
+            p7_upsampled = self._upsample(
+                p7_in, scale_factor=2, input_shape=self.conv7_down.pointwise_conv.dynamic_conv.output_shape
+            )
 
+        p6_in = ttnn.to_memory_config(p6_in, ttnn.DRAM_MEMORY_CONFIG)
         p6_in = ttnn.reshape(p6_in, p7_upsampled.shape)
         p6_up = self.conv6_up(self._swish(self.p6_w1_weight_0 * p6_in + self.p6_w1_weight_1 * p7_upsampled))
 
