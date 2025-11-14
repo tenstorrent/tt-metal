@@ -204,9 +204,12 @@ class TtLlamaMLP(LightweightModule):
         """
         seq_len = x.shape[-2]
         use_w1_w3_interleaved = seq_len >= 4096 or seq_len == 128
-        pc_1 = self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"](seq_len, use_w1_w3_interleaved)
-        pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG"](seq_len)
-        pc_3 = self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"](seq_len, use_w1_w3_interleaved)
+        # pc_1 = self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"](seq_len, use_w1_w3_interleaved)
+        # pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG"](seq_len)
+        # pc_3 = self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"](seq_len, use_w1_w3_interleaved)
+
+        minimal_pc_1_3 = self.model_config["PREFILL_FF1_FF3_MINIMAL_MATMUL_CONFIG"](seq_len)
+        minimal_pc_2 = self.model_config["PREFILL_FF2_MINIMAL_MATMUL_CONFIG"](seq_len)
 
         if 1024 <= seq_len < 4096:
             x = ttnn.reshape(x, (1, seq_len // 1024, 1024, -1))
@@ -214,20 +217,10 @@ class TtLlamaMLP(LightweightModule):
         w1_out = ttnn.experimental.minimal_matmul(
             input_tensor=x,
             weight_tensor=self.w1_interleaved if use_w1_w3_interleaved else self.w1,
-            config=ttnn.MinimalMatmulConfig(
-                M_block_size=8,
-                K_block_size=8,
-                N_block_size=8,
-                subblock_h=2,
-                subblock_w=2,
-                compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
-            ),
+            config=minimal_pc_1_3,
             compute_kernel_config=self.args.compute_kernel_config_lofi,
-            # program_config=pc_1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        w1_out = ttnn.typecast(w1_out, dtype=ttnn.bfloat8_b, memory_config=w1_out.memory_config())
-
         # w1_out = ttnn.linear(
         #     x,
         #     self.w1_interleaved if use_w1_w3_interleaved else self.w1,
@@ -248,20 +241,10 @@ class TtLlamaMLP(LightweightModule):
         w3_out = ttnn.experimental.minimal_matmul(
             input_tensor=x,
             weight_tensor=self.w3_interleaved if use_w1_w3_interleaved else self.w3,
-            config=ttnn.MinimalMatmulConfig(
-                M_block_size=8,
-                K_block_size=8,
-                N_block_size=8,
-                subblock_h=2,
-                subblock_w=2,
-                compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
-            ),
+            config=minimal_pc_1_3,
             compute_kernel_config=self.args.compute_kernel_config_lofi,
-            # program_config=pc_1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        w3_out = ttnn.typecast(w3_out, dtype=ttnn.bfloat8_b, memory_config=w3_out.memory_config())
-
         # w3_out = ttnn.linear(
         #     x,
         #     self.w3_interleaved if use_w1_w3_interleaved else self.w3,
@@ -292,24 +275,13 @@ class TtLlamaMLP(LightweightModule):
         ttnn.deallocate(w2_in)
         # ttnn.deallocate(w3_out)
         # ttnn.deallocate(w1_out)
-
         w2_out = ttnn.experimental.minimal_matmul(
             input_tensor=w2_in_gathered,
             weight_tensor=self.w2_interleaved,
-            config=ttnn.MinimalMatmulConfig(
-                M_block_size=8,
-                K_block_size=8,
-                N_block_size=8,
-                subblock_h=2,
-                subblock_w=2,
-                compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
-            ),
+            config=minimal_pc_2,
             compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
-            # program_config=pc_1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        w2_out = ttnn.typecast(w2_out, dtype=ttnn.bfloat8_b, memory_config=w2_out.memory_config())
-
         # w2_out = ttnn.linear(
         #     w2_in_gathered,
         #     self.w2_interleaved,
