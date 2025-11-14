@@ -9,6 +9,7 @@
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 #include "tt_metal/api/tt-metalium/fabric_edm_types.hpp"
 #include "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h"
+#include "tt_metal/fabric/builder/fabric_router_recipe.hpp"
 
 #include <vector>
 #include <ostream>
@@ -29,6 +30,7 @@ public:
     FabricStaticSizedChannelsAllocator(
         tt::tt_fabric::Topology topology,
         const FabricEriscDatamoverOptions& options,
+        const ChannelPoolDefinition& channel_pool_definition,
         size_t num_used_sender_channels,
         size_t num_used_receiver_channels,
         size_t channel_buffer_size_bytes,
@@ -52,6 +54,20 @@ public:
     size_t get_sender_channel_base_address(size_t channel_id) const;
 
     /**
+     * Get the base address for a specific remote sender channel.
+     * @param channel_id Channel ID
+     * @return Base address
+     */
+    size_t get_remote_sender_channel_base_address(size_t channel_id) const;
+
+    /**
+     * Get the number of slots for a specific remote sender channel.
+     * @param channel_id Channel ID
+     * @return Number of slots
+     */
+    size_t get_remote_sender_channel_number_of_slots(size_t channel_id) const;
+
+    /**
      * Get the number of slots for a specific receiver channel.
      * @param channel_id Channel ID
      * @return Number of slots
@@ -65,14 +81,93 @@ public:
      */
     size_t get_receiver_channel_base_address(size_t channel_id) const;
 
+    /**
+     * Get the base address for a specific remote receiver channel.
+     * @param channel_id Channel ID
+     * @return Base address
+     */
+    size_t get_remote_receiver_channel_base_address(size_t channel_id) const;
+
+    /**
+     * Get the number of slots for a specific remote receiver channel.
+     * @param channel_id Channel ID
+     * @return Number of slots
+     */
+    size_t get_remote_receiver_channel_number_of_slots(size_t channel_id) const;
+
     size_t get_num_sender_channels() const { return num_used_sender_channels; }
     size_t get_num_receiver_channels() const { return num_used_receiver_channels; }
+
+    /**
+     * Create a new dedicated channel allocator for a specific sender channel index.
+     * This method constructs a new FabricStaticSizedChannelsAllocator with only the specified
+     * sender channel populated, while keeping all receiver channels. This is useful during
+     * transition periods when migrating from processing all static channels together to
+     * having separate pools per static channel.
+     * @param channel_index The index of the sender channel to extract
+     * @return A shared pointer to a new FabricStaticSizedChannelsAllocator with only the specified channel
+     */
+    std::shared_ptr<FabricStaticSizedChannelsAllocator> create_dedicated_sender_channel_allocator(
+        size_t sender_channel_index) const;
+
+    std::shared_ptr<FabricStaticSizedChannelsAllocator> create_dedicated_receiver_channel_allocator(
+        size_t receiver_channel_index) const;
+
+    /**
+     * Get a channel allocator for a specific sender channel index.
+     * This method creates a dedicated allocator for the specified channel and returns it
+     * as a FabricChannelAllocator pointer for compatibility with existing code.
+     * @param channel_index The index of the sender channel
+     * @return A shared pointer to a FabricChannelAllocator containing only the specified channel
+     */
+    std::shared_ptr<FabricChannelAllocator> get_sender_channel_allocator(size_t channel_index) const {
+        return create_dedicated_sender_channel_allocator(channel_index);
+    }
+
+    std::shared_ptr<FabricChannelAllocator> get_receiver_channel_allocator(size_t channel_index) const {
+        return create_dedicated_receiver_channel_allocator(channel_index);
+    }
 
     // Override virtual print method from base class
     void print(std::ostream& os) const override;
 
+    size_t get_sender_channel_number_of_slots() const {
+        TT_FATAL(sender_channels_num_buffers.size() == 1, "Sender channels number of slots is not set");
+        return sender_channels_num_buffers[0];
+    }
+
+    size_t get_sender_channel_base_address() const {
+        TT_FATAL(sender_channels_base_address.size() == 1, "Sender channels base address is not set");
+        return sender_channels_base_address[0];
+    }
+
+    size_t get_receiver_channel_number_of_slots() const {
+        TT_FATAL(receiver_channels_num_buffers.size() == 1, "Receiver channels number of slots is not set");
+        return receiver_channels_num_buffers[0];
+    }
+
+    size_t get_receiver_channel_base_address() const {
+        TT_FATAL(receiver_channels_base_address.size() == 1, "Receiver channels base address is not set");
+        return receiver_channels_base_address[0];
+    }
+
+protected:
+    void remove_sender_channel(size_t channel_id);
+    void remove_receiver_channel(size_t channel_id);
+    std::vector<MemoryRegion> get_consumed_memory_regions() const;
+
 private:
     friend class FabricRemoteChannelsAllocator;
+    // Friend function for elastic channel allocation
+    friend std::shared_ptr<tt::tt_fabric::FabricChannelAllocator> create_elastic_channel_allocator(
+        tt::tt_fabric::Topology topology,
+        const tt::tt_fabric::FabricEriscDatamoverOptions& options,
+        const std::vector<tt::tt_fabric::ChannelPoolDefinition>& pool_definitions,
+        const std::shared_ptr<tt::tt_fabric::FabricStaticSizedChannelsAllocator>& static_allocator,
+        size_t num_used_sender_channels,
+        size_t num_used_receiver_channels,
+        size_t channel_buffer_size_bytes,
+        const std::vector<tt::tt_fabric::MemoryRegion>& router_memory_regions);
     /*
      * Helper function that decides the number of buffer slots for each channel.
     */
@@ -108,24 +203,26 @@ private:
     static constexpr size_t dateline_upstream_adjcent_sender_channel_skip_idx = 2;
 
     // Channel size and buffer information
-    std::array<std::size_t, builder_config::num_sender_channels> sender_channels_size_bytes = {};
+    std::vector<std::size_t> sender_channels_size_bytes = {};
     std::array<std::size_t, builder_config::num_receiver_channels> receiver_channels_size_bytes = {};
-    std::array<size_t, builder_config::num_sender_channels> sender_channels_num_buffers = {};
+    std::vector<size_t> sender_channels_num_buffers = {};
     std::array<size_t, builder_config::num_receiver_channels> receiver_channels_num_buffers = {};
 
     // Remote channels sizes, used to calculate the remote buffer addresses.
-    std::array<std::size_t, builder_config::num_sender_channels> remote_sender_channels_size_bytes = {};
+    std::vector<std::size_t> remote_sender_channels_size_bytes = {};
     std::array<std::size_t, builder_config::num_receiver_channels> remote_receiver_channels_size_bytes = {};
     // Remote recv channels number of buffers, use by the local sender channel to check free slots.
-    std::array<std::size_t, builder_config::num_sender_channels> remote_sender_channels_num_buffers = {};
+    std::vector<std::size_t> remote_sender_channels_num_buffers = {};
     std::array<size_t, builder_config::num_receiver_channels> remote_receiver_channels_num_buffers = {};
     // Downstream sender channels number of buffers, used by the local receiver channel to check free slots.
 
-    std::array<size_t, builder_config::num_sender_channels> sender_channels_base_address = {};
+    std::vector<size_t> sender_channels_base_address = {};
     std::array<size_t, builder_config::num_receiver_channels> receiver_channels_base_address = {};
     // the base addr per remote channel, used by local channels.
-    std::array<size_t, builder_config::num_sender_channels> remote_sender_channels_base_address = {};
+    std::vector<size_t> remote_sender_channels_base_address = {};
     std::array<size_t, builder_config::num_receiver_channels> remote_receiver_channels_base_address = {};
+
+    std::vector<MemoryRegion> consumed_memory_regions;
 };
 
 // Implementation of virtual print method

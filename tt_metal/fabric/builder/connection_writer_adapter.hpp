@@ -45,26 +45,93 @@ struct SenderWorkerAdapterSpec {
  */
 class ChannelConnectionWriterAdapter {
 public:
+    ChannelConnectionWriterAdapter(tt::tt_fabric::Topology topology) :
+        is_2D_routing(topology == tt::tt_fabric::Topology::Mesh || topology == tt::tt_fabric::Topology::Torus),
+        topology(topology) {}
+    virtual ~ChannelConnectionWriterAdapter() = default;
+
     // Adds downstream noc x/y
-    virtual void add_downstream_connection(
-        SenderWorkerAdapterSpec const& adapter_spec,
+    void add_downstream_connection(
+        const SenderWorkerAdapterSpec& adapter_spec,
+        uint32_t inbound_vc_idx,
+        eth_chan_directions downstream_direction,
+        CoreCoord downstream_noc_xy,
+        bool is_2D_routing,
+        bool is_vc1);
+
+    void pack_inbound_channel_rt_args(uint32_t vc_idx, std::vector<uint32_t>& args_out) const;
+    void emit_ct_args(std::vector<uint32_t>& ct_args_out, size_t num_fwd_paths) const;
+
+    /*
+     * For 2D fabric, downstream noc x/y coords are packed into uint32_t, one per byte
+     * X and Y have separate uint32s
+     */
+    uint32_t encode_noc_ord_for_2d(
+        const std::array<std::vector<std::pair<eth_chan_directions, CoreCoord>>, builder_config::num_receiver_channels>&
+            downstream_edms_connected_by_vc,
+        uint32_t vc_idx,
+        const std::function<uint32_t(CoreCoord)>& get_noc_ord) const {
+        if (vc_idx == 1 || !is_2D_routing) {
+            if (downstream_edms_connected_by_vc[vc_idx].empty()) {
+                return 0;  // no connection here
+            }
+            TT_FATAL(
+                downstream_edms_connected_by_vc[vc_idx].size() == 1,
+                "Downstream edms connected by vc should be 1 for vc1 or non-2D routing. vc_idx: {}, size: {}",
+                vc_idx,
+                downstream_edms_connected_by_vc[vc_idx].size());
+            auto ord = get_noc_ord(downstream_edms_connected_by_vc[vc_idx].front().second);
+            return ord;
+        } else {
+            uint32_t ord = 0;
+            for (const auto& [direction, noc_xy] : downstream_edms_connected_by_vc[vc_idx]) {
+                ord |= (get_noc_ord(noc_xy) << (direction * 8));
+            }
+            return ord;
+        }
+    }
+
+    uint32_t pack_downstream_noc_y_rt_arg(uint32_t vc_idx) const {
+        return encode_noc_ord_for_2d(
+            this->downstream_edms_connected_by_vc, vc_idx, [](CoreCoord noc_xy) { return noc_xy.y; });
+    }
+    uint32_t pack_downstream_noc_x_rt_arg(uint32_t vc_idx) const {
+        return encode_noc_ord_for_2d(
+            this->downstream_edms_connected_by_vc, vc_idx, [](CoreCoord noc_xy) { return noc_xy.x; });
+    }
+
+    uint32_t get_downstream_edms_connected(bool is_2d_routing, bool is_vc1) const {
+        return this->downstream_edms_connected;
+    }
+
+protected:
+    virtual void emit_ct_args_impl(std::vector<uint32_t>& ct_args_out, size_t num_fwd_paths) const = 0;
+
+    virtual void pack_inbound_channel_rt_args_impl(uint32_t vc_idx, std::vector<uint32_t>& args_out) const = 0;
+
+    virtual void add_downstream_connection_impl(
+        const SenderWorkerAdapterSpec& adapter_spec,
         uint32_t inbound_vc_idx,
         eth_chan_directions downstream_direction,
         CoreCoord downstream_noc_xy,
         bool is_2D_routing,
         bool is_vc1) = 0;
 
-    virtual void pack_inbound_channel_rt_args(uint32_t vc_idx, std::vector<uint32_t>& args_out) const = 0;
-    virtual void emit_ct_args(std::vector<uint32_t>& ct_args_out, size_t num_fwd_paths) const = 0;
-
-protected:
-    ~ChannelConnectionWriterAdapter() = default;
-
-private:
     std::array<std::optional<size_t>, builder_config::num_receiver_channels> downstream_edm_vcs_noc_x = {};
     std::array<std::optional<size_t>, builder_config::num_receiver_channels> downstream_edm_vcs_noc_y = {};
     std::array<std::optional<size_t>, builder_config::num_receiver_channels> downstream_edm_vcs_worker_registration_address = {};
     std::array<std::optional<size_t>, builder_config::num_receiver_channels> downstream_edm_vcs_worker_location_info_address = {};
+
+    // holds which downstream cores a given receiver/inbound channel VC can feed into
+    std::array<std::vector<std::pair<eth_chan_directions, CoreCoord>>, builder_config::num_receiver_channels>
+        downstream_edms_connected_by_vc = {};
+
+    std::unordered_set<uint32_t> downstream_edms_connected_by_vc_set = {};
+
+    uint32_t downstream_edms_connected = 0;
+    bool is_2D_routing = false;
+
+    tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Linear;
 };
 
 /*
@@ -76,32 +143,21 @@ public:
     StaticSizedChannelConnectionWriterAdapter(
         FabricStaticSizedChannelsAllocator& allocator, tt::tt_fabric::Topology topology);
 
-     void add_downstream_connection(
-        SenderWorkerAdapterSpec const& adapter_spec,
+protected:
+    void pack_inbound_channel_rt_args_impl(uint32_t vc_idx, std::vector<uint32_t>& args_out) const override;
+    /*
+     * Implements any child class specific logic for adding a downstream connection.
+     */
+    void add_downstream_connection_impl(
+        const SenderWorkerAdapterSpec& adapter_spec,
         uint32_t inbound_vc_idx,
         eth_chan_directions downstream_direction,
         CoreCoord downstream_noc_xy,
         bool is_2D_routing,
-        bool is_vc1) override;
-
-    void pack_inbound_channel_rt_args(uint32_t vc_idx, std::vector<uint32_t>& args_out) const override;
-
-    uint32_t get_downstream_edms_connected(bool is_2d_routing, bool is_vc1) const;
+        bool is_vc1) final;
 
 private:
-    uint32_t pack_downstream_noc_y_rt_arg(uint32_t vc_idx) const;
-    uint32_t pack_downstream_noc_x_rt_arg(uint32_t vc_idx) const;
-    uint32_t encode_noc_ord_for_2d(
-        const std::array<std::vector<std::pair<eth_chan_directions, CoreCoord>>, builder_config::num_receiver_channels>& downstream_edms_connected_by_vc,
-        uint32_t vc_idx,
-        const std::function<uint32_t(CoreCoord)>& get_noc_ord) const;
-
-    void emit_ct_args(std::vector<uint32_t>& ct_args_out, size_t num_fwd_paths) const override;
-
-    std::unordered_set<uint32_t> downstream_edms_connected_by_vc_set;
-
-    // holds which downstream cores a given receiver/inbound channel VC can feed into
-    std::array<std::vector<std::pair<eth_chan_directions, CoreCoord>>, builder_config::num_receiver_channels> downstream_edms_connected_by_vc = {};
+    void emit_ct_args_impl(std::vector<uint32_t>& ct_args_out, size_t num_fwd_paths) const override;
 
     // holds the number of buffer slots per downstream sender channel
     std::array<std::optional<size_t>, builder_config::num_sender_channels> sender_channels_num_buffers = {};
@@ -113,15 +169,28 @@ private:
     // holds the base address of the downstream sender channel buffer, by downstream sender/outbound VC index
     std::array<std::optional<size_t>, builder_config::num_receiver_channels> downstream_edm_vcs_buffer_base_address = {};
 
-    uint32_t downstream_edms_connected = 0;
-
     std::array<std::optional<size_t>, builder_config::num_receiver_channels>
         downstream_edm_vcs_worker_registration_address = {};
     std::array<std::optional<size_t>, builder_config::num_receiver_channels>
         downstream_edm_vcs_worker_location_info_address = {};
-
-    bool is_2D_routing = false;
 };
 
+class ElasticChannelConnectionWriterAdapter final : public ChannelConnectionWriterAdapter {
+public:
+    ElasticChannelConnectionWriterAdapter(ElasticChannelsAllocator& allocator, tt::tt_fabric::Topology topology);
+
+protected:
+    void emit_ct_args_impl(std::vector<uint32_t>& ct_args_out, size_t num_fwd_paths) const override;
+
+    void pack_inbound_channel_rt_args_impl(uint32_t vc_idx, std::vector<uint32_t>& args_out) const override;
+
+    void add_downstream_connection_impl(
+        const SenderWorkerAdapterSpec& adapter_spec,
+        uint32_t inbound_vc_idx,
+        eth_chan_directions downstream_direction,
+        CoreCoord downstream_noc_xy,
+        bool is_2D_routing,
+        bool is_vc1) final;
+};
 
 }  // namespace tt::tt_fabric

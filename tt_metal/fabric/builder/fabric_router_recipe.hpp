@@ -18,6 +18,7 @@ namespace tt::tt_fabric {
 enum class FabricChannelPoolType : uint32_t {
     STATIC = 0,
     ELASTIC = 1,
+    INVALID = 2,
 };
 
 /**
@@ -31,6 +32,13 @@ struct ChannelPoolDefinition {
     std::vector<size_t> mapped_receiver_channels;
 
     ChannelPoolDefinition(FabricChannelPoolType type) : type(type) {}
+    ChannelPoolDefinition(
+        FabricChannelPoolType type,
+        std::vector<size_t> mapped_sender_channels,
+        std::vector<size_t> mapped_receiver_channels) :
+        type(type),
+        mapped_sender_channels(mapped_sender_channels),
+        mapped_receiver_channels(mapped_receiver_channels) {}
 };
 
 /**
@@ -94,6 +102,74 @@ public:
 
     size_t get_num_sender_channels() const { return sender_channel_to_pool_index_.size(); }
     size_t get_num_receiver_channels() const { return receiver_channel_to_pool_index_.size(); }
+
+    void expand_static_channels(size_t num_sender_channels) {
+        auto expand = [this](size_t offset, std::vector<size_t>& channel_to_pool_index) {
+            std::vector<size_t> channel_to_pool_index_expanded;
+            size_t num_inserted = offset;
+            for (size_t i = 0; i < channel_to_pool_index.size(); i++) {
+                auto mapped_pool_idx = channel_to_pool_index[i];
+                if (this->pool_definitions_[mapped_pool_idx].type == FabricChannelPoolType::STATIC) {
+                    auto new_index = mapped_pool_idx + num_inserted;
+                    num_inserted++;
+                    channel_to_pool_index_expanded.push_back(new_index);
+                }
+            }
+            return channel_to_pool_index_expanded;
+        };
+
+        auto expanded_senders = expand(0, sender_channel_to_pool_index_);
+        // log_info(tt::LogFabric, "\tunexpanded_senders: {}", expanded_senders);
+        // log_info(tt::LogFabric, "\texpanded_senders: {}", expanded_senders);
+        sender_channel_to_pool_index_ = std::move(expanded_senders);
+        auto expanded_receivers = expand(num_sender_channels, receiver_channel_to_pool_index_);
+        // log_info(tt::LogFabric, "\tunexpanded_receivers: {}", expanded_receivers);
+        // log_info(tt::LogFabric, "\texpanded_receivers: {}", expanded_receivers);
+        receiver_channel_to_pool_index_ = std::move(expanded_receivers);
+
+        std::vector<ChannelPoolDefinition> expanded_pool_definitions;
+        // Need to expand the pool definitions as well
+        size_t expanded_pool_index = 0;
+        for (size_t i = 0; i < pool_definitions_.size(); i++) {
+            auto& pool_definition = pool_definitions_[i];
+            bool is_static = pool_definition.type == FabricChannelPoolType::STATIC;
+            if (is_static) {
+                for (size_t j = 0; j < pool_definition.mapped_sender_channels.size(); j++) {
+                    auto new_pool_def = ChannelPoolDefinition(FabricChannelPoolType::STATIC, {expanded_pool_index}, {});
+                    expanded_pool_definitions.push_back(new_pool_def);
+                    expanded_pool_index++;
+                }
+                for (size_t j = 0; j < pool_definition.mapped_receiver_channels.size(); j++) {
+                    auto new_pool_def = ChannelPoolDefinition(FabricChannelPoolType::STATIC, {}, {expanded_pool_index});
+                    expanded_pool_definitions.push_back(new_pool_def);
+                    expanded_pool_index++;
+                }
+
+            } else {
+                expanded_pool_definitions.push_back(pool_definition);
+                expanded_pool_index++;
+            }
+        }
+
+        // for (size_t i = 0; i < expanded_pool_definitions.size(); i++) {
+        //     log_info(tt::LogFabric, "Expanded pool definition {}: type={}, mapped_sender_channels={},
+        //     mapped_receiver_channels={}", i, expanded_pool_definitions[i].type,
+        //     expanded_pool_definitions[i].mapped_sender_channels,
+        //     expanded_pool_definitions[i].mapped_receiver_channels);
+        // }
+        pool_definitions_ = std::move(expanded_pool_definitions);
+    }
+
+    /*
+     * This is a hack to insert empty pool definitions at the front of the pool definitions to
+     * keep indexing consistent for remote channel views. This is super hacky.
+     */
+    void insert_empty_pool_definitions_front(size_t num_pools) {
+        for (size_t i = 0; i < num_pools; i++) {
+            pool_definitions_.insert(
+                pool_definitions_.begin(), ChannelPoolDefinition(FabricChannelPoolType::INVALID, {}, {}));
+        }
+    }
 
 private:
     /**

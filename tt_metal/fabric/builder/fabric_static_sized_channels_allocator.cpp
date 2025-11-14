@@ -26,6 +26,22 @@ size_t FabricStaticSizedChannelsAllocator::get_sender_channel_number_of_slots(si
     return sender_channels_num_buffers[channel_id];
 }
 
+size_t FabricStaticSizedChannelsAllocator::get_remote_sender_channel_base_address(size_t channel_id) const {
+    TT_FATAL(
+        channel_id < remote_sender_channels_base_address.size(),
+        "Remote sender channel ID {} out of bounds",
+        channel_id);
+    return remote_sender_channels_base_address[channel_id];
+}
+
+size_t FabricStaticSizedChannelsAllocator::get_remote_sender_channel_number_of_slots(size_t channel_id) const {
+    TT_FATAL(
+        channel_id < remote_sender_channels_num_buffers.size(),
+        "Remote sender channel ID {} out of bounds",
+        channel_id);
+    return remote_sender_channels_num_buffers[channel_id];
+}
+
 size_t FabricStaticSizedChannelsAllocator::get_receiver_channel_number_of_slots(size_t channel_id) const {
     TT_FATAL(channel_id < receiver_channels_num_buffers.size(), "Receiver channel ID {} out of bounds", channel_id);
     return receiver_channels_num_buffers[channel_id];
@@ -36,9 +52,26 @@ size_t FabricStaticSizedChannelsAllocator::get_receiver_channel_base_address(siz
     return receiver_channels_base_address[channel_id];
 }
 
+size_t FabricStaticSizedChannelsAllocator::get_remote_receiver_channel_base_address(size_t channel_id) const {
+    TT_FATAL(
+        channel_id < remote_receiver_channels_base_address.size(),
+        "Remote receiver channel ID {} out of bounds",
+        channel_id);
+    return remote_receiver_channels_base_address[channel_id];
+}
+
+size_t FabricStaticSizedChannelsAllocator::get_remote_receiver_channel_number_of_slots(size_t channel_id) const {
+    TT_FATAL(
+        channel_id < remote_receiver_channels_num_buffers.size(),
+        "Remote receiver channel ID {} out of bounds",
+        channel_id);
+    return remote_receiver_channels_num_buffers[channel_id];
+}
+
 FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
     tt::tt_fabric::Topology topology,
     const FabricEriscDatamoverOptions& options,
+    const ChannelPoolDefinition& channel_pool_definition,
     size_t num_used_sender_channels,
     size_t num_used_receiver_channels,
     size_t channel_buffer_size_bytes,
@@ -52,6 +85,26 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
     // Compute buffer region start from memory regions
     TT_FATAL(!memory_regions.empty(), "Memory regions must not be empty");
     this->buffer_region_start = memory_regions[0].start_address;
+
+    // Initialize the local to global channel index maps
+    this->sender_channel_local_to_global_index_map.resize(num_used_sender_channels);
+    this->receiver_channel_local_to_global_index_map.resize(num_used_receiver_channels);
+    std::iota(
+        this->sender_channel_local_to_global_index_map.begin(),
+        this->sender_channel_local_to_global_index_map.end(),
+        0);
+    std::iota(
+        this->receiver_channel_local_to_global_index_map.begin(),
+        this->receiver_channel_local_to_global_index_map.end(),
+        this->sender_channel_local_to_global_index_map.size());
+
+    // Initialize the sender channel info vectors
+    this->sender_channels_size_bytes.resize(num_used_sender_channels, 0);
+    this->sender_channels_num_buffers.resize(num_used_sender_channels, 0);
+    this->remote_sender_channels_size_bytes.resize(num_used_sender_channels, 0);
+    this->remote_sender_channels_num_buffers.resize(num_used_sender_channels, 0);
+    this->sender_channels_base_address.resize(num_used_sender_channels, 0);
+    this->remote_sender_channels_base_address.resize(num_used_sender_channels, 0);
 
     // Set max_l1_loading_size from memory regions
     this->max_l1_loading_size = memory_regions[0].get_end_address();
@@ -201,8 +254,18 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
             this->available_channel_buffering_space,
         "Internal error when computing channel sizes. Total channel size exceeds available space");
     TT_FATAL(
-        buffer_addr_end < this->max_l1_loading_size,
+        buffer_addr_end <= this->max_l1_loading_size,  // buffer_addr_end is the next available address, hence <=
         "Internal error - channel buffers spilled past the end of usable L1 region.");
+
+    // validate that sender and receiver channels don't overlap
+    for (size_t i = 0; i < num_used_sender_channels; ++i) {
+        for (size_t j = 0; j < num_used_receiver_channels; ++j) {
+            if (sender_channels_base_address[i] <= receiver_channels_base_address[j] &&
+                (sender_channels_base_address[i] + sender_channels_size_bytes[i]) > receiver_channels_base_address[j]) {
+                TT_FATAL(false, "Sender and receiver channels overlap");
+            }
+        }
+    }
 }
 
 void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
@@ -562,6 +625,311 @@ void FabricStaticSizedChannelsAllocator::emit_ct_args(
         ct_args.push_back(static_cast<uint32_t>(this->remote_receiver_channels_base_address[i]));
         ct_args.push_back(this->remote_receiver_channels_num_buffers[i]);
     }
+}
+
+void FabricStaticSizedChannelsAllocator::remove_sender_channel(size_t channel_id) {
+    TT_FATAL(channel_id < num_used_sender_channels, "Sender channel ID {} out of bounds", channel_id);
+    log_info(tt::LogMetal, "\tFabricStaticSizedChannelsAllocator::remove_sender_channel {}", channel_id);
+
+    for (size_t i = 0; i < this->num_used_sender_channels; ++i) {
+        for (size_t j = 0; j < this->num_used_receiver_channels; ++j) {
+            if (sender_channels_base_address.at(i) <= receiver_channels_base_address.at(j) &&
+                (sender_channels_base_address.at(i) + sender_channels_size_bytes.at(i)) >
+                    receiver_channels_base_address.at(j)) {
+                TT_FATAL(false, "Sender and receiver channels overlap");
+            }
+        }
+    }
+
+    // Mark the channel to be removed by zeroing it out
+    auto new_free_address_base_address = sender_channels_base_address[channel_id];
+    log_info(tt::LogMetal, "\t\t\tnew_free_address_base_address={}", new_free_address_base_address);
+    auto channel_size_bytes = sender_channels_size_bytes[channel_id];
+    auto expected_next_used_address = new_free_address_base_address + channel_size_bytes;
+    log_info(tt::LogMetal, "\t\t\texpected_next_used_address={}", expected_next_used_address);
+    log_info(tt::LogMetal, "\t\t\tchannel_addresses_before_deletion:");
+    for (size_t i = 0; i < num_used_sender_channels; ++i) {
+        log_info(
+            tt::LogMetal,
+            "\t\t\t\ts channel {} address={}, size={}, num_buffers={}",
+            i,
+            sender_channels_base_address.at(i),
+            sender_channels_size_bytes.at(i),
+            sender_channels_num_buffers.at(i));
+    }
+    for (size_t i = 0; i < num_used_receiver_channels; ++i) {
+        log_info(
+            tt::LogMetal,
+            "\t\t\t\tr channel {} address={}, size={}, num_buffers={}",
+            i,
+            receiver_channels_base_address.at(i),
+            receiver_channels_size_bytes.at(i),
+            receiver_channels_num_buffers.at(i));
+    }
+    std::vector<size_t> sender_channels_to_shift_down = {};
+    std::vector<size_t> receiver_channels_to_shift_down = {};
+    bool did_something = false;
+    size_t count = 0;
+    do {
+        did_something = false;
+        for (size_t i = 0; i < num_used_sender_channels; ++i) {
+            if (i != channel_id && sender_channels_base_address[i] == expected_next_used_address) {
+                sender_channels_to_shift_down.push_back(i);
+                expected_next_used_address += sender_channels_size_bytes[i];
+                did_something = true;
+            }
+        }
+        for (size_t i = 0; i < num_used_receiver_channels; ++i) {
+            if (receiver_channels_base_address[i] == expected_next_used_address) {
+                receiver_channels_to_shift_down.push_back(i);
+                expected_next_used_address += receiver_channels_size_bytes[i];
+                did_something = true;
+            }
+        }
+        count++;
+        TT_FATAL(count < 100, "Count is too high");
+    } while (did_something);
+    for (auto ch : sender_channels_to_shift_down) {
+        sender_channels_base_address[ch] -= channel_size_bytes;
+        log_info(
+            tt::LogMetal,
+            "\t\t\tshift down sender channel {} by {} to {}",
+            ch,
+            channel_size_bytes,
+            sender_channels_base_address[ch]);
+    }
+    for (auto ch : receiver_channels_to_shift_down) {
+        receiver_channels_base_address[ch] -= channel_size_bytes;
+        log_info(
+            tt::LogMetal,
+            "\t\t\tshift down receiver channel {} by {} to {}",
+            ch,
+            channel_size_bytes,
+            receiver_channels_base_address[ch]);
+    }
+
+    TT_FATAL(
+        sender_channel_local_to_global_index_map.size() > channel_id,
+        "Sender channel local to global index map size {} is less than channel ID {}",
+        sender_channel_local_to_global_index_map.size(),
+        channel_id);
+    sender_channel_local_to_global_index_map.erase(sender_channel_local_to_global_index_map.begin() + channel_id);
+    sender_channels_base_address.erase(sender_channels_base_address.begin() + channel_id);
+    sender_channels_size_bytes.erase(sender_channels_size_bytes.begin() + channel_id);
+    sender_channels_num_buffers.erase(sender_channels_num_buffers.begin() + channel_id);
+    remote_sender_channels_base_address.erase(remote_sender_channels_base_address.begin() + channel_id);
+    remote_sender_channels_size_bytes.erase(remote_sender_channels_size_bytes.begin() + channel_id);
+    remote_sender_channels_num_buffers.erase(remote_sender_channels_num_buffers.begin() + channel_id);
+    this->num_used_sender_channels--;
+    log_info(tt::LogMetal, "\t\t\tnum_used_sender_channels={}", this->num_used_sender_channels);
+
+    for (size_t i = 0; i < this->num_used_sender_channels; ++i) {
+        for (size_t j = 0; j < this->num_used_receiver_channels; ++j) {
+            if (sender_channels_base_address[i] <= receiver_channels_base_address[j] &&
+                (sender_channels_base_address[i] + sender_channels_size_bytes[i]) > receiver_channels_base_address[j]) {
+                TT_FATAL(false, "Sender and receiver channels overlap");
+            }
+        }
+    }
+}
+
+void FabricStaticSizedChannelsAllocator::remove_receiver_channel(size_t channel_id) {
+    TT_FATAL(channel_id < num_used_receiver_channels, "Receiver channel ID {} out of bounds", channel_id);
+    log_info(tt::LogMetal, "\tFabricStaticSizedChannelsAllocator::remove_receiver_channel {}", channel_id);
+
+    // Mark the channel to be removed by zeroing it out
+    receiver_channels_size_bytes[channel_id] = 0;
+    receiver_channels_num_buffers[channel_id] = 0;
+    remote_receiver_channels_size_bytes[channel_id] = 0;
+    remote_receiver_channels_num_buffers[channel_id] = 0;
+
+    // Chain together all remaining active channels (non-zero size) in order
+    size_t active_count = 0;
+    for (size_t i = 0; i < num_used_receiver_channels; ++i) {
+        if (receiver_channels_size_bytes[i] > 0) {
+            // This channel stays - copy it to the active position
+            if (active_count != i) {
+                receiver_channels_size_bytes[active_count] = receiver_channels_size_bytes[i];
+                receiver_channels_num_buffers[active_count] = receiver_channels_num_buffers[i];
+                remote_receiver_channels_size_bytes[active_count] = remote_receiver_channels_size_bytes[i];
+                remote_receiver_channels_num_buffers[active_count] = remote_receiver_channels_num_buffers[i];
+            }
+            ++active_count;
+        }
+    }
+
+    // Clear any remaining entries at the end
+    for (size_t i = active_count; i < num_used_receiver_channels; ++i) {
+        receiver_channels_size_bytes[i] = 0;
+        receiver_channels_num_buffers[i] = 0;
+        remote_receiver_channels_size_bytes[i] = 0;
+        remote_receiver_channels_num_buffers[i] = 0;
+    }
+
+    // Update the count of used channels
+    num_used_receiver_channels = active_count;
+
+    // Recalculate base addresses to fill the gap
+    // First calculate sender channels end address
+    uint32_t sender_buffer_addr = buffer_region_start;
+    for (uint32_t i = 0; i < num_used_sender_channels; i++) {
+        sender_channels_base_address[i] = sender_buffer_addr;
+        sender_buffer_addr += sender_channels_size_bytes[i];
+    }
+
+    // Update receiver channels to start after the sender channels
+    uint32_t receiver_buffer_addr = sender_buffer_addr;
+    for (uint32_t i = 0; i < num_used_receiver_channels; i++) {
+        receiver_channels_base_address[i] = receiver_buffer_addr;
+        receiver_buffer_addr += receiver_channels_size_bytes[i];
+    }
+
+    // Recalculate remote channel addresses too
+    uint32_t remote_sender_buffer_addr = buffer_region_start;
+    for (uint32_t i = 0; i < num_used_sender_channels; i++) {
+        remote_sender_channels_base_address[i] = remote_sender_buffer_addr;
+        remote_sender_buffer_addr += remote_sender_channels_size_bytes[i];
+    }
+
+    uint32_t remote_receiver_buffer_addr = remote_sender_buffer_addr;
+    for (uint32_t i = 0; i < num_used_receiver_channels; i++) {
+        remote_receiver_channels_base_address[i] = remote_receiver_buffer_addr;
+        remote_receiver_buffer_addr += remote_receiver_channels_size_bytes[i];
+    }
+}
+
+std::vector<MemoryRegion> FabricStaticSizedChannelsAllocator::get_consumed_memory_regions() const {
+    std::vector<MemoryRegion> consumed_regions;
+
+    // Calculate consumed regions based on allocated channels
+    size_t current_address = buffer_region_start;
+
+    // Add regions for sender channels
+    for (size_t i = 0; i < num_used_sender_channels; ++i) {
+        if (sender_channels_size_bytes[i] > 0) {
+            consumed_regions.emplace_back(current_address, sender_channels_size_bytes[i]);
+            current_address += sender_channels_size_bytes[i];
+        }
+    }
+
+    // Add regions for receiver channels
+    for (size_t i = 0; i < num_used_receiver_channels; ++i) {
+        if (receiver_channels_size_bytes[i] > 0) {
+            consumed_regions.emplace_back(current_address, receiver_channels_size_bytes[i]);
+            current_address += receiver_channels_size_bytes[i];
+        }
+    }
+
+    return consumed_regions;
+}
+
+std::shared_ptr<FabricStaticSizedChannelsAllocator>
+FabricStaticSizedChannelsAllocator::create_dedicated_sender_channel_allocator(size_t channel_index) const {
+    TT_FATAL(channel_index < num_used_sender_channels, "Sender channel index {} out of bounds", channel_index);
+
+    // Create a minimal ChannelPoolDefinition with STATIC type
+    ChannelPoolDefinition channel_pool_definition(FabricChannelPoolType::STATIC);
+
+    // Calculate memory needed: one sender channel + all receiver channels
+    size_t sender_channel_size = sender_channels_size_bytes[channel_index];
+    size_t total_receiver_size = 0;
+    for (size_t i = 0; i < num_used_receiver_channels; ++i) {
+        total_receiver_size += receiver_channels_size_bytes[i];
+    }
+    size_t total_memory_needed = sender_channel_size + total_receiver_size;
+
+    // Create memory regions starting from the original buffer_region_start
+    // We'll create a single contiguous region that's large enough
+    std::vector<MemoryRegion> memory_regions;
+    memory_regions.emplace_back(buffer_region_start, total_memory_needed);
+
+    // Create the new allocator with 1 sender channel and all receiver channels
+    auto dedicated_allocator = std::make_shared<FabricStaticSizedChannelsAllocator>(
+        topology_,
+        options_,
+        channel_pool_definition,
+        1,  // num_used_sender_channels
+        0,
+        channel_buffer_size_bytes,
+        total_memory_needed,
+        memory_regions);
+
+    // Overwrite the constructor-computed values with the actual values from the original allocator
+    // Copy sender channel data (will be at index 0 in the new allocator)
+    TT_FATAL(
+        dedicated_allocator->sender_channels_base_address.size() == 1, "Sender channels base address size is not 1");
+    TT_FATAL(dedicated_allocator->sender_channels_size_bytes.size() == 1, "Sender channels size bytes size is not 1");
+    TT_FATAL(dedicated_allocator->sender_channels_num_buffers.size() == 1, "Sender channels num buffers size is not 1");
+    TT_FATAL(
+        dedicated_allocator->remote_sender_channels_base_address.size() == 1,
+        "Remote sender channels base address size is not 1");
+    TT_FATAL(
+        dedicated_allocator->remote_sender_channels_size_bytes.size() == 1,
+        "Remote sender channels size bytes size is not 1");
+    TT_FATAL(
+        dedicated_allocator->remote_sender_channels_num_buffers.size() == 1,
+        "Remote sender channels num buffers size is not 1");
+    TT_FATAL(
+        dedicated_allocator->sender_channel_local_to_global_index_map.size() == 1,
+        "Sender channel local to global index map size is not 1");
+    TT_FATAL(
+        dedicated_allocator->receiver_channel_local_to_global_index_map.size() == 0,
+        "Receiver channel local to global index map size is not 0");
+
+    dedicated_allocator->sender_channels_base_address[0] = sender_channels_base_address[channel_index];
+    dedicated_allocator->sender_channels_size_bytes[0] = sender_channels_size_bytes[channel_index];
+    dedicated_allocator->sender_channels_num_buffers[0] = sender_channels_num_buffers[channel_index];
+    dedicated_allocator->remote_sender_channels_base_address[0] = remote_sender_channels_base_address[channel_index];
+    dedicated_allocator->remote_sender_channels_size_bytes[0] = remote_sender_channels_size_bytes[channel_index];
+    dedicated_allocator->remote_sender_channels_num_buffers[0] = remote_sender_channels_num_buffers[channel_index];
+
+    // Update the sender channel local to global index map
+    dedicated_allocator->sender_channel_local_to_global_index_map[0] =
+        sender_channel_local_to_global_index_map[channel_index];
+
+    return dedicated_allocator;
+}
+
+std::shared_ptr<FabricStaticSizedChannelsAllocator>
+FabricStaticSizedChannelsAllocator::create_dedicated_receiver_channel_allocator(size_t channel_index) const {
+    TT_FATAL(channel_index < num_used_receiver_channels, "Receiver channel index {} out of bounds", channel_index);
+
+    ChannelPoolDefinition channel_pool_definition(FabricChannelPoolType::STATIC);
+
+    // Calculate memory needed: all sender channels + one receiver channel
+    size_t total_sender_size = 0;
+    for (size_t i = 0; i < num_used_sender_channels; ++i) {
+        total_sender_size += sender_channels_size_bytes[i];
+    }
+    size_t receiver_channel_size = receiver_channels_size_bytes[channel_index];
+    size_t total_memory_needed = total_sender_size + receiver_channel_size;
+
+    std::vector<MemoryRegion> memory_regions;
+    memory_regions.emplace_back(buffer_region_start, total_memory_needed);
+
+    // Create the new allocator with all sender channels and 1 receiver channel
+    auto dedicated_allocator = std::make_shared<FabricStaticSizedChannelsAllocator>(
+        topology_,
+        options_,
+        channel_pool_definition,
+        0,
+        1,  // num_used_receiver_channels
+        channel_buffer_size_bytes,
+        total_memory_needed,
+        memory_regions);
+
+    // Copy receiver channel data (will be at index 0 in the new allocator)
+    dedicated_allocator->receiver_channels_base_address[0] = receiver_channels_base_address[channel_index];
+    dedicated_allocator->receiver_channels_size_bytes[0] = receiver_channels_size_bytes[channel_index];
+    dedicated_allocator->receiver_channels_num_buffers[0] = receiver_channels_num_buffers[channel_index];
+    dedicated_allocator->remote_receiver_channels_base_address[0] =
+        remote_receiver_channels_base_address[channel_index];
+    dedicated_allocator->remote_receiver_channels_size_bytes[0] = remote_receiver_channels_size_bytes[channel_index];
+    dedicated_allocator->remote_receiver_channels_num_buffers[0] = remote_receiver_channels_num_buffers[channel_index];
+    dedicated_allocator->receiver_channel_local_to_global_index_map[0] =
+        receiver_channel_local_to_global_index_map[channel_index];
+
+    return dedicated_allocator;
 }
 
 };  // namespace tt::tt_fabric

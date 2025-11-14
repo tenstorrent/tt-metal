@@ -12,6 +12,8 @@
 
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <tt-metalium/fabric_edm_types.hpp>
+#include "builder/channel_to_pool_mapping.hpp"
+#include "builder/multi_pool_channel_allocator.hpp"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include <tt-metalium/edm_fabric_counters.hpp>
 #include <tt-metalium/routing_table_generator.hpp>  // for FabricNodeId
@@ -283,6 +285,7 @@ struct FabricEriscDatamoverConfig {
 
     std::vector<FabricRiscConfig> risc_configs;
     // ----------- Sender Channels
+    // flow control address
     std::array<std::size_t, builder_config::num_sender_channels> sender_channels_buffer_index_address = {};
     // Connection info layout:
     // 0: buffer_index_rdptr -> Tells EDM the address in worker L1 to update EDM's copy of channel rdptr
@@ -354,7 +357,8 @@ struct FabricEriscDatamoverConfig {
 
     // Fabric channel allocator for L1 memory management
     // Points to the primary allocator (typically static allocator for single-pool configs)
-    std::shared_ptr<FabricChannelAllocator> channel_allocator;
+    // std::shared_ptr<FabricChannelAllocator>
+    //     channel_allocator;  // I think I can delete this (or at least my mental model expect I can)
 
     // Multi-pool allocator coordinator - manages all pool allocators
     // Emits pool metadata and delegates to individual pools for CT args
@@ -366,7 +370,37 @@ struct FabricEriscDatamoverConfig {
     std::shared_ptr<ChannelToPoolMapping> remote_channel_to_pool_mapping;
 
     // Remote channels allocator - tracks remote receiver channel info for the remote ethernet core
-    std::shared_ptr<FabricRemoteChannelsAllocator> remote_channels_allocator;
+    std::vector<std::shared_ptr<FabricRemoteChannelsAllocator>> remote_channels_allocators;
+
+    FabricChannelAllocator* get_sender_channel_allocator(size_t channel_index) const {
+        const auto& sender_channel_to_pool_index = this->channel_to_pool_mapping->get_sender_channel_to_pool_index();
+        TT_FATAL(sender_channel_to_pool_index.size() > channel_index, "Sender channel to pool index out of bounds");
+        const auto sender_channel_pool_index = sender_channel_to_pool_index[channel_index];
+
+        return this->multi_pool_allocator->get_pool(sender_channel_pool_index).get();
+    }
+    FabricChannelPoolType get_sender_channel_pool_type(size_t channel_index) const {
+        const auto& sender_channel_to_pool_type = this->channel_to_pool_mapping->get_sender_channel_to_pool_type();
+        TT_FATAL(sender_channel_to_pool_type.size() > channel_index, "Sender channel to pool type out of bounds");
+        return sender_channel_to_pool_type[channel_index];
+    }
+
+    FabricChannelAllocator* get_receiver_channel_allocator(size_t channel_index) const {
+        const auto& receiver_channel_to_pool_index =
+            this->channel_to_pool_mapping->get_receiver_channel_to_pool_index();
+        TT_FATAL(receiver_channel_to_pool_index.size() > channel_index, "Receiver channel to pool index out of bounds");
+        const auto receiver_channel_pool_index = receiver_channel_to_pool_index[channel_index];
+
+        log_info(tt::LogFabric, "receiver_channel_pool_index: {}", receiver_channel_pool_index);
+        auto allocator = this->multi_pool_allocator->get_pool(receiver_channel_pool_index).get();
+        TT_FATAL(allocator != nullptr, "Allocator is null");
+        return allocator;
+    }
+    FabricChannelPoolType get_receiver_channel_pool_type(size_t channel_index) const {
+        const auto& receiver_channel_to_pool_type = this->channel_to_pool_mapping->get_receiver_channel_to_pool_type();
+        TT_FATAL(receiver_channel_to_pool_type.size() > channel_index, "Receiver channel to pool type out of bounds");
+        return receiver_channel_to_pool_type[channel_index];
+    }
 
 private:
     void configure_skip_connection_flags(Topology topology, FabricEriscDatamoverOptions const& options);
@@ -543,8 +577,8 @@ public:
     size_t handshake_address = 0;
     size_t channel_buffer_size = 0;
 
-    std::shared_ptr<tt::tt_fabric::ChannelConnectionWriterAdapter> receiver_channel_to_downstream_adapter;
-    std::array<std::shared_ptr<tt::tt_fabric::FabricChannelAllocator>, FabricEriscDatamoverConfig::max_downstream_edms> downstream_allocators = {};
+    std::array<std::shared_ptr<tt::tt_fabric::ChannelConnectionWriterAdapter>, builder_config::num_receiver_channels>
+        receiver_channel_to_downstream_adapter;
 
     std::array<size_t, builder_config::num_receiver_channels> receiver_channels_num_buffers = {};
     std::array<size_t, builder_config::num_receiver_channels> remote_receiver_channels_num_buffers = {};
@@ -594,6 +628,10 @@ private:
     // Internal implementation for connect_to_downstream_edm
     void connect_to_downstream_edm_impl(
         FabricDatamoverBuilder downstream_builder, FabricDatamoverBuilder vc1_edm_builder);
+
+    // Initialize downstream adapter for a specific VC
+    void initialize_downstream_adapter_for_vc(
+        const std::shared_ptr<tt::tt_fabric::MultiPoolChannelAllocator>& multi_pool_allocator, size_t vc_idx);
 };
 
 }  // namespace tt::tt_fabric

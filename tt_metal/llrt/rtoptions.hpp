@@ -234,6 +234,9 @@ class RunTimeOptions {
     // Force JIT compile even if dependencies are up to date
     bool force_jit_compile = false;
 
+    // flag: enable experimental fabric elastic channels feature
+    bool enable_fabric_elastic_channels = false;
+
 public:
     RunTimeOptions();
     RunTimeOptions(const RunTimeOptions&) = delete;
@@ -558,6 +561,9 @@ public:
             ParseFeatureEnv((RunTimeDebugFeatures)i, hal);
         }
     }
+
+    bool get_enable_fabric_elastic_channels() const { return enable_fabric_elastic_channels; }
+    void set_enable_fabric_elastic_channels(bool enable) { enable_fabric_elastic_channels = enable; }
 
 private:
     // Helper functions to parse feature-specific environment vaiables.

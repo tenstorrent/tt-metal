@@ -8,6 +8,7 @@
 #include "fabric_router_recipe.hpp"
 #include "fabric_static_sized_channels_allocator.hpp"
 #include "fabric_remote_channels_allocator.hpp"
+#include <tt_stl/assert.hpp>
 #include <memory>
 #include <vector>
 #include <ostream>
@@ -45,9 +46,23 @@ public:
      * @param pool_allocators Vector of individual pool allocators (static or elastic)
      * @param pool_types Types of each pool (must match allocators)
      */
+    template <typename AllocatorType>
     MultiPoolChannelAllocator(
-        std::vector<std::shared_ptr<FabricChannelAllocator>> pool_allocators,
-        std::vector<FabricChannelPoolType> pool_types);
+        const std::vector<std::shared_ptr<AllocatorType>>& pool_allocators,
+        std::vector<FabricChannelPoolType> pool_types) :
+        pool_allocators_(pool_allocators.begin(), pool_allocators.end()), pool_types_(std::move(pool_types)) {
+        TT_FATAL(!pool_allocators_.empty(), "MultiPoolChannelAllocator requires at least one pool allocator");
+        TT_FATAL(
+            pool_allocators_.size() == pool_types_.size(),
+            "Number of pool allocators ({}) must match number of pool types ({})",
+            pool_allocators_.size(),
+            pool_types_.size());
+
+        // Validate that all pool allocators are non-null
+        for (size_t i = 0; i < pool_allocators_.size(); ++i) {
+            TT_FATAL(pool_allocators_[i] != nullptr, "Pool allocator at index {} is null", i);
+        }
+    }
 
     /**
      * Emit compile-time arguments for all pools.

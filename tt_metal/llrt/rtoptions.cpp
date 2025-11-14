@@ -80,6 +80,7 @@ enum class EnvVarID {
     TT_METAL_DISABLE_RELAXED_MEM_ORDERING,  // Disable relaxed memory ordering
     TT_METAL_ENABLE_GATHERING,              // Enable instruction gathering
     TT_METAL_FABRIC_TELEMETRY,              // Enable fabric telemetry
+    TT_FABRIC_ENABLE_ELASTIC_CHANNELS,      // Enable elastic channels for fabric
     TT_FABRIC_PROFILE_RX_CH_FWD,            // Enable fabric RX channel forwarding profiling
     TT_METAL_FORCE_REINIT,                  // Force context reinitialization
     TT_METAL_DISABLE_FABRIC_TWO_ERISC,      // Disable fabric 2-ERISC mode
@@ -458,6 +459,12 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (telemetry disabled)
         // Usage: export TT_METAL_FABRIC_TELEMETRY=1
         case EnvVarID::TT_METAL_FABRIC_TELEMETRY: this->enable_fabric_telemetry = true; break;
+        
+        // TT_FABRIC_ENABLE_ELASTIC_CHANNELS
+        // Enable elastic channels for fabric.
+        // Default: false (elastic channels disabled)
+        // Usage: export TT_FABRIC_ENABLE_ELASTIC_CHANNELS=1
+        case EnvVarID::TT_FABRIC_ENABLE_ELASTIC_CHANNELS: this->enable_fabric_elastic_channels = true; break;
 
         // TT_FABRIC_PROFILE_RX_CH_FWD
         // Enables fabric RX channel forwarding profiling.

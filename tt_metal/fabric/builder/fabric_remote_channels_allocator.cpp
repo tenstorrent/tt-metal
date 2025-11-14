@@ -11,14 +11,24 @@
 namespace tt::tt_fabric {
 
 FabricRemoteChannelsAllocator::FabricRemoteChannelsAllocator(
-    const FabricStaticSizedChannelsAllocator& static_allocator) :
+    const FabricStaticSizedChannelsAllocator& static_allocator, size_t num_used_receiver_channels) :
     FabricChannelAllocator(static_allocator.topology_, static_allocator.options_, static_allocator.memory_regions_),
-    num_used_receiver_channels_(builder_config::num_receiver_channels) {
+    num_used_receiver_channels_(num_used_receiver_channels) {
     // Extract remote receiver channel information from the static allocator
     for (size_t i = 0; i < builder_config::num_receiver_channels; i++) {
         this->remote_receiver_channels_base_address_[i] = static_allocator.remote_receiver_channels_base_address[i];
         this->remote_receiver_channels_num_buffers_[i] = static_allocator.remote_receiver_channels_num_buffers[i];
+        TT_FATAL(
+            this->remote_receiver_channels_base_address_[i] != 0 || i > 0, "Remote receiver channel base address is 0");
+        TT_FATAL(
+            this->remote_receiver_channels_num_buffers_[i] != 0 || i > 0, "Remote receiver channel num buffers is 0");
     }
+
+    this->receiver_channel_local_to_global_index_map.resize(num_used_receiver_channels_);
+    std::iota(
+        this->receiver_channel_local_to_global_index_map.begin(),
+        this->receiver_channel_local_to_global_index_map.end(),
+        0);  // Start from 0 since this allocator only handles receiver channels
 }
 
 void FabricRemoteChannelsAllocator::emit_ct_args(

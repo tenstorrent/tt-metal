@@ -32,6 +32,12 @@ struct StaticChannelPool : public CtArgConsumer<StaticChannelPool<CT_ARG_IDX_BAS
     static constexpr size_t GET_NUM_ARGS_CONSUMED() { return 4; }
 };
 
+/*
+ * ElasticChannelPool:
+ * - num_chunks (1 arg)
+ * - num_slots_per_chunk (1 arg)
+ * - chunk_base_addresses[] (num_chunks args)
+ */
 template <size_t CT_ARG_IDX_BASE>
 struct ElasticChannelPool : public CtArgConsumer<ElasticChannelPool<CT_ARG_IDX_BASE>> {
     static constexpr size_t num_chunks = get_compile_time_arg_val(CT_ARG_IDX_BASE);

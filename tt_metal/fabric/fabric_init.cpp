@@ -438,6 +438,19 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(tt::
             ct_args.push_back(num_local_fabric_routers);
             ct_args.push_back(router_channels_mask);
 
+            log_info(
+                tt::LogMetal,
+                "Fabric router d={}, ch={}, CT ARGS: {}",
+                device->id(),
+                eth_chan,
+                fmt::join(ct_args, ", "));
+            log_info(
+                tt::LogMetal,
+                "Fabric router d={}, ch={}, RT ARGS: {}",
+                device->id(),
+                eth_chan,
+                fmt::join(rt_args, ", "));
+
             auto proc = static_cast<tt::tt_metal::DataMovementProcessor>(risc_id);
             if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::BLACKHOLE &&
                 tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode() &&
