@@ -6,6 +6,8 @@
 
 #include "device/rotary_embedding_device_operation.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 
 namespace ttnn::operations::experimental::transformer {
 
@@ -16,11 +18,13 @@ ttnn::Tensor RotaryEmbeddingOperation::invoke(
     const std::optional<uint32_t> token_index,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
+    using namespace tt::constants;
+
     TT_FATAL(
-        input_tensor.padded_shape()[-1] % (tt::constants::TILE_WIDTH * 2) == 0,
+        input_tensor.padded_shape()[-1] % (TILE_WIDTH * 2) == 0,
         "Input X dimension ({}) must be divisible by {} for tiling.",
         input_tensor.padded_shape()[-1],
-        tt::constants::TILE_WIDTH * 2);
+        TILE_WIDTH * 2);
 
     uint32_t seq_len = input_tensor.padded_shape()[-2];
     uint32_t X = input_tensor.padded_shape()[-1];
@@ -67,10 +71,36 @@ ttnn::Tensor RotaryEmbeddingOperation::invoke(
         default_memory_config = input_tensor.memory_config();
     }
 
+    // Format inputs: device operation requires TILE layout, but API accepts both TILE and ROW_MAJOR
+    auto format_input = [](const Tensor& input) -> Tensor {
+        if (input.layout() == Layout::TILE) {
+            // Already in TILE layout - no formatting needed (already tile-aligned)
+            return input;
+        } else {
+            // ROW_MAJOR → TILE conversion needed
+            // Use compute_padded_shape to calculate tile-aligned shape
+            Shape tile_aligned_shape =
+                data_movement::compute_padded_shape(input.padded_shape(), TILE_HEIGHT, TILE_WIDTH);
+
+            // Always use tilize_with_val_padding - it handles both padding and tilization
+            PadValue pad_value_variant;
+            if (input.dtype() == DataType::BFLOAT16 || input.dtype() == DataType::FLOAT32) {
+                pad_value_variant = 0.0f;
+            } else {
+                pad_value_variant = (uint32_t)0;
+            }
+            return ttnn::tilize_with_val_padding(input, tile_aligned_shape, pad_value_variant, input.memory_config());
+        }
+    };
+
+    Tensor formatted_input = format_input(input_tensor);
+    Tensor formatted_cos = format_input(cos_cache);
+    Tensor formatted_sin = format_input(sin_cache);
+
     return tt::tt_metal::operation::run(
                tt::tt_metal::RotaryEmbedding{
                    seq_len, token_index, memory_config.value_or(default_memory_config), kernel_config_val},
-               {input_tensor, cos_cache, sin_cache})
+               {formatted_input, formatted_cos, formatted_sin})
         .at(0);
 }
 
