@@ -248,8 +248,12 @@ class Generator:
         data_parallel_slots = len(empty_slots) // self.data_parallel
         user_id = None
         idx = None
+
+        data_parallel_slots = 1 if data_parallel_slots == 0 else data_parallel_slots
+        loop = 1 if data_parallel_slots == 1 else self.data_parallel
+
         for i in range(data_parallel_slots):
-            for dp_rank in range(self.data_parallel):
+            for dp_rank in range(loop):
                 user_id = i + data_parallel_slots * dp_rank
                 idx = user_id
             # if model_id is not None, it means that prefill is called from warmup_prefill_traces
@@ -323,8 +327,7 @@ class Generator:
             # if data parallel is greater than 1, we need to add logits to out_list and do the processing after all the prefill are done
             # otherwise, we can process the logits after prefill immediately
             if self.data_parallel > 1:
-                logger.info(f"OUT_LIST")
-                out_list.append(logits)
+                out_list[idx] = logits
             else:
                 output_logits[idx] = self.model[model_id].process_output_prefill(
                     logits, last_token_idx=(last_token_idx % 32)
