@@ -53,6 +53,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/distributed_host_buffer.hpp
     api/tt-metalium/edm_fabric_counters.hpp
     api/tt-metalium/event.hpp
+    api/tt-metalium/experimental/profiler.hpp
     api/tt-metalium/fabric.hpp
     api/tt-metalium/fabric_edm_types.hpp
     api/tt-metalium/fabric_types.hpp
@@ -255,6 +256,7 @@ target_link_libraries(
         lite_fabric
         FlatBuffers::FlatBuffers
         TT::Metalium::Logging
+        TT::ScaleoutTools
 )
 
 target_precompile_headers(tt_metal REUSE_FROM TT::CommonPCH)
