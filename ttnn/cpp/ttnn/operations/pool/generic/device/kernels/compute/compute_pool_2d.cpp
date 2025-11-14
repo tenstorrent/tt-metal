@@ -314,9 +314,11 @@ void MAIN {
                 cb_reserve_back(out_cb_id, output_faces);
                 cb_reserve_back(out_idx_cb_id, output_faces);
 
+                PACK((llk_pack_init<false>(out_cb_id)));
                 pack_reconfig_data_format(out_cb_id);
                 pack_tile<false>(data_dst_idx, out_cb_id, mpwi_cb_tile_idx);
 
+                PACK((llk_pack_init<false>(out_idx_cb_id)));
                 pack_reconfig_data_format(out_idx_cb_id);
                 pack_tile<false>(index_dst_idx, out_idx_cb_id, mpwi_cb_tile_idx);
 
@@ -328,6 +330,7 @@ void MAIN {
 
                 if (last_c_block) {
                     cb_reserve_back(in_idx_cb_id, 1);
+                    PACK((llk_pack_init<false>(in_idx_cb_id)));
                     pack_reconfig_data_format(in_idx_cb_id);
                     // this call should not be changed
                     pack_tile<true>(index_scratch_out_dst_idx, in_idx_cb_id, mpwi_cb_tile_idx);
