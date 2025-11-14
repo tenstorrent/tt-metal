@@ -97,7 +97,7 @@ class WanAttention:
         self.dummy_joint_input = ttnn.from_torch(
             torch.zeros((1, self.n_local_heads, 0, self.head_dim)),
             layout=ttnn.TILE_LAYOUT,
-            dtype=self.qkv_dtype,
+            dtype=self.qkv_dtype if self.qkv_dtype is not None else ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             device=self.mesh_device,
         )
@@ -112,7 +112,7 @@ class WanAttention:
         )
         self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
-            math_fidelity=quantization_config.get("sdpa_math_fidelity", ttnn.MathFidelity.HiFi2),
+            math_fidelity=quant_config.get("sdpa_math_fidelity", ttnn.MathFidelity.HiFi2),
             math_approx_mode=False,
             fp32_dest_acc_en=False,  # NOTE: Set to True if there's a correctness issue
         )
