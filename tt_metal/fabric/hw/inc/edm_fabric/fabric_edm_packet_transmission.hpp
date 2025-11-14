@@ -204,22 +204,39 @@ FORCE_INLINE
 
         case tt::tt_fabric::NocSendType::NOC_UNICAST_SCATTER_WRITE: {
             size_t offset = 0;
-            size_t chunk_size;
-            for (size_t i = 0; i < NOC_SCATTER_WRITE_MAX_CHUNKS; ++i) {
-                if (i == NOC_SCATTER_WRITE_MAX_CHUNKS - 1) {
-                    chunk_size = payload_size_bytes - offset;
-                } else {
-                    chunk_size = header.command_fields.unicast_scatter_write.chunk_size[i];
+            const auto& scatter = header.command_fields.unicast_scatter_write;
+            constexpr size_t kAddrCount = sizeof(scatter.noc_address) / sizeof(scatter.noc_address[0]);
+            constexpr size_t kSizeCount = sizeof(scatter.chunk_size) / sizeof(scatter.chunk_size[0]);  // kAddrCount - 1
+
+            // Send explicitly-sized chunks until sentinel (0xFFFF) or end of configured sizes
+            size_t i = 0;
+            for (; i < kSizeCount; ++i) {
+                const uint16_t cfg_size = scatter.chunk_size[i];
+                if (cfg_size == 0xFFFF) {
+                    break;  // sentinel indicates no more explicit chunk sizes
                 }
-                const auto dest_address = header.command_fields.unicast_scatter_write.noc_address[i];
+                const auto dest_address = scatter.noc_address[i];
                 noc_async_write_one_packet_with_trid<update_counter, false>(
                     payload_start_address + offset,
                     dest_address,
-                    chunk_size,
+                    static_cast<size_t>(cfg_size),
                     transaction_id,
                     tt::tt_fabric::local_chip_data_cmd_buf,
                     tt::tt_fabric::edm_to_local_chip_noc);
-                offset += chunk_size;
+                offset += static_cast<size_t>(cfg_size);
+            }
+            // Final implicit chunk (remainder) goes to the next address index
+            {
+                const size_t final_index = i;  // number of explicit chunks sent so far
+                const auto dest_address = scatter.noc_address[final_index];
+                const size_t final_chunk_size = payload_size_bytes - offset;
+                noc_async_write_one_packet_with_trid<update_counter, false>(
+                    payload_start_address + offset,
+                    dest_address,
+                    final_chunk_size,
+                    transaction_id,
+                    tt::tt_fabric::local_chip_data_cmd_buf,
+                    tt::tt_fabric::edm_to_local_chip_noc);
             }
         } break;
         case tt::tt_fabric::NocSendType::NOC_MULTICAST_WRITE:
