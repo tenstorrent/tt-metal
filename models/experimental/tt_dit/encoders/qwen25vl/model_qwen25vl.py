@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -99,6 +100,8 @@ class Qwen25VlTextEncoder(Module):
             attention_mask = ttnn.unsqueeze(attention_mask, 1)
             attention_mask = ttnn.expand(attention_mask, [-1, seq_len, -1])
             attention_mask = ttnn.tril(attention_mask)
+
+            attention_mask = (attention_mask - 1.0) * math.inf
 
             attention_mask = ttnn.clone(attention_mask, dtype=ttnn.bfloat4_b)
 

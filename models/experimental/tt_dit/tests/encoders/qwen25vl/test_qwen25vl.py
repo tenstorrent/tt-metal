@@ -66,8 +66,7 @@ def test_qwen25vl_text_encoder(
     model.load_torch_state_dict(torch_text_model.state_dict())
 
     tokens = torch.randint(0, torch_model.config.vocab_size, [batch_size, sequence_length])
-    # attention_mask = torch.randint(0, 2, [batch_size, sequence_length])
-    attention_mask = None  # TODO: enable
+    attention_mask = torch.randint(0, 2, [batch_size, sequence_length])
 
     # causal_attention_mask = attention_mask[:, None, :].expand(-1, sequence_length, -1).tril()
     position_ids, _ = torch_model.model.get_rope_index(tokens, attention_mask=attention_mask)
