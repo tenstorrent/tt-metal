@@ -923,14 +923,19 @@ void handle_workload_timeout(
     std::unordered_map<EthChannelIdentifier, std::vector<LinkStatus>>& statuses_per_link,
     std::vector<uint32_t>& inputs,
     size_t data_size,
-    size_t packet_size_bytes) {
+    size_t packet_size_bytes,
+    bool log_ethernet_metrics) {
     log_output_rank0("ERROR: Workload execution timed out after 30 seconds");
     log_output_rank0("Cluster is not in a healthy state.");
 
     log_output_rank0("Current ethernet link status:");
     dump_link_stats(ctx, inputs, statuses_per_link, data_size, packet_size_bytes);
     auto current_result = process_link_statuses(statuses_per_link, true);
-    log_link_metrics(current_result.all_link_metrics, std::filesystem::current_path(), true);
+    if (log_ethernet_metrics) {
+        // Log all ethernet metrics
+        log_link_metrics(current_result.all_link_metrics, std::filesystem::current_path(), true);
+    }
+    log_link_metrics(current_result.unhealthy_links, std::filesystem::current_path(), false);
 }
 
 LinkMetricsResult send_traffic_and_validate_links(
@@ -995,7 +1000,7 @@ LinkMetricsResult send_traffic_and_validate_links(
                 tt::tt_metal::distributed::multihost::ReduceOp::LAND);
 
             if (!global_success) {
-                handle_workload_timeout(ctx, statuses_per_link, inputs, d_size, pkt_size_bytes);
+                handle_workload_timeout(ctx, statuses_per_link, inputs, d_size, pkt_size_bytes, log_ethernet_metrics);
                 return LinkMetricsResult{};
             }
 
