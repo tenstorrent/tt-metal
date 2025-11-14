@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 import ttnn
 from typing import Tuple
 from models.experimental.efficientdetd0.tt.utils import (
@@ -142,7 +146,6 @@ class TtBiFPN:
 
         # Initialize channel reduction layers for first_time
         if self.first_time:
-            # import pdb; pdb.set_trace()
             self.p3_down_channel = TtConv2dDynamicSamePadding(
                 device,
                 parameters.p3_down_channel[0],
@@ -166,7 +169,6 @@ class TtBiFPN:
             )
 
             # P5 to P6 conversion (conv + maxpool)
-            # import pdb; pdb.set_trace()
             self.p5_to_p6_conv = TtConv2dDynamicSamePadding(
                 device,
                 parameters.p5_to_p6[0],

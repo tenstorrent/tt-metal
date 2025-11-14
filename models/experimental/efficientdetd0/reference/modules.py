@@ -2,6 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+"""
+Adapted and modified from Yet Another EfficientDet Pytorch (zylo117/Yet-Another-EfficientDet-Pytorch)
+Original repository: https://github.com/zylo117/Yet-Another-EfficientDet-Pytorch
+Original author: Zylo117
+"""
+
 import torch
 from torch import nn
 
