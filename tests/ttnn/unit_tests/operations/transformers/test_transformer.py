@@ -194,10 +194,20 @@ def test_transformer_split_query_key_value_and_split_heads(
 @pytest.mark.parametrize("num_heads", [24])
 @pytest.mark.parametrize("head_size", [128])
 @pytest.mark.parametrize("num_kv_heads", [8])
+@pytest.mark.parametrize("transpose_key", [True, False])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG])
 def test_transformer_split_query_key_value_and_split_heads_with_kv_input_tensor(
-    batch_size, num_heads, sequence_size, head_size, num_kv_heads, input_dtype, input_memory_config, *, device
+    batch_size,
+    num_heads,
+    sequence_size,
+    head_size,
+    num_kv_heads,
+    transpose_key,
+    input_dtype,
+    input_memory_config,
+    *,
+    device,
 ):
     torch.manual_seed(0)
 
@@ -212,7 +222,11 @@ def test_transformer_split_query_key_value_and_split_heads_with_kv_input_tensor(
         torch_key_tensor,
         torch_value_tensor,
     ) = golden_function(
-        torch_input_tensor, torch_kv_input_tensor, num_heads=num_heads, num_kv_heads=num_kv_heads, transpose_key=False
+        torch_input_tensor,
+        torch_kv_input_tensor,
+        num_heads=num_heads,
+        num_kv_heads=num_kv_heads,
+        transpose_key=transpose_key,
     )
 
     input_tensor = ttnn.from_torch(
@@ -231,7 +245,7 @@ def test_transformer_split_query_key_value_and_split_heads_with_kv_input_tensor(
     )
 
     query_tensor, key_tensor, value_tensor = ttnn.transformer.split_query_key_value_and_split_heads(
-        input_tensor, kv_input_tensor, num_heads=num_heads, num_kv_heads=num_kv_heads, transpose_key=False
+        input_tensor, kv_input_tensor, num_heads=num_heads, num_kv_heads=num_kv_heads, transpose_key=transpose_key
     )
     query_tensor = ttnn.to_torch(query_tensor)
     key_tensor = ttnn.to_torch(key_tensor)
