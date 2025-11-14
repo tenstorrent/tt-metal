@@ -125,7 +125,7 @@ Conv2dBlockConfig determine_per_core_conv_block_config(
     bool fp32_accum,
     bool full_inner_dim,
     bool enable_activation_reuse = false,
-    bool force_subblock_1x1 = false);
+    bool force_subblock_1x1_wormhole = false);
 
 std::tuple<Conv2dParallelizationConfig, Conv2dBlockConfig, MemoryConfig> get_conv_configs(
     const Conv2dConfig& conv_config,

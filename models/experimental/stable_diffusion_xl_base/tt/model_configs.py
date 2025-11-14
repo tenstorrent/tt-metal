@@ -24,6 +24,7 @@ class ModelOptimisations:
         self.attention_weights_dtype = attention_weights_dtype
         self.ff_weights_dtype = ff_weights_dtype
 
+        # todo: handle blackhole case
         force_subblock_1x1 = True
 
         # HEIGHT SHARDED
@@ -36,7 +37,7 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=1024,
-            force_subblock_1x1=True,
+            force_subblock_1x1_wormhole=True,
         )
         self.conv_configs["ABH_256_ADB"] = ttnn.Conv2dConfig(
             weights_dtype=conv_w_dtype,
@@ -47,7 +48,7 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=256,
-            force_subblock_1x1=True,
+            force_subblock_1x1_wormhole=True,
         )
         self.conv_configs["ABH_256_NO_ADB_HS"] = ttnn.Conv2dConfig(
             weights_dtype=self.conv_ws_dtype,
@@ -58,7 +59,7 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=256,
-            force_subblock_1x1=True,
+            force_subblock_1x1_wormhole=True,
         )
         self.conv_configs["ABH_128_NO_ADB_HS"] = ttnn.Conv2dConfig(
             weights_dtype=conv_w_dtype,
@@ -69,7 +70,7 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=128,
-            force_subblock_1x1=True,
+            force_subblock_1x1_wormhole=True,
         )
         self.conv_configs["ABH_0_ADB_HS"] = ttnn.Conv2dConfig(
             weights_dtype=self.conv_ws_dtype,
@@ -80,7 +81,7 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=0,
-            force_subblock_1x1=True,
+            force_subblock_1x1_wormhole=True,
         )
         self.conv_configs["ABH_0_NO_ADB_HS"] = ttnn.Conv2dConfig(
             weights_dtype=self.conv_ws_dtype,
@@ -91,7 +92,7 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=0,
-            force_subblock_1x1=True,
+            force_subblock_1x1_wormhole=True,
         )
 
         self.conv_configs["ABH_64_NO_ADB_HS"] = ttnn.Conv2dConfig(
@@ -103,7 +104,7 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=64,
-            force_subblock_1x1=True,
+            force_subblock_1x1_wormhole=True,
         )
 
         self.conv_configs["ABH_32_ADB_HS"] = ttnn.Conv2dConfig(
@@ -115,7 +116,7 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=32,
-            force_subblock_1x1=True,
+            force_subblock_1x1_wormhole=True,
         )
 
         # BLOCK SHARDED
@@ -129,7 +130,7 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=0,
-            force_subblock_1x1=True,  # needs subblock forcing as there is 56 or 64 cores doing compute
+            force_subblock_1x1_wormhole=True,  # needs subblock forcing as there is 56 or 64 cores doing compute
         )
 
         self.conv_configs["ABH_0_ADB_WDB_NO_DEALLOC_BS"] = ttnn.Conv2dConfig(
@@ -142,7 +143,7 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=0,
-            force_subblock_1x1=True,
+            force_subblock_1x1_wormhole=True,
         )
         self.conv_configs["ABH_64_ADB_WDB_BS"] = ttnn.Conv2dConfig(
             weights_dtype=self.conv_ws_dtype,
@@ -154,7 +155,7 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=64,
-            force_subblock_1x1=True,
+            force_subblock_1x1_wormhole=True,
         )
         self.conv_configs["ABH_128_ADB_WDB_BS"] = ttnn.Conv2dConfig(
             weights_dtype=self.conv_ws_dtype,
@@ -166,7 +167,7 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=128,
-            force_subblock_1x1=True,  # needs subblock forcing as there is 56 cores doing compute
+            force_subblock_1x1_wormhole=True,  # needs subblock forcing as there is 56 cores doing compute
         )
         self.conv_configs["ABH_128_ADB_WDB_MOVE_BS"] = ttnn.Conv2dConfig(
             weights_dtype=self.conv_ws_dtype,
@@ -178,7 +179,7 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=128,
-            force_subblock_1x1=True,  # does not need subblock forcing as there is 40 cores doing compute
+            force_subblock_1x1_wormhole=True,  # does not need subblock forcing as there is 40 cores doing compute
         )
         self.conv_configs["ABH_256_NO_ADB_BS"] = ttnn.Conv2dConfig(
             weights_dtype=self.conv_w_dtype,
@@ -189,7 +190,7 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=256,
-            force_subblock_1x1=True,
+            force_subblock_1x1_wormhole=True,
         )
 
         self.conv_configs["ABH_256_ADB_WDB_BS_NO_MOVE"] = ttnn.Conv2dConfig(
@@ -202,7 +203,7 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=256,
-            force_subblock_1x1=True,
+            force_subblock_1x1_wormhole=True,
         )
 
         self.conv_configs["ABH_256_ADB_WDB_BS"] = ttnn.Conv2dConfig(
@@ -215,7 +216,7 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=256,
-            force_subblock_1x1=True,  # does not need subblock forcing as there is 40 cores doing compute
+            force_subblock_1x1_wormhole=True,  # does not need subblock forcing as there is 40 cores doing compute
         )
 
         self.conv_configs["ABH_256_ADB_WDB_BS_SUBBLOCK_1x1"] = ttnn.Conv2dConfig(
@@ -228,7 +229,7 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=256,
-            force_subblock_1x1=True,  # needs subblock forcing as there is 56 cores doing compute
+            force_subblock_1x1_wormhole=True,  # needs subblock forcing as there is 56 cores doing compute
         )
 
         self.conv_configs["ABH_512_NO_ADB_BS"] = ttnn.Conv2dConfig(
@@ -241,7 +242,7 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=512,
-            force_subblock_1x1=True,
+            force_subblock_1x1_wormhole=True,
         )
 
         self.conv_configs["ABH_512_ADB_WDB_BS"] = ttnn.Conv2dConfig(
@@ -254,7 +255,7 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=512,
-            force_subblock_1x1=True,
+            force_subblock_1x1_wormhole=True,
         )
 
         self.conv_configs["ABH_512_ADB_WDB_NO_DEALLOC_BS"] = ttnn.Conv2dConfig(
@@ -267,7 +268,7 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=512,
-            force_subblock_1x1=True,
+            force_subblock_1x1_wormhole=True,
         )
 
         self.conv_configs["ABH_1024_NO_ADB_BS"] = ttnn.Conv2dConfig(
@@ -280,7 +281,7 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=1024,
-            force_subblock_1x1=True,
+            force_subblock_1x1_wormhole=True,
         )
 
         self.conv_configs["ABH_1024_ADB_WDB_BS"] = ttnn.Conv2dConfig(
@@ -293,7 +294,7 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=1024,
-            force_subblock_1x1=True,  # does not need subblock forcing as there is 40 cores doing compute
+            force_subblock_1x1_wormhole=True,  # does not need subblock forcing as there is 40 cores doing compute
         )
 
         # DEFAULT CONF
@@ -305,7 +306,7 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=0,
-            force_subblock_1x1=True,
+            force_subblock_1x1_wormhole=True,
         )
 
         # DRAM CONF
@@ -318,7 +319,7 @@ class ModelOptimisations:
             act_block_w_div=1,
             act_block_h_override=0,
             output_layout=ttnn.TILE_LAYOUT,
-            force_subblock_1x1=True,
+            force_subblock_1x1_wormhole=True,
         )
 
         self.matmul_configs["2D_LINEAR_ATTENTION_DO_SEQ_LEN_4096"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(

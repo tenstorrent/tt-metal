@@ -341,21 +341,13 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_width_sharded(
             fused_activation.value().op_type, fused_activation.value().params, "ACTIVATION", "i"));
     }
 
-    const bool mm_throttle_env_enabled = std::getenv("TT_MM_THROTTLE_PERF");
-    uint32_t throttle_level = 0;
-    if (mm_throttle_env_enabled) {
-        throttle_level = std::stoi(std::getenv("TT_MM_THROTTLE_PERF"));
-    }
-    if (out_subblock_w_ntiles != 1 || out_subblock_h_ntiles != 1) {
-        ttnn::operations::compute_throttle_utils::throttle_mm_perf(
-            device->arch(), output_cores.num_cores(), compute_defines, ttnn::get_throttle_level(compute_kernel_config));
-    } else if (throttle_level != 0) {
-        log_warning(
-            tt::LogOp,
-            "Conv Throttle matmul perf not enabled for out_subblock_h = {} and out_subblock_w = {}",
-            out_subblock_h_ntiles,
-            out_subblock_w_ntiles);
-    }
+    ttnn::operations::compute_throttle_utils::throttle_mm_perf(
+        device->arch(),
+        output_cores.num_cores(),
+        compute_defines,
+        out_subblock_h_ntiles,
+        out_subblock_w_ntiles,
+        ttnn::get_throttle_level(compute_kernel_config));
 
     for (auto elem : compute_defines) {
         log_debug(tt::LogOp, "compute_defines: {} = {}", elem.first, elem.second);

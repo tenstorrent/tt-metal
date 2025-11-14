@@ -25,6 +25,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/compute_throttle_utils.hpp"
 #include "ttnn/operations/data_movement/move/move.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/types.hpp"
@@ -370,7 +371,7 @@ Conv2dBlockConfig determine_per_core_conv_block_config(
     bool fp32_accum,
     bool full_inner_dim,
     bool enable_activation_reuse,
-    bool force_subblock_1x1) {
+    bool force_subblock_1x1_wormhole) {
     if (act_block_h_override > 0) {
         TT_ASSERT(
             act_block_h_override % 32 == 0,
@@ -439,7 +440,9 @@ Conv2dBlockConfig determine_per_core_conv_block_config(
     uint32_t weight_block_w_ntiles = conv_op_parallel_config.per_core_out_matrix_width_ntile;
     uint32_t out_subblock_h_ntiles = 1;
     uint32_t out_subblock_w_ntiles = 1;
-    if (force_subblock_1x1 == true && num_compute_cores > 48) {
+    // todo: handle blackhole case, need to propagate BH information to here
+    if (force_subblock_1x1_wormhole == true &&
+        num_compute_cores > compute_throttle_utils::WH_B0_MM_MAX_CORES_NO_THROTTLE_OR_STAGGER) {
         log_debug(
             tt::LogOp,
             "Using 1x1 subblock due to force_subblock flag being set and num_compute_cores = {}",
@@ -1105,7 +1108,7 @@ std::tuple<Conv2dParallelizationConfig, Conv2dBlockConfig, MemoryConfig> get_con
         get_fp32_dest_acc_en(compute_config),
         conv_config.full_inner_dim,
         conv_config.enable_activation_reuse,
-        conv_config.force_subblock_1x1);
+        conv_config.force_subblock_1x1_wormhole);
     return {opt_conv_op_parallel_config, opt_conv_op_block_config, conv_out_memory_config};
 }
 

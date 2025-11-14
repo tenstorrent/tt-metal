@@ -346,7 +346,7 @@ void py_bind_conv2d(py::module& module) {
         py::arg("enable_kernel_stride_folding") = std::nullopt,
         py::arg("enable_activation_reuse") = false,
         py::arg("force_split_reader") = std::nullopt,
-        py::arg("force_subblock_1x1") = false);
+        py::arg("force_subblock_1x1_wormhole") = false);
     py_conv_config.def_readwrite("weights_dtype", &Conv2dConfig::weights_dtype, R"doc(
         Optional argument which specifies the data type of the preprocessed weights & bias tensor if the Conv2D op is responsible for preparing the weights.
         Supports ttnn.bfloat16 and ttnn.bfloat8_b.
@@ -515,7 +515,7 @@ void py_bind_conv2d(py::module& module) {
         ===============================================================
     )doc");
 
-    py_conv_config.def_readwrite("force_subblock_1x1", &Conv2dConfig::force_subblock_1x1, R"doc(
+    py_conv_config.def_readwrite("force_subblock_1x1_wormhole", &Conv2dConfig::force_subblock_1x1_wormhole, R"doc(
         ===================== EXPERIMENTAL FEATURE ======================
 
         Force subblock 1x1 overrides matmul subblock size selection and forces it to be 1x1.

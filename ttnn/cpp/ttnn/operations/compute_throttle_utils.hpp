@@ -14,6 +14,15 @@ namespace operations {
 
 namespace compute_throttle_utils {
 
+// Empirically deduced di/dt problems appear for matmuls using more than 48
+// cores; when there is 48 cores or less, we never enable throttle or stagger since the
+// delay impacts op performance
+constexpr uint32_t WH_B0_MM_MAX_CORES_NO_THROTTLE_OR_STAGGER = 48;
+
+// currently not defined, so leave at 0.
+// Todo: determine min core threshold for throttle/stagger to be needed on BH
+constexpr uint32_t BH_MM_MAX_CORES_NO_THROTTLE_OR_STAGGER = 0;
+
 enum class ThrottleLevel : uint32_t {
     NO_THROTTLE = 0,
     LEVEL_1 = 1,
@@ -44,6 +53,8 @@ void throttle_mm_perf(
     tt::ARCH arch,
     int num_cores,
     std::map<std::string, std::string>& mm_kernel_defines,
+    uint32_t out_subblock_h_ntiles,
+    uint32_t out_subblock_w_ntiles,
     ThrottleLevel throttle_level = ThrottleLevel::NO_THROTTLE);
 
 }  // namespace compute_throttle_utils
