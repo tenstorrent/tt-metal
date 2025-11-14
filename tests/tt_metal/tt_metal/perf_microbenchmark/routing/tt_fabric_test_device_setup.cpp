@@ -390,6 +390,7 @@ void TestSender::add_config(TestTrafficSenderConfig config) {
 
     if (config.hops.has_value() && !is_torus_2d_unicast) {
         // Use hops to determine direction (for static routing with explicit hops)
+        // However, NeighborExchange topology does not support multi-hop.
         outgoing_direction = this->test_device_ptr_->get_forwarding_direction(config.hops.value());
     } else {
         // Derive direction from src->dst node IDs
@@ -506,10 +507,23 @@ TestSync::TestSync(CoreCoord logical_core, TestDevice* test_device_ptr, std::opt
 
 void TestSync::add_config(TestTrafficSyncConfig sync_config) {
     const auto& sender_config = sync_config.sender_config;
-    // Sync configs should always have hops specified (multicast pattern)
-    TT_FATAL(sender_config.hops.has_value(), "Sync config on core {} should have hops specified", this->logical_core_);
+    const auto& topology = sender_config.parameters.topology;
 
-    const auto outgoing_direction = this->test_device_ptr_->get_forwarding_direction(sender_config.hops.value());
+    // Determine outgoing direction for sync message
+    RoutingDirection outgoing_direction;
+    if (topology == tt::tt_fabric::Topology::NeighborExchange) {
+        TT_FATAL(
+            sender_config.dst_node_ids.size() == 1,
+            "Sync config on core {} should have exactly one destination node for NeighborExchange topology",
+            this->logical_core_);
+        outgoing_direction =
+            this->test_device_ptr_->get_forwarding_direction(sender_config.src_node_id, sender_config.dst_node_ids[0]);
+    } else {
+        // Multicast sync configs should always have hops specified (multicast pattern)
+        TT_FATAL(
+            sender_config.hops.has_value(), "Sync config on core {} should have hops specified", this->logical_core_);
+        outgoing_direction = this->test_device_ptr_->get_forwarding_direction(sender_config.hops.value());
+    }
 
     // Use common helper to register sync fabric connection
     auto fabric_connection_key = this->test_device_ptr_->register_fabric_connection(
