@@ -244,18 +244,24 @@ class Generator:
         if empty_slots is None:
             empty_slots = list(range(batch_size))
 
-        out_list = []
+        out_list = [None for _ in range(batch_size)]
         data_parallel_slots = len(empty_slots) // self.data_parallel
-        user_id = None
-        idx = None
 
-        data_parallel_slots = 1 if data_parallel_slots == 0 else data_parallel_slots
-        loop = 1 if data_parallel_slots == 1 else self.data_parallel
+        # Generate all user indices to process (flattened from nested loop pattern)
+        user_indices = []
+        if data_parallel_slots > 0:
+            for i in range(data_parallel_slots):
+                for dp_rank in range(self.data_parallel):
+                    user_id = i + data_parallel_slots * dp_rank
+                    if user_id < len(empty_slots):  # Safety check
+                        user_indices.append(user_id)
+        else:
+            # Fallback: process all slots sequentially
+            user_indices = list(range(len(empty_slots)))
 
-        for i in range(data_parallel_slots):
-            for dp_rank in range(loop):
-                user_id = i + data_parallel_slots * dp_rank
-                idx = user_id
+        # Process each user with a single flat loop
+        for user_id in user_indices:
+            idx = user_id
             # if model_id is not None, it means that prefill is called from warmup_prefill_traces
             model_id = user_id // max_batch_size_per_model if model_id_warmup is None else model_id_warmup
             group_user_id = user_id % max_batch_size_per_model if page_table is None else 0
