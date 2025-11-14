@@ -178,6 +178,7 @@ class QuantizationHookHelper:
                     )
 
                     if self.min_output_pcc is not None and pcc >= self.min_output_pcc:
+                        logger.info(f"Updating best output to ({dtype}, {math_fidelity})")
                         best_output = new_output
                 else:
                     logger.warning(f"Unexpected output shape {new_output_torch.shape}, expecting {output_torch.shape}")
