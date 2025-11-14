@@ -15,7 +15,6 @@ from loguru import logger
 from skimage import io
 
 import ttnn
-from models.common.utility_functions import disable_persistent_kernel_cache, is_blackhole, is_wormhole_b0
 from models.demos.yolov9c.common import YOLOV9C_L1_SMALL_SIZE
 
 
@@ -484,8 +483,6 @@ def run_vgg_unet(
     from models.demos.vgg_unet.reference.vgg_unet import UNetVGG19
     from models.demos.vgg_unet.runner.performant_runner import VggUnetTrace2CQ
 
-    disable_persistent_kernel_cache()
-
     model_seg = UNetVGG19()
     if use_pretrained_weight:
         model_seg = load_torch_model(model_seg, model_location_generator)
@@ -614,7 +611,6 @@ def test_yolov9c(
 ):
     from models.demos.yolov9c.common import load_torch_model
 
-    disable_persistent_kernel_cache()
     enable_segment = model_task == "segment"
 
     torch_model = load_torch_model(model_location_generator=model_location_generator, model_task=model_task)

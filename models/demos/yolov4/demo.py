@@ -12,7 +12,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import disable_persistent_kernel_cache, run_for_wormhole_b0
+from models.common.utility_functions import run_for_wormhole_b0
 from models.demos.utils.common_demo_utils import LoadImages, get_mesh_mappers, load_coco_class_names
 from models.demos.yolov4.common import YOLOV4_L1_SMALL_SIZE, get_model_result
 from models.demos.yolov4.post_processing import plot_boxes_cv2, post_processing
@@ -37,8 +37,6 @@ def run_yolov4(
     model_location_generator,
     resolution,
 ):
-    disable_persistent_kernel_cache()
-
     batch_size = batch_size_per_device * device.get_num_devices()
     logger.info(f"Running with batch_size={batch_size} across {device.get_num_devices()} devices")
 
@@ -132,8 +130,6 @@ def run_yolov4_coco(
     model_location_generator,
     resolution,
 ):
-    disable_persistent_kernel_cache()
-
     batch_size = batch_size_per_device * device.get_num_devices()
     logger.info(f"Running with batch_size={batch_size} across {device.get_num_devices()} devices")
 

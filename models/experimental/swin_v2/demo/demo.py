@@ -9,7 +9,7 @@ import ttnn
 from models.demos.utils.common_demo_utils import get_batch, get_data_loader, load_imagenet_dataset
 from models.experimental.swin_v2.runner.performant_runner import SwinV2PerformantRunner
 from tqdm import tqdm
-from models.common.utility_functions import disable_persistent_kernel_cache, run_for_wormhole_b0
+from models.common.utility_functions import run_for_wormhole_b0
 from models.experimental.swin_v2.common import SWIN_V2_L1_SMALL_SIZE
 from loguru import logger
 
@@ -24,7 +24,6 @@ def run_swin_v2_trace_2cqs_inference(
     imagenet_label_dict,
     iterations=100,
 ):
-    disable_persistent_kernel_cache()
     batch_size = device.get_num_devices() * device_batch_size
     iterations = iterations // batch_size
     with torch.no_grad():

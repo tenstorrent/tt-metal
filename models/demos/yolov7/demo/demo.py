@@ -12,7 +12,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import disable_persistent_kernel_cache, run_for_wormhole_b0
+from models.common.utility_functions import run_for_wormhole_b0
 from models.demos.utils.common_demo_utils import LoadImages, get_mesh_mappers, load_coco_class_names, preprocess
 from models.demos.yolov7.common import YOLOV7_L1_SMALL_SIZE, load_torch_model
 from models.demos.yolov7.demo.demo_utils import postprocess
@@ -24,7 +24,6 @@ sys.modules["models.yolo"] = yolov7_model
 
 
 def init_model_and_runner(model_location_generator, device, model_type, batch_size_per_device):
-    disable_persistent_kernel_cache()
     num_devices = device.get_num_devices()
     batch_size = batch_size_per_device * num_devices
     logger.info(f"Running with batch_size={batch_size} across {num_devices} devices")

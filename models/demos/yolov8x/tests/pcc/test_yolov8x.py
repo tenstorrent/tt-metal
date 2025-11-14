@@ -7,7 +7,6 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import disable_persistent_kernel_cache
 from models.demos.yolov8x.common import YOLOV8X_L1_SMALL_SIZE, load_torch_model
 from models.demos.yolov8x.reference import yolov8x
 from models.demos.yolov8x.tt.ttnn_yolov8x import TtC2f, TtConv, TtDFL, TtSppf, TtYolov8xModel
@@ -53,8 +52,6 @@ def make_anchors(feats, strides, grid_cell_offset=0.5):
     [True],
 )
 def test_yolov8x_640(device, input_tensor, use_pretrained_weights, model_location_generator):
-    disable_persistent_kernel_cache()
-
     inp_h, inp_w = input_tensor.shape[2], input_tensor.shape[3]
     if use_pretrained_weights:
         torch_model = load_torch_model(model_location_generator)
@@ -92,8 +89,6 @@ def test_yolov8x_640(device, input_tensor, use_pretrained_weights, model_locatio
 @pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV8X_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize("input_tensor", [(torch.rand((1, 3, 640, 640)))], ids=["input_tensor1"])
 def test_conv(device, input_tensor, model_location_generator):
-    disable_persistent_kernel_cache()
-
     torch_model = load_torch_model(model_location_generator)
 
     x = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
@@ -141,8 +136,6 @@ def test_conv(device, input_tensor, model_location_generator):
 @pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV8X_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize("input_tensor", [(torch.rand((1, 160, 160, 160)))], ids=["input_tensor1"])
 def test_c2f(device, input_tensor, reset_seeds, model_location_generator):
-    disable_persistent_kernel_cache()
-
     torch_model = load_torch_model(model_location_generator)
 
     ttnn_input = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
@@ -185,8 +178,6 @@ def test_c2f(device, input_tensor, reset_seeds, model_location_generator):
 @pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV8X_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize("input_tensor", [(torch.rand((1, 640, 20, 20)))], ids=["input_tensor1"])
 def test_sppf(device, input_tensor, reset_seeds, model_location_generator):
-    disable_persistent_kernel_cache()
-
     torch_model = load_torch_model(model_location_generator)
 
     ttnn_input = torch.clone(input_tensor)
@@ -226,8 +217,6 @@ def test_sppf(device, input_tensor, reset_seeds, model_location_generator):
 @pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV8X_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize("input_tensor", [(torch.rand((1, 64, 8400)))], ids=["input_tensor1"])
 def test_dfl(device, input_tensor, reset_seeds, model_location_generator):
-    disable_persistent_kernel_cache()
-
     torch_model = load_torch_model(model_location_generator)
 
     ttnn_input = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
@@ -255,8 +244,6 @@ def test_dfl(device, input_tensor, reset_seeds, model_location_generator):
     "distance, anchors", [(torch.rand((1, 4, 8400)), torch.rand((1, 2, 8400)))], ids=["input_tensor"]
 )
 def test_dist2bbox(device, distance, anchors):
-    disable_persistent_kernel_cache()
-
     ttnn_distance = ttnn.from_torch(distance, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     ttnn_anchors = ttnn.from_torch(anchors, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 

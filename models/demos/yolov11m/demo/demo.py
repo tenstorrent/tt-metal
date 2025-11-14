@@ -11,7 +11,6 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import disable_persistent_kernel_cache
 from models.demos.utils.common_demo_utils import (
     LoadImages,
     get_mesh_mappers,
@@ -28,8 +27,6 @@ from models.demos.yolov11m.runner.performant_runner import YOLOv11PerformantRunn
 def init_model_and_runner(
     device, model_type, use_weights_from_ultralytics, batch_size_per_device, model_location_generator
 ):
-    disable_persistent_kernel_cache()
-
     num_devices = device.get_num_devices()
     batch_size = batch_size_per_device * num_devices
 

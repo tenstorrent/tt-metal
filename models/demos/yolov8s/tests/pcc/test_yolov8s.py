@@ -7,7 +7,6 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import disable_persistent_kernel_cache
 from models.demos.yolov8s.common import YOLOV8S_L1_SMALL_SIZE, load_torch_model
 from models.demos.yolov8s.tt.tt_yolov8s_utils import custom_preprocessor
 from models.demos.yolov8s.tt.ttnn_yolov8s import TtYolov8sModel
@@ -25,8 +24,6 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     [True],
 )
 def test_yolov8s_640(device, input_tensor, use_pretrained_weights, model_location_generator):
-    disable_persistent_kernel_cache()
-
     inp_h, inp_w = input_tensor.shape[2], input_tensor.shape[3]
     if use_pretrained_weights:
         torch_model = load_torch_model(model_location_generator)

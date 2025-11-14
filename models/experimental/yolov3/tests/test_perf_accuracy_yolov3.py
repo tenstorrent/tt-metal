@@ -19,8 +19,6 @@ from models.experimental.yolov3.reference.utils.dataloaders import LoadImages
 from models.common.utility_functions import (
     torch2tt_tensor,
     Profiler,
-    disable_persistent_kernel_cache,
-    enable_persistent_kernel_cache,
 )
 from models.experimental.yolov3.reference.utils.general import (
     check_img_size,
@@ -37,7 +35,6 @@ BATCH_SIZE = 1
 
 def run_perf_yolov3(expected_inference_time, expected_compile_time, model_location_generator, device, iterations):
     profiler = Profiler()
-    disable_persistent_kernel_cache()
     first_key = "first_iter"
     second_key = "second_iter"
     third_key = "third_iter"
@@ -88,8 +85,6 @@ def run_perf_yolov3(expected_inference_time, expected_compile_time, model_locati
         ttnn.synchronize_device(device)
         profiler.end(first_key)
         del tt_out
-
-        enable_persistent_kernel_cache()
 
         profiler.start(second_key)
         tt_out = tt_module(tt_im)

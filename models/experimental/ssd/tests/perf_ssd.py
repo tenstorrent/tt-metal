@@ -6,8 +6,6 @@ import torch
 from loguru import logger
 from models.common.utility_functions import (
     torch_to_tt_tensor_rm,
-    disable_persistent_kernel_cache,
-    enable_persistent_kernel_cache,
 )
 from models.common.utility_functions import Profiler
 from models.perf.perf_utils import prep_perf_report
@@ -39,7 +37,6 @@ def test_perf(
     imagenet_sample_input,
 ):
     profiler = Profiler()
-    disable_persistent_kernel_cache()
     first_key = "first_iter"
     second_key = "second_iter"
     cpu_key = "ref_key"
@@ -59,8 +56,6 @@ def test_perf(
         profiler.start(first_key)
         tt_output = tt_model(tt_input)
         profiler.end(first_key)
-
-        enable_persistent_kernel_cache()
 
         profiler.start(second_key)
         tt_output = tt_model(tt_input)

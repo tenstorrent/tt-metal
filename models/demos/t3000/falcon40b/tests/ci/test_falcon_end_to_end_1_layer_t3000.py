@@ -7,7 +7,6 @@ from pathlib import Path
 import pytest
 
 import ttnn
-from models.common.utility_functions import disable_persistent_kernel_cache
 from models.demos.t3000.falcon40b.tests.test_falcon_end_to_end import run_test_FalconCausalLM_end_to_end
 from models.demos.t3000.falcon40b.tt.model_config import get_model_config
 from models.tt_transformers.tt.common import get_hf_tt_cache_path
@@ -92,8 +91,6 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
 
     tt_cache_path = Path(get_hf_tt_cache_path(model_version))
-
-    disable_persistent_kernel_cache()
 
     run_test_FalconCausalLM_end_to_end(
         t3k_mesh_device,

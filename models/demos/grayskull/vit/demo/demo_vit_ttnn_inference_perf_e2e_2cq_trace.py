@@ -7,7 +7,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import disable_persistent_kernel_cache, is_blackhole, is_wormhole_b0, profiler
+from models.common.utility_functions import is_blackhole, is_wormhole_b0, profiler
 from models.demos.vit.tests.vit_test_infra import create_test_infra
 from models.perf.perf_utils import prep_perf_report
 
@@ -124,7 +124,6 @@ def test_vit(device):
     torch.manual_seed(0)
 
     profiler.clear()
-    disable_persistent_kernel_cache()
 
     batch_size = 9
 

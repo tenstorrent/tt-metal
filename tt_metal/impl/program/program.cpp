@@ -9,7 +9,6 @@
 #include <graph_tracking.hpp>
 #include <enchantum/enchantum.hpp>
 #include <memory_reporter.hpp>
-#include <persistent_kernel_cache.hpp>
 #include "impl/buffers/semaphore.hpp"
 #include <tt_align.hpp>
 #include <algorithm>
@@ -144,7 +143,6 @@ namespace tt::tt_metal {
 using detail::ProgramImpl;
 
 namespace {
-std::atomic<bool> enable_persistent_kernel_cache = false;
 
 void GenerateBinaries(IDevice* device, JitBuildOptions& build_options, const std::shared_ptr<Kernel>& kernel) {
     // ZoneScoped;
@@ -189,13 +187,6 @@ size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions&
     return compile_hash;
 }
 }  // namespace
-namespace detail {
-
-void EnablePersistentKernelCache() { enable_persistent_kernel_cache = true; }
-
-void DisablePersistentKernelCache() { enable_persistent_kernel_cache = false; }
-
-}  // namespace detail
 
 std::atomic<uint64_t> detail::ProgramImpl::program_counter = 0;
 
@@ -1402,12 +1393,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 
                     KernelImpl::from(*kernel).register_kernel_elf_paths_with_watcher(*device);
 
-                    if (enable_persistent_kernel_cache && KernelImpl::from(*kernel).binaries_exist_on_disk(device)) {
-                        if (not detail::HashLookup::inst().exists(kernel_hash)) {
-                            detail::HashLookup::inst().add(kernel_hash);
-                            detail::HashLookup::inst().add_generated_bin(kernel_hash);
-                        }
-                    } else if (detail::HashLookup::inst().add(kernel_hash)) {
+                    if (detail::HashLookup::inst().add(kernel_hash)) {
                         GenerateBinaries(device, build_options, kernel);
                         detail::HashLookup::inst().add_generated_bin(kernel_hash);
                     }

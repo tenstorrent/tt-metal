@@ -24,8 +24,6 @@ from models.experimental.yolov5.tt.yolov5_detection_model import yolov5s_detecti
 from models.common.utility_functions import (
     torch2tt_tensor,
     Profiler,
-    disable_persistent_kernel_cache,
-    enable_persistent_kernel_cache,
 )
 from models.experimental.yolov5.reference.utils.metrics import ap_per_class
 from models.experimental.yolov5.reference.utils.general import check_img_size
@@ -48,7 +46,6 @@ def run_perf_yolov5s(
     device,
 ):
     profiler = Profiler()
-    disable_persistent_kernel_cache()
     first_key = f"first_iter"
     second_key = f"second_iter"
     third_key = f"third_iter"
@@ -90,8 +87,6 @@ def run_perf_yolov5s(
         ttnn.synchronize_device(device)
         profiler.end(first_key)
         del tt_output
-
-        enable_persistent_kernel_cache()
 
         profiler.start(second_key)
         tt_output = tt_module(tt_inputs)
