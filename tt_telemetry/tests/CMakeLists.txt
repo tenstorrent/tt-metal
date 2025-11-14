@@ -2,7 +2,12 @@
 
 add_executable(telemetry_unit_tests)
 
-target_sources(telemetry_unit_tests PRIVATE test_exception_handling.cpp)
+target_sources(
+    telemetry_unit_tests
+    PRIVATE
+        test_exception_handling.cpp
+        test_custom_labels.cpp
+)
 
 target_include_directories(
     telemetry_unit_tests

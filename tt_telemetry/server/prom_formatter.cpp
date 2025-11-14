@@ -175,6 +175,14 @@ void process_metrics(
                 if (custom_it != custom_labels->get().end()) {
                     // Merge custom labels into parsed labels (custom labels override path labels if conflict)
                     for (const auto& [key, val] : custom_it->second) {
+                        if (parsed.labels.find(key) != parsed.labels.end()) {
+                            log_warning(
+                                tt::LogAlways,
+                                "Custom label '{}' for metric '{}' overrides path-derived label value '{}'",
+                                key,
+                                path,
+                                parsed.labels[key]);
+                        }
                         parsed.labels[key] = val;
                     }
                 }

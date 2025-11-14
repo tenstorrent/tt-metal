@@ -82,7 +82,7 @@ public:
     //   - Must match [a-zA-Z_][a-zA-Z0-9_]*
     //   - Reserved prefixes "__" (double underscore) are for Prometheus internal use
     //   - Values are automatically escaped for special characters (\, ", \n)
-    //   - Validation is enforced via assertion in debug builds
+    //   - Validation is enforced in all builds via error logging and early return
     //
     // Example usage:
     //   class MyMetric : public UIntMetric {
@@ -151,6 +151,18 @@ public:
     }
 
     void set_labels(std::unordered_map<std::string, std::string> labels) {
+        // Validate all keys before accepting bulk update
+        for (const auto& [key, value] : labels) {
+            if (!is_valid_prometheus_label_key(key)) {
+                log_error(
+                    tt::LogAlways,
+                    "Invalid Prometheus label key '{}' in bulk update: must match [a-zA-Z_][a-zA-Z0-9_]* and not start "
+                    "with '__'",
+                    key);
+                return;  // Reject entire bulk update if any key is invalid
+            }
+        }
+
         if (custom_labels_ != labels) {
             custom_labels_ = std::move(labels);
             labels_changed_since_transmission_ = true;
