@@ -238,7 +238,6 @@ struct FabricEriscDatamoverConfig {
     static constexpr std::size_t num_downstream_edms = num_downstream_edms_vc0 + num_downstream_edms_vc1;
     static constexpr std::size_t num_downstream_edms_2d = num_downstream_edms_2d_vc0 + num_downstream_edms_vc1;
     static constexpr std::size_t max_downstream_edms = std::max(num_downstream_edms, num_downstream_edms_2d);
-    static constexpr uint32_t num_virtual_channels = 2;
 
     static constexpr std::size_t field_size = 16;
     static constexpr std::size_t buffer_alignment = 32;

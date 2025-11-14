@@ -71,7 +71,7 @@ size_t FabricStaticSizedChannelsAllocator::get_remote_receiver_channel_number_of
 FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
     tt::tt_fabric::Topology topology,
     const FabricEriscDatamoverOptions& options,
-    const ChannelPoolDefinition& channel_pool_definition,
+    const ChannelPoolDefinition& /*channel_pool_definition*/,
     size_t num_used_sender_channels,
     size_t num_used_receiver_channels,
     size_t channel_buffer_size_bytes,

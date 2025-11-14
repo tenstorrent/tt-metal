@@ -411,8 +411,8 @@ struct FabricRouterRecipes {
 };
 
 static FabricRouterRecipes choose_router_recipe(
-    Topology topology,
-    FabricEriscDatamoverOptions options,
+    Topology /*topology*/,
+    FabricEriscDatamoverOptions /*options*/,
     size_t num_used_sender_channels,
     size_t num_used_receiver_channels) {
     auto arch = tt::tt_metal::MetalContext::instance().hal().get_arch();
@@ -1109,6 +1109,13 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     bool vc1_has_different_downstream_dest =
         fabric_context.need_deadlock_avoidance_support(this->direction) && this->has_tensix_extension;
 
+    size_t num_downstream_vcs = std::accumulate(
+        receiver_channel_to_downstream_adapter.begin(),
+        receiver_channel_to_downstream_adapter.end(),
+        0,
+        [](size_t acc, const auto& adapter) { return acc + (adapter != nullptr ? 1 : 0); });
+    // size_t num_downstream_vcs = 1 +
+    // static_cast<size_t>(fabric_context.need_deadlock_avoidance_support(this->direction));
     const std::vector<uint32_t> main_args_part1 = {
         num_sender_channels,
         num_receiver_channels,
@@ -1124,7 +1131,8 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         this->handshake_address,
         this->channel_buffer_size,
         vc1_has_different_downstream_dest,
-        this->has_tensix_extension};
+        this->has_tensix_extension,
+        num_downstream_vcs};
 
     const std::vector<uint32_t> main_args_part2 = {
         config.skip_receiver_channel_1_connection,
@@ -1563,20 +1571,17 @@ SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_
             case FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice:
             case FabricEriscDatamoverType::Dateline: {
                 // int64_t none_zero_buffer_slot_idx = is_2D_routing ? (direction == 0 ? 1 : 0) : 1;
-                int64_t none_zero_buffer_slot_idx = is_2D_routing ? (direction == 0 ? 1 : 0) : ds_edm_channel;
+                int64_t none_zero_buffer_slot_idx =
+                    is_2D_routing ? ds_edm_channel /*(direction == 0 ? 1 : 0)*/ : ds_edm_channel;
                 downstream_static_channel_allocator = dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(
                     config.get_sender_channel_allocator(none_zero_buffer_slot_idx));
             } break;
             // there is some bug that affects atleast dateline VC1 connections
             default: {
-                int64_t none_zero_buffer_slot_idx = is_2D_routing ? (direction == 0 ? 1 : 0) : ds_edm_channel;
+                int64_t none_zero_buffer_slot_idx =
+                    is_2D_routing ? ds_edm_channel /*(direction == 0 ? 1 : 0)*/ : ds_edm_channel;
                 downstream_static_channel_allocator = dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(
                     config.get_sender_channel_allocator(none_zero_buffer_slot_idx));
-                if (ds_edm_channel > 1) {
-                    TT_FATAL(
-                        downstream_static_channel_allocator->get_sender_channel_base_address() != 122016,
-                        "VC1 base address must not be 122016");
-                }
             } break;
         }
         sender_channels_num_buffer = downstream_static_channel_allocator->get_sender_channel_number_of_slots();
@@ -1711,7 +1716,7 @@ void FabricEriscDatamoverBuilder::setup_downstream_vc_connection(
     BuilderType& downstream_builder,
     uint32_t vc_idx,
     uint32_t channel_id,
-    uint32_t channel_offset_into_vc,
+    uint32_t /*channel_offset_into_vc*/,
     bool is_vc1) {
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
     const bool is_2D_routing = fabric_context.is_2D_routing_enabled();

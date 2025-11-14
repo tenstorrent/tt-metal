@@ -13,9 +13,9 @@ StaticSizedChannelConnectionWriterAdapter::StaticSizedChannelConnectionWriterAda
 void StaticSizedChannelConnectionWriterAdapter::add_downstream_connection_impl(
     const SenderWorkerAdapterSpec& adapter_spec,
     uint32_t inbound_vc_idx,
-    eth_chan_directions downstream_direction,
-    CoreCoord downstream_noc_xy,
-    bool is_2D_routing,
+    eth_chan_directions /*downstream_direction*/,
+    CoreCoord /*downstream_noc_xy*/,
+    bool /*is_2D_routing*/,
     bool is_vc1) {
     if (is_vc1) {
         // TT_FATAL(adapter_spec.edm_buffer_base_addr != 122016, "VC1 base address must not be 122016");

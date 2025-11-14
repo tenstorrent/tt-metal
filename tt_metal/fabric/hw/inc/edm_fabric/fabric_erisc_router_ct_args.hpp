@@ -143,8 +143,9 @@ constexpr size_t channel_buffer_size = get_compile_time_arg_val(MAIN_CT_ARGS_STA
 constexpr bool vc1_has_different_downstream_dest = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 8);
 constexpr bool has_tensix_extension = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 9);
 constexpr bool skip_src_ch_id_update = has_tensix_extension;
+constexpr size_t NUM_VIRTUAL_CHANNELS = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 10);
 
-constexpr size_t REMOTE_CHANNEL_INFO_START_IDX = MAIN_CT_ARGS_START_IDX + 10;
+constexpr size_t REMOTE_CHANNEL_INFO_START_IDX = MAIN_CT_ARGS_START_IDX + 11;
 constexpr uint32_t remote_vc1_sender_channel =
     conditional_get_compile_time_arg<skip_src_ch_id_update, REMOTE_CHANNEL_INFO_START_IDX>();
 constexpr size_t remote_worker_sender_channel =
@@ -228,20 +229,23 @@ static_assert(
     get_compile_time_arg_val(DOWNSTREAM_SENDER_NUM_BUFFERS_SPECIAL_TAG_IDX) == 0xabaddad7,
     "DOWNSTREAM_SENDER_NUM_BUFFERS_SPECIAL_TAG_IDX not found. This implies some arguments were misaligned between host and device. Double check the CT args.");
 
-constexpr size_t NUM_DOWNSTREAM_CHANNELS = NUM_FORWARDING_PATHS;
+// constexpr size_t NUM_DOWNSTREAM_CHANNELS = NUM_FORWARDING_PATHS;
+constexpr size_t NUM_DOWNSTREAM_CHANNELS = NUM_VIRTUAL_CHANNELS;  // NUM_FORWARDING_PATHS;
 // Downstream sender num buffers comes after channel mappings
 constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_IDX = DOWNSTREAM_SENDER_NUM_BUFFERS_SPECIAL_TAG_IDX + 1;
 constexpr std::array<size_t, NUM_DOWNSTREAM_CHANNELS> DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY =
     fill_array_with_next_n_args<size_t, DOWNSTREAM_SENDER_NUM_BUFFERS_IDX, NUM_DOWNSTREAM_CHANNELS>();
-// TODO: remove DOWNSTREAM_SENDER_NUM_BUFFERS and use TMP on downstream sender channels.
-constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC0 = DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY[0];
-constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC1 = DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY[NUM_RECEIVER_CHANNELS - 1];
 
 constexpr size_t ANOTHER_SPECIAL_TAG_2 = 0xabaddad9;
 constexpr size_t ANOTHER_SPECIAL_TAG_2_IDX = DOWNSTREAM_SENDER_NUM_BUFFERS_IDX + NUM_DOWNSTREAM_CHANNELS;
 static_assert(
     get_compile_time_arg_val(ANOTHER_SPECIAL_TAG_2_IDX) == ANOTHER_SPECIAL_TAG_2,
     "ANOTHER_SPECIAL_TAG_2 not found. This implies some arguments were misaligned between host and device. Double check the CT args.");
+
+// TODO: remove DOWNSTREAM_SENDER_NUM_BUFFERS and use TMP on downstream sender channels.
+constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC0 = DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY[0];
+constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC1 =
+    NUM_VIRTUAL_CHANNELS > 0 ? DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY[NUM_VIRTUAL_CHANNELS - 1] : 0;
 
 constexpr size_t SKIP_CHANNEL_IDX = ANOTHER_SPECIAL_TAG_2_IDX + 1;
 constexpr bool skip_receiver_channel_1_connection = get_compile_time_arg_val(SKIP_CHANNEL_IDX);

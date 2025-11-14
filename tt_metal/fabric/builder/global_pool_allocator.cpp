@@ -16,8 +16,8 @@ std::shared_ptr<tt::tt_fabric::FabricChannelAllocator> create_elastic_channel_al
     const tt::tt_fabric::FabricEriscDatamoverOptions& options,
     const std::vector<ChannelPoolDefinition>& pool_definitions,
     const std::shared_ptr<tt::tt_fabric::FabricStaticSizedChannelsAllocator>& static_allocator,
-    size_t num_used_sender_channels,
-    size_t num_used_receiver_channels,
+    size_t /*num_used_sender_channels*/,
+    size_t /*num_used_receiver_channels*/,
     size_t channel_buffer_size_bytes,
     // The memory regions, including the parts already allocated to the static allocator
     const std::vector<MemoryRegion>& router_memory_regions) {

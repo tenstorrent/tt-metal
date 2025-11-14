@@ -100,7 +100,7 @@ public:
             this->downstream_edms_connected_by_vc, vc_idx, [](CoreCoord noc_xy) { return noc_xy.x; });
     }
 
-    uint32_t get_downstream_edms_connected(bool is_2d_routing, bool is_vc1) const {
+    uint32_t get_downstream_edms_connected(bool /*is_2d_routing*/, bool /*is_vc1*/) const {
         return this->downstream_edms_connected;
     }
 

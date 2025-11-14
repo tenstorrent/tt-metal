@@ -45,7 +45,7 @@ size_t FabricChannelAllocator::get_total_available_memory() const {
 ElasticChannelsAllocator::ElasticChannelsAllocator(
     tt::tt_fabric::Topology topology,
     const tt::tt_fabric::FabricEriscDatamoverOptions& options,
-    const tt::tt_fabric::ChannelPoolDefinition& pool_definition,
+    const tt::tt_fabric::ChannelPoolDefinition& /*pool_definition*/,
     const std::vector<MemoryRegion>& memory_regions,
     size_t buffer_slot_size_bytes,
     size_t num_slots_per_chunk) :
@@ -91,7 +91,7 @@ ElasticChannelsAllocator::ElasticChannelsAllocator(
 
 void ElasticChannelsAllocator::emit_ct_args(
     std::vector<uint32_t>& ct_args,
-    size_t num_fwd_paths,
+    size_t /*num_fwd_paths*/,
     size_t num_used_sender_channels,
     size_t num_used_receiver_channels) const {
     ct_args.reserve(ct_args.size() + 2 + chunk_addresses_.size());
