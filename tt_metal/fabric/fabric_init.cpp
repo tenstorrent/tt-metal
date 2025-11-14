@@ -149,8 +149,6 @@ std::pair<tt::tt_fabric::FabricEriscDatamoverType, tt::tt_fabric::FabricEriscDat
 void build_tt_fabric_program(
     tt::tt_metal::IDevice* device,
     tt::tt_metal::Program* fabric_program_ptr,
-    std::unordered_map<tt::tt_fabric::chan_id_t, std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverBuilder>>& edm_builders,
-    std::unordered_map<tt::tt_fabric::chan_id_t, tt::tt_fabric::FabricTensixDatamoverBuilder>& tensix_builders,
     std::unordered_map<tt::tt_fabric::chan_id_t, std::unique_ptr<tt::tt_fabric::FabricRouterBuilder>>& router_builders) {
     using namespace tt_fabric;
     const auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
@@ -197,22 +195,11 @@ void build_tt_fabric_program(
             // Both links used by dispatch on TG Gateway (mmio device)
             // TODO: https://github.com/tenstorrent/tt-metal/issues/24413
             configure_edm_builder_for_dispatch(*edm_builder);
-            edm_builders.insert({eth_chan, std::move(edm_builder)});
-        }
 
-        // For TG Gateway, create router builders before returning
-        const auto topology = fabric_context.get_fabric_topology();
-        std::vector<tt::tt_fabric::chan_id_t> tg_eth_chan_keys;
-        tg_eth_chan_keys.reserve(edm_builders.size());
-        for (const auto& [eth_chan, _] : edm_builders) {
-            tg_eth_chan_keys.push_back(eth_chan);
-        }
-        for (const auto& eth_chan : tg_eth_chan_keys) {
-            auto eth_direction = control_plane.get_eth_chan_direction(fabric_node_id, eth_chan);
+            // Immediately wrap in router_builder
+            const auto topology = fabric_context.get_fabric_topology();
             auto channel_mapping = tt::tt_fabric::FabricRouterChannelMapping(
                 topology, eth_direction, false);  // TG Gateway doesn't use tensix extension
-            auto edm_builder = std::move(edm_builders.at(eth_chan));
-            edm_builders.erase(eth_chan);
             auto router_builder = std::make_unique<tt::tt_fabric::FabricRouterBuilder>(
                 std::move(edm_builder), std::nullopt, std::move(channel_mapping));
             router_builders.insert({eth_chan, std::move(router_builder)});
@@ -358,60 +345,38 @@ void build_tt_fabric_program(
                 edm_builder->set_firmware_context_switch_type(FabricEriscDatamoverContextSwitchType::INTERVAL);
             }
 
-            edm_builders.insert({eth_chan, std::move(edm_builder)});
-
+            // Create tensix builder if needed
+            std::optional<tt::tt_fabric::FabricTensixDatamoverBuilder> tensix_builder_opt;
+            bool has_tensix = false;
             if (fabric_tensix_extension_enabled) {
                 // Only create tensix builder if this channel is not used by dispatch
                 if (!dispatch_link) {
                     auto tensix_builder = tt::tt_fabric::FabricTensixDatamoverBuilder::build(
                         device, *fabric_program_ptr, fabric_node_id, remote_fabric_node_id, eth_chan, eth_direction);
-                    tensix_builders.insert({eth_chan, tensix_builder});
+                    tensix_builder_opt = tensix_builder;
+                    has_tensix = true;
                 }
             }
+
+            // Immediately wrap in router_builder
+            const auto topology = fabric_context.get_fabric_topology();
+            auto channel_mapping = tt::tt_fabric::FabricRouterChannelMapping(
+                topology, eth_direction, has_tensix);
+            auto router_builder = std::make_unique<tt::tt_fabric::FabricRouterBuilder>(
+                std::move(edm_builder), tensix_builder_opt, std::move(channel_mapping));
+            router_builders.insert({eth_chan, std::move(router_builder)});
         }
 
         // Last link may be used by dispatch if there is tunneling
         // TODO: https://github.com/tenstorrent/tt-metal/issues/24413
         if (!active_fabric_eth_channels[direction].empty() && device_has_dispatch_tunnel) {
             const auto dispatch_eth_chan = active_fabric_eth_channels[direction].back();
-            configure_edm_builder_for_dispatch(*edm_builders.at(dispatch_eth_chan));
+            configure_edm_builder_for_dispatch(router_builders.at(dispatch_eth_chan)->get_erisc_builder());
         }
     }
 
     const auto topology = fabric_context.get_fabric_topology();
     const bool is_galaxy = tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy();
-
-    // Create FabricRouterBuilder wrappers for all routers
-    // Collect keys first since we'll be moving from edm_builders
-    std::vector<tt::tt_fabric::chan_id_t> eth_chan_keys;
-    eth_chan_keys.reserve(edm_builders.size());
-    for (const auto& [eth_chan, _] : edm_builders) {
-        eth_chan_keys.push_back(eth_chan);
-    }
-
-    for (const auto& eth_chan : eth_chan_keys) {
-        // Get direction for this channel
-        auto eth_direction = control_plane.get_eth_chan_direction(fabric_node_id, eth_chan);
-
-        bool has_tensix = tensix_builders.find(eth_chan) != tensix_builders.end();
-        std::optional<tt::tt_fabric::FabricTensixDatamoverBuilder> tensix_builder_opt;
-        if (has_tensix) {
-            tensix_builder_opt = tensix_builders.at(eth_chan);
-        }
-
-        // Create channel mapping
-        auto channel_mapping = tt::tt_fabric::FabricRouterChannelMapping(
-            topology, eth_direction, has_tensix);
-
-        // Move builder out of edm_builders
-        auto edm_builder = std::move(edm_builders.at(eth_chan));
-        edm_builders.erase(eth_chan);
-
-        // Create router builder wrapper
-        auto router_builder = std::make_unique<tt::tt_fabric::FabricRouterBuilder>(
-            std::move(edm_builder), tensix_builder_opt, std::move(channel_mapping));
-        router_builders.insert({eth_chan, std::move(router_builder)});
-    }
 
     auto build_downstream_connections = [&](tt::tt_fabric::chan_id_t eth_chan_dir1,
                                             tt::tt_fabric::chan_id_t eth_chan_dir2) {
@@ -497,24 +462,24 @@ void build_tt_fabric_program(
 
 std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(tt::tt_metal::IDevice* device) {
     std::unique_ptr<tt::tt_metal::Program> fabric_program_ptr = std::make_unique<tt::tt_metal::Program>();
-    std::unordered_map<tt::tt_fabric::chan_id_t, std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverBuilder>> edm_builders;
-    std::unordered_map<tt::tt_fabric::chan_id_t, tt::tt_fabric::FabricTensixDatamoverBuilder> tensix_builders;
     std::unordered_map<tt::tt_fabric::chan_id_t, std::unique_ptr<tt::tt_fabric::FabricRouterBuilder>> router_builders;
 
     const auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
     auto& fabric_context = control_plane.get_fabric_context();
 
-    build_tt_fabric_program(device, fabric_program_ptr.get(), edm_builders, tensix_builders, router_builders);
+    build_tt_fabric_program(device, fabric_program_ptr.get(), router_builders);
     fabric_context.set_num_fabric_initialized_routers(device->id(), router_builders.size());
     if (router_builders.empty()) {
         return nullptr;
     }
 
-    // Compile all fabric tensix builders
+    // Compile all fabric tensix builders through router builders
     if (tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() !=
         tt::tt_fabric::FabricTensixConfig::DISABLED) {
-        for (auto& [eth_chan, tensix_builder] : tensix_builders) {
-            tensix_builder.create_and_compile(device, *fabric_program_ptr);
+        for (auto& [eth_chan, router_builder] : router_builders) {
+            if (router_builder->has_tensix_builder()) {
+                router_builder->get_tensix_builder().create_and_compile(device, *fabric_program_ptr);
+            }
         }
     }
 
