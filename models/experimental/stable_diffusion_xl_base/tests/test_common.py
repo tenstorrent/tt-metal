@@ -865,7 +865,6 @@ def run_tt_image_gen(
     if return_latents:
         profiler.start("read_output_tensor")
         latents = ttnn.to_torch(tt_latents, mesh_composer=ttnn.ConcatMeshToTensor(ttnn_device, dim=0))[:batch_size, ...]
-        ttnn.synchronize_device(ttnn_device)
         profiler.end("read_output_tensor")
 
         # Reshape latents to match expected format
