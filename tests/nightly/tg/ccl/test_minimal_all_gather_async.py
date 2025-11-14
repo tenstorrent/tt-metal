@@ -549,9 +549,17 @@ def test_all_gather_async_wan_galaxy_4x32(
             },
             ttnn.Topology.Linear,
         ),
+        (
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+                "trace_region_size": 190112,
+            },
+            ttnn.Topology.Linear,
+        ),
     ],
     indirect=["device_params"],
-    ids=["fabric_linear"],
+    ids=["fabric_2d_dynamic_linear", "fabric_linear"],
 )
 @pytest.mark.parametrize("mesh_device", [(4, 32)], indirect=True)
 def test_all_gather_run_impl_assert_repro(
