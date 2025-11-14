@@ -26,18 +26,20 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in0 = 0;
 
+    experimental::CircularBuffer cb(cb_id_in0);
+    experimental::Noc noc(noc_index);
+
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
-    uint32_t tile_bytes = get_tile_size(cb_id_in0);
+    uint32_t tile_bytes = cb.get_tile_size();
 
     auto tensor_accessor = TensorAccessor(tensor_args, src_addr, tile_bytes);
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
     for (uint32_t i = start_id; i < start_id + num_tiles; i++) {
-        cb_reserve_back(cb_id_in0, onetile);
-        uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
-        noc_async_read_page(i, tensor_accessor, l1_write_addr);
-        noc_async_read_barrier();
-        cb_push_back(cb_id_in0, onetile);
+        cb.reserve_back(onetile);
+        noc.async_read(tensor_accessor, cb, tile_bytes, {.page_id = i}, {});
+        noc.async_read_barrier();
+        cb.push_back(onetile);
     }
 }
