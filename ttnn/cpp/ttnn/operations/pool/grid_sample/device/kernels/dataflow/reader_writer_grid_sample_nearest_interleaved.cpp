@@ -143,11 +143,11 @@ void kernel_main() {
                 const uint64_t remote_noc_addr = input_tensor_accessor.get_noc_addr(nearest_stick_index);
                 noc_async_read(remote_noc_addr, l1_write_work_addr, input_stick_size);
             } else {
-                // Write zeros for out-of-bounds coordinates
-                volatile tt_l1_ptr uint16_t* zero_ptr =
-                    reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_work_addr);
-                const uint32_t stick_size_words = input_stick_size / sizeof(uint16_t);
-                for (uint32_t i = 0; i < stick_size_words; ++i) {
+                // Write zeros for out-of-bounds coordinates (using 32-bit writes for better performance)
+                volatile tt_l1_ptr uint32_t* zero_ptr =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_work_addr);
+                const uint32_t stick_size_dwords = input_stick_size / sizeof(uint32_t);
+                for (uint32_t i = 0; i < stick_size_dwords; ++i) {
                     zero_ptr[i] = 0;
                 }
             }
