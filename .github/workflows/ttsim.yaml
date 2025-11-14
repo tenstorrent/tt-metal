@@ -341,22 +341,26 @@ jobs:
       - name: C++ tests
         timeout-minutes: 5
         run: |
-          ./build/test/tt_metal/unit_tests_api --gtest_filter="MeshDeviceFixture.IdleEthTestNocStreamRegs"
-          ./build/test/tt_metal/unit_tests_api --gtest_filter="MeshDispatchFixture.IdleEthDRAMLoopbackSingleCore"
-          ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="DPrintMeshFixture.IdleEthTestPrint"
-          # BH doesn't work on watcher, triggers: ERROR: decode_and_execute_fence: unsupported fence_mode=0x31
-          if [[ "${{ matrix.arch }}" != "blackhole" ]]; then
-            # WH works (very long test, by default for erisc runs at least 0x5f5e1000U cycles)
-            # ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="MeshWatcherFixture.TensixTestWatcherPause"
-            ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="MeshWatcherFixture.TestWatcherRingBufferIErisc"
-            ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="MeshWatcherFixture.TestWatcherStackUsage0"
-            ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="MeshWatcherFixture.TestWatcherStackUsage16"
+          if [[ "${{ matrix.arch }}" != "quasar" ]]; then
+            ./build/test/tt_metal/unit_tests_api --gtest_filter="MeshDeviceFixture.IdleEthTestNocStreamRegs"
+            ./build/test/tt_metal/unit_tests_api --gtest_filter="MeshDispatchFixture.IdleEthDRAMLoopbackSingleCore"
+            ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="DPrintMeshFixture.IdleEthTestPrint"
+            # BH doesn't work on watcher, triggers: ERROR: decode_and_execute_fence: unsupported fence_mode=0x31
+            if [[ "${{ matrix.arch }}" != "blackhole" ]]; then
+              # WH works (very long test, by default for erisc runs at least 0x5f5e1000U cycles)
+              # ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="MeshWatcherFixture.TensixTestWatcherPause"
+              ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="MeshWatcherFixture.TestWatcherRingBufferIErisc"
+              ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="MeshWatcherFixture.TestWatcherStackUsage0"
+              ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="MeshWatcherFixture.TestWatcherStackUsage16"
+            fi
+            ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="MeshDispatchFixture.TensixIdleEthTestSemaphores"
+            ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="MeshDispatchFixture.EthTestBlank"
+            ./build/test/tt_metal/unit_tests_eth --gtest_filter="BlackholeSingleCardFixture.IdleEthKernelOnIdleErisc0"
+            ./build/test/tt_metal/unit_tests_eth --gtest_filter="BlackholeSingleCardFixture.IdleEthKernelOnIdleErisc1"
+            ./build/test/tt_metal/unit_tests_eth --gtest_filter="BlackholeSingleCardFixture.IdleEthKernelOnBothIdleEriscs"
+          else
+            ./build/test/tt_metal/test_single_dm_l1_write
           fi
-          ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="MeshDispatchFixture.TensixIdleEthTestSemaphores"
-          ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="MeshDispatchFixture.EthTestBlank"
-          ./build/test/tt_metal/unit_tests_eth --gtest_filter="BlackholeSingleCardFixture.IdleEthKernelOnIdleErisc0"
-          ./build/test/tt_metal/unit_tests_eth --gtest_filter="BlackholeSingleCardFixture.IdleEthKernelOnIdleErisc1"
-          ./build/test/tt_metal/unit_tests_eth --gtest_filter="BlackholeSingleCardFixture.IdleEthKernelOnBothIdleEriscs"
   ttsim-galaxy-cpp-unit-tests:
     if: ${{ inputs.run-metal-cpp-unit-tests }}
     runs-on: tt-ubuntu-2204-large-stable
