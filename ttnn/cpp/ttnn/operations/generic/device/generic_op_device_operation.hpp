@@ -28,7 +28,7 @@ struct GenericOpDeviceOperation {
 
     struct GenericProgram {
         struct shared_variables_t {
-            uint32_t num_kernel_handles;
+            uint32_t num_kernel_handles{};
             std::vector<tt::tt_metal::CBHandle> cb_handles;
         };
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
