@@ -207,8 +207,26 @@ class Qwen25VlAttention(Module):
         head_dim = hidden_size // num_heads
         tp_factor = ctx.device.shape[ctx.tp_axis] if ctx.tp_axis is not None else 1
 
+        repeat_kv_heads = 1
+        # f = num_heads // num_key_value_heads
+        # num_additional_heads = math.inf
+        # repeat_kv_heads = 1
+        # for a in range(1, f + 1):
+        #     if f % a != 0:
+        #         continue
+        #     pad, pad_kv = _num_head_padding(num_heads, num_key_value_heads * a, tp_factor)
+        #     value = pad + pad_kv + (a - 1) * num_key_value_heads
+        #     if value < num_additional_heads:
+        #         num_additional_heads = value
+        #         repeat_kv_heads = a
+
+        # pad, pad_kv = _num_head_padding(num_heads, num_key_value_heads * repeat_kv_heads, tp_factor)
+
         self.qkv_proj = ColParallelLinear(
-            hidden_size, (num_heads + 2 * num_key_value_heads) * head_dim, mesh_device=ctx.device, mesh_axis=ctx.tp_axis
+            hidden_size,
+            (num_heads + 2 * num_key_value_heads * repeat_kv_heads) * head_dim,
+            mesh_device=ctx.device,
+            mesh_axis=ctx.tp_axis,
         )
         self.o_proj = ColParallelLinear(
             num_heads * head_dim, hidden_size, bias=False, mesh_device=ctx.device, mesh_axis=ctx.tp_axis
@@ -236,9 +254,9 @@ class Qwen25VlAttention(Module):
 
         self._head_dim = head_dim
         self._mrope_section = mrope_section
-        # self._num_key_value_groups = num_heads // num_key_value_heads
         self._num_local_heads = num_heads // tp_factor
-        self._num_local_kv_heads = num_key_value_heads // tp_factor
+        self._num_local_kv_heads = repeat_kv_heads * num_key_value_heads // tp_factor
+        self._repeat_kv_heads = repeat_kv_heads
         self._tp_axis = ctx.tp_axis
         self._tp_factor = tp_factor
         self._ccl_manager = ctx.ccl_manager
@@ -254,12 +272,16 @@ class Qwen25VlAttention(Module):
             # q = q.unflatten(0, [self._num_heads, 2, self._head_dim // 2]).transpose(1, 2).flatten(0, 2)
             # k = k.unflatten(0, [self._num_kv_heads, 2, self._head_dim // 2]).transpose(1, 2).flatten(0, 2)
 
+            # repeat KV heads
+            n = self._repeat_kv_heads
+            k = k.unflatten(0, [-1, self._head_dim]).repeat([1, n, 1]).flatten(0, 1)
+            v = v.unflatten(0, [-1, self._head_dim]).repeat([1, n, 1]).flatten(0, 1)
+
+            # fuse
             q = q.unflatten(0, [self._tp_factor, self._num_local_heads, self._head_dim])
             k = k.unflatten(0, [self._tp_factor, self._num_local_kv_heads, self._head_dim])
             v = v.unflatten(0, [self._tp_factor, self._num_local_kv_heads, self._head_dim])
-
             qkv = torch.cat([q, k, v], dim=1)
-
             return qkv.flatten(0, 2)
 
         if "q_proj.weight" in state and "k_proj.weight" in state and "v_proj.weight" in state:
