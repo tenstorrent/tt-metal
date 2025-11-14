@@ -9,6 +9,7 @@
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/untilize.h"
 #include "compute_kernel_api/pack_untilize.h"
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.h"
 
 namespace NAMESPACE {
 
@@ -34,18 +35,8 @@ void MAIN {
     unary_op_init_common(cb_in, cb_out);
 
     for (uint32_t block = start_block; block < end_block; block++) {
-        // tilize input via unpack and then pack
-        tilize_init(cb_in, 1, cb_tilize);
-
-        cb_wait_front(cb_in, 1);
-        cb_reserve_back(cb_tilize, 1);
-
-        tilize_block(cb_in, 1, cb_tilize);
-
-        cb_push_back(cb_tilize, 1);
-        cb_pop_front(cb_in, 1);
-
-        tilize_uninit(cb_in, cb_tilize);
+        // Tilize input via unpack and then pack (standard symmetric: 1 tile in → 1 tile out)
+        compute_kernel_lib::tilize(cb_in, 1, cb_tilize, 1);
 
         // transpose input
         cb_wait_front(cb_tilize, 1);
