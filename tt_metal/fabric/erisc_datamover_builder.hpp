@@ -436,6 +436,11 @@ size_t log_worker_to_fabric_edm_sender_rt_args(const std::vector<uint32_t>& args
 /*
  * The `FabricEriscDatamoverBuilder` is a general class that is used to build fabric router erisc kernels.
  * It is instantiated per fabric (erisc) router. It works closely with the `FabricEriscDatamoverConfig` class.
+ *
+ * Note on 2-ERISC enablement (Blackhole):
+ *   Builder logic may enable an effective "fabric 2-ERISC" mode by default when the platform exposes
+ *   two ERISCs on the Ethernet core and Fabric Tensix MUX is enabled. Decisions such as ERISC count and
+ *   TXQ selection are derived from this effective mode. A presence-based disable env exists to force-disable.
  */
 class FabricEriscDatamoverBuilder {
 public:
@@ -444,6 +449,9 @@ public:
     // payload only, no header
     static constexpr size_t default_packet_payload_size_bytes = tt::tile_size(tt::DataFormat::Bfp8_b) * 4;
     static constexpr size_t default_mesh_packet_payload_size_bytes = tt::tile_size(tt::DataFormat::Bfp8_b) * 4;
+
+    static_assert(default_packet_payload_size_bytes == 4352, "Packet size must be 4352 bytes");
+    static_assert(default_mesh_packet_payload_size_bytes == 4352, "Mesh packet size must be 4352 bytes");
 
     FabricEriscDatamoverBuilder(
         const CoreCoord& my_eth_core_logical,
