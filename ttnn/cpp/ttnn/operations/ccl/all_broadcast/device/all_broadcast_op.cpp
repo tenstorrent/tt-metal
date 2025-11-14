@@ -14,23 +14,7 @@ namespace ttnn {
 
 void AllBroadcast::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
-    TT_FATAL(input_tensors.size() == 1, "Error, Input tensor size should be 1 but has {}", input_tensors.size());
-    const auto& input_tensor = input_tensors[0];
-
-    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_broadcast need to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to all_broadcast need to be allocated in buffers on device!");
-    TT_FATAL(this->num_links > 0, "Error, num_links should be more than 0 but has {}", this->num_links);
-    TT_FATAL(
-        this->num_links <= input_tensor.device()->compute_with_storage_grid_size().y,
-        "Worker cores used by links are parallelizaed over rows");
-
-    TT_FATAL(
-        input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED ||
-            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
-            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
-            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
-        "Unsupported memory layout {}.",
-        input_tensor.memory_config().memory_layout());
+    ;
 }
 
 std::vector<ttnn::TensorSpec> AllBroadcast::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
@@ -50,17 +34,14 @@ tt::tt_metal::operation::MeshWorkloadWithCallbacks AllBroadcast::create_mesh_wor
     const std::vector<Tensor>& input_tensors,
     std::vector<Tensor>& output_tensors) const {
     auto mesh_device = input_tensors[0].device();
-    auto sub_device_id = this->sub_device_id;
 
-    auto subdevice = sub_device_id.has_value() ? *sub_device_id : mesh_device->get_sub_device_ids().at(0);
+    auto subdevice = mesh_device->get_sub_device_ids().at(0);
     const auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice);
     auto subdevices = {subdevice};
 
     auto init_barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
     auto final_barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
-    log_debug(tt::LogOp, "Semaphores allocated and waiting for all devices to be ready");
     tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, subdevices);
-    log_debug(tt::LogOp, "All devices are ready, starting program execution");
 
     return ccl::create_mesh_workload_from_programs(
         tensor_coords, input_tensors, output_tensors, [&, this](const ttnn::MeshCoordinate& coord) {

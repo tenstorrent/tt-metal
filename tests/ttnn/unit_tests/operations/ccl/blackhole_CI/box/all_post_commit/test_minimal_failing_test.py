@@ -28,7 +28,11 @@ from models.common.utility_functions import skip_for_wormhole_b0, skip_for_n_or_
     ],
 )
 @pytest.mark.parametrize("num_iters", [3])
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}, {"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    indirect=True,
+)
 def test_all_broadcast(
     bh_1d_mesh_device,
     num_devices,

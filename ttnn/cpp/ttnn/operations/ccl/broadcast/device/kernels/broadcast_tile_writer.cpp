@@ -45,8 +45,6 @@ void kernel_main() {
     const uint8_t barrier_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t barrier_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_connections = get_arg_val<uint32_t>(arg_idx++);
-    auto unicast_route_id = PacketHeaderPool::allocate_header_n(num_connections);
-    auto scatter_route_id = PacketHeaderPool::allocate_header_n(num_connections);
     auto sem_route_id = PacketHeaderPool::allocate_header_n(num_connections);
     tt::tt_fabric::RoutingPlaneConnectionManager fabric_connection;
     open_connections(fabric_connection, num_connections, arg_idx);
