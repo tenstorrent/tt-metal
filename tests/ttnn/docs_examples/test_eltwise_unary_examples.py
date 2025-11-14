@@ -5,6 +5,7 @@
 import pytest
 import ttnn
 import torch
+from loguru import logger
 
 
 def test_abs(device):
@@ -15,7 +16,7 @@ def test_abs(device):
 
     # Compute the absolute value
     output = ttnn.abs(tensor)
-    print(f"Absolute value: {output}")
+    logger.info(f"Absolute value: {output}")
 
 
 def test_acos(device):
@@ -24,7 +25,7 @@ def test_acos(device):
 
     # Compute the arccosine
     output = ttnn.acos(tensor)
-    print(f"Arccosine: {output}")
+    logger.info(f"Arccosine: {output}")
 
 
 def test_asin(device):
@@ -33,7 +34,7 @@ def test_asin(device):
 
     # Compute the arcsine
     output = ttnn.asin(tensor)
-    print(f"Arcsine: {output}")
+    logger.info(f"Arcsine: {output}")
 
 
 def test_atan(device):
@@ -42,7 +43,7 @@ def test_atan(device):
 
     # Compute the arctangent
     output = ttnn.atan(tensor)
-    print(f"Arctangent: {output}")
+    logger.info(f"Arctangent: {output}")
 
 
 def test_atanh(device):
@@ -51,7 +52,7 @@ def test_atanh(device):
 
     # Compute the hyperbolic arctangent
     output = ttnn.atanh(tensor)
-    print(f"Hyperbolic arctangent: {output}")
+    logger.info(f"Hyperbolic arctangent: {output}")
 
 
 def test_cos(device):
@@ -60,7 +61,7 @@ def test_cos(device):
 
     # Compute the cosine
     output = ttnn.cos(tensor)
-    print(f"Cosine: {output}")
+    logger.info(f"Cosine: {output}")
 
 
 def test_acosh(device):
@@ -69,7 +70,7 @@ def test_acosh(device):
 
     # Compute the hyperbolic arccosine
     output = ttnn.acosh(tensor)
-    print(f"Hyperbolic arccosine: {output}")
+    logger.info(f"Hyperbolic arccosine: {output}")
 
 
 def test_erfinv(device):
@@ -78,7 +79,7 @@ def test_erfinv(device):
 
     # Compute the inverse error function
     output = ttnn.erfinv(tensor)
-    print(f"Inverse error function: {output}")
+    logger.info(f"Inverse error function: {output}")
 
 
 def test_exp2(device):
@@ -87,7 +88,7 @@ def test_exp2(device):
 
     # Compute 2^x
     output = ttnn.exp2(tensor)
-    print(f"2^x: {output}")
+    logger.info(f"2^x: {output}")
 
 
 def test_expm1(device):
@@ -96,7 +97,7 @@ def test_expm1(device):
 
     # Compute e^x - 1
     output = ttnn.expm1(tensor)
-    print(f"e^x - 1: {output}")
+    logger.info(f"e^x - 1: {output}")
 
 
 def test_floor(device):
@@ -105,7 +106,7 @@ def test_floor(device):
 
     # Compute the floor (largest integer less than or equal to each element)
     output = ttnn.floor(tensor)
-    print(f"Floor: {output}")
+    logger.info(f"Floor: {output}")
 
 
 def test_trunc(device):
@@ -114,7 +115,7 @@ def test_trunc(device):
 
     # Compute the truncated value (integer part)
     output = ttnn.trunc(tensor)
-    print(f"Truncated: {output}")
+    logger.info(f"Truncated: {output}")
 
 
 def test_frac(device):
@@ -123,7 +124,7 @@ def test_frac(device):
 
     # Compute the fractional part
     output = ttnn.frac(tensor)
-    print(f"Fractional part: {output}")
+    logger.info(f"Fractional part: {output}")
 
 
 def test_eqz(device):
@@ -132,7 +133,7 @@ def test_eqz(device):
 
     # Check if elements are equal to zero
     output = ttnn.eqz(tensor)
-    print(f"Equal to zero: {output}")
+    logger.info(f"Equal to zero: {output}")
 
 
 def test_ceil(device):
@@ -141,7 +142,7 @@ def test_ceil(device):
 
     # Compute the ceiling (smallest integer greater than or equal to each element)
     output = ttnn.ceil(tensor)
-    print(f"Ceiling: {output}")
+    logger.info(f"Ceiling: {output}")
 
 
 def test_mish(device):
@@ -150,7 +151,7 @@ def test_mish(device):
 
     # Compute Mish activation function
     output = ttnn.mish(tensor)
-    print(f"Mish: {output}")
+    logger.info(f"Mish: {output}")
 
 
 def test_gez(device):
@@ -159,7 +160,7 @@ def test_gez(device):
 
     # Check if elements are greater than or equal to zero
     output = ttnn.gez(tensor)
-    print(f"Greater than or equal to zero: {output}")
+    logger.info(f"Greater than or equal to zero: {output}")
 
 
 def test_gtz(device):
@@ -168,7 +169,7 @@ def test_gtz(device):
 
     # Check if elements are greater than zero
     output = ttnn.gtz(tensor)
-    print(f"Greater than zero: {output}")
+    logger.info(f"Greater than zero: {output}")
 
 
 def test_i0(device):
@@ -177,7 +178,7 @@ def test_i0(device):
 
     # Compute the zeroth order modified Bessel function
     output = ttnn.i0(tensor)
-    print(f"Bessel i0: {output}")
+    logger.info(f"Bessel i0: {output}")
 
 
 def test_isfinite(device):
@@ -186,7 +187,7 @@ def test_isfinite(device):
 
     # Check if elements are finite
     output = ttnn.isfinite(tensor)
-    print(f"Is finite: {output}")
+    logger.info(f"Is finite: {output}")
 
 
 def test_isinf(device):
@@ -195,7 +196,7 @@ def test_isinf(device):
 
     # Check if elements are infinite
     output = ttnn.isinf(tensor)
-    print(f"Is infinite: {output}")
+    logger.info(f"Is infinite: {output}")
 
 
 def test_isnan(device):
@@ -204,7 +205,7 @@ def test_isnan(device):
 
     # Check if elements are NaN (Not a Number)
     output = ttnn.isnan(tensor)
-    print(f"Is NaN: {output}")
+    logger.info(f"Is NaN: {output}")
 
 
 def test_isneginf(device):
@@ -213,7 +214,7 @@ def test_isneginf(device):
 
     # Check if elements are negative infinity
     output = ttnn.isneginf(tensor)
-    print(f"Is negative infinity: {output}")
+    logger.info(f"Is negative infinity: {output}")
 
 
 def test_isposinf(device):
@@ -222,7 +223,7 @@ def test_isposinf(device):
 
     # Check if elements are positive infinity
     output = ttnn.isposinf(tensor)
-    print(f"Is positive infinity: {output}")
+    logger.info(f"Is positive infinity: {output}")
 
 
 def test_lez(device):
@@ -231,7 +232,7 @@ def test_lez(device):
 
     # Check if elements are less than or equal to zero
     output = ttnn.lez(tensor)
-    print(f"Less than or equal to zero: {output}")
+    logger.info(f"Less than or equal to zero: {output}")
 
 
 def test_logical_not(device):
@@ -240,7 +241,7 @@ def test_logical_not(device):
 
     # Compute logical NOT
     output = ttnn.logical_not(tensor)
-    print(f"Logical NOT: {output}")
+    logger.info(f"Logical NOT: {output}")
 
 
 def test_ltz(device):
@@ -249,7 +250,7 @@ def test_ltz(device):
 
     # Check if elements are less than zero
     output = ttnn.ltz(tensor)
-    print(f"Less than zero: {output}")
+    logger.info(f"Less than zero: {output}")
 
 
 def test_neg(device):
@@ -258,7 +259,7 @@ def test_neg(device):
 
     # Compute the negative values
     output = ttnn.neg(tensor)
-    print(f"Negative: {output}")
+    logger.info(f"Negative: {output}")
 
 
 def test_nez(device):
@@ -267,7 +268,7 @@ def test_nez(device):
 
     # Check if elements are not equal to zero
     output = ttnn.nez(tensor)
-    print(f"Not equal to zero: {output}")
+    logger.info(f"Not equal to zero: {output}")
 
 
 def test_reciprocal(device):
@@ -278,7 +279,7 @@ def test_reciprocal(device):
 
     # Compute the reciprocal (1/x)
     output = ttnn.reciprocal(tensor)
-    print(f"Reciprocal: {output}")
+    logger.info(f"Reciprocal: {output}")
 
 
 def test_relu(device):
@@ -287,7 +288,7 @@ def test_relu(device):
 
     # Apply ReLU activation function
     output = ttnn.relu(tensor)
-    print(f"ReLU: {output}")
+    logger.info(f"ReLU: {output}")
 
 
 def test_relu6(device):
@@ -296,7 +297,7 @@ def test_relu6(device):
 
     # Apply ReLU6 activation function (clamps values between 0 and 6)
     output = ttnn.relu6(tensor)
-    print(f"ReLU6: {output}")
+    logger.info(f"ReLU6: {output}")
 
 
 def test_sign(device):
@@ -305,7 +306,7 @@ def test_sign(device):
 
     # Extract the sign of each element
     output = ttnn.sign(tensor)
-    print(f"Sign: {output}")
+    logger.info(f"Sign: {output}")
 
 
 def test_signbit(device):
@@ -314,7 +315,7 @@ def test_signbit(device):
 
     # Test the sign bit of each element
     output = ttnn.signbit(tensor)
-    print(f"Sign bit: {output}")
+    logger.info(f"Sign bit: {output}")
 
 
 def test_silu(device):
@@ -323,7 +324,7 @@ def test_silu(device):
 
     # Apply SiLU (Swish) activation function
     output = ttnn.silu(tensor)
-    print(f"SiLU: {output}")
+    logger.info(f"SiLU: {output}")
 
 
 def test_sin(device):
@@ -332,7 +333,7 @@ def test_sin(device):
 
     # Compute the sine
     output = ttnn.sin(tensor)
-    print(f"Sine: {output}")
+    logger.info(f"Sine: {output}")
 
 
 def test_square(device):
@@ -341,7 +342,7 @@ def test_square(device):
 
     # Compute the square of each element
     output = ttnn.square(tensor)
-    print(f"Square: {output}")
+    logger.info(f"Square: {output}")
 
 
 def test_tan(device):
@@ -350,7 +351,7 @@ def test_tan(device):
 
     # Compute the tangent
     output = ttnn.tan(tensor)
-    print(f"Tangent: {output}")
+    logger.info(f"Tangent: {output}")
 
 
 def test_log_sigmoid(device):
@@ -359,7 +360,7 @@ def test_log_sigmoid(device):
 
     # Compute the logarithm of sigmoid
     output = ttnn.log_sigmoid(tensor)
-    print(f"Log sigmoid: {output}")
+    logger.info(f"Log sigmoid: {output}")
 
 
 def test_bitwise_not(device):
@@ -368,7 +369,7 @@ def test_bitwise_not(device):
 
     # Apply bitwise NOT operation
     output = ttnn.bitwise_not(tensor)
-    print(f"Bitwise NOT: {output}")
+    logger.info(f"Bitwise NOT: {output}")
 
 
 def test_deg2rad(device):
@@ -377,7 +378,7 @@ def test_deg2rad(device):
 
     # Convert degrees to radians
     output = ttnn.deg2rad(tensor)
-    print(f"Degrees to radians: {output}")
+    logger.info(f"Degrees to radians: {output}")
 
 
 def test_rad2deg(device):
@@ -386,7 +387,7 @@ def test_rad2deg(device):
 
     # Convert radians to degrees
     output = ttnn.rad2deg(tensor)
-    print(f"Radians to degrees: {output}")
+    logger.info(f"Radians to degrees: {output}")
 
 
 def test_asinh(device):
@@ -395,7 +396,7 @@ def test_asinh(device):
 
     # Compute the hyperbolic arcsine
     output = ttnn.asinh(tensor)
-    print(f"Hyperbolic arcsine: {output}")
+    logger.info(f"Hyperbolic arcsine: {output}")
 
 
 def test_hardsigmoid(device):
@@ -404,7 +405,7 @@ def test_hardsigmoid(device):
 
     # Apply hard sigmoid activation function
     output = ttnn.hardsigmoid(tensor)
-    print(f"Hard sigmoid: {output}")
+    logger.info(f"Hard sigmoid: {output}")
 
 
 def test_hardswish(device):
@@ -413,7 +414,7 @@ def test_hardswish(device):
 
     # Apply hard swish activation function
     output = ttnn.hardswish(tensor)
-    print(f"Hard swish: {output}")
+    logger.info(f"Hard swish: {output}")
 
 
 def test_softsign(device):
@@ -422,7 +423,7 @@ def test_softsign(device):
 
     # Apply softsign activation function
     output = ttnn.softsign(tensor)
-    print(f"Softsign: {output}")
+    logger.info(f"Softsign: {output}")
 
 
 def test_cbrt(device):
@@ -431,7 +432,7 @@ def test_cbrt(device):
 
     # Compute the cube root
     output = ttnn.cbrt(tensor)
-    print(f"Cube root: {output}")
+    logger.info(f"Cube root: {output}")
 
 
 def test_sqrt(device):
@@ -445,7 +446,7 @@ def test_sqrt(device):
 
     # Compute the square root
     output = ttnn.sqrt(tensor, fast_and_approximate_mode=True)
-    print(f"Square root: {output}")
+    logger.info(f"Square root: {output}")
 
 
 def test_rsqrt(device):
@@ -459,7 +460,7 @@ def test_rsqrt(device):
 
     # Compute the reciprocal square root (1/sqrt(x))
     output = ttnn.rsqrt(tensor, fast_and_approximate_mode=True)
-    print(f"Reciprocal square root: {output}")
+    logger.info(f"Reciprocal square root: {output}")
 
 
 def test_exp(device):
@@ -473,7 +474,7 @@ def test_exp(device):
 
     # Compute the exponential function (e^x)
     output = ttnn.exp(tensor, fast_and_approximate_mode=True)
-    print(f"Exponential: {output}")
+    logger.info(f"Exponential: {output}")
 
 
 def test_erf(device):
@@ -487,7 +488,7 @@ def test_erf(device):
 
     # Compute the error function
     output = ttnn.erf(tensor, fast_and_approximate_mode=True)
-    print(f"Error function: {output}")
+    logger.info(f"Error function: {output}")
 
 
 def test_erfc(device):
@@ -501,7 +502,7 @@ def test_erfc(device):
 
     # Compute the complementary error function
     output = ttnn.erfc(tensor, fast_and_approximate_mode=True)
-    print(f"Complementary error function: {output}")
+    logger.info(f"Complementary error function: {output}")
 
 
 def test_gelu(device):
@@ -515,7 +516,7 @@ def test_gelu(device):
 
     # Apply GELU activation function
     output = ttnn.gelu(tensor, fast_and_approximate_mode=True)
-    print(f"GELU: {output}")
+    logger.info(f"GELU: {output}")
 
 
 def test_log(device):
@@ -529,7 +530,7 @@ def test_log(device):
 
     # Compute the natural logarithm
     output = ttnn.log(tensor, fast_and_approximate_mode=True)
-    print(f"Natural logarithm: {output}")
+    logger.info(f"Natural logarithm: {output}")
 
 
 def test_log10(device):
@@ -543,7 +544,7 @@ def test_log10(device):
 
     # Compute the base-10 logarithm
     output = ttnn.log10(tensor, fast_and_approximate_mode=True)
-    print(f"Base-10 logarithm: {output}")
+    logger.info(f"Base-10 logarithm: {output}")
 
 
 def test_log2(device):
@@ -557,7 +558,7 @@ def test_log2(device):
 
     # Compute the base-2 logarithm
     output = ttnn.log2(tensor, fast_and_approximate_mode=True)
-    print(f"Base-2 logarithm: {output}")
+    logger.info(f"Base-2 logarithm: {output}")
 
 
 def test_log1p(device):
@@ -571,7 +572,7 @@ def test_log1p(device):
 
     # Compute log(1 + x)
     output = ttnn.log1p(tensor, fast_and_approximate_mode=True)
-    print(f"Log(1 + x): {output}")
+    logger.info(f"Log(1 + x): {output}")
 
 
 def test_elu(device):
@@ -585,7 +586,7 @@ def test_elu(device):
 
     # Apply ELU activation function with alpha parameter
     output = ttnn.elu(tensor, alpha=5)
-    print(f"ELU: {output}")
+    logger.info(f"ELU: {output}")
 
 
 def test_heaviside(device):
@@ -600,7 +601,7 @@ def test_heaviside(device):
 
     # Apply Heaviside step function
     output = ttnn.heaviside(tensor, value)
-    print(f"Heaviside: {output}")
+    logger.info(f"Heaviside: {output}")
 
 
 def test_leaky_relu(device):
@@ -615,7 +616,7 @@ def test_leaky_relu(device):
 
     # Apply Leaky ReLU activation function
     output = ttnn.leaky_relu(tensor, negative_slope)
-    print(f"Leaky ReLU: {output}")
+    logger.info(f"Leaky ReLU: {output}")
 
 
 def test_relu_max(device):
@@ -630,7 +631,7 @@ def test_relu_max(device):
 
     # Apply ReLU with upper limit
     output = ttnn.relu_max(tensor, upper_limit)
-    print(f"ReLU max: {output}")
+    logger.info(f"ReLU max: {output}")
 
 
 def test_relu_min(device):
@@ -645,7 +646,7 @@ def test_relu_min(device):
 
     # Apply ReLU with lower limit
     output = ttnn.relu_min(tensor, lower_limit)
-    print(f"ReLU min: {output}")
+    logger.info(f"ReLU min: {output}")
 
 
 def test_rpow(device):
@@ -660,7 +661,7 @@ def test_rpow(device):
 
     # Compute exponent^tensor
     output = ttnn.rpow(tensor, exponent)
-    print(f"Reverse power: {output}")
+    logger.info(f"Reverse power: {output}")
 
 
 def test_celu(device):
@@ -675,7 +676,7 @@ def test_celu(device):
 
     # Apply CELU activation function
     output = ttnn.celu(tensor, alpha=alpha)
-    print(f"CELU: {output}")
+    logger.info(f"CELU: {output}")
 
 
 def test_fill(device):
@@ -690,7 +691,7 @@ def test_fill(device):
 
     # Fill tensor with a specific value
     output = ttnn.fill(tensor, fill_value)
-    print(f"Fill: {output}")
+    logger.info(f"Fill: {output}")
 
 
 def test_glu(device):
@@ -700,7 +701,7 @@ def test_glu(device):
 
     # Apply GLU (Gated Linear Unit)
     output = ttnn.glu(tensor, dim)
-    print(f"GLU: {output}")
+    logger.info(f"GLU: {output}")
 
 
 def test_reglu(device):
@@ -710,7 +711,7 @@ def test_reglu(device):
 
     # Apply ReGLU (ReLU Gated Linear Unit)
     output = ttnn.reglu(tensor, dim)
-    print(f"ReGLU: {output}")
+    logger.info(f"ReGLU: {output}")
 
 
 def test_geglu(device):
@@ -720,7 +721,7 @@ def test_geglu(device):
 
     # Apply GeGLU (GELU Gated Linear Unit)
     output = ttnn.geglu(tensor, dim)
-    print(f"GeGLU: {output}")
+    logger.info(f"GeGLU: {output}")
 
 
 def test_swiglu(device):
@@ -730,7 +731,7 @@ def test_swiglu(device):
 
     # Apply SwiGLU (Swish Gated Linear Unit)
     output = ttnn.swiglu(tensor, dim)
-    print(f"SwiGLU: {output}")
+    logger.info(f"SwiGLU: {output}")
 
 
 def test_softplus(device):
@@ -744,7 +745,7 @@ def test_softplus(device):
 
     # Apply Softplus activation function
     output = ttnn.softplus(tensor, beta=1.0, threshold=20.0)
-    print(f"Softplus: {output}")
+    logger.info(f"Softplus: {output}")
 
 
 def test_tanh(device):
@@ -758,7 +759,7 @@ def test_tanh(device):
 
     # Compute the hyperbolic tangent
     output = ttnn.tanh(tensor, fast_and_approximate_mode=False)
-    print(f"Hyperbolic tangent: {output}")
+    logger.info(f"Hyperbolic tangent: {output}")
 
 
 def test_tanhshrink(device):
@@ -772,7 +773,7 @@ def test_tanhshrink(device):
 
     # Apply tanh shrink function
     output = ttnn.tanhshrink(tensor, fast_and_approximate_mode=False)
-    print(f"Tanh shrink: {output}")
+    logger.info(f"Tanh shrink: {output}")
 
 
 def test_sigmoid_accurate(device):
@@ -783,14 +784,14 @@ def test_sigmoid_accurate(device):
 
     # Apply accurate sigmoid activation function
     output = ttnn.sigmoid_accurate(tensor)
-    print(f"Sigmoid accurate: {output}")
+    logger.info(f"Sigmoid accurate: {output}")
 
     # Test with fast_and_approximate_mode=False
     tensor = ttnn.from_torch(
         torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device
     )
     output = ttnn.sigmoid_accurate(tensor, fast_and_approximate_mode=False)
-    print(f"Sigmoid accurate (precise): {output}")
+    logger.info(f"Sigmoid accurate (precise): {output}")
 
 
 def test_sigmoid(device):
@@ -801,7 +802,7 @@ def test_sigmoid(device):
 
     # Apply sigmoid activation function with vector mode
     output = ttnn.sigmoid(tensor, vector_mode=4, fast_and_approximate_mode=True)
-    print(f"Sigmoid: {output}")
+    logger.info(f"Sigmoid: {output}")
 
 
 def test_unary_chain(device):
@@ -815,7 +816,7 @@ def test_unary_chain(device):
 
     # Apply a chain of unary operations
     output = ttnn.unary_chain(tensor, ops_chain)
-    print(f"Unary chain: {output}")
+    logger.info(f"Unary chain: {output}")
 
 
 def test_identity(device):
@@ -826,7 +827,7 @@ def test_identity(device):
 
     # Apply identity function (returns input unchanged)
     output = ttnn.identity(tensor)
-    print(f"Identity: {output}")
+    logger.info(f"Identity: {output}")
 
 
 def test_cosh(device):
@@ -835,7 +836,7 @@ def test_cosh(device):
 
     # Compute the hyperbolic cosine
     output = ttnn.cosh(tensor)
-    print(f"Hyperbolic cosine: {output}")
+    logger.info(f"Hyperbolic cosine: {output}")
 
 
 def test_digamma(device):
@@ -846,7 +847,7 @@ def test_digamma(device):
 
     # Compute the digamma function (logarithmic derivative of gamma)
     output = ttnn.digamma(tensor)
-    print(f"Digamma: {output}")
+    logger.info(f"Digamma: {output}")
 
 
 def test_lgamma(device):
@@ -855,7 +856,7 @@ def test_lgamma(device):
 
     # Compute the log gamma function
     output = ttnn.lgamma(tensor)
-    print(f"Log gamma: {output}")
+    logger.info(f"Log gamma: {output}")
 
 
 def test_multigammaln(device):
@@ -866,7 +867,7 @@ def test_multigammaln(device):
 
     # Compute the multivariate log gamma function
     output = ttnn.multigammaln(tensor)
-    print(f"Multivariate log gamma: {output}")
+    logger.info(f"Multivariate log gamma: {output}")
 
 
 def test_sinh(device):
@@ -875,7 +876,7 @@ def test_sinh(device):
 
     # Compute the hyperbolic sine
     output = ttnn.sinh(tensor)
-    print(f"Hyperbolic sine: {output}")
+    logger.info(f"Hyperbolic sine: {output}")
 
 
 def test_swish(device):
@@ -884,7 +885,7 @@ def test_swish(device):
 
     # Apply Swish activation function
     output = ttnn.swish(tensor)
-    print(f"Swish: {output}")
+    logger.info(f"Swish: {output}")
 
 
 def test_normalize_hw(device):
@@ -893,7 +894,7 @@ def test_normalize_hw(device):
 
     # Normalize along height and width dimensions
     output = ttnn.normalize_hw(tensor)
-    print(f"Normalize HW: {output}")
+    logger.info(f"Normalize HW: {output}")
 
 
 def test_logical_not_(device):
@@ -902,7 +903,7 @@ def test_logical_not_(device):
 
     # Apply logical NOT (in-place)
     output = ttnn.logical_not_(tensor)
-    print(f"Logical NOT (in-place): {output}")
+    logger.info(f"Logical NOT (in-place): {output}")
 
 
 def test_normalize_global(device):
@@ -911,7 +912,7 @@ def test_normalize_global(device):
 
     # Normalize globally across all dimensions
     output = ttnn.normalize_global(tensor)
-    print(f"Normalize global: {output}")
+    logger.info(f"Normalize global: {output}")
 
 
 def test_clip(device):
@@ -937,7 +938,7 @@ def test_clip(device):
 
     # Clip values using tensor bounds
     output = ttnn.clip(input_tensor, min_tensor, max_tensor)
-    print(f"Clip with tensor bounds: {output}")
+    logger.info(f"Clip with tensor bounds: {output}")
 
     # Create tensor for clipping with scalar bounds
     input_tensor = ttnn.from_torch(
@@ -949,7 +950,7 @@ def test_clip(device):
 
     # Clip values using scalar bounds
     output = ttnn.clip(input_tensor, min=2, max=9)
-    print(f"Clip with scalar bounds: {output}")
+    logger.info(f"Clip with scalar bounds: {output}")
 
 
 def test_clamp(device):
@@ -975,7 +976,7 @@ def test_clamp(device):
 
     # Clamp values using tensor bounds
     output = ttnn.clamp(input_tensor, min_tensor, max_tensor)
-    print(f"Clamp with tensor bounds: {output}")
+    logger.info(f"Clamp with tensor bounds: {output}")
 
     # Create tensor for clamping with scalar bounds
     input_tensor = ttnn.from_torch(
@@ -987,7 +988,7 @@ def test_clamp(device):
 
     # Clamp values using scalar bounds
     output = ttnn.clamp(input_tensor, min=2, max=9)
-    print(f"Clamp with scalar bounds: {output}")
+    logger.info(f"Clamp with scalar bounds: {output}")
 
 
 def test_clone(device):
@@ -996,7 +997,7 @@ def test_clone(device):
 
     # Clone the tensor
     output = ttnn.clone(tensor, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    print(f"Clone: {output}")
+    logger.info(f"Clone: {output}")
 
 
 def test_selu(device):
@@ -1010,7 +1011,7 @@ def test_selu(device):
 
     # Apply SELU activation function
     output = ttnn.selu(tensor, scale=1.0507, alpha=1.67326)
-    print(f"SELU: {output}")
+    logger.info(f"SELU: {output}")
 
 
 def test_hardtanh(device):
@@ -1024,7 +1025,7 @@ def test_hardtanh(device):
 
     # Apply hard tanh activation function
     output = ttnn.hardtanh(tensor, min_val=-1.0, max_val=1.0)
-    print(f"Hard tanh: {output}")
+    logger.info(f"Hard tanh: {output}")
 
 
 def test_threshold(device):
@@ -1040,7 +1041,7 @@ def test_threshold(device):
 
     # Apply threshold function
     output = ttnn.threshold(tensor, threshold, value)
-    print(f"Threshold: {output}")
+    logger.info(f"Threshold: {output}")
 
 
 def test_tril(device):
@@ -1049,7 +1050,7 @@ def test_tril(device):
 
     # Extract lower triangular part
     output = ttnn.tril(tensor, diagonal=0)
-    print(f"Lower triangular: {output}")
+    logger.info(f"Lower triangular: {output}")
 
 
 def test_triu(device):
@@ -1058,7 +1059,7 @@ def test_triu(device):
 
     # Extract upper triangular part
     output = ttnn.triu(tensor, diagonal=0)
-    print(f"Upper triangular: {output}")
+    logger.info(f"Upper triangular: {output}")
 
 
 def test_round(device):
@@ -1073,7 +1074,7 @@ def test_round(device):
 
     # Round to specified decimal places
     output = ttnn.round(tensor, decimals=decimals)
-    print(f"Round: {output}")
+    logger.info(f"Round: {output}")
 
 
 def test_polygamma(device):
@@ -1087,7 +1088,7 @@ def test_polygamma(device):
 
     # Compute the polygamma function
     output = ttnn.polygamma(tensor, 3)
-    print(f"Polygamma: {output}")
+    logger.info(f"Polygamma: {output}")
 
 
 def test_hardshrink(device):
@@ -1101,7 +1102,7 @@ def test_hardshrink(device):
 
     # Apply hard shrinkage function
     output = ttnn.hardshrink(tensor, lambd=5)
-    print(f"Hard shrink: {output}")
+    logger.info(f"Hard shrink: {output}")
 
 
 def test_softshrink(device):
@@ -1115,7 +1116,7 @@ def test_softshrink(device):
 
     # Apply soft shrinkage function
     output = ttnn.softshrink(tensor, lambd=5)
-    print(f"Soft shrink: {output}")
+    logger.info(f"Soft shrink: {output}")
 
 
 def test_logit(device):
@@ -1129,7 +1130,7 @@ def test_logit(device):
 
     # Compute the logit function
     output = ttnn.logit(tensor, eps=5)
-    print(f"Logit: {output}")
+    logger.info(f"Logit: {output}")
 
 
 def test_rdiv(device):
@@ -1144,7 +1145,7 @@ def test_rdiv(device):
 
     # Compute reverse division (value / tensor)
     output = ttnn.rdiv(tensor, value, round_mode=None)
-    print(f"Reverse division: {output}")
+    logger.info(f"Reverse division: {output}")
 
 
 @pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
@@ -1159,7 +1160,7 @@ def test_bitwise_left_shift(device):
 
     # Apply bitwise left shift operation
     output = ttnn.bitwise_left_shift(tensor1, tensor2)  # CHECK
-    print(f"Bitwise left shift: {output}")
+    logger.info(f"Bitwise left shift: {output}")
 
 
 @pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
@@ -1174,7 +1175,7 @@ def test_bitwise_right_shift(device):
 
     # Apply bitwise right shift operation
     output = ttnn.bitwise_right_shift(tensor1, tensor2)
-    print(f"Bitwise right shift: {output}")  # Check
+    logger.info(f"Bitwise right shift: {output}")  # Check
 
 
 @pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
@@ -1186,7 +1187,7 @@ def test_prelu(device):
 
     # Apply PReLU activation function
     output = ttnn.prelu(tensor1, tensor2 / scalar)
-    print(f"PReLU: {output}")
+    logger.info(f"PReLU: {output}")
 
 
 @pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
@@ -1202,4 +1203,4 @@ def test_remainder(device):
 
     # Compute the remainder of division
     output = ttnn.remainder(tensor1, tensor2 / scalar)
-    print(f"Remainder: {output}")
+    logger.info(f"Remainder: {output}")

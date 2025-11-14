@@ -5,6 +5,7 @@
 import pytest
 import ttnn
 import torch
+from loguru import logger
 
 
 @pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
@@ -14,7 +15,7 @@ def test_real(device):
 
     # Get the real part
     output = ttnn.real(tensor)
-    print(f"Real part: {output}")
+    logger.info(f"Real part: {output}")
 
 
 @pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
@@ -24,7 +25,7 @@ def test_imag(device):
 
     # Get the imaginary part
     output = ttnn.imag(tensor)
-    print(f"Imaginary part: {output}")
+    logger.info(f"Imaginary part: {output}")
 
 
 @pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
@@ -34,7 +35,7 @@ def test_angle(device):
 
     # Get the angle (phase) of the complex tensor
     output = ttnn.angle(tensor)
-    print(f"Angle: {output}")
+    logger.info(f"Angle: {output}")
 
 
 @pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
@@ -44,7 +45,7 @@ def test_is_imag(device):
 
     # Check if tensor values are purely imaginary
     output = ttnn.is_imag(tensor)
-    print(f"Is imaginary: {output}")
+    logger.info(f"Is imaginary: {output}")
 
 
 @pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
@@ -54,7 +55,7 @@ def test_is_real(device):
 
     # Check if tensor values are purely real
     output = ttnn.is_real(tensor)
-    print(f"Is real: {output}")
+    logger.info(f"Is real: {output}")
 
 
 @pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
@@ -64,7 +65,7 @@ def test_conj(device):
 
     # Get the complex conjugate
     output = ttnn.conj(tensor)
-    print(f"Complex conjugate: {output}")
+    logger.info(f"Complex conjugate: {output}")
 
 
 @pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
@@ -74,7 +75,7 @@ def test_polar(device):
 
     # Convert to polar form
     output = ttnn.polar(tensor)
-    print(f"Polar form: {output}")
+    logger.info(f"Polar form: {output}")
 
 
 @pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
@@ -84,4 +85,4 @@ def test_alt_complex_rotate90(device):
 
     # Rotate complex values by 90 degrees
     output = ttnn.alt_complex_rotate90(tensor)
-    print(f"Complex rotated by 90 degrees: {output}")
+    logger.info(f"Complex rotated by 90 degrees: {output}")

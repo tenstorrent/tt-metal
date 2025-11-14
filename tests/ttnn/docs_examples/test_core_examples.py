@@ -4,12 +4,13 @@
 
 import ttnn
 import torch
+from loguru import logger
 
 
 def test_as_tensor(device):
     # Create a Torch tensor and convert it to a TT-NN tensor
     tensor = ttnn.as_tensor(torch.randn((2, 3)), dtype=ttnn.bfloat16)
-    print(tensor.shape)
+    logger.info(tensor.shape)
 
 
 def test_from_torch(device):
@@ -17,7 +18,7 @@ def test_from_torch(device):
     torch_tensor = torch.randn((4, 5), dtype=torch.bfloat16)
     ttnn_tensor = ttnn.from_torch(torch_tensor, dtype=ttnn.bfloat16, device=device)
 
-    print("TT-NN tensor shape", ttnn_tensor.shape)
+    logger.info("TT-NN tensor shape", ttnn_tensor.shape)
 
 
 def test_to_torch(device):
@@ -25,7 +26,7 @@ def test_to_torch(device):
     ttnn_tensor = ttnn.rand((2, 3), dtype=ttnn.bfloat16, device=device)
     torch_tensor = ttnn.to_torch(ttnn_tensor)
 
-    print("Torch tensor shape", torch_tensor.shape)
+    logger.info("Torch tensor shape", torch_tensor.shape)
 
 
 def test_to_device(device):
@@ -37,7 +38,7 @@ def test_to_device(device):
     tensor_on_host = ttnn.from_torch(torch.randn((10, 64, 32)), dtype=ttnn.bfloat16)
     ttnn_tensor = ttnn.to_device(tensor_on_host, device=device)
 
-    print("TT-NN tensor shape after moving to device", ttnn_tensor.shape)
+    logger.info("TT-NN tensor shape after moving to device", ttnn_tensor.shape)
 
 
 def test_from_device(device):
@@ -49,7 +50,7 @@ def test_from_device(device):
     ttnn_tensor_on_device = ttnn.rand((2, 3), dtype=ttnn.bfloat16, device=device)
     ttnn_tensor_on_host = ttnn.from_device(ttnn_tensor_on_device)
 
-    print("TT-NN tensor shape after moving from device to host", ttnn_tensor_on_host.shape)
+    logger.info("TT-NN tensor shape after moving from device to host", ttnn_tensor_on_host.shape)
 
 
 def test_to_layout(device):
@@ -57,7 +58,7 @@ def test_to_layout(device):
     ttnn_tensor = ttnn.rand((2, 3, 4), dtype=ttnn.bfloat16, device=device)
     ttnn_tensor_layout_changed = ttnn.to_layout(ttnn_tensor, layout=ttnn.TILE_LAYOUT)
 
-    print("TT-NN tensor shape after changing layout", ttnn_tensor_layout_changed.shape)
+    logger.info("TT-NN tensor shape after changing layout", ttnn_tensor_layout_changed.shape)
 
 
 def test_dump_tensor(device):
@@ -72,7 +73,7 @@ def test_load_tensor(device):
     ttnn.dump_tensor(file_name="ttnn_tensor.tensorbin", tensor=ttnn_tensor)
 
     loaded_tensor = ttnn.load_tensor(file_name="ttnn_tensor.tensorbin", device=device)
-    print("Loaded TT-NN tensor shape", loaded_tensor.shape)
+    logger.info("Loaded TT-NN tensor shape", loaded_tensor.shape)
 
 
 def test_deallocate(device):
@@ -86,7 +87,7 @@ def test_reallocate(device):
     ttnn_tensor = ttnn.rand((2, 3), dtype=ttnn.bfloat16, device=device)
     ttnn_tensor_reallocated = ttnn.reallocate(ttnn_tensor)
 
-    print("Reallocated TT-NN tensor shape", ttnn_tensor_reallocated.shape)
+    logger.info("Reallocated TT-NN tensor shape", ttnn_tensor_reallocated.shape)
 
 
 def test_to_memory_config(device):
@@ -94,4 +95,4 @@ def test_to_memory_config(device):
     ttnn_tensor = ttnn.rand((2, 3), dtype=ttnn.bfloat16, device=device)
     ttnn_tensor_memory_config_changed = ttnn.to_memory_config(ttnn_tensor, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    print("TT-NN tensor shape after changing memory configuration", ttnn_tensor_memory_config_changed.shape)
+    logger.info("TT-NN tensor shape after changing memory configuration", ttnn_tensor_memory_config_changed.shape)
