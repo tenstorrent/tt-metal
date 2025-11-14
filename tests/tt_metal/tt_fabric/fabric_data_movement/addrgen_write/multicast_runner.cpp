@@ -14,6 +14,7 @@
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "tests/tt_metal/tt_fabric/common/utils.hpp"
 #include "tests/tt_metal/tt_fabric/fabric_data_movement/addrgen_write/test_common.hpp"
+#include "tests/tt_metal/tt_fabric/fabric_data_movement/addrgen_write/kernels/kernel_common.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -184,23 +185,31 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
 
     constexpr const char* KDIR = "tests/tt_metal/tt_fabric/fabric_data_movement/addrgen_write/kernels/";
 
-    // Variant detection
-    const bool is_with_state =
-        (p.api_variant == AddrgenApiVariant::MulticastWriteWithState ||
-         p.api_variant == AddrgenApiVariant::MulticastScatterWriteWithState ||
-         p.api_variant == AddrgenApiVariant::MulticastFusedAtomicIncWriteWithState);
-    const bool is_set_state =
-        (p.api_variant == AddrgenApiVariant::MulticastWriteSetState ||
-         p.api_variant == AddrgenApiVariant::MulticastScatterWriteSetState ||
-         p.api_variant == AddrgenApiVariant::MulticastFusedAtomicIncWriteSetState);
-    const bool is_scatter =
-        (p.api_variant == AddrgenApiVariant::MulticastScatterWrite ||
-         p.api_variant == AddrgenApiVariant::MulticastScatterWriteWithState ||
-         p.api_variant == AddrgenApiVariant::MulticastScatterWriteSetState);
-    const bool is_fused_atomic_inc =
-        (p.api_variant == AddrgenApiVariant::MulticastFusedAtomicIncWrite ||
-         p.api_variant == AddrgenApiVariant::MulticastFusedAtomicIncWriteWithState ||
-         p.api_variant == AddrgenApiVariant::MulticastFusedAtomicIncWriteSetState);
+    // Helper to map API variant to OPERATION_TYPE and API_VARIANT compile-time parameters
+    auto get_operation_and_api_variant = [](AddrgenApiVariant variant) -> std::pair<OperationType, ApiVariant> {
+        // Returns OperationType and ApiVariant enums
+        switch (variant) {
+            case AddrgenApiVariant::MulticastWrite: return {OperationType::BasicWrite, ApiVariant::Basic};
+            case AddrgenApiVariant::MulticastWriteWithState: return {OperationType::BasicWrite, ApiVariant::WithState};
+            case AddrgenApiVariant::MulticastWriteSetState: return {OperationType::BasicWrite, ApiVariant::SetState};
+            case AddrgenApiVariant::MulticastFusedAtomicIncWrite:
+                return {OperationType::FusedAtomicInc, ApiVariant::Basic};
+            case AddrgenApiVariant::MulticastFusedAtomicIncWriteWithState:
+                return {OperationType::FusedAtomicInc, ApiVariant::WithState};
+            case AddrgenApiVariant::MulticastFusedAtomicIncWriteSetState:
+                return {OperationType::FusedAtomicInc, ApiVariant::SetState};
+            case AddrgenApiVariant::MulticastScatterWrite: return {OperationType::Scatter, ApiVariant::Basic};
+            case AddrgenApiVariant::MulticastScatterWriteWithState:
+                return {OperationType::Scatter, ApiVariant::WithState};
+            case AddrgenApiVariant::MulticastScatterWriteSetState:
+                return {OperationType::Scatter, ApiVariant::SetState};
+            default: TT_FATAL(false, "Unknown API variant"); return {OperationType::BasicWrite, ApiVariant::Basic};
+        }
+    };
+
+    auto [operation_type, api_variant] = get_operation_and_api_variant(p.api_variant);
+
+    const bool is_fused_atomic_inc = (operation_type == OperationType::FusedAtomicInc);
 
     // Move NUM_PAGES calculation before receiver setup
     const uint32_t NUM_PAGES = (p.tensor_bytes + p.page_size - 1) / p.page_size;
@@ -209,7 +218,7 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
         receiver_progs.emplace_back(tt::tt_metal::CreateProgram());
         auto rx_wait_k = tt::tt_metal::CreateKernel(
             receiver_progs.back(),
-            std::string(KDIR) + "multicast_rx_addrgen.cpp",
+            std::string(KDIR) + "rx_addrgen.cpp",  // Unified receiver kernel
             p.receiver_core,
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -237,16 +246,17 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
                       .set_page_size(CB_ID, p.page_size);
     (void)tt::tt_metal::CreateCircularBuffer(sender_prog, p.sender_core, cb_cfg);
 
-    // Reader kernel (DRAM->CB)
+    // Reader kernel (DRAM->CB) - now uses unified kernel with OPERATION_TYPE compile-time arg
     std::vector<uint32_t> reader_cta;
     tt::tt_metal::TensorAccessorArgs(*src_buf).append_to(reader_cta);
-    reader_cta.push_back(1u /*SRC_IS_DRAM*/);
+    reader_cta.push_back(static_cast<uint32_t>(operation_type));  // OPERATION_TYPE
+    reader_cta.push_back(1u);              // SRC_IS_DRAM
     reader_cta.push_back(NUM_PAGES);
     reader_cta.push_back(p.page_size);
 
     auto reader_k = tt::tt_metal::CreateKernel(
         sender_prog,
-        std::string(KDIR) + "multicast_tx_reader_to_cb_addrgen.cpp",
+        std::string(KDIR) + "tx_reader_to_cb_addrgen.cpp",  // Unified reader kernel
         p.sender_core,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -255,43 +265,17 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
             .defines = defines});
     tt::tt_metal::SetRuntimeArgs(sender_prog, reader_k, p.sender_core, {(uint32_t)src_buf->address()});
 
-    // Writer kernel (CB->Fabric->dst + final sem INC)
+    // Writer kernel (CB->Fabric->dst + final sem INC) - now uses unified kernel with compile-time args
     std::vector<uint32_t> writer_cta;
     tt::tt_metal::TensorAccessorArgs(*dst_buf).append_to(writer_cta);
-    writer_cta.push_back(NUM_PAGES);
-    writer_cta.push_back(p.page_size);
-
-    // Select writer kernel based on variant
-    std::string writer_kernel_name;
-    if (is_fused_atomic_inc) {
-        if (is_set_state) {
-            writer_kernel_name = "multicast_fused_atomic_inc_tx_writer_set_state_addrgen.cpp";
-        } else if (is_with_state) {
-            writer_kernel_name = "multicast_fused_atomic_inc_tx_writer_with_state_addrgen.cpp";
-        } else {
-            writer_kernel_name = "multicast_fused_atomic_inc_tx_writer_addrgen.cpp";
-        }
-    } else if (is_scatter) {
-        if (is_set_state) {
-            writer_kernel_name = "multicast_scatter_tx_writer_set_state_addrgen.cpp";
-        } else if (is_with_state) {
-            writer_kernel_name = "multicast_scatter_tx_writer_with_state_addrgen.cpp";
-        } else {
-            writer_kernel_name = "multicast_scatter_tx_writer_addrgen.cpp";
-        }
-    } else {
-        if (is_set_state) {
-            writer_kernel_name = "multicast_tx_writer_set_state_addrgen.cpp";
-        } else if (is_with_state) {
-            writer_kernel_name = "multicast_tx_writer_with_state_addrgen.cpp";
-        } else {
-            writer_kernel_name = "multicast_tx_writer_cb_to_dst_addrgen.cpp";
-        }
-    }
+    writer_cta.push_back(static_cast<uint32_t>(operation_type));  // OPERATION_TYPE
+    writer_cta.push_back(static_cast<uint32_t>(api_variant));     // API_VARIANT
+    writer_cta.push_back(NUM_PAGES);       // TOTAL_PAGES
+    writer_cta.push_back(p.page_size);     // PAGE_SIZE
 
     auto writer_k = tt::tt_metal::CreateKernel(
         sender_prog,
-        std::string(KDIR) + writer_kernel_name,
+        std::string(KDIR) + "multicast_tx_writer_addrgen.cpp",  // Unified multicast writer kernel
         p.sender_core,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
