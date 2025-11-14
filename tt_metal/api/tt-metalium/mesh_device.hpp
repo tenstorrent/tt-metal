@@ -152,7 +152,13 @@ private:
     experimental::MemoryPinningParameters get_memory_pinning_parameters() const;
 
     // To allow access to pin_memory and get_memory_pinning_parameters from experimental::PinnedMemory.
-    friend experimental::PinnedMemory;
+    friend std::unique_ptr<experimental::PinnedMemory> experimental::PinMemory(
+        distributed::MeshDevice& mesh_device,
+        const distributed::MeshCoordinateRangeSet& coordinate_range_set,
+        HostBuffer& host_buffer,
+        bool map_to_noc);
+    friend experimental::MemoryPinningParameters experimental::GetMemoryPinningParameters(
+        distributed::MeshDevice& mesh_device);
 
 public:
     MeshDevice(
