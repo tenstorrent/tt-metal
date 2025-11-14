@@ -13,9 +13,6 @@ on:
       wheel-artifact-name:
         required: true
         type: string
-      build-artifact-name:
-        required: true
-        type: string
       dry-run:
         required: false
         type: boolean
