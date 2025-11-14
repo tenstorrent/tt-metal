@@ -354,7 +354,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_loopback_src(
             mcast,
             {0} /* mcast_exclude */,
             false /* wrapping_en */,
-            posted,
+            false,
             linked,
             true /* src_include */);
         setup_ongoing_cmdbuf_0(false, false, false, false, false);
@@ -374,7 +374,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_loopback_src(
             mcast,
             {0} /* mcast_exclude */,
             false /* wrapping_en */,
-            posted,
+            false,
             linked,
             true /* src_include */);
         setup_ongoing_cmdbuf_1(false, false, false, false, false);
@@ -389,7 +389,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_loopback_src(
         issue_write_cmdbuf_1();
     } else if (cmd_buf == SIMPLE_CMD_BUF) {
         reset_reg_cmdbuf();
-        setup_as_copy_reg_cmdbuf(true /* wr*/, mcast, {0} /* mcast_exclude */, posted, linked, true /* src_include */);
+        setup_as_copy_reg_cmdbuf(true /* wr*/, mcast, {0} /* mcast_exclude */, false, linked, true /* src_include */);
         SCMDBUF_WR_REG(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET, vc);
         SCMDBUF_WR_REG(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET, mcast ? MCAST_RESP_VC : WR_RESP_VC);
 
