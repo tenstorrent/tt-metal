@@ -465,13 +465,16 @@ class WanPatchEmbed(Module):
 
 
 class Embedding(Module):
-    def __init__(self, num_embeddings: int, embedding_dim: int, *, device: ttnn.MeshDevice) -> None:
+    def __init__(
+        self, dictionary_size: int, embedding_size: int, *, device: ttnn.MeshDevice, mesh_axis: int | None = None
+    ) -> None:
         super().__init__()
 
-        self.weight = Parameter(total_shape=[num_embeddings, embedding_dim], device=device)
-
-        self.num_embeddings = num_embeddings
-        self.embedding_dim = embedding_dim
+        self.weight = Parameter(
+            total_shape=[dictionary_size, embedding_size],
+            mesh_axes=[None, mesh_axis],
+            device=device,
+        )
 
     def forward(self, x: ttnn.Tensor, /) -> ttnn.Tensor:
         return ttnn.embedding(x, self.weight.data, layout=ttnn.TILE_LAYOUT)

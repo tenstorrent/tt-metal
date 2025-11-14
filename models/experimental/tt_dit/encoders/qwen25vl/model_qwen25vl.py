@@ -57,7 +57,11 @@ class Qwen25VlTextEncoder(Module):
             ccl_manager=ccl_manager,
         )
 
-        self.embed_tokens = Embedding(vocab_size, hidden_size, device=ctx.device)
+        if ctx.tp_axis is not None and ctx.ccl_manager is None:
+            msg = "ccl_manager must be provided if tensor parallelism is used"
+            raise ValueError(msg)
+
+        self.embed_tokens = Embedding(vocab_size, hidden_size, device=ctx.device, mesh_axis=ctx.tp_axis)
         self.layers = ModuleList(
             Qwen25VlDecoderLayer(
                 hidden_size=hidden_size,
@@ -77,6 +81,9 @@ class Qwen25VlTextEncoder(Module):
         # self.rotary_emb = Qwen25VlRotaryEmbedding(
         #     ctx=ctx, head_dim=hidden_size // num_attention_heads, rope_theta=rope_theta
         # )
+
+        self._tp_axis = ctx.tp_axis
+        self._ccl_manager = ctx.ccl_manager
 
     def forward(
         self,
@@ -100,6 +107,11 @@ class Qwen25VlTextEncoder(Module):
 
         input_embeds = self.embed_tokens.forward(input_ids)
         # pos_embeds = self.rotary_emb.forward(position_ids)
+
+        if self._tp_axis is not None:
+            input_embeds = self._ccl_manager.all_gather_persistent_buffer(
+                input_embeds, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True
+            )
 
         hidden_states = input_embeds
         hidden_states_list = []
