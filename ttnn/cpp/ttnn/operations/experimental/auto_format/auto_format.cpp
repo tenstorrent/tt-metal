@@ -49,18 +49,6 @@ bool legal_device_shape(const ttnn::Shape& shape, tt::tt_metal::Layout layout) {
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // anonymous namespace
 
-Tensor AutoFormat::move_tensor_to_mem_config(const Tensor& input, const MemoryConfig& mem_config) {
-    if (input.storage_type() != StorageType::DEVICE) {
-        auto default_device = AutoFormat::GetDefaultDevice();
-        TT_FATAL(default_device != nullptr, "Default mesh device is not set for AutoFormat operations");
-        return input.to_device(default_device, mem_config);
-    } else if (input.memory_config() != mem_config) {
-        return ttnn::clone(input, std::nullopt, mem_config, std::nullopt);
-    } else {
-        return input;
-    }
-}
-
 // This code is a workaround for cases where we need to remove autoformat but other dependent ops
 // are not quite ready. So here we basically just put the tensor back on device.
 // Used in backward_ops.cpp

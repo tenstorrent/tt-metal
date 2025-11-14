@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "clone/clone.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/decorators.hpp"
 #include "device/transpose_op.hpp"
@@ -11,7 +12,6 @@
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
-#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 
 #include <tt-metalium/hal.hpp>
 
@@ -196,8 +196,11 @@ ttnn::Tensor transpose_impl(
     Tensor output;
     if ((normalized_dim1 == normalized_dim2) || (input_typecasted.padded_shape()[normalized_dim1] == 1 &&
                                                  input_typecasted.padded_shape()[normalized_dim2] == 1)) {
-        output = ttnn::operations::experimental::auto_format::AutoFormat::move_tensor_to_mem_config(
-            input_typecasted, memory_config);
+        if (input_typecasted.memory_config() != memory_config) {
+            output = ttnn::clone(input_typecasted, std::nullopt, memory_config, std::nullopt);
+        } else {
+            output = input_typecasted;
+        }
     } else {
         if (normalized_dim1 > normalized_dim2) {
             std::swap(normalized_dim1, normalized_dim2);

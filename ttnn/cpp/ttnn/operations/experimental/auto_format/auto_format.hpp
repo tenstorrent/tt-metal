@@ -78,14 +78,6 @@ public:
         std::optional<tt::tt_metal::MemoryConfig> target_mem_config);
 
     /**
-     * Updates tensor memory configuration
-     * @param input Input tensor
-     * @param mem_config Target memory configuration
-     * @return Tensor with updated memory configuration
-     */
-    static Tensor move_tensor_to_mem_config(const Tensor& input, const tt::tt_metal::MemoryConfig& mem_config);
-
-    /**
      * Formats an input tensor to meet device and layout requirements
      * @param input Input tensor
      * @param device Target device
