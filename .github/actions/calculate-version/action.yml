@@ -128,8 +128,18 @@ runs:
         tag_type="${{ inputs.tag-type }}"
 
         if [ "$tag_type" = "dev" ]; then
-          echo "Dev tag type - ignoring version bump, using latest version"
-          echo "new_version=$latest_tag" >> "$GITHUB_OUTPUT"
+          echo "Dev tag type - forcing minor version bump"
+          # Extract version numbers (remove 'v' prefix) for dev minor bump
+          version_no_v=${latest_tag#v}
+          IFS='.' read -r major minor patch <<< "$version_no_v"
+
+          # Always increment minor version for dev tags
+          minor=$((minor + 1))
+          patch=0
+
+          new_version="v$major.$minor.$patch"
+          echo "Dev version calculated: $new_version"
+          echo "new_version=$new_version" >> "$GITHUB_OUTPUT"
           exit 0
         fi
 
