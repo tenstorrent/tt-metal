@@ -352,11 +352,23 @@ void ElfFile::Impl::Finalize() {
 
             --segment_iter;
             if (segment_iter->address == vma) {
-                uint32_t trim = info[ix + 1] - vma;
-
-                segment_iter->address += trim;
-                segment_iter->membytes -= trim;
-                segment_iter->contents = segment_iter->contents.subspan(trim / sizeof(uint32_t));
+                if (uint32_t trim = info[ix + 1] - vma) {
+                    if (segment_iter->lma == segment_iter->address) {
+                        // Keep the LMA matching
+                        segment_iter->lma += trim;
+                    } else {
+                        // Keep the LMA unchanged, move any following
+                        // contiguous LMAs
+                        uint32_t hwm = segment_iter->lma + segment_iter->contents.size() * sizeof(uint32_t);
+                        for (auto probe = segment_iter; ++probe != GetSegments().end() && probe->lma == hwm;) {
+                            probe->lma -= trim;
+                            hwm += probe->contents.size() * sizeof(uint32_t);
+                        }
+                    }
+                    segment_iter->address += trim;
+                    segment_iter->membytes -= trim;
+                    segment_iter->contents = segment_iter->contents.subspan(trim / sizeof(uint32_t));
+                }
 
                 uint32_t limit = info[ix + 2];
                 if (segment_iter->membytes > limit) {
