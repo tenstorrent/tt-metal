@@ -59,6 +59,9 @@ void matmul_blocks(
     // Width-first traversal: iterate column subblocks outer, row subblocks inner
     for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; ++in1_subblock) {
         for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
+            // PACK(( DPRINT << "[matmul_blocks] in0_subblock: " << in0_subblock << ", in1_subblock: " << in1_subblock
+            // << ENDL() ));
+
             tile_regs_acquire();
 
             uint32_t dst_index = 0;
@@ -100,7 +103,8 @@ void matmul_blocks(
                 for (uint32_t i = 0; i < subblock_w; i++) {
                     sfpu_reduce_max_col_epilogue();
                     uint32_t reduce_tile_index = out_col_offset + i;
-                    pack_tile<true>(i, reduce_out_cb, reduce_tile_index);
+                    // Epilogue always writes result to dst[0], so pack from dst[0]
+                    pack_tile<true>(0, reduce_out_cb, reduce_tile_index);
                 }
             }
 
