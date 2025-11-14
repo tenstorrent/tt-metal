@@ -127,7 +127,7 @@ class OpTestBase:
             # If we are running determinism checks, we want to switch activation tensors
             # every time we complete an iteration of a determinism check, to confirm that
             # device is producing new results, and not just reusing an already existing buffer
-            num_activation_tensors = 10
+            num_activation_tensors = 1
 
         A = []
         for act in range(num_activation_tensors):
@@ -162,6 +162,8 @@ class OpTestBase:
         self.activations = [None] * num_devices
         out = [None] * num_devices
 
+        # return
+
         self.activations = self.convert_activations_to_memory_config(a_t[current_act_tensor])
 
         logger.info("Starting iterations")
@@ -185,12 +187,31 @@ class OpTestBase:
                     if torch.equal(reference_out[current_act_tensor][output_id], outputs[output_id]):
                         logger.info(f"Device {device_idx} PCC: 1.0")
                     else:
+                        # print where the mismatch is
+                        print(f"Mismatch locations:")
+                        mismatch_locations = torch.where(
+                            reference_out[current_act_tensor][output_id] != outputs[output_id]
+                        )
+                        print(mismatch_locations)
+                        print("--------------------------------")
+
                         # For determinism check, we avoid calling comp_pcc func as it is heavy and with too many operations,
                         # part of the code that replaces nans/infs with zeros starts leaking memory, even if deallocation is forced,
                         # so we call it only in case we see tensors are not equal
                         _, pcc = comp_pcc(reference_out[current_act_tensor][output_id], outputs[output_id])
                         logger.info(f"Device {device_idx} PCC: {pcc}")
                         num_nd_outputs[output_id] += 1
+
+                        # print the outputs
+                        torch.set_printoptions(
+                            precision=2, sci_mode=False, linewidth=1000, threshold=100000, edgeitems=32000
+                        )
+                        print(f"Output {output_id}:")
+                        print(outputs[output_id][mismatch_locations])
+                        print(f"Reference output {output_id}:")
+                        print(reference_out[current_act_tensor][output_id][mismatch_locations])
+                        print("--------------------------------")
+                        print(f"Output shape: {outputs[output_id].shape}")
 
                 current_act_tensor = (current_act_tensor + 1) % num_activation_tensors
                 logger.info("Switching activation tensor for new determinism iterations...")

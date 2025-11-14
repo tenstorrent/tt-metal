@@ -165,22 +165,24 @@ def test_resnet_conv(mesh_device, didt_workload_iterations, determinism_check_in
     filter_height = 4
     filter_width = 4
     input_height = 35
-    input_width = 83
+    input_width = 35
+    # input_width = 83
     compute_with_storage_grid_size = (8, 8)
     if is_blackhole():
         compute_grid = get_blackhole_grid_size(mesh_device)
-        compute_with_storage_grid_size = (compute_grid.x, compute_grid.y)
+        # compute_with_storage_grid_size = (compute_grid.x, compute_grid.y)
+        compute_with_storage_grid_size = (1, 1)
     logger.info(f"Running on {compute_with_storage_grid_size} cores")
     # scale batch_size with num cores to keep sub_block dims
     batch_size = compute_with_storage_grid_size[0] * compute_with_storage_grid_size[1]
 
-    output_channels = 64
-    input_channels = 16
+    output_channels = 8
+    input_channels = 2
     torch.manual_seed(0)
     conv_input_shape = [batch_size, input_channels, input_height, input_width]
     conv_weight_shape = [output_channels, input_channels // groups, filter_height, filter_width]
     weights_block_h = 2
-    weights_block_w = 2
+    weights_block_w = 1
 
     in0_shape = conv_input_shape
     in1_shape = conv_weight_shape

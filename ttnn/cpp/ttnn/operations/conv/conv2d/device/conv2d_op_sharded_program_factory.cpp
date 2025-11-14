@@ -671,7 +671,10 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
     const CoreCoord top_left_core_plus_one = {(std::size_t)1, (std::size_t)1};
     const CoreCoord bottom_right_core = {(std::size_t)in_num_cores_x - 1, (std::size_t)in_num_cores_y - 1};
     const CoreCoord top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
-    const CoreCoord top_left_core_plus_one_physical = device->worker_core_from_logical_core(top_left_core_plus_one);
+    CoreCoord top_left_core_plus_one_physical;
+    if (block_sharded) {
+        top_left_core_plus_one_physical = device->worker_core_from_logical_core(top_left_core_plus_one);
+    }
     const CoreCoord bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
 
     CoreRangeSet mcast_sender_cores =
