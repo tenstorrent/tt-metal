@@ -5,7 +5,6 @@ import torch
 
 import ttnn
 from models.demos.gpt_oss.config import MeshConfig, Mode, ModeConfig
-from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 from models.demos.gpt_oss.utils.substate import substate
 from models.tt_transformers.tt.common import copy_host_to_device
 from models.tt_transformers.tt.rope import RotarySetup
@@ -68,6 +67,16 @@ class Model:
         self.mesh_config = mesh_config or MeshConfig(
             mesh_device.shape, decode=ModeConfig(tp=mesh_device.shape[1], ep=mesh_device.shape[0], sp=1)
         )
+        self.num_rows = self.mesh_config.mesh_shape[0]
+        shard_chunk_size = self.num_rows * ttnn.TILE_SIZE
+        if hf_config.hidden_size % shard_chunk_size != 0:
+            self.padded_hidden_size = (
+                (hf_config.hidden_size + shard_chunk_size - 1) // shard_chunk_size
+            ) * shard_chunk_size
+        else:
+            self.padded_hidden_size = hf_config.hidden_size
+        self.local_padded_hidden = self.padded_hidden_size // self.num_rows
+        print("mesh rows", self.num_rows, "padded_hidden", self.padded_hidden_size, "local", self.local_padded_hidden)
 
         # Setup RoPE using tt-transformers RotarySetup (handles cos/sin matrices and transformation matrices)
         # Force datatype to bfloat16 since rotary_embedding_llama requires bfloat16
@@ -88,15 +97,19 @@ class Model:
         self.transformation_mats = self.rope_setup.get_both_trans_mats()
 
         embedding_weight = substate(state_dict, "model.embed_tokens")["weight"]
+        if embedding_weight.shape[-1] < self.padded_hidden_size:
+            pad_width = self.padded_hidden_size - embedding_weight.shape[-1]
+            embedding_weight = torch.nn.functional.pad(embedding_weight, (0, pad_width))
         embedding_weight = embedding_weight.unsqueeze(0).unsqueeze(0)
+        print("embedding_weight", embedding_weight.shape)
         self.embedding_weight = ttnn.as_tensor(
             embedding_weight,
             dtype=ttnn.bfloat16,
             device=mesh_device,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            cache_file_name=get_cache_file_name(tensor_cache_path, "model.embed_tokens.weight"),
+            # cache_file_name=get_cache_file_name(tensor_cache_path, "model.embed_tokens.weight"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=self.mesh_config.row_parallel(mesh_device),
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=(-1, None)),
         )
         self.layers = [
             DecoderLayer(
@@ -106,7 +119,8 @@ class Model:
                 layer_idx,
                 ccl_manager,
                 dtype=dtype,
-                tensor_cache_path=get_cache_file_name(tensor_cache_path, f"model.layers.{layer_idx}"),
+                tensor_cache_path=None,
+                # get_cache_file_name(tensor_cache_path, f"model.layers.{layer_idx}"),
                 paged_attention_config=paged_attention_config,
                 mesh_config=self.mesh_config,
                 create_kv_cache=create_kv_cache,
@@ -118,18 +132,23 @@ class Model:
             mesh_device,
             hf_config,
             substate(state_dict, "model.norm"),
-            tensor_cache_path=get_cache_file_name(tensor_cache_path, "norm"),
+            # tensor_cache_path=get_cache_file_name(tensor_cache_path, "norm"),
             mesh_config=self.mesh_config,
         )
+        lm_head = substate(state_dict, "lm_head")["weight"].transpose(0, 1)
+        if lm_head.shape[0] < self.padded_hidden_size:
+            pad_rows = self.padded_hidden_size - lm_head.shape[0]
+            lm_head = torch.nn.functional.pad(lm_head, (0, 0, 0, pad_rows))
+
         self.lm_head_weight = ttnn.as_tensor(
-            substate(state_dict, "lm_head")["weight"].transpose(0, 1),
+            lm_head,
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat8_b,
-            cache_file_name=get_cache_file_name(tensor_cache_path, "lm_head_sharded.weight"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=self.mesh_config.column_parallel(mesh_device),
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=(-2, -1)),
         )
+        print("lm_head_weight", self.lm_head_weight.shape)
 
     @classmethod
     def create_transformer_compatible(
@@ -217,14 +236,22 @@ class Model:
 
         # Final norm and lm_head
         hidden_states = self.norm(hidden_states)
+        hidden_states = hidden_states[:, :, : self.local_padded_hidden]
         logits = ttnn.matmul(hidden_states, self.lm_head_weight, dtype=ttnn.bfloat8_b)
         hidden_states.deallocate(True)
+
         # TP all-gather if using tensor parallelism
         config = self.mesh_config.get_config(mode)
+        if config.ep > 1 or config.sp > 1:
+            logits = ttnn.all_reduce(
+                logits, num_links=4, topology=ttnn.Topology.Ring, cluster_axis=0, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+
         if config.tp > 1:
             logits_gathered = self.mesh_config.allgather(logits, self.ccl_manager, axis=self.mesh_config.tp_axis, dim=2)
             logits.deallocate(True)
             logits = logits_gathered
+
         return logits
 
     def ttnn_decode_forward(
