@@ -52,8 +52,8 @@ void matmul_blocks(
     // reconfig_data_format(in1_cb, in0_cb);
     // pack_reconfig_data_format(matmul_out_cb);
     cb_reserve_back(matmul_out_cb, output_num_tiles);
-    // Reserve space for reduced outputs: one tile per output column per in0_subblock
-    uint32_t total_reduce_tiles = in0_num_subblocks * in1_num_subblocks * subblock_w;  // = in0_num_subblocks * N
+    // Reserve space for reduced outputs: one tile per output column (final result)
+    uint32_t total_reduce_tiles = in1_num_subblocks * subblock_w;  // = N
     cb_reserve_back(reduce_out_cb, total_reduce_tiles);
 
     // Width-first traversal: iterate column subblocks outer, row subblocks inner
@@ -84,18 +84,24 @@ void matmul_blocks(
                 }
             }
 
-            // DO this on same bank packer worked on berfore switching to next bank value
+            // Initialize reduce once per column (first row block only)
+            if (in0_subblock == 0) {
+                sfpu_reduce_max_sdpa_init(subblock_w);
+            }
 
-            // real sdpa usecase
-            // subblock_w: 2
-            // subblock_h: 4
-
-            sfpu_reduce_max_sdpa_init(subblock_w);
-
+            // Perform reduce operation on current row block
+            // This accumulates max values in LREGs 4-7
             for (uint32_t i = 0; i < subblock_w; i++) {
                 sfpu_reduce_max_sdpa(i, subblock_h, (int)VectorMode::RC_custom);
-                uint32_t reduce_tile_index = in0_subblock * N + out_col_offset + i;
-                pack_tile<true>(i, reduce_out_cb, reduce_tile_index);
+            }
+
+            // Only finalize and pack after processing all row blocks for this column
+            if (in0_subblock == (in0_num_subblocks - 1)) {
+                for (uint32_t i = 0; i < subblock_w; i++) {
+                    sfpu_reduce_max_col_epilogue();
+                    uint32_t reduce_tile_index = out_col_offset + i;
+                    pack_tile<true>(i, reduce_out_cb, reduce_tile_index);
+                }
             }
 
             tile_regs_release();
@@ -103,41 +109,7 @@ void matmul_blocks(
     }
     cb_push_back(matmul_out_cb, output_num_tiles);
     cb_push_back(reduce_out_cb, total_reduce_tiles);
-    // UNPACK(( DPRINT << "[matmul_blocks] packed intermediate reduce tiles: " << total_reduce_tiles << ENDL() ));
-}
-
-template <uint32_t in0_cb, uint32_t scale_cb, uint32_t k_chunk_size, uint32_t q_chunk_size>
-void reduce_c_transposed(uint32_t out_cb) {
-    DeviceZoneScopedN("reduce_c");
-
-    constexpr uint32_t num_tiles = k_chunk_size * q_chunk_size;
-
-    reduce_init<PoolType::MAX, ReduceDim::REDUCE_COL>(in0_cb, scale_cb, out_cb);
-
-    // UNPACK(( DPRINT << "k_chunk_size " << k_chunk_size << " q_chunk_size " << q_chunk_size << ENDL() ));
-
-    // Process columns in blocks to improve locality and reduce DST acquire/release overhead
-    constexpr uint32_t COLS_PER_BLOCK = (q_chunk_size >= 16) ? 16 : ((q_chunk_size >= 8) ? 8 : 4);
-    for (uint32_t j0 = 0; j0 < q_chunk_size; j0 += COLS_PER_BLOCK) {
-        uint32_t block_cols = std::min<uint32_t>(COLS_PER_BLOCK, q_chunk_size - j0);
-        tile_regs_acquire();
-        for (uint32_t i = 0; i < k_chunk_size; i++) {
-            // Stream a contiguous run of tiles for row i and columns [j0, j0+block_cols)
-            for (uint32_t b = 0; b < block_cols; b++) {
-                uint32_t j = j0 + b;
-                reduce_tile<PoolType::MAX, ReduceDim::REDUCE_COL>(in0_cb, scale_cb, i * q_chunk_size + j, 0, b);
-            }
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        for (uint32_t b = 0; b < block_cols; b++) {
-            pack_tile(b, out_cb);
-        }
-        tile_regs_release();
-        // UNPACK(( DPRINT << "[reduce_c_transposed] packed block cols [" << j0 << "," << (j0 + block_cols) << ")" <<
-        // ENDL() ));
-    }
-    // reduce_uninit();
+    // UNPACK(( DPRINT << "[matmul_blocks] packed reduce tiles: " << total_reduce_tiles << ENDL() ));
 }
 
 namespace NAMESPACE {
@@ -174,12 +146,7 @@ void MAIN {
 
     // Ensure outputs are produced before exiting
     cb_wait_front(cb_matmul_out, k_chunk_size * q_chunk_size);
-    cb_wait_front(
-        reduce_out_cb, q_chunk_size);  // Now only expect q_chunk_size tiles in reduce_out_cb after final reduce
-
-    reduce_c_transposed<cb_matmul_out, identity_scale_cb, k_chunk_size, q_chunk_size>(reduce_out_cb);
-    cb_push_back(reduce_out_cb, q_chunk_size);
-    // UNPACK(( DPRINT << "[reduce_c_transposed] packed final reduce tiles: " << q_chunk_size << ENDL() ));
+    cb_wait_front(reduce_out_cb, q_chunk_size);  // Expect q_chunk_size tiles from on-the-fly reduction
 
     // PACK(( tt::compute::common::print_full_tile(reduce_out_cb, 0) ));
     // PACK(( tt::compute::common::print_full_tile(reduce_out_cb, 1) ));

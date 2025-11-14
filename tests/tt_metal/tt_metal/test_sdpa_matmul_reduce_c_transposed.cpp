@@ -266,16 +266,16 @@ static bool test_sdpa_reduce_c_transposed(
     uint32_t out_subblock_w =
         (out_subblock_h == k_chunk_size) ? (std::min(q_chunk_size, dst_size / out_subblock_h)) : 1;
 
-    if (out_subblock_h == dst_size && out_subblock_w == 1 && k_chunk_size % 2 == 0 && q_chunk_size % 2 == 0) {
-        // Hacky, try to get 4x2 output subblock if possible to optimize matmul util.
-        out_subblock_h = out_subblock_h / 2;
-        out_subblock_w = 2;
-    }
+    // if (out_subblock_h == dst_size && out_subblock_w == 1 && k_chunk_size % 2 == 0 && q_chunk_size % 2 == 0) {
+    //     // Hacky, try to get 4x2 output subblock if possible to optimize matmul util.
+    //     out_subblock_h = out_subblock_h / 2;
+    //     out_subblock_w = 2;
+    // }
 
     const uint32_t in0_num_subblocks = k_chunk_size / out_subblock_h;
     const uint32_t in1_num_subblocks = q_chunk_size / out_subblock_w;
 
-    uint32_t max_out_num_tiles = in0_num_subblocks * q_chunk_size;  // reduce_out tiles
+    uint32_t max_out_num_tiles = q_chunk_size;  // reduce_out tiles (one per column)
 
     // Now that blocking is known, create reduce_out buffer and CB
     auto max_out_buffer_config = tt::tt_metal::ShardedBufferConfig{
@@ -286,10 +286,10 @@ static bool test_sdpa_reduce_c_transposed(
         .buffer_layout = tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
         .shard_parameters = tt::tt_metal::ShardSpecBuffer(
             CoreRangeSet(std::set<CoreRange>({CoreRange(core, core)})),
-            {in0_num_subblocks * tt::constants::TILE_HEIGHT, q_chunk_size * tt::constants::TILE_WIDTH},
+            {tt::constants::TILE_HEIGHT, q_chunk_size * tt::constants::TILE_WIDTH},
             tt::tt_metal::ShardOrientation::ROW_MAJOR,
             {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
-            {in0_num_subblocks, q_chunk_size})};
+            {1, q_chunk_size})};
     auto max_out_buffer = CreateBuffer(max_out_buffer_config);
 
     auto cb_reduce_out_id = tt::CBIndex::c_3;

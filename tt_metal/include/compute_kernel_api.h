@@ -61,6 +61,8 @@ ALWI void sfpu_reduce_max_sdpa(uint32_t idst, uint32_t block_height, int vector_
     PACK((llk_math_sfpu_reduce_max_sdpa(idst, block_height, vector_mode)));
 }
 
+ALWI void sfpu_reduce_max_col_epilogue() { PACK((llk_math_sfpu_reduce_max_col_epilogue())); }
+
 /**
  * Please refer to documentation for any_init.
  */
