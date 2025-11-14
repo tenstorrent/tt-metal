@@ -61,9 +61,10 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_minimal_matmul_
     tt::tt_metal::Program program{};
 
     // Create a matmul signal info object that gets populated by the matmul kernel
+    uint32_t TILE_WIDTH = 32;
     std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler> matmul_fused_op_signaler =
         ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler();
-    matmul_fused_op_signaler->init_all_gather(ring_size, ring_index);
+    matmul_fused_op_signaler->init_all_gather(ring_size, ring_index, input_tensor.padded_shape()[3] / TILE_WIDTH);
 
     // Matmul
     std::optional<tt::tt_metal::operation::ProgramWithCallbacks> matmul_program_with_callbacks;
