@@ -291,9 +291,8 @@ class Qwen25VlAttention(Module):
         # q = ttnn.experimental.rotary_embedding_llama(q, cos, sin, self._rope_mat, is_decode_mode=False)
         # k = ttnn.experimental.rotary_embedding_llama(k, cos, sin, self._rope_mat, is_decode_mode=False)
 
-        # TODO: necessary?
-        k = ttnn.repeat_interleave(k, repeats=self._num_local_heads // self._num_local_kv_heads, dim=1)
-        v = ttnn.repeat_interleave(v, repeats=self._num_local_heads // self._num_local_kv_heads, dim=1)
+        # k = ttnn.repeat_interleave(k, repeats=self._num_local_heads // self._num_local_kv_heads, dim=1)
+        # v = ttnn.repeat_interleave(v, repeats=self._num_local_heads // self._num_local_kv_heads, dim=1)
 
         x = ttnn.transformer.scaled_dot_product_attention(
             q,
