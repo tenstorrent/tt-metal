@@ -38,7 +38,6 @@
 
 #include <tt-metalium/queue_id.hpp>
 #include <tt-metalium/shape.hpp>
-#include <tt-metalium/tensor/tensor_impl.hpp>
 
 namespace tt::tt_metal {
 namespace {

@@ -6,11 +6,11 @@
 #include <gmock/gmock.h>
 
 #include "host_buffer.hpp"
-#include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
+#include <tt_metal/tt_metal/common/multi_device_fixture.hpp>
 
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/operations/functions.hpp"
-#include "tt-metalium/tensor/tensor_utils.hpp"
+#include <tt-metalium/tensor/tensor_utils.hpp>
 #include "ttnn_test_fixtures.hpp"
 #include <ttnn/distributed/types.hpp>
 #include <ttnn/distributed/distributed_tensor.hpp>

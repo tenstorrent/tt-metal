@@ -5,7 +5,7 @@
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
 
-#include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
+#include <tt_metal/tt_metal/common/multi_device_fixture.hpp>
 
 #include "ttnn/distributed/api.hpp"
 
