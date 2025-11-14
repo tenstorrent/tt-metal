@@ -495,7 +495,7 @@ jobs:
     secrets: inherit
     with:
       base-image-name: harbor.ci.tenstorrent.net/${{ needs.build-docker-image.outputs.dev-tag }}
-      evaluation-image-name: harbor.ci.tenstorrent.net/ghcr.io/${{ github.repository }}/tt-metalium/${{ inputs.distro }}-${{ inputs.version }}-evaluation-${{ inputs.architecture }}:${{ github.sha }}
+      evaluation-image-name: harbor.ci.tenstorrent.net/evaluation/${{ github.repository }}/tt-metalium/${{ inputs.distro }}-${{ inputs.version }}-evaluation-${{ inputs.architecture }}:${{ github.sha }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build_artifact_name }}
       wheel-artifact-name: ${{ needs.build-wheel.outputs.wheel_artifact_name }}
       run-id: ${{ inputs.use-artifacts-from-run != '' && inputs.use-artifacts-from-run || github.run_id }}
