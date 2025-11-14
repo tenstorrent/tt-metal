@@ -659,6 +659,8 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype.value() == DataType::INT32) {
                 op_init_and_name = {"mul_int32_tile_init();", fmt::format("mul_int32_tile({0}, {0}, {0});", idst)};
+            } else if (input_dtype.value() == DataType::UINT32) {
+                op_init_and_name = {"mul_int32_tile_init();", fmt::format("mul_uint32_tile({0}, {0}, {0});", idst)};
             } else if (input_dtype.value() == DataType::UINT16) {
                 op_init_and_name = {"mul_int_tile_init();", fmt::format("mul_uint16_tile({0}, {0}, {0});", idst)};
             } else {
@@ -900,48 +902,6 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
     TT_THROW("Unknown unary op: {}", name);
 }
 
-std::string unary_with_param_to_string(const UnaryWithParam& unary_op) {
-    switch (unary_op.op_type) {
-        case UnaryOpType::RELU: return "relu";
-        case UnaryOpType::RELU6: return "relu6";
-        case UnaryOpType::GELU:
-            if (!unary_op.params.empty() && unary_op.params[0] == static_cast<float>(true)) {
-                return "gelu_approx";
-            }
-            return "gelu";
-        case UnaryOpType::SILU: return "silu";
-        case UnaryOpType::SIGMOID:
-            if (unary_op.params.size() >= 2 && unary_op.params[1] == static_cast<float>(true)) {
-                return "sigmoid_approx";
-            }
-            return "sigmoid";
-        case UnaryOpType::HARDSIGMOID: return "hardsigmoid";
-        case UnaryOpType::SQRT: return "sqrt";
-        case UnaryOpType::RSQRT: return "rsqrt";
-        case UnaryOpType::EXP: return "exp";
-        case UnaryOpType::RECIP: return "recip";
-        case UnaryOpType::LOG: return "log";
-        case UnaryOpType::LOG1P: return "log1p";
-        case UnaryOpType::TANH: return "tanh";
-        case UnaryOpType::LOG2: return "log2";
-        case UnaryOpType::LOG10: return "log10";
-        case UnaryOpType::SIN: return "sin";
-        case UnaryOpType::COS: return "cos";
-        case UnaryOpType::COSH: return "cosh";
-        case UnaryOpType::SINH: return "sinh";
-        case UnaryOpType::ABS: return "abs";
-        case UnaryOpType::ABS_INT32: return "abs_int32";
-        case UnaryOpType::SIGN: return "sign";
-        case UnaryOpType::SQUARE: return "square";
-        case UnaryOpType::SOFTPLUS: return "softplus";
-        case UnaryOpType::SELU: return "selu";
-        case UnaryOpType::ALT_COMPLEX_ROTATE90: return "alt_complex_rotate90";
-        case UnaryOpType::MISH: return "mish";
-        case UnaryOpType::HARDMISH: return "hardmish";
-        default: TT_THROW("Unsupported unary op type: {}", static_cast<int>(unary_op.op_type));
-    }
-}
-
 template <typename T>
 std::map<std::string, std::string> get_defines(
     UnaryOpType op_type,
@@ -1054,9 +1014,6 @@ std::string get_compute_kernel_path(
 
 template <typename T>
 uint32_t pack_scalar_runtime_arg_impl(const T& param, DataType dtype) {
-    // if ((dtype == DataType::UINT32 || dtype == DataType::INT32) && std::same_as<T, float>) {
-    //     return std::bit_cast<uint32_t>(static_cast<int32_t>(param));
-    // }
     if constexpr (std::same_as<T, uint32_t>) {
         return param;
     } else {

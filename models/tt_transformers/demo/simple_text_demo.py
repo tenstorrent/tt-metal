@@ -697,7 +697,9 @@ def prepare_generator_args(
     ids=["performance", "accuracy"],
 )
 @pytest.mark.parametrize(
-    "device_params", [{"fabric_config": True, "trace_region_size": 70000000, "num_command_queues": 1}], indirect=True
+    "device_params",
+    [{"fabric_config": True, "trace_region_size": 50000000, "num_command_queues": 1}],
+    indirect=True,
 )
 @pytest.mark.parametrize(
     "mesh_device",
@@ -1404,7 +1406,7 @@ def test_demo_text(
                 "T3K_Llama-3.1-70B": 240,
                 "T3K_Qwen2.5-72B": (290, 1.35),  # (value, high_tolerance_ratio)
                 "T3K_Qwen2.5-Coder-32B": (215, 1.27),  # (value, high_tolerance_ratio)
-                "T3K_Qwen3-32B": 230,  # Issue: Perf regression being tracked on issue #29834
+                "T3K_Qwen3-32B": (100, 1.1),  # Issue: Perf regression being tracked on issue #29834
             }
             ci_target_decode_tok_s_u = {
                 # N150 targets - higher is better

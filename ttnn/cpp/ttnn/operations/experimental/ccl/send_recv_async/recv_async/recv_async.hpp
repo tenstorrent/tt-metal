@@ -14,9 +14,7 @@ namespace operations::experimental::ccl {
 
 struct ExecuteRecvAsync {
     static std::vector<ttnn::Tensor> invoke(
-        const Tensor& output_tensor,
-        const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
-        const tt::tt_metal::distributed::SocketConfig& socket_config);
+        const Tensor& output_tensor, const tt::tt_metal::distributed::MeshSocket& mesh_socket);
 };
 
 }  // namespace operations::experimental::ccl

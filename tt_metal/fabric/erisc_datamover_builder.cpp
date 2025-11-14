@@ -198,11 +198,9 @@ bool requires_forced_assignment_to_noc1() {
     // When creating a kernel on erisc0 and 2 erisc mode is disabled, the physical processor is erisc1 while erisc0 is
     // running base firmware. As base firmware may occasionally use noc0 force fabric on "erisc0" to use noc1
     //
-    // When 2 erisc mode is enabled on the runtime, erisc index == noc index is enforced hence the condition
-    // !get_enable_2_erisc_mode() below.
+    // When 2 erisc mode is enabled on the runtime, erisc index == noc index is enforced in tt_metal.cpp
     //
-    return tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE &&
-           get_num_riscv_cores() == 1 && !tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode();
+    return tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE && get_num_riscv_cores() == 1;
 }
 }  // anonymous namespace
 

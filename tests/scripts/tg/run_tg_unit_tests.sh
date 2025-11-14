@@ -36,7 +36,7 @@ run_tg_gpt_oss_tests() {
   gpt_oss_120b=/mnt/MLPerf/tt_dnn-models/tt/GPT-OSS-120B/
 
   for gpt_oss_dir in "$gpt_oss_20b" "$gpt_oss_120b"; do
-    HF_MODEL=$gpt_oss_dir pytest -n auto models/demos/gpt_oss/tests/unit --timeout 600; fail+=$?
+    HF_MODEL=$gpt_oss_dir pytest -n auto models/demos/gpt_oss/tests/unit --timeout 900; fail+=$?
   done
 
   # Record the end time

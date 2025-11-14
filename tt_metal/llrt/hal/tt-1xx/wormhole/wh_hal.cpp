@@ -365,6 +365,7 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
 
     this->verify_eth_fw_version_func_ = [](tt::umd::semver_t /*eth_fw_version*/) {
         // No checks
+        return true;
     };
 }
 

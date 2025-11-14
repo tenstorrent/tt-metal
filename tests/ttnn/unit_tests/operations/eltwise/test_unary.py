@@ -201,8 +201,6 @@ def run_identity_test(device, h, w, data_type):
 @pytest.mark.parametrize("w", [128])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.uint8, ttnn.uint32, ttnn.int32, ttnn.float32])
 def test_fp32_uint32(device, h, w, dtype):
-    if dtype == ttnn.uint8:
-        pytest.skip(" Need uint8 LLK support without workarounds - see #24571")
     run_identity_test(device, h, w, dtype)
 
 

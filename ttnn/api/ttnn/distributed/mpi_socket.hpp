@@ -21,9 +21,7 @@ namespace ttnn::distributed {
  */
 class MPISocket : public ISocket {
 public:
-    MPISocket(
-        const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
-        const tt::tt_metal::distributed::SocketConfig& socket_config);
+    MPISocket(const tt::tt_metal::distributed::MeshSocket& mesh_socket);
     ~MPISocket() override = default;
 
     void send(const ttnn::Tensor& tensor) override;
@@ -38,8 +36,7 @@ public:
         tt::tt_metal::distributed::SocketConfig socket_config);
 
 private:
-    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device_;
-    tt::tt_metal::distributed::SocketConfig socket_config_;
+    tt::tt_metal::distributed::MeshSocket mesh_socket_;
 };
 
 }  // namespace ttnn::distributed
