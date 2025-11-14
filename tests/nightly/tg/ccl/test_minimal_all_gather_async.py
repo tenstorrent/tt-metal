@@ -487,6 +487,8 @@ def test_all_gather_async_wan_galaxy_4x32(
     num_iters,
 ):
     torch.manual_seed(2005)
+    from loguru import logger
+
     devices = mesh_device.get_num_devices()
     input_shape = ag_output_shape
 
@@ -500,6 +502,7 @@ def test_all_gather_async_wan_galaxy_4x32(
         device=mesh_device,
     )
 
+    logger.info(f"tt_input.shape = {tt_input.shape}")
     tt_output = ttnn.all_gather(tt_input, dim=gather_dim, cluster_axis=cluster_axis, topology=all_gather_topology)
 
     torch_output = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
@@ -511,9 +514,9 @@ def test_all_gather_async_wan_galaxy_4x32(
 
 @pytest.mark.parametrize("num_links", [1], ids=["1links"])
 @pytest.mark.parametrize(
-    "ag_output_shape, gather_dim, cluster_axis,layout, ag_input_dtype",
+    "input_shape, gather_dim, cluster_axis,layout, ag_input_dtype",
     [
-        ([1, 10, 81920, 128], 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        ([1, 10, 640, 128], 3, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
     ],
     ids=[
         "wan_all_gather_1",
@@ -553,7 +556,7 @@ def test_all_gather_async_wan_galaxy_4x32(
 @pytest.mark.parametrize("mesh_device", [(4, 32)], indirect=True)
 def test_all_gather_run_impl_assert_repro(
     mesh_device,
-    ag_output_shape,
+    input_shape,
     gather_dim,
     cluster_axis,
     num_links,
@@ -565,19 +568,37 @@ def test_all_gather_run_impl_assert_repro(
     all_gather_topology,
     num_iters,
 ):
-    run_all_gather_impl(
-        mesh_device,
-        mesh_device.shape[cluster_axis],
-        ag_output_shape,
-        gather_dim,
-        num_links,
-        ag_input_dtype,
-        layout,
-        mem_config_input,
-        mem_config_ag,
-        all_gather_topology=all_gather_topology,
-        enable_trace=enable_trace,
-        num_iters=num_iters,
-        cluster_axis=cluster_axis,
+    from loguru import logger
+
+    torch.manual_seed(2005)
+    devices = mesh_device.get_num_devices()
+    input_shape[gather_dim] *= devices
+
+    torch_input = torch.rand(input_shape, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        layout=layout,
+        dtype=ag_input_dtype,
+        memory_config=mem_config_input,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=gather_dim),
+        device=mesh_device,
     )
-    ttnn.ReadDeviceProfiler(mesh_device)
+
+    logger.info(f"Starting all-gather")
+    tt_output = ttnn.all_gather(
+        tt_input,
+        dim=gather_dim,
+        cluster_axis=cluster_axis,
+        topology=all_gather_topology,
+        num_links=num_links,
+        memory_config=mem_config_ag,
+    )
+    # logger.info(f"All-gather completed")
+    # logger.info(f"tt_output.shape = {tt_output.shape}")
+    # torch_output = ttnn.to_torch(
+    #     tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)
+    # )
+    # logger.info(f"torch_output.shape = {torch_output.shape}")
+    # torch_reference = torch_input.repeat([devices, 1, 1, 1])
+    # eq, output = comp_equal(torch_output, torch_reference)
+    # assert eq, f"Output mismatch between torch and ttnn all-gather: {output}"

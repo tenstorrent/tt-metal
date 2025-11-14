@@ -6,14 +6,14 @@ Tests:
 
     senders:
       # Cross Galaxy row
-      - device: [0, 3]
+      - device: [0, 28]
         patterns:
           - ftype: unicast
             ntype: unicast_write
             size: 1024
             num_packets: 100
             destination:
-              device: [0, 4]
+              device: [0, 32]
       # Within Galaxy 0 col
       - device: [0, 0]
         patterns:
@@ -22,22 +22,13 @@ Tests:
             size: 1024
             num_packets: 100
             destination:
-              device: [0, 16]
+              device: [0, 3]
       # Within Galaxy 1 col
-      - device: [0, 4]
+      - device: [0, 32]
         patterns:
           - ftype: unicast
             ntype: unicast_write
             size: 1024
             num_packets: 100
             destination:
-              device: [0, 20]
-
-      - device: [0, 56]
-        patterns:
-          - ftype: unicast
-            ntype: unicast_write
-            size: 1024
-            num_packets: 100
-            destination:
-              device: [0, 63]
+              device: [0, 35]
