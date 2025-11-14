@@ -26,6 +26,81 @@ def _is_ttnn_tensor(x):
     return isinstance(x, ttnn.Tensor)
 
 
+def _ttnn_op_layout_invariant(x, op_func, **kwargs):
+    """
+    Generic helper for TTNN operations that require TILE layout for non-sharded tensors.
+
+    Args:
+        x: TTNN tensor
+        op_func: TTNN operation function to call (e.g., ttnn.sign, ttnn.abs, ttnn.typecast)
+        **kwargs: Additional keyword arguments to pass to op_func (e.g., dtype=ttnn.bfloat16 for typecast)
+
+    Returns:
+        Result of op_func applied to x, with layout preserved.
+    """
+    # [ttnn contract] all TTNN operations require tensors to be in TILE layout when working with non-sharded tensors:
+    # ttnn.sign(), ttnn.abs(), ttnn.isinf(), ttnn.isnan(), ttnn.typecast(), ttnn.where(), ttnn.logical_not()
+    layout = x.get_layout()
+    if layout == ttnn.TILE_LAYOUT or x.is_sharded():  # sharded tensors can use either layout
+        return op_func(x, **kwargs)
+    else:
+        return ttnn.to_layout(op_func(ttnn.to_layout(x, ttnn.TILE_LAYOUT), **kwargs), layout)
+
+
+def _ttnn_max_scalar_all_dtype(x):
+    x_bf16 = _ttnn_op_layout_invariant(x, ttnn.typecast, dtype=ttnn.bfloat16)
+
+    # [ttnn contract] ttnn.max() internally calls a FillPad operation, which only supports the following dtypes:
+    # BFLOAT16
+    # FLOAT32
+    # UINT16, UINT32, INT32
+    # UINT8
+    # see ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/fill_pad_program_factory.hpp for more details
+    # [INFO] we cast to bfloat16 to avoid the limitation of the FillPad operation when dealing with e.g., bfloat8_b and bfloat4_b dtypes
+
+    # [ttnn contract] When called without a dim parameter, ttnn.max() returns the maximum value across the entire tensor as a scalar.
+    max_val_tensor = ttnn.max(x_bf16)
+
+    # [ttnn contract] When called without a dim parameter, ttnn.max() returns the maximum value across the entire tensor as a scalar.
+    # The method supports multiple data types:
+    # FLOAT32 → Python float
+    # BFLOAT16 → Python float (cast from bfloat16)
+    # BFLOAT8_B and BFLOAT4_B → Python float
+    return max_val_tensor.item()
+
+
+def _ttnn_mean_scalar_all_dtype(x):
+    x_bf16 = _ttnn_op_layout_invariant(x, ttnn.typecast, dtype=ttnn.bfloat16)
+
+    # [ttnn contract] ttnn.mean() internally calls a FillPad operation, which only supports the following dtypes:
+    # BFLOAT16
+    # FLOAT32
+    # UINT16, UINT32, INT32
+    # UINT8
+    # see ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/fill_pad_program_factory.hpp for more details
+    # [INFO] we cast to bfloat16 to avoid the limitation of the FillPad operation when dealing with e.g., bfloat8_b and bfloat4_b dtypes
+
+    # [ttnn contract] When called without a dim parameter, ttnn.mean() returns the mean value across the entire tensor as a scalar.
+    mean_val_tensor = ttnn.mean(x_bf16)
+    return mean_val_tensor.item()
+
+
+def _ttnn_min_scalar_all_dtype(x):
+    x_bf16 = _ttnn_op_layout_invariant(x, ttnn.typecast, dtype=ttnn.bfloat16)
+
+    # [ttnn contract] ttnn.mean() internally calls a FillPad operation, which only supports the following dtypes:
+    # BFLOAT16
+    # FLOAT32
+    # UINT16, UINT32, INT32
+    # UINT8
+    # see ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/fill_pad_program_factory.hpp for more details
+    # [INFO] we cast to bfloat16 to avoid the limitation of the FillPad operation when dealing with e.g., bfloat8_b and bfloat4_b dtypes
+
+    # [ttnn contract] When called without a dim parameter, ttnn.mean() returns the mean value across the entire tensor as a scalar.
+    min_val_tensor = ttnn.min(x_bf16)
+    return min_val_tensor.item()
+
+
 def compute_max_abs_error(impl, ref):
     """
     Compute maximum absolute error between two tensors.
@@ -50,10 +125,8 @@ def compute_max_abs_error(impl, ref):
         if _is_ttnn_tensor(impl) and _is_ttnn_tensor(ref):
             # TTNN path - stay on device
             diff = ttnn.subtract(impl, ref)
-            abs_diff = ttnn.abs(diff)
-            max_val = ttnn.max(abs_diff)
-            # todo)) [device metrics] use to_torch_auto_compose here instead of to_torch
-            return ttnn.to_torch(max_val).item()  # Convert only final scalar
+            abs_diff = _ttnn_op_layout_invariant(diff, ttnn.abs)
+            return _ttnn_max_scalar_all_dtype(abs_diff)
         elif _is_ttnn_tensor(impl):
             return (to_torch_auto_compose(impl) - ref).abs().max().item()
         elif _is_ttnn_tensor(ref):
@@ -89,10 +162,8 @@ def compute_mean_abs_error(impl, ref):
         if _is_ttnn_tensor(impl) and _is_ttnn_tensor(ref):
             # TTNN path - stay on device
             diff = ttnn.subtract(impl, ref)
-            abs_diff = ttnn.abs(diff)
-            mean_val = ttnn.mean(abs_diff)
-            # todo)) [device metrics] use to_torch_auto_compose here instead of to_torch
-            return ttnn.to_torch(mean_val).item()
+            abs_diff = _ttnn_op_layout_invariant(diff, ttnn.abs)
+            return _ttnn_mean_scalar_all_dtype(abs_diff)
         elif _is_ttnn_tensor(impl):
             return (to_torch_auto_compose(impl) - ref).abs().mean().item()
         elif _is_ttnn_tensor(ref):
@@ -185,49 +256,50 @@ def comp_allclose(impl, ref, rtol=1e-05, atol=1e-08):
         # TTNN-native path: compute deltas and allclose on device, then transfer final scalars
         if _is_ttnn_tensor(impl) and _is_ttnn_tensor(ref):
             # Compute deltas (device)
-            diff = ttnn.abs(ttnn.subtract(impl, ref))
-            cal_atol_t = ttnn.max(diff)
+            diff = _ttnn_op_layout_invariant(ttnn.subtract(impl, ref), ttnn.abs)
+            cal_atol = _ttnn_max_scalar_all_dtype(diff)
             # For rtol delta, divide by abs(ref) (may produce inf for zeros; acceptable for reporting)
-            cal_rtol_t = ttnn.max(ttnn.divide(diff, ttnn.abs(ref)))
+            divided_by_ref = ttnn.divide(diff, _ttnn_op_layout_invariant(ref, ttnn.abs))
+            cal_rtol = _ttnn_max_scalar_all_dtype(divided_by_ref)
 
             # equal_nan=True semantics and finite/infinite handling
-            isnan_impl = ttnn.isnan(impl)
-            isnan_ref = ttnn.isnan(ref)
+            isnan_impl = _ttnn_op_layout_invariant(impl, ttnn.isnan)
+            isnan_ref = _ttnn_op_layout_invariant(ref, ttnn.isnan)
             both_nan = ttnn.logical_and(isnan_impl, isnan_ref)
 
-            isinf_impl = ttnn.isinf(impl)
-            isinf_ref = ttnn.isinf(ref)
-            same_sign_inf = ttnn.eq(ttnn.sign(impl), ttnn.sign(ref))
+            isinf_impl = _ttnn_op_layout_invariant(impl, ttnn.isinf)
+            isinf_ref = _ttnn_op_layout_invariant(ref, ttnn.isinf)
+            impl_sign = _ttnn_op_layout_invariant(impl, ttnn.sign)
+            ref_sign = _ttnn_op_layout_invariant(ref, ttnn.sign)
+            same_sign_inf = ttnn.eq(impl_sign, ref_sign)
             both_inf_same_sign = ttnn.logical_and(ttnn.logical_and(isinf_impl, isinf_ref), same_sign_inf)
 
             # Finite elements where numeric closeness applies
             any_nan = ttnn.logical_or(isnan_impl, isnan_ref)
             any_inf = ttnn.logical_or(isinf_impl, isinf_ref)
-            finite_both = ttnn.logical_not(ttnn.logical_or(any_nan, any_inf))
+            finite_both = _ttnn_op_layout_invariant(ttnn.logical_or(any_nan, any_inf), ttnn.logical_not)
 
             # |impl - ref| <= atol + rtol * |ref|
-            bound = ttnn.add(ttnn.mul(ttnn.abs(ref), rtol), atol)
+            bound = ttnn.add(ttnn.mul(_ttnn_op_layout_invariant(ref, ttnn.abs), rtol, dtype=ttnn.bfloat16), atol)
             close_numeric = ttnn.le(diff, bound)
             finite_and_close = ttnn.logical_and(finite_both, close_numeric)
 
             ok_mask = ttnn.logical_or(ttnn.logical_or(both_nan, both_inf_same_sign), finite_and_close)
-            fail_mask = ttnn.logical_not(ok_mask)
+            fail_mask = _ttnn_op_layout_invariant(ok_mask, ttnn.logical_not)
 
             # Reduce to scalar: any failure -> 1.0 else 0.0
-            fail_indicator = ttnn.where(fail_mask, 1.0, 0.0)
-            any_fail = ttnn.max(fail_indicator)
-            passing = ttnn.to_torch(any_fail).item() == 0.0
+            fail_indicator = _ttnn_op_layout_invariant(fail_mask, ttnn.where, true_value=1.0, false_value=0.0)
+            any_fail = _ttnn_max_scalar_all_dtype(fail_indicator)
+            passing = any_fail == 0.0
 
-            cal_atol = ttnn.to_torch(cal_atol_t).item()
-            cal_rtol = ttnn.to_torch(cal_rtol_t).item()
             output_str = f"Max ATOL Delta: {cal_atol}, Max RTOL Delta: {cal_rtol}"
             if not passing:
                 output_str += ", Allclose check failed"
             return passing, output_str
 
         # Fallback: compute with PyTorch (handles mixed inputs by converting TTNN -> torch)
-        impl_torch = ttnn.to_torch(impl) if _is_ttnn_tensor(impl) else impl
-        ref_torch = ttnn.to_torch(ref) if _is_ttnn_tensor(ref) else ref
+        impl_torch = to_torch_auto_compose(impl) if _is_ttnn_tensor(impl) else impl
+        ref_torch = to_torch_auto_compose(ref) if _is_ttnn_tensor(ref) else ref
 
         if torch.is_tensor(impl_torch) and torch.is_tensor(ref_torch):
             # Match dtype for fair comparison
@@ -245,8 +317,8 @@ def comp_allclose(impl, ref, rtol=1e-05, atol=1e-08):
 
         # Unsupported types
         return False, "Unsupported input types for comp_allclose"
-    except Exception:
-        return False, "Error computing comp_allclose"
+    except Exception as e:
+        return False, f"Error computing comp_allclose: {e}"
 
 
 def compute_pcc_device(impl, ref):
@@ -258,20 +330,19 @@ def compute_pcc_device(impl, ref):
         # - Both constant → 1.0 if equal, else 0.0
 
         # Any nonzero check (all-zero detection)
-        # todo)) [device metrics] to_torch_auto_compose here instead of to_torch
-        impl_abs_max = ttnn.to_torch(ttnn.max(ttnn.abs(impl))).item()
-        ref_abs_max = ttnn.to_torch(ttnn.max(ttnn.abs(ref))).item()
+        impl_abs_max = _ttnn_max_scalar_all_dtype(_ttnn_op_layout_invariant(impl, ttnn.abs))
+        ref_abs_max = _ttnn_max_scalar_all_dtype(_ttnn_op_layout_invariant(ref, ttnn.abs))
+
         impl_has_any = impl_abs_max != 0.0
         ref_has_any = ref_abs_max != 0.0
         if impl_has_any != ref_has_any:
             return 0.0
 
         # Min/Max scalars for constant and NaN detection
-        # todo)) [device metrics] to_torch_auto_compose here instead of to_torch
-        impl_min = ttnn.to_torch(ttnn.min(impl)).item()
-        impl_max = ttnn.to_torch(ttnn.max(impl)).item()
-        ref_min = ttnn.to_torch(ttnn.min(ref)).item()
-        ref_max = ttnn.to_torch(ttnn.max(ref)).item()
+        impl_min = _ttnn_min_scalar_all_dtype(impl)
+        impl_max = _ttnn_max_scalar_all_dtype(impl)
+        ref_min = _ttnn_min_scalar_all_dtype(ref)
+        ref_max = _ttnn_max_scalar_all_dtype(ref)
 
         impl_min_finite = np.isfinite(impl_min)
         impl_max_finite = np.isfinite(impl_max)
@@ -297,28 +368,30 @@ def compute_pcc_device(impl, ref):
                 )
 
         # Standard PCC formula on device
-        mean_impl = ttnn.mean(impl)
-        mean_ref = ttnn.mean(ref)
+        mean_impl = _ttnn_mean_scalar_all_dtype(impl)
+        mean_ref = _ttnn_mean_scalar_all_dtype(ref)
 
         impl_centered = ttnn.subtract(impl, mean_impl)
         ref_centered = ttnn.subtract(ref, mean_ref)
 
-        numerator = ttnn.sum(ttnn.mul(impl_centered, ref_centered))
-        impl_sq_sum = ttnn.sum(ttnn.mul(impl_centered, impl_centered))
-        ref_sq_sum = ttnn.sum(ttnn.mul(ref_centered, ref_centered))
-        denominator = ttnn.sqrt(ttnn.mul(impl_sq_sum, ref_sq_sum))
+        # todo)) ttnn.sum() does local reduction only; need CCL reduction for global sum when adding support for multiple-devices
+        # [INFO] we cast to float32 to avoid overflow when impl and ref are in bfloat8_b or bfloat4_b
+        numerator = ttnn.sum(ttnn.mul(impl_centered, ref_centered, dtype=ttnn.float32))
+        impl_sq_sum = ttnn.sum(ttnn.mul(impl_centered, impl_centered, dtype=ttnn.float32))
+        ref_sq_sum = ttnn.sum(ttnn.mul(ref_centered, ref_centered, dtype=ttnn.float32))
+        denominator = ttnn.sqrt(ttnn.mul(impl_sq_sum, ref_sq_sum, dtype=ttnn.float32))
 
         # Safe divide
-        denom_scalar = ttnn.to_torch(denominator).item()
+        denom_scalar = denominator.item()
         if denom_scalar == 0.0 or not np.isfinite(denom_scalar):
             return 0.0
 
-        pcc_tensor = ttnn.mul(numerator, ttnn.reciprocal(denominator))
-        pcc = ttnn.to_torch(pcc_tensor).item()
+        pcc = numerator.item() / denom_scalar
         if not np.isfinite(pcc):
             return 0.0
         return pcc
-    except Exception:
+    except Exception as e:
+        # todo)) return a string for logging: f"Error computing PCC on device: {e}, impl: {impl}, ref: {ref}"
         return 0.0
 
 
