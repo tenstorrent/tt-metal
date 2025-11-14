@@ -661,15 +661,13 @@ ALWI void sfpu_add_top_row(uint32_t dst_tile_0, uint32_t dst_tile_1, uint32_t ds
         format == DataFormat::Float32 || format == DataFormat::Int32 || format == DataFormat::UInt32,
         "Unsupported data format. Supported formats: Float32, Int32, UInt32");
 
-    MATH((llk_math_eltwise_binary_sfpu_add_top_row<true, format>(dst_tile_0, dst_tile_1, dst_tile_out)));
+    MATH((llk_math_eltwise_binary_sfpu_add_top_row<format>(dst_tile_0, dst_tile_1, dst_tile_out)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void sfpu_add_top_row_init() {
-    MATH((llk_math_eltwise_binary_sfpu_add_top_row_init<true>()));
-}
+ALWI void sfpu_add_top_row_init() { MATH((llk_math_eltwise_binary_sfpu_add_top_row_init())); }
 
 /**
  * Pauses the cores so that the debug interface can be used to inspect the value of the registers.
