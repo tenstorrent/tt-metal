@@ -193,13 +193,24 @@ template <>
 uint8_t DebugPrintTypeToId<uint16_t>() {
     return DPrintUINT16;
 }
+// We can't specialize on uint32_t or uint64_t because we don't know
+// whether on ILP32 unsigned or unsigned long is used for uint32_t and
+// on LP64 whether unsigned long or unsigned long long for uint64_t
 template <>
-uint8_t DebugPrintTypeToId<uint32_t>() {
+uint8_t DebugPrintTypeToId<unsigned>() {
+    static_assert(sizeof(unsigned) == sizeof(uint32_t));
     return DPrintUINT32;
 }
 template <>
-uint8_t DebugPrintTypeToId<uint64_t>() {
+uint8_t DebugPrintTypeToId<unsigned long long>() {
+    static_assert(sizeof(unsigned long long) == sizeof(uint64_t));
     return DPrintUINT64;
+}
+template <>
+uint8_t DebutPrintTypeToId<unsigned long>() {
+    static_assert(sizeof(unsigned long) == sizeof(unsigned) || sizeof(unsigned long) == sizeof(unsigned long long));
+    return sizeof(unsigned long) == sizeof(unsigned) ? DebugPrintTypeToId<unsigned>()
+                                                     : DebugPrintTypeToId<unsigned long long>();
 }
 template <>
 uint8_t DebugPrintTypeToId<int8_t>() {
@@ -210,13 +221,21 @@ uint8_t DebugPrintTypeToId<int16_t>() {
     return DPrintINT16;
 }
 template <>
-uint8_t DebugPrintTypeToId<int32_t>() {
+uint8_t DebugPrintTypeToId<int>() {
+    static_assert(sizeof(int) == sizeof(int32_t));
     return DPrintINT32;
 }
 template <>
-uint8_t DebugPrintTypeToId<int64_t>() {
+uint8_t DebugPrintTypeToId<long long>() {
+    static_assert(sizeof(long long) == sizeof(int64_t));
     return DPrintINT64;
 }
+template <>
+uint8_t DebutPrintTypeToId<long>() {
+    static_assert(sizeof(long) == sizeof(int) || sizeof(long) == sizeof(long long));
+    return sizeof(long) == sizeof(int) ? DebugPrintTypeToId<int>() : DebugPrintTypeToId<long long>();
+}
+
 template <>
 uint8_t DebugPrintTypeToId<float>() {
     return DPrintFLOAT32;
