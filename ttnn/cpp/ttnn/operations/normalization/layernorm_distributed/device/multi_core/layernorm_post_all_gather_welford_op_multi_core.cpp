@@ -48,7 +48,7 @@ inline uint32_t pack_two_bfloat16_into_uint32(std::pair<uint16_t, uint16_t> two_
 }  // namespace
 
 // computes layernorm(a)*gamma + beta
-tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_core(
+tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_welford_multi_core(
     const Tensor& a,
     const Tensor& stats,
     const std::optional<const Tensor>& gamma,
@@ -83,14 +83,15 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
 
     uint32_t num_tile_rows = NC * Ht;
 
-    log_debug(tt::LogOp, "is_rmsnorm: {}", is_rmsnorm);
-    log_debug(tt::LogOp, "W: {}", W);
-    log_debug(tt::LogOp, "H: {}", H);
-    log_debug(tt::LogOp, "num_tile_rows: {}", num_tile_rows);
-    log_debug(tt::LogOp, "Wt: {}", Wt);
-    log_debug(tt::LogOp, "Ht: {}", Ht);
-    log_debug(tt::LogOp, "stats_tiles_cols: {}", stats_tiles_cols);
-    log_debug(tt::LogOp, "num_devices: {}", num_devices);
+    log_debug(tt::LogOp, "device_id: {}", gamma.value().device()->get_device_ids());
+    // log_debug(tt::LogOp, "is_rmsnorm: {}", is_rmsnorm);
+    // log_debug(tt::LogOp, "W: {}", W);
+    // log_debug(tt::LogOp, "H: {}", H);
+    // log_debug(tt::LogOp, "num_tile_rows: {}", num_tile_rows);
+    // log_debug(tt::LogOp, "Wt: {}", Wt);
+    // log_debug(tt::LogOp, "Ht: {}", Ht);
+    // log_debug(tt::LogOp, "stats_tiles_cols: {}", stats_tiles_cols);
+    // log_debug(tt::LogOp, "num_devices: {}", num_devices);
 
     ////////////////////////////////////////////////////////////////////////////
     //                       Device Setup
@@ -124,14 +125,14 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
     uint32_t gamma_single_tile_size = tt::tile_size(gamma_cb_data_format);
     uint32_t beta_single_tile_size = tt::tile_size(beta_cb_data_format);
 
-    log_debug(tt::LogOp, "in_data_format: {}", in_data_format);
-    log_debug(tt::LogOp, "out_data_format: {}", out_data_format);
-    log_debug(tt::LogOp, "cb_data_format: {}", cb_data_format);
-    log_debug(tt::LogOp, "gamma_cb_data_format: {}", gamma_cb_data_format);
-    log_debug(tt::LogOp, "beta_cb_data_format: {}", beta_cb_data_format);
-    log_debug(tt::LogOp, "math_fidelity: {}", math_fidelity);
-    log_debug(tt::LogOp, "math_approx_mode: {}", math_approx_mode);
-    log_debug(tt::LogOp, "fp32_dest_acc_en: {}", fp32_dest_acc_en);
+    // log_debug(tt::LogOp, "in_data_format: {}", in_data_format);
+    // log_debug(tt::LogOp, "out_data_format: {}", out_data_format);
+    // log_debug(tt::LogOp, "cb_data_format: {}", cb_data_format);
+    // log_debug(tt::LogOp, "gamma_cb_data_format: {}", gamma_cb_data_format);
+    // log_debug(tt::LogOp, "beta_cb_data_format: {}", beta_cb_data_format);
+    // log_debug(tt::LogOp, "math_fidelity: {}", math_fidelity);
+    // log_debug(tt::LogOp, "math_approx_mode: {}", math_approx_mode);
+    // log_debug(tt::LogOp, "fp32_dest_acc_en: {}", fp32_dest_acc_en);
 
     auto a_addr = a.buffer()->address();
     auto stats_addr = stats.buffer()->address();
@@ -139,19 +140,19 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
     auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
     auto dst_addr = output.buffer()->address();
 
-    [[maybe_unused]] uint32_t num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / TILE_HW : 0;
-    [[maybe_unused]] uint32_t num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / TILE_HW : 0;
+    // uint32_t num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / TILE_HW : 0;
+    // uint32_t num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / TILE_HW : 0;
 
     // For bert, tensor is packed as RM with width 32
     if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
-        num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / TILE_WIDTH : 0;
+        // num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / TILE_WIDTH : 0;
     }
     if (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR) {
-        num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / TILE_WIDTH : 0;
+        // num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / TILE_WIDTH : 0;
     }
 
-    log_debug(tt::LogOp, "num_gamma_tiles: {}", num_gamma_tiles);
-    log_debug(tt::LogOp, "num_beta_tiles: {}", num_beta_tiles);
+    // log_debug(tt::LogOp, "num_gamma_tiles: {}", num_gamma_tiles);
+    // log_debug(tt::LogOp, "num_beta_tiles: {}", num_beta_tiles);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
@@ -293,12 +294,12 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
         num_tile_rows_per_core_group_1 = num_tile_rows_per_core_group_1_result;
         num_tile_rows_per_core_group_2 = num_tile_rows_per_core_group_2_result;
 
-        log_debug(tt::LogOp, "num_cores: {}", num_cores);
-        log_debug(tt::LogOp, "grid_size: {}", grid_size);
-        log_debug(tt::LogOp, "core_group_1: {}", core_group_1.str());
-        log_debug(tt::LogOp, "num_tile_rows_per_core_group_1: {}", num_tile_rows_per_core_group_1);
-        log_debug(tt::LogOp, "core_group_2: {}", core_group_2.str());
-        log_debug(tt::LogOp, "num_tile_rows_per_core_group_2: {}", num_tile_rows_per_core_group_2);
+        // log_debug(tt::LogOp, "num_cores: {}", num_cores);
+        // log_debug(tt::LogOp, "grid_size: {}", grid_size);
+        // log_debug(tt::LogOp, "core_group_1: {}", core_group_1.str());
+        // log_debug(tt::LogOp, "num_tile_rows_per_core_group_1: {}", num_tile_rows_per_core_group_1);
+        // log_debug(tt::LogOp, "core_group_2: {}", core_group_2.str());
+        // log_debug(tt::LogOp, "num_tile_rows_per_core_group_2: {}", num_tile_rows_per_core_group_2);
     }
 
     auto cores = corerange_to_cores(all_cores, std::nullopt);
@@ -317,6 +318,8 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
         gamma_stick_size = gamma.value().padded_shape()[-1] * gamma.value().element_size();
         bool gamma_stick_size_is_power_of_two = tt::tt_metal::is_power_of_two_at_least_32(gamma_stick_size);
         TT_FATAL(gamma_stick_size_is_power_of_two, "Only power of 2 gammas are supported");
+    } else if (gamma.has_value() and gamma.value().layout() == Layout::TILE) {
+        gamma_stick_size = 2048;  // size of tile in bytes bf16
     }
     reader_compile_time_args.push_back((std::uint32_t)gamma_stick_size);
 
@@ -339,11 +342,11 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
         reader_defines["FUSE_BETA"] = "1";
     }
 
-    auto use_row_major_kernel = (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) or
-                                (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR);
-    TT_FATAL(
-        use_row_major_kernel || (!gamma.has_value() && !beta.has_value()),
-        "Only row major gamma and beta are supported");
+    // auto use_row_major_kernel = (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) or
+    //                             (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR);
+    // TT_FATAL(
+    //     use_row_major_kernel || (!gamma.has_value() && !beta.has_value()),
+    //     "Only row major gamma and beta are supported");
     auto reader_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
@@ -361,6 +364,7 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
     bool float32_reduction = fp32_dest_acc_en && !program_config.legacy_reduction;
     std::vector<uint32_t> compute_args = {
         tiles_per_core_y,
+        W,
         block_size,
         stats_tiles_cols,
         gamma.has_value(),
@@ -373,7 +377,7 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
         is_rmsnorm ? "ttnn/cpp/ttnn/operations/normalization/rmsnorm_distributed/device/kernels/compute/"
                      "rmsnorm_post_allgather.cpp"
                    : "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/compute/"
-                     "layernorm_post_allgather.cpp";
+                     "layernorm_post_allgather_welford.cpp";
     auto compute_config = tt::tt_metal::ComputeConfig{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
@@ -477,10 +481,10 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
 
     for (const auto& cb : program.circular_buffers()) {
         for ([[maybe_unused]] const auto index : cb->buffer_indices()) {
-            log_debug(tt::LogOp, "cb_id {}", index);
-            log_debug(tt::LogOp, "page_size: {}", cb->page_size(index));
-            log_debug(tt::LogOp, "num_pages: {}", cb->num_pages(index));
-            log_debug(tt::LogOp, "data_format: {}", cb->data_format(index));
+            // log_debug(tt::LogOp, "cb_id {}", index);
+            // log_debug(tt::LogOp, "page_size: {}", cb->page_size(index));
+            // log_debug(tt::LogOp, "num_pages: {}", cb->num_pages(index));
+            // log_debug(tt::LogOp, "data_format: {}", cb->data_format(index));
         }
     }
 
@@ -503,12 +507,12 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
                 uint32_t tile_offset = (x * Wt) + (y * tiles_per_core_y);
                 uint32_t stats_offset = x * stats_tiles_cols;
 
-                log_debug(
-                    tt::LogOp,
-                    "Setting reader runtime args for core: {}, tile_offset: {}, tiles_per_core_y: {}",
-                    core.x,
-                    tile_offset,
-                    tiles_per_core_y);
+                // // log_debug(
+                //     tt::LogOp,
+                //     "Setting reader runtime args for core: {}, tile_offset: {}, tiles_per_core_y: {}",
+                //     core.x,
+                //     tile_offset,
+                //     tiles_per_core_y);
                 SetRuntimeArgs(
                     program,
                     reader_kernels_id,

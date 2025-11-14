@@ -170,10 +170,12 @@ inline void combine_welford_partials(
 
     // Pack the results into the combined CB
     tile_regs_commit();
+    cb_reserve_back(cb_combined, 2);
     tile_regs_wait();
     pack_tile(mean_acc_dst, cb_combined);
     pack_tile(m2_acc_dst, cb_combined);
     tile_regs_release();
+    // cb_push_back(cb_combined, 2);
 }
 
 }  // namespace norm::kernel_util::compute

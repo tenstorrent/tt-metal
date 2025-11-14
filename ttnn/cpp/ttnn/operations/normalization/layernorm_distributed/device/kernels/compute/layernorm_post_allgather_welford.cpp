@@ -1,4 +1,3 @@
-
 // SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
@@ -23,6 +22,11 @@
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/layernorm.h"
+#include "ttnn/cpp/ttnn/operations/normalization/kernel_util/compute/combine_welford.h"
+#include "debug/dprint_pages.h"
+#include "dprint_tensix.h"
+// read dest reg
+#include "debug/dprint.h"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
@@ -31,13 +35,18 @@ namespace NAMESPACE {
 void MAIN {
     uint32_t NCHt = get_arg_val<uint32_t>(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
-    constexpr uint32_t blk = get_compile_time_arg_val(1);
-    constexpr uint32_t stats_tiles_cols = get_compile_time_arg_val(2);
-    constexpr uint32_t do_gamma = get_compile_time_arg_val(3);
-    constexpr uint32_t do_beta = get_compile_time_arg_val(4);
-    constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(5) == 1;
-    constexpr bool FLOAT32_REDUCTION = get_compile_time_arg_val(6) == 1;
-    constexpr bool LEGACY_RSQRT = get_compile_time_arg_val(7) == 1;
+    constexpr uint32_t W = get_compile_time_arg_val(1);
+    constexpr uint32_t blk = get_compile_time_arg_val(2);
+    constexpr uint32_t stats_tiles_cols = get_compile_time_arg_val(3) / 2;
+    constexpr uint32_t do_gamma = get_compile_time_arg_val(4);
+    constexpr uint32_t do_beta = get_compile_time_arg_val(5);
+    constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(6) == 1;
+    DPRINT << "do_gamma" << do_gamma << ENDL();
+    DPRINT << "do_beta" << do_beta << ENDL();
+    DPRINT << "Wt" << Wt << ENDL();
+    DPRINT << "W" << W << ENDL();
+    DPRINT << "blk" << blk << ENDL();
+    DPRINT << "NCHt" << NCHt << ENDL();
 
     constexpr uint32_t onetile = 1;
 
@@ -55,13 +64,17 @@ void MAIN {
     constexpr uint32_t cb_x_normed = tt::CBIndex::c_12;  // (x - E(x)) * 1/sqrt(var+eps) or x * 1/sqrt(E(x**2) + eps)
 
     constexpr uint32_t cb_var = tt::CBIndex::c_8;  // E(x**2) - E(x)**2 or E(x**2)
-
+#ifndef RMSNORM
     // Layernorm-specific CBs
     constexpr uint32_t cb_mean_squared = tt::CBIndex::c_7;   // E(x)**2
     constexpr uint32_t cb_x_minus_mean = tt::CBIndex::c_11;  // x - E(x)
 
     constexpr uint32_t cb_norm_x_input = cb_x_minus_mean;
     constexpr uint32_t stats_tile_stride = 2;
+#else
+    constexpr uint32_t cb_norm_x_input = cb_inp;
+    constexpr uint32_t stats_tile_stride = 1;
+#endif
 
     constexpr uint32_t cb_gamma = tt::CBIndex::c_2;
     constexpr uint32_t cb_beta = tt::CBIndex::c_3;
@@ -75,111 +88,63 @@ void MAIN {
     cb_wait_front(cb_reduce, 1);  // comes from the reader
     cb_wait_front(cb_eps, 1);     // comes from the reader
 
+    DPRINT << "==============\n\n\n\n" << ENDL();
+    if (0 < NCHt) {
+        DPRINT << "0 < NCHt is true" << ENDL();
+    } else {
+        DPRINT << "0 < NCHt is false" << ENDL();
+    }
+
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         constexpr int onetile = 1;
         constexpr int dst0 = 0;
 
-        reconfig_data_format(cb_stats, cb_reduce);
-        pack_reconfig_data_format(cb_stats_reduced);
-
-        /*
-         * Reduce stats input.
-         * cb_stats = [sum(x0**2), sum(x0), sum(x1**2), sum(x1), ...]
-         * RMSNorm packs mean(x**2) into cb_var. Layernorm just uses cb_stats_reduced.
-         */
-        reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_stats, cb_reduce, cb_stats_reduced);
-        cb_wait_front(cb_stats, stats_tiles_cols);
-        cb_reserve_back(cb_stats_reduced, stats_tile_stride);
-
-        ACQ();
-        // Reduce sum(x**2) first
-        for (uint32_t i = 0; i < stats_tiles_cols; i += stats_tile_stride) {
-            reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_stats, cb_reduce, i, 0, 0);
-        }
-        pack_tile(0, cb_stats_reduced);
-
-        // Reduce sum(x) next
-        for (uint32_t i = 1; i < stats_tiles_cols; i += stats_tile_stride) {
-            reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_stats, cb_reduce, i, 0, 1);
-        }
-        pack_tile(1, cb_stats_reduced);
-
-        REL();
-        cb_push_back(cb_stats_reduced, stats_tile_stride);
-        cb_pop_front(cb_stats, stats_tiles_cols);
-
-        reduce_uninit();
-
-        /*
-         * E[x]**2
-         */
-        reconfig_data_format(cb_stats_reduced, cb_stats_reduced);
-        pack_reconfig_data_format(cb_mean_squared);
-        mul_tiles_init(cb_stats_reduced, cb_stats_reduced);
-        cb_reserve_back(cb_mean_squared, onetile);
-        cb_wait_front(cb_stats_reduced, stats_tile_stride);
-        ACQ();
-        mul_tiles(cb_stats_reduced, cb_stats_reduced, 1, 1, 0);
-        pack_tile(0, cb_mean_squared);
-        REL();
-
-        cb_push_back(cb_mean_squared, 1);
-
-        /*
-         * E[x**2] - E[x]**2
-         */
-        reconfig_data_format(cb_stats_reduced, cb_mean_squared);
-        pack_reconfig_data_format(cb_var);
-        sub_tiles_init(cb_stats_reduced, cb_mean_squared);
-
-        cb_reserve_back(cb_var, onetile);
-        cb_wait_front(cb_mean_squared, 1);
-        ACQ();
-        sub_tiles(cb_stats_reduced, cb_mean_squared, 0, 0, 0);
-        pack_tile(0, cb_var);
-        REL();
-        cb_push_back(cb_var, 1);
-        cb_pop_front(cb_mean_squared, 1);
-
+        norm::kernel_util::compute::combine_welford_partials(
+            cb_stats,
+            cb_stats_reduced,
+            stats_tiles_cols,
+            [&](uint32_t b) { return (static_cast<float>(W)); },
+            norm::kernel_util::compute::RSqrtPolicy{false, 0});
+        cb_push_back(cb_stats_reduced, 2);
+        cb_wait_front(cb_stats_reduced, 2);
         /*
          * x - E[x]
          */
         reconfig_data_format(cb_inp, cb_stats_reduced);
         pack_reconfig_data_format(cb_x_minus_mean);
         sub_bcast_cols_init_short(cb_inp, cb_stats_reduced);
+        cb_wait_front(cb_stats_reduced, 1);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             cb_wait_front(cb_inp, blk);
             cb_reserve_back(cb_x_minus_mean, blk);
             ACQ();
             for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                sub_tiles_bcast_cols(cb_inp, cb_stats_reduced, wtr, 1, wtr);
+                sub_tiles_bcast_cols(cb_inp, cb_stats_reduced, wtr, 0, wtr);
                 pack_tile(wtr, cb_x_minus_mean);
             }
             REL();
             cb_push_back(cb_x_minus_mean, blk);
             cb_pop_front(cb_inp, blk);
         }
-
-        // free up CBs
-        cb_pop_front(cb_stats_reduced, stats_tile_stride);
-
         /*
          * 1/sqrt(var + eps)
          */
-        cb_wait_front(cb_var, 1);
+        cb_wait_front(cb_stats_reduced, 2);
         cb_reserve_back(cb_recip_sqrt_var, 1);
-        reconfig_data_format(cb_var, cb_eps);
+        reconfig_data_format(cb_stats_reduced, cb_eps);
         pack_reconfig_data_format(cb_recip_sqrt_var);
 
-        add_tiles_init(cb_var, cb_eps);
+        add_tiles_init(cb_stats_reduced, cb_eps);
         ACQ();
-        add_tiles(cb_var, cb_eps, 0, 0, 0);
-        rsqrt_tile_init<LEGACY_RSQRT>();
-        rsqrt_tile<LEGACY_RSQRT>(0);
+        add_tiles(cb_stats_reduced, cb_eps, 1, 0, 0);
+        rsqrt_tile_init<true>();
+        rsqrt_tile<true>(0);
         pack_tile(0, cb_recip_sqrt_var);
         REL();
         cb_push_back(cb_recip_sqrt_var, 1);
-        cb_pop_front(cb_var, 1);
+
+        // free up CBs
+        cb_pop_front(cb_stats_reduced, stats_tile_stride);
 
         /*
          * norm x
@@ -209,11 +174,12 @@ void MAIN {
             cb_pop_front(cb_norm_x_input, blk);
         }
         cb_pop_front(cb_recip_sqrt_var, 1);
-
         if constexpr (do_gamma) {
+            // DPRINT << "do_gamma" << ENDL();
             /*
              * x_normed * gamma
              */
+
             reconfig_data_format(cb_x_normed, cb_gamma);
             pack_reconfig_data_format(cb_times_gamma_out);
             cb_wait_front(cb_gamma, Wt);
@@ -223,6 +189,7 @@ void MAIN {
                 cb_reserve_back(cb_times_gamma_out, blk);
                 ACQ();
                 for (uint32_t wtr = 0; wtr < blk; wtr++) {
+                    UNPACK(tt::compute::common::print_full_tile(cb_gamma, wt + wtr, true));
                     mul_tiles_bcast_rows(cb_x_normed, cb_gamma, wtr, wt + wtr, wtr);
                     pack_tile(wtr, cb_times_gamma_out);
                 }
@@ -239,11 +206,14 @@ void MAIN {
                 pack_reconfig_data_format(cb_out);
                 cb_wait_front(cb_beta, Wt);
                 add_bcast_rows_init_short(cb_times_gamma_out, cb_beta);
+                // DPRINT << "===========BETA============="<< ENDL();
                 for (uint32_t wt = 0; wt < Wt; wt += blk) {
                     cb_wait_front(cb_times_gamma_out, blk);
                     cb_reserve_back(cb_out, blk);
                     ACQ();
                     for (uint32_t wtr = 0; wtr < blk; wtr++) {
+                        UNPACK(tt::compute::common::print_full_tile(cb_beta, wt + wtr, true));
+
                         add_tiles_bcast_rows(cb_times_gamma_out, cb_beta, wtr, wt + wtr, wtr);
                         pack_tile(wtr, cb_out);
                     }
@@ -254,6 +224,7 @@ void MAIN {
             }
         }
     }
+
     cb_pop_front(cb_eps, 1);
     cb_pop_front(cb_reduce, 1);
     cb_pop_front(cb_gamma, Wt);
