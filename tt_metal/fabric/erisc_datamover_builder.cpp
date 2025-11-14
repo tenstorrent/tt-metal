@@ -95,6 +95,7 @@ bool is_fabric_two_erisc_enabled() {
 
     // 2d dynamic fabric doesn't properly support 2-erisc yet but is being deprecated anyways so we
     // simply disable 2-erisc on it for now.
+    // Issue [#32419](https://github.com/tenstorrent/tt-metal/issues/32419)
     bool is_2d_dynamic = mc.get_fabric_config() == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC ||
                          mc.get_fabric_config() == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_X ||
                          mc.get_fabric_config() == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_Y ||
