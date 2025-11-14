@@ -46,16 +46,20 @@ ttnn::MemoryConfig l1_memory_config =
 ttnn::MemoryConfig dram_memory_config =
     ttnn::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
 
+CoreCoord get_op_grid_size(tt::tt_metal::IDevice* device, std::size_t batch_size) {
+    CoreCoord compute_grid_size = device->compute_with_storage_grid_size();
+    return CoreCoord(compute_grid_size.x, batch_size);
+}
+
 ttnn::Tensor encoder(
     ttnn::Tensor&& hidden_states,
     const ttnn::Tensor& attention_mask,
     const Parameters& parameters,
     std::size_t encoder_index,
-    const std::uint32_t head_size) {
-    auto batch_size = hidden_states.padded_shape()[0];
-
+    const std::uint32_t head_size,
+    const CoreCoord& op_grid_size) {
     auto fused_qkv_matmul_program_config = ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig{
-        .compute_with_storage_grid_size = {12, batch_size},
+        .compute_with_storage_grid_size = op_grid_size,
         .in0_block_w = 4,
         .out_subblock_h = 4,
         .out_subblock_w = 2,
@@ -76,11 +80,11 @@ ttnn::Tensor encoder(
             l1_memory_config});
 
     auto&& [query, key, value] = ttnn::experimental::split_query_key_value_and_split_heads(
-        fused_qkv_matmul_output, CoreCoord{12, batch_size}, l1_memory_config);
+        fused_qkv_matmul_output, op_grid_size, l1_memory_config);
     fused_qkv_matmul_output.deallocate();
 
     auto pre_softmax_bmm_program_config = ttnn::operations::matmul::MatmulMultiCoreReuseProgramConfig{
-        .compute_with_storage_grid_size = {12, batch_size},
+        .compute_with_storage_grid_size = op_grid_size,
         .in0_block_w = 1,
         .out_subblock_h = 4,
         .out_subblock_w = 2,
@@ -102,7 +106,7 @@ ttnn::Tensor encoder(
         ttnn::scale_mask_softmax_in_place(pre_softmax_bmm_matmul, 1.0f / std::sqrt(head_size), attention_mask);
 
     auto post_softmax_bmm_program_config = ttnn::operations::matmul::MatmulMultiCoreReuseProgramConfig{
-        .compute_with_storage_grid_size = {12, batch_size},
+        .compute_with_storage_grid_size = op_grid_size,
         .in0_block_w = 2,
         .out_subblock_h = 4,
         .out_subblock_w = 2,
@@ -121,11 +125,11 @@ ttnn::Tensor encoder(
     value.deallocate();
 
     auto concat_heads_output =
-        ttnn::experimental::concatenate_heads(post_softmax_bmm_output, CoreCoord{12, batch_size}, l1_memory_config);
+        ttnn::experimental::concatenate_heads(post_softmax_bmm_output, op_grid_size, l1_memory_config);
     post_softmax_bmm_output.deallocate();
 
     auto selfout_bmm_program_config = ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig{
-        .compute_with_storage_grid_size = {12, batch_size},
+        .compute_with_storage_grid_size = op_grid_size,
         .in0_block_w = 4,
         .out_subblock_h = 6,
         .out_subblock_w = 1,
@@ -157,7 +161,7 @@ ttnn::Tensor encoder(
     selfout_bmm_output.deallocate();
 
     auto ff1_matmul_program_config = ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig{
-        .compute_with_storage_grid_size = {12, batch_size},
+        .compute_with_storage_grid_size = op_grid_size,
         .in0_block_w = 4,
         .out_subblock_h = 6,
         .out_subblock_w = 1,
@@ -178,7 +182,7 @@ ttnn::Tensor encoder(
             dram_memory_config});
 
     auto ff2_matmul_program_config = ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig{
-        .compute_with_storage_grid_size = {12, batch_size},
+        .compute_with_storage_grid_size = op_grid_size,
         .in0_block_w = 4,
         .out_subblock_h = 6,
         .out_subblock_w = 1,
@@ -334,7 +338,9 @@ void test_bert() {
                 bfloat16(-1.0f), bfloat16(1.0f), ttnn::Shape({batch_size, 1, sequence_size, hidden_size}), Layout::TILE)
                 .to_device(device, l1_memory_config);
         for (auto encoder_index = 0; encoder_index < num_encoders; encoder_index++) {
-            hidden_states = encoder(std::move(hidden_states), attention_mask, parameters, encoder_index, head_size);
+            const auto op_grid_size = get_op_grid_size(device, hidden_states.padded_shape()[0]);
+            hidden_states =
+                encoder(std::move(hidden_states), attention_mask, parameters, encoder_index, head_size, op_grid_size);
         }
         auto output = qa_head(std::move(hidden_states), parameters).cpu();
         auto end = std::chrono::steady_clock::now();
