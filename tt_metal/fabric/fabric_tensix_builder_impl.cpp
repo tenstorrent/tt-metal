@@ -372,7 +372,7 @@ FabricTensixDatamoverRelayConfig::FabricTensixDatamoverRelayConfig(
     mux_relay_buffer_index_semaphore_region_ = MemoryRegion(current_address, noc_aligned_address_size_bytes_, 1);
     current_address = mux_relay_buffer_index_semaphore_region_.get_end_address();
 
-    constexpr size_t udm_memory_pool_size = 1 * 1024;  // 32KB as default memory pool size
+    constexpr size_t udm_memory_pool_size = 32 * 1024;  // 32KB as default memory pool size
     udm_memory_pool_region_ = MemoryRegion(current_address, udm_memory_pool_size, 1);
     current_address = udm_memory_pool_region_.get_end_address();
 

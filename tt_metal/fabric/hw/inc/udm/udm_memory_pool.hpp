@@ -39,9 +39,6 @@ public:
         pool_size_ = size_bytes;
         current_offset_ = 0;
         pool_end_ = base_address + size_bytes;
-
-        DPRINT << "UDMMemoryPool initialized: base=0x" << (uint32_t)base_address << " size=" << (uint32_t)size_bytes
-               << " alignment=" << DRAM_ALIGNMENT << ENDL();
     }
 
     // Allocate a chunk of memory of the specified size
@@ -84,10 +81,6 @@ public:
         // Update offset to account for alignment padding and the allocated size
         current_offset_ += total_allocation;
 
-        DPRINT << "UDMMemoryPool::allocate_memory: addr=0x" << allocated_addr << " size=" << size_bytes
-               << " aligned_size=" << aligned_size << " padding=" << alignment_padding << " total=" << total_allocation
-               << " new_offset=" << current_offset_ << ENDL();
-
         return allocated_addr;
     }
 
@@ -115,9 +108,6 @@ public:
         }
 
         current_offset_ -= total_dealloc;
-
-        DPRINT << "UDMMemoryPool::deallocate_memory: size=" << size_bytes << " total_dealloc=" << total_dealloc
-               << " new_offset=" << current_offset_ << ENDL();
     }
 
     // Get the current pool usage in bytes
@@ -127,10 +117,7 @@ public:
     FORCE_INLINE static uint32_t get_available() { return pool_size_ - current_offset_; }
 
     // Reset the pool (only use during initialization or teardown)
-    FORCE_INLINE static void reset() {
-        current_offset_ = 0;
-        DPRINT << "UDMMemoryPool reset" << ENDL();
-    }
+    FORCE_INLINE static void reset() { current_offset_ = 0; }
 };
 
 }  // namespace tt::tt_fabric::udm

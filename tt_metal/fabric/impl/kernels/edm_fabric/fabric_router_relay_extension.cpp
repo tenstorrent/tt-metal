@@ -113,9 +113,6 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_noc_txn_to_lo
     uint32_t payload_start_address = reinterpret_cast<size_t>(packet_header) + sizeof(PACKET_HEADER_TYPE);
 
     tt::tt_fabric::NocSendType noc_send_type = header.noc_send_type;
-    if (noc_send_type > tt::tt_fabric::NocSendType::NOC_SEND_TYPE_LAST) {
-        __builtin_unreachable();
-    }
     switch (noc_send_type) {
         case tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE: {
             const auto noc_addr = header.command_fields.unicast_write.noc_address;
@@ -144,6 +141,41 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_noc_txn_to_lo
             const auto noc_addr = header.command_fields.unicast_inline_write.noc_address;
             const auto value = header.command_fields.unicast_inline_write.value;
             noc_inline_dw_write<InlineWriteDst::DEFAULT, true>(noc_addr, value);
+            // temporarily place here until we have txn id support
+            noc_async_writes_flushed();
+            // writes done, send ack back
+            tt::tt_fabric::udm::fabric_fast_write_ack(mux_connection, packet_header);
+        } break;
+
+        case tt::tt_fabric::NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC: {
+            const auto dest_address = header.command_fields.unicast_seminc_fused.noc_address;
+            noc_async_write_one_packet(payload_start_address, dest_address, payload_size_bytes);
+
+            const uint64_t semaphore_dest_address = header.command_fields.unicast_seminc_fused.semaphore_noc_address;
+            const auto increment = header.command_fields.unicast_seminc_fused.val;
+            if (header.command_fields.unicast_seminc_fused.flush) {
+                noc_async_write_barrier();
+            }
+            noc_semaphore_inc<true>(semaphore_dest_address, increment);
+            // temporarily place here until we have txn id support
+            noc_async_atomic_barrier();
+            // writes done, send ack back - Do we also need to send atomic inc response back?
+            tt::tt_fabric::udm::fabric_fast_write_ack(mux_connection, packet_header);
+        } break;
+
+        case tt::tt_fabric::NocSendType::NOC_UNICAST_SCATTER_WRITE: {
+            size_t offset = 0;
+            size_t chunk_size;
+            for (size_t i = 0; i < NOC_SCATTER_WRITE_MAX_CHUNKS; ++i) {
+                if (i == NOC_SCATTER_WRITE_MAX_CHUNKS - 1) {
+                    chunk_size = payload_size_bytes - offset;
+                } else {
+                    chunk_size = header.command_fields.unicast_scatter_write.chunk_size[i];
+                }
+                const auto dest_address = header.command_fields.unicast_scatter_write.noc_address[i];
+                noc_async_write_one_packet(payload_start_address + offset, dest_address, chunk_size);
+                offset += chunk_size;
+            }
             // temporarily place here until we have txn id support
             noc_async_writes_flushed();
             // writes done, send ack back
