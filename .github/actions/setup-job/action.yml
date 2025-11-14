@@ -18,7 +18,7 @@ inputs:
     default: false
     type: boolean
   use-evaluation-image:
-    description: 'Skip download and installation of build artifacts and wheel as theyre pre-insaled in evaluation image'
+    description: 'Skip download and installation of build artifacts and wheel as theyre pre-installed in evaluation image'
     default: false
     type: boolean
   fetch-depth:
