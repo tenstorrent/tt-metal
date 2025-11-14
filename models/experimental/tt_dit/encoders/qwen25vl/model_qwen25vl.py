@@ -13,8 +13,7 @@ from models.tt_transformers.tt.common import get_rot_transformation_mat
 
 from ...layers.embeddings import Embedding
 from ...layers.linear import ColParallelLinear, RowParallelLinear
-from ...layers.module import Module, ModuleList
-from ...layers.normalization import UniversalRMSNorm
+from ...layers.module import Module, ModuleList, Parameter
 from ...parallel.config import EncoderParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils import tensor
@@ -75,9 +74,7 @@ class Qwen25VlTextEncoder(Module):
             )
             for _ in range(num_hidden_layers)
         )
-        self.norm = UniversalRMSNorm(
-            hidden_size, eps=rms_norm_eps, device=ctx.device  # , tp_axis=ctx.tp_axis, ccl_manager=ctx.ccl_manager
-        )
+        self.norm = Qwen25VlRmsNorm(hidden_size, eps=rms_norm_eps, device=ctx.device)
         # self.rotary_emb = Qwen25VlRotaryEmbedding(
         #     ctx=ctx, head_dim=hidden_size // num_attention_heads, rope_theta=rope_theta
         # )
@@ -157,12 +154,8 @@ class Qwen25VlDecoderLayer(Module):
         self.mlp = Qwen25VlMlp(
             hidden_size=hidden_size, intermediate_size=intermediate_size, hidden_act=hidden_act, ctx=ctx
         )
-        self.input_layernorm = UniversalRMSNorm(
-            hidden_size, eps=rms_norm_eps, device=ctx.device  # , tp_axis=ctx.tp_axis, ccl_manager=ctx.ccl_manager
-        )
-        self.post_attention_layernorm = UniversalRMSNorm(
-            hidden_size, eps=rms_norm_eps, device=ctx.device  # , tp_axis=ctx.tp_axis, ccl_manager=ctx.ccl_manager
-        )
+        self.input_layernorm = Qwen25VlRmsNorm(hidden_size, eps=rms_norm_eps, device=ctx.device)
+        self.post_attention_layernorm = Qwen25VlRmsNorm(hidden_size, eps=rms_norm_eps, device=ctx.device)
 
     def forward(
         self,
@@ -390,6 +383,23 @@ class Qwen25VlMlp(Module):
             x = self._ccl_manager.all_gather_persistent_buffer(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
 
         return x
+
+
+class Qwen25VlRmsNorm(Module):
+    def __init__(self, size: int, *, eps: float, device: ttnn.MeshDevice) -> None:
+        super().__init__()
+
+        self.weight = Parameter(total_shape=[size], device=device)
+        self._eps = eps
+
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        if "weight" in state:
+            state["weight"] = state["weight"].reshape([-1])
+
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        norm = ttnn.mean(ttnn.pow(x, 2), dim=-1, keepdim=True)
+        norm = ttnn.rsqrt(norm + self._eps)
+        return x * (norm * self.weight.data)
 
 
 def _apply_rope(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
