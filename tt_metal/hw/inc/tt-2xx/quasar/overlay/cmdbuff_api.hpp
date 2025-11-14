@@ -92,15 +92,18 @@ constexpr uint32_t CMDBUF_MCAST_RESP_VC = 14;
         bool mcast = false,                                                                                            \
         TT_ROCC_CMD_BUF_MCAST_EXCLUDE_reg_u mcast_exclude = {0},                                                       \
         bool wrapping_en = true,                                                                                       \
-        bool posted = true) {                                                                                          \
+        bool posted = true,                                                                                            \
+        bool linked = false,                                                                                           \
+        bool src_include = false) {                                                                                    \
         TT_ROCC_CMD_BUF_MISC_reg_u misc;                                                                               \
         misc.val = TT_ROCC_CMD_BUF_MISC_REG_DEFAULT;                                                                   \
                                                                                                                        \
-        misc.f.linked = mcast;                                                                                         \
+        misc.f.linked = linked;                                                                                        \
         misc.f.posted = wr && posted;                                                                                  \
         misc.f.multicast = mcast;                                                                                      \
         misc.f.write_trans = wr;                                                                                       \
         misc.f.wrapping_en = wrapping_en;                                                                              \
+        misc.f.src_include = src_include;                                                                              \
                                                                                                                        \
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET, misc.val);                         \
                                                                                                                        \
@@ -1199,15 +1202,20 @@ DEFINE_CMD_BUFS(cmdbuf_1, CMDBUF_1)
 inline __attribute__((always_inline)) void reset_reg_cmdbuf() { SCMDBUF_RESET(); }
 
 inline __attribute__((always_inline)) void setup_as_copy_reg_cmdbuf(
-    bool wr, bool mcast = false, TT_ROCC_CMD_BUF_MCAST_EXCLUDE_reg_u mcast_exclude = {0}, bool posted = true) {
+    bool wr,
+    bool mcast = false,
+    TT_ROCC_CMD_BUF_MCAST_EXCLUDE_reg_u mcast_exclude = {0},
+    bool posted = true,
+    bool linked = false,
+    bool src_include = false) {
     TT_ROCC_CMD_BUF_MISC_reg_u misc;
     misc.val = TT_ROCC_CMD_BUF_MISC_REG_DEFAULT;
 
-    misc.f.linked = mcast;
+    misc.f.linked = linked;
     misc.f.posted = wr && posted;
     misc.f.multicast = mcast;
     misc.f.write_trans = wr;
-
+    misc.f.src_include = src_include;
     SCMDBUF_WR_REG(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET, misc.val);
 
     if (mcast) {
