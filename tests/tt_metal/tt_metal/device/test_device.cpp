@@ -486,7 +486,7 @@ TEST_F(MeshDeviceFixture, MeshL1ToPinnedMemoryAt16BAlignedAddress) {
     auto mesh_device = devices_.at(0);
 
     // Skip if mapping to NOC isn't supported on this system
-    if (!PinnedMemory::GetMemoryPinningParameters(*mesh_device).can_map_to_noc) {
+    if (!experimental::GetMemoryPinningParameters(*mesh_device).can_map_to_noc) {
         GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
     }
 
@@ -511,7 +511,7 @@ TEST_F(MeshDeviceFixture, MeshL1ToPinnedMemoryAt16BAlignedAddress) {
     tt::tt_metal::HostBuffer host_buffer_view(
         tt::stl::Span<uint32_t>(aligned_buf->data(), aligned_buf->size()), tt::tt_metal::MemoryPin(aligned_buf));
     auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(target_coord, target_coord));
-    auto pinned_memory = PinnedMemory::PinMemory(
+    auto pinned_memory = experimental::PinMemory(
         *mesh_device,
         coordinate_range_set,
         host_buffer_view,
