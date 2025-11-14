@@ -11,26 +11,20 @@ namespace ttnn::operations::experimental::deepseek_b1::gate {
 using namespace tt::constants;
 
 void GateDeviceOperation::validate(const std::vector<Tensor>& input_tensors) const {
+    TT_FATAL(input_tensors.size() == 3, "Gate operation requires 3 input tensors (a, b, expert_bias)");
+
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
     const auto& input_tensor_expert_bias = input_tensors.at(2);
 
-    const auto& ashape = input_tensor_a.padded_shape();
-    const auto& bshape = input_tensor_b.padded_shape();
-    const auto& expert_bias_shape = input_tensor_expert_bias.padded_shape();
+    TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Input A must be on device");
+    TT_FATAL(input_tensor_b.storage_type() == StorageType::DEVICE, "Input B must be on device");
+    TT_FATAL(input_tensor_expert_bias.storage_type() == StorageType::DEVICE, "Expert bias must be on device");
+    TT_FATAL(input_tensor_a.layout() == Layout::TILE, "Input A must be tilized");
+    TT_FATAL(input_tensor_b.layout() == Layout::TILE, "Input B must be tilized");
+    TT_FATAL(input_tensor_expert_bias.layout() == Layout::TILE, "Expert bias must be tilized");
 
-    auto in0_tile = input_tensor_a.tensor_spec().tile();
-    auto in1_tile = input_tensor_b.tensor_spec().tile();
-    auto in0_tile_shape = in0_tile.get_tile_shape();
-    auto in1_tile_shape = in1_tile.get_tile_shape();
-
-    // Buffer size checks
-    tt::DataFormat in0_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_a.dtype());
-    tt::DataFormat in1_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_b.dtype());
-    uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
-    uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
-    tt::tt_metal::Buffer* in0_buffer = input_tensor_a.buffer();
-    tt::tt_metal::Buffer* in1_buffer = input_tensor_b.buffer();
+    // TODO: Add more comprehensive validation when implementing the full gate operation
 }
 
 std::vector<ttnn::TensorSpec> GateDeviceOperation::compute_output_specs(

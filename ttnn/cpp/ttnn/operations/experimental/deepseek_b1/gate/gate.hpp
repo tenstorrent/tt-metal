@@ -14,6 +14,7 @@ struct GateOperation {
         const ttnn::Tensor& a,
         const ttnn::Tensor& b,
         const ttnn::Tensor& expert_bias,
+        const ttnn::CoreGrid& core_grid,
         const std::optional<const ttnn::MemoryConfig>& memory_config = std::nullopt,
         const std::optional<const ttnn::DataType>& dtype = std::nullopt,
         const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);

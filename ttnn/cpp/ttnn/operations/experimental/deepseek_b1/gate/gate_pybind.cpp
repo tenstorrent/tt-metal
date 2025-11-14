@@ -54,14 +54,16 @@ void bind_gate(py::module& module) {
                const ttnn::Tensor& a,
                const ttnn::Tensor& b,
                const ttnn::Tensor& expert_bias,
+               const ttnn::CoreGrid& core_grid,
                const std::optional<const ttnn::MemoryConfig>& memory_config,
                const std::optional<const ttnn::DataType>& dtype,
                const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config) {
-                return self(a, b, expert_bias, memory_config, dtype, compute_kernel_config);
+                return self(a, b, expert_bias, core_grid, memory_config, dtype, compute_kernel_config);
             },
             py::arg("a"),
             py::arg("b"),
             py::arg("expert_bias"),
+            py::arg("core_grid"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("dtype") = std::nullopt,

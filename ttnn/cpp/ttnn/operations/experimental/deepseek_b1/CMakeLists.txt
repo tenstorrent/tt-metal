@@ -38,6 +38,8 @@ target_sources(
         matmul_1d/matmul_1d.cpp
         matmul_1d/device/matmul_1d_device_operation.cpp
         matmul_1d/device/matmul_1d_program_factory.cpp
+        gate/gate.cpp
+        gate/device/gate_op.cpp
         gate/device/gate_program_factory.cpp
 )
 

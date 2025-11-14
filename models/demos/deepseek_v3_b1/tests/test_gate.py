@@ -36,7 +36,8 @@ def test_gate(device):
     # For reference, compute the expected output
     # (The actual gate op will do matmul + bias + sigmoid + top-k + normalize internally)
     torch_matmul_output = torch.matmul(torch_activations.float(), torch_router_weights.float())
-    torch_reference_output = (torch_matmul_output + torch_expert_bias.float()).bfloat16()
+    torch_sigmoid_output = torch.sigmoid(torch_matmul_output)
+    torch_reference_output = (torch_sigmoid_output + torch_expert_bias.float()).bfloat16()
 
     # Create memory config for input activations
     # Using single core for simplicity
@@ -117,10 +118,12 @@ def test_gate(device):
     logger.info("Calling ttnn.experimental.deepseek_b1.gate...")
 
     for i in range(1000):
+        print(f"Iteration {i}")
         ttnn_output = ttnn.experimental.deepseek_b1.gate(
             ttnn_activations,
             ttnn_router_weights,
             ttnn_expert_bias,
+            grid_size,
             memory_config=output_mem_config,
         )
 
