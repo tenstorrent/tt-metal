@@ -24,6 +24,208 @@ def get_device_freq():
     return freq
 
 
+def get_arch():
+    """Get device architecture from profiler logs."""
+    setup = device_post_proc_config.default_setup()
+    setup.deviceInputLog = profiler_log_path
+    deviceData = import_log_run_stats(setup)
+    arch = deviceData["deviceInfo"]["arch"]
+    return arch
+
+
+def get_cluster_type_name():
+    """Get cluster type name (e.g., 't3k', 'galaxy') for CSV file naming."""
+    try:
+        import ttnn
+
+        cluster_type = ttnn.cluster.get_cluster_type()
+        cluster_type_str = str(cluster_type).split(".")[-1].lower()
+
+        # Map cluster type enum names to file naming convention
+        if cluster_type_str == "t3k":
+            return "t3k"
+        elif cluster_type_str in ["galaxy", "tg"]:
+            return "galaxy"
+        elif cluster_type_str == "blackhole_galaxy":
+            return "blackhole_galaxy"
+        else:
+            # Return the lowercase version for other types
+            return cluster_type_str
+    except Exception as e:
+        logger.warning(f"Could not determine cluster type: {e}, defaulting to 'unknown'")
+        return "unknown"
+
+
+def write_measured_results_to_csv(
+    topology,
+    line_size,
+    latency_measurement_worker_line_index,
+    latency_ping_message_size_bytes,
+    latency_ping_burst_size,
+    latency_ping_burst_count,
+    add_upstream_fabric_congestion_writers,
+    num_downstream_fabric_congestion_writers,
+    congestion_writers_message_size,
+    congestion_writers_use_mcast,
+    enable_fused_payload_with_sync,
+    latency_avg_ns,
+    latency_min_ns,
+    latency_max_ns,
+    avg_hop_latency_ns,
+    count,
+):
+    """Write measured latency results to CSV file."""
+    arch = get_arch()
+    cluster_type = get_cluster_type_name()
+    freq = get_device_freq()
+
+    # Create output directory if it doesn't exist
+    output_dir = os.path.join(os.environ["TT_METAL_HOME"], "generated", "fabric", "latency_benchmarks")
+    os.makedirs(output_dir, exist_ok=True)
+
+    # CSV file name
+    csv_file = os.path.join(output_dir, f"measured_latency_results_{arch}_{cluster_type}.csv")
+
+    # CSV header
+    header = [
+        "Architecture",
+        "System Type",
+        "Topology",
+        "Line Size",
+        "Latency Measurement Worker Line Index",
+        "Latency Ping Message Size (bytes)",
+        "Latency Ping Burst Size",
+        "Latency Ping Burst Count",
+        "Add Upstream Fabric Congestion Writers",
+        "Num Downstream Fabric Congestion Writers",
+        "Congestion Writers Message Size",
+        "Congestion Writers Use Mcast",
+        "Enable Fused Payload With Sync",
+        "Device Frequency (MHz)",
+        "Latency Avg (ns)",
+        "Latency Min (ns)",
+        "Latency Max (ns)",
+        "Avg Hop Latency (ns)",
+        "Count",
+    ]
+
+    # Check if file exists to determine if we need to write header
+    file_exists = os.path.isfile(csv_file)
+
+    # Write to CSV
+    with open(csv_file, "a", newline="") as f:
+        writer = csv.writer(f)
+        if not file_exists:
+            writer.writerow(header)
+
+        writer.writerow(
+            [
+                arch,
+                cluster_type,
+                topology,
+                line_size,
+                latency_measurement_worker_line_index,
+                latency_ping_message_size_bytes,
+                latency_ping_burst_size,
+                latency_ping_burst_count,
+                int(add_upstream_fabric_congestion_writers),
+                num_downstream_fabric_congestion_writers,
+                congestion_writers_message_size,
+                int(congestion_writers_use_mcast),
+                int(enable_fused_payload_with_sync),
+                freq,
+                latency_avg_ns,
+                latency_min_ns,
+                latency_max_ns,
+                avg_hop_latency_ns,
+                count,
+            ]
+        )
+
+    logger.info(f"Measured results written to {csv_file}")
+
+
+def load_golden_values(
+    topology,
+    line_size,
+    latency_measurement_worker_line_index,
+    latency_ping_message_size_bytes,
+    latency_ping_burst_size,
+    latency_ping_burst_count,
+    add_upstream_fabric_congestion_writers,
+    num_downstream_fabric_congestion_writers,
+    congestion_writers_message_size,
+    congestion_writers_use_mcast,
+    enable_fused_payload_with_sync,
+):
+    """
+    Load golden values from CSV file based on test parameters.
+    Returns None if golden file doesn't exist or matching entry not found.
+    """
+    arch = get_arch()
+    cluster_type = get_cluster_type_name()
+
+    # Golden file location
+    golden_dir = os.path.join(
+        os.environ["TT_METAL_HOME"],
+        "tests",
+        "tt_metal",
+        "tt_metal",
+        "perf_microbenchmark",
+        "routing",
+        "golden",
+        "latency",
+    )
+    golden_file = os.path.join(golden_dir, f"golden_latency_summary_{arch}_{cluster_type}.csv")
+
+    # Check if golden file exists
+    if not os.path.isfile(golden_file):
+        logger.warning(f"Golden file not found: {golden_file}")
+        return None
+
+    # Read golden CSV and find matching entry
+    try:
+        import pandas as pd
+
+        df = pd.read_csv(golden_file)
+
+        # Filter by test parameters
+        mask = (
+            (df["Topology"] == topology)
+            & (df["Line Size"] == line_size)
+            & (df["Latency Measurement Worker Line Index"] == latency_measurement_worker_line_index)
+            & (df["Latency Ping Message Size (bytes)"] == latency_ping_message_size_bytes)
+            & (df["Latency Ping Burst Size"] == latency_ping_burst_size)
+            & (df["Latency Ping Burst Count"] == latency_ping_burst_count)
+            & (df["Add Upstream Fabric Congestion Writers"] == int(add_upstream_fabric_congestion_writers))
+            & (df["Num Downstream Fabric Congestion Writers"] == num_downstream_fabric_congestion_writers)
+            & (df["Congestion Writers Message Size"] == congestion_writers_message_size)
+            & (df["Congestion Writers Use Mcast"] == int(congestion_writers_use_mcast))
+            & (df["Enable Fused Payload With Sync"] == int(enable_fused_payload_with_sync))
+        )
+
+        matching_rows = df[mask]
+
+        if len(matching_rows) == 0:
+            logger.warning(f"No matching golden values found for test parameters in {golden_file}")
+            return None
+
+        if len(matching_rows) > 1:
+            logger.warning(f"Multiple matching golden values found, using first match")
+
+        row = matching_rows.iloc[0]
+
+        return {
+            "expected_mean_latency_ns": row["Expected Mean Latency (ns)"],
+            "expected_min_latency_ns": row["Expected Min Latency (ns)"],
+            "expected_max_latency_ns": row["Expected Max Latency (ns)"],
+            "expected_avg_hop_latency_ns": row["Expected Avg Hop Latency (ns)"],
+        }
+    except Exception as e:
+        logger.warning(f"Error reading golden file {golden_file}: {e}")
+        return None
+
+
 def profile_results(
     line_size,
     latency_measurement_worker_line_index,
@@ -146,6 +348,26 @@ def run_latency_test(
     print(f"latency_max_ns: {latency_max_ns}")
     print(f"count: {count}")
     print(f"avg_hop_latency: {avg_hop_latency}")
+
+    # Export measured results to CSV
+    write_measured_results_to_csv(
+        topology,
+        line_size,
+        latency_measurement_worker_line_index,
+        latency_ping_message_size_bytes,
+        latency_ping_burst_size,
+        latency_ping_burst_count,
+        add_upstream_fabric_congestion_writers,
+        num_downstream_fabric_congestion_writers,
+        congestion_writers_message_size,
+        congestion_writers_use_mcast,
+        enable_fused_payload_with_sync,
+        latency_avg_ns,
+        latency_min_ns,
+        latency_max_ns,
+        avg_hop_latency,
+        count,
+    )
 
     min_max_latency_lower_bound_threshold_percent = 0.93
     lower_bound_threshold_percent = 0.95
