@@ -90,6 +90,8 @@ public:
     static constexpr auto attribute_names =
         std::forward_as_tuple("config", "socket_endpoint_type", "fabric_node_id_map");
     auto attribute_values() const { return std::forward_as_tuple(config_, socket_endpoint_type_, fabric_node_id_map_); }
+    uint32_t get_socket_id() const { return socket_id_; }
+    MeshDevice* get_device() const { return config_buffer_->device(); }
 
 private:
     MeshSocket(
@@ -111,6 +113,8 @@ private:
     std::
         array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, enchantum::count<SocketEndpoint>>
             fabric_node_id_map_;
+    inline static uint32_t global_socket_id = 0;
+    uint32_t socket_id_;
 };
 
 }  // namespace tt::tt_metal::distributed

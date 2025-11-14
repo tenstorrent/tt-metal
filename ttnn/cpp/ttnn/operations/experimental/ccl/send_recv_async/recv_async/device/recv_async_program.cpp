@@ -34,7 +34,6 @@ tt::tt_metal::operation::ProgramWithCallbacks recv_async_multicore(
     tt::tt_fabric::FabricNodeId receiver_fabric_node_id{tt::tt_fabric::MeshId{0}, 0};
 
     // TODO #24995: Find appropriate receiver core and fabric node IDs based on mesh socket configuration
-    std::cout << "Get fabric node ids" << std::endl;
     for (const auto& connection : socket_connection_config) {
         if (socket_mesh_device->get_device(connection.receiver_core.device_coord)->id() == target_device->id()) {
             receiver_core_coord = connection.receiver_core.core_coord;
@@ -44,7 +43,6 @@ tt::tt_metal::operation::ProgramWithCallbacks recv_async_multicore(
             break;
         }
     }
-    std::cout << "Get fabric node ids done" << std::endl;
     // TODO #24995: These parameters should be derived from the expected tensor/socket configuration
     auto max_alignment = std::max(
         target_device->allocator()->get_alignment(mesh_socket.get_config().socket_mem_config.socket_storage_type),
@@ -66,7 +64,6 @@ tt::tt_metal::operation::ProgramWithCallbacks recv_async_multicore(
     } else {
         socket_block_size = socket_aligned_page_size;
     }
-    std::cout << "Get socket block size done" << std::endl;
     uint32_t packet_header_cb_num_pages = 1;  // One for sync
     uint32_t packet_header_cb_page_size = fabric_max_payload_size;
 
@@ -86,7 +83,6 @@ tt::tt_metal::operation::ProgramWithCallbacks recv_async_multicore(
     bool socket_storage_in_dram =
         mesh_socket.get_config().socket_mem_config.socket_storage_type == tt::tt_metal::BufferType::DRAM;
     bool use_local_storage = !socket_storage_in_dram;
-    std::cout << "Use local storage: " << use_local_storage << std::endl;
     uint32_t num_blocks = 0;
     uint32_t num_pages_per_block = 0;
     uint32_t block_remainder_pages = 0;
@@ -111,9 +107,7 @@ tt::tt_metal::operation::ProgramWithCallbacks recv_async_multicore(
     tt::tt_metal::KernelHandle reader_kernel = 0;
     tt::tt_metal::KernelHandle writer_kernel = 0;
     auto link_indices = tt::tt_fabric::get_forwarding_link_indices(receiver_fabric_node_id, sender_fabric_node_id);
-    std::cout << "Get link indices done" << std::endl;
     if (use_local_storage) {
-        std::cout << "Use local storage" << std::endl;
         std::vector<uint32_t> writer_compile_args = {
             packet_header_cb_index,    // fabric_packet_header_cb_id
             num_pages,                 // num_pages
@@ -138,12 +132,6 @@ tt::tt_metal::operation::ProgramWithCallbacks recv_async_multicore(
 
         std::vector<uint32_t> writer_rt_args = {
             mesh_socket.get_config_buffer()->address(), output_tensor.buffer()->address()};
-        std::cout << "Append fabric connection rt args" << std::endl;
-        std::cout << "Sender Fabric Node Id: " << *sender_fabric_node_id.mesh_id << " " << sender_fabric_node_id.chip_id
-                  << std::endl;
-        std::cout << "Receiver Fabric Node Id: " << *receiver_fabric_node_id.mesh_id << " "
-                  << receiver_fabric_node_id.chip_id << std::endl;
-        std::cout << "Num Links: " << link_indices.size() << std::endl;
         tt::tt_fabric::append_fabric_connection_rt_args(
             receiver_fabric_node_id,
             sender_fabric_node_id,
@@ -151,9 +139,7 @@ tt::tt_metal::operation::ProgramWithCallbacks recv_async_multicore(
             program,
             receiver_core_coord,
             writer_rt_args);
-        std::cout << "Append fabric connection rt args done" << std::endl;
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel, receiver_core_coord, writer_rt_args);
-        std::cout << "Set writer runtime args done" << std::endl;
     } else {
         TT_ASSERT(num_blocks * num_pages_per_block + block_remainder_pages == num_pages, "Blocks and pages mismatch");
         std::vector<uint32_t> reader_compile_args = {

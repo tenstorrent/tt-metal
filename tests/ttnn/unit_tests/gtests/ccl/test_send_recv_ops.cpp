@@ -10,6 +10,7 @@
 
 #include "ttnn/operations/experimental/ccl/send_recv_async/send_async/send_async.hpp"
 #include "ttnn/operations/experimental/ccl/send_recv_async/recv_async/recv_async.hpp"
+#include "ttnn/operations/experimental/ccl/send_recv_async/socket_copy/socket_copy.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -127,17 +128,45 @@ TEST_F(FabricSendRecv2x4Fixture, SRTest) {
 
     auto sender_logical_coord = CoreCoord(0, 0);
     auto recv_logical_coord = CoreCoord(0, 1);
+    auto copy_logical_coord = CoreCoord(0, 2);
+
     auto socket_fifo_size = 28 * 1024;
-    distributed::SocketConnection socket_connection = {
-        .sender_core = {distributed::MeshCoordinate(0, 0), sender_logical_coord},
-        .receiver_core = {distributed::MeshCoordinate(0, 1), recv_logical_coord}};
+
+    auto start_device_coord = distributed::MeshCoordinate(0, 0);
+    auto intermed_device_coord = distributed::MeshCoordinate(0, 1);
+    auto intermed_device_coord_2 = distributed::MeshCoordinate(0, 2);
+    auto end_device_coord = distributed::MeshCoordinate(0, 3);
+
+    // Create connections for:
+    // Stage 0 -> 1
+    // Stage 1 -> 2
+    distributed::SocketConnection socket_connection_01 = {
+        .sender_core = {start_device_coord, sender_logical_coord},
+        .receiver_core = {intermed_device_coord, copy_logical_coord}};
+    distributed::SocketConnection socket_connection_12 = {
+        .sender_core = {intermed_device_coord, copy_logical_coord},
+        .receiver_core = {intermed_device_coord_2, copy_logical_coord}};
+    distributed::SocketConnection socket_connection_23 = {
+        .sender_core = {intermed_device_coord_2, copy_logical_coord},
+        .receiver_core = {end_device_coord, recv_logical_coord}};
+
     distributed::SocketMemoryConfig socket_mem_config = {
         .socket_storage_type = BufferType::L1,
         .fifo_size = socket_fifo_size,
     };
 
-    distributed::SocketConfig socket_config = {
-        .socket_connection_config = {socket_connection},
+    distributed::SocketConfig socket_config_01 = {
+        .socket_connection_config = {socket_connection_01},
+        .socket_mem_config = socket_mem_config,
+    };
+
+    distributed::SocketConfig socket_config_12 = {
+        .socket_connection_config = {socket_connection_12},
+        .socket_mem_config = socket_mem_config,
+    };
+
+    distributed::SocketConfig socket_config_23 = {
+        .socket_connection_config = {socket_connection_23},
         .socket_mem_config = socket_mem_config,
     };
 
@@ -160,20 +189,40 @@ TEST_F(FabricSendRecv2x4Fixture, SRTest) {
     uint32_t num_elems = input_shape.volume();
     auto layout = input_tensor_spec.layout();
     auto dtype = input_tensor_spec.data_type();
+
+    auto output_tensor = allocate_tensor_on_device(output_tensor_spec, mesh_device.get());
+
+    auto [send_socket_0, recv_socket_1] =
+        distributed::MeshSocket::create_socket_pair(mesh_device, mesh_device, socket_config_01);
+
+    auto [send_socket_1, recv_socket_2] =
+        distributed::MeshSocket::create_socket_pair(mesh_device, mesh_device, socket_config_12);
+
+    auto [send_socket_2, recv_socket_3] =
+        distributed::MeshSocket::create_socket_pair(mesh_device, mesh_device, socket_config_23);
+
     const Tensor input_tensor =
         ttnn::distributed::distribute_tensor(
             ttnn::experimental::view(ttnn::arange(0, num_elems, 1, dtype), input_shape).to_layout(layout),
             *ttnn::distributed::replicate_tensor_to_mesh_mapper(*mesh_device),
             std::nullopt)
             .to_device(mesh_device.get(), memory_config);
-    auto output_tensor = allocate_tensor_on_device(output_tensor_spec, mesh_device.get());
+    for (uint32_t i = 0; i < 1000; i++) {
+        ttnn::experimental::send_async(input_tensor, send_socket_0);
+        ttnn::experimental::socket_copy(recv_socket_1, send_socket_1, num_elems * sizeof(bfloat16));
+        ttnn::experimental::socket_copy(recv_socket_2, send_socket_2, num_elems * sizeof(bfloat16));
+        ttnn::experimental::recv_async(output_tensor, recv_socket_3);
 
-    auto [send_socket, recv_socket] =
-        distributed::MeshSocket::create_socket_pair(mesh_device, mesh_device, socket_config);
+        // auto composer = ttnn::distributed::concat_mesh_to_tensor_composer(*mesh_device, /*dim=*/0);
+        // auto output_data = ttnn::distributed::aggregate_tensor(output_tensor, *composer).to_vector<bfloat16>();
+        // auto expected_output_data = ttnn::arange(i, num_elems + i, 1, tt::tt_metal::DataType::BFLOAT16);
+        // auto expected_output_data_vector = expected_output_data.to_vector<bfloat16>();
 
-    ttnn::experimental::send_async(input_tensor, send_socket);
-    ttnn::experimental::recv_async(output_tensor, recv_socket);
-    distributed::Synchronize(mesh_device.get(), std::nullopt);
+        // auto chunked_output_vector =
+        //     std::vector<bfloat16>(output_data.begin() + 3 * num_elems, output_data.begin() + 4 * num_elems);
+        // EXPECT_EQ(chunked_output_vector, expected_output_data_vector);
+    }
+    Synchronize(mesh_device.get(), std::nullopt);
 }
 
 }  // namespace tt::tt_metal

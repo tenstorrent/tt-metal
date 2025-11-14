@@ -37,7 +37,8 @@ void point_to_point_barrier(
 
 }  // namespace
 
-MeshSocket::MeshSocket(const std::shared_ptr<MeshDevice>& device, const SocketConfig& config) : config_(config) {
+MeshSocket::MeshSocket(const std::shared_ptr<MeshDevice>& device, const SocketConfig& config) :
+    config_(config), socket_id_(global_socket_id++) {
     auto context = config.distributed_context ? config.distributed_context : DistributedContext::get_current_world();
 
     if (!(context->rank() == config.sender_rank || context->rank() == config.receiver_rank)) {

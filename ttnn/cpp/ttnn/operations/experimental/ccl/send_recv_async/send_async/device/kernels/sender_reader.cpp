@@ -38,58 +38,63 @@ void kernel_main() {
     // TODO #24995: Instead of page by page transfers, we can transfer bank by bank
 
     // Small pages. We pack multiple pages into a single packet.
-    for (int i = 0; i < 10000000; i++) {
-        uint32_t page_index = 0;
-        if constexpr (num_pages_per_packet > 0) {
-            for (uint32_t i = 0; i < num_whole_packets; ++i) {
-                cb_reserve_back(cb0_id, 1);
-                auto l1_write_addr = get_write_ptr(cb0_id);
-                for (uint32_t j = 0; j < num_pages_per_packet; ++j) {
-                    auto noc_read_addr = input_addr_gen.get_noc_addr(page_index);
-                    noc_async_read<input_page_size>(noc_read_addr, l1_write_addr, input_page_size);
-                    page_index++;
-                    l1_write_addr += socket_page_size;
-                }
-                noc_async_read_barrier();
-                cb_push_back(cb0_id, 1);
-            }
-
-            if constexpr (num_pages_remainder > 0) {
-                cb_reserve_back(cb0_id, 1);
-                auto l1_write_addr = get_write_ptr(cb0_id);
-                for (uint32_t j = 0; j < num_pages_remainder; ++j) {
-                    auto noc_read_addr = input_addr_gen.get_noc_addr(page_index);
-                    noc_async_read<input_page_size>(noc_read_addr, l1_write_addr, input_page_size);
-                    page_index++;
-                    l1_write_addr += socket_page_size;
-                }
-                noc_async_read_barrier();
-                cb_push_back(cb0_id, 1);
-            }
-
-        }
-        // Large pages. We pack page chunks into a single packet.
-        else {
-            // TODO #24995: Could read whole page into scratch, then copy locally
-            for (uint32_t i = 0; i < num_pages; ++i) {
+    uint32_t page_index = 0;
+    if constexpr (num_pages_per_packet > 0) {
+        for (uint32_t i = 0; i < num_whole_packets; ++i) {
+            cb_reserve_back(cb0_id, 1);
+            auto l1_write_addr = get_write_ptr(cb0_id);
+            for (uint32_t j = 0; j < num_pages_per_packet; ++j) {
                 auto noc_read_addr = input_addr_gen.get_noc_addr(page_index);
-                for (uint32_t j = 0; j < num_whole_packets_per_page; ++j) {
-                    cb_reserve_back(cb0_id, 1);
-                    auto l1_write_addr = get_write_ptr(cb0_id);
-                    noc_async_read<whole_packet_size>(noc_read_addr, l1_write_addr, whole_packet_size);
-                    noc_read_addr += whole_packet_size;
-                    noc_async_read_barrier();
-                    cb_push_back(cb0_id, 1);
-                }
-                if constexpr (partial_packet_size > 0) {
-                    cb_reserve_back(cb0_id, 1);
-                    auto l1_write_addr = get_write_ptr(cb0_id);
-                    noc_async_read<partial_packet_size>(noc_read_addr, l1_write_addr, partial_packet_size);
-                    noc_async_read_barrier();
-                    cb_push_back(cb0_id, 1);
-                }
+                noc_async_read<input_page_size>(noc_read_addr, l1_write_addr, input_page_size);
                 page_index++;
+                l1_write_addr += socket_page_size;
             }
+            noc_async_read_barrier();
+            cb_push_back(cb0_id, 1);
         }
+
+        if constexpr (num_pages_remainder > 0) {
+            cb_reserve_back(cb0_id, 1);
+            auto l1_write_addr = get_write_ptr(cb0_id);
+            for (uint32_t j = 0; j < num_pages_remainder; ++j) {
+                auto noc_read_addr = input_addr_gen.get_noc_addr(page_index);
+                noc_async_read<input_page_size>(noc_read_addr, l1_write_addr, input_page_size);
+                page_index++;
+                l1_write_addr += socket_page_size;
+            }
+            noc_async_read_barrier();
+            cb_push_back(cb0_id, 1);
+        }
+
+    }
+    // Large pages. We pack page chunks into a single packet.
+    else {
+        // TODO #24995: Could read whole page into scratch, then copy locally
+        // Read entire tensor in a single shot
+        auto noc_read_addr = input_addr_gen.get_noc_addr(0);
+        cb_reserve_back(cb0_id, 1);
+        auto l1_write_addr = get_write_ptr(cb0_id);
+        noc_async_read<input_page_size>(noc_read_addr, l1_write_addr, input_page_size);
+        noc_async_read_barrier();
+        cb_push_back(cb0_id, 1);
+        // for (uint32_t i = 0; i < num_pages; ++i) {
+        //     auto noc_read_addr = input_addr_gen.get_noc_addr(page_index);
+        //     for (uint32_t j = 0; j < num_whole_packets_per_page; ++j) {
+        //         cb_reserve_back(cb0_id, 1);
+        //         auto l1_write_addr = get_write_ptr(cb0_id);
+        //         noc_async_read<whole_packet_size>(noc_read_addr, l1_write_addr, whole_packet_size);
+        //         noc_read_addr += whole_packet_size;
+        //         noc_async_read_barrier();
+        //         cb_push_back(cb0_id, 1);
+        //     }
+        //     if constexpr (partial_packet_size > 0) {
+        //         cb_reserve_back(cb0_id, 1);
+        //         auto l1_write_addr = get_write_ptr(cb0_id);
+        //         noc_async_read<partial_packet_size>(noc_read_addr, l1_write_addr, partial_packet_size);
+        //         noc_async_read_barrier();
+        //         cb_push_back(cb0_id, 1);
+        //     }
+        //     page_index++;
+        // }
     }
 }
