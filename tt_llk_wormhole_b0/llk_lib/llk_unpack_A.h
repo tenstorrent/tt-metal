@@ -189,13 +189,16 @@ template <
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool unpack_to_dest                          = false>
 inline void _llk_unpack_A_init_(
-    const std::uint32_t transpose_of_faces                           = 0,
-    [[maybe_unused]] const std::uint32_t within_face_16x16_transpose = 0,
-    const std::uint32_t face_r_dim                                   = FACE_R_DIM,
-    const std::uint32_t num_faces                                    = 4,
-    const std::uint32_t unpack_src_format                            = 0,
-    const std::uint32_t unpack_dst_format                            = 0)
+    const std::uint32_t transpose_of_faces          = 0,
+    const std::uint32_t within_face_16x16_transpose = 0,
+    const std::uint32_t face_r_dim                  = FACE_R_DIM,
+    const std::uint32_t num_faces                   = 4,
+    const std::uint32_t unpack_src_format           = 0,
+    const std::uint32_t unpack_dst_format           = 0)
 {
+    // Set transpose register to prevent state pollution
+    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(within_face_16x16_transpose);
+
     constexpr std::uint32_t UNP_SEL = (BType == BroadcastType::NONE) ? p_setadc::UNP_A : p_setadc::UNP_B;
     config_unpacker_x_end<UNP_SEL>(face_r_dim);
     _llk_unpack_A_mop_config_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(transpose_of_faces > 0, num_faces, unpack_src_format, unpack_dst_format);

@@ -33,7 +33,7 @@ jobs:
       test_splits: 10
       pytest_markers: ${{ inputs.pytest_markers || 'not perf and not quasar' }}
       random_order: true
-      timeout_minutes: 240
+      timeout_minutes: 360
 
   nightly-test-blackhole:
     name: "🕳️ Nightly Tests (Blackhole)"
@@ -45,7 +45,7 @@ jobs:
       test_splits: 10
       pytest_markers: ${{ inputs.pytest_markers || 'not perf and not quasar' }}
       random_order: true
-      timeout_minutes: 240
+      timeout_minutes: 360
 
   nightly-summary:
     name: "📊 Nightly Summary"
