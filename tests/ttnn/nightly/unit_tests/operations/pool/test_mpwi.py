@@ -11,11 +11,11 @@ from tests.sweep_framework.sweep_utils.max_pool2d_with_indices_common import run
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
-@pytest.mark.parametrize("in_c", [32])
+@pytest.mark.parametrize("in_c", [1, 16, 32, 48, 64])
 def test_mpwi_20_core_C_dims(device, in_c):
     in_n = 1
-    in_h = 3
-    in_w = 3
+    in_h = 159
+    in_w = 159
     kernel_size = [3, 3]
     stride = [1, 1]
     padding = [1, 1]
@@ -36,8 +36,8 @@ def test_mpwi_20_core_C_dims(device, in_c):
         memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         buffer_type=ttnn.BufferType.L1,
         shard_spec=ttnn.ShardSpec(
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
-            [in_n * in_h * in_w, shard_width],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 3))}),
+            [1280, shard_width],
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )

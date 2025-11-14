@@ -12,7 +12,7 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/add_int_sfpu.h"
 
-#define DEBUG_PRINT 1
+#define DEBUG_PRINT 0
 
 #if DEBUG_PRINT == 1
 #include "debug/dprint.h"
@@ -114,7 +114,6 @@ void MAIN {
     } else {
         unary_op_init_common(in_cb_id_0, in_cb_id_0);
         copy_tile_to_dst_init_short(in_cb_id_0);
-        // PACK(llk_pack_init(out_cb_id));
     }
 
     constexpr uint32_t remaining_elems = window_size_hw % max_sticks_for_reduction;
@@ -183,9 +182,7 @@ void MAIN {
                         cb_wait_front(in_idx_cb_id, 1);
                     }
                     reconfig_data_format_srca(in_idx_cb_id);
-                    UNPACK(tt::compute::common::print_tile_rows(in_idx_cb_id, 9));
                     copy_tile(in_idx_cb_id, mpwi_cb_tile_idx, index_dst_idx);
-                    // dprint_tensix_dest_reg(index_dst_idx);
                     copy_tile(in_idx_cb_id, mpwi_cb_tile_idx, index_scratch_in_dst_idx);
                     if (last_c_block) {
                         cb_pop_front(in_idx_cb_id, 1);
@@ -240,10 +237,6 @@ void MAIN {
                 }
                 cb_pop_front(curr_in_cb_id, 1);
             }
-
-            // reconfig_data_format_srca(out_idx_cb_id);
-            // pack_reconfig_data_format(out_idx_cb_id);
-            // dprint_tensix_dest_reg(2);
 
             tile_regs_commit();
             tile_regs_wait();
@@ -322,9 +315,6 @@ void MAIN {
                 pack_reconfig_data_format(out_idx_cb_id);
                 pack_tile<false>(index_dst_idx, out_idx_cb_id, mpwi_cb_tile_idx);
 
-                // PACK(tt::compute::common::print_tile_rows(out_cb_id, 1));
-                // PACK(tt::compute::common::print_tile_rows(out_idx_cb_id, 1));
-
                 cb_push_back(out_cb_id, output_faces);
                 cb_push_back(out_idx_cb_id, output_faces);
 
@@ -332,7 +322,6 @@ void MAIN {
                     cb_reserve_back(in_idx_cb_id, 1);
                     PACK((llk_pack_init<false>(in_idx_cb_id)));
                     pack_reconfig_data_format(in_idx_cb_id);
-                    // this call should not be changed
                     pack_tile<true>(index_scratch_out_dst_idx, in_idx_cb_id, mpwi_cb_tile_idx);
                     cb_push_back(in_idx_cb_id, 1);
                 }

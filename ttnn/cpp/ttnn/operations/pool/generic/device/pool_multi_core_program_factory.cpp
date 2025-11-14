@@ -492,7 +492,12 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     }
 
     // Create output CB with custom tile dimensions
-    tt::tt_metal::Tile out_tile({2, 16});
+    TT_FATAL(
+        in_c <= 16 || in_c % 32 == 0,
+        "in_c {} should be <=16 or multiple of 32 so that out_tile size is consistent",
+        in_c);
+    uint32_t out_rows = in_c <= 16 ? 1 : 2;
+    tt::tt_metal::Tile out_tile({out_rows, 16});
     uint32_t out_cb_id = next_cb_index++;
     tt::tt_metal::CircularBufferConfig out_cb_config =
         tt::tt_metal::CircularBufferConfig(
