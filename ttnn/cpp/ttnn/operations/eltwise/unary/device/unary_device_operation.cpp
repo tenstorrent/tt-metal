@@ -93,9 +93,9 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
         "Operands to eltwise unary need to be allocated in buffers on the device. Buffer is null.");
 
     // Allow sharded output from non-sharded input if shard_spec can be created automatically
+    // Only skip layout check when output is sharded but missing shard_spec (will be auto-created)
     bool allow_sharded_output = out_memory_config.is_sharded() &&
-                                (!out_memory_config.shard_spec().has_value() ||
-                                 (input_tensor.is_sharded() && input_tensor.shard_spec().has_value()));
+                                !out_memory_config.shard_spec().has_value();
 
     if (!allow_sharded_output) {
         TT_FATAL(
@@ -197,6 +197,7 @@ spec_return_value_t UnaryDeviceOperation::compute_output_specs(
                     // Calculate shard width that maximizes core usage while satisfying alignment
                     uint32_t shard_width = tt::round_up(total_width / target_cores, l1_aligned_tile_multiple);
                     shard_width = std::max(shard_width, l1_aligned_tile_multiple); // Ensure minimum
+                    shard_width = std::min(shard_width, total_width); // Don't exceed total width
                     shard_shape = {total_height, shard_width};
                     num_cores = tt::div_up(total_width, shard_shape[1]);
                     break;
@@ -209,6 +210,7 @@ spec_return_value_t UnaryDeviceOperation::compute_output_specs(
 
                     uint32_t shard_height = tt::round_up(total_height / target_cores, TILE_HEIGHT);
                     shard_height = std::max(shard_height, TILE_HEIGHT);
+                    shard_height = std::min(shard_height, total_height); // Don't exceed total height
                     shard_shape = {shard_height, total_width};
                     num_cores = tt::div_up(total_height, shard_shape[0]);
                     break;
@@ -219,72 +221,43 @@ spec_return_value_t UnaryDeviceOperation::compute_output_specs(
                     uint32_t grid_y = static_cast<uint32_t>(grid_size.y);  // rows
                     uint32_t grid_x = static_cast<uint32_t>(grid_size.x);   // columns
 
-                    // Calculate initial shard dimensions conservatively
-                    uint32_t max_grid_cores = static_cast<uint32_t>(grid_size.x * grid_size.y);
-                    uint32_t conservative_max_shards = std::min(grid_x, grid_y);
-                    conservative_max_shards = std::max(1u, conservative_max_shards);
+                    // We need: num_shards_height <= grid_x and num_shards_width <= grid_y
+                    // For COL_MAJOR: shard_height >= ceil(total_height / grid_x) and shard_width >= ceil(total_width / grid_y)
 
-                    uint32_t min_shard_height = tt::div_up(total_height, conservative_max_shards);
+                    // Calculate shard height: ensure num_shards_height <= grid_x
+                    // Minimum shard_height needed: ceil(total_height / grid_x), rounded to tile boundary
+                    uint32_t min_shard_height = tt::div_up(total_height, grid_x);
                     uint32_t shard_height = tt::round_up(min_shard_height, TILE_HEIGHT);
                     shard_height = std::max(shard_height, TILE_HEIGHT);
+                    shard_height = std::min(shard_height, total_height);  // Don't exceed total height
                     uint32_t num_shards_height = tt::div_up(total_height, shard_height);
-
-                    uint32_t min_shard_width = tt::div_up(total_width, conservative_max_shards);
-                    uint32_t shard_width = tt::round_up(min_shard_width, l1_aligned_tile_multiple);
-                    shard_width = std::max(shard_width, l1_aligned_tile_multiple);
-                    uint32_t num_shards_width = tt::div_up(total_width, shard_width);
-
-                    // Iteratively adjust to satisfy actual grid constraints
-                    bool row_wise = false;  // COL_MAJOR for BLOCK_SHARDED
-                    CoreRangeSet temp_grid_set;
-                    uint32_t actual_grid_x = 0;
-                    uint32_t actual_grid_y = 0;
-                    uint32_t max_iterations = 20;
-
-                    for (uint32_t iter = 0; iter < max_iterations; iter++) {
-                        // Calculate num_cores and create CoreRangeSet
-                        num_cores = num_shards_height * num_shards_width;
-                        num_cores = std::min(num_cores, max_grid_cores);
-                        temp_grid_set = tt::tt_metal::num_cores_to_corerangeset(num_cores, grid_size, row_wise);
-                        CoreCoord actual_shard_grid = temp_grid_set.bounding_box().grid_size();
-                        actual_grid_x = static_cast<uint32_t>(actual_shard_grid.x);
-                        actual_grid_y = static_cast<uint32_t>(actual_shard_grid.y);
-
-                        // Check if constraints are satisfied
-                        bool height_ok = (num_shards_height <= actual_grid_x);
-                        bool width_ok = (num_shards_width <= actual_grid_y);
-
-                        if (height_ok && width_ok) {
-                            break;  // Constraints satisfied
-                        }
-
-                        // Adjust shard dimensions to satisfy constraints
-                        if (!height_ok && shard_height < total_height) {
-                            // Increase shard_height to reduce num_shards_height
-                            uint32_t target_num_shards = actual_grid_x;
-                            if (target_num_shards == 0) target_num_shards = 1;
-                            uint32_t new_min_shard_height = tt::div_up(total_height, target_num_shards);
-                            shard_height = tt::round_up(new_min_shard_height, TILE_HEIGHT);
-                            shard_height = std::max(shard_height, TILE_HEIGHT);
-                            num_shards_height = tt::div_up(total_height, shard_height);
-                        }
-
-                        if (!width_ok && shard_width < total_width) {
-                            // Increase shard_width to reduce num_shards_width
-                            uint32_t target_num_shards = actual_grid_y;
-                            if (target_num_shards == 0) target_num_shards = 1;
-                            uint32_t new_min_shard_width = tt::div_up(total_width, target_num_shards);
-                            shard_width = tt::round_up(new_min_shard_width, l1_aligned_tile_multiple);
-                            shard_width = std::max(shard_width, l1_aligned_tile_multiple);
-                            num_shards_width = tt::div_up(total_width, shard_width);
-                        }
+                    // If rounding caused violation, increase shard_height by one tile to guarantee satisfaction
+                    if (num_shards_height > grid_x) {
+                        shard_height += TILE_HEIGHT;
+                        shard_height = std::min(shard_height, total_height);
+                        num_shards_height = tt::div_up(total_height, shard_height);
                     }
 
-                    // Final verification
-                    TT_FATAL(num_shards_height <= actual_grid_x, "Number of shards along height {} must not exceed grid columns {}", num_shards_height, actual_grid_x);
-                    TT_FATAL(num_shards_width <= actual_grid_y, "Number of shards along width {} must not exceed grid rows {} for COL_MAJOR orientation", num_shards_width, actual_grid_y);
+                    // Calculate shard width: ensure num_shards_width <= grid_y
+                    // Minimum shard_width needed: ceil(total_width / grid_y), rounded to alignment boundary
+                    uint32_t min_shard_width = tt::div_up(total_width, grid_y);
+                    uint32_t shard_width = tt::round_up(min_shard_width, l1_aligned_tile_multiple);
+                    shard_width = std::max(shard_width, l1_aligned_tile_multiple);
+                    shard_width = std::min(shard_width, total_width);  // Don't exceed total width
+                    uint32_t num_shards_width = tt::div_up(total_width, shard_width);
+                    // If rounding caused violation, increase shard_width by one alignment unit to guarantee satisfaction
+                    if (num_shards_width > grid_y) {
+                        shard_width += l1_aligned_tile_multiple;
+                        shard_width = std::min(shard_width, total_width);
+                        num_shards_width = tt::div_up(total_width, shard_width);
+                    }
+
+                    // Verify constraints are satisfied
+                    TT_FATAL(num_shards_height <= grid_x, "Number of shards along height {} must not exceed grid columns {}", num_shards_height, grid_x);
+                    TT_FATAL(num_shards_width <= grid_y, "Number of shards along width {} must not exceed grid rows {} for COL_MAJOR orientation", num_shards_width, grid_y);
 
                     shard_shape = {shard_height, shard_width};
+                    num_cores = num_shards_height * num_shards_width;
                     break;
                 }
                 default:
@@ -302,10 +275,10 @@ spec_return_value_t UnaryDeviceOperation::compute_output_specs(
             if (memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
                 // For BLOCK_SHARDED, create a rectangular grid directly
                 // The grid should be (num_shards_height, num_shards_width) for COL_MAJOR
-                // We need to get num_shards_height and num_shards_width from the shard_shape
+                // num_shards_height and num_shards_width were already calculated in the BLOCK_SHARDED case
                 uint32_t num_shards_h = tt::div_up(total_height, shard_shape[0]);
                 uint32_t num_shards_w = tt::div_up(total_width, shard_shape[1]);
-                // Ensure we don't exceed device grid
+                // Ensure we don't exceed device grid (should already be satisfied, but double-check)
                 uint32_t grid_h = std::min(num_shards_h, static_cast<uint32_t>(grid_size.x));
                 uint32_t grid_w = std::min(num_shards_w, static_cast<uint32_t>(grid_size.y));
                 // Create a single rectangular CoreRange
