@@ -307,21 +307,16 @@ class Qwen25VlAttention(Module):
 
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             ttnn.unsqueeze(x, 1),
-            num_heads=self._num_local_heads * self._tp_factor,
-            num_kv_heads=self._num_local_kv_heads * self._tp_factor,
+            num_heads=self._num_local_heads,
+            num_kv_heads=self._num_local_kv_heads,
             transpose_k_heads=False,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        if self._tp_axis is not None:
-            q = self._ccl_manager.all_gather_persistent_buffer(q, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
-            k = self._ccl_manager.all_gather_persistent_buffer(k, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
-            v = self._ccl_manager.all_gather_persistent_buffer(v, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
-
         cos, sin = pos_embeds
         q = _apply_rope(q, cos, sin)
         k = _apply_rope(k, cos, sin)
-        # this version of ROPE can probably be done before all-gather
+
         # q = ttnn.experimental.rotary_embedding_llama(q, cos, sin, self._rope_mat, is_decode_mode=False)
         # k = ttnn.experimental.rotary_embedding_llama(k, cos, sin, self._rope_mat, is_decode_mode=False)
 
@@ -339,6 +334,9 @@ class Qwen25VlAttention(Module):
         )
 
         x = ttnn.transformer.concatenate_heads(x)
+
+        if self._tp_axis is not None:
+            x = self._ccl_manager.all_gather_persistent_buffer(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
 
         x = self.o_proj.forward(x)
 
