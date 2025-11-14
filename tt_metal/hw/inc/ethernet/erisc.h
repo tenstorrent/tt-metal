@@ -32,8 +32,6 @@ inline __attribute__((always_inline)) void risc_context_switch() {
 #if defined(KERNEL_BUILD)
     if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
         ncrisc_noc_full_sync<1>();
-    } else {
-        ncrisc_dynamic_noc_full_sync();
     }
 
     service_eth_msg();
@@ -43,8 +41,6 @@ inline __attribute__((always_inline)) void risc_context_switch() {
         ncrisc_noc_counters_init<1>();
     }
 #elif defined(FW_BUILD)
-    // Firmware always uses NOC0
-    ncrisc_noc_full_sync<1>();
     service_eth_msg();
     update_boot_results_eth_link_status_check();
     ncrisc_noc_counters_init<1>();
