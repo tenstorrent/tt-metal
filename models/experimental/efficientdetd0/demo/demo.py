@@ -36,6 +36,17 @@ from models.demos.utils.common_demo_utils import get_mesh_mappers
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.common.utility_functions import disable_persistent_kernel_cache, comp_pcc
 
+# Import COCO evaluation function
+try:
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).parent.parent / "tests"))
+    from evaluate_coco import evaluate_coco
+
+    COCO_EVAL_AVAILABLE = True
+except ImportError:
+    COCO_EVAL_AVAILABLE = False
+
 
 # COCO class names
 COCO_CLASSES = [
@@ -413,7 +424,6 @@ def run_efficient_det_demo(
     height=512,
     width=512,
     num_classes=90,
-    compound_coef=0,
     image_path=None,
     threshold=0.5,
     iou_threshold=0.5,
@@ -430,7 +440,6 @@ def run_efficient_det_demo(
         height: Input image height
         width: Input image width
         num_classes: Number of object classes
-        compound_coef: EfficientDet compound coefficient (0-8)
     """
     disable_persistent_kernel_cache()
 
@@ -439,13 +448,12 @@ def run_efficient_det_demo(
     logger.info("=" * 80)
     logger.info(f"Input shape: ({batch_size}, 3, {height}, {width})")
     logger.info(f"Number of classes: {num_classes}")
-    logger.info(f"Compound coefficient: {compound_coef}")
 
     # Initialize PyTorch model
     logger.info("\n[1/5] Initializing PyTorch model...")
     torch_model = EfficientDetBackbone(
         num_classes=num_classes,
-        compound_coef=compound_coef,
+        compound_coef=0,
         load_weights=False,
     ).eval()
     load_torch_model_state(torch_model, model_location_generator=model_location_generator, weights_path=weights_path)
@@ -507,7 +515,7 @@ def run_efficient_det_demo(
         parameters=parameters,
         conv_params=module_args,
         num_classes=num_classes,
-        compound_coef=compound_coef,
+        compound_coef=0,
     )
 
     # Convert inputs to TTNN format
@@ -761,13 +769,6 @@ def main():
         help="Number of object classes (default: 90)",
     )
     parser.add_argument(
-        "--compound-coef",
-        type=int,
-        default=0,
-        choices=range(0, 9),
-        help="EfficientDet compound coefficient 0-8 (default: 0)",
-    )
-    parser.add_argument(
         "--device-id",
         type=int,
         default=0,
@@ -809,29 +810,235 @@ def main():
         default=None,
         help="Directory to save output images with bounding boxes (default: demo/output/)",
     )
+    parser.add_argument(
+        "--eval-mode",
+        action="store_true",
+        help="Enable COCO evaluation mode (requires --coco-annotations and --coco-images)",
+    )
+    parser.add_argument(
+        "--coco-annotations",
+        type=str,
+        default=None,
+        help="Path to COCO annotations JSON file for evaluation (e.g., instances_val2017.json). Required if --eval-mode is set.",
+    )
+    parser.add_argument(
+        "--coco-images",
+        type=str,
+        default=None,
+        help="Path to COCO validation images directory for evaluation. Required if --eval-mode is set.",
+    )
+    parser.add_argument(
+        "--num-samples",
+        type=int,
+        default=None,
+        help="Number of COCO samples to evaluate (default: all if --eval-mode is set)",
+    )
 
     args = parser.parse_args()
 
-    # Open device
-    device = ttnn.open_device(device_id=args.device_id, l1_small_size=args.l1_small_size)
+    # Check if evaluation mode is requested
+    if args.eval_mode:
+        # Validate required arguments for evaluation mode
+        if not args.coco_annotations or not args.coco_images:
+            logger.error("Evaluation mode requires both --coco-annotations and --coco-images")
+            parser.print_help()
+            return
 
-    try:
-        run_efficient_det_demo(
-            device=device,
+        if not COCO_EVAL_AVAILABLE:
+            logger.error(
+                "COCO evaluation not available. Please ensure pycocotools is installed and evaluate_coco.py is accessible."
+            )
+            return
+
+        # Run both PyTorch and TTNN evaluations
+        logger.info("=" * 80)
+        logger.info("COCO Evaluation - PyTorch Reference vs TTNN")
+        logger.info("=" * 80)
+
+        # First run PyTorch reference evaluation
+        logger.info("\n" + "=" * 80)
+        logger.info("Running COCO evaluation on PyTorch Reference model...")
+        logger.info("=" * 80)
+        pytorch_stats = evaluate_coco(
+            device=None,  # Not needed for PyTorch
+            coco_annotations_path=args.coco_annotations,
+            coco_images_path=args.coco_images,
+            weights_path=args.weights_path,
             model_location_generator=None,
+            num_samples=args.num_samples,
             batch_size=args.batch_size,
             height=args.height,
             width=args.width,
             num_classes=args.num_classes,
-            compound_coef=args.compound_coef,
-            image_path=args.image_path,
-            threshold=args.threshold,
+            threshold=args.threshold,  # Lower threshold for evaluation
+            # iou_threshold=0.2,
             iou_threshold=args.iou_threshold,
-            weights_path=args.weights_path,
-            output_dir=args.output_dir,
+            use_ttnn=False,  # PyTorch reference
         )
-    finally:
-        ttnn.close_device(device)
+
+        # Then run TTNN evaluation
+        logger.info("\n" + "=" * 80)
+        logger.info("Running COCO evaluation on TTNN model...")
+        logger.info("=" * 80)
+        device = ttnn.open_device(device_id=args.device_id, l1_small_size=args.l1_small_size)
+
+        try:
+            ttnn_stats = evaluate_coco(
+                device=device,
+                coco_annotations_path=args.coco_annotations,
+                coco_images_path=args.coco_images,
+                weights_path=args.weights_path,
+                model_location_generator=None,
+                num_samples=args.num_samples,
+                batch_size=args.batch_size,
+                height=args.height,
+                width=args.width,
+                num_classes=args.num_classes,
+                threshold=args.threshold,  # Lower threshold for evaluation
+                iou_threshold=args.iou_threshold,
+                use_ttnn=True,
+            )
+
+            # Print comparison summary
+            logger.info("\n" + "=" * 80)
+            logger.info("COCO Evaluation Results Summary")
+            logger.info("=" * 80)
+
+            # Print PyTorch results in benchmark format
+            logger.info("\n--- PyTorch Reference Results ---")
+            logger.info("efficientdet-d0 (PyTorch)")
+            if pytorch_stats and len(pytorch_stats) >= 12:
+                logger.info(
+                    f" Average Precision  (AP) @[ IoU=0.50:0.95 | area=   all | maxDets=100 ] = {pytorch_stats[0]:.3f}"
+                )
+                logger.info(
+                    f" Average Precision  (AP) @[ IoU=0.50      | area=   all | maxDets=100 ] = {pytorch_stats[1]:.3f}"
+                )
+                logger.info(
+                    f" Average Precision  (AP) @[ IoU=0.75      | area=   all | maxDets=100 ] = {pytorch_stats[2]:.3f}"
+                )
+                logger.info(
+                    f" Average Precision  (AP) @[ IoU=0.50:0.95 | area= small | maxDets=100 ] = {pytorch_stats[3]:.3f}"
+                )
+                logger.info(
+                    f" Average Precision  (AP) @[ IoU=0.50:0.95 | area=medium | maxDets=100 ] = {pytorch_stats[4]:.3f}"
+                )
+                logger.info(
+                    f" Average Precision  (AP) @[ IoU=0.50:0.95 | area= large | maxDets=100 ] = {pytorch_stats[5]:.3f}"
+                )
+                logger.info(
+                    f" Average Recall     (AR) @[ IoU=0.50:0.95 | area=   all | maxDets=  1 ] = {pytorch_stats[6]:.3f}"
+                )
+                logger.info(
+                    f" Average Recall     (AR) @[ IoU=0.50:0.95 | area=   all | maxDets= 10 ] = {pytorch_stats[7]:.3f}"
+                )
+                logger.info(
+                    f" Average Recall     (AR) @[ IoU=0.50:0.95 | area=   all | maxDets=100 ] = {pytorch_stats[8]:.3f}"
+                )
+                logger.info(
+                    f" Average Recall     (AR) @[ IoU=0.50:0.95 | area= small | maxDets=100 ] = {pytorch_stats[9]:.3f}"
+                )
+                logger.info(
+                    f" Average Recall     (AR) @[ IoU=0.50:0.95 | area=medium | maxDets=100 ] = {pytorch_stats[10]:.3f}"
+                )
+                logger.info(
+                    f" Average Recall     (AR) @[ IoU=0.50:0.95 | area= large | maxDets=100 ] = {pytorch_stats[11]:.3f}"
+                )
+
+            # Print TTNN results in benchmark format
+            logger.info("\n--- TTNN Results ---")
+            logger.info("efficientdet-d0 (TTNN)")
+            if ttnn_stats and len(ttnn_stats) >= 12:
+                logger.info(
+                    f" Average Precision  (AP) @[ IoU=0.50:0.95 | area=   all | maxDets=100 ] = {ttnn_stats[0]:.3f}"
+                )
+                logger.info(
+                    f" Average Precision  (AP) @[ IoU=0.50      | area=   all | maxDets=100 ] = {ttnn_stats[1]:.3f}"
+                )
+                logger.info(
+                    f" Average Precision  (AP) @[ IoU=0.75      | area=   all | maxDets=100 ] = {ttnn_stats[2]:.3f}"
+                )
+                logger.info(
+                    f" Average Precision  (AP) @[ IoU=0.50:0.95 | area= small | maxDets=100 ] = {ttnn_stats[3]:.3f}"
+                )
+                logger.info(
+                    f" Average Precision  (AP) @[ IoU=0.50:0.95 | area=medium | maxDets=100 ] = {ttnn_stats[4]:.3f}"
+                )
+                logger.info(
+                    f" Average Precision  (AP) @[ IoU=0.50:0.95 | area= large | maxDets=100 ] = {ttnn_stats[5]:.3f}"
+                )
+                logger.info(
+                    f" Average Recall     (AR) @[ IoU=0.50:0.95 | area=   all | maxDets=  1 ] = {ttnn_stats[6]:.3f}"
+                )
+                logger.info(
+                    f" Average Recall     (AR) @[ IoU=0.50:0.95 | area=   all | maxDets= 10 ] = {ttnn_stats[7]:.3f}"
+                )
+                logger.info(
+                    f" Average Recall     (AR) @[ IoU=0.50:0.95 | area=   all | maxDets=100 ] = {ttnn_stats[8]:.3f}"
+                )
+                logger.info(
+                    f" Average Recall     (AR) @[ IoU=0.50:0.95 | area= small | maxDets=100 ] = {ttnn_stats[9]:.3f}"
+                )
+                logger.info(
+                    f" Average Recall     (AR) @[ IoU=0.50:0.95 | area=medium | maxDets=100 ] = {ttnn_stats[10]:.3f}"
+                )
+                logger.info(
+                    f" Average Recall     (AR) @[ IoU=0.50:0.95 | area= large | maxDets=100 ] = {ttnn_stats[11]:.3f}"
+                )
+
+            # Print side-by-side comparison
+            logger.info("\n" + "=" * 80)
+            logger.info("Side-by-Side Comparison")
+            logger.info("=" * 80)
+            logger.info(f"{'Metric':<50} {'PyTorch':<12} {'TTNN':<12} {'Diff':<12}")
+            logger.info("-" * 80)
+
+            metric_names = [
+                "AP @[ IoU=0.50:0.95 | area=   all | maxDets=100 ]",
+                "AP @[ IoU=0.50      | area=   all | maxDets=100 ]",
+                "AP @[ IoU=0.75      | area=   all | maxDets=100 ]",
+                "AP @[ IoU=0.50:0.95 | area= small | maxDets=100 ]",
+                "AP @[ IoU=0.50:0.95 | area=medium | maxDets=100 ]",
+                "AP @[ IoU=0.50:0.95 | area= large | maxDets=100 ]",
+                "AR @[ IoU=0.50:0.95 | area=   all | maxDets=  1 ]",
+                "AR @[ IoU=0.50:0.95 | area=   all | maxDets= 10 ]",
+                "AR @[ IoU=0.50:0.95 | area=   all | maxDets=100 ]",
+                "AR @[ IoU=0.50:0.95 | area= small | maxDets=100 ]",
+                "AR @[ IoU=0.50:0.95 | area=medium | maxDets=100 ]",
+                "AR @[ IoU=0.50:0.95 | area= large | maxDets=100 ]",
+            ]
+
+            for i, metric_name in enumerate(metric_names):
+                pytorch_val = pytorch_stats[i] if pytorch_stats and len(pytorch_stats) > i else 0.0
+                ttnn_val = ttnn_stats[i] if ttnn_stats and len(ttnn_stats) > i else 0.0
+                diff = ttnn_val - pytorch_val
+                logger.info(f"{metric_name:<50} {pytorch_val:>11.3f}  {ttnn_val:>11.3f}  {diff:>+11.3f}")
+
+            logger.info("=" * 80)
+
+        finally:
+            ttnn.close_device(device)
+    else:
+        # Normal demo mode
+        # Run regular demo
+        device = ttnn.open_device(device_id=args.device_id, l1_small_size=args.l1_small_size)
+
+        try:
+            run_efficient_det_demo(
+                device=device,
+                model_location_generator=None,
+                batch_size=args.batch_size,
+                height=args.height,
+                width=args.width,
+                num_classes=args.num_classes,
+                image_path=args.image_path,
+                threshold=args.threshold,
+                iou_threshold=args.iou_threshold,
+                weights_path=args.weights_path,
+                output_dir=args.output_dir,
+            )
+        finally:
+            ttnn.close_device(device)
 
 
 if __name__ == "__main__":
