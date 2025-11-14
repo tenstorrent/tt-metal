@@ -452,7 +452,7 @@ process_mcast_in0_program_and_create_override_variables(
     if (out_subblock_h != 1 || out_subblock_w != 1) {
         ttnn::operations::compute_throttle_utils::throttle_mm_perf(
             device->arch(), num_cores, mm_kernel_defines, throttle_level);
-    } else {
+    } else if (throttle_level != ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE) {
         log_warning(
             tt::LogOp,
             "Throttle matmul perf not enabled for out_subblock_h = {} and out_subblock_w = {}",
@@ -1299,7 +1299,7 @@ process_mcast_in1_program_and_create_override_variables(
     if (out_subblock_h != 1 || out_subblock_w != 1) {
         ttnn::operations::compute_throttle_utils::throttle_mm_perf(
             device->arch(), num_cores, mm_kernel_defines, throttle_level);
-    } else {
+    } else if (throttle_level != ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE) {
         log_warning(
             tt::LogOp,
             "Throttle matmul perf not enabled for out_subblock_h = {} and out_subblock_w = {}",
@@ -2132,7 +2132,7 @@ process_gather_in0_program_and_create_override_variables(
     if (out_subblock_h != 1 || out_subblock_w != 1) {
         ttnn::operations::compute_throttle_utils::throttle_mm_perf(
             device->arch(), num_cores, mm_kernel_defines, throttle_level);
-    } else {
+    } else if (throttle_level != ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE) {
         log_warning(
             tt::LogOp,
             "Throttle matmul perf not enabled for out_subblock_h = {} and out_subblock_w = {}",
@@ -3386,13 +3386,15 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
         device->arch(), num_cores, mm_kernel_defines);
     if (out_subblock_h != 1 || out_subblock_w != 1) {
         ttnn::operations::compute_throttle_utils::throttle_mm_perf(device->arch(), num_cores, mm_kernel_defines);
-    } else {
-        log_warning(
-            tt::LogOp,
-            "Throttle matmul perf not enabled for out_subblock_h = {} and out_subblock_w = {}",
-            out_subblock_h,
-            out_subblock_w);
     }
+    // } else  if (ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE !=
+    // ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE){
+    //     log_warning(
+    //         tt::LogOp,
+    //         "Throttle matmul perf not enabled for out_subblock_h = {} and out_subblock_w = {}",
+    //         out_subblock_h,
+    //         out_subblock_w);
+    // }
 
     mm_kernel_in1_sender_writer_defines["SKIP_MCAST"] = "1";
 

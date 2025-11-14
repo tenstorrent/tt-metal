@@ -546,7 +546,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     if (out_subblock_h != 1 || out_subblock_w != 1) {
         ttnn::operations::compute_throttle_utils::throttle_mm_perf(
             device->arch(), cores.size(), mm_kernel_defines, throttle_level);
-    } else {
+    } else if (throttle_level != ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE) {
         log_warning(
             tt::LogOp,
             "Throttle matmul perf not enabled for out_subblock_h = {} and out_subblock_w = {}",

@@ -9,7 +9,6 @@ from models.perf.device_perf_utils import run_device_perf, check_device_perf, pr
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from models.experimental.stable_diffusion_xl_base.tests.pcc.test_module_tt_unet import run_unet_model
 from models.experimental.stable_diffusion_xl_base.refiner.tests.pcc.test_module_tt_unet import run_refiner_unet_model
-import os
 
 VAE_DEVICE_TEST_TOTAL_ITERATIONS = 1
 UNET_DEVICE_TEST_TOTAL_ITERATIONS = 1
@@ -152,7 +151,7 @@ def test_sdxl_vae_decode_perf_device():
     command = f"pytest models/experimental/stable_diffusion_xl_base/vae/tests/pcc/test_module_tt_autoencoder_kl.py::test_vae -k 'test_decode'"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
-    os.environ["TT_MM_THROTTLE_PERF"] = "5"
+    # os.environ["TT_MM_THROTTLE_PERF"] = "5"
     batch_size = 1
 
     inference_time_key = "AVG DEVICE KERNEL DURATION [ns]"
