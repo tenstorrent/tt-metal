@@ -85,7 +85,7 @@ bool is_fabric_two_erisc_enabled() {
     }
 
     const auto &hal = mc.hal();
-    // only blackhole supports 2-erisc
+    // by default, enable only single erisc mode for future architectures as well to simplify bringup
     bool arch_bh = hal.get_arch() == tt::ARCH::BLACKHOLE;
 
     // out of stack size issue on the erisc, to be investigated
