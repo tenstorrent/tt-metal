@@ -66,33 +66,17 @@ public:
         tt::tt_fabric::Topology topology);
 
     /**
-     * Connect to a local router over NOC (intra-device connection)
+     * Connect the downstream router over noc or Ethernet
      *
-     * Establishes one-way connection: sender channel on this router → receiver channel on other router over NOC
+     * Establishes one-way connection
      *
      * @param other The other router builder to connect to
      * @param vc Virtual channel ID
      * @param sender_channel_idx Logical sender channel index within the VC
      * @param receiver_channel_idx Logical receiver channel index within the VC on the other router
      */
-    void connect_to_downstream_local_router_over_noc(
+    void connect_to_downstream_router(
         FabricRouterBuilder& other,
-        uint32_t vc,
-        uint32_t sender_channel_idx,
-        uint32_t receiver_channel_idx);
-
-    /**
-     * Connect to a remote router over Ethernet (inter-device connection)
-     *
-     * Establishes one-way connection: sender channel on this router → receiver channel on other router over Ethernet
-     *
-     * @param other The other router builder to connect to
-     * @param vc Virtual channel ID
-     * @param sender_channel_idx Logical sender channel index within the VC
-     * @param receiver_channel_idx Logical receiver channel index within the VC on the other router
-     */
-    void connect_to_downstream_remote_router_over_ethernet(
-        FabricRouterBuilder& other,   
         uint32_t vc,
         uint32_t sender_channel_idx,
         uint32_t receiver_channel_idx);

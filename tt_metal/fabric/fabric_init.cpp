@@ -311,14 +311,9 @@ void build_tt_fabric_program(
         auto& router_builder1 = router_builders.at(eth_chan_dir1);
         auto& router_builder2 = router_builders.at(eth_chan_dir2);
 
-        // Connect routers using FabricRouterBuilder interface
-        // Note: The underlying connect_to_downstream_edm connects all VC0 and VC1 channels,
-        // so we call the wrapper's connection method once per router pair.
-        // For VC0, use channel 1 (forward channel for 1D) or channel 0 (first channel for 2D).
-        // The underlying implementation will connect all necessary channels including VC1 if needed.
         uint32_t vc0_sender_channel = is_2D_routing ? 0 : 1;
-        router_builder1->connect_to_downstream_remote_router_over_ethernet(*router_builder2, 0, vc0_sender_channel, 0);
-        router_builder2->connect_to_downstream_remote_router_over_ethernet(*router_builder1, 0, vc0_sender_channel, 0);
+        router_builder1->connect_to_downstream_router(*router_builder2, 0, vc0_sender_channel, 0);
+        router_builder2->connect_to_downstream_router(*router_builder1, 0, vc0_sender_channel, 0);
     };
 
     auto connect_downstream_builders = [&](RoutingDirection dir1, RoutingDirection dir2) {

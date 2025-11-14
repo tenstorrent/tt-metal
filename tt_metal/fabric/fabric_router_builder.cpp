@@ -79,15 +79,21 @@ std::unique_ptr<FabricRouterBuilder> FabricRouterBuilder::build(
         std::move(edm_builder), tensix_builder_opt, std::move(channel_mapping));
 }
 
-void FabricRouterBuilder::connect_to_downstream_local_router_over_noc(
+
+void FabricRouterBuilder::connect_to_downstream_router(
     FabricRouterBuilder& other,
     uint32_t vc,
-    [[maybe_unused]] uint32_t sender_channel_idx ,
+    [[maybe_unused]] uint32_t sender_channel_idx,
     uint32_t receiver_channel_idx) {
-    // Get mappings for sender and receiver channels
+    // auto sender_mapping = channel_mapping_.get_sender_mapping(vc, sender_channel_idx);
     auto receiver_mapping = other.channel_mapping_.get_receiver_mapping(vc, receiver_channel_idx);
 
-    // Connect sender to receiver over NOC
+    // TT_FATAL(sender_mapping.builder_type == BuilderType::ERISC, "Internal Error. Tried to connect to a downstream router over Ethernet, but the source is not an erisc fabric builder.");
+    // erisc_builder_->connect_to_downstream_edm(*other.erisc_builder_);
+
+    // Create FabricDatamoverBuilder variant for the downstream builder
+    // If both routers have tensix builders, connect VC0 to tensix (performance optimization)
+    // Otherwise, use the receiver_mapping to determine which builder to connect to
     bool both_have_tensix = this->tensix_builder_.has_value() && other.tensix_builder_.has_value();
 
     // Initialize variants directly - cannot default-construct variant with reference_wrapper
@@ -104,22 +110,14 @@ void FabricRouterBuilder::connect_to_downstream_local_router_over_noc(
     FabricDatamoverBuilder downstream_builder = get_downstream_builder();
     FabricDatamoverBuilder vc1_downstream_builder = std::ref(*other.erisc_builder_);
 
+    // If both routers have tensix builders, use the two-argument version
+    // (connects VC0 to tensix, VC1 to erisc)
+    // Otherwise, use the single-argument version (connects both VC0 and VC1 to erisc)
     if (both_have_tensix) {
         erisc_builder_->connect_to_downstream_edm(downstream_builder, vc1_downstream_builder);
     } else {
         erisc_builder_->connect_to_downstream_edm(downstream_builder);
     }
-}
-
-void FabricRouterBuilder::connect_to_downstream_remote_router_over_ethernet(
-    FabricRouterBuilder& other,
-    uint32_t vc,
-    uint32_t sender_channel_idx,
-    [[maybe_unused]] uint32_t receiver_channel_idx) {
-    auto sender_mapping = channel_mapping_.get_sender_mapping(vc, sender_channel_idx);
-
-    TT_FATAL(sender_mapping.builder_type == BuilderType::ERISC, "Internal Error. Tried to connect to a downstream router over Ethernet, but the source is not an erisc fabric builder.");
-    erisc_builder_->connect_to_downstream_edm(*other.erisc_builder_);
 }
 
 SenderWorkerAdapterSpec FabricRouterBuilder::build_connection_to_fabric_channel(
