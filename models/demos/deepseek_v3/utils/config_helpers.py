@@ -86,6 +86,7 @@ def try_decode_saved_weight(obj: dict[str, Any]) -> Any:
     if not isinstance(path_str, str):
         return obj
     memory_config_dict = obj.get("memory_config", None)
+
     if not isinstance(memory_config_dict, dict) or not {
         "buffer_type",
         "memory_layout",
@@ -677,8 +678,8 @@ def shard_and_save(
     if path.exists():
         logger.warning(f"Overwriting existing cache file: {path}")
     ttnn.dump_tensor(path, ttnn_tensor)
-
-    return SavedWeight(path, memory_config)
+    relative_path = Path(str(path).split("mesh_")[1].split("/", 1)[1])
+    return SavedWeight(relative_path, memory_config)
 
 
 def _shard_device_impl(
@@ -844,14 +845,14 @@ def get_weight_config(
         / f"mesh_{mesh_device.shape[0]}x{mesh_device.shape[1]}"
     )
     config_path = weight_cache_path / "config.json"
-    weight_path = weight_cache_path / "weights"
+
     for _ in range(1):
         if force_recalculate:
             break
         if not config_path.exists():
             break
         weight_config = json.load(config_path.open(), object_hook=try_decode_saved_weight)
-        if not _check_weights_exist(weight_path, weight_config):
+        if not _check_weights_exist_and_convert(weight_cache_path, weight_config):
             break
         logger.info(f"Using weights cached at {weight_cache_path}")
         return weight_config
@@ -859,10 +860,11 @@ def get_weight_config(
     logger.info(f"Caching weights at {weight_cache_path}")
     weight_config = ModuleClass.convert_weights(hf_config, state_dicts, weight_cache_path, mesh_device)
     json.dump(weight_config, config_path.open("w"), cls=WeightConfigEncoder)
+    _check_weights_exist_and_convert(weight_cache_path, weight_config)
     return weight_config
 
 
-def _check_weights_exist(root_path: Path, weight_config: WeightConfig) -> bool:
+def _check_weights_exist_and_convert(root_path: Path, weight_config: WeightConfig) -> bool:
     if isinstance(weight_config, dict):
         entries = weight_config.values()
     else:
@@ -873,7 +875,9 @@ def _check_weights_exist(root_path: Path, weight_config: WeightConfig) -> bool:
         if isinstance(entry, SavedWeight):
             if not (root_path / entry.path).exists() or entry.path.suffix != TENSOR_CACHE_EXTENSION:
                 return False
-        elif not _check_weights_exist(root_path, entry):
+            elif (root_path / entry.path).exists() and entry.path.suffix == TENSOR_CACHE_EXTENSION:
+                entry.path = root_path / entry.path
+        elif not _check_weights_exist_and_convert(root_path, entry):
             return False
     return True
 
