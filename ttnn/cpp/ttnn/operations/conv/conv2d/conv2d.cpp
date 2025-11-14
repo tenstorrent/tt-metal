@@ -667,7 +667,10 @@ Result conv2d_L1(
                 true,
                 conv_config.config_tensors_in_dram);
 
-            if (should_deallocate_act) {
+            // In cases where input tensor is in DRAM and it gets sharded, we need to deallocate the sharded input
+            // tensor at this point (it will be deallocated automatically because nothing is using it, but reallocating
+            // halo output will be affected so we need to deallocate it manually before reallocating halo output)
+            if (conv_config.deallocate_activation && !input_tensor_post_tm.memory_config().is_dram()) {
                 input_tensor_post_tm.deallocate(/*force*/ true);
             }
 
