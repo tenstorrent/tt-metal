@@ -22,3 +22,8 @@ fabric:
     skus:
       wh_llmbox:
         time_budget: 240
+scaleout:
+  nightly:
+    skus:
+      wh_llmbox:
+        time_budget: 240

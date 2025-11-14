@@ -29,6 +29,14 @@ jobs:
           submodules: recursive
       - name: Install dependencies
         run: pip3 install PyYAML
+      - name: Verify test timeouts against budget
+        run: |
+          set -e
+          echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
+          python3 .github/scripts/utils/verify_time_budget.py \
+            ./tests/pipeline_reorg/nightly/tests.yaml \
+            ./.github/time_budget.yaml \
+            "nightly"
       - name: Load test matrix
         id: load-test-matrix
         env:
