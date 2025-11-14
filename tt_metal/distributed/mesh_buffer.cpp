@@ -12,6 +12,8 @@
 #include <tt_stl/assert.hpp>
 #include "device.hpp"
 
+#include "impl/buffers/buffer.hpp"
+
 namespace tt::tt_metal::distributed {
 namespace {
 
@@ -159,7 +161,7 @@ void MeshBuffer::deallocate() {
     // Special handling is required if MeshDevice is already deallocated
     if (std::holds_alternative<OwnedBufferState>(state_)) {
         auto& owned_state = std::get<OwnedBufferState>(state_);
-        owned_state.backing_buffer->mark_as_deallocated();
+        owned_state.backing_buffer->impl()->mark_as_deallocated();
     }
     state_ = DeallocatedState{};
 }

@@ -20,6 +20,8 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/api/ttnn/distributed/api.hpp"
 
+#include "impl/buffers/buffer_distribution_spec.hpp"
+
 namespace tensor_accessor_device_tests {
 
 using namespace ttnn;
@@ -157,7 +159,7 @@ static void test_multi_core_copy(
     auto aligned_page_size = input_buffer->aligned_page_size();
 
     auto program = CreateProgram();
-    auto core_groups = input_buffer->buffer_distribution_spec().value().core_groups();
+    auto core_groups = input_buffer->buffer_distribution_spec().value().impl()->core_groups();
     auto cores_with_data = corerange_to_cores(
         core_groups.cores_with_data, std::nullopt, params.input_shard_spec->orientation == ShardOrientation::ROW_MAJOR);
     auto num_cores = cores_with_data.size();

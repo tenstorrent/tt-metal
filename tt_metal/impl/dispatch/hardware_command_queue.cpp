@@ -250,7 +250,7 @@ void HWCommandQueue::enqueue_read_buffer(
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScopedN("HWCommandQueue_read_buffer");
     TT_FATAL(!this->manager_.get_bypass_mode(), "Enqueue Read Buffer cannot be used with tracing");
-    auto buffer_obj = get_buffer_object(buffer).view(region);
+    auto buffer_obj = get_buffer_object(buffer).impl()->view(region);
 
     // Reading from device would clobber prefetcher cache, so reset it now
     this->reset_prefetcher_cache_manager();
@@ -320,7 +320,7 @@ void HWCommandQueue::enqueue_write_buffer(
             [](const void* raw_data) -> const void* { return raw_data; },
             [](const auto& data) -> const void* { return data->data(); }},
         src);
-    auto buffer_obj = get_buffer_object(buffer).view(region);
+    auto buffer_obj = get_buffer_object(buffer).impl()->view(region);
 
     // This is to make sure we block on the same sub_device_ids at the end
     // TODO: enqueue_write_to_core will call select_sub_device_ids every loop which will have minor overhead

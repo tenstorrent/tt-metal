@@ -140,7 +140,7 @@ TEST_F(MeshTensorTest, Lifecycle) {
         auto buffer = device_storage->mesh_buffer->get_device_buffer(coordinate);
 
         ASSERT_NE(buffer, nullptr);
-        EXPECT_TRUE(buffer->is_allocated());
+        EXPECT_TRUE(buffer->impl()->is_allocated());
         EXPECT_EQ(buffer->address(), buffer_address);
     }
 

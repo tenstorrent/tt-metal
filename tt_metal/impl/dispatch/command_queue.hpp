@@ -16,6 +16,8 @@
 
 #include <tt_stl/span.hpp>
 
+#include "impl/buffers/buffer.hpp"
+
 namespace tt::tt_metal {
 
 struct Event;

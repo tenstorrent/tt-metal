@@ -16,6 +16,7 @@
 #include "impl/allocator/allocator_types.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/xy_pair.hpp>
+#include "impl/buffers/buffer.hpp"
 
 namespace tt {
 
@@ -107,10 +108,10 @@ void Allocator::verify_safe_allocation() const {
 DeviceAddr Allocator::allocate_buffer(Buffer* buffer) {
     std::lock_guard<std::mutex> lock(mutex_);
     DeviceAddr address = 0;
-    auto size = buffer->aligned_size();
+    auto size = buffer->impl()->aligned_size();
     auto page_size = buffer->aligned_page_size();
     auto buffer_type = buffer->buffer_type();
-    auto bottom_up = buffer->bottom_up();
+    auto bottom_up = buffer->impl()->bottom_up();
     auto num_cores = buffer->num_cores();
     this->verify_safe_allocation();
     if (config_->disable_interleaved) {
