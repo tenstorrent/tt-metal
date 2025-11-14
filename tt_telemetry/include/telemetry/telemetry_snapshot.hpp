@@ -39,6 +39,10 @@ struct TelemetrySnapshot {
     std::unordered_map<std::string, uint16_t> string_metric_units;
     std::unordered_map<std::string, uint64_t> string_metric_timestamps;
 
+    // Custom labels: path -> {label_key -> label_value}
+    // Unified map for all metric types (paths are globally unique)
+    std::unordered_map<std::string, std::unordered_map<std::string, std::string>> metric_labels;
+
     // Unit label maps
     std::unordered_map<uint16_t, std::string> metric_unit_display_label_by_code;
     std::unordered_map<uint16_t, std::string> metric_unit_full_label_by_code;
@@ -55,6 +59,7 @@ struct TelemetrySnapshot {
         double_metric_timestamps.clear();
         string_metric_units.clear();
         string_metric_timestamps.clear();
+        metric_labels.clear();
         metric_unit_display_label_by_code.clear();
         metric_unit_full_label_by_code.clear();
     }
@@ -73,6 +78,13 @@ struct TelemetrySnapshot {
     }
 
 private:
+    // Variadic template to check if path exists in any of the provided maps
+    // Extensible: adding new metric types only requires updating call sites, not this function
+    template <typename... Maps>
+    static bool path_exists_in_any_map(std::string_view path, const Maps&... maps) {
+        return (... || (maps.find(std::string(path)) != maps.end()));
+    }
+
     /**
      * Fast path: merge without validation (original implementation)
      */
@@ -94,7 +106,6 @@ private:
         for (const auto& [path, timestamp] : other.bool_metric_timestamps) {
             bool_metric_timestamps[path] = timestamp;
         }
-
         // Update uint metrics and their metadata
         for (const auto& [path, value] : other.uint_metrics) {
             uint_metrics[path] = value;
@@ -105,7 +116,6 @@ private:
         for (const auto& [path, timestamp] : other.uint_metric_timestamps) {
             uint_metric_timestamps[path] = timestamp;
         }
-
         // Update double metrics and their metadata
         for (const auto& [path, value] : other.double_metrics) {
             double_metrics[path] = value;
@@ -116,7 +126,6 @@ private:
         for (const auto& [path, timestamp] : other.double_metric_timestamps) {
             double_metric_timestamps[path] = timestamp;
         }
-
         // Update string metrics and their metadata
         for (const auto& [path, value] : other.string_metrics) {
             string_metrics[path] = value;
@@ -126,6 +135,10 @@ private:
         }
         for (const auto& [path, timestamp] : other.string_metric_timestamps) {
             string_metric_timestamps[path] = timestamp;
+        }
+        // Merge all custom labels (single unified map) - fast path, no validation
+        for (const auto& [path, labels] : other.metric_labels) {
+            metric_labels[path] = labels;
         }
     }
 
@@ -272,6 +285,36 @@ private:
                 string_metric_timestamps[path] = timestamp;
             }
         }
+
+        // Validate and merge custom labels
+        for (const auto& [path, labels] : other.metric_labels) {
+            // Check if path exists in any metric type (prevent orphaned labels)
+            bool path_exists = path_exists_in_any_map(path, bool_metrics, uint_metrics, double_metrics, string_metrics);
+
+            if (!path_exists) {
+                log_error(tt::LogAlways, "Label orphaned: path '{}' has labels but no metric", path);
+                continue;
+            }
+
+            // Check for conflicting label values
+            auto existing = metric_labels.find(path);
+            if (existing != metric_labels.end()) {
+                for (const auto& [label_key, label_value] : labels) {
+                    auto existing_label = existing->second.find(label_key);
+                    if (existing_label != existing->second.end() && existing_label->second != label_value) {
+                        log_error(
+                            tt::LogAlways,
+                            "Label conflict for path '{}', key '{}': existing='{}', new='{}'",
+                            path,
+                            label_key,
+                            existing_label->second,
+                            label_value);
+                    }
+                }
+            }
+
+            metric_labels[path] = labels;
+        }
     }
 
 public:
@@ -290,6 +333,7 @@ public:
          {"double_metric_timestamps", t.double_metric_timestamps},
          {"string_metric_units", t.string_metric_units},
          {"string_metric_timestamps", t.string_metric_timestamps},
+         {"metric_labels", t.metric_labels},
          {"metric_unit_display_label_by_code", t.metric_unit_display_label_by_code},
          {"metric_unit_full_label_by_code", t.metric_unit_full_label_by_code},
      };
@@ -307,6 +351,9 @@ static inline void from_json(const nlohmann::json &j, TelemetrySnapshot &t) {
     j.at("double_metric_timestamps").get_to(t.double_metric_timestamps);
     j.at("string_metric_units").get_to(t.string_metric_units);
     j.at("string_metric_timestamps").get_to(t.string_metric_timestamps);
+    if (j.contains("metric_labels")) {
+        j.at("metric_labels").get_to(t.metric_labels);
+    }
     j.at("metric_unit_display_label_by_code").get_to(t.metric_unit_display_label_by_code);
     j.at("metric_unit_full_label_by_code").get_to(t.metric_unit_full_label_by_code);
 }
