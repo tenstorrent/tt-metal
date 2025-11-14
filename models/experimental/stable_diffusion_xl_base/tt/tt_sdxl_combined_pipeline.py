@@ -275,7 +275,8 @@ class TtSDXLCombinedPipeline:
             _, _, _ = self.refiner_pipeline.generate_input_tensors(
                 all_prompt_embeds_torch=refiner_dummy_embeds,
                 torch_add_text_embeds=dummy_text_embeds,
-                input_latents=dummy_latents,
+                torch_image=dummy_latents,
+                denoising_start=self.config.denoising_split,
             )
 
             logger.info("Compiling refiner pipeline image processing...")
@@ -420,16 +421,13 @@ class TtSDXLCombinedPipeline:
             ) = self.refiner_pipeline.generate_input_tensors(
                 all_prompt_embeds_torch=torch.randn(self.batch_size, 2, MAX_SEQUENCE_LENGTH, 1280),
                 torch_add_text_embeds=torch_add_text_embeds,
-                input_latents=base_latents,
+                torch_image=base_latents,
                 fixed_seed_for_batch=True,
                 start_latent_seed=0,
                 timesteps=timesteps,
                 sigmas=sigmas,
+                denoising_start=self.config.denoising_split,
             )
-
-            self.refiner_pipeline.tt_scheduler.set_step_index(split_idx)
-
-            self.refiner_pipeline.num_inference_steps = num_inference_steps - split_idx
 
             self.refiner_pipeline.prepare_input_tensors(
                 [
