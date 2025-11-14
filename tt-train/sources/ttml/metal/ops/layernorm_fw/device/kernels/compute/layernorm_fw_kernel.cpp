@@ -101,7 +101,7 @@ inline void compute_sum() {
 
     for (uint32_t col = 0; col < Wt; col += block_size) {
         const uint32_t current_block_size = std::min(block_size, Wt - col);
-        cb_wait_front(cb_input_idx, current_block_size);
+        cb_wait_front(cb_input_idx, block_size);
 
         for (uint32_t block_idx = 0; block_idx < current_block_size; ++block_idx) {
             uint32_t global_col = col + block_idx;
@@ -128,7 +128,7 @@ inline void compute_sum() {
             }
         }
 
-        cb_pop_front(cb_input_idx, current_block_size);
+        cb_pop_front(cb_input_idx, block_size);
     }
 
     tile_regs_commit();
@@ -225,7 +225,7 @@ inline void compute_variance_sum() {
 
     for (uint32_t col = 0; col < Wt; col += block_size) {
         const uint32_t current_block_size = std::min(block_size, Wt - col);
-        cb_wait_front(cb_input_idx, current_block_size);
+        cb_wait_front(cb_input_idx, block_size);
 
         for (uint32_t block_idx = 0; block_idx < current_block_size; ++block_idx) {
             uint32_t global_col = col + block_idx;
@@ -261,7 +261,7 @@ inline void compute_variance_sum() {
             }
         }
 
-        cb_pop_front(cb_input_idx, current_block_size);
+        cb_pop_front(cb_input_idx, block_size);
     }
 
     tile_regs_commit();
@@ -338,7 +338,7 @@ inline void compute_x_hat() {
         }
 
         tile_regs_commit();
-        pack_and_push_block(cb_x_hat_idx, current_block_size);
+        pack_and_push_block(cb_x_hat_idx, block_size);
     }
 }
 #endif
@@ -362,8 +362,8 @@ inline void compute_output() {
             mul_tiles_bcast_rows(cb_x_hat_idx, cb_gamma_idx, input_tile_idx, input_tile_idx, block_idx);
         }
         tile_regs_commit();
-        pack_and_push_block(cb_output_intermediate_idx, current_block_size);
-        cb_wait_front(cb_output_intermediate_idx, current_block_size);
+        pack_and_push_block(cb_output_intermediate_idx, block_size);
+        cb_wait_front(cb_output_intermediate_idx, block_size);
 
         // Then add beta from intermediate CB -> store in output CB
         tile_regs_acquire();
@@ -374,8 +374,8 @@ inline void compute_output() {
         }
 
         tile_regs_commit();
-        cb_pop_front(cb_output_intermediate_idx, current_block_size);
-        pack_and_push_block(cb_output_idx, current_block_size);
+        cb_pop_front(cb_output_intermediate_idx, block_size);
+        pack_and_push_block(cb_output_idx, block_size);
     }
 }
 #else
@@ -386,16 +386,16 @@ inline void compute_output() {
 
     for (uint32_t col = 0; col < Wt; col += block_size) {
         const uint32_t current_block_size = std::min(block_size, Wt - col);
-        cb_wait_front(cb_input_idx, current_block_size);
-        cb_wait_front(cb_gamma_idx, current_block_size);
-        cb_wait_front(cb_beta_idx, current_block_size);
+        cb_wait_front(cb_input_idx, block_size);
+        cb_wait_front(cb_gamma_idx, block_size);
+        cb_wait_front(cb_beta_idx, block_size);
 
         tile_regs_acquire();
 
         // First compute x_hat = (input - mean) * rstd for this block
         for (uint32_t block_idx = 0; block_idx < current_block_size; ++block_idx) {
             uint32_t x_hat_reg = block_idx;
-            uint32_t temp_reg = current_block_size + block_idx;
+            uint32_t temp_reg = x_hat_reg + 1;
 
             // Subtract mean: (input - mean)
             sub_tiles_init(cb_input_idx, cb_mean_bcast_idx);
@@ -411,8 +411,8 @@ inline void compute_output() {
         }
 
         tile_regs_commit();
-        pack_and_push_block(cb_x_hat_idx, current_block_size);
-        cb_wait_front(cb_x_hat_idx, current_block_size);
+        pack_and_push_block(cb_x_hat_idx, block_size);
+        cb_wait_front(cb_x_hat_idx, block_size);
 
         // Now compute output = x_hat * gamma + beta
         // Multiply x_hat by gamma -> store in intermediate CB
@@ -423,9 +423,9 @@ inline void compute_output() {
         }
 
         tile_regs_commit();
-        cb_pop_front(cb_x_hat_idx, current_block_size);
-        pack_and_push_block(cb_output_intermediate_idx, current_block_size);
-        cb_wait_front(cb_output_intermediate_idx, current_block_size);
+        cb_pop_front(cb_x_hat_idx, block_size);
+        pack_and_push_block(cb_output_intermediate_idx, block_size);
+        cb_wait_front(cb_output_intermediate_idx, block_size);
 
         // Then add beta from intermediate CB -> store in output CB
         tile_regs_acquire();
@@ -435,11 +435,11 @@ inline void compute_output() {
         }
 
         tile_regs_commit();
-        cb_pop_front(cb_output_intermediate_idx, current_block_size);
-        pack_and_push_block(cb_output_idx, current_block_size);
-        cb_pop_front(cb_input_idx, current_block_size);
-        cb_pop_front(cb_gamma_idx, current_block_size);
-        cb_pop_front(cb_beta_idx, current_block_size);
+        cb_pop_front(cb_output_intermediate_idx, block_size);
+        pack_and_push_block(cb_output_idx, block_size);
+        cb_pop_front(cb_input_idx, block_size);
+        cb_pop_front(cb_gamma_idx, block_size);
+        cb_pop_front(cb_beta_idx, block_size);
     }
 }
 #endif

@@ -101,34 +101,31 @@ void kernel_main() {
 
         // First pass: for computing sum (mean)
         for (uint32_t c = 0; c < Wt; c += block_size) {
-            const uint32_t current_block_size = (c + block_size > Wt) ? (Wt - c) : block_size;
             uint32_t row_tile_idx = (r * Wt) + c;
 
-            read_tiles(cb_input_idx, input_address_generator, row_tile_idx, current_block_size, tile_bytes, true);
-            cb_push_back(cb_input_idx, current_block_size);
+            read_tiles(cb_input_idx, input_address_generator, row_tile_idx, block_size, tile_bytes, true);
+            cb_push_back(cb_input_idx, block_size);
         }
 
         // Second pass: for computing variance
         for (uint32_t c = 0; c < Wt; c += block_size) {
-            const uint32_t current_block_size = (c + block_size > Wt) ? (Wt - c) : block_size;
             uint32_t row_tile_idx = (r * Wt) + c;
 
-            read_tiles(cb_input_idx, input_address_generator, row_tile_idx, current_block_size, tile_bytes, true);
-            cb_push_back(cb_input_idx, current_block_size);
+            read_tiles(cb_input_idx, input_address_generator, row_tile_idx, block_size, tile_bytes, true);
+            cb_push_back(cb_input_idx, block_size);
         }
 
         // Third pass: for computing x_hat and output
         for (uint32_t c = 0; c < Wt; c += block_size) {
-            const uint32_t current_block_size = (c + block_size > Wt) ? (Wt - c) : block_size;
             uint32_t row_tile_idx = (r * Wt) + c;
 
-            read_tiles(cb_input_idx, input_address_generator, row_tile_idx, current_block_size, tile_bytes);
-            read_tiles(cb_gamma_idx, gamma_address_generator, c, current_block_size, tile_bytes);
-            read_tiles(cb_beta_idx, beta_address_generator, c, current_block_size, tile_bytes, true);
+            read_tiles(cb_input_idx, input_address_generator, row_tile_idx, block_size, tile_bytes);
+            read_tiles(cb_gamma_idx, gamma_address_generator, c, block_size, tile_bytes);
+            read_tiles(cb_beta_idx, beta_address_generator, c, block_size, tile_bytes, true);
 
-            cb_push_back(cb_input_idx, current_block_size);
-            cb_push_back(cb_gamma_idx, current_block_size);
-            cb_push_back(cb_beta_idx, current_block_size);
+            cb_push_back(cb_input_idx, block_size);
+            cb_push_back(cb_gamma_idx, block_size);
+            cb_push_back(cb_beta_idx, block_size);
         }
 #endif
     }

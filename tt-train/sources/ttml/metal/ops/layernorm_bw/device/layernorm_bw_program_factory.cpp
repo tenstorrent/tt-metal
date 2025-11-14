@@ -82,28 +82,28 @@ bool fits_in_l1_check(
 
     const uint32_t bf16_row_memory = Wt * bfloat16_single_tile_size_bytes;
     // Memory for input data CBs
-    const uint64_t scaler_memory = kNumScalerTiles * bfloat16_single_tile_size_bytes;
-    const uint64_t mask_memory = kNumMaskTiles * bfloat16_single_tile_size_bytes;
-    const uint64_t gamma_memory = bf16_row_memory;
-    const uint64_t x_hat_memory = bf16_row_memory;
-    const uint64_t input_memory = bf16_row_memory;
-    const uint64_t mean_memory = kNumRstdTiles * bfloat16_single_tile_size_bytes;  // same shape as rstd
-    const uint64_t rstd_memory = kNumRstdTiles * bfloat16_single_tile_size_bytes;
-    const uint64_t dL_dout_memory = bf16_row_memory;
+    const uint32_t scaler_memory = kNumScalerTiles * bfloat16_single_tile_size_bytes;
+    const uint32_t mask_memory = kNumMaskTiles * bfloat16_single_tile_size_bytes;
+    const uint32_t gamma_memory = bf16_row_memory;
+    const uint32_t x_hat_memory = bf16_row_memory;
+    const uint32_t input_memory = bf16_row_memory;
+    const uint32_t mean_memory = kNumRstdTiles * bfloat16_single_tile_size_bytes;  // same shape as rstd
+    const uint32_t rstd_memory = kNumRstdTiles * bfloat16_single_tile_size_bytes;
+    const uint32_t dL_dout_memory = bf16_row_memory;
 
     // Memory for output CBs
-    const uint64_t dx_memory = bf16_row_memory;
-    const uint64_t dgamma_components_memory = bf16_row_memory;
-    const uint64_t dbeta_components_memory = bf16_row_memory;
+    const uint32_t dx_memory = bf16_row_memory;
+    const uint32_t dgamma_components_memory = bf16_row_memory;
+    const uint32_t dbeta_components_memory = bf16_row_memory;
 
     // Memory for intermediate computation CBs
-    const uint64_t dy_gamma_sum_memory = kNumDyGammaSumTiles * float32_single_tile_size_bytes;
-    const uint64_t dy_gamma_xnorm_sum_memory = kNumDyGammaXnormSumTiles * float32_single_tile_size_bytes;
-    const uint64_t rstd_bcast_memory = kNumRstdBcastTiles * bfloat16_single_tile_size_bytes;
-    const uint64_t mean_bcast_memory = kNumMeanBcastTiles * bfloat16_single_tile_size_bytes;
+    const uint32_t dy_gamma_sum_memory = kNumDyGammaSumTiles * float32_single_tile_size_bytes;
+    const uint32_t dy_gamma_xnorm_sum_memory = kNumDyGammaXnormSumTiles * float32_single_tile_size_bytes;
+    const uint32_t rstd_bcast_memory = kNumRstdBcastTiles * bfloat16_single_tile_size_bytes;
+    const uint32_t mean_bcast_memory = kNumMeanBcastTiles * bfloat16_single_tile_size_bytes;
 
     // Total L1 memory required
-    const uint64_t required_L1_in_bytes = scaler_memory + mask_memory + gamma_memory + x_hat_memory + input_memory +
+    const uint32_t required_L1_in_bytes = scaler_memory + mask_memory + gamma_memory + x_hat_memory + input_memory +
                                           mean_memory + rstd_memory + dL_dout_memory + dx_memory +
                                           dgamma_components_memory + dbeta_components_memory + dy_gamma_sum_memory +
                                           dy_gamma_xnorm_sum_memory + rstd_bcast_memory + mean_bcast_memory;
@@ -313,52 +313,13 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
     // 3) Create reader/writer kernels
     // -------------------------------------------------------------------------
     auto* gamma_buffer = gamma.buffer();
-    TT_FATAL(
-        gamma_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
-        "Gamma buffer must be in DRAM. Gamma buffer of type {}",
-        enchantum::to_string(gamma_buffer->buffer_type()));
-
     auto* input_buffer = input.buffer();
-    TT_FATAL(
-        input_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
-        "Input buffer must be in DRAM. Input buffer of type {}",
-        enchantum::to_string(input_buffer->buffer_type()));
-
     auto* mean_buffer = mean.buffer();
-    TT_FATAL(
-        mean_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
-        "Mean buffer must be in DRAM. Mean buffer of type {}",
-        enchantum::to_string(mean_buffer->buffer_type()));
-
     auto* rstd_buffer = rstd.buffer();
-    TT_FATAL(
-        rstd_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
-        "Rstd buffer must be in DRAM. Rstd buffer of type {}",
-        enchantum::to_string(rstd_buffer->buffer_type()));
-
     auto* dLdout_buffer = dLdout.buffer();
-    TT_FATAL(
-        dLdout_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
-        "dL_dout buffer must be in DRAM. dL_dout buffer of type {}",
-        enchantum::to_string(dLdout_buffer->buffer_type()));
-
     auto* dx_buffer = output[0].buffer();
-    TT_FATAL(
-        dx_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
-        "dx buffer must be in DRAM. dx buffer of type {}",
-        enchantum::to_string(dx_buffer->buffer_type()));
-
     auto* dgamma_components_buffer = output[1].buffer();
-    TT_FATAL(
-        dgamma_components_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
-        "dgamma_components buffer must be in DRAM. dgamma_components buffer of type {}",
-        enchantum::to_string(dgamma_components_buffer->buffer_type()));
-
     auto* dbeta_components_buffer = output[2].buffer();
-    TT_FATAL(
-        dbeta_components_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
-        "dbeta_components buffer must be in DRAM. dbeta_components buffer of type {}",
-        enchantum::to_string(dbeta_components_buffer->buffer_type()));
 
     std::map<std::string, std::string> defines;
     if (mask_w != 0) {
@@ -473,31 +434,12 @@ void LayerNormBackwardProgramFactory::override_runtime_arguments(
     auto& reader_runtime_args = GetRuntimeArgs(program, layernorm_bw_reader_kernel_id);
     auto& writer_runtime_args = GetRuntimeArgs(program, layernorm_bw_writer_kernel_id);
 
-    // Process core_group_1 - iterate over actual cores
-    for (const auto& core_range : core_group_1.ranges()) {
-        for (auto core : tt::tt_metal::CoreRange(core_range)) {
-            // Update input buffers for the reader kernel
-            {
-                auto& runtime_args = reader_runtime_args[core.x][core.y];
-                runtime_args[kGammaBufferIdx] = gamma_buffer->address();
-                runtime_args[kInputBufferIdx] = input_buffer->address();
-                runtime_args[kMeanBufferIdx] = mean_buffer->address();
-                runtime_args[kRstdBufferIdx] = rstd_buffer->address();
-                runtime_args[kDLdoutBufferIdx] = dLdout_buffer->address();
-            }
-
-            // Update output buffers for the writer kernel
-            {
-                auto& runtime_args = writer_runtime_args[core.x][core.y];
-                runtime_args[kDxBufferIdx] = dx_buffer->address();
-                runtime_args[kDgammaComponentsBufferIdx] = dgamma_buffer->address();
-                runtime_args[kDbetaComponentsBufferIdx] = dbeta_buffer->address();
-            }
-        }
-    }
-
-    // Process core_group_2 - iterate over actual cores
-    for (const auto& core_range : core_group_2.ranges()) {
+    std::vector<CoreRange> all_ranges;
+    all_ranges.reserve(core_group_1.ranges().size() + core_group_2.ranges().size());
+    all_ranges.insert(all_ranges.end(), core_group_1.ranges().begin(), core_group_1.ranges().end());
+    all_ranges.insert(all_ranges.end(), core_group_2.ranges().begin(), core_group_2.ranges().end());
+    // Iterate over all cores
+    for (const auto& core_range : all_ranges) {
         for (auto core : tt::tt_metal::CoreRange(core_range)) {
             // Update input buffers for the reader kernel
             {

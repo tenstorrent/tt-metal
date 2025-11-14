@@ -6,10 +6,7 @@
 
 #include <cmath>
 #include <core/ttnn_all_includes.hpp>
-#include <random>
-#include <ttnn/tensor/xtensor/xtensor_all_includes.hpp>
 #include <tuple>
-#include <vector>
 
 #include "autograd/auto_context.hpp"
 #include "core/random.hpp"
@@ -205,8 +202,8 @@ TEST_F(LayerNormBackwardOpTest, NIGHTLY_MetalLayerNormBw_LargeFeatures_NoL1Fit) 
     CompareKernelVsXArray(3, 273, 1, 8462);
 }
 
-TEST_F(LayerNormBackwardOpTest, MetalLayerNormBw_EverythingSmall_L1Fit) {
-    CompareKernelVsXArray(3, 100, 1, 324, 10);
+TEST_F(LayerNormBackwardOpTest, MetalLayerNormBw_DoesNotFitInL1_WtNotDivisibleBy4) {
+    CompareKernelVsXArray(3, 100, 1, 8191, 10);
 }
 
 TEST_F(LayerNormBackwardOpTest, MetalLayerNormBw_OneTilePerRow) {

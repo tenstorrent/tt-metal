@@ -5,7 +5,7 @@
 #include "layernorm_fw_program_factory.hpp"
 
 #include <cstdint>
-#include <enchantum/enchantum.hpp>
+#include <metal/ttnn_all_includes.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "metal/ops/common/program_utils.hpp"
@@ -76,35 +76,36 @@ bool fits_in_l1_check(
     const uint32_t available_L1_in_bytes =
         device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
 
+    const uint32_t bf16_row_memory = Wt * bfloat16_single_tile_size_bytes;
     // Memory for input data CBs
-    const uint64_t scaler_memory = kNumScalerTiles * bfloat16_single_tile_size_bytes;
-    const uint64_t mask_memory = kNumMaskTiles * bfloat16_single_tile_size_bytes;
-    const uint64_t eps_memory = kNumEpsTiles * bfloat16_single_tile_size_bytes;
-    const uint64_t gamma_memory = Wt * bfloat16_single_tile_size_bytes;
-    const uint64_t beta_memory = Wt * bfloat16_single_tile_size_bytes;
-    const uint64_t input_memory = Wt * bfloat16_single_tile_size_bytes;
+    const uint32_t scaler_memory = kNumScalerTiles * bfloat16_single_tile_size_bytes;
+    const uint32_t mask_memory = kNumMaskTiles * bfloat16_single_tile_size_bytes;
+    const uint32_t eps_memory = kNumEpsTiles * bfloat16_single_tile_size_bytes;
+    const uint32_t gamma_memory = bf16_row_memory;
+    const uint32_t beta_memory = bf16_row_memory;
+    const uint32_t input_memory = bf16_row_memory;
 
     // Memory for output CBs
-    const uint64_t output_memory = Wt * bfloat16_single_tile_size_bytes;
+    const uint32_t output_memory = bf16_row_memory;
 
     // Memory for intermediate computation CBs
-    const uint64_t sum_memory = kNumSumTiles * float32_single_tile_size_bytes;
-    const uint64_t mean_bcast_memory = kNumMeanBcastTiles * bfloat16_single_tile_size_bytes;
-    const uint64_t variance_sum_memory = kNumSumTiles * float32_single_tile_size_bytes;
-    const uint64_t variance_reduced_memory = kNumVarianceReducedTiles * bfloat16_single_tile_size_bytes;
-    const uint64_t rstd_bcast_memory = kNumRstdBcastTiles * bfloat16_single_tile_size_bytes;
-    const uint64_t x_hat_memory = Wt * bfloat16_single_tile_size_bytes;
-    const uint64_t output_intermediate_memory = block_size * bfloat16_single_tile_size_bytes;
+    const uint32_t sum_memory = kNumSumTiles * float32_single_tile_size_bytes;
+    const uint32_t mean_bcast_memory = kNumMeanBcastTiles * bfloat16_single_tile_size_bytes;
+    const uint32_t variance_sum_memory = kNumSumTiles * float32_single_tile_size_bytes;
+    const uint32_t variance_reduced_memory = kNumVarianceReducedTiles * bfloat16_single_tile_size_bytes;
+    const uint32_t rstd_bcast_memory = kNumRstdBcastTiles * bfloat16_single_tile_size_bytes;
+    const uint32_t x_hat_memory = bf16_row_memory;
+    const uint32_t output_intermediate_memory = block_size * bfloat16_single_tile_size_bytes;
 
     // Total L1 memory required
-    uint64_t required_L1_in_bytes = scaler_memory + mask_memory + eps_memory + gamma_memory + beta_memory +
+    uint32_t required_L1_in_bytes = scaler_memory + mask_memory + eps_memory + gamma_memory + beta_memory +
                                     input_memory + output_memory + sum_memory + mean_bcast_memory +
                                     variance_sum_memory + variance_reduced_memory + rstd_bcast_memory + x_hat_memory +
                                     output_intermediate_memory;
 
     if (return_mean_rstd) {
-        const uint64_t mean_output_memory = kNumMeanBcastTiles * bfloat16_single_tile_size_bytes;
-        const uint64_t rstd_output_memory = kNumRstdBcastTiles * bfloat16_single_tile_size_bytes;
+        const uint32_t mean_output_memory = kNumMeanBcastTiles * bfloat16_single_tile_size_bytes;
+        const uint32_t rstd_output_memory = kNumRstdBcastTiles * bfloat16_single_tile_size_bytes;
         required_L1_in_bytes += mean_output_memory + rstd_output_memory;
     }
     return required_L1_in_bytes <= available_L1_in_bytes;
@@ -294,43 +295,14 @@ LayerNormForwardProgramFactory::cached_program_t LayerNormForwardProgramFactory:
     // 3) Create reader/writer kernels
     // -------------------------------------------------------------------------
     auto* input_buffer = input.buffer();
-    TT_FATAL(
-        input_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
-        "Input buffer must be in DRAM. Input buffer of type {}",
-        enchantum::to_string(input_buffer->buffer_type()));
-
     auto* gamma_buffer = gamma.buffer();
-    TT_FATAL(
-        gamma_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
-        "Gamma buffer must be in DRAM. Gamma buffer of type {}",
-        enchantum::to_string(gamma_buffer->buffer_type()));
-
     auto* beta_buffer = beta.buffer();
-    TT_FATAL(
-        beta_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
-        "Beta buffer must be in DRAM. Beta buffer of type {}",
-        enchantum::to_string(beta_buffer->buffer_type()));
-
     auto* output_buffer = output[0].value().buffer();
-    TT_FATAL(
-        output_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
-        "Output buffer must be in DRAM. Output buffer of type {}",
-        enchantum::to_string(output_buffer->buffer_type()));
-
     tt::tt_metal::Buffer* mean_buffer = nullptr;
     tt::tt_metal::Buffer* rstd_buffer = nullptr;
     if (return_mean_rstd) {
         mean_buffer = output[1].value().buffer();
-        TT_FATAL(
-            mean_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
-            "Mean buffer must be in DRAM. Mean buffer of type {}",
-            enchantum::to_string(mean_buffer->buffer_type()));
-
         rstd_buffer = output[2].value().buffer();
-        TT_FATAL(
-            rstd_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
-            "Rstd buffer must be in DRAM. Rstd buffer of type {}",
-            enchantum::to_string(rstd_buffer->buffer_type()));
     }
 
     std::map<std::string, std::string> defines;
@@ -456,31 +428,12 @@ void LayerNormForwardProgramFactory::override_runtime_arguments(
     auto& reader_runtime_args = GetRuntimeArgs(program, layernorm_fw_reader_kernel_id);
     auto& writer_runtime_args = GetRuntimeArgs(program, layernorm_fw_writer_kernel_id);
 
-    // Process core_group_1 - iterate over actual cores
-    for (const auto& core_range : core_group_1.ranges()) {
-        for (auto core : tt::tt_metal::CoreRange(core_range)) {
-            // Update input buffers for the reader kernel
-            {
-                auto& runtime_args = reader_runtime_args[core.x][core.y];
-                runtime_args[kInputBufferIdx] = input_buffer->address();
-                runtime_args[kGammaBufferIdx] = gamma_buffer->address();
-                runtime_args[kBetaBufferIdx] = beta_buffer->address();
-            }
-
-            // Update output buffers for the writer kernel
-            {
-                auto& runtime_args = writer_runtime_args[core.x][core.y];
-                runtime_args[kOutputBufferIdx] = output_buffer->address();
-                if (operation_attributes.return_mean_rstd) {
-                    runtime_args[kMeanBufferIdx] = mean_buffer->address();
-                    runtime_args[kRstdBufferIdx] = rstd_buffer->address();
-                }
-            }
-        }
-    }
-
-    // Process core_group_2 - iterate over actual cores
-    for (const auto& core_range : core_group_2.ranges()) {
+    std::vector<CoreRange> all_ranges;
+    all_ranges.reserve(core_group_1.ranges().size() + core_group_2.ranges().size());
+    all_ranges.insert(all_ranges.end(), core_group_1.ranges().begin(), core_group_1.ranges().end());
+    all_ranges.insert(all_ranges.end(), core_group_2.ranges().begin(), core_group_2.ranges().end());
+    // Iterate over all cores
+    for (const auto& core_range : all_ranges) {
         for (auto core : tt::tt_metal::CoreRange(core_range)) {
             // Update input buffers for the reader kernel
             {

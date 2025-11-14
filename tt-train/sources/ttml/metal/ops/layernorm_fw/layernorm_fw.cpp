@@ -18,22 +18,7 @@ std::vector<std::optional<ttnn::Tensor>> LayerNormForwardOperation::invoke(
     float epsilon,
     bool return_mean_rstd) {
     // Returns: [output, mean (optional), rstd (optional)]
-    auto result = ttnn::prim::ttml_layernorm_fw(input_tensor, gamma_tensor, beta_tensor, epsilon, return_mean_rstd);
-
-    std::vector<std::optional<ttnn::Tensor>> return_tensors;
-    return_tensors.reserve(3);
-    return_tensors.push_back(result[0]);
-
-    // If mean and rstd were requested, reshape them as well
-    if (return_mean_rstd) {
-        return_tensors.push_back(result[1]);
-        return_tensors.push_back(result[2]);
-    } else {
-        return_tensors.push_back(std::nullopt);
-        return_tensors.push_back(std::nullopt);
-    }
-
-    return return_tensors;
+    return ttnn::prim::ttml_layernorm_fw(input_tensor, gamma_tensor, beta_tensor, epsilon, return_mean_rstd);
 }
 
 }  // namespace ttml::metal::ops::layernorm_fw

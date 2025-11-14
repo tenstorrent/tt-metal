@@ -6,7 +6,6 @@
 
 #include <cmath>
 #include <core/ttnn_all_includes.hpp>
-#include <ttnn/tensor/xtensor/xtensor_all_includes.hpp>
 #include <tuple>
 
 #include "autograd/auto_context.hpp"
@@ -107,7 +106,7 @@ static void CompareKernelVsXArray(
 
         // Run metal kernel
         auto output_tensors = metal::ops::layernorm_fw::LayerNormForwardOperation::invoke(
-            input_tensor, gamma_tensor, beta_tensor, 1e-6f, true);
+            input_tensor, gamma_tensor, beta_tensor, 1e-6f, /* return_mean_rstd */ true);
 
         auto metal_y_xtensor = core::to_xtensor(output_tensors[0].value());
         auto metal_mu_xtensor = core::to_xtensor(output_tensors[1].value());

@@ -86,11 +86,10 @@ autograd::TensorPtr layernorm(
         tensor->get_value().memory_config());
     auto rstd = ttnn::empty_like(mean);
 
-    auto out_tensors =
-        ttml::metal::layernorm_fw(tensor->get_value(), gamma->get_value(), beta->get_value(), 1e-6F, true);
+    auto out_tensors = ttml::metal::layernorm_fw(
+        tensor->get_value(), gamma->get_value(), beta->get_value(), 1e-6F, /* return_mean_std */ true);
 
-    auto out = autograd::create_tensor();
-    out->set_value(out_tensors[0].value());
+    auto out = autograd::create_tensor(out_tensors[0].value());
     mean = out_tensors[1].value();
     rstd = out_tensors[2].value();
     autograd::GradFunction grad = [tensor, out, mean, rstd, gamma, beta]() {

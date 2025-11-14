@@ -24,12 +24,6 @@ void LayerNormForwardDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     auto check_tensor = [](const ttnn::Tensor& tensor, const std::string& name) {
         TT_FATAL(
-            tensor.device()->arch() == tt::ARCH::WORMHOLE_B0,
-            "LayerNormForward operation is only supported on Wormhole. Device arch: {}. Tensor name {}",
-            enchantum::to_string(tensor.device()->arch()),
-            name);
-
-        TT_FATAL(
             tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,
             "LayerNormForward operation requires {} to be on Device. Input storage type: {}",
             name,
@@ -40,6 +34,12 @@ void LayerNormForwardDeviceOperation::validate_on_program_cache_miss(
             "Operands to LayerNormForward need to be allocated in buffers on the device. Buffer is null. Tensor name "
             "{}",
             name);
+
+        TT_FATAL(
+            tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
+            "{} buffer must be in DRAM. Buffer of type {}",
+            name,
+            enchantum::to_string(tensor.buffer()->buffer_type()));
 
         TT_FATAL(
             tensor.layout() == tt::tt_metal::Layout::TILE,

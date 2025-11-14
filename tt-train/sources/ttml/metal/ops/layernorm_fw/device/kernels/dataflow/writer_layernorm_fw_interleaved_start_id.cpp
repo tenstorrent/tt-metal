@@ -59,7 +59,7 @@ void kernel_main() {
             // Write output block
             write_cb_block_to_dram(cb_output_idx, output_addr_generator, start_idx, current_block_size, tile_bytes);
             noc_async_write_barrier();
-            cb_pop_front(cb_output_idx, current_block_size);
+            cb_pop_front(cb_output_idx, block_size);
         }
 
         // Write mean and rstd (one tile per row) if needed

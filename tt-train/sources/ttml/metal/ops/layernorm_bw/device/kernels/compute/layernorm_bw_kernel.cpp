@@ -93,7 +93,7 @@ inline void compute_x_hat_preprocessing(const uint32_t num_tiles) {
         }
 
         tile_regs_commit();
-        pack_and_push_block(cb_x_hat_idx, current_block_size);
+        pack_and_push_block(cb_x_hat_idx, block_size);
     }
 }
 
@@ -553,16 +553,16 @@ inline void MAIN {
             const uint32_t current_block_size = std::min(block_size, Wt - col);
 
             // Compute dx
-            {
 #ifndef EVERYTHING_FITS_IN_L1
-                // Compute x_hat for this block
-                cb_wait_front(cb_input_idx, current_block_size);
-                compute_x_hat_preprocessing(current_block_size);
-                cb_wait_front(cb_x_hat_idx, current_block_size);
+            // Compute x_hat for this block
+            cb_wait_front(cb_input_idx, block_size);
+            compute_x_hat_preprocessing(current_block_size);
+            cb_wait_front(cb_x_hat_idx, block_size);
 
-                cb_wait_front(cb_dL_out_idx, current_block_size);
-                cb_wait_front(cb_gamma_idx, current_block_size);
+            cb_wait_front(cb_dL_out_idx, block_size);
+            cb_wait_front(cb_gamma_idx, block_size);
 #endif
+            {
                 uint32_t dx_register;
                 tile_regs_acquire();
 
@@ -576,26 +576,12 @@ inline void MAIN {
                     compute_dx(input_tile_idx, dx_register, col + block_idx);
                 }
                 tile_regs_commit();
-                pack_and_push_block(cb_dx_idx, current_block_size);
-#ifndef EVERYTHING_FITS_IN_L1
-                cb_pop_front(cb_gamma_idx, current_block_size);
-                cb_pop_front(cb_dL_out_idx, current_block_size);
-                cb_pop_front(cb_x_hat_idx, current_block_size);
-                cb_pop_front(cb_input_idx, current_block_size);
-#endif
+                pack_and_push_block(cb_dx_idx, block_size);
             }
 
             reconfig_data_format(cb_dL_out_idx, cb_dL_out_idx);
             // Compute dgamma_components
             {
-#ifndef EVERYTHING_FITS_IN_L1
-                // Compute x_hat for this block
-                cb_wait_front(cb_input_idx, current_block_size);
-                compute_x_hat_preprocessing(current_block_size);
-                cb_wait_front(cb_x_hat_idx, current_block_size);
-
-                cb_wait_front(cb_dL_out_idx, current_block_size);
-#endif
                 uint32_t dgamma_register;
                 tile_regs_acquire();
 
@@ -609,19 +595,11 @@ inline void MAIN {
                     compute_dgamma_components(input_tile_idx, dgamma_register, col + block_idx);
                 }
                 tile_regs_commit();
-                pack_and_push_block(cb_dgamma_components, current_block_size);
-#ifndef EVERYTHING_FITS_IN_L1
-                cb_pop_front(cb_x_hat_idx, current_block_size);
-                cb_pop_front(cb_dL_out_idx, current_block_size);
-                cb_pop_front(cb_input_idx, current_block_size);
-#endif
+                pack_and_push_block(cb_dgamma_components, block_size);
             }
 
             // Compute dbeta_components
             {
-#ifndef EVERYTHING_FITS_IN_L1
-                cb_wait_front(cb_dL_out_idx, current_block_size);
-#endif
                 uint32_t dbeta_register;
                 tile_regs_acquire();
 
@@ -635,11 +613,14 @@ inline void MAIN {
                     compute_dbeta_components(dy_tile_idx, dbeta_register, col + block_idx);
                 }
                 tile_regs_commit();
-                pack_and_push_block(cb_dbeta_components, current_block_size);
-#ifndef EVERYTHING_FITS_IN_L1
-                cb_pop_front(cb_dL_out_idx, current_block_size);
-#endif
+                pack_and_push_block(cb_dbeta_components, block_size);
             }
+#ifndef EVERYTHING_FITS_IN_L1
+            cb_pop_front(cb_gamma_idx, block_size);
+            cb_pop_front(cb_dL_out_idx, block_size);
+            cb_pop_front(cb_x_hat_idx, block_size);
+            cb_pop_front(cb_input_idx, block_size);
+#endif
         }
 
         // Pop the row-level tensors
