@@ -90,7 +90,7 @@ enum class EnvVarID {
     TT_METAL_DISABLE_DMA_OPS,               // Disable DMA operations
     TT_METAL_ENABLE_ERISC_IRAM,             // Enable ERISC IRAM (inverted logic)
     RELIABILITY_MODE,                       // Fabric reliability mode (strict/relaxed)
-    TT_METAL_MULTI_AERISC,                  // Enable experimental multi-erisc mode
+    TT_METAL_DISABLE_MULTI_AERISC,          // Disable multi-erisc mode (inverted logic, enabled by default)
     TT_METAL_USE_MGD_2_0,                   // Use mesh graph descriptor 2.0
     TT_METAL_FORCE_JIT_COMPILE,             // Force JIT compilation
 
@@ -231,6 +231,12 @@ RunTimeOptions::RunTimeOptions() :
     }
 
     InitializeFromEnvVars();
+
+    // Disable 2-erisc mode for non-Silicon devices (simulator/mock)
+    if (this->runtime_target_device_ != tt::TargetDevice::Silicon) {
+        log_info(tt::LogMetal, "Disabling multi-erisc mode with simulator/mock target device");
+        this->enable_2_erisc_mode = false;
+    }
 
     TT_FATAL(
         !(get_feature_enabled(RunTimeDebugFeatureDprint) && get_profiler_enabled()),
@@ -479,13 +485,14 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             break;
         }
 
-        // TT_METAL_MULTI_AERISC
-        // Experimental multi-ERISC mode flag that enables 2-ERISC mode.
-        // Default: false (single ERISC mode)
-        // Usage: export TT_METAL_MULTI_AERISC=1
-        case EnvVarID::TT_METAL_MULTI_AERISC:
-            log_info(tt::LogMetal, "Enabling experimental multi-erisc mode");
-            this->enable_2_erisc_mode = true;
+        // TT_METAL_DISABLE_MULTI_AERISC
+        // Disable multi-ERISC mode (2-ERISC mode is enabled by default on Blackhole).
+        // Use this to fallback to single ERISC mode.
+        // Default: enabled (2-ERISC mode)
+        // Usage: export TT_METAL_DISABLE_MULTI_AERISC=1
+        case EnvVarID::TT_METAL_DISABLE_MULTI_AERISC:
+            log_info(tt::LogMetal, "Disabling multi-erisc mode with TT_METAL_DISABLE_MULTI_AERISC");
+            this->enable_2_erisc_mode = false;
             break;
 
         // TT_METAL_USE_MGD_2_0
