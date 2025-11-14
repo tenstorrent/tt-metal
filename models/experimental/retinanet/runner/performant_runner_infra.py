@@ -99,7 +99,7 @@ class RetinaNetPerformanceRunnerInfra:
         # Preprocess model parameters
         parameters = preprocess_model_parameters(
             initialize_model=lambda: self.torch_model,
-            custom_preprocessor=create_custom_mesh_preprocessor(self.weights_mesh_mapper, device),
+            custom_preprocessor=create_custom_mesh_preprocessor(self.weights_mesh_mapper),
             device=None,
         )
         self.model_config = (

@@ -48,7 +48,7 @@ def test_retinanet_stability(
         batch_size,
         resolution=resolution,
         model_location_generator=None,
-        input_path="models/experimental/retinanet/resources/dog.jpg",
+        input_path="models/experimental/retinanet/resources/dog_800x800.jpg",
         model_config=model_config,
     )
 
