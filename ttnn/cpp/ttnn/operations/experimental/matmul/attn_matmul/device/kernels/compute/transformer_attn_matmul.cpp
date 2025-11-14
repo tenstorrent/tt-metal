@@ -7,6 +7,7 @@
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/untilize.h"
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.h"
 
 using std::uint32_t;
 
@@ -75,16 +76,16 @@ void MAIN {
 
                 // cb_intermed2 comes from reader; untilized row-major tile
                 pack_reconfig_data_format(cb_intermed1, out_cb_id);
-                cb_wait_front(cb_intermed2, onetile);
-                cb_reserve_back(out_cb_id, onetile);
 
                 // tilize CB::intermed2 and write to CBIndex::c_16
-                tilize_init_short_with_dt(cb_in1, cb_intermed2, onetile, out_cb_id);
-                tilize_block(cb_intermed2, onetile, out_cb_id);
-                cb_push_back(out_cb_id, onetile);
-
-                cb_pop_front(cb_intermed2, onetile);
-                tilize_uninit_with_dt(cb_intermed2, cb_in1, out_cb_id);
+                compute_kernel_lib::tilize<true, true, false, true>(
+                    cb_intermed2,  // new_cb (input)
+                    onetile,       // block_w (1 tile)
+                    out_cb_id,     // output CB
+                    1,             // num_blocks (1 iteration)
+                    1,             // subblock_h (default)
+                    cb_in1         // old_cb (for DT restoration)
+                );
 
                 pack_reconfig_data_format(out_cb_id, cb_intermed0);
                 mm_init_short_with_dt(cb_in0, cb_in1, cb_intermed2, transpose_hw);

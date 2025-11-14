@@ -7,6 +7,7 @@
 #include "compute_kernel_api/common.h"
 #include "compute_kernel_api/pack_untilize.h"
 #include "compute_kernel_api/tilize.h"
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.h"
 
 namespace NAMESPACE {
 
@@ -69,18 +70,16 @@ void MAIN {
         reconfig_data_format_srca(cache_cb, untilized_cache2_cb);
         pack_reconfig_data_format(untilized_cache_cb, out_cb);
 
-        tilize_init(untilized_cache2_cb, Wt, out_cb);
-
         // Wait on writer to update block. Tilize.
-        cb_wait_front(untilized_cache2_cb, Wt);
+        compute_kernel_lib::tilize<true, true, false, true>(
+            untilized_cache2_cb,  // new_cb (input)
+            Wt,                   // block_w
+            out_cb,               // output CB
+            1,                    // num_blocks (1 iteration)
+            1,                    // subblock_h (default)
+            cache_cb              // old_cb (for DT restoration)
+        );
 
-        cb_reserve_back(out_cb, Wt);
-
-        tilize_block(untilized_cache2_cb, Wt, out_cb);
-
-        cb_push_back(out_cb, Wt);
-        cb_pop_front(untilized_cache2_cb, Wt);
-        tilize_uninit_with_dt(untilized_cache2_cb, cache_cb, out_cb);
         pack_reconfig_data_format(out_cb, untilized_cache_cb);
     }
 }
