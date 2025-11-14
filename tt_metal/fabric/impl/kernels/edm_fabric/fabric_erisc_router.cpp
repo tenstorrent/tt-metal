@@ -360,11 +360,11 @@ static_assert(sender_channel_free_slots_stream_ids[2] == 19);
 static_assert(sender_channel_free_slots_stream_ids[3] == 20);
 static_assert(sender_channel_free_slots_stream_ids[4] == 21);
 
-static constexpr std::array<uint32_t, NUM_ROUTER_CARDINAL_DIRECTIONS> receiver_channel_free_slots_stream_ids = {
-    receiver_channel_0_free_slots_from_east_stream_id,
-    receiver_channel_0_free_slots_from_west_stream_id,
-    receiver_channel_0_free_slots_from_north_stream_id,
-    receiver_channel_0_free_slots_from_south_stream_id};
+static constexpr std::array<uint32_t, NUM_ROUTER_CARDINAL_DIRECTIONS> vc_0_free_slots_stream_ids = {
+    vc_0_free_slots_from_downstream_edge_1_stream_id,
+    vc_0_free_slots_from_downstream_edge_2_stream_id,
+    vc_0_free_slots_from_downstream_edge_3_stream_id,
+    0};
 
 enum PacketLocalForwardType : uint8_t {
     PACKET_FORWARD_INVALID = 0x0,
@@ -2258,10 +2258,6 @@ constexpr uint32_t get_vc0_downstream_sender_channel_free_slots_stream_id(uint32
 }
 #endif
 
-constexpr uint32_t get_vc1_downstream_sender_channel_free_slots_stream_id() {
-    return sender_channel_free_slots_stream_ids[sender_channel_free_slots_stream_ids.size() - 1];
-}
-
 void populate_local_sender_channel_free_slots_stream_id_ordered_map(
     uint32_t has_downstream_edm_vc0_buffer_connection,
     std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids_ordered) {
@@ -2403,11 +2399,10 @@ void kernel_main() {
     init_ptr_val<sender_channel_free_slots_stream_ids[1]>(SENDER_NUM_BUFFERS_ARRAY[1]);  // Compact index 0
     init_ptr_val<sender_channel_free_slots_stream_ids[2]>(SENDER_NUM_BUFFERS_ARRAY[2]);  // Compact index 1
     // TODO: change to per channel downstream buffers.
-    init_ptr_val<receiver_channel_0_free_slots_from_east_stream_id>(DOWNSTREAM_SENDER_NUM_BUFFERS_VC0);
-    init_ptr_val<receiver_channel_0_free_slots_from_west_stream_id>(DOWNSTREAM_SENDER_NUM_BUFFERS_VC0);
-    init_ptr_val<receiver_channel_0_free_slots_from_north_stream_id>(DOWNSTREAM_SENDER_NUM_BUFFERS_VC0);
-    init_ptr_val<receiver_channel_0_free_slots_from_south_stream_id>(DOWNSTREAM_SENDER_NUM_BUFFERS_VC0);
-    init_ptr_val<receiver_channel_1_free_slots_from_downstream_stream_id>(DOWNSTREAM_SENDER_NUM_BUFFERS_VC1);
+    init_ptr_val<vc_0_free_slots_from_downstream_edge_1_stream_id>(DOWNSTREAM_SENDER_NUM_BUFFERS_VC0);
+    init_ptr_val<vc_0_free_slots_from_downstream_edge_2_stream_id>(DOWNSTREAM_SENDER_NUM_BUFFERS_VC0);
+    init_ptr_val<vc_0_free_slots_from_downstream_edge_3_stream_id>(DOWNSTREAM_SENDER_NUM_BUFFERS_VC0);
+    init_ptr_val<vc_1_free_slots_from_downstream_edge_1_stream_id>(DOWNSTREAM_SENDER_NUM_BUFFERS_VC1);
 
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
         wait_for_other_local_erisc();
@@ -2416,7 +2411,6 @@ void kernel_main() {
     if constexpr (is_2d_fabric) {
         init_ptr_val<sender_channel_free_slots_stream_ids[3]>(SENDER_NUM_BUFFERS_ARRAY[3]);  // Compact index 2
         init_ptr_val<sender_channel_free_slots_stream_ids[4]>(SENDER_NUM_BUFFERS_ARRAY[4]);  // VC1
-        init_ptr_val<vc1_sender_channel_free_slots_stream_id>(SENDER_NUM_BUFFERS_ARRAY[VC1_SENDER_CHANNEL]);
         init_ptr_val<to_sender_packets_acked_streams[3]>(0);
         init_ptr_val<to_sender_packets_acked_streams[4]>(0);
         init_ptr_val<to_sender_packets_completed_streams[3]>(0);
@@ -2696,10 +2690,9 @@ void kernel_main() {
                 // reset the handshake addresses to 0 (this is for router -> router handshake for connections over noc)
                 *reinterpret_cast<volatile uint32_t* const>(teardown_sem_address) = 0;
 #if defined(FABRIC_2D)
-                auto receiver_channel_free_slots_stream_id =
-                    StreamId{receiver_channel_free_slots_stream_ids[compact_index]};
+                auto receiver_channel_free_slots_stream_id = StreamId{vc_0_free_slots_stream_ids[compact_index]};
 #else
-                auto receiver_channel_free_slots_stream_id = StreamId{receiver_channel_free_slots_stream_ids[0]};
+                auto receiver_channel_free_slots_stream_id = StreamId{vc_0_free_slots_stream_ids[0]};
 #endif
                 new (&downstream_edm_noc_interfaces_vc0[compact_index])
                     RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC0>(
@@ -2767,8 +2760,7 @@ void kernel_main() {
             *reinterpret_cast<volatile uint32_t* const>(teardown_sem_address) = 0;
 
             auto downstream_sender_channel_credit_stream_id =
-                is_2d_fabric ? StreamId{vc1_sender_channel_free_slots_stream_id}
-                             : StreamId{local_sender_channel_free_slots_stream_ids_ordered[2]};
+                local_sender_channel_free_slots_stream_ids_ordered[VC1_SENDER_CHANNEL];
             new (&downstream_edm_noc_interface_vc1) RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>(
                 // persistent_mode -> hardcode to false because for EDM -> EDM
                 //  connections we must always use semaphore lookup
@@ -2792,7 +2784,7 @@ void kernel_main() {
                 downstream_sender_channel_credit_stream_id,
                 // This is our local stream register for the copy of the downstream router's
                 // free slots
-                StreamId{receiver_channel_1_free_slots_from_downstream_stream_id},
+                StreamId{vc_1_free_slots_from_downstream_edge_1_stream_id},
                 receiver_channel_forwarding_data_cmd_buf_ids[1],
                 receiver_channel_forwarding_sync_cmd_buf_ids[1]);
 
@@ -2807,6 +2799,10 @@ void kernel_main() {
             }
         }
     }
+
+    // helps ubenchmark performance
+    __asm__("nop");
+    __asm__("nop");
 
     // initialize the local receiver channel buffers
     local_receiver_channels.init<channel_pools_args>(
