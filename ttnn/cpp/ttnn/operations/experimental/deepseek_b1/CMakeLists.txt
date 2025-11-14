@@ -12,7 +12,11 @@ set_target_properties(
 )
 
 # Glob kernels from all operation subfolders
-file(GLOB_RECURSE kernels matmul_1d/device/kernels/*)
+file(
+    GLOB_RECURSE kernels
+    matmul_1d/device/kernels/*
+    gate/device/kernels/*
+)
 
 target_sources(
     ttnn_op_experimental_deepseek_b1
@@ -20,7 +24,12 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES matmul_1d/matmul_1d.hpp matmul_1d/device/matmul_1d_device_operation.hpp
+        FILES
+            matmul_1d/matmul_1d.hpp
+            matmul_1d/device/matmul_1d_device_operation.hpp
+            gate/gate.hpp
+            gate/device/gate_op.hpp
+            gate/device/gate_program_factory.hpp
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
@@ -29,6 +38,7 @@ target_sources(
         matmul_1d/matmul_1d.cpp
         matmul_1d/device/matmul_1d_device_operation.cpp
         matmul_1d/device/matmul_1d_program_factory.cpp
+        gate/device/gate_program_factory.cpp
 )
 
 target_include_directories(ttnn_op_experimental_deepseek_b1 PRIVATE ${FixmeOpIncDirs})
