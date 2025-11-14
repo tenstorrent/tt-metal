@@ -24,7 +24,7 @@ struct ApplyDeviceDelayDeviceOperation {
     struct operation_attributes_t {
         const std::vector<std::vector<uint32_t>> delays;
         const CoreRangeSet worker_core_range_set;
-        const ttnn::MeshDevice* mesh_device;
+        ttnn::MeshDevice* mesh_device;
     };
 
     using tensor_args_t = std::monostate;
