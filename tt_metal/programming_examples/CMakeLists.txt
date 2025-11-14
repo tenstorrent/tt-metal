@@ -26,6 +26,7 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/NoC_tile_transfer)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/sfpu_eltwise_chain)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/custom_sfpi_add)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/custom_sfpi_smoothstep)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/tt_smi_simple)
 
 add_custom_target(
     programming_examples
@@ -50,6 +51,7 @@ install(
         sfpu_eltwise_chain
         custom_sfpi_add
         custom_sfpi_smoothstep
+        tt_smi_simple
         tests
     # DESTINATION ${CMAKE_INSTALL_DOCDIR}/examples
     # FIXME(afuller): Something funky is happening when installing files into
