@@ -601,30 +601,32 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     this->remote_channel_to_pool_mapping = std::make_shared<tt::tt_fabric::ChannelToPoolMapping>(recipes.remote);
 
     // Create remote channels allocator from the first local allocator
-    for (size_t i = 0; i < this->num_used_sender_channels; i++) {
-        auto static_allocator =
-            dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(this->get_sender_channel_allocator(i));
-        log_info(
-            tt::LogFabric,
-            "Sender channel {}, base_address: {}, num_buffers: {}, remote_base_address: {}, remote_num_buffers: {}",
-            i,
-            static_allocator->get_sender_channel_base_address(0),
-            static_allocator->get_sender_channel_number_of_slots(0),
-            static_allocator->get_remote_sender_channel_base_address(0),
-            static_allocator->get_remote_sender_channel_number_of_slots(0));
-    }
-    for (size_t i = 0; i < this->num_used_receiver_channels; i++) {
-        auto static_allocator =
-            dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(this->get_receiver_channel_allocator(i));
-        log_info(
-            tt::LogFabric,
-            "Receiver channel {}, base_address: {}, num_buffers: {}, remote_base_address: {}, remote_num_buffers: {}",
-            i,
-            static_allocator->get_receiver_channel_base_address(0),
-            static_allocator->get_receiver_channel_number_of_slots(0),
-            static_allocator->get_remote_receiver_channel_base_address(0),
-            static_allocator->get_remote_receiver_channel_number_of_slots(0));
-    }
+    // for (size_t i = 0; i < this->num_used_sender_channels; i++) {
+    //     // auto static_allocator =
+    //     // dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(this->get_sender_channel_allocator(i));
+    //     // log_info(
+    //     //     tt::LogFabric,
+    //     //     "Sender channel {}, base_address: {}, num_buffers: {}, remote_base_address: {}, remote_num_buffers:
+    //     {}",
+    //     //     i,
+    //     //     static_allocator->get_sender_channel_base_address(0),
+    //     //     static_allocator->get_sender_channel_number_of_slots(0),
+    //     //     static_allocator->get_remote_sender_channel_base_address(0),
+    //     //     static_allocator->get_remote_sender_channel_number_of_slots(0));
+    // }
+    // for (size_t i = 0; i < this->num_used_receiver_channels; i++) {
+    //     // auto static_allocator =
+    //     // dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(this->get_receiver_channel_allocator(i));
+    //     // log_info(
+    //     //     tt::LogFabric,
+    //     //     "Receiver channel {}, base_address: {}, num_buffers: {}, remote_base_address: {}, remote_num_buffers:
+    //     {}",
+    //     //     i,
+    //     //     static_allocator->get_receiver_channel_base_address(0),
+    //     //     static_allocator->get_receiver_channel_number_of_slots(0),
+    //     //     static_allocator->get_remote_receiver_channel_base_address(0),
+    //     //     static_allocator->get_remote_receiver_channel_number_of_slots(0));
+    // }
 
     for (size_t i = 0; i < this->num_used_receiver_channels; i++) {
         auto static_allocator =
@@ -632,7 +634,11 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         TT_FATAL(static_allocator != nullptr, "Static allocator is null");
         remote_channels_allocators.push_back(
             std::make_shared<tt::tt_fabric::FabricRemoteChannelsAllocator>(*static_allocator, 1));
+        remote_channels_allocators.back()->normalize_ch_to_global_index_map_for_remote_channels(
+            num_used_sender_channels);
     }
+
+    // remote_multi_pool_allocator.normalize_ch_to_global_index_map_for_remote_channels(num_sender_channels);
 
     // set default noc and cmd bufs (current setup in TG 4U)
     for (uint32_t i = 0; i < builder_config::num_receiver_channels; i++) {
@@ -1262,6 +1268,8 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         config.remote_channels_allocators, remote_channel_allocator_pool_types);
 
     // Emit remote channel pool data via multi-pool coordinator
+    // Huge hack here with passing `num_sender_channels`
+    // remote_multi_pool_allocator.normalize_ch_to_global_index_map_for_remote_channels(num_sender_channels);
     remote_multi_pool_allocator.emit_ct_args(ct_args, config.num_fwd_paths, 0, num_receiver_channels);
 
     // config.remote_channel_to_pool_mapping->emit_ct_args(ct_args);

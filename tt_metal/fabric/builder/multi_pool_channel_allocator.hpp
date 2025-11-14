@@ -80,8 +80,8 @@ public:
     void emit_ct_args(
         std::vector<uint32_t>& ct_args,
         size_t num_fwd_paths,
-        size_t num_used_sender_channels,
-        size_t num_used_receiver_channels) const;
+        int num_used_sender_channels,
+        int num_used_receiver_channels) const;
 
     /**
      * Get the number of pools managed by this allocator.

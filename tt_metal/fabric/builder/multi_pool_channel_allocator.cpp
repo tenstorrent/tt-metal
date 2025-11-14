@@ -16,8 +16,8 @@ static bool implements_static_channel_allocator(FabricChannelAllocator* allocato
 void MultiPoolChannelAllocator::emit_ct_args(
     std::vector<uint32_t>& ct_args,
     size_t num_fwd_paths,
-    size_t num_used_sender_channels,
-    size_t num_used_receiver_channels) const {
+    int num_used_sender_channels,
+    int num_used_receiver_channels) const {
     // Step 0: Emit special tag (replaces the tag that was in static allocator)
     ct_args.push_back(0xabcd1234);
 
@@ -85,8 +85,8 @@ void MultiPoolChannelAllocator::emit_ct_args(
 
     // for each pool, index into its channel index map to get the pool index
     auto build_channel_to_pool_index_map =
-        [&](size_t first_ch_offset,
-            const std::function<const std::vector<size_t>&(FabricChannelAllocator*)>& get_local_to_global_index_map)
+        [&](int first_ch_offset,
+            const std::function<const std::vector<int>&(FabricChannelAllocator*)>& get_local_to_global_index_map)
         -> std::vector<size_t> {
         std::vector<size_t> channel_to_pool_index = {};
         bool did_something = false;
@@ -120,7 +120,7 @@ void MultiPoolChannelAllocator::emit_ct_args(
 
     if (num_used_sender_channels > 0) {
         auto sender_channel_to_pool_index =
-            build_channel_to_pool_index_map(0, [](FabricChannelAllocator* allocator) -> const std::vector<size_t>& {
+            build_channel_to_pool_index_map(0, [](FabricChannelAllocator* allocator) -> const std::vector<int>& {
                 return allocator->get_sender_local_to_global_index_map();
             });
         TT_FATAL(
@@ -134,7 +134,7 @@ void MultiPoolChannelAllocator::emit_ct_args(
     }
     if (num_used_receiver_channels > 0) {
         auto receiver_channel_to_pool_index = build_channel_to_pool_index_map(
-            num_used_sender_channels, [](FabricChannelAllocator* allocator) -> const std::vector<size_t>& {
+            num_used_sender_channels, [](FabricChannelAllocator* allocator) -> const std::vector<int>& {
                 return allocator->get_receiver_local_to_global_index_map();
             });
         TT_FATAL(

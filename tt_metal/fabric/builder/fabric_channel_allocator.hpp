@@ -72,11 +72,24 @@ public:
      */
     virtual void print(std::ostream& os) const = 0;
 
-    const std::vector<size_t>& get_sender_local_to_global_index_map() const {
+    const std::vector<int>& get_sender_local_to_global_index_map() const {
         return sender_channel_local_to_global_index_map;
     }
-    const std::vector<size_t>& get_receiver_local_to_global_index_map() const {
+    const std::vector<int>& get_receiver_local_to_global_index_map() const {
         return receiver_channel_local_to_global_index_map;
+    }
+
+    void normalize_ch_to_global_index_map_for_remote_channels(int offset_to_decrement_by) {
+        if (!normalized) {
+            TT_FATAL(normalized == false, "Channel to global index map is already normalized");
+            for (size_t j = 0; j < receiver_channel_local_to_global_index_map.size(); ++j) {
+                receiver_channel_local_to_global_index_map[j] -= offset_to_decrement_by;
+                TT_FATAL(
+                    receiver_channel_local_to_global_index_map[j] >= 0,
+                    "Receiver channel local to global index map is negative");
+            }
+            normalized = true;
+        }
     }
 
     // Stream output operator for logging
@@ -91,8 +104,9 @@ protected:
     std::vector<MemoryRegion> memory_regions_;
 
     // Maps from local list (inside the allocator) to the global list (inside the router)
-    std::vector<size_t> sender_channel_local_to_global_index_map = {};
-    std::vector<size_t> receiver_channel_local_to_global_index_map = {};
+    std::vector<int> sender_channel_local_to_global_index_map = {};
+    std::vector<int> receiver_channel_local_to_global_index_map = {};
+    bool normalized = false;
 };
 
 /**

@@ -26,11 +26,17 @@ FabricRemoteChannelsAllocator::FabricRemoteChannelsAllocator(
         //     0");
     }
 
-    this->receiver_channel_local_to_global_index_map.resize(num_used_receiver_channels_);
-    std::iota(
-        this->receiver_channel_local_to_global_index_map.begin(),
-        this->receiver_channel_local_to_global_index_map.end(),
-        0);  // Start from 0 since this allocator only handles receiver channels
+    this->receiver_channel_local_to_global_index_map = static_allocator.get_receiver_local_to_global_index_map();
+    for (size_t i = 0; i < num_used_receiver_channels_; i++) {
+        TT_FATAL(
+            this->receiver_channel_local_to_global_index_map[i] > 1,
+            "Receiver channel local to global index map is greater than 2");
+    }
+    // this->receiver_channel_local_to_global_index_map.resize(num_used_receiver_channels_);
+    // std::iota(
+    //     this->receiver_channel_local_to_global_index_map.begin(),
+    //     this->receiver_channel_local_to_global_index_map.end(),
+    //     0);  // Start from 0 since this allocator only handles receiver channels
 }
 
 void FabricRemoteChannelsAllocator::emit_ct_args(

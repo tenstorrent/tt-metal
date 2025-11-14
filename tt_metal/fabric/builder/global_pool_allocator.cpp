@@ -116,8 +116,8 @@ GlobalPoolAllocator create_global_pool_allocators(
         static_allocator->get_receiver_local_to_global_index_map().size() == num_used_receiver_channels,
         "static_allocator->get_receiver_local_to_global_index_map().size() != num_used_receiver_channels");
 
-    log_info(tt::LogFabric, "static_allocator");
-    static_allocator.get()->print(std::cout);
+    // log_info(tt::LogFabric, "static_allocator");
+    // static_allocator.get()->print(std::cout);
 
     pool_allocators.push_back(static_allocator);
     pool_types.push_back(tt::tt_fabric::FabricChannelPoolType::STATIC);
@@ -144,7 +144,7 @@ GlobalPoolAllocator create_global_pool_allocators(
         pool_allocators.push_back(elastic_allocator);
         pool_types.push_back(tt::tt_fabric::FabricChannelPoolType::ELASTIC);
     }
-    log_info(tt::LogFabric, "Expanding static sized channels into separate pools...");
+    // log_info(tt::LogFabric, "Expanding static sized channels into separate pools...");
     // // Expand all the static sized channels into separate pools here...
     std::vector<std::shared_ptr<tt::tt_fabric::FabricChannelAllocator>> expanded_pool_allocators;
     std::vector<tt::tt_fabric::FabricChannelPoolType> expanded_pool_types;

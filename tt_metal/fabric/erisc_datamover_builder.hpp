@@ -385,13 +385,17 @@ struct FabricEriscDatamoverConfig {
         return sender_channel_to_pool_type[channel_index];
     }
 
-    FabricChannelAllocator* get_receiver_channel_allocator(size_t channel_index) const {
+    size_t get_receiver_channel_pool_index(size_t channel_index) const {
         const auto& receiver_channel_to_pool_index =
             this->channel_to_pool_mapping->get_receiver_channel_to_pool_index();
         TT_FATAL(receiver_channel_to_pool_index.size() > channel_index, "Receiver channel to pool index out of bounds");
-        const auto receiver_channel_pool_index = receiver_channel_to_pool_index[channel_index];
+        return receiver_channel_to_pool_index[channel_index];
+    }
 
-        log_info(tt::LogFabric, "receiver_channel_pool_index: {}", receiver_channel_pool_index);
+    FabricChannelAllocator* get_receiver_channel_allocator(size_t channel_index) const {
+        const auto receiver_channel_pool_index = get_receiver_channel_pool_index(channel_index);
+
+        // log_info(tt::LogFabric, "receiver_channel_pool_index: {}", receiver_channel_pool_index);
         auto allocator = this->multi_pool_allocator->get_pool(receiver_channel_pool_index).get();
         TT_FATAL(allocator != nullptr, "Allocator is null");
         return allocator;
