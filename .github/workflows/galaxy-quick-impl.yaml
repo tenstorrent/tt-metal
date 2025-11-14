@@ -16,22 +16,10 @@ on:
         required: false
         type: string
         default: "in-service"
-      wormhole_b0:
-        required: false
-        type: boolean
-        default: true
-      blackhole:
-        required: false
-        type: boolean
-        default: true
-      topology-6u:
-        required: false
-        type: boolean
-        default: true
 
 jobs:
   quick-wh-glx-health:
-    if: ${{ inputs.topology-6u && inputs.wormhole_b0 }}
+    if: ${{ BH == 'false' }}
     runs-on:
       - topology-6u
       - arch-wormhole_b0
@@ -87,7 +75,7 @@ jobs:
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
   quick-wh-glx-quick:
-    if: ${{ inputs.topology-6u && inputs.wormhole_b0 }}
+    if: ${{ BH == 'false' }}
     runs-on:
       - topology-6u
       - arch-wormhole_b0
@@ -150,7 +138,7 @@ jobs:
         if: always()
 
   quick-bh-glx-health:
-    if: ${{ inputs.topology-6u && inputs.blackhole }}
+    if: ${{ BH == 'true' }}
     runs-on:
       - topology-6u
       - arch-blackhole
