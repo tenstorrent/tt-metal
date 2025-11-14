@@ -246,10 +246,6 @@ class ValidationRegistry:
         print("\n" + "=" * 80)
         print("VALIDATION REPORT")
         print("=" * 80)
-        print(f"Total validations: {summary['total']}")
-        print(f"Passed: {summary['passed']} ({summary['pass_rate']*100:.1f}%)")
-        print(f"Failed: {summary['failed']}")
-        print(f"Average speedup: {summary['avg_speedup']:.2f}x")
         print()
 
         for result in self.results:
@@ -288,6 +284,13 @@ class ValidationRegistry:
 
             # All errors are reported via per-metric entries
             print()
+
+        print("-" * 36 + "Summary:" + "-" * 36)
+        print(f"Total validations: {summary['total']}")
+        print(f"Passed: {summary['passed']} ({summary['pass_rate']*100:.1f}%)")
+        print(f"Failed: {summary['failed']}")
+        print(f"Average speedup: {summary['avg_speedup']:.2f}x")
+        print()
         print("=" * 80 + "\n")
 
 
