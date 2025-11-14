@@ -79,18 +79,18 @@ void kernel_main() {
         noc_semaphore_set_remote(l1_addr, remote_addr, noc_index);
 
         // Multicast operations
-        // if (mcast_enable) {
-        //     // Multicast write operations
-        //     noc_async_write_multicast(l1_addr, mcast_addr, page_size, num_dests - 1, false, noc_index);
-        //     noc_async_write_multicast_one_packet(l1_addr, mcast_addr, page_size, num_dests - 1, false, noc_index);
+        if (mcast_enable) {
+            // Multicast write operations
+            noc_async_write_multicast(l1_addr, mcast_addr, page_size, num_dests, false, noc_index);
+            noc_async_write_multicast_one_packet(l1_addr, mcast_addr, page_size, num_dests, false, noc_index);
 
-        //     // Multicast with loopback (includes source)
-        //     noc_async_write_multicast_loopback_src(l1_addr, mcast_addr, page_size, num_dests, false, noc_index);
+            // Multicast with loopback (includes source)
+            noc_async_write_multicast_loopback_src(l1_addr, mcast_addr, page_size, num_dests, false, noc_index);
 
-        //     // Multicast semaphore operations
-        //     noc_semaphore_set_multicast(l1_addr, mcast_addr, num_dests - 1, false, noc_index);
-        //     noc_semaphore_set_multicast_loopback_src(l1_addr, mcast_addr, num_dests, false, noc_index);
-        // }
+            // Multicast semaphore operations
+            noc_semaphore_set_multicast(l1_addr, mcast_addr, num_dests, false, noc_index);
+            noc_semaphore_set_multicast_loopback_src(l1_addr, mcast_addr, num_dests, false, noc_index);
+        }
     }
 
     // Full barrier on our assigned NOC
