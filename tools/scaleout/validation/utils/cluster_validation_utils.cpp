@@ -268,7 +268,8 @@ bool execute_workloads(
 
     // Launch async tasks
     constexpr std::chrono::seconds TIMEOUT_DURATION{30};
-    std::vector<std::future<void>> futures;
+    static std::vector<std::future<void>> futures;  // Static to avoid destructor blocking
+    futures.clear();
     futures.reserve(mesh_workloads.size());
     for (auto& [device_id, mesh_workload] : mesh_workloads) {
         futures.push_back(std::async(std::launch::async, [device_id, &mesh_workload, &devices]() {
@@ -285,8 +286,13 @@ bool execute_workloads(
             TIMEOUT_DURATION - std::chrono::duration_cast<std::chrono::seconds>(elapsed), std::chrono::seconds(0));
 
         if (future.wait_for(remaining) != std::future_status::ready) {
+            log_output_rank0("ERROR: Workload execution timed out after 30 seconds BBBBBBB");
+            // Don't wait for futures to complete because they're stuck. Just abandon them.
+            // Static storage prevents destructor from blocking.
             return false;
         }
+        // Get the result to propagate any exceptions
+        future.get();
     }
 
     return true;
@@ -1005,6 +1011,13 @@ LinkMetricsResult send_traffic_and_validate_links(
 
             bool local_success = execute_workloads(programs, devices);
 
+            // If local execution timed out, exit immediately without distributed coordination
+            // (MPI operations will hang if ethernet links are down)
+            if (!local_success) {
+                handle_workload_timeout(physical_system_descriptor, asic_id_to_chip_id, statuses_per_link, devices);
+                return LinkMetricsResult{};
+            }
+
             // Check if ALL ranks succeeded using all_reduce with logical AND
             const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
             bool global_success;
@@ -1358,6 +1371,11 @@ bool generate_link_metrics(
             packet_size_bytes,
             data_size,
             asic_id_to_chip_id);
+
+        // Check if we got an empty result (indicates timeout occurred)
+        if (result.all_link_metrics.empty() && result.unhealthy_links.empty()) {
+            TT_THROW("Workload execution timed out. Cluster validation failed.");
+        }
     } else if (log_ethernet_metrics) {
         std::unordered_map<EthChannelIdentifier, std::vector<LinkStatus>> statuses_per_link;
         std::vector<uint32_t> inputs = {};
