@@ -112,7 +112,7 @@ public:
     virtual std::vector<uint32_t> get_forwarding_link_indices_in_direction(
         const FabricNodeId& src_node_id, const FabricNodeId& dst_node_id, const RoutingDirection& direction) const = 0;
     virtual FabricNodeId get_neighbor_node_id(
-        const FabricNodeId& src_node_id, const RoutingDirection& direction) const = 0;
+        const FabricNodeId& src_node_id, const RoutingDirection& direction, const bool hard_exit = true) const = 0;
     virtual bool validate_num_links_supported(uint32_t num_links) const = 0;
 };
 

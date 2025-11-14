@@ -1126,16 +1126,36 @@ public:
     }
 
     FabricNodeId get_neighbor_node_id(
-        const FabricNodeId& src_node_id, const RoutingDirection& direction) const override {
+        const FabricNodeId& src_node_id,
+        const RoutingDirection& direction,
+        const bool hard_exit = true) const override {
         const auto& neighbors =
             tt::tt_metal::MetalContext::instance().get_control_plane().get_chip_neighbors(src_node_id, direction);
-        TT_FATAL(neighbors.size() == 1, "Expected only neighbor mesh for {} in direction: {}", src_node_id, direction);
+
+        // Case 1: More than 1 mesh returned.
         TT_FATAL(
-            !neighbors.begin()->second.empty(),
-            "Expected at least 1 neighbor chip for {} in direction: {}",
+            neighbors.size() <= 1,
+            "Expected at most one neighbor mesh for {} in direction: {}",
             src_node_id,
             direction);
-        return FabricNodeId(neighbors.begin()->first, neighbors.begin()->second[0]);
+
+        const auto& neighbor_chips = neighbors.begin()->second;
+
+        // Case 2: No neighbor chips found.
+        if (neighbor_chips.empty()) {
+            // If hard exit is enabled, we throw an error.
+            if (hard_exit) {
+                TT_FATAL(false, "No neighbor chips found for {} in direction: {}", src_node_id, direction);
+            }
+            // In a soft exit option, we return the original node ID as the neighbor. This allows us to check every
+            // direction for neighbors, without erroring out.
+            else {
+                return src_node_id;
+            }
+        }
+
+        // Case 3: Valid neighbor chips returned.
+        return FabricNodeId(neighbors.begin()->first, neighbor_chips[0]);
     }
 
     std::vector<uint32_t> get_forwarding_link_indices_in_direction(
