@@ -505,58 +505,41 @@ py::object convert_tt_tensor_to_torch_tensor(const RowMajorHostBuffer& row_major
     py::object torch = py::module_::import("torch");
     auto frombuffer = torch.attr("frombuffer");
 
-    // dtype to use for frombuffer (must match element width)
-    const char* read_dtype = [&]() {
+    py::object torch_dtype = [&]() {
         switch (row_major_host_buffer.data_type) {
-            case DataType::UINT16: return "int16";  // match 2 bytes
-            case DataType::UINT32: return "int32";  // match 4 bytes
-            case DataType::INT32: return "int32";
-            case DataType::UINT8: return "uint8";
-            case DataType::BFLOAT16: return "bfloat16";
+            case DataType::UINT8: return torch.attr("uint8");
+            case DataType::UINT16: return torch.attr("int16");
+            case DataType::INT32:
+            case DataType::UINT32: return torch.attr("int32");
+            case DataType::BFLOAT16: return torch.attr("bfloat16");
             case DataType::BFLOAT8_B:
             case DataType::BFLOAT4_B:
-            case DataType::FLOAT32: return "float32";
-            default: TT_THROW("Invalid data type");
+            case DataType::FLOAT32: return torch.attr("float32");
+            case DataType::INVALID: TT_THROW("Invalid data type");
         }
+        TT_THROW("Unreachable");
     }();
 
-    // final dtype requested by caller
-    const char* final_dtype = [&]() {
-        switch (row_major_host_buffer.data_type) {
-            case DataType::UINT16: return "int32";  // widen to avoid loss
-            case DataType::UINT32: return "int64";  // widen to avoid loss
-            case DataType::INT32: return "int32";
-            case DataType::UINT8: return "uint8";
-            case DataType::BFLOAT16: return "bfloat16";
-            case DataType::BFLOAT8_B:
-            case DataType::BFLOAT4_B:
-            case DataType::FLOAT32: return "float32";
-            default: TT_THROW("Invalid data type");
+    auto tensor = [&]() {
+        if (row_major_host_buffer.buffer.view_bytes().empty()) {
+            auto pytorch_empty = torch.attr("empty");
+            return pytorch_empty(row_major_host_buffer.shape, py::arg("dtype") = torch_dtype);
         }
+        return frombuffer(row_major_host_buffer.buffer, py::arg("dtype") = torch_dtype);
     }();
 
-    py::object tensor;
-
-    if (row_major_host_buffer.buffer.view_bytes().empty()) {
-        auto pytorch_empty = torch.attr("empty");
-        tensor = pytorch_empty(row_major_host_buffer.shape, py::arg("dtype") = torch.attr(final_dtype));
-    } else {
-        // read with dtype matching element width (no copy), then widen the data and fix up the values
-        tensor = frombuffer(row_major_host_buffer.buffer, py::arg("dtype") = torch.attr(read_dtype));
-        tensor = tensor.attr("reshape")(row_major_host_buffer.shape);
-
-        if (row_major_host_buffer.data_type == DataType::UINT16) {
-            auto bitwise_and = torch.attr("bitwise_and");
-            tensor = bitwise_and(tensor.attr("to")(torch.attr("int32")), py::int_(0xFFFF));
-        } else if (row_major_host_buffer.data_type == DataType::UINT32) {
-            auto bitwise_and = torch.attr("bitwise_and");
-            tensor = bitwise_and(tensor.attr("to")(torch.attr("int64")), py::int_(0xFFFFFFFF));
-        } else if (!tensor.attr("dtype").equal(torch.attr(final_dtype))) {
-            tensor = tensor.attr("to")(torch.attr(final_dtype));
-        }
+    // torch does not support unsigned integers. To preserve the full range of the TTNN tensor,
+    // for uint16/32 read with dtype matching element width (no copy), then widen the data and
+    // fix up the values
+    if (row_major_host_buffer.data_type == DataType::UINT16) {
+        auto bitwise_and = torch.attr("bitwise_and");
+        tensor = bitwise_and(tensor.attr("to")(torch.attr("int32")), py::int_(0xFFFF));
+    } else if (row_major_host_buffer.data_type == DataType::UINT32) {
+        auto bitwise_and = torch.attr("bitwise_and");
+        tensor = bitwise_and(tensor.attr("to")(torch.attr("int64")), py::int_(0xFFFFFFFF));
     }
 
-    // make contiguous if needed
+    tensor = tensor.attr("reshape")(row_major_host_buffer.shape);
     tensor = tensor.attr("contiguous")();
 
     GraphTracker::instance().track_function_end(tensor);
