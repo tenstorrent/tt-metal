@@ -157,7 +157,7 @@ int main(int argc, char** argv) {
         const auto& routing_type = test_config.fabric_setup.routing_type.value();
         const auto& fabric_tensix_config = test_config.fabric_setup.fabric_tensix_config.value();
         if (test_config.benchmark_mode) {
-            tt::tt_metal::MetalContext::instance().rtoptions().set_enable_fabric_telemetry(true);
+            tt::tt_metal::MetalContext::instance().rtoptions().set_enable_fabric_bw_telemetry(true);
         }
 
         log_info(
@@ -243,7 +243,7 @@ int main(int argc, char** argv) {
 
     test_context.close_devices();
 
-    tt::tt_metal::MetalContext::instance().rtoptions().set_enable_fabric_telemetry(false);
+    tt::tt_metal::MetalContext::instance().rtoptions().set_enable_fabric_bw_telemetry(false);
 
     // Bandwidth summary is generated after all tests have run, to collect multi-run statistics
     if (benchmark_mode) {

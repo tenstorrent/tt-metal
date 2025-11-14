@@ -40,7 +40,7 @@ static uint32_t get_code_profiling_buffer_addr() {
     // Add telemetry buffer size (32 bytes) if telemetry is enabled or on Blackhole
     // This mirrors the logic in FabricEriscDatamoverConfig constructor
     auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    if (rtoptions.get_enable_fabric_telemetry() ||
+    if (rtoptions.get_enable_fabric_bw_telemetry() ||
         tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE) {
         addr += 32;  // telemetry buffer size
     }

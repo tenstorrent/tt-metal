@@ -307,6 +307,10 @@ RunTimeOptions::RunTimeOptions() {
         }
     }
 
+    if (getenv("TT_METAL_FABRIC_BW_TELEMETRY")) {
+        enable_fabric_bw_telemetry = true;
+    }
+
     if (getenv("TT_METAL_FABRIC_TELEMETRY")) {
         enable_fabric_telemetry = true;
     }
