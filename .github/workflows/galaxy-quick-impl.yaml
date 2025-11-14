@@ -19,7 +19,7 @@ on:
 
 jobs:
   quick-wh-glx-health:
-    if: ${{ BH == 'false' }}
+    if: ${{ env.BH == 'false' }}
     runs-on:
       - topology-6u
       - arch-wormhole_b0
@@ -75,7 +75,7 @@ jobs:
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
   quick-wh-glx-quick:
-    if: ${{ BH == 'false' }}
+    if: ${{ env.BH == 'false' }}
     runs-on:
       - topology-6u
       - arch-wormhole_b0
@@ -138,7 +138,7 @@ jobs:
         if: always()
 
   quick-bh-glx-health:
-    if: ${{ BH == 'true' }}
+    if: ${{ env.BH == 'true' }}
     runs-on:
       - topology-6u
       - arch-blackhole
