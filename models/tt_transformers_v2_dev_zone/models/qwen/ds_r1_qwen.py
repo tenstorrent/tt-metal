@@ -16,8 +16,6 @@ from tt_transformers_v2.src.testing import Metric, compare_to_torch, get_validat
 
 import ttnn
 
-# todo)) work on ds_r1_qwen model validation using new decorator
-
 # TODO)) accumulate prompts that instructs AI to use testing tools to validate the model
 # -- where, how, what to add to validate_against decorator
 # -- get us to the debug iteration starting point!
@@ -182,9 +180,9 @@ class Attention:
             xv = ttnn.add(xv, self.bv)
 
         # Convert to torch for reshaping and RoPE
-        xq_torch = ttnn.to_torch(xq).squeeze(0)
-        xk_torch = ttnn.to_torch(xk).squeeze(0)
-        xv_torch = ttnn.to_torch(xv).squeeze(0)
+        xq_torch = to_torch_auto_compose(xq).squeeze(0)
+        xk_torch = to_torch_auto_compose(xk).squeeze(0)
+        xv_torch = to_torch_auto_compose(xv).squeeze(0)
         # Ensure batch dim exists
         if xq_torch.dim() == 3:
             pass  # [batch, seq, hidden]
@@ -717,7 +715,7 @@ def generate(model: QwenModel, tokenizer, prompt: str, max_new_tokens: int = 50,
     logits = model.forward(tokens, start_pos=0)
 
     # Get last token logits
-    logits_torch = ttnn.to_torch(logits)
+    logits_torch = to_torch_auto_compose(logits)
     if len(logits.shape) > 3:
         logits_torch = logits_torch.squeeze(0)  # [batch, seq_len, vocab_size]
     next_token_id = torch.argmax(logits_torch[:, -1, :], dim=-1).item()  # Take last position
@@ -730,7 +728,7 @@ def generate(model: QwenModel, tokenizer, prompt: str, max_new_tokens: int = 50,
     for i in range(max_new_tokens - 1):
         next_token = torch.tensor([[next_token_id]], dtype=torch.long)  # [1, 1]
         logits = model.forward(next_token, start_pos=current_pos)
-        logits_torch = ttnn.to_torch(logits)
+        logits_torch = to_torch_auto_compose(logits)
         if len(logits.shape) > 3:
             logits_torch = logits_torch.squeeze(0)  # [batch, 1, vocab_size]
 
