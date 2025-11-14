@@ -70,7 +70,7 @@ Use `--num-prompts` to truncate large prompt sets. For example, there are 256 to
 ### Sample usage with JSON file:
 
 ```bash
-python models/demos/deepseek_v3/demo/demo.py  --prompts-file models/demos/deepseek_v3/demo/test_prompts.json --num-prompts 256 --output-path deepseek_tt_out.json  --max-new-tokens 128
+python models/demos/deepseek_v3/demo/demo.py --prompts-file models/demos/deepseek_v3/demo/test_prompts.json --num-prompts 256 --output-path deepseek_tt_out.json --max-new-tokens 128
 ```
 
 ### Programmatic usage
