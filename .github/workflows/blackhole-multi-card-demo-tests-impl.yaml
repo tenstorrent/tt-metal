@@ -166,7 +166,7 @@ jobs:
             arch: blackhole
             cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct pytest models/tt_transformers/tests/test_device_perf.py -k "decode-llama3_70b-2-1024-2-10-1-1-False"
             owner_id: U08GELBB1AP # Ambrose Ling
-          - name: "qwen3-32b ${{ inputs.runner-label }} batch-32 TP device perf prefill"
+          - name: "qwen3-32b ${{ inputs.runner-label }} batch-32 performance"
             arch: blackhole
             cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen3-32B TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen3-32B pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32"
             owner_id: U08GELBB1AP # Ambrose Ling
