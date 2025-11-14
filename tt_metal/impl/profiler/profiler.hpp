@@ -123,6 +123,9 @@ private:
     // Read all control buffers
     void readControlBuffers(IDevice* device, const std::vector<CoreCoord>& virtual_cores);
 
+    // Clear the device-side DRAM profiler buffer
+    // void clearProfilerDramBuffer(const IDevice* device);
+
     // Read control buffer for a single core
     void readControlBufferForCore(IDevice* device, const CoreCoord& virtual_core);
 
