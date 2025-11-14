@@ -22,6 +22,7 @@
 #include "ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp"
 #include "api/compute/pack_untilize.h"
 #include "api/compute/untilize.h"
+#include "ttnn/kernel_lib/tilize_helpers.h"
 
 constexpr uint32_t MAX_PACK_UNTILIZE_WIDTH = 8;
 
@@ -163,13 +164,7 @@ void kernel_main() {
     // We tilize input Q if it is in ROW MAJOR layout
     if constexpr (tilize_q) {
         compute_kernel_hw_startup(cb_q_rm, cb_q_in);
-        tilize_init(cb_q_rm, q_chunk_tiles, cb_q_in);
-        cb_wait_front(cb_q_rm, q_chunk_tiles);
-        cb_reserve_back(cb_q_in, q_chunk_tiles);
-        tilize_block(cb_q_rm, q_chunk_tiles, cb_q_in);
-        tilize_uninit(cb_q_rm, cb_q_in);
-        cb_push_back(cb_q_in, q_chunk_tiles);
-        cb_pop_front(cb_q_rm, q_chunk_tiles);
+        tilize(cb_q_rm, q_chunk_tiles, cb_q_in, 1);
         mm_init_short(cb_q_in, cb_k_in);
     } else {
         mm_init(cb_q_in, cb_k_in, cb_qk_im);

@@ -9,6 +9,7 @@
 #include "api/compute/bcast.h"
 #include "api/compute/tilize.h"
 #include "api/compute/untilize.h"
+#include "ttnn/kernel_lib/tilize_helpers.h"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
@@ -51,17 +52,9 @@ ALWI void UNTILIZE_TILES(uint32_t in0_cb, uint32_t out_cb, uint32_t num_tiles) {
 }
 
 ALWI void TILIZE_ROWS(uint32_t in0_cb, uint32_t sync_cb, uint32_t out_cb, uint32_t num_tiles) {
-    tilize_init(in0_cb, num_tiles, out_cb);
-    cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(sync_cb, num_tiles);
-    cb_reserve_back(out_cb, num_tiles);
-    tilize_block(in0_cb, num_tiles, out_cb);
-    cb_push_back(out_cb, num_tiles);
-
-    // Pop shared cbs after tilize
-    cb_pop_front(in0_cb, num_tiles);
+    compute_kernel_lib::tilize(in0_cb, num_tiles, out_cb, 1);
     cb_pop_front(sync_cb, num_tiles);
-    tilize_uninit(in0_cb, out_cb);
 }
 
 void kernel_main() {
