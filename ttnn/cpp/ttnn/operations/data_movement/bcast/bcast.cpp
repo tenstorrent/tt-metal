@@ -5,8 +5,8 @@
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 
 #include "ttnn/operations/data_movement/bcast/device/bcast_device_operation.hpp"
-#include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/run_operation.hpp"
 
 namespace ttnn::operations::data_movement {
@@ -78,12 +78,36 @@ Tensor BcastOperation::invoke(
                 "Error");
         }
     }
-    return tt::tt_metal::operation::run_with_autoformat(
+
+    // Format inputs: device operation requires TILE layout, but API accepts both TILE and ROW_MAJOR
+    auto format_input = [](const Tensor& input) -> Tensor {
+        if (input.layout() == Layout::TILE) {
+            // Already in TILE layout - no formatting needed (already tile-aligned)
+            return input;
+        } else {
+            // ROW_MAJOR → TILE conversion needed
+            // Use compute_padded_shape to calculate tile-aligned shape
+            Shape tile_aligned_shape = compute_padded_shape(input.padded_shape(), TILE_HEIGHT, TILE_WIDTH);
+
+            // Always use tilize_with_val_padding - it handles both padding and tilization
+            PadValue pad_value_variant;
+            if (input.dtype() == DataType::BFLOAT16 || input.dtype() == DataType::FLOAT32) {
+                pad_value_variant = 0.0f;
+            } else {
+                pad_value_variant = (uint32_t)0;
+            }
+            return ttnn::tilize_with_val_padding(input, tile_aligned_shape, pad_value_variant, input.memory_config());
+        }
+    };
+
+    Tensor formatted_a = format_input(input_tensor_a);
+    Tensor formatted_b = format_input(input_tensor_b);
+
+    return tt::tt_metal::operation::run(
                EltwiseBinaryBroadcast{bcast_op, bcast_dim, output_memory_config},
-               {input_tensor_a, input_tensor_b},
+               {formatted_a, formatted_b},
                {},
-               {output_tensor},
-               0 /* pad_value*/)
+               {output_tensor})
         .at(0);
 }
 
