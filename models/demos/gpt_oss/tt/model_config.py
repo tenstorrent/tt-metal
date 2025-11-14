@@ -17,7 +17,6 @@ from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.tt_transformers.tt.load_checkpoints import convert_hf_qkv_to_meta_format
-from models.tt_transformers.tt.model_config import DecodersPrecision
 
 
 class ModelArgs:
@@ -38,6 +37,7 @@ class ModelArgs:
         self.dummy_weights = dummy_weights
         self.max_batch_size = max_batch_size
         self.max_seq_len = max_seq_len
+        self.optimizations = optimizations
         self.cache_hf = cache_hf
         self.can_enable_trace = lambda seqlen: False
 
@@ -184,7 +184,11 @@ class ModelArgs:
 
     def weight_cache_path(self, dtype):
         """Return weight cache path for the model"""
-        cache_dir = Path(self.model_path)  # Use same directory as model
+        cache_dir = os.getenv("TT_CACHE_PATH")
+        if cache_dir:
+            cache_dir = Path(cache_dir)  # If we specify a TT_CACHE_PATH, use that for the cache
+        else:
+            cache_dir = Path(self.model_path)  # Use same directory as model
         logger.info(f"Cache directory: {cache_dir}")
         dtype_str = {ttnn.bfloat16: "bf16", ttnn.bfloat8_b: "bfp8"}[dtype]
 
