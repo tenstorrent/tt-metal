@@ -28,7 +28,6 @@ memory::memory(const std::string& path, Loading loading) : loading_(loading) {
     if (loading == Loading::CONTIGUOUS_XIP) {
         elf.MakeExecuteInPlace();
     }
-    elf.Finalize();
     if (loading == Loading::CONTIGUOUS_XIP) {
         // debug: dump disassembly after XIP transform
         if (std::getenv("TT_METAL_XIP_DUMP") != nullptr) {

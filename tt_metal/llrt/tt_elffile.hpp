@@ -71,7 +71,7 @@ public:
     void WriteImage(const std::string& path);
 
     // Finalize representation before end use.
-    void Finalize();
+    //    void Finalize();
 
     // Weaken data symbols, remove all others. Keep STRONG_NAMES
     // strong (can be non-data symbols).  Names can be exact or simple

@@ -532,7 +532,6 @@ void JitBuildState::weaken(const string& /*log_file*/, const string& out_dir) co
     } else {
         pathname_out += "_weakened.elf";
     }
-    elf.Finalize();
     elf.WriteImage(pathname_out);
 }
 

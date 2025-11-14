@@ -65,7 +65,7 @@ using namespace ll_api;
 class ElfFile::Impl {
 private:
     ElfFile& owner_;
-    bool xipped_ = false;
+    //    bool xipped_ = false;
 
 protected:
     // This is a view of the caller's object, which must remain live
@@ -333,9 +333,12 @@ void ElfFile::ObjectifyExecutable() { pimpl_->ObjectifyExecutable(); }
 
 void ElfFile::MakeExecuteInPlace() { pimpl_->XIPify(); }
 
-void ElfFile::Finalize() { pimpl_->Finalize(); }
+// void ElfFile::Finalize() { pimpl_->Finalize(); }
 
-void ElfFile::Impl::XIPify() { xipped_ = true; }
+void ElfFile::Impl::XIPify() {
+    // The text segment is now XIP
+    GetSegments().front().address = 0;
+}
 
 void ElfFile::Impl::TrimSegments(std::span<const std::uint32_t> info) {
     auto segment_iter = GetSegments().end();
@@ -456,10 +459,12 @@ void ElfFile::Impl::Finalize() {
         }
     }
 #endif
+#if 0
     if (xipped_) {
         // The text segment is now XIP
         GetSegments().front().address = 0;
     }
+#endif
 }
 
 template <bool Is64>
@@ -1102,7 +1107,7 @@ int main(int argc, char* argv[]) {
     elf.ReadImage(argv[1]);
     elf.WeakenDataSymbols({});
     elf.ObjectifyExecutable();
-    elf.Finalize();
+    //    elf.Finalize();
     elf.WriteImage(argv[2]);
 }
 #endif
