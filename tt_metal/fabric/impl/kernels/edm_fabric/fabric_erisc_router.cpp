@@ -1566,31 +1566,28 @@ FORCE_INLINE void run_sender_channel_step_impl(
         outbound_to_receiver_channel_pointers.num_free_slots += completions_since_last_check;
         sender_channel_from_receiver_credits.increment_num_processed_completions(completions_since_last_check);
 
-        if constexpr (IS_ELASTIC_SENDER_CHANNEL[sender_channel_index]) {
-            if constexpr (SKIP_CONNECTION_LIVENESS_CHECK) {
-                static_assert(
-                    SKIP_CONNECTION_LIVENESS_CHECK || !IS_ELASTIC_SENDER_CHANNEL[sender_channel_index],
-                    "Only persistent connections are currently supported in elastic channel mode. See issue ___ for "
-                    "more "
-                    "details.");
+        if constexpr (SKIP_CONNECTION_LIVENESS_CHECK) {
+            static_assert(
+                SKIP_CONNECTION_LIVENESS_CHECK || !IS_ELASTIC_SENDER_CHANNEL[sender_channel_index],
+                "Only persistent connections are currently supported in elastic channel mode. See issue ___ for "
+                "more "
+                "details.");
+            local_sender_channel_worker_interface
+                .template notify_persistent_connection_of_free_space<enable_deadlock_avoidance>(
+                    completions_since_last_check, local_sender_channel);
+        } else {
+            // Connection liveness checks are only done for connections that are not persistent
+            // For those connections, it's unsafe to use free-slots counters held in stream registers
+            // due to the lack of race avoidant connection protocol. Therefore, we update our read counter
+            // instead because these connections will be read/write counter based instead
+            local_sender_channel_worker_interface.increment_local_read_counter(completions_since_last_check);
+            if (channel_connection_established) {
                 local_sender_channel_worker_interface
-                    .template notify_persistent_connection_of_free_space<enable_deadlock_avoidance>(
-                        completions_since_last_check, local_sender_channel);
+                    .template notify_worker_of_read_counter_update<enable_read_counter_update_noc_flush>();
             } else {
-                ASSERT(false);  // not implemented properly yet
-                // Connection liveness checks are only done for connections that are not persistent
-                // For those connections, it's unsafe to use free-slots counters held in stream registers
-                // due to the lack of race avoidant connection protocol. Therefore, we update our read counter
-                // instead because these connections will be read/write counter based instead
-                local_sender_channel_worker_interface.increment_local_read_counter(completions_since_last_check);
-                if (channel_connection_established) {
-                    local_sender_channel_worker_interface
-                        .template notify_worker_of_read_counter_update<enable_read_counter_update_noc_flush>();
-                } else {
-                    local_sender_channel_worker_interface.copy_read_counter_to_worker_location_info();
-                    // If not connected, we update the read counter in L1 as well so the next connecting worker
-                    // is more likely to see space available as soon as it tries connecting
-                }
+                local_sender_channel_worker_interface.copy_read_counter_to_worker_location_info();
+                // If not connected, we update the read counter in L1 as well so the next connecting worker
+                // is more likely to see space available as soon as it tries connecting
             }
         }
     }
