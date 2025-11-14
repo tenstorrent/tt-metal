@@ -39,74 +39,21 @@ tt::stl::hash::hash_t GenericOpDeviceOperation::compute_program_hash(
     }
 
     auto hash_kernel = [&](const KernelDescriptor& kernel) -> size_t {
-        size_t hash = std::hash<std::string>()(kernel.kernel_source);
-        ttsl::hash::hash_combine(hash, static_cast<size_t>(kernel.source_type));
-
-        ttsl::hash::hash_combine(hash, kernel.core_ranges.size());
-        for (const auto& core_range : kernel.core_ranges.ranges()) {
-            ttsl::hash::hash_combine(hash, core_range);
-        }
-
-        ttsl::hash::hash_combine(hash, kernel.compile_time_args.size());
-        for (const auto& compile_time_arg : kernel.compile_time_args) {
-            ttsl::hash::hash_combine(hash, compile_time_arg);
-        }
-
-        ttsl::hash::hash_combine(hash, kernel.defines.size());
-        for (const auto& [key, value] : kernel.defines) {
-            ttsl::hash::hash_combine(hash, key);
-            ttsl::hash::hash_combine(hash, value);
-        }
-
-        ttsl::hash::hash_combine(hash, kernel.common_runtime_args.size());
-
-        ttsl::hash::hash_combine(hash, kernel.runtime_args.size());
-        for (const auto& runtime_args_row : kernel.runtime_args) {
-            ttsl::hash::hash_combine(hash, runtime_args_row.size());
-            for (const auto& core_runtime_args : runtime_args_row) {
-                ttsl::hash::hash_combine(hash, core_runtime_args.size());
-            }
-        }
-
-        size_t hash_config = std::visit(
-            tt::stl::overloaded{
-                [&](const ReaderConfigDescriptor& reader_config) -> size_t { return 0; },
-                [&](const WriterConfigDescriptor& writer_config) -> size_t { return 0; },
-                [&](const DataMovementConfigDescriptor& data_movement_config) -> size_t {
-                    size_t hash = static_cast<size_t>(data_movement_config.processor);
-                    ttsl::hash::hash_combine(hash, static_cast<size_t>(data_movement_config.noc));
-                    ttsl::hash::hash_combine(hash, static_cast<size_t>(data_movement_config.noc_mode));
-                    return hash;
-                },
-                [&](const ComputeConfigDescriptor& compute_config) -> size_t {
-                    size_t hash = static_cast<size_t>(compute_config.math_fidelity);
-                    ttsl::hash::hash_combine(hash, compute_config.fp32_dest_acc_en);
-                    ttsl::hash::hash_combine(hash, compute_config.dst_full_sync_en);
-                    ttsl::hash::hash_combine(hash, compute_config.bfp8_pack_precise);
-                    ttsl::hash::hash_combine(hash, compute_config.math_approx_mode);
-                    ttsl::hash::hash_combine(hash, compute_config.unpack_to_dest_mode.size());
-                    for (auto unpack_to_dest_mode : compute_config.unpack_to_dest_mode) {
-                        ttsl::hash::hash_combine(hash, static_cast<size_t>(unpack_to_dest_mode));
-                    }
-                    return hash;
-                },
-                [&](const EthernetConfigDescriptor& ethernet_config) -> size_t {
-                    size_t hash = static_cast<size_t>(ethernet_config.eth_mode);
-                    ttsl::hash::hash_combine(hash, static_cast<size_t>(ethernet_config.noc));
-                    ttsl::hash::hash_combine(hash, static_cast<size_t>(ethernet_config.processor));
-                    return hash;
-                }},
+        return ttsl::hash::hash_objects_with_default_seed(
+            kernel.kernel_source,
+            kernel.source_type,
+            kernel.core_ranges,
+            kernel.compile_time_args,
+            kernel.defines,
+            kernel.common_runtime_args.size(),
+            kernel.runtime_args.size(),
+            kernel.config.index(),
             kernel.config);
-        ttsl::hash::hash_combine(hash, kernel.config.index());
-        ttsl::hash::hash_combine(hash, hash_config);
-        return hash;
     };
 
     auto hash_cb_format_descriptor = [&](const CBFormatDescriptor& format_descriptor) -> size_t {
-        size_t hash = format_descriptor.buffer_index;
-        ttsl::hash::hash_combine(hash, static_cast<size_t>(format_descriptor.data_format));
-        ttsl::hash::hash_combine(hash, format_descriptor.page_size);
-        return hash;
+        return ttsl::hash::hash_objects_with_default_seed(
+            format_descriptor.buffer_index, format_descriptor.data_format, format_descriptor.page_size);
     };
 
     auto hash_circular_buffer = [&](const CBDescriptor& cb) -> size_t {
@@ -128,13 +75,8 @@ tt::stl::hash::hash_t GenericOpDeviceOperation::compute_program_hash(
     };
 
     auto hash_semaphore = [&](const SemaphoreDescriptor& semaphore) -> size_t {
-        size_t hash = semaphore.core_ranges.size();
-        for (const auto& core_range : semaphore.core_ranges.ranges()) {
-            ttsl::hash::hash_combine(hash, core_range);
-        }
-        ttsl::hash::hash_combine(hash, semaphore.core_type);
-        ttsl::hash::hash_combine(hash, semaphore.initial_value);
-        return hash;
+        return ttsl::hash::hash_objects_with_default_seed(
+            semaphore.core_ranges, semaphore.core_type, semaphore.initial_value);
     };
 
     size_t hash = 0;
