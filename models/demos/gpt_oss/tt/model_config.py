@@ -17,7 +17,6 @@ from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.tt_transformers.tt.load_checkpoints import convert_hf_qkv_to_meta_format
-from models.tt_transformers.tt.model_config import DecodersPrecision
 
 
 class ModelArgs:
@@ -38,6 +37,9 @@ class ModelArgs:
         self.dummy_weights = dummy_weights
         self.max_batch_size = max_batch_size
         self.max_seq_len = max_seq_len
+        if optimizations is not None:
+            logger.warning("GPT-OSS doesn't support any performance optimizations - ignoring optimizations argument")
+        self.optimizations = None
         self.cache_hf = cache_hf
         self.can_enable_trace = lambda seqlen: False
 
@@ -92,15 +94,6 @@ class ModelArgs:
             # Load tokenizer
             self.tokenizer = AutoTokenizer.from_pretrained(self.weights_path, trust_remote_code=True)
             self.processor = None  # GPT-OSS doesn't use vision processor
-
-        if callable(optimizations):
-            self.optimizations = optimizations(self)
-        else:
-            self.optimizations = optimizations
-
-        # Configure data precision and math fidelity for tensors and kernels
-        if self.optimizations is None:
-            self.optimizations = DecodersPrecision.accuracy(num_decoders=self.n_layers, model_name=self.model_name)
 
         self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
 
