@@ -407,7 +407,7 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
     Dist::EnqueueMeshWorkload(mcq, sender_workload, /*blocking=*/true);
 
     // Read back and verify
-    for (auto mc : dst_coords) {
+    for (const auto& mc : dst_coords) {
         std::vector<uint32_t> rx(n_words, 0u);
         Dist::ReadShard(mcq, rx, dst_buf, mc, /*blocking=*/true);
         verify_payload_words(rx, tx);
