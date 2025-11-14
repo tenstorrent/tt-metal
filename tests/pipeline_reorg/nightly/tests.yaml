@@ -15,7 +15,7 @@
 
 # TODO: Separated from the suite above due to issues switching between fabric configs and needing to use a custom mesh descriptor
 - name: t3k_ccl_2d_tests
-  cmd: TT_MESH_GRAPH_DESC_PATH=tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_1x8_mesh_graph_descriptor.yaml pytest -n auto tests/nightly/t3000/2d_ccl
+  cmd: TT_MESH_GRAPH_DESC_PATH=tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_1x8_mesh_graph_descriptor.textproto pytest -n auto tests/nightly/t3000/2d_ccl
   sku: wh_llmbox
   owner_id: U013121KDH9 # Austin Ho
   timeout: 10
