@@ -11,7 +11,7 @@ from loguru import logger
 from ..parallel.config import vae_neighbor_pad
 
 
-def get_conv3d_config(in_channels, out_channels, kernel_size, stride, padding, padding_mode, grid_size):
+def get_conv3d_config(in_channels, grid_size):
     shape_to_blocking = {
         # (60, 106, 768): (128, 96, 1, 2, 16),
         # (120, 212, 512): (128, 128, 1, 8, 4),
@@ -39,12 +39,6 @@ def get_conv3d_config(in_channels, out_channels, kernel_size, stride, padding, p
         H_out_block=H_out_block,
         C_out_block=C_out_block,
         C_in_block=C_in_block,
-        output_channels=out_channels,
-        kernel_size=kernel_size,
-        stride=stride,
-        padding=padding,
-        padding_mode=padding_mode,
-        groups=1,
         compute_with_storage_grid_size=grid_size,
     )
 
@@ -169,11 +163,6 @@ class ContextParallelConv3d:
         logger.warning("Setting up conv3d config")
         conv_config = get_conv3d_config(
             self.in_channels,
-            self.out_channels,
-            self.kernel_size,
-            self.stride,
-            self.padding,
-            self.padding_mode,
             self.grid_size,
         )
         self.conv_config = conv_config
@@ -249,6 +238,12 @@ class ContextParallelConv3d:
             input_tensor=x_pad_NTHWC,
             weight_tensor=self.weight,
             bias_tensor=self.bias,
+            output_channels=self.out_channels,
+            kernel_size=self.kernel_size,
+            stride=self.stride,
+            padding=self.padding,
+            padding_mode=self.padding_mode,
+            groups=self.groups,
             config=self.conv_config,
             compute_kernel_config=self.compute_kernel_config,
         )
