@@ -44,12 +44,17 @@ void multicast_data(
 // whole block to be available in the source CB before starting the multicast, instead waits for enough tiles to do one
 // multicast of NOC_MAX_BURST_SIZE size. This is because under the hood, the multicast splits the data into chunks of
 // NOC_MAX_BURST_SIZE size
+// It calls the multicast_data function for each chunk of maximum size NOC_MAX_BURST_SIZE bytes.
+// Said function does mcast loopback when the sender core is also a receiver core (it is both in ouput and input grids)
+// or mcast when the sender core is not a receiver core (it is only present in the input grid, mcast loopback will hang
+// if the core isn't one of receivers) or just local write when it is in both input and output grids but is the only
+// receiver core (will hang if mcast loopback is used)
 template <
     uint32_t act_mcast_num_dest_cores,
     uint32_t mcast_noc_burst_size,
     uint32_t block_tile_count,
     uint32_t tile_size>
-void mcast_block(bool is_receiver_core, uint32_t src_cb, uint32_t dst_cb, uint64_t multicast_noc_addr) {
+void mcast_block_chunked(bool is_receiver_core, uint32_t src_cb, uint32_t dst_cb, uint64_t multicast_noc_addr) {
     // number of full bursts
     constexpr uint32_t mcast_full_burst_cnt = block_tile_count * tile_size / mcast_noc_burst_size;
     // size of the leftover burst, if 0 means we have no leftover burst
@@ -267,7 +272,7 @@ void kernel_main() {
 
                     noc_semaphore_set(act_mcast_receiver_semaphore_addr_ptr, INVALID);
 
-                    mcast_block<
+                    mcast_block_chunked<
                         act_mcast_num_cores,
                         NOC_MAX_BURST_SIZE,
                         act_block_num_tiles,
