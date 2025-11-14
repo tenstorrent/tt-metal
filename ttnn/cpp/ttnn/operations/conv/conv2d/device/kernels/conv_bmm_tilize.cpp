@@ -12,6 +12,8 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/tilize.h"
 #include "api/compute/untilize.h"
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.h"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.h"
 
 // #include "api/debug/dprint.h"
 
@@ -25,19 +27,10 @@ template <bool init_tilize = true, bool uninit_tilize = true>
 void tilize_in(
 #endif
     uint32_t in_cb_id, uint32_t in_block_w, uint32_t in_num_subblocks, uint32_t out_cb_id) {
-    if constexpr (init_tilize) {
-        fast_tilize_init_with_dt(in_cb_id, in_block_w, out_cb_id);
-    }
-    for (uint32_t in_subblock = 0; in_subblock < in_num_subblocks; ++in_subblock) {
-        cb_wait_front(in_cb_id, in_block_w);
-        cb_reserve_back(out_cb_id, in_block_w);
-        fast_tilize_block(in_cb_id, in_block_w, out_cb_id);
-        cb_push_back(out_cb_id, in_block_w);
-        cb_pop_front(in_cb_id, in_block_w);
-    }
-    if constexpr (uninit_tilize) {
-        fast_tilize_uninit(in_cb_id, out_cb_id);
-    }
+    // Replaced manual tilize loop with unified helper function
+    // This uses fast tilize with DT variant (fast_tilize_init_with_dt)
+    compute_kernel_lib::tilize<init_tilize, uninit_tilize, true, true>(
+        in_cb_id, in_block_w, out_cb_id, in_num_subblocks);
 }  // tilize_in()
 
 template <uint32_t in_cb_id, uint32_t in_block_w, uint32_t out_cb_id>
@@ -599,17 +592,9 @@ void kernel_main() {
                     }
                     pack_untilize_uninit(matmul_partials_cb);
                 } else {
-                    untilize_init(matmul_partials_cb);
-                    for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
-                        for (uint32_t out_block_h_i = 0; out_block_h_i < out_subblock_h; ++out_block_h_i) {
-                            cb_wait_front(matmul_partials_cb, out_block_w);
-                            cb_reserve_back(out_cb_id, out_block_w);
-                            untilize_block(matmul_partials_cb, out_block_w, out_cb_id);
-                            cb_push_back(out_cb_id, out_block_w);
-                            cb_pop_front(matmul_partials_cb, out_block_w);
-                        }
-                    }
-                    untilize_uninit(matmul_partials_cb);
+                    // Flatten nested loops into single iteration count: in0_num_subblocks * out_subblock_h
+                    compute_kernel_lib::untilize<out_block_w>(
+                        matmul_partials_cb, out_cb_id, in0_num_subblocks * out_subblock_h);
                 }
             }
             if constexpr ((in1_num_blocks_w > 1 || in0_num_blocks_h > 1)) {

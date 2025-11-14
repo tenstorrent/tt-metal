@@ -7,6 +7,8 @@
 #include "api/compute/common.h"
 #include "api/compute/pack_untilize.h"
 #include "api/compute/tilize.h"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.h"
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.h"
 
 // Helper constexpr function to compute num_blocks_per_col
 constexpr uint32_t compute_num_blocks_per_col(uint32_t per_core_block_tile_cnt) {
@@ -31,54 +33,30 @@ void kernel_main() {
     constexpr uint32_t Wt = get_compile_time_arg_val(6);
     constexpr uint32_t num_heads = get_compile_time_arg_val(7);
 
-    constexpr uint32_t num_blocks_per_col = compute_num_blocks_per_col(Wt);
-    constexpr uint32_t block_ct_dim = Wt / num_blocks_per_col;
-    constexpr uint32_t full_ct_dim = Wt;
-
     compute_kernel_hw_startup(in_cb, untilized_in_cb);
-    pack_untilize_init<block_ct_dim, full_ct_dim>(in_cb, untilized_in_cb);
 
-    cb_reserve_back(untilized_in_cb, Wt);
-    for (uint32_t b = 0; b < num_blocks_per_col; ++b) {
-        cb_wait_front(in_cb, block_ct_dim);
-        pack_untilize_block<block_ct_dim, full_ct_dim>(in_cb, 1, untilized_in_cb, b);
-        cb_pop_front(in_cb, block_ct_dim);
-    }
-    cb_push_back(untilized_in_cb, Wt);
+    // Untilize input (single row, no uninit needed)
+    compute_kernel_lib::untilize<Wt, true, false>(in_cb, untilized_in_cb, 1);
 
     reconfig_data_format_srca(in_cb, cache_cb);
     pack_reconfig_data_format(untilized_in_cb, untilized_cache_cb);
     for (uint32_t cur_head = 0; cur_head < num_heads; ++cur_head) {
-        pack_untilize_init<block_ct_dim, full_ct_dim>(cache_cb, untilized_cache_cb);
-
-        // Untilize a block from the cache
-        cb_reserve_back(untilized_cache_cb, Wt);
-
-        for (uint32_t b = 0; b < num_blocks_per_col; ++b) {
-            cb_wait_front(cache_cb, block_ct_dim);
-            pack_untilize_block<block_ct_dim, full_ct_dim>(cache_cb, 1, untilized_cache_cb, b);
-            cb_pop_front(cache_cb, block_ct_dim);
-        }
-
-        cb_push_back(untilized_cache_cb, Wt);
-
-        pack_untilize_uninit(untilized_cache_cb);
+        // Untilize a block from the cache - DEST limit auto-detected
+        compute_kernel_lib::untilize<Wt>(cache_cb, untilized_cache_cb, 1);
 
         reconfig_data_format_srca(cache_cb, untilized_cache2_cb);
         pack_reconfig_data_format(untilized_cache_cb, out_cb);
 
-        tilize_init(untilized_cache2_cb, Wt, out_cb);
-
         // Wait on writer to update block. Tilize.
-        cb_wait_front(untilized_cache2_cb, Wt);
+        compute_kernel_lib::tilize<true, true, false, true>(
+            untilized_cache2_cb,  // new_cb (input)
+            Wt,                   // block_w
+            out_cb,               // output CB
+            1,                    // num_blocks (1 iteration)
+            1,                    // subblock_h (default)
+            cache_cb              // old_cb (for DT restoration)
+        );
 
-        cb_reserve_back(out_cb, Wt);
-
-        tilize_block(untilized_cache2_cb, Wt, out_cb);
-
-        cb_push_back(out_cb, Wt);
-        cb_pop_front(untilized_cache2_cb, Wt);
-        tilize_uninit_with_dt(untilized_cache2_cb, cache_cb, out_cb);
         pack_reconfig_data_format(out_cb, untilized_cache_cb);
     }
 }

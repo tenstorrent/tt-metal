@@ -22,8 +22,11 @@
 #include "ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp"
 #include "api/compute/pack_untilize.h"
 #include "api/compute/untilize.h"
+#include "ttnn/kernel_lib/tilize_helpers.h"
 
 constexpr uint32_t MAX_PACK_UNTILIZE_WIDTH = 8;
+#include "ttnn/kernel_lib/tilize_helpers.hpp"
+#include "ttnn/kernel_lib/untilize_helpers.hpp"
 
 void kernel_main() {
     // Compile time arguments
@@ -65,7 +68,6 @@ void kernel_main() {
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
     constexpr bool untilize_output = tilize_q;
-    constexpr bool use_pack_untilize = out_chunk_tiles <= MAX_PACK_UNTILIZE_WIDTH;
 
     // CB index definitions
     constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
@@ -163,13 +165,7 @@ void kernel_main() {
     // We tilize input Q if it is in ROW MAJOR layout
     if constexpr (tilize_q) {
         compute_kernel_hw_startup(cb_q_rm, cb_q_in);
-        tilize_init(cb_q_rm, q_chunk_tiles, cb_q_in);
-        cb_wait_front(cb_q_rm, q_chunk_tiles);
-        cb_reserve_back(cb_q_in, q_chunk_tiles);
-        tilize_block(cb_q_rm, q_chunk_tiles, cb_q_in);
-        tilize_uninit(cb_q_rm, cb_q_in);
-        cb_push_back(cb_q_in, q_chunk_tiles);
-        cb_pop_front(cb_q_rm, q_chunk_tiles);
+        tilize(cb_q_rm, q_chunk_tiles, cb_q_in, 1);
         mm_init_short(cb_q_in, cb_k_in);
     } else {
         mm_init(cb_q_in, cb_k_in, cb_qk_im);
@@ -540,26 +536,8 @@ void kernel_main() {
 
             // Untilize output to ROW MAJOR if input Q was also ROW MAJOR
             if constexpr (untilize_output) {
-                // Conditionally use pack_untilize or untilize
-                if constexpr (use_pack_untilize) {
-                    pack_untilize_init<out_chunk_tiles>(cb_out_accumulate_im, cb_out_final);
-                } else {
-                    untilize_init(cb_out_accumulate_im);
-                }
-                cb_wait_front(cb_out_accumulate_im, out_chunk_tiles);
-                cb_reserve_back(cb_out_final, out_chunk_tiles);
-                if constexpr (use_pack_untilize) {
-                    pack_untilize_block<out_chunk_tiles>(cb_out_accumulate_im, 1, cb_out_final);
-                } else {
-                    untilize_block(cb_out_accumulate_im, out_chunk_tiles, cb_out_final);
-                }
-                if constexpr (use_pack_untilize) {
-                    pack_untilize_uninit(cb_out_final);
-                } else {
-                    untilize_uninit(cb_out_final);
-                }
-                cb_pop_front(cb_out_accumulate_im, out_chunk_tiles);
-                cb_push_back(cb_out_final, out_chunk_tiles);
+                // Unified untilize - auto-dispatches based on out_chunk_tiles vs DEST limit
+                compute_kernel_lib::untilize<out_chunk_tiles>(cb_out_accumulate_im, cb_out_final, 1);
             } else {
                 // Move output to buffer for the writer
                 move_block<true>(cb_out_accumulate_im, cb_out_final, out_chunk_tiles);
