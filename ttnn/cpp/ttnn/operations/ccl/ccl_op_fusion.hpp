@@ -246,13 +246,14 @@ struct MinimalMatmulFusedOpSignaler {
     /* All Gather specs */
     uint32_t ring_size = 0;
     uint32_t start_ring_index = 0;
+    uint32_t input_tensor_Wt = 0;
 
     bool initialized_all_gather = false;
     bool initialized_fused_op = false;
 
     MinimalMatmulFusedOpSignaler() {}
 
-    void init_all_gather(uint32_t ring_size, uint32_t start_ring_index);
+    void init_all_gather(uint32_t ring_size, uint32_t start_ring_index, uint32_t input_tensor_Wt);
 
     void init_fused_op(
         tt::tt_metal::Program& program,
@@ -260,7 +261,8 @@ struct MinimalMatmulFusedOpSignaler {
         const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal,
         FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::MULTI);
 
-    void push_matmul_fused_op_rt_args(std::vector<uint32_t>& out_rt_args);
+    void push_matmul_fused_op_rt_args(
+        std::vector<uint32_t>& out_rt_args, uint32_t k_num_blocks, uint32_t k_block_tiles);
 };
 
 }  // namespace ccl
