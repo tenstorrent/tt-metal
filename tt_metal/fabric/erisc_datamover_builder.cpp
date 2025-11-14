@@ -78,17 +78,29 @@ namespace {
 bool is_fabric_two_erisc_enabled() {
     auto &mc = tt::tt_metal::MetalContext::instance();
     // Force-disable if the override is present
-    if (mc.rtoptions().get_disable_fabric_2_erisc_mode()) {
+    bool force_disable_2_erisc = mc.rtoptions().get_disable_fabric_2_erisc_mode();
+    if (force_disable_2_erisc) {
+        log_debug(tt::LogFabric, "Disabling fabric 2-ERISC mode due to force disable");
         return false;
     }
+
     const auto &hal = mc.hal();
-    if (hal.get_arch() != tt::ARCH::BLACKHOLE) {
-        return false;
-    }
-    if (mc.get_fabric_tensix_config() == tt::tt_fabric::FabricTensixConfig::MUX) {
-        return false;
-    }
-    return hal.get_num_risc_processors(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH) >= 2;
+    // only blackhole supports 2-erisc
+    bool arch_bh = hal.get_arch() == tt::ARCH::BLACKHOLE;
+
+    // out of stack size issue on the erisc, to be investigated
+    bool tensix_extensions_enabled = mc.get_fabric_tensix_config() != tt::tt_fabric::FabricTensixConfig::DISABLED;
+
+    bool single_erisc_dispatch = hal.get_num_risc_processors(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH) < 2;
+
+    // 2d dynamic fabric doesn't properly support 2-erisc yet but is being deprecated anyways so we
+    // simply disable 2-erisc on it for now.
+    bool is_2d_dynamic = mc.get_fabric_config() == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC ||
+                         mc.get_fabric_config() == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_X ||
+                         mc.get_fabric_config() == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_Y ||
+                         mc.get_fabric_config() == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY;
+
+    return arch_bh && !tensix_extensions_enabled && !single_erisc_dispatch && !is_2d_dynamic;
 }
 void configure_risc_settings(
     size_t num_riscv_cores,
