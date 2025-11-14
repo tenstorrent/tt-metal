@@ -230,7 +230,7 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
     }
 
     // Ensure the same logical worker maps to the same physical XY across all receiver chips
-    for (auto mc : dst_coords) {
+    for (const auto& mc : dst_coords) {
         auto dev_i = view.get_device(mc);
         auto xy_i = dev_i->worker_core_from_logical_core(p.receiver_core);
         if (xy_i != rx_xy) {
