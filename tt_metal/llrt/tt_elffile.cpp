@@ -94,11 +94,12 @@ public:
     virtual void WeakenDataSymbols(std::span<const std::string_view> strong_names) = 0;
     virtual void ObjectifyExecutable() = 0;
     virtual void XIPify() = 0;
-    virtual std::span<const std::uint32_t> GetSegmentInfo() = 0;
+    //    virtual std::span<const std::uint32_t> GetSegmentInfo() = 0;
 
 private:
     [[nodiscard]] auto GetSegments() const -> std::vector<Segment>& { return owner_.segments_; }
     [[nodiscard]] auto GetContents() const -> std::span<std::byte>& { return owner_.contents_; }
+    void TrimSegments(std::span<const std::uint32_t>);
 
 private:
     template <bool Is64>
@@ -117,7 +118,7 @@ public:
 private:
     std::span<Phdr> phdrs_;
     std::span<Shdr> shdrs_;
-    const Shdr* segment_info_ = nullptr;
+    //    const Shdr* segment_info_ = nullptr;
 
     class Weakener;
 
@@ -129,7 +130,7 @@ public:
     virtual void WeakenDataSymbols(std::span<const std::string_view> strong_names) override;
     virtual void ObjectifyExecutable() override;
     virtual void XIPify() override;
-    virtual std::span<const std::uint32_t> GetSegmentInfo() override;
+    //    virtual std::span<const std::uint32_t> GetSegmentInfo() override;
 
 private:
     [[nodiscard]] auto GetHeader() const -> Ehdr& { return *ByteOffset<Ehdr>(GetContents().data()); }
@@ -336,9 +337,7 @@ void ElfFile::Finalize() { pimpl_->Finalize(); }
 
 void ElfFile::Impl::XIPify() { xipped_ = true; }
 
-void ElfFile::Impl::Finalize() {
-    auto info = GetSegmentInfo();
-
+void ElfFile::Impl::TrimSegments(std::span<const std::uint32_t> info) {
     auto segment_iter = GetSegments().end();
     for (unsigned ix = info.size() / 3 * 3; ix;) {
         ix -= 3;
@@ -394,7 +393,69 @@ void ElfFile::Impl::Finalize() {
             }
         }
     }
+}
 
+void ElfFile::Impl::Finalize() {
+#if 0
+    auto info = GetSegmentInfo();
+
+    auto segment_iter = GetSegments().end();
+    for (unsigned ix = info.size() / 3 * 3; ix;) {
+        ix -= 3;
+        uint32_t vma = info[ix + 0];
+
+        for (;;) {
+            if (segment_iter == GetSegments().begin()) {
+                TT_THROW("{}: cannot find segment at {:#x}", path_, vma);
+                break;
+            }
+
+            --segment_iter;
+            if (segment_iter->address == vma) {
+                if (uint32_t trim = info[ix + 1] - vma) {
+                    if (segment_iter->lma == segment_iter->address) {
+                        // Keep the LMA matching
+                        segment_iter->lma += trim;
+                    } else {
+                        // Keep the LMA unchanged, move any following
+                        // contiguous LMAs
+                        uint32_t hwm = segment_iter->lma + segment_iter->contents.size() * sizeof(uint32_t);
+                        for (auto probe = segment_iter; ++probe != GetSegments().end()
+                                 && probe->lma == hwm;) {
+                            probe->lma -= trim;
+                            hwm += probe->contents.size() * sizeof(uint32_t);
+                        }
+                    }
+                    segment_iter->address += trim;
+                    segment_iter->membytes -= trim;
+                    segment_iter->contents = segment_iter->contents.subspan(trim / sizeof(uint32_t));
+                }
+
+                uint32_t limit = info[ix + 2];
+                if (segment_iter->membytes > limit) {
+                    unsigned seg_ix = segment_iter - GetSegments().begin();
+                    TT_THROW(
+                        "{}: segment[{}] [{:#x},+{:#x}) overflows region:{} limit of {:#x} bytes, reduce the size of "
+                        "{}",
+                        path_,
+                        seg_ix,
+                        segment_iter->address,
+                        segment_iter->membytes,
+                        ix / 3,
+                        limit,
+                        seg_ix == 0                                ? "code"
+                        : seg_ix == 2                              ? "statically allocated variables (e.g, globals)"
+                        : seg_ix == 1 && GetSegments().size() == 2 ? "thread_local variables"
+                                                                   : "globals and/or thread_local variables");
+                }
+                if (segment_iter->contents.empty()) {
+                    GetSegments().erase(segment_iter);
+                }
+                break;
+            }
+        }
+    }
+#endif
     if (xipped_) {
         // The text segment is now XIP
         GetSegments().front().address = 0;
@@ -490,6 +551,7 @@ void ElfFile::Impl::Elf<Is64>::LoadImage() {
     }
 
     // Check sections
+    const Shdr* segment_info = nullptr;
     for (auto const& section : GetShdrs()) {
         // We care about alignment of allocatable sections,
         // relocations and symbols.
@@ -525,8 +587,13 @@ void ElfFile::Impl::Elf<Is64>::LoadImage() {
         }
         if (!(section.sh_flags & SHF_ALLOC) && section.sh_type == SHT_PROGBITS &&
             std::strcmp(GetName(section), ".segments") == 0) {
-            segment_info_ = &section;
+            segment_info = &section;
         }
+    }
+    if (segment_info) {
+        auto bytes = GetContents(*segment_info);
+        std::span info{reinterpret_cast<const uint32_t*>(bytes.data()), bytes.size() / sizeof(uint32_t)};
+        TrimSegments(info);
     }
 }
 
@@ -670,6 +737,7 @@ void ElfFile::Impl::Elf<Is64>::ObjectifyExecutable() {
     hdr.e_phentsize = 0;
 }
 
+#if 0
 template <bool Is64>
 std::span<const std::uint32_t> ElfFile::Impl::Elf<Is64>::GetSegmentInfo() {
     if (segment_info_) {
@@ -679,7 +747,7 @@ std::span<const std::uint32_t> ElfFile::Impl::Elf<Is64>::GetSegmentInfo() {
         return std::span<std::uint32_t>{};
     }
 }
-
+#endif
 template <bool Is64>
 void ElfFile::Impl::Elf<Is64>::XIPify() {
     // In general there can be several lo12 relocs for a hi20
