@@ -105,7 +105,7 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
     const Tensor& output_tensor,
     const DeviceComputeKernelConfig& compute_kernel_config) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
-    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> empty_fused_op_signaler;
+    std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler> empty_fused_op_signaler;
     return minimal_matmul_factory_helper(
         program,
         input_tensor,
@@ -127,7 +127,7 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory_helper(
     const std::optional<const MinimalMatmulConfig>& config,
     const Tensor& output_tensor,
     const DeviceComputeKernelConfig& compute_kernel_config,
-    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler) {
+    std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler>& fused_op_signaler) {
     auto* device = input_tensor.device();
 
     bool fuse_op = fused_op_signaler.has_value();
