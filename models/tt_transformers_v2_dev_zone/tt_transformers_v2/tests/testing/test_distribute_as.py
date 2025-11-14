@@ -92,7 +92,9 @@ def _topology_signature(tt: ttnn.Tensor) -> tuple[tuple[str, tuple[int, ...]], t
 # ======================================================================================
 
 
-def test_as_host_sharded_1d(ttnn_mesh_device: ttnn.MeshDevice, layout, dtype) -> None:
+@pytest.mark.parametrize("storage", ["host", "device"])
+def test_sharded_1d(ttnn_mesh_device: ttnn.MeshDevice, layout, dtype, storage: str) -> None:
+    is_host_ref = storage == "host"
     num_devices = ttnn_mesh_device.get_num_devices()
 
     # Reference topology: host-sharded along dim 0
@@ -102,7 +104,7 @@ def test_as_host_sharded_1d(ttnn_mesh_device: ttnn.MeshDevice, layout, dtype) ->
     ref_input = _make_arange_dtype(shape, dtype=torch.float32, min_value=-7, max_value=max_value)
     ref_tt = ttnn.from_torch(
         ref_input,
-        device=None,
+        device=None if is_host_ref else ttnn_mesh_device,
         dtype=dtype,
         layout=layout,
         mesh_mapper=ttnn.ShardTensorToMesh(ttnn_mesh_device, dim=0),
@@ -110,7 +112,10 @@ def test_as_host_sharded_1d(ttnn_mesh_device: ttnn.MeshDevice, layout, dtype) ->
 
     # Distribute a different tensor using the same topology
     new_input = ref_input + 1  # change values to avoid accidental equality
-    tt_as = from_torch_dist_as(new_input, ref_tt, device=ttnn_mesh_device)
+    if is_host_ref:
+        tt_as = from_torch_dist_as(new_input, ref_tt, device=ttnn_mesh_device)
+    else:
+        tt_as = from_torch_dist_as(new_input, ref_tt)
 
     # Verify topology matches reference
     expected_topology = _topology_signature(ref_tt)
@@ -118,37 +123,17 @@ def test_as_host_sharded_1d(ttnn_mesh_device: ttnn.MeshDevice, layout, dtype) ->
     assert tt_as.dtype == dtype
 
     # Verify round-trip via auto-composition matches the source
-    torch_auto = to_torch_auto_compose(tt_as, device=ttnn_mesh_device)
+    if is_host_ref:
+        torch_auto = to_torch_auto_compose(tt_as, device=ttnn_mesh_device)
+    else:
+        torch_auto = to_torch_auto_compose(tt_as)
     assert torch.equal(torch_auto, new_input)
 
 
-def test_as_device_sharded_1d(ttnn_mesh_device: ttnn.MeshDevice, layout, dtype) -> None:
-    num_devices = ttnn_mesh_device.get_num_devices()
-
-    # Reference topology: host-sharded along dim 0
-    shape = (num_devices, 1, 3, 1)
-    # get range of values for bfloat4_b quantization which has 4 bits for the mantissa and shared 8-bit exponent
-    max_value = 6  # allows for range of value to grow to 7 for new_input
-    ref_input = _make_arange_dtype(shape, dtype=torch.float32, min_value=-7, max_value=max_value)
-    ref_tt = ttnn.from_torch(
-        ref_input,
-        device=ttnn_mesh_device,
-        dtype=dtype,
-        layout=layout,
-        mesh_mapper=ttnn.ShardTensorToMesh(ttnn_mesh_device, dim=0),
-    )
-
-    new_input = ref_input + 1  # change values to avoid accidental equality
-    tt_as = from_torch_dist_as(new_input, ref_tt)
-
-    assert _topology_signature(tt_as) == _topology_signature(ref_tt)
-    assert tt_as.dtype == dtype
-    torch_auto = to_torch_auto_compose(tt_as)
-    assert torch.equal(torch_auto, new_input)
-
-
+@pytest.mark.parametrize("storage", ["host", "device"])
 @pytest.mark.parametrize("dim", [0, 1, 2, -1])
-def test_as_host_sharded_various_dims(ttnn_mesh_device: ttnn.MeshDevice, layout, dtype, dim: int) -> None:
+def test_sharded_various_dims(ttnn_mesh_device: ttnn.MeshDevice, layout, dtype, dim: int, storage: str) -> None:
+    is_host_ref = storage == "host"
     num_devices = ttnn_mesh_device.get_num_devices()
 
     rank = 4
@@ -161,52 +146,31 @@ def test_as_host_sharded_various_dims(ttnn_mesh_device: ttnn.MeshDevice, layout,
 
     ref_tt = ttnn.from_torch(
         ref_input,
-        device=None,
+        device=None if is_host_ref else ttnn_mesh_device,
         dtype=dtype,
         layout=layout,
         mesh_mapper=ttnn.ShardTensorToMesh(ttnn_mesh_device, dim=dim),
     )
 
     new_input = ref_input + 1  # change values to avoid accidental equality
-    tt_as = from_torch_dist_as(new_input, ref_tt, device=ttnn_mesh_device)
+    if is_host_ref:
+        tt_as = from_torch_dist_as(new_input, ref_tt, device=ttnn_mesh_device)
+    else:
+        tt_as = from_torch_dist_as(new_input, ref_tt)
 
     assert _topology_signature(tt_as) == _topology_signature(ref_tt)
     assert tt_as.dtype == dtype
-    torch_auto = to_torch_auto_compose(tt_as, device=ttnn_mesh_device)
+    if is_host_ref:
+        torch_auto = to_torch_auto_compose(tt_as, device=ttnn_mesh_device)
+    else:
+        torch_auto = to_torch_auto_compose(tt_as)
     assert torch.equal(torch_auto, new_input)
 
 
-@pytest.mark.parametrize("dim", [0, 1, 2, -1])
-def test_as_device_sharded_various_dims(ttnn_mesh_device: ttnn.MeshDevice, layout, dtype, dim: int) -> None:
-    num_devices = ttnn_mesh_device.get_num_devices()
-
-    rank = 4
-    axis = _pos_dim(dim, rank)
-    shape = [2, 3, 4, 1]
-    shape[axis] = num_devices
-    # get range of values for bfloat4_b quantization which has 4 bits for the mantissa and shared 8-bit exponent
-    max_value = 6  # allows for range of value to grow to 7 for new_input
-    ref_input = _make_arange_dtype(shape, dtype=torch.float32, min_value=-7, max_value=max_value)
-
-    ref_tt = ttnn.from_torch(
-        ref_input,
-        device=ttnn_mesh_device,
-        dtype=dtype,
-        layout=layout,
-        mesh_mapper=ttnn.ShardTensorToMesh(ttnn_mesh_device, dim=dim),
-    )
-
-    new_input = ref_input + 1  # change values to avoid accidental equality
-    tt_as = from_torch_dist_as(new_input, ref_tt)
-
-    assert _topology_signature(tt_as) == _topology_signature(ref_tt)
-    assert tt_as.dtype == dtype
-    torch_auto = to_torch_auto_compose(tt_as)
-    assert torch.equal(torch_auto, new_input)
-
-
+@pytest.mark.parametrize("storage", ["host", "device"])
 @pytest.mark.parametrize("dims_pair", [(0, 1), (0, -1), (1, -1)])
-def test_as_2d_shard_shard(ttnn_mesh_device: ttnn.MeshDevice, layout, dtype, dims_pair: tuple[int, int]) -> None:
+def test_sharded_2d(ttnn_mesh_device: ttnn.MeshDevice, layout, dtype, dims_pair: tuple[int, int], storage: str) -> None:
+    is_host_ref = storage == "host"
     mesh_shape = tuple(ttnn_mesh_device.shape)
     if len(mesh_shape) != 2 and torch.prod(torch.tensor(mesh_shape)).item() <= 1:
         pytest.skip("Requires a 2D mesh with both dims > 1")
@@ -224,12 +188,20 @@ def test_as_2d_shard_shard(ttnn_mesh_device: ttnn.MeshDevice, layout, dtype, dim
     ref_input = _make_arange_dtype(shape, dtype=torch.float32, min_value=-7, max_value=max_value)
 
     mapper = ttnn.ShardTensor2dMesh(ttnn_mesh_device, mesh_shape=mesh_shape, dims=(dims_pair[0], dims_pair[1]))
-    ref_tt = ttnn.from_torch(ref_input, device=None, dtype=dtype, layout=layout, mesh_mapper=mapper)
+    ref_tt = ttnn.from_torch(
+        ref_input, device=None if is_host_ref else ttnn_mesh_device, dtype=dtype, layout=layout, mesh_mapper=mapper
+    )
 
     new_input = ref_input + 1  # change values to avoid accidental equality
-    tt_as = from_torch_dist_as(new_input, ref_tt, device=ttnn_mesh_device)
+    if is_host_ref:
+        tt_as = from_torch_dist_as(new_input, ref_tt, device=ttnn_mesh_device)
+    else:
+        tt_as = from_torch_dist_as(new_input, ref_tt)
 
     assert _topology_signature(tt_as) == _topology_signature(ref_tt)
     assert tt_as.dtype == dtype
-    torch_auto = to_torch_auto_compose(tt_as, device=ttnn_mesh_device)
+    if is_host_ref:
+        torch_auto = to_torch_auto_compose(tt_as, device=ttnn_mesh_device)
+    else:
+        torch_auto = to_torch_auto_compose(tt_as)
     assert torch.equal(torch_auto, new_input)
