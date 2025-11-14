@@ -17,6 +17,12 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
     const Tensor& input_tensor,
     const Tensor& weight_tensor,
     const std::optional<const Tensor>& bias_tensor,
+    uint32_t output_channels,
+    const std::array<uint32_t, 3>& kernel_size,
+    const std::array<uint32_t, 3>& stride,
+    const std::array<uint32_t, 3>& padding,
+    const std::string& padding_mode,
+    uint32_t groups,
     const Conv3dConfig& config,
     const Tensor& output_tensor,
     const DeviceComputeKernelConfig& compute_kernel_config) {
@@ -35,9 +41,8 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
     uint32_t H_in = input_tensor_shape[2];
     uint32_t W_in = input_tensor_shape[3];
     uint32_t C_in = input_tensor_shape[4];
-    auto [T_out, H_out, W_out] =
-        detail::compute_output_dims(T_in, H_in, W_in, config.padding, config.stride, config.kernel_size);
-    uint32_t C_out = config.output_channels;
+    auto [T_out, H_out, W_out] = detail::compute_output_dims(T_in, H_in, W_in, padding, stride, kernel_size);
+    uint32_t C_out = output_channels;
 
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     auto dtype_bytes = input_tensor.element_size();
@@ -67,7 +72,7 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
     uint32_t C_out_block = config.C_out_block > 0 ? config.C_out_block : C_out;
     uint32_t C_in_block = config.C_in_block > 0 ? config.C_in_block : C_in;
 
-    uint32_t patch_size = config.kernel_size[0] * config.kernel_size[1] * config.kernel_size[2] * C_in_block;
+    uint32_t patch_size = kernel_size[0] * kernel_size[1] * kernel_size[2] * C_in_block;
     uint32_t num_patches = config.T_out_block * config.H_out_block * config.W_out_block;
 
     uint32_t C_in_num_blocks = tt::div_up(C_in, C_in_block);
@@ -163,17 +168,17 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
         tt::tt_metal::create_cb(cb_bias_tiled_id, program, core_grid, tile_size, matmul_N_t, data_format);
     }
 
-    bool is_padding_zeros = config.padding_mode == "zeros";
+    bool is_padding_zeros = padding_mode == "zeros";
 
     uint32_t in_row_size_bytes = input_tensor.buffer()->aligned_page_size();
     uint32_t out_row_size_bytes = output_tensor.buffer()->aligned_page_size();
 
     log_debug(tt::LogOp, "Input tensor shape: N={}, T={}, H={}, W={}, C={}", N, T_in, H_in, W_in, C_in);
     log_debug(tt::LogOp, "Output tensor shape: T={}, H={}, W={}, C={}", T_out, H_out, W_out, C_out);
-    log_debug(tt::LogOp, "Kernel size: {}x{}x{}", config.kernel_size[0], config.kernel_size[1], config.kernel_size[2]);
-    log_debug(tt::LogOp, "Stride: {}x{}x{}", config.stride[0], config.stride[1], config.stride[2]);
-    log_debug(tt::LogOp, "Padding: {}x{}x{}", config.padding[0], config.padding[1], config.padding[2]);
-    log_debug(tt::LogOp, "Groups: {}", config.groups);
+    log_debug(tt::LogOp, "Kernel size: {}x{}x{}", kernel_size[0], kernel_size[1], kernel_size[2]);
+    log_debug(tt::LogOp, "Stride: {}x{}x{}", stride[0], stride[1], stride[2]);
+    log_debug(tt::LogOp, "Padding: {}x{}x{}", padding[0], padding[1], padding[2]);
+    log_debug(tt::LogOp, "Groups: {}", groups);
     log_debug(tt::LogOp, "Patch size: {}", patch_size);
     log_debug(tt::LogOp, "Input row size (bytes): {}", in_row_size_bytes);
     log_debug(tt::LogOp, "Output row size (bytes): {}", out_row_size_bytes);
@@ -195,12 +200,12 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
         H_out,
         W_out,
         C_out,
-        config.padding[0],
-        config.padding[1],
-        config.padding[2],
-        config.kernel_size[0],
-        config.kernel_size[1],
-        config.kernel_size[2],
+        padding[0],
+        padding[1],
+        padding[2],
+        kernel_size[0],
+        kernel_size[1],
+        kernel_size[2],
         config.T_out_block,
         config.H_out_block,
         config.W_out_block,
@@ -210,9 +215,9 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
         out_row_size_bytes,
         is_padding_zeros,
         semaphore_id,
-        config.stride[0],
-        config.stride[1],
-        config.stride[2]};
+        stride[0],
+        stride[1],
+        stride[2]};
     tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_compile_time_args);
 
     auto reader_kernels_id = CreateKernel(

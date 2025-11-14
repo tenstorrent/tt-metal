@@ -35,12 +35,6 @@ struct Conv3dConfig {
         uint32_t H_out_block_ = 1,
         uint32_t C_out_block_ = 0,
         uint32_t C_in_block_ = 0,
-        uint32_t output_channels_ = 0,
-        const std::array<uint32_t, 3> kernel_size_ = {1, 1, 1},
-        const std::array<uint32_t, 3> stride_ = {1, 1, 1},
-        const std::array<uint32_t, 3> padding_ = {0, 0, 0},
-        const std::string& padding_mode_ = "zeros",
-        uint32_t groups_ = 1,
         CoreCoord compute_with_storage_grid_size_ = {1, 1}) :
         dtype(dtype_),
         weights_dtype(weights_dtype_),
@@ -50,12 +44,6 @@ struct Conv3dConfig {
         H_out_block(H_out_block_),
         C_out_block(C_out_block_),
         C_in_block(C_in_block_),
-        output_channels(output_channels_),
-        kernel_size(kernel_size_),
-        stride(stride_),
-        padding(padding_),
-        padding_mode(padding_mode_),
-        groups(groups_),
         compute_with_storage_grid_size(compute_with_storage_grid_size_) {}
 
     tt::tt_metal::DataType dtype;
@@ -66,12 +54,6 @@ struct Conv3dConfig {
     uint32_t H_out_block;
     uint32_t C_out_block;
     uint32_t C_in_block;
-    uint32_t output_channels;
-    std::array<uint32_t, 3> kernel_size;
-    std::array<uint32_t, 3> stride;
-    std::array<uint32_t, 3> padding;
-    std::string padding_mode;
-    uint32_t groups;
     CoreCoord compute_with_storage_grid_size;
 
     static constexpr auto attribute_names = std::make_tuple(
@@ -83,12 +65,6 @@ struct Conv3dConfig {
         "H_out_block",
         "C_out_block",
         "C_in_block",
-        "output_channels",
-        "kernel_size",
-        "stride",
-        "padding",
-        "padding_mode",
-        "groups",
         "compute_with_storage_grid_size");
 
     auto attribute_values() const {
@@ -101,17 +77,17 @@ struct Conv3dConfig {
             this->H_out_block,
             this->C_out_block,
             this->C_in_block,
-            this->output_channels,
-            this->kernel_size,
-            this->stride,
-            this->padding,
-            this->padding_mode,
-            this->groups,
             this->compute_with_storage_grid_size);
     }
 };
 
 struct Conv3dOp {
+    uint32_t output_channels;
+    std::array<uint32_t, 3> kernel_size;
+    std::array<uint32_t, 3> stride;
+    std::array<uint32_t, 3> padding;
+    std::string padding_mode;
+    uint32_t groups;
     Conv3dConfig config;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;

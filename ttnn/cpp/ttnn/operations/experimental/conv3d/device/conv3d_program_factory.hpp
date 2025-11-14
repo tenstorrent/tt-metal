@@ -12,6 +12,12 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
     const Tensor& input_tensor,
     const Tensor& weight_tensor,
     const std::optional<const Tensor>& bias_tensor,
+    uint32_t output_channels,
+    const std::array<uint32_t, 3>& kernel_size,
+    const std::array<uint32_t, 3>& stride,
+    const std::array<uint32_t, 3>& padding,
+    const std::string& padding_mode,
+    uint32_t groups,
     const Conv3dConfig& config,
     const Tensor& output_tensor,
     const DeviceComputeKernelConfig& compute_kernel_config);

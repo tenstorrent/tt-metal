@@ -19,6 +19,12 @@ struct ExecuteConv3d {
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& weight_tensor,
+        uint32_t output_channels,
+        const std::array<uint32_t, 3>& kernel_size,
+        const std::array<uint32_t, 3>& stride,
+        const std::array<uint32_t, 3>& padding,
+        const std::string& padding_mode,
+        uint32_t groups,
         const std::optional<ttnn::Tensor>& bias_tensor,
         const Conv3dConfig& config,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
