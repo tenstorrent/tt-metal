@@ -22,23 +22,30 @@ import json
 import os
 import time
 
-import cv2
 import numpy as np
 import torch
 import ttnn
 from loguru import logger
-from torchvision.ops.boxes import batched_nms
 
+from models.demos.utils.common_demo_utils import get_mesh_mappers
+from ttnn.model_preprocessing import preprocess_model_parameters
+from models.common.utility_functions import disable_persistent_kernel_cache
 from models.experimental.efficientdetd0.reference.efficientdet import EfficientDetBackbone
-from models.experimental.efficientdetd0.tt.efficient_det import TtEfficientDetBackbone
+from models.experimental.efficientdetd0.tt.efficientdetd0 import TtEfficientDetBackbone
 from models.experimental.efficientdetd0.common import load_torch_model_state
 from models.experimental.efficientdetd0.tt.custom_preprocessor import (
     infer_torch_module_args,
     create_custom_mesh_preprocessor,
 )
-from models.demos.utils.common_demo_utils import get_mesh_mappers
-from ttnn.model_preprocessing import preprocess_model_parameters
-from models.common.utility_functions import disable_persistent_kernel_cache
+from models.experimental.efficientdetd0.reference.utils import (
+    ClipBoxes,
+    BBoxTransform,
+)
+from models.experimental.efficientdetd0.demo.demo_utils import (
+    postprocess,
+    invert_affine,
+    preprocess_image,
+)
 
 # Try to import pycocotools for official COCO evaluation
 try:
@@ -49,191 +56,6 @@ try:
 except ImportError:
     PYCOCOTOOLS_AVAILABLE = False
     logger.warning("pycocotools not available. Install with: pip install pycocotools")
-
-
-class BBoxTransform(torch.nn.Module):
-    """Transform regression outputs to bounding boxes."""
-
-    def forward(self, anchors, regression):
-        y_centers_a = (anchors[..., 0] + anchors[..., 2]) / 2
-        x_centers_a = (anchors[..., 1] + anchors[..., 3]) / 2
-        ha = anchors[..., 2] - anchors[..., 0]
-        wa = anchors[..., 3] - anchors[..., 1]
-
-        w = regression[..., 3].exp() * wa
-        h = regression[..., 2].exp() * ha
-
-        y_centers = regression[..., 0] * ha + y_centers_a
-        x_centers = regression[..., 1] * wa + x_centers_a
-
-        ymin = y_centers - h / 2.0
-        xmin = x_centers - w / 2.0
-        ymax = y_centers + h / 2.0
-        xmax = x_centers + w / 2.0
-
-        return torch.stack([xmin, ymin, xmax, ymax], dim=2)
-
-
-class ClipBoxes(torch.nn.Module):
-    """Clip boxes to image boundaries."""
-
-    def forward(self, boxes, img):
-        batch_size, num_channels, height, width = img.shape
-        boxes[:, :, 0] = torch.clamp(boxes[:, :, 0], min=0)
-        boxes[:, :, 1] = torch.clamp(boxes[:, :, 1], min=0)
-        boxes[:, :, 2] = torch.clamp(boxes[:, :, 2], max=width - 1)
-        boxes[:, :, 3] = torch.clamp(boxes[:, :, 3], max=height - 1)
-        return boxes
-
-
-def aspectaware_resize_padding(image, width, height, interpolation=None, means=None):
-    """Resize image with aspect ratio preservation and padding."""
-    old_h, old_w, c = image.shape
-    if old_w > old_h:
-        new_w = width
-        new_h = int(width / old_w * old_h)
-    else:
-        new_w = int(height / old_h * old_w)
-        new_h = height
-
-    canvas = np.zeros((height, width, c), np.float32)
-    if means is not None:
-        canvas[...] = means
-
-    if new_w != old_w or new_h != old_h:
-        if interpolation is None:
-            image = cv2.resize(image, (new_w, new_h))
-        else:
-            image = cv2.resize(image, (new_w, new_h), interpolation=interpolation)
-
-    padding_h = height - new_h
-    padding_w = width - new_w
-
-    if c > 1:
-        canvas[:new_h, :new_w] = image
-    else:
-        if len(image.shape) == 2:
-            canvas[:new_h, :new_w, 0] = image
-        else:
-            canvas[:new_h, :new_w] = image
-
-    return (
-        canvas,
-        new_w,
-        new_h,
-        old_w,
-        old_h,
-        padding_w,
-        padding_h,
-    )
-
-
-def preprocess_image(image_path, max_size=512, mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)):
-    """Preprocess image for EfficientDet inference."""
-    ori_img = cv2.imread(image_path)
-    if ori_img is None:
-        raise ValueError(f"Could not load image from {image_path}")
-
-    normalized_img = (ori_img[..., ::-1] / 255.0 - mean) / std
-    img_meta = aspectaware_resize_padding(normalized_img, max_size, max_size, means=None)
-    framed_img = img_meta[0]
-    framed_meta = img_meta[1:]
-
-    framed_img = torch.from_numpy(framed_img.transpose(2, 0, 1)).float()
-    framed_img = framed_img.unsqueeze(0)
-
-    return ori_img, framed_img, framed_meta
-
-
-def postprocess(
-    regression, classification, anchors, regressBoxes, clipBoxes, input_tensor, threshold=0.5, iou_threshold=0.5
-):
-    """Post-process model outputs to get bounding boxes."""
-    transformed_anchors = regressBoxes(anchors, regression)
-    transformed_anchors = clipBoxes(transformed_anchors, input_tensor)
-
-    scores = torch.max(classification, dim=2, keepdim=True)[0]
-    scores_over_thresh = (scores > threshold)[:, :, 0]
-
-    out = []
-    for i in range(regression.shape[0]):
-        if scores_over_thresh[i].sum() == 0:
-            out.append(
-                {
-                    "rois": np.array(()),
-                    "class_ids": np.array(()),
-                    "scores": np.array(()),
-                }
-            )
-            continue
-
-        classification_per = classification[i, scores_over_thresh[i, :], ...].permute(1, 0)
-        transformed_anchors_per = transformed_anchors[i, scores_over_thresh[i, :], ...]
-        scores_per = scores[i, scores_over_thresh[i, :], ...]
-        scores_, classes_ = classification_per.max(dim=0)
-        anchors_nms_idx = batched_nms(transformed_anchors_per, scores_per[:, 0], classes_, iou_threshold=iou_threshold)
-
-        if anchors_nms_idx.shape[0] != 0:
-            classes_ = classes_[anchors_nms_idx]
-            scores_ = scores_[anchors_nms_idx]
-            boxes_ = transformed_anchors_per[anchors_nms_idx, :]
-
-            out.append(
-                {
-                    "rois": boxes_.cpu().numpy(),
-                    "class_ids": classes_.cpu().numpy(),
-                    "scores": scores_.cpu().numpy(),
-                }
-            )
-        else:
-            out.append(
-                {
-                    "rois": np.array(()),
-                    "class_ids": np.array(()),
-                    "scores": np.array(()),
-                }
-            )
-
-    return out
-
-
-def invert_affine(metas, preds):
-    """
-    Transform bounding boxes back to original image coordinates.
-
-    This function transforms boxes from preprocessed image coordinates back to
-    original image coordinates, accounting for aspect ratio preservation and padding.
-
-    Args:
-        metas: Metadata from preprocessing (new_w, new_h, old_w, old_h, padding_w, padding_h)
-               or list of such tuples
-        preds: List of prediction dictionaries with 'rois' key
-
-    Returns:
-        Modified preds with transformed boxes
-    """
-    for i in range(len(preds)):
-        if len(preds[i]["rois"]) == 0:
-            continue
-
-        if isinstance(metas, float):
-            # Simple scaling case
-            preds[i]["rois"][:, [0, 2]] = preds[i]["rois"][:, [0, 2]] / metas
-            preds[i]["rois"][:, [1, 3]] = preds[i]["rois"][:, [1, 3]] / metas
-        else:
-            # Aspect ratio preservation case
-            if isinstance(metas, list) and len(metas) > i:
-                meta = metas[i]
-            else:
-                meta = metas
-
-            if isinstance(meta, (list, tuple)) and len(meta) >= 4:
-                new_w, new_h, old_w, old_h = meta[0], meta[1], meta[2], meta[3]
-                # Transform boxes back to original coordinates
-                preds[i]["rois"][:, [0, 2]] = preds[i]["rois"][:, [0, 2]] / (new_w / old_w)
-                preds[i]["rois"][:, [1, 3]] = preds[i]["rois"][:, [1, 3]] / (new_h / old_h)
-
-    return preds
 
 
 def convert_to_coco_format(predictions, image_ids, framed_metas):
@@ -447,7 +269,7 @@ def evaluate_coco(
     coco_eval.summarize()
 
     # Print results in the same format as benchmark
-    logger.info("\n" + "=" * 80)
+    logger.info("=" * 80)
     logger.info("COCO Evaluation Results - mAP Summary")
     logger.info("=" * 80)
     logger.info(f"efficientdet-d0 ({'TTNN' if use_ttnn else 'PyTorch Reference'})")
