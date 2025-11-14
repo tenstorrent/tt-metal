@@ -167,47 +167,6 @@ void build_tt_fabric_program(
         edm_builder.set_firmware_context_switch_type(FabricEriscDatamoverContextSwitchType::INTERVAL);
     };
 
-    if (is_TG && device->is_mmio_capable()) {
-        const auto& edm_config = fabric_context.get_fabric_router_config();
-
-        auto router_chans_and_direction = control_plane.get_active_fabric_eth_channels(fabric_node_id);
-        for (const auto& [eth_chan, eth_direction] : router_chans_and_direction) {
-            log_debug(
-                tt::LogFabric,
-                "FabricEriscDatamoverConfig for device {}: eth_chan={}, direction={}",
-                device->id(),
-                eth_chan,
-                eth_direction);
-            // remote_fabric_node_id is only used to determine the handshake master, no functional impact
-            // for now treat the mmio chips as the handshake master
-            auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
-            auto edm_builder = std::make_unique<tt::tt_fabric::FabricEriscDatamoverBuilder>(
-                tt::tt_fabric::FabricEriscDatamoverBuilder::build(
-                    device,
-                    *fabric_program_ptr,
-                    eth_logical_core,
-                    fabric_node_id,
-                    FabricNodeId{fabric_node_id.mesh_id, fabric_node_id.chip_id + 1},
-                    edm_config,
-                    false,                                            /* build_in_worker_connection_mode */
-                    tt::tt_fabric::FabricEriscDatamoverType::Default, /* fabric_edm_type */
-                    eth_direction));
-            // Both links used by dispatch on TG Gateway (mmio device)
-            // TODO: https://github.com/tenstorrent/tt-metal/issues/24413
-            configure_edm_builder_for_dispatch(*edm_builder);
-
-            // Immediately wrap in router_builder
-            const auto topology = fabric_context.get_fabric_topology();
-            auto channel_mapping = tt::tt_fabric::FabricRouterChannelMapping(
-                topology, eth_direction, false);  // TG Gateway doesn't use tensix extension
-            auto router_builder = std::make_unique<tt::tt_fabric::FabricRouterBuilder>(
-                std::move(edm_builder), std::nullopt, std::move(channel_mapping));
-            router_builders.insert({eth_chan, std::move(router_builder)});
-        }
-
-        return;
-    }
-
     std::unordered_map<RoutingDirection, std::vector<chan_id_t>> active_fabric_eth_channels;
     std::unordered_map<RoutingDirection, FabricNodeId> chip_neighbors;
     uint32_t num_intra_chip_neighbors = 0;
