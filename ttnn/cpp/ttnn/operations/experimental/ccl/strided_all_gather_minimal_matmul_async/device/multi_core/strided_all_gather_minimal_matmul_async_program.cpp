@@ -70,9 +70,8 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_minimal_matmul_
     ////////////////////////////////////////////////////////
 
     // Create a matmul signal info object that gets populated by the matmul kernel
-    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> matmul_fused_op_signaler =
-        ttnn::experimental::ccl::MatmulFusedOpSignaler(
-            ttnn::experimental::ccl::MatmulFusedOpSignalerType::STRIDED_ALL_GATHER);
+    std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler> matmul_fused_op_signaler =
+        ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler();
     matmul_fused_op_signaler->init_all_gather(
         num_transfers,
         ring_size,
@@ -106,7 +105,7 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_minimal_matmul_
     }
 
     // Create the all gather fused op signaler
-    std::optional<AllGatherFusedOpSignaler> all_gather_fused_op_signaler = AllGatherFusedOpSignaler();
+    std::optional<StridedAllGatherFusedOpSignaler> all_gather_fused_op_signaler = StridedAllGatherFusedOpSignaler();
     all_gather_fused_op_signaler->init_fused_op(
         matmul_fused_op_signaler->fused_op_receiver_cores_noc,
         matmul_fused_op_signaler->fused_op_receiver_signal_semaphores,
