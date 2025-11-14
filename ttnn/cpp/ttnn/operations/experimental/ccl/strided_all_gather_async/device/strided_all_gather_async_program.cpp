@@ -152,7 +152,7 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
     std::optional<uint32_t> mm_block_ht,
     std::optional<uint32_t> mm_block_wt) {
     tt::tt_metal::Program program{};
-    std::optional<experimental::ccl::AllGatherFusedOpSignaler> empty_fused_op_signaler;
+    std::optional<experimental::ccl::StridedAllGatherFusedOpSignaler> empty_fused_op_signaler;
     return strided_all_gather_async_minimal_default_helper(
         program,
         input_tensor,
@@ -193,7 +193,7 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
     const std::vector<GlobalSemaphore>& semaphore,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    std::optional<experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
+    std::optional<experimental::ccl::StridedAllGatherFusedOpSignaler>& fused_op_signaler,
     std::optional<uint32_t> tiles_per_chunk,
     std::optional<uint32_t> num_workers_per_direction_opt,
     std::optional<uint32_t> num_buffers_per_channel,
@@ -233,9 +233,9 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
     bool fuse_op = fused_op_signaler.has_value();
 
     // Need a separate signaler for the sender workers, to handle the first tensor slice that is locally available
-    std::optional<experimental::ccl::AllGatherFusedOpSignaler> fused_op_signaler_sender_workers;
-    std::optional<experimental::ccl::AllGatherFusedOpSignaler> fused_op_signaler_forward;
-    std::optional<experimental::ccl::AllGatherFusedOpSignaler> fused_op_signaler_backward;
+    std::optional<experimental::ccl::StridedAllGatherFusedOpSignaler> fused_op_signaler_sender_workers;
+    std::optional<experimental::ccl::StridedAllGatherFusedOpSignaler> fused_op_signaler_forward;
+    std::optional<experimental::ccl::StridedAllGatherFusedOpSignaler> fused_op_signaler_backward;
     if (fuse_op) {
         fused_op_signaler_sender_workers = fused_op_signaler.value();
         fused_op_signaler_forward = fused_op_signaler.value();

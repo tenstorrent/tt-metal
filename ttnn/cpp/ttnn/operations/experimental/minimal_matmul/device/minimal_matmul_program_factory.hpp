@@ -19,7 +19,7 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory_helper(
     const std::optional<const MinimalMatmulConfig>& config,
     const Tensor& output_tensor,
     const DeviceComputeKernelConfig& compute_kernel_config,
-    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler);
+    std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler>& fused_op_signaler);
 
 tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
     const Tensor& input_tensor,
