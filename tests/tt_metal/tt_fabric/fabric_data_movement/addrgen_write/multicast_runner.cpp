@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <utility>
 #include <vector>
 
 #include <tt-metalium/tt_metal.hpp>
