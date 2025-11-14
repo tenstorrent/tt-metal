@@ -23,9 +23,9 @@ FabricRemoteChannelsAllocator::FabricRemoteChannelsAllocator(
 
 void FabricRemoteChannelsAllocator::emit_ct_args(
     std::vector<uint32_t>& ct_args,
-    size_t num_fwd_paths,
-    size_t num_used_sender_channels,
-    size_t num_used_receiver_channels) const {
+    size_t /*num_fwd_paths*/,
+    size_t /*num_used_sender_channels*/,
+    size_t /*num_used_receiver_channels*/) const {
     // This is now called by MultiPoolChannelAllocator, which handles num_pools and pool_type emission.
     // We only emit the pool data itself.
 

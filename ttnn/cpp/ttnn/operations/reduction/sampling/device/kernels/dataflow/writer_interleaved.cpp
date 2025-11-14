@@ -18,6 +18,9 @@ Samples from the top-k subset by comparing cumulative sums of probabilities with
 appropriate index.
 */
 
+constexpr uint32_t FACE_WIDTH = 16;
+constexpr uint32_t FACE_HEIGHT = 16;
+
 uint16_t bfloat16_add(uint16_t bf16_a, uint16_t bf16_b) {
     // Extract the sign, exponent, and mantissa from both values
     uint16_t sign_a = bf16_a & 0x8000;
@@ -309,17 +312,17 @@ void kernel_main() {
     uint32_t out_addr = get_write_ptr(cb_id_out);
     volatile tt_l1_ptr uint32_t* index_out = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_addr);
 
-    uint32_t start_id_local_phase_0 = core_id * 16;
+    uint32_t start_id_local_phase_0 = core_id * FACE_WIDTH;
     // each user is on 1 core, so core_id = user_id
-    // users 0-16 have their data on first 2 faces (2 * 16 * 16 values)
-    // skip the first 2 faces for users>=16
-    if (core_id >= 16) {
-        start_id_local_phase_0 = 32 * 16 + (core_id - 16) * 16;
+    // users 0-16 have their data on first 2 faces (2 * FACE_WIDTH * FACE_HEIGHT = 2*16*16 = 512 values)
+    // skip the first 2 faces for users >= FACE_WIDTH users (16 users)
+    if (core_id >= FACE_WIDTH) {
+        start_id_local_phase_0 = 2 * FACE_WIDTH * FACE_HEIGHT + (core_id - FACE_WIDTH) * FACE_WIDTH;
     }
-    uint32_t end_id_local_phase_0 = start_id_local_phase_0 + 16;
-    uint32_t start_id_local_phase_1 = 16 * 16 + start_id_local_phase_0;
-    uint32_t end_id_local_phase_1 = start_id_local_phase_1 + (k - 16);
-    if (k <= 16) {
+    uint32_t end_id_local_phase_0 = start_id_local_phase_0 + FACE_WIDTH;
+    uint32_t start_id_local_phase_1 = FACE_WIDTH * FACE_HEIGHT + start_id_local_phase_0;
+    uint32_t end_id_local_phase_1 = start_id_local_phase_1 + (k - FACE_WIDTH);
+    if (k <= FACE_WIDTH) {
         end_id_local_phase_0 = start_id_local_phase_0 + k;
         start_id_local_phase_1 = end_id_local_phase_0;
         end_id_local_phase_1 = end_id_local_phase_0;
@@ -327,32 +330,43 @@ void kernel_main() {
 
     uint16_t bf16_p = static_cast<uint16_t>(p & 0xFFFF);
     uint32_t cum_prob = 0;
-    bool cutoff_found = false;
+    uint32_t kept_tokens = 0;
+    bool cutoff_found_in_phase_0 = false;
+    bool cutoff_found_in_phase_1 = false;
     uint32_t top_p_cutoff = end_id_local_phase_1;  // Default to all tokens
     for (uint32_t i = start_id_local_phase_0; i < end_id_local_phase_0; ++i) {
         cum_prob = bfloat16_add(cum_prob, local_values[i]);
         if (bfloat16_greater(cum_prob, bf16_p)) {
             top_p_cutoff = i + 1;  // Include this token in the top-p set
-            cutoff_found = true;
+            cutoff_found_in_phase_0 = true;
+            kept_tokens = top_p_cutoff - start_id_local_phase_0;
             break;
         }
     }
-    if (!cutoff_found) {
+    if (!cutoff_found_in_phase_0) {
+        kept_tokens = FACE_WIDTH;
         for (uint32_t i = start_id_local_phase_1; i < end_id_local_phase_1; ++i) {
             // cum sum of local values
             cum_prob = bfloat16_add(cum_prob, local_values[i]);
             if (bfloat16_greater(cum_prob, bf16_p)) {
                 top_p_cutoff = i + 1;
+                kept_tokens += top_p_cutoff - start_id_local_phase_1;
+                cutoff_found_in_phase_1 = true;
                 break;
             }
         }
     }
     // adjust phase indices
-    end_id_local_phase_1 = start_id_local_phase_1 + (top_p_cutoff - 16);
-    if (top_p_cutoff <= 16) {
-        end_id_local_phase_0 = start_id_local_phase_0 + top_p_cutoff;
+    if (cutoff_found_in_phase_0) {
+        // skip last FACE_WIDTH tokens since cutoff found in phase 0
         start_id_local_phase_1 = end_id_local_phase_0;
         end_id_local_phase_1 = end_id_local_phase_0;
+        // adjust phase 0 to only keep the tokens that are in the top-p set
+        end_id_local_phase_0 = start_id_local_phase_0 + kept_tokens;
+    } else if (cutoff_found_in_phase_1) {
+        // in case cutoff not found in phase 0, but in phase 1,
+        // keep all tokens in phase 0 and part of tokens in phase 1 which is (kept_tokens - FACE_WIDTH)
+        end_id_local_phase_1 = start_id_local_phase_1 + (kept_tokens - FACE_WIDTH);
     }
 
     uint32_t cum_sum = 0;

@@ -1158,17 +1158,17 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_set_state(
  *
  * Return value: None
  *
- * | Argument                            | Description                                            | Type     | Valid Range                      | Required |
- * |-------------------------------------|--------------------------------------------------------|----------|----------------------------------|----------|
- * | noc                                 | NOC to use for the transaction                         | uint32_t | 0 or 1                           | True     |
- * | cmd_buf                             | Command buffer to use for the transaction              | uint32_t | 0 - 3                            | True     |
- * | val                                 | The value to be written                                | uint32_t | Any uint32_t value               | False    |
- * | dest_addr                           | Encoding of the destination NOC location (x,y)+address | uint64_t | Results of \a get_noc_addr calls | False    |
- * | update_addr_lo (template parameter) | Whether to update the lower 32 bits of the address     | bool     | true or false                    | False    |
- * | update_addr_hi (template parameter) | Whether to update the upper 32 bits of the address     | bool     | true or false                    | False    |
- * | update_val (template parameter)     | Whether to set the value to be written                 | bool     | true or false                    | False    |
- * | posted (template parameter)         | Whether the call is posted (i.e. ack requirement)      | bool     | true or false                    | False    |
- * | update_counter (template parameter) | Whether to update the write counters                   | bool     | true or false                    | False    |
+ * | Argument                                   | Description                                            | Type     | Valid Range                      | Required |
+ * |--------------------------------------------|--------------------------------------------------------|----------|----------------------------------|----------|
+ * | noc                                        | NOC to use for the transaction                         | uint32_t | 0 or 1                           | True     |
+ * | cmd_buf                                    | Command buffer to use for the transaction              | uint32_t | 0 - 3                            | True     |
+ * | val                                        | The value to be written                                | uint32_t | Any uint32_t value               | False    |
+ * | dest_addr                                  | Encoding of the destination NOC location (x,y)+address | uint64_t | Results of \a get_noc_addr calls | False    |
+ * | update_addr_lo (template parameter)        | Whether to update the lower 32 bits of the address     | bool     | true or false                    | False    |
+ * | update_addr_hi (template parameter)        | Whether to update the upper 32 bits of the address     | bool     | true or false                    | False    |
+ * | update_val (template parameter)            | Whether to set the value to be written                 | bool     | true or false                    | False    |
+ * | posted (template parameter)                | Whether the call is posted (i.e. ack requirement)      | bool     | true or false                    | False    |
+ * | update_counter (template parameter)        | Whether to update the write counters                   | bool     | true or false                    | False    |
  */
 // clang-format on
 template <

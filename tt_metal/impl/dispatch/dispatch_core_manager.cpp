@@ -230,7 +230,12 @@ CoreCoord dispatch_core_manager::get_next_available_dispatch_core(ChipId device_
 }
 
 void dispatch_core_manager::log_dispatch_assignment(
-    std::string name, tt_cxy_pair& cxy, ChipId device_id, uint16_t channel, uint8_t cq_id, bool force_ethernet) {
+    [[maybe_unused]] std::string name,
+    [[maybe_unused]] tt_cxy_pair& cxy,
+    [[maybe_unused]] ChipId device_id,
+    [[maybe_unused]] uint16_t channel,
+    [[maybe_unused]] uint8_t cq_id,
+    [[maybe_unused]] bool force_ethernet) {
     log_debug(
         tt::LogMetal,
         "Allocated {} Core: {}({}) for Device {} Channel {} CQ ID {}",

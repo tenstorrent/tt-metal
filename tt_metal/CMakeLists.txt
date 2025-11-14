@@ -1,3 +1,5 @@
+add_compile_options("$<$<CXX_COMPILER_ID:Clang>:-Wunused-parameter>")
+
 add_library(tt_metal)
 add_library(TT::Metalium ALIAS tt_metal)
 add_library(Metalium::Metal ALIAS tt_metal) # For backwards compatibility
@@ -51,6 +53,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/distributed_host_buffer.hpp
     api/tt-metalium/edm_fabric_counters.hpp
     api/tt-metalium/event.hpp
+    api/tt-metalium/experimental/profiler.hpp
     api/tt-metalium/fabric.hpp
     api/tt-metalium/fabric_edm_types.hpp
     api/tt-metalium/fabric_types.hpp
@@ -88,6 +91,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/program.hpp
     api/tt-metalium/program_cache.hpp
     api/tt-metalium/program_descriptors.hpp
+    api/tt-metalium/queue_id.hpp
     api/tt-metalium/routing_table_generator.hpp
     api/tt-metalium/runtime_args_data.hpp
     api/tt-metalium/shape.hpp
@@ -164,23 +168,6 @@ target_sources(
             core_descriptors/wormhole_b0_80_arch.yaml
             core_descriptors/wormhole_b0_80_arch_fabric_mux.yaml
             core_descriptors/wormhole_b0_80_arch_eth_dispatch.yaml
-            fabric/mesh_graph_descriptors/n150_mesh_graph_descriptor.yaml
-            fabric/mesh_graph_descriptors/n300_mesh_graph_descriptor.yaml
-            fabric/mesh_graph_descriptors/n300_2x2_mesh_graph_descriptor.yaml
-            fabric/mesh_graph_descriptors/p100_mesh_graph_descriptor.yaml
-            fabric/mesh_graph_descriptors/p150_mesh_graph_descriptor.yaml
-            fabric/mesh_graph_descriptors/p150_x2_mesh_graph_descriptor.yaml
-            fabric/mesh_graph_descriptors/p150_x4_mesh_graph_descriptor.yaml
-            fabric/mesh_graph_descriptors/p150_x8_mesh_graph_descriptor.yaml
-            fabric/mesh_graph_descriptors/p300_mesh_graph_descriptor.yaml
-            fabric/mesh_graph_descriptors/p300_x2_mesh_graph_descriptor.yaml
-            fabric/mesh_graph_descriptors/single_galaxy_mesh_graph_descriptor.yaml
-            fabric/mesh_graph_descriptors/single_galaxy_torus_xy_graph_descriptor.yaml
-            fabric/mesh_graph_descriptors/single_galaxy_torus_x_graph_descriptor.yaml
-            fabric/mesh_graph_descriptors/single_galaxy_torus_y_graph_descriptor.yaml
-            fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.yaml
-            fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml
-            fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.yaml
             fabric/mesh_graph_descriptors/n150_mesh_graph_descriptor.textproto
             fabric/mesh_graph_descriptors/n300_mesh_graph_descriptor.textproto
             fabric/mesh_graph_descriptors/n300_2x2_mesh_graph_descriptor.textproto
@@ -211,6 +198,7 @@ target_sources(
             tools/profiler/kernel_profiler.hpp
             tools/profiler/fabric_event_profiler.hpp
             tools/profiler/noc_event_profiler.hpp
+            tools/profiler/cpp_device_analyses.json
             # Kernel sources
             impl/dispatch/kernels/cq_dispatch.cpp
             impl/dispatch/kernels/cq_dispatch_subordinate.cpp

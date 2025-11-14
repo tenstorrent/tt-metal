@@ -207,11 +207,6 @@ def run_avg_pool2d(
         compute_kernel_config=compute_kernel_config,
     )
 
-    # TODO always use run_twice after resolution of https://github.com/tenstorrent/tt-metal/issues/26093
-    # skip run_twice for blackhole with wide Bfloat8 tensors as this currently causes PCC failures
-    if is_blackhole() and in_dtype == ttnn.bfloat8_b and in_c > 256:
-        run_twice = False
-
     if run_twice:
         ttnn.deallocate(ttnn_output, True)
         ttnn_output = ttnn.avg_pool2d(

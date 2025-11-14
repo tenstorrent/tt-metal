@@ -45,7 +45,13 @@ def mesh_device(request, device_params):
     device_ids = ttnn.get_device_ids()
     request.node.pci_ids = [ttnn.GetPCIeDeviceID(i) for i in device_ids]
 
-    if len(device_ids) == 32:  # If running on Galaxy system
+    # Override mesh shape based on MESH_DEVICE environment variable
+    mesh_device_env = os.getenv("MESH_DEVICE")
+    if mesh_device_env == "DUAL":
+        default_mesh_shape = ttnn.MeshShape(8, 8)  # If running on DUAL system
+    elif mesh_device_env == "QUAD":
+        default_mesh_shape = ttnn.MeshShape(16, 8)  # If running on QUAD system
+    elif mesh_device_env == "TG" or len(device_ids) == 32:  # If running on Galaxy system
         default_mesh_shape = ttnn.MeshShape(4, 8)
     else:
         default_mesh_shape = ttnn.MeshShape(1, len(device_ids))

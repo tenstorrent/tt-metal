@@ -125,7 +125,7 @@ class resnet50Bottleneck:
                     deallocate_activation=True,
                     reallocate_halo_output=False,
                     reshard_if_not_optimal=reshard_if_not_optimal,
-                    enable_act_double_buffer=True,
+                    enable_act_double_buffer=True if not (is_blackhole_p100(device) and batch_size > 16) else False,
                     enable_weights_double_buffer=True if input_width < 56 else False,
                     full_inner_dim=True,
                     enable_activation_reuse=True if height_sharding and self.stride == 1 else False,
@@ -246,7 +246,11 @@ class resnet50Bottleneck:
             if layer_module == "layer1_module3":
                 conv_kwargs_2["conv_config"].act_block_h_override = 16 * 32
             if batch_size == 32 and is_blackhole_p100(device):
-                if layer_module == "layer1_module3" or layer_module == "layer2_module1":
+                if (
+                    layer_module == "layer1_module2"
+                    or layer_module == "layer1_module3"
+                    or layer_module == "layer2_module1"
+                ):
                     conv_kwargs_2["conv_config"].act_block_h_override = 32
 
         if is_wormhole_b0():

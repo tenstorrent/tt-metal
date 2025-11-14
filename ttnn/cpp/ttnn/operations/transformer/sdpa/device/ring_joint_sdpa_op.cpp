@@ -336,6 +336,8 @@ operation::ProgramWithCallbacks RingJointScaledDotProductAttention::create_progr
     auto ring_joint_sdpa_program = detail::ring_joint_sdpa(
         program,
         input_tensor_q,
+        input_tensor_k,
+        input_tensor_v,
         persistent_output_buffer_k,
         persistent_output_buffer_v,
         joint_tensor_q,
@@ -421,6 +423,8 @@ operation::ProgramWithCallbacks RingJointScaledDotProductAttention::create_progr
             operation,
             program,
             {input_tensor_q,
+             input_tensor_k,
+             input_tensor_v,
              persistent_output_buffer_k,
              persistent_output_buffer_v,
              joint_tensor_q,

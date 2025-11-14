@@ -96,8 +96,7 @@ Node build_node(
     const std::string& node_descriptor_name,
     HostId host_id,
     const tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor& cluster_descriptor,
-    std::unordered_map<std::string, Node>& node_templates,
-    std::unordered_map<BoardType, Board>& board_templates) {
+    std::unordered_map<std::string, Node>& node_templates) {
     const std::string& node_type = node_descriptor_name;
     auto it = node_templates.find(node_type);
     if (it != node_templates.end()) {
@@ -119,17 +118,7 @@ Node build_node(
     for (const auto& board_item : node_descriptor.boards().board()) {
         TrayId tray_id = TrayId(board_item.tray_id());
         auto board_type = get_board_type_from_string(board_item.board_type());
-
-        // Check cache first
-        auto board_it = board_templates.find(board_type);
-        if (board_it != board_templates.end()) {
-            template_node.boards.emplace(tray_id, board_it->second);
-        } else {
-            // Create new board and cache it
-            Board board = create_board(board_type);
-            board_templates.emplace(board_type, board);
-            template_node.boards.emplace(tray_id, board);
-        }
+        template_node.boards.emplace(tray_id, create_board(board_type));
     }
 
     // Add inter-board connections and validate/mark ports
@@ -206,8 +195,7 @@ std::unique_ptr<ResolvedGraphInstance> build_graph_instance(
     const tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor& cluster_descriptor,
     const tt::scaleout_tools::deployment::proto::DeploymentDescriptor& deployment_descriptor,
     const std::string& instance_name,
-    std::unordered_map<std::string, Node>& node_templates,
-    std::unordered_map<BoardType, Board>& board_templates) {
+    std::unordered_map<std::string, Node>& node_templates) {
     auto resolved = std::make_unique<ResolvedGraphInstance>();
     resolved->template_name = graph_instance.template_name();
     resolved->instance_name = instance_name;
@@ -243,8 +231,7 @@ std::unique_ptr<ResolvedGraphInstance> build_graph_instance(
             }
 
             // Find node descriptor and build node inside build_node
-            resolved->nodes[child_name] =
-                build_node(node_descriptor_name, host_id, cluster_descriptor, node_templates, board_templates);
+            resolved->nodes[child_name] = build_node(node_descriptor_name, host_id, cluster_descriptor, node_templates);
 
         } else if (child_def.has_graph_ref()) {
             // Non-leaf node - recursively build subgraph
@@ -254,12 +241,7 @@ std::unique_ptr<ResolvedGraphInstance> build_graph_instance(
             }
 
             resolved->subgraphs[child_name] = build_graph_instance(
-                child_mapping.sub_instance(),
-                cluster_descriptor,
-                deployment_descriptor,
-                child_name,
-                node_templates,
-                board_templates);
+                child_mapping.sub_instance(), cluster_descriptor, deployment_descriptor, child_name, node_templates);
         }
     }
 
@@ -327,12 +309,7 @@ CablingGenerator::CablingGenerator(
 
     // Build cluster with all connections and port validation
     root_instance_ = build_graph_instance(
-        cluster_descriptor.root_instance(),
-        cluster_descriptor,
-        deployment_descriptor,
-        "",
-        node_templates_,
-        board_templates_);
+        cluster_descriptor.root_instance(), cluster_descriptor, deployment_descriptor, "", node_templates_);
 
     // Validate host_id uniqueness across all nodes
     validate_host_id_uniqueness();
@@ -475,7 +452,8 @@ void CablingGenerator::emit_cabling_guide_csv(const std::string& output_path, bo
         const auto& host1 = deployment_hosts_[host_id1];
         const auto& host2 = deployment_hosts_[host_id2];
 
-        // Create node_type strings with "_DEFAULT" suffix removed if present
+        // Create node_type strings with "_DEFAULT" suffix removed if present;
+        //  all the default connections are enumerated
         const std::string suffix = "_DEFAULT";
         std::string host1_node_type = host1.node_type;
         if (host1_node_type.size() >= suffix.size() &&
@@ -491,9 +469,11 @@ void CablingGenerator::emit_cabling_guide_csv(const std::string& output_path, bo
         // Get arch from node
         // Assume arch for start and end are the same
         // This is validated in create_port_connection
-        auto arch = host_id_to_node_.at(std::get<0>(start))->boards.at(std::get<1>(start)).get_arch();
 
-        CableLength cable_l = calc_cable_length(host1, tray_id1, host2, tray_id2, host1_node_type);
+        // TODO: Determine better heuristic/specification for cable length and type
+        // auto arch = host_id_to_node_.at(std::get<0>(start))->boards.at(std::get<1>(start)).get_arch();
+        // CableLength cable_l = calc_cable_length(host1, tray_id1, host2, tray_id2, host1_node_type);
+
         if (loc_info) {
             output_file << host1.hostname << ",";
             output_file << host1.hall << "," << host1.aisle << "," << std::setw(2) << host1.rack << ",U" << std::setw(2)
@@ -508,9 +488,8 @@ void CablingGenerator::emit_cabling_guide_csv(const std::string& output_path, bo
             output_file << host2.hall << host2.aisle << std::setw(2) << host2.rack << "U" << std::setw(2)
                         << host2.shelf_u << "-" << tray_id2 << "-" << port_id2 << "," << host2_node_type << ",";
 
-            output_file << cable_length_str.at(cable_l) << ",";
-            output_file << speed_str.at(arch) << "_" << ((cable_l == CableLength::UNKNOWN) ? "Optical" : "AEC")
-                        << std::endl;
+            output_file << ",";        // Length blank, leaving up to technician
+            output_file << std::endl;  // Type blank, leaving up to technician
         } else {
             output_file << host1.hostname << "," << tray_id1 << "," << port_id1 << "," << host1_node_type << ",";
             output_file << host2.hostname << "," << tray_id2 << "," << port_id2 << "," << host2_node_type << std::endl;

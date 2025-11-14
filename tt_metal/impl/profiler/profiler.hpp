@@ -88,7 +88,7 @@ private:
     uint64_t smallest_timestamp = (1lu << 63);
 
     // Output directory for device profiler logs
-    std::filesystem::path output_dir;
+    std::filesystem::path device_logs_output_dir;
 
     // Hash to zone source locations
     std::unordered_map<uint16_t, tracy::MarkerDetails> hash_to_zone_src_locations;
@@ -182,6 +182,10 @@ private:
 
     // Track the smallest timestamp read
     void updateFirstTimestamp(uint64_t timestamp);
+
+    // Generate programs analysis results for device markers
+    void generateAnalysesForDeviceMarkers(
+        const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers) const;
 
     // Dump device results to files
     void writeDeviceResultsToFiles() const;

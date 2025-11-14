@@ -128,6 +128,7 @@ Result conv_transpose2d(
             tt::tt_metal::is_device_tensor(input_tensor) ? std::make_optional(input_tensor.memory_config())
                                                          : std::nullopt,
             kernel_size,
+            stride,
             dilation,
             sliding_window::get_pair_n4_padding(padding),
             groups,

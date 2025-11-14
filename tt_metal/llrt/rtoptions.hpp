@@ -16,9 +16,7 @@
 #include <map>
 #include <set>
 #include <string>
-#include <utility>
 #include <vector>
-
 #include "llrt/hal.hpp"
 #include "core_coord.hpp"
 #include "dispatch_core_common.hpp"  // For DispatchCoreConfig
@@ -30,6 +28,8 @@
 namespace tt {
 
 namespace llrt {
+// Forward declaration - full definition in rtoptions.cpp
+enum class EnvVarID;
 
 inline std::string g_root_dir;
 inline std::once_flag g_root_once;
@@ -90,8 +90,10 @@ struct InspectorSettings {
     bool initialization_is_important = false;
     bool warn_on_write_exceptions = true;
     std::filesystem::path log_path;
-    std::string rpc_server_address = "localhost:50051";
+    std::string rpc_server_host = "localhost";
+    uint16_t rpc_server_port = 50051;
     bool rpc_server_enabled = true;
+    std::string rpc_server_address() const { return rpc_server_host + ":" + std::to_string(rpc_server_port); }
 };
 
 class RunTimeOptions {
@@ -132,6 +134,7 @@ class RunTimeOptions {
     bool profiler_mid_run_dump = false;
     bool profiler_trace_profiler = false;
     bool profiler_trace_tracking = false;
+    bool profiler_cpp_post_process = false;
     bool profiler_buffer_usage_enabled = false;
     bool profiler_noc_events_enabled = false;
     std::string profiler_noc_events_report_path;
@@ -145,7 +148,6 @@ class RunTimeOptions {
     bool clear_dram = false;
 
     bool skip_loading_fw = false;
-    bool skip_reset_cores_on_init = false;
 
     bool riscv_debug_info_enabled = false;
     uint32_t watcher_debug_delay = 0;
@@ -194,12 +196,19 @@ class RunTimeOptions {
     // Forces MetalContext re-init on Device creation. Workaround for upstream issues that require re-init each time
     // (#25048) TODO: Once all of init is moved to MetalContext, investigate removing this option.
     bool force_context_reinit = false;
+    // Comma-separated list of device IDs to make visible to the runtime
+    std::string visible_devices;
 
+    // Sets the architecture name (only necessary during simulation)
+    std::string arch_name;
+
+    // Forces Tracy profiler pushes during execution for real-time profiling
+    bool tracy_mid_run_push = false;
     // feature flag to enable 2-erisc mode with fabric on Blackhole, until it is enabled by default
     bool enable_2_erisc_mode_with_fabric = false;
 
     // feature flag to enable 2-erisc mode on Blackhole (general, not fabric-specific)
-    bool enable_2_erisc_mode = false;
+    bool enable_2_erisc_mode = true;
 
     // Log kernels compilation commands
     bool log_kernels_compilation_commands = false;
@@ -215,11 +224,14 @@ class RunTimeOptions {
     // Timeout duration for operations
     std::chrono::duration<float> timeout_duration_for_operations = std::chrono::duration<float>(0.0f);
 
-    // Using MGD 1.0 syntax for mesh graph descriptor in Fabric Control Plane
-    bool use_mesh_graph_descriptor_1_0 = false;
+    // Using MGD 2.0 syntax for mesh graph descriptor
+    bool use_mesh_graph_descriptor_2_0 = false;
 
     // Reliability mode override parsed from environment (RELIABILITY_MODE)
     std::optional<tt::tt_fabric::FabricReliabilityMode> reliability_mode = std::nullopt;
+
+    // Force JIT compile even if dependencies are up to date
+    bool force_jit_compile = false;
 
 public:
     RunTimeOptions();
@@ -264,6 +276,9 @@ public:
     void set_watcher_text_start(bool text_start) { watcher_settings.text_start = text_start; }
     bool get_watcher_skip_logging() const { return watcher_settings.skip_logging; }
     void set_watcher_skip_logging(bool skip_logging) { watcher_settings.skip_logging = skip_logging; }
+    bool get_inspector_rpc_server_enabled() const { return inspector_settings.rpc_server_enabled; }
+    const std::string& get_inspector_rpc_server_host() const { return inspector_settings.rpc_server_host; }
+    uint16_t get_inspector_rpc_server_port() const { return inspector_settings.rpc_server_port; }
     bool get_watcher_noc_sanitize_linked_transaction() const {
         return watcher_settings.noc_sanitize_linked_transaction;
     }
@@ -291,11 +306,10 @@ public:
     }
     bool get_inspector_warn_on_write_exceptions() const { return inspector_settings.warn_on_write_exceptions; }
     void set_inspector_warn_on_write_exceptions(bool warn) { inspector_settings.warn_on_write_exceptions = warn; }
-    const std::string& get_inspector_rpc_server_address() const { return inspector_settings.rpc_server_address; }
-    void set_inspector_rpc_server_address(const std::string& address) { inspector_settings.rpc_server_address = address; }
-    bool get_inspector_rpc_server_enabled() const { return inspector_settings.rpc_server_enabled; }
+    std::string get_inspector_rpc_server_address() const {
+        return inspector_settings.rpc_server_host + ":" + std::to_string(inspector_settings.rpc_server_port);
+    }
     void set_inspector_rpc_server_enabled(bool enabled) { inspector_settings.rpc_server_enabled = enabled; }
-
     // Info from DPrint environment variables, setters included so that user can
     // override with a SW call.
     bool get_feature_enabled(RunTimeDebugFeatures feature) const { return feature_targets[feature].enabled; }
@@ -341,8 +355,8 @@ public:
         feature_targets[feature].processors = processors;
     }
     std::string get_feature_file_name(RunTimeDebugFeatures feature) const { return feature_targets[feature].file_name; }
-    void set_feature_file_name(RunTimeDebugFeatures feature, std::string file_name) {
-        feature_targets[feature].file_name = std::move(file_name);
+    void set_feature_file_name(RunTimeDebugFeatures feature, const std::string& file_name) {
+        feature_targets[feature].file_name = file_name;
     }
     bool get_feature_one_file_per_risc(RunTimeDebugFeatures feature) const {
         return feature_targets[feature].one_file_per_risc;
@@ -357,8 +371,8 @@ public:
         feature_targets[feature].prepend_device_core_risc = prepend_device_core_risc;
     }
     TargetSelection get_feature_targets(RunTimeDebugFeatures feature) const { return feature_targets[feature]; }
-    void set_feature_targets(RunTimeDebugFeatures feature, TargetSelection targets) {
-        feature_targets[feature] = std::move(targets);
+    void set_feature_targets(RunTimeDebugFeatures feature, const TargetSelection& targets) {
+        feature_targets[feature] = targets;
     }
 
     bool get_record_noc_transfers() const { return record_noc_transfer_data; }
@@ -416,6 +430,7 @@ public:
     bool get_profiler_trace_only() const { return profiler_trace_profiler; }
     bool get_profiler_trace_tracking() const { return profiler_trace_tracking; }
     bool get_profiler_mid_run_dump() const { return profiler_mid_run_dump; }
+    bool get_profiler_cpp_post_process() const { return profiler_cpp_post_process; }
     bool get_profiler_buffer_usage_enabled() const { return profiler_buffer_usage_enabled; }
     bool get_profiler_noc_events_enabled() const { return profiler_noc_events_enabled; }
     std::string get_profiler_noc_events_report_path() const { return profiler_noc_events_report_path; }
@@ -432,8 +447,11 @@ public:
     bool get_clear_dram() const { return clear_dram; }
     void set_clear_dram(bool clear) { clear_dram = clear; }
 
+    std::string get_visible_devices() const { return visible_devices; }
+    std::string get_arch_name() const { return arch_name; }
+    bool get_tracy_mid_run_push() const { return tracy_mid_run_push; }
+
     bool get_skip_loading_fw() const { return skip_loading_fw; }
-    bool get_skip_reset_cores_on_init() const { return skip_reset_cores_on_init; }
 
     // Whether to compile with -g to include DWARF debug info in the binary.
     bool get_riscv_debug_info_enabled() const { return riscv_debug_info_enabled; }
@@ -495,6 +513,8 @@ public:
     // Feature flag to enable 2-erisc mode on Blackhole
     bool get_enable_2_erisc_mode() const { return enable_2_erisc_mode; }
 
+    void set_enable_2_erisc_mode(bool enable) { enable_2_erisc_mode = enable; }
+
     bool is_custom_fabric_mesh_graph_desc_path_specified() const { return is_custom_fabric_mesh_graph_desc_path_set; }
     std::string get_custom_fabric_mesh_graph_desc_path() const { return custom_fabric_mesh_graph_desc_path; }
 
@@ -525,10 +545,11 @@ public:
     TargetDevice get_target_device() const { return runtime_target_device_; }
 
     std::chrono::duration<float> get_timeout_duration_for_operations() const { return timeout_duration_for_operations; }
+    // Mesh graph descriptor version accessor
+    bool get_use_mesh_graph_descriptor_2_0() const { return use_mesh_graph_descriptor_2_0; }
 
-    // Using MGD 1.0 syntax for mesh graph descriptor in Fabric Control Plane
-    // TODO: This will be removed after MGD 1.0 is deprecated
-    bool get_use_mesh_graph_descriptor_1_0() const { return use_mesh_graph_descriptor_1_0; }
+    bool get_force_jit_compile() const { return force_jit_compile; }
+    void set_force_jit_compile(bool enable) { force_jit_compile = enable; }
 
     // Parse all feature-specific environment variables, after hal is initialized.
     // (Needed because syntax of some env vars is arch-dependent.)
@@ -547,7 +568,9 @@ private:
     void ParseFeatureFileName(RunTimeDebugFeatures feature, const std::string& env_var);
     void ParseFeatureOneFilePerRisc(RunTimeDebugFeatures feature, const std::string& env_var);
     void ParseFeaturePrependDeviceCoreRisc(RunTimeDebugFeatures feature, const std::string& env_var);
-
+    void HandleEnvVar(
+        EnvVarID id, const char* value);  // Handle single env var (value usually non-null, see cpp for details)
+    void InitializeFromEnvVars();                       // Initialize all environment variables from table
     // Helper function to parse watcher-specific environment variables.
     void ParseWatcherEnv();
 
@@ -561,13 +584,12 @@ private:
     const std::string watcher_stack_usage_str = "STACK_USAGE";
     const std::string watcher_dispatch_str = "DISPATCH";
     const std::string watcher_eth_link_status_str = "ETH_LINK_STATUS";
+    const std::string watcher_sanitize_read_only_l1_str = "SANITIZE_READ_ONLY_L1";
+    const std::string watcher_sanitize_write_only_l1_str = "SANITIZE_WRITE_ONLY_L1";
     std::set<std::string> watcher_disabled_features;
     bool watcher_feature_disabled(const std::string& name) const {
         return watcher_disabled_features.find(name) != watcher_disabled_features.end();
     }
-
-    // Helper function to parse inspector-specific environment variables.
-    void ParseInspectorEnv();
 };
 
 // Function declarations for operation timeout and synchronization

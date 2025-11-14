@@ -57,6 +57,7 @@
 #include "sub_device/sub_device_manager_tracker.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include "impl/context/metal_context.hpp"
+#include "impl/dispatch/system_memory_manager.hpp"
 
 #include <umd/device/types/core_coordinates.hpp>
 
@@ -217,12 +218,12 @@ MeshDevice::MeshDevice(
     std::unique_ptr<MeshDeviceView> mesh_device_view,
     std::shared_ptr<MeshDevice> parent_mesh) :
     scoped_devices_(std::move(mesh_handle)),
-    view_(std::move(mesh_device_view)),
     mesh_id_(generate_unique_mesh_id()),
+    view_(std::move(mesh_device_view)),
     parent_mesh_(std::move(parent_mesh)),
-    program_cache_(std::make_unique<program_cache::detail::ProgramCache>()),
     dispatch_thread_pool_(create_default_thread_pool(extract_locals(scoped_devices_->root_devices()))),
-    reader_thread_pool_(create_default_thread_pool(extract_locals(scoped_devices_->root_devices()))) {
+    reader_thread_pool_(create_default_thread_pool(extract_locals(scoped_devices_->root_devices()))),
+    program_cache_(std::make_unique<program_cache::detail::ProgramCache>()) {
     Inspector::mesh_device_created(this, parent_mesh_ ? std::make_optional(parent_mesh_->mesh_id_) : std::nullopt);
 }
 
@@ -303,7 +304,7 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
     size_t trace_region_size,
     size_t num_command_queues,
     const DispatchCoreConfig& dispatch_core_config,
-    tt::stl::Span<const std::uint32_t> l1_bank_remap,
+    tt::stl::Span<const std::uint32_t> /*l1_bank_remap*/,
     size_t worker_l1_size) {
     auto scoped_devices = std::make_shared<ScopedDevices>(
         wrap_to_maybe_remote(device_ids),
@@ -703,9 +704,6 @@ std::vector<CoreCoord> MeshDevice::worker_cores_from_logical_cores(const std::ve
     });
 }
 std::vector<CoreCoord> MeshDevice::get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) {
-    TT_FATAL(
-        num_devices() == 1,
-        "get_optimal_dram_bank_to_logical_worker_assignment() is only supported on unit MeshDevice.");
     return get_devices().front()->get_optimal_dram_bank_to_logical_worker_assignment(noc);
 }
 CoreCoord MeshDevice::virtual_core_from_logical_core(const CoreCoord& logical_coord, const CoreType& core_type) const {
@@ -1026,6 +1024,37 @@ uint32_t MeshDevice::num_sub_devices() const {
 bool MeshDevice::is_mmio_capable() const {
     TT_THROW("is_mmio_capable() is not supported on MeshDevice - use individual devices instead");
     return reference_device()->is_mmio_capable();
+}
+
+void MeshDevice::quiesce_internal() {
+    TT_FATAL(
+        get_active_sub_device_manager_id() == get_default_sub_device_manager_id(),
+        "Cannot quiesce when non-default sub-device manager is active");
+    for (const auto& submesh : submeshes_) {
+        if (auto submesh_ptr = submesh.lock()) {
+            submesh_ptr->quiesce_devices();
+        }
+    }
+    bool have_reset_launch_msg_state = false;
+    for (auto& command_queue : mesh_command_queues_) {
+        command_queue->wait_for_completion(!have_reset_launch_msg_state);
+        have_reset_launch_msg_state = true;
+    }
+    for (auto& command_queue : mesh_command_queues_) {
+        command_queue->finish_and_reset_in_use();
+    }
+}
+
+void MeshDevice::quiesce_devices() {
+    quiesce_internal();
+    for (auto& command_queue : mesh_command_queues_) {
+        for (auto& device : get_devices()) {
+            TT_ASSERT(
+                device->sysmem_manager().get_last_completed_event(command_queue->id()) == 0,
+                "Last completed event is not 0");
+            TT_ASSERT(device->sysmem_manager().get_current_event(command_queue->id()) == 0, "Current event is not 0");
+        }
+    }
 }
 
 // Allocator methods

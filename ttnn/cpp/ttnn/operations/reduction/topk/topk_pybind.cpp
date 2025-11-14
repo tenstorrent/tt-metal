@@ -13,8 +13,6 @@ namespace py = pybind11;
 void bind_reduction_topk_operation(py::module& module) {
     auto doc =
         R"doc(
-            ``ttnn.topk(input_tensor: ttnn.Tensor, k: int, dim: int, largest: bool, sorted: bool, out: Optional[Tuple[ttnn.Tensor, ttnn.Tensor]] = None, memory_config: Optional[ttnn.MemoryConfig] = None, sub_core_grids: Optional[ttnn.CoreRangeSet] = None, indices_tensor: Optional[ttnn.Tensor] = None) -> Tuple[ttnn.Tensor, ttnn.Tensor]``
-
             Returns the :attr:`k` largest or :attr:`k` smallest elements of the :attr:`input_tensor` along a given dimension :attr:`dim`.
 
             If :attr:`dim` is not provided, the last dimension of the :attr:`input_tensor` is used.
