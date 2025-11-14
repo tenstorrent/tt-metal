@@ -4,8 +4,6 @@
 
 #pragma once
 
-#include <sys/param.h>
-#include <cstdint>
 #include <tt-metalium/constants.hpp>
 #include "dataflow_api.h"
 
