@@ -256,9 +256,9 @@ void kernel_main() {
             UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
             pkt_scatter_hdr,
             static_cast<uint8_t>(unicast_route_info.distance_in_hops),
-            NocUnicastScatterCommandHeader{
+            NocUnicastScatterCommandHeader<2>{
                 {0, 0},  // ignore
-                static_cast<uint16_t>(page_size)},
+                {static_cast<uint16_t>(page_size)}},
             page_size * 2);
 
         fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
@@ -346,7 +346,7 @@ void kernel_main() {
                                 mux_connection_handle,
                                 pkt_scatter_hdr,
                                 l1_read_addr,
-                                NocUnicastScatterCommandHeader{{noc_address0, noc_address1}, 0});
+                                NocUnicastScatterCommandHeader<2>{{noc_address0, noc_address1}, {0}});
                             l1_read_addr += page_size * 2;
                         } else {
                             ASSERT(false);

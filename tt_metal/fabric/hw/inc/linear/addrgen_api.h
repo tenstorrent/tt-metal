@@ -141,7 +141,8 @@ FORCE_INLINE void to_noc_unicast_scatter_write(
     auto noc_address1 = addrgen_detail::get_noc_address(d, id1, offset1);
 
     pkt_hdr->to_noc_unicast_scatter_write(
-        NocUnicastScatterCommandHeader({{noc_address0, noc_address1}, static_cast<uint16_t>(page_size)}), payload_size);
+        NocUnicastScatterCommandHeader<2>({{noc_address0, noc_address1}, {static_cast<uint16_t>(page_size)}}),
+        payload_size);
 
     validate_max_payload_size(payload_size);
 }
