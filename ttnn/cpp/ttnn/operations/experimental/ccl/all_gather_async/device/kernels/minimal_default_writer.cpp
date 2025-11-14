@@ -285,10 +285,10 @@ void kernel_main() {
             UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
             pkt_scatter_hdr,
             static_cast<uint8_t>(unicast_route_info.distance_in_hops),
-            NocUnicastScatterCommandHeader<4>{
-                {0, 0, 0, 0},  // ignore
+            NocUnicastScatterCommandHeader<2>{
+                {0, 0},  // ignore
                 {static_cast<uint16_t>(page_size)}},
-            page_size * 4);
+            page_size * 2);
 
         fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
             pkt_unicast_hdr, static_cast<uint8_t>(unicast_route_info.distance_in_hops), nullptr, page_size);
