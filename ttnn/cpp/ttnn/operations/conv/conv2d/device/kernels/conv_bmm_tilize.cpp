@@ -12,6 +12,7 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/untilize.h"
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.h"
 
 // #include "api/debug/dprint.h"
 
@@ -25,19 +26,10 @@ template <bool init_tilize = true, bool uninit_tilize = true>
 void tilize_in(
 #endif
     uint32_t in_cb_id, uint32_t in_block_w, uint32_t in_num_subblocks, uint32_t out_cb_id) {
-    if constexpr (init_tilize) {
-        fast_tilize_init_with_dt(in_cb_id, in_block_w, out_cb_id);
-    }
-    for (uint32_t in_subblock = 0; in_subblock < in_num_subblocks; ++in_subblock) {
-        cb_wait_front(in_cb_id, in_block_w);
-        cb_reserve_back(out_cb_id, in_block_w);
-        fast_tilize_block(in_cb_id, in_block_w, out_cb_id);
-        cb_push_back(out_cb_id, in_block_w);
-        cb_pop_front(in_cb_id, in_block_w);
-    }
-    if constexpr (uninit_tilize) {
-        fast_tilize_uninit(in_cb_id, out_cb_id);
-    }
+    // Replaced manual tilize loop with unified helper function
+    // This uses fast tilize with DT variant (fast_tilize_init_with_dt)
+    compute_kernel_lib::tilize<init_tilize, uninit_tilize, true, true>(
+        in_cb_id, in_block_w, out_cb_id, in_num_subblocks);
 }  // tilize_in()
 
 template <uint32_t in_cb_id, uint32_t in_block_w, uint32_t out_cb_id>
