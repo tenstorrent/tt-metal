@@ -163,6 +163,11 @@ GlobalPoolAllocator create_global_pool_allocators(
             if (found) {
                 auto static_allocator =
                     dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(pool_allocators[j].get());
+                log_info(tt::LogFabric, "TYPE: {}", options.edm_type);
+                log_info(tt::LogFabric, "AXIS: {}", options.edm_axis);
+                log_info(tt::LogFabric, "BUFFER CONFIG: {}", options.edm_buffer_config);
+                log_info(tt::LogFabric, "FABRIC TENSIX CONFIG: {}", options.fabric_tensix_config);
+                log_info(tt::LogFabric, "DIRECTION: {}", options.direction);
                 expanded_pool_allocators.push_back(static_allocator->get_sender_channel_allocator(i));
                 expanded_pool_types.push_back(pool_types[j]);
                 break;

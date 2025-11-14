@@ -2475,7 +2475,7 @@ void kernel_main() {
     const auto downstream_edm_vc1_worker_registration_id = get_arg_val<uint32_t>(arg_idx++);
     const auto downstream_edm_vc1_worker_location_info_address = get_arg_val<uint32_t>(arg_idx++);
     // static size channel specific: TODO - generalize
-    const auto downstream_edm_vc1_buffer_base_address = get_arg_val<uint32_t>(arg_idx++);
+    const auto downstream_edm_vc1_buffer_base_address = get_arg_val<uint32_t>(arg_idx++);  // WRONG
 
     // unused now - to be deleted
     [[maybe_unused]]

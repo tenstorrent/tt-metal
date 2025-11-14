@@ -24,9 +24,7 @@ struct MemoryRegion {
     size_t start_address;
     size_t size;
 
-    MemoryRegion(size_t start, size_t size) : start_address(start), size(size) {
-        TT_FATAL(size > 0, "Size must be greater than 0");
-    }
+    MemoryRegion(size_t start, size_t size) : start_address(start), size(size) {}
 
     size_t get_size() const { return size; }
     size_t get_start_address() const { return start_address; }

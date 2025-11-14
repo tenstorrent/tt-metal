@@ -36,7 +36,8 @@ void ChannelConnectionWriterAdapter::add_downstream_connection(
 
 void ChannelConnectionWriterAdapter::pack_inbound_channel_rt_args(
     uint32_t vc_idx, std::vector<uint32_t>& args_out) const {
-    bool vc_1_enabled = topology == tt::tt_fabric::Topology::Ring || topology == tt::tt_fabric::Topology::Torus;
+    bool vc_1_enabled = (topology == tt::tt_fabric::Topology::Ring || topology == tt::tt_fabric::Topology::Torus) &&
+                        (this->downstream_edms_connected_by_vc_set.contains(vc_idx));
     auto rt_args = std::initializer_list<uint32_t>{
         vc_idx == 0 ? this->downstream_edms_connected : vc_1_enabled,
         this->pack_downstream_noc_x_rt_arg(vc_idx),

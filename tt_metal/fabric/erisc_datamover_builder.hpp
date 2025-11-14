@@ -372,6 +372,20 @@ struct FabricEriscDatamoverConfig {
     // Remote channels allocator - tracks remote receiver channel info for the remote ethernet core
     std::vector<std::shared_ptr<FabricRemoteChannelsAllocator>> remote_channels_allocators;
 
+    void print_sender_channel_allocor_info() const {
+        log_info(tt::LogFabric, "Printing sender channel allocator info");
+        const auto& sender_channel_to_pool_index = this->channel_to_pool_mapping->get_sender_channel_to_pool_index();
+        for (size_t i = 0; i < sender_channel_to_pool_index.size(); ++i) {
+            const auto sender_channel_pool_index = sender_channel_to_pool_index[i];
+            const auto sender_channel_allocator = dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(
+                this->get_sender_channel_allocator(sender_channel_pool_index));
+            auto base_address = sender_channel_allocator->get_sender_channel_base_address();
+            auto num_buffers = sender_channel_allocator->get_sender_channel_number_of_slots();
+            log_info(
+                tt::LogFabric, "Sender channel {} base_address: {}, num_buffers: {}", i, base_address, num_buffers);
+        }
+    }
+
     FabricChannelAllocator* get_sender_channel_allocator(size_t channel_index) const {
         const auto& sender_channel_to_pool_index = this->channel_to_pool_mapping->get_sender_channel_to_pool_index();
         TT_FATAL(sender_channel_to_pool_index.size() > channel_index, "Sender channel to pool index out of bounds");
@@ -627,7 +641,11 @@ private:
     // Shared helper for setting up VC connections
     template <typename BuilderType>
     void setup_downstream_vc_connection(
-        BuilderType& downstream_builder, uint32_t vc_idx, uint32_t channel_id, bool is_vc1);
+        BuilderType& downstream_builder,
+        uint32_t vc_idx,
+        uint32_t channel_id,
+        uint32_t channel_offset_into_vc,
+        bool is_vc1);
 
     // Internal implementation for connect_to_downstream_edm
     void connect_to_downstream_edm_impl(
@@ -635,7 +653,8 @@ private:
 
     // Initialize downstream adapter for a specific VC
     void initialize_downstream_adapter_for_vc(
-        const std::shared_ptr<tt::tt_fabric::MultiPoolChannelAllocator>& multi_pool_allocator, size_t vc_idx);
+        // const std::shared_ptr<tt::tt_fabric::MultiPoolChannelAllocator>& multi_pool_allocator,
+        size_t vc_idx);
 };
 
 }  // namespace tt::tt_fabric

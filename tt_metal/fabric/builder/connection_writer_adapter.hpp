@@ -156,7 +156,8 @@ protected:
         bool is_2D_routing,
         bool is_vc1) final;
 
-private:
+protected:
+    friend class FabricEriscDatamoverBuilder;  // TODO DELETE
     void emit_ct_args_impl(std::vector<uint32_t>& ct_args_out, size_t num_fwd_paths) const override;
 
     // holds the number of buffer slots per downstream sender channel

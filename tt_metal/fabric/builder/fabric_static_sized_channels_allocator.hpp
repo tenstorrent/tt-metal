@@ -156,6 +156,9 @@ protected:
     void remove_receiver_channel(size_t channel_id);
     std::vector<MemoryRegion> get_consumed_memory_regions() const;
 
+    FabricStaticSizedChannelsAllocator(
+        const FabricStaticSizedChannelsAllocator& other, size_t channel_index, bool is_sender);
+
 private:
     friend class FabricRemoteChannelsAllocator;
     // Friend function for elastic channel allocation
