@@ -10,7 +10,6 @@
 #include "dev_msgs.h"
 #include "noc_overlay_parameters.h"
 #include "debug/assert.h"
-#include "debug/dprint.h"
 
 #if defined(COMPILE_FOR_AERISC)
 #include "eth_fw_api.h"
@@ -425,18 +424,6 @@ inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_nonposted_writes_f
     uint32_t status_reg_val = NOC_STATUS_READ_REG(noc, NIU_MST_WR_ACK_RECEIVED);
     uint32_t self_risc_acked = get_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc);
     uint32_t other_risc_acked = get_noc_counter_val<1 - proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc);
-#if defined(COMPILE_FOR_AERISC) && defined(DEBUG_PRINT_ENABLED)
-    static uint32_t print_counter = 0;
-    // if (print_counter++ % 1000000 == 0) {  // Print every millionth check to avoid spam
-    DPRINT << "ncrisc_dynamic_noc_nonposted_writes_flushed: noc=" << DEC() << noc
-           << " proc_type= " << (uint32_t)proc_type << " status= " << DEC() << status_reg_val << " self= " << DEC()
-           << self_risc_acked << " other= " << DEC() << other_risc_acked << " sum= " << DEC()
-           << (self_risc_acked + other_risc_acked) << " self_addr= " << HEX()
-           << get_noc_counter_address<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc)
-           << " other_addr= " << HEX()
-           << get_noc_counter_address<1 - proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc) << ENDL();
-    // }
-#endif
     return (status_reg_val == (self_risc_acked + other_risc_acked));
 }
 
