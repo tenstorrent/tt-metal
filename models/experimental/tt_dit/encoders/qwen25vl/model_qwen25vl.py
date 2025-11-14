@@ -204,8 +204,10 @@ class Qwen25VlAttention(Module):
             msg = f"hidden_size {hidden_size} must be divisible by num_heads {num_heads}"
             raise ValueError(msg)
 
+        self._qkv_parallel = False  # TODO: remove
+
         head_dim = hidden_size // num_heads
-        tp_factor = ctx.device.shape[ctx.tp_axis] if ctx.tp_axis is not None else 1
+        tp_factor = ctx.device.shape[ctx.tp_axis] if ctx.tp_axis is not None and self._qkv_parallel else 1
 
         repeat_kv_heads = 1
         # f = num_heads // num_key_value_heads
@@ -226,7 +228,7 @@ class Qwen25VlAttention(Module):
             hidden_size,
             (num_heads + 2 * num_key_value_heads * repeat_kv_heads) * head_dim,
             mesh_device=ctx.device,
-            mesh_axis=ctx.tp_axis,
+            mesh_axis=ctx.tp_axis if self._qkv_parallel else None,
         )
         self.o_proj = ColParallelLinear(
             num_heads * head_dim, hidden_size, bias=False, mesh_device=ctx.device, mesh_axis=ctx.tp_axis
@@ -331,7 +333,7 @@ class Qwen25VlAttention(Module):
 
         x = ttnn.transformer.concatenate_heads(x)
 
-        if self._tp_axis is not None:
+        if self._tp_axis is not None and self._qkv_parallel:
             x = self._ccl_manager.all_gather_persistent_buffer(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
 
         x = self.o_proj.forward(x)
