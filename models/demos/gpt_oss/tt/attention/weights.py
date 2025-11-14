@@ -54,11 +54,28 @@ def load_attention_weights(
     k_proj_weight = substate(state_dict, "k_proj")["weight"]  # [num_kv_heads * head_dim, hidden_size]
     v_proj_weight = substate(state_dict, "v_proj")["weight"]  # [num_kv_heads * head_dim, hidden_size]
 
-    o_proj = torch.randn(4096, 2944)  # substate(state_dict, "o_proj")["weight"].transpose(-1, -2)
-    o_proj_bias = torch.randn(2944)  # substate(state_dict, "o_proj")["bias"]
+    # Calculate padded hidden size for row-sharding (must be divisible by num_rows * TILE_SIZE)
+    hidden_size = config.hidden_size
+    num_rows = mesh_config.mesh_shape[0]
+    shard_chunk_size = num_rows * ttnn.TILE_SIZE  # e.g., 4 * 32 = 128
+    if hidden_size % shard_chunk_size != 0:
+        padded_hidden_size = ((hidden_size + shard_chunk_size - 1) // shard_chunk_size) * shard_chunk_size
+    else:
+        padded_hidden_size = hidden_size
 
-    print(o_proj.shape, o_proj_bias.shape)
+    # Load and pad o_proj weights for 2D sharding
+    o_proj = substate(state_dict, "o_proj")["weight"].transpose(-1, -2)  # [hidden_size, hidden_size]
+    o_proj_bias = substate(state_dict, "o_proj")["bias"]  # [hidden_size]
 
+    # Pad BOTH dimensions of o_proj to padded_hidden_size
+    if padded_hidden_size > hidden_size:
+        padding_size = padded_hidden_size - hidden_size
+        # Pad both dimensions: [hidden_size, hidden_size] -> [padded_hidden_size, padded_hidden_size]
+        o_proj = torch.nn.functional.pad(o_proj, (0, padding_size, 0, 0), value=0.0)
+        # Pad bias: [hidden_size] -> [padded_hidden_size]
+        o_proj_bias = torch.nn.functional.pad(o_proj_bias, (0, padding_size), value=0.0)
+
+    print("o_proj_bias", o_proj.shape, o_proj_bias.shape)
     # Create fused QKV weight for 2D sharding
     # For 2D sharding: don't pre-chunk, let mesh_mapper handle distribution
     # Split Q, K, V across devices, then concatenate per device
@@ -79,9 +96,16 @@ def load_attention_weights(
         qkv_list.append(qkv)
 
     # Concatenate across devices: [hidden_size, total_qkv_dim]
-    # qkv_cat = torch.cat(qkv_list, dim=-1).unsqueeze(0).unsqueeze(0)  # [1, 1, hidden_size, total_qkv_dim]
+    qkv_cat = torch.cat(qkv_list, dim=-1)  # [hidden_size, total_qkv_dim]
 
-    qkv_cat = torch.randn(1, 1, 2944, 5120)
+    # Pad input dimension (hidden_size) to padded_hidden_size for row-sharding
+    if padded_hidden_size > hidden_size:
+        padding_size = padded_hidden_size - hidden_size
+        # Pad first dimension: [hidden_size, total_qkv_dim] -> [padded_hidden_size, total_qkv_dim]
+        qkv_cat = torch.nn.functional.pad(qkv_cat, (0, 0, 0, padding_size), value=0.0)
+
+    # Add batch dimensions: [padded_hidden_size, total_qkv_dim] -> [1, 1, padded_hidden_size, total_qkv_dim]
+    qkv_cat = qkv_cat.unsqueeze(0).unsqueeze(0)
     print("qkv_cat", qkv_cat.shape)
 
     # 2D sharding mappers
@@ -142,21 +166,18 @@ def load_attention_weights(
 
     # Handle bias for 2D sharding
     # After WO matmul + allreduce_cols, output is: row-sharded, column-replicated
-    # So bias needs to be: row-sharded, column-replicated (same sharding pattern)
+    # Bias should match: row-sharded (already padded_hidden_size), column-replicated
     #
-    # For row-parallel output: only first row should have actual bias, others get zeros
+    # For 2D mesh: shard dim=-1 (padded_hidden_size) across mesh axis 0 (rows)
+    # For 1D mesh: column-parallel sharding (TP dimension)
     if num_rows > 1:
-        # Create row-wise pattern: [bias, zeros, zeros, ...] for the rows
-        # o_proj_bias = torch.cat([o_proj_bias] + [torch.zeros_like(o_proj_bias)] * (num_rows - 1), dim=-1)
-        # Now o_proj_bias has size: hidden_size * num_rows
-        # We need to shard dim=-1 across mesh axis 0 (rows), replicate across mesh axis 1 (cols)
-        # dims=(-1, None) means: shard tensor dim -1 on mesh axis 0, replicate on mesh axis 1
-        print("setting o bias mesh mapper", o_proj_bias.shape)
+        # 2D mesh: shard along rows
+        # dims=(-1, None) means: shard tensor dim -1 on mesh axis 0 (rows), replicate on mesh axis 1 (cols)
         o_bias_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_config.mesh_shape, dims=(-1, None))
     else:
-        o_proj_bias = torch.cat([o_proj_bias] + [torch.zeros_like(o_proj_bias)] * (mesh_config.tp - 1), dim=-1)
-
-        # For 1D mesh: just column-parallel (TP) sharding
+        # 1D mesh: pad bias by TP factor and use column-parallel sharding
+        if mesh_config.tp > 1:
+            o_proj_bias = torch.cat([o_proj_bias] + [torch.zeros_like(o_proj_bias)] * (mesh_config.tp - 1), dim=-1)
         o_bias_mapper = col_mesh_mapper
 
     o_proj_tt = ttnn.as_tensor(
@@ -178,7 +199,6 @@ def load_attention_weights(
         cache_file_name=get_cache_file_name(tensor_cache_path, "o_proj_bias"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    print("o_proj_bias_tt", o_proj_bias_tt.shape)
 
     decode_sinks_tt = ttnn.as_tensor(
         decode_sinks,

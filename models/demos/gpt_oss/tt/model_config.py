@@ -183,4 +183,4 @@ class ModelArgs:
     @property
     def max_grid_size(self):
         """Return maximum grid size for the device"""
-        return ttnn.CoreGrid(y=8, x=8)  # Standard grid size
+        return self.mesh_device.compute_with_storage_grid_size()

@@ -48,56 +48,60 @@ class RMSNorm(nn.Module):
 
         self.eps = hf_config.rms_norm_eps
         self.mesh_device = mesh_device
+        self.hidden_size = hidden_size
+        self.padded_hidden_size = torch_weight.shape[0]  # Store actual size after padding
 
     def forward(self, x):
+        seq_len = int(x.shape[-2])
+        is_prefill = seq_len > 1
+        if is_prefill:
+            x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+
         if self.is_distributed:
-            num_cores_ln = 16
-            hidden_size_per_device_distributed_ln = 720
-            self.gather_in_mem_cfg = ttnn.create_sharded_memory_config(
-                shape=(1, 1, 32, 32),  # hidden_size_per_device_distributed_ln//num_cores_ln),
-                core_grid=ttnn.CoreGrid(y=3, x=8),
-                strategy=ttnn.ShardStrategy.WIDTH,
-                use_height_and_width_as_shard_shape=True,
-            )
-            program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
-                compute_with_storage_grid_size=(8, 3),
-                subblock_w=1,  # (hidden_size_per_device_distributed_ln // num_cores_ln) // 32,
-                block_h=1,
-                block_w=1,  # (hidden_size_per_device_distributed_ln // num_cores_ln) // 32,
-                inplace=False,
-            )
-            x = ttnn.to_memory_config(x, self.gather_in_mem_cfg)
-            print("x", x.memory_config())
+            # Calculate per-device size dynamically
+            per_device_hidden = self.padded_hidden_size // self.num_rows
+
+            # Use existing memory config from input tensor (no need to specify our own)
             # For 2D sharding: input is row-sharded (hidden/num_rows per row)
             # Need to gather stats across ROWS (cluster_axis=0)
-            # activation_grid_bounding_box_size = x.memory_config().shard_spec.grid.bounding_box().grid_size()
-            # shard_height, shard_width = x.memory_config().shard_spec.shape
 
-            tt_gathered_stats_memory_config = ttnn.create_sharded_memory_config(
-                shape=[1, 1, 32, 32 * 4],  # Gather across rows
-                core_grid=ttnn.CoreGrid(y=1, x=1),
-                strategy=ttnn.ShardStrategy.WIDTH,
-                # orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            # Program config for distributed LayerNorm
+            # Note: These grid sizes are optimized for GPT-OSS 120B on 4x8 mesh
+            # TODO: Make this configurable per model size
+            program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+                compute_with_storage_grid_size=(8, 3),
+                subblock_w=1,
+                block_h=1,
+                block_w=1,
+                inplace=False,
             )
-            # Run distributed rmsnorm part 1
+
+            # Memory config for gathered stats (stats from all rows concatenated)
+            if is_prefill:
+                tt_gathered_stats_memory_config = ttnn.DRAM_MEMORY_CONFIG
+            else:
+                tt_gathered_stats_memory_config = ttnn.create_sharded_memory_config(
+                    shape=[1, 1, 32, 32 * self.num_rows],  # Gather across rows
+                    core_grid=ttnn.CoreGrid(y=1, x=1),
+                    strategy=ttnn.ShardStrategy.WIDTH,
+                )
+
+            # Run distributed rmsnorm part 1: compute local stats
             x = ttnn.unsqueeze_to_4D(x)
             tt_stats = ttnn.rms_norm_pre_all_gather(x, program_config=program_config)
-            print("done tt stats", tt_stats.memory_config())
 
             # AllGather stats across ROWS (cluster_axis=0) for row-sharded input
             tt_gathered_stats = ttnn.all_gather(
                 tt_stats,
                 dim=3,
                 num_links=2,
-                cluster_axis=0,  # Changed from 1 to 0 for row-sharding
-                # mesh_device=self.mesh_device,
+                cluster_axis=0,
                 memory_config=tt_gathered_stats_memory_config,
-                # ccl_manager = self.ccl_manager
                 topology=ttnn.Topology.Linear,
             )
-            print("done ag", tt_gathered_stats.memory_config())
             ttnn.deallocate(tt_stats)
-            # Run distributed rmsnorm part 2
+
+            # Run distributed rmsnorm part 2: apply normalization with gathered stats
             tt_output = ttnn.rms_norm_post_all_gather(
                 x,
                 tt_gathered_stats,
@@ -105,14 +109,13 @@ class RMSNorm(nn.Module):
                 epsilon=self.eps,
                 weight=self.tt_weight,
                 dtype=ttnn.bfloat8_b,
-                # stats=tt_gathered_stats,
-                # memory_config= ttnn.L1_MEMORY_CONFIG
             )
             ttnn.deallocate(tt_gathered_stats)
-            print("tt_output", tt_output.shape)
-            tt_output = ttnn.reshape(tt_output, (1, tt_output.shape[-2], 736))
-            # tt_output = ttnn.to_torc
-            # tt_output = ttnn.all_gather(tt_output, cluster_axis=0, dim=-1)
+
+            # Reshape to remove padding dimension
+            tt_output = ttnn.reshape(tt_output, (1, tt_output.shape[-2], per_device_hidden))
+            if is_prefill:
+                tt_output = ttnn.to_memory_config(tt_output, ttnn.DRAM_MEMORY_CONFIG)
             return tt_output
         else:
             # Non-distributed: simple RMSNorm
@@ -121,4 +124,6 @@ class RMSNorm(nn.Module):
                 weight=self.tt_weight,
                 epsilon=self.eps,
             )
+            if is_prefill:
+                tt_output = ttnn.to_memory_config(tt_output, ttnn.DRAM_MEMORY_CONFIG)
             return tt_output

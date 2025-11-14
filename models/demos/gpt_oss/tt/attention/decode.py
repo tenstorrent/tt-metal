@@ -51,22 +51,13 @@ def decode_forward(
         raise ValueError(f"Decode mode requires seq_len=1, got {seq_len}")
 
     # QKV projection with 2D sharding (includes all-reduce along rows)
-    # QKV projection
-    mem = ttnn.create_sharded_memory_config(
-        shape=(1, 1, 32, 32),  # hidden_size_per_device_distributed_ln//num_cores_ln),
-        core_grid=ttnn.CoreGrid(y=4, x=5),
-        strategy=ttnn.ShardStrategy.WIDTH,
-        use_height_and_width_as_shard_shape=True,
-    )
     xqkv_fused = ttnn.matmul(
         hidden_states, weights.wqkv, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
     )
     xqkv_fused = ttnn.add(xqkv_fused, weights.wqkv_bias, output_tensor=xqkv_fused)
-    print(xqkv_fused.memory_config())
     xqkv_fused = ttnn.all_reduce(
         xqkv_fused, num_links=1, topology=ttnn.Topology.Linear, cluster_axis=0, memory_config=ttnn.L1_MEMORY_CONFIG
     )
-    print(xqkv_fused.memory_config())
     xqkv_fused = ttnn.typecast(xqkv_fused, ttnn.bfloat16)
 
     # Split into Q, K, V heads using standard (non-fused) operation
@@ -160,25 +151,9 @@ def decode_forward(
     tt_out = ttnn.add(tt_out, weights.o_proj_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
     tt_out = ttnn.typecast(tt_out, ttnn.bfloat8_b)
 
-    # Tensor parallel allreduce
-    mem = ttnn.create_sharded_memory_config(
-        shape=(1, 1, 32, 32),  # hidden_size_per_device_distributed_ln//num_cores_ln),
-        core_grid=ttnn.CoreGrid(y=3, x=8),
-        strategy=ttnn.ShardStrategy.WIDTH,
-        use_height_and_width_as_shard_shape=True,
-    )
+    # Tensor parallel all-reduce along columns
     tt_out = ttnn.all_reduce(
         tt_out, num_links=4, topology=ttnn.Topology.Ring, cluster_axis=1, memory_config=ttnn.L1_MEMORY_CONFIG
     )
-    # tt_out = ttnn.to_memory_config(tt_out, mem)
 
-    # mesh_config.allreduce_cols(tt_out, ccl_manager, memory_config=mem)
-    # (tt_out, mesh_config, ccl_manager, batch_size, seq_len, hidden_size)
-
-    # tt_out = ttnn.all_gather(tt_out, cluster_axis=0, dim=-1)
-    # tt_out = ttnn.reshape(
-    #     tt_out,
-    #     #ttnn.Shape([batch_size, 1, hidden_size]),
-    #     ttnn.Shape([batch_size, 32, hidden_size]),
-    # )
     return tt_out

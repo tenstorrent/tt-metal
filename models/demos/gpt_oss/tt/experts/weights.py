@@ -110,14 +110,24 @@ def load_expert_weights(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    # Load down projection
-    down_proj = torch.randn(
-        1, config.num_experts, config.intermediate_size, 3072
-    )  # state_dict["down_proj"].reshape(1, config.num_experts, config.intermediate_size, config.hidden_size)
-    down_proj_bias = torch.randn(
-        1, config.num_experts, 3072
-    )  # state_dict["down_proj_bias"].reshape(1, config.num_experts, config.hidden_size)
+    # Load down projection and pad hidden_size dimension for row-sharding
+    down_proj = state_dict["down_proj"].reshape(1, config.num_experts, config.intermediate_size, config.hidden_size)
+    down_proj_bias = state_dict["down_proj_bias"].reshape(1, config.num_experts, config.hidden_size)
 
+    # Calculate padded hidden size for row-sharding (must be divisible by num_rows * TILE_SIZE)
+    # Note: mesh_config may have EP on rows, need to check the actual sharding dimension
+    num_rows = mesh_config.mesh_shape[0]
+    shard_chunk_size = num_rows * ttnn.TILE_SIZE
+    hidden_size = config.hidden_size
+    if hidden_size % shard_chunk_size != 0:
+        padded_hidden_size = ((hidden_size + shard_chunk_size - 1) // shard_chunk_size) * shard_chunk_size
+        padding_size = 192  # padded_hidden_size - hidden_size
+        # Pad last dimension: [1, num_experts, intermediate_size, hidden_size] -> [1, num_experts, intermediate_size, padded_hidden_size]
+        down_proj = torch.nn.functional.pad(down_proj, (0, padding_size), value=0.0)
+        # Pad last dimension: [1, num_experts, hidden_size] -> [1, num_experts, padded_hidden_size]
+        down_proj_bias = torch.nn.functional.pad(down_proj_bias, (0, padding_size), value=0.0)
+
+    print("down proj", down_proj.shape, down_proj_bias.shape)
     down_proj_tt = ttnn.as_tensor(
         down_proj,
         device=mesh_device,

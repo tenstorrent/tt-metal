@@ -55,7 +55,8 @@ def decode_forward(
 
     # EP-specific routing remap for sparsity
     if ep > 1:
-        sparsity = ttnn.moe_routing_remap(ttnn.reshape(sparsity, (1, sparsity.shape[-1])), 4, 4, 0)
+        # Use ep value from mesh config instead of hardcoding (4, 4)
+        sparsity = ttnn.moe_routing_remap(ttnn.reshape(sparsity, (1, sparsity.shape[-1])), ep, ep, 0)
         routing_weights = ttnn.tilize_with_zero_padding(sparsity, use_multicore=True)
 
     num_experts_per_tok = config.num_experts_per_tok // ep
@@ -97,30 +98,9 @@ def decode_forward(
 
     # Apply SwiGLU activation
     down_input = apply_swiglu(gate, up, config)
-    # height_sharded_mem_config = ttnn.create_sharded_memory_config(
-    #             shape=(32, 384),  # Shape per shard (tile-aligned)
-    #             core_grid=ttnn.CoreGrid(x=1, y=1),
-    #             strategy=ttnn.ShardStrategy.HEIGHT,
-    #             orientation=ttnn.ShardOrientation.ROW_MAJOR,
-    #             use_height_and_width_as_shard_shape=True,
-    #         )
-    # print(down_input.shape)
-    # down_input = ttnn.to_memory_config(down_input, height_sharded_mem_config)
-    # height_sharded_mem_config_next = ttnn.create_sharded_memory_config(
-    #         shape=(32*32, 384),  # Shape per shard (tile-aligned)
-    #         core_grid=ttnn.CoreGrid(x=1, y=1),
-    #         strategy=ttnn.ShardStrategy.HEIGHT,
-    #         orientation=ttnn.ShardOrientation.ROW_MAJOR,
-    #         use_height_and_width_as_shard_shape=True,
-    #     )
-    # print("down input", down_input.memory_config())
-    down_input = ttnn.transpose(down_input, 1, 0)  # , memory_config=height_sharded_mem_config_next)
+    down_input = ttnn.transpose(down_input, 1, 0)
     down_input = ttnn.reshape(down_input, (1, config.num_experts, seq_len, weights.intermediate_size_per_device))
     # Down projection
-    print(
-        "program_config.get_decode_down_config(down_input.shape[2], weights.down_proj.shape[-1])",
-        program_config.get_decode_down_config(down_input.shape[2], weights.down_proj.shape[-1]),
-    )
     down = ttnn.sparse_matmul(
         down_input,
         weights.down_proj,
@@ -143,6 +123,7 @@ def decode_forward(
     routing_weights = ttnn.permute(routing_weights, (1, 0))
     routing_weights = ttnn.reshape(routing_weights, (batch_size, config.num_experts, 1))
     next_states = ttnn.typecast(next_states, ttnn.bfloat8_b)
+    # Use device's actual grid size instead of hardcoding (6, 8)
     mem = ttnn.create_sharded_memory_config(
         shape=(1, 1, 128, 64),  # hidden_size_per_device_distributed_ln//num_cores_ln),
         core_grid=ttnn.CoreGrid(y=6, x=8),

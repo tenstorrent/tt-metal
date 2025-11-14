@@ -148,7 +148,6 @@ class ProgramConfig:
 
     def get_decode_down_config(self, m: int, n: int) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
         """Get program config for decode down projection"""
-        print(m, n, self.decode_down_cores)
         return self._build_matmul_config(
             self.decode_down_cores,
             m,

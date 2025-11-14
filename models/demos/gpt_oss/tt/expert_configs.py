@@ -26,7 +26,7 @@ class GPTOSSProgramConfig(ProgramConfig):
     # Prefill
     prefill_gate_up_cores: tuple[int, int] = (3, 4)
     prefill_gate_up_in0_block_w: int = 30
-    prefill_down_cores: tuple[int, int] = (5, 6)
+    prefill_down_cores: tuple[int, int] = (8, 6)
     prefill_down_in0_block_w: int = 12
 
     # Memory

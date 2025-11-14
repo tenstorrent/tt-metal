@@ -33,7 +33,13 @@ def apply_qkv_projection(hidden_states, weights: AttentionWeights, mesh_config, 
     # After this: row-replicated, column-sharded (ready for head splitting)
     num_rows = mesh_config.mesh_shape[0]
     if num_rows > 1:
-        xqkv_fused = mesh_config.allreduce_rows(xqkv_fused, ccl_manager)
+        xqkv_fused = ttnn.all_reduce(
+            xqkv_fused,
+            num_links=1,
+            topology=ttnn.Topology.Linear,
+            cluster_axis=0,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
 
     return xqkv_fused
 
@@ -142,28 +148,12 @@ def apply_output_projection(tensor, weights: AttentionWeights, activation_dtype,
     # All-reduce along COLUMNS (cluster_axis=1) to sum partial results
     # After this: column-replicated, row-sharded (ready for residual add)
     if mesh_config.tp > 1:
-        out = mesh_config.allreduce_cols(out, ccl_manager)
+        out = ttnn.all_reduce(
+            out,
+            num_links=4,
+            topology=ttnn.Topology.Ring,
+            cluster_axis=1,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
 
     return out
-
-
-def apply_allreduce(tensor, mesh_config, ccl_manager, batch_size: int, seq_len: int, hidden_size: int):
-    """
-    Apply tensor parallel allreduce if needed.
-
-    Args:
-        tensor: Input tensor
-        mesh_config: Mesh configuration
-        ccl_manager: Communication manager
-        batch_size: Batch size for final reshape
-        seq_len: Sequence length for final reshape
-        hidden_size: Hidden size for final reshape
-
-    Returns:
-        Tensor after allreduce (if TP > 1) or original tensor
-    """
-    if mesh_config.tp > 1:
-        tensor = ttnn.unsqueeze(tensor, 0)
-        tensor = mesh_config.allreduce(tensor, ccl_manager, pad_size=0, axis=mesh_config.tp_axis)
-        # tensor = ttnn.reshape(tensor, (batch_size, seq_len, hidden_size))
-    return tensor
