@@ -12,7 +12,6 @@
 
 struct MinimalMatmulOpReceiver {
     bool wait_for_op_signal = false;
-    uint32_t num_k_blocks_per_device = 0;
     uint32_t num_devices = 0;
     uint32_t my_chip_id = 0;
     std::array<volatile tt_l1_ptr uint32_t*, 3> signal_op_semaphore_addr_ptrs = {};  // backward, forward, self
@@ -33,7 +32,6 @@ struct MinimalMatmulOpReceiver {
         // Runtime args
         uint32_t num_transfers = get_arg_val<uint32_t>(rt_args_idx++);  // TODO remove
         num_devices = get_arg_val<uint32_t>(rt_args_idx++);
-        num_k_blocks_per_device = num_k_blocks / num_devices;
         my_chip_id = get_arg_val<uint32_t>(rt_args_idx++);
         uint32_t tensor_slice_shape_width = get_arg_val<uint32_t>(rt_args_idx++);  // TODO remove
         uint32_t output_page_offset = get_arg_val<uint32_t>(rt_args_idx++);        // TODO remove
