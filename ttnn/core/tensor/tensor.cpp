@@ -48,7 +48,7 @@ HostBuffer create_host_buffer_from_row_major_data(std::vector<T>&& data, const T
 
 }  // namespace
 
-std::atomic<std::uint64_t> Tensor::tensor_id_counter{0};
+static std::atomic<std::uint64_t> tensor_id_counter{0};
 
 Tensor::Tensor(
     HostBuffer buffer,
@@ -113,7 +113,7 @@ Tensor& Tensor::operator=(const Tensor& other) {
 
 Tensor& Tensor::operator=(Tensor&& other) noexcept {
     this->tensor_id = other.tensor_id;
-    other.tensor_id = tensor_id_counter.fetch_add(1, std::memory_order_relaxed);
+    other.tensor_id = INVALID_TENSOR_ID;
     if (this->tensor_attributes != other.tensor_attributes) {
         this->tensor_attributes = std::move(other.tensor_attributes);
     }
@@ -150,7 +150,9 @@ void Tensor::deallocate_impl(bool force) {
     // GraphTracker::instance().track_function_end();
 }
 
-std::uint64_t Tensor::get_tensor_id() const { return tensor_id; }
+std::optional<std::uint64_t> Tensor::get_tensor_id() const {
+    return tensor_id != INVALID_TENSOR_ID ? std::make_optional(tensor_id) : std::nullopt;
+}
 
 template <typename T>
 Tensor Tensor::from_span(

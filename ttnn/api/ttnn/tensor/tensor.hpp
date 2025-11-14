@@ -55,6 +55,7 @@ public:
     // If not set, the tensor can either be on host or allocated on a single device.
     // TODO: #21099 - This won't be needed after the migration to MeshDevice is complete.
     std::optional<distributed::MeshDevice*> mesh_device_ = std::nullopt;
+    constexpr static std::uint64_t INVALID_TENSOR_ID = std::numeric_limits<std::uint64_t>::max();
 
     // ======================================================================================
     //                                  Hi Level APIs
@@ -261,7 +262,7 @@ public:
     // Size in bytes of a single element held in tensor
     uint32_t element_size() const;
 
-    std::uint64_t get_tensor_id() const;
+    std::optional<std::uint64_t> get_tensor_id() const;
 
     static constexpr auto attribute_names = std::forward_as_tuple("storage", "tensor_spec");
     auto attribute_values() const {
@@ -270,9 +271,7 @@ public:
     }
 
 private:
-    static std::atomic<std::uint64_t> tensor_id_counter;
-
-    std::uint64_t tensor_id{std::numeric_limits<std::uint64_t>::max()};
+    std::uint64_t tensor_id{INVALID_TENSOR_ID};
 
     void init(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
     void deallocate_impl(bool force);
