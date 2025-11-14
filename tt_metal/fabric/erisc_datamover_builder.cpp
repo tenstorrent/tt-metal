@@ -1447,8 +1447,8 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
 
     // auto remote_pool_allocators =
     //     std::vector<std::shared_ptr<tt::tt_fabric::FabricChannelAllocator>>{config.remote_channels_allocator};
-    auto remote_pool_types =
-        std::vector<tt::tt_fabric::FabricChannelPoolType>{tt::tt_fabric::FabricChannelPoolType::STATIC};
+    auto remote_pool_types = std::vector<tt::tt_fabric::FabricChannelPoolType>(
+        config.remote_channels_allocators.size(), tt::tt_fabric::FabricChannelPoolType::STATIC);
     auto remote_multi_pool_allocator = std::make_shared<tt::tt_fabric::MultiPoolChannelAllocator>(
         config.remote_channels_allocators, std::move(remote_pool_types));
 
@@ -1559,8 +1559,9 @@ SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_
             case FabricEriscDatamoverType::DatelineUpstream: {
                 int64_t dateline_upstream_none_zero_idx = -1;
                 for (int64_t i = 0; i < sender_channel_to_pool_index.size(); ++i) {
-                    if (sender_channel_to_pool_index[i] ==
+                    if (sender_channel_to_pool_index[i] !=
                         0) {  // Why did I make it 0... revisit for ring/torus; especially when elastic channels enabled
+                        // note it was == 0, I changed to != 0
                         dateline_upstream_none_zero_idx = i;
                         break;
                     }

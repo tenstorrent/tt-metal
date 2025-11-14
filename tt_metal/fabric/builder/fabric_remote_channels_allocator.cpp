@@ -18,10 +18,12 @@ FabricRemoteChannelsAllocator::FabricRemoteChannelsAllocator(
     for (size_t i = 0; i < builder_config::num_receiver_channels; i++) {
         this->remote_receiver_channels_base_address_[i] = static_allocator.remote_receiver_channels_base_address[i];
         this->remote_receiver_channels_num_buffers_[i] = static_allocator.remote_receiver_channels_num_buffers[i];
-        TT_FATAL(
-            this->remote_receiver_channels_base_address_[i] != 0 || i > 0, "Remote receiver channel base address is 0");
-        TT_FATAL(
-            this->remote_receiver_channels_num_buffers_[i] != 0 || i > 0, "Remote receiver channel num buffers is 0");
+        // TT_FATAL(
+        //     this->remote_receiver_channels_base_address_[i] != 0 || i > 0, "Remote receiver channel base address is
+        //     0");
+        // TT_FATAL(
+        //     this->remote_receiver_channels_num_buffers_[i] != 0 || i > 0, "Remote receiver channel num buffers is
+        //     0");
     }
 
     this->receiver_channel_local_to_global_index_map.resize(num_used_receiver_channels_);

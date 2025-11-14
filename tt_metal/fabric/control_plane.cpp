@@ -2097,7 +2097,7 @@ void fill_connection_info_fields(
     TT_FATAL(static_channel_allocator != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator.");
     connection_info.edm_noc_x = static_cast<uint8_t>(virtual_core.x);
     connection_info.edm_noc_y = static_cast<uint8_t>(virtual_core.y);
-    connection_info.edm_buffer_base_addr = static_channel_allocator->get_sender_channel_base_address(sender_channel);
+    connection_info.edm_buffer_base_addr = static_channel_allocator->get_sender_channel_base_address();
     connection_info.num_buffers_per_channel = static_channel_allocator->get_sender_channel_number_of_slots();
     connection_info.edm_connection_handshake_addr = config.sender_channels_connection_semaphore_address[sender_channel];
     connection_info.edm_worker_location_info_addr =
