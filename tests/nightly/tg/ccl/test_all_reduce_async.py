@@ -406,7 +406,7 @@ def test_line_all_reduce_on_TG_cols_post_commit(
 @pytest.mark.parametrize("replication_factor", [1])
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
 @pytest.mark.parametrize("mesh_device", [pytest.param((1, 32), id="1x32_grid")], indirect=True)
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_2D_DYNAMIC}], indirect=True) #See issue #32406
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_2D_DYNAMIC}], indirect=True)
 def test_line_all_reduce_training(
     mesh_device,
     num_devices,
@@ -420,7 +420,7 @@ def test_line_all_reduce_training(
     replication_factor,
     num_iters=1,
 ):
-    pytest.skip("Skipping Failing Test")
+    pytest.skip("Issue 32406: Skipping Failing Test")
     if mesh_device.get_num_devices() != 32:
         pytest.skip("Not TG!")
 
