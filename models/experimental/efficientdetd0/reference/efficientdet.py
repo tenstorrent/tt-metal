@@ -12,7 +12,7 @@ from .utils import Anchors
 
 
 class EfficientDetBackbone(nn.Module):
-    def __init__(self, num_classes=90, compound_coef=0, load_weights=False, **kwargs):
+    def __init__(self, num_classes=90, compound_coef=0, **kwargs):
         super(EfficientDetBackbone, self).__init__()
         self.compound_coef = compound_coef
 
@@ -74,7 +74,7 @@ class EfficientDetBackbone(nn.Module):
             **kwargs,
         )
 
-        self.backbone_net = EfficientNet(self.backbone_compound_coef[compound_coef], load_weights)
+        self.backbone_net = EfficientNet(self.backbone_compound_coef[compound_coef])
 
     def freeze_bn(self):
         for m in self.modules():

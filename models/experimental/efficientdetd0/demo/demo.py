@@ -11,6 +11,9 @@ import torch
 import ttnn
 from loguru import logger
 
+from models.demos.utils.common_demo_utils import get_mesh_mappers
+from ttnn.model_preprocessing import preprocess_model_parameters
+from models.common.utility_functions import disable_persistent_kernel_cache, comp_pcc
 from models.experimental.efficientdetd0.reference.efficientdet import EfficientDetBackbone
 from models.experimental.efficientdetd0.tt.efficientdetd0 import TtEfficientDetBackbone
 from models.experimental.efficientdetd0.common import load_torch_model_state
@@ -18,16 +21,16 @@ from models.experimental.efficientdetd0.tt.custom_preprocessor import (
     infer_torch_module_args,
     create_custom_mesh_preprocessor,
 )
-from models.demos.utils.common_demo_utils import get_mesh_mappers
-from ttnn.model_preprocessing import preprocess_model_parameters
-from models.common.utility_functions import disable_persistent_kernel_cache, comp_pcc
+from models.experimental.efficientdetd0.reference.utils import (
+    Anchors,
+    ClipBoxes,
+    BBoxTransform,
+)
 from models.experimental.efficientdetd0.demo.demo_utils import (
     COCO_CLASSES,
-    BBoxTransform,
-    ClipBoxes,
-    preprocess_image,
     postprocess,
     invert_affine,
+    preprocess_image,
     draw_bounding_boxes,
 )
 
@@ -52,6 +55,7 @@ def run_efficient_det_demo(
         device: TTNN device
         model_location_generator: Model location generator for weights (optional)
         batch_size: Batch size for inference
+
         height: Input image height
         width: Input image width
         num_classes: Number of object classes
@@ -66,7 +70,6 @@ def run_efficient_det_demo(
     torch_model = EfficientDetBackbone(
         num_classes=num_classes,
         compound_coef=0,
-        load_weights=False,
     ).eval()
     load_torch_model_state(torch_model, model_location_generator=model_location_generator, weights_path=weights_path)
 
@@ -147,10 +150,10 @@ def run_efficient_det_demo(
         ttnn_features_torch.append(ttnn_feat_torch)
 
     # PCC Comparisons
-    logger.info("\n" + "=" * 80)
+    logger.info("=" * 80)
     logger.info("PCC (Pearson Correlation Coefficient) Comparisons")
     logger.info("=" * 80)
-    PCC_THRESHOLD = 0.92
+    PCC_THRESHOLD = 0.97
 
     # Compare BiFPN feature maps
     for i, (torch_feat, ttnn_feat) in enumerate(zip(torch_features, ttnn_features_torch)):
@@ -164,17 +167,15 @@ def run_efficient_det_demo(
     logger.info(f"Classification: PCC = {pcc_value:.6f} {'✓' if passing else '✗'}")
 
     # Post-process to get bounding boxes
-    logger.info("\n" + "=" * 80)
+    logger.info("=" * 80)
     logger.info("Post-processing Results")
     logger.info("=" * 80)
-
-    anchors = torch_model.anchors(torch_inputs, torch_inputs.dtype)
 
     # Initialize post-processing modules
     regressBoxes = BBoxTransform()
     clipBoxes = ClipBoxes()
 
-    # Post-process outputs
+    # Post-process torch outputs
     torch_preds = postprocess(
         torch_regression,
         torch_classification,
@@ -186,6 +187,14 @@ def run_efficient_det_demo(
         iou_threshold=iou_threshold,
     )
 
+    # Generating anchors for TTNN outputs
+    gen_anchors = Anchors(
+        anchor_scale=4.0,
+        pyramid_levels=(torch.arange(5) + 3).tolist(),
+    )
+    anchors = gen_anchors(torch_inputs, torch_inputs.dtype)
+
+    # Post-process TTNN outputs
     ttnn_preds = postprocess(
         ttnn_regression_torch,
         ttnn_classification_torch,

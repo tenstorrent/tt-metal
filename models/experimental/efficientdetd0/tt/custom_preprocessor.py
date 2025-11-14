@@ -11,7 +11,7 @@ from ttnn.model_preprocessing import (
     fold_batch_norm2d_into_conv2d,
     convert_torch_model_to_ttnn_model,
 )
-from models.experimental.efficientdetd0.reference.efficientnetb0 import EfficientNet
+from efficientnet_pytorch import EfficientNet
 from models.experimental.efficientdetd0.reference.efficientdet import EfficientDetBackbone
 from models.experimental.efficientdetd0.reference.modules import BiFPN, Regressor, Classifier, SeparableConvBlock
 

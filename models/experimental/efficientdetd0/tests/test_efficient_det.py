@@ -34,7 +34,7 @@ def test_efficient_det(batch, channels, height, width, device):
     num_classes = 90
     torch_model = EfficientDetBackbone(
         num_classes=num_classes,
-        load_weights=False,
+        compound_coef=0,
     ).eval()
     load_torch_model_state(torch_model)
 

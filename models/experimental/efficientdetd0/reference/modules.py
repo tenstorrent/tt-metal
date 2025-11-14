@@ -11,7 +11,7 @@ from .utils import (
     Conv2dStaticSamePadding,
     MaxPool2dStaticSamePadding,
 )
-from models.experimental.efficientdetd0.reference.efficientnetb0 import EfficientNet as EffNet
+from efficientnet_pytorch import EfficientNet as EffNet
 
 
 class SeparableConvBlock(nn.Module):
@@ -438,9 +438,9 @@ class EfficientNet(nn.Module):
     modified by Zylo117
     """
 
-    def __init__(self, compound_coef, load_weights=False):
+    def __init__(self, compound_coef):
         super(EfficientNet, self).__init__()
-        model = EffNet.from_pretrained(f"efficientnet-b{compound_coef}", load_weights)
+        model = EffNet.from_pretrained(f"efficientnet-b{compound_coef}")
         del model._conv_head
         del model._bn1
         del model._avg_pooling
