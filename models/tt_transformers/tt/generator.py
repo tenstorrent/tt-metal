@@ -245,7 +245,13 @@ class Generator:
             empty_slots = list(range(batch_size))
 
         out_list = []
-        for idx, user_id in enumerate(empty_slots):
+        data_parallel_slots = len(empty_slots) // self.data_parallel
+        user_id = None
+        idx = None
+        for i in range(data_parallel_slots):
+            for dp_rank in range(self.data_parallel):
+                user_id = i + data_parallel_slots * dp_rank
+                idx = user_id
             # if model_id is not None, it means that prefill is called from warmup_prefill_traces
             model_id = user_id // max_batch_size_per_model if model_id_warmup is None else model_id_warmup
             group_user_id = user_id % max_batch_size_per_model if page_table is None else 0
@@ -317,6 +323,7 @@ class Generator:
             # if data parallel is greater than 1, we need to add logits to out_list and do the processing after all the prefill are done
             # otherwise, we can process the logits after prefill immediately
             if self.data_parallel > 1:
+                logger.info(f"OUT_LIST")
                 out_list.append(logits)
             else:
                 output_logits[idx] = self.model[model_id].process_output_prefill(
