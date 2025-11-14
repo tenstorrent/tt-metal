@@ -86,6 +86,7 @@ struct Conv3dOp {
     std::array<uint32_t, 3> kernel_size;
     std::array<uint32_t, 3> stride;
     std::array<uint32_t, 3> padding;
+    std::array<uint32_t, 3> dilation;
     std::string padding_mode;
     uint32_t groups;
     Conv3dConfig config;
