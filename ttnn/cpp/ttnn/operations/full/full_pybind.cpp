@@ -20,7 +20,7 @@ void bind_full_operation(py::module& module) {
         Args:
             shape (ttnn.Shape): The shape of the tensor.
             fill_value (float or int): The value to fill the tensor with.
-            mesh_device (ttnn.MeshDevice): The mesh device on which the tensor will be allocated.
+            device (ttnn.MeshDevice): The device on which the tensor will be allocated.
             dtype (ttnn.DataType, optional): The data type of the tensor. Defaults to `ttnn.bfloat16`.
             layout (ttnn.Layout, optional): The layout of the tensor. Defaults to `ttnn.TILE_LAYOUT`.
             memory_config (ttnn.MemoryConfig, optional): The memory configuration of the tensor. Defaults to `ttnn.DRAM_MEMORY_CONFIG`.
@@ -29,8 +29,8 @@ void bind_full_operation(py::module& module) {
             ttnn.Tensor: A filled tensor of specified shape and value.
 
         Example:
-            >>> mesh_device = ttnn.open_device(device_id=0)
-            >>> filled_tensor = ttnn.moreh_full([2, 2], 7.0, mesh_device, dtype=ttnn.bfloat16)
+            >>> device = ttnn.open_device(device_id=0)
+            >>> filled_tensor = ttnn.moreh_full([2, 2], 7.0, device, dtype=ttnn.bfloat16)
             >>> print(filled_tensor)
             ttnn.Tensor([[[[7.0,  7.0],
                             [7.0,  7.0]]]], shape=Shape([2, 2]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
@@ -44,7 +44,7 @@ void bind_full_operation(py::module& module) {
         ttnn::pybind_arguments_t{
             py::arg("shape"),
             py::arg("fill_value"),
-            py::arg("mesh_device"),
+            py::arg("device"),
             py::kw_only(),
             py::arg("dtype") = DataType::BFLOAT16,
             py::arg("layout") = ttnn::TILE_LAYOUT,

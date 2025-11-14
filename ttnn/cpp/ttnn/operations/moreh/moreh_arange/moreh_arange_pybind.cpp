@@ -17,7 +17,7 @@ void bind_moreh_arange_operation(py::module& module) {
             py::arg("start") = 0,
             py::arg("end"),
             py::arg("step") = 1,
-            py::arg("mesh_device"),
+            py::arg("device"),
             py::kw_only(),
             py::arg("output") = std::nullopt,
             py::arg("untilize_out") = false,
