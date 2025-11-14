@@ -329,6 +329,7 @@ def run_strided_all_gather_impl(
         (4096, 4096, 4096, 3, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
         (4096, 4096, 4096, 3, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(4, 4), False),
         (4096, 4096, 4096, 3, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 256, 256, 256, 2, 2, ttnn.CoreCoord(4, 4), False),
+        (4096, 4096, 4096, 3, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 256, 160, 256, 1, 1, ttnn.CoreCoord(4, 4), False),
     ],
     ids=[
         "base",  # 1 forward pass through K
@@ -344,6 +345,7 @@ def run_strided_all_gather_impl(
         "4k4k4k",
         "4x4mmcores",  # increase to a larger core grid
         "fulltest",
+        "unalignedK",
     ],
 )
 @pytest.mark.parametrize(
