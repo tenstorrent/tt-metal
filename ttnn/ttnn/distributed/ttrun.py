@@ -245,6 +245,8 @@ def wrap_program_with_tracy(
         "-m",
         "tracy",
         "-r",
+        "-v",
+        "-p",
         "--port",
         str(port),
         "-o",
