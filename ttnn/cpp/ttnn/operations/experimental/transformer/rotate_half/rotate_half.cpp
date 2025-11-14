@@ -5,7 +5,6 @@
 #include "rotate_half.hpp"
 
 #include "device/rotate_half_device_operation.hpp"
-#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/run_operation.hpp"
 
 namespace ttnn::operations::experimental::transformer {
@@ -22,15 +21,8 @@ Tensor RotateHalfOperation::invoke(const Tensor& input_tensor, const std::option
         input_tensor.padded_shape()[-1],
         tt::constants::TILE_WIDTH * 2);
 
-    ttnn::Shape pad_shape =
-        ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(input_tensor.padded_shape());
-    ttnn::operations::experimental::auto_format::FormatParams input_format_params = {
-        .pad_shape = pad_shape, .pad_value = 0.0, .target_layout = Layout::TILE};
-    return tt::tt_metal::operation::run_with_autoformat(
-               RotateHalf{memory_config.value_or(input_tensor.memory_config())},
-               {input_tensor},
-               {input_format_params},
-               {Layout::TILE})
+    return tt::tt_metal::operation::run(
+               RotateHalf{memory_config.value_or(input_tensor.memory_config())}, {input_tensor})
         .at(0);
 }
 
