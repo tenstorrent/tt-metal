@@ -23,23 +23,22 @@ def convert2ref(state_dict):
 
 
 @pytest.mark.parametrize("mode", ["prefill", "decode"])
-def test_mixtral_mlp_inference(t3k_mesh_device, reset_seeds, mode):
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+def test_mixtral_mlp_inference(mesh_device, reset_seeds, mode):
     seqlen = 32
-    t3k_mesh_device.disable_and_clear_program_cache()
+    mesh_device.disable_and_clear_program_cache()
     dtypes = {
         "w1": ttnn.bfloat8_b,
         "w2": ttnn.bfloat8_b,
         "w3": ttnn.bfloat8_b,
     }
 
-    model_args = ModelArgs(t3k_mesh_device)
+    model_args = ModelArgs(mesh_device)
     model_args.n_layers = 32
     state_dict = model_args.load_state_dict()
     state_dict_prefix = model_args.get_state_dict_prefix("", 0)
 
-    tt_model = TtMixtralMLP(
-        mesh_device=t3k_mesh_device, state_dict=state_dict, args=model_args, layer_num=0, dtypes=dtypes
-    )
+    tt_model = TtMixtralMLP(mesh_device=mesh_device, state_dict=state_dict, args=model_args, layer_num=0, dtypes=dtypes)
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     partial_state_dict = {
@@ -75,7 +74,7 @@ def test_mixtral_mlp_inference(t3k_mesh_device, reset_seeds, mode):
             torch_input,
             dtype=ttnn.bfloat16,  # or your desired dtype
             layout=ttnn.TILE_LAYOUT,
-            device=t3k_mesh_device,
+            device=mesh_device,
             memory_config=width_sharded_mem_config,
         )
     else:
@@ -83,12 +82,12 @@ def test_mixtral_mlp_inference(t3k_mesh_device, reset_seeds, mode):
             torch_input,
             dtype=ttnn.bfloat16,  # or your desired dtype
             layout=ttnn.TILE_LAYOUT,
-            device=t3k_mesh_device,
+            device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
     tt_output = tt_model(tt_input, mode)
-    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=0))[0]
+    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ConcatMeshToTensor(mesh_device, dim=0))[0]
 
     pcc_required = 0.99
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
