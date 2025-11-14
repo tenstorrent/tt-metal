@@ -113,6 +113,7 @@
 <li class="toctree-l1"><a class="reference internal" href="../adding_new_ttnn_operation.html">Adding New TT-NN Operation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../profiling_ttnn_operations.html">Profiling TT-NN Operations</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../demos.html">Building and Uplifting Demos</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../tools/index.html">Tools</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Resources</span></p>
 <ul>
@@ -148,9 +149,9 @@
   <section id="ttnn-repeat-interleave">
 <h1>ttnn.repeat_interleave<a class="headerlink" href="#ttnn-repeat-interleave" title="Permalink to this heading"></a>
 </h1>
-<span class="target" id="id1"></span><dl class="py data">
+<span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.repeat_interleave">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">repeat_interleave</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.repeat_interleave',</span> <span class="pre">function=&lt;ttnn._ttnn.operations.data_movement.repeat_interleave_t</span> <span class="pre">object&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">default_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=&lt;function</span> <span class="pre">_golden_function&gt;,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">default_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=True,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.repeat_interleave" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">repeat_interleave</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">repeats</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">number</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dim</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">number</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.repeat_interleave" title="Permalink to this definition"></a>
 </dt>
 <dd>
 <p>Repeats elements of a <code class="xref py py-attr docutils literal notranslate"><span class="pre">tensor</span></code> in the given <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code>.</p>
@@ -175,19 +176,18 @@
 <p><em>ttnn.Tensor</em> – the output tensor.</p>
 </dd>
 </dl>
-<p>Example:</p>
-<dl>
-<dt>torch_input_tensor =</dt>
-<dd>
-<p>torch_result = torch.repeat_interleave(torch_input_tensor, repeats, dim=dim)</p>
-<p>input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)</p>
-<p>output = ttnn.repeat_interleave(input_tensor, repeats, dim=dim)
-&gt;&gt;&gt; a = ttnn.from_torch(torch.rand(1, 1, 32, 32, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-&gt;&gt;&gt; b = ttnn.repeat_interleave(a, 2, dim=0)
-&gt;&gt;&gt; print(a.shape, b.shape)
-ttnn.Shape([1, 1, 32, 32]) ttnn.Shape([2, 1, 32, 32])</p>
-</dd>
-</dl>
+<div class="admonition-example admonition">
+<p class="admonition-title">Example</p>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># Create a tensor to repeat interleave</span>
+<span class="n">input_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">((</span><span class="mi">10</span><span class="p">,</span> <span class="mi">10</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">Layout</span><span class="o">.</span><span class="n">TILE</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+
+<span class="c1"># Repeat interleave the tensor</span>
+<span class="n">repeated_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">repeat_interleave</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">,</span> <span class="n">repeats</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">"Repeat Interleave Tensor Shape:"</span><span class="p">,</span> <span class="n">repeated_tensor</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>  <span class="c1"># Repeat Interleave Tensor Shape: Shape([20, 10])</span>
+</pre></div>
+</div>
+</div>
 </dd>
 </dl>
 

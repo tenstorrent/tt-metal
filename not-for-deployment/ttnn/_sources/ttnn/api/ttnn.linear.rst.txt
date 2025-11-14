@@ -5,4 +5,4 @@
 
 .. _ttnn.linear:
 
-.. autodata:: ttnn.linear
+.. autooperation:: ttnn.linear

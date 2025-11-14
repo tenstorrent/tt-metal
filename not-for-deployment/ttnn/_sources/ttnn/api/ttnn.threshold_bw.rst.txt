@@ -5,4 +5,4 @@
 
 .. _ttnn.threshold_bw:
 
-.. autodata:: ttnn.threshold_bw
+.. autooperation:: ttnn.threshold_bw

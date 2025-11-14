@@ -5,4 +5,4 @@
 
 .. _ttnn.logaddexp2_bw:
 
-.. autodata:: ttnn.logaddexp2_bw
+.. autooperation:: ttnn.logaddexp2_bw

@@ -5,4 +5,4 @@
 
 .. _ttnn.nonzero:
 
-.. autodata:: ttnn.nonzero
+.. autooperation:: ttnn.nonzero

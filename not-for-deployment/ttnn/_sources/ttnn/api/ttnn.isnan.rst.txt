@@ -5,4 +5,4 @@
 
 .. _ttnn.isnan:
 
-.. autodata:: ttnn.isnan
+.. autooperation:: ttnn.isnan

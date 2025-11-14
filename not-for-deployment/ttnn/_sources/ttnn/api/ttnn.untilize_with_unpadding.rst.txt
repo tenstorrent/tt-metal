@@ -5,4 +5,4 @@
 
 .. _ttnn.untilize_with_unpadding:
 
-.. autodata:: ttnn.untilize_with_unpadding
+.. autooperation:: ttnn.untilize_with_unpadding

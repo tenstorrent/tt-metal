@@ -5,4 +5,4 @@
 
 .. _ttnn.log2_bw:
 
-.. autodata:: ttnn.log2_bw
+.. autooperation:: ttnn.log2_bw

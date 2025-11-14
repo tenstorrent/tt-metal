@@ -5,4 +5,4 @@
 
 .. _ttnn.erfinv_bw:
 
-.. autodata:: ttnn.erfinv_bw
+.. autooperation:: ttnn.erfinv_bw

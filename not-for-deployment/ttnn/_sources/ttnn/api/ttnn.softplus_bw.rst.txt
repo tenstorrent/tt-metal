@@ -5,4 +5,4 @@
 
 .. _ttnn.softplus_bw:
 
-.. autodata:: ttnn.softplus_bw
+.. autooperation:: ttnn.softplus_bw

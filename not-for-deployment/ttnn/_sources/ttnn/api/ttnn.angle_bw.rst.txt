@@ -5,4 +5,4 @@
 
 .. _ttnn.angle_bw:
 
-.. autodata:: ttnn.angle_bw
+.. autooperation:: ttnn.angle_bw

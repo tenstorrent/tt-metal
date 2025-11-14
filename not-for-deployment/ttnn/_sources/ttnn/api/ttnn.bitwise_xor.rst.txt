@@ -5,4 +5,4 @@
 
 .. _ttnn.bitwise_xor:
 
-.. autodata:: ttnn.bitwise_xor
+.. autooperation:: ttnn.bitwise_xor

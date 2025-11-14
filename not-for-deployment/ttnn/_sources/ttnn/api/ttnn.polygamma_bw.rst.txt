@@ -5,4 +5,4 @@
 
 .. _ttnn.polygamma_bw:
 
-.. autodata:: ttnn.polygamma_bw
+.. autooperation:: ttnn.polygamma_bw

@@ -5,4 +5,4 @@
 
 .. _ttnn.polar_bw:
 
-.. autodata:: ttnn.polar_bw
+.. autooperation:: ttnn.polar_bw

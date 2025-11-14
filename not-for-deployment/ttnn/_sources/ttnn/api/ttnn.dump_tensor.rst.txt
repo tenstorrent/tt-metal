@@ -5,4 +5,4 @@
 
 .. _ttnn.dump_tensor:
 
-.. autodata:: ttnn.dump_tensor
+.. autooperation:: ttnn.dump_tensor

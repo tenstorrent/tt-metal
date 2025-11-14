@@ -5,4 +5,4 @@
 
 .. _ttnn.cos_bw:
 
-.. autodata:: ttnn.cos_bw
+.. autooperation:: ttnn.cos_bw

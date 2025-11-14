@@ -5,4 +5,4 @@
 
 .. _ttnn.pad:
 
-.. autodata:: ttnn.pad
+.. autooperation:: ttnn.pad

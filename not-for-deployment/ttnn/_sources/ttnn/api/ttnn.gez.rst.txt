@@ -5,4 +5,4 @@
 
 .. _ttnn.gez:
 
-.. autodata:: ttnn.gez
+.. autooperation:: ttnn.gez

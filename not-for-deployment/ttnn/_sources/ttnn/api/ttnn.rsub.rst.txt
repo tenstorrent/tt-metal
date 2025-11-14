@@ -5,4 +5,4 @@
 
 .. _ttnn.rsub:
 
-.. autodata:: ttnn.rsub
+.. autooperation:: ttnn.rsub

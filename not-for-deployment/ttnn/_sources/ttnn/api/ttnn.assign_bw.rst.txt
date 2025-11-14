@@ -5,4 +5,4 @@
 
 .. _ttnn.assign_bw:
 
-.. autodata:: ttnn.assign_bw
+.. autooperation:: ttnn.assign_bw

@@ -5,4 +5,4 @@
 
 .. _ttnn.transformer.scaled_dot_product_attention_decode:
 
-.. autodata:: ttnn.transformer.scaled_dot_product_attention_decode
+.. autooperation:: ttnn.transformer.scaled_dot_product_attention_decode

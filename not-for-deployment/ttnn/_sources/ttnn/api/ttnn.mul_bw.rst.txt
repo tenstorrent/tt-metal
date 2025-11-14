@@ -5,4 +5,4 @@
 
 .. _ttnn.mul_bw:
 
-.. autodata:: ttnn.mul_bw
+.. autooperation:: ttnn.mul_bw

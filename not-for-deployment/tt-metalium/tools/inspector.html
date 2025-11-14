@@ -62,6 +62,7 @@
 <li class="toctree-l1"><a class="reference internal" href="../tt_metal/examples/index.html">Programming Examples</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../tt_metal/advanced_topics/index.html">Advanced Topics</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../tt_metal/apis/index.html">APIs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tt_metal/environment_variables/index.html">Environment Variables</a></li>
 <li class="toctree-l1 current"><a class="reference internal" href="index.html">Tools</a><ul class="current">
 <li class="toctree-l2"><a class="reference internal" href="kernel_print.html">Kernel Debug Print</a></li>
 <li class="toctree-l2"><a class="reference internal" href="watcher.html">Watcher</a></li>
@@ -164,7 +165,7 @@ Next, implement your callback to handle the request and send a response to the c
 </div>
 <p>Example changes in your Metal host runtime code:</p>
 <div class="highlight-cpp notranslate">
-<div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"tt_metal/impl/debug/inspector.hpp"</span>
+<div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"tt_metal/impl/debug/inspector/inspector.hpp"</span>
 <span class="cp">#include</span><span class="w"> </span><span class="cpf">"impl/debug/inspector/rpc_server_generated.hpp"</span>
 
 <span class="c1">// In your initialization code</span>

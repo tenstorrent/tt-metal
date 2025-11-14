@@ -5,4 +5,4 @@
 
 .. _ttnn.ldexp:
 
-.. autodata:: ttnn.ldexp
+.. autooperation:: ttnn.ldexp

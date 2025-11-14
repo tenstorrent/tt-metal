@@ -5,4 +5,4 @@
 
 .. _ttnn.load_tensor:
 
-.. autodata:: ttnn.load_tensor
+.. autooperation:: ttnn.load_tensor

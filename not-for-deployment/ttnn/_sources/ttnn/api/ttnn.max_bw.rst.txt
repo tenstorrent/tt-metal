@@ -5,4 +5,4 @@
 
 .. _ttnn.max_bw:
 
-.. autodata:: ttnn.max_bw
+.. autooperation:: ttnn.max_bw

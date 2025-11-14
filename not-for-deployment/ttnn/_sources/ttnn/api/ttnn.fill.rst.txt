@@ -5,4 +5,4 @@
 
 .. _ttnn.fill:
 
-.. autodata:: ttnn.fill
+.. autooperation:: ttnn.fill

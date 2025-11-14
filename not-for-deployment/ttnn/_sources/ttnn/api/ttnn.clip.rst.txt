@@ -5,4 +5,4 @@
 
 .. _ttnn.clip:
 
-.. autodata:: ttnn.clip
+.. autooperation:: ttnn.clip

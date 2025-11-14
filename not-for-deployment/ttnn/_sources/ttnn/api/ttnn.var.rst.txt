@@ -5,4 +5,4 @@
 
 .. _ttnn.var:
 
-.. autodata:: ttnn.var
+.. autooperation:: ttnn.var

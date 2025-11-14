@@ -5,4 +5,4 @@
 
 .. _ttnn.reshape:
 
-.. autodata:: ttnn.reshape
+.. autooperation:: ttnn.reshape

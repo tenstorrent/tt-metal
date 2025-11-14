@@ -5,4 +5,4 @@
 
 .. _ttnn.topk:
 
-.. autodata:: ttnn.topk
+.. autooperation:: ttnn.topk

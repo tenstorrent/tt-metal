@@ -5,4 +5,4 @@
 
 .. _ttnn.geglu:
 
-.. autodata:: ttnn.geglu
+.. autooperation:: ttnn.geglu

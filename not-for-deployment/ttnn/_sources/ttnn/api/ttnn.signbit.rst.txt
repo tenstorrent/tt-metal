@@ -5,4 +5,4 @@
 
 .. _ttnn.signbit:
 
-.. autodata:: ttnn.signbit
+.. autooperation:: ttnn.signbit

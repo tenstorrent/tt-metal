@@ -5,4 +5,4 @@
 
 .. _ttnn.floor_div:
 
-.. autodata:: ttnn.floor_div
+.. autooperation:: ttnn.floor_div

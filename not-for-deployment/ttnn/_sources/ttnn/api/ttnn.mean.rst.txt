@@ -5,4 +5,4 @@
 
 .. _ttnn.mean:
 
-.. autodata:: ttnn.mean
+.. autooperation:: ttnn.mean

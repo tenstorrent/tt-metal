@@ -5,4 +5,4 @@
 
 .. _ttnn.hypot_bw:
 
-.. autodata:: ttnn.hypot_bw
+.. autooperation:: ttnn.hypot_bw

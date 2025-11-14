@@ -5,4 +5,4 @@
 
 .. _ttnn.isneginf:
 
-.. autodata:: ttnn.isneginf
+.. autooperation:: ttnn.isneginf

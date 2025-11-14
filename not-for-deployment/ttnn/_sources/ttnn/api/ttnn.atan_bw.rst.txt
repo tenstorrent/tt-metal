@@ -5,4 +5,4 @@
 
 .. _ttnn.atan_bw:
 
-.. autodata:: ttnn.atan_bw
+.. autooperation:: ttnn.atan_bw

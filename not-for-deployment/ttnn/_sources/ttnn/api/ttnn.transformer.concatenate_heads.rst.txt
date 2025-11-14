@@ -5,4 +5,4 @@
 
 .. _ttnn.transformer.concatenate_heads:
 
-.. autodata:: ttnn.transformer.concatenate_heads
+.. autooperation:: ttnn.transformer.concatenate_heads

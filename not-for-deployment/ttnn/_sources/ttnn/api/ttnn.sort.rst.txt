@@ -5,4 +5,4 @@
 
 .. _ttnn.sort:
 
-.. autodata:: ttnn.sort
+.. autooperation:: ttnn.sort

@@ -5,4 +5,4 @@
 
 .. _ttnn.to_memory_config:
 
-.. autodata:: ttnn.to_memory_config
+.. autooperation:: ttnn.to_memory_config

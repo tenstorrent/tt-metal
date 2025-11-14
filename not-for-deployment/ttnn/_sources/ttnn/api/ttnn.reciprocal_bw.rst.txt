@@ -5,4 +5,4 @@
 
 .. _ttnn.reciprocal_bw:
 
-.. autodata:: ttnn.reciprocal_bw
+.. autooperation:: ttnn.reciprocal_bw

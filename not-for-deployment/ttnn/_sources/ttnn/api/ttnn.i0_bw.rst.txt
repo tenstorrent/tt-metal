@@ -5,4 +5,4 @@
 
 .. _ttnn.i0_bw:
 
-.. autodata:: ttnn.i0_bw
+.. autooperation:: ttnn.i0_bw

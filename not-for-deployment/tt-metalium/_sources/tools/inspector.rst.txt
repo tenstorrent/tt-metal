@@ -54,7 +54,7 @@ Example changes in your Metal host runtime code:
 
 .. code-block:: cpp
 
-   #include "tt_metal/impl/debug/inspector.hpp"
+   #include "tt_metal/impl/debug/inspector/inspector.hpp"
    #include "impl/debug/inspector/rpc_server_generated.hpp"
 
    // In your initialization code

@@ -5,4 +5,4 @@
 
 .. _ttnn.lerp_bw:
 
-.. autodata:: ttnn.lerp_bw
+.. autooperation:: ttnn.lerp_bw

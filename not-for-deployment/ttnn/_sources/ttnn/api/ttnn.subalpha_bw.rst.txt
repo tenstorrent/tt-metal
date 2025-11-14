@@ -5,4 +5,4 @@
 
 .. _ttnn.subalpha_bw:
 
-.. autodata:: ttnn.subalpha_bw
+.. autooperation:: ttnn.subalpha_bw

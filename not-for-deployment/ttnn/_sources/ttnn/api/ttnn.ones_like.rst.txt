@@ -5,4 +5,4 @@
 
 .. _ttnn.ones_like:
 
-.. autodata:: ttnn.ones_like
+.. autooperation:: ttnn.ones_like

@@ -5,4 +5,4 @@
 
 .. _ttnn.full_like:
 
-.. autodata:: ttnn.full_like
+.. autooperation:: ttnn.full_like

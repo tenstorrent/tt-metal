@@ -5,4 +5,4 @@
 
 .. _ttnn.tilize_with_val_padding:
 
-.. autodata:: ttnn.tilize_with_val_padding
+.. autooperation:: ttnn.tilize_with_val_padding

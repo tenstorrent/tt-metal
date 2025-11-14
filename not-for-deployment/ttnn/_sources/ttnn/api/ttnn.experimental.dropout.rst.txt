@@ -5,4 +5,4 @@
 
 .. _ttnn.experimental.dropout:
 
-.. autodata:: ttnn.experimental.dropout
+.. autooperation:: ttnn.experimental.dropout

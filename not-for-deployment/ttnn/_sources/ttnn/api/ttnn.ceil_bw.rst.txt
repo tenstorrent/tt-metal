@@ -5,4 +5,4 @@
 
 .. _ttnn.ceil_bw:
 
-.. autodata:: ttnn.ceil_bw
+.. autooperation:: ttnn.ceil_bw

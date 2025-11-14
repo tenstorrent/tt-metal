@@ -5,4 +5,4 @@
 
 .. _ttnn.rpow_bw:
 
-.. autodata:: ttnn.rpow_bw
+.. autooperation:: ttnn.rpow_bw

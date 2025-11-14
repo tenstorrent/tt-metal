@@ -5,4 +5,4 @@
 
 .. _ttnn.deallocate:
 
-.. autodata:: ttnn.deallocate
+.. autooperation:: ttnn.deallocate

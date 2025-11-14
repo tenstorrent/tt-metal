@@ -5,4 +5,4 @@
 
 .. _ttnn.max_pool2d:
 
-.. autodata:: ttnn.max_pool2d
+.. autooperation:: ttnn.max_pool2d

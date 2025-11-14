@@ -5,4 +5,4 @@
 
 .. _ttnn.softsign_bw:
 
-.. autodata:: ttnn.softsign_bw
+.. autooperation:: ttnn.softsign_bw

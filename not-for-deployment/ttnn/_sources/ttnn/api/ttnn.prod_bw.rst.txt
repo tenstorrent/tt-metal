@@ -5,4 +5,4 @@
 
 .. _ttnn.prod_bw:
 
-.. autodata:: ttnn.prod_bw
+.. autooperation:: ttnn.prod_bw

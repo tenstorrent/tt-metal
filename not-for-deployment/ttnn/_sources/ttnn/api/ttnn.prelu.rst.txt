@@ -5,4 +5,4 @@
 
 .. _ttnn.prelu:
 
-.. autodata:: ttnn.prelu
+.. autooperation:: ttnn.prelu

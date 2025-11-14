@@ -5,4 +5,4 @@
 
 .. _ttnn.subtract:
 
-.. autodata:: ttnn.subtract
+.. autooperation:: ttnn.subtract

@@ -5,4 +5,4 @@
 
 .. _ttnn.rad2deg:
 
-.. autodata:: ttnn.rad2deg
+.. autooperation:: ttnn.rad2deg

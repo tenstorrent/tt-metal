@@ -5,4 +5,4 @@
 
 .. _ttnn.tilize:
 
-.. autodata:: ttnn.tilize
+.. autooperation:: ttnn.tilize

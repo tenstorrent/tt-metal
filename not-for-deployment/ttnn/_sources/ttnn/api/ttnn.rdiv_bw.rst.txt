@@ -5,4 +5,4 @@
 
 .. _ttnn.rdiv_bw:
 
-.. autodata:: ttnn.rdiv_bw
+.. autooperation:: ttnn.rdiv_bw

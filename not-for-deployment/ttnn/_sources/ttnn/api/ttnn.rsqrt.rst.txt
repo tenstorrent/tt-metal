@@ -5,4 +5,4 @@
 
 .. _ttnn.rsqrt:
 
-.. autodata:: ttnn.rsqrt
+.. autooperation:: ttnn.rsqrt

@@ -5,4 +5,4 @@
 
 .. _ttnn.lgamma_bw:
 
-.. autodata:: ttnn.lgamma_bw
+.. autooperation:: ttnn.lgamma_bw

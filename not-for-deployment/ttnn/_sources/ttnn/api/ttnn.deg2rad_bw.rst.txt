@@ -5,4 +5,4 @@
 
 .. _ttnn.deg2rad_bw:
 
-.. autodata:: ttnn.deg2rad_bw
+.. autooperation:: ttnn.deg2rad_bw

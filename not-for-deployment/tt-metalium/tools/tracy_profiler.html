@@ -62,6 +62,7 @@
 <li class="toctree-l1"><a class="reference internal" href="../tt_metal/examples/index.html">Programming Examples</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../tt_metal/advanced_topics/index.html">Advanced Topics</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../tt_metal/apis/index.html">APIs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tt_metal/environment_variables/index.html">Environment Variables</a></li>
 <li class="toctree-l1 current"><a class="reference internal" href="index.html">Tools</a><ul class="current">
 <li class="toctree-l2"><a class="reference internal" href="kernel_print.html">Kernel Debug Print</a></li>
 <li class="toctree-l2"><a class="reference internal" href="watcher.html">Watcher</a></li>
@@ -165,9 +166,9 @@ ninja<span class="w"> </span>install
 <p>Mac users can install Tracy using Homebrew. Open a terminal and run:</p>
 <div class="highlight-bash notranslate">
 <div class="highlight"><pre><span></span>brew<span class="w"> </span>uninstall<span class="w"> </span>tracy<span class="w"> </span><span class="c1"># Remove any old version of Tracy</span>
-wget<span class="w"> </span>-P<span class="w"> </span>~/<span class="w"> </span>--no-check-certificate<span class="w"> </span>--no-cache<span class="w"> </span>--no-cookies<span class="w"> </span>https://raw.githubusercontent.com/tenstorrent-metal/tracy/master/tracy.rb
-brew<span class="w"> </span>install<span class="w"> </span>~/tracy.rb
-rm<span class="w"> </span>~/tracy.rb
+brew<span class="w"> </span>tap-new<span class="w"> </span><span class="nv">$USER</span>/tracy<span class="w"> </span><span class="c1"># Create a tap</span>
+wget<span class="w"> </span>-P<span class="w"> </span><span class="k">$(</span>brew<span class="w"> </span>--repository<span class="k">)</span>/Library/Taps/<span class="nv">$USER</span>/homebrew-tracy/Formula/<span class="w"> </span>--no-check-certificate<span class="w"> </span>--no-cache<span class="w"> </span>--no-cookies<span class="w"> </span>https://raw.githubusercontent.com/tenstorrent-metal/tracy/master/tracy.rb
+brew<span class="w"> </span>install<span class="w"> </span><span class="nv">$USER</span>/tracy/tracy<span class="w"> </span><span class="c1"># Install from the tap</span>
 </pre></div>
 </div>
 <p>After installation, start the Tracy GUI with:</p>
@@ -237,7 +238,7 @@ make<span class="w"> </span>-j8
 <img alt="Tracy C++ run" src="../_images/tracy-c%2B%2B-run.png">
 <p>For example, the <code class="docutils literal notranslate"><span class="pre">Device</span></code> constructor shown above is instrumented as follows:</p>
 <div class="highlight-C++ notranslate">
-<div class="highlight"><pre><span></span><span class="n">Device</span><span class="o">::</span><span class="n">Device</span><span class="p">(</span><span class="n">chip_id_t</span><span class="w"> </span><span class="n">device_id</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">l1_bank_remap</span><span class="p">)</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="n">id_</span><span class="p">(</span><span class="n">device_id</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><span class="n">Device</span><span class="o">::</span><span class="n">Device</span><span class="p">(</span><span class="n">ChipId</span><span class="w"> </span><span class="n">device_id</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">l1_bank_remap</span><span class="p">)</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="n">id_</span><span class="p">(</span><span class="n">device_id</span><span class="p">)</span>
 <span class="p">{</span>
 <span class="w">    </span><span class="n">ZoneScoped</span><span class="p">;</span>
 <span class="w">    </span><span class="k">this</span><span class="o">-&gt;</span><span class="n">initialize</span><span class="p">(</span><span class="n">l1_bank_remap</span><span class="p">);</span>

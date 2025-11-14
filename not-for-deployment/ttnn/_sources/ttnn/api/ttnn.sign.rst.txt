@@ -5,4 +5,4 @@
 
 .. _ttnn.sign:
 
-.. autodata:: ttnn.sign
+.. autooperation:: ttnn.sign

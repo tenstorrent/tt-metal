@@ -10,7 +10,7 @@
       <link rel="stylesheet" href="../../../_static/tt_theme.css" type="text/css" />
       <link rel="stylesheet" href="../../../_static/nbsphinx-code-cells.css" type="text/css" />
     <link rel="shortcut icon" href="../../../_static/favicon.png"/>
-    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/tutorials/2025_dx_rework/ttnn_simplecnn_inference.html" />
+    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/tutorials/tutorials/ttnn_simplecnn_inference.html" />
   <!--[if lt IE 9]>
     <script src="../../../_static/js/html5shiv.min.js"></script>
   <![endif]-->
@@ -27,7 +27,7 @@
     <script src="../../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
-    <link rel="next" title="TT-NN Visualizer" href="ttnn_visualizer.html" />
+    <link rel="next" title="Building CLIP Model for Zero-Shot Image Classification with TT-NN" href="ttnn_clip_zero_shot_classification.html" />
     <link rel="prev" title="Basic Convolution" href="ttnn_basic_conv.html" /> 
 </head>
 
@@ -65,6 +65,7 @@
 <li class="toctree-l1 current"><a class="reference internal" href="../../tutorials.html">Tutorials</a><ul class="current">
 <li class="toctree-l2"><a class="reference internal" href="ttnn_add_tensors.html">Add Tensors</a></li>
 <li class="toctree-l2"><a class="reference internal" href="ttnn_basic_operations.html">Basic Tensor Operations</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ttnn_basic_matrix_multiplication.html">Matrix Multiplication</a></li>
 <li class="toctree-l2"><a class="reference internal" href="ttnn_mlp_inference_mnist.html">MLP Inference</a></li>
 <li class="toctree-l2"><a class="reference internal" href="ttnn_multihead_attention.html">Multi-Head Attention</a></li>
 <li class="toctree-l2"><a class="reference internal" href="ttnn_basic_conv.html">Basic Convolution</a></li>
@@ -79,7 +80,12 @@
 <li class="toctree-l3"><a class="reference internal" href="#Full-Example-and-Output">Full Example and Output</a></li>
 </ul>
 </li>
+<li class="toctree-l2"><a class="reference internal" href="ttnn_clip_zero_shot_classification.html">Building CLIP Model for Zero-Shot Image Classification with TT-NN</a></li>
 <li class="toctree-l2"><a class="reference internal" href="ttnn_visualizer.html">TT-NN Visualizer</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ttnn_tracer_model.html">TT-NN Tracer and BERT Model Visualization Tutorial</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ttnn_tracer_model.html#Example-1:-Tracing-PyTorch-Operations">Example 1: Tracing PyTorch Operations</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ttnn_tracer_model.html#Example-2:-Tracing-TT-NN-Tensor-Operations">Example 2: Tracing TT-NN Tensor Operations</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ttnn_tracer_model.html#Example-3:-Tracing-a-BERT-Layer">Example 3: Tracing a BERT Layer</a></li>
 </ul>
 </li>
 <li class="toctree-l1"><a class="reference internal" href="../../onboarding.html">Onboarding New Functionality</a></li>
@@ -87,6 +93,7 @@
 <li class="toctree-l1"><a class="reference internal" href="../../adding_new_ttnn_operation.html">Adding New TT-NN Operation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../profiling_ttnn_operations.html">Profiling TT-NN Operations</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../demos.html">Building and Uplifting Demos</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../tools/index.html">Tools</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Resources</span></p>
 <ul>
@@ -111,7 +118,7 @@
           <li class="breadcrumb-item"><a href="../../tutorials.html">Tutorials</a></li>
       <li class="breadcrumb-item active">Running a Simple CNN Inference on CIFAR-10</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../../_sources/ttnn/tutorials/2025_dx_rework/ttnn_simplecnn_inference.ipynb.txt" rel="nofollow"> View page source</a>
+            <a href="../../../_sources/ttnn/tutorials/tutorials/ttnn_simplecnn_inference.ipynb.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -572,7 +579,7 @@ accuracy counters, and the result for each sample is logged. Finally, the overal
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
         <a href="ttnn_basic_conv.html" class="btn btn-neutral float-left" title="Basic Convolution" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="ttnn_visualizer.html" class="btn btn-neutral float-right" title="TT-NN Visualizer" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="ttnn_clip_zero_shot_classification.html" class="btn btn-neutral float-right" title="Building CLIP Model for Zero-Shot Image Classification with TT-NN" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>

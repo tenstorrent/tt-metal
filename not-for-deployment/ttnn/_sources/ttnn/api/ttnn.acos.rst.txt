@@ -5,4 +5,4 @@
 
 .. _ttnn.acos:
 
-.. autodata:: ttnn.acos
+.. autooperation:: ttnn.acos

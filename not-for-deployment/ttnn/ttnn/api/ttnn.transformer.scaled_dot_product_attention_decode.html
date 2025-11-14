@@ -24,7 +24,7 @@
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="ttnn.embedding" href="ttnn.embedding.html" />
+    <link rel="next" title="ttnn.all_gather" href="ttnn.all_gather.html" />
     <link rel="prev" title="ttnn.transformer.scaled_dot_product_attention" href="ttnn.transformer.scaled_dot_product_attention.html" /> 
 </head>
 
@@ -103,6 +103,7 @@
 <li class="toctree-l1"><a class="reference internal" href="../adding_new_ttnn_operation.html">Adding New TT-NN Operation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../profiling_ttnn_operations.html">Profiling TT-NN Operations</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../demos.html">Building and Uplifting Demos</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../tools/index.html">Tools</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Resources</span></p>
 <ul>
@@ -138,9 +139,9 @@
   <section id="ttnn-transformer-scaled-dot-product-attention-decode">
 <h1>ttnn.transformer.scaled_dot_product_attention_decode<a class="headerlink" href="#ttnn-transformer-scaled-dot-product-attention-decode" title="Permalink to this heading"></a>
 </h1>
-<span class="target" id="id1"></span><dl class="py data">
+<span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.transformer.scaled_dot_product_attention_decode">
-<span class="sig-prename descclassname"><span class="pre">ttnn.transformer.</span></span><span class="sig-name descname"><span class="pre">scaled_dot_product_attention_decode</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.transformer.scaled_dot_product_attention_decode',</span> <span class="pre">function=&lt;ttnn._ttnn.operations.transformer.scaled_dot_product_attention_decode_t</span> <span class="pre">object&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">default_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=None,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">default_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=True,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.transformer.scaled_dot_product_attention_decode" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.transformer.</span></span><span class="sig-name descname"><span class="pre">scaled_dot_product_attention_decode</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor_q:</span> <span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_tensor_k:</span> <span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_tensor_v:</span> <span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">is_causal:</span> <span class="pre">bool</span> <span class="pre">=</span> <span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">attn_mask:</span> <span class="pre">ttnn.Tensor</span> <span class="pre">=</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cur_pos:</span> <span class="pre">List</span> <span class="pre">of</span> <span class="pre">int</span> <span class="pre">=</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config:</span> <span class="pre">ttnn.MemoryConfig</span> <span class="pre">=</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cur_pos_tensor:</span> <span class="pre">ttnn.Tensor</span> <span class="pre">=</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">scale:</span> <span class="pre">float</span> <span class="pre">=</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">program_config:</span> <span class="pre">SDPAProgramConfig</span> <span class="pre">=</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">compute_kernel_config:</span> <span class="pre">ttnn.DeviceComputeKernelConfig</span> <span class="pre">=</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sliding_window_size:</span> <span class="pre">int</span> <span class="pre">=</span> <span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.transformer.scaled_dot_product_attention_decode" title="Permalink to this definition"></a>
 </dt>
 <dd>
 <p>A version of scaled dot product attention specifically for decode.
@@ -168,6 +169,7 @@ The implementation is Flash-Decode and it currently only supports MQA on decodin
 <li><p><strong>scale</strong> (<em>float</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>program_config</strong> (<em>SDPAProgramConfig</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>compute_kernel_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>sliding_window_size</strong> (<em>int</em><em>, </em><em>optional</em>) – The size of sliding window for sliding window attention. Defaults to <cite>None</cite>.</p></li>
 </ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
@@ -189,7 +191,7 @@ The implementation is Flash-Decode and it currently only supports MQA on decodin
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
         <a href="ttnn.transformer.scaled_dot_product_attention.html" class="btn btn-neutral float-left" title="ttnn.transformer.scaled_dot_product_attention" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="ttnn.embedding.html" class="btn btn-neutral float-right" title="ttnn.embedding" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="ttnn.all_gather.html" class="btn btn-neutral float-right" title="ttnn.all_gather" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>

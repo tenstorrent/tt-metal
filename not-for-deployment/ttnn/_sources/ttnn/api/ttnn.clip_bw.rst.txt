@@ -5,4 +5,4 @@
 
 .. _ttnn.clip_bw:
 
-.. autodata:: ttnn.clip_bw
+.. autooperation:: ttnn.clip_bw

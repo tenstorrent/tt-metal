@@ -5,4 +5,4 @@
 
 .. _ttnn.conv_transpose2d:
 
-.. autodata:: ttnn.conv_transpose2d
+.. autooperation:: ttnn.conv_transpose2d

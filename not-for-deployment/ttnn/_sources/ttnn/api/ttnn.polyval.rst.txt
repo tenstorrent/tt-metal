@@ -5,4 +5,4 @@
 
 .. _ttnn.polyval:
 
-.. autodata:: ttnn.polyval
+.. autooperation:: ttnn.polyval

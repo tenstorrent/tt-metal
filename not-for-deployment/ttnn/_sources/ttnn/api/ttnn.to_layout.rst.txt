@@ -5,4 +5,4 @@
 
 .. _ttnn.to_layout:
 
-.. autodata:: ttnn.to_layout
+.. autooperation:: ttnn.to_layout

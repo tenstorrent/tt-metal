@@ -5,4 +5,4 @@
 
 .. _ttnn.relu_min:
 
-.. autodata:: ttnn.relu_min
+.. autooperation:: ttnn.relu_min

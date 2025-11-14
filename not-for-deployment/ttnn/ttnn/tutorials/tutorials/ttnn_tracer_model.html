@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TT-NN Tracer and BERT Model Visualization Tutorial &mdash; TT-NN  documentation</title>
+      <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../../_static/tt_theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../../_static/nbsphinx-code-cells.css" type="text/css" />
+    <link rel="shortcut icon" href="../../../_static/favicon.png"/>
+    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/tutorials/tutorials/ttnn_tracer_model.html" />
+  <!--[if lt IE 9]>
+    <script src="../../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../../../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../../../_static/doctools.js?v=888ff710"></script>
+        <script src="../../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
+        <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+        <script src="../../../_static/posthog.js?v=aa5946f9"></script>
+    <script src="../../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+    <link rel="next" title="Onboarding New Functionality" href="../../onboarding.html" />
+    <link rel="prev" title="TT-NN Visualizer" href="ttnn_visualizer.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../../../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../../../index.html">
+    TT-NN
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">TTNN</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../../about.html">What is TT-NN?</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../installing.html">Install</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../usage.html">Using TT-NN</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../tensor.html">Tensor</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../api.html">APIs</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="../../tutorials.html">Tutorials</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="ttnn_add_tensors.html">Add Tensors</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ttnn_basic_operations.html">Basic Tensor Operations</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ttnn_basic_matrix_multiplication.html">Matrix Multiplication</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ttnn_mlp_inference_mnist.html">MLP Inference</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ttnn_multihead_attention.html">Multi-Head Attention</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ttnn_basic_conv.html">Basic Convolution</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ttnn_simplecnn_inference.html">Running a Simple CNN Inference on CIFAR-10</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ttnn_clip_zero_shot_classification.html">Building CLIP Model for Zero-Shot Image Classification with TT-NN</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ttnn_visualizer.html">TT-NN Visualizer</a></li>
+<li class="toctree-l2 current"><a class="current reference internal" href="#">TT-NN Tracer and BERT Model Visualization Tutorial</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#Import-Libraries">Import Libraries</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Set-program-config">Set program config</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#Example-1:-Tracing-PyTorch-Operations">Example 1: Tracing PyTorch Operations</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#Example-2:-Tracing-TT-NN-Tensor-Operations">Example 2: Tracing TT-NN Tensor Operations</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#Model-and-Config-downloading">Model and Config downloading</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#Example-3:-Tracing-a-BERT-Layer">Example 3: Tracing a BERT Layer</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#Example-4:-Trace-models-written-using-ttnn">Example 4: Trace models written using ttnn</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Close-the-device">Close the device</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../../onboarding.html">Onboarding New Functionality</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../converting_torch_model_to_ttnn.html">Converting PyTorch Model to TT-NN</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../adding_new_ttnn_operation.html">Adding New TT-NN Operation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../profiling_ttnn_operations.html">Profiling TT-NN Operations</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../demos.html">Building and Uplifting Demos</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../tools/index.html">Tools</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../../index.html">TT-NN</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../../tutorials.html">Tutorials</a></li>
+      <li class="breadcrumb-item active">TT-NN Tracer and BERT Model Visualization Tutorial</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../../_sources/ttnn/tutorials/tutorials/ttnn_tracer_model.ipynb.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="TT-NN-Tracer-and-BERT-Model-Visualization-Tutorial">
+<h1>TT-NN Tracer and BERT Model Visualization Tutorial<a class="headerlink" href="#TT-NN-Tracer-and-BERT-Model-Visualization-Tutorial" title="Permalink to this heading"></a>
+</h1>
+<p>This tutorial demonstrates how to use TT-NN’s tracer functionality to visualize tensor operations and computational graphs. We’ll explore: 1. Basic tensor operation tracing with PyTorch tensors 2. TT-NN tensor operations with reshaping 3. Tracing a BERT self-attention layer 4. Running and tracing a full BERT model for question answering</p>
+<p>The tracer is a powerful debugging and optimization tool that helps understand how operations are executed on Tenstorrent hardware.</p>
+<section id="Import-Libraries">
+<h2>Import Libraries<a class="headerlink" href="#Import-Libraries" title="Permalink to this heading"></a>
+</h2>
+<p>Disable fast runtime mode to ensure all operations are properly traced. Fast runtime mode may skip some operations for performance, which we don’t want when debugging.</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">pathlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">Path</span>
+<span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="p">[</span><span class="s2">"TTNN_CONFIG_OVERRIDES"</span><span class="p">]</span> <span class="o">=</span> <span class="s2">"{</span><span class="se">\"</span><span class="s2">enable_fast_runtime_mode</span><span class="se">\"</span><span class="s2">: false}"</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">transformers</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">ttnn</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">ttnn.tracer</span><span class="w"> </span><span class="kn">import</span> <span class="n">trace</span><span class="p">,</span> <span class="n">visualize</span>
+</pre></div>
+</div>
+</div>
+</section>
+<section id="Set-program-config">
+<h2>Set program config<a class="headerlink" href="#Set-program-config" title="Permalink to this heading"></a>
+</h2>
+<p>Suppress transformer library warnings for cleaner output.</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="n">transformers</span><span class="o">.</span><span class="n">logging</span><span class="o">.</span><span class="n">set_verbosity_error</span><span class="p">()</span>
+</pre></div>
+</div>
+</div>
+</section>
+</section>
+
+<section id="Example-1:-Tracing-PyTorch-Operations">
+<h1>Example 1: Tracing PyTorch Operations<a class="headerlink" href="#Example-1:-Tracing-PyTorch-Operations" title="Permalink to this heading"></a>
+</h1>
+<p>The tracer context manager captures all operations performed within its scope.</p>
+<p>This example shows how basic PyTorch operations are tracked.</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="k">with</span> <span class="n">trace</span><span class="p">():</span>
+    <span class="c1"># Create a random integer tensor of shape (1, 64) with values between 0-99</span>
+    <span class="n">tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randint</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">100</span><span class="p">,</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">64</span><span class="p">))</span>
+    <span class="c1"># Apply exponential function element-wise</span>
+    <span class="c1"># This demonstrates how mathematical operations are captured</span>
+    <span class="n">tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="n">tensor</span><span class="p">)</span>
+
+<span class="c1"># Visualize the computational graph of the traced operations</span>
+<span class="c1"># This will show the flow from random tensor creation to exp operation</span>
+<span class="n">visualize</span><span class="p">(</span><span class="n">tensor</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</section>
+
+<section id="Example-2:-Tracing-TT-NN-Tensor-Operations">
+<h1>Example 2: Tracing TT-NN Tensor Operations<a class="headerlink" href="#Example-2:-Tracing-TT-NN-Tensor-Operations" title="Permalink to this heading"></a>
+</h1>
+<p>This example demonstrates tracing operations that involve TT-NN tensors.</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="k">with</span> <span class="n">trace</span><span class="p">():</span>
+    <span class="c1"># Create a PyTorch tensor with shape (4, 64)</span>
+    <span class="n">tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randint</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">100</span><span class="p">,</span> <span class="p">(</span><span class="mi">4</span><span class="p">,</span> <span class="mi">64</span><span class="p">))</span>
+
+    <span class="c1"># Convert PyTorch tensor to TT-NN format</span>
+    <span class="c1"># This operation moves data to the TT-NN representation</span>
+    <span class="n">tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">tensor</span><span class="p">)</span>
+
+    <span class="c1"># Reshape the tensor from (4, 64) to (2, 4, 32)</span>
+    <span class="c1"># This demonstrates how reshape operations are handled in TT-NN</span>
+    <span class="n">tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">tensor</span><span class="p">,</span> <span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">32</span><span class="p">))</span>
+
+    <span class="c1"># Convert back to PyTorch for visualization</span>
+    <span class="n">tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_torch</span><span class="p">(</span><span class="n">tensor</span><span class="p">)</span>
+
+<span class="c1"># Visualize the graph showing PyTorch → TT-NN → reshape → PyTorch conversion</span>
+<span class="n">visualize</span><span class="p">(</span><span class="n">tensor</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<section id="Model-and-Config-downloading">
+<h2>Model and Config downloading<a class="headerlink" href="#Model-and-Config-downloading" title="Permalink to this heading"></a>
+</h2>
+<p>We define three functions to download the weights and configuration from Hugging Face.</p>
+<p>For practical purposes, we can also specify a <code class="docutils literal notranslate"><span class="pre">TTNN_TUTORIALS_MODELS_CLIP_PATH</span></code> environment variable to avoid downloading the model. If it is defined, then model and configuration will be loaded from the location indicated by <code class="docutils literal notranslate"><span class="pre">TTNN_TUTORIALS_MODELS_CLIP_PATH</span></code>.</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">download_google_bert_model_and_config</span><span class="p">(</span>
+    <span class="n">model_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">transformers</span><span class="o">.</span><span class="n">models</span><span class="o">.</span><span class="n">bert</span><span class="o">.</span><span class="n">modeling_bert</span><span class="o">.</span><span class="n">BertSelfOutput</span><span class="p">,</span> <span class="n">transformers</span><span class="o">.</span><span class="n">BertConfig</span><span class="p">]:</span>
+    <span class="n">model_location</span> <span class="o">=</span> <span class="n">model_name</span>  <span class="c1"># By default, download from Hugging Face</span>
+
+    <span class="c1"># If TTNN_TUTORIALS_MODELS_TRACER_PATH is set, use it as the cache directory to avoid requests to Hugging Face</span>
+    <span class="n">cache_dir</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s2">"TTNN_TUTORIALS_MODELS_TRACER_PATH"</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">cache_dir</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">model_location</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="n">cache_dir</span><span class="p">)</span> <span class="o">/</span> <span class="n">Path</span><span class="p">(</span><span class="s2">"config_google_bert.json"</span><span class="p">)</span>
+
+    <span class="c1"># Load model weights (download if cache_dir was not set)</span>
+    <span class="n">config</span> <span class="o">=</span> <span class="n">transformers</span><span class="o">.</span><span class="n">BertConfig</span><span class="o">.</span><span class="n">from_pretrained</span><span class="p">(</span><span class="n">model_location</span><span class="p">)</span>
+    <span class="n">model</span> <span class="o">=</span> <span class="n">transformers</span><span class="o">.</span><span class="n">models</span><span class="o">.</span><span class="n">bert</span><span class="o">.</span><span class="n">modeling_bert</span><span class="o">.</span><span class="n">BertSelfOutput</span><span class="p">(</span><span class="n">config</span><span class="p">)</span><span class="o">.</span><span class="n">eval</span><span class="p">()</span>
+
+    <span class="k">return</span> <span class="n">model</span><span class="p">,</span> <span class="n">config</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">download_ttnn_bert_config</span><span class="p">(</span><span class="n">model_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">transformers</span><span class="o">.</span><span class="n">BertConfig</span><span class="p">:</span>
+    <span class="n">config_location</span> <span class="o">=</span> <span class="n">model_name</span>  <span class="c1"># By default, download from Hugging Face</span>
+
+    <span class="c1"># If TTNN_TUTORIALS_MODELS_TRACER_PATH is set, use it as the cache directory to avoid requests to Hugging Face</span>
+    <span class="n">cache_dir</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s2">"TTNN_TUTORIALS_MODELS_TRACER_PATH"</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">cache_dir</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">config_location</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="n">cache_dir</span><span class="p">)</span> <span class="o">/</span> <span class="n">Path</span><span class="p">(</span><span class="s2">"config_ttnn_bert.json"</span><span class="p">)</span>
+
+    <span class="c1"># Load config (download if cache_dir was not set)</span>
+    <span class="n">config</span> <span class="o">=</span> <span class="n">transformers</span><span class="o">.</span><span class="n">BertConfig</span><span class="o">.</span><span class="n">from_pretrained</span><span class="p">(</span><span class="n">config_location</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">config</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">download_ttnn_bert_model</span><span class="p">(</span><span class="n">model_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">config</span><span class="p">:</span> <span class="n">transformers</span><span class="o">.</span><span class="n">BertConfig</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">transformers</span><span class="o">.</span><span class="n">BertForQuestionAnswering</span><span class="p">:</span>
+    <span class="n">model_location</span> <span class="o">=</span> <span class="n">model_name</span>  <span class="c1"># By default, download from Hugging Face</span>
+
+    <span class="c1"># If TTNN_TUTORIALS_MODELS_TRACER_PATH is set, use it as the cache directory to avoid requests to Hugging Face</span>
+    <span class="n">cache_dir</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s2">"TTNN_TUTORIALS_MODELS_TRACER_PATH"</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">cache_dir</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">model_location</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="n">cache_dir</span><span class="p">)</span>
+
+    <span class="c1"># Load model weights (download if cache_dir was not set)</span>
+    <span class="n">model</span> <span class="o">=</span> <span class="n">transformers</span><span class="o">.</span><span class="n">BertForQuestionAnswering</span><span class="o">.</span><span class="n">from_pretrained</span><span class="p">(</span><span class="n">model_location</span><span class="p">,</span> <span class="n">config</span><span class="o">=</span><span class="n">config</span><span class="p">)</span><span class="o">.</span><span class="n">eval</span><span class="p">()</span>
+
+    <span class="k">return</span> <span class="n">model</span>
+</pre></div>
+</div>
+</div>
+</section>
+</section>
+
+<section id="Example-3:-Tracing-a-BERT-Layer">
+<h1>Example 3: Tracing a BERT Layer<a class="headerlink" href="#Example-3:-Tracing-a-BERT-Layer" title="Permalink to this heading"></a>
+</h1>
+<p>Load a small BERT configuration for demonstration. This is a tiny BERT model with only 4 layers, 256 hidden dimensions, and 4 attention heads.</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="n">model_name</span> <span class="o">=</span> <span class="s2">"google/bert_uncased_L-4_H-256_A-4"</span>
+<span class="n">model</span><span class="p">,</span> <span class="n">config</span> <span class="o">=</span> <span class="n">download_google_bert_model_and_config</span><span class="p">(</span><span class="n">model_name</span><span class="p">)</span>
+
+<span class="c1"># Trace the BERT self-output layer operations</span>
+<span class="k">with</span> <span class="n">trace</span><span class="p">():</span>
+    <span class="c1"># Create dummy inputs matching the expected dimensions</span>
+    <span class="c1"># hidden_states: output from self-attention (batch=1, seq_len=64, hidden_size=256)</span>
+    <span class="n">hidden_states</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">hidden_size</span><span class="p">))</span>
+    <span class="c1"># input_tensor: residual connection input</span>
+    <span class="n">input_tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">hidden_size</span><span class="p">))</span>
+
+    <span class="c1"># Run the layer forward pass</span>
+    <span class="n">hidden_states</span> <span class="o">=</span> <span class="n">model</span><span class="p">(</span><span class="n">hidden_states</span><span class="p">,</span> <span class="n">input_tensor</span><span class="p">)</span>
+
+    <span class="c1"># Convert output to TT-NN format for visualization</span>
+    <span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">hidden_states</span><span class="p">)</span>
+
+<span class="c1"># Visualize the BERT layer computation graph</span>
+<span class="n">visualize</span><span class="p">(</span><span class="n">output</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<section id="Example-4:-Trace-models-written-using-ttnn">
+<h2>Example 4: Trace models written using ttnn<a class="headerlink" href="#Example-4:-Trace-models-written-using-ttnn" title="Permalink to this heading"></a>
+</h2>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># Configure the dispatch core type based on the architecture</span>
+<span class="c1"># ETH cores are used on newer architectures, WORKER cores on Grayskull</span>
+<span class="n">dispatch_core_type</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">device</span><span class="o">.</span><span class="n">DispatchCoreType</span><span class="o">.</span><span class="n">ETH</span>
+<span class="k">if</span> <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"ARCH_NAME"</span><span class="p">)</span> <span class="ow">and</span> <span class="s2">"grayskull"</span> <span class="ow">in</span> <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"ARCH_NAME"</span><span class="p">):</span>
+    <span class="n">dispatch_core_type</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">device</span><span class="o">.</span><span class="n">DispatchCoreType</span><span class="o">.</span><span class="n">WORKER</span>
+
+<span class="c1"># Open device with custom configuration</span>
+<span class="c1"># - l1_small_size: Set L1 memory allocation to 8KB for small tensors</span>
+<span class="c1"># - dispatch_core_config: Configure which cores handle dispatch operations</span>
+<span class="n">device</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">open_device</span><span class="p">(</span>
+    <span class="n">device_id</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span>
+    <span class="n">l1_small_size</span><span class="o">=</span><span class="mi">8192</span><span class="p">,</span>
+    <span class="n">dispatch_core_config</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">device</span><span class="o">.</span><span class="n">DispatchCoreConfig</span><span class="p">(</span><span class="n">dispatch_core_type</span><span class="p">)</span>
+<span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">models.demos.bert.tt</span><span class="w"> </span><span class="kn">import</span> <span class="n">ttnn_bert</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">models.demos.bert.tt</span><span class="w"> </span><span class="kn">import</span> <span class="n">ttnn_optimized_bert</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">ttnn.model_preprocessing</span><span class="w"> </span><span class="kn">import</span> <span class="n">preprocess_model_parameters</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">ttnn_bert</span><span class="p">(</span><span class="n">bert</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""</span>
+<span class="sd">    Run and trace a complete BERT model for question answering.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        bert: Either ttnn_bert or ttnn_optimized_bert module</span>
+<span class="sd">    """</span>
+    <span class="c1"># Use a larger BERT model fine-tuned for question answering</span>
+    <span class="n">model_name</span> <span class="o">=</span> <span class="s2">"phiyodr/bert-large-finetuned-squad2"</span>
+    <span class="n">config</span> <span class="o">=</span> <span class="n">download_ttnn_bert_config</span><span class="p">(</span><span class="n">model_name</span><span class="p">)</span>
+
+    <span class="c1"># Limit to 1 layer for faster execution in this demo</span>
+    <span class="c1"># Full BERT-large has 24 layers</span>
+    <span class="n">config</span><span class="o">.</span><span class="n">num_hidden_layers</span> <span class="o">=</span> <span class="mi">1</span>
+
+    <span class="c1"># Set batch size and sequence length for input</span>
+    <span class="n">batch_size</span> <span class="o">=</span> <span class="mi">8</span>
+    <span class="n">sequence_size</span> <span class="o">=</span> <span class="mi">384</span>  <span class="c1"># Standard for question answering tasks</span>
+
+    <span class="c1"># ===== Model Parameter Preprocessing =====</span>
+    <span class="c1"># Convert model parameters to TT-NN format and optimize for device</span>
+    <span class="c1"># This includes weight packing, layout conversion, and memory placement</span>
+    <span class="n">model</span> <span class="o">=</span> <span class="n">download_ttnn_bert_model</span><span class="p">(</span><span class="n">model_name</span><span class="p">,</span> <span class="n">config</span><span class="p">)</span>
+    <span class="n">parameters</span> <span class="o">=</span> <span class="n">preprocess_model_parameters</span><span class="p">(</span>
+        <span class="n">initialize_model</span><span class="o">=</span><span class="k">lambda</span><span class="p">:</span> <span class="n">model</span><span class="p">,</span>
+        <span class="n">custom_preprocessor</span><span class="o">=</span><span class="n">bert</span><span class="o">.</span><span class="n">custom_preprocessor</span><span class="p">,</span>
+        <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span>
+    <span class="p">)</span>
+
+    <span class="c1"># ===== Trace BERT Inference =====</span>
+    <span class="k">with</span> <span class="n">trace</span><span class="p">():</span>
+        <span class="c1"># Create dummy input tensors</span>
+        <span class="c1"># input_ids: Token IDs from vocabulary</span>
+        <span class="n">input_ids</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randint</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">vocab_size</span><span class="p">,</span> <span class="p">(</span><span class="n">batch_size</span><span class="p">,</span> <span class="n">sequence_size</span><span class="p">))</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">int32</span><span class="p">)</span>
+
+        <span class="c1"># token_type_ids: Segment IDs (0 for question, 1 for context in QA)</span>
+        <span class="n">torch_token_type_ids</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">batch_size</span><span class="p">,</span> <span class="n">sequence_size</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int32</span><span class="p">)</span>
+
+        <span class="c1"># position_ids: Position embeddings (usually just 0 to sequence_length-1)</span>
+        <span class="n">torch_position_ids</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">batch_size</span><span class="p">,</span> <span class="n">sequence_size</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int32</span><span class="p">)</span>
+
+        <span class="c1"># attention_mask: Mask for padding tokens (only for optimized version)</span>
+        <span class="c1"># Shape differs between regular and optimized BERT implementations</span>
+        <span class="n">torch_attention_mask</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">sequence_size</span><span class="p">)</span> <span class="k">if</span> <span class="n">bert</span> <span class="o">==</span> <span class="n">ttnn_optimized_bert</span> <span class="k">else</span> <span class="kc">None</span>
+
+        <span class="c1"># Preprocess inputs for TT-NN format</span>
+        <span class="c1"># This converts PyTorch tensors to device tensors with appropriate layout</span>
+        <span class="n">ttnn_bert_inputs</span> <span class="o">=</span> <span class="n">bert</span><span class="o">.</span><span class="n">preprocess_inputs</span><span class="p">(</span>
+            <span class="n">input_ids</span><span class="p">,</span>
+            <span class="n">torch_token_type_ids</span><span class="p">,</span>
+            <span class="n">torch_position_ids</span><span class="p">,</span>
+            <span class="n">torch_attention_mask</span><span class="p">,</span>
+            <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span>
+        <span class="p">)</span>
+
+        <span class="c1"># Run BERT model for question answering</span>
+        <span class="c1"># Returns start and end logits for answer span prediction</span>
+        <span class="n">output</span> <span class="o">=</span> <span class="n">bert</span><span class="o">.</span><span class="n">bert_for_question_answering</span><span class="p">(</span>
+            <span class="n">config</span><span class="p">,</span>
+            <span class="o">*</span><span class="n">ttnn_bert_inputs</span><span class="p">,</span>
+            <span class="n">parameters</span><span class="o">=</span><span class="n">parameters</span><span class="p">,</span>
+        <span class="p">)</span>
+
+        <span class="c1"># Move output back from device to host for visualization</span>
+        <span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_device</span><span class="p">(</span><span class="n">output</span><span class="p">)</span>
+
+    <span class="c1"># Visualize the complete BERT computation graph</span>
+    <span class="k">return</span> <span class="n">visualize</span><span class="p">(</span><span class="n">output</span><span class="p">)</span>
+
+
+<span class="c1"># Run the optimized BERT implementation</span>
+<span class="c1"># This version includes TT-NN specific optimizations for better performance</span>
+<span class="n">ttnn_bert</span><span class="p">(</span><span class="n">ttnn_optimized_bert</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</section>
+<section id="Close-the-device">
+<h2>Close the device<a class="headerlink" href="#Close-the-device" title="Permalink to this heading"></a>
+</h2>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="n">ttnn</span><span class="o">.</span><span class="n">close_device</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</section>
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="ttnn_visualizer.html" class="btn btn-neutral float-left" title="TT-NN Visualizer" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="../../onboarding.html" class="btn btn-neutral float-right" title="Onboarding New Functionality" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://docs.tenstorrent.com/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

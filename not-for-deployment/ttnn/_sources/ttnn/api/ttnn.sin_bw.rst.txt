@@ -5,4 +5,4 @@
 
 .. _ttnn.sin_bw:
 
-.. autodata:: ttnn.sin_bw
+.. autooperation:: ttnn.sin_bw

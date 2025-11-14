@@ -5,4 +5,4 @@
 
 .. _ttnn.normalize_global:
 
-.. autodata:: ttnn.normalize_global
+.. autooperation:: ttnn.normalize_global

@@ -5,4 +5,4 @@
 
 .. _ttnn.log:
 
-.. autodata:: ttnn.log
+.. autooperation:: ttnn.log

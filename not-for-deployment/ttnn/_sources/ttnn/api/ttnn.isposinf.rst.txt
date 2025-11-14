@@ -5,4 +5,4 @@
 
 .. _ttnn.isposinf:
 
-.. autodata:: ttnn.isposinf
+.. autooperation:: ttnn.isposinf

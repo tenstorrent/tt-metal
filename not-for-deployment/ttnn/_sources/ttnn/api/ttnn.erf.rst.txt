@@ -5,4 +5,4 @@
 
 .. _ttnn.erf:
 
-.. autodata:: ttnn.erf
+.. autooperation:: ttnn.erf

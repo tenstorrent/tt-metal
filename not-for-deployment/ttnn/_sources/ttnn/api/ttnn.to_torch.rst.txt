@@ -5,4 +5,4 @@
 
 .. _ttnn.to_torch:
 
-.. autodata:: ttnn.to_torch
+.. autooperation:: ttnn.to_torch

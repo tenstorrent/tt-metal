@@ -5,4 +5,4 @@
 
 .. _ttnn.group_norm:
 
-.. autodata:: ttnn.group_norm
+.. autooperation:: ttnn.group_norm

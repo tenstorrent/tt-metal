@@ -5,4 +5,4 @@
 
 .. _ttnn.concat_bw:
 
-.. autodata:: ttnn.concat_bw
+.. autooperation:: ttnn.concat_bw

@@ -5,4 +5,4 @@
 
 .. _ttnn.imag_bw:
 
-.. autodata:: ttnn.imag_bw
+.. autooperation:: ttnn.imag_bw

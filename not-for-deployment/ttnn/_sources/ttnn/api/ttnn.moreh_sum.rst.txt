@@ -5,4 +5,4 @@
 
 .. _ttnn.moreh_sum:
 
-.. autodata:: ttnn.moreh_sum
+.. autooperation:: ttnn.moreh_sum

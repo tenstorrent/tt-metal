@@ -5,4 +5,4 @@
 
 .. _ttnn.heaviside:
 
-.. autodata:: ttnn.heaviside
+.. autooperation:: ttnn.heaviside

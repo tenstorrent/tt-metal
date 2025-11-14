@@ -5,4 +5,4 @@
 
 .. _ttnn.outer:
 
-.. autodata:: ttnn.outer
+.. autooperation:: ttnn.outer

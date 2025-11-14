@@ -5,4 +5,4 @@
 
 .. _ttnn.squared_difference:
 
-.. autodata:: ttnn.squared_difference
+.. autooperation:: ttnn.squared_difference

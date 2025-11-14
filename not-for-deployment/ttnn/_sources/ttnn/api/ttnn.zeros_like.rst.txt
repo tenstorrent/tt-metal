@@ -5,4 +5,4 @@
 
 .. _ttnn.zeros_like:
 
-.. autodata:: ttnn.zeros_like
+.. autooperation:: ttnn.zeros_like

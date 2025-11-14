@@ -5,4 +5,4 @@
 
 .. _ttnn.celu_bw:
 
-.. autodata:: ttnn.celu_bw
+.. autooperation:: ttnn.celu_bw

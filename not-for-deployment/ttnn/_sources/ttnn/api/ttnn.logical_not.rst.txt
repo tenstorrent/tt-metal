@@ -5,4 +5,4 @@
 
 .. _ttnn.logical_not:
 
-.. autodata:: ttnn.logical_not
+.. autooperation:: ttnn.logical_not

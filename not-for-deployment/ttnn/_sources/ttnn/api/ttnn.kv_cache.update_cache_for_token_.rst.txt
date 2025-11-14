@@ -5,4 +5,4 @@
 
 .. _ttnn.kv_cache.update_cache_for_token_:
 
-.. autodata:: ttnn.kv_cache.update_cache_for_token_
+.. autooperation:: ttnn.kv_cache.update_cache_for_token_

@@ -5,4 +5,4 @@
 
 .. _ttnn.experimental.conv3d:
 
-.. autodata:: ttnn.experimental.conv3d
+.. autooperation:: ttnn.experimental.conv3d

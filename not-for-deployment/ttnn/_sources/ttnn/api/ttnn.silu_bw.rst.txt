@@ -5,4 +5,4 @@
 
 .. _ttnn.silu_bw:
 
-.. autodata:: ttnn.silu_bw
+.. autooperation:: ttnn.silu_bw

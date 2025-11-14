@@ -5,4 +5,4 @@
 
 .. _ttnn.repeat:
 
-.. autodata:: ttnn.repeat
+.. autooperation:: ttnn.repeat

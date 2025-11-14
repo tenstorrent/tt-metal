@@ -5,4 +5,4 @@
 
 .. _ttnn.digamma:
 
-.. autodata:: ttnn.digamma
+.. autooperation:: ttnn.digamma

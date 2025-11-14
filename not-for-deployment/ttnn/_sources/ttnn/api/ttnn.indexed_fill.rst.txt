@@ -5,4 +5,4 @@
 
 .. _ttnn.indexed_fill:
 
-.. autodata:: ttnn.indexed_fill
+.. autooperation:: ttnn.indexed_fill

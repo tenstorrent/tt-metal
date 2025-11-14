@@ -5,4 +5,4 @@
 
 .. _ttnn.scale_mask_softmax:
 
-.. autodata:: ttnn.scale_mask_softmax
+.. autooperation:: ttnn.scale_mask_softmax
