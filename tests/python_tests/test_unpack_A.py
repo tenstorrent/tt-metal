@@ -278,21 +278,6 @@ def filter_params_with_z3(all_params):
         # ROW broadcast constraint: Requires 4 faces for proper row broadcast
         row_broadcast_constraint = Implies(broadcast_row, num_faces_z3 == 4)
 
-        # Block Float16/Float16_b transpose combinations that produce garbage values on CI runners
-        ci_undefined_behavior_constraint = Not(
-            And(
-                Or(
-                    BoolVal(formats.input_format == DataFormat.Float16_b),
-                    BoolVal(formats.input_format == DataFormat.Float16),
-                ),
-                broadcast_none,
-                acc_to_dest_z3,
-                Or(reuse_none, reuse_srca),
-                transpose_faces,
-                within_face_transpose,
-            )
-        )
-
         # Block transpose operations for face_r_dim < 16
         # Hardware transpose logic hardcoded for 16x16 faces, corrupts smaller faces
         # Note: matmul operations support transpose with partial faces, but unpack_A does not
@@ -334,7 +319,6 @@ def filter_params_with_z3(all_params):
             datacopy_acc_to_dest_constraint,
             bfp8_stochastic_constraint,
             wormhole_row_outlier_constraint,
-            ci_undefined_behavior_constraint,
             transpose_face_size_constraint,
             partial_face_num_faces_constraint,
             bfp8_partial_face_constraint,
