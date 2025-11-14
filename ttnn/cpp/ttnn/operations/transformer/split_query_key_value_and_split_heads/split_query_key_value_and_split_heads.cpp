@@ -136,15 +136,15 @@ std::tuple<Tensor, Tensor, Tensor> SplitQueryKeyValueAndSplitHeadsOperation::inv
             num_heads);
 
         TT_FATAL(
-            (input_shape_kv[2] % (2 * num_kv_heads.value())) == 0,
+            (input_shape_kv[2] % (2 * num_kv_heads.value_or(num_heads))) == 0,
             "KV dimension ({}) must be divisible by 2 * num_kv_heads ({}).",
             input_shape_kv[2],
-            (2 * num_kv_heads.value()));
+            (2 * num_kv_heads.value_or(num_heads)));
 
         TT_FATAL(
-            (input_shape_kv[2] / (2 * num_kv_heads.value())) == (input_shape[2] / num_heads),
+            (input_shape_kv[2] / (2 * num_kv_heads.value_or(num_heads))) == (input_shape[2] / num_heads),
             "Dimension mismatch: KV head size ({}) must be equal to query head size ({}).",
-            (input_shape_kv[2] / (2 * num_kv_heads.value())),
+            (input_shape_kv[2] / (2 * num_kv_heads.value_or(num_heads))),
             (input_shape[2] / num_heads));
 
         hidden_dim = input_shape[2];
