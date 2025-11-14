@@ -289,14 +289,17 @@ class TtSDXLCombinedPipeline:
         logger.info("Pipeline compilation complete!")
         logger.info("=" * 80)
 
-    def _calculate_timestep_split(self, num_inference_steps):
-        split_idx = int(num_inference_steps * self.config.denoising_split)
+    def _calculate_timestep_split(self, num_inference_steps, denoising_split):
+        discrete_timestep_cutoff = int(
+            round(
+                self.shared_scheduler.num_train_timesteps
+                - (denoising_split * self.shared_scheduler.num_train_timesteps)
+            )
+        )
 
-        # Ensure at least 1 step for each pipeline if both are active
-        if self.config.use_refiner:
-            split_idx = max(1, min(split_idx, num_inference_steps - 1))
+        split_idx = len([t for t in self.shared_scheduler.torch_timesteps if t < discrete_timestep_cutoff])
 
-        return split_idx
+        return num_inference_steps - split_idx
 
     def generate(
         self,
@@ -359,7 +362,9 @@ class TtSDXLCombinedPipeline:
         )
 
         split_idx = (
-            self._calculate_timestep_split(num_inference_steps) if self.config.use_refiner else num_inference_steps
+            self._calculate_timestep_split(num_inference_steps, self.config.denoising_split)
+            if self.config.use_refiner
+            else num_inference_steps
         )
 
         # For refiner case, we need to mark that input tensors need regeneration since we updated the config
