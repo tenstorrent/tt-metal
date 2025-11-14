@@ -279,27 +279,13 @@ def evaluate_coco(
     logger.info(f"  mAP@0.50      (IoU=0.50):      {coco_eval.stats[1]:.3f}")
     logger.info(f"  mAP@0.75      (IoU=0.75):      {coco_eval.stats[2]:.3f}")
     logger.info("")
-    logger.info("=" * 80)
-    logger.info("Detailed COCO Metrics")
-    logger.info("=" * 80)
-    logger.info(f" Average Precision  (AP) @[ IoU=0.50:0.95 | area=   all | maxDets=100 ] = {coco_eval.stats[0]:.3f}")
-    logger.info(f" Average Precision  (AP) @[ IoU=0.50      | area=   all | maxDets=100 ] = {coco_eval.stats[1]:.3f}")
-    logger.info(f" Average Precision  (AP) @[ IoU=0.75      | area=   all | maxDets=100 ] = {coco_eval.stats[2]:.3f}")
-    logger.info(f" Average Precision  (AP) @[ IoU=0.50:0.95 | area= small | maxDets=100 ] = {coco_eval.stats[3]:.3f}")
-    logger.info(f" Average Precision  (AP) @[ IoU=0.50:0.95 | area=medium | maxDets=100 ] = {coco_eval.stats[4]:.3f}")
-    logger.info(f" Average Precision  (AP) @[ IoU=0.50:0.95 | area= large | maxDets=100 ] = {coco_eval.stats[5]:.3f}")
-    logger.info(f" Average Recall     (AR) @[ IoU=0.50:0.95 | area=   all | maxDets=  1 ] = {coco_eval.stats[6]:.3f}")
-    logger.info(f" Average Recall     (AR) @[ IoU=0.50:0.95 | area=   all | maxDets= 10 ] = {coco_eval.stats[7]:.3f}")
-    logger.info(f" Average Recall     (AR) @[ IoU=0.50:0.95 | area=   all | maxDets=100 ] = {coco_eval.stats[8]:.3f}")
-    logger.info(f" Average Recall     (AR) @[ IoU=0.50:0.95 | area= small | maxDets=100 ] = {coco_eval.stats[9]:.3f}")
-    logger.info(f" Average Recall     (AR) @[ IoU=0.50:0.95 | area=medium | maxDets=100 ] = {coco_eval.stats[10]:.3f}")
-    logger.info(f" Average Recall     (AR) @[ IoU=0.50:0.95 | area= large | maxDets=100 ] = {coco_eval.stats[11]:.3f}")
 
     # Performance metrics
     if inference_times:
-        avg_inference_time = np.mean(inference_times)
-        logger.info(f"\nPerformance Metrics:")
-        logger.info(f"  Average Inference Time: {avg_inference_time*1000:.2f} ms")
+        avg_inference_time = np.mean(inference_times[1:])
+        logger.info(f" Performance Metrics:")
+        logger.info(f" Average Inference Time: {avg_inference_time*1000:.2f} ms")
+        logger.info(f" Average FPS: {1/avg_inference_time:.2f}")
 
     # Cleanup
     os.unlink(results_file)
