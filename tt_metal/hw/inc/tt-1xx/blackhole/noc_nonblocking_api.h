@@ -10,6 +10,7 @@
 #include "dev_msgs.h"
 #include "noc_overlay_parameters.h"
 #include "debug/assert.h"
+#include "debug/dprint.h"
 
 #if defined(COMPILE_FOR_AERISC)
 #include "eth_fw_api.h"
@@ -424,6 +425,18 @@ inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_nonposted_writes_f
     uint32_t status_reg_val = NOC_STATUS_READ_REG(noc, NIU_MST_WR_ACK_RECEIVED);
     uint32_t self_risc_acked = get_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc);
     uint32_t other_risc_acked = get_noc_counter_val<1 - proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc);
+#if defined(COMPILE_FOR_AERISC) && defined(DEBUG_PRINT_ENABLED)
+    static uint32_t print_counter = 0;
+    // if (print_counter++ % 1000000 == 0) {  // Print every millionth check to avoid spam
+    DPRINT << "ncrisc_dynamic_noc_nonposted_writes_flushed: noc=" << DEC() << noc
+           << " proc_type= " << (uint32_t)proc_type << " status= " << DEC() << status_reg_val << " self= " << DEC()
+           << self_risc_acked << " other= " << DEC() << other_risc_acked << " sum= " << DEC()
+           << (self_risc_acked + other_risc_acked) << " self_addr= " << HEX()
+           << get_noc_counter_address<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc)
+           << " other_addr= " << HEX()
+           << get_noc_counter_address<1 - proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc) << ENDL();
+    // }
+#endif
     return (status_reg_val == (self_risc_acked + other_risc_acked));
 }
 
@@ -562,11 +575,17 @@ inline __attribute__((always_inline)) void noc_local_state_init(int noc) {
 template <NocBarrierType barrier_type, uint32_t status_register>
 inline __attribute__((always_inline)) void dynamic_noc_local_barrier_init(
     uint32_t noc0_status_reg, uint32_t noc1_status_reg) {
-    using underlying_tensix_processor_types_t = std::underlying_type_t<TensixProcessorTypes>;
-    constexpr underlying_tensix_processor_types_t dm0 =
-        static_cast<underlying_tensix_processor_types_t>(TensixProcessorTypes::DM0);
-    constexpr underlying_tensix_processor_types_t dm1 =
-        static_cast<underlying_tensix_processor_types_t>(TensixProcessorTypes::DM1);
+#if defined(COMPILE_FOR_AERISC)
+    // For ERISC, use EthProcessorTypes
+    using underlying_processor_types_t = std::underlying_type_t<EthProcessorTypes>;
+    constexpr underlying_processor_types_t dm0 = static_cast<underlying_processor_types_t>(EthProcessorTypes::DM0);
+    constexpr underlying_processor_types_t dm1 = static_cast<underlying_processor_types_t>(EthProcessorTypes::DM1);
+#else
+    // For Tensix, use TensixProcessorTypes
+    using underlying_processor_types_t = std::underlying_type_t<TensixProcessorTypes>;
+    constexpr underlying_processor_types_t dm0 = static_cast<underlying_processor_types_t>(TensixProcessorTypes::DM0);
+    constexpr underlying_processor_types_t dm1 = static_cast<underlying_processor_types_t>(TensixProcessorTypes::DM1);
+#endif
 
     set_noc_counter_val<dm0, barrier_type>(NOC_0, noc0_status_reg);
     set_noc_counter_val<dm0, barrier_type>(NOC_1, 0);
@@ -1740,28 +1759,21 @@ inline __attribute__((always_inline)) void noc_wwrite_with_state(
 
 template <uint8_t MAX_NOCS_TO_INIT = NUM_NOCS>
 inline __attribute__((always_inline)) void ncrisc_dynamic_noc_full_sync() {
-    auto status = reinterpret_cast<volatile uint32_t*>(0x50000);
     for (uint32_t noc = 0; noc < MAX_NOCS_TO_INIT; noc++) {
-        status[0] = 0xdead;
         while (!ncrisc_dynamic_noc_reads_flushed(noc)) {
             invalidate_l1_cache();
         }
-        status[0] = 1;
         while (!ncrisc_dynamic_noc_nonposted_writes_sent(noc)) {
             invalidate_l1_cache();
         }
-        status[0] = 2;
         while (!ncrisc_dynamic_noc_nonposted_writes_flushed(noc)) {
             invalidate_l1_cache();
         }
-        status[0] = 3;
         while (!ncrisc_dynamic_noc_nonposted_atomics_flushed(noc)) {
             invalidate_l1_cache();
         }
-        status[0] = 4;
         while (!ncrisc_dynamic_noc_posted_writes_sent(noc)) {
             invalidate_l1_cache();
         }
-        status[0] = 5;
     }
 }
