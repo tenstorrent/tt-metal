@@ -60,28 +60,10 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_minimal_matmul_
     DeviceComputeKernelConfig compute_kernel_config) {
     tt::tt_metal::Program program{};
 
-    ////////////// Params for fused op signalers //////////////
-    auto tensor_slicer =
-        ttnn::ccl::InterleavedRingAllGatherTensorSlicer(input_tensor, all_gather_output_tensor, dim, ring_index);
-    bool is_clockwise_direction = true;
-    const uint32_t num_transfers = 4;
-    const uint32_t weight_tensor_width = weight_tensor.padded_shape()[3] / 32;
-
-    ////////////////////////////////////////////////////////
-
     // Create a matmul signal info object that gets populated by the matmul kernel
     std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler> matmul_fused_op_signaler =
         ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler();
-    matmul_fused_op_signaler->init_all_gather(
-        num_transfers,
-        ring_size,
-        ring_index,
-        tensor_slicer.num_cols,
-        tensor_slicer.output_page_offset,
-        is_clockwise_direction,
-        tensor_slicer.num_cols *
-            weight_tensor_width /* weight_output_page_offset: stride across a tensor slice in the weight_tensor */
-    );
+    matmul_fused_op_signaler->init_all_gather(ring_size, ring_index);
 
     // Matmul
     std::optional<tt::tt_metal::operation::ProgramWithCallbacks> matmul_program_with_callbacks;

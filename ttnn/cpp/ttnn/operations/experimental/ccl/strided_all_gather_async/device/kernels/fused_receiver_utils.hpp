@@ -30,13 +30,8 @@ struct MinimalMatmulOpReceiver {
         sem_targets[2] = 0;  // self
 
         // Runtime args
-        uint32_t num_transfers = get_arg_val<uint32_t>(rt_args_idx++);  // TODO remove
         num_devices = get_arg_val<uint32_t>(rt_args_idx++);
         my_chip_id = get_arg_val<uint32_t>(rt_args_idx++);
-        uint32_t tensor_slice_shape_width = get_arg_val<uint32_t>(rt_args_idx++);  // TODO remove
-        uint32_t output_page_offset = get_arg_val<uint32_t>(rt_args_idx++);        // TODO remove
-        uint32_t last_output_page_offset = get_arg_val<uint32_t>(rt_args_idx++);   // TODO remove
-        uint32_t is_clockwise_direction = get_arg_val<uint32_t>(rt_args_idx++);    // TODO remove
 
         if (this->wait_for_op_signal) {
             this->signal_op_semaphore_addr_ptrs[0] =
