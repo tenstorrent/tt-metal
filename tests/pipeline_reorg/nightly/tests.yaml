@@ -5,6 +5,7 @@
 #   cmd: The exact command to run for the test.
 #   sku: Machine type to target (e.g. wh_llmbox).
 #   owner_id: The Slack user ID to notify on failure.
+#   team: The team that owns the test.
 #   timeout: The maximum allowed runtime for this job in minutes.
 
 #- name: t3k_ccl_tests
