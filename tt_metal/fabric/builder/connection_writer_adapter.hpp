@@ -158,6 +158,7 @@ protected:
 
 protected:
     friend class FabricEriscDatamoverBuilder;  // TODO DELETE
+    friend class ChannelConnectionWriterAdapter;  // TODO DELETE
     void emit_ct_args_impl(std::vector<uint32_t>& ct_args_out, size_t num_fwd_paths) const override;
 
     // holds the number of buffer slots per downstream sender channel

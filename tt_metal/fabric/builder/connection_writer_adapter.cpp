@@ -38,13 +38,34 @@ void ChannelConnectionWriterAdapter::pack_inbound_channel_rt_args(
     uint32_t vc_idx, std::vector<uint32_t>& args_out) const {
     bool vc_1_enabled = (topology == tt::tt_fabric::Topology::Ring || topology == tt::tt_fabric::Topology::Torus) &&
                         (this->downstream_edms_connected_by_vc_set.contains(vc_idx));
+    bool is_active = vc_idx == 0 ? this->downstream_edms_connected : vc_1_enabled;
     auto rt_args = std::initializer_list<uint32_t>{
-        vc_idx == 0 ? this->downstream_edms_connected : vc_1_enabled,
+        is_active,
         this->pack_downstream_noc_x_rt_arg(vc_idx),
         this->pack_downstream_noc_y_rt_arg(vc_idx),
         this->downstream_edm_vcs_worker_registration_address[vc_idx].value_or(0),
         this->downstream_edm_vcs_worker_location_info_address[vc_idx].value_or(0),
     };
+    if (is_active && vc_idx == 1) {
+        log_info(
+            tt::LogFabric,
+            "Downstream edm vcs buffer base address[0]: {}",
+            dynamic_cast<const StaticSizedChannelConnectionWriterAdapter*>(this)
+                ->downstream_edm_vcs_buffer_base_address.at(0)
+                .value_or(0));
+        log_info(
+            tt::LogFabric,
+            "Downstream edm vcs buffer base address[1]: {}",
+            dynamic_cast<const StaticSizedChannelConnectionWriterAdapter*>(this)
+                ->downstream_edm_vcs_buffer_base_address.at(1)
+                .value_or(0));
+        TT_FATAL(
+            dynamic_cast<const StaticSizedChannelConnectionWriterAdapter*>(this)
+                    ->downstream_edm_vcs_buffer_base_address[vc_idx]
+                    .value_or(0) != 0,
+            "Downstream edm vcs buffer base address must be non-zero for vc_idx: {}",
+            vc_idx);
+    }
 
     args_out.reserve(args_out.size() + rt_args.size());
     std::copy(rt_args.begin(), rt_args.end(), std::back_inserter(args_out));

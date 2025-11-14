@@ -814,31 +814,18 @@ void FabricEriscDatamoverBuilder::initialize_downstream_adapter_for_vc(
         "Receiver channel to downstream adapter already initialized for vc_idx: {}",
         vc_idx);
 
-    // Determine first sender channel for this VC based on simplified rules
-    std::vector<size_t> vc_sender_channels;
     const bool is_2d = FabricContext::is_2D_topology(this->config.topology);
-
+    size_t first_non_worker_channel;
     if (!is_2d) {
         // 1D: Linear/Ring → VC0->CH1, VC1->CH2
         TT_FATAL(this->config.topology != Topology::Linear || vc_idx == 0, "VC1 is not supported for Linear topology");
-        size_t first_non_worker_channel = vc_idx + 1;
-        vc_sender_channels = {first_non_worker_channel};
+        first_non_worker_channel = vc_idx + 1;
     } else {
         // 2D: Mesh/Torus
         TT_FATAL(this->config.topology != Topology::Mesh || vc_idx == 0, "VC1 is not supported for Mesh topology");
-        size_t first_non_worker_channel = (vc_idx == 0) ? ((static_cast<size_t>(this->direction) == 0) ? 1 : 0) : 4;
+        first_non_worker_channel = (vc_idx == 0) ? ((static_cast<size_t>(this->direction) == 0) ? 1 : 0) : 4;
         // size_t first_channel = (vc_idx == 0) ? static_cast<size_t>(this->direction) : 4;
-        vc_sender_channels = {first_non_worker_channel};
     }
-
-    TT_FATAL(
-        !vc_sender_channels.empty(),
-        "No sender channels found for VC{} in topology {}",
-        vc_idx,
-        static_cast<int>(this->config.topology));
-
-    // Get pool index for the first sender channel (all channels for a VC should map to the same pool)
-    size_t first_non_worker_channel = vc_sender_channels[0];
 
     auto downstream_pool_type = config.get_sender_channel_pool_type(first_non_worker_channel);
     bool downstream_is_elastic = downstream_pool_type == tt::tt_fabric::FabricChannelPoolType::ELASTIC;
@@ -1261,7 +1248,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     ct_args.push_back(0);
     ct_args.push_back(static_cast<uint32_t>(FabricChannelPoolType::STATIC));
     if (config.remote_channel_to_pool_mapping->get_receiver_channel_to_pool_index().size() > 1) {
-        ct_args.push_back(1);
+        ct_args.push_back(1);  // THIS IS PROBLEMATIC FOR MUX
         ct_args.push_back(static_cast<uint32_t>(FabricChannelPoolType::STATIC));
     }
 
@@ -1723,6 +1710,14 @@ void FabricEriscDatamoverBuilder::setup_downstream_vc_connection(
     const auto ds_noc_x = downstream_builder.get_noc_x();
     const auto ds_noc_y = downstream_builder.get_noc_y();
     eth_chan_directions ds_dir = downstream_builder.get_direction();
+    if (vc_idx == 1) {
+        log_info(tt::LogFabric, "VC1 connection, channel_id: {}", channel_id);
+    }
+    if constexpr (std::is_same_v<BuilderType, FabricTensixDatamoverBuilder>) {
+        if (vc_idx == 1) {
+            channel_id = 1;
+        }
+    }
 
     auto adapter_spec = downstream_builder.build_connection_to_fabric_channel(channel_id);
 
@@ -1731,10 +1726,6 @@ void FabricEriscDatamoverBuilder::setup_downstream_vc_connection(
         downstream_builder.append_upstream_routers_noc_xy(this->my_noc_x, this->my_noc_y);
     }
 
-    // auto channel_allocator = config.channel_allocator.get();
-    // const auto static_channel_allocator =
-    //     dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator);
-    // TT_FATAL(static_channel_allocator != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator.");
     TT_FATAL(vc_idx == static_cast<size_t>(is_vc1), "VC index mismatch");
     auto adapter_ptr = receiver_channel_to_downstream_adapter[vc_idx].get();
     TT_FATAL(adapter_ptr != nullptr, "Adapter is not set. Failed to build TT-Fabric router. Internal error.");
