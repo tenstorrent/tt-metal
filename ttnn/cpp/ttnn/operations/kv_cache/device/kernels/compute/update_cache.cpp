@@ -8,6 +8,8 @@
 #include "api/compute/pack_untilize.h"
 #include "api/compute/tilize.h"
 #include "api/compute/untilize.h"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.h"
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.h"
 
 void kernel_main() {
     constexpr uint32_t cache_cb = get_compile_time_arg_val(0);
@@ -22,71 +24,37 @@ void kernel_main() {
     constexpr uint32_t u_count = get_compile_time_arg_val(9);
 
     compute_kernel_hw_startup(in_cb, untilized_in_cb);
-    if constexpr (Wt > 8) {
-        untilize_init(in_cb);
-    } else {
-        pack_untilize_init<Wt>(in_cb, untilized_in_cb);
-    }
+
+    // Initialize once before the loop
+    compute_kernel_lib::untilize_init<Wt>(in_cb, untilized_in_cb);
 
     for (uint32_t h = 0; h < num_batched_heads; ++h) {
-        cb_wait_front(in_cb, Wt);
-        cb_reserve_back(untilized_in_cb, Wt);
-        if constexpr (Wt > 8) {
-            untilize_block(in_cb, Wt, untilized_in_cb);
-        } else {
-            pack_untilize_block<Wt>(in_cb, Wt, untilized_in_cb);
-        }
-        cb_push_back(untilized_in_cb, Wt);
-        cb_pop_front(in_cb, Wt);
+        // Untilize input (init done before loop, no uninit needed)
+        compute_kernel_lib::untilize<Wt, false, false>(in_cb, untilized_in_cb, 1);
 
         reconfig_data_format_srca(in_cb, cache_cb);
         for (uint32_t u = 0; u < u_count; ++u) {
-            if constexpr (Wt > 8) {
-                untilize_init(cache_cb);
-            } else {
-                pack_untilize_init<Wt>(cache_cb, untilized_cache_cb);
-            }
-
-            for (uint32_t g = 0; g < granularity; ++g) {
-                // Untilize a block from the cache
-                cb_wait_front(cache_cb, Wt);
-                cb_reserve_back(untilized_cache_cb, Wt);
-                if constexpr (Wt > 8) {
-                    untilize_block(cache_cb, 1, untilized_cache_cb);
-                } else {
-                    pack_untilize_block<Wt>(cache_cb, 1, untilized_cache_cb);
-                }
-                cb_push_back(untilized_cache_cb, Wt);
-                cb_pop_front(cache_cb, Wt);
-            }
-            if constexpr (Wt > 8) {
-                untilize_uninit(untilized_cache_cb);
-            } else {
-                pack_untilize_uninit(untilized_cache_cb);
-            }
+            // Untilize cache blocks
+            compute_kernel_lib::untilize<Wt>(cache_cb, untilized_cache_cb, granularity);
 
             reconfig_data_format_srca(cache_cb, untilized_cache2_cb);
             pack_reconfig_data_format(untilized_cache_cb, out_cb);
 
-            tilize_init(untilized_cache2_cb, Wt, out_cb);
+            // Wait on writer to update block. Tilize.
+            compute_kernel_lib::tilize<true, true, false, true>(
+                untilized_cache2_cb,  // new_cb (input)
+                Wt,                   // block_w
+                out_cb,               // output CB
+                granularity,          // num_blocks
+                1,                    // subblock_h (default)
+                cache_cb              // old_cb (for DT restoration)
+            );
 
-            for (uint32_t g = 0; g < granularity; ++g) {
-                // Wait on writer to update block. Tilize.
-                cb_wait_front(untilized_cache2_cb, Wt);
-                cb_reserve_back(out_cb, Wt);
-                tilize_block(untilized_cache2_cb, Wt, out_cb);
-                cb_push_back(out_cb, Wt);
-                cb_pop_front(untilized_cache2_cb, Wt);
-            }
-
-            tilize_uninit_with_dt(untilized_cache2_cb, cache_cb, out_cb);
             pack_reconfig_data_format(out_cb, untilized_cache_cb);
         }
         reconfig_data_format_srca(cache_cb, in_cb);
-        if constexpr (Wt > 8) {
-            untilize_init(in_cb);
-        } else {
-            pack_untilize_init<Wt>(in_cb, untilized_in_cb);
-        }
+
+        // Re-initialize for next iteration
+        compute_kernel_lib::untilize_init<Wt>(in_cb, untilized_in_cb);
     }
 }

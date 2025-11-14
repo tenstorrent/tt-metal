@@ -9,6 +9,7 @@
 #include "api/compute/tilize.h"
 #include "api/compute/untilize.h"
 #include "api/compute/pack_untilize.h"
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.h"
 
 void kernel_main() {
     constexpr uint32_t x_block_size = get_named_compile_time_arg_val("x_block_size");
@@ -26,18 +27,16 @@ void kernel_main() {
     unary_op_init_common(cb_in, cb_out);
 
     for (uint32_t n = 0; n < num_blocks; n++) {
-        // tilize input via unpack and then pack
-        tilize_init(cb_in, 1, cb_tilize);
-
-        cb_wait_front(cb_in, x_block_size);
-        cb_reserve_back(cb_tilize, 1);
-
-        tilize_block(cb_in, 1, cb_tilize);  // tilize and pack into cb_tilize
-
-        cb_push_back(cb_tilize, 1);
-        cb_pop_front(cb_in, x_block_size);
-
-        tilize_uninit(cb_in, cb_tilize);
+        // Tilize input via unpack and then pack (asymmetric: x_block_size rows → 1 tile)
+        compute_kernel_lib::tilize(
+            cb_in,        // Input CB (row-major)
+            1,            // block_w (1 tile output)
+            cb_tilize,    // Output CB (tiled)
+            1,            // num_blocks (1 iteration per outer loop)
+            1,            // subblock_h (default)
+            0,            // old_icb (not used)
+            x_block_size  // input_count (asymmetric: rows != tiles)
+        );
 
         // transpose input
         cb_wait_front(cb_tilize, 1);
