@@ -87,7 +87,9 @@ void GridSample::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(grid_tensor.layout() == Layout::ROW_MAJOR, "Grid tensor must be ROW_MAJOR layout");
 
     // Parameter validation - currently only support fixed configuration
-    TT_FATAL(mode_ == "bilinear", "Only bilinear interpolation mode is currently supported");
+    TT_FATAL(
+        mode_ == "bilinear" || mode_ == "nearest",
+        "Only bilinear and nearest interpolation modes are currently supported");
     TT_FATAL(padding_mode_ == "zeros", "Only zeros padding mode is currently supported");
 
     // Memory layout validation - support interleaved and height sharded
@@ -241,8 +243,19 @@ operation::ProgramWithCallbacks GridSample::create_program(
     const Tensor& grid_tensor = input_tensors.at(1);
     Tensor& output_tensor = output_tensors.at(0);
 
-    return grid_sample_program_factory(
-        input_tensor, grid_tensor, output_tensor, mode_, padding_mode_, use_precomputed_grid_, batch_output_channels_);
+    if (mode_ == "nearest") {
+        return grid_sample_nearest_program_factory(
+            input_tensor, grid_tensor, output_tensor, padding_mode_, use_precomputed_grid_, batch_output_channels_);
+    } else {
+        return grid_sample_program_factory(
+            input_tensor,
+            grid_tensor,
+            output_tensor,
+            mode_,
+            padding_mode_,
+            use_precomputed_grid_,
+            batch_output_channels_);
+    }
 }
 
 }  // namespace ttnn::operations::grid_sample

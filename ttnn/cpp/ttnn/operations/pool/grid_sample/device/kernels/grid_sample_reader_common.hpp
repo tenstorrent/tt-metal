@@ -134,6 +134,56 @@ struct GridCoordinateReader {
     }
 };
 
+// Nearest neighbor coordinate reading - simpler version without weights
+template <uint32_t grid_dtype, bool use_precomputed_grid>
+struct GridCoordinateReaderNearest {
+    template <typename GridPtrType>
+    ALWI static void read_grid_point_nearest(
+        GridPtrType grid_ptr,
+        uint32_t grid_idx,
+        float height_scale,
+        float height_offset,
+        float width_scale,
+        float width_offset,
+        uint32_t input_height,
+        uint32_t input_width,
+        int32_t& h_nearest,
+        int32_t& w_nearest) {
+        if constexpr (use_precomputed_grid) {
+            // For precomputed grid with nearest mode, coordinates should already be rounded
+            const uint32_t precomputed_data_offset = grid_idx * PRECOMPUTED_GRID_ELEMENTS_PER_POINT;
+            const int16_t h0_raw = *reinterpret_cast<volatile int16_t*>(&grid_ptr[precomputed_data_offset + 0]);
+            const int16_t w0_raw = *reinterpret_cast<volatile int16_t*>(&grid_ptr[precomputed_data_offset + 1]);
+            h_nearest = static_cast<int32_t>(h0_raw);
+            w_nearest = static_cast<int32_t>(w0_raw);
+        } else {
+            // Read normalized coordinates from grid
+            float h_coord_rel, w_coord_rel;
+            if constexpr (grid_dtype == DTYPE_FLOAT32) {
+                volatile tt_l1_ptr float* float_data = reinterpret_cast<volatile tt_l1_ptr float*>(grid_ptr);
+                const uint32_t float_offset = grid_idx * STANDARD_GRID_ELEMENTS_PER_POINT;
+                w_coord_rel = float_data[float_offset + 0];  // x coordinate
+                h_coord_rel = float_data[float_offset + 1];  // y coordinate
+            } else {
+                const uint32_t coordinate_pair_offset = grid_idx * STANDARD_GRID_ELEMENTS_PER_POINT;
+                const uint16_t h_coord_raw = grid_ptr[coordinate_pair_offset + 1];  // y coordinate
+                const uint16_t w_coord_raw = grid_ptr[coordinate_pair_offset + 0];  // x coordinate
+                h_coord_rel = bfloat16_to_float(h_coord_raw);
+                w_coord_rel = bfloat16_to_float(w_coord_raw);
+            }
+
+            // Transform from normalized [-1, 1] to pixel coordinates
+            const float h_coord_image = h_coord_rel * height_scale + height_offset;
+            const float w_coord_image = w_coord_rel * width_scale + width_offset;
+
+            // Round to nearest integer pixel using floor(x + 0.5)
+            // This matches PyTorch's nearest neighbor behavior
+            h_nearest = static_cast<int32_t>(floor(h_coord_image + 0.5f));
+            w_nearest = static_cast<int32_t>(floor(w_coord_image + 0.5f));
+        }
+    }
+};
+
 // Input data reading template - handles both tensor accessor and direct NOC reads
 template <typename TensorAccessor>
 ALWI void read_four_corner_inputs(
