@@ -18,6 +18,7 @@ file(
     kernels/*
     all_to_all_combine/device/kernels/*
     all_to_all_dispatch/device/kernels/*
+    fused_broadcast/device/kernels/*
 )
 target_sources(
     ttnn_op_ccl
@@ -30,6 +31,7 @@ target_sources(
             all_reduce/all_reduce.hpp
             reduce_scatter/reduce_scatter.hpp
             all_broadcast/device/all_broadcast_op.hpp # seems odd to have some of this file, but it's needed for tt-train to consume
+            fused_broadcast/fused_broadcast.hpp
             ccl_common.hpp
             ccl_host_datastructures.hpp
             ccl_host_types.hpp
@@ -95,6 +97,9 @@ target_sources(
         broadcast/broadcast.cpp
         broadcast/device/broadcast_op.cpp
         broadcast/device/broadcast_program.cpp
+        fused_broadcast/fused_broadcast.cpp
+        fused_broadcast/device/fused_broadcast_op.cpp
+        fused_broadcast/device/fused_broadcast_program.cpp
 )
 
 target_include_directories(ttnn_op_ccl PRIVATE ${FixmeOpIncDirs})

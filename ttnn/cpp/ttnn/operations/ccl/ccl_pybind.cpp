@@ -15,6 +15,7 @@
 #include "ttnn/operations/ccl/all_to_all_dispatch/all_to_all_dispatch_pybind.hpp"
 #include "ttnn/operations/ccl/reduce_scatter/reduce_scatter_pybind.hpp"
 #include "ttnn/operations/ccl/all_reduce/all_reduce_pybind.hpp"
+#include "ttnn/operations/ccl/fused_broadcast/fused_broadcast_pybind.hpp"
 
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include <tt-metalium/fabric.hpp>
@@ -37,6 +38,7 @@ void py_module(py::module& module) {
     ccl::py_bind_reduce_scatter(module);
     ccl::py_bind_all_reduce(module);
     ccl::py_bind_broadcast(module);
+    ccl::py_bind_fused_broadcast(module);
 }
 
 }  // namespace ttnn::operations::ccl
