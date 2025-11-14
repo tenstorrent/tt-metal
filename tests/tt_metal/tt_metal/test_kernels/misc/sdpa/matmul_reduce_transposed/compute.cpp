@@ -58,6 +58,9 @@ void matmul_blocks(
 
     // Width-first traversal: iterate column subblocks outer, row subblocks inner
     for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; ++in1_subblock) {
+        // Initialize reduce once per column (before processing any row blocks)
+        sfpu_reduce_max_sdpa_init(subblock_w);
+
         for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
             // PACK(( DPRINT << "[matmul_blocks] in0_subblock: " << in0_subblock << ", in1_subblock: " << in1_subblock
             // << ENDL() ));
@@ -77,6 +80,14 @@ void matmul_blocks(
             tile_regs_commit();
 
             tile_regs_wait();
+
+            // Perform reduce operation on current row block before packing
+            // This accumulates max values in LREGs 4-7
+            for (uint32_t i = 0; i < subblock_w; i++) {
+                sfpu_reduce_max_sdpa(i, subblock_h, (int)VectorMode::RC_custom);
+            }
+
+            // Now pack the tiles after reduce has processed them
             uint32_t dst_idx = 0;
             uint32_t out_col_offset = in1_subblock * subblock_w;
             for (uint32_t r = 0; r < subblock_h; r++) {
@@ -85,17 +96,6 @@ void matmul_blocks(
                     pack_tile<true>(dst_idx, matmul_out_cb, out_row_offset + out_col_offset + c);
                     dst_idx++;
                 }
-            }
-
-            // Initialize reduce once per column (first row block only)
-            if (in0_subblock == 0) {
-                sfpu_reduce_max_sdpa_init(subblock_w);
-            }
-
-            // Perform reduce operation on current row block
-            // This accumulates max values in LREGs 4-7
-            for (uint32_t i = 0; i < subblock_w; i++) {
-                sfpu_reduce_max_sdpa(i, subblock_h, (int)VectorMode::RC_custom);
             }
 
             // Only finalize and pack after processing all row blocks for this column
