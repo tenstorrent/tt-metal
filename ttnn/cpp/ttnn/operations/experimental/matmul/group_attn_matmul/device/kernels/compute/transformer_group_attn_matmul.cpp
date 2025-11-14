@@ -8,6 +8,7 @@
 #include "api/compute/tilize.h"
 #include "api/compute/pack_untilize.h"
 #include "experimental/circular_buffer.h"
+#include "ttnn/kernel_lib/tilize_helpers.h"
 
 using std::uint32_t;
 
@@ -161,17 +162,9 @@ void kernel_main() {
             // cb_intermed1 comes from reader; untilized row-major tile
             reconfig_data_format_srca(cb_in1, cb_intermed1);
             pack_reconfig_data_format(cb_intermed0, out_cb_id);
-            cb_intermed1_obj.wait_front(out_num_tiles);
-
-            cb_out_obj.reserve_back(out_num_tiles);
 
             // tilize CB::intermed1 and write to CBIndex::c_16
-            tilize_init_short_with_dt(cb_in1, cb_intermed1, out_num_tiles, out_cb_id);
-            tilize_block(cb_intermed1, out_num_tiles, out_cb_id);
-            cb_out_obj.push_back(out_num_tiles);
-
-            cb_intermed1_obj.pop_front(out_num_tiles);
-            tilize_uninit(cb_intermed1, out_cb_id);
+            tilize<true, true, false, true>(cb_intermed1, out_num_tiles, out_cb_id, 1, 1, cb_in1);
 
             cb_in0_obj.pop_front(in0_block_num_tiles);
         } // Mt loop
