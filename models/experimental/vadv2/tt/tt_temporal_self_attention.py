@@ -194,14 +194,10 @@ class TtTemporalSelfAttention:
         output = ttnn.reshape(tmp, (num_query, embed_dims, bs, self.num_bev_queue))
         ttnn.deallocate(tmp)
 
-        # WORKAROUND: ttnn.mean causes OOM issues (allocates ~5GB for ~5MB operation)
-        # Bug confirmed in test_ttnn_mean_bug.py - works in isolation with DRAM config
-        # but fails in real model context due to existing memory allocations.
-        # Using torch fallback until ttnn.mean memory allocation is fixed.
-        output_torch = ttnn.to_torch(output)
-        ttnn.deallocate(output)
-        output_torch = output_torch.mean(dim=-1, keepdim=False)
-        output = ttnn.from_torch(output_torch, dtype=ttnn.bfloat16, device=self.device, layout=ttnn.ROW_MAJOR_LAYOUT)
+        # Use native ttnn.mean - requires ROW_MAJOR_LAYOUT
+        output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
+        output = ttnn.mean(output, dim=-1, keepdim=False)
+        # Output is already in ROW_MAJOR_LAYOUT after mean operation
 
         # Convert to TILE_LAYOUT and permute
         output = ttnn.to_layout(output, ttnn.TILE_LAYOUT)
