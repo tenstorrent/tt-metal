@@ -172,11 +172,11 @@ jobs:
             owner_id: U08GELBB1AP # Ambrose Ling
           - name: "qwen3-32b ${{ inputs.runner-label }} batch-1 TP device perf prefill"
             arch: blackhole
-            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen3-32B pytest models/tt_transformers/tests/test_device_perf.py -k "prefill-llama3_70b-2-1024-2-10-1-1-False"
+            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen3-32B pytest models/tt_transformers/tests/test_device_perf.py -k "prefill-qwen3_32b-2-1024-2-10-1-1-False"
             owner_id: U08GELBB1AP # Ambrose Ling
           - name: "qwen3-32b ${{ inputs.runner-label }} batch-1 TP device perf decode"
             arch: blackhole
-            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen3-32B pytest models/tt_transformers/tests/test_device_perf.py -k "decode-llama3_70b-2-1024-2-10-1-1-False"
+            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen3-32B pytest models/tt_transformers/tests/test_device_perf.py -k "decode-qwen3_32b-2-1024-2-10-1-1-False"
             owner_id: U08GELBB1AP # Ambrose Ling
     name: ${{ matrix.test-group.name }}
     runs-on:
