@@ -114,7 +114,7 @@ std::tuple<uint32_t, uint32_t, uint32_t> get_max_page_size_and_num_pages(
     } else {
         // Use max_page_size for all pages except the last one
         uint32_t num_pages = (total_size + max_page_size - 1) / max_page_size;
-        uint32_t last_page_size = total_size - (num_pages - 1) * max_page_size;
+        uint32_t last_page_size = total_size - ((num_pages - 1) * max_page_size);
         return {max_page_size, num_pages, last_page_size};
     }
 }
