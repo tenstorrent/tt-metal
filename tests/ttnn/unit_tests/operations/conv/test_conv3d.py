@@ -134,9 +134,7 @@ def run_conv3d_test(device, input_shape, out_channels, kernel_size, stride, padd
     tt_weight, tt_bias = prepare_weights(conv3d_module, C, out_channels, device, C_in_block=0)
 
     # Create config and run TTNN conv3d
-    config = create_conv3d_config(
-        out_channels, kernel_size, stride, padding, padding_mode, compute_with_storage_grid_size=grid_size
-    )
+    config = create_conv3d_config(compute_with_storage_grid_size=grid_size)
 
     tt_output = ttnn.experimental.conv3d(
         input_tensor=tt_input,
