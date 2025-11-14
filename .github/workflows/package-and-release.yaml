@@ -279,14 +279,14 @@ jobs:
           echo ""
           echo "=== All files that would be uploaded to release ==="
           ls -lh "${required_files[@]}" debian-packages/*.deb 2>/dev/null || echo "Some files are missing!"
-      - name: Release (skipped for dry run)
+      - name: Create draft release with assets (skipped for dry run)
         if: ${{ !inputs.dry-run }}
         uses: softprops/action-gh-release@4634c16e79c963813287e889244c50009e7f0981
         with:
           tag_name: ${{ needs.create-tag.outputs.version }}
           name: ${{ needs.create-tag.outputs.version }}
-          draft: false
-          prerelease: true
+          draft: true
+          prerelease: false
           body_path: RELEASE_NOTES.txt
           files: |
             VERSION
@@ -297,6 +297,19 @@ jobs:
             tt-metalium.tar.gz
             debian-packages/*.deb
           fail_on_unmatched_files: true
+
+  convert-draft-to-prerelease:
+    needs: [create-and-upload-draft-release, create-tag]
+    runs-on: ubuntu-latest
+    if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v') || inputs.dry-run }}
+    steps:
+      - name: Convert draft to prerelease (skipped for dry run)
+        if: ${{ !inputs.dry-run }}
+        uses: softprops/action-gh-release@4634c16e79c963813287e889244c50009e7f0981
+        with:
+          tag_name: ${{ needs.create-tag.outputs.version }}
+          draft: false
+          prerelease: true
 
   check-stable-for-new-commits:
     runs-on: ubuntu-latest
