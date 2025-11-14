@@ -16,18 +16,34 @@ class ChipArchitecture(Enum):
         return self.value
 
     @classmethod
+    def _get_string_to_enum_map(cls):
+        if not hasattr(cls, "_cached_string_map"):
+            cls._cached_string_map = {
+                "blackhole": cls.BLACKHOLE,
+                "quasar": cls.QUASAR,
+                "wormhole": cls.WORMHOLE,
+            }
+        return cls._cached_string_map
+
+    @classmethod
     def from_string(cls, arch_str):
-        if arch_str.lower() == "blackhole":
-            return cls.BLACKHOLE
-        elif arch_str.lower() == "wormhole":
-            return cls.WORMHOLE
-        elif arch_str.lower() == "quasar":
-            return cls.QUASAR
-        else:
+        arch_lower = arch_str.lower()
+        enum_value = cls._get_string_to_enum_map().get(arch_lower)
+        if enum_value is None:
             raise ValueError(f"Unknown architecture: {arch_str}")
+        return enum_value
+
+
+# Cache for chip architecture
+_cached_chip_architecture = None
 
 
 def get_chip_architecture():
+    global _cached_chip_architecture
+
+    if _cached_chip_architecture is not None:
+        return _cached_chip_architecture
+
     chip_architecture = os.getenv("CHIP_ARCH")
     if not chip_architecture:
         context = check_context()
@@ -36,4 +52,5 @@ def get_chip_architecture():
             chip_architecture = "wormhole"
         os.environ["CHIP_ARCH"] = chip_architecture
 
-    return ChipArchitecture.from_string(chip_architecture)
+    _cached_chip_architecture = ChipArchitecture.from_string(chip_architecture)
+    return _cached_chip_architecture
