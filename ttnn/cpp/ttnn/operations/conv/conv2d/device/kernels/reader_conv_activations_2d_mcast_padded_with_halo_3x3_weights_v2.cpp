@@ -40,7 +40,10 @@ void multicast_data(
 }
 
 // Multicast activation data from the local circular buffer to multiple destinations (dst_cb in receiver cores).
-// This function sends a block of data (the activation block) using NOC multicast commands.
+// This function sends a block of data (the activation block) using NOC multicast commands, it avoids waiting for the
+// whole block to be available in the source CB before starting the multicast, instead waits for enough tiles to do one
+// multicast of NOC_MAX_BURST_SIZE size. This is because under the hood, the multicast splits the data into chunks of
+// NOC_MAX_BURST_SIZE size
 template <
     uint32_t act_mcast_num_dest_cores,
     uint32_t mcast_noc_burst_size,
