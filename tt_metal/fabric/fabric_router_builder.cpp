@@ -34,7 +34,7 @@ std::unique_ptr<FabricRouterBuilder> FabricRouterBuilder::build(
     bool dispatch_link,
     tt::tt_fabric::chan_id_t eth_chan,
     tt::tt_fabric::Topology topology) {
-    
+
     bool has_tensix_extension = false;
     if (fabric_tensix_extension_enabled && !dispatch_link) {
         has_tensix_extension = true;
@@ -77,7 +77,7 @@ std::unique_ptr<FabricRouterBuilder> FabricRouterBuilder::build(
     // Create channel mapping
     auto channel_mapping = tt::tt_fabric::FabricRouterChannelMapping(
         topology, eth_direction, has_tensix);
-    
+
     return std::make_unique<tt::tt_fabric::FabricRouterBuilder>(
         std::move(edm_builder), tensix_builder_opt, std::move(channel_mapping));
 }
@@ -139,7 +139,7 @@ void FabricRouterBuilder::connect_sender_to_receiver(
             // If both routers have tensix builders, connect VC0 to tensix (performance optimization)
             // Otherwise, use the receiver_mapping to determine which builder to connect to
             bool both_have_tensix = this->tensix_builder_.has_value() && other.tensix_builder_.has_value();
-            
+
             // Initialize variants directly - cannot default-construct variant with reference_wrapper
             auto make_downstream_builder = [&]() -> FabricDatamoverBuilder {
                 if (both_have_tensix) {
@@ -153,7 +153,7 @@ void FabricRouterBuilder::connect_sender_to_receiver(
             };
             FabricDatamoverBuilder downstream_builder = make_downstream_builder();
             FabricDatamoverBuilder vc1_downstream_builder = std::ref(*other.erisc_builder_);
-            
+
             // If both routers have tensix builders, use the two-argument version
             // (connects VC0 to tensix, VC1 to erisc)
             // Otherwise, use the single-argument version (connects both VC0 and VC1 to erisc)
@@ -171,7 +171,7 @@ void FabricRouterBuilder::connect_sender_to_receiver(
         // For now, use the same approach as Ethernet
         if (sender_mapping.builder_type == BuilderType::ERISC) {
             bool both_have_tensix = this->tensix_builder_.has_value() && other.tensix_builder_.has_value();
-            
+
             // Initialize variants directly - cannot default-construct variant with reference_wrapper
             auto make_downstream_builder = [&]() -> FabricDatamoverBuilder {
                 if (both_have_tensix) {
@@ -185,7 +185,7 @@ void FabricRouterBuilder::connect_sender_to_receiver(
             };
             FabricDatamoverBuilder downstream_builder = make_downstream_builder();
             FabricDatamoverBuilder vc1_downstream_builder = std::ref(*other.erisc_builder_);
-            
+
             if (both_have_tensix) {
                 erisc_builder_->connect_to_downstream_edm(downstream_builder, vc1_downstream_builder);
             } else {
@@ -222,4 +222,3 @@ FabricNodeId FabricRouterBuilder::get_peer_fabric_node_id() const {
 }
 
 }  // namespace tt::tt_fabric
-

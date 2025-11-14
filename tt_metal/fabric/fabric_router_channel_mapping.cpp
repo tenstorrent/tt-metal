@@ -120,4 +120,3 @@ InternalReceiverChannelMapping FabricRouterChannelMapping::get_receiver_mapping(
 }
 
 }  // namespace tt::tt_fabric
-

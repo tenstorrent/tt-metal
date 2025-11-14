@@ -14,7 +14,7 @@ namespace tt::tt_fabric {
 
 /**
  * FabricRouterBuilder
- * 
+ *
  * Wrapper class that wraps FabricEriscDatamoverBuilder (always present) and optionally
  * FabricTensixDatamoverBuilder (0 or 1). This wrapper acts as the external interface for
  * router connections, translating between logical channels (VC + sender/receiver indices)
@@ -24,7 +24,7 @@ class FabricRouterBuilder {
 public:
     /**
      * Constructor
-     * 
+     *
      * @param erisc_builder The erisc datamover builder (always required)
      * @param tensix_builder Optional tensix datamover builder
      * @param channel_mapping The channel mapping object that defines logical to internal channel mappings
@@ -36,7 +36,7 @@ public:
 
     /**
      * Build a FabricRouterBuilder with all necessary components
-     * 
+     *
      * @param device The device to build on
      * @param fabric_program The fabric program
      * @param eth_logical_core The ethernet logical core
@@ -67,9 +67,9 @@ public:
 
     /**
      * Connect to a local router over NOC (intra-device connection)
-     * 
+     *
      * Establishes one-way connection: sender channel on this router → receiver channel on other router over NOC
-     * 
+     *
      * @param other The other router builder to connect to
      * @param vc Virtual channel ID
      * @param sender_channel_idx Logical sender channel index within the VC
@@ -83,9 +83,9 @@ public:
 
     /**
      * Connect to a remote router over Ethernet (inter-device connection)
-     * 
+     *
      * Establishes one-way connection: sender channel on this router → receiver channel on other router over Ethernet
-     * 
+     *
      * @param other The other router builder to connect to
      * @param vc Virtual channel ID
      * @param sender_channel_idx Logical sender channel index within the VC
@@ -99,7 +99,7 @@ public:
 
     /**
      * Build connection to fabric channel (for sender channels)
-     * 
+     *
      * @param vc Virtual channel ID
      * @param sender_channel_idx Logical sender channel index within the VC
      * @return SenderWorkerAdapterSpec for external connections
@@ -108,7 +108,7 @@ public:
 
     /**
      * Build connection to fabric receiver channel (for receiver channels, if needed)
-     * 
+     *
      * @param vc Virtual channel ID
      * @param receiver_channel_idx Logical receiver channel index within the VC
      * @return Connection specification (implementation depends on use case)
@@ -151,4 +151,3 @@ private:
 };
 
 }  // namespace tt::tt_fabric
-

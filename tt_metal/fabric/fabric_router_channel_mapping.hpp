@@ -52,10 +52,10 @@ struct InternalReceiverChannelMapping {
 
 /**
  * FabricRouterChannelMapping
- * 
+ *
  * Defines the mapping from logical channels (VC + channel index) to internal builder channels.
  * This mapping is computed based on topology, direction, and tensix extension mode.
- * 
+ *
  * The mapping follows the design doc table:
  * - VC0: [0] = worker, [1] = vc0 forward channels (1D) or [0-3] = N/E/S/W/Worker (2D)
  * - VC1: [0] = vc1 forward channel (ring/torus only)
@@ -95,4 +95,3 @@ private:
 };
 
 }  // namespace tt::tt_fabric
-
