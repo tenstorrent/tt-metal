@@ -53,18 +53,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_multicore(
     tt::tt_metal::Program program{};
 
     auto mesh_device = input_tensor.device();
-    [[maybe_unused]] bool is_first_chip = ring_index == 0;
-    [[maybe_unused]] bool is_last_chip = ring_index == ring_size - 1;
-    log_trace(
-        tt::LogOp,
-        "DEBUG: device coord: {}, is_first_chip: {}, is_last_chip: {}",
-        sender_device_coord,
-        is_first_chip,
-        is_last_chip);
 
     bool sharded = input_tensor.memory_config().memory_layout() != TensorMemoryLayout::INTERLEAVED;
-
-    uint32_t num_width_shards = 1;
 
     // Get OP Config, topology config
     std::vector<Tensor> input_tensors = {input_tensor};
@@ -75,11 +65,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_multicore(
     uint32_t num_workers_per_link = 1;
     const auto [sender_worker_core_range, sender_worker_cores] =
         choose_worker_cores(num_links, num_workers_per_link, mesh_device, sub_device_id);
-
-    // Info for RM tensors
-
-    // Tensor Info
-    const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
 
     // KERNEL CREATION
 
@@ -123,30 +108,11 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_multicore(
 
         barrier_core = mesh_device->worker_core_from_logical_core(core);
 
-        uint32_t base_pages_per_worker = input_tensor_num_pages / num_links;
-        uint32_t remainder = input_tensor_num_pages % num_links;
-        uint32_t input_tile_id_start = (link * base_pages_per_worker) + std::min(link, remainder);
-        uint32_t input_tile_id_end = ((link + 1) * base_pages_per_worker) + std::min(link + 1, remainder);
-
         // Set writer runtime args
-        bool wait_output_semaphore = (link == 0);
-        bool reset_global_semaphore = (link == 0);
-        uint32_t out_ready_sem_wait_value = ring_size * num_links;
-        uint32_t output_tile_id_start = input_tile_id_start;
-        uint32_t output_tile_id_end = input_tile_id_end;
         std::vector<uint32_t> writer_rt_args = {
-            output_tensors[ring_index].buffer()->address(),  // tensor_address0  //HERE
-            semaphore.address(),                             // out_ready_sem_bank_addr (absolute address)
-            output_tile_id_start * num_width_shards,         // tile_id_start
-            output_tile_id_end * num_width_shards,           // tile_id_end
-            wait_output_semaphore,                           // wait_output_semaphore
-            reset_global_semaphore,                          // reset_global_semaphore
-            drain_sync_core.x,                               // out_ready_sem_noc0_x
-            drain_sync_core.y,                               // out_ready_sem_noc0_y
-            out_ready_sem_wait_value,                        // out_ready_sem_wait_value
-            barrier_semaphore.address(),                     // barrier_sem
-            barrier_core.x,                                  // barrier_sem_noc0_x
-            barrier_core.y                                   // barrier_sem_noc0_y
+            barrier_semaphore.address(),  // barrier_sem
+            barrier_core.x,               // barrier_sem_noc0_x
+            barrier_core.y                // barrier_sem_noc0_y
         };
         auto num_connections = (int)forward_coord.has_value() + (int)backward_coord.has_value();
         writer_rt_args.push_back(num_connections);
