@@ -45,6 +45,7 @@ jobs:
           python3 .github/scripts/utils/verify_time_budget.py \
             ./tests/pipeline_reorg/ops/sanity/tests.yaml \
             ./.github/time_budget.yaml
+            "sanity"
 
       - name: Load test matrix
         id: load-test-matrix
