@@ -11,10 +11,10 @@ This module provides the TTNN-accelerated EfficientDet D0 model for object detec
 import ttnn
 from typing import Tuple, List
 
-from models.experimental.efficientdetd0.tt.efficientnetb0 import TtnnEfficientNet
+from models.experimental.efficientdetd0.tt.efficientnetb0 import TtEfficientNet
 from models.experimental.efficientdetd0.tt.bifpn import TtBiFPN
-from models.experimental.efficientdetd0.tt.regressor import Regressor as TtRegressor
-from models.experimental.efficientdetd0.tt.classifier import Classifier as TtClassifier
+from models.experimental.efficientdetd0.tt.regressor import TtRegressor
+from models.experimental.efficientdetd0.tt.classifier import TtClassifier
 
 
 # EfficientDet D0 configuration constants
@@ -90,7 +90,7 @@ class TtEfficientDetBackbone:
         backbone_params = parameters.backbone_net.model
         backbone_conv_params = conv_params.backbone_net.model
 
-        self.backbone_net = TtnnEfficientNet(
+        self.backbone_net = TtEfficientNet(
             device=device,
             parameters=backbone_params,
             conv_params=backbone_conv_params,

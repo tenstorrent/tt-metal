@@ -6,7 +6,7 @@ import ttnn
 import math
 
 
-class EfficientDetd0Maxpool2D:
+class TtEfficientDetMaxpool2D:
     def __init__(
         self,
         maxpool_params,
@@ -62,7 +62,7 @@ class EfficientDetd0Maxpool2D:
         )
 
 
-class MaxPool2dDynamicSamePadding:
+class TtMaxPool2dDynamicSamePadding:
     def __init__(
         self,
         device,
@@ -105,7 +105,7 @@ class MaxPool2dDynamicSamePadding:
             maxpool_params.kernel_size = [maxpool_params.kernel_size, maxpool_params.kernel_size]
         if isinstance(maxpool_params.stride, int):
             maxpool_params.stride = [maxpool_params.stride, maxpool_params.stride]
-        self.dynamic_conv = EfficientDetd0Maxpool2D(
+        self.dynamic_maxpool = TtEfficientDetMaxpool2D(
             maxpool_params,
             device=device,
             shard_layout=self.shard_layout,
@@ -114,10 +114,10 @@ class MaxPool2dDynamicSamePadding:
         )
 
     def __call__(self, x):
-        return self.dynamic_conv(x)
+        return self.dynamic_maxpool(x)
 
 
-class EfficientNetb0Conv2D:
+class TtEfficientDetConv2D:
     def __init__(
         self,
         parameters,
@@ -207,7 +207,7 @@ class EfficientNetb0Conv2D:
         return x
 
 
-class Conv2dDynamicSamePadding:
+class TtConv2dDynamicSamePadding:
     def __init__(
         self,
         device,
@@ -248,7 +248,7 @@ class Conv2dDynamicSamePadding:
                 pad_right = pad_left + pad_offset_width % 2
                 conv_params.padding = (pad_top, pad_bottom, pad_left, pad_right)
 
-        self.dynamic_conv = EfficientNetb0Conv2D(
+        self.dynamic_conv = TtEfficientDetConv2D(
             parameters,
             conv_params,
             device=device,
@@ -261,15 +261,10 @@ class Conv2dDynamicSamePadding:
         self.parameters_conv = conv_params
 
     def __call__(self, x):
-        if self.pad_h > 0 or self.pad_w > 0:
-            padded_shape = [self.batch, self.parameters_conv.input_height, self.parameters_conv.input_width, x.shape[3]]
-            input_height = int(math.sqrt((x.shape[2] // self.batch)))
-            input_width = int(math.sqrt((x.shape[2] // self.batch)))
-
         return self.dynamic_conv(x)
 
 
-class SeparableConvBlock:
+class TtSeparableConvBlock:
     def __init__(
         self,
         device,
@@ -282,7 +277,7 @@ class SeparableConvBlock:
         dtype=ttnn.bfloat16,
     ):
         self.activation = activation
-        self.depthwise_conv = Conv2dDynamicSamePadding(
+        self.depthwise_conv = TtConv2dDynamicSamePadding(
             device,
             parameters.depthwise_conv,
             shard_layout,
@@ -290,7 +285,7 @@ class SeparableConvBlock:
             batch=batch,
             deallocate_activation=deallocate_activation,
         )
-        self.pointwise_conv = Conv2dDynamicSamePadding(
+        self.pointwise_conv = TtConv2dDynamicSamePadding(
             device,
             parameters.pointwise_conv,
             shard_layout,

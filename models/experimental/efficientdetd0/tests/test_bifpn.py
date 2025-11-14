@@ -7,16 +7,16 @@ import pytest
 
 from loguru import logger
 from ttnn.model_preprocessing import preprocess_model_parameters
-from models.common.utility_functions import comp_pcc
 
-from models.experimental.efficientdetd0.reference.modules import BiFPN
-from models.experimental.efficientdetd0.tt.bifpn import TtBiFPN
+from models.common.utility_functions import comp_pcc
 from models.experimental.efficientdetd0.tt.custom_preprocessor import (
     create_custom_mesh_preprocessor,
     infer_torch_module_args,
 )
-from models.experimental.efficientdetd0.common import load_torch_model_state
 from models.demos.utils.common_demo_utils import get_mesh_mappers
+from models.experimental.efficientdetd0.common import load_torch_model_state
+from models.experimental.efficientdetd0.tt.bifpn import TtBiFPN
+from models.experimental.efficientdetd0.reference.modules import BiFPN
 
 
 torch.manual_seed(0)

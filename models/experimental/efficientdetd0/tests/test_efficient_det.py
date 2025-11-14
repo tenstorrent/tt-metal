@@ -1,24 +1,22 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import ttnn
-
-from models.experimental.efficientdetd0.reference.efficientdet import EfficientDetBackbone
-from models.experimental.efficientdetd0.tt.efficient_det import TtEfficientDetBackbone
-
+import torch
 import pytest
 from loguru import logger
 
+from tests.ttnn.utils_for_testing import check_with_pcc
 from ttnn.model_preprocessing import preprocess_model_parameters
 
+from models.demos.utils.common_demo_utils import get_mesh_mappers
+from models.experimental.efficientdetd0.common import load_torch_model_state
 from models.experimental.efficientdetd0.tt.custom_preprocessor import (
     infer_torch_module_args,
     create_custom_mesh_preprocessor,
 )
-from tests.ttnn.utils_for_testing import check_with_pcc
-from models.experimental.efficientdetd0.common import load_torch_model_state
-from models.demos.utils.common_demo_utils import get_mesh_mappers
+from models.experimental.efficientdetd0.tt.efficientdetd0 import TtEfficientDetBackbone
+from models.experimental.efficientdetd0.reference.efficientdet import EfficientDetBackbone
 
 
 torch.manual_seed(0)

@@ -26,7 +26,7 @@ from loguru import logger
 from torchvision.ops.boxes import batched_nms
 
 from models.experimental.efficientdetd0.reference.efficientdet import EfficientDetBackbone
-from models.experimental.efficientdetd0.tt.efficient_det import TtEfficientDetBackbone
+from models.experimental.efficientdetd0.tt.efficientdetd0 import TtEfficientDetBackbone
 from models.experimental.efficientdetd0.common import load_torch_model_state
 from models.experimental.efficientdetd0.tt.custom_preprocessor import (
     infer_torch_module_args,
@@ -493,7 +493,7 @@ def run_efficient_det_demo(
     # Run PyTorch forward pass for reference
     logger.info("\n[3/5] Running PyTorch reference forward pass...")
     with torch.no_grad():
-        torch_features, torch_regression, torch_classification = torch_model(torch_inputs)
+        torch_features, torch_regression, torch_classification, torch_anchors = torch_model(torch_inputs)
     logger.info(f"PyTorch features: {len(torch_features)} feature maps")
     logger.info(f"PyTorch regression shape: {torch_regression.shape}")
     logger.info(f"PyTorch classification shape: {torch_classification.shape}")
@@ -617,10 +617,6 @@ def run_efficient_det_demo(
     logger.info("Post-processing to get bounding boxes...")
     logger.info("=" * 80)
 
-    # Generate anchors
-    anchors = torch_model.anchors(torch_inputs, torch_inputs.dtype)
-    logger.info(f"Generated anchors shape: {anchors.shape}")
-
     # Initialize post-processing modules
     regressBoxes = BBoxTransform()
     clipBoxes = ClipBoxes()
@@ -630,7 +626,7 @@ def run_efficient_det_demo(
     torch_preds = postprocess(
         torch_regression,
         torch_classification,
-        anchors,
+        torch_anchors,
         regressBoxes,
         clipBoxes,
         torch_inputs,
@@ -643,7 +639,7 @@ def run_efficient_det_demo(
     ttnn_preds = postprocess(
         ttnn_regression_torch,
         ttnn_classification_torch,
-        anchors,
+        torch_anchors,
         regressBoxes,
         clipBoxes,
         torch_inputs,

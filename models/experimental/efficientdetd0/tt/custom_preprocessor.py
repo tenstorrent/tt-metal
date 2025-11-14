@@ -8,7 +8,6 @@ import torch.nn as nn
 
 from ttnn.dot_access import make_dot_access_dict
 from ttnn.model_preprocessing import (
-    infer_ttnn_module_args,
     fold_batch_norm2d_into_conv2d,
     convert_torch_model_to_ttnn_model,
 )
@@ -291,14 +290,3 @@ def infer_torch_module_args(model, input, layer_type=(nn.Conv2d, nn.MaxPool2d)):
         h.remove()
 
     return _make_dot_accessible_args(layer_info)
-
-
-def infer_module_args(*, model, input):
-    assert isinstance(model, EfficientDetBackbone)
-    backbone = model.backbone_net
-    conv_params = infer_torch_module_args(model=model, input=input)
-    conv_params_backbone = infer_ttnn_module_args(
-        model=backbone, run_model=lambda backbone: backbone(input), device=None
-    )
-    conv_params["backbone"] = conv_params_backbone
-    return conv_params

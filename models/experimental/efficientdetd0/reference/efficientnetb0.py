@@ -84,7 +84,6 @@ class MBConvBlock(nn.Module):
         # Expansion and Depthwise Convolution
         x = inputs
         if self._block_args.expand_ratio != 1:
-            # print(f"Expanded")
             x = self._expand_conv(inputs)
             x = self._bn0(x)
             x = self._swish(x)

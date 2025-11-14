@@ -4,7 +4,6 @@
 
 import torch
 from torch import nn
-from torchvision.ops.boxes import nms as nms_torch
 
 from .utils import (
     Swish,
@@ -13,10 +12,6 @@ from .utils import (
     MaxPool2dStaticSamePadding,
 )
 from models.experimental.efficientdetd0.reference.efficientnetb0 import EfficientNet as EffNet
-
-
-def nms(dets, thresh):
-    return nms_torch(dets[:, :4], dets[:, 4], thresh)
 
 
 class SeparableConvBlock(nn.Module):

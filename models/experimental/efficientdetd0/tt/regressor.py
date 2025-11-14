@@ -3,10 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.experimental.efficientdetd0.tt.utils import SeparableConvBlock
+from models.experimental.efficientdetd0.tt.utils import TtSeparableConvBlock
 
 
-class Regressor:
+class TtRegressor:
     def __init__(
         self,
         device,
@@ -18,7 +18,7 @@ class Regressor:
         self.num_layers = num_layers
         self.conv_list = [
             [
-                SeparableConvBlock(
+                TtSeparableConvBlock(
                     device=device,
                     parameters=parameters.conv_list[j][i],
                     shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
@@ -32,7 +32,7 @@ class Regressor:
         ]
 
         self.header_list = [
-            SeparableConvBlock(
+            TtSeparableConvBlock(
                 device=device,
                 parameters=parameters.header_list[j],
                 shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,

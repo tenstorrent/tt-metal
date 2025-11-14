@@ -1,9 +1,9 @@
 import ttnn
 from typing import Tuple
 from models.experimental.efficientdetd0.tt.utils import (
-    SeparableConvBlock,
-    MaxPool2dDynamicSamePadding,
-    Conv2dDynamicSamePadding,
+    TtSeparableConvBlock,
+    TtMaxPool2dDynamicSamePadding,
+    TtConv2dDynamicSamePadding,
 )
 
 
@@ -32,7 +32,7 @@ class TtBiFPN:
 
     def __init__(
         self,
-        device: ttnn.Device,
+        device,
         parameters,
         conv_params,
         num_channels: int,
@@ -63,42 +63,42 @@ class TtBiFPN:
         self.shard_layout = shard_layout
 
         # Initialize separable conv blocks for upsampling path
-        self.conv6_up = SeparableConvBlock(
+        self.conv6_up = TtSeparableConvBlock(
             device, parameters.conv6_up, shard_layout, conv_params.conv6_up, deallocate_activation=True
         )
-        self.conv5_up = SeparableConvBlock(
+        self.conv5_up = TtSeparableConvBlock(
             device, parameters.conv5_up, shard_layout, conv_params.conv5_up, deallocate_activation=True
         )
-        self.conv4_up = SeparableConvBlock(
+        self.conv4_up = TtSeparableConvBlock(
             device, parameters.conv4_up, shard_layout, conv_params.conv4_up, deallocate_activation=True
         )
-        self.conv3_up = SeparableConvBlock(
+        self.conv3_up = TtSeparableConvBlock(
             device, parameters.conv3_up, shard_layout, conv_params.conv3_up, deallocate_activation=True
         )
 
         # Initialize separable conv blocks for downsampling path
-        self.conv4_down = SeparableConvBlock(
+        self.conv4_down = TtSeparableConvBlock(
             device,
             parameters.conv4_down,
             shard_layout,
             conv_params.conv4_down,
             deallocate_activation=True,
         )
-        self.conv5_down = SeparableConvBlock(
+        self.conv5_down = TtSeparableConvBlock(
             device,
             parameters.conv5_down,
             shard_layout,
             conv_params.conv5_down,
             deallocate_activation=True,
         )
-        self.conv6_down = SeparableConvBlock(
+        self.conv6_down = TtSeparableConvBlock(
             device,
             parameters.conv6_down,
             shard_layout,
             conv_params.conv6_down,
             deallocate_activation=True,
         )
-        self.conv7_down = SeparableConvBlock(
+        self.conv7_down = TtSeparableConvBlock(
             device,
             parameters.conv7_down,
             shard_layout,
@@ -107,7 +107,7 @@ class TtBiFPN:
         )
 
         # Initialize maxpool layers for downsampling
-        self.p4_downsample = MaxPool2dDynamicSamePadding(
+        self.p4_downsample = TtMaxPool2dDynamicSamePadding(
             device,
             None,
             # shard_layout,
@@ -115,7 +115,7 @@ class TtBiFPN:
             conv_params.p4_downsample,
             deallocate_activation=False,
         )
-        self.p5_downsample = MaxPool2dDynamicSamePadding(
+        self.p5_downsample = TtMaxPool2dDynamicSamePadding(
             device,
             None,
             # shard_layout,
@@ -123,7 +123,7 @@ class TtBiFPN:
             conv_params.p5_downsample,
             deallocate_activation=False,
         )
-        self.p6_downsample = MaxPool2dDynamicSamePadding(
+        self.p6_downsample = TtMaxPool2dDynamicSamePadding(
             device,
             None,
             # shard_layout,
@@ -131,7 +131,7 @@ class TtBiFPN:
             conv_params.p6_downsample,
             deallocate_activation=False,
         )
-        self.p7_downsample = MaxPool2dDynamicSamePadding(
+        self.p7_downsample = TtMaxPool2dDynamicSamePadding(
             device,
             None,
             # shard_layout,
@@ -143,21 +143,21 @@ class TtBiFPN:
         # Initialize channel reduction layers for first_time
         if self.first_time:
             # import pdb; pdb.set_trace()
-            self.p3_down_channel = Conv2dDynamicSamePadding(
+            self.p3_down_channel = TtConv2dDynamicSamePadding(
                 device,
                 parameters.p3_down_channel[0],
                 shard_layout,
                 conv_params.p3_down_channel[0],
                 deallocate_activation=deallocate_activation,
             )
-            self.p4_down_channel = Conv2dDynamicSamePadding(
+            self.p4_down_channel = TtConv2dDynamicSamePadding(
                 device,
                 parameters.p4_down_channel[0],
                 shard_layout,
                 conv_params.p4_down_channel[0],
                 deallocate_activation=False,
             )
-            self.p5_down_channel = Conv2dDynamicSamePadding(
+            self.p5_down_channel = TtConv2dDynamicSamePadding(
                 device,
                 parameters.p5_down_channel[0],
                 shard_layout,
@@ -167,14 +167,14 @@ class TtBiFPN:
 
             # P5 to P6 conversion (conv + maxpool)
             # import pdb; pdb.set_trace()
-            self.p5_to_p6_conv = Conv2dDynamicSamePadding(
+            self.p5_to_p6_conv = TtConv2dDynamicSamePadding(
                 device,
                 parameters.p5_to_p6[0],
                 shard_layout,
                 conv_params.p5_to_p6[0],
                 deallocate_activation=False,
             )
-            self.p5_to_p6_pool = MaxPool2dDynamicSamePadding(
+            self.p5_to_p6_pool = TtMaxPool2dDynamicSamePadding(
                 device,
                 None,
                 # shard_layout,
@@ -184,7 +184,7 @@ class TtBiFPN:
             )
 
             # P6 to P7 conversion (maxpool only)
-            self.p6_to_p7 = MaxPool2dDynamicSamePadding(
+            self.p6_to_p7 = TtMaxPool2dDynamicSamePadding(
                 device,
                 None,
                 # shard_layout,
@@ -194,14 +194,14 @@ class TtBiFPN:
             )
 
             # Additional channel reduction for bottom-up path
-            self.p4_down_channel_2 = Conv2dDynamicSamePadding(
+            self.p4_down_channel_2 = TtConv2dDynamicSamePadding(
                 device,
                 parameters.p4_down_channel_2[0],
                 shard_layout,
                 conv_params.p4_down_channel_2[0],
                 deallocate_activation=deallocate_activation,
             )
-            self.p5_down_channel_2 = Conv2dDynamicSamePadding(
+            self.p5_down_channel_2 = TtConv2dDynamicSamePadding(
                 device,
                 parameters.p5_down_channel_2[0],
                 shard_layout,
@@ -292,7 +292,7 @@ class TtBiFPN:
 
         # P6_1 = weighted_sum(P6_0, upsample(P7_0))
         if self.first_time:
-            p7_upsampled = self._upsample(p7_in, scale_factor=2, input_shape=self.p6_to_p7.dynamic_conv.output_shape)
+            p7_upsampled = self._upsample(p7_in, scale_factor=2, input_shape=self.p6_to_p7.dynamic_maxpool.output_shape)
         else:
             p7_upsampled = self._upsample(p7_in, scale_factor=2)
 
