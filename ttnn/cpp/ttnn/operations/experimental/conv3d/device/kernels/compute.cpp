@@ -10,6 +10,7 @@
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.h"
 
 // Slightly modified from compute_common.hpp
 void matmul_blocks(
@@ -192,23 +193,18 @@ void MAIN {
             for (uint32_t t_block = t_out_start; t_block < t_out_end; t_block += T_block_size) {
                 for (uint32_t h_block = h_out_start; h_block < h_out_end; h_block += H_block_size) {
                     for (uint32_t w_block = w_out_start; w_block < w_out_end; w_block += W_block_size) {
-                        // Tilize row-major patches
-                        uint32_t patch_rows_left = num_patches;
-                        tilize_init(cb_vol2col_rm, matmul_K_t, cb_vol2col_tiled);
-                        for (uint32_t patch_t = 0; patch_t < matmul_M_t; patch_t++) {
-                            // Reader produces row pages, which may not be tile aligned. Wait on the correct number of
-                            // rows.
-                            uint32_t current_patch_rows = patch_rows_left < tt::constants::TILE_HEIGHT
-                                                              ? patch_rows_left
-                                                              : tt::constants::TILE_HEIGHT;
-                            cb_wait_front(cb_vol2col_rm, current_patch_rows);
-                            cb_reserve_back(cb_vol2col_tiled, matmul_K_t);
-                            tilize_block(cb_vol2col_rm, matmul_K_t, cb_vol2col_tiled);
-                            cb_push_back(cb_vol2col_tiled, matmul_K_t);
-                            cb_pop_front(cb_vol2col_rm, current_patch_rows);
-                            patch_rows_left -= current_patch_rows;
-                        }
-                        tilize_uninit(cb_vol2col_rm, cb_vol2col_tiled);
+                        // Tilize row-major patches with variable row alignment
+                        // Reader produces row pages, which may not be tile aligned
+                        compute_kernel_lib::tilize(
+                            cb_vol2col_rm,     // Input CB (row-major)
+                            matmul_K_t,        // Block width (tiles per output row)
+                            cb_vol2col_tiled,  // Output CB (tiled)
+                            matmul_M_t,        // Number of tile rows to produce
+                            1,                 // subblock_h (default)
+                            0,                 // old_icb (not used)
+                            0,                 // input_count (use variable row mode)
+                            num_patches        // total_rows (enables variable row alignment)
+                        );
 
                         // Apply matmul blocks
                         cb_wait_front(cb_vol2col_tiled, patch_tiles);
