@@ -14,9 +14,7 @@ namespace operations::experimental::ccl {
 
 struct ExecuteSendAsync {
     static std::vector<ttnn::Tensor> invoke(
-        const ttnn::Tensor& input_tensor,
-        const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
-        const tt::tt_metal::distributed::SocketConfig& socket_config);
+        const ttnn::Tensor& input_tensor, const tt::tt_metal::distributed::MeshSocket& mesh_socket);
 };
 
 }  // namespace operations::experimental::ccl

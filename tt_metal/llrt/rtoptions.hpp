@@ -215,9 +215,6 @@ class RunTimeOptions {
     // Timeout duration for operations
     std::chrono::duration<float> timeout_duration_for_operations = std::chrono::duration<float>(0.0f);
 
-    // Using MGD 1.0 syntax for mesh graph descriptor in Fabric Control Plane
-    bool use_mesh_graph_descriptor_1_0 = false;
-
     // Reliability mode override parsed from environment (RELIABILITY_MODE)
     std::optional<tt::tt_fabric::FabricReliabilityMode> reliability_mode = std::nullopt;
 
@@ -530,10 +527,6 @@ public:
     TargetDevice get_target_device() const { return runtime_target_device_; }
 
     std::chrono::duration<float> get_timeout_duration_for_operations() const { return timeout_duration_for_operations; }
-
-    // Using MGD 1.0 syntax for mesh graph descriptor in Fabric Control Plane
-    // TODO: This will be removed after MGD 1.0 is deprecated
-    bool get_use_mesh_graph_descriptor_1_0() const { return use_mesh_graph_descriptor_1_0; }
 
     bool get_force_jit_compile() const { return force_jit_compile; }
     void set_force_jit_compile(bool enable) { force_jit_compile = enable; }
