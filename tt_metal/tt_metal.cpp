@@ -452,7 +452,6 @@ void WriteToDeviceSharded(Buffer& buffer, tt::stl::Span<const uint8_t> host_buff
         auto bank_id = allocator->get_bank_ids_from_logical_core(buffer.buffer_type(), core)[0];
         auto bank_offset = allocator->get_bank_offset(buffer.buffer_type(), bank_id);
         auto data_index = mapped_page.host_page * page_size;
-        // std::span<const std::uint8_t> page(host_buffer.data() + data_index, aligned_page_size); //change!
         std::span<const std::uint8_t> page;
         std::vector<uint8_t> aligned_page_buffer;
         if (aligned_page_size > page_size) {
@@ -512,7 +511,6 @@ void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<cons
     size_t data_index = 0;
     for (size_t page_index = 0; page_index < num_pages; page_index++) {
         const DeviceAddr address = CalculateAddressDeviceInterleavedContiguous(buffer, bank_index, page_index);
-        // std::span<const uint8_t> page(host_buffer.data() + data_index, aligned_page_size); //change!
         std::span<const std::uint8_t> page;
         std::vector<uint8_t> aligned_page_buffer;
         if (aligned_page_size > page_size) {
