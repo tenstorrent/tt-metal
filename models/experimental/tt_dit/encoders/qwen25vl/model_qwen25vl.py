@@ -12,9 +12,10 @@ import ttnn
 from models.tt_transformers.tt.common import get_rot_transformation_mat
 
 from ...layers.embeddings import Embedding
-from ...layers.linear import Linear
+from ...layers.linear import ColParallelLinear, RowParallelLinear
 from ...layers.module import Module, ModuleList
 from ...layers.normalization import UniversalRMSNorm
+from ...parallel.config import EncoderParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils import tensor
 
@@ -45,12 +46,16 @@ class Qwen25VlTextEncoder(Module):
         rope_theta: float,
         mrope_section: Sequence[int],
         device: ttnn.MeshDevice,
-        tp_axis: int | None = None,
+        parallel_config: EncoderParallelConfig | None = None,
         ccl_manager: CCLManager | None = None,
     ) -> None:
         super().__init__()
 
-        ctx = Qwen25VlContext(device=device, tp_axis=tp_axis, ccl_manager=ccl_manager)
+        ctx = Qwen25VlContext(
+            device=device,
+            tp_axis=parallel_config.tensor_parallel.mesh_axis if parallel_config is not None else None,
+            ccl_manager=ccl_manager,
+        )
 
         self.embed_tokens = Embedding(vocab_size, hidden_size, device=ctx.device)
         self.layers = ModuleList(
@@ -67,7 +72,7 @@ class Qwen25VlTextEncoder(Module):
             for _ in range(num_hidden_layers)
         )
         self.norm = UniversalRMSNorm(
-            hidden_size, eps=rms_norm_eps, device=ctx.device, tp_axis=ctx.tp_axis, ccl_manager=ctx.ccl_manager
+            hidden_size, eps=rms_norm_eps, device=ctx.device  # , tp_axis=ctx.tp_axis, ccl_manager=ctx.ccl_manager
         )
         # self.rotary_emb = Qwen25VlRotaryEmbedding(
         #     ctx=ctx, head_dim=hidden_size // num_attention_heads, rope_theta=rope_theta
@@ -141,10 +146,10 @@ class Qwen25VlDecoderLayer(Module):
             hidden_size=hidden_size, intermediate_size=intermediate_size, hidden_act=hidden_act, ctx=ctx
         )
         self.input_layernorm = UniversalRMSNorm(
-            hidden_size, eps=rms_norm_eps, device=ctx.device, tp_axis=ctx.tp_axis, ccl_manager=ctx.ccl_manager
+            hidden_size, eps=rms_norm_eps, device=ctx.device  # , tp_axis=ctx.tp_axis, ccl_manager=ctx.ccl_manager
         )
         self.post_attention_layernorm = UniversalRMSNorm(
-            hidden_size, eps=rms_norm_eps, device=ctx.device, tp_axis=ctx.tp_axis, ccl_manager=ctx.ccl_manager
+            hidden_size, eps=rms_norm_eps, device=ctx.device  # , tp_axis=ctx.tp_axis, ccl_manager=ctx.ccl_manager
         )
 
     def forward(
@@ -154,7 +159,6 @@ class Qwen25VlDecoderLayer(Module):
         causal_attn_mask: ttnn.Tensor | None = None,
         pos_embeds: tuple[ttnn.Tensor, ttnn.Tensor],
     ) -> ttnn.Tensor:
-
         residual = x
         x = self.input_layernorm.forward(x)
         x = self.self_attn.forward(x, causal_mask=causal_attn_mask, pos_embeds=pos_embeds)
@@ -191,8 +195,12 @@ class Qwen25VlAttention(Module):
         head_dim = hidden_size // num_heads
         tp_factor = ctx.device.shape[ctx.tp_axis] if ctx.tp_axis is not None else 1
 
-        self.qkv_proj = Linear(hidden_size, (num_heads + 2 * num_key_value_heads) * head_dim, mesh_device=ctx.device)
-        self.o_proj = Linear(num_heads * head_dim, hidden_size, bias=False, mesh_device=ctx.device)
+        self.qkv_proj = ColParallelLinear(
+            hidden_size, (num_heads + 2 * num_key_value_heads) * head_dim, mesh_device=ctx.device, mesh_axis=ctx.tp_axis
+        )
+        self.o_proj = ColParallelLinear(
+            num_heads * head_dim, hidden_size, bias=False, mesh_device=ctx.device, mesh_axis=ctx.tp_axis
+        )
 
         grid_size = ctx.device.compute_with_storage_grid_size()
 
@@ -265,22 +273,23 @@ class Qwen25VlAttention(Module):
 
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             ttnn.unsqueeze(x, 1),
-            num_heads=self._num_local_heads,
-            num_kv_heads=self._num_local_kv_heads,
+            num_heads=self._num_local_heads * self._tp_factor,
+            num_kv_heads=self._num_local_kv_heads * self._tp_factor,
             transpose_k_heads=False,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+        if self._tp_axis is not None:
+            q = self._ccl_manager.all_gather_persistent_buffer(q, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
+            k = self._ccl_manager.all_gather_persistent_buffer(k, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
+            v = self._ccl_manager.all_gather_persistent_buffer(v, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
+
         cos, sin = pos_embeds
         q = _apply_rope(q, cos, sin)
         k = _apply_rope(k, cos, sin)
+        # this version of ROPE can probably be done before all-gather
         # q = ttnn.experimental.rotary_embedding_llama(q, cos, sin, self._rope_mat, is_decode_mode=False)
         # k = ttnn.experimental.rotary_embedding_llama(k, cos, sin, self._rope_mat, is_decode_mode=False)
-
-        # if self._tp_axis is not None:
-        #     q = self._ccl_manager.all_gather_persistent_buffer(q, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
-        #     k = self._ccl_manager.all_gather_persistent_buffer(k, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
-        #     v = self._ccl_manager.all_gather_persistent_buffer(v, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
 
         # TODO: necessary?
         k = ttnn.repeat_interleave(k, repeats=self._num_local_heads // self._num_local_kv_heads, dim=1)
@@ -298,7 +307,12 @@ class Qwen25VlAttention(Module):
 
         x = ttnn.transformer.concatenate_heads(x)
 
-        return self.o_proj.forward(x)
+        x = self.o_proj.forward(x)
+
+        if self._tp_axis is not None:
+            x = self._ccl_manager.all_gather_persistent_buffer(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
+
+        return x
 
 
 # adapted from https://github.com/huggingface/transformers/blob/v4.57.1/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py#L529
@@ -312,18 +326,41 @@ class Qwen25VlMlp(Module):
     ) -> None:
         super().__init__()
 
-        self.gate_proj = Linear(hidden_size, intermediate_size, bias=False, mesh_device=ctx.device)
-        self.up_proj = Linear(hidden_size, intermediate_size, bias=False, mesh_device=ctx.device)
-        self.down_proj = Linear(intermediate_size, hidden_size, bias=False, mesh_device=ctx.device)
+        if ctx.tp_axis is not None:
+            assert ctx.ccl_manager is not None
+
+        # intermediate_size is much greater than hidden_size
+        self.gate_proj = ColParallelLinear(
+            hidden_size, intermediate_size, bias=False, mesh_device=ctx.device, mesh_axis=ctx.tp_axis
+        )
+        self.up_proj = ColParallelLinear(
+            hidden_size, intermediate_size, bias=False, mesh_device=ctx.device, mesh_axis=ctx.tp_axis
+        )
+        self.down_proj = RowParallelLinear(
+            intermediate_size,
+            hidden_size,
+            bias=False,
+            mesh_device=ctx.device,
+            mesh_axis=ctx.tp_axis,
+            ccl_manager=ctx.ccl_manager,
+        )
 
         if hidden_act != "silu":
             msg = f"unsupported activation function: {hidden_act}"
             raise ValueError(msg)
         self.act_fn = ttnn.silu
 
+        self._ccl_manager = ctx.ccl_manager
+        self._tp_axis = ctx.tp_axis
+
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         x = self.act_fn(self.gate_proj.forward(x)) * self.up_proj.forward(x)
-        return self.down_proj(x)
+        x = self.down_proj(x)
+
+        if self._tp_axis is not None:
+            x = self._ccl_manager.all_gather_persistent_buffer(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
+
+        return x
 
 
 def _apply_rope(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:

@@ -11,6 +11,8 @@ from transformers import Qwen2_5_VLForConditionalGeneration
 
 from ....encoders.qwen25vl.encoder_pair import Qwen25VlTokenizerEncoderPair
 from ....encoders.qwen25vl.model_qwen25vl import Qwen25VlTextEncoder
+from ....parallel.config import EncoderParallelConfig, ParallelFactor
+from ....parallel.manager import CCLManager
 from ....utils import tensor
 from ....utils.check import assert_quality
 
@@ -29,6 +31,16 @@ def test_qwen25vl_text_encoder(
 
     batch_size = 1
     sequence_length = 512
+    tp_axis = 1
+
+    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
+    parallel_config = (
+        EncoderParallelConfig(
+            tensor_parallel=ParallelFactor(factor=mesh_device.shape[tp_axis], mesh_axis=tp_axis),
+        )
+        if tp_axis is not None
+        else None
+    )
 
     torch_model = Qwen2_5_VLForConditionalGeneration.from_pretrained("Qwen/Qwen-Image", subfolder="text_encoder")
     torch_text_model = torch_model.model.language_model
@@ -48,6 +60,8 @@ def test_qwen25vl_text_encoder(
         rope_theta=torch_model.config.rope_theta,
         mrope_section=torch_model.config.rope_scaling["mrope_section"],
         device=mesh_device,
+        parallel_config=parallel_config,
+        ccl_manager=ccl_manager,
     )
     model.load_torch_state_dict(torch_text_model.state_dict())
 
