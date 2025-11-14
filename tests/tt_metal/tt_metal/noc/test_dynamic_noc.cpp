@@ -177,7 +177,6 @@ void build_and_run_program_ethernet(
     uint32_t MAX_LOOP,
     uint32_t page_size,
     bool mix_noc_mode) {
-    MAX_LOOP = 10;
     // Make random
     auto random_seed = 0;  // (unsigned int)time(NULL);
     uint32_t seed = tt::parse_env("TT_METAL_SEED", random_seed);
