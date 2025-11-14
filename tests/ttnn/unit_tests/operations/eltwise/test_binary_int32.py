@@ -925,3 +925,67 @@ def test_div_inf_nan_cases(use_legacy, device):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert torch.allclose(torch_output_tensor, output_tensor, atol=1e-10, rtol=1e-5, equal_nan=True)
+
+
+@pytest.mark.parametrize(
+    "ttnn_op",
+    [
+        ttnn.add,
+        ttnn.sub,
+    ],
+)
+@pytest.mark.parametrize(
+    "value", [16777217, -16777217, 33554433, -67108865, 1073741823, -1073741823, 2147483646, -2147483646]
+)
+def test_binary_add_sub_int32_scalar(ttnn_op, value, device):
+    torch_input_tensor = torch.tensor([-2, -1, 0, 1, 2])
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    golden_function = ttnn.get_golden_function(ttnn_op)
+    torch_output_tensor = golden_function(torch_input_tensor, value, device=device)
+
+    output_tensor = ttnn_op(input_tensor, value)
+    output_tensor = ttnn.to_torch(output_tensor, dtype=torch.int32)
+    print("TT Input Tensor:", torch_input_tensor)
+    print("Scalar Value:", value)
+    print("Torch Output Tensor:", torch_output_tensor)
+    print("TT Output Tensor:", output_tensor)
+
+    assert torch.equal(output_tensor, torch_output_tensor)
+
+
+@pytest.mark.parametrize(
+    "ttnn_op",
+    [
+        ttnn.add,
+        ttnn.sub,
+    ],
+)
+@pytest.mark.parametrize("value", [0, 1, 2])
+def test_binary_add_sub_uint32_scalar(ttnn_op, value, device):
+    torch_input_tensor = torch.tensor([0, 1, 2, 3, 4])
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.uint32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    golden_function = ttnn.get_golden_function(ttnn_op)
+    torch_output_tensor = golden_function(torch_input_tensor, value, device=device)
+
+    output_tensor = ttnn_op(input_tensor, value)
+    output_tensor = ttnn.to_torch(output_tensor, dtype=torch.int32)
+    print("TT Input Tensor:", torch_input_tensor)
+    print("Scalar Value:", value)
+    print("Torch Output Tensor:", torch_output_tensor)
+    print("TT Output Tensor:", output_tensor)
+
+    assert torch.equal(output_tensor, torch_output_tensor)
