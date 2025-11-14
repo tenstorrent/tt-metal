@@ -20,11 +20,12 @@ graph_descriptors {
   instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
   instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
 
-  # Connection between M0 and M1 with 8 channels
-  connections {
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
-    channels { count: 8 }
+  graph_topology: {
+    layout_type: ALL_TO_ALL
+    channels {
+      count: 8
+      policy: STRICT
+    }
   }
 }
 
