@@ -650,10 +650,9 @@ def map_meta_to_hf_keys(state_dict):
     You can use this to support other models by adding more mappings.
     See replace_keys for more details on the format of replacements.
     """
-    tok_embeddings_layers = [layer for layer in state_dict if "tok_embeddings" in layer]
-    assert len(tok_embeddings_layers) == 1
+    tok_embeddings_layers = [layer for layer in state_dict if ("tok_embeddings" in layer) or ("" in layer)]
     learnable_embedding_layers = [layer for layer in state_dict if "learnable_embedding" in layer]
-    assert len(learnable_embedding_layers) <= 1
+    assert len(learnable_embedding_layers) <= len(tok_embeddings_layers) <= 1
     if len(learnable_embedding_layers) == 1:
         state_dict[tok_embeddings_layers[0]] = torch.cat(
             [
