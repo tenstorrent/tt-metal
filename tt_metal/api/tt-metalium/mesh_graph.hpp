@@ -145,7 +145,6 @@ public:
     static std::filesystem::path get_mesh_graph_descriptor_path_for_cluster_type(
         tt::tt_metal::ClusterType cluster_type,
         const std::string& root_dir,
-        bool version_2 = true,
         tt::tt_fabric::FabricType fabric_type = tt::tt_fabric::FabricType::MESH);
 
     // Get the number of active channels the user has requested between meshes
@@ -166,7 +165,6 @@ private:
         const MeshCoordinate& src_mesh_coord,
         const MeshCoordinateRange& mesh_coord_range,
         FabricType fabric_type) const;
-    void initialize_from_yaml(const std::string& mesh_graph_desc_file_path, std::optional<FabricConfig> fabric_config);
     void initialize_from_mgd(const MeshGraphDescriptor& mgd, std::optional<FabricConfig> fabric_config);
 
     void add_to_connectivity(

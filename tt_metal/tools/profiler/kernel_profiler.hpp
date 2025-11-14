@@ -101,7 +101,7 @@ __attribute__((noinline)) void init_profiler(
         sums[i] = 0;
     }
 
-#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC) || \
+#if defined(COMPILE_FOR_IDLE_ERISC) || (defined(COMPILE_FOR_AERISC) && (COMPILE_FOR_AERISC == 0)) || \
     defined(COMPILE_FOR_BRISC)
     uint32_t runCounter = profiler_control_buffer[RUN_COUNTER];
     profiler_control_buffer[PROFILER_DONE] = 0;
@@ -195,7 +195,7 @@ inline __attribute__((always_inline)) void risc_finished_profiling() {
 }
 
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_ERISC) || \
-    defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC)
+    defined(COMPILE_FOR_IDLE_ERISC) || (defined(COMPILE_FOR_AERISC) && (COMPILE_FOR_AERISC == 0))
 
 // Saves several NoC register states restores them
 // when the NocRegisterStateSave is destroyed
@@ -275,7 +275,7 @@ void profiler_noc_async_flush_posted_write(uint8_t noc = noc_index) {
 
 __attribute__((noinline)) void finish_profiler() {
     risc_finished_profiling();
-#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC) || \
+#if defined(COMPILE_FOR_IDLE_ERISC) || (defined(COMPILE_FOR_AERISC) && (COMPILE_FOR_AERISC == 0)) || \
     defined(COMPILE_FOR_BRISC)
     if (profiler_control_buffer[PROFILER_DONE] == 1) {
         return;
@@ -351,9 +351,9 @@ __attribute__((noinline)) void finish_profiler() {
 }
 
 __attribute__((noinline)) void quick_push() {
-#if (                                                                                          \
-    defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || \
-    defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC))
+#if (                                                                                               \
+    defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_IDLE_ERISC) || \
+    (defined(COMPILE_FOR_AERISC) && (COMPILE_FOR_AERISC == 0)))
 
     // tt-metal/issues/22578 - forbid quick_push if any cmd buffer has NOC_CMD_VC_LINKED bit set
     auto linked_bit_is_set = [](const uint32_t reg_val) { return reg_val & NOC_CMD_VC_LINKED; };
@@ -426,9 +426,9 @@ __attribute__((noinline)) void quick_push() {
 // DRAM in the event that a long series of linked multicast will prevent
 // flushing and cause dropped events.
 void quick_push_if_linked(uint32_t cmd_buf, bool linked) {
-#if (                                                                                          \
-    defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || \
-    defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC))
+#if (                                                                                               \
+    defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_IDLE_ERISC) || \
+    (defined(COMPILE_FOR_AERISC) && (COMPILE_FOR_AERISC == 0)))
     if (!linked) {
         return;
     }

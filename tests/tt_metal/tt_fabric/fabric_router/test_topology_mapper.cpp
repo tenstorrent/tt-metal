@@ -38,7 +38,7 @@ bool contains(const std::vector<tt::tt_metal::AsicID>& asic_ids, const tt::tt_me
 TEST_F(TopologyMapperTest, T3kMeshGraphTest) {
     const std::filesystem::path t3k_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml";
+        "tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.textproto";
 
     auto mesh_graph = MeshGraph(t3k_mesh_graph_desc_path.string());
 
@@ -92,7 +92,7 @@ TEST_F(TopologyMapperTest, T3kMeshGraphTest) {
 TEST_F(TopologyMapperTest, DualGalaxyBigMeshTest) {
     const std::filesystem::path dual_galaxy_big_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.yaml";
+        "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto";
 
     auto mesh_graph = MeshGraph(dual_galaxy_big_mesh_graph_desc_path.string());
 
@@ -154,7 +154,7 @@ TEST_F(TopologyMapperTest, DualGalaxyBigMeshTest) {
 TEST_F(TopologyMapperTest, N300MeshGraphTest) {
     const std::filesystem::path n300_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/n300_mesh_graph_descriptor.yaml";
+        "tt_metal/fabric/mesh_graph_descriptors/n300_mesh_graph_descriptor.textproto";
 
     auto mesh_graph = MeshGraph(n300_mesh_graph_desc_path.string());
 
@@ -194,7 +194,7 @@ TEST_F(TopologyMapperTest, N300MeshGraphTest) {
 TEST_F(TopologyMapperTest, P100MeshGraphTest) {
     const std::filesystem::path p100_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/p100_mesh_graph_descriptor.yaml";
+        "tt_metal/fabric/mesh_graph_descriptors/p100_mesh_graph_descriptor.textproto";
 
     auto mesh_graph = MeshGraph(p100_mesh_graph_desc_path.string());
 
@@ -408,7 +408,7 @@ TEST_F(TopologyMapperTest, ClosetBox3PodTTSwitchHostnameAPIs) {
     }
 
     // Test hostname for switch mesh_id as well
-    HostName switch_mesh_hostname = topology_mapper.get_hostname_for_mesh(switch_mesh_id);
+    HostName switch_mesh_hostname = topology_mapper.get_hostname_for_switch(switch_id);
     EXPECT_FALSE(switch_mesh_hostname.empty()) << "Switch mesh hostname should not be empty";
     EXPECT_EQ(switch_mesh_hostname, switch_hostname) << "Switch mesh hostname should match switch hostname";
 
@@ -440,10 +440,10 @@ TEST_F(TopologyMapperTest, ClosetBox3PodTTSwitchHostnameAPIs) {
         << "Fabric node hostname should match mesh hostname for the same mesh";
 
     // Test fabric node ID from switch
-    const auto& switch_chip_ids = mesh_graph.get_chip_ids(switch_mesh_id);
+    const auto& switch_chip_ids = mesh_graph.get_chip_ids(MeshId(*switch_id));
     ASSERT_GT(switch_chip_ids.size(), 0) << "Switch should have at least one chip";
 
-    FabricNodeId switch_fabric_node_id(switch_mesh_id, switch_chip_ids.values()[0]);
+    FabricNodeId switch_fabric_node_id(MeshId(*switch_id), switch_chip_ids.values()[0]);
     HostName switch_fabric_node_hostname = topology_mapper.get_hostname_for_fabric_node_id(switch_fabric_node_id);
     EXPECT_FALSE(switch_fabric_node_hostname.empty()) << "Switch fabric node hostname should not be empty";
     EXPECT_EQ(switch_fabric_node_hostname, switch_hostname)
@@ -471,7 +471,7 @@ TEST_F(TopologyMapperTest, ClosetBox3PodTTSwitchHostnameAPIs) {
 TEST_F(TopologyMapperTest, PinningHonorsFixedAsicPositionOnDualGalaxyMesh_1pin) {
     const std::filesystem::path galaxy_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.yaml";
+        "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto";
 
     auto mesh_graph = MeshGraph(galaxy_mesh_graph_desc_path.string());
 
@@ -513,7 +513,7 @@ TEST_F(TopologyMapperTest, PinningHonorsFixedAsicPositionOnDualGalaxyMesh_1pin) 
 TEST_F(TopologyMapperTest, PinningHonorsFixedAsicPositionOnDualGalaxyMesh_2pins) {
     const std::filesystem::path galaxy_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.yaml";
+        "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto";
 
     auto mesh_graph = MeshGraph(galaxy_mesh_graph_desc_path.string());
 
@@ -562,7 +562,7 @@ TEST_F(TopologyMapperTest, PinningHonorsFixedAsicPositionOnDualGalaxyMesh_2pins)
 TEST_F(TopologyMapperTest, PinningThrowsOnBadAsicPositionGalaxyMesh) {
     const std::filesystem::path galaxy_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.yaml";
+        "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto";
 
     auto mesh_graph = MeshGraph(galaxy_mesh_graph_desc_path.string());
 
