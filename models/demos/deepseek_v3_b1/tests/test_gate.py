@@ -118,15 +118,15 @@ def test_gate(device):
     logger.info(f"Input expert bias tensor: {ttnn_expert_bias}")
     logger.info("Calling ttnn.experimental.deepseek_b1.gate...")
 
-    for i in range(1000):
-        print(f"Iteration {i}")
-        ttnn_output = ttnn.experimental.deepseek_b1.gate(
-            ttnn_activations,
-            ttnn_router_weights,
-            ttnn_expert_bias,
-            grid_size,
-            memory_config=output_mem_config,
-        )
+    # for i in range(1000):
+    ttnn_output = ttnn.experimental.deepseek_b1.gate(
+        ttnn_activations,
+        ttnn_router_weights,
+        ttnn_expert_bias,
+        grid_size,
+        memory_config=output_mem_config,
+    )
+    print(ttnn_output)
 
     # Convert back to torch for comparison
     output_torch = ttnn.to_torch(ttnn_output)
