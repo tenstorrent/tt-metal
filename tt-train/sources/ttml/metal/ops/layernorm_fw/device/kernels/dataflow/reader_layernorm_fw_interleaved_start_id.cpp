@@ -79,8 +79,10 @@ void kernel_main() {
     // Read gamma and beta once for all rows when everything fits in L1
     cb_reserve_back(cb_gamma_idx, Wt);
     cb_reserve_back(cb_beta_idx, Wt);
+
     read_tiles(cb_gamma_idx, gamma_address_generator, 0, Wt, tile_bytes);
     read_tiles(cb_beta_idx, beta_address_generator, 0, Wt, tile_bytes, /*read_barrier=*/true);
+
     cb_push_back(cb_gamma_idx, Wt);
     cb_push_back(cb_beta_idx, Wt);
 #endif
@@ -90,6 +92,7 @@ void kernel_main() {
     for (uint32_t r = start_row; r < end_row; ++r) {
 #ifdef EVERYTHING_FITS_IN_L1
         // If everything fits in L1, read all input for the row at once
+        cb_reserve_back(cb_input_idx, Wt);
         read_tiles(cb_input_idx, input_address_generator, r * Wt, Wt, tile_bytes, true);
         cb_push_back(cb_input_idx, Wt);
 #else

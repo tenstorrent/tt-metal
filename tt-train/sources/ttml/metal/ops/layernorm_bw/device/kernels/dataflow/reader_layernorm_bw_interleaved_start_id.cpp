@@ -80,21 +80,24 @@ void kernel_main() {
     uint32_t end_row = start_row + num_rows_to_process;
     for (uint32_t r = start_row; r < end_row; ++r) {
         // Read rstd and mean once per row - both have shape [B,1,S,1]
-        read_tiles(cb_rstd_idx, rstd_address_generator, r, 1, tile_bytes);
-        noc_async_read_barrier();
-        cb_push_back(cb_rstd_idx, 1);
+        cb_reserve_back(cb_rstd_idx, 1);
+        cb_reserve_back(cb_mean_idx, 1);
 
-        read_tiles(cb_mean_idx, mean_address_generator, r, 1, tile_bytes);
-        noc_async_read_barrier();
+        read_tiles(cb_rstd_idx, rstd_address_generator, r, 1, tile_bytes);
+        read_tiles(cb_mean_idx, mean_address_generator, r, 1, tile_bytes, /*read_barrier=*/true);
+
+        cb_push_back(cb_rstd_idx, 1);
         cb_push_back(cb_mean_idx, 1);
 
 #ifdef EVERYTHING_FITS_IN_L1
         // If everything fits in L1, read all data for the row at once
         cb_reserve_back(cb_input_idx, Wt);
-        read_tiles(cb_input_idx, input_address_generator, r * Wt, Wt, tile_bytes, /*read_barrier=*/true);
-        cb_push_back(cb_input_idx, Wt);
         cb_reserve_back(cb_dL_out_idx, Wt);
+
+        read_tiles(cb_input_idx, input_address_generator, r * Wt, Wt, tile_bytes);
         read_tiles(cb_dL_out_idx, dL_out_address_generator, r * Wt, Wt, tile_bytes, /*read_barrier=*/true);
+
+        cb_push_back(cb_input_idx, Wt);
         cb_push_back(cb_dL_out_idx, Wt);
         if (r == start_row) {
             // Read gamma only once for all rows when everything fits in L1
