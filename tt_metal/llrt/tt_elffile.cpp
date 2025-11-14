@@ -629,17 +629,22 @@ public:
         // Weaken or hide globals
         for (auto& sym : syms_in_) {
             auto kind = GLOBAL;
-            auto name = impl.GetName(sym, shdr_.sh_link);
             auto bind = impl.GetSymBind(sym);
-            if ((bind == STB_GLOBAL || bind == STB_WEAK) && !name_matches(name, strong)) {
-                auto type = impl.GetSymType(sym);
-                auto* seg = type == STT_OBJECT || type == STT_NOTYPE || type == STT_TLS || type == STT_COMMON
-                                ? impl.FindSegment(sym)
-                                : nullptr;
-                bind = seg && !impl.IsText(seg) ? STB_WEAK : STB_LOCAL;
-                impl.SetSymInfo(sym, bind, type);
-                if (bind == STB_LOCAL) {
+            if (bind == STB_GLOBAL || bind == STB_WEAK) {
+                auto name = impl.GetName(sym, shdr_.sh_link);
+                if (!name_matches(name, strong)) {
+                    bind = STB_LOCAL;
                     kind = LOCAL;
+                    auto type = impl.GetSymType(sym);
+                    if (type == STT_OBJECT || type == STT_NOTYPE || type == STT_TLS || type == STT_COMMON) {
+                        if (auto* seg = impl.FindSegment(sym)) {
+                            if (!impl.IsText(seg)) {
+                                bind = STB_WEAK;
+                                kind = GLOBAL;
+                            }
+                        }
+                    }
+                    impl.SetSymInfo(sym, bind, type);
                 }
             }
             remap_.push_back(syms_out_[kind].size() ^ (kind == GLOBAL ? ~0U : 0U));
