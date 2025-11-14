@@ -207,6 +207,14 @@ static bool test_sdpa_reduce_c_transposed(
     auto mm_output_buffer = CreateBuffer(mm_output_buffer_config);
     auto one_tile_buffer = CreateBuffer(one_tile_buffer_config_2);
 
+    // Initialize output buffer to zeros to avoid stale data from previous runs
+    {
+        std::vector<bfloat16> zeros(M * N, static_cast<bfloat16>(0.0f));
+        auto zeros_tilized = tilize_nfaces(zeros, M, N);
+        auto zeros_uint = pack_bfloat16_vec_into_uint32_vec(zeros_tilized);
+        tt_metal::detail::WriteToBuffer(mm_output_buffer, zeros_uint);
+    }
+
     // Host writes for inputs
     // k_in: tensor_A_rm, tilized
     {
@@ -263,8 +271,8 @@ static bool test_sdpa_reduce_c_transposed(
      */
     const uint32_t dst_size = fp32_dest_acc_en ? 4 : 8;
     uint32_t out_subblock_h = std::min(k_chunk_size, dst_size);
-    uint32_t out_subblock_w =
-        (out_subblock_h == k_chunk_size) ? (std::min(q_chunk_size, dst_size / out_subblock_h)) : 1;
+    uint32_t out_subblock_w = 1;
+    // (out_subblock_h == k_chunk_size) ? (std::min(q_chunk_size, dst_size / out_subblock_h)) : 1;
 
     // if (out_subblock_h == dst_size && out_subblock_w == 1 && k_chunk_size % 2 == 0 && q_chunk_size % 2 == 0) {
     //     // Hacky, try to get 4x2 output subblock if possible to optimize matmul util.
@@ -291,6 +299,16 @@ static bool test_sdpa_reduce_c_transposed(
             {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
             {1, q_chunk_size})};
     auto max_out_buffer = CreateBuffer(max_out_buffer_config);
+
+    // Initialize max_out_buffer to zeros to avoid stale data from previous runs
+    {
+        std::vector<bfloat16> zeros(
+            max_out_num_tiles * tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH, static_cast<bfloat16>(0.0f));
+        auto zeros_tilized =
+            tilize_nfaces(zeros, tt::constants::TILE_HEIGHT, max_out_num_tiles * tt::constants::TILE_WIDTH);
+        auto zeros_uint = pack_bfloat16_vec_into_uint32_vec(zeros_tilized);
+        tt_metal::detail::WriteToBuffer(max_out_buffer, zeros_uint);
+    }
 
     auto cb_reduce_out_id = tt::CBIndex::c_3;
     auto cb_reduce_out_config =
