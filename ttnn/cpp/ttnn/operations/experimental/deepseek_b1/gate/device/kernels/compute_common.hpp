@@ -54,6 +54,9 @@ inline void router_compute() {
     // Wait for input tiles
     cb_wait_front(cb_in0, in0_block_num_tiles);
     cb_wait_front(cb_in1, in1_block_num_tiles);
+    UNPACK((
+        DPRINT << TileSlice(cb_in0, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 16, .w0 = 0, .w1 = 32, .ws = 16}, true, true)
+               << ENDL()));
 
     // Acquire tile registers for computation
     tile_regs_acquire();

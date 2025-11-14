@@ -43,8 +43,8 @@ gate_common_override_variables_t deepseek_b1_gate_(
     const auto& output = output_tensor;
 
     // Get tensor shapes and tiles
-    // const auto& ashape = a.padded_shape();  // TODO: Use when implementing kernel logic
-    // const auto& bshape = b.padded_shape();  // TODO: Use when implementing kernel logic
+    const auto& ashape = a.padded_shape();
+    // const auto& bshape = b.padded_shape();  // Not used yet
     auto in0_tile = a.tensor_spec().tile();
     auto in1_tile = b.tensor_spec().tile();
     auto in0_tile_shape = in0_tile.get_tile_shape();
@@ -64,22 +64,48 @@ gate_common_override_variables_t deepseek_b1_gate_(
     uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
     uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
-    // Buffer pointers - will be needed when kernels actually read/write data
-    // tt_metal::Buffer* in0_buffer = a.buffer();
-    // tt_metal::Buffer* in1_buffer = b.buffer();
-    // tt_metal::Buffer* out_buffer = output.buffer();
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Gate Parameters Setup
+    ////////////////////////////////////////////////////////////////////////////
+    // Calculate dimensions in tiles
+    uint32_t B = get_batch_size(ashape);
+    // uint32_t Mt = ashape[-2] / in0_tile_shape[0];  // M dimension in tiles (not used yet)
+    uint32_t Kt = ashape[-1] / in0_tile_shape[1];  // K dimension in tiles (inner dim)
+    // uint32_t Nt = bshape[-1] / in1_tile_shape[1];  // N dimension in tiles (not used yet)
 
-    // Basic CB sizes for gate operation
-    uint32_t in0_block_num_tiles = 1;  // Process 1 tile at a time for now
-    uint32_t in1_block_num_tiles = 1;
-    uint32_t num_blocks_inner_dim = 1;
-    uint32_t batch = 1;
+    // Fuse batch dimension (not used yet, but keeping structure consistent with matmul_1d)
+    // bool fuse_batch = true;
+    // if (fuse_batch) {
+    //     Mt = B * Mt;
+    //     B = 1;
+    // }
+    B = 1;  // Simplified: assume batch is fused
+
+    // Gate operation parameters (similar to matmul_1d)
+    uint32_t in0_block_w = Kt;  // Process full K dimension
     uint32_t out_subblock_h = 1;
     uint32_t out_subblock_w = 1;
+    // uint32_t per_core_M = 1;  // Not used yet
+    // uint32_t per_core_N = 1;  // Not used yet
+    uint32_t out_block_h = 1;
+    uint32_t out_block_w = 1;
+
+    TT_FATAL(Kt % in0_block_w == 0, "Kt ({}) must be divisible by in0_block_w ({})", Kt, in0_block_w);
+
+    uint32_t in0_block_h = out_block_h;
+    uint32_t in1_block_w = out_block_w;
+
+    uint32_t in0_block_tiles = in0_block_h * in0_block_w;
+    uint32_t in0_block_num_tiles = in0_block_tiles;
+    uint32_t in1_block_tiles = out_block_w * in0_block_w;
+    uint32_t in1_block_num_tiles = in1_block_tiles;
+    uint32_t num_blocks = Kt / in0_block_w;
+    uint32_t num_blocks_inner_dim = num_blocks;
+    uint32_t batch = B;
 
     uint32_t in0_CB_size = in0_block_num_tiles * in0_single_tile_size;
     uint32_t in1_CB_size = in1_block_num_tiles * in1_single_tile_size;
-    uint32_t out_CB_size = output_single_tile_size;
+    uint32_t out_CB_size = out_block_h * out_block_w * output_single_tile_size;
 
     CoreCoord start_core = {0, 0};
     uint32_t num_cores = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
@@ -92,35 +118,13 @@ gate_common_override_variables_t deepseek_b1_gate_(
 
     const auto& cores = corerange_to_cores(all_cores, std::nullopt, row_major);
 
-    std::vector<uint32_t> compute_kernel_args = {};
+    // Get compute kernel config parameters
+    auto [math_fidelity, math_approx_mode, _, __, dst_full_sync_en] =
+        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
-    uint32_t src0_cb_index = tt::CBIndex::c_0;
-    uint32_t src1_cb_index = tt::CBIndex::c_1;
-    uint32_t output_cb_index = tt::CBIndex::c_2;
-    uint32_t interm0_cb_index = tt::CBIndex::c_5;
-
-    tt_metal::CircularBufferConfig src0_cb_config =
-        tt_metal::CircularBufferConfig(in0_CB_size, {{src0_cb_index, in0_data_format}})
-            .set_page_size(src0_cb_index, in0_single_tile_size)
-            .set_tile_dims(src0_cb_index, in0_tile);
-
-    tt_metal::CircularBufferConfig src1_cb_config =
-        tt_metal::CircularBufferConfig(in1_CB_size, {{src1_cb_index, in1_data_format}})
-            .set_page_size(src1_cb_index, in1_single_tile_size)
-            .set_tile_dims(src1_cb_index, in1_tile);
-
-    std::map<uint8_t, tt::DataFormat> output_cb_data_format_spec{
-        {output_cb_index, output_data_format}, {interm0_cb_index, interm0_data_format}};
-    tt_metal::CircularBufferConfig output_cb_config =
-        tt_metal::CircularBufferConfig(out_CB_size, output_cb_data_format_spec)
-            .set_page_size(output_cb_index, output_single_tile_size)
-            .set_page_size(interm0_cb_index, interm0_single_tile_size)
-            .set_tile_dims(output_cb_index, output_tile)
-            .set_tile_dims(interm0_cb_index, output_tile);
-
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
-    auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
-    auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Kernel Creation
+    ////////////////////////////////////////////////////////////////////////////
 
     // Create semaphores for multicast synchronization
     auto in0_mcast_sender_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
@@ -161,7 +165,7 @@ gate_common_override_variables_t deepseek_b1_gate_(
         num_cores_y,                      // 8: num_y
         (uint32_t)false,                  // 9: transpose_mcast
         shard_width_in_tiles,             // 10: shard_width_in_tiles
-        1,                                // 11: in0_block_w
+        in0_block_w,                      // 11: in0_block_w
         batch                             // 12: batch
     };
 
@@ -174,11 +178,33 @@ gate_common_override_variables_t deepseek_b1_gate_(
         out_subblock_h         // 4: out_subblock_h
     };
 
+    // Compute kernel compile-time args (must match gate.cpp expectations)
+    uint32_t out_subblock_num_tiles = out_subblock_h * out_subblock_w;
+    bool untilize_out = false;
+
+    std::vector<uint32_t> compute_kernel_args = {
+        in0_block_w,             // 0: in0_block_w
+        in0_block_num_tiles,     // 1: in0_block_num_tiles
+        in1_block_num_tiles,     // 2: in1_block_num_tiles
+        in1_block_w,             // 3: in1_block_w
+        out_subblock_h,          // 4: out_subblock_h
+        out_subblock_w,          // 5: out_subblock_w
+        out_subblock_num_tiles,  // 6: out_subblock_num_tiles
+        untilize_out             // 7: untilize_out
+    };
+
+    // Kernel defines for compute throttling
+    std::map<std::string, std::string> mm_kernel_defines;
+    ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
+        device->arch(), num_cores, mm_kernel_defines);
+    ttnn::operations::compute_throttle_utils::throttle_mm_perf(
+        device->arch(), num_cores, mm_kernel_defines, ttnn::get_throttle_level(compute_kernel_config));
+
     // NOC selection
     tt_metal::NOC reader_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
     tt_metal::NOC writer_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
 
-    // Create reader kernel
+    // Create reader kernel (RISCV_1)
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek_b1/gate/device/kernels/reader.cpp",
@@ -188,7 +214,7 @@ gate_common_override_variables_t deepseek_b1_gate_(
             .noc = reader_noc,
             .compile_args = reader_compile_time_args});
 
-    // Create writer kernel
+    // Create writer kernel (RISCV_0)
     auto writer_kernel_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek_b1/gate/device/kernels/writer.cpp",
@@ -198,7 +224,52 @@ gate_common_override_variables_t deepseek_b1_gate_(
             .noc = writer_noc,
             .compile_args = writer_compile_time_args});
 
-    // Set runtime args for each core
+    // Create compute kernel
+    auto compute_kernel_id = tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/deepseek_b1/gate/device/kernels/gate.cpp",
+        all_cores,
+        tt_metal::ComputeConfig{
+            .math_fidelity = math_fidelity,
+            .fp32_dest_acc_en = false,
+            .math_approx_mode = math_approx_mode,
+            .compile_args = compute_kernel_args,
+            .defines = mm_kernel_defines});
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Circular Buffer Creation
+    ////////////////////////////////////////////////////////////////////////////
+
+    uint32_t src0_cb_index = tt::CBIndex::c_0;
+    tt_metal::CircularBufferConfig src0_cb_config =
+        tt_metal::CircularBufferConfig(in0_CB_size, {{src0_cb_index, in0_data_format}})
+            .set_page_size(src0_cb_index, in0_single_tile_size)
+            .set_tile_dims(src0_cb_index, in0_tile);
+    auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
+
+    uint32_t src1_cb_index = tt::CBIndex::c_1;
+    tt_metal::CircularBufferConfig src1_cb_config =
+        tt_metal::CircularBufferConfig(in1_CB_size, {{src1_cb_index, in1_data_format}})
+            .set_page_size(src1_cb_index, in1_single_tile_size)
+            .set_tile_dims(src1_cb_index, in1_tile);
+    auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
+
+    uint32_t output_cb_index = tt::CBIndex::c_4;
+    uint32_t interm0_cb_index = tt::CBIndex::c_5;
+    std::map<uint8_t, tt::DataFormat> output_cb_data_format_spec{
+        {output_cb_index, output_data_format}, {interm0_cb_index, interm0_data_format}};
+    tt_metal::CircularBufferConfig output_cb_config =
+        tt_metal::CircularBufferConfig(out_CB_size, output_cb_data_format_spec)
+            .set_page_size(output_cb_index, output_single_tile_size)
+            .set_page_size(interm0_cb_index, interm0_single_tile_size)
+            .set_tile_dims(output_cb_index, output_tile)
+            .set_tile_dims(interm0_cb_index, output_tile);
+    auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Runtime Args Setup
+    ////////////////////////////////////////////////////////////////////////////
+
     CoreCoord start_core_noc = top_left_core_physical;
     CoreCoord end_core_noc = bottom_right_core_physical;
 
@@ -228,7 +299,7 @@ gate_common_override_variables_t deepseek_b1_gate_(
     }
 
     return gate_common_override_variables_t{
-        {reader_kernel_id, writer_kernel_id},
+        {reader_kernel_id, writer_kernel_id, compute_kernel_id},
         {cb_src0, cb_src1, cb_output},
         false,
         start_core,

@@ -5,6 +5,7 @@
 #include "gate_op.hpp"
 #include "gate_program_factory.hpp"
 #include <tt-metalium/constants.hpp>
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::operations::experimental::deepseek_b1::gate {
 
@@ -50,6 +51,10 @@ tt::tt_metal::operation::ProgramWithCallbacks GateDeviceOperation::create_progra
     const auto& input_tensor_expert_bias = input_tensors.at(2);
     auto& output_tensor = output_tensors.at(0);
 
+    // Initialize compute kernel config with proper device architecture
+    auto kernel_config_val =
+        init_device_compute_kernel_config(input_tensor_a.device()->arch(), compute_kernel_config, MathFidelity::HiFi4);
+
     // Call our local program factory with simplified signature
     return deepseek_b1_gate(
         input_tensor_a,
@@ -57,7 +62,7 @@ tt::tt_metal::operation::ProgramWithCallbacks GateDeviceOperation::create_progra
         input_tensor_expert_bias,
         output_tensor,
         program_config.compute_with_storage_grid_size,
-        compute_kernel_config.value_or(DeviceComputeKernelConfig{}));
+        kernel_config_val);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_b1::gate
