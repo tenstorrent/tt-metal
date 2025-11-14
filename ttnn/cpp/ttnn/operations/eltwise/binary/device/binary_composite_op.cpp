@@ -541,10 +541,10 @@ Tensor _outer(const Tensor& input_a, const Tensor& input_b, const std::optional<
     auto device = ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice();
     if (device != nullptr) {
         if (a_slim.storage_type() != tt::tt_metal::StorageType::DEVICE) {
-            a_slim = ttnn::operations::experimental::auto_format::AutoFormat::move_tensor_to_device(a_slim, device);
+            a_slim = a_slim.to_device(device);
         }
         if (b_slim.storage_type() != tt::tt_metal::StorageType::DEVICE) {
-            b_slim = ttnn::operations::experimental::auto_format::AutoFormat::move_tensor_to_device(b_slim, device);
+            b_slim = b_slim.to_device(device);
         }
     }
 

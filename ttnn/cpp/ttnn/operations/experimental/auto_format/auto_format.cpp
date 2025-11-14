@@ -49,16 +49,6 @@ bool legal_device_shape(const ttnn::Shape& shape, tt::tt_metal::Layout layout) {
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // anonymous namespace
 
-Tensor AutoFormat::move_tensor_to_device(
-    const Tensor& input, tt::tt_metal::distributed::MeshDevice* device, const MemoryConfig& mem_config) {
-    if (input.storage_type() != StorageType::DEVICE) {
-        TT_FATAL(device != nullptr, "Target mesh device must not be nullptr when moving tensor to device");
-        return input.to_device(device, mem_config);
-    } else {
-        return input;
-    }
-}
-
 Tensor AutoFormat::move_tensor_to_mem_config(const Tensor& input, const MemoryConfig& mem_config) {
     if (input.storage_type() != StorageType::DEVICE) {
         auto default_device = AutoFormat::GetDefaultDevice();
@@ -102,7 +92,7 @@ Tensor AutoFormat::format_input_tensor(
     bool convert_layout = input.layout() != target_layout;
 
     if (!pad_input && !convert_layout) {
-        return AutoFormat::move_tensor_to_device(input, device);
+        return input.to_device(device);
     }
 
     MemoryConfig mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG;
@@ -176,7 +166,7 @@ Tensor AutoFormat::format_input_tensor(
         formatted_input = formatted_input.to_layout(target_layout);
     }
 
-    return AutoFormat::move_tensor_to_device(formatted_input, device, mem_config);
+    return formatted_input.to_device(device, mem_config);
 }
 
 Tensor AutoFormat::format_output_tensor(
@@ -282,7 +272,7 @@ Tensor AutoFormat::format_output_tensor(
     // Check that shape is supported on device
     if (formatted_output.storage_type() != StorageType::DEVICE) {
         if (CMAKE_UNIQUE_NAMESPACE::legal_device_shape(formatted_output.padded_shape(), formatted_output.layout())) {
-            formatted_output = AutoFormat::move_tensor_to_device(formatted_output, device, mem_config);
+            formatted_output = formatted_output.to_device(device, mem_config);
         }
     }
 

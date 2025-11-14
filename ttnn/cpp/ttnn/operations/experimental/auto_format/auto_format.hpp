@@ -78,18 +78,6 @@ public:
         std::optional<tt::tt_metal::MemoryConfig> target_mem_config);
 
     /**
-     * Moves a tensor to device memory
-     * @param input Input tensor
-     * @param device Target device
-     * @param mem_config Memory configuration
-     * @return Tensor on device
-     */
-    static Tensor move_tensor_to_device(
-        const Tensor& input,
-        tt::tt_metal::distributed::MeshDevice* device,
-        const tt::tt_metal::MemoryConfig& mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-    /**
      * Updates tensor memory configuration
      * @param input Input tensor
      * @param mem_config Target memory configuration
