@@ -207,7 +207,7 @@ uint8_t DebugPrintTypeToId<unsigned long long>() {
     return DPrintUINT64;
 }
 template <>
-uint8_t DebutPrintTypeToId<unsigned long>() {
+uint8_t DebugPrintTypeToId<unsigned long>() {
     static_assert(sizeof(unsigned long) == sizeof(unsigned) || sizeof(unsigned long) == sizeof(unsigned long long));
     return sizeof(unsigned long) == sizeof(unsigned) ? DebugPrintTypeToId<unsigned>()
                                                      : DebugPrintTypeToId<unsigned long long>();
@@ -231,7 +231,7 @@ uint8_t DebugPrintTypeToId<long long>() {
     return DPrintINT64;
 }
 template <>
-uint8_t DebutPrintTypeToId<long>() {
+uint8_t DebugPrintTypeToId<long>() {
     static_assert(sizeof(long) == sizeof(int) || sizeof(long) == sizeof(long long));
     return sizeof(long) == sizeof(int) ? DebugPrintTypeToId<int>() : DebugPrintTypeToId<long long>();
 }
