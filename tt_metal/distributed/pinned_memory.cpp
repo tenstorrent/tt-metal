@@ -302,7 +302,7 @@ void* PinnedMemory::lock() { return pImpl->lock(); }
 
 void PinnedMemory::unlock() { pImpl->unlock(); }
 
-std::unique_ptr<PinnedMemory> PinnedMemory::PinMemory(
+std::unique_ptr<PinnedMemory> PinMemory(
     distributed::MeshDevice& mesh_device,
     const distributed::MeshCoordinateRangeSet& coordinate_range_set,
     HostBuffer& host_buffer,
@@ -310,7 +310,7 @@ std::unique_ptr<PinnedMemory> PinnedMemory::PinMemory(
     return mesh_device.pin_memory(coordinate_range_set, host_buffer, map_to_noc);
 }
 
-experimental::MemoryPinningParameters PinnedMemory::GetMemoryPinningParameters(distributed::MeshDevice& mesh_device) {
+experimental::MemoryPinningParameters GetMemoryPinningParameters(distributed::MeshDevice& mesh_device) {
     return mesh_device.get_memory_pinning_parameters();
 }
 
