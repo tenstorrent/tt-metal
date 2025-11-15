@@ -22,6 +22,7 @@ from tracy.common import (
     PROFILER_SCRIPTS_ROOT,
     PROFILER_ARTIFACTS_DIR,
     PROFILER_LOGS_DIR,
+    PROFILER_CPP_DEVICE_PERF_REPORT,
     clear_profiler_runtime_artifacts,
 )
 
@@ -61,6 +62,8 @@ def set_env_vars(**kwargs):
         "slowDispatch": "TT_METAL_SLOW_DISPATCH_MODE=1 ",
         "enable_noc_tracing": "TT_METAL_DEVICE_PROFILER_NOC_EVENTS=1 ",
         "doDeviceTrace": "TT_METAL_TRACE_PROFILER=1 ",
+        "do_mid_run_dump": "TT_METAL_PROFILER_MID_RUN_DUMP=1 ",
+        "do_cpp_post_process": "TT_METAL_PROFILER_CPP_POST_PROCESS=1 ",
     }
     envVarsStr = " "
     for arg, argVal in kwargs.items():
@@ -70,9 +73,22 @@ def set_env_vars(**kwargs):
 
 
 # returns True if test passed, False if test was SKIPPED
-def run_gtest_profiler_test(testbin, testname, doSync=False, enable_noc_tracing=False, skip_get_device_data=False):
+def run_gtest_profiler_test(
+    testbin,
+    testname,
+    doSync=False,
+    enable_noc_tracing=False,
+    do_mid_run_dump=False,
+    do_cpp_post_process=False,
+    skip_get_device_data=False,
+):
     clear_profiler_runtime_artifacts()
-    envVars = set_env_vars(doSync=doSync, enable_noc_tracing=enable_noc_tracing)
+    envVars = set_env_vars(
+        doSync=doSync,
+        enable_noc_tracing=enable_noc_tracing,
+        do_mid_run_dump=do_mid_run_dump,
+        do_cpp_post_process=do_cpp_post_process,
+    )
     testCommand = f"cd {TT_METAL_HOME} && {envVars} {testbin} --gtest_filter={testname}"
     print()
     logger.info(f"Running: {testCommand}")
@@ -877,3 +893,68 @@ def test_sub_device_profiler():
         "./build/test/tt_metal/unit_tests_dispatch",
         "UnitMeshCQSingleCardTraceFixture.TensixTestSubDeviceTraceBasicPrograms",
     )
+
+
+def validate_programs_perf_durations(perf_data):
+    cpp_ops_perf_report = pd.read_csv(PROFILER_LOGS_DIR / PROFILER_CPP_DEVICE_PERF_REPORT).reset_index(drop=True)
+
+    for snapshot in perf_data:
+        for device in snapshot:
+            device_id = device["device"]
+            device_programs_analysis_data = device["programs_analysis_data"]
+            for program_analysis_data in device_programs_analysis_data:
+                runtime_id = program_analysis_data["program_execution_uid"]["runtime_id"]
+                program_analyses_results = program_analysis_data["program_analyses_results"]
+                for analysis_type in program_analyses_results:
+                    analysis_result = program_analyses_results[analysis_type]
+                    if analysis_result["duration"] == 0:
+                        continue
+
+                    row = cpp_ops_perf_report.loc[
+                        (cpp_ops_perf_report["GLOBAL CALL COUNT"] == runtime_id)
+                        & (cpp_ops_perf_report["DEVICE ID"] == device_id)
+                    ]
+
+                    assert row[analysis_type].values[0] == analysis_result["duration"]
+
+
+def test_get_programs_perf_data():
+    # Program execution UIDs and the number of programs are validated in the test_get_programs_perf_data gtests
+    # In this file, we validate the durations of the programs
+    test_get_programs_perf_data_binary = "./build/test/ttnn/tracy/test_get_programs_perf_data"
+
+    run_gtest_profiler_test(
+        test_get_programs_perf_data_binary,
+        "GetProgramsPerfDataFixture.TestGetProgramsPerfDataBeforeReadMeshDeviceProfilerResultsCall",
+        do_mid_run_dump=True,
+        do_cpp_post_process=True,
+    )
+
+    with open(PROFILER_LOGS_DIR / "test_get_programs_perf_data_latest.json", "r") as f:
+        validate_programs_perf_durations(json.load(f))
+    with open(PROFILER_LOGS_DIR / "test_get_programs_perf_data_all.json", "r") as f:
+        validate_programs_perf_durations(json.load(f))
+
+    run_gtest_profiler_test(
+        test_get_programs_perf_data_binary,
+        "GetProgramsPerfDataFixture.TestGetProgramsPerfDataAfterSingleReadMeshDeviceProfilerResultsCall",
+        do_mid_run_dump=True,
+        do_cpp_post_process=True,
+    )
+
+    with open(PROFILER_LOGS_DIR / "test_get_programs_perf_data_latest.json", "r") as f:
+        validate_programs_perf_durations(json.load(f))
+    with open(PROFILER_LOGS_DIR / "test_get_programs_perf_data_all.json", "r") as f:
+        validate_programs_perf_durations(json.load(f))
+
+    run_gtest_profiler_test(
+        test_get_programs_perf_data_binary,
+        "GetProgramsPerfDataFixture.TestGetProgramsPerfDataAfterMultipleReadMeshDeviceProfilerResultsCalls",
+        do_mid_run_dump=True,
+        do_cpp_post_process=True,
+    )
+
+    with open(PROFILER_LOGS_DIR / "test_get_programs_perf_data_latest.json", "r") as f:
+        validate_programs_perf_durations(json.load(f))
+    with open(PROFILER_LOGS_DIR / "test_get_programs_perf_data_all.json", "r") as f:
+        validate_programs_perf_durations(json.load(f))

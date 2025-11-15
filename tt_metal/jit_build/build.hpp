@@ -14,6 +14,7 @@
 
 #include "hal_types.hpp"
 #include "jit_build_options.hpp"
+#include <umd/device/types/arch.hpp>
 
 namespace tt::tt_metal {
 

@@ -19,7 +19,7 @@ Options:
                                      Controls which columns/fields are displayed:
                                      Level 0 (default): Essential fields (Kernel ID:Name, Go Message, Subdevice, Preload, Waypoint, PC, Callstack)
                                      Level 1 (-v): Include detailed dispatcher fields (Firmware/Kernel Path, Host Assigned ID, Kernel Offset, Previous Kernel)
-                                     Level 2 (-vv): Include internal debug fields (RD PTR, Base, Offset)
+                                     Level 2 (-vv): Include internal debug fields (RD PTR, Base, Offset, Kernel XIP Path)
 
 Description:
     Diagnoses Tenstorrent AI hardware by performing comprehensive health checks on ARC processors, NOC connectivity, L1 memory, and RISC-V cores.
@@ -382,6 +382,8 @@ def parse_arguments(scripts: dict[str, TriageScript], script_path: str | None = 
                 script_options = parse_defaults(script.module.__doc__)
                 if len(script_options) > 0:
                     help_message += f"\n{script.module.__doc__}\n"
+        print(help_message)
+        sys.exit(0)
     else:
         help_message = printable_usage(doc)
         for script in scripts.values():

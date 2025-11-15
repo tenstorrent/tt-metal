@@ -23,6 +23,7 @@
 #include <thread>
 #include <tuple>
 #include <vector>
+#include <fstream>
 
 #include <enchantum/enchantum.hpp>
 #include <tt-logger/tt-logger.hpp>

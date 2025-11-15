@@ -276,10 +276,6 @@ Result conv2d_DRAM(
         // run conv as matmul
         std::optional<ttnn::operations::matmul::MatmulProgramConfig> program_config = std::nullopt;
         std::optional<MemoryConfig> mm_output_memory_config = std::nullopt;
-        std::optional<std::string> linear_activation = std::nullopt;
-        if (conv_config.activation.has_value()) {
-            linear_activation = unary::utils::unary_with_param_to_string(conv_config.activation.value());
-        }
         // Matmul expects inputs to be in Tile Layout
         tilize_with_optional_deallocation(input_tensor_on_device, conv_config.deallocate_activation);
         Tensor matmul_output = ttnn::linear(
@@ -291,7 +287,7 @@ Result conv2d_DRAM(
             mm_output_memory_config,
             output_dtype,
             program_config,
-            linear_activation,
+            conv_config.activation,
             compute_config);
         if (conv_config.deallocate_activation) {
             input_tensor_on_device.deallocate(true);
@@ -669,7 +665,6 @@ Result conv2d_L1(
                 parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
                 input_tensor_post_tm.memory_config(),
                 true,
-                conv_config.in_place,
                 conv_config.config_tensors_in_dram);
 
             if (conv_config.deallocate_activation) {
@@ -717,7 +712,6 @@ Result conv2d_L1(
         // run conv as matmul
         std::optional<ttnn::operations::matmul::MatmulProgramConfig> program_config = std::nullopt;
         std::optional<MemoryConfig> mm_output_memory_config = std::nullopt;
-        std::optional<std::string> linear_activation = std::nullopt;
 
         if (input_tensor_post_tm.is_sharded()) {
             uint32_t num_cores_c = get_num_cores_channels_from_parallel_config(parallel_config);
@@ -729,10 +723,6 @@ Result conv2d_L1(
                 parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
                 num_cores_c);
             mm_output_memory_config = conv_out_memory_config;
-        } else {
-            if (conv_config.activation.has_value()) {
-                linear_activation = unary::utils::unary_with_param_to_string(conv_config.activation.value());
-            }
         }
 
         Tensor matmul_output = ttnn::linear(
@@ -744,7 +734,8 @@ Result conv2d_L1(
             mm_output_memory_config,
             output_dtype,
             program_config,
-            linear_activation,
+            // for sharded input, activation is set on program config
+            input_tensor_post_tm.is_sharded() ? std::nullopt : conv_config.activation,
             compute_config);
 
         if (conv_config.deallocate_activation) {

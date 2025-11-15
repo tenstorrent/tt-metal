@@ -22,13 +22,13 @@ graph_descriptors {
   # Per-device edges derived from YAML Graph using port index -> device_id mapping (row-major)
   # [[0, E0], [1, W0]]
   connections {
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 1 } }
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 device_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
     channels { count: 2 }
   }
   connections {
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 3 } }
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 device_id: 2 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
     channels { count: 2 }
   }
 }

@@ -12,6 +12,7 @@
 #include <iostream>
 #include <optional>
 #include <sstream>
+#include <fstream>
 
 #include <boost/functional/hash.hpp>
 #include <cxxopts.hpp>

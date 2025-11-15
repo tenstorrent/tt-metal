@@ -82,7 +82,7 @@ def test_attention(
     torch_output_tensor = torch_attention(torch_input_tensor, torch_encoder_tensor).unsqueeze(0)
 
     ttnn_input_tensor = ttnn.from_torch(
-        torch_input_tensor,
+        torch_input_tensor.unsqueeze(0),
         dtype=ttnn.bfloat16,
         device=device,
         layout=ttnn.TILE_LAYOUT,

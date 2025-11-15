@@ -12,6 +12,8 @@
 #include <filesystem>
 #include <functional>
 #include <iostream>
+#include <ostream>
+#include <fstream>
 #include <stdexcept>
 #include <string>
 #include <thread>
