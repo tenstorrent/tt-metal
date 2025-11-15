@@ -324,13 +324,13 @@ class CMakeBuild(build_ext):
             "api/ttnn/tensor/enum_types.hpp",
         ]
         ttnn_cpp_patterns = [
+            "ttnn/kernel/**/*",
             "ttnn/operations/**/kernels/**/*",
             "ttnn/operations/**/kernels_ng/**/*",
             "ttnn/operations/kernel_helper_functions/*",
             "ttnn/operations/ccl/**/*",
             "ttnn/operations/data_movement/**/*",
             "ttnn/operations/moreh/**/*",
-            "ttnn/kernel/*",
             "ttnn/operations/normalization/kernel_util/compute/*",
         ]
         tt_metal_patterns = [
