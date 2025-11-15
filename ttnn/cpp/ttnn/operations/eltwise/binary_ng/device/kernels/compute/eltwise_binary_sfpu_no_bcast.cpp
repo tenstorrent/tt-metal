@@ -20,16 +20,13 @@
 #include "compute_kernel_api/lcm.h"
 #include "compute_kernel_api/xlogy.h"
 #include "compute_kernel_api/binary_comp.h"
-#include "compute_kernel_api/eltwise_unary/where.h"
-#include "compute_kernel_api/eltwise_unary/fill.h"
+
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils_sfpu.hpp"
 
 namespace NAMESPACE {
 void MAIN {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
-    const uint32_t scalar_value = get_arg_val<uint32_t>(3);
-    const auto scalar_val = reinterpret_cast<const float*>(&scalar_value);
 
     constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);
 
@@ -62,7 +59,6 @@ void MAIN {
         BINARY_SFPU_INIT
 #endif
         tile_regs_acquire();
-
         copy_tile_to_dst_init_short_with_dt(cb_post_rhs, cb_post_lhs);
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             copy_tile(cb_post_lhs, i, i * 2);
@@ -74,7 +70,6 @@ void MAIN {
             BINARY_SFPU_OP(i * 2, i * 2 + 1, i * 2);
             PROCESS_POST_ACTIVATIONS(i * 2);
         }
-
         tile_regs_commit();
 
         tile_regs_wait();

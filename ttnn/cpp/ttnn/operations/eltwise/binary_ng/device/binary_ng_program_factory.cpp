@@ -824,7 +824,6 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     }
     compute_kernel_defines["WHERE_TTS"] = (op_type == BinaryOpType::WHERE_TTS) ? "1" : "0";
     compute_kernel_defines["WHERE_TST"] = (op_type == BinaryOpType::WHERE_TST) ? "1" : "0";
-    std::cout << "compute_kernel " << get_kernel_file_path(compute_kernel, is_sfpu_op, is_where_op) << std::endl;
     auto compute_kernel_id = tt_metal::CreateKernel(
         program,
         get_kernel_file_path(compute_kernel, is_sfpu_op, is_where_op),
