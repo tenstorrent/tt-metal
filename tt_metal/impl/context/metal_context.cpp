@@ -117,9 +117,6 @@ void MetalContext::initialize(
             hal_->get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) - worker_l1_size_,
         max_alignment);
 
-    // Initialize fabric control plane
-    initialize_control_plane();
-
     // Initialize inspector
     inspector_data_ = Inspector::initialize();
     // Set fw_compile_hash for Inspector RPC build environment info
@@ -525,8 +522,9 @@ void MetalContext::clear_launch_messages_on_eth_cores(ChipId device_id) {
 }
 
 tt::tt_fabric::ControlPlane& MetalContext::get_control_plane() {
+    std::lock_guard<std::mutex> lock(control_plane_mutex_);
     if (!control_plane_) {
-        TT_THROW("Trying to get control plane before initializing it.");
+        this->initialize_control_plane_impl();
     }
     return *control_plane_;
 }
@@ -683,6 +681,11 @@ void MetalContext::construct_control_plane(const std::filesystem::path& mesh_gra
 }
 
 void MetalContext::initialize_control_plane() {
+    std::lock_guard<std::mutex> lock(control_plane_mutex_);
+    initialize_control_plane_impl();
+}
+
+void MetalContext::initialize_control_plane_impl() {
     if (custom_mesh_graph_desc_path_.has_value()) {
         log_debug(tt::LogDistributed, "Using custom mesh graph descriptor: {}", custom_mesh_graph_desc_path_.value());
         std::filesystem::path mesh_graph_desc_path = std::filesystem::path(custom_mesh_graph_desc_path_.value());
