@@ -20,6 +20,7 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/loopback)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/matmul)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/pad_multi_core)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/shard_data_rm)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/struct_runtime_args)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/vecadd_sharding)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/vecadd_multi_core)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/NoC_tile_transfer)
@@ -46,6 +47,7 @@ install(
         loopback
         matmul
         shard_data_rm
+        struct_runtime_args
         NoC_tile_transfer
         sfpu_eltwise_chain
         custom_sfpi_add
@@ -74,6 +76,7 @@ install(
         loopback
         matmul
         shard_data_rm
+        struct_runtime_args
         NoC_tile_transfer
         sfpu_eltwise_chain
         custom_sfpi_add
