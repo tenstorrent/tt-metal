@@ -117,7 +117,6 @@ FORCE_INLINE uint32_t read_chunk(
     uint32_t output_tensor_Wt,
     uint32_t actual_sender_chip_id,
     bool read_output) {
-    // TODO WHAT HAPPENS IF WORKER TILES BELOW is ZERO
     uint32_t worker_tiles_in_curr_chunk =
         (tiles_in_chunk / ag_worker_cores) + ((ag_worker_core_id < (tiles_in_chunk % ag_worker_cores)) ? 1 : 0);
     uint32_t num_tiles_per_packet = std::min(max_tiles_per_packet, worker_tiles_in_curr_chunk);
@@ -194,7 +193,6 @@ FORCE_INLINE uint32_t write_chunk(
     uint64_t out_ready_sem_noc_addr_in_pkt,
     bool direction,
     bool write_local) {
-    // TODO WHAT HAPPENS IF WORKER TILES BELOW is ZERO
     uint32_t worker_tiles_in_curr_chunk =
         (tiles_in_chunk / ag_worker_cores) + ((ag_worker_core_id < (tiles_in_chunk % ag_worker_cores)) ? 1 : 0);
     uint32_t num_tiles_per_packet = std::min(max_tiles_per_packet, worker_tiles_in_curr_chunk);
