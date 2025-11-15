@@ -275,6 +275,10 @@ void build_tt_fabric_program(
     // check whether using tensix extension for connection between worker and fabric routers.
     bool fabric_tensix_extension_enabled = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() !=
                                            tt::tt_fabric::FabricTensixConfig::DISABLED;
+    bool fabric_tensix_extension_mux_mode =
+        tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() == tt::tt_fabric::FabricTensixConfig::MUX;
+    bool fabric_tensix_extension_udm_mode =
+        tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() == tt::tt_fabric::FabricTensixConfig::UDM;
 
     for (const auto& [direction, remote_fabric_node_id] : chip_neighbors) {
         const auto& [fabric_edm_type, fabric_edm_axis] = get_fabric_edm_type(
@@ -291,28 +295,26 @@ void build_tt_fabric_program(
         uint32_t dispatch_link_idx =
             tt::tt_metal::RelayMux::get_dispatch_link_index(fabric_node_id, remote_fabric_node_id, device);
 
-        auto get_fabric_router_config =
-            [&](bool fabric_tensix_extension_enabled, bool is_dispatch_link, auto eth_direction) {
-                auto fabric_tensix_config = tt::tt_fabric::FabricTensixConfig::DISABLED;
-                // if not the link used by dispatch, get the fabric router config with tensix extension.
-                if (fabric_tensix_extension_enabled && !is_dispatch_link) {
-                    fabric_tensix_config = tt::tt_fabric::FabricTensixConfig::MUX;
-                }
-                return fabric_context.get_fabric_router_config(
-                    fabric_edm_type, fabric_edm_axis, fabric_tensix_config, eth_direction);
-            };
+        auto get_fabric_router_config = [&](bool is_dispatch_link, auto eth_direction) {
+            auto fabric_tensix_config = tt::tt_fabric::FabricTensixConfig::DISABLED;
+            // if not the link used by dispatch, get the fabric router config with tensix extension.
+            if (!is_dispatch_link) {
+                fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
+            }
+            return fabric_context.get_fabric_router_config(
+                fabric_edm_type, fabric_edm_axis, fabric_tensix_config, eth_direction);
+        };
 
         for (const auto& eth_chan : active_fabric_eth_channels[direction]) {
             auto eth_direction = control_plane.routing_direction_to_eth_direction(direction);
             auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
 
             bool dispatch_link = is_dispatch_link(eth_chan, dispatch_link_idx);
-            const auto& curr_edm_config =
-                get_fabric_router_config(fabric_tensix_extension_enabled, dispatch_link, eth_direction);
+            const auto& curr_edm_config = get_fabric_router_config(dispatch_link, eth_direction);
 
-            bool has_tensix_extension = false;
-            if (fabric_tensix_extension_enabled && !dispatch_link) {
-                has_tensix_extension = true;
+            bool downstream_is_tensix_extension = false;
+            if (fabric_tensix_extension_mux_mode && !dispatch_link) {
+                downstream_is_tensix_extension = true;
             }
 
             auto edm_builder = tt::tt_fabric::FabricEriscDatamoverBuilder::build(
@@ -325,7 +327,7 @@ void build_tt_fabric_program(
                 false, /* build_in_worker_connection_mode */
                 fabric_edm_type,
                 eth_direction,
-                has_tensix_extension);
+                downstream_is_tensix_extension);
             edm_builders.insert({eth_chan, edm_builder});
 
             if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::BLACKHOLE &&
@@ -341,7 +343,15 @@ void build_tt_fabric_program(
                 if (!dispatch_link) {
                     auto tensix_builder = tt::tt_fabric::FabricTensixDatamoverBuilder::build(
                         device, *fabric_program_ptr, fabric_node_id, remote_fabric_node_id, eth_chan, eth_direction);
-                    tensix_builders.insert({eth_chan, tensix_builder});
+
+                    if (fabric_tensix_extension_udm_mode) {
+                        // Get reference to the builder stored in the map
+                        auto& edm_builder_in_map = edm_builders.at(eth_chan);
+                        // setup the local relay kernel connection - must be called on the builder in the map!
+                        edm_builder_in_map.connect_to_local_tensix_builder(tensix_builder);
+                    }
+
+                    tensix_builders.emplace(eth_chan, std::move(tensix_builder));
                 }
             }
         }
@@ -362,7 +372,7 @@ void build_tt_fabric_program(
         auto& edm_builder1 = edm_builders.at(eth_chan_dir1);
         auto& edm_builder2 = edm_builders.at(eth_chan_dir2);
 
-        if (fabric_tensix_extension_enabled) {
+        if (fabric_tensix_extension_mux_mode) {
             if (tensix_builders.find(eth_chan_dir1) != tensix_builders.end() &&
                 tensix_builders.find(eth_chan_dir2) != tensix_builders.end()) {
                 auto& tensix_builder1 = tensix_builders.at(eth_chan_dir1);
@@ -466,7 +476,7 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(tt::
     if (tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() !=
         tt::tt_fabric::FabricTensixConfig::DISABLED) {
         for (auto& [eth_chan, tensix_builder] : tensix_builders) {
-            tensix_builder.create_and_compile(device, *fabric_program_ptr);
+            tensix_builder.create_and_compile(*fabric_program_ptr);
         }
     }
 
