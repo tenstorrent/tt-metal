@@ -83,6 +83,16 @@ void generate_tile_with_packed_bfloat16_value(uint32_t cb_id, uint32_t packed_bf
     cb_push_back(cb_id, onetile);
 }
 
+// Generates a tile for broadcasting a scalar bfloat16 value.
+// Only the first element of the tile is set to the scalar value (upper 16 bits of packed_scalar).
+// This is used for efficient broadcast operations where only the first value is needed.
+void generate_bcast_scalar_bfloat16(uint32_t cb_id, uint32_t packed_scalar) {
+    cb_reserve_back(cb_id, onetile);
+    uint32_t* ptr = reinterpret_cast<uint32_t*>(get_write_ptr(cb_id));
+    ptr[0] = packed_scalar >> 16;
+    cb_push_back(cb_id, onetile);
+}
+
 // Fills a tile (32x32 bfloat16 values) with a single bfloat16 value.
 // This avoids writing 1024 individual 16-bit values by packing them into 512 32-bit writes.
 void generate_tile_with_bfloat16_value(uint32_t cb_id, uint16_t bf16_value) {
