@@ -33,7 +33,7 @@ std::string GetCommonOptions() {
     std::vector<std::string> options{
         "O3",
         "mcpu=tt-bh",
-        "fno-rvtt-sfpu-replay",
+        "fno-tt-tensix-optimize-replay",
         "std=c++17",
         "flto=auto",
         "ffast-math",
