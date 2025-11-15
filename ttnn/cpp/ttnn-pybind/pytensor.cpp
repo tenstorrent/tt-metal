@@ -23,7 +23,6 @@
 #include <pybind11/stl.h>
 #include <pybind11/numpy.h>
 
-#include "ttnn/tensor/tensor_impl_wrapper.hpp"
 #include "tools/profiler/op_profiler.hpp"
 #include "ttnn-pybind/small_vector_caster.hpp"  // NOLINT - for pybind11 SmallVector binding support.
 #include "ttnn/common/queue_id.hpp"
