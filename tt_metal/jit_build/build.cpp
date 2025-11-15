@@ -81,6 +81,26 @@ std::string get_default_root_path() {
     }
 }
 
+void JitBuildTargetLookup::build_once(const std::string& target_name, const std::function<void()>& build_func) {
+    // TODO: can use std::once_flag instead.
+    std::shared_future<void>* future = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = build_futures_.find(target_name);
+        if (it == build_futures_.end()) {
+            // log_info(tt::LogBuildKernels, "initiating JIT build for {} from {}", target_name,
+            // reinterpret_cast<uintptr_t>(this));
+            it = build_futures_.emplace_hint(it, target_name, detail::async(build_func));
+        } else {
+            // log_info(tt::LogBuildKernels, "waiting for JIT build {} from {}", target_name,
+            // reinterpret_cast<uintptr_t>(this));
+        }
+        future = &it->second;
+        TT_FATAL(build_futures_.contains(target_name), "future must exist");
+    }
+    future->get();
+}
+
 JitBuildEnv::JitBuildEnv() = default;
 
 void JitBuildEnv::init(
@@ -569,22 +589,24 @@ void JitBuildState::extract_zone_src_locations(const std::string& out_dir) const
 }
 
 void JitBuildState::build(const JitBuildSettings* settings) const {
+    static JitBuildTargetLookup global_target_lookup;
     // ZoneScoped;
     string out_dir = (settings == nullptr)
                          ? this->out_path_ + this->target_name_ + "/"
                          : this->out_path_ + settings->get_full_kernel_name() + this->target_name_ + "/";
 
-    fs::create_directories(out_dir);
-    if (compile(out_dir, settings) > 0 || need_link(out_dir)) {
-        link(out_dir, settings);
-        if (this->is_fw_) {
-            weaken(out_dir);
+    global_target_lookup.build_once(out_dir, [this, &out_dir, settings]() {
+        fs::create_directories(out_dir);
+        if (compile(out_dir, settings) > 0 || need_link(out_dir)) {
+            link(out_dir, settings);
+            if (this->is_fw_) {
+                weaken(out_dir);
+            }
         }
-    }
-
-    // `extract_zone_src_locations` must be called every time, because it writes to a global file
-    // that gets cleared in each run.
-    extract_zone_src_locations(out_dir);
+        // `extract_zone_src_locations` must be called every time, because it writes to a global file
+        // that gets cleared in each run.
+        extract_zone_src_locations(out_dir);
+    });
 }
 
 void jit_build(const JitBuildState& build, const JitBuildSettings* settings) {
