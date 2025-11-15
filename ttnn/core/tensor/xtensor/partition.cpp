@@ -130,14 +130,22 @@ XtensorAdapter<typename Expression::value_type> concat_ndim(
         return XtensorAdapter<DataType>(std::vector<DataType>(), {0});
     }
 
-    if (num_chunks.empty()) {
-        TT_FATAL(expressions.size() == 1, "When no dims specified, must have exactly one expression");
-        std::vector<DataType> data(expressions.front().begin(), expressions.front().end());
-        std::vector<size_t> shape_vec(expressions.front().shape().cbegin(), expressions.front().shape().cend());
+    const auto& first_expr = expressions.front();
+    if (first_expr.dimension() == 0 && expressions.size() > 1) {
+        TT_FATAL(false, "Cannot concatenate multiple scalars; expected a single scalar expression.");
+    }
+    if (num_chunks.empty() || expressions.size() == 1) {
+        if (num_chunks.empty()) {
+            TT_FATAL(expressions.size() == 1, "When no dims specified, must have exactly one expression");
+        }
+        std::vector<DataType> data(first_expr.begin(), first_expr.end());
+        std::vector<size_t> shape_vec(first_expr.shape().cbegin(), first_expr.shape().cend());
+        if (first_expr.dimension() == 0) {
+            TT_FATAL(shape_vec.empty(), "Scalar input must have an empty shape.");
+        }
         return XtensorAdapter<DataType>(std::move(data), std::move(shape_vec));
     }
 
-    const auto& first_expr = expressions.front();
     const auto& expected_shape = first_expr.shape();
     const size_t num_dims = first_expr.dimension();
     for (const auto& expr : expressions) {
