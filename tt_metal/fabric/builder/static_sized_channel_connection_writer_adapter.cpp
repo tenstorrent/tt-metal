@@ -49,6 +49,12 @@ void StaticSizedChannelConnectionWriterAdapter::add_downstream_connection(
                 adapter_spec.edm_connection_handshake_addr;
             this->downstream_edm_worker_location_info_addresses.at(inbound_vc_idx).at(compact_index) =
                 adapter_spec.edm_worker_location_info_addr;
+        } else {
+            this->downstream_edm_buffer_base_addresses.at(inbound_vc_idx).at(0) = adapter_spec.edm_buffer_base_addr;
+            this->downstream_edm_worker_registration_addresses.at(inbound_vc_idx).at(0) =
+                adapter_spec.edm_connection_handshake_addr;
+            this->downstream_edm_worker_location_info_addresses.at(inbound_vc_idx).at(0) =
+                adapter_spec.edm_worker_location_info_addr;
         }
     } else {
         this->downstream_edms_connected = 1;
