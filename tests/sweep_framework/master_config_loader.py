@@ -1558,17 +1558,9 @@ class MasterConfigLoader:
                         f"✅ Loaded {len(transformed_configs)} traced configurations for {operation_name} (model_traced suite)"
                     )
 
-                    # For embedding, return separate keys to match sweep test expectations
+                    # For embedding, return tuples to prevent cartesian product explosion
                     if clean_op_name == "embedding":
-                        embedding_args_list = []
-                        input_dtypes = []
-                        weight_dtypes = []
-                        output_dtypes = []
-                        input_layouts = []
-                        weight_layouts = []
-                        input_memory_configs = []
-                        weight_memory_configs = []
-                        output_memory_configs = []
+                        param_tuples = []
 
                         for cfg in transformed_configs:
                             # Convert input_shape dict to embedding_args tuple format
@@ -1593,30 +1585,28 @@ class MasterConfigLoader:
                                     embeddings_dim = other_shape[-1]
                                 else:
                                     continue
-                                embedding_args_list.append((batch_size, seq_length, embeddings_dim, num_embeddings))
+                                embedding_args = (batch_size, seq_length, embeddings_dim, num_embeddings)
                             else:
                                 continue
 
-                            input_dtypes.append(cfg["input_a_dtype"])
-                            weight_dtypes.append(cfg["input_b_dtype"])
-                            output_dtypes.append(cfg["input_b_dtype"])  # Output dtype matches weight dtype
-                            input_layouts.append(cfg["input_a_layout"])
-                            weight_layouts.append(cfg["input_b_layout"])
-                            input_memory_configs.append(cfg["input_a_memory_config"])
-                            weight_memory_configs.append(cfg["input_b_memory_config"])
-                            output_memory_configs.append(cfg["output_memory_config"])
+                            # Create tuple with all parameters to keep configs together
+                            param_tuples.append(
+                                (
+                                    embedding_args,
+                                    cfg["input_a_dtype"],
+                                    cfg["input_b_dtype"],
+                                    cfg["input_b_dtype"],  # Output dtype matches weight dtype
+                                    cfg["input_a_layout"],
+                                    cfg["input_b_layout"],
+                                    cfg["input_a_memory_config"],
+                                    cfg["input_b_memory_config"],
+                                    cfg["output_memory_config"],
+                                )
+                            )
 
-                        return {
-                            "embedding_args": embedding_args_list,
-                            "input_dtype": input_dtypes,
-                            "weight_dtype": weight_dtypes,
-                            "output_dtype": output_dtypes,
-                            "input_layout": input_layouts,
-                            "weight_layout": weight_layouts,
-                            "input_memory_config": input_memory_configs,
-                            "weight_memory_config": weight_memory_configs,
-                            "output_memory_config": output_memory_configs,
-                        }
+                        # Return as comma-separated parameter name with tuple list (like linear)
+                        param_name = "embedding_args,input_dtype,weight_dtype,output_dtype,input_layout,weight_layout,input_memory_config,weight_memory_config,output_memory_config"
+                        return {param_name: param_tuples}
 
                     elif clean_op_name == "linear":
                         param_names = [
