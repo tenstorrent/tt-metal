@@ -346,12 +346,11 @@ from ttnn.operations.normalization import (
     LayerNormShardedMultiCoreProgramConfig,
     LayerNormDistributedDefaultProgramConfig,
     create_group_norm_weight_bias_rm,
-    create_group_norm_input_mask,
-    create_group_norm_input_negative_mask,
     create_group_norm_reciprocals,
     determine_expected_group_norm_sharded_config_and_grid_size,
     dram_group_norm_params_from_torch,
 )
+from ttnn._ttnn.operations.normalization import create_group_norm_input_mask, create_group_norm_input_negative_mask
 
 from ttnn.operations.embedding import (
     EmbeddingsType,

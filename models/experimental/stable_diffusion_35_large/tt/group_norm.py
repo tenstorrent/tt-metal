@@ -122,11 +122,13 @@ class TtGroupNorm:
             num_channels,
             core_grid.y,
         )
-        torch_mask = ttnn.create_group_norm_input_mask(
+        tt_mask = ttnn.create_group_norm_input_mask(
             num_channels,
             num_groups,
             core_grid.y,
+            ttnn.bfloat8_b,
         )
+        tt_mask = ttnn.to_device(tt_mask, self._device)
 
         self._preparation = TtGroupNormPreparation(
             batch_size=batch_size,
@@ -145,12 +147,7 @@ class TtGroupNorm:
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=self._device,
             ),
-            mask=from_torch_fast(
-                torch_mask,
-                dtype=ttnn.bfloat8_b,
-                layout=ttnn.TILE_LAYOUT,
-                device=self._device,
-            ),
+            mask=tt_mask,
             memory_config=memory_config,
             core_grid=core_grid,
         )
