@@ -925,3 +925,119 @@ def test_div_inf_nan_cases(use_legacy, device):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert torch.allclose(torch_output_tensor, output_tensor, atol=1e-10, rtol=1e-5, equal_nan=True)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    ((torch.Size([1, 2, 32, 128])),),
+)
+def test_binary_divide_int32_full_range(input_shapes, device):
+    value_ranges_a = [
+        (-300, 300),
+        (-750, 500),
+        (-1000, 1000),
+        (-1e4, 1e4),
+        (-1e5, 1e5),
+        (-1e7, 1e7),
+        (-16777216, 16777216),  # full fp32 int range
+        (1e8, 16777216),  # large positive input
+        (-16777216, -1e8),  # large negative input
+        (-16777216, 16777216),  # large numerator
+        (-10, 10),  # small numerator
+    ]
+
+    value_ranges_b = [
+        (-250, 250),
+        (-750, 750),
+        (-500, 1000),
+        (-5e3, 5e3),
+        (-5e4, 5e4),
+        (-1e6, 1e6),
+        (-16777216, 16777216),  # full fp32 int range
+        (1.5e7, 16777216),  # large positive input
+        (-16777216, -1e7),  # large negative input
+        (-10, 10),  # large numerator
+        (-16777216, 16777216),  # small numerator
+    ]
+
+    torch_input_tensor_a = create_full_range_tensor(
+        input_shape=input_shapes, dtype=torch.int32, value_ranges=value_ranges_a
+    )
+    torch_input_tensor_b = create_full_range_tensor(
+        input_shape=input_shapes, dtype=torch.int32, value_ranges=value_ranges_b
+    )
+
+    torch_input_tensor_b[
+        torch_input_tensor_b == 0
+    ] = 1  # avoid division by zero since nan and inf are not representable in int32
+
+    golden_function = ttnn.get_golden_function(ttnn.divide)
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device).to(torch.int32)
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    output_tensor = ttnn.divide(input_tensor_a, input_tensor_b)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert torch.max(torch.abs(torch_output_tensor - output_tensor)) <= 1
+
+
+def test_divide_edge_cases(device):
+    pairs = [
+        (1, 2),
+        (2, 1),
+        (3, 2),
+        (2, 2),
+        (10, 3),
+        (20, 2),
+        (16777215, 1),
+        (16777216, 2),
+        (-16777215, 3),
+        (16777216, -3),
+        (-16777216, -4),
+        (16777216, 16777215),
+        (16777229, 19),
+        (16777229, 8388615),
+        (16777230, 8388615),
+    ]
+
+    numerators, denominators = zip(*pairs)
+    torch_input_tensor_a = torch.tensor(numerators, dtype=torch.int32)
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    torch_input_tensor_b = torch.tensor(denominators, dtype=torch.int32)
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    golden_function = ttnn.get_golden_function(ttnn.divide)
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device).to(torch.int32)
+
+    output_tensor = ttnn.divide(input_tensor_a, input_tensor_b)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert torch.equal(output_tensor, torch_output_tensor)
