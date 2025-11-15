@@ -465,44 +465,67 @@ void MAIN {
                 // This indicates that there are computes done by other workers.
                 // We need to wait for them and send to reducer's compute
                 // Iterate through each worker
-
+                DPRINT << "I am a reducer core" << ENDL();
+                DPRINT << "Num cores to wait: " << num_cores_to_wait << ENDL();
                 for (uint32_t i = 0; i < num_cores_to_wait; i++) {
+                    DPRINT << "Waiting for worker " << i << ENDL();
                     // OUT_ACC_2 <- WORKER_OUT
+                    // cb_wait_front(cb_out_o, out_chunk_tiles); // Worker Output
+                    // cb_wait_front(cb_m_in, Sq_chunk_t); // Worker Max
+                    // cb_wait_front(cb_l_in, Sq_chunk_t); // Worker Sum
+
                     move_block<true>(cb_out_o, cb_out_accumulate_im_2, out_chunk_tiles);
 
                     // PREV_SUM_2 <- WORKER_SUM
                     move_block<true>(cb_l_in, cb_prev_sum_2, Sq_chunk_t);
 
-                    // CUR_MAX = max(PREV_MAX, WORKER_MAX)
-                    max_block<vector_mode>(cb_m_in, cb_prev_max, cb_cur_max, Sq_chunk_t);  // pushed, pushed, popped
+                    // Fused Correction
+                    correction_block<scale_fp32, (int)VectorMode::C>(
+                        cb_m_in,
+                        cb_prev_sum_2,
+                        cb_cur_max,
+                        cb_prev_max,
+                        cb_cur_sum,
+                        cb_prev_sum,
+                        cb_exp_max_diff,
+                        cb_exp_max_diff_2,
+                        Sq_chunk_t);
+                    // DPRINT << "Fused correction" << ENDL();
+                    // // CUR_MAX = max(PREV_MAX, WORKER_MAX)
+                    // max_block<vector_mode>(cb_m_in, cb_prev_max, cb_cur_max, Sq_chunk_t);  // pushed, pushed, popped
 
-                    // EXP_MAX_DIFF_2 = exp((WORKER_MAX - CUR_MAX)*scale)
-                    // PREV_SUM_2 *= EXP_MAX_DIFF_2
-                    sub_exp_block<scale_fp32, vector_mode>(cb_m_in, cb_cur_max, cb_exp_max_diff_2, Sq_chunk_t);
-                    mul_block_inplace(cb_prev_sum_2, cb_exp_max_diff_2, Sq_chunk_t);
+                    // // EXP_MAX_DIFF_2 = exp((WORKER_MAX - CUR_MAX)*scale)
+                    // // PREV_SUM_2 *= EXP_MAX_DIFF_2
+                    // sub_exp_block<scale_fp32, vector_mode>(cb_m_in, cb_cur_max, cb_exp_max_diff_2, Sq_chunk_t);
+                    // mul_block_inplace(cb_prev_sum_2, cb_exp_max_diff_2, Sq_chunk_t);
 
-                    /// EXP_MAX_DIFF = exp((PREV_MAX - CUR_MAX)*scale)
-                    // PREV_SUM *= EXP_MAX_DIFF
-                    sub_exp_block<scale_fp32, vector_mode>(cb_prev_max, cb_cur_max, cb_exp_max_diff, Sq_chunk_t);
-                    mul_block_inplace(cb_prev_sum, cb_exp_max_diff, Sq_chunk_t);
+                    // /// EXP_MAX_DIFF = exp((PREV_MAX - CUR_MAX)*scale)
+                    // // PREV_SUM *= EXP_MAX_DIFF
+                    // sub_exp_block<scale_fp32, vector_mode>(cb_prev_max, cb_cur_max, cb_exp_max_diff, Sq_chunk_t);
+                    // mul_block_inplace(cb_prev_sum, cb_exp_max_diff, Sq_chunk_t);
 
-                    /// CUR_SUM = PREV_SUM_2 + PREV_SUM
-                    add_block(cb_prev_sum_2, cb_prev_sum, cb_cur_sum, Sq_chunk_t);
+                    // /// CUR_SUM = PREV_SUM_2 + PREV_SUM
+                    // add_block(cb_prev_sum_2, cb_prev_sum, cb_cur_sum, Sq_chunk_t);
 
                     // OUT_ACC_2 *= EXP_MAX_DIFF
                     // OUT_ACC *= EXP_MAX_DIFF_2
                     mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_exp_max_diff, Sq_chunk_t, vDHt);
                     mul_block_bcast_cols_inplace(cb_out_accumulate_im_2, cb_exp_max_diff_2, Sq_chunk_t, vDHt);
 
+                    // DPRINT << "Multiplied out accumulate im" << ENDL();
+                    // DPRINT << "Multiplied out accumulate im 2" << ENDL();
                     // OUT_ACC = OUT_ACC + OUT_ACC_2
                     add_block_inplace<true>(cb_out_accumulate_im, cb_out_accumulate_im_2, out_chunk_tiles);
-
+                    // DPRINT << "Added out accumulate im" << ENDL();
+                    // DPRINT << "Added out accumulate im 2" << ENDL();
                     // PREV_MAX <- CUR_MAX
                     // PREV_SUM <- CUR_SUM
                     cb_pop_front(cb_prev_max, Sq_chunk_t);
                     cb_pop_front(cb_m_in, Sq_chunk_t);
                     move_block<true>(cb_cur_max, cb_prev_max, Sq_chunk_t);
                     move_block<true>(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
+                    DPRINT << "Moved prev max" << ENDL();
+                    DPRINT << "Moved prev sum" << ENDL();
                 }
             }
 
