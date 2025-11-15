@@ -142,7 +142,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
 
         tt_metal::CreateKernel(
             program,
-            "ttnn/kernel/compute/eltwise_copy.cpp",
+            "ttnn/cpp/ttnn/kernel/compute/eltwise_copy.cpp",
             all_cores,
             tt_metal::ComputeConfig{.compile_args = compute_kernel_args});
     }

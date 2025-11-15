@@ -194,7 +194,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(
 
     tt::tt_metal::CreateKernel(
         program,
-        "ttnn/kernel/compute/tilize.cpp",
+        "ttnn/cpp/ttnn/kernel/compute/tilize.cpp",
         core,
         tt::tt_metal::ComputeConfig{.compile_args = compute_kernel_args});
 
@@ -591,14 +591,14 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
     if (!core_range.empty()) {
         CreateKernel(
             program,
-            "ttnn/kernel/compute/tilize.cpp",
+            "ttnn/cpp/ttnn/kernel/compute/tilize.cpp",
             core_range,
             ComputeConfig{.compile_args = {nblocks_per_core, num_tiles_per_row}});
     }
     if (has_cliff) {
         CreateKernel(
             program,
-            "ttnn/kernel/compute/tilize.cpp",
+            "ttnn/cpp/ttnn/kernel/compute/tilize.cpp",
             core_range_cliff,
             ComputeConfig{.compile_args = {nblocks_per_core_cliff, num_tiles_per_row}});
     }
@@ -786,7 +786,8 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_sharded(
         (uint32_t)ntiles_per_block,  // per_block_ntiles
     };
 
-    CreateKernel(program, "ttnn/kernel/compute/tilize.cpp", all_cores, ComputeConfig{.compile_args = compute_args});
+    CreateKernel(
+        program, "ttnn/cpp/ttnn/kernel/compute/tilize.cpp", all_cores, ComputeConfig{.compile_args = compute_args});
 
     uint32_t packed_pad_value = get_packed_value(a, pad_value);
 

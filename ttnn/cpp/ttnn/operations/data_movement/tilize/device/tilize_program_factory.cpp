@@ -120,7 +120,10 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor& a, Tensor& outp
     };
 
     tt::tt_metal::CreateKernel(
-        program, "ttnn/kernel/compute/tilize.cpp", core, tt::tt_metal::ComputeConfig{.compile_args = compute_args});
+        program,
+        "ttnn/cpp/ttnn/kernel/compute/tilize.cpp",
+        core,
+        tt::tt_metal::ComputeConfig{.compile_args = compute_args});
 
     tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_kernel_args);
 
@@ -503,12 +506,15 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, T
 
     if (!core_range.ranges().empty()) {
         CreateKernel(
-            program, "ttnn/kernel/compute/tilize.cpp", core_range, ComputeConfig{.compile_args = compute_args});
+            program,
+            "ttnn/cpp/ttnn/kernel/compute/tilize.cpp",
+            core_range,
+            ComputeConfig{.compile_args = compute_args});
     }
     if (!core_range_cliff.empty()) {
         CreateKernel(
             program,
-            "ttnn/kernel/compute/tilize.cpp",
+            "ttnn/cpp/ttnn/kernel/compute/tilize.cpp",
             core_range_cliff,
             ComputeConfig{.compile_args = compute_args_cliff});
     }
@@ -654,7 +660,7 @@ operation::ProgramWithCallbacks tilize_multi_core_sharded(const Tensor& input, T
 
     tt::tt_metal::CreateKernel(
         program,
-        "ttnn/kernel/compute/tilize.cpp",
+        "ttnn/cpp/ttnn/kernel/compute/tilize.cpp",
         all_cores,
         tt::tt_metal::ComputeConfig{.compile_args = compute_args});
 

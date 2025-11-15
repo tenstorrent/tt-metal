@@ -1015,7 +1015,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
     if (unpad_tensor_w_16) {
         // Use copy compute kernel just for a potential data type conversion.
-        compute_kernel = "ttnn/kernel/compute/eltwise_copy.cpp";
+        compute_kernel = "ttnn/cpp/ttnn/kernel/compute/eltwise_copy.cpp";
         compute_args[0] = (uint32_t)num_input_tiles;  // per_core_tile_cnt
     } else if (
         !use_pack_untilize || a.dtype() == DataType::UINT16 ||

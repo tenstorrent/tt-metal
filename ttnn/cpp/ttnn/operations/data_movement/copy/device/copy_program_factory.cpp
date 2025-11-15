@@ -122,7 +122,7 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor& input, const Tenso
         std::vector<uint32_t> compute_kernel_args_group_1 = {num_units_per_core_group_1};
         tt::tt_metal::CreateKernel(
             program,
-            "ttnn/kernel/compute/eltwise_copy.cpp",
+            "ttnn/cpp/ttnn/kernel/compute/eltwise_copy.cpp",
             core_group_1,
             tt::tt_metal::ComputeConfig{.compile_args = compute_kernel_args_group_1});
 
@@ -130,7 +130,7 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor& input, const Tenso
             std::vector<uint32_t> compute_kernel_args_group_2 = {num_units_per_core_group_2};
             tt::tt_metal::CreateKernel(
                 program,
-                "ttnn/kernel/compute/eltwise_copy.cpp",
+                "ttnn/cpp/ttnn/kernel/compute/eltwise_copy.cpp",
                 core_group_2,
                 tt::tt_metal::ComputeConfig{.compile_args = compute_kernel_args_group_2});
         }
