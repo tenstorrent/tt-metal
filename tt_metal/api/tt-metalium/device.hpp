@@ -185,6 +185,7 @@ public:
     virtual void enable_program_cache() = 0;
     virtual void clear_program_cache() = 0;
     virtual void disable_and_clear_program_cache() = 0;
+    virtual void disable_program_cache() = 0;
     void set_program_cache_misses_allowed(bool allowed);
     virtual program_cache::detail::ProgramCache& get_program_cache() = 0;
     virtual std::size_t num_program_cache_entries() = 0;

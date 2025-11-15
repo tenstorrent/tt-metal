@@ -125,7 +125,8 @@ std::vector<tt::tt_metal::Tensor> disaggregate(const tt::tt_metal::Tensor& tenso
             input_mesh_buffer->global_config(), input_mesh_buffer->device_local_config(), submesh.get(), input_address);
 
         DeviceStorage device_storage(
-            std::move(mesh_buffer), std::vector<distributed::MeshCoordinate>{distributed::MeshCoordinate(0, 0)});
+            std::move(mesh_buffer),
+            std::vector<tt::tt_metal::distributed::MeshCoordinate>{tt::tt_metal::distributed::MeshCoordinate(0, 0)});
 
         result.push_back(Tensor(std::move(device_storage), reference_spec, TensorTopology{}));
     }
