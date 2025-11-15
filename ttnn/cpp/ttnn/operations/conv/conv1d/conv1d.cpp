@@ -34,7 +34,7 @@ using namespace tt;
 namespace conv1d {
 
 Result conv1d(
-    const ttnn::Tensor& input_tensor,
+    ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     MeshDevice* device,
     uint32_t in_channels,
@@ -54,10 +54,9 @@ Result conv1d(
     bool return_output_dim,
     bool return_weights_and_bias) {
     // reshape input tensor to 4D, if it is not already
-    const ttnn::Tensor& input_tensor_4d =
-        (input_tensor.logical_shape().rank() < 4)
-            ? ttnn::reshape(input_tensor, Shape({batch_size, input_length, 1, in_channels}))
-            : input_tensor;
+    ttnn::Tensor input_tensor_4d = (input_tensor.logical_shape().rank() < 4)
+                                       ? ttnn::reshape(input_tensor, Shape({batch_size, input_length, 1, in_channels}))
+                                       : input_tensor;
 
     // padding for conv2d based on conv1d padding
     std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> conv2d_padding;
@@ -110,7 +109,7 @@ Result conv1d(
     };
 }
 Result Conv1dOperation::invoke(
-    const ttnn::Tensor& input_tensor,
+    ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     MeshDevice* device,
     uint32_t in_channels,

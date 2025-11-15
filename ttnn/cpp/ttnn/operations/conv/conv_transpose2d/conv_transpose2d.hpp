@@ -26,7 +26,7 @@ using Result = std::variant<
 
 struct ConvTranpose2dOperation {
     static Result invoke(
-        const ttnn::Tensor& input_tensor,
+        ttnn::Tensor& input_tensor,
         const ttnn::Tensor& weight_tensor,
         IDevice* device,
         uint32_t in_channels,
@@ -50,7 +50,7 @@ struct ConvTranpose2dOperation {
         bool return_weights_and_bias = false);
 
     static Result invoke(
-        const ttnn::Tensor& input_tensor,
+        ttnn::Tensor& input_tensor,
         const ttnn::Tensor& weight_tensor,
         MeshDevice* device,
         uint32_t in_channels,
