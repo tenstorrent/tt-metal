@@ -194,7 +194,7 @@ void packet_sizes_test(
     uint32_t max_transactions = 256;
     uint32_t max_pages_per_transaction = 256;
 
-    for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 4) {
+    for (uint32_t num_of_transactions = 256; num_of_transactions <= max_transactions; num_of_transactions *= 4) {
         for (uint32_t pages_per_transaction = 1; pages_per_transaction <= max_pages_per_transaction;
              pages_per_transaction *= 2) {
             if (num_of_transactions * pages_per_transaction * bytes_per_page >= max_reservable_bytes) {
@@ -207,6 +207,27 @@ void packet_sizes_test(
                 .num_of_transactions = num_of_transactions,
                 .pages_per_transaction = pages_per_transaction,
                 .bytes_per_page = bytes_per_page,
+                .l1_data_format = DataFormat::Float16_b,
+                .core_coord = core_coord,
+                .dram_channel = dram_channel};
+
+            // Run
+            EXPECT_TRUE(run_dm(mesh_device, test_config));
+        }
+    }
+
+    for (uint32_t num_of_transactions = 256; num_of_transactions <= max_transactions; num_of_transactions *= 4) {
+        for (uint32_t pages_per_transaction = 1; pages_per_transaction <= 2; pages_per_transaction *= 2) {
+            if (num_of_transactions * pages_per_transaction * bytes_per_page >= max_reservable_bytes) {
+                continue;
+            }
+
+            // Test config
+            unit_tests::dm::dram::DramConfig test_config = {
+                .test_id = test_case_id,
+                .num_of_transactions = num_of_transactions,
+                .pages_per_transaction = pages_per_transaction,
+                .bytes_per_page = 544,
                 .l1_data_format = DataFormat::Float16_b,
                 .core_coord = core_coord,
                 .dram_channel = dram_channel};
