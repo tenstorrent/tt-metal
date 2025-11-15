@@ -77,11 +77,6 @@ class OptimParamSetter:
     def set_lr(self, lr: float):
         self.optim.set_lr(float(lr))
 
-    def set_beta1(self, beta1: float):
-        raise NotImplementedError(
-            "set_beta1 is not implemented in TTML AdamW optimizer."
-        )
-
 
 def build_logits_mask(vocab_size: int, padded_vocab_size: int) -> ttml.autograd.Tensor:
     logits_mask = np.zeros((1, 1, 1, padded_vocab_size), dtype=np.float32)
@@ -97,7 +92,7 @@ class CollateFn:
         self.max_sequence_length = max_sequence_length
         self.padded_vocab_size = padded_vocab_size
 
-    def collate_fn(self, batch):
+    def __call__(self, batch):
         X = [sample[0] for sample in batch]
         Y = [sample[1] for sample in batch]
 
@@ -303,6 +298,9 @@ def validate(
     ttml.autograd.AutoContext.get_instance().set_gradient_mode(
         ttml.autograd.GradMode.DISABLED
     )
+
+    with ttml.autograd.no_grad():
+
     tt_model.eval()
     eval_batch_count = 4
     cur_val_losses = []
@@ -352,13 +350,6 @@ def validate(
     )
     tt_model.train()
     return np.mean(cur_val_losses)
-
-
-def adjust_logits(logits, binary_mask, add_mask):
-    masked_logits = binary_mask * logits
-    masked_logits = masked_logits + add_mask
-
-    return masked_logits
 
 
 def get_loss_over_devices(loss):
