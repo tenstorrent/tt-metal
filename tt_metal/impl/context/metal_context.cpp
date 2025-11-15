@@ -117,6 +117,9 @@ void MetalContext::initialize(
             hal_->get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) - worker_l1_size_,
         max_alignment);
 
+    // Initialize fabric control plane
+    initialize_control_plane();
+
     // Initialize inspector
     inspector_data_ = Inspector::initialize();
     // Set fw_compile_hash for Inspector RPC build environment info
@@ -155,33 +158,13 @@ void MetalContext::initialize(
     auto all_devices = cluster_->all_chip_ids();
 
     std::vector<std::future<void>> futures;
-    std::vector<ChipId> device_ids;  // Store device IDs in the same order as futures
-
-    // Lambda to wait for async tasks and handle exceptions
-    auto wait_for_async_tasks = [&](std::string_view operation_name) {
-        for (size_t i = 0; i < futures.size(); ++i) {
-            ChipId device_id = device_ids[i];
-            try {
-                futures[i].get();
-            } catch (const std::exception& e) {
-                TT_THROW("{} failed for device {}: {}", operation_name, device_id, e.what());
-            } catch (...) {
-                TT_THROW("{} failed for device {} with unknown exception", operation_name, device_id);
-            }
-        }
-    };
-
     {
-        ZoneScoped;
-        std::string zoneName = "Parallel Device Initialization";
-        ZoneName(zoneName.c_str(), zoneName.size());
+        ZoneScopedN("FW builds and Device Inits");
 
         futures.reserve(all_devices.size());
-        device_ids.reserve(all_devices.size());
 
         // Launch async tasks for each device
         for (ChipId device_id : all_devices) {
-            device_ids.emplace_back(device_id);
             futures.emplace_back(std::async(std::launch::async, [this, device_id, fw_compile_hash]() {
                 // Clear L1/DRAM if requested
                 if (rtoptions_.get_clear_l1()) {
@@ -223,7 +206,9 @@ void MetalContext::initialize(
         }
 
         // Wait for all async tasks to complete
-        wait_for_async_tasks("Device initialization");
+        for (auto& fut : futures) {
+            fut.wait();
+        }
     }
 
     // Populate FD topology across all devices
@@ -244,17 +229,13 @@ void MetalContext::initialize(
 
     // Parallelize device initialization
     {
-        ZoneScoped;
-        std::string zoneName = "Parallel Device Final Initialization";
-        ZoneName(zoneName.c_str(), zoneName.size());
+        ZoneScopedN("Resets and FW Launch");
 
         // Clear and reuse existing task group vectors
         futures.clear();
-        device_ids.clear();
 
         // Launch async tasks for each device
         for (ChipId device_id : all_devices) {
-            device_ids.emplace_back(device_id);
             futures.emplace_back(std::async(std::launch::async, [this, device_id]() {
                 ClearNocData(device_id);
 
@@ -265,7 +246,9 @@ void MetalContext::initialize(
         }
 
         // Wait for all async tasks to complete
-        wait_for_async_tasks("FW initialization and launch");
+        for (auto& fut : futures) {
+            fut.wait();
+        }
     }
     // Watcher needs to init before FW since FW needs watcher mailboxes to be set up, and needs to attach after FW
     // starts since it also writes to watcher mailboxes.
@@ -542,9 +525,8 @@ void MetalContext::clear_launch_messages_on_eth_cores(ChipId device_id) {
 }
 
 tt::tt_fabric::ControlPlane& MetalContext::get_control_plane() {
-    std::lock_guard<std::mutex> lock(control_plane_mutex_);
     if (!control_plane_) {
-        this->initialize_control_plane_impl();
+        TT_THROW("Trying to get control plane before initializing it.");
     }
     return *control_plane_;
 }
@@ -701,11 +683,6 @@ void MetalContext::construct_control_plane(const std::filesystem::path& mesh_gra
 }
 
 void MetalContext::initialize_control_plane() {
-    std::lock_guard<std::mutex> lock(control_plane_mutex_);
-    initialize_control_plane_impl();
-}
-
-void MetalContext::initialize_control_plane_impl() {
     if (custom_mesh_graph_desc_path_.has_value()) {
         log_debug(tt::LogDistributed, "Using custom mesh graph descriptor: {}", custom_mesh_graph_desc_path_.value());
         std::filesystem::path mesh_graph_desc_path = std::filesystem::path(custom_mesh_graph_desc_path_.value());
