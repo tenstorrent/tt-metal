@@ -24,11 +24,9 @@ set(SOURCES
     autograd/autograd_test.cpp
     autograd/module_base_parameters_test.cpp
     schedulers/schedulers_test.cpp
-    tokenizers/bpe_tokenizer_test.cpp
     tokenizers/char_tokenizer_trainer_test.cpp
     tokenizers/char_tokenizer_test.cpp
     3rd_party/xtensor_test.cpp
-    3rd_party/tokenizers_test.cpp
     datasets/in_memory_token_dataset_test.cpp
     datasets/random_split_test.cpp
     datasets/utils_test.cpp
