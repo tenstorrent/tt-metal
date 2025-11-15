@@ -137,14 +137,11 @@ void kernel_main() {
         noc_inline_dw_write(noc_addr, 1, 0xF, noc);
 #endif
     }
-    DPRINT << "Loop Done" << ENDL();
 
     // barrier on all txns
     for (int noc = 0; noc < NUM_NOCS; noc++) {
-        DPRINT << "Full Barrier on NOC" << noc << "\n";
         noc_async_full_barrier(noc);
     }
-    DPRINT << "Full Barrier Done" << ENDL();
 
     // Sync all riscs since we should only clear the trid counters when there are no outstanding requests
     *semaphore_ptrs[risc_index] = 1;

@@ -314,7 +314,7 @@ FORCE_INLINE void base_fw_dynamic_noc_local_state_init() {
         risc1_mailbox_val = *risc1_mailbox_msg_ptr;
     } while ((risc1_mailbox_val & MEM_SYSENG_ETH_MSG_STATUS_MASK) == MEM_SYSENG_ETH_MSG_CALL);
 #else
-    // Directly call the function
+    // Directly call the function on ERISC0. No need to switch to base firmware.
     reinterpret_cast<void (*)()>(
         (uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->eth_dynamic_noc_init_ptr))();
 #endif

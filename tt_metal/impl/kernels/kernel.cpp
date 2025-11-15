@@ -215,7 +215,6 @@ void EthernetKernel::process_defines(
     const std::function<void(const std::string& define, const std::string& value)> callback) const {
     Kernel::process_defines(callback);
     callback("NOC_INDEX", std::to_string(this->config_.noc));
-    log_info(tt::LogMetal, "Process defines for eth kernel noc mode = {}", this->config_.noc_mode);
     callback("NOC_MODE", std::to_string(this->config_.noc_mode));
 }
 
