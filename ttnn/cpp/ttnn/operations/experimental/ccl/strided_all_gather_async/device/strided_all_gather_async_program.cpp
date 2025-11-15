@@ -257,9 +257,6 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
         num_targets_backward,
         mesh_device);
 
-    TT_FATAL(
-        !((topology == ccl::Topology::Linear) && fuse_op), "linear is not support when using fused for all-gather");
-
     const auto [all_core_range, all_cores] =
         choose_worker_cores(num_links, num_cores_per_link, mesh_device, sub_device_id, core_grid_offset);
     std::set<CoreRange> sender_worker_core_ranges;

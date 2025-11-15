@@ -7,6 +7,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/fabric_edm_types.hpp>
 
 namespace ttnn {
 namespace experimental {
@@ -247,13 +248,15 @@ struct MinimalMatmulFusedOpSignaler {
     uint32_t ring_size = 0;
     uint32_t start_ring_index = 0;
     uint32_t input_tensor_Wt = 0;
+    tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Ring;
 
     bool initialized_all_gather = false;
     bool initialized_fused_op = false;
 
     MinimalMatmulFusedOpSignaler() {}
 
-    void init_all_gather(uint32_t ring_size, uint32_t start_ring_index, uint32_t input_tensor_Wt);
+    void init_all_gather(
+        uint32_t ring_size, uint32_t start_ring_index, uint32_t input_tensor_Wt, tt::tt_fabric::Topology topology);
 
     void init_fused_op(
         tt::tt_metal::Program& program,

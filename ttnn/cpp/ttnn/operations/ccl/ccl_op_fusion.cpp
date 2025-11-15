@@ -5,6 +5,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
 
 using namespace tt::tt_metal;
 
@@ -447,10 +448,11 @@ bool MatmulFusedOpSignaler::is_llama_all_gather() {
 
 // Used to propagate semaphore information from matmul to all_gather in all_gather_matmul op
 void MinimalMatmulFusedOpSignaler::init_all_gather(
-    uint32_t ring_size, uint32_t start_ring_index, uint32_t input_tensor_Wt) {
+    uint32_t ring_size, uint32_t start_ring_index, uint32_t input_tensor_Wt, tt::tt_fabric::Topology topology) {
     this->ring_size = ring_size;
     this->start_ring_index = start_ring_index;
     this->input_tensor_Wt = input_tensor_Wt;
+    this->topology = topology;
 
     initialized_all_gather = true;
 }
@@ -507,6 +509,7 @@ void MinimalMatmulFusedOpSignaler::push_matmul_fused_op_rt_args(
     out_rt_args.push_back(static_cast<uint32_t>(this->input_tensor_Wt));
     out_rt_args.push_back(static_cast<uint32_t>(k_num_blocks));
     out_rt_args.push_back(static_cast<uint32_t>(k_block_tiles));
+    out_rt_args.push_back(static_cast<uint32_t>(this->topology));
 
     for (uint32_t k = 0; k < k_num_blocks; k++) {
         out_rt_args.push_back(static_cast<uint32_t>(0));
