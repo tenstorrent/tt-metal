@@ -479,6 +479,7 @@ class TtResNet:
             dilation=[1, 1],
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             ceil_mode=False,
+            in_place_halo=True,
         )
 
         outs = []
