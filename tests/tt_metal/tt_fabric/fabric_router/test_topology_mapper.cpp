@@ -5,11 +5,15 @@
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt-metalium/mesh_graph_descriptor.hpp>
 #include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/fabric_types.hpp>
 #include "impl/context/metal_context.hpp"
 #include <memory>
+#include <unordered_set>
 
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include "tt_metal/fabric/topology_mapper.hpp"
+#include "t3k_mesh_descriptor_chip_mappings.hpp"
+#include "utils.hpp"
 
 namespace tt::tt_fabric {
 
@@ -608,5 +612,122 @@ TEST_F(TopologyMapperTest, PinningThrowsOnBadAsicPositionGalaxyMesh) {
     EXPECT_THROW(
         TopologyMapper(mesh_graph, *physical_system_descriptor_, local_mesh_binding, pins_missing), std::exception);
 }
+
+// Parameterized test fixture for testing TopologyMapper with custom mappings
+class T3kTopologyMapperWithCustomMappingFixture
+    : public TopologyMapperTest,
+      public testing::WithParamInterface<std::tuple<std::string, std::vector<std::vector<EthCoord>>>> {};
+
+TEST_P(T3kTopologyMapperWithCustomMappingFixture, T3kMeshGraphWithCustomMapping) {
+    auto [mesh_graph_desc_path, mesh_graph_eth_coords] = GetParam();
+    const std::filesystem::path t3k_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) / mesh_graph_desc_path;
+
+    auto mesh_graph = MeshGraph(t3k_mesh_graph_desc_path.string());
+
+    // Create logical to physical chip mapping from eth_coords
+    auto logical_mesh_chip_id_to_physical_chip_id_mapping =
+        fabric_router_tests::get_physical_chip_mapping_from_eth_coords_mapping(mesh_graph_eth_coords);
+
+    // Determine which meshes are in the mapping and create local mesh binding
+    std::unordered_set<MeshId> mesh_ids_in_mapping;
+    for (const auto& [fabric_node_id, _] : logical_mesh_chip_id_to_physical_chip_id_mapping) {
+        mesh_ids_in_mapping.insert(fabric_node_id.mesh_id);
+    }
+
+    // Create local mesh binding - use the first mesh ID found, or all meshes if multi-mesh
+    LocalMeshBinding local_mesh_binding;
+    if (mesh_ids_in_mapping.size() == 1) {
+        local_mesh_binding.mesh_ids = {*mesh_ids_in_mapping.begin()};
+    } else {
+        // For multi-mesh cases, bind to all meshes
+        local_mesh_binding.mesh_ids.assign(mesh_ids_in_mapping.begin(), mesh_ids_in_mapping.end());
+    }
+    local_mesh_binding.host_rank = MeshHostRankId{0};
+
+    // Create TopologyMapper using the new constructor that skips discovery
+    auto topology_mapper_with_mapping = TopologyMapper(
+        mesh_graph, *physical_system_descriptor_, local_mesh_binding, logical_mesh_chip_id_to_physical_chip_id_mapping);
+
+    // Verify that the mapper correctly uses the provided mapping for each mesh
+    for (const auto& mesh_id : mesh_ids_in_mapping) {
+        const auto mesh_shape = mesh_graph.get_mesh_shape(mesh_id);
+        const auto mesh_size = mesh_shape.mesh_size();
+
+        // Verify all fabric nodes in this mesh
+        for (ChipId chip_id = 0; chip_id < mesh_size; ++chip_id) {
+            FabricNodeId fabric_node_id(mesh_id, chip_id);
+
+            // Skip if this fabric node is not in the provided mapping (for multi-mesh cases)
+            if (logical_mesh_chip_id_to_physical_chip_id_mapping.find(fabric_node_id) ==
+                logical_mesh_chip_id_to_physical_chip_id_mapping.end()) {
+                continue;
+            }
+
+            // Verify that the physical chip ID matches what we provided
+            auto phys_chip_id_from_mapper =
+                topology_mapper_with_mapping.get_physical_chip_id_from_fabric_node_id(fabric_node_id);
+            auto expected_phys_chip_id = logical_mesh_chip_id_to_physical_chip_id_mapping.at(fabric_node_id);
+            EXPECT_EQ(phys_chip_id_from_mapper, expected_phys_chip_id)
+                << "Physical chip ID mismatch for fabric node " << fabric_node_id << " (mesh_id=" << mesh_id.get()
+                << ", chip_id=" << chip_id << ")";
+
+            // Verify bidirectional mappings work correctly
+            auto asic_id = topology_mapper_with_mapping.get_asic_id_from_fabric_node_id(fabric_node_id);
+            EXPECT_EQ(topology_mapper_with_mapping.get_fabric_node_id_from_asic_id(asic_id), fabric_node_id);
+            EXPECT_EQ(
+                topology_mapper_with_mapping.get_fabric_node_id_from_physical_chip_id(phys_chip_id_from_mapper),
+                fabric_node_id);
+
+            // Verify physical chip ID to ASIC ID conversion
+            auto phys_chip_id_from_asic = topology_mapper_with_mapping.get_physical_chip_id_from_asic_id(asic_id);
+            EXPECT_EQ(phys_chip_id_from_asic, expected_phys_chip_id);
+        }
+
+        // Verify host rank structures are built correctly
+        const auto& host_ranks = topology_mapper_with_mapping.get_host_ranks(mesh_id);
+        EXPECT_GT(host_ranks.size(), 0u) << "No host ranks found for mesh " << mesh_id.get();
+
+        // Verify mesh shape matches mesh graph
+        auto mapper_mesh_shape = topology_mapper_with_mapping.get_mesh_shape(mesh_id);
+        EXPECT_EQ(mapper_mesh_shape, mesh_shape) << "Mesh shape mismatch for mesh " << mesh_id.get();
+
+        // Verify coordinate range
+        auto coord_range = topology_mapper_with_mapping.get_coord_range(mesh_id);
+        auto expected_coord_range = mesh_graph.get_coord_range(mesh_id);
+        EXPECT_EQ(coord_range.start_coord(), expected_coord_range.start_coord())
+            << "Coordinate range start mismatch for mesh " << mesh_id.get();
+        EXPECT_EQ(coord_range.end_coord(), expected_coord_range.end_coord())
+            << "Coordinate range end mismatch for mesh " << mesh_id.get();
+
+        // Verify chip IDs
+        auto chip_ids = topology_mapper_with_mapping.get_chip_ids(mesh_id);
+        EXPECT_EQ(chip_ids.size(), mesh_size) << "Chip IDs size mismatch for mesh " << mesh_id.get();
+    }
+
+    // Verify local logical mesh chip id to physical chip id mapping
+    auto local_mapping = topology_mapper_with_mapping.get_local_logical_mesh_chip_id_to_physical_chip_id_mapping();
+    const auto& my_host = physical_system_descriptor_->my_host_name();
+
+    // Count how many chips from the provided mapping are on this host
+    size_t expected_local_mapping_size = 0;
+    for (const auto& [fabric_node_id, physical_chip_id] : logical_mesh_chip_id_to_physical_chip_id_mapping) {
+        auto asic_id = topology_mapper_with_mapping.get_asic_id_from_fabric_node_id(fabric_node_id);
+        if (physical_system_descriptor_->get_host_name_for_asic(asic_id) == my_host) {
+            expected_local_mapping_size++;
+            EXPECT_EQ(local_mapping.at(fabric_node_id), physical_chip_id)
+                << "Local mapping mismatch for fabric node " << fabric_node_id;
+        }
+    }
+    EXPECT_EQ(local_mapping.size(), expected_local_mapping_size)
+        << "Local mapping size mismatch. Expected " << expected_local_mapping_size << " but got "
+        << local_mapping.size();
+}
+
+// Instantiate the parameterized test with all t3k mesh descriptor chip mappings
+INSTANTIATE_TEST_SUITE_P(
+    T3kTopologyMapperCustomMapping,
+    T3kTopologyMapperWithCustomMappingFixture,
+    ::testing::ValuesIn(fabric_router_tests::t3k_mesh_descriptor_chip_mappings));
 
 }  // namespace tt::tt_fabric
