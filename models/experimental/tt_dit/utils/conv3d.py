@@ -18,7 +18,7 @@ def _ntuple(x, n):
     return tuple(repeat(x, n))
 
 
-def get_conv3d_config(in_channels, out_channels, kernel_size, stride, padding, padding_mode, grid_size):
+def get_conv3d_config(in_channels, grid_size):
     config_to_blocking = {
         # (in_channels, out_channels, kernel_size) -> (C_in_block, C_out_block, T_out_block, H_out_block, W_out_block)
         (96, 32, (3, 3, 3)): (96, 32, 1, 32, 2),
@@ -33,11 +33,11 @@ def get_conv3d_config(in_channels, out_channels, kernel_size, stride, padding, p
         (384, 768, (3, 3, 3)): (128, 128, 1, 16, 2),
     }
 
-    blocking = config_to_blocking.get((in_channels, out_channels, kernel_size), None)
+    blocking = config_to_blocking.get((in_channels), None)
     if blocking is None:
         C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = in_channels, 32, 1, 1, 1
         logger.warning(
-            f"No blocking found for {(in_channels, out_channels, kernel_size)}. Using default blocking: {C_in_block}, {C_out_block}, {T_out_block}, {H_out_block}, {W_out_block}"
+            f"No blocking found for {(in_channels)}. Using default blocking: {C_in_block}, {C_out_block}, {T_out_block}, {H_out_block}, {W_out_block}"
         )
     else:
         C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = blocking
@@ -50,11 +50,6 @@ def get_conv3d_config(in_channels, out_channels, kernel_size, stride, padding, p
         H_out_block=H_out_block,
         C_out_block=C_out_block,
         C_in_block=C_in_block,
-        output_channels=out_channels,
-        kernel_size=kernel_size,
-        stride=stride,
-        padding=padding,
-        padding_mode=padding_mode,
         groups=1,
         compute_with_storage_grid_size=grid_size,
     )
