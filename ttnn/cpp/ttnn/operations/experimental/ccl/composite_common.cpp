@@ -1,16 +1,13 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
-///
-#include <tt-metalium/fabric.hpp>
-#include "ttnn/operations/experimental/ccl/composite_common.hpp"
-#include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/operations/ccl/mesh_partition/mesh_partition.hpp"
 
-#include "ttnn/operations/ccl/reduce_scatter/reduce_scatter.hpp"
-#include "ttnn/operations/data_movement/split/split.hpp"
+#include <tt-metalium/fabric.hpp>
+#include "ttnn/operations/ccl/reduce_scatter/device/reduce_scatter_device_operation.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
+#include "ttnn/operations/data_movement/split/split.hpp"
+#include "ttnn/operations/experimental/ccl/composite_common.hpp"
 
 namespace composite_common {
 
@@ -65,7 +62,7 @@ ttnn::Tensor composite_reduce_scatter(
     ttnn::Tensor input_tensor,
     const int32_t dim,
     const uint32_t num_links,
-    const std::vector<ttnn::GlobalSemaphore>& multi_device_global_semaphore,
+    tt::tt_fabric::Topology topology,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     std::optional<uint32_t> cluster_axis) {
@@ -81,107 +78,78 @@ ttnn::Tensor composite_reduce_scatter(
     auto output_shape = input_tensor.logical_shape();
     output_shape[scatter_dim] /= num_devices;
 
-    // tile path
-    // TODO: row major path
+    TT_FATAL(
+        !(input_tensor.memory_config().is_sharded() && !memory_config.has_value()),
+        "If input memory config is sharded, then output memory config must be provided. Defaulting the output memory "
+        "config to the input sharded memory config will break the op as the input and output shapes are different.");
+    auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
 
+    /*
+     * - If sharded to interleaved, convert to the final interleaved memory config, and use that final
+     *   interleaved memory config for all ops within the composite.
+     * - If interleaved to sharded, use the input memory config for all ops within the composite, and
+     *   then we'll convert to the output sharded memory config at the end.
+     * - If sharded to sharded, use DRAM interleaved as the intermediate memory config for all ops
+     *   within the composite, and then we'll convert to the output sharded memory config at the end.
+     * - If interleaved DRAM to interleaved L1 or interleaved L1 to interleaved DRAM, do the conversion
+     *   during the execution of native RS.
+     * - If interleaved DRAM to interleaved DRAM or interleaved L1 to interleaved L1, use the single
+     *   memory config for all ops within the composite.
+     */
+    ttnn::MemoryConfig native_rs_output_memory_config;
+    if (input_tensor.memory_config().is_sharded()) {
+        native_rs_output_memory_config =
+            output_memory_config.is_sharded() ? ttnn::DRAM_MEMORY_CONFIG : output_memory_config;
+        input_tensor = ttnn::to_memory_config(input_tensor, native_rs_output_memory_config);
+    } else if (!output_memory_config.is_sharded() && input_tensor.memory_config() != output_memory_config) {
+        native_rs_output_memory_config = output_memory_config;
+    }
+
+    // split the input tensor so we can insert internal padding
     std::vector<ttnn::Tensor> split_tensors =
-        ttnn::split(input_tensor, output_shape[scatter_dim], scatter_dim, std::nullopt);  // TODO: mem_config
+        ttnn::split(input_tensor, output_shape[scatter_dim], scatter_dim, input_tensor.memory_config());
 
+    // insert the internal padding (only pad on the dim we're scattering on)
     auto logical_shape = split_tensors[0].logical_shape();
     auto padded_shape = split_tensors[0].padded_shape();
-
-    // std::cout << logical_shape[2] << std::endl;
-    // std::cout << logical_shape[3] << std::endl;
-    // std::cout << split_tensors.size() << std::endl;
-    // std::cout << padded_shape[2] << std::endl;
-    // std::cout << padded_shape[3] << std::endl;
-
     ttnn::SmallVector<std::array<uint32_t, 2>> padding;
     if (scatter_dim - rank == -2) {
-        padding = {{0, 0}, {0, 0}, {0, padded_shape[-2] - logical_shape[-2]}, {0, 0}};
+        padding = {{0, padded_shape[-2] - logical_shape[-2]}, {0, 0}};
     } else if (scatter_dim - rank == -1) {
-        padding = {{0, 0}, {0, 0}, {0, 0}, {0, padded_shape[-1] - logical_shape[-1]}};
+        padding = {{0, 0}, {0, padded_shape[-1] - logical_shape[-1]}};
     }
-
     for (uint32_t i = 0; i < num_devices; ++i) {
-        split_tensors[i] = ttnn::pad(split_tensors[i], padding, 0, true, std::nullopt);
-        // split_tensors[i] = split_tensors[i].pad_to_tile(0);
+        split_tensors[i] = ttnn::pad(split_tensors[i], padding, 0, true, split_tensors[i].memory_config());
     }
 
-    ttnn::Tensor pre_native_rs_tensor = ttnn::concat(split_tensors, scatter_dim);
+    // cancat back into a single input tensor, now with internal padding
+    ttnn::Tensor padded_native_rs_input_tensor = ttnn::concat(split_tensors, scatter_dim);
 
-    // std::cout << "STARTING" << std::endl;
-    // std::cout << pre_native_rs_tensor.padded_shape()[0] << std::endl;
-    // std::cout << pre_native_rs_tensor.padded_shape()[1] << std::endl;
-    // std::cout << pre_native_rs_tensor.padded_shape()[2] << std::endl;
-    // std::cout << pre_native_rs_tensor.padded_shape()[3] << std::endl;
+    // execute native RS
+    ttnn::Tensor padded_native_rs_output_tensor = ttnn::prim::reduce_scatter(
+                                                      padded_native_rs_input_tensor,
+                                                      scatter_dim,
+                                                      cluster_axis,
+                                                      subdevice_id,
+                                                      native_rs_output_memory_config,
+                                                      std::nullopt,  // optional output tensor
+                                                      num_links,
+                                                      topology)
+                                                      .at(1);  // first is the intermediate tensor
 
-    ttnn::Tensor native_rs_output_tensor = ttnn::operations::experimental::ccl::reduce_scatter_minimal_async(
-        pre_native_rs_tensor,
-        /* persistent_output_buffers */ std::nullopt,
-        scatter_dim,
-        multi_device_global_semaphore,  // sems
-        std::nullopt,                   // barrier
-        num_links,
-        std::nullopt,  // memory_config
-        /* intermediate_memory_config */ std::nullopt,
-        ttnn::ccl::Topology::Linear);
-
-    // ttnn::Tensor native_rs_output_tensor = ttnn::reduce_scatter(
-    //     pre_native_rs_tensor,
-    //     scatter_dim,
-    //     cluster_axis,
-    //     subdevice_id,
-    //     std::nullopt,   // mem_config
-    //     std::nullopt,   // optional output tensor
-    //     num_links,
-    //     ttnn::ccl::Topology::Linear);
-
-    // std::cout << "ENDING" << std::endl;
-
+    // remove the padding we previously inserted
     const ttnn::SmallVector<int32_t> steps(output_shape.rank(), 1);
     ttnn::SmallVector<int32_t> begins(output_shape.rank(), 0), ends(output_shape.cbegin(), output_shape.cend());
     const tt::stl::Span<const int32_t> sbegins(begins), ssteps(steps), sends(ends);
+    ttnn::Tensor rs_output_tensor =
+        ttnn::slice(padded_native_rs_output_tensor, sbegins, sends, ssteps, native_rs_output_memory_config);
 
-    // auto final_shape = native_rs_output_tensor.logical_shape();
-    // final_shape[scatter_dim] = output_shape[scatter_dim];
-    // native_rs_output_tensor = native_rs_output_tensor.unpad_from_tile(final_shape);
+    // if the output is sharded, do the conversion
+    if (output_memory_config.is_sharded()) {
+        rs_output_tensor = ttnn::to_memory_config(rs_output_tensor, output_memory_config);
+    }
 
-    native_rs_output_tensor = ttnn::slice(native_rs_output_tensor, sbegins, sends, ssteps, std::nullopt);
-
-    return native_rs_output_tensor;
-    // bool is_tiled_and_not_tile_aligned = input_tensor.layout() == ttnn::Layout::TILE &&
-    //                                      (output_shape[-2] % tile_height != 0 || output_shape[-1] % tile_width != 0);
-
-    // auto input_memory_config = input_tensor.memory_config();
-    // TT_FATAL(
-    //     !(input_memory_config.is_sharded() && !memory_config.has_value()),
-    //     "If input memory config is sharded, then output memory config must be provided. Defaulting the output memory
-    //     " "config to the input sharded memory config will break the op as the input and output shapes are
-    //     different.");
-    // auto output_memory_config = memory_config.value_or(input_memory_config);
-
-    // if (input_memory_config.is_sharded()) {
-    //     /*
-    //      * If sharded to interleaved, convert to the final interleaved memory config.
-    //      * If sharded to sharded, use DRAM interleaved as the intermediate memory
-    //      * config for executing the composite.
-    //      */
-    //     auto intermediate_memory_config =
-    //         output_memory_config.is_sharded() ? ttnn::DRAM_MEMORY_CONFIG : output_memory_config;
-    //     input_tensor = ttnn::to_memory_config(input_tensor, intermediate_memory_config);
-    // }
-
-    // std::vector<ttnn::Tensor> broadcasted_tensors = ttnn::operations::ccl::all_broadcast(
-    //     input_tensor, cluster_axis, subdevice_id, input_tensor.memory_config(), num_links,
-    //     ttnn::ccl::Topology::Linear);
-
-    // // Reduce broadcasted tensors into a single reduced tensor
-    // ttnn::Tensor all_reduced_tensor = broadcasted_tensors[0];
-    // for (uint32_t i = 1; i < broadcasted_tensors.size(); ++i) {
-    //     all_reduced_tensor = ttnn::add(all_reduced_tensor, broadcasted_tensors[i]);
-    //     broadcasted_tensors[i].deallocate();
-    // }
+    return rs_output_tensor;
 
     // // Convert to row-major (if necessary)
     // if (is_tiled_and_not_tile_aligned) {
@@ -204,12 +172,6 @@ ttnn::Tensor composite_reduce_scatter(
     //         reduce_scatter_output_tensor = ttnn::typecast(reduce_scatter_output_tensor, ttnn::DataType::BFLOAT8_B);
     //     }
     // }
-
-    // if (output_memory_config.is_sharded()) {
-    //     reduce_scatter_output_tensor = ttnn::to_memory_config(reduce_scatter_output_tensor, output_memory_config);
-    // }
-
-    // return reduce_scatter_output_tensor;
 }
 
 bool use_all_gather_async_llama_sharded(const ttnn::Tensor& input_tensor, const ttnn::MemoryConfig& output_mem_config) {
