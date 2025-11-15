@@ -523,40 +523,6 @@ Tensor ExecuteRdiv::invoke(
         ttnn::eqz(input_tensor, memory_config), t_inf * value, result, memory_config, optional_output_tensor);
 }
 
-// logit(input, eps)=log(input / 1 - input)
-Tensor _logit(const Tensor& input_a, float eps, const std::optional<MemoryConfig>& output_mem_config) {
-    float t1m_eps = 1 - eps;
-    Tensor logit_input = ttnn::where(
-        ttnn::lt(input_a, eps, std::nullopt, output_mem_config),
-        eps,
-        ttnn::where(ttnn::gt(input_a, t1m_eps, std::nullopt, output_mem_config), t1m_eps, input_a));
-    Tensor linput_m1 = ttnn::rsub(logit_input, 1.0f, std::nullopt, output_mem_config);
-    Tensor log_input =
-        ttnn::multiply(logit_input, ttnn::reciprocal(linput_m1, output_mem_config), std::nullopt, output_mem_config);
-    linput_m1.deallocate();
-    Tensor t_inf = ttnn::multiply(
-        ttnn::sign(input_a, output_mem_config), tt::tt_metal::hal::get_inf(), std::nullopt, output_mem_config);
-    Tensor logit_result;
-    if (eps == 0.0 || eps == 1.0) {
-        logit_result = ttnn::where(
-            ttnn::eqz(logit_input, output_mem_config),
-            t_inf,
-            ttnn::where(
-                ttnn::eq(logit_input, 1.0f, std::nullopt, output_mem_config),
-                tt::tt_metal::hal::get_inf(),
-                ttnn::log(log_input, true, output_mem_config)));
-    } else {
-        logit_result = ttnn::where(
-            ttnn::eq(logit_input, 1.0f, std::nullopt, output_mem_config),
-            t_inf,
-            ttnn::where(
-                ttnn::ltz(log_input, output_mem_config),
-                tt::tt_metal::hal::get_nan(),
-                ttnn::log(log_input, true, output_mem_config)));
-    }
-    return logit_result;
-}
-
 // // tanhshrink(x) = x - tanh(x)
 Tensor _logical_not_(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
     return ttnn::logical_not(x, output_mem_config, x);

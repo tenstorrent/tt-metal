@@ -433,24 +433,6 @@ def run_unary_test_with_float_remainder(device, h, w, scalar, ttnn_function, pcc
     assert_with_pcc(torch_output_tensor, output_tensor, pcc)
 
 
-@pytest.mark.parametrize("scalar", [1, 2])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_logit(device, h, w, scalar):
-    torch.manual_seed(0)
-
-    torch_input_tensor_a = torch.rand((h, w), dtype=torch.bfloat16)
-
-    golden_function = ttnn.get_golden_function(ttnn.logit)
-    torch_output_tensor = golden_function(torch_input_tensor_a, eps=scalar, device=device)
-
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
-
-    output_tensor = ttnn.logit(input_tensor_a, eps=scalar)
-    output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
-
-
 @pytest.mark.parametrize("scalar", [0, 1.0, 2])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
@@ -1887,3 +1869,31 @@ def test_unary_root_ops_ttnn(input_shapes, torch_dtype, ttnn_dtype, ttnn_op, fas
                 torch.isinf(output_tensor), torch.tensor(float("nan"), dtype=output_tensor.dtype), output_tensor
             )
         torch.isclose(output_tensor, golden_tensor, equal_nan=True)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([3, 128, 32])),
+        (torch.Size([1, 1, 3, 64, 12])),
+    ),
+)
+@pytest.mark.parametrize(
+    "torch_dtype, ttnn_dtype",
+    [
+        (torch.bfloat16, ttnn.bfloat16),
+        (torch.float32, ttnn.float32),
+    ],
+)
+@pytest.mark.parametrize("scalar", [0.0, 0.25, 0.38, 0.5, 0.85, 1.0, None])
+def test_unary_logit(input_shapes, scalar, torch_dtype, ttnn_dtype, device):
+    torch.manual_seed(0)
+    in_data = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-100, 100)
+    input_tensor_a = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.logit(input_tensor_a, eps=scalar)
+    output_tensor = ttnn.to_torch(output_tensor)
+    golden_function = ttnn.get_golden_function(ttnn.logit)
+    golden_tensor = golden_function(in_data, eps=scalar)
+
+    torch.allclose(output_tensor, golden_tensor, equal_nan=True, rtol=1e-05, atol=1e-05)
