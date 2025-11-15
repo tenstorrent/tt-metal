@@ -177,40 +177,12 @@ BufferCorePageMapping::Iterator::Range BufferCorePageMapping::Iterator::next_ran
     }
 
     uint32_t num_pages_left = host_range.device_page_offset + host_range.num_pages - device_page_offset_;
-    // bool excess_padding_ignored = (device_page_offset_ < host_range.device_page_offset) &&
-    //     (host_range.device_page_offset - device_page_offset_ > host_range.host_page_start);
-    // if(excess_padding_ignored) {
-    //     num_pages_left = host_range.num_pages;
-    //
-    // }
     uint32_t num_pages = std::min(num_pages_left, end_device_page_offset - device_page_offset_);
-    // uint32_t num_pages_to_write_to_device = num_pages;
-    // uint32_t computed_host_page_start = 0;
-    // if(excess_padding_ignored) {
-    //     computed_host_page_start = host_range.host_page_start;
-    //     device_page_offset_ = host_range.device_page_offset;
-    // } else {
-    //     computed_host_page_start = host_range.host_page_start + device_page_offset_ - host_range.device_page_offset;
-    // }
-    // if (device_page_offset_ >= host_range.device_page_offset ||
-    //     host_range.device_page_offset - device_page_offset_ <= host_range.host_page_start) {
-    //     computed_host_page_start = host_range.host_page_start + device_page_offset_ - host_range.device_page_offset;
-    // } else {
-    //     computed_host_page_start = 0;//= host_range.host_page_start;
-    //     // num_pages_to_write_to_device = host_range.host_page_start+num;
-    //     // device_page_offset_ = host_range.device_page_offset;
-    // }
     result = Range{
         .device_page_offset = device_page_offset_,
-        .host_page_start = host_range.host_page_start + device_page_offset_ -
-                           host_range.device_page_offset,  // computed_host_page_start,
+        .host_page_start = host_range.host_page_start + device_page_offset_ - host_range.device_page_offset,
         .num_pages = num_pages,
     };
-    // if(more_padding_than_host_page_start) {
-    //     device_page_offset_ =host_range.device_page_offset + host_range.num_pages;
-    // } else {
-    //     device_page_offset_ += num_pages;// result.device_page_offset = device_page_offset_;
-    // }
     device_page_offset_ += num_pages;
     if (device_page_offset_ == host_range.device_page_offset + host_range.num_pages) {
         range_index_++;
