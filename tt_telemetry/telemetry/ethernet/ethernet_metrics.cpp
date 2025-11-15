@@ -2,16 +2,33 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+/*
+ * TODO:
+ * -----
+ * - Once we refactor to support arbitrary attributes (for serialization directly as Prometheus
+ *   attributes), fabric telemetry static information (e.g. device and mesh ID) should become
+ *   attributes of every fabric metric rather thn independent metrics.
+ */
+
 #include <chrono>
+#include <cstring>
+#include <bit>
+#include <array>
 
 #include "protobuf/factory_system_descriptor.pb.h"
 
 #include <telemetry/ethernet/ethernet_metrics.hpp>
 #include <telemetry/ethernet/ethernet_helpers.hpp>
+#include <telemetry/ethernet/fabric_telemetry_reader.hpp>
 #include <topology/topology.hpp>
+#include <tt-metalium/fabric_types.hpp>
 
 /**************************************************************************************************
  Metric Creation
+
+ A note about ERISC cores: Ethernet cores may themselves be comprised of multiple ERISC cores. On
+ Wormhole, there is only one, but Blackhole has two. Many metrics (e.g. fabric telemetry) are
+ therefore broken up by ERISC core.
 **************************************************************************************************/
 
 // Creates Ethernet metrics with contiguous IDs and returns the next free ID value
@@ -19,6 +36,7 @@ void create_ethernet_metrics(
     std::vector<std::unique_ptr<BoolMetric>>& bool_metrics,
     std::vector<std::unique_ptr<UIntMetric>>& uint_metrics,
     std::vector<std::unique_ptr<DoubleMetric>>& double_metrics,
+    std::vector<std::unique_ptr<StringMetric>>& string_metrics,
     const std::unique_ptr<tt::umd::Cluster>& cluster,
     const tt::scaleout_tools::fsd::proto::FactorySystemDescriptor& fsd,
     const std::unique_ptr<TopologyHelper>& topology_translation,
@@ -61,6 +79,8 @@ void create_ethernet_metrics(
 
     // For each, create a metric
     for (const auto& endpoint : endpoints) {
+        tt::ARCH arch = hal->get_arch();
+
         uint32_t channel = endpoint.chan_id();
         tt::tt_metal::ASICLocation asic_location = tt::tt_metal::ASICLocation(endpoint.asic_location());
         tt::tt_metal::TrayID tray_id = tt::tt_metal::TrayID(endpoint.tray_id());
@@ -80,11 +100,13 @@ void create_ethernet_metrics(
             *asic_location,
             channel,
             chip_id);
+
         bool_metrics.push_back(
             std::make_unique<EthernetEndpointUpMetric>(tray_id, asic_location, chip_id, channel, hal));
         uint_metrics.push_back(
             std::make_unique<EthernetRetrainCountMetric>(tray_id, asic_location, chip_id, channel, cluster, hal));
-        if (hal->get_arch() == tt::ARCH::WORMHOLE_B0) {
+
+        if (arch == tt::ARCH::WORMHOLE_B0) {
             // These are available only on Wormhole
             uint_metrics.push_back(
                 std::make_unique<EthernetCRCErrorCountMetric>(tray_id, asic_location, chip_id, channel, cluster, hal));
@@ -92,6 +114,45 @@ void create_ethernet_metrics(
                 tray_id, asic_location, chip_id, channel, cluster, hal));
             uint_metrics.push_back(std::make_unique<EthernetUncorrectedCodewordCountMetric>(
                 tray_id, asic_location, chip_id, channel, cluster, hal));
+        }
+
+        // Different number of ERISC cores to monitor depending on architecture
+        std::map<tt::ARCH, size_t> num_erisc_cores_by_arch = {
+            { tt::ARCH::WORMHOLE_B0, 1 },
+            { tt::ARCH::BLACKHOLE, 2 }
+        };
+
+        auto telemetry_reader = std::make_shared<FabricTelemetryReader>(
+            tray_id, asic_location, chip_id, channel, cluster, hal);
+
+        uint_metrics.push_back(
+            std::make_unique<FabricMeshIDMetric>(tray_id, asic_location, channel, telemetry_reader));
+        uint_metrics.push_back(
+            std::make_unique<FabricDeviceIDMetric>(tray_id, asic_location, channel, telemetry_reader));
+        string_metrics.push_back(
+            std::make_unique<FabricDirectionMetric>(tray_id, asic_location, channel, telemetry_reader));
+        string_metrics.push_back(
+            std::make_unique<FabricConfigMetric>(tray_id, asic_location, channel, telemetry_reader));
+        uint_metrics.push_back(
+            std::make_unique<FabricTxWordsMetric>(tray_id, asic_location, channel, telemetry_reader));
+        uint_metrics.push_back(
+            std::make_unique<FabricRxWordsMetric>(tray_id, asic_location, channel, telemetry_reader));
+        uint_metrics.push_back(
+            std::make_unique<FabricTxPacketsMetric>(tray_id, asic_location, channel, telemetry_reader));
+        uint_metrics.push_back(
+            std::make_unique<FabricRxPacketsMetric>(tray_id, asic_location, channel, telemetry_reader));
+
+        for (size_t erisc_core = 0; erisc_core < num_erisc_cores_by_arch[arch]; erisc_core++) {
+            // TODO: does not work as expected, disable for now
+            // double_metrics.push_back(
+            //     std::make_unique<FabricBandwidthMetric>(tray_id, asic_location, chip_id, channel, erisc_core,
+            //     telemetry_reader));
+            uint_metrics.push_back(std::make_unique<FabricTxHeartbeatMetric>(
+                tray_id, asic_location, channel, erisc_core, telemetry_reader));
+            uint_metrics.push_back(std::make_unique<FabricRxHeartbeatMetric>(
+                tray_id, asic_location, channel, erisc_core, telemetry_reader));
+            uint_metrics.push_back(
+                std::make_unique<FabricRouterStateMetric>(tray_id, asic_location, channel, erisc_core, telemetry_reader));
         }
     }
 
@@ -105,6 +166,17 @@ static std::vector<std::string> endpoint_telemetry_path(
         "tray" + std::to_string(*tray_id),
         "chip" + std::to_string(*asic_location),
         "channel" + std::to_string(channel),
+        metric_name};
+}
+
+static std::vector<std::string> erisc_telemetry_path(
+    tt::tt_metal::TrayID tray_id, tt::tt_metal::ASICLocation asic_location, uint32_t channel, size_t erisc_core, const char* metric_name) {
+    // Create path in format: tray{n}/chip{m}/channel{l}/erisc_{k}/metric_name
+    return {
+        "tray" + std::to_string(*tray_id),
+        "chip" + std::to_string(*asic_location),
+        "channel" + std::to_string(channel),
+        "erisc" + std::to_string(erisc_core),
         metric_name};
 }
 
@@ -180,7 +252,9 @@ void EthernetCRCErrorCountMetric::update(
     const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
     uint32_t crc_error_val = 0;
     cluster->read_from_device(&crc_error_val, chip_id_, ethernet_core_, crc_addr_, sizeof(uint32_t));
-    value_ = uint64_t(crc_error_val);
+    uint64_t new_value = uint64_t(crc_error_val);
+    changed_since_transmission_ = new_value != value_;
+    value_ = new_value;
     set_timestamp_now();
 }
 
@@ -212,7 +286,9 @@ void EthernetRetrainCountMetric::update(
     const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
     uint32_t data = 0;
     cluster->read_from_device(&data, chip_id_, ethernet_core_, retrain_count_addr_, sizeof(uint32_t));
-    value_ = uint64_t(data);
+    uint64_t new_value = uint64_t(data);
+    changed_since_transmission_ = new_value != value_;
+    value_ = new_value;
     set_timestamp_now();
 }
 
@@ -248,7 +324,9 @@ void EthernetCorrectedCodewordCountMetric::update(
     uint32_t lo = 0;
     cluster->read_from_device(&hi, chip_id_, ethernet_core_, corr_addr_ + 0, sizeof(uint32_t));
     cluster->read_from_device(&lo, chip_id_, ethernet_core_, corr_addr_ + 4, sizeof(uint32_t));
-    value_ = (static_cast<uint64_t>(hi) << 32) | static_cast<uint64_t>(lo);
+    uint64_t new_value = (static_cast<uint64_t>(hi) << 32) | static_cast<uint64_t>(lo);
+    changed_since_transmission_ = new_value != value_;
+    value_ = new_value;
     set_timestamp_now();
 }
 
@@ -284,6 +362,458 @@ void EthernetUncorrectedCodewordCountMetric::update(
     uint32_t lo = 0;
     cluster->read_from_device(&hi, chip_id_, ethernet_core_, uncorr_addr_ + 0, sizeof(uint32_t));
     cluster->read_from_device(&lo, chip_id_, ethernet_core_, uncorr_addr_ + 4, sizeof(uint32_t));
-    value_ = (static_cast<uint64_t>(hi) << 32) | static_cast<uint64_t>(lo);
+    uint64_t new_value = (static_cast<uint64_t>(hi) << 32) | static_cast<uint64_t>(lo);
+    changed_since_transmission_ = new_value != value_;
+    value_ = new_value;
+    set_timestamp_now();
+}
+
+/**************************************************************************************************
+ FabricBandwidthMetric
+
+ Bandwidth telemetry.
+**************************************************************************************************/
+
+static double calc_bw_bytes_per_cycle(uint32_t total_words, uint64_t cycles) {
+    constexpr uint32_t bytes_per_eth_word = 16;
+    return (total_words * bytes_per_eth_word) / static_cast<double>(cycles);
+}
+
+FabricBandwidthMetric::FabricBandwidthMetric(
+    tt::tt_metal::TrayID tray_id,
+    tt::tt_metal::ASICLocation asic_location,
+    tt::ChipId chip_id,
+    uint32_t channel,
+    size_t erisc_core,
+    std::shared_ptr<FabricTelemetryReader> telemetry_reader) :
+    DoubleMetric(),
+    tray_id_(tray_id),
+    asic_location_(asic_location),
+    chip_id_(chip_id),
+    channel_(channel),
+    erisc_core_(erisc_core),
+    telemetry_reader_(telemetry_reader) {
+    value_ = 0.0;
+}
+
+const std::vector<std::string> FabricBandwidthMetric::telemetry_path() const {
+    return erisc_telemetry_path(tray_id_, asic_location_, channel_, erisc_core_, "fabricBandwidth");
+}
+
+void FabricBandwidthMetric::update(
+    const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
+    const FabricTelemetryContainer& telemetry = telemetry_reader_->get_fabric_telemetry(cluster, start_of_update_cycle);
+
+    double old_value = value_;
+
+    // Get cycles elapsed
+    uint64_t cycles = 0;
+    std::visit([&](auto&& tel) { cycles = tel.dynamic_info.tx_bandwidth.elapsed_cycles.full; }, telemetry);
+
+    // Get words sent
+    uint64_t words_sent = 0;
+    std::visit([&](auto&& tel) { words_sent = tel.dynamic_info.tx_bandwidth.num_words_sent; }, telemetry);
+
+    // Calculate bandwidth
+    if (cycles > 0) {
+        uint32_t freq_mhz = cluster->get_tt_device(chip_id_)->get_clock();
+        double freq_ghz = double(freq_mhz) / 1000.0;
+        double bytes_per_cycle = calc_bw_bytes_per_cycle(words_sent, cycles);
+        value_ = bytes_per_cycle * freq_ghz;  // GB/s
+    } else {
+        value_ = 0.0;
+    }
+
+    changed_since_transmission_ = value_ != old_value;
+    set_timestamp_now();
+}
+
+/**************************************************************************************************
+ FabricTxWordsMetric
+
+ Number of words sent over fabric (transmission).
+**************************************************************************************************/
+
+FabricTxWordsMetric::FabricTxWordsMetric(
+    tt::tt_metal::TrayID tray_id,
+    tt::tt_metal::ASICLocation asic_location,
+    uint32_t channel,
+    std::shared_ptr<FabricTelemetryReader> telemetry_reader) :
+    UIntMetric(),
+    tray_id_(tray_id),
+    asic_location_(asic_location),
+    channel_(channel),
+    telemetry_reader_(telemetry_reader) {
+    value_ = 0;
+}
+
+const std::vector<std::string> FabricTxWordsMetric::telemetry_path() const {
+    return endpoint_telemetry_path(tray_id_, asic_location_, channel_, "fabricTxWords");
+}
+
+void FabricTxWordsMetric::update(
+    const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
+    uint64_t new_value = 0;
+    const FabricTelemetryContainer& telemetry = telemetry_reader_->get_fabric_telemetry(cluster, start_of_update_cycle);
+    std::visit([&](auto&& tel) { new_value = tel.dynamic_info.tx_bandwidth.num_words_sent; }, telemetry);
+    changed_since_transmission_ = new_value != value_;
+    value_ = new_value;
+    set_timestamp_now();
+}
+
+/**************************************************************************************************
+ FabricRxWordsMetric
+
+ Number of words received over fabric.
+**************************************************************************************************/
+
+FabricRxWordsMetric::FabricRxWordsMetric(
+    tt::tt_metal::TrayID tray_id,
+    tt::tt_metal::ASICLocation asic_location,
+    uint32_t channel,
+    std::shared_ptr<FabricTelemetryReader> telemetry_reader) :
+    UIntMetric(),
+    tray_id_(tray_id),
+    asic_location_(asic_location),
+    channel_(channel),
+    telemetry_reader_(telemetry_reader) {
+    value_ = 0;
+}
+
+const std::vector<std::string> FabricRxWordsMetric::telemetry_path() const {
+    return endpoint_telemetry_path(tray_id_, asic_location_, channel_, "fabricRxWords");
+}
+
+void FabricRxWordsMetric::update(
+    const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
+    uint64_t new_value = 0;
+    const FabricTelemetryContainer& telemetry = telemetry_reader_->get_fabric_telemetry(cluster, start_of_update_cycle);
+    std::visit([&](auto&& tel) { new_value = tel.dynamic_info.rx_bandwidth.num_words_sent; }, telemetry);
+    changed_since_transmission_ = new_value != value_;
+    value_ = new_value;
+    set_timestamp_now();
+}
+
+/**************************************************************************************************
+ FabricTxPacketsMetric
+
+ Number of packets sent over fabric.
+**************************************************************************************************/
+
+FabricTxPacketsMetric::FabricTxPacketsMetric(
+    tt::tt_metal::TrayID tray_id,
+    tt::tt_metal::ASICLocation asic_location,
+    uint32_t channel,
+    std::shared_ptr<FabricTelemetryReader> telemetry_reader) :
+    UIntMetric(),
+    tray_id_(tray_id),
+    asic_location_(asic_location),
+    channel_(channel),
+    telemetry_reader_(telemetry_reader) {
+    value_ = 0;
+}
+
+const std::vector<std::string> FabricTxPacketsMetric::telemetry_path() const {
+    return endpoint_telemetry_path(tray_id_, asic_location_, channel_, "fabricTxPackets");
+}
+
+void FabricTxPacketsMetric::update(
+    const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
+    uint64_t new_value = 0;
+    const FabricTelemetryContainer& telemetry = telemetry_reader_->get_fabric_telemetry(cluster, start_of_update_cycle);
+    std::visit([&](auto&& tel) { new_value = tel.dynamic_info.tx_bandwidth.num_packets_sent; }, telemetry);
+    changed_since_transmission_ = new_value != value_;
+    value_ = new_value;
+    set_timestamp_now();
+}
+
+/**************************************************************************************************
+ FabricRxPacketsMetric
+
+ Number of packets received over fabric.
+**************************************************************************************************/
+
+FabricRxPacketsMetric::FabricRxPacketsMetric(
+    tt::tt_metal::TrayID tray_id,
+    tt::tt_metal::ASICLocation asic_location,
+    uint32_t channel,
+    std::shared_ptr<FabricTelemetryReader> telemetry_reader) :
+    UIntMetric(),
+    tray_id_(tray_id),
+    asic_location_(asic_location),
+    channel_(channel),
+    telemetry_reader_(telemetry_reader) {
+    value_ = 0;
+}
+
+const std::vector<std::string> FabricRxPacketsMetric::telemetry_path() const {
+    return endpoint_telemetry_path(tray_id_, asic_location_, channel_, "fabricRxPackets");
+}
+
+void FabricRxPacketsMetric::update(
+    const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
+    uint64_t new_value = 0;
+    const FabricTelemetryContainer& telemetry = telemetry_reader_->get_fabric_telemetry(cluster, start_of_update_cycle);
+    std::visit([&](auto&& tel) { new_value = tel.dynamic_info.rx_bandwidth.num_packets_sent; }, telemetry);
+    changed_since_transmission_ = new_value != value_;
+    value_ = new_value;
+    set_timestamp_now();
+}
+
+/**************************************************************************************************
+ FabricTxHeartbeatMetric
+
+ Fabric heartbeat count for transmission.
+**************************************************************************************************/
+
+FabricTxHeartbeatMetric::FabricTxHeartbeatMetric(
+    tt::tt_metal::TrayID tray_id,
+    tt::tt_metal::ASICLocation asic_location,
+    uint32_t channel,
+    size_t erisc_core,
+    std::shared_ptr<FabricTelemetryReader> telemetry_reader) :
+    UIntMetric(),
+    tray_id_(tray_id),
+    asic_location_(asic_location),
+    channel_(channel),
+    erisc_core_(erisc_core),
+    telemetry_reader_(telemetry_reader) {
+    value_ = 0;
+}
+
+const std::vector<std::string> FabricTxHeartbeatMetric::telemetry_path() const {
+    return erisc_telemetry_path(tray_id_, asic_location_, channel_, erisc_core_, "fabricTxHeartbeat");
+}
+
+void FabricTxHeartbeatMetric::update(
+    const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
+    uint64_t new_value = 0;
+    const FabricTelemetryContainer& telemetry = telemetry_reader_->get_fabric_telemetry(cluster, start_of_update_cycle);
+    std::visit([&](auto&& tel) {
+        new_value = tel.dynamic_info.erisc[erisc_core_].tx_heartbeat.full;
+    }, telemetry);
+    changed_since_transmission_ = new_value != value_;
+    value_ = new_value;
+    set_timestamp_now();
+}
+
+/**************************************************************************************************
+ FabricRxHeartbeatMetric
+
+ Fabric heartbeat count (reception).
+**************************************************************************************************/
+
+FabricRxHeartbeatMetric::FabricRxHeartbeatMetric(
+    tt::tt_metal::TrayID tray_id,
+    tt::tt_metal::ASICLocation asic_location,
+    uint32_t channel,
+    size_t erisc_core,
+    std::shared_ptr<FabricTelemetryReader> telemetry_reader) :
+    UIntMetric(),
+    tray_id_(tray_id),
+    asic_location_(asic_location),
+    channel_(channel),
+    erisc_core_(erisc_core),
+    telemetry_reader_(telemetry_reader) {
+    value_ = 0;
+}
+
+const std::vector<std::string> FabricRxHeartbeatMetric::telemetry_path() const {
+    return erisc_telemetry_path(tray_id_, asic_location_, channel_, erisc_core_, "fabricRxHeartbeat");
+}
+
+void FabricRxHeartbeatMetric::update(
+    const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
+    uint64_t new_value = 0;
+    const FabricTelemetryContainer& telemetry = telemetry_reader_->get_fabric_telemetry(cluster, start_of_update_cycle);
+    std::visit([&](auto&& tel) {
+        new_value = tel.dynamic_info.erisc[erisc_core_].rx_heartbeat.full;
+    }, telemetry);
+    changed_since_transmission_ = new_value != value_;
+    value_ = new_value;
+    set_timestamp_now();
+}
+
+/**************************************************************************************************
+ FabricRouterStateMetric
+
+ Fabric router state (per-ERISC).
+**************************************************************************************************/
+
+FabricRouterStateMetric::FabricRouterStateMetric(
+    tt::tt_metal::TrayID tray_id,
+    tt::tt_metal::ASICLocation asic_location,
+    uint32_t channel,
+    size_t erisc_core,
+    std::shared_ptr<FabricTelemetryReader> telemetry_reader) :
+    UIntMetric(), tray_id_(tray_id), asic_location_(asic_location), channel_(channel), erisc_core_(erisc_core), telemetry_reader_(telemetry_reader) {
+    value_ = 0;
+}
+
+const std::vector<std::string> FabricRouterStateMetric::telemetry_path() const {
+    return erisc_telemetry_path(tray_id_, asic_location_, channel_, erisc_core_, "fabricRouterState");
+}
+
+void FabricRouterStateMetric::update(
+    const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
+    uint64_t new_value = 0;
+    const FabricTelemetryContainer& telemetry = telemetry_reader_->get_fabric_telemetry(cluster, start_of_update_cycle);
+    std::visit([&](auto&& tel) {
+        new_value = static_cast<uint64_t>(tel.dynamic_info.erisc[erisc_core_].router_state);
+    }, telemetry);
+    changed_since_transmission_ = new_value != value_;
+    value_ = new_value;
+    set_timestamp_now();
+}
+
+/**************************************************************************************************
+ FabricMeshIDMetric
+
+ Fabric mesh ID from static info.
+**************************************************************************************************/
+
+FabricMeshIDMetric::FabricMeshIDMetric(
+    tt::tt_metal::TrayID tray_id,
+    tt::tt_metal::ASICLocation asic_location,
+    uint32_t channel,
+    std::shared_ptr<FabricTelemetryReader> telemetry_reader) :
+    UIntMetric(),
+    tray_id_(tray_id),
+    asic_location_(asic_location),
+    channel_(channel),
+    telemetry_reader_(telemetry_reader) {
+    value_ = 0;
+}
+
+const std::vector<std::string> FabricMeshIDMetric::telemetry_path() const {
+    return endpoint_telemetry_path(tray_id_, asic_location_, channel_, "fabricMeshID");
+}
+
+void FabricMeshIDMetric::update(
+    const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
+    uint64_t new_value = 0;
+    const FabricTelemetryContainer& telemetry = telemetry_reader_->get_fabric_telemetry(cluster, start_of_update_cycle);
+    std::visit([&](auto&& tel) {
+        new_value = static_cast<uint64_t>(tel.static_info.mesh_id);
+    }, telemetry);
+    changed_since_transmission_ = new_value != value_;
+    value_ = new_value;
+    set_timestamp_now();
+}
+
+/**************************************************************************************************
+ FabricDeviceIDMetric
+
+ Fabric device ID from static info.
+**************************************************************************************************/
+
+FabricDeviceIDMetric::FabricDeviceIDMetric(
+    tt::tt_metal::TrayID tray_id,
+    tt::tt_metal::ASICLocation asic_location,
+    uint32_t channel,
+    std::shared_ptr<FabricTelemetryReader> telemetry_reader) :
+    UIntMetric(),
+    tray_id_(tray_id),
+    asic_location_(asic_location),
+    channel_(channel),
+    telemetry_reader_(telemetry_reader) {
+    value_ = 0;
+}
+
+const std::vector<std::string> FabricDeviceIDMetric::telemetry_path() const {
+    return endpoint_telemetry_path(tray_id_, asic_location_, channel_, "fabricDeviceID");
+}
+
+void FabricDeviceIDMetric::update(
+    const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
+    uint64_t new_value = 0;
+    const FabricTelemetryContainer& telemetry = telemetry_reader_->get_fabric_telemetry(cluster, start_of_update_cycle);
+    std::visit([&](auto&& tel) {
+        new_value = static_cast<uint64_t>(tel.static_info.device_id);
+    }, telemetry);
+    changed_since_transmission_ = new_value != value_;
+    value_ = new_value;
+    set_timestamp_now();
+}
+
+/**************************************************************************************************
+ FabricDirectionMetric
+
+ Fabric direction from static info.
+**************************************************************************************************/
+
+FabricDirectionMetric::FabricDirectionMetric(
+    tt::tt_metal::TrayID tray_id,
+    tt::tt_metal::ASICLocation asic_location,
+    uint32_t channel,
+    std::shared_ptr<FabricTelemetryReader> telemetry_reader) :
+    StringMetric(),
+    tray_id_(tray_id),
+    asic_location_(asic_location),
+    channel_(channel),
+    telemetry_reader_(telemetry_reader),
+    raw_value_(0) {
+    value_ = tt::tt_fabric::eth_chan_direction_to_string(static_cast<tt::tt_fabric::eth_chan_directions>(raw_value_));
+}
+
+const std::vector<std::string> FabricDirectionMetric::telemetry_path() const {
+    return endpoint_telemetry_path(tray_id_, asic_location_, channel_, "fabricDirection");
+}
+
+void FabricDirectionMetric::update(
+    const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
+    uint8_t new_raw_value = 0;
+    const FabricTelemetryContainer& telemetry = telemetry_reader_->get_fabric_telemetry(cluster, start_of_update_cycle);
+    std::visit([&](auto&& tel) {
+        new_raw_value = static_cast<uint8_t>(tel.static_info.direction);
+    }, telemetry);
+
+    // Only convert to string if the raw value changed
+    changed_since_transmission_ = new_raw_value != raw_value_;
+    raw_value_ = new_raw_value;
+    if (changed_since_transmission_) {
+        value_ = tt::tt_fabric::eth_chan_direction_to_string(static_cast<tt::tt_fabric::eth_chan_directions>(new_raw_value));
+    }
+    set_timestamp_now();
+}
+
+/**************************************************************************************************
+FabricConfigMetric
+
+Fabric configuration from static info.
+**************************************************************************************************/
+
+FabricConfigMetric::FabricConfigMetric(
+    tt::tt_metal::TrayID tray_id,
+    tt::tt_metal::ASICLocation asic_location,
+    uint32_t channel,
+    std::shared_ptr<FabricTelemetryReader> telemetry_reader) :
+    StringMetric(),
+    tray_id_(tray_id),
+    asic_location_(asic_location),
+    channel_(channel),
+    telemetry_reader_(telemetry_reader),
+    raw_value_(0) {
+    value_ = tt::tt_fabric::fabric_config_to_string(static_cast<tt::tt_fabric::FabricConfig>(raw_value_));
+}
+
+const std::vector<std::string> FabricConfigMetric::telemetry_path() const {
+    return endpoint_telemetry_path(tray_id_, asic_location_, channel_, "fabricConfig");
+}
+
+void FabricConfigMetric::update(
+    const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
+    uint32_t new_raw_value = 0;
+    const FabricTelemetryContainer& telemetry = telemetry_reader_->get_fabric_telemetry(cluster, start_of_update_cycle);
+    std::visit([&](auto&& tel) {
+        new_raw_value = static_cast<uint32_t>(tel.static_info.fabric_config);
+    }, telemetry);
+
+    // Only convert to string if the raw value changed
+    changed_since_transmission_ = new_raw_value != raw_value_;
+    raw_value_ = new_raw_value;
+    if (changed_since_transmission_) {
+        value_ = tt::tt_fabric::fabric_config_to_string(static_cast<tt::tt_fabric::FabricConfig>(new_raw_value));
+    }
     set_timestamp_now();
 }

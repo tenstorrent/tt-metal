@@ -5,6 +5,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <string>
 #include <tt_stl/strong_type.hpp>
 
 namespace tt::tt_fabric {
@@ -23,6 +24,38 @@ enum class FabricConfig : uint32_t {
     FABRIC_2D_DYNAMIC_TORUS_XY = 10,  // 2D routing with dynamic routing and deadlock avoidance along XY axes
     CUSTOM = 11
 };
+
+// Convert fabric config to string representation
+inline std::string fabric_config_to_string(FabricConfig config) {
+    switch (config) {
+        case FabricConfig::DISABLED:
+            return "DISABLED";
+        case FabricConfig::FABRIC_1D:
+            return "FABRIC_1D";
+        case FabricConfig::FABRIC_1D_RING:
+            return "FABRIC_1D_RING";
+        case FabricConfig::FABRIC_2D:
+            return "FABRIC_2D";
+        case FabricConfig::FABRIC_2D_TORUS_X:
+            return "FABRIC_2D_TORUS_X";
+        case FabricConfig::FABRIC_2D_TORUS_Y:
+            return "FABRIC_2D_TORUS_Y";
+        case FabricConfig::FABRIC_2D_TORUS_XY:
+            return "FABRIC_2D_TORUS_XY";
+        case FabricConfig::FABRIC_2D_DYNAMIC:
+            return "FABRIC_2D_DYNAMIC";
+        case FabricConfig::FABRIC_2D_DYNAMIC_TORUS_X:
+            return "FABRIC_2D_DYNAMIC_TORUS_X";
+        case FabricConfig::FABRIC_2D_DYNAMIC_TORUS_Y:
+            return "FABRIC_2D_DYNAMIC_TORUS_Y";
+        case FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY:
+            return "FABRIC_2D_DYNAMIC_TORUS_XY";
+        case FabricConfig::CUSTOM:
+            return "CUSTOM";
+        default:
+            return "UNKNOWN (" + std::to_string(static_cast<uint32_t>(config)) + ")";
+    }
+}
 
 // tensix extension for fabric routers, used to build connections between worker - fabric router, upstream fabric router
 // - downstream fabric router.

@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <array>
+#include <string>
 #include <type_traits>
 
 namespace tt::tt_fabric {
@@ -40,6 +41,22 @@ enum eth_chan_directions : std::uint8_t {
     SOUTH = 3,
     COUNT = 4,
 };
+
+// Convert ethernet channel direction to string representation
+inline std::string eth_chan_direction_to_string(eth_chan_directions direction) {
+    switch (direction) {
+        case eth_chan_directions::EAST:
+            return "EAST";
+        case eth_chan_directions::WEST:
+            return "WEST";
+        case eth_chan_directions::NORTH:
+            return "NORTH";
+        case eth_chan_directions::SOUTH:
+            return "SOUTH";
+        default:
+            return "UNKNOWN (" + std::to_string(static_cast<std::uint8_t>(direction)) + ")";
+    }
+}
 
 template <size_t ArraySize>
 struct routing_table_t {

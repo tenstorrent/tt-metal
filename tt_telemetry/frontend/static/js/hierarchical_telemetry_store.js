@@ -165,17 +165,9 @@ export class HierarchicalTelemetryStore {
             return;
         }
 
-        // Split path into components. Then move upwards to propagate the boolean value and timestamp.
-        const parts = path.split("/");
-        for (let i = parts.length; i > 0; i--) {
-            const currentPath = parts.slice(0, i).join("/");
-            if (currentPath !== path) {
-                // _getAggregateHealthAndTimestamp only supports bools at leaf level, so we don't want to
-                // invoke it on our uint
-                const aggregateData = this._getAggregateHealthAndTimestamp(currentPath);
-                this._dataByPath.set(currentPath, aggregateData);
-            }
-        }
+        // For uint values, we do NOT propagate aggregate health data upwards.
+        // Only boolean metrics should trigger health aggregation to avoid coloring
+        // intermediate nodes that have no boolean descendants.
     }
 
     // Updates telemetry state for a particular double-valued node. Will set the value directly
@@ -207,17 +199,9 @@ export class HierarchicalTelemetryStore {
             return;
         }
 
-        // Split path into components. Then move upwards to propagate the boolean value and timestamp.
-        const parts = path.split("/");
-        for (let i = parts.length; i > 0; i--) {
-            const currentPath = parts.slice(0, i).join("/");
-            if (currentPath !== path) {
-                // _getAggregateHealthAndTimestamp only supports bools at leaf level, so we don't want to
-                // invoke it on our double
-                const aggregateData = this._getAggregateHealthAndTimestamp(currentPath);
-                this._dataByPath.set(currentPath, aggregateData);
-            }
-        }
+        // For double values, we do NOT propagate aggregate health data upwards.
+        // Only boolean metrics should trigger health aggregation to avoid coloring
+        // intermediate nodes that have no boolean descendants.
     }
 
     // Updates telemetry state for a particular string-valued node. Will set the value directly
@@ -249,17 +233,9 @@ export class HierarchicalTelemetryStore {
             return;
         }
 
-        // Split path into components. Then move upwards to propagate the string value and timestamp.
-        const parts = path.split("/");
-        for (let i = parts.length; i > 0; i--) {
-            const currentPath = parts.slice(0, i).join("/");
-            if (currentPath !== path) {
-                // _getAggregateHealthAndTimestamp only supports bools at leaf level, so we don't want to
-                // invoke it on our string
-                const aggregateData = this._getAggregateHealthAndTimestamp(currentPath);
-                this._dataByPath.set(currentPath, aggregateData);
-            }
-        }
+        // For string values, we do NOT propagate aggregate health data upwards.
+        // Only boolean metrics should trigger health aggregation to avoid coloring
+        // intermediate nodes that have no boolean descendants.
     }
 
     // Update function for unit label maps - iterates through the provided maps
