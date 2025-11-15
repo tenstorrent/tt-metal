@@ -7,6 +7,7 @@
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/pack_untilize.h"
 #include "compute_kernel_api/tile_move_copy.h"
+#include "compute_kernel_api/transpose_wh.h"
 #include "mod_div_lib.h"
 
 #ifdef FUSE_BIAS
@@ -21,6 +22,50 @@
 // Have to keep a copy because cannot import ttnn into tests/tt_metal.
 
 namespace NAMESPACE {
+
+template <uint32_t in0_block_num_tiles>
+FORCE_INLINE void transpose_tile_block(uint32_t in0_transpose_cb_id, uint32_t in0_cb_id) {
+    // Let us stream it in blocks of 4 tiles at a time
+    constexpr uint32_t block_size = 4;
+    constexpr uint32_t num_blocks = in0_block_num_tiles / block_size;
+    constexpr uint32_t last_block_size = in0_block_num_tiles % block_size;
+    // Lets do 2 passes: One loop until last and one last for the left overs
+    for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
+        cb_wait_front(in0_transpose_cb_id, block_size);
+        tile_regs_acquire();
+        for (uint32_t tile_idx = 0; tile_idx < block_size; tile_idx++) {
+            transpose_wh_tile(in0_transpose_cb_id, tile_idx, tile_idx);
+        }
+        tile_regs_commit();
+        cb_pop_front(in0_transpose_cb_id, block_size);
+
+        cb_reserve_back(in0_cb_id, block_size);
+        tile_regs_wait();
+        for (uint32_t tile_idx = 0; tile_idx < block_size; tile_idx++) {
+            pack_tile(tile_idx, in0_cb_id);
+        }
+        tile_regs_release();
+        cb_push_back(in0_cb_id, block_size);
+    }
+
+    if constexpr (last_block_size > 0) {
+        cb_wait_front(in0_transpose_cb_id, last_block_size);
+        tile_regs_acquire();
+        for (uint32_t tile_idx = 0; tile_idx < last_block_size; tile_idx++) {
+            transpose_wh_tile(in0_transpose_cb_id, tile_idx, tile_idx);
+        }
+        tile_regs_commit();
+        cb_pop_front(in0_transpose_cb_id, last_block_size);
+
+        cb_reserve_back(in0_cb_id, last_block_size);
+        tile_regs_wait();
+        for (uint32_t tile_idx = 0; tile_idx < last_block_size; tile_idx++) {
+            pack_tile(tile_idx, in0_cb_id);
+        }
+        tile_regs_release();
+        cb_push_back(in0_cb_id, last_block_size);
+    }
+}
 
 FORCE_INLINE void reload_from_cb_to_dst(
     uint32_t in0_cb_id,
@@ -110,14 +155,17 @@ void MAIN {
     constexpr bool untilize_out = get_compile_time_arg_val(15);                // untilize output
     // This boolean is set when the number of batches is only known at runtime, typically based on a sparsity tensor.
     constexpr bool get_batch_from_reader = (bool)get_compile_time_arg_val(16);
+    constexpr bool in0_transpose_tile = (bool)get_compile_time_arg_val(17);
 
     constexpr uint32_t out_block_w = out_subblock_w * in1_num_subblocks;
 
-    constexpr uint32_t in0_cb_id = tt::CBIndex::c_0;
+    constexpr uint32_t in0_cb_id = in0_transpose_tile ? tt::CBIndex::c_10 : tt::CBIndex::c_0;
     constexpr uint32_t in1_cb_id = tt::CBIndex::c_1;
     constexpr uint32_t out_cb_id = tt::CBIndex::c_4;
     constexpr uint32_t mm_partials_cb_id = tt::CBIndex::c_5;
     constexpr uint32_t untilize_mode_out_cb_id = untilize_out ? mm_partials_cb_id : out_cb_id;
+    // When in0 needs to be transposed, we route it here first and then push it to in0_cb_id for matmul call
+    constexpr uint32_t in0_transpose_cb_id = tt::CBIndex::c_0;
 
 #ifdef FUSE_BIAS
     constexpr uint32_t bias_cb_id = tt::CBIndex::c_3;
@@ -177,6 +225,13 @@ void MAIN {
                         PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
                     }
 #endif
+
+                    if constexpr (in0_transpose_tile) {
+                        transpose_wh_init_short(in0_transpose_cb_id);
+                        transpose_tile_block<in0_block_num_tiles>(in0_transpose_cb_id, in0_cb_id);
+                        mm_block_init_short(
+                            in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+                    }
 
                     cb_wait_front(in0_cb_id, in0_block_num_tiles);
                     cb_wait_front(in1_cb_id, in1_block_num_tiles);

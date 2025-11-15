@@ -124,6 +124,8 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_o
     const std::optional<const Tensor>& bias,
     Tensor& output_tensor,
     bool bcast_batch,
+    bool transpose_a,
+    bool transpose_b,
     CoreCoord compute_with_storage_grid_size,
     DeviceComputeKernelConfig compute_kernel_config,
     uint32_t in0_block_w,
