@@ -54,9 +54,10 @@ inline void router_compute_sigmoid() {
     // Wait for input tiles
     cb_wait_front(cb_in0, in0_block_num_tiles);
     cb_wait_front(cb_in1, in1_block_num_tiles);
-    UNPACK((
-        DPRINT << TileSlice(cb_in0, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 16, .w0 = 0, .w1 = 32, .ws = 16}, true, true)
-               << ENDL()));
+    // UNPACK((
+    //     DPRINT << TileSlice(cb_in0, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 16, .w0 = 0, .w1 = 32, .ws = 16}, true,
+    //     true)
+    //            << ENDL()));
 
     // Acquire tile registers for computation
     tile_regs_acquire();
@@ -106,4 +107,72 @@ inline void router_compute_sigmoid() {
     // Pop consumed input tiles
     cb_pop_front(cb_in0, in0_block_num_tiles);
     cb_pop_front(cb_in1, in1_block_num_tiles);
+}
+
+// cb_in0: activations [1, 7168]
+// cb_in1: router weights [7168, 256]
+// cb_bias: expert bias [1, 256]
+// cb_out: router scores [1, 256]
+// cb_mm_partials: intermediate buffer for matmul (same as cb_out or separate if untilizing)
+template <
+    uint32_t cb_in0,
+    uint32_t cb_in1,
+    uint32_t cb_bias,
+    uint32_t cb_out,
+    uint32_t cb_mm_partials,
+    uint32_t cb_mm_partials2,
+    uint32_t in0_block_w,
+    uint32_t in0_block_num_tiles,
+    uint32_t in1_block_num_tiles,
+    uint32_t in1_block_w,
+    uint32_t out_subblock_h,
+    uint32_t out_subblock_w,
+    uint32_t out_subblock_num_tiles,
+    uint32_t bias_num_tiles,
+    bool untilize_out>
+inline void router_compute_sigmoid_bias() {
+    router_compute_sigmoid<
+        cb_in0,
+        cb_in1,
+        cb_mm_partials2,
+        cb_mm_partials,
+        in0_block_w,
+        in0_block_num_tiles,
+        in1_block_num_tiles,
+        in1_block_w,
+        out_subblock_h,
+        out_subblock_w,
+        out_subblock_num_tiles,
+        untilize_out>();
+
+    // reconfig_data_format_srcb(cb_mm_partials2, cb_bias);
+    add_tiles_init(cb_mm_partials2, cb_bias);
+    uint32_t dst_index = 0;
+
+    // DPRINT << "out_subblock_num_tiles: " << out_subblock_num_tiles << ENDL();
+
+    for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
+        cb_wait_front(cb_mm_partials2, 1);
+        // UNPACK ((DPRINT << TileSlice(cb_mm_partials2, 0, SliceRange{.h0 = 0, .h1 = 2, .hs = 1, .w0 = 0, .w1 = 16, .ws
+        // = 1}, true, true)
+        //        << ENDL()));
+        cb_wait_front(cb_bias, 1);
+        UNPACK(
+            (DPRINT << TileSlice(
+                           cb_bias, 0, SliceRange{.h0 = 0, .h1 = 2, .hs = 1, .w0 = 0, .w1 = 16, .ws = 1}, true, true)
+                    << ENDL()));
+        tile_regs_acquire();
+        add_tiles(cb_mm_partials2, cb_bias, 0, 0, dst_index);
+        tile_regs_commit();
+        cb_pop_front(cb_mm_partials2, 1);
+        cb_pop_front(cb_bias, 1);
+        cb_reserve_back(cb_out, 1);
+        tile_regs_wait();
+        pack_tile(dst_index, cb_out, 0);
+        tile_regs_release();
+        // PACK ((DPRINT << TileSlice(cb_out, 0, SliceRange{.h0 = 1, .h1 = 2, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
+        // true, true)
+        //        << ENDL()));
+        cb_push_back(cb_out, 1);
+    }
 }

@@ -70,6 +70,15 @@ gate_common_override_variables_t deepseek_b1_gate_(
     tt_metal::Buffer* in0_buffer = a.buffer();
     tt_metal::Buffer* in1_buffer = b.buffer();
 
+    // Expert bias buffer and tile info
+    tt_metal::Buffer* bias_buffer = expert_bias.buffer();
+    auto bias_tile = expert_bias.tensor_spec().tile();
+    tt::DataFormat bias_data_format = tt_metal::datatype_to_dataformat_converter(expert_bias.dtype());
+    uint32_t bias_single_tile_size = bias_tile.get_tile_size(bias_data_format);
+    uint32_t bias_tile_height = bias_tile.get_tile_shape()[0];
+    uint32_t bias_tile_width = bias_tile.get_tile_shape()[1];
+    uint32_t bias_num_tiles = expert_bias.logical_volume() / (bias_tile_height * bias_tile_width);
+
     auto [math_fidelity, math_approx_mode, _, __, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
@@ -129,6 +138,7 @@ gate_common_override_variables_t deepseek_b1_gate_(
 
     bool in0_is_sharded = a.memory_config().is_sharded();
     bool in1_is_sharded = b.memory_config().is_sharded();
+    bool bias_is_sharded = expert_bias.memory_config().is_sharded();
     bool output_is_sharded = output.memory_config().is_sharded();
 
     bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h);
@@ -274,7 +284,7 @@ gate_common_override_variables_t deepseek_b1_gate_(
         (std::uint32_t)(false),                                     // 9: transpose_mcast
         (std::uint32_t)(in0_shard_width_in_tiles),                  // 10: shard_width_in_tiles
         (std::uint32_t)(in0_block_w),                               // 11: in0_block_w
-        (std::uint32_t)B                                            // 12: batch
+        (std::uint32_t)B,                                           // 12: batch
     };
 
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
@@ -447,6 +457,26 @@ gate_common_override_variables_t deepseek_b1_gate_(
         in1_CB_size / in1_single_tile_size,
         in1_CB_size);
 
+    // Expert bias circular buffer (cb_index c_2)
+    uint32_t bias_cb_index = tt::CBIndex::c_2;
+    uint32_t bias_CB_size = bias_num_tiles * bias_single_tile_size;
+
+    tt_metal::CircularBufferConfig bias_cb_config =
+        tt_metal::CircularBufferConfig(bias_CB_size, {{bias_cb_index, bias_data_format}})
+            .set_page_size(bias_cb_index, bias_single_tile_size)
+            .set_tile_dims(bias_cb_index, bias_tile);
+    if (bias_is_sharded) {
+        bias_cb_config = bias_cb_config.set_globally_allocated_address(*bias_buffer);
+    }
+    auto cb_bias = tt_metal::CreateCircularBuffer(program, all_cores, bias_cb_config);
+    log_debug(
+        LogOp,
+        "CB {} :: PS = {}, NP = {}, TOTAL = {}",
+        bias_cb_index,
+        bias_single_tile_size,
+        bias_CB_size / bias_single_tile_size,
+        bias_CB_size);
+
     // Local L1 to store temp vars (only when sharded)
     if (in0_is_sharded) {
         uint32_t l1_cb_index = tt::CBIndex::c_6;
@@ -550,7 +580,7 @@ gate_common_override_variables_t deepseek_b1_gate_(
         uint32_t output_idx_x = i % num_blocks_x;
 
         std::vector<uint32_t> mm_in0_sender_args;
-        mm_in0_sender_args.reserve(5 + in0_mcast_noc_x.size() + in0_mcast_noc_y.size());
+        mm_in0_sender_args.reserve(6 + in0_mcast_noc_x.size() + in0_mcast_noc_y.size());
         mm_in0_sender_args.push_back(i);
         mm_in0_sender_args.push_back(start_core_noc.x);
         mm_in0_sender_args.push_back(start_core_noc.y);
@@ -558,6 +588,7 @@ gate_common_override_variables_t deepseek_b1_gate_(
         mm_in0_sender_args.push_back(end_core_noc.y);
         mm_in0_sender_args.insert(mm_in0_sender_args.end(), in0_mcast_noc_x.begin(), in0_mcast_noc_x.end());
         mm_in0_sender_args.insert(mm_in0_sender_args.end(), in0_mcast_noc_y.begin(), in0_mcast_noc_y.end());
+        mm_in0_sender_args.push_back(bias_buffer->address());  // bias buffer address
 
         if (i < num_cores_with_work) {
             tt_metal::SetRuntimeArgs(
@@ -586,7 +617,7 @@ gate_common_override_variables_t deepseek_b1_gate_(
 
     return gate_common_override_variables_t{
         {mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id, mm_kernel_in1_sender_writer_id},
-        {cb_src0, cb_src1, cb_output},
+        {cb_src0, cb_src1, cb_bias, cb_output},
         false,
         start_core,
         cores,
@@ -617,12 +648,13 @@ tt::tt_metal::operation::ProgramWithCallbacks deepseek_b1_gate(
 
             auto src_buffer_a = input_tensors.at(0).buffer();
             auto src_buffer_b = input_tensors.at(1).buffer();
-            // auto expert_bias_buffer = input_tensors.at(2).buffer();
+            auto expert_bias_buffer = input_tensors.at(2).buffer();
 
             auto dst_buffer = output_tensors.at(0).buffer();
 
             bool src0_sharded = input_tensors[0].is_sharded();
             bool src1_sharded = input_tensors[1].is_sharded();
+            bool bias_sharded = input_tensors[2].is_sharded();
             bool out_sharded = output_tensors[0].is_sharded();
 
             // Update in0 sharded buffer (cb_src0 is at index 0)
@@ -632,6 +664,10 @@ tt::tt_metal::operation::ProgramWithCallbacks deepseek_b1_gate(
 
             if (src1_sharded) {
                 UpdateDynamicCircularBufferAddress(program, shared_vars.cbs.at(1), *src_buffer_b);
+            }
+
+            if (bias_sharded) {
+                UpdateDynamicCircularBufferAddress(program, shared_vars.cbs.at(2), *expert_bias_buffer);
             }
 
             if (out_sharded) {
