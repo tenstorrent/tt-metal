@@ -330,6 +330,7 @@ def run_strided_all_gather_impl(
         (4096, 4096, 4096, 3, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(4, 4), False),
         (4096, 4096, 4096, 3, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 256, 256, 256, 2, 2, ttnn.CoreCoord(4, 4), False),
         (4096, 4096, 4096, 3, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 256, 160, 256, 1, 1, ttnn.CoreCoord(4, 4), False),
+        (4096, 4096, 4096, 3, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 160, 256, 256, 1, 1, ttnn.CoreCoord(4, 4), False),
     ],
     ids=[
         "base",  # 1 forward pass through K
@@ -346,6 +347,7 @@ def run_strided_all_gather_impl(
         "4x4mmcores",  # increase to a larger core grid
         "fulltest",
         "unalignedK",
+        "unalignedM",
     ],
 )
 @pytest.mark.parametrize(
@@ -409,8 +411,6 @@ def test_strided_all_gather_async(
     shard_weights,
 ):
     TILE_SIZE = 32
-    assert not (M % mm_block_m), f"M must be divisible by mm_block_m"
-    assert not ((M // mm_block_m) % mm_core_grid.y), f"num M blocks must divide evenly into mm_core_grid.y"
     assert not ((M // TILE_SIZE) % num_workers_per_link), f"worker must be divisible by num workers per link"
     Nt = N // TILE_SIZE
     if shard_weights:
