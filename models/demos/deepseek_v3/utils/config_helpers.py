@@ -841,7 +841,7 @@ def get_weight_config(
     weight_cache_path = (
         weight_cache_path
         / f"{hf_config.num_hidden_layers}_layers"
-        / str("mesh_" + str(mesh_device.shape[0]) + "x" + str(mesh_device.shape[1]))
+        / f"mesh_{mesh_device.shape[0]}x{mesh_device.shape[1]}"
     )
     config_path = weight_cache_path / "config.json"
     weight_path = weight_cache_path / "weights"
