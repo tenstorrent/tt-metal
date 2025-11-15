@@ -9,6 +9,7 @@
 // Enables native aliases to use original _mm* intrinsics on any architecture
 #define SIMDE_ENABLE_NATIVE_ALIASES
 #include <simde/x86/aes.h>
+#include <simde/x86/sse.h>
 #include <simde/x86/sse2.h>
 #include <simde/x86/sse4.1.h>
 
@@ -187,29 +188,18 @@ public:
 // Portable SIMD Math Helpers using SIMDE
 // ============================================================================
 
-// Portable SIMD logarithm - works on all architectures via SIMDE
+// Portable SIMD logarithm - uses standard library std::log for accuracy
 inline __m128 _mm_log_ps(__m128 x) noexcept {
-    // IEEE 754 floating point representation extraction
-    const __m128 one = _mm_set1_ps(1.0f);
-    const __m128 ln2 = _mm_set1_ps(0.693147180559945f);
+    // Extract individual floats and compute logarithms using std::log
+    alignas(16) float values[4];
+    simde_mm_store_ps(values, x);
 
-    // Extract exponent
-    __m128i e = _mm_castps_si128(x);
-    e = _mm_srli_epi32(e, 23);
-    e = _mm_sub_epi32(e, _mm_set1_epi32(127));
-    __m128 e_f = _mm_cvtepi32_ps(e);
+    values[0] = std::log(values[0]);
+    values[1] = std::log(values[1]);
+    values[2] = std::log(values[2]);
+    values[3] = std::log(values[3]);
 
-    // Extract mantissa [1, 2)
-    __m128i mantissa = _mm_and_si128(_mm_castps_si128(x), _mm_set1_epi32(0x807FFFFF));
-    mantissa = _mm_or_si128(mantissa, _mm_set1_epi32(0x3F000000));
-    x = _mm_castsi128_ps(mantissa);
-
-    // Polynomial approximation for ln(x)
-    __m128 x_minus_one = _mm_sub_ps(x, one);
-    __m128 x2 = _mm_mul_ps(x_minus_one, x_minus_one);
-    __m128 ln_x = _mm_add_ps(x_minus_one, _mm_mul_ps(x2, _mm_set1_ps(-0.5f)));
-
-    return _mm_add_ps(_mm_mul_ps(e_f, ln2), _mm_mul_ps(ln_x, ln2));
+    return simde_mm_load_ps(values);
 }
 
 // Portable SIMD square root
