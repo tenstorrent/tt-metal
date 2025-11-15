@@ -204,8 +204,9 @@ class RunTimeOptions {
 
     // Forces Tracy profiler pushes during execution for real-time profiling
     bool tracy_mid_run_push = false;
-    // feature flag to enable 2-erisc mode with fabric on Blackhole, until it is enabled by default
-    bool enable_2_erisc_mode_with_fabric = false;
+
+    // presence-based override to force-disable fabric 2-ERISC regardless of defaults
+    bool disable_fabric_2_erisc_mode = false;
 
     // feature flag to enable 2-erisc mode on Blackhole (general, not fabric-specific)
     bool enable_2_erisc_mode = true;
@@ -408,7 +409,7 @@ public:
             get_kernels_early_return(),
             get_erisc_iram_enabled(),
             get_enable_2_erisc_mode(),
-            get_is_fabric_2_erisc_mode_enabled());
+            get_disable_fabric_2_erisc_mode());
         for (int i = 0; i < RunTimeDebugFeatureCount; i++) {
             compile_hash_str += "_";
             compile_hash_str += get_feature_hash_string((llrt::RunTimeDebugFeatures)i);
@@ -506,9 +507,8 @@ public:
 
     bool get_force_context_reinit() const { return force_context_reinit; }
 
-    // Feature flag to specify if fabric is enabled in 2-erisc mode or not.
-    // if true, then the fabric router is parallelized across two eriscs in the Ethernet core
-    bool get_is_fabric_2_erisc_mode_enabled() const { return enable_2_erisc_mode_with_fabric; }
+    // Presence-based override to force-disable fabric 2-ERISC
+    bool get_disable_fabric_2_erisc_mode() const { return disable_fabric_2_erisc_mode; }
 
     // Feature flag to enable 2-erisc mode on Blackhole
     bool get_enable_2_erisc_mode() const { return enable_2_erisc_mode; }
