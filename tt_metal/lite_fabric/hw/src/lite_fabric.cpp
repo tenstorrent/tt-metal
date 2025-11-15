@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "tt_metal/api/tt-metalium/hal_types.hpp"
+#include "risc_common.h"
 #include "noc_nonblocking_api.h"
 #include "dataflow_api.h"
 #include "eth_chan_noc_mapping.h"

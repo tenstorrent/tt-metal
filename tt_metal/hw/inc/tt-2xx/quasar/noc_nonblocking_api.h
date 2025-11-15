@@ -25,7 +25,9 @@ constexpr std::underlying_type_t<EthProcessorTypes> proc_type =
 constexpr std::underlying_type_t<TensixProcessorTypes> proc_type =
     static_cast<std::underlying_type_t<TensixProcessorTypes>>(TensixProcessorTypes::DM1);
 #else
-#error "Unknown processor type for noc_nonblocking_api.h"
+// Lite Fabric compile
+constexpr std::underlying_type_t<TensixProcessorTypes> proc_type =
+    static_cast<std::underlying_type_t<TensixProcessorTypes>>(TensixProcessorTypes::DM1);
 #endif
 
 // Helper functions to convert NoC coordinates to NoC-0 coordinates, used in metal as "physical" coordinates.
