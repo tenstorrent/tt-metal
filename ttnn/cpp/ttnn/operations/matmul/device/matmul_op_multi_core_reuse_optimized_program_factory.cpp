@@ -234,7 +234,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
         out_block_tiles,
 
         untilize_out,  // untilize_out
-        false          // get_batch_from_reader
+        false,         // get_batch_from_reader
+        false,         // in0_transpose_tile
     };
 
     std::map<std::string, std::string> mm_kernel_defines;
@@ -286,7 +287,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
             out_block_tiles,
 
             untilize_out,  // untilize_out
-            false          // get_batch_from_reader
+            false,         // get_batch_from_reader
+            false,         // in0_transpose_tile
         };
         tt_metal::CreateKernel(
             program,

@@ -59,18 +59,6 @@ uint32_t get_preferred_noc(
     return use_dedicated_noc ? 1 : noc;
 }
 
-/**
- * @brief Compute the last K tile width for input tensor A, taking transpose into account.
- *
- * @param a The input tensor A
- * @param in0_tile The tile configuration for input tensor A
- * @param transpose_a Whether tensor A is transposed
- * @return uint32_t The last K tile width
- */
-uint32_t compute_in0_last_ktile_w(const tt::tt_metal::Shape& ashape, const tt::tt_metal::Tile& in0_tile) {
-    return ashape[-1] % in0_tile.get_width();
-}
-
 ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t
 process_mcast_in0_program_and_create_override_variables(
     tt_metal::Program& program,
@@ -118,6 +106,7 @@ process_mcast_in0_program_and_create_override_variables(
     using tt::tt_metal::num_cores_to_corerangeset;
 
     // currently only support transpose of the full tile
+    bool in0_transpose_tile = in0_tile.get_transpose_of_faces() && in0_tile.get_transpose_within_face();
     bool in1_transpose_tile = in1_tile.get_transpose_of_faces() && in1_tile.get_transpose_within_face();
 
     bool fuse_op = fused_op_signaler.has_value();
@@ -286,17 +275,19 @@ process_mcast_in0_program_and_create_override_variables(
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
     const auto& a_shape_logical = get_matmul_tensor_logical_shape(a, transpose_a);
-    uint32_t in0_last_ktile_w = compute_in0_last_ktile_w(a_shape_logical, in0_tile);
+    const auto in0_last_ktile_w = a_shape_logical[-1] % in0_tile.get_width();
 
     const auto in0_tensor_stride_w = transpose_a ? M : 1;
     const auto in0_tensor_stride_h = transpose_a ? 1 : K;
     const auto in0_tensor_next_block_stride = in0_block_w * in0_tensor_stride_w;
     const auto in0_tensor_next_h_dim_block_stride = in0_block_h * in0_tensor_stride_h;
+    const auto in0_tensor_start_tile_id_stride = per_core_M * in0_tensor_stride_h;
 
     const auto in1_tensor_stride_w = transpose_b ? K : 1;
     const auto in1_tensor_stride_h = transpose_b ? 1 : N;
     const auto in1_tensor_next_block_stride = in0_block_w * in1_tensor_stride_h;
     const auto in1_tensor_next_w_dim_block_stride = in1_block_w * in1_tensor_stride_w;
+    const auto in1_tensor_start_tile_id_stride = per_core_N * in1_tensor_stride_w;
 
     std::vector<uint32_t> in0_sender_compile_time_args;
     if (in0_is_sharded) {
@@ -644,7 +635,8 @@ process_mcast_in0_program_and_create_override_variables(
         out_block_tiles,         // out_block_num_tiles
 
         untilize_out,  // untilize_out
-        false          // get_batch_from_reader
+        false,         // get_batch_from_reader
+        in0_transpose_tile,
     };
 
     // Create compute kernel
@@ -816,6 +808,16 @@ process_mcast_in0_program_and_create_override_variables(
         tt_metal::CreateCircularBuffer(program, all_cores, cb_in0_intermediate_config);
     }
 
+    // Transpose CB for input0
+    if (in0_transpose_tile) {
+        const uint32_t in0_transpose_cb_index = tt::CBIndex::c_10;
+        auto in0_transpose_cb_config =
+            tt_metal::CircularBufferConfig(in0_CB_size, {{in0_transpose_cb_index, in0_data_format}})
+                .set_page_size(in0_transpose_cb_index, in0_single_tile_size)
+                .set_tile_dims(in0_transpose_cb_index, in0_tile);
+        tt_metal::CreateCircularBuffer(program, all_cores, in0_transpose_cb_config);
+    }
+
     // Parameters for last row, col, or block, no need to re-calc h-dim since there's no split on height
     uint32_t last_per_core_N = N % per_core_N == 0 ? per_core_N : N % per_core_N;
     uint32_t last_out_block_w = last_per_core_N % out_block_w == 0 ? out_block_w : last_per_core_N % out_block_w;
@@ -880,7 +882,7 @@ process_mcast_in0_program_and_create_override_variables(
             std::vector<uint32_t> mm_in0_sender_args = {
                 // in0 tensor args
                 (std::uint32_t)in0_buffer->address(),
-                (std::uint32_t)K * per_core_M * output_idx_y,  // in0_tensor_start_tile_id
+                (std::uint32_t)in0_tensor_start_tile_id_stride * output_idx_y,  // in0_tensor_start_tile_id
                 // in0 mcast args
                 (std::uint32_t)start_core_noc.x,  // in0_mcast_dest_noc_start_x
                 (std::uint32_t)start_core_noc.y,  // in0_mcast_dest_noc_start_y
@@ -919,7 +921,7 @@ process_mcast_in0_program_and_create_override_variables(
                 // READER
                 // in1 tensor args
                 (std::uint32_t)in1_buffer->address(),
-                (std::uint32_t)per_core_N * output_idx_x,  // in1_tensor_start_tile_id
+                (std::uint32_t)in1_tensor_start_tile_id_stride * output_idx_x,  // in1_tensor_start_tile_id
                 // in1 mcast args
                 (std::uint32_t)0,  // in1_mcast_dest_noc_start_x
                 (std::uint32_t)0,  // in1_mcast_dest_noc_start_y
@@ -1035,6 +1037,7 @@ process_mcast_in1_program_and_create_override_variables(
     bool output_is_sharded,
     bool untilize_out) {
     // currently only support transpose of the full tile
+    bool in0_transpose_tile = in0_tile.get_transpose_of_faces() && in0_tile.get_transpose_within_face();
     bool in1_transpose_tile = in1_tile.get_transpose_of_faces() && in1_tile.get_transpose_within_face();
 
     bool fuse_op = false;
@@ -1076,7 +1079,7 @@ process_mcast_in1_program_and_create_override_variables(
     uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
 
     const auto& a_shape_logical = get_matmul_tensor_logical_shape(a, transpose_a);
-    uint32_t in0_last_ktile_w = compute_in0_last_ktile_w(a_shape_logical, in0_tile);
+    const auto in0_last_ktile_w = a_shape_logical[-1] % in0_tile.get_width();
 
     bool extract_shard_sub_blocks = false;
     uint32_t in0_shard_height_in_tiles = 0;
@@ -1153,11 +1156,13 @@ process_mcast_in1_program_and_create_override_variables(
     const auto in0_tensor_stride_h = transpose_a ? 1 : K;
     const auto in0_tensor_next_block_stride = in0_block_w * in0_tensor_stride_w;
     const auto in0_tensor_next_h_dim_block_stride = in0_block_h * in0_tensor_stride_h;
+    const auto in0_tensor_start_tile_id_stride = per_core_M * in0_tensor_stride_h;
 
     const auto in1_tensor_stride_w = transpose_b ? K : 1;
     const auto in1_tensor_stride_h = transpose_b ? 1 : N;
     const auto in1_tensor_next_block_stride = in0_block_w * in1_tensor_stride_h;
     const auto in1_tensor_next_w_dim_block_stride = in1_block_w * in1_tensor_stride_w;
+    const auto in1_tensor_start_tile_id_stride = per_core_N * in1_tensor_stride_w;
 
     std::vector<uint32_t> in0_sender_compile_time_args = {
         // in0 tensor args
@@ -1448,7 +1453,8 @@ process_mcast_in1_program_and_create_override_variables(
         out_block_tiles,         // out_block_num_tiles
 
         untilize_out,  // untilize_out
-        false          // get_batch_from_reader
+        false,         // get_batch_from_reader
+        in0_transpose_tile,
     };
 
     // Create compute kernel
@@ -1605,6 +1611,15 @@ process_mcast_in1_program_and_create_override_variables(
         tt_metal::CreateCircularBuffer(program, all_cores, cb_in0_intermediate_config);
     }
 
+    if (in0_transpose_tile) {
+        const uint32_t in0_transpose_cb_index = tt::CBIndex::c_10;
+        auto in0_transpose_cb_config =
+            tt_metal::CircularBufferConfig(in0_CB_size, {{in0_transpose_cb_index, in0_data_format}})
+                .set_page_size(in0_transpose_cb_index, in0_single_tile_size)
+                .set_tile_dims(in0_transpose_cb_index, in0_tile);
+        tt_metal::CreateCircularBuffer(program, all_cores, in0_transpose_cb_config);
+    }
+
     // Parameters for last row, col, or block
     uint32_t last_per_core_M = M % per_core_M == 0 ? per_core_M : M % per_core_M;
     uint32_t last_out_block_h = last_per_core_M % out_block_h == 0 ? out_block_h : last_per_core_M % out_block_h;
@@ -1633,7 +1648,7 @@ process_mcast_in1_program_and_create_override_variables(
                 // READER
                 // in1 tensor args
                 (std::uint32_t)in1_buffer->address(),
-                (std::uint32_t)per_core_N * output_idx_x,  // in1_tensor_start_tile_id
+                (std::uint32_t)in1_tensor_start_tile_id_stride * output_idx_x,  // in1_tensor_start_tile_id
                 // in1 mcast args
                 (std::uint32_t)start_core_noc.x,  // in1_mcast_dest_noc_start_x
                 (std::uint32_t)start_core_noc.y,  // in1_mcast_dest_noc_start_y
@@ -1733,7 +1748,7 @@ process_mcast_in1_program_and_create_override_variables(
         std::vector<uint32_t> mm_in0_sender_args = {
             // in0 tensor args
             (std::uint32_t)in0_buffer->address(),
-            (std::uint32_t)K * per_core_M * output_idx_y,  // in0_tensor_start_tile_id
+            (std::uint32_t)in0_tensor_start_tile_id_stride * output_idx_y,  // in0_tensor_start_tile_id
             // in0 mcast args
             (std::uint32_t)0,  // in0_mcast_dest_noc_start_x
             (std::uint32_t)0,  // in0_mcast_dest_noc_start_y
@@ -1779,8 +1794,6 @@ process_gather_in0_program_and_create_override_variables(
     uint32_t N,
     uint32_t K,
     bool bcast_batch,
-    bool transpose_a,
-    bool transpose_b,
     uint32_t in0_block_w,
     uint32_t out_subblock_h,
     uint32_t out_subblock_w,
@@ -1871,7 +1884,7 @@ process_gather_in0_program_and_create_override_variables(
     uint32_t in1_shard_width_in_tiles = 0;
     uint32_t in1_CB_tiles = 0;
 
-    const auto& bshape = get_matmul_tensor_padded_shape(b, transpose_b);
+    const auto& bshape = get_matmul_tensor_padded_shape(b, /*transpose_b=*/false);
     uint32_t in1_tensor_width_in_tiles = bshape[-1] / in1_tile.get_width();
 
     if (in1_is_dram_sharded || in1_is_dram_interleaved) {
@@ -2769,6 +2782,8 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
     ////////////////////////////////////////////////////////////////////////////
 
     if (gather_in0) {
+        TT_FATAL(
+            !transpose_a, "Transpose A is not supported for gather_in0, please use a different program configuration");
         std::vector<tt_metal::Buffer*> out_buffers;
         out_buffers.reserve(output_tensors.size());
         for (const auto& output_tensor : output_tensors) {
@@ -2792,8 +2807,6 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
             Nt,
             Kt,
             bcast_batch,
-            transpose_a,
-            transpose_b,
             in0_block_w,
             out_subblock_h,
             out_subblock_w,
@@ -3278,7 +3291,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
     const auto& a_shape_logical = get_matmul_tensor_logical_shape(a, /*transpose_a=*/false);
-    uint32_t in0_last_ktile_w = reuse_mcast_1d_optimized_helpers::compute_in0_last_ktile_w(a_shape_logical, in0_tile);
+    const auto in0_last_ktile_w = a_shape_logical[-1] % in0_tile.get_width();
 
     // We keep this as a placeholder for now and we will plumb this later.
     const auto transpose_a = false;
@@ -3521,8 +3534,9 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
         num_batch_compute,       // batch_nnz
         out_block_tiles,         // out_block_num_tiles
 
-        false,            // untilize_out
-        !nnz.has_value()  // get_batch_from_reader
+        false,             // untilize_out
+        !nnz.has_value(),  // get_batch_from_reader
+        false,             // in0_transpose_tile
     };
 
     // Create compute kernel
