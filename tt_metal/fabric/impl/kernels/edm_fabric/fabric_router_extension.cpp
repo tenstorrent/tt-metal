@@ -129,7 +129,7 @@ void forward_data(
         noc_async_writes_flushed();
         if (is_persistent_channel) {
             constexpr bool enable_deadlock_avoidance = true;  // not used
-            worker_interface.template notify_persistent_connection_of_free_space<enable_deadlock_avoidance>(1);
+            worker_interface.template notify_persistent_connection_of_free_space<enable_deadlock_avoidance>(1, channel);
         } else if (channel_connection_established) {
             worker_interface.notify_worker_of_read_counter_update();
         }

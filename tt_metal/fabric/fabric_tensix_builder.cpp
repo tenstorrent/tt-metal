@@ -485,12 +485,13 @@ std::vector<uint32_t> FabricTensixDatamoverBuilder::get_compile_time_args(tt::tt
         }
     }();
 
-    auto channel_allocator_base = fabric_router_config.channel_allocator.get();
-    const auto channel_allocator =
-        dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator_base);
+    size_t worker_sender_channel_index = 0;
+    const auto channel_allocator = dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(
+        fabric_router_config.get_sender_channel_allocator(worker_sender_channel_index));
+
     TT_FATAL(channel_allocator != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator.");
     fabric_mux_config_->set_fabric_endpoint_channel_num_buffers(
-        channel_allocator->get_sender_channel_number_of_slots(0));
+        channel_allocator->get_sender_channel_number_of_slots());
     fabric_mux_config_->set_wait_for_fabric_endpoint_ready(true);
     fabric_mux_config_->set_fabric_endpoint_status_address(fabric_router_config.edm_status_address);
     auto ct_args = fabric_mux_config_->get_fabric_mux_compile_time_main_args(fabric_router_config);

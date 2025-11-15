@@ -5,11 +5,8 @@
 #pragma once
 
 #include "risc_attribs.h"
-#include <cstdint>
-#include <cstddef>
 
 namespace tt::tt_fabric {
-
 // A base sender channel interface class that will be specialized for different
 // channel architectures (e.g. static vs elastic sizing)
 template <typename DERIVED_T>

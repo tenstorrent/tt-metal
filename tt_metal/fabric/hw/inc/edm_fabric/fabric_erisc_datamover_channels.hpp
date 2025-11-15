@@ -46,10 +46,8 @@ FORCE_INLINE auto wrap_increment(T val, size_t max) {
 // Static sized sender channels have a fixed number of buffer slots, defined
 // at router initialization, and persistent for the lifetime of the router.
 template <typename HEADER_TYPE, uint8_t NUM_BUFFERS>
-class StaticSizedSenderEthChannel : public SenderEthChannelInterface<
-                                        HEADER_TYPE,
-                                        NUM_BUFFERS,
-                                        StaticSizedSenderEthChannel<HEADER_TYPE, NUM_BUFFERS>> {
+class StaticSizedSenderEthChannel
+    : public SenderEthChannelInterface<StaticSizedSenderEthChannel<HEADER_TYPE, NUM_BUFFERS>> {
 public:
     explicit StaticSizedSenderEthChannel() = default;
 
@@ -70,7 +68,7 @@ public:
     }
 
     StaticSizedSenderEthChannel(size_t channel_base_address, size_t buffer_size_bytes, size_t header_size_bytes) :
-        SenderEthChannelInterface<HEADER_TYPE, NUM_BUFFERS, StaticSizedSenderEthChannel<HEADER_TYPE, NUM_BUFFERS>>() {
+        SenderEthChannelInterface<StaticSizedSenderEthChannel<HEADER_TYPE, NUM_BUFFERS>>() {
         this->init(channel_base_address, buffer_size_bytes, header_size_bytes);
     }
 
@@ -146,24 +144,28 @@ public:
 };
 
 // Elastic sender channel implementation (stub for now)
+// not needed until we want to enable elastic channels on the receiver channel side
 // Issue #26311
 template <typename HEADER_TYPE>
-class ElasticSenderEthChannel : public SenderEthChannelInterface<HEADER_TYPE, 0, ElasticSenderEthChannel<HEADER_TYPE>> {
+class ElasticSenderEthChannel : public SenderEthChannelInterface<ElasticSenderEthChannel<HEADER_TYPE>> {
 public:
     explicit ElasticSenderEthChannel() = default;
 
     FORCE_INLINE void init_impl(
         size_t channel_base_address, size_t max_eth_payload_size_in_bytes, size_t header_size_bytes) {
-        // TODO: Issue #26311
+        // UPDATE ISSUE
+        // TODO: Issue #26311 - when enabling elastic channels on the receiver channel side
     }
 
     FORCE_INLINE size_t get_cached_next_buffer_slot_addr_impl() const {
-        // TODO: Issue #26311
+        // UPDATE ISSUE
+        // TODO: Issue #26311 - when enabling elastic channels on the receiver channel side
         return 0;
     }
 
     FORCE_INLINE void advance_to_next_cached_buffer_slot_addr_impl() {
-        // TODO: Issue #26311
+        // UPDATE ISSUE
+        // TODO: Issue #26311 - when enabling elastic channels on the receiver channel side
     }
 };
 
@@ -291,13 +293,13 @@ struct ChannelBufferTypeSelector {
         ElasticEthChannelBuffer<HEADER_TYPE>>;
 };
 
+// SenderChannelTypeSelector implements the type selection for the sender
+// to receiver path
 template <bool UseStatic, typename HEADER_TYPE, uint8_t NUM_BUFFERS>
 struct SenderChannelTypeSelector {
-    using type = std::conditional_t<
-        UseStatic,
-        StaticSizedSenderEthChannel<HEADER_TYPE, NUM_BUFFERS>,
-        ElasticSenderEthChannel<HEADER_TYPE>
-    >;
+    // elastic channels on the receiver side are not supported so
+    // static sized is always specificed
+    using type = StaticSizedSenderEthChannel<HEADER_TYPE, NUM_BUFFERS>;
 };
 
 // For backward compatibility until Issue #26311 completed
@@ -340,9 +342,6 @@ struct ChannelTuple {
 template <typename HEADER_TYPE, size_t... BufferSizes>
 using EthChannelBufferTuple = ChannelTuple<tt::tt_fabric::EthChannelBuffer, HEADER_TYPE, BufferSizes...>;
 
-template <typename HEADER_TYPE, size_t... BufferSizes>
-using SenderEthChannelTuple = ChannelTuple<tt::tt_fabric::SenderEthChannel, HEADER_TYPE, BufferSizes...>;
-
 template <template <typename, size_t> class ChannelBase, typename HEADER_TYPE, auto& ChannelBuffers>
 struct StaticSizedChannelBuffersHelper {
     template <size_t... Is>
@@ -379,25 +378,9 @@ struct ElasticEthChannelBuffersHelper {
     }
 };
 
-template <typename HEADER_TYPE, auto& ChannelBuffers>
-struct ElasticSenderEthChannelBuffersHelper {
-    template <size_t... Is>
-    static auto make(std::index_sequence<Is...>) {
-        // Create a tuple of ElasticSenderEthChannel instances
-        // Use parameter pack expansion with comma operator to create N instances
-        return std::tuple<decltype((void)Is, ElasticSenderEthChannel<HEADER_TYPE>{})...>{
-            ((void)Is, ElasticSenderEthChannel<HEADER_TYPE>{})...
-        };
-    }
-};
-
 // Elastic channel buffer aliases
 template <typename HEADER_TYPE, auto& ChannelBuffers>
 using ElasticEthChannelBuffers = ElasticEthChannelBuffersHelper<HEADER_TYPE, ChannelBuffers>;
-
-template <typename HEADER_TYPE, auto& ChannelBuffers>
-using ElasticSenderEthChannelBuffers = ElasticSenderEthChannelBuffersHelper<HEADER_TYPE, ChannelBuffers>;
-
 
 template <typename HEADER_TYPE, auto& ChannelBuffers>
 using EthChannelBuffers = std::conditional_t<
@@ -416,13 +399,6 @@ struct GenericChannelTypeSelector {
         ElasticType
     >;
 };
-
-// Backward compatibility alias for existing code
-template <typename HEADER_TYPE, FabricChannelPoolType PoolType, size_t NumBuffers>
-using ChannelTypeSelector = GenericChannelTypeSelector<
-    HEADER_TYPE, PoolType, NumBuffers,
-    StaticSizedSenderEthChannel, ElasticSenderEthChannel<HEADER_TYPE>
->;
 
 template <typename HEADER_TYPE, typename ChannelPoolCollection,
           template<typename, size_t> class StaticChannelType, typename ElasticChannelType,
@@ -571,14 +547,6 @@ using MultiPoolEthChannelBuffers = MultiPoolChannelBuffers<
     StaticSizedEthChannelBuffer, ElasticEthChannelBuffer<HEADER_TYPE>,
     ChannelToPoolIndex>;
 
-// Backward compatibility: keep the old interface for existing code
-template <typename HEADER_TYPE, auto& ChannelBuffers>
-using SenderEthChannelBuffers = std::conditional_t<
-    USE_STATIC_SIZED_CHANNEL_BUFFERS,
-    StaticSizedSenderEthChannelBuffers<HEADER_TYPE, ChannelBuffers>,
-    ElasticSenderEthChannelBuffers<HEADER_TYPE, ChannelBuffers>
->;
-
 // Base class for channel worker interfaces
 // Derived classes implement specific counter management strategies.
 template <uint8_t WORKER_HANDSHAKE_NOC, typename DERIVED>
@@ -619,10 +587,11 @@ struct EdmChannelWorkerInterface {
     }
 
     // Only used for persistent connections (i.e. upstream is EDM)
-    template <bool enable_deadlock_avoidance>
-    FORCE_INLINE void notify_persistent_connection_of_free_space(int32_t inc_val) {
+    template <bool enable_deadlock_avoidance, typename SENDER_CHANNEL_T>
+    FORCE_INLINE void notify_persistent_connection_of_free_space(int32_t inc_val, SENDER_CHANNEL_T& sender_channel) {
         static_cast<DERIVED*>(this)
-            ->template notify_persistent_connection_of_free_space_impl<enable_deadlock_avoidance>(inc_val);
+            ->template notify_persistent_connection_of_free_space_impl<enable_deadlock_avoidance>(
+                inc_val, sender_channel);
     }
 
     template <bool enable_noc_flush = true>
@@ -630,8 +599,13 @@ struct EdmChannelWorkerInterface {
         static_cast<DERIVED*>(this)->template notify_worker_of_read_counter_update_impl<enable_noc_flush>();
     }
 
+    // <<<<<<< HEAD
     FORCE_INLINE void increment_local_read_counter(int32_t inc_val) {
         static_cast<DERIVED*>(this)->increment_read_counter_impl(inc_val);
+        // =======
+        //     FORCE_INLINE void advance_completion_pointer(int32_t inc_val) {
+        //         local_read_counter.counter += inc_val;
+        // >>>>>>> cbbe9c392f (checkpoint)
     }
 
     FORCE_INLINE void copy_read_counter_to_worker_location_info() const {
@@ -732,8 +706,9 @@ struct StaticSizedSenderChannelWorkerInterface
             read_counter_update_src_address);
     }
 
-    template <bool enable_deadlock_avoidance>
-    FORCE_INLINE void notify_persistent_connection_of_free_space_impl(int32_t inc_val) {
+    template <bool enable_deadlock_avoidance, typename SENDER_CHANNEL_T>
+    FORCE_INLINE void notify_persistent_connection_of_free_space_impl(
+        int32_t inc_val, SENDER_CHANNEL_T& sender_channel) {
         auto packed_val = pack_value_for_inc_on_write_stream_reg_write(inc_val);
         noc_inline_dw_write<InlineWriteDst::REG, true>(
             this->cached_worker_semaphore_address, packed_val, 0xf, WORKER_HANDSHAKE_NOC);
@@ -788,19 +763,22 @@ struct ElasticSenderChannelWorkerInterface : public EdmChannelWorkerInterface<
         // TODO: Issue #26311
     }
 
-    template <bool enable_deadlock_avoidance>
-    FORCE_INLINE void notify_persistent_connection_of_free_space_impl(int32_t inc_val) {
-        // TODO: Issue #26311
+    template <bool enable_deadlock_avoidance, typename SENDER_CHANNEL_T>
+    FORCE_INLINE void notify_persistent_connection_of_free_space_impl(
+        int32_t inc_val, SENDER_CHANNEL_T& elastic_sender_channel) {
+        auto chunks_cleared = elastic_sender_channel.advance_n_completion_credits(inc_val);
+        if (chunks_cleared) {
+            elastic_sender_channel.release_slots(chunks_cleared);
+            if (elastic_sender_channel.empty()) {
+                elastic_sender_channel.acquire_new_chunk();
+                elastic_sender_channel.notify_producer_of_new_chunk();
+            }
+        }
     }
 
     template <bool SKIP_CONNECTION_LIVENESS_CHECK>
     FORCE_INLINE void update_write_counter_for_send() {
         // TODO: Issue #26311
-    }
-
-    [[nodiscard]] FORCE_INLINE BufferIndex get_write_buffer_index() const {
-        // TODO: Issue #26311
-        return BufferIndex{0};
     }
 };
 

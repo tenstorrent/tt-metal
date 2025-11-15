@@ -34,7 +34,7 @@ public:
      * @param static_allocator The static allocator containing remote channel information
      */
     explicit FabricRemoteChannelsAllocator(
-        const FabricStaticSizedChannelsAllocator& static_allocator);
+        const FabricStaticSizedChannelsAllocator& static_allocator, size_t num_used_receiver_channels);
 
     /**
      * Emit compile-time arguments for remote receiver channels.

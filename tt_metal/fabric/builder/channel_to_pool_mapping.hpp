@@ -43,18 +43,22 @@ public:
 
     // Accessors for validation and debugging
     const std::vector<size_t>& get_sender_channel_to_pool_index() const { return sender_channel_to_pool_index_; }
-    const std::vector<uint32_t>& get_sender_channel_to_pool_type() const { return sender_channel_to_pool_type_; }
+    const std::vector<FabricChannelPoolType>& get_sender_channel_to_pool_type() const {
+        return sender_channel_to_pool_type_;
+    }
     const std::vector<size_t>& get_receiver_channel_to_pool_index() const { return receiver_channel_to_pool_index_; }
-    const std::vector<uint32_t>& get_receiver_channel_to_pool_type() const { return receiver_channel_to_pool_type_; }
+    const std::vector<FabricChannelPoolType>& get_receiver_channel_to_pool_type() const {
+        return receiver_channel_to_pool_type_;
+    }
 
 private:
     // Sender channel mappings
     std::vector<size_t> sender_channel_to_pool_index_;
-    std::vector<uint32_t> sender_channel_to_pool_type_;  // FabricChannelPoolType as uint32_t
+    std::vector<FabricChannelPoolType> sender_channel_to_pool_type_;
 
     // Receiver channel mappings
     std::vector<size_t> receiver_channel_to_pool_index_;
-    std::vector<uint32_t> receiver_channel_to_pool_type_;  // FabricChannelPoolType as uint32_t
+    std::vector<FabricChannelPoolType> receiver_channel_to_pool_type_;
 };
 
 }  // namespace tt::tt_fabric

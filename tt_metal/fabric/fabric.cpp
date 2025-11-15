@@ -192,17 +192,16 @@ void append_fabric_connection_rt_args(
                 src_chip_id, fabric_router_channel);
 
         const auto& edm_config = fabric_context.get_fabric_router_config();
-        auto channel_allocator = edm_config.channel_allocator.get();
-        const auto static_channel_allocator =
-            dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator);
-        TT_FATAL(
-            static_channel_allocator != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator.");
+
         const auto sender_channel = is_2d_fabric ? router_direction : 0;
+        const auto static_channel_allocator = dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(
+            edm_config.get_sender_channel_allocator(sender_channel));
+
         tt::tt_fabric::SenderWorkerAdapterSpec edm_connection = {
             .edm_noc_x = fabric_router_virtual_core.x,
             .edm_noc_y = fabric_router_virtual_core.y,
-            .edm_buffer_base_addr = static_channel_allocator->get_sender_channel_base_address(sender_channel),
-            .num_buffers_per_channel = static_channel_allocator->get_sender_channel_number_of_slots(sender_channel),
+            .edm_buffer_base_addr = static_channel_allocator->get_sender_channel_base_address(),
+            .num_buffers_per_channel = static_channel_allocator->get_sender_channel_number_of_slots(),
             .edm_l1_sem_addr = edm_config.sender_channels_local_flow_control_semaphore_address[sender_channel],
             .edm_connection_handshake_addr = edm_config.sender_channels_connection_semaphore_address[sender_channel],
             .edm_worker_location_info_addr = edm_config.sender_channels_worker_conn_info_base_address[sender_channel],

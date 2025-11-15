@@ -14,6 +14,7 @@
 #include <fmt/format.h>
 
 namespace tt::tt_fabric {
+struct ChannelPoolDefinition;
 
 /**
  * Base interface class for fabric channel allocators.
@@ -71,6 +72,26 @@ public:
      */
     virtual void print(std::ostream& os) const = 0;
 
+    const std::vector<int>& get_sender_local_to_global_index_map() const {
+        return sender_channel_local_to_global_index_map;
+    }
+    const std::vector<int>& get_receiver_local_to_global_index_map() const {
+        return receiver_channel_local_to_global_index_map;
+    }
+
+    void normalize_ch_to_global_index_map_for_remote_channels(int offset_to_decrement_by) {
+        if (!normalized) {
+            TT_FATAL(normalized == false, "Channel to global index map is already normalized");
+            for (size_t j = 0; j < receiver_channel_local_to_global_index_map.size(); ++j) {
+                receiver_channel_local_to_global_index_map[j] -= offset_to_decrement_by;
+                TT_FATAL(
+                    receiver_channel_local_to_global_index_map[j] >= 0,
+                    "Receiver channel local to global index map is negative");
+            }
+            normalized = true;
+        }
+    }
+
     // Stream output operator for logging
     friend std::ostream& operator<<(std::ostream& os, const FabricChannelAllocator& allocator) {
         allocator.print(os);
@@ -78,9 +99,14 @@ public:
     }
 
 protected:
-    tt::tt_fabric::Topology topology_;
+    tt::tt_fabric::Topology topology_ = tt::tt_fabric::Topology::Linear;
     tt::tt_fabric::FabricEriscDatamoverOptions options_;
     std::vector<MemoryRegion> memory_regions_;
+
+    // Maps from local list (inside the allocator) to the global list (inside the router)
+    std::vector<int> sender_channel_local_to_global_index_map = {};
+    std::vector<int> receiver_channel_local_to_global_index_map = {};
+    bool normalized = false;
 };
 
 /**
@@ -104,15 +130,18 @@ public:
     ElasticChannelsAllocator(
         tt::tt_fabric::Topology topology,
         const tt::tt_fabric::FabricEriscDatamoverOptions& options,
+        const tt::tt_fabric::ChannelPoolDefinition& pool_definition,
         const std::vector<MemoryRegion>& memory_regions,
         size_t buffer_slot_size_bytes,
-        size_t min_buffers_per_chunk,
-        size_t max_buffers_per_chunk
-        );
+        size_t num_slots_per_chunk);
 
     void emit_ct_args(std::vector<uint32_t>& ct_args, size_t num_fwd_paths, size_t num_used_sender_channels, size_t num_used_receiver_channels) const override;
 
     void print(std::ostream& os) const override { os << "ElasticChannelsAllocator (not yet fully implemented)"; }
+
+private:
+    std::vector<size_t> chunk_addresses_;
+    size_t num_slots_per_chunk_;
 };
 
 }  // namespace tt::tt_fabric
