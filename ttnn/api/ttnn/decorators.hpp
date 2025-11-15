@@ -64,8 +64,6 @@ concept HasInvoke = requires {
 
 template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t>
 struct registered_operation_t {
-    static constexpr auto is_primitive = PrimitiveOperationConcept<operation_t>;
-
     // Get "add" from "ttnn::add"
     std::string base_name() const { return detail::base_name(std::string{cpp_fully_qualified_name}); }
 

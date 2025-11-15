@@ -132,11 +132,6 @@ auto bind_registered_operation(
     py_operation.def_property_readonly(
         "__ttnn_operation__", [](const registered_operation_t& self) { return std::nullopt; });
 
-    py_operation.def_property_readonly(
-        "is_primitive",
-        [](const registered_operation_t& self) -> bool { return registered_operation_t::is_primitive; },
-        "Specifies if the operation maps to a single program");
-
     (
         [&py_operation](auto&& overload) {
             def_call_operator<registered_operation_t, operation_t>(

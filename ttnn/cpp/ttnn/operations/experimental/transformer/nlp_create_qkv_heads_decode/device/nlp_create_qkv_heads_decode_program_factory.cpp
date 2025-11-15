@@ -348,14 +348,16 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_de
             .append_to(q_reader_compile_time_args);
         auto q_reader_kernel_id = tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/device/kernels/reader_tm_tile_layout_nlp_create_qkv_heads_decode.cpp",
+            "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/device/kernels/"
+            "reader_tm_tile_layout_nlp_create_qkv_heads_decode.cpp",
             q_cores,
             tt_metal::ReaderDataMovementConfig(q_reader_compile_time_args));
         std::vector<uint32_t> q_writer_compile_time_args = q_reader_compile_time_args;
         q_writer_compile_time_args[9] = 2;  // read the second phase
         auto q_writer_kernel_id = tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/device/kernels/reader_tm_tile_layout_nlp_create_qkv_heads_decode.cpp",
+            "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/device/kernels/"
+            "reader_tm_tile_layout_nlp_create_qkv_heads_decode.cpp",
             q_cores,
             tt_metal::WriterDataMovementConfig(q_writer_compile_time_args));
 
@@ -369,7 +371,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_de
             k_reader_compile_time_args[13] = process_k;
             k_reader_kernel_id = tt_metal::CreateKernel(
                 program,
-                "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/device/kernels/reader_tm_tile_layout_nlp_create_qkv_heads_decode.cpp",
+                "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/device/kernels/"
+                "reader_tm_tile_layout_nlp_create_qkv_heads_decode.cpp",
                 k_cores,
                 tt_metal::ReaderDataMovementConfig(k_reader_compile_time_args));
 
@@ -377,7 +380,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_de
             k_writer_compile_time_args[9] = 2; // read the second phase
             k_writer_kernel_id = tt_metal::CreateKernel(
                 program,
-                "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/device/kernels/reader_tm_tile_layout_nlp_create_qkv_heads_decode.cpp",
+                "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/device/kernels/"
+                "reader_tm_tile_layout_nlp_create_qkv_heads_decode.cpp",
                 k_cores,
                 tt_metal::WriterDataMovementConfig(k_writer_compile_time_args));
         }
