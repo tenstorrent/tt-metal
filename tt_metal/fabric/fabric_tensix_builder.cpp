@@ -385,7 +385,7 @@ FabricTensixDatamoverBuilder::FabricTensixDatamoverBuilder(
 
 FabricTensixDatamoverBuilder FabricTensixDatamoverBuilder::build(
     tt::tt_metal::IDevice* device,
-    tt::tt_metal::Program& program,
+    tt::tt_metal::Program& /*program*/,
     tt::tt_fabric::FabricNodeId local_fabric_node_id,
     tt::tt_fabric::FabricNodeId remote_fabric_node_id,
     uint32_t ethernet_channel_id,
@@ -486,12 +486,9 @@ std::vector<uint32_t> FabricTensixDatamoverBuilder::get_compile_time_args(tt::tt
     }();
 
     auto channel_allocator_base = fabric_router_config.channel_allocator.get();
-    TT_FATAL(
-        dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator_base) != nullptr,
-        "Channel allocator is not a FabricStaticSizedChannelsAllocator");
     const auto channel_allocator =
         dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator_base);
-    TT_FATAL(channel_allocator != nullptr, "Channel allocator is not a FabricStaticSizedChannelsAllocator");
+    TT_FATAL(channel_allocator != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator.");
     fabric_mux_config_->set_fabric_endpoint_channel_num_buffers(
         channel_allocator->get_sender_channel_number_of_slots(0));
     fabric_mux_config_->set_wait_for_fabric_endpoint_ready(true);

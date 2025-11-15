@@ -43,11 +43,8 @@ void bind_normalization_layernorm_operation(py::module& module) {
         module,
         ttnn::layer_norm,
         R"doc(
-
-        ``ttnn.layer_norm(input_tensor: ttnn.Tensor, epsilon: float = 1e-12, weight: Optional[ttnn.Tensor] = None, bias: Optional[ttnn.Tensor] = None, residual_input_tensor: Optional[ttnn.Tensor] = None, memory_config: Optional[ttnn.MemoryConfig] = None, program_config: Optional[ttnn.ProgramConfig] = None, compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None) -> ttnn.Tensor``
-
-          Compute layer norm over :attr:`input_tensor`.
-          See `Layer Normalization <https://arxiv.org/abs/1607.06450>`_ for more details.
+        Compute layer norm over :attr:`input_tensor`.
+        See `Layer Normalization <https://arxiv.org/abs/1607.06450>`_ for more details.
 
           .. math::
 

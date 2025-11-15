@@ -71,7 +71,10 @@ ttnn::Tensor ReshapeOperation::invoke(
         ((padded_output_shape.volume() / padded_output_shape[-1]) % TILE_HEIGHT != 0 ||
          padded_output_shape[-1] % TILE_WIDTH != 0 || input_tensor.padded_shape()[-1] % TILE_WIDTH != 0 ||
          (input_tensor.physical_volume() / input_tensor.padded_shape()[-1]) % TILE_HEIGHT != 0)) {
-        TT_FATAL(input_tensor.dtype() == DataType::BFLOAT16, "Error");
+        TT_FATAL(
+            input_tensor.dtype() == DataType::BFLOAT16,
+            "Input tensor dtype must be BFLOAT16 for this reshape operation but got {}",
+            input_tensor.dtype());
 
         return detail::manual_insertion(
             (tt::tt_metal::Tensor)input_tensor,

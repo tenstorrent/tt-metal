@@ -301,7 +301,7 @@ Metalium follows a similar design philosophy to OpenCL, which is reflected in it
 
 The following example demonstrates vector addition implementation using the Metalium API. This code shows the complete workflow: device initialization, buffer allocation, kernel compilation, circular buffer configuration, program execution, and result retrieval.
 
-First, we initialize the device connection and allocate the necessary buffers. In Metalium, everything belongs to a mesh. Even a single chip is treated as a 1x1 mesh. This design exnables seamless scaling from one chip to multiple chips:
+First, we initialize the device connection and allocate the necessary buffers. In Metalium, everything belongs to a mesh. Even a single chip is treated as a 1x1 mesh. This design enables seamless scaling from one chip to multiple chips:
 
 ```c++
 auto device = MeshDevice::create_unit_mesh(/*device_id=*/0);

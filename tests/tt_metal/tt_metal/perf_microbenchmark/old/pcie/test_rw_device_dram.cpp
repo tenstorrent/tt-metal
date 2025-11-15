@@ -127,6 +127,6 @@ int main(int argc, char** argv) {
         TT_THROW("Test Failed");
     }
 
-    TT_FATAL(pass, "Error");
+    TT_FATAL(pass, "PCIe DRAM read/write test failed");
     return 0;
 }

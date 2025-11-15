@@ -127,6 +127,9 @@ def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str,
         "TT_MESH_ID": str(binding.mesh_id),
         "TT_MESH_GRAPH_DESC_PATH": config.mesh_graph_desc_path,
         "TT_METAL_HOME": os.environ.get("TT_METAL_HOME", str(Path.home())),
+        "TT_METAL_RUNTIME_ROOT": os.environ.get(
+            "TT_METAL_RUNTIME_ROOT", os.environ.get("TT_METAL_HOME", str(Path.home()))
+        ),
         "PYTHONPATH": os.environ.get("PYTHONPATH", str(Path.home())),
         # 26640: TODO - Investigate why this needs to be set for multi-host CI environments
         "LD_LIBRARY_PATH": os.environ.get("LD_LIBRARY_PATH", DEFAULT_LD_LIBRARY_PATH.format(home=str(Path.home()))),
@@ -167,7 +170,9 @@ def build_rank_environment_args(binding: RankBinding, config: TTRunConfig) -> Li
     return env_args
 
 
-def build_mpi_command(config: TTRunConfig, program: List[str], mpi_args: Optional[List[str]] = None) -> List[str]:
+def build_mpi_command(
+    config: TTRunConfig, program: List[str], mpi_args: Optional[List[str]] = None, debug_gdbserver: bool = False
+) -> List[str]:
     """Build OpenMPI command with per-rank environment variables."""
     # Find mpirun-ulfm executable, fall back to mpirun if not found
     mpi_launcher = shutil.which("mpirun-ulfm")
@@ -192,6 +197,9 @@ def build_mpi_command(config: TTRunConfig, program: List[str], mpi_args: Optiona
     if mpi_args:
         cmd.extend(mpi_args)
 
+    if debug_gdbserver:
+        cmd.extend(["--tag-output"])
+
     # Build per-rank application contexts
     for i, binding in sorted(enumerate(config.rank_bindings), key=lambda x: x[1].rank):
         if i > 0:
@@ -199,7 +207,15 @@ def build_mpi_command(config: TTRunConfig, program: List[str], mpi_args: Optiona
 
         cmd.extend(["-np", "1"])
         cmd.extend(build_rank_environment_args(binding, config))
-        cmd.extend(program)
+        program_to_run = program
+        if debug_gdbserver:
+            port = 20000 + binding.rank
+            echo_part = f'echo "Rank {binding.rank} on $(hostname) listening on :{port}";'
+            gdbserver_part = f"exec gdbserver :{port}"
+            quoted_program_args = " ".join(shlex.quote(arg) for arg in program)
+            cmd_str = f"{echo_part} {gdbserver_part} {quoted_program_args}"
+            program_to_run = ["bash", "-c", cmd_str]
+        cmd.extend(program_to_run)
 
     return cmd
 
@@ -246,11 +262,15 @@ def print_command(cmd: List[str], prefix: str = TT_RUN_PREFIX) -> None:
     callback=lambda ctx, param, value: shlex.split(value) if value else None,
     help="Additional MPI arguments (quoted)",
 )
+@click.option("--debug-gdbserver", is_flag=True, help="Launch each process with gdbserver for remote debugging")
 @click.option(
     "--mock-cluster-rank-binding",
     required=False,
     type=click.Path(exists=True, path_type=Path),
     help="Mock cluster rank binding configuration file (YAML)",
+)
+@click.option(
+    "--skip-executable-check", is_flag=True, help="Skip the check if program executable exists on the local host"
 )
 @click.pass_context
 def main(
@@ -259,7 +279,9 @@ def main(
     dry_run: bool,
     verbose: bool,
     mpi_args: Optional[List[str]],
+    debug_gdbserver: bool,
     mock_cluster_rank_binding: Optional[Path],
+    skip_executable_check: bool,
 ) -> None:
     """tt-run - MPI process launcher for TT-Metal and TTNN distributed applications
 
@@ -323,6 +345,36 @@ def main(
         - LD_LIBRARY_PATH: `<USER_HOME>/build/lib`
 
     \b
+    Debugging with --debug-gdbserver:
+        This flag launches each MPI rank under gdbserver for remote debugging, ideal for multi-machine setups.
+        - Each rank runs 'gdbserver :PORT ./program args' where PORT = 20000 + rank.
+        - It prints "Rank X on HOST listening on :PORT" and waits for attachment.
+        - Use with --mpi-args for host mapping (e.g., "--host nodeA,nodeB").
+
+        Prerequisites:
+        - Build program with -g -O0 for debug symbols.
+        - Passwordless SSH between workstation and nodes.
+        - gdbserver installed on all nodes.
+
+        Usage:
+            tt-run --rank-binding binding.yaml --debug-gdbserver --mpi-args "--host nodeA,nodeB" ./program arg1 arg2
+
+        Attachment Steps:
+        1. Note host and port from output (e.g., Rank 0 on nodeA :20000).
+        2. Set up SSH tunnels (one per rank):
+           ssh -L 20000:localhost:20000 nodeA  # For rank 0
+           ssh -L 20001:localhost:20001 nodeB  # For rank 1
+        3. Attach locally (one gdb per rank):
+           gdb ./program
+           (gdb) target remote localhost:20000
+           (gdb) break main
+           (gdb) continue
+
+        Tips:
+        - Conditional breaks: break foo if atoi(getenv("OMPI_COMM_WORLD_RANK")) == 1
+        - Non-stop: set non-stop on
+        - Ignore signals: handle SIGPIPE nostop noprint pass
+        - MPI issues: Add --mca pml ob1 --mca btl tcp,self to --mpi-args
     Mock testing:
 
     For Control plane internal testing, we can use a mock cluster descriptor to initialize control plane without
@@ -355,18 +407,28 @@ def main(
         raise click.ClickException("No program specified. Please provide a program to run.")
 
     # Validate program executable exists
-    program_path = Path(program[0])
-    if not program_path.exists() and not shutil.which(program[0]):
-        raise click.ClickException(f"Program not found: {program[0]}")
+    if not skip_executable_check:
+        program_path = Path(program[0])
+        if not program_path.exists() and not shutil.which(program[0]):
+            raise click.ClickException(f"Program not found: {program[0]}")
 
     # Build MPI command
-    mpi_cmd = build_mpi_command(config, program, mpi_args)
+    mpi_cmd = build_mpi_command(config, program, mpi_args, debug_gdbserver=debug_gdbserver)
 
     if verbose or dry_run:
         print_command(mpi_cmd)
 
     if dry_run:
         return
+
+    if debug_gdbserver:
+        logger.info(f"{TT_RUN_PREFIX} GDBServer mode: Each rank starts gdbserver on port 20000 + rank")
+        logger.info(f"{TT_RUN_PREFIX} After ranks print their host and port, set up SSH tunnels:")
+        logger.info(f"{TT_RUN_PREFIX} ssh -L <local_port>:localhost:<remote_port> <remote_host>")
+        logger.info(f"{TT_RUN_PREFIX} Then locally run: gdb {program[0]}")
+        logger.info(f"{TT_RUN_PREFIX} (gdb) target remote localhost:<local_port>")
+        logger.info(f"{TT_RUN_PREFIX} (gdb) break main")
+        logger.info(f"{TT_RUN_PREFIX} (gdb) continue")
 
     try:
         result = subprocess.run(mpi_cmd)

@@ -52,13 +52,19 @@ int main(int argc, char** argv) {
     std::vector<ParsedTestConfig> raw_test_configs;
     tt::tt_fabric::fabric_tests::AllocatorPolicies allocation_policies;
     std::optional<tt::tt_fabric::fabric_tests::PhysicalMeshConfig> physical_mesh_config = std::nullopt;
+    bool use_dynamic_policies = true;  // Default to dynamic
+
     if (auto yaml_path = cmdline_parser.get_yaml_config_path()) {
         YamlConfigParser yaml_parser;
         auto parsed_yaml = yaml_parser.parse_file(yaml_path.value());
         raw_test_configs = std::move(parsed_yaml.test_configs);
+
+        // Check if YAML explicitly provided allocation_policies
         if (parsed_yaml.allocation_policies.has_value()) {
             allocation_policies = parsed_yaml.allocation_policies.value();
+            use_dynamic_policies = false;  // User provided explicit policies
         }
+
         if (parsed_yaml.physical_mesh_config.has_value()) {
             physical_mesh_config = parsed_yaml.physical_mesh_config;
         }
@@ -75,7 +81,7 @@ int main(int argc, char** argv) {
     fixture->init(physical_mesh_config);
 
     TestContext test_context;
-    test_context.init(fixture, allocation_policies);
+    test_context.init(fixture, allocation_policies, use_dynamic_policies);
 
     // Configure progress monitoring from cmdline flags
     if (cmdline_parser.show_progress()) {
@@ -137,6 +143,7 @@ int main(int argc, char** argv) {
     }
 
     bool device_opened = false;
+    uint32_t tests_ran = 0;
     for (auto& test_config : raw_test_configs) {
         if (!cmdline_parser.check_filter(test_config, true)) {
             log_info(tt::LogTest, "Skipping Test Group: {} due to filter policy", test_config.name);
@@ -160,7 +167,14 @@ int main(int argc, char** argv) {
             topology,
             routing_type,
             fabric_tensix_config);
-        test_context.open_devices(test_config.fabric_setup);
+
+        bool open_devices_success = test_context.open_devices(test_config.fabric_setup);
+        if (!open_devices_success) {
+            log_warning(
+                tt::LogTest, "Skipping Test Group: {} due to unsupported fabric configuration", test_config.name);
+            continue;
+        }
+        tests_ran++;
         device_opened = true;
 
         for (uint32_t iter = 0; iter < test_config.num_top_level_iterations; ++iter) {
@@ -179,6 +193,9 @@ int main(int argc, char** argv) {
 
             for (auto& built_test : built_tests) {
                 log_info(tt::LogTest, "Running Test: {}", built_test.parametrized_name);
+
+                // Prepare allocator and memory maps for this specific test
+                test_context.prepare_for_test(built_test);
 
                 test_context.setup_devices();
                 log_info(tt::LogTest, "Device setup complete");
@@ -256,6 +273,15 @@ int main(int argc, char** argv) {
             log_error(tt::LogTest, "  - {}", failed_test);
         }
         TT_THROW("Some tests failed golden comparison validation. See summary above.");
+    }
+
+    auto total_tests_count = raw_test_configs.size();
+    if (tests_ran < total_tests_count) {
+        log_warning(
+            tt::LogTest,
+            "{} out of {} test groups did not run (filtered, skipped, or unsupported)",
+            total_tests_count - tests_ran,
+            total_tests_count);
     }
 
     if (device_opened) {

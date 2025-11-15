@@ -144,9 +144,9 @@ int main(int argc, char** argv) {
         auto devices = tt::tt_metal::detail::CreateDevices(ids);
         std::vector<tt_metal::Program> programs;
         // kernel->binaries() returns 32B aligned binaries
-        std::map<uint32_t, std::vector<const ll_api::memory*>> compute_binaries;
-        std::map<uint32_t, std::vector<const ll_api::memory*>> brisc_binaries;
-        std::map<uint32_t, std::vector<const ll_api::memory*>> ncrisc_binaries;
+        std::map<uint64_t, std::vector<const ll_api::memory*>> compute_binaries;
+        std::map<uint64_t, std::vector<const ll_api::memory*>> brisc_binaries;
+        std::map<uint64_t, std::vector<const ll_api::memory*>> ncrisc_binaries;
 
         for (int i = 0; i < num_devices; i++) {
             auto device = devices[i];
@@ -188,8 +188,7 @@ int main(int argc, char** argv) {
             TT_FATAL(compute_kernel != nullptr && riscv0_kernel != nullptr && riscv1_kernel != nullptr, "Error");
 
             // Run iteration to get golden
-            uint32_t mask =
-                tt_metal::BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key;
+            auto mask = tt_metal::BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key();
             tt_metal::detail::CompileProgram(device, program);
             compute_binaries.insert({mask, tt_metal::KernelImpl::from(*compute_kernel).binaries(mask)});
             TT_FATAL(compute_binaries.at(mask).size() == 3, "Expected 3 Compute binaries!");
@@ -229,9 +228,9 @@ int main(int argc, char** argv) {
                 auto& program = new_programs[i];
                 ths.emplace_back([&] {
                     for (int j = 0; j < num_compiles; j++) {
-                        uint32_t mask = tt_metal::BuildEnvManager::get_instance()
-                                            .get_device_build_env(device->build_id())
-                                            .build_key;
+                        auto mask = tt_metal::BuildEnvManager::get_instance()
+                                        .get_device_build_env(device->build_id())
+                                        .build_key();
                         tt_metal::detail::CompileProgram(device, program);
                         uint32_t programmable_core_index =
                             tt_metal::MetalContext::instance().hal().get_programmable_core_type_index(

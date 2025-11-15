@@ -49,8 +49,8 @@ SubDeviceManager::SubDeviceManager(
     tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size, IDevice* device) :
     id_(next_sub_device_manager_id_++),
     sub_devices_(sub_devices.begin(), sub_devices.end()),
-    local_l1_size_(tt::align(local_l1_size, MetalContext::instance().hal().get_alignment(HalMemType::L1))),
-    device_(device) {
+    device_(device),
+    local_l1_size_(tt::align(local_l1_size, MetalContext::instance().hal().get_alignment(HalMemType::L1))) {
     TT_ASSERT(device != nullptr, "Device must not be null");
     this->validate_sub_devices();
     this->populate_sub_device_ids();
@@ -62,8 +62,8 @@ SubDeviceManager::SubDeviceManager(
 SubDeviceManager::SubDeviceManager(
     IDevice* device, std::unique_ptr<Allocator>&& global_allocator, tt::stl::Span<const SubDevice> sub_devices) :
     id_(next_sub_device_manager_id_++),
-    device_(device),
     sub_devices_(sub_devices.begin(), sub_devices.end()),
+    device_(device),
     local_l1_size_(0) {
     TT_ASSERT(device != nullptr, "Device must not be null");
 
@@ -284,7 +284,6 @@ void SubDeviceManager::populate_sub_allocators() {
              .l1_unreserved_base = global_allocator_config.l1_unreserved_base,
              .worker_grid = compute_cores,
              .worker_l1_size = global_allocator_config.l1_unreserved_base + local_l1_size_,
-             .storage_core_bank_size = std::nullopt,
              .l1_small_size = 0,
              .trace_region_size = 0,
              .core_type_from_noc_coord_table = {},  // Populated later
@@ -295,9 +294,7 @@ void SubDeviceManager::populate_sub_allocators() {
              .l1_alignment = global_allocator_config.l1_alignment,
              .disable_interleaved = true});
         TT_FATAL(
-            config.l1_small_size < (config.storage_core_bank_size.has_value()
-                                        ? config.storage_core_bank_size.value()
-                                        : config.worker_l1_size - config.l1_unreserved_base),
+            config.l1_small_size < config.worker_l1_size - config.l1_unreserved_base,
             "Reserved size must be less than bank size");
         TT_FATAL(
             config.l1_small_size % config.l1_alignment == 0,

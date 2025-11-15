@@ -813,9 +813,6 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
         im0_t = 80;
         im3_t = 80;
         TT_FATAL(!attributes.inplace, "Tensor is too large to run softmax inplace, please use standard softmax");
-        // TODO: fix the hang, which occurs when numeric_stable is true for large softmax
-        // See issue #28509
-        TT_FATAL(!attributes.numeric_stable, "For softmax, cannot enable both large_kernel and numeric_stable");
     }
     if (!use_large_kernel) {
         TT_FATAL(
@@ -1129,8 +1126,6 @@ void SoftmaxProgramFactoryAttentionOptimized::override_runtime_arguments(
     TT_FATAL((block_size != -1), "Wt {} must be divisible by one of the numbers in the range from 8 to 1.", Wt);
 
     uint32_t num_tile_rows = NC * Ht;
-    auto all_device_cores = CoreRange(
-        {0, 0}, {cached_program.shared_variables.grid_size.x - 1, cached_program.shared_variables.grid_size.y - 1});
     auto
         [num_cores,
          all_cores,

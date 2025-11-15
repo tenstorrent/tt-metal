@@ -21,6 +21,7 @@ std::vector<ttnn::Tensor> ExecuteRingAttentionAllGatherAsync::invoke(
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
+    tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensors.at(0), topology, cluster_axis);
     return ttnn::operations::experimental::ccl::ring_attention_all_gather_async(
         input_tensors,
         persistent_output_buffer,
@@ -28,7 +29,7 @@ std::vector<ttnn::Tensor> ExecuteRingAttentionAllGatherAsync::invoke(
         multi_device_global_semaphore,
         cluster_axis,
         mesh_device,
-        topology,
+        topology_,
         num_links,
         memory_config,
         subdevice_id);

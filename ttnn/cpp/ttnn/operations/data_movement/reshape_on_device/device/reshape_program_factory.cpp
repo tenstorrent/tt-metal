@@ -209,7 +209,11 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
 }
 
 operation::ProgramWithCallbacks reshape_rm_multi_core(const Tensor& a, Tensor& output) {
-    TT_FATAL(a.dtype() == output.dtype(), "Error");
+    TT_FATAL(
+        a.dtype() == output.dtype(),
+        "Input tensor dtype ({}) must match output tensor dtype ({})",
+        a.dtype(),
+        output.dtype());
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 

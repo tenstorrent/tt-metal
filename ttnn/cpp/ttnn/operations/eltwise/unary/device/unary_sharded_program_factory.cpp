@@ -25,9 +25,8 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
 
     const auto& input = tensor_args.input;
     const auto& ops_chain = args.op_chain;
-    float value1 = 0.0f;
-    float value2 = 0.0f;
-
+    uint32_t packed_scalar1 = 0u;
+    uint32_t packed_scalar2 = 0u;
     tt::tt_metal::Program program = CreateProgram();
 
     auto shard_spec = input.shard_spec().value();
@@ -133,26 +132,24 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
         args.op_chain.begin(), args.op_chain.end(), [](const auto& u) { return utils::get_op_approx_mode(u.type()); });
     std::map<std::string, std::string> unary_defines = utils::get_block_defines(args.op_chain, "0", "0", input.dtype());
 
+    if (input.dtype() == DataType::FLOAT32) {
+        unary_defines["INP_FLOAT32"] = "1";
+    } else if (input.dtype() == DataType::INT32) {
+        unary_defines["INP_INT32"] = "1";
+    } else if (input.dtype() == DataType::UINT32) {
+        unary_defines["INP_UINT32"] = "1";
+    } else {
+        unary_defines["INP_FLOAT"] = "1";
+    }
+
     if (!ops_chain[0].empty()) {
         switch (ops_chain[0].type()) {
-            case UnaryOpType::HARDSHRINK: value1 = *ops_chain[0].get_param_if<float>(0); break;
-            case UnaryOpType::WHERE_TSS:
-                value1 = *ops_chain[0].get_param_if<float>(0);
-                value2 = *ops_chain[0].get_param_if<float>(1);
-                if (input.dtype() == DataType::INT32) {
-                    unary_defines["FILL_INT"] = "fill_tile_int";
-                } else {
-                    unary_defines["FILL_FLOAT"] = "fill_tile";
-                }
+            case UnaryOpType::HARDSHRINK:
+                packed_scalar1 = utils::pack_scalar_runtime_arg(ops_chain[0], 0, input.dtype());
                 break;
-            default: break;
-        }
-    } else {
-        switch (ops_chain[0].type()) {
-            case UnaryOpType::CBRT:
-                if (input.dtype() == DataType::FLOAT32) {
-                    unary_defines["CBRT_FLOAT"] = "mul_binary_tile";
-                }
+            case UnaryOpType::WHERE_TSS:
+                packed_scalar1 = utils::pack_scalar_runtime_arg(ops_chain[0], 0, input.dtype());
+                packed_scalar2 = utils::pack_scalar_runtime_arg(ops_chain[0], 1, input.dtype());
                 break;
             default: break;
         }
@@ -160,8 +157,6 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
 
     auto path = utils::get_compute_kernel_path(ops_chain[0].type(), compute_root_sharded, input.dtype());
 
-    const auto packed_scalar1 = utils::pack_scalar_runtime_arg(value1, input.dtype());
-    const auto packed_scalar2 = utils::pack_scalar_runtime_arg(value2, input.dtype());
     auto eltwise_unary_kernel_group_1_id = tt::tt_metal::CreateKernel(
         program,
         path,

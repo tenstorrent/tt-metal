@@ -77,7 +77,7 @@ class Embedding1D(AbstractModule):
                     mesh_device=mesh_device,
                     remove_dims=True,
                     dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
             }

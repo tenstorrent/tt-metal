@@ -95,7 +95,8 @@ struct FabricLiteHeader {
     // otherwise.
     uint8_t src_ch_id{};
     LiteFabricRoutingFields routing_fields{};
-    unsigned char unused[32]{};
+    uint32_t debug{};
+    unsigned char unused[28]{};
 
     explicit FabricLiteHeader() = default;
     lite_fabric::NocSendType get_noc_send_type() volatile const {

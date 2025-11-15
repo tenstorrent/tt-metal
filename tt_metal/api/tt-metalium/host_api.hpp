@@ -32,9 +32,6 @@
  * https://www.tablesgenerator.com/markdown_tables
  * */
 
-class CoreRange;
-class CoreRangeSet;
-
 namespace tt {
 
 namespace tt_metal {
@@ -48,6 +45,8 @@ class CircularBuffer;
 struct Event;
 class Buffer;
 class GlobalSemaphore;
+class CoreRange;
+class CoreRangeSet;
 
 // ==================================================
 //                  HOST API: Device management

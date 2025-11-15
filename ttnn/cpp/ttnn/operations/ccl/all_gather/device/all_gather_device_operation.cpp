@@ -24,7 +24,7 @@ void AllGatherDeviceOperation::validate_on_program_cache_miss(
     // Basic validations
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor must be allocated in buffer on device!");
-    TT_FATAL(input_tensor.logical_shape().rank() > 2, "AllGather requires tensor of rank 3 or greater");
+    TT_FATAL(input_tensor.logical_shape().rank() >= 2, "AllGather requires tensor of rank 2 or greater");
 
     uint32_t target_ring_size = ::ttnn::ccl::get_topological_dimension(input_tensor, operation_attributes.cluster_axis);
     TT_FATAL(target_ring_size > 1, "all_gather op will only work for num_devices > 1, but has {}", target_ring_size);
@@ -119,6 +119,25 @@ AllGatherDeviceOperation::tensor_return_value_t AllGatherDeviceOperation::create
         return tensor_args.optional_output_tensor.value();
     }
     return create_device_tensor(output_specs, tensor_args.input_tensor.device());
+}
+
+AllGatherDeviceOperation::topology_return_value_t AllGatherDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto& input_tensor = tensor_args.input_tensor;
+    const auto& input_topology = input_tensor.tensor_topology();
+    auto output_placements = input_topology.placements();
+
+    // For each distribution dimension, if sharded on the gather dim, make it replicated
+    for (size_t i = 0; i < output_placements.size(); i++) {
+        if (auto* shard = std::get_if<tt::tt_metal::distributed::MeshMapperConfig::Shard>(&output_placements[i])) {
+            if (shard->dim == static_cast<int>(operation_attributes.dim)) {
+                output_placements[i] = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
+            }
+        }
+    }
+
+    return {tt::tt_metal::TensorTopology(
+        input_topology.distribution_shape(), output_placements, input_topology.mesh_coords())};
 }
 
 ttsl::hash::hash_t AllGatherDeviceOperation::compute_program_hash(

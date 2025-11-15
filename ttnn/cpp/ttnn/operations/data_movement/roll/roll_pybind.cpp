@@ -51,8 +51,6 @@ void py_bind_roll(pybind11::module& module) {
         module,
         ttnn::roll,
         R"doc(
-        roll(input_tensor: ttnn.Tensor, shifts: Union[int, List[int]], dim: Union[int, List[int]]) -> ttnn.Tensor
-
         Performs circular shifting of elements along the specified dimension(s).
 
         Args:
