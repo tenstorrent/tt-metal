@@ -52,6 +52,7 @@ on:
           - sentence_bert
           - sd35
           - flux1
+          - motif
           - gpt-oss
           - wan22
           - mochi
@@ -70,6 +71,7 @@ on:
           - wan22
           - mochi
           - flux1
+          - motif
         default: 'disabled'
       galaxy-model-perf:
         description: 'Model perf tests (needs tracy): Select all, specific model, or disabled'
@@ -84,6 +86,7 @@ on:
 #          - llama70b_prefill
           - sd35
           - flux1-dev
+          - motif
           - sentence_bert
 #          - wan2-2
 #          - mochi
