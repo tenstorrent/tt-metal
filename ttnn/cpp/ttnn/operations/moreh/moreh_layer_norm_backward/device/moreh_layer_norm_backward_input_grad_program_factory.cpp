@@ -190,7 +190,7 @@ MorehLayerNormBackwardInputGradOperation::ProgramFactory::create(
                                           "reader_moreh_layer_norm_backward_input_grad_small.cpp";
 
     const auto writer_kernel_file =
-        "ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
+        "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
         "writer_moreh_layer_norm_backward_input_grad.cpp";
 
     const auto reader_kernels_id =

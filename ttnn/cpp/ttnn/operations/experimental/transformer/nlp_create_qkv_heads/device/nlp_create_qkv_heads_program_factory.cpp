@@ -142,13 +142,13 @@ NlpCreateHeadsDeviceOperation::Interleaved::cached_program_t NlpCreateHeadsDevic
 
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/operations/experimental/transformer/nlp_create_qkv_heads/device/kernels/dataflow/"
+        "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/device/kernels/dataflow/"
         "reader_tm_tile_layout_nlp_create_qkv_heads.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
     auto writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/operations/experimental/transformer/nlp_create_qkv_heads/device/kernels/dataflow/"
+        "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/device/kernels/dataflow/"
         "writer_tm_tile_layout_nlp_create_qkv_heads.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_defines));
@@ -397,13 +397,13 @@ NlpCreateHeadsDeviceOperation::Sharded::cached_program_t NlpCreateHeadsDeviceOpe
     std::vector<uint32_t> writer_compile_time_args = {q_output_cb_index, v_output_cb_index};
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/operations/experimental/transformer/nlp_create_qkv_heads/device/kernels/dataflow/"
+        "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/device/kernels/dataflow/"
         "reader_tm_tile_layout_nlp_create_qkv_heads_sharded.cpp",
         q_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
     auto writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/operations/experimental/transformer/nlp_create_qkv_heads/device/kernels/dataflow/"
+        "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/device/kernels/dataflow/"
         "reader_tm_tile_layout_nlp_create_qkv_heads_sharded.cpp",
         q_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));

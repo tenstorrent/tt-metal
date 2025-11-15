@@ -76,7 +76,7 @@ Fold::SingleCore::cached_program_t fold_single_core(
 
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/operations/data_movement/fold/device/kernels/dataflow/"
+        "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/"
         "writer_unary_stick_layout_concatenate_rows_interleaved.cpp",
         core,
         WriterDataMovementConfig(writer_compile_time_args));

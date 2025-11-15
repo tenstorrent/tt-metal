@@ -155,7 +155,7 @@ MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFactory
                               "reader_moreh_group_norm_backward_input_grad_small.cpp";
 
     const std::string writer_kernel_file(
-        "ttnn/operations/moreh/moreh_group_norm_backward/device/input_grad/kernels/dataflow/"
+        "ttnn/cpp/ttnn/operations/moreh/moreh_group_norm_backward/device/input_grad/kernels/dataflow/"
         "writer_moreh_group_norm_backward_input_grad.cpp");
 
     std::vector<uint32_t> reader_compile_time_args{static_cast<uint32_t>(gamma_has_value)};

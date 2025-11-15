@@ -120,7 +120,7 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
                                         : "ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_step1/device/"
                                           "kernels/reader_moreh_nll_loss_step1.cpp";
     const auto writer_kernel_file =
-        "ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_step1/device/kernels/"
+        "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_step1/device/kernels/"
         "writer_moreh_nll_loss_step1.cpp";
 
     auto reader_kernel_id =

@@ -142,13 +142,13 @@ NlpCreateHeadsBoltzDeviceOperation::Interleaved::create(
 
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_boltz/device/kernels/dataflow/"
+        "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_boltz/device/kernels/dataflow/"
         "reader_tm_tile_layout_nlp_create_qkv_heads_boltz.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
     auto writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_boltz/device/kernels/dataflow/"
+        "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_boltz/device/kernels/dataflow/"
         "writer_tm_tile_layout_nlp_create_qkv_heads_boltz.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_defines));
@@ -354,13 +354,13 @@ NlpCreateHeadsBoltzDeviceOperation::Sharded::cached_program_t NlpCreateHeadsBolt
     std::vector<uint32_t> writer_compile_time_args = {q_output_cb_index, v_output_cb_index};
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_boltz/device/kernels/dataflow/"
+        "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_boltz/device/kernels/dataflow/"
         "reader_tm_tile_layout_nlp_create_qkv_heads_boltz_sharded.cpp",
         q_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
     auto writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_boltz/device/kernels/dataflow/"
+        "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_boltz/device/kernels/dataflow/"
         "reader_tm_tile_layout_nlp_create_qkv_heads_boltz_sharded.cpp",
         q_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
