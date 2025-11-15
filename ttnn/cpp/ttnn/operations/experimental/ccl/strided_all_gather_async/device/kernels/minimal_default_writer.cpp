@@ -256,6 +256,8 @@ void kernel_main() {
                     pkt_hdr_sem_inc,
                     out_ready_sem_noc_addr_in_pkt,
                     direction,
+                    num_targets_forward_direction,
+                    num_targets_backward_direction,
                     true);
                 if constexpr (fuse_op && direction == 1) {
                     // Synchronize and signal that the local tensor slice is available
@@ -298,6 +300,8 @@ void kernel_main() {
                         pkt_hdr_sem_inc,
                         out_ready_sem_noc_addr_in_pkt,
                         direction,
+                        num_targets_forward_direction,
+                        num_targets_backward_direction,
                         false);
                 }
                 slice_writes++;
