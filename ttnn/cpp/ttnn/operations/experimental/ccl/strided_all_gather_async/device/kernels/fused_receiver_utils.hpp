@@ -149,6 +149,7 @@ struct MinimalMatmulOpReceiver {
                         } else {
                             curr_k_block_dir = 0;
                             device_id = next_backward;
+                            next_backward--;
                         }
                     } else if (curr_k_block_dir == 1) {  // currently forward, check backwards first
                         if (next_backward < 0) {
