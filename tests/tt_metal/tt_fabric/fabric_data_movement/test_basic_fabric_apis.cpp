@@ -209,7 +209,7 @@ void RunSetUnicastRouteTest(
     auto mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
     const auto& fabric_context = control_plane.get_fabric_context();
     const auto topology = fabric_context.get_fabric_topology();
-    bool is_2d_fabric = topology == Topology::Mesh;
+    bool is_2d_fabric = topology == Topology::Mesh || topology == Topology::Torus;
     uint32_t ew_dim = is_2d_fabric ? mesh_shape[1] : 0;
 
     uint32_t MAX_ROUTE_BUFFER_SIZE = is_2d_fabric ? HYBRID_MESH_MAX_ROUTE_BUFFER_SIZE : SINGLE_ROUTE_SIZE_1D;
@@ -379,7 +379,17 @@ TEST_F(Fabric2DFixture, TestUnicastRaw) {
     }
 }
 
+TEST_F(Fabric2DTorusXYFixture, TestUnicastRaw) {
+    for (uint32_t i = 0; i < 10; i++) {
+        RunTestUnicastRaw(this);
+    }
+}
+
 TEST_F(Fabric2DFixture, TestUnicastRaw_3N) {
+    RunTestUnicastRaw2D(this, 3, RoutingDirection::N, 0, RoutingDirection::E);
+}
+
+TEST_F(Fabric2DTorusXYFixture, TestUnicastRaw_3N) {
     RunTestUnicastRaw2D(this, 3, RoutingDirection::N, 0, RoutingDirection::E);
 }
 
@@ -387,7 +397,15 @@ TEST_F(Fabric2DFixture, TestUnicastRaw_3E) {
     RunTestUnicastRaw2D(this, 0, RoutingDirection::N, 3, RoutingDirection::E);
 }
 
+TEST_F(Fabric2DTorusXYFixture, TestUnicastRaw_3E) {
+    RunTestUnicastRaw2D(this, 0, RoutingDirection::N, 3, RoutingDirection::E);
+}
+
 TEST_F(Fabric2DFixture, TestUnicastRaw_3N3E) {
+    RunTestUnicastRaw2D(this, 3, RoutingDirection::N, 3, RoutingDirection::E);
+}
+
+TEST_F(Fabric2DTorusXYFixture, TestUnicastRaw_3N3E) {
     RunTestUnicastRaw2D(this, 3, RoutingDirection::N, 3, RoutingDirection::E);
 }
 
@@ -395,7 +413,15 @@ TEST_F(Fabric2DFixture, TestUnicastConnAPI) { RunTestUnicastConnAPI(this, 1); }
 
 TEST_F(Fabric2DFixture, TestUnicastConnAPIDRAM) { RunTestUnicastConnAPI(this, 1, RoutingDirection::E, true); }
 
+TEST_F(Fabric2DTorusXYFixture, TestUnicastConnAPIDRAM) { RunTestUnicastConnAPI(this, 1, RoutingDirection::E, true); }
+
 TEST_F(Fabric2DFixture, TestUnicastConnAPIRandom) {
+    for (uint32_t i = 0; i < 10; i++) {
+        RunTestUnicastConnAPIRandom(this);
+    }
+}
+
+TEST_F(Fabric2DTorusXYFixture, TestUnicastConnAPIRandom) {
     for (uint32_t i = 0; i < 10; i++) {
         RunTestUnicastConnAPIRandom(this);
     }
@@ -405,7 +431,15 @@ TEST_F(Fabric2DFixture, TestMCastConnAPI_1W1E) {
     RunTestMCastConnAPI(this, RoutingDirection::W, 1, RoutingDirection::E, 1);
 }
 
+TEST_F(Fabric2DTorusXYFixture, TestMCastConnAPI_1W1E) {
+    RunTestMCastConnAPI(this, RoutingDirection::W, 1, RoutingDirection::E, 1);
+}
+
 TEST_F(Fabric2DFixture, TestMCastConnAPI_1W2E) {
+    RunTestMCastConnAPI(this, RoutingDirection::W, 1, RoutingDirection::E, 2);
+}
+
+TEST_F(Fabric2DTorusXYFixture, TestMCastConnAPI_1W2E) {
     RunTestMCastConnAPI(this, RoutingDirection::W, 1, RoutingDirection::E, 2);
 }
 
@@ -413,7 +447,15 @@ TEST_F(Fabric2DFixture, TestMCastConnAPI_2W1E) {
     RunTestMCastConnAPI(this, RoutingDirection::W, 2, RoutingDirection::E, 1);
 }
 
+TEST_F(Fabric2DTorusXYFixture, TestMCastConnAPI_2W1E) {
+    RunTestMCastConnAPI(this, RoutingDirection::W, 2, RoutingDirection::E, 1);
+}
+
 TEST_F(Fabric2DFixture, TestMCastConnAPI_2W2E) {
+    RunTestMCastConnAPI(this, RoutingDirection::W, 2, RoutingDirection::E, 2);
+}
+
+TEST_F(Fabric2DTorusXYFixture, TestMCastConnAPI_2W2E) {
     RunTestMCastConnAPI(this, RoutingDirection::W, 2, RoutingDirection::E, 2);
 }
 
@@ -421,7 +463,15 @@ TEST_F(Fabric2DFixture, TestMCastConnAPI_3W3E) {
     RunTestMCastConnAPI(this, RoutingDirection::W, 3, RoutingDirection::E, 3);
 }
 
+TEST_F(Fabric2DTorusXYFixture, TestMCastConnAPI_3W3E) {
+    RunTestMCastConnAPI(this, RoutingDirection::W, 3, RoutingDirection::E, 3);
+}
+
 TEST_F(Fabric2DFixture, TestMCastConnAPI_4W3E) {
+    RunTestMCastConnAPI(this, RoutingDirection::W, 4, RoutingDirection::E, 3);
+}
+
+TEST_F(Fabric2DTorusXYFixture, TestMCastConnAPI_4W3E) {
     RunTestMCastConnAPI(this, RoutingDirection::W, 4, RoutingDirection::E, 3);
 }
 
@@ -429,7 +479,15 @@ TEST_F(Fabric2DFixture, TestMCastConnAPI_3W4E) {
     RunTestMCastConnAPI(this, RoutingDirection::W, 3, RoutingDirection::E, 4);
 }
 
+TEST_F(Fabric2DTorusXYFixture, TestMCastConnAPI_3W4E) {
+    RunTestMCastConnAPI(this, RoutingDirection::W, 3, RoutingDirection::E, 4);
+}
+
 TEST_F(Fabric2DFixture, TestMCastConnAPI_1N2S) {
+    RunTestMCastConnAPI(this, RoutingDirection::N, 1, RoutingDirection::S, 2);
+}
+
+TEST_F(Fabric2DTorusXYFixture, TestMCastConnAPI_1N2S) {
     RunTestMCastConnAPI(this, RoutingDirection::N, 1, RoutingDirection::S, 2);
 }
 
@@ -437,9 +495,17 @@ TEST_F(Fabric2DFixture, TestMCastConnAPI_2N1S) {
     RunTestMCastConnAPI(this, RoutingDirection::N, 2, RoutingDirection::S, 1);
 }
 
+TEST_F(Fabric2DTorusXYFixture, TestMCastConnAPI_2N1S) {
+    RunTestMCastConnAPI(this, RoutingDirection::N, 2, RoutingDirection::S, 1);
+}
+
 TEST_F(Fabric2DFixture, Test2DMCastConnAPI_1N1E1W) { RunTest2DMCastConnAPI(this, 1, 0, 1, 1); }
 
+TEST_F(Fabric2DTorusXYFixture, Test2DMCastConnAPI_1N1E1W) { RunTest2DMCastConnAPI(this, 1, 0, 1, 1); }
+
 TEST_F(Fabric2DFixture, Test2DMCastConnAPI_7N3E) { RunTest2DMCastConnAPI(this, 7, 0, 3, 0); }
+
+TEST_F(Fabric2DTorusXYFixture, Test2DMCastConnAPI_7N3E) { RunTest2DMCastConnAPI(this, 7, 0, 3, 0); }
 
 TEST_F(NightlyFabric2DFixture, Test2DMCast) {
     auto valid_combinations = GenerateAllValidCombinations(this);
@@ -447,6 +513,8 @@ TEST_F(NightlyFabric2DFixture, Test2DMCast) {
         RunTest2DMCastConnAPI(this, north, south, east, west);
     }
 }
+
+TEST_F(Fabric2DTorusXYFixture, TestUnicastConnAPI) { RunTestUnicastConnAPI(this, 1); }
 
 // 2D topology Mesh API tests
 TEST_F(NightlyFabric2DFixture, TestMeshFabricUnicastNocUnicastWrite) {
@@ -1609,7 +1677,16 @@ TEST_F(Fabric1DFixture, TestSetUnicastRouteIdleEth) {
 // 1 mesh all-to-all
 TEST_F(Fabric2DFixture, TestSetUnicastRoute) { RunSetUnicastRouteTest(this, false); }
 
+TEST_F(Fabric2DTorusXYFixture, TestSetUnicastRoute) { RunSetUnicastRouteTest(this, false); }
+
 TEST_F(Fabric2DFixture, TestSetUnicastRouteIdleEth) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::T3K) {
+        GTEST_SKIP() << "Test applicable only on T3K";
+    }
+    RunSetUnicastRouteTest(this, false, HalProgrammableCoreType::IDLE_ETH);
+}
+
+TEST_F(Fabric2DTorusXYFixture, TestSetUnicastRouteIdleEth) {
     if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::T3K) {
         GTEST_SKIP() << "Test applicable only on T3K";
     }

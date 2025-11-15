@@ -269,6 +269,14 @@ class T3kCustomMeshGraphFabric2DDynamicFixture
     }
 };
 
+class Fabric2DTorusXYFixture : public BaseFabricFixture {
+protected:
+    static void SetUpTestSuite() {
+        BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY);
+    }
+    static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
+};
+
 struct McastRoutingInfo {
     RoutingDirection mcast_dir;
     uint32_t num_mcast_hops;

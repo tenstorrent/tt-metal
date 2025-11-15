@@ -212,7 +212,7 @@ void RunTestLineMcast(BaseFabricFixture* fixture, const std::vector<McastRouting
 
     const auto& fabric_context = control_plane.get_fabric_context();
     const auto& edm_config = fabric_context.get_fabric_router_config();
-    uint32_t is_2d_fabric = edm_config.topology == Topology::Mesh;
+    uint32_t is_2d_fabric = edm_config.topology == Topology::Mesh || edm_config.topology == Topology::Torus;
 
     auto sender_device = fixture->get_device(sender_phys_id);
     auto mcast_start_device = fixture->get_device(mcast_start_phys_id);
@@ -376,7 +376,7 @@ void RunTestUnicastRaw(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDir
 
     const auto& fabric_context = control_plane.get_fabric_context();
     const auto topology = fabric_context.get_fabric_topology();
-    uint32_t is_2d_fabric = topology == Topology::Mesh;
+    uint32_t is_2d_fabric = topology == Topology::Mesh || topology == Topology::Torus;
 
     if (!is_2d_fabric) {
         // Find a device with enough neighbours in the specified directions
@@ -456,7 +456,7 @@ void RunTestUnicastRaw(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDir
         worker_mem_map.test_results_size_bytes,
         worker_mem_map.target_address,
         0 /* use_dram_dst */,
-        topology == Topology::Mesh,
+        topology == Topology::Mesh || topology == Topology::Torus,
         fabric_config == tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
         0 /* is_chip_multicast */,
         0 /* additional_dir */};
@@ -569,7 +569,7 @@ void run_unicast_test_bw_chips(
 
     const auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
     const auto topology = control_plane.get_fabric_context().get_fabric_topology();
-    uint32_t is_2d_fabric = topology == Topology::Mesh;
+    uint32_t is_2d_fabric = topology == Topology::Mesh || topology == Topology::Torus;
 
     // test parameters
     auto worker_mem_map = generate_worker_mem_map(sender_device, topology);
@@ -582,7 +582,7 @@ void run_unicast_test_bw_chips(
         worker_mem_map.test_results_size_bytes,
         worker_mem_map.target_address,
         use_dram_dst,
-        topology == Topology::Mesh,
+        topology == Topology::Mesh || topology == Topology::Torus,
         fabric_config == tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
         0 /* is_chip_multicast */,
         0 /* additional_dir */};
@@ -635,7 +635,29 @@ void run_unicast_test_bw_chips(
     }
 
     // append the EDM connection rt args
+    // Check if forwarding direction can be determined first (this will fail fast if routing tables aren't initialized)
+    auto forwarding_dir = control_plane.get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
+    if (!forwarding_dir.has_value()) {
+        log_error(
+            tt::LogTest,
+            "get_forwarding_direction returned nullopt for {} -> {} - routing tables may not be initialized for torus "
+            "topology",
+            src_fabric_node_id,
+            dst_fabric_node_id);
+        GTEST_FAIL()
+            << "Cannot determine forwarding direction - routing tables may not be initialized for torus topology";
+    }
+
     const auto& available_links = get_forwarding_link_indices(src_fabric_node_id, dst_fabric_node_id);
+    if (available_links.empty()) {
+        log_error(
+            tt::LogTest,
+            "No forwarding links found from {} to {} in direction {}",
+            src_fabric_node_id,
+            dst_fabric_node_id,
+            forwarding_dir.value());
+        GTEST_FAIL() << "No forwarding links available between source and destination";
+    }
     EXPECT_EQ(!available_links.empty(), true);
 
     uint32_t link_idx = available_links[0];
@@ -744,7 +766,7 @@ void RunTestUnicastConnAPIRandom(BaseFabricFixture* fixture) {
                               .get_control_plane()
                               .get_fabric_context()
                               .get_fabric_topology();
-    uint32_t is_2d_fabric = topology == Topology::Mesh;
+    uint32_t is_2d_fabric = topology == Topology::Mesh || topology == Topology::Torus;
     if (!is_2d_fabric) {
         GTEST_SKIP() << "This test is only supported for 2D fabric currently";
     }
@@ -800,7 +822,7 @@ void RunTestUnicastRaw2D(
 
     tt::tt_metal::distributed::MeshShape mesh_shape;
     const auto topology = control_plane.get_fabric_context().get_fabric_topology();
-    uint32_t is_2d_fabric = topology == Topology::Mesh;
+    uint32_t is_2d_fabric = topology == Topology::Mesh || topology == Topology::Torus;
 
     if (!is_2d_fabric) {
         GTEST_SKIP() << "Need 2D Fabric for this test.";
@@ -908,7 +930,7 @@ void RunTestMCastConnAPI(
 
     tt::tt_metal::distributed::MeshShape mesh_shape;
     const auto topology = control_plane.get_fabric_context().get_fabric_topology();
-    uint32_t is_2d_fabric = topology == Topology::Mesh;
+    uint32_t is_2d_fabric = topology == Topology::Mesh || topology == Topology::Torus;
 
     // Get the mcast sender device and mcast receiver devices that satisfy the input number of hops in forward and
     // backward directions.
@@ -959,7 +981,7 @@ void RunTestMCastConnAPI(
         worker_mem_map.test_results_size_bytes,
         worker_mem_map.target_address,
         0 /* use_dram_dst */,
-        topology == Topology::Mesh,
+        topology == Topology::Mesh || topology == Topology::Torus,
         fabric_config == tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
         1 /* is_chip_multicast */,
         1 /* additional_dir */};
@@ -1183,7 +1205,7 @@ void RunTest2DMCastConnAPI(
 
     tt::tt_metal::distributed::MeshShape mesh_shape;
     const auto topology = control_plane.get_fabric_context().get_fabric_topology();
-    uint32_t is_2d_fabric = topology == Topology::Mesh;
+    uint32_t is_2d_fabric = topology == Topology::Mesh || topology == Topology::Torus;
 
     if (!is_2d_fabric) {
         GTEST_SKIP() << "Need 2D Fabric for this test.";
@@ -1445,7 +1467,7 @@ void RunTest2DMCastConnAPI(
         worker_mem_map.target_address,
         0 /* use_dram_dst */,
         mcast_mode,
-        topology == Topology::Mesh,
+        topology == Topology::Mesh || topology == Topology::Torus,
         fabric_config == tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
         1 /* is_chip_multicast */,
         1 /* additional_dir */};
@@ -2132,7 +2154,7 @@ void FabricUnicastCommon(
     const auto topology = control_plane.get_fabric_context().get_fabric_topology();
 
     std::vector<std::tuple<RoutingDirection, uint32_t>> dir_configs = pair_ordered_dirs;
-    if (topology == Topology::Mesh) {
+    if (topology == Topology::Mesh || topology == Topology::Torus) {
         const auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
         size_t max_dirs = (cluster_type == tt::tt_metal::ClusterType::T3K) ? 3 : 4;
         if (dir_configs.size() > max_dirs) {

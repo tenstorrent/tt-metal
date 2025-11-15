@@ -96,7 +96,7 @@ void RunTestUnicastSmoke(BaseFabricFixture* fixture) {
     // Get fabric context and topology
     const auto& fabric_context = control_plane.get_fabric_context();
     const auto topology = fabric_context.get_fabric_topology();
-    uint32_t is_2d_fabric = topology == Topology::Mesh;
+    uint32_t is_2d_fabric = topology == Topology::Mesh || topology == Topology::Torus;
 
     // Get available links between devices
     auto eth_chans = control_plane.get_forwarding_eth_chans_to_chip(src_fabric_node_id, dst_fabric_node_id);
