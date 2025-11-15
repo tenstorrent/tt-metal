@@ -175,11 +175,13 @@ BufferCorePageMapping::Iterator::Range BufferCorePageMapping::Iterator::next_ran
     //     device_page_offset_ = host_range.device_page_offset;
     //     // std::cout<<"AAAAAAAAAAAAAAA\n";
     // }
-    std::cout << "device_page_offset_: " << device_page_offset_
-              << " host_range.host_page_start: " << host_range.host_page_start
-              << " host_range.device_page_offset: " << host_range.device_page_offset
-              << " host_range.num_pages: " << host_range.num_pages << std::endl;
-    uint32_t num_pages_left = host_range.num_pages - (device_page_offset_ - host_range.device_page_offset);
+    // std::cout << "device_page_offset_: " << device_page_offset_
+    //           << " host_range.host_page_start: " << host_range.host_page_start
+    //           << " host_range.device_page_offset: " << host_range.device_page_offset
+    //           << " host_range.num_pages: " << host_range.num_pages << std::endl;
+    uint32_t num_pages_left =
+        host_range.device_page_offset + host_range.num_pages -
+        device_page_offset_;  // host_range.num_pages - (device_page_offset_ - host_range.device_page_offset);
     uint32_t num_pages = std::min(num_pages_left, end_device_page_offset - device_page_offset_);
     // if (device_page_offset_ < host_range.device_page_offset) {  // we are in padding.
     //     device_page_offset_ = host_range.device_page_offset;
@@ -201,10 +203,10 @@ BufferCorePageMapping::Iterator::Range BufferCorePageMapping::Iterator::next_ran
         .host_page_start = computed_host_page_start,
         .num_pages = num_pages,
     };
-    std::cout << "num_pages_left: " << num_pages_left << std::endl;
-    std::cout << "result.host_page_start: " << result.host_page_start
-              << " result.device_page_offset: " << result.device_page_offset
-              << " result.num_pages: " << result.num_pages << std::endl;
+    // std::cout << "num_pages_left: " << num_pages_left << std::endl;
+    // std::cout << "result.host_page_start: " << result.host_page_start
+    //           << " result.device_page_offset: " << result.device_page_offset
+    //           << " result.num_pages: " << result.num_pages << std::endl;
     device_page_offset_ += num_pages;
     // if(reached_padding) {
     //     device_page_offset_ = host_range.device_page_offset + num_pages;
