@@ -8,10 +8,8 @@
 #include <enchantum/enchantum.hpp>
 #include <cmath>
 #include <tracy/Tracy.hpp>
-#include <bitset>
 #include <cstddef>
 #include <map>
-#include <optional>
 #include <string>
 #include <variant>
 
@@ -103,7 +101,7 @@ std::map<std::string, std::string> initialize_device_kernel_defines(ChipId devic
     return device_kernel_defines;
 }
 
-uint64_t compute_build_key(ChipId device_id, uint8_t num_hw_cqs) {
+uint64_t compute_build_key(ChipId /*device_id*/, uint8_t /*num_hw_cqs*/) {
     const auto& dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
 
     // Collect all the parameters that affect the build configuration
@@ -112,6 +110,7 @@ uint64_t compute_build_key(ChipId device_id, uint8_t num_hw_cqs) {
     // Hash the dispatch core configuration
     std::hash<uint32_t> uint32_hasher;
     hash ^= uint32_hasher(static_cast<uint32_t>(dispatch_core_config.get_dispatch_core_type()));
+#if 0
     hash ^= uint32_hasher(static_cast<uint32_t>(dispatch_core_config.get_dispatch_core_axis())) << 1;
 
     // Hash the number of hardware command queues
@@ -130,7 +129,7 @@ uint64_t compute_build_key(ChipId device_id, uint8_t num_hw_cqs) {
         ).count();
         hash ^= uint32_hasher(harvested_core_count) << 4;
     }
-
+#endif
     return static_cast<uint64_t>(hash);
 }
 
