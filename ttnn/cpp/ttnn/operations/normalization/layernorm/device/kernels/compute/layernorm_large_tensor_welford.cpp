@@ -16,7 +16,7 @@
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "compute_kernel_api/eltwise_unary/rsqrt.h"
 #include "compute_kernel_api/transpose_wh.h"
-#include "ttnn/cpp/ttnn/operations/normalization/kernel_util/compute/memory.h"
+#include "ttnn/operations/normalization/kernel_util/compute/memory.h"
 
 namespace NAMESPACE {
 

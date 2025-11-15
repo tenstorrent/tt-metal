@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
-#include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
+#include "ttnn/operations/data_movement/common/kernels/common.hpp"
 
 void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);

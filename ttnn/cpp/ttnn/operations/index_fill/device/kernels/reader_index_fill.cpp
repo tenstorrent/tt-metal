@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 #include "dataflow_api.h"
-#include "ttnn/cpp/ttnn/kernel/dataflow/moreh_common.hpp"
+#include "ttnn/kernel/dataflow/moreh_common.hpp"
 union value {
     float f;
     uint32_t u;

@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-#include "ttnn/cpp/ttnn/kernel/compute/moreh_common.hpp"
+#include "ttnn/kernel/compute/moreh_common.hpp"
 
 namespace NAMESPACE {
 void MAIN {

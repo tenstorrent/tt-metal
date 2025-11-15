@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/kernel/dataflow/moreh_common.hpp"
+#include "ttnn/kernel/dataflow/moreh_common.hpp"
 
 void kernel_main() {
     constexpr uint32_t Ht = get_compile_time_arg_val(0);

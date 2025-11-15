@@ -6,7 +6,7 @@
 
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
+#include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "pad_tile.hpp"
 #include "ckernel.h"
 #include "ckernel_defs.h"

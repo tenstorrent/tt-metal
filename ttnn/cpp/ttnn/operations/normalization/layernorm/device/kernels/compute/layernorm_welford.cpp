@@ -14,7 +14,7 @@
 #include "compute_kernel_api/welford.h"
 #include "compute_kernel_api/transpose_wh.h"
 #include "compute_kernel_api/compute_kernel_hw_startup.h"
-#include "ttnn/cpp/ttnn/operations/normalization/kernel_util/compute/memory.h"
+#include "ttnn/operations/normalization/kernel_util/compute/memory.h"
 
 namespace NAMESPACE {
 

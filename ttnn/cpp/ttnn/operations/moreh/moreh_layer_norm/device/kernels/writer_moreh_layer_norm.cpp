@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-#include "ttnn/cpp/ttnn/kernel/dataflow/moreh_common.hpp"
+#include "ttnn/kernel/dataflow/moreh_common.hpp"
 
 template <typename T>
 void write_mean_rstd(

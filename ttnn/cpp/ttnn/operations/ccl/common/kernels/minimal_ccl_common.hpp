@@ -12,8 +12,8 @@
 #include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
 #include <cstdint>
 #include <utility>
-#include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
+#include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
+#include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 
 template <bool blocking = false>
 FORCE_INLINE void perform_payload_send(
