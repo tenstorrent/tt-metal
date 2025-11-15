@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/buffer_page_mapping.hpp>
+#include <iostream>
 
 namespace tt::tt_metal {
 
@@ -169,14 +170,47 @@ BufferCorePageMapping::Iterator::Range BufferCorePageMapping::Iterator::next_ran
         return result;
     }
     const auto& host_range = mapping_->host_ranges[range_index_];
+    // std::cout<<"range_index_: "<<range_index_<<std::endl;
+    // if (device_page_offset_ < host_range.device_page_offset) {  // we are in padding.
+    //     device_page_offset_ = host_range.device_page_offset;
+    //     // std::cout<<"AAAAAAAAAAAAAAA\n";
+    // }
+    std::cout << "device_page_offset_: " << device_page_offset_
+              << " host_range.host_page_start: " << host_range.host_page_start
+              << " host_range.device_page_offset: " << host_range.device_page_offset
+              << " host_range.num_pages: " << host_range.num_pages << std::endl;
     uint32_t num_pages_left = host_range.num_pages - (device_page_offset_ - host_range.device_page_offset);
     uint32_t num_pages = std::min(num_pages_left, end_device_page_offset - device_page_offset_);
+    // if (device_page_offset_ < host_range.device_page_offset) {  // we are in padding.
+    //     device_page_offset_ = host_range.device_page_offset;
+    //     // std::cout<<"AAAAAAAAAAAAAAA\n";
+    // }
+    // bool reached_padding = (device_page_offset_ < host_range.device_page_offset) ? true : false;
+
+    // fix not really
+    uint32_t computed_host_page_start = 0;
+    if (device_page_offset_ >= host_range.device_page_offset ||
+        host_range.device_page_offset - device_page_offset_ <= host_range.host_page_start) {
+        computed_host_page_start = host_range.host_page_start + device_page_offset_ - host_range.device_page_offset;
+    } else {
+        computed_host_page_start = host_range.host_page_start;
+        device_page_offset_ = host_range.device_page_offset;
+    }
     result = Range{
         .device_page_offset = device_page_offset_,
-        .host_page_start = host_range.host_page_start + device_page_offset_ - host_range.device_page_offset,
+        .host_page_start = computed_host_page_start,
         .num_pages = num_pages,
     };
+    std::cout << "num_pages_left: " << num_pages_left << std::endl;
+    std::cout << "result.host_page_start: " << result.host_page_start
+              << " result.device_page_offset: " << result.device_page_offset
+              << " result.num_pages: " << result.num_pages << std::endl;
     device_page_offset_ += num_pages;
+    // if(reached_padding) {
+    //     device_page_offset_ = host_range.device_page_offset + num_pages;
+    // } else {
+    //     device_page_offset_ += num_pages;
+    // }
     if (device_page_offset_ == host_range.device_page_offset + host_range.num_pages) {
         range_index_++;
     }
