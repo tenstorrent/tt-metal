@@ -8,6 +8,7 @@
 #include "debug/assert.h"
 #include "debug/dprint.h"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include <array>
 
 uint32_t increment_arg_idx(uint32_t& arg_idx, uint32_t num_args = 1) {
@@ -32,6 +33,9 @@ struct MinimalMatmulOpReceiver {
     uint32_t* k_block_device_received = nullptr;
     uint32_t* device_k_block_counts = nullptr;
     uint32_t* device_k_block_start_ids = nullptr;
+    ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring;
+    uint32_t next_forward = 0;
+    int32_t next_backward = 0;
 
     MinimalMatmulOpReceiver() {}
 
@@ -46,6 +50,7 @@ struct MinimalMatmulOpReceiver {
         input_tensor_Wt = get_arg_val<uint32_t>(rt_args_idx++);
         num_k_blocks = get_arg_val<uint32_t>(rt_args_idx++);
         uint32_t k_block_tiles = get_arg_val<uint32_t>(rt_args_idx++);
+        topology = static_cast<ttnn::ccl::Topology>(get_arg_val<uint32_t>(rt_args_idx++));
 
         this->k_block_device_expected = (uint32_t*)get_arg_addr(increment_arg_idx(rt_args_idx, this->num_k_blocks));
         this->k_block_device_received = (uint32_t*)get_arg_addr(increment_arg_idx(rt_args_idx, this->num_k_blocks));
@@ -122,15 +127,50 @@ struct MinimalMatmulOpReceiver {
                 // Move to next device
                 devices_received++;
                 device_chunk_id = 0;
-                if (curr_k_block_dir > 0) {  // currently self or forward, next is backwards
-                    curr_k_block_dir = 0;
-                    int32_t unwrapped_device_id = my_chip_id - (devices_received / 2 + 1);
-                    device_id = (unwrapped_device_id < 0) ? num_devices + unwrapped_device_id : unwrapped_device_id;
-                } else {  // currently backwards, next is forwards
-                    curr_k_block_dir = 1;
-                    uint32_t unwrapped_device_id = my_chip_id + (devices_received / 2);
-                    device_id =
-                        unwrapped_device_id >= num_devices ? unwrapped_device_id - num_devices : unwrapped_device_id;
+                if (topology == ttnn::ccl::Topology::Ring) {
+                    if (curr_k_block_dir > 0) {  // currently self or forward, next is backwards
+                        curr_k_block_dir = 0;
+                        int32_t unwrapped_device_id = my_chip_id - (devices_received / 2 + 1);
+                        device_id = (unwrapped_device_id < 0) ? num_devices + unwrapped_device_id : unwrapped_device_id;
+                    } else {  // currently backwards, next is forwards
+                        curr_k_block_dir = 1;
+                        uint32_t unwrapped_device_id = my_chip_id + (devices_received / 2);
+                        device_id = unwrapped_device_id >= num_devices ? unwrapped_device_id - num_devices
+                                                                       : unwrapped_device_id;
+                    }
+                } else {
+                    if (curr_k_block_dir == 2) {  // currently self, check backwards first
+                        next_forward = my_chip_id + 1;
+                        next_backward = my_chip_id - 1;
+                        if (next_backward < 0) {
+                            curr_k_block_dir = 1;
+                            device_id = next_forward;
+                            next_forward++;
+                        } else {
+                            curr_k_block_dir = 0;
+                            device_id = next_backward;
+                        }
+                    } else if (curr_k_block_dir == 1) {  // currently forward, check backwards first
+                        if (next_backward < 0) {
+                            curr_k_block_dir = 1;
+                            device_id = next_forward;
+                            next_forward++;
+                        } else {
+                            curr_k_block_dir = 0;
+                            device_id = next_backward;
+                            next_backward--;
+                        }
+                    } else {  // currently backwards, check_forwards first
+                        if (next_forward >= num_devices) {
+                            curr_k_block_dir = 0;
+                            device_id = next_backward;
+                            next_backward--;
+                        } else {
+                            curr_k_block_dir = 1;
+                            device_id = next_forward;
+                            next_forward++;
+                        }
+                    }
                 }
             }
             if (k_block_device_received[k_block_received] == k_block_device_expected[k_block_received]) {
