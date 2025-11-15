@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 #include <vector>
+#include "debug/dprint.h"
 /******************************************************************************
  *                                                                             *
  *                   Common Functions for Dataflow Kernels                     *
@@ -173,11 +174,11 @@ void fill_tile_partial_sliding_window(uint32_t cb_id, uint32_t tile_id, uint32_t
     }
 
     // Fill partial face (the face containing window_start_pos_in_tile)
-    uint32_t fill_end_pos_in_face = window_start_pos_in_tile % 16;  // Position to stop filling (exclusive)
+    uint32_t fill_end_pos_in_face = (window_start_pos_in_tile) % 16;  // Position to stop filling (exclusive)
 
     // Optimize performance by filling 2 uint16 datums in each write
     bool is_odd_end_pos = fill_end_pos_in_face % 2 == 1;
-    uint32_t fill_end_pos_in_uint32_face = fill_end_pos_in_face >> 1;
+    uint32_t fill_end_pos_in_uint32_face = (fill_end_pos_in_face) >> 1;
     constexpr uint32_t num_cols_in_face = 16;
     constexpr uint32_t num_rows_in_face = 16;
     constexpr uint32_t num_cols_in_uint32_face = num_cols_in_face >> 1;
@@ -354,6 +355,15 @@ void generate_sliding_window_mask(uint32_t k_num_chunks, uint32_t Sk_chunk_t, ui
     uint32_t q_write_ptr_base = get_read_ptr(cb_mask_in);
     constexpr uint32_t tile_bytes = get_tile_size(cb_mask_in);
 
+    DPRINT << "Generating sliding window mask" << ENDL();
+    DPRINT << "window_start: " << window_start << ENDL();
+    DPRINT << "window_start_in_chunk: " << window_start_in_chunk << ENDL();
+    DPRINT << "window_start_in_chunk_t: " << window_start_in_chunk_t << ENDL();
+    DPRINT << "window_start_in_tile: " << window_start_in_tile << ENDL();
+    DPRINT << "Sk_chunk_t: " << Sk_chunk_t << ENDL();
+    DPRINT << "total_read_tiles: " << total_read_tiles << ENDL();
+    DPRINT << "tile_bytes: " << tile_bytes << ENDL();
+
     for (uint32_t i = 0; i < Sk_chunk_t; ++i) {
         if (i < window_start_in_chunk_t) {
             // Tile is completely before sliding window - fill with -inf
@@ -383,6 +393,7 @@ void generate_sliding_window_mask(uint32_t k_num_chunks, uint32_t Sk_chunk_t, ui
         }
 
         // Copy to all heads
+        DPRINT << "PNHt: " << PNHt << ENDL();
         for (uint32_t j = 1; j < PNHt; ++j) {
             copy_tile<tile_bytes>(noc_read_addr_base, q_write_ptr_base, i, j * Sk_chunk_t + i);
             if (j == PNHt - 1) {
