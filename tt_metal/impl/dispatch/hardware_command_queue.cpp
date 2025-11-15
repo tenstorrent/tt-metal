@@ -78,7 +78,7 @@ HWCommandQueue::HWCommandQueue(
     IDevice* device,
     std::shared_ptr<CQSharedState> cq_shared_state,
     uint32_t id,
-    NOC noc_index,
+    NOC /*noc_index*/,
     uint32_t completion_queue_reader_core) :
     id_(id),
     size_B_(0),

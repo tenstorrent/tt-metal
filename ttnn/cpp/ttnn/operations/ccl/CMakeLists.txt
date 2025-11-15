@@ -92,9 +92,6 @@ target_sources(
         mesh_partition/mesh_partition.cpp
         mesh_partition/device/mesh_partition_device_operation.cpp
         mesh_partition/device/mesh_partition_program_factory.cpp
-        barrier/device/host/barrier_full_worker_grid.cpp
-        barrier/device/barrier_op.cpp
-        barrier/barrier.cpp
         broadcast/broadcast.cpp
         broadcast/device/broadcast_op.cpp
         broadcast/device/broadcast_program.cpp

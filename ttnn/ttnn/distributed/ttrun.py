@@ -127,6 +127,9 @@ def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str,
         "TT_MESH_ID": str(binding.mesh_id),
         "TT_MESH_GRAPH_DESC_PATH": config.mesh_graph_desc_path,
         "TT_METAL_HOME": os.environ.get("TT_METAL_HOME", str(Path.home())),
+        "TT_METAL_RUNTIME_ROOT": os.environ.get(
+            "TT_METAL_RUNTIME_ROOT", os.environ.get("TT_METAL_HOME", str(Path.home()))
+        ),
         "PYTHONPATH": os.environ.get("PYTHONPATH", str(Path.home())),
         # 26640: TODO - Investigate why this needs to be set for multi-host CI environments
         "LD_LIBRARY_PATH": os.environ.get("LD_LIBRARY_PATH", DEFAULT_LD_LIBRARY_PATH.format(home=str(Path.home()))),
@@ -266,6 +269,9 @@ def print_command(cmd: List[str], prefix: str = TT_RUN_PREFIX) -> None:
     type=click.Path(exists=True, path_type=Path),
     help="Mock cluster rank binding configuration file (YAML)",
 )
+@click.option(
+    "--skip-executable-check", is_flag=True, help="Skip the check if program executable exists on the local host"
+)
 @click.pass_context
 def main(
     ctx: click.Context,
@@ -275,6 +281,7 @@ def main(
     mpi_args: Optional[List[str]],
     debug_gdbserver: bool,
     mock_cluster_rank_binding: Optional[Path],
+    skip_executable_check: bool,
 ) -> None:
     """tt-run - MPI process launcher for TT-Metal and TTNN distributed applications
 
@@ -400,9 +407,10 @@ def main(
         raise click.ClickException("No program specified. Please provide a program to run.")
 
     # Validate program executable exists
-    program_path = Path(program[0])
-    if not program_path.exists() and not shutil.which(program[0]):
-        raise click.ClickException(f"Program not found: {program[0]}")
+    if not skip_executable_check:
+        program_path = Path(program[0])
+        if not program_path.exists() and not shutil.which(program[0]):
+            raise click.ClickException(f"Program not found: {program[0]}")
 
     # Build MPI command
     mpi_cmd = build_mpi_command(config, program, mpi_args, debug_gdbserver=debug_gdbserver)

@@ -288,6 +288,19 @@ def run_all_to_all_impl(
     [
         (
             1,
+            [3, 8, 384, 128],
+            1,
+            2,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+            2,
+            True,
+            False,
+            False,
+        ),  # Padded, check, no_trace
+        (
+            1,
             [1, 1, 44544, 3072 * 3],
             2,
             3,
@@ -313,7 +326,7 @@ def run_all_to_all_impl(
             False,
         ),  # Post-attn, stress, no_trace
     ],
-    ids=["pre-attn-check-use_trace", "post-attn-stress-no_trace"],
+    ids=["padded", "pre-attn-check-use_trace", "post-attn-stress-no_trace"],
 )
 @pytest.mark.parametrize(
     "device_params", [{"trace_region_size": 100000, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True

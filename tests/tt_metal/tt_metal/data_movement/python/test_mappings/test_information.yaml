@@ -438,3 +438,14 @@ tests:
 
   602:
     name: "Transaction ID - Read After Write One Packet Stateful"
+  500:
+    name: "Inline Direct Write Performance Comparison"
+    comment: |
+      Compares stateful vs non-stateful NOC inline write performance.
+      Shows scaling advantage of stateful approach with increasing write counts.
+
+  501:
+    name: "Inline Direct Write Address Pattern"
+    comment: |
+      Evaluates the performance impact of stateful versus stateless approaches under scenarios
+      involving both identical and differing values and destinations.

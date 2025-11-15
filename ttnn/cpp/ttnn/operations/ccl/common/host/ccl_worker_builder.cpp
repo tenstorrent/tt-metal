@@ -889,7 +889,7 @@ tt::tt_metal::KernelHandle generate_multi_command_stream_kernel_ct_args(
 static void log_command_stream(ttnn::ccl::cmd::CclHostLowLevelCommandSequence const& commands, size_t tab_level = 0) {
     using namespace ttnn::ccl;
     using namespace ttnn::ccl::cmd;
-    size_t index = 0;
+    [[maybe_unused]] size_t index = 0;
     for (auto const& c : commands) {
         index++;
         std::stringstream tabs_ss;
@@ -1196,18 +1196,13 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_reader_kernel_rt_args
     // If we are on device zero, we send n-1 chunks in ascending order
     auto& input_tensor = this->op_config.get_input_tensor(0);
     TT_ASSERT(input_tensor.padded_shape().size() == 4, "Only 4D tensors are supported for ccl");
-    ttnn::ccl::Shape4D<uint32_t> input_tensor_shape = {
-        input_tensor.padded_shape()[0],
-        input_tensor.padded_shape()[1],
-        input_tensor.padded_shape()[2],
-        input_tensor.padded_shape()[3]};
 
     std::vector<uint32_t> args = {
         static_cast<uint32_t>(input_tensor.buffer()->address()),
         static_cast<uint32_t>(slices.size()),
         num_pages_per_packet,
         this->op_config.get_page_size()};
-    std::size_t logged_arg_idx = 0;
+    [[maybe_unused]] std::size_t logged_arg_idx = 0;
     log_trace(tt::LogOp, "ccl_send_reader arg[{}]: buffer_address = {}", logged_arg_idx, args[logged_arg_idx]);
     logged_arg_idx++;
     log_trace(tt::LogOp, "ccl_send_reader arg[{}]: num_commands = {}", logged_arg_idx, args[logged_arg_idx]);

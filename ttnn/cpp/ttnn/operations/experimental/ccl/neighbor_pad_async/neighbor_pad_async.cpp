@@ -36,10 +36,8 @@ ttnn::Tensor ExecuteNeighborPadAsync::invoke(
     num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
 
     TT_FATAL(num_devices > 1, "neighbor_pad_async op will only work for num_devices > 1, but has {}", num_devices);
-    ttnn::ccl::Topology ccl_topology = topology.value_or(ttnn::ccl::Topology::Linear);
 
-    CoreCoord grid_size = devices[0]->compute_with_storage_grid_size();
-    auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
+    tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
 
     return tt::tt_metal::operation::run(
                ttnn::NeighborPadAsync(
@@ -53,7 +51,7 @@ ttnn::Tensor ExecuteNeighborPadAsync::invoke(
                    barrier_semaphore,
                    num_preferred_links.value_or(1),
                    memory_config.value_or(input_tensor.memory_config()),
-                   ccl_topology,
+                   topology_,
                    num_devices,
                    secondary_cluster_axis,
                    secondary_mesh_shape),

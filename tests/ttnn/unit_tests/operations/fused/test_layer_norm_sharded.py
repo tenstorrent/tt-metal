@@ -13,13 +13,6 @@ from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
     generate_input_tensor,
     ttnn_layer_norm_sharded,
 )
-from models.common.utility_functions import is_blackhole
-
-
-def skip_welford_blackhole(use_welford):
-    return pytest.mark.skipif(
-        use_welford and is_blackhole(), reason="Welford's algorithm is not supported on Blackhole"
-    )
 
 
 @pytest.mark.parametrize("h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt", single_stage_param_sets())
@@ -27,7 +20,6 @@ def skip_welford_blackhole(use_welford):
 @pytest.mark.parametrize("two_stage", [False])
 @pytest.mark.parametrize("tensor_type", ["ascending_values_repeated_rows", "random"])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
-@skip_welford_blackhole("'use_welford'")
 def test_layer_norm_sharded_single_stage(
     device, h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt, use_welford, two_stage, tensor_type, dtype
 ):
@@ -55,7 +47,6 @@ def test_layer_norm_sharded_single_stage(
 @pytest.mark.parametrize("two_stage", [True])
 @pytest.mark.parametrize("tensor_type", ["ascending_values_repeated_rows", "random"])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
-@skip_welford_blackhole("'use_welford'")
 def test_layer_norm_sharded_two_stage(
     device, h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt, use_welford, two_stage, tensor_type, dtype
 ):
@@ -79,7 +70,6 @@ def test_layer_norm_sharded_two_stage(
 @pytest.mark.parametrize("two_stage", [True, False])
 @pytest.mark.parametrize("tensor_type", ["ascending_values_repeated_rows", "random_normal"])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
-@skip_welford_blackhole("'use_welford'")
 def test_layer_norm_sharded_with_residual(device, use_welford, two_stage, tensor_type, dtype):
     if tensor_type == "random" or tensor_type == "random_normal":
         pytest.skip("Low PCC, see #30455")
@@ -110,7 +100,6 @@ def test_layer_norm_sharded_with_residual(device, use_welford, two_stage, tensor
 @pytest.mark.parametrize("two_stage", [True, False])
 @pytest.mark.parametrize("tensor_type", ["ascending_values_repeated_rows", "random_normal"])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
-@skip_welford_blackhole("'use_welford'")
 def test_layer_norm_sharded_with_weight_and_bias(device, use_welford, two_stage, tensor_type, dtype):
     h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt = simple_size_params(two_stage)
 
@@ -139,7 +128,6 @@ def test_layer_norm_sharded_with_weight_and_bias(device, use_welford, two_stage,
 @pytest.mark.parametrize("two_stage", [False])
 @pytest.mark.parametrize("tensor_type", ["ascending_values_repeated_rows", "random_normal"])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
-@skip_welford_blackhole("'use_welford'")
 def test_layer_norm_sharded_with_weight_and_bias_row_major(device, use_welford, two_stage, tensor_type, dtype):
     h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt = 64, 32, 2, 1, 1, 1, 1
 
@@ -169,7 +157,6 @@ def test_layer_norm_sharded_with_weight_and_bias_row_major(device, use_welford, 
 @pytest.mark.parametrize("two_stage", [True, False])
 @pytest.mark.parametrize("tensor_type", ["ascending_values_repeated_rows", "random"])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
-@skip_welford_blackhole("'use_welford'")
 def test_layer_norm_sharded_with_weight_and_bias_and_residual(device, use_welford, two_stage, tensor_type, dtype):
     if tensor_type == "random" or tensor_type == "random_normal":
         pytest.skip("Low PCC, see #30455")
@@ -199,7 +186,6 @@ def test_layer_norm_sharded_with_weight_and_bias_and_residual(device, use_welfor
 
 
 @pytest.mark.parametrize("use_welford", [True])
-@skip_welford_blackhole("'use_welford'")
 def test_layer_norm_sharded_padded(device, use_welford):
     """
     Test layer norm on a sharded tensor that is padded with zeros

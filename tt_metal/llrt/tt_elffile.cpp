@@ -439,8 +439,9 @@ void ElfFile::Impl::Elf<Is64>::LoadImage() {
             auto bytes = GetContents(section);
             auto words = std::span(reinterpret_cast<uint32_t const *>(bytes.data()), bytes.size() / sizeof(uint32_t));
             for (unsigned ix = 0; ix != words.size(); ix++) {
-                if (ix >= GetSegments().size())
+                if (ix >= GetSegments().size()) {
                     continue;
+                }
                 uint32_t limit = words[ix];
                 auto const &seg = GetSegments()[ix];
                 if (seg.membytes > limit) {

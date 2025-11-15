@@ -26,6 +26,7 @@
 #include <tt_stl/assert.hpp>
 #include "dispatch/hardware_command_queue.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
+#include "profiler_analysis.hpp"
 #include "hal_types.hpp"
 #include "hostdevcommon/profiler_common.h"
 #include "llrt.hpp"
@@ -35,11 +36,10 @@
 #include "profiler_paths.hpp"
 #include "profiler_state.hpp"
 #include "profiler_state_manager.hpp"
-#include "profiler_analysis.hpp"
 #include "tools/profiler/noc_event_profiler_utils.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt-metalium/profiler_types.hpp"
-#include "tt_backend_api_types.hpp"
+#include "common/tt_backend_api_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/arch.hpp>
@@ -47,6 +47,11 @@
 #include <umd/device/arch/wormhole_implementation.hpp>
 #include <tt-metalium/device_pool.hpp>
 #include "tt_cluster.hpp"
+
+#if !defined(TRACY_ENABLE) && defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunused-parameter"
+#endif
 
 namespace tt {
 
@@ -260,6 +265,27 @@ std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> getSortedDevice
     mergeSortedDeviceMarkerChunks(device_markers_vec, device_markers_chunk_offsets, thread_pool);
 
     return device_markers_vec;
+}
+
+std::set<experimental::ProgramAnalysisData> translateProgramsPerfResults(
+    const ProgramsPerfResults& programs_perf_results) {
+    ZoneScoped;
+
+    std::set<experimental::ProgramAnalysisData> programs_analyses_data;
+    for (const auto& [program_execution_uid, program_perf_results] :
+         programs_perf_results.program_execution_uid_to_perf_results) {
+        experimental::ProgramAnalysisData program_analysis_data;
+        program_analysis_data.program_execution_uid = program_execution_uid;
+        TT_ASSERT(
+            program_perf_results.analysis_results.size() == programs_perf_results.analysis_results_configs.size());
+        for (uint32_t i = 0; i < program_perf_results.analysis_results.size(); ++i) {
+            const AnalysisResultsConfig results_config = programs_perf_results.analysis_results_configs[i];
+            program_analysis_data.program_analyses_results[results_config.analysis_name] =
+                program_perf_results.analysis_results[i];
+        }
+        programs_analyses_data.insert(program_analysis_data);
+    }
+    return programs_analyses_data;
 }
 
 bool doAllDispatchCoresComeAfterNonDispatchCores(const IDevice* device, const std::vector<CoreCoord>& virtual_cores) {
@@ -1050,7 +1076,7 @@ void DeviceProfiler::issueFastDispatchReadFromL1DataBuffer(
 }
 
 void DeviceProfiler::issueSlowDispatchReadFromL1DataBuffer(
-    IDevice* device, const CoreCoord& worker_core, std::vector<uint32_t>& core_l1_data_buffer) {
+    IDevice* /*device*/, const CoreCoord& worker_core, std::vector<uint32_t>& core_l1_data_buffer) {
     ZoneScoped;
 
     const Hal& hal = MetalContext::instance().hal();
@@ -1676,7 +1702,7 @@ void DeviceProfiler::setLastFDReadAsDone() { this->is_last_fd_read_done = true; 
 
 bool DeviceProfiler::isLastFDReadDone() const { return this->is_last_fd_read_done; }
 
-DeviceProfiler::DeviceProfiler(const IDevice* device, const bool new_logs) :
+DeviceProfiler::DeviceProfiler(const IDevice* device, const bool new_logs [[maybe_unused]]) :
     device_arch(device->arch()),
     device_id(device->id()),
     device_core_frequency(tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(this->device_id)) {
@@ -1693,9 +1719,13 @@ DeviceProfiler::DeviceProfiler(const IDevice* device, const bool new_logs) :
         std::filesystem::path log_path = this->device_logs_output_dir / DEVICE_SIDE_LOG;
         std::filesystem::remove(log_path);
 
-        std::filesystem::path ops_perf_report_path = this->device_logs_output_dir / PROFILER_OPS_PERF_REPORT_NAME;
-        std::filesystem::remove(ops_perf_report_path);
+        std::filesystem::path device_perf_report_path = this->device_logs_output_dir / PROFILER_DEVICE_PERF_REPORT_NAME;
+        std::filesystem::remove(device_perf_report_path);
     }
+
+    tt::tt_metal::MetalContext::instance()
+        .profiler_state_manager()
+        ->device_programs_perf_analyses_map[this->device_id] = {};
 
     const std::string noc_events_report_path =
         tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_noc_events_report_path();
@@ -1711,10 +1741,8 @@ DeviceProfiler::DeviceProfiler(const IDevice* device, const bool new_logs) :
 #endif
 }
 
-void generateAnalysesForDeviceMarkers(
-    const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers,
-    const std::filesystem::path& report_path,
-    ThreadPool& thread_pool) {
+void DeviceProfiler::generateAnalysesForDeviceMarkers(
+    const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers) const {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
 
@@ -1723,9 +1751,16 @@ void generateAnalysesForDeviceMarkers(
         "tt_metal/tools/profiler/cpp_device_analyses.json";
     const std::vector<AnalysisConfig> analysis_configs = loadAnalysisConfigsFromJSON(analysis_configs_path);
 
-    const OpsPerfResults ops_perf_results = generatePerfResultsForOps(analysis_configs, device_markers, thread_pool);
+    const ProgramsPerfResults programs_perf_results =
+        generatePerfResultsForPrograms(analysis_configs, device_markers, *this->thread_pool);
 
-    writeOpsPerfResultsToCSV(ops_perf_results, report_path);
+    std::vector<std::set<experimental::ProgramAnalysisData>>& device_programs_perf_analyses =
+        tt::tt_metal::MetalContext::instance().profiler_state_manager()->device_programs_perf_analyses_map.at(
+            this->device_id);
+    device_programs_perf_analyses.push_back(translateProgramsPerfResults(programs_perf_results));
+
+    writeProgramsPerfResultsToCSV(
+        programs_perf_results, this->device_logs_output_dir / PROFILER_DEVICE_PERF_REPORT_NAME);
 #endif
 }
 
@@ -1743,13 +1778,13 @@ void DeviceProfiler::dumpDeviceResults(bool is_mid_run_dump) {
                                                 ->calculate_optimal_num_threads_for_device_profiler_thread_pool());
     }
 
-    initializeMissingTracyContexts(/*blocking=*/is_mid_run_dump);
+    this->initializeMissingTracyContexts(/*blocking=*/is_mid_run_dump);
 
     if (!is_mid_run_dump) {
         for (auto& [core, _] : this->device_markers_per_core_risc_map) {
             this->thread_pool->enqueue([this, core]() {
                 for (auto& [risc_num, device_markers] : this->device_markers_per_core_risc_map[core]) {
-                    processDeviceMarkerData(device_markers);
+                    this->processDeviceMarkerData(device_markers);
                 }
             });
         }
@@ -1761,13 +1796,12 @@ void DeviceProfiler::dumpDeviceResults(bool is_mid_run_dump) {
         getSortedDeviceMarkersVector(this->device_markers_per_core_risc_map, *this->thread_pool);
 
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_cpp_post_process()) {
-        generateAnalysesForDeviceMarkers(
-            device_markers_vec, this->device_logs_output_dir / PROFILER_OPS_PERF_REPORT_NAME, *this->thread_pool);
+        this->generateAnalysesForDeviceMarkers(device_markers_vec);
     }
 
     this->thread_pool->enqueue([this]() { writeDeviceResultsToFiles(); });
 
-    pushTracyDeviceResults(device_markers_vec);
+    this->pushTracyDeviceResults(device_markers_vec);
 
     this->thread_pool->wait();
 
@@ -1783,8 +1817,8 @@ void DeviceProfiler::freshDeviceLog() {
     std::filesystem::path log_path = device_logs_output_dir / DEVICE_SIDE_LOG;
     std::filesystem::remove(log_path);
 
-    std::filesystem::path ops_perf_report_path = device_logs_output_dir / PROFILER_OPS_PERF_REPORT_NAME;
-    std::filesystem::remove(ops_perf_report_path);
+    std::filesystem::path device_perf_report_path = device_logs_output_dir / PROFILER_DEVICE_PERF_REPORT_NAME;
+    std::filesystem::remove(device_perf_report_path);
 #endif
 }
 
@@ -1803,7 +1837,7 @@ void DeviceProfiler::readResults(
     const std::vector<CoreCoord>& virtual_cores,
     const ProfilerReadState state,
     const ProfilerDataBufferSource data_source,
-    const std::optional<ProfilerOptionalMetadata>& metadata) {
+    const std::optional<ProfilerOptionalMetadata>& /*metadata*/) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
     if (!getDeviceProfilerState()) {
@@ -2145,3 +2179,7 @@ bool getDeviceProfilerState() { return tt::tt_metal::MetalContext::instance().rt
 }  // namespace tt_metal
 
 }  // namespace tt
+
+#if !defined(TRACY_ENABLE) && defined(__clang__)
+#pragma clang diagnostic pop
+#endif

@@ -32,8 +32,6 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_unpad_r
     const uint32_t num_tiles_shifted_per_core = input_shape[-2] * input_shape[-1] / TILE_HW;
 
     for (uint32_t i = 0; i < num_cores_total; i++) {
-        CoreCoord core = {i % num_cores_x, i / num_cores_x};
-
         // reader and writer kernel args
         std::vector<uint32_t> reader_kernel_args = common_reader_kernel_args;
         reader_kernel_args[1] = start_id;

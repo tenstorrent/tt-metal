@@ -41,6 +41,14 @@ pytest --disable-warnings models/demos/whisper/demo/demo.py::test_demo_for_audio
 pytest --disable-warnings models/demos/whisper/demo/demo.py::test_demo_for_audio_classification_dataset
 ```
 
+### Translation Demo
+
+- To run the translation demo with inputs from the `google/fleurs` dataset:
+
+```sh
+pytest --disable-warnings models/demos/whisper/demo/demo.py::test_demo_for_translation_dataset
+```
+
 ## Notes:
 - By default, demo tests (Conditional Generation, Audio Classification) run on a single device (1) and all available devices.
 - To run the demo with specific device configurations, provide the desired number of devices under the `mesh_device` parameter.

@@ -112,6 +112,7 @@ def test_ttnn_aspp(device, model_location_generator):
     ttnn_aspp_output = ttnn_model.semantic_head.decoder["res5"]["project_conv"](ttnn_input)
 
     ttnn_aspp_output_torch = ttnn.to_torch(ttnn_aspp_output).permute(0, 3, 1, 2)
+    ttnn_aspp_output_torch = torch.reshape(ttnn_aspp_output_torch, (1, 256, 32, 64))
 
     pcc_passed, pcc_message = assert_with_pcc(pytorch_aspp_output, ttnn_aspp_output_torch, pcc=0.99)
 

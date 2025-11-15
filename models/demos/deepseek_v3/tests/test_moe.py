@@ -52,12 +52,12 @@ def reference_model(hf_config):
 def test_forward_pass(
     mode,
     seq_len,
+    set_deterministic_env,
     reference_model,
     hf_config,
-    tmp_path,
+    cache_path,
     mesh_device,
     ccl,
-    set_deterministic_env,
     topk_fallback,
 ):
     """Test forward pass against reference model."""
@@ -79,7 +79,7 @@ def test_forward_pass(
         reference_output = reference_model(torch_input)
 
     # Setup: Convert weights and get weight_config
-    weight_config = MoE.convert_weights(hf_config, (state_dict,), tmp_path, mesh_device)
+    weight_config = MoE.convert_weights(hf_config, (state_dict,), cache_path, mesh_device)
 
     # Generate appropriate config using utility function
     model_config = get_model_config(MoE, mode, hf_config, mesh_device, topk_fallback=topk_fallback)
