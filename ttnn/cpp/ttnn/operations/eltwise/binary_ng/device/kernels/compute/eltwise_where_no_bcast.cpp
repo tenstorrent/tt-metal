@@ -56,10 +56,10 @@ void MAIN {
             fill_tile_init();
             // TST: scalar is true value, goes to dst_reg 1
 #ifdef FILL_WITH_VALUE_FLOAT
-            FILL_LLK(i, i * 3 + 1, *scalar_val);
+            FILL_LLK(i * 3 + 1, *scalar_val);
 #endif
 #ifdef FILL_WITH_VALUE_INT
-            FILL_LLK(i, i * 3 + 1, scalar_value);
+            FILL_LLK(i * 3 + 1, scalar_value);
 #endif
 #endif
 

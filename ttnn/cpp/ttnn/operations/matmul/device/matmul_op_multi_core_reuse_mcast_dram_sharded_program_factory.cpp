@@ -21,6 +21,19 @@ namespace reuse_dram_sharded_optimized_helpers {
 using ttnn::operations::unary::UnaryOpType;
 using ttnn::operations::unary::UnaryWithParam;
 
+// This type of access pattern cannot be copied.
+// Treat it as a one off patch to restore functionality that
+// was adjusted to fix one P0 causing another P0.
+// TODO: Proper fix will be implemented in Issue #32205
+tt::tt_metal::IDevice* get_device_for_dram_banks(const ttnn::Tensor& a, const ttnn::MeshCoordinate& coord) {
+    ttnn::distributed::MeshDevice* device = a.device();
+    const ttnn::distributed::MeshDeviceView& view = device->get_view();
+    if (!view.contains(coord) || !view.is_local(coord)) {
+        return device;
+    }
+    return a.device()->get_device(coord);
+}
+
 void get_max_page_size_and_num_pages(uint32_t num_tiles, uint32_t tile_size, uint32_t& page_size, uint32_t& num_pages) {
     uint64_t total_size = static_cast<uint64_t>(num_tiles) * tile_size;
 
@@ -963,7 +976,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_shard
         bias_data_format = tt_metal::datatype_to_dataformat_converter(c.dtype());
     }
 
-    tt::tt_metal::IDevice* device = a.device();
+    tt::tt_metal::IDevice* device = reuse_dram_sharded_optimized_helpers::get_device_for_dram_banks(a, mesh_coord);
 
     TT_FATAL(
         a.shard_spec().has_value() && output.shard_spec().has_value(), "Both input A and output must have shard specs");
