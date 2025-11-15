@@ -464,6 +464,7 @@ void py_module(py::module& module) {
                 return str.str();
             })
         .def_readonly("dim", &MeshMapperConfig::Shard::dim);
+
     auto py_placement_replicate =
         static_cast<py::class_<MeshMapperConfig::Replicate>>(module.attr("PlacementReplicate"));
     py_placement_replicate.def(py::init([]() { return MeshMapperConfig::Replicate{}; }))
