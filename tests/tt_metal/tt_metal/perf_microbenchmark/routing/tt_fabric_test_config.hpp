@@ -409,10 +409,8 @@ public:
 
         return built_tests;
     }
-    // Helper function to check if a test should be skipped based on:
-    // 1. topology and device count
-    // 2. architecture or cluster type
-    bool should_skip_test(const ParsedTestConfig& test_config) const {
+    // Helper function to check if a test should be skipped based on architecture or cluster type.
+    bool should_skip_test_on_platform(const ParsedTestConfig& test_config) const {
         // Skip if the test declares platforms to skip and this platform matches
         if (test_config.skip.has_value()) {
             // Determine current platform identifiers
@@ -426,6 +424,11 @@ public:
                 }
             }
         }
+        return false;
+    }
+
+    // Helper function to check if a test should be skipped based on topology incompatibilities.
+    bool should_skip_test_on_topology(const ParsedTestConfig& test_config) const {
         if (test_config.fabric_setup.topology == Topology::Ring) {
             uint32_t num_devices = device_info_provider_.get_local_node_ids().size();
             if (num_devices < MIN_RING_TOPOLOGY_DEVICES) {
