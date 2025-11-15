@@ -58,6 +58,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::ATANH: return "SFPU_OP_TRIG_FAMILY_INCLUDE";
         case UnaryOpType::NEG: return "SFPU_OP_NEG_INCLUDE";
         case UnaryOpType::SOFTPLUS: return "SFPU_OP_SOFTPLUS_INCLUDE";
+        case UnaryOpType::LOGSIGMOID: return "SFPU_OP_LOGSIGMOID_INCLUDE";
         case UnaryOpType::SELU: return "SFPU_OP_SELU_INCLUDE";
         case UnaryOpType::PRELU_SFPU: return "SFPU_OP_PRELU_INCLUDE";
         case UnaryOpType::TYPECAST: return "SFPU_OP_TYPECAST_INCLUDE";
@@ -429,6 +430,11 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     std::bit_cast<uint32_t>(param0),
                     std::bit_cast<uint32_t>(1.0f / param0),  // Pass reciprocal to avoid doing it on device
                     std::bit_cast<uint32_t>(param1))};
+            break;
+        }
+        case UnaryOpType::LOGSIGMOID: {
+            op_init_and_name = {
+                "logsigmoid_tile_init();", "logsigmoid_tile(0, 1, 0);"};  // Two inputs (x, exp(-x)), output to dst[0]
             break;
         }
         case UnaryOpType::PRELU_SFPU: {
@@ -1013,6 +1019,7 @@ std::string get_compute_kernel_path(
                 return fmt::format("{}/{}", compute_root, "hardswish_kernel.cpp");
             }
         case UnaryOpType::CBRT: return fmt::format("{}/{}", compute_root, "cbrt_kernel.cpp");
+        case UnaryOpType::LOGSIGMOID: return fmt::format("{}/{}", compute_root, "logsigmoid_kernel.cpp");
         default: return fmt::format("{}/{}", compute_root, "eltwise_sfpu.cpp");
     }
 }
