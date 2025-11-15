@@ -71,7 +71,7 @@ operation::ProgramWithCallbacks indexed_fill_multi_core(
 
     auto writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp",
+        "ttnn/cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 

@@ -518,7 +518,7 @@ inline tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
 
         writer_kernel_id = tt::tt_metal::CreateKernel(
             program,
-            "ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp",
+            "ttnn/cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp",
             all_cores,
             tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
     }
@@ -733,7 +733,7 @@ inline tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
     // Tilized writer
     auto writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp",
+        "ttnn/cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 

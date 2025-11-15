@@ -864,7 +864,7 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
 
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        rm_layout ? "ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp"
+        rm_layout ? "ttnn/cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp"
                   : "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
                     "writer_unary_interleaved_start_id.cpp",
         all_cores,

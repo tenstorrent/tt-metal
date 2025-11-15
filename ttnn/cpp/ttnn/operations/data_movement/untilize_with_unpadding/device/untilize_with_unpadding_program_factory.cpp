@@ -993,7 +993,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
         TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
         unary_writer_kernel_id = CreateKernel(
             program,
-            "ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_blocks.cpp",
+            "ttnn/cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_blocks.cpp",
             all_cores,
             WriterDataMovementConfig(writer_ct_args));
     }

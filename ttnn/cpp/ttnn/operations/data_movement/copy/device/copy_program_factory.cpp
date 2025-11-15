@@ -100,7 +100,7 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor& input, const Tenso
     }
     std::string reader_rm_path =
         sharded ? "ttnn/cpp/ttnn/operations/data_movement/copy/device/kernels/reader_unary_stick_start_id.cpp"
-                : "ttnn/kernel/dataflow/reader_unary_stick_layout_interleaved_start_id.cpp";
+                : "ttnn/cpp/ttnn/kernel/dataflow/reader_unary_stick_layout_interleaved_start_id.cpp";
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         tilized ? "ttnn/cpp/ttnn/operations/data_movement/copy/device/kernels/reader_unary_start_id.cpp"
@@ -110,7 +110,7 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor& input, const Tenso
 
     std::string writer_rm_path =
         sharded ? "ttnn/cpp/ttnn/operations/data_movement/copy/device/kernels/writer_unary_stick_start_id.cpp"
-                : "ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp";
+                : "ttnn/cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp";
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         tilized ? "ttnn/cpp/ttnn/operations/data_movement/copy/device/kernels/writer_unary_start_id.cpp"
