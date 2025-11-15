@@ -12,7 +12,6 @@
 #include <string>
 #include <vector>
 
-#include "common/executor.hpp"
 #include "hal_types.hpp"
 #include "jit_build_options.hpp"
 #include <umd/device/types/arch.hpp>
@@ -42,19 +41,7 @@ struct JitBuiltStateConfig {
 
 class JitBuildTargetLookup {
 public:
-    void build_once(const std::string& target_name, const std::function<void()>& build_func) {
-        // TODO: can use std::once_flag instead.
-        std::shared_future<void>* future = nullptr;
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            auto it = build_futures_.find(target_name);
-            if (it == build_futures_.end()) {
-                it = build_futures_.emplace_hint(it, target_name, detail::async(build_func));
-            }
-            future = &it->second;
-        }
-        future->get();
-    }
+    void build_once(const std::string& target_name, const std::function<void()>& build_func);
 
 private:
     std::mutex mutex_;
