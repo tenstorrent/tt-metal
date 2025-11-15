@@ -26,6 +26,7 @@ from models.experimental.stable_diffusion_xl_base.vae.tt.tt_autoencoder_kl impor
 # space left in base variant as well.
 SDXL_L1_SMALL_SIZE = 30000
 SDXL_TRACE_REGION_SIZE = 34000000
+SDXL_BASE_REFINER_TRACE_REGION_SIZE = 51429376
 SDXL_CI_WEIGHTS_PATH = "/mnt/MLPerf/tt_dnn-models/hf_home"
 SDXL_FABRIC_CONFIG = ttnn.FabricConfig.FABRIC_1D
 MAX_SEQUENCE_LENGTH = 77
@@ -195,6 +196,12 @@ def batch_encode_prompt_on_device(
     prompt_2 = prompt_2 or prompt
     prompt_2 = [prompt_2] if isinstance(prompt_2, str) else prompt_2
 
+    # Convert negative prompts to lists early
+    if negative_prompt is not None:
+        negative_prompt = [negative_prompt] if isinstance(negative_prompt, str) else negative_prompt
+    if negative_prompt_2 is not None:
+        negative_prompt_2 = [negative_prompt_2] if isinstance(negative_prompt_2, str) else negative_prompt_2
+
     num_devices = ttnn_device.get_num_devices()
     num_prompts = len(prompt)
     if use_cfg_parallel and num_prompts < num_devices:
@@ -202,6 +209,12 @@ def batch_encode_prompt_on_device(
         prompt = prompt + [""] * (num_devices - len(prompt))
         if prompt_2 is not None:
             prompt_2 = prompt_2 + [""] * (num_devices - len(prompt_2))
+
+        # Pad negative prompts as well
+        if negative_prompt is not None:
+            negative_prompt = negative_prompt + [""] * (num_devices - len(negative_prompt))
+        if negative_prompt_2 is not None:
+            negative_prompt_2 = negative_prompt_2 + [""] * (num_devices - len(negative_prompt_2))
 
     assert len(prompt) == num_devices, "Prompt length must be equal to number of devices"
     assert lora_scale is None, "Lora scale is not supported currently with on device text encoders"
@@ -746,6 +759,7 @@ def run_tt_image_gen(
     use_cfg_parallel=False,
     guidance_rescale=0.0,
     one_minus_guidance_rescale=1.0,
+    return_latents=False,  # If True, skip VAE decoding and return latents
 ):
     assert not (capture_trace and num_steps != 1), "Trace should capture only 1 iteration"
     profiler.start("image_gen")
@@ -846,6 +860,20 @@ def run_tt_image_gen(
     tt_scheduler.set_begin_index(0)
 
     profiler.end("denoising_loop")
+
+    # Skip VAE decoding if return_latents is True
+    if return_latents:
+        profiler.start("read_output_tensor")
+        latents = ttnn.to_torch(tt_latents, mesh_composer=ttnn.ConcatMeshToTensor(ttnn_device, dim=0))[:batch_size, ...]
+        profiler.end("read_output_tensor")
+
+        # Reshape latents to match expected format
+        B, C, H, W = input_shape
+        latents = latents.reshape(batch_size * B, H, W, C)
+        latents = torch.permute(latents, (0, 3, 1, 2))
+
+        profiler.end("image_gen")
+        return latents, tid, output_device, output_shape, tid_vae
 
     vae_on_device = isinstance(vae, TtAutoencoderKL)
 

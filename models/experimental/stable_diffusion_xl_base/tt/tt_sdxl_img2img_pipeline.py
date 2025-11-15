@@ -25,8 +25,8 @@ class TtSDXLImg2ImgPipelineConfig(TtSDXLPipelineConfig):
 
 
 class TtSDXLImg2ImgPipeline(TtSDXLPipeline):
-    def __init__(self, ttnn_device, torch_pipeline, pipeline_config: TtSDXLImg2ImgPipelineConfig):
-        super().__init__(ttnn_device, torch_pipeline, pipeline_config)
+    def __init__(self, ttnn_device, torch_pipeline, pipeline_config: TtSDXLImg2ImgPipelineConfig, tt_scheduler=None):
+        super().__init__(ttnn_device, torch_pipeline, pipeline_config, tt_scheduler)
 
         self.num_in_channels_unet = 4
         self.num_channels_image_latents = 4
@@ -68,7 +68,7 @@ class TtSDXLImg2ImgPipeline(TtSDXLPipeline):
         self,
         all_prompt_embeds_torch,
         torch_add_text_embeds,
-        torch_image,
+        torch_image=None,
         start_latent_seed=None,  # need this to generate noise tensors, and in the future if we want to support strength_max == 1.0
         fixed_seed_for_batch=False,
         timesteps=None,
@@ -95,9 +95,9 @@ class TtSDXLImg2ImgPipeline(TtSDXLPipeline):
             start_latent_seed, int
         ), "start_latent_seed must be an integer or None"
 
+        # Encode image to latents (standard img2img case)
         if start_latent_seed is not None:
             torch.manual_seed(start_latent_seed if fixed_seed_for_batch else start_latent_seed)
-
         add_noise = True if denoising_start is None else False
         img_latents = prepare_image_latents(
             self.torch_pipeline,
