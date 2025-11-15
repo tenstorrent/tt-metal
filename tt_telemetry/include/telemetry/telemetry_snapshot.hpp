@@ -43,6 +43,10 @@ struct TelemetrySnapshot {
     std::unordered_map<uint16_t, std::string> metric_unit_display_label_by_code;
     std::unordered_map<uint16_t, std::string> metric_unit_full_label_by_code;
 
+    // Physical link information (immutable, sent once per metric)
+    // Maps metric path to physical link topology info as JSON
+    std::unordered_map<std::string, nlohmann::json> physical_link_info;
+
     void clear() {
         bool_metrics.clear();
         uint_metrics.clear();
@@ -57,6 +61,7 @@ struct TelemetrySnapshot {
         string_metric_timestamps.clear();
         metric_unit_display_label_by_code.clear();
         metric_unit_full_label_by_code.clear();
+        physical_link_info.clear();
     }
 
     /**
@@ -73,59 +78,60 @@ struct TelemetrySnapshot {
     }
 
 private:
+    // Helper template to merge maps efficiently
+    template <typename MapType>
+    static void merge_map_into(MapType& target, const MapType& source) {
+        for (const auto& [key, value] : source) {
+            target[key] = value;
+        }
+    }
+
     /**
      * Fast path: merge without validation (original implementation)
      */
     void merge_from_fast(const TelemetrySnapshot& other) {
         // Update unit label maps if they are provided
         if (!other.metric_unit_display_label_by_code.empty() || !other.metric_unit_full_label_by_code.empty()) {
-            for (const auto& [code, label] : other.metric_unit_display_label_by_code) {
-                metric_unit_display_label_by_code[code] = label;
+            merge_map_into(metric_unit_display_label_by_code, other.metric_unit_display_label_by_code);
+            merge_map_into(metric_unit_full_label_by_code, other.metric_unit_full_label_by_code);
+        }
+
+        // Update metrics and their metadata using helper
+        merge_map_into(bool_metrics, other.bool_metrics);
+        merge_map_into(bool_metric_timestamps, other.bool_metric_timestamps);
+        merge_map_into(uint_metrics, other.uint_metrics);
+        merge_map_into(uint_metric_units, other.uint_metric_units);
+        merge_map_into(uint_metric_timestamps, other.uint_metric_timestamps);
+        merge_map_into(double_metrics, other.double_metrics);
+        merge_map_into(double_metric_units, other.double_metric_units);
+        merge_map_into(double_metric_timestamps, other.double_metric_timestamps);
+        merge_map_into(string_metrics, other.string_metrics);
+        merge_map_into(string_metric_units, other.string_metric_units);
+        merge_map_into(string_metric_timestamps, other.string_metric_timestamps);
+
+        // Merge physical link info (immutable, sent once per metric)
+        for (const auto& [path, info] : other.physical_link_info) {
+            physical_link_info.insert({path, info});
+        }
+    }
+
+    // Helper template to validate and merge unit label maps
+    template <typename T>
+    void validate_and_merge_label_map(
+        std::unordered_map<T, std::string>& target,
+        const std::unordered_map<T, std::string>& source,
+        const char* label_type) {
+        for (const auto& [code, label] : source) {
+            auto result = target.insert({code, label});
+            if (!result.second && result.first->second != label) {
+                log_error(
+                    tt::LogAlways,
+                    "Unit {} label redefinition detected for code {}: existing='{}', new='{}'",
+                    label_type,
+                    code,
+                    result.first->second,
+                    label);
             }
-            for (const auto& [code, label] : other.metric_unit_full_label_by_code) {
-                metric_unit_full_label_by_code[code] = label;
-            }
-        }
-
-        // Update bool metrics and their metadata
-        for (const auto& [path, value] : other.bool_metrics) {
-            bool_metrics[path] = value;
-        }
-        for (const auto& [path, timestamp] : other.bool_metric_timestamps) {
-            bool_metric_timestamps[path] = timestamp;
-        }
-
-        // Update uint metrics and their metadata
-        for (const auto& [path, value] : other.uint_metrics) {
-            uint_metrics[path] = value;
-        }
-        for (const auto& [path, unit] : other.uint_metric_units) {
-            uint_metric_units[path] = unit;
-        }
-        for (const auto& [path, timestamp] : other.uint_metric_timestamps) {
-            uint_metric_timestamps[path] = timestamp;
-        }
-
-        // Update double metrics and their metadata
-        for (const auto& [path, value] : other.double_metrics) {
-            double_metrics[path] = value;
-        }
-        for (const auto& [path, unit] : other.double_metric_units) {
-            double_metric_units[path] = unit;
-        }
-        for (const auto& [path, timestamp] : other.double_metric_timestamps) {
-            double_metric_timestamps[path] = timestamp;
-        }
-
-        // Update string metrics and their metadata
-        for (const auto& [path, value] : other.string_metrics) {
-            string_metrics[path] = value;
-        }
-        for (const auto& [path, unit] : other.string_metric_units) {
-            string_metric_units[path] = unit;
-        }
-        for (const auto& [path, timestamp] : other.string_metric_timestamps) {
-            string_metric_timestamps[path] = timestamp;
         }
     }
 
@@ -135,141 +141,85 @@ private:
     void merge_from_with_validation(const TelemetrySnapshot& other) {
         // Validate and merge unit label maps
         if (!other.metric_unit_display_label_by_code.empty() || !other.metric_unit_full_label_by_code.empty()) {
-            // Validate display label map
-            for (const auto& [code, label] : other.metric_unit_display_label_by_code) {
-                auto result = metric_unit_display_label_by_code.insert({code, label});
-                if (!result.second) {  // Key already exists
-                    if (result.first->second != label) {
-                        log_error(
-                            tt::LogAlways,
-                            "Unit display label redefinition detected for code {}: existing='{}', new='{}'",
-                            code,
-                            result.first->second,
-                            label);
-                    }
-                }
-            }
-
-            // Validate full label map
-            for (const auto& [code, label] : other.metric_unit_full_label_by_code) {
-                auto result = metric_unit_full_label_by_code.insert({code, label});
-                if (!result.second) {  // Key already exists
-                    if (result.first->second != label) {
-                        log_error(
-                            tt::LogAlways,
-                            "Unit full label redefinition detected for code {}: existing='{}', new='{}'",
-                            code,
-                            result.first->second,
-                            label);
-                    }
-                }
-            }
+            validate_and_merge_label_map(
+                metric_unit_display_label_by_code, other.metric_unit_display_label_by_code, "display");
+            validate_and_merge_label_map(metric_unit_full_label_by_code, other.metric_unit_full_label_by_code, "full");
         }
+
+        // Helper to check for metric type conflicts
+        auto check_metric_conflict = [](const std::string& path,
+                                        const char* new_type,
+                                        const char* existing_type,
+                                        const auto& existing_map) -> bool {
+            if (existing_map.find(path) != existing_map.end()) {
+                log_error(
+                    tt::LogAlways,
+                    "Metric type conflict: path '{}' exists as both {} and {}",
+                    path,
+                    new_type,
+                    existing_type);
+                return true;
+            }
+            return false;
+        };
 
         // Validate and merge bool metrics
         for (const auto& [path, value] : other.bool_metrics) {
-            // Check if this path exists in other metric types
-            if (uint_metrics.find(path) != uint_metrics.end()) {
-                log_error(tt::LogAlways, "Metric type conflict: path '{}' exists as both bool and uint", path);
-                continue;  // Skip this update
-            }
-            if (double_metrics.find(path) != double_metrics.end()) {
-                log_error(tt::LogAlways, "Metric type conflict: path '{}' exists as both bool and double", path);
-                continue;  // Skip this update
-            }
-            if (string_metrics.find(path) != string_metrics.end()) {
-                log_error(tt::LogAlways, "Metric type conflict: path '{}' exists as both bool and string", path);
-                continue;  // Skip this update
+            if (check_metric_conflict(path, "bool", "uint", uint_metrics) ||
+                check_metric_conflict(path, "bool", "double", double_metrics) ||
+                check_metric_conflict(path, "bool", "string", string_metrics)) {
+                continue;
             }
             bool_metrics[path] = value;
         }
-
-        // Merge bool metadata
-        for (const auto& [path, timestamp] : other.bool_metric_timestamps) {
-            bool_metric_timestamps[path] = timestamp;
-        }
+        merge_map_into(bool_metric_timestamps, other.bool_metric_timestamps);
 
         // Validate and merge uint metrics
         for (const auto& [path, value] : other.uint_metrics) {
-            // Check if this path exists in other metric types
-            if (bool_metrics.find(path) != bool_metrics.end()) {
-                log_error(tt::LogAlways, "Metric type conflict: path '{}' exists as both uint and bool", path);
-                continue;  // Skip this update
-            }
-            if (double_metrics.find(path) != double_metrics.end()) {
-                log_error(tt::LogAlways, "Metric type conflict: path '{}' exists as both uint and double", path);
-                continue;  // Skip this update
-            }
-            if (string_metrics.find(path) != string_metrics.end()) {
-                log_error(tt::LogAlways, "Metric type conflict: path '{}' exists as both uint and string", path);
-                continue;  // Skip this update
+            if (check_metric_conflict(path, "uint", "bool", bool_metrics) ||
+                check_metric_conflict(path, "uint", "double", double_metrics) ||
+                check_metric_conflict(path, "uint", "string", string_metrics)) {
+                continue;
             }
             uint_metrics[path] = value;
         }
-
-        // Merge uint metadata
-        for (const auto& [path, unit] : other.uint_metric_units) {
-            uint_metric_units[path] = unit;
-        }
-        for (const auto& [path, timestamp] : other.uint_metric_timestamps) {
-            uint_metric_timestamps[path] = timestamp;
-        }
+        merge_map_into(uint_metric_units, other.uint_metric_units);
+        merge_map_into(uint_metric_timestamps, other.uint_metric_timestamps);
 
         // Validate and merge double metrics
         for (const auto& [path, value] : other.double_metrics) {
-            // Check if this path exists in other metric types
-            if (bool_metrics.find(path) != bool_metrics.end()) {
-                log_error(tt::LogAlways, "Metric type conflict: path '{}' exists as both double and bool", path);
-                continue;  // Skip this update
-            }
-            if (uint_metrics.find(path) != uint_metrics.end()) {
-                log_error(tt::LogAlways, "Metric type conflict: path '{}' exists as both double and uint", path);
-                continue;  // Skip this update
-            }
-            if (string_metrics.find(path) != string_metrics.end()) {
-                log_error(tt::LogAlways, "Metric type conflict: path '{}' exists as both double and string", path);
-                continue;  // Skip this update
+            if (check_metric_conflict(path, "double", "bool", bool_metrics) ||
+                check_metric_conflict(path, "double", "uint", uint_metrics) ||
+                check_metric_conflict(path, "double", "string", string_metrics)) {
+                continue;
             }
             double_metrics[path] = value;
         }
-
-        // Merge double metadata
-        for (const auto& [path, unit] : other.double_metric_units) {
-            double_metric_units[path] = unit;
-        }
-        for (const auto& [path, timestamp] : other.double_metric_timestamps) {
-            double_metric_timestamps[path] = timestamp;
-        }
+        merge_map_into(double_metric_units, other.double_metric_units);
+        merge_map_into(double_metric_timestamps, other.double_metric_timestamps);
 
         // Validate and merge string metrics
-        std::unordered_set<std::string> merged_string_paths;
         for (const auto& [path, value] : other.string_metrics) {
-            // Check if this path exists in other metric types
-            if (bool_metrics.find(path) != bool_metrics.end()) {
-                log_error(tt::LogAlways, "Metric type conflict: path '{}' exists as both string and bool", path);
-                continue;  // Skip this update
-            }
-            if (uint_metrics.find(path) != uint_metrics.end()) {
-                log_error(tt::LogAlways, "Metric type conflict: path '{}' exists as both string and uint", path);
-                continue;  // Skip this update
-            }
-            if (double_metrics.find(path) != double_metrics.end()) {
-                log_error(tt::LogAlways, "Metric type conflict: path '{}' exists as both string and double", path);
-                continue;  // Skip this update
+            if (check_metric_conflict(path, "string", "bool", bool_metrics) ||
+                check_metric_conflict(path, "string", "uint", uint_metrics) ||
+                check_metric_conflict(path, "string", "double", double_metrics)) {
+                continue;
             }
             string_metrics[path] = value;
-            merged_string_paths.insert(path);
         }
+        merge_map_into(string_metric_units, other.string_metric_units);
+        merge_map_into(string_metric_timestamps, other.string_metric_timestamps);
 
-        // Merge string metadata only for successfully merged paths
-        for (const auto& [path, unit] : other.string_metric_units) {
-            if (merged_string_paths.find(path) != merged_string_paths.end()) {
-                string_metric_units[path] = unit;
-            }
-        }
-        for (const auto& [path, timestamp] : other.string_metric_timestamps) {
-            if (merged_string_paths.find(path) != merged_string_paths.end()) {
-                string_metric_timestamps[path] = timestamp;
+        // Merge physical link info (immutable, sent once per metric)
+        for (const auto& [path, info] : other.physical_link_info) {
+            auto result = physical_link_info.insert({path, info});
+            if (!result.second) {  // Key already exists
+                if (result.first->second != info) {
+                    log_error(
+                        tt::LogAlways,
+                        "Physical link info redefinition detected for path '{}': existing and new values differ",
+                        path);
+                }
             }
         }
     }
@@ -292,6 +242,7 @@ public:
          {"string_metric_timestamps", t.string_metric_timestamps},
          {"metric_unit_display_label_by_code", t.metric_unit_display_label_by_code},
          {"metric_unit_full_label_by_code", t.metric_unit_full_label_by_code},
+         {"physical_link_info", t.physical_link_info},
      };
 }
 
@@ -309,4 +260,9 @@ static inline void from_json(const nlohmann::json &j, TelemetrySnapshot &t) {
     j.at("string_metric_timestamps").get_to(t.string_metric_timestamps);
     j.at("metric_unit_display_label_by_code").get_to(t.metric_unit_display_label_by_code);
     j.at("metric_unit_full_label_by_code").get_to(t.metric_unit_full_label_by_code);
+
+    // Physical link info may not be present in older snapshots
+    if (j.contains("physical_link_info")) {
+        j.at("physical_link_info").get_to(t.physical_link_info);
+    }
 }
