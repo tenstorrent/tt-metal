@@ -262,9 +262,9 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
 
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        in_sharded ? "ttnn/operations/experimental/transformer/rotary_embedding/device/kernels/dataflow/"
+        in_sharded ? "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/device/kernels/dataflow/"
                      "reader_rotary_embedding_interleaved_start_id_sharded.cpp"
-                   : "ttnn/operations/experimental/transformer/rotary_embedding/device/kernels/dataflow/"
+                   : "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/device/kernels/dataflow/"
                      "reader_rotary_embedding_interleaved_start_id.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_kernel_defines));

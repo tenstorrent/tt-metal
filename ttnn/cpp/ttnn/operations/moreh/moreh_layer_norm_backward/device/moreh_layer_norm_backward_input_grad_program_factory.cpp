@@ -184,9 +184,9 @@ MorehLayerNormBackwardInputGradOperation::ProgramFactory::create(
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
     const auto reader_kernel_file = use_large_algorithm
-                                        ? "ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
+                                        ? "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
                                           "reader_moreh_layer_norm_backward_input_grad_large.cpp"
-                                        : "ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
+                                        : "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
                                           "reader_moreh_layer_norm_backward_input_grad_small.cpp";
 
     const auto writer_kernel_file =
@@ -207,9 +207,9 @@ MorehLayerNormBackwardInputGradOperation::ProgramFactory::create(
         static_cast<uint32_t>(is_groupnorm)};
 
     const auto compute_kernel_file = use_large_algorithm
-                                         ? "ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
+                                         ? "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
                                            "moreh_layer_norm_backward_input_grad_large_kernel.cpp"
-                                         : "ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
+                                         : "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
                                            "moreh_layer_norm_backward_input_grad_small_kernel.cpp";
 
     CreateComputeKernel(

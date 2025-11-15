@@ -149,10 +149,11 @@ MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFactory
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     const auto reader_kernel_file =
-        use_large_algorithm ? "ttnn/operations/moreh/moreh_group_norm_backward/device/input_grad/kernels/dataflow/"
-                              "reader_moreh_group_norm_backward_input_grad_large.cpp"
-                            : "ttnn/operations/moreh/moreh_group_norm_backward/device/input_grad/kernels/dataflow/"
-                              "reader_moreh_group_norm_backward_input_grad_small.cpp";
+        use_large_algorithm
+            ? "ttnn/cpp/ttnn/operations/moreh/moreh_group_norm_backward/device/input_grad/kernels/dataflow/"
+              "reader_moreh_group_norm_backward_input_grad_large.cpp"
+            : "ttnn/cpp/ttnn/operations/moreh/moreh_group_norm_backward/device/input_grad/kernels/dataflow/"
+              "reader_moreh_group_norm_backward_input_grad_small.cpp";
 
     const std::string writer_kernel_file(
         "ttnn/cpp/ttnn/operations/moreh/moreh_group_norm_backward/device/input_grad/kernels/dataflow/"
@@ -179,9 +180,9 @@ MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFactory
     compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_SCALAR";
 
     const auto compute_kernel_file = use_large_algorithm
-                                         ? "ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
+                                         ? "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
                                            "moreh_layer_norm_backward_input_grad_large_kernel.cpp"
-                                         : "ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
+                                         : "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
                                            "moreh_layer_norm_backward_input_grad_small_kernel.cpp";
 
     const std::vector<uint32_t> compute_args_group_1{
