@@ -60,6 +60,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/models/distributed/llama.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/distributed/pipeline_parallel_llama.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/distributed/pipeline_parallel_llama.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/models/distributed/qwen.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/models/distributed/qwen.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/base_transformer.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/gpt2.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/gpt2.hpp
@@ -69,6 +71,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/models/llama.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/mlp.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/mlp.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/models/qwen.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/models/qwen.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/gpt_block.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/gpt_block.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/grouped_query_attention.cpp
@@ -77,6 +81,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/linear.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/llama_block.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/llama_block.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/qwen_block.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/qwen_block.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/multi_head_attention.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/multi_head_attention.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/dropout_module.cpp
@@ -93,6 +99,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/linear_module.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/llama_block.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/llama_block.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/qwen_block.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/qwen_block.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/lora_linear_module.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/lora_linear_module.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/module_base.hpp
