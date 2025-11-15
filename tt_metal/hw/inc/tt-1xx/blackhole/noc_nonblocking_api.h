@@ -24,6 +24,10 @@ constexpr std::underlying_type_t<TensixProcessorTypes> proc_type =
 #elif defined(COMPILE_FOR_AERISC) || defined(COMPILE_FOR_IDLE_ERISC)
 constexpr std::underlying_type_t<EthProcessorTypes> proc_type =
     static_cast<std::underlying_type_t<EthProcessorTypes>>(PROCESSOR_INDEX);
+#elif defined(COMPILE_FOR_TRISC)
+// TRISC is not a data movement processor. This is just so it compiles
+constexpr std::underlying_type_t<TensixProcessorTypes> proc_type =
+    static_cast<std::underlying_type_t<TensixProcessorTypes>>(TensixProcessorTypes::DM1);
 #else
 #error "Unknown processor type for noc_nonblocking_api.h"
 #endif
