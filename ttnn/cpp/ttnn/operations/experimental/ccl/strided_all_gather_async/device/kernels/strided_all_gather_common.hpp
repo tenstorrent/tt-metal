@@ -49,7 +49,6 @@ FORCE_INLINE int32_t get_next_chunk_tile(
     uint32_t input_tile_index = input_chunk_start_tile_index + chunk_row * input_tensor_Wt + chunk_col;
     uint32_t input_row = input_tile_index / input_tensor_Wt;
     if (input_row >= input_tensor_Ht) {
-        DPRINT << "RETURNED " << ENDL();
         return -1;
     }
     if (read_from_output) {
