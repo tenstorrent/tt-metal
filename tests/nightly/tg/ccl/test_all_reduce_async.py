@@ -406,7 +406,7 @@ def test_line_all_reduce_on_TG_cols_post_commit(
 @pytest.mark.parametrize("replication_factor", [1])
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
 @pytest.mark.parametrize("mesh_device", [pytest.param((1, 32), id="1x32_grid")], indirect=True)
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_2D_DYNAMIC}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}], indirect=True)
 def test_line_all_reduce_training(
     mesh_device,
     num_devices,
@@ -468,9 +468,9 @@ def test_line_all_reduce_training(
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}, {"fabric_config": ttnn.FabricConfig.FABRIC_2D_DYNAMIC}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
-    ids=["fabric_2d_standard", "fabric_2d_dynamic"],
+    ids=["fabric_2d"],
 )
 def test_all_reduce_fabric_2d(
     mesh_device,
@@ -509,7 +509,7 @@ def test_all_reduce_fabric_2d(
             assert (
                 mesh_device.num_program_cache_entries() == 3
             ), f"Number of program cache entries: {mesh_device.num_program_cache_entries()} but was expecting 3 as we are using fabric 2D, which fallsback to composite all gather + local reduce"
-        elif device_params["fabric_config"] == ttnn.FabricConfig.FABRIC_2D_DYNAMIC:
+        elif device_params["fabric_config"] == ttnn.FabricConfig.FABRIC_2D:
             logger.info(f"Number of program cache entries: {mesh_device.num_program_cache_entries()}")
             assert (
                 mesh_device.num_program_cache_entries() == 2
