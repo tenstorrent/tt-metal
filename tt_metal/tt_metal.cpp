@@ -1094,19 +1094,57 @@ KernelHandle CreateEthernetKernel(
         "cores because both NOCs are in use!",
         kernel->name());
 
-    // Due to conflict with eth fw using noc0 at the same time, ensure each risc only uses their own noc
-    // https://github.com/tenstorrent/tt-metal/issues/25058
-    // E.g., risc0 -> noc0, risc1 -> noc1
-    if (config.processor != DataMovementProcessor::RISCV_0 && config.eth_mode != Eth::IDLE &&
-        !tt::tt_metal::MetalContext::instance().hal().get_eth_fw_is_cooperative()) {
+    //
+    // Valid configurations for Blackhole ERISC
+    //
+    // |                | Valid NOC Configuration     |                             |
+    // |----------------|-----------------------------|-----------------------------|
+    // | **ERISC Mode** | **Physical ERISC0**         | **Physical ERISC1**         |
+    // | Single         | Not enabled for dispatch    | Dedicated NOC1, Dynamic NOC |
+    // | Dual           | Dedicated NOC0, Dynamic NOC | Dedicated NOC1, Dynamic NOC |
+    //
+    if (!tt::tt_metal::MetalContext::instance().hal().get_eth_fw_is_cooperative() && config.eth_mode != Eth::IDLE &&
+        config.noc_mode != NOC_MODE::DM_DYNAMIC_NOC) {
+        bool is_dual_erisc_mode = tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode();
+        bool is_erisc0 = (config.processor == DataMovementProcessor::RISCV_0);
+        bool is_erisc1 = (config.processor == DataMovementProcessor::RISCV_1);
+
+        if (is_dual_erisc_mode) {
+            // Dual ERISC mode: ERISC0 uses NOC0, ERISC1 uses NOC1 (when in dedicated mode)
+            if (is_erisc0) {
+                TT_FATAL(
+                    config.noc == NOC::NOC_0,
+                    "EthernetKernel creation failure: In dual ERISC mode, ERISC0 must use NOC0 in dedicated mode. "
+                    "Kernel: {}, Current NOC: {}, Required NOC: NOC_0. Use Dynamic NOC mode for flexible routing.",
+                    kernel->name(),
+                    config.noc);
+            } else if (is_erisc1) {
+                TT_FATAL(
+                    config.noc == NOC::NOC_1,
+                    "EthernetKernel creation failure: In dual ERISC mode, ERISC1 must use NOC1 in dedicated mode. "
+                    "Kernel: {}, Current NOC: {}, Required NOC: NOC_1. Use Dynamic NOC mode for flexible routing.",
+                    kernel->name(),
+                    config.noc);
+            }
+        } else {
+            // ERISC1 must use NOC1 in dedicated mode
+            TT_FATAL(
+                config.noc == NOC::NOC_1,
+                "EthernetKernel creation failure: In single ERISC mode, ERISC1 must use NOC1 in dedicated mode. "
+                "Kernel: {}, Current NOC: {}, Required NOC: NOC_1. Use Dynamic NOC mode for flexible routing.",
+                kernel->name(),
+                config.noc);
+        }
+    }
+
+    if (tt::tt_metal::MetalContext::instance().hal().get_eth_fw_is_cooperative()) {
+        // Dynamic NOC is not supported with this configuration
         TT_FATAL(
-            static_cast<uint32_t>(config.noc) == static_cast<uint32_t>(config.processor),
+            config.noc_mode != NOC_MODE::DM_DYNAMIC_NOC,
             "EthernetKernel creation failure: Cannot create data movement kernels for {} across specified "
-            "cores because NOC {} is not supported for processor {}. Dynamic NOC is not supported for Ethernet "
-            "kernels.",
+            "cores because NOC Mode {} is not supported on this platform",
             kernel->name(),
-            config.noc,
-            config.processor);
+            config.noc_mode);
     }
     return program.impl().add_kernel(kernel, eth_core_type);
 }

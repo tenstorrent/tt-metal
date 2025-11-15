@@ -11,10 +11,25 @@
 #include "noc_overlay_parameters.h"
 #include "debug/assert.h"
 
+#if defined(COMPILE_FOR_AERISC)
+#include "eth_fw_api.h"
+#endif
+
 #if defined(COMPILE_FOR_BRISC)
 constexpr std::underlying_type_t<TensixProcessorTypes> proc_type =
     static_cast<std::underlying_type_t<TensixProcessorTypes>>(TensixProcessorTypes::DM0);
+#elif defined(COMPILE_FOR_NCRISC)
+constexpr std::underlying_type_t<TensixProcessorTypes> proc_type =
+    static_cast<std::underlying_type_t<TensixProcessorTypes>>(TensixProcessorTypes::DM1);
+#elif defined(COMPILE_FOR_AERISC) || defined(COMPILE_FOR_IDLE_ERISC)
+constexpr std::underlying_type_t<EthProcessorTypes> proc_type =
+    static_cast<std::underlying_type_t<EthProcessorTypes>>(PROCESSOR_INDEX);
+#elif defined(COMPILE_FOR_TRISC)
+// TRISC is not a data movement processor. This is just so it compiles
+constexpr std::underlying_type_t<TensixProcessorTypes> proc_type =
+    static_cast<std::underlying_type_t<TensixProcessorTypes>>(TensixProcessorTypes::DM1);
 #else
+// Lite Fabric compile
 constexpr std::underlying_type_t<TensixProcessorTypes> proc_type =
     static_cast<std::underlying_type_t<TensixProcessorTypes>>(TensixProcessorTypes::DM1);
 #endif
@@ -77,15 +92,41 @@ enum class NocBarrierType : uint8_t {
 
 static constexpr uint8_t NUM_BARRIER_TYPES = static_cast<uint32_t>(NocBarrierType::COUNT);
 
+struct BarrierCounter {
+    uint32_t barrier[NUM_BARRIER_TYPES];
+};
+
+struct RiscBarrierCounter {
+    BarrierCounter risc[MaxDMProcessorsPerCoreType];
+};
+
+struct NocBarrierCounter {
+    RiscBarrierCounter noc[NUM_NOCS];
+};
+
+static_assert(sizeof(NocBarrierCounter) == 80, "NocBarrierCounter size is not 80 bytes");
+
 template <uint8_t proc_t, NocBarrierType barrier_type>
 inline __attribute__((always_inline)) uint32_t get_noc_counter_address(uint32_t noc) {
     static_assert(proc_t < MaxDMProcessorsPerCoreType);
     static_assert(static_cast<std::underlying_type_t<NocBarrierType>>(barrier_type) < NUM_BARRIER_TYPES);
-    constexpr uint32_t offset =
-        MEM_NOC_COUNTER_BASE +
-        (proc_t * NUM_BARRIER_TYPES + static_cast<std::underlying_type_t<NocBarrierType>>(barrier_type)) * NUM_NOCS *
-            MEM_NOC_COUNTER_SIZE;
-    return offset + noc * MEM_NOC_COUNTER_SIZE;
+#if defined(COMPILE_FOR_AERISC)
+    constexpr uint32_t base = MEM_AERISC_NOC_COUNTER_BASE;
+    constexpr uint32_t size = MEM_AERISC_NOC_COUNTER_SIZE;
+#else
+    constexpr uint32_t base = MEM_NOC_COUNTER_BASE;
+    constexpr uint32_t size = MEM_NOC_COUNTER_SIZE;
+#endif
+
+    // Calculate most of the offset at compile time. Only the noc is variable at runtime.
+    constexpr uint32_t compile_time_offset =
+        offsetof(NocBarrierCounter, noc) + proc_t * sizeof(decltype(std::declval<NocBarrierCounter>().noc[0].risc[0])) +
+        static_cast<std::underlying_type_t<NocBarrierType>>(barrier_type) *
+            sizeof(decltype(std::declval<NocBarrierCounter>().noc[0].risc[0].barrier[0]));
+
+    constexpr uint32_t noc_stride = sizeof(decltype(std::declval<NocBarrierCounter>().noc[0]));
+
+    return base + noc * noc_stride + compile_time_offset;
 }
 
 // noc_nonposted_writes_acked
@@ -469,11 +510,21 @@ inline __attribute__((always_inline)) void dynamic_noc_init() {
         uint64_t xy_local_addr = NOC_XY_ADDR(my_x, my_y, 0);
 
         // program brisc cmd_buf 0
+        //
+        // active erisc specific behavior
+        // If active erisc is running on ERISC1 (Single ERISC mode), base firmware is running concurrently on ERISC0
+        // and they are using this cmd_buf. Do not reprogram it. Being in this function implies ERISC1 is dynamic NOC,
+        // and ERISC1 is NCRISC therefore this cmd_buf will not be conflicting with base firmware.
+        //
+        // Does this register need to be reprogrammed each time we come back from base firmware on ERISC0?
+        // No. NOC_RET_ADDR_COORDINATE is programmed each time we call ncrisc_noc_fast_ functions
+#if !(defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 1) && (COMPILE_FOR_AERISC == 0))
         NOC_CMD_BUF_WRITE_REG(
             noc,
             DYNAMIC_NOC_BRISC_RD_CMD_BUF,
             NOC_RET_ADDR_COORDINATE,
             (uint32_t)(xy_local_addr >> NOC_ADDR_COORD_SHIFT));
+#endif
 
         // program brisc cmd_buf 1
         NOC_CMD_BUF_WRITE_REG(
@@ -517,11 +568,17 @@ inline __attribute__((always_inline)) void noc_local_state_init(int noc) {
 template <NocBarrierType barrier_type, uint32_t status_register>
 inline __attribute__((always_inline)) void dynamic_noc_local_barrier_init(
     uint32_t noc0_status_reg, uint32_t noc1_status_reg) {
-    using underlying_tensix_processor_types_t = std::underlying_type_t<TensixProcessorTypes>;
-    constexpr underlying_tensix_processor_types_t dm0 =
-        static_cast<underlying_tensix_processor_types_t>(TensixProcessorTypes::DM0);
-    constexpr underlying_tensix_processor_types_t dm1 =
-        static_cast<underlying_tensix_processor_types_t>(TensixProcessorTypes::DM1);
+#if defined(COMPILE_FOR_AERISC)
+    // For ERISC, use EthProcessorTypes
+    using underlying_processor_types_t = std::underlying_type_t<EthProcessorTypes>;
+    constexpr underlying_processor_types_t dm0 = static_cast<underlying_processor_types_t>(EthProcessorTypes::DM0);
+    constexpr underlying_processor_types_t dm1 = static_cast<underlying_processor_types_t>(EthProcessorTypes::DM1);
+#else
+    // For Tensix, use TensixProcessorTypes
+    using underlying_processor_types_t = std::underlying_type_t<TensixProcessorTypes>;
+    constexpr underlying_processor_types_t dm0 = static_cast<underlying_processor_types_t>(TensixProcessorTypes::DM0);
+    constexpr underlying_processor_types_t dm1 = static_cast<underlying_processor_types_t>(TensixProcessorTypes::DM1);
+#endif
 
     set_noc_counter_val<dm0, barrier_type>(NOC_0, noc0_status_reg);
     set_noc_counter_val<dm0, barrier_type>(NOC_1, 0);
@@ -530,6 +587,14 @@ inline __attribute__((always_inline)) void dynamic_noc_local_barrier_init(
 }
 
 inline __attribute__((always_inline)) void dynamic_noc_local_state_init() {
+    // Active ERISC specific behavior
+    // This function should only be called from the (primary) active erisc.
+    // When the active_erisc is running on ERISC1 (Single ERISC mode), base firmware is running concurrently on ERISC0
+    // and we should delegate the execution to base firmware and stall until it completes.
+    //
+#if defined(COMPILE_FOR_AERISC)
+    base_fw_dynamic_noc_local_state_init();
+#else
     // Pipeline all register reads first to hide latency
     uint32_t noc0_reads_num_issued = NOC_STATUS_READ_REG(NOC_0, NIU_MST_RD_RESP_RECEIVED);
     uint32_t noc1_reads_num_issued = NOC_STATUS_READ_REG(NOC_1, NIU_MST_RD_RESP_RECEIVED);
@@ -551,6 +616,7 @@ inline __attribute__((always_inline)) void dynamic_noc_local_state_init() {
         noc0_nonposted_atomics_acked, noc1_nonposted_atomics_acked);
     dynamic_noc_local_barrier_init<NocBarrierType::POSTED_WRITES_NUM_ISSUED, NIU_MST_POSTED_WR_REQ_SENT>(
         noc0_posted_writes_num_issued, noc1_posted_writes_num_issued);
+#endif
 }
 
 template <uint8_t MAX_NOCS_TO_INIT = NUM_NOCS>
@@ -1681,5 +1747,26 @@ inline __attribute__((always_inline)) void noc_wwrite_with_state(
     }
     if constexpr (send) {
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+    }
+}
+
+template <uint8_t MAX_NOCS_TO_INIT = NUM_NOCS>
+inline __attribute__((always_inline)) void ncrisc_dynamic_noc_full_sync() {
+    for (uint32_t noc = 0; noc < MAX_NOCS_TO_INIT; noc++) {
+        while (!ncrisc_dynamic_noc_reads_flushed(noc)) {
+            invalidate_l1_cache();
+        }
+        while (!ncrisc_dynamic_noc_nonposted_writes_sent(noc)) {
+            invalidate_l1_cache();
+        }
+        while (!ncrisc_dynamic_noc_nonposted_writes_flushed(noc)) {
+            invalidate_l1_cache();
+        }
+        while (!ncrisc_dynamic_noc_nonposted_atomics_flushed(noc)) {
+            invalidate_l1_cache();
+        }
+        while (!ncrisc_dynamic_noc_posted_writes_sent(noc)) {
+            invalidate_l1_cache();
+        }
     }
 }
