@@ -1541,7 +1541,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_o
     // NOTE: Pads matmul input dims to 512 x 512 multiples (ie. multiples of 16*32 x 16*32)
     // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])
     const auto B = fuse_batch ? 1 : get_batch_size(a_shape_padded);
-    const auto Mt = get_M_dim(a_shape_padded, in0_tile, /*fuse_batch=*/true);
+    const auto Mt = get_M_dim(a_shape_padded, in0_tile, fuse_batch);
     const auto Kt = get_K_dim(a_shape_padded, in0_tile);
     const auto Nt = get_N_dim(b_shape_padded, in1_tile);
 
