@@ -23,10 +23,23 @@
 
 namespace NAMESPACE {
 
-template <uint32_t in0_block_num_tiles>
+/**
+ * @brief Transposes a block of tiles from one circular buffer to another.
+ *
+ * This function reads a block of tiles from the input circular buffer (cb), performs a width-height
+ * (WH) transpose on each tile, and writes the transposed tiles to the output circular buffer.
+ * The operation is performed in blocks of `block_size` tiles for efficiency, with a separate loop
+ * at the end to handle any leftover tiles when the total tile count is not divisible by
+ * `block_size`. The default block size is 4, since there are guaranteed to be 4 tiles in the dst
+ *               regs irrespective of dst sync mode or data format.
+ *
+ * @tparam in0_block_num_tiles The number of tiles in the block to be transposed.
+ * @tparam block_size The number of tiles in each block to be transposed.
+ * @param in0_transpose_cb_id Circular buffer ID to read the original tiles from.
+ * @param in0_cb_id Circular buffer ID to which the transposed tiles are written.
+ */
+template <uint32_t in0_block_num_tiles, uint32_t block_size = 4>
 FORCE_INLINE void transpose_tile_block(uint32_t in0_transpose_cb_id, uint32_t in0_cb_id) {
-    // Let us stream it in blocks of 4 tiles at a time
-    constexpr uint32_t block_size = 4;
     constexpr uint32_t num_blocks = in0_block_num_tiles / block_size;
     constexpr uint32_t last_block_size = in0_block_num_tiles % block_size;
     // Lets do 2 passes: One loop until last and one last for the left overs
