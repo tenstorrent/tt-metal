@@ -47,6 +47,7 @@ def prepare_gpt_oss_generator_args(
     page_params,
     paged_attention,
     mesh_config=None,
+    num_layers=None,
 ):
     """Prepare generator args using GPT-OSS create_tt_model (clean version)"""
     submesh_devices = create_submeshes(mesh_device, data_parallel)
@@ -78,6 +79,7 @@ def prepare_gpt_oss_generator_args(
             dtype=ttnn.bfloat8_b,
             state_dict=state_dict,
             mesh_config=mesh_config,  # Pass mesh config for proper sharding
+            num_layers=num_layers,
         )
         model_args.append(model_args_i)
         model.append(model_i)
@@ -102,7 +104,7 @@ def prepare_gpt_oss_generator_args(
 
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
-    "mesh_shape, data_parallel, batch_size, repeat_batches, max_seq_len, max_generated_tokens, instruct, page_params, sampling_params",
+    "mesh_shape, data_parallel, batch_size, repeat_batches, max_seq_len, max_generated_tokens, instruct, page_params, sampling_params, num_layers",
     [
         (  # LoudBox (1×8) - Single device, low latency
             (1, 8),  # mesh_shape
@@ -114,6 +116,7 @@ def prepare_gpt_oss_generator_args(
             True,  # instruct (set to False for base model, True for instruct model)
             {"page_block_size": 64, "page_max_num_blocks_per_dp": 4 * 1024 // 64},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
+            None,  # num_layers
         ),
         (  # Galaxy (4×8) - Multi-device mesh, higher throughput
             (4, 8),  # mesh_shape
@@ -125,9 +128,22 @@ def prepare_gpt_oss_generator_args(
             True,  # instruct
             {"page_block_size": 64, "page_max_num_blocks_per_dp": 4 * 1024 // 64},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params
+            None,  # num_layers
+        ),
+        (
+            (4, 8),
+            1,
+            1,
+            1,
+            4 * 1024,
+            200,
+            True,
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 4 * 1024 // 64},
+            {"temperature": 0, "top_p": 0.08},
+            1,
         ),
     ],
-    ids=["mesh_1x8", "mesh_4x8"],
+    ids=["mesh_1x8", "mesh_4x8", "tracy_profiling"],
 )
 @parametrize_mesh_with_fabric()
 def test_gpt_oss_demo(
@@ -142,6 +158,7 @@ def test_gpt_oss_demo(
     instruct,
     page_params,
     sampling_params,
+    num_layers,
 ):
     """GPT-OSS demo using full tt_transformers generation pipeline"""
     mesh_device = mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))
@@ -195,6 +212,7 @@ def test_gpt_oss_demo(
         page_params=page_params,
         paged_attention=paged_attention,
         mesh_config=mesh_config,  # Pass our refactored mesh config
+        num_layers=num_layers,
     )
 
     # Create generator (match tt-transformers pattern)

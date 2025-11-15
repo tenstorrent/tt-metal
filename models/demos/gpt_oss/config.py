@@ -138,7 +138,7 @@ class MeshConfig:
             tensor,
             dim=3,
             multi_device_global_semaphore=ccl_manager.get_rs_ping_pong_semaphore(),
-            num_links=1,
+            num_links=4,
             memory_config=memory_config,
             topology=ccl_manager.topology,
             cluster_axis=axis,
@@ -153,20 +153,21 @@ class MeshConfig:
             mesh_device=ccl_manager.mesh_device,
             topology=ccl_manager.topology,
             multi_device_global_semaphore=ccl_manager.get_ag_ping_pong_semaphore(),
-            num_links=1,
+            num_links=4,
             memory_config=memory_config,
             barrier_semaphore=ccl_manager.get_barrier_semaphore(),
         )
+        print("gathered", gathered.dtype)
 
         # Remove padding if applied
         if padded:
             gathered_sliced = gathered[:, :, :, :-pad_size]
             gathered.deallocate(True)
             gathered = gathered_sliced
-
+        print("last", gathered.dtype)
         return gathered
 
-    def allgather(self, tensor, ccl_manager, memory_config=None, axis=0, dim=3):
+    def allgather(self, tensor, ccl_manager, memory_config=None, axis=0, dim=3, linear=False):
         """
         All-gather operation for tensor parallel communication
 
@@ -179,9 +180,9 @@ class MeshConfig:
             dim=dim,
             cluster_axis=axis,
             mesh_device=ccl_manager.mesh_device,
-            topology=ccl_manager.topology,
+            topology=ttnn.Topology.Linear if linear else ccl_manager.topology,
             multi_device_global_semaphore=ccl_manager.get_ag_ping_pong_semaphore(),
-            num_links=1,
+            num_links=4,
             memory_config=memory_config,
             barrier_semaphore=ccl_manager.get_barrier_semaphore(),
         )
