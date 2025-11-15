@@ -20,7 +20,7 @@ namespace ttnn {
 namespace operations::conv {
 namespace conv2d {
 
-using Conv2dSliceConfig = op_slicing::Op2DSliceConfig;
+using Conv2dSliceConfig = op_slicing::Op2dSliceConfig;
 struct Conv2dConfig {
     // If set, the weights & bias tensors will be converted to this dtype after preprocessing.
     // prepare_conv_bias needs this to always be set to the same dtype as the weights.

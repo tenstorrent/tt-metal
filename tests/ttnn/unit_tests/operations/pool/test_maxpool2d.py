@@ -6,7 +6,21 @@ import ttnn
 import pytest
 from tests.ttnn.nightly.unit_tests.operations.pool.test_maxpool2d import run_max_pool
 
+HS = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+BS = ttnn.TensorMemoryLayout.BLOCK_SHARDED
+WS = ttnn.TensorMemoryLayout.WIDTH_SHARDED
+
 parameters = {
+    "dram_slice_tests": {
+        "in_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "input_specs": [
+            # Contains following parameters
+            # [in_n, in_c, in_h, in_w, kernel_h, kernel_w, stride_h, stride_w, pad_h, pad_w, dilation_h, dilation_w, ceil_mode, num_slices, shard_layout]
+            [1, 128, 1024, 1024, 2, 2, 2, 2, 0, 0, 1, 1, False, 8, HS],
+            [1, 480, 256, 256, 3, 3, 2, 2, 1, 1, 1, 1, True, 8, BS],
+            [1, 32768, 32, 32, 2, 2, 1, 1, 0, 0, 1, 1, True, 4, WS],
+        ],
+    },
     "height_shard_tests": {
         "in_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_specs": [
@@ -67,6 +81,45 @@ parameters = {
         ],
     },
 }
+
+
+@pytest.mark.parametrize("input_spec", parameters["dram_slice_tests"]["input_specs"])
+@pytest.mark.parametrize("in_dtype", parameters["dram_slice_tests"]["in_dtype"])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_max_pool2d_dram_slice(device, in_dtype, input_spec):
+    (
+        in_n,
+        in_c,
+        in_h,
+        in_w,
+        kernel_h,
+        kernel_w,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        dilation_h,
+        dilation_w,
+        ceil_mode,
+        num_slices,
+        shard_scheme,
+    ) = input_spec
+    dram_slice_config = ttnn.Op2dSliceConfig(num_slices=num_slices, slice_type=ttnn.Op2dDRAMSliceWidth)
+    torch_tensor_map = {}
+    run_max_pool(
+        [in_n, in_c, in_h, in_w],
+        [kernel_h, kernel_w],
+        [pad_h, pad_w],
+        [stride_h, stride_w],
+        [dilation_h, dilation_w],
+        device,
+        torch_tensor_map,
+        in_dtype,
+        shard_scheme=shard_scheme,
+        ceil_mode=ceil_mode,
+        nightly_skips=False,
+        dram_slice_config=dram_slice_config,
+    )
 
 
 @pytest.mark.parametrize("input_spec", parameters["height_shard_tests"]["input_specs"])

@@ -105,6 +105,7 @@ def run_avg_pool2d(
     out_dtype=ttnn.bfloat16,
     output_layout=ttnn.ROW_MAJOR_LAYOUT,
     compute_kernel_config=None,
+    dram_slice_config=None,
 ):
     in_n, in_c, in_h, in_w = input_shape
     kernel_h, kernel_w = kernel_size
@@ -205,6 +206,7 @@ def run_avg_pool2d(
         dtype=out_dtype,
         output_layout=output_layout,
         compute_kernel_config=compute_kernel_config,
+        dram_slice_config=dram_slice_config,
     )
 
     if run_twice:
