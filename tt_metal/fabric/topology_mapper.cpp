@@ -177,7 +177,6 @@ TopologyMapper::TopologyMapper(
 }
 
 // Removed bus-id pinning constructor
-
 TopologyMapper::TopologyMapper(
     const MeshGraph& mesh_graph,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
@@ -191,6 +190,55 @@ TopologyMapper::TopologyMapper(
     mesh_host_rank_coord_ranges_.clear();
     build_asic_physical_chip_id_mappings();
     build_mapping();
+}
+
+// Constructor that skips discovery and builds mapping directly from provided logical to physical chip mapping
+TopologyMapper::TopologyMapper(
+    const MeshGraph& mesh_graph,
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const LocalMeshBinding& local_mesh_binding,
+    const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping) :
+    mesh_graph_(mesh_graph),
+    physical_system_descriptor_(physical_system_descriptor),
+    local_mesh_binding_(local_mesh_binding),
+    fixed_asic_position_pinnings_({}) {
+    log_debug(
+        tt::LogFabric,
+        "TopologyMapper: Building mapping directly from provided logical to physical chip mapping (skipping "
+        "discovery)");
+
+    mesh_host_ranks_.clear();
+    mesh_host_rank_coord_ranges_.clear();
+
+    // Build asic to physical chip id mappings first (needed for conversion)
+    build_asic_physical_chip_id_mappings();
+
+    // Build fabric node id to asic id mapping directly from the provided logical to physical chip mapping
+    for (const auto& [fabric_node_id, physical_chip_id] : logical_mesh_chip_id_to_physical_chip_id_mapping) {
+        // Convert physical chip id to asic id
+        auto asic_id_it = physical_chip_id_to_asic_id_.find(physical_chip_id);
+        TT_FATAL(
+            asic_id_it != physical_chip_id_to_asic_id_.end(),
+            "Physical chip id {} not found in asic to physical chip id mapping",
+            physical_chip_id);
+        tt::tt_metal::AsicID asic_id = asic_id_it->second;
+
+        // Build bidirectional mappings
+        fabric_node_id_to_asic_id_.emplace(fabric_node_id, asic_id);
+        asic_id_to_fabric_node_id_.emplace(asic_id, fabric_node_id);
+    }
+
+    // Build asic_id_to_mesh_rank mapping needed for rebuild_host_rank_structs_from_mapping
+    // This maps each asic to its mesh host rank based on the fabric node it's mapped to
+    std::unordered_map<MeshId, std::unordered_map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+    for (const auto& [fabric_node_id, asic_id] : fabric_node_id_to_asic_id_) {
+        auto host_rank = mesh_graph_.get_host_rank_for_chip(fabric_node_id.mesh_id, fabric_node_id.chip_id);
+        TT_FATAL(host_rank.has_value(), "Fabric node id {} not found in mesh graph", fabric_node_id);
+        asic_id_to_mesh_rank[fabric_node_id.mesh_id][asic_id] = host_rank.value();
+    }
+
+    // Build host rank structures from the mapping
+    rebuild_host_rank_structs_from_mapping(asic_id_to_mesh_rank);
 }
 
 ChipId TopologyMapper::get_physical_chip_id_from_asic_id(tt::tt_metal::AsicID asic_id) const {
