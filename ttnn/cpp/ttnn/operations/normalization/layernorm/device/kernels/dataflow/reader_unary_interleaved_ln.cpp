@@ -4,8 +4,8 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
-#include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
-#include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
+#include "ttnn/cpp/ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/cpp/ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 
 template <typename T>
 void read_row_to_cb(

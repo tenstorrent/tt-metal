@@ -14,8 +14,8 @@
 #include "compute_kernel_api/transpose_wh.h"
 #include "compute_kernel_api/welford.h"
 #include "compute_kernel_api/eltwise_binary.h"
-#include "ttnn/operations/normalization/kernel_util/compute/combine_welford.h"
-#include "ttnn/operations/normalization/kernel_util/compute/memory.h"
+#include "ttnn/cpp/ttnn/operations/normalization/kernel_util/compute/combine_welford.h"
+#include "ttnn/cpp/ttnn/operations/normalization/kernel_util/compute/memory.h"
 
 /**
  * @brief This kernel computes layernorm for sharded tensors using

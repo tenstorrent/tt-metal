@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <cstdint>
 #include "dataflow_api.h"
-#include "ttnn/operations/data_movement/common/kernels/common.hpp"
+#include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 
 void kernel_main() {
     constexpr uint32_t tiles_per_channel_dim = get_compile_time_arg_val(0);

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/kernel/dataflow/moreh_common.hpp"
+#include "ttnn/cpp/ttnn/kernel/dataflow/moreh_common.hpp"
 
 #define ALWI inline __attribute__((always_inline))
 

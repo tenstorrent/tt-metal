@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-#include "ttnn/kernel/compute/moreh_common.hpp"
+#include "ttnn/cpp/ttnn/kernel/compute/moreh_common.hpp"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 
 namespace NAMESPACE {

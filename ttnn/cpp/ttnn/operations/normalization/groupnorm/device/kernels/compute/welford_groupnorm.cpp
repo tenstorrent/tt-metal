@@ -21,7 +21,7 @@
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/transpose_wh.h"
 #include "compute_kernel_api/welford.h"
-#include "ttnn/operations/normalization/kernel_util/compute/memory.h"
+#include "ttnn/cpp/ttnn/operations/normalization/kernel_util/compute/memory.h"
 
 namespace NAMESPACE {
 void MAIN {

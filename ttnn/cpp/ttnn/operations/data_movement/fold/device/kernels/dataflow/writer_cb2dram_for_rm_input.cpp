@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <cstdint>
 #include "dataflow_api.h"
-#include "ttnn/operations/data_movement/common/kernels/common.hpp"
+#include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 
 using namespace tt::data_movement::common;
 void kernel_main() {

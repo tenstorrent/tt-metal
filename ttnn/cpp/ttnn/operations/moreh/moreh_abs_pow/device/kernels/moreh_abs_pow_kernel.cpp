@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include "debug/dprint.h"
-#include "ttnn/kernel/compute/moreh_common.hpp"
+#include "ttnn/cpp/ttnn/kernel/compute/moreh_common.hpp"
 
 namespace NAMESPACE {
 void MAIN {

@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 #include "elemwise_reader_kernel_args.hpp"
-#include "ttnn/kernel/kernel_utils.hpp"
+#include "ttnn/cpp/ttnn/kernel/kernel_utils.hpp"
 
 void kernel_main() {
     using namespace ttnn::kernel_utils;

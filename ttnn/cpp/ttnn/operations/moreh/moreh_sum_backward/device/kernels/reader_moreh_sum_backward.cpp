@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/kernel/dataflow/moreh_common.hpp"
+#include "ttnn/cpp/ttnn/kernel/dataflow/moreh_common.hpp"
 static constexpr int32_t MAX_NUM_DIMENSIONS = 8;
 
 inline uint32_t get_output_grad_tile(

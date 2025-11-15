@@ -5,7 +5,7 @@
 // Implemented based on bmm.cpp
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/transpose_wh.h"
-#include "ttnn/kernel/compute/moreh_common.hpp"
+#include "ttnn/cpp/ttnn/kernel/compute/moreh_common.hpp"
 
 namespace NAMESPACE {
 

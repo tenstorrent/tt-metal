@@ -7,7 +7,7 @@
 #define REDUCE_OP PoolType::SUM
 #define REDUCE_DIM ReduceDim::REDUCE_ROW
 
-#include "ttnn/kernel/compute/moreh_common.hpp"
+#include "ttnn/cpp/ttnn/kernel/compute/moreh_common.hpp"
 
 namespace NAMESPACE {
 

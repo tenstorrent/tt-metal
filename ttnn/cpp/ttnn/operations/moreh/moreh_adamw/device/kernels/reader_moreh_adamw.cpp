@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 #include "dataflow_api.h"
-#include "ttnn/kernel/dataflow/moreh_common.hpp"
+#include "ttnn/cpp/ttnn/kernel/dataflow/moreh_common.hpp"
 
 void kernel_main() {
     uint32_t i = 0;

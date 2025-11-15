@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
-#include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
+#include "ttnn/cpp/ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 
 void kernel_main() {
     auto src0_addr = get_arg_val<uint32_t>(0);

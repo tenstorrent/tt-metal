@@ -13,7 +13,7 @@
 
 #include <utility>
 #include "compile_time_args.h"
-#include "ttnn/kernel/kernel_common_utils.hpp"  // SerializableKernelArgs
+#include "ttnn/cpp/ttnn/kernel/kernel_common_utils.hpp"  // SerializableKernelArgs
 #include <bit>
 
 namespace ttnn::kernel_utils {

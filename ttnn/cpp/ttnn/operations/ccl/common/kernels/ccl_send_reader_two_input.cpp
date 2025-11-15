@@ -7,12 +7,12 @@
 
 #include "dataflow_api.h"
 #include <tt-metalium/buffer_types.hpp>
-#include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include <tt-metalium/buffer_types.hpp>
-#include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 
-#include "ttnn/operations/ccl/common/kernels/command_processor.hpp"
-#include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/common/kernels/command_processor.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
