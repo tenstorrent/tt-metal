@@ -123,13 +123,13 @@
 <section id="enabling-device-profiling">
 <h2>Enabling Device Profiling<a class="headerlink" href="#enabling-device-profiling" title="Permalink to this heading"></a>
 </h2>
-<p>To use the device profiler, you must first build Metalium with profiling enabled. This can be done using the following build script command:</p>
+<p>Profiling support is enabled by default when building Metalium. Simply build using:</p>
 <div class="highlight-bash notranslate">
-<div class="highlight"><pre><span></span>./build_metal.sh<span class="w"> </span>--enable-profiler
+<div class="highlight"><pre><span></span>./build_metal.sh
 </pre></div>
 </div>
-<p>This command enables both device-side profiling and Tracy for host-side profiling. For a general overview of profiling in Metalium and how to use the Tracy GUI, see <a class="reference internal" href="tracy_profiler.html#tracy-profiler"><span class="std std-ref">Tracy Profiler</span></a>.</p>
-<p>Device profiling is disabled by default to avoid unnecessary runtime overhead. To enable profiling, set the environment variable before running your application. You can do this either in your shell session or inline when launching your program:</p>
+<p>This enables both device-side profiling and Tracy for host-side profiling. For a general overview of profiling in Metalium and how to use the Tracy GUI, see <a class="reference internal" href="tracy_profiler.html#tracy-profiler"><span class="std std-ref">Tracy Profiler</span></a>.</p>
+<p>Device profiling is disabled by default at runtime to avoid unnecessary runtime overhead. To enable profiling, set the environment variable before running your application. You can do this either in your shell session or inline when launching your program:</p>
 <div class="highlight-bash notranslate">
 <div class="highlight"><pre><span></span><span class="nv">TT_METAL_DEVICE_PROFILER</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>/path/to/your/application
 </pre></div>
@@ -214,7 +214,7 @@
 <p>To build and run this example:</p>
 <div class="highlight-bash notranslate">
 <div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span><span class="nv">$TT_METAL_HOME</span>
-build_metal.sh<span class="w"> </span>--enable-profiler<span class="w"> </span>--build-programming-examples
+./build_metal.sh<span class="w"> </span>--build-programming-examples
 <span class="nv">TT_METAL_DEVICE_PROFILER</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>./build/programming_examples/profiler/test_full_buffer
 </pre></div>
 </div>

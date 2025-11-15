@@ -142,19 +142,17 @@
 <section id="enabling-tracy">
 <h2>Enabling Tracy<a class="headerlink" href="#enabling-tracy" title="Permalink to this heading"></a>
 </h2>
-<p>To use Tracy for profiling, you need to build Metalium with profiler support enabled. This is done by setting the <code class="docutils literal notranslate"><span class="pre">ENABLE_TRACY=ON</span></code> option when configuring CMake. Or with the <code class="docutils literal notranslate"><span class="pre">--enable-profiler</span></code> flag in the build script. Profiling features are only available in builds where this option is set.</p>
-<p>You can enable the profiler by running:</p>
+<p>Tracy profiling support is <strong>enabled by default</strong> when building Metalium. Simply run:</p>
 <div class="highlight-bash notranslate">
 <div class="highlight"><pre><span></span><span class="c1"># Via build script</span>
-./build_metal.sh<span class="w"> </span>--enable-profiler
+./build_metal.sh
 
-<span class="c1"># Via CMake flags</span>
+<span class="c1"># Or via CMake flags</span>
 cmake<span class="w"> </span>.<span class="w"> </span>-DENABLE_TRACY<span class="o">=</span>ON
 ninja
 ninja<span class="w"> </span>install
 </pre></div>
 </div>
-<p>Note that Tracy support is not included in prebuilt binaries or release builds by default. You must build from source with the profiler enabled to use these features.</p>
 </section>
 <section id="gui">
 <h2>GUI<a class="headerlink" href="#gui" title="Permalink to this heading"></a>
