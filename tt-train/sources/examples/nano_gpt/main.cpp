@@ -692,7 +692,7 @@ int main(int argc, char **argv) {
             throw std::runtime_error("Model path already exists: " + save_and_exit_path);
         }
         fmt::println("Saving model and exiting");
-        ttml::serialization::MsgPackFile serializer;
+        ttml::serialization::FlatBufferFile serializer;
         std::string model_prefix = (config.model_type == "llama") ? "llama" : "transformer";
         ttml::serialization::write_module(serializer, model_prefix, model.get());
         serializer.serialize(save_and_exit_path);

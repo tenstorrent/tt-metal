@@ -159,8 +159,12 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/schedulers/sequential_scheduler.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/schedulers/step_scheduler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/schedulers/step_scheduler.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/msgpack_file.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/msgpack_file.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/flatbuffer_file.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/flatbuffer_file.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/tar_reader.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/tar_reader.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/tar_writer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/tar_writer.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/serialization/safetensors.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/serialization/safetensors.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/serialization/serializable.hpp
@@ -357,9 +361,179 @@ else()
     message(STATUS "Metalium targets already exists")
 endif()
 
-add_library(ttml STATIC ${SOURCES})
+# Generate FlatBuffer code for serialization
+# Include flatbuffers helper from parent project
+get_filename_component(TT_METAL_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../.." ABSOLUTE)
+include(${TT_METAL_ROOT}/cmake/flatbuffers.cmake)
+set(FLATBUFFERS_SCHEMA ${CMAKE_CURRENT_SOURCE_DIR}/serialization/ttml_tensor.fbs)
+set(TTNN_TENSOR_FBS_DIR "${TT_METAL_ROOT}/ttnn/core/tensor/flatbuffer")
+set(TT_METAL_API_DIR "${TT_METAL_ROOT}/tt_metal/api")
+
+# Verify the paths exist
+if(NOT EXISTS "${TTNN_TENSOR_FBS_DIR}/tensor.fbs")
+    message(FATAL_ERROR "Cannot find tensor.fbs at ${TTNN_TENSOR_FBS_DIR}/tensor.fbs")
+endif()
+
+# Generate FlatBuffer C++ code
+set(FLATBUFFER_GENERATED_DIR ${CMAKE_CURRENT_BINARY_DIR}/serialization)
+file(MAKE_DIRECTORY ${FLATBUFFER_GENERATED_DIR})
+
+# Generate tensor flatbuffers ourselves (no dependency on tt-metal build directory)
+# When building tt-train independently, we always generate tensor_generated.h ourselves
+if(TARGET TTNN::Core)
+    # If TTNN::Core target exists, use its binary directory
+    get_target_property(TTNN_BINARY_DIR TTNN::Core BINARY_DIR)
+    set(TTNN_FLATBUFFER_GEN_DIR "${TTNN_BINARY_DIR}/flatbuffers")
+    set(GENERATE_TENSOR_HEADER FALSE)
+else()
+    # Generate headers in tt-train's build directory (no dependency on tt-metal build)
+    set(TTNN_FLATBUFFER_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/ttnn_flatbuffers")
+    file(MAKE_DIRECTORY ${TTNN_FLATBUFFER_GEN_DIR})
+    set(GENERATE_TENSOR_HEADER TRUE)
+
+    # Generate all flatbuffer headers separately (like ttnn does)
+    # This ensures all dependencies are available before tensor_generated.h is generated
+    set(MESH_COORDINATE_GEN_DIR "${TTNN_FLATBUFFER_GEN_DIR}/tt-metalium/serialized_descriptors")
+    set(MESH_COORDINATE_FBS "${TT_METAL_API_DIR}/tt-metalium/serialized_descriptors/mesh_coordinate.fbs")
+    # Ensure the parent output directory exists before flatc runs
+    file(MAKE_DIRECTORY ${TTNN_FLATBUFFER_GEN_DIR})
+
+    # Generate mesh_coordinate_generated.h
+    add_custom_command(
+        OUTPUT
+            ${MESH_COORDINATE_GEN_DIR}/mesh_coordinate_generated.h
+        COMMAND
+            flatc --keep-prefix --cpp --scoped-enums -I ${TT_METAL_API_DIR} -o "${TTNN_FLATBUFFER_GEN_DIR}"
+            ${MESH_COORDINATE_FBS}
+        DEPENDS
+            flatc
+            ${MESH_COORDINATE_FBS}
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Generating mesh_coordinate_generated.h for tt-train"
+    )
+
+    # Generate mesh_shape_generated.h
+    add_custom_command(
+        OUTPUT
+            ${TTNN_FLATBUFFER_GEN_DIR}/mesh_shape_generated.h
+        COMMAND
+            flatc --keep-prefix --cpp --scoped-enums -I ${TTNN_TENSOR_FBS_DIR} -o "${TTNN_FLATBUFFER_GEN_DIR}"
+            ${TTNN_TENSOR_FBS_DIR}/mesh_shape.fbs
+        DEPENDS
+            flatc
+            ${TTNN_TENSOR_FBS_DIR}/mesh_shape.fbs
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Generating mesh_shape_generated.h for tt-train"
+    )
+
+    # Generate tensor_spec_generated.h
+    add_custom_command(
+        OUTPUT
+            ${TTNN_FLATBUFFER_GEN_DIR}/tensor_spec_generated.h
+        COMMAND
+            flatc --keep-prefix --cpp --scoped-enums -I ${TTNN_TENSOR_FBS_DIR} -o "${TTNN_FLATBUFFER_GEN_DIR}"
+            ${TTNN_TENSOR_FBS_DIR}/tensor_spec.fbs
+        DEPENDS
+            flatc
+            ${TTNN_TENSOR_FBS_DIR}/tensor_spec.fbs
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Generating tensor_spec_generated.h for tt-train"
+    )
+
+    # Generate tensor_topology_generated.h
+    # tensor_topology.fbs includes mesh_shape.fbs and mesh_coordinate.fbs
+    add_custom_command(
+        OUTPUT
+            ${TTNN_FLATBUFFER_GEN_DIR}/tensor_topology_generated.h
+        COMMAND
+            flatc --keep-prefix --cpp --scoped-enums -I ${TTNN_TENSOR_FBS_DIR} -I ${TT_METAL_API_DIR} -o
+            "${TTNN_FLATBUFFER_GEN_DIR}" ${TTNN_TENSOR_FBS_DIR}/tensor_topology.fbs
+        DEPENDS
+            flatc
+            ${TTNN_TENSOR_FBS_DIR}/tensor_topology.fbs
+            ${TTNN_TENSOR_FBS_DIR}/mesh_shape.fbs
+            ${MESH_COORDINATE_FBS}
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Generating tensor_topology_generated.h for tt-train"
+    )
+
+    # Generate tensor_generated.h from tensor.fbs
+    # All dependencies should already be generated
+    add_custom_command(
+        OUTPUT
+            ${TTNN_FLATBUFFER_GEN_DIR}/tensor_generated.h
+        COMMAND
+            flatc --keep-prefix --cpp --scoped-enums -I ${TTNN_TENSOR_FBS_DIR} -I ${TT_METAL_API_DIR} -I
+            ${TTNN_FLATBUFFER_GEN_DIR} -o ${TTNN_FLATBUFFER_GEN_DIR} ${TTNN_TENSOR_FBS_DIR}/tensor.fbs
+        DEPENDS
+            flatc
+            ${TTNN_TENSOR_FBS_DIR}/tensor.fbs
+            ${TTNN_FLATBUFFER_GEN_DIR}/mesh_shape_generated.h
+            ${TTNN_FLATBUFFER_GEN_DIR}/tensor_spec_generated.h
+            ${TTNN_FLATBUFFER_GEN_DIR}/tensor_topology_generated.h
+            ${MESH_COORDINATE_GEN_DIR}/mesh_coordinate_generated.h
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Generating tensor_generated.h for tt-train"
+    )
+endif()
+
+# Build the dependency list for ttml_tensor_generated.h
+set(TTML_TENSOR_DEPS
+    flatc
+    ${FLATBUFFERS_SCHEMA}
+)
+if(GENERATE_TENSOR_HEADER)
+    list(
+        APPEND
+        TTML_TENSOR_DEPS
+        ${TTNN_FLATBUFFER_GEN_DIR}/tensor_generated.h
+        ${TTNN_FLATBUFFER_GEN_DIR}/mesh_shape_generated.h
+        ${TTNN_FLATBUFFER_GEN_DIR}/tensor_spec_generated.h
+        ${TTNN_FLATBUFFER_GEN_DIR}/tensor_topology_generated.h
+        ${MESH_COORDINATE_GEN_DIR}/mesh_coordinate_generated.h
+    )
+endif()
+
+add_custom_command(
+    OUTPUT
+        ${FLATBUFFER_GENERATED_DIR}/ttml_tensor_generated.h
+    COMMAND
+        flatc -c --keep-prefix --scoped-enums -I ${TTNN_TENSOR_FBS_DIR} -I ${TT_METAL_API_DIR} -I
+        ${TTNN_FLATBUFFER_GEN_DIR} -o ${FLATBUFFER_GENERATED_DIR} ${FLATBUFFERS_SCHEMA}
+    DEPENDS
+        ${TTML_TENSOR_DEPS}
+    COMMENT "Generating FlatBuffer C++ code from ttml_tensor.fbs"
+)
+
+# Collect generated header files
+set(GENERATED_HEADERS ${FLATBUFFER_GENERATED_DIR}/ttml_tensor_generated.h)
+if(GENERATE_TENSOR_HEADER)
+    list(
+        APPEND
+        GENERATED_HEADERS
+        ${TTNN_FLATBUFFER_GEN_DIR}/tensor_generated.h
+        ${TTNN_FLATBUFFER_GEN_DIR}/mesh_shape_generated.h
+        ${TTNN_FLATBUFFER_GEN_DIR}/tensor_spec_generated.h
+        ${TTNN_FLATBUFFER_GEN_DIR}/tensor_topology_generated.h
+        ${MESH_COORDINATE_GEN_DIR}/mesh_coordinate_generated.h
+    )
+endif()
+
+add_library(
+    ttml
+    STATIC
+    ${SOURCES}
+    ${GENERATED_HEADERS}
+)
 
 target_include_directories(ttml PUBLIC ${PROJECT_SOURCE_DIR})
+target_include_directories(ttml PUBLIC ${FLATBUFFER_GENERATED_DIR})
+# Add ttnn flatbuffer generated headers directory to include path
+# tensor_generated.h and related headers (including mesh_coordinate_generated.h) are generated here
+# mesh_coordinate_generated.h is included as 'tt-metalium/serialized_descriptors/mesh_coordinate_generated.h'
+# flatc creates the directory structure matching the include path, so TTNN_FLATBUFFER_GEN_DIR
+# contains all generated headers in the correct subdirectory structure
+target_include_directories(ttml PUBLIC ${TTNN_FLATBUFFER_GEN_DIR})
 
 find_package(
     Python3
@@ -395,14 +569,13 @@ target_link_libraries(
         Boost::container
         tt-logger
         simde::simde
+        FlatBuffers::FlatBuffers
 )
 
 message(STATUS "xtensor_SOURCE_DIR: ${xtensor_SOURCE_DIR}")
 message(STATUS "xtl_SOURCE_DIR: ${xtl_SOURCE_DIR}")
 message(STATUS "xtensor-blas_SOURCE_DIR: ${xtensor-blas_SOURCE_DIR}")
 
-message(STATUS "msgpack_SOURCE_DIR: ${msgpack_SOURCE_DIR}")
-target_include_directories(ttml PUBLIC ${msgpack_SOURCE_DIR}/include)
 message(STATUS "cli11_SOURCE_DIR: ${CLI11_SOURCE_DIR}")
 target_include_directories(ttml PUBLIC ${CLI11_SOURCE_DIR}/include)
 

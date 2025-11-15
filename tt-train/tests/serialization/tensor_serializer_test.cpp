@@ -14,7 +14,7 @@
 #include "core/device.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "modules/multi_layer_perceptron.hpp"
-#include "serialization/msgpack_file.hpp"
+#include "serialization/flatbuffer_file.hpp"
 #include "serialization/serialization.hpp"
 
 class TensorFileTest : public ::testing::Test {
@@ -36,11 +36,11 @@ protected:
         ttml::autograd::ctx().close_device();
     }
 
-    const std::string test_filename = "/tmp/test_tensor.msgpack";
+    const std::string test_filename = "/tmp/test_tensor.flatbuffer";
 };
 
 TEST_F(TensorFileTest, SerializeDeserializeTensor) {
-    ttml::serialization::MsgPackFile serializer;
+    ttml::serialization::FlatBufferFile serializer;
     auto* device = &ttml::autograd::ctx().get_device();
     auto shape = ttnn::Shape({1, 2, 32, 321});
     auto tensor_zeros = ttml::core::zeros(shape, device);
@@ -49,7 +49,7 @@ TEST_F(TensorFileTest, SerializeDeserializeTensor) {
     // Write tensor to file
     ttml::serialization::write_ttnn_tensor(serializer, "tensor", tensor_ones);
     serializer.serialize(test_filename);
-    ttml::serialization::MsgPackFile deserializer;
+    ttml::serialization::FlatBufferFile deserializer;
     deserializer.deserialize(test_filename);
 
     // Read tensor from file
@@ -70,7 +70,7 @@ bool compare_tensors(const tt::tt_metal::Tensor& tensor1, const tt::tt_metal::Te
 }
 
 TEST_F(TensorFileTest, SerializeDeserializeNamedParameters) {
-    ttml::serialization::MsgPackFile serializer;
+    ttml::serialization::FlatBufferFile serializer;
     auto model_params = ttml::modules::MultiLayerPerceptronParameters{
         .input_features = 128, .hidden_features = {256}, .output_features = 10};
     ttml::modules::MultiLayerPerceptron mlp_to_write(model_params);
@@ -79,7 +79,7 @@ TEST_F(TensorFileTest, SerializeDeserializeNamedParameters) {
     auto params_to_write = mlp_to_write.parameters();
     ttml::serialization::write_named_parameters(serializer, "mlp", params_to_write);
     serializer.serialize(test_filename);
-    ttml::serialization::MsgPackFile deserializer;
+    ttml::serialization::FlatBufferFile deserializer;
     deserializer.deserialize(test_filename);
     auto params_to_read = mlp_to_read.parameters();
     ttml::serialization::read_named_parameters(deserializer, "mlp", params_to_read);
