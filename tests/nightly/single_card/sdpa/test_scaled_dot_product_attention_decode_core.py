@@ -493,16 +493,18 @@ def run_scaled_dot_product_attention_decode(
         if sub_core_grids is not None
         else None
     )
-    if sub_core_grids is not None:
+    if sub_core_grids is None:
         assert (
-            compute_sub_core_grids.num_cores() == num_cores
-        ), f"Number of cores {num_cores} must be equal to number of compute sub core grids {compute_sub_core_grids.num_cores()}"
-    assert (
-        grid_height <= compute_grid_size.x
-    ), f"Invalid grid height on X dimension ({grid_height} > {compute_grid_size.x})"
-    assert (
-        grid_width <= compute_grid_size.y
-    ), f"Invalid grid height on Y dimension ({grid_width} > {compute_grid_size.y})"
+            grid_height <= compute_grid_size.x
+        ), f"Invalid grid height on X dimension ({grid_height} > {compute_grid_size.x})"
+        assert (
+            grid_width <= compute_grid_size.y
+        ), f"Invalid grid height on Y dimension ({grid_width} > {compute_grid_size.y})"
+    else:
+        available_cores = sub_core_grids.num_cores()
+        assert (
+            num_grid_cores <= available_cores
+        ), f"Invalid grid size: requested {num_grid_cores} cores but only {available_cores} cores available in sub_core_grids"
 
     # Set min pcc based on q_dtype, kv_dtype, and number of cores per batch
     min_pcc = get_min_pcc(q_dtype, kv_dtype, num_cores // b)
