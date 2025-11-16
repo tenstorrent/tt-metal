@@ -424,7 +424,6 @@ void worker_compute(
     constexpr uint32_t ml_write_size = PNHt * tile_bytes;
     uint64_t output_write_addr =
         get_noc_addr(reduce_core_noc_x, reduce_core_noc_y, get_write_ptr(cb_intermed_out)) + worker_offset;
-    // output_write_addr += o_write_size;
 
     // send the max logits first then the logits sum then the partial output to the reducer
     noc_async_write(get_read_ptr(cb_out_m), output_write_addr, ml_write_size);

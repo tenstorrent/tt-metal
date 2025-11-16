@@ -473,7 +473,7 @@ void MAIN {
                     //
                     // * Fused Correction is a fused operation that performs the following steps:
                     // * 1. CUR_MAX = max(PREV_MAX, WORKER_MAX)
-                    // * 2. EXP_MAX_DIFF = exp((WORKER_MAX - CUR_MAX)*scale)
+                    // * 2. EXP_MAX_DIFF_2 = exp((WORKER_MAX - CUR_MAX)*scale)
                     // * 3. PREV_SUM_2 *= EXP_MAX_DIFF_2
                     // * 4. EXP_MAX_DIFF = exp((PREV_MAX - CUR_MAX)*scale)
                     // * 5. PREV_SUM *= EXP_MAX_DIFF

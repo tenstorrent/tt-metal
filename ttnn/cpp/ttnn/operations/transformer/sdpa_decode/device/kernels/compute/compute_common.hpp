@@ -411,7 +411,12 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
 /**
  * The custom SFPI LLK function computes the following operation:
  * cur_max = max(prev_max, worker_max)
- * cur_sum = exp(worker_max - cur_max) * scale + exp(prev_max - cur_max) * prev_sum
+ * cur_sum = exp((worker_max - cur_max) * scale) * worker_sum + exp((prev_max - cur_max) * scale) * prev_sum
+ * There are 4 results produced:
+ * 1. exp_max_diff = exp((worker_max - cur_max) * scale), produced in dst_reg[prev_max_base_idx]
+ * 2. exp_max_diff_2 = exp((prev_max - cur_max) * scale), produced in dst_reg[worker_max_base_idx]
+ * 3. cur_sum produced in dst_reg[prev_sum_base_idx]
+ * 4. cur_max produced in dst_reg[cur_max_base_idx]
  * fused_max_sub_exp_add_tile
  */
 template <bool SDPA_EXP_APPROX_MODE>
@@ -457,9 +462,7 @@ void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
         sfpi::vFloat corr_prev_sum = sfpi::dst_reg[prev_sum_base_idx];
         sfpi::vFloat corr_sum = corr_worker_sum + corr_prev_sum;
         sfpi::dst_reg[prev_sum_base_idx] = corr_sum;
-
         sfpi::dst_reg += 2;
-        // cur_sum = exp(worker_max - cur_max) * worker_sum + exp(prev_max - cur_max) * prev_sum
     }
 }
 
