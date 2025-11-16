@@ -265,7 +265,6 @@ jobs:
     secrets: inherit
     with:
       docker-image: ${{ needs.build.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
