@@ -467,16 +467,9 @@ void MAIN {
                 // Iterate through each worker
                 for (uint32_t i = 0; i < num_cores_to_wait; i++) {
                     // OUT_ACC_2 <- WORKER_OUT
-                    // cb_wait_front(cb_out_o, out_chunk_tiles); // Worker Output
-                    // cb_wait_front(cb_m_in, Sq_chunk_t); // Worker Max
-                    // cb_wait_front(cb_l_in, Sq_chunk_t); // Worker Sum
-
                     move_block<true>(cb_out_o, cb_out_accumulate_im_2, out_chunk_tiles);
 
-                    // PREV_SUM_2 <- WORKER_SUM
-                    move_block<true>(cb_l_in, cb_prev_sum_2, Sq_chunk_t);
-
-                    // Fused Correction
+                    // Fused Softmax Correction
                     //
                     // * Fused Correction is a fused operation that performs the following steps:
                     // * 1. CUR_MAX = max(PREV_MAX, WORKER_MAX)
@@ -487,8 +480,8 @@ void MAIN {
                     // * 6. CUR_SUM = PREV_SUM_2 + PREV_SUM
                     // */
                     correction_block<scale_fp32, (int)VectorMode::C>(
-                        cb_m_in,        // cb worker max
-                        cb_prev_sum_2,  // cb worker sum
+                        cb_m_in,  // cb worker max
+                        cb_l_in,  // cb worker sum
                         cb_cur_max,
                         cb_prev_max,
                         cb_cur_sum,
