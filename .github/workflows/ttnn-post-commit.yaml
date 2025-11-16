@@ -16,9 +16,6 @@ on:
       docker-image:
         required: true
         type: string
-      build-artifact-name:
-        required: true
-        type: string
       wheel-artifact-name:
         required: true
         type: string
@@ -51,9 +48,6 @@ on:
         type: number
         default: 40
       docker-image:
-        required: true
-        type: string
-      build-artifact-name:
         required: true
         type: string
       wheel-artifact-name:
