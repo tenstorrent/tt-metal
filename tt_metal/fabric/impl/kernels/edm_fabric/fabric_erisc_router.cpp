@@ -2152,8 +2152,7 @@ void
     init_local_sender_channel_worker_interfaces(
         std::array<size_t, NUM_SENDER_CHANNELS>& local_sender_connection_live_semaphore_addresses,
         std::array<size_t, NUM_SENDER_CHANNELS>& local_sender_connection_info_addresses,
-        EdmChannelWorkerIFs& local_sender_channel_worker_interfaces,
-        std::array<size_t, NUM_SENDER_CHANNELS>& local_sender_flow_control_semaphores) {
+        EdmChannelWorkerIFs& local_sender_channel_worker_interfaces) {
     // manual unrol because previously, going from having this in a loop to unrolling this would
     // lead to a performance regression. Having these unrolled is needed to enable some performance optimizations
     // because setup will differ in that each will be a different type. Keeping them unrolled here let's us
@@ -2166,7 +2165,7 @@ void
         new (&local_sender_channel_worker_interfaces.template get<0>()) tt::tt_fabric::
             StaticSizedSenderChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS_ARRAY[0]>(
                 connection_worker_info_ptr,
-                reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(local_sender_flow_control_semaphores[0]),
+                0,  // Not used for credits.
                 reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_live_semaphore_ptr),
                 sender_channel_ack_cmd_buf_ids[0],
                 get_credits_init_val<0>(),
@@ -2180,7 +2179,7 @@ void
         new (&local_sender_channel_worker_interfaces.template get<1>()) tt::tt_fabric::
             StaticSizedSenderChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS_ARRAY[1]>(
                 connection_worker_info_ptr,
-                reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(local_sender_flow_control_semaphores[1]),
+                0,  // Not used for credits.
                 reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_live_semaphore_ptr),
                 sender_channel_ack_cmd_buf_ids[1],
                 get_credits_init_val<1>(),
@@ -2195,7 +2194,7 @@ void
         new (&local_sender_channel_worker_interfaces.template get<2>()) tt::tt_fabric::
             StaticSizedSenderChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS_ARRAY[2]>(
                 connection_worker_info_ptr,
-                reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(local_sender_flow_control_semaphores[2]),
+                0,  // Not used for credits.
                 reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_live_semaphore_ptr),
                 sender_channel_ack_cmd_buf_ids[2],
                 get_credits_init_val<2>(),
@@ -2209,7 +2208,7 @@ void
         new (&local_sender_channel_worker_interfaces.template get<3>()) tt::tt_fabric::
             StaticSizedSenderChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS_ARRAY[3]>(
                 connection_worker_info_ptr,
-                reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(local_sender_flow_control_semaphores[3]),
+                0,  // Not used for credits.
                 reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_live_semaphore_ptr),
                 sender_channel_ack_cmd_buf_ids[3],
                 get_credits_init_val<3>(),
@@ -2228,8 +2227,7 @@ void
                     tt::tt_fabric::worker_handshake_noc,
                     SENDER_NUM_BUFFERS_ARRAY[VC1_SENDER_CHANNEL]>(
                     connection_worker_info_ptr,
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(
-                        local_sender_flow_control_semaphores[VC1_SENDER_CHANNEL]),
+                    0,  // Not used for credits.
                     reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_live_semaphore_ptr),
                     sender_channel_ack_cmd_buf_ids[VC1_SENDER_CHANNEL],
                     get_credits_init_val<VC1_SENDER_CHANNEL>(),
@@ -2515,15 +2513,20 @@ void kernel_main() {
 #if defined(FABRIC_2D)
     std::array<uint32_t, NUM_DOWNSTREAM_SENDERS_VC0> downstream_edm_vc0_worker_registration_ids;
     std::array<uint32_t, NUM_DOWNSTREAM_SENDERS_VC0> downstream_edm_vc0_worker_location_info_addresses;
+    std::array<uint32_t, NUM_DOWNSTREAM_SENDERS_VC0> downstream_edm_vc0_buffer_index_semaphore_addresses;
     for (size_t i = 0; i < NUM_DOWNSTREAM_SENDERS_VC0; i++) {
         downstream_edm_vc0_worker_registration_ids[i] = get_arg_val<uint32_t>(arg_idx++);
     }
     for (size_t i = 0; i < NUM_DOWNSTREAM_SENDERS_VC0; i++) {
         downstream_edm_vc0_worker_location_info_addresses[i] = get_arg_val<uint32_t>(arg_idx++);
     }
+    for (size_t i = 0; i < NUM_DOWNSTREAM_SENDERS_VC0; i++) {
+        downstream_edm_vc0_buffer_index_semaphore_addresses[i] = get_arg_val<uint32_t>(arg_idx++);
+    }
 #else
     const auto downstream_edm_vc0_worker_registration_id = get_arg_val<uint32_t>(arg_idx++);
     const auto downstream_edm_vc0_worker_location_info_address = get_arg_val<uint32_t>(arg_idx++);
+    const auto downstream_edm_vc0_buffer_index_semaphore_address = get_arg_val<uint32_t>(arg_idx++);
 #endif
 
     // unused - to be deleted
@@ -2541,6 +2544,7 @@ void kernel_main() {
     // unused now - to be deleted
     [[maybe_unused]]
     const auto downstream_vc1_noc_interface_buffer_index_local_addr = 0;
+    const auto downstream_edm_vc1_buffer_index_semaphore_address = get_arg_val<uint32_t>(arg_idx++);
 
     const auto my_sem_for_teardown_from_edm_0 = get_arg_val<uint32_t>(arg_idx++);
     const auto my_sem_for_teardown_from_edm_1 = get_arg_val<uint32_t>(arg_idx++);
@@ -2598,14 +2602,6 @@ void kernel_main() {
 
     std::array<uint32_t, NUM_SENDER_CHANNELS> local_sender_channel_free_slots_stream_ids_ordered;
 
-    const auto& local_sender_channel_connection_buffer_index_id =
-        take_first_n_elements<NUM_DOWNSTREAM_CHANNELS, MAX_NUM_SENDER_CHANNELS - 1, size_t>(
-            std::array<size_t, MAX_NUM_SENDER_CHANNELS - 1>{
-                local_sender_channel_1_connection_buffer_index_id,
-                local_sender_channel_2_connection_buffer_index_id,
-                local_sender_channel_3_connection_buffer_index_id,
-                local_sender_channel_4_connection_buffer_index_id});
-
     const auto& local_sem_for_teardown_from_downstream_edm =
         take_first_n_elements<NUM_DOWNSTREAM_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(
             std::array<size_t, MAX_NUM_SENDER_CHANNELS>{
@@ -2636,14 +2632,6 @@ void kernel_main() {
         SENDER_TO_POOL_TYPE,
         SENDER_TO_POOL_IDX>::make();
 
-    std::array<size_t, NUM_SENDER_CHANNELS> local_sender_flow_control_semaphores =
-        take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(
-            std::array<size_t, MAX_NUM_SENDER_CHANNELS>{
-                reinterpret_cast<size_t>(sender0_worker_semaphore_ptr),
-                reinterpret_cast<size_t>(sender1_worker_semaphore_ptr),
-                reinterpret_cast<size_t>(sender2_worker_semaphore_ptr),
-                reinterpret_cast<size_t>(sender3_worker_semaphore_ptr),
-                reinterpret_cast<size_t>(sender4_worker_semaphore_ptr)});
     std::array<size_t, NUM_SENDER_CHANNELS> local_sender_connection_live_semaphore_addresses =
         take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(
             std::array<size_t, MAX_NUM_SENDER_CHANNELS>{
@@ -2721,7 +2709,11 @@ void kernel_main() {
                         channel_buffer_size,
                         // Used to park current write pointer value at the downstream edm
                         // when this interface disconnects from the downstream edm.
-                        local_sender_channel_connection_buffer_index_id[compact_index],
+#if defined(FABRIC_2D)
+                        downstream_edm_vc0_buffer_index_semaphore_addresses[compact_index],
+#else
+                        downstream_edm_vc0_buffer_index_semaphore_address,
+#endif
                         0,  // Unused for Router->Router connections. Router->Router always uses stream registers for
                             // credits. Used by Worker->Router connections. This is an address in the worker's L1. The
                             // Router that a Worker adapter is connected to writes its read counter to this address. The
@@ -2729,12 +2721,7 @@ void kernel_main() {
                         reinterpret_cast<volatile uint32_t* const>(teardown_sem_address),
                         downstream_vc0_noc_interface_buffer_index_local_addr,  // keep common, since its a scratch noc
                                                                                // read dest.
-                    // Since we are the same direction, we're always going to send to the same stream
-                    // reg for each downstream router because we are allocating sender channels by
-                    // producer direction.
-                    //
-                    // We add 1 because sender_channel[0] is for (non-forwarded) traffic from our local chip's NoC, so
-                    // we skip that first one. The first forwarded direction is the next one so we start there.
+
 #if defined(FABRIC_2D)
                         get_vc0_downstream_sender_channel_free_slots_stream_id(compact_index),
 #else
@@ -2777,7 +2764,7 @@ void kernel_main() {
                 downstream_edm_vc1_worker_registration_id,
                 downstream_edm_vc1_worker_location_info_address,
                 channel_buffer_size,
-                local_sender_channel_connection_buffer_index_id[NUM_DOWNSTREAM_CHANNELS - 1],
+                downstream_edm_vc1_buffer_index_semaphore_address,
                 0,  // Unused for Router->Router connections. Router->Router always uses stream registers for
                     // credits. Used by Worker->Router connections. This is an address in the worker's L1. The
                     // Router that a Worker adapter is connected to writes its read counter to this address. The
@@ -2806,12 +2793,9 @@ void kernel_main() {
     }
 
     // helps ubenchmark performance
-    // __asm__("nop");
-    // __asm__("nop");
-    // __asm__("nop");
-    // __asm__("nop");
-    // __asm__("nop");
-    // __asm__("nop");
+    __asm__("nop");
+    __asm__("nop");
+    __asm__("nop");
 
     // initialize the local receiver channel buffers
     local_receiver_channels.init<channel_pools_args>(
@@ -2835,9 +2819,12 @@ void kernel_main() {
         init_local_sender_channel_worker_interfaces(
             local_sender_connection_live_semaphore_addresses,
             local_sender_connection_info_addresses,
-            local_sender_channel_worker_interfaces,
-            local_sender_flow_control_semaphores);
+            local_sender_channel_worker_interfaces);
     }
+
+    __asm__("nop");
+    __asm__("nop");
+    __asm__("nop");
 
     WriteTransactionIdTracker<
         RECEIVER_NUM_BUFFERS_ARRAY[0],

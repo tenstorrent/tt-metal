@@ -90,6 +90,11 @@ public:
 
     uint32_t get_downstream_edms_connected(bool is_2d_routing, bool is_vc1) const;
 
+    // Get buffer index semaphore address for a specific VC and compact index
+    std::optional<size_t> get_buffer_index_semaphore_address(uint32_t vc_idx, size_t compact_idx) const {
+        return downstream_edm_buffer_index_semaphore_addresses.at(vc_idx).at(compact_idx);
+    }
+
 private:
     uint32_t pack_downstream_noc_y_rt_arg(uint32_t vc_idx) const;
     uint32_t pack_downstream_noc_x_rt_arg(uint32_t vc_idx) const;
@@ -129,6 +134,10 @@ private:
         std::array<std::optional<size_t>, builder_config::max_downstream_edms>,
         builder_config::num_receiver_channels>
         downstream_edm_worker_location_info_addresses = {};
+    std::array<
+        std::array<std::optional<size_t>, builder_config::max_downstream_edms>,
+        builder_config::num_receiver_channels>
+        downstream_edm_buffer_index_semaphore_addresses = {};
 
     bool is_2D_routing = false;
     eth_chan_directions my_direction = eth_chan_directions::EAST;

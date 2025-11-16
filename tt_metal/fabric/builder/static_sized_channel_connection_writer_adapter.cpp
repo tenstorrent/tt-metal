@@ -49,12 +49,17 @@ void StaticSizedChannelConnectionWriterAdapter::add_downstream_connection(
                 adapter_spec.edm_connection_handshake_addr;
             this->downstream_edm_worker_location_info_addresses.at(inbound_vc_idx).at(compact_index) =
                 adapter_spec.edm_worker_location_info_addr;
+            this->downstream_edm_buffer_index_semaphore_addresses.at(inbound_vc_idx).at(compact_index) =
+                adapter_spec.buffer_index_semaphore_id;
+
         } else {
             this->downstream_edm_buffer_base_addresses.at(inbound_vc_idx).at(0) = adapter_spec.edm_buffer_base_addr;
             this->downstream_edm_worker_registration_addresses.at(inbound_vc_idx).at(0) =
                 adapter_spec.edm_connection_handshake_addr;
             this->downstream_edm_worker_location_info_addresses.at(inbound_vc_idx).at(0) =
                 adapter_spec.edm_worker_location_info_addr;
+            this->downstream_edm_buffer_index_semaphore_addresses.at(inbound_vc_idx).at(0) =
+                adapter_spec.buffer_index_semaphore_id;
         }
     } else {
         this->downstream_edms_connected = 1;
@@ -65,6 +70,8 @@ void StaticSizedChannelConnectionWriterAdapter::add_downstream_connection(
             adapter_spec.edm_connection_handshake_addr;
         this->downstream_edm_worker_location_info_addresses.at(inbound_vc_idx).at(0) =
             adapter_spec.edm_worker_location_info_addr;
+        this->downstream_edm_buffer_index_semaphore_addresses.at(inbound_vc_idx).at(0) =
+            adapter_spec.buffer_index_semaphore_id;
     }
 
     this->downstream_sender_channels_num_buffers.at(inbound_vc_idx) = adapter_spec.num_buffers_per_channel;
@@ -88,7 +95,7 @@ void StaticSizedChannelConnectionWriterAdapter::pack_inbound_channel_rt_args(uin
         args_out.push_back(this->pack_downstream_noc_x_rt_arg(vc_idx));
         args_out.push_back(this->pack_downstream_noc_y_rt_arg(vc_idx));
 
-        // Pack 3 worker registration addresses
+        // Pack 3 worker registration addresses (connection handshake addresses)
         for (size_t compact_idx = 0; compact_idx < builder_config::num_downstream_edms_2d_vc0; compact_idx++) {
             args_out.push_back(this->downstream_edm_worker_registration_addresses[vc_idx][compact_idx].value_or(0));
         }
@@ -96,6 +103,11 @@ void StaticSizedChannelConnectionWriterAdapter::pack_inbound_channel_rt_args(uin
         // Pack 3 worker location info addresses
         for (size_t compact_idx = 0; compact_idx < builder_config::num_downstream_edms_2d_vc0; compact_idx++) {
             args_out.push_back(this->downstream_edm_worker_location_info_addresses[vc_idx][compact_idx].value_or(0));
+        }
+
+        // Pack 3 buffer index semaphore addresses
+        for (size_t compact_idx = 0; compact_idx < builder_config::num_downstream_edms_2d_vc0; compact_idx++) {
+            args_out.push_back(this->downstream_edm_buffer_index_semaphore_addresses[vc_idx][compact_idx].value_or(0));
         }
     } else {
         // For VC1 or 1D: single downstream connection (backward compatible)
@@ -113,6 +125,7 @@ void StaticSizedChannelConnectionWriterAdapter::pack_inbound_channel_rt_args(uin
             this->pack_downstream_noc_y_rt_arg(vc_idx),
             this->downstream_edm_worker_registration_addresses[vc_idx][0].value_or(0),
             this->downstream_edm_worker_location_info_addresses[vc_idx][0].value_or(0),
+            this->downstream_edm_buffer_index_semaphore_addresses[vc_idx][0].value_or(0),
         };
 
         args_out.reserve(args_out.size() + rt_args.size());

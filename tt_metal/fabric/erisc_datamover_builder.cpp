@@ -736,7 +736,6 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     sender_channels_flow_control_semaphore_id(sender_channels_flow_control_semaphore_id),
     sender_channels_connection_semaphore_id(sender_channels_connection_semaphore_id),
     sender_channels_buffer_index_semaphore_id(sender_channels_buffer_index_semaphore_id),
-    downstream_vcs_sender_channel_buffer_index_semaphore_id(sender_channels_buffer_index_semaphore_id),
     build_in_worker_connection_mode(build_in_worker_connection_mode),
     fabric_edm_type(fabric_edm_type),
     dateline_connection(fabric_edm_type == tt::tt_fabric::FabricEriscDatamoverType::Dateline),
@@ -756,6 +755,10 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     this->receiver_channel_to_downstream_adapter =
         std::make_shared<tt::tt_fabric::StaticSizedChannelConnectionWriterAdapter>(
             *static_allocator, config.topology, direction);
+    // worker is always index 0.
+    // rest of the downstream buffer index addresses will be populated when building connections to downstream edm
+    // channels.
+    downstream_vcs_sender_channel_buffer_index_semaphore_id[0] = sender_channels_buffer_index_semaphore_id[0];
 
     // Add this log right at the beginning of the constructor body
     log_debug(
