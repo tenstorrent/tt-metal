@@ -29,9 +29,7 @@ struct OneToOneConfig {
     DataFormat l1_data_format = DataFormat::Invalid;
     uint32_t num_virtual_channels = 1;  // Number of virtual channels to cycle through (must be > 1 for cycling)
     NOC noc_id = NOC::NOC_0;
-
-    // TODO: Add the following parameters
-    //  1. Posted flag
+    bool use_2_0_api = false;  // Use Device 2.0 API
 };
 
 /// @brief Does L1 Sender Core --> L1 Receiver Core
@@ -98,8 +96,11 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneToO
 
     // Kernels
     std::string kernels_dir = "tests/tt_metal/tt_metal/data_movement/one_to_one/kernels/";
-    std::string sender_kernel_filename = "sender.cpp";
-    std::string sender_kernel_path = kernels_dir + sender_kernel_filename;
+    std::string sender_kernel_filename = "sender";
+    if (test_config.use_2_0_api) {
+        sender_kernel_filename += "_2_0";
+    }
+    std::string sender_kernel_path = kernels_dir + sender_kernel_filename + ".cpp";
 
     CreateKernel(
         program,
@@ -243,7 +244,8 @@ void packet_sizes_test(
     const shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t test_id,
     CoreCoord master_core_coord = {0, 0},
-    CoreCoord subordinate_core_coord = {1, 1}) {
+    CoreCoord subordinate_core_coord = {1, 1},
+    bool use_2_0_api = false) {
     IDevice* device = mesh_device->get_device(0);
     // Physical Constraints
     auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
@@ -271,6 +273,7 @@ void packet_sizes_test(
                 .pages_per_transaction = pages_per_transaction,
                 .bytes_per_page = bytes_per_page,
                 .l1_data_format = DataFormat::Float16_b,
+                .use_2_0_api = use_2_0_api,
             };
 
             // Run
@@ -368,4 +371,10 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToOneCustom) {
         num_virtual_channels);
 }
 
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToOnePacketSizes2_0) {
+    // Test ID
+    uint32_t test_id = 158;
+
+    unit_tests::dm::core_to_core::packet_sizes_test(get_mesh_device(), test_id, CoreCoord(0, 0), CoreCoord(1, 1), true);
+}
 }  // namespace tt::tt_metal
