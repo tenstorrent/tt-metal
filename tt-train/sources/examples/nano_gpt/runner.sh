@@ -10,10 +10,6 @@ SCRIPT="/home/tt-metal/tt-train/build/sources/examples/nano_gpt/nano_gpt"
 RESET_BOARD="tt-smi -r 0"
 CONFIG="/home/tt-metal/tt-train/configs/training_shakespeare_nanogpt.yaml"
 SLEEP_DURATION=30
-INTERVAL=100
-DEFAULT_SEED=5489
-MAX_STEPS=5000
-SLEEP_DURATION=30
 
 $RESET_BOARD
 echo "Running $SCRIPT..."
