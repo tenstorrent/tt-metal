@@ -7,7 +7,7 @@ three TTNN optimization stages:
 
 - **Stage 1** – High-precision bring-up (fp32 weights/activations, no optimizations)
 - **Stage 2** – Basic optimizations (sharding, fusion, L1)
-- **Stage 3** – Deep optimizations (fused SDPA, bfloat8 activations, max core utilization)
+- **Stage 3** – Deep optimizations (fused SDPA when available, bfloat16 activations today with optional bfloat8 in future runtimes, max core utilization)
 
 ## Running the demo
 
