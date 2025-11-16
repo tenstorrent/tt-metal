@@ -15,7 +15,6 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/reduce.h"
-#include "debug/dprint.h"
 
 /******************************************************************************
  *                                                                             *
@@ -425,16 +424,19 @@ void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
     constexpr uint32_t worker_sum_base_idx = 128;  // dst_reg_4 (Tile 4)
 
     for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
+        // Load inputs for this vector-slot into temporaries to avoid aliasing on dst_reg
         sfpi::vFloat prev_max_vec = sfpi::dst_reg[prev_max_base_idx];
         sfpi::vFloat worker_max_vec = sfpi::dst_reg[worker_max_base_idx];
+        sfpi::vFloat prev_sum_vec = sfpi::dst_reg[prev_sum_base_idx];
+        sfpi::vFloat worker_sum_vec = sfpi::dst_reg[worker_sum_base_idx];
         v_if(prev_max_vec < worker_max_vec) { sfpi::dst_reg[cur_max_base_idx] = worker_max_vec; }
         v_else { sfpi::dst_reg[cur_max_base_idx] = prev_max_vec; }
         v_endif;
         sfpi::vFloat cur_max = sfpi::dst_reg[cur_max_base_idx];
 
         // Compute differences
-        sfpi::vFloat diff_prev = sfpi::dst_reg[prev_max_base_idx] - cur_max;
-        sfpi::vFloat diff_worker = sfpi::dst_reg[worker_max_base_idx] - cur_max;
+        sfpi::vFloat diff_prev = prev_max_vec - cur_max;
+        sfpi::vFloat diff_worker = worker_max_vec - cur_max;
 
         // Exponentials of differences
         sfpi::vFloat exp_prev = ckernel::sfpu::
@@ -449,8 +451,12 @@ void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
         sfpi::dst_reg[worker_max_base_idx] = exp_worker;
 
         // cur_sum = exp(worker_max - cur_max) * worker_sum + exp(prev_max - cur_max) * prev_sum
-        sfpi::dst_reg[prev_sum_base_idx] =
-            exp_worker * sfpi::dst_reg[worker_sum_base_idx] + exp_prev * sfpi::dst_reg[prev_sum_base_idx];
+        sfpi::dst_reg[worker_sum_base_idx] = exp_worker * worker_sum_vec;
+        sfpi::dst_reg[prev_sum_base_idx] = exp_prev * prev_sum_vec;
+        sfpi::vFloat corr_worker_sum = sfpi::dst_reg[worker_sum_base_idx];
+        sfpi::vFloat corr_prev_sum = sfpi::dst_reg[prev_sum_base_idx];
+        sfpi::vFloat corr_sum = corr_worker_sum + corr_prev_sum;
+        sfpi::dst_reg[prev_sum_base_idx] = corr_sum;
 
         sfpi::dst_reg += 2;
         // cur_sum = exp(worker_max - cur_max) * worker_sum + exp(prev_max - cur_max) * prev_sum
@@ -488,7 +494,7 @@ void correction_block(
     constexpr uint32_t dst_reg_0 = 0;  // dst_reg_0 is used for prev_max
     constexpr uint32_t dst_reg_1 = 1;  // dst_reg_1 is used for worker_max
     constexpr uint32_t dst_reg_2 = 2;  // dst_reg_2 is used for cur_max
-    constexpr uint32_t dst_reg_3 = 3;  // dst_reg_3 is used for prev_sum
+    constexpr uint32_t dst_reg_3 = 3;  // dst_reg_3 is used for prev_sum, returns cur_sum
     constexpr uint32_t dst_reg_4 = 4;  // dst_reg_4 is used for worker_sum
 
     // convert scale from fp32 to bf16
@@ -497,9 +503,8 @@ void correction_block(
     for (uint32_t i = 0; i < num_head_tiles; i++) {
         acquire_dst();
         copy_tile_to_dst_init_short(cb_worker_max);
-        max_tile_init();
-        sub_tiles_init(cb_prev_max, cb_worker_max);
         exp_tile_init<EXP_APPROX_MODE, false>();
+        max_tile_init();
         copy_tile(cb_prev_max, i, dst_reg_0);
         copy_tile(cb_worker_max, i, dst_reg_1);
         copy_tile(cb_prev_sum, i, dst_reg_3);
