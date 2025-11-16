@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """
-Quick test script to verify YOLOS-small works on Tenstorrent hardware
-This script can be run standalone with minimal dependencies
+SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+SPDX-License-Identifier: Apache-2.0
+
+Quick test script to verify YOLOS-small works on Tenstorrent hardware.
+This script can be run standalone with minimal dependencies.
 """
 
 import os

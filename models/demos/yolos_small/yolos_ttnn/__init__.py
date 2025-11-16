@@ -1,4 +1,10 @@
-"""TTNN YOLOS-small Implementation"""
+"""
+SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+SPDX-License-Identifier: Apache-2.0
+
+TTNN YOLOS-small implementation.
+"""
 
 from .modeling_yolos import (
     yolos_patch_embeddings,
