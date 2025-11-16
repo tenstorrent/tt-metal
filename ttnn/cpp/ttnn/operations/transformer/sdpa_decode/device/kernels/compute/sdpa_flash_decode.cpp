@@ -466,11 +466,7 @@ void MAIN {
                 // We need to wait for them and send to reducer's compute
                 // Iterate through each worker
                 for (uint32_t i = 0; i < num_cores_to_wait; i++) {
-                    // OUT_ACC_2 <- WORKER_OUT
-                    move_block<true>(cb_out_o, cb_out_accumulate_im_2, out_chunk_tiles);
-
                     // Fused Softmax Correction
-                    //
                     // * Fused Correction is a fused operation that performs the following steps:
                     // * 1. CUR_MAX = max(PREV_MAX, WORKER_MAX)
                     // * 2. EXP_MAX_DIFF_2 = exp((WORKER_MAX - CUR_MAX)*scale)
@@ -489,6 +485,9 @@ void MAIN {
                         cb_exp_max_diff,
                         cb_exp_max_diff_2,
                         Sq_chunk_t);
+
+                    // OUT_ACC_2 <- WORKER_OUT
+                    move_block<true>(cb_out_o, cb_out_accumulate_im_2, out_chunk_tiles);
 
                     // OUT_ACC_2 *= EXP_MAX_DIFF
                     // OUT_ACC *= EXP_MAX_DIFF_2
