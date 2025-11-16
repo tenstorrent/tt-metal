@@ -35,7 +35,7 @@ public:
         size_t available_channel_buffering_space,
         const std::vector<MemoryRegion>& memory_regions);
 
-    void emit_ct_args(std::vector<uint32_t>& ct_args, size_t num_fwd_paths, size_t num_used_sender_channels, size_t num_used_receiver_channels) const override;
+    void emit_ct_args(std::vector<uint32_t>& ct_args) const override;
 
     /**
      * Get the number of slots for a specific sender channel.

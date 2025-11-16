@@ -2599,9 +2599,8 @@ void kernel_main() {
     std::array<uint32_t, NUM_SENDER_CHANNELS> local_sender_channel_free_slots_stream_ids_ordered;
 
     const auto& local_sender_channel_connection_buffer_index_id =
-        take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(
-            std::array<size_t, MAX_NUM_SENDER_CHANNELS>{
-                local_sender_channel_0_connection_buffer_index_id,
+        take_first_n_elements<NUM_DOWNSTREAM_CHANNELS, MAX_NUM_SENDER_CHANNELS - 1, size_t>(
+            std::array<size_t, MAX_NUM_SENDER_CHANNELS - 1>{
                 local_sender_channel_1_connection_buffer_index_id,
                 local_sender_channel_2_connection_buffer_index_id,
                 local_sender_channel_3_connection_buffer_index_id,
@@ -2709,13 +2708,19 @@ void kernel_main() {
 #endif
                         DOWNSTREAM_SENDER_NUM_BUFFERS_VC0,
 #if defined(FABRIC_2D)
+                        // connection handshake address on downstream edm
                         downstream_edm_vc0_worker_registration_ids[compact_index],
+                        // worker location info address on downstream edm
+                        // written by this interface when it connects to the downstream edm
+                        // so that the downstream edm knows who its upstream peer is
                         downstream_edm_vc0_worker_location_info_addresses[compact_index],
 #else
                         downstream_edm_vc0_worker_registration_id,
                         downstream_edm_vc0_worker_location_info_address,
 #endif
                         channel_buffer_size,
+                        // Used to park current write pointer value at the downstream edm
+                        // when this interface disconnects from the downstream edm.
                         local_sender_channel_connection_buffer_index_id[compact_index],
                         0,  // Unused for Router->Router connections. Router->Router always uses stream registers for
                             // credits. Used by Worker->Router connections. This is an address in the worker's L1. The
@@ -2801,8 +2806,12 @@ void kernel_main() {
     }
 
     // helps ubenchmark performance
-    __asm__("nop");
-    __asm__("nop");
+    // __asm__("nop");
+    // __asm__("nop");
+    // __asm__("nop");
+    // __asm__("nop");
+    // __asm__("nop");
+    // __asm__("nop");
 
     // initialize the local receiver channel buffers
     local_receiver_channels.init<channel_pools_args>(

@@ -418,15 +418,11 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     this->num_used_sender_channels = builder_config::get_sender_channel_count(is_2D_routing);
     this->num_used_receiver_channels = builder_config::num_receiver_channels;
 
-    if (is_2D_routing) {
-        // For 2D there is no forwarding to self but we are still initialize the settings for it.
-        // Routers ignore the settings at self index.
-        this->num_fwd_paths = this->num_used_sender_channels;
-    } else {
-        this->num_fwd_paths = this->num_used_sender_channels - 1;
-    }
+    // Default, assuming deadlock avoidance is enabled
+    // -1 to discount for the tensix worker channel
+    this->num_fwd_paths = this->num_used_sender_channels - 1;
 
-    // Ring/Torus have extra channels
+    // If not a Ring/Torus, we need to discount for Dateline VC sender and receiver channels
     if (topology == Topology::Linear || topology == Topology::Mesh) {
         this->num_used_sender_channels -= 1;
         this->num_used_receiver_channels -= 1;
@@ -1039,8 +1035,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
 
     // Emit pool data via multi-pool coordinator (steps 1-4 of schema: special tag, num_pools, pool_types, individual
     // pool CT args)
-    config.multi_pool_allocator->emit_ct_args(
-        ct_args, config.num_fwd_paths, num_sender_channels, num_receiver_channels);
+    config.multi_pool_allocator->emit_ct_args(ct_args, num_sender_channels, num_receiver_channels);
 
     // Emit channel-to-pool mappings (steps 5-8 of schema)
     ct_args.push_back(0xabaddad8);
@@ -1056,7 +1051,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         {config.remote_channels_allocator}, {FabricChannelPoolType::STATIC});
 
     // Emit remote channel pool data via multi-pool coordinator
-    remote_multi_pool_allocator.emit_ct_args(ct_args, config.num_fwd_paths, 0, num_receiver_channels);
+    remote_multi_pool_allocator.emit_ct_args(ct_args, 0, num_receiver_channels);
 
     config.remote_channel_to_pool_mapping->emit_ct_args(ct_args);
 
