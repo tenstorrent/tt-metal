@@ -40,10 +40,14 @@ import warnings
 
 
 try:
-    from models.common.utility_functions import tt_to_torch_tensor, torch_to_tt_tensor_rm
+    from models.common.utility_functions import tt_to_torch_tensor, torch_to_tt_tensor_rm, is_blackhole
 except ModuleNotFoundError:  # pragma: no cover - optional if running outside repo context.
     tt_to_torch_tensor = None
     torch_to_tt_tensor_rm = None
+
+    def is_blackhole() -> bool:
+        return False
+
 
 from .weights import extract_backbone_state, extract_patch_embed_state
 from .ttnn_compat import ttnn, get_default_dtype, require_ttnn
@@ -69,6 +73,32 @@ except ModuleNotFoundError:  # pragma: no cover - TT-CNN helpers unavailable wit
 
 DEFAULT_TT_DTYPE = get_default_dtype()
 TILE_WIDTH = 32
+
+
+def _make_compute_kernel_config(
+    *,
+    math_fidelity,
+    math_approx_mode: bool,
+    fp32_dest_acc_en: bool,
+    packer_l1_acc: bool,
+):
+    """Select an appropriate compute kernel config for the current arch."""
+
+    if ttnn is None:
+        raise RuntimeError("TT-NN runtime is required to construct Swin compute kernel configs.")
+    ComputeConfigClass = ttnn.WormholeComputeKernelConfig
+    try:
+        if is_blackhole() and hasattr(ttnn, "types") and hasattr(ttnn.types, "BlackholeComputeKernelConfig"):
+            ComputeConfigClass = ttnn.types.BlackholeComputeKernelConfig  # type: ignore[assignment]
+    except Exception:
+        # Conservatively fall back to Wormhole config on detection errors.
+        pass
+    return ComputeConfigClass(
+        math_fidelity=math_fidelity,
+        math_approx_mode=math_approx_mode,
+        fp32_dest_acc_en=fp32_dest_acc_en,
+        packer_l1_acc=packer_l1_acc,
+    )
 
 
 @dataclass
@@ -655,7 +685,7 @@ class MaskFormerSwinBackbone:
             self._to_tile_dram(merged),
             params.reduction_weight,
             None,
-            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+            compute_kernel_config=_make_compute_kernel_config(
                 math_fidelity=ttnn.MathFidelity.HiFi2,
                 math_approx_mode=False,
                 fp32_dest_acc_en=True,
@@ -914,7 +944,7 @@ class MaskFormerSwinBackbone:
             k_chunk_size=target,
             exp_approx_mode=True,
         )
-        compute_cfg = ttnn.WormholeComputeKernelConfig(
+        compute_cfg = _make_compute_kernel_config(
             math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=True,
             fp32_dest_acc_en=False,
@@ -1569,13 +1599,13 @@ class MaskFormerSwinBackbone:
         pad_tokens = (tile_size - (seq % tile_size)) % tile_size
         padded_seq = seq + pad_tokens
         program_cfg, compute_cfg = self._build_sdpa_configs(padded_seq)
-        matmul_compute_cfg = ttnn.WormholeComputeKernelConfig(
+        matmul_compute_cfg = _make_compute_kernel_config(
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
-        softmax_compute_cfg = ttnn.WormholeComputeKernelConfig(
+        softmax_compute_cfg = _make_compute_kernel_config(
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=True,

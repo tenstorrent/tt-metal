@@ -29,9 +29,13 @@ except ModuleNotFoundError:  # pragma: no cover - fallback optional
     DetrDecoderOutput = None
 
 try:
-    from models.common.utility_functions import tt_to_torch_tensor
-except ModuleNotFoundError:
+    from models.common.utility_functions import tt_to_torch_tensor, is_blackhole
+except ModuleNotFoundError:  # pragma: no cover - optional when running outside repo context
     tt_to_torch_tensor = None
+
+    def is_blackhole() -> bool:
+        return False
+
 
 from .backbone_swin import DEFAULT_TT_DTYPE
 from .ttnn_compat import ttnn, require_ttnn
@@ -171,7 +175,16 @@ class MaskFormerTransformerDecoder:
         tt_mem = to_tt_sequence(mem)
         tt_mem_pos = to_tt_sequence(pos_mem)
 
-        compute_cfg = ttnn.WormholeComputeKernelConfig(
+        if ttnn is None:
+            raise RuntimeError("TT-NN runtime is required for TT transformer decoder execution.")
+        ComputeConfigClass = ttnn.WormholeComputeKernelConfig
+        try:
+            if is_blackhole() and hasattr(ttnn, "types") and hasattr(ttnn.types, "BlackholeComputeKernelConfig"):
+                ComputeConfigClass = ttnn.types.BlackholeComputeKernelConfig  # type: ignore[assignment]
+        except Exception:
+            # Fall back to Wormhole config on detection errors.
+            pass
+        compute_cfg = ComputeConfigClass(
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=True,

@@ -185,3 +185,50 @@ def test_fallback_pipeline_forward():
     assert outputs.class_logits.shape == (1, ref.config.get("num_queries", 100), expected_classes)
     assert outputs.mask_logits.shape[0] == 1
     assert outputs.mask_logits.shape[1] == ref.config.get("num_queries", 100)
+
+
+@pytest.mark.skipif(not _TRANSFORMERS_AVAILABLE, reason="Requires transformers package for fallback execution.")
+@pytest.mark.skipif(
+    os.environ.get("MASKFORMER_RUN_WEIGHT_TESTS") != "1",
+    reason="Set MASKFORMER_RUN_WEIGHT_TESTS=1 to run integration tests that pull HF weights.",
+)
+def test_tt_pipeline_forward_shapes():
+    """Smoke-test TT decoder + heads (and optional TT mask projection) end-to-end."""
+
+    from models.experimental.maskformer_swin.ttnn_compat import ttnn as _ttnn
+
+    if _ttnn is None or not hasattr(_ttnn, "open_device"):
+        pytest.skip("TTNN runtime with open_device is required for TT pipeline tests.")
+
+    try:
+        device = _ttnn.open_device(device_id=0)
+    except Exception:
+        pytest.skip("Unable to open TT device for MaskFormer TT pipeline test.")
+
+    try:
+        cfg = WeightConversionConfig()
+        ref = download_reference_weights(cfg)
+        state = convert_state_dict_to_tt(ref.state_dict, cfg)
+
+        # Enable TT decoder and mask projection paths.
+        os.environ["MASKFORMER_TT_DECODER"] = "1"
+        os.environ.setdefault("MASKFORMER_TT_MASK_PROJ", "1")
+
+        pipeline = MaskFormerFallbackPipeline.from_reference(ref, state, device=device)
+
+        pixel_values = torch.randn(1, 3, 384, 384)
+        with torch.no_grad():
+            outputs = pipeline.forward(pixel_values)
+
+        expected_classes = len(ref.config.get("id2label", {})) + 1
+        assert outputs.class_logits.shape == (1, ref.config.get("num_queries", 100), expected_classes)
+        assert outputs.mask_logits.shape[0] == 1
+        assert outputs.mask_logits.shape[1] == ref.config.get("num_queries", 100)
+        assert torch.isfinite(outputs.class_logits).all()
+        assert torch.isfinite(outputs.mask_logits).all()
+    finally:
+        os.environ["MASKFORMER_TT_DECODER"] = "0"
+        try:
+            _ttnn.close_device(device)
+        except Exception:
+            pass

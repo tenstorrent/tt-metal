@@ -21,9 +21,13 @@ import torch
 import warnings
 
 try:
-    from models.common.utility_functions import tt_to_torch_tensor
-except ModuleNotFoundError:
+    from models.common.utility_functions import tt_to_torch_tensor, is_blackhole
+except ModuleNotFoundError:  # pragma: no cover - optional when running outside repo context
     tt_to_torch_tensor = None
+
+    def is_blackhole() -> bool:
+        return False
+
 
 try:
     from transformers.models.maskformer.modeling_maskformer import MaskformerMLPPredictionHead
@@ -80,6 +84,25 @@ class MaskFormerHeads:
             )
         self._torch_state: Dict[str, Any] = {}
 
+    def _make_compute_kernel_config(self):
+        """Select an appropriate compute kernel config for the current arch."""
+
+        if ttnn is None:
+            raise RuntimeError("TT-NN runtime is required to construct compute kernel configs for MaskFormer heads.")
+        ComputeConfigClass = ttnn.WormholeComputeKernelConfig
+        try:
+            if is_blackhole() and hasattr(ttnn, "types") and hasattr(ttnn.types, "BlackholeComputeKernelConfig"):
+                ComputeConfigClass = ttnn.types.BlackholeComputeKernelConfig  # type: ignore[assignment]
+        except Exception:
+            # Conservatively fall back to Wormhole config on detection errors.
+            pass
+        return ComputeConfigClass(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+
     def forward(
         self,
         decoder_outputs: torch.Tensor,
@@ -121,12 +144,7 @@ class MaskFormerHeads:
                 if pix_tt.get_layout() != ttnn.TILE_LAYOUT:
                     pix_tt = ttnn.to_layout(pix_tt, ttnn.TILE_LAYOUT)
 
-            matmul_cfg = ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi2,
-                math_approx_mode=False,
-                fp32_dest_acc_en=True,
-                packer_l1_acc=False,
-            )
+            matmul_cfg = self._make_compute_kernel_config()
 
             # Class logits: [B, Q, D] x [NumCls+1, D]^T -> [B, Q, NumCls+1]
             class_logits_tt = ttnn.matmul(
