@@ -155,7 +155,7 @@ void kernel_main() {
 
             // Receive remote chunks
             uint32_t slices_received = 0;
-            uint32_t last_input_chunk_start_tile = global_tile_index;
+            uint32_t last_input_chunk_start_tile = input_chunk_start_tile;
             while (slices_received < slices_expected) {
                 uint32_t actual_sender_chip_id = get_sender_id(direction, my_chip_id, slices_received, ring_size);
 
