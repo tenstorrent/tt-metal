@@ -1,0 +1,27 @@
+# Core dependencies
+torch>=2.0.0
+torchvision>=0.15.0
+numpy>=1.24.0
+Pillow>=9.5.0
+
+# TTNN - Tenstorrent Neural Network library
+# Note: Install from tt-metal repository
+# git clone https://github.com/tenstorrent/tt-metal.git
+# Follow installation instructions at: https://docs.tenstorrent.com/tt-metal/latest/get_started/installation.html
+
+# HuggingFace for pretrained weights (optional)
+transformers>=4.30.0
+
+# Testing
+pytest>=7.3.0
+pytest-cov>=4.1.0
+
+# Utilities
+requests>=2.31.0
+tqdm>=4.65.0
+
+# COCO evaluation (optional)
+pycocotools>=2.0.6
+
+# Visualization
+matplotlib>=3.7.0
