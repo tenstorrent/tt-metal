@@ -12,10 +12,12 @@
 #include "ttnn/distributed/distributed_tensor.hpp"
 
 #include "tt_metal/multihost/fabric_tests/multihost_fabric_fixtures.hpp"
+#include "ttnn/operations/experimental/ccl/send_recv_async/socket_copy/socket_copy.hpp"
 #include <tt-metalium/mesh_socket.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include "tests/ttnn/unit_tests/gtests/ccl/send_recv_op_utils.hpp"
 #include <chrono>
+#include "tt_metal/fabric/physical_system_descriptor.hpp"
 
 namespace tt::tt_metal {
 
@@ -257,6 +259,93 @@ TEST_P(MeshDeviceNanoExabox2x4SendRecvFixture, MultiSendRecvAsync) {
     }
 }
 
+std::unordered_map<tt::tt_metal::AsicID, distributed::MeshCoordinate> get_asic_id_to_mesh_coord_map(
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    std::unordered_map<tt::tt_metal::AsicID, distributed::MeshCoordinate> asic_id_to_mesh_coord_map;
+
+    for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
+        tt_fabric::FabricNodeId fabric_node_id = mesh_device->get_fabric_node_id(coord);
+        tt_metal::AsicID asic_id = control_plane.get_asic_id_from_fabric_node_id(fabric_node_id);
+        asic_id_to_mesh_coord_map.emplace(asic_id, coord);
+    }
+    // Exchange this map across all hosts using distributed context
+    auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    for (auto rank = 0; rank < *(distributed_context->size()); rank++) {
+        if (rank == *(distributed_context->rank())) {
+            // Loop over all entries of the map and send them to the other hosts
+            std::size_t num_entries = asic_id_to_mesh_coord_map.size();
+            distributed_context->broadcast(
+                tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&num_entries), sizeof(num_entries)),
+                distributed::multihost::Rank{rank});
+            for (auto& [asic_id, mesh_coord] : asic_id_to_mesh_coord_map) {
+                distributed_context->broadcast(
+                    tt::stl::Span<std::byte>(
+                        reinterpret_cast<std::byte*>(const_cast<tt_metal::AsicID*>(&asic_id)), sizeof(asic_id)),
+                    distributed::multihost::Rank{rank});
+                distributed_context->broadcast(
+                    tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&(mesh_coord[0])), sizeof(mesh_coord[0])),
+                    distributed::multihost::Rank{rank});
+                distributed_context->broadcast(
+                    tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&(mesh_coord[1])), sizeof(mesh_coord[1])),
+                    distributed::multihost::Rank{rank});
+            }
+        } else {
+            // Receive the map from the other host
+            std::size_t num_entries = 0;
+            distributed_context->broadcast(
+                tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&num_entries), sizeof(num_entries)),
+                distributed::multihost::Rank{rank});
+            for (auto i = 0; i < num_entries; i++) {
+                tt_metal::AsicID asic_id;
+                distributed::MeshCoordinate mesh_coord = distributed::MeshCoordinate(0, 0);
+                distributed_context->broadcast(
+                    tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&asic_id), sizeof(asic_id)),
+                    distributed::multihost::Rank{rank});
+                distributed_context->broadcast(
+                    tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&(mesh_coord[0])), sizeof(mesh_coord[0])),
+                    distributed::multihost::Rank{rank});
+                distributed_context->broadcast(
+                    tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&(mesh_coord[1])), sizeof(mesh_coord[1])),
+                    distributed::multihost::Rank{rank});
+                asic_id_to_mesh_coord_map.emplace(asic_id, mesh_coord);
+            }
+        }
+    }
+    return asic_id_to_mesh_coord_map;
+}
+
+std::pair<distributed::MeshCoordinate, distributed::MeshCoordinate> get_connecting_coords(
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    uint32_t neighbor_mesh_id,
+    const std::unordered_map<tt::tt_metal::AsicID, distributed::MeshCoordinate>& asic_id_to_mesh_coord) {
+    auto neighbor_rank = neighbor_mesh_id;
+    auto my_host = physical_system_descriptor.my_host_name();
+    std::string neighbor_host;
+
+    for (const auto& [host_name, rank] : physical_system_descriptor.get_host_to_rank_map()) {
+        if (rank == neighbor_rank) {
+            neighbor_host = host_name;
+            break;
+        }
+    }
+    auto exit_node = physical_system_descriptor.get_connecting_exit_nodes(my_host, neighbor_host)[0];
+    auto src_mesh_coord = asic_id_to_mesh_coord.at(exit_node.src_exit_node);
+    auto dst_mesh_coord = asic_id_to_mesh_coord.at(exit_node.dst_exit_node);
+    return std::make_pair(src_mesh_coord, dst_mesh_coord);
+}
+
+PhysicalSystemDescriptor create_physical_system_descriptor() {
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    constexpr bool run_discovery = true;
+    const auto& driver = cluster.get_driver();
+
+    return tt::tt_metal::PhysicalSystemDescriptor(driver, distributed_context, &hal, rtoptions, run_discovery);
+}
+
 TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
 
@@ -264,32 +353,30 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
     distributed::multihost::Rank pipeline_end_rank = distributed::multihost::Rank{*distributed_context->size() - 1};
     std::cout << "starting test_send_recv_pipeline" << std::endl;
 
-    auto sender_logical_coord = CoreCoord(0, 0);
-    auto recv_logical_coord = CoreCoord(0, 1);
+    // auto sender_logical_coord = CoreCoord(0, 0);
+    // auto recv_logical_coord = CoreCoord(0, 1);
 
     uint32_t socket_fifo_size = 70 * 1024;
     auto mesh_shape = mesh_device_->shape();
-    distributed::SocketConnection socket_connection = {
-        .sender_core = {distributed::MeshCoordinate(0, 0), sender_logical_coord},
-        .receiver_core = {distributed::MeshCoordinate(0, 0), recv_logical_coord},
-    };
+
+    auto physical_system_descriptor = create_physical_system_descriptor();
+    auto asic_id_to_mesh_coord = get_asic_id_to_mesh_coord_map(mesh_device_);
+
+    auto my_mesh_id = *distributed_context->rank();
+    auto send_mesh_id = my_mesh_id - 1;
+    auto recv_mesh_id = my_mesh_id + 1;
+
+    distributed::SocketConnection fwd_connection = {
+        .sender_core = {distributed::MeshCoordinate(0, 0), CoreCoord(0, 0)},
+        .receiver_core = {distributed::MeshCoordinate(0, 0), CoreCoord(0, 0)}};
+
+    distributed::SocketConnection bwd_connection = {
+        .sender_core = {distributed::MeshCoordinate(0, 0), CoreCoord(0, 0)},
+        .receiver_core = {distributed::MeshCoordinate(0, 0), CoreCoord(0, 0)}};
+
     distributed::SocketMemoryConfig socket_mem_config = {
         .socket_storage_type = BufferType::L1,
         .fifo_size = socket_fifo_size,
-    };
-
-    distributed::SocketConfig send_socket_config = {
-        .socket_connection_config = {socket_connection},
-        .socket_mem_config = socket_mem_config,
-        .sender_rank = distributed_context->rank(),
-        .receiver_rank = distributed::multihost::Rank(*distributed_context->rank() + 1),
-    };
-
-    distributed::SocketConfig recv_socket_config = {
-        .socket_connection_config = {socket_connection},
-        .socket_mem_config = socket_mem_config,
-        .sender_rank = distributed::multihost::Rank(*distributed_context->rank() - 1),
-        .receiver_rank = distributed_context->rank(),
     };
 
     auto tensor_spec = TensorSpec(
@@ -299,17 +386,25 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
             tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1)));
 
-    constexpr uint32_t num_iters = 1;
-    uint64_t start_time = 0;
-    uint64_t end_time = 0;
-    std::cout << "Rank: " << *distributed_context->rank() << " "
-              << "Device Id: " << mesh_device_->get_device(distributed::MeshCoordinate(0, 0))->id() << std::endl;
+    constexpr uint32_t num_iters = 1000;
+    // uint64_t start_time = 0;
+    // uint64_t end_time = 0;
+
     if (*distributed_context->rank() == *pipeline_start_rank) {
         const auto& input_shape = tensor_spec.logical_shape();
         const auto& memory_config = tensor_spec.memory_config();
         uint32_t num_elems = input_shape.volume();
         auto layout = tensor_spec.layout();
         auto dtype = tensor_spec.data_type();
+        auto [my_sender, downstream_recv] =
+            get_connecting_coords(physical_system_descriptor, recv_mesh_id, asic_id_to_mesh_coord);
+        fwd_connection = {
+            .sender_core = {my_sender, CoreCoord(0, 0)}, .receiver_core = {downstream_recv, CoreCoord(0, 0)}};
+        distributed::SocketConfig send_socket_config = {
+            .socket_connection_config = {fwd_connection},
+            .socket_mem_config = socket_mem_config,
+            .sender_rank = distributed_context->rank(),
+            .receiver_rank = distributed::multihost::Rank(recv_mesh_id)};
         auto send_socket = distributed::MeshSocket(mesh_device_, send_socket_config);
         auto input_tensor =
             ttnn::distributed::distribute_tensor(
@@ -319,48 +414,98 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
                 .to_device(mesh_device_.get(), memory_config);
         // Block after sending data. We will profile the time taken to forward data over sockets
         // after the write has completed.
-        ttnn::experimental::send_async(input_tensor, send_socket);
+        // ttnn::experimental::send_async(input_tensor, send_socket);
+
+        for (int i = 0; i < num_iters; i++) {
+            ttnn::experimental::send_async(input_tensor, send_socket);
+        }
         Synchronize(mesh_device_.get(), std::nullopt);
         distributed_context->barrier();
-        // for (int i = 0; i < num_iters; i++) {
-        ttnn::experimental::send_async(input_tensor, send_socket);
-        // }
     } else {
-        distributed::MeshSocket send_socket;
+        auto [my_recv, upstream_send] =
+            get_connecting_coords(physical_system_descriptor, send_mesh_id, asic_id_to_mesh_coord);
+        bwd_connection = {.sender_core = {upstream_send, CoreCoord(0, 0)}, .receiver_core = {my_recv, CoreCoord(0, 0)}};
+
+        distributed::SocketConfig recv_socket_config = {
+            .socket_connection_config = {bwd_connection},
+            .socket_mem_config = socket_mem_config,
+            .sender_rank = distributed::multihost::Rank(send_mesh_id),
+            .receiver_rank = distributed_context->rank()};
         auto recv_socket = distributed::MeshSocket(mesh_device_, recv_socket_config);
-
+        distributed::MeshSocket send_socket;
+        distributed::MeshSocket intermed_send;
+        distributed::MeshSocket intermed_recv;
         if (*distributed_context->rank() < *pipeline_end_rank) {
+            auto [my_sender, downstream_recv] =
+                get_connecting_coords(physical_system_descriptor, recv_mesh_id, asic_id_to_mesh_coord);
+            fwd_connection = {
+                .sender_core = {my_sender, CoreCoord(0, 0)}, .receiver_core = {downstream_recv, CoreCoord(0, 0)}};
+            distributed::SocketConfig send_socket_config = {
+                .socket_connection_config = {fwd_connection},
+                .socket_mem_config = socket_mem_config,
+                .sender_rank = distributed_context->rank(),
+                .receiver_rank = distributed::multihost::Rank(recv_mesh_id)};
             send_socket = distributed::MeshSocket(mesh_device_, send_socket_config);
-        }
+            // Create an intermediate socket to forward data from the recv socket to the send socket
+            distributed::SocketConnection intermed_connection = {
+                .sender_core = {my_recv, CoreCoord(0, 0)}, .receiver_core = {my_sender, CoreCoord(0, 0)}};
 
-        auto output_tensor = tt::tt_metal::allocate_tensor_on_device(tensor_spec, mesh_device_.get());
-        ttnn::experimental::recv_async(output_tensor, recv_socket);
-        if (*distributed_context->rank() < *pipeline_end_rank) {
-            ttnn::experimental::send_async(output_tensor, send_socket);
+            distributed::SocketConfig intermed_socket_config = {
+                .socket_connection_config = {intermed_connection},
+                .socket_mem_config = socket_mem_config,
+            };
+            std::tie(intermed_send, intermed_recv) =
+                distributed::MeshSocket::create_socket_pair(mesh_device_, mesh_device_, intermed_socket_config);
+        }
+        // Allocate Output Tensor on the last device in the pipeline
+        Tensor output_tensor;
+        if (*distributed_context->rank() == *pipeline_end_rank) {
+            output_tensor = tt::tt_metal::allocate_tensor_on_device(tensor_spec, mesh_device_.get());
+        }
+        for (int i = 0; i < num_iters; i++) {
+            if (*distributed_context->rank() < *pipeline_end_rank) {
+                // Copy from previous pipeline stage to my exit node
+                ttnn::experimental::socket_copy(recv_socket, intermed_send, 14336);
+                // Copy from my exit node to the next pipeline stage
+                ttnn::experimental::socket_copy(intermed_recv, send_socket, 14336);
+            } else {
+                // Receive into output tensor on last device in the pipeline
+                ttnn::experimental::recv_async(output_tensor, recv_socket);
+
+                auto composer = ttnn::distributed::concat_mesh_to_tensor_composer(*mesh_device_, /*dim=*/0);
+                auto output_data = ttnn::distributed::aggregate_tensor(output_tensor, *composer).to_vector<bfloat16>();
+                auto expected_output_data = ttnn::arange(0, 7168, 1, tt::tt_metal::DataType::BFLOAT16);
+                auto expected_output_data_vector = expected_output_data.to_vector<bfloat16>();
+
+                auto chunked_output_vector =
+                    std::vector<bfloat16>(output_data.begin() + 6 * 7168, output_data.begin() + 7 * 7168);
+                EXPECT_EQ(chunked_output_vector, expected_output_data_vector);
+            }
         }
         Synchronize(mesh_device_.get(), std::nullopt);
         distributed_context->barrier();
-        if (*distributed_context->rank() == *pipeline_end_rank) {
-            start_time = std::chrono::duration_cast<std::chrono::microseconds>(
-                             std::chrono::high_resolution_clock::now().time_since_epoch())
-                             .count();
-        }
-        ttnn::experimental::recv_async(output_tensor, recv_socket);
-        if (*distributed_context->rank() < *pipeline_end_rank) {
-            ttnn::experimental::send_async(output_tensor, send_socket);
-        }
+
+        // if (*distributed_context->rank() == *pipeline_end_rank) {
+        //     start_time = std::chrono::duration_cast<std::chrono::microseconds>(
+        //                      std::chrono::high_resolution_clock::now().time_since_epoch())
+        //                      .count();
+        // }
+        // ttnn::experimental::recv_async(output_tensor, recv_socket,);
+        // if (*distributed_context->rank() < *pipeline_end_rank) {
+        //     ttnn::experimental::send_async(output_tensor, send_socket);
+        // }
     }
 
-    distributed::Synchronize(mesh_device_.get(), std::nullopt);
-    std::cout << "Send/Recv Benchmark Complete" << std::endl;
-    if (distributed_context->rank() == pipeline_end_rank) {
-        end_time = std::chrono::duration_cast<std::chrono::microseconds>(
-                       std::chrono::high_resolution_clock::now().time_since_epoch())
-                       .count();
-        std::cout << "Time taken to forward: " << num_iters << " Packets: " << end_time - start_time << " us"
-                  << std::endl;
-        std::cout << "Time per iteration: " << (end_time - start_time) / num_iters << " us" << std::endl;
-    }
+    // distributed::Synchronize(mesh_device_.get(), std::nullopt);
+    // std::cout << "Send/Recv Benchmark Complete" << std::endl;
+    // if (distributed_context->rank() == pipeline_end_rank) {
+    //     end_time = std::chrono::duration_cast<std::chrono::microseconds>(
+    //                    std::chrono::high_resolution_clock::now().time_since_epoch())
+    //                    .count();
+    //     std::cout << "Time taken to forward: " << num_iters << " Packets: " << end_time - start_time << " us"
+    //               << std::endl;
+    //     std::cout << "Time per iteration: " << (end_time - start_time) / num_iters << " us" << std::endl;
+    // }
 }
 
 }  // namespace tt::tt_metal
