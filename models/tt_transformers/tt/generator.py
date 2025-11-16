@@ -245,6 +245,8 @@ class Generator:
             empty_slots = list(range(batch_size))
 
         out_list = []
+        logger.info(f"len(empty_slots): {len(empty_slots)}")
+        logger.info(f"page_table shape: {page_table.shape}")
         for idx, user_id in enumerate(empty_slots):
             logger.info(f"IDX, USER_ID: {idx}, {user_id}")
             # if model_id is not None, it means that prefill is called from warmup_prefill_traces
@@ -326,6 +328,8 @@ class Generator:
                 del logits
 
         # Process the logits after all the prefill are done in data parallel mode
+        logger.info(f"len(empty_slots) after all users: {len(empty_slots)}")
+        logger.info(f"len(out_list): {len(out_list)}")
         if self.data_parallel > 1:
             for idx, out in enumerate(out_list):
                 seq_len = int(prompt_lens[idx])
