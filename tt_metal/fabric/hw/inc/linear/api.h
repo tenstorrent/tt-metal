@@ -104,6 +104,90 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write(
 
 // clang-format off
 /**
+ * Issues a unicast write from local L1 memory to a destination NOC address with automatic packetization.
+ * Automatically splits large transfers into multiple packets when size exceeds max packet size (4352 bytes).
+ *
+ * Return value: None
+ *
+ * | Argument                              | Description                             | Type                                          | Required |
+ * |---------------------------------------|-----------------------------------------|-----------------------------------------------|----------|
+ * | client_interface                      | Fabric sender interface                 | tt_l1_ptr WorkerToFabricEdmSender*            | True     |
+ * | packet_header                         | Packet header to use                    | volatile PACKET_HEADER_TYPE*                  | True     |
+ * | src_addr                              | Source L1 address                       | uint32_t                                      | True     |
+ * | size                                  | Payload size in bytes (can exceed 4352) | uint32_t                                      | True     |
+ * | noc_unicast_command_header            | Destination NOC command header          | tt::tt_fabric::NocUnicastCommandHeader        | True     |
+ * | num_hops                              | Unicast hop count                       | uint8_t                                       | True     |
+ */
+// clang-format on
+template <typename FabricSenderType>
+FORCE_INLINE void fabric_unicast_noc_unicast_write_auto(
+    tt_l1_ptr FabricSenderType* client_interface,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint32_t src_addr,
+    uint32_t size,
+    tt::tt_fabric::NocUnicastCommandHeader noc_unicast_command_header,
+    uint8_t num_hops) {
+    [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
+
+    constexpr uint32_t MAX_PACKET_SIZE = 4352;
+
+    // Set routing once before loop
+    packet_header->to_chip_unicast(num_hops);
+
+    uint32_t remaining = size;
+    uint32_t current_src = src_addr;
+    uint64_t current_dst = noc_unicast_command_header.noc_address;
+
+    while (remaining > 0) {
+        uint32_t chunk = (remaining > MAX_PACKET_SIZE) ? MAX_PACKET_SIZE : remaining;
+        tt::tt_fabric::NocUnicastCommandHeader chunk_header{current_dst};
+
+        packet_header->to_noc_unicast_write(chunk_header, chunk);
+        client_interface->wait_for_empty_write_slot();
+        client_interface->send_payload_without_header_non_blocking_from_address(current_src, chunk);
+        client_interface->send_payload_flush_non_blocking_from_address(
+            (uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
+
+        remaining -= chunk;
+        current_src += chunk;
+        current_dst += chunk;
+    }
+}
+
+// clang-format off
+/**
+ * Issues a unicast write for all headers in a route via a connection manager with automatic packetization.
+ * Automatically splits large transfers into multiple packets when size exceeds max packet size (4352 bytes).
+ *
+ * Return value: None
+ *
+ * | Argument                              | Description                             | Type                                          | Required |
+ * |---------------------------------------|-----------------------------------------|-----------------------------------------------|----------|
+ * | connection_manager                    | Routing plane connection manager        | RoutingPlaneConnectionManager&                | True     |
+ * | route_id                              | Route containing packet headers         | uint8_t                                       | True     |
+ * | src_addr                              | Source L1 address                       | uint32_t                                      | True     |
+ * | size                                  | Payload size in bytes (can exceed 4352) | uint32_t                                      | True     |
+ * | noc_unicast_command_header            | Destination NOC command header          | tt::tt_fabric::NocUnicastCommandHeader        | True     |
+ * | num_hops                              | Per-header unicast hop counts           | uint8_t*                                      | True     |
+ */
+// clang-format on
+FORCE_INLINE void fabric_unicast_noc_unicast_write_auto(
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
+    uint8_t route_id,
+    uint32_t src_addr,
+    uint32_t size,
+    tt::tt_fabric::NocUnicastCommandHeader noc_unicast_command_header,
+    uint8_t* num_hops) {
+    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
+        auto& slot = connection_manager.get(i);
+        fabric_set_unicast_route(connection_manager, packet_header, i);
+        fabric_unicast_noc_unicast_write_auto(
+            &slot.sender, packet_header, src_addr, size, noc_unicast_command_header, num_hops[i]);
+    });
+}
+
+// clang-format off
+/**
  * Issues a unicast write for all headers in a route via a connection manager.
  *
  * Return value: None

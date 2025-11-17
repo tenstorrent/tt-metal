@@ -75,6 +75,7 @@ INSTANTIATE_TEST_SUITE_P(
         tt::tt_fabric::test::AddrgenApiVariant::UnicastWrite,
         tt::tt_fabric::test::AddrgenApiVariant::UnicastWriteWithState,
         tt::tt_fabric::test::AddrgenApiVariant::UnicastWriteSetState,
+        tt::tt_fabric::test::AddrgenApiVariant::UnicastWriteAuto,
         tt::tt_fabric::test::AddrgenApiVariant::FusedAtomicIncWrite,
         tt::tt_fabric::test::AddrgenApiVariant::FusedAtomicIncWriteWithState,
         tt::tt_fabric::test::AddrgenApiVariant::FusedAtomicIncWriteSetState,
@@ -95,6 +96,7 @@ INSTANTIATE_TEST_SUITE_P(
             case tt::tt_fabric::test::AddrgenApiVariant::UnicastWrite: return "UnicastWrite";
             case tt::tt_fabric::test::AddrgenApiVariant::UnicastWriteWithState: return "UnicastWriteWithState";
             case tt::tt_fabric::test::AddrgenApiVariant::UnicastWriteSetState: return "UnicastWriteSetState";
+            case tt::tt_fabric::test::AddrgenApiVariant::UnicastWriteAuto: return "UnicastWriteAuto";
             case tt::tt_fabric::test::AddrgenApiVariant::FusedAtomicIncWrite: return "FusedAtomicIncWrite";
             case tt::tt_fabric::test::AddrgenApiVariant::FusedAtomicIncWriteWithState:
                 return "FusedAtomicIncWriteWithState";
@@ -120,6 +122,77 @@ INSTANTIATE_TEST_SUITE_P(
             default: return "UnknownVariant";
         }
     });
+
+// Dedicated tests for auto-packetization with large transfers
+TEST_F(Fixture, UnicastWriteAuto_SinglePacket) {
+    tt::tt_fabric::test::AddrgenTestParams p{
+        .mesh_id = 0,
+        .src_chip = 0,
+        .dst_chip = 1,
+        .use_dram_dst = false,
+        .tensor_bytes = 4352,  // Exactly 1 packet (boundary case)
+        .page_size = 4352,
+        .sender_core = {0, 0},
+        .receiver_core = {1, 0},
+        .api_variant = tt::tt_fabric::test::AddrgenApiVariant::UnicastWriteAuto};
+    tt::tt_fabric::test::run_unicast_write_test(this, p);
+}
+
+TEST_F(Fixture, UnicastWriteAuto_JustOverOnePacket) {
+    tt::tt_fabric::test::AddrgenTestParams p{
+        .mesh_id = 0,
+        .src_chip = 0,
+        .dst_chip = 1,
+        .use_dram_dst = false,
+        .tensor_bytes = 4356,  // Just over 1 packet (requires 2 packets)
+        .page_size = 4356,
+        .sender_core = {0, 0},
+        .receiver_core = {1, 0},
+        .api_variant = tt::tt_fabric::test::AddrgenApiVariant::UnicastWriteAuto};
+    tt::tt_fabric::test::run_unicast_write_test(this, p);
+}
+
+TEST_F(Fixture, UnicastWriteAuto_TwoPackets) {
+    tt::tt_fabric::test::AddrgenTestParams p{
+        .mesh_id = 0,
+        .src_chip = 0,
+        .dst_chip = 1,
+        .use_dram_dst = false,
+        .tensor_bytes = 8704,  // Exactly 2 packets
+        .page_size = 8704,
+        .sender_core = {0, 0},
+        .receiver_core = {1, 0},
+        .api_variant = tt::tt_fabric::test::AddrgenApiVariant::UnicastWriteAuto};
+    tt::tt_fabric::test::run_unicast_write_test(this, p);
+}
+
+TEST_F(Fixture, UnicastWriteAuto_OddSize) {
+    tt::tt_fabric::test::AddrgenTestParams p{
+        .mesh_id = 0,
+        .src_chip = 0,
+        .dst_chip = 1,
+        .use_dram_dst = false,
+        .tensor_bytes = 10000,  // Odd size (~2.3 packets)
+        .page_size = 10000,
+        .sender_core = {0, 0},
+        .receiver_core = {1, 0},
+        .api_variant = tt::tt_fabric::test::AddrgenApiVariant::UnicastWriteAuto};
+    tt::tt_fabric::test::run_unicast_write_test(this, p);
+}
+
+TEST_F(Fixture, UnicastWriteAuto_LargeTransfer) {
+    tt::tt_fabric::test::AddrgenTestParams p{
+        .mesh_id = 0,
+        .src_chip = 0,
+        .dst_chip = 1,
+        .use_dram_dst = false,
+        .tensor_bytes = 100000,  // Large transfer (~23 packets)
+        .page_size = 100000,
+        .sender_core = {0, 0},
+        .receiver_core = {1, 0},
+        .api_variant = tt::tt_fabric::test::AddrgenApiVariant::UnicastWriteAuto};
+    tt::tt_fabric::test::run_unicast_write_test(this, p);
+}
 
 int main(int argc, char** argv) {
     ::testing::InitGoogleTest(&argc, argv);

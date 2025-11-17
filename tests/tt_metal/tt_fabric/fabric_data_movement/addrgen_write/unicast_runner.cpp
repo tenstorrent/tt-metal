@@ -240,6 +240,7 @@ Notes:
             case AddrgenApiVariant::UnicastWrite: return KDIR + "unicast_tx_writer_cb_to_dst_addrgen.cpp";
             case AddrgenApiVariant::UnicastWriteWithState: return KDIR + "unicast_tx_writer_with_state_addrgen.cpp";
             case AddrgenApiVariant::UnicastWriteSetState: return KDIR + "unicast_tx_writer_set_state_addrgen.cpp";
+            case AddrgenApiVariant::UnicastWriteAuto: return KDIR + "unicast_tx_writer_auto.cpp";
             case AddrgenApiVariant::FusedAtomicIncWrite: return KDIR + "fused_atomic_inc_tx_writer_addrgen.cpp";
             case AddrgenApiVariant::FusedAtomicIncWriteWithState:
                 return KDIR + "fused_atomic_inc_tx_writer_with_state_addrgen.cpp";
