@@ -28,14 +28,13 @@ jobs:
       version: 22.04
 
   galaxy-quick-test:
-    env:
-      BH_GALAXY_SCHEDULED_ENABLED: 'false'
     needs: build-artifact
-    secrets: inherit
     uses: ./.github/workflows/galaxy-quick-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       bh: ${{ github.event.inputs.bh_glx }}
-      bh_scheduled: ${{ env.BH_GALAXY_SCHEDULED_ENABLED }}
+      bh_scheduled: 'false'  # or 'true'
+    secrets: inherit
+    
