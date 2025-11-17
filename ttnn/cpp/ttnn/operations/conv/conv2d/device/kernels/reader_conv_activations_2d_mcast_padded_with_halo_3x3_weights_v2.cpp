@@ -156,7 +156,7 @@ void kernel_main() {
         act_split_reader_write_done_semaphore_addr_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_split_reader_write_done_semaphore_addr);
     }
-
+    constexpr uint32_t delay_cycles = get_compile_time_arg_val(35);
     if constexpr (needs_act_block_zero_out) {
         zero_out_tiles<cb_id_act_row_major_bfloat16>();
     }
@@ -325,6 +325,12 @@ void kernel_main() {
 
                     // wait on act semaphore value to become VALID (set by mcast sender after it multicasts data)
                     noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
+
+                    if constexpr (delay_cycles > 0) {
+                        const uint32_t delay_cycles_current =
+                            ((act_w_outer_i < act_mcast_sender_id) ? act_w_outer_i + 1 : act_w_outer_i) * delay_cycles;
+                        delay_in_cycles(delay_cycles_current);
+                    }
                 }
                 cb_push_back(cb_id_act, act_block_num_tiles);
             }  // act_w_num_outer

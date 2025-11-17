@@ -861,6 +861,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
         reader_compile_time_args.push_back(0);
         reader_compile_time_args.push_back(0);
     }
+    reader_compile_time_args.push_back(50);  // delay_cycles
     if (skip_activation_mcast) {
         reader_defines["SKIP_MCAST"] = "1";
     }

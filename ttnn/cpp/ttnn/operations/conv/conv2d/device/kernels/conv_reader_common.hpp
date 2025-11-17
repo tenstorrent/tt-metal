@@ -472,3 +472,9 @@ FORCE_INLINE void wait_write_done(volatile tt_l1_ptr uint32_t* semaphore_addr_pt
     noc_semaphore_wait(semaphore_addr_ptr, VALID);
     noc_semaphore_set(semaphore_addr_ptr, INVALID);
 }
+
+FORCE_INLINE void delay_in_cycles(uint32_t cycles) {
+    while (cycles--) {
+        asm volatile("nop");
+    }
+}
