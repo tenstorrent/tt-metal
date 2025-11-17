@@ -876,6 +876,163 @@ class OperationParameterExtractors:
             return None
 
     @staticmethod
+    def _extract_max_pool2d_parameters(config: List) -> Optional[Dict]:
+        """Extract parameters for max_pool2d operation
+
+        Extracts from JSON:
+        - arg1: batch_size
+        - arg2: input_h
+        - arg3: input_w
+        - arg4: channels
+        - arg5: kernel_size [H, W]
+        - arg6: stride [H, W]
+        - arg7: padding [H, W]
+        - arg8: dilation [H, W]
+        - arg11: applied_shard_scheme (TensorMemoryLayout enum)
+        """
+        try:
+            params = {}
+            for arg in config:
+                if not isinstance(arg, dict):
+                    continue
+                # Extract batch_size (arg1)
+                if "arg1" in arg:
+                    batch_size = arg["arg1"]
+                    if isinstance(batch_size, (int, str)) and batch_size != "nullopt":
+                        try:
+                            params["batch_size"] = int(batch_size)
+                        except:
+                            pass
+                # Extract input_h (arg2)
+                if "arg2" in arg:
+                    input_h = arg["arg2"]
+                    if isinstance(input_h, (int, str)) and input_h != "nullopt":
+                        try:
+                            params["input_h"] = int(input_h)
+                        except:
+                            pass
+                # Extract input_w (arg3)
+                if "arg3" in arg:
+                    input_w = arg["arg3"]
+                    if isinstance(input_w, (int, str)) and input_w != "nullopt":
+                        try:
+                            params["input_w"] = int(input_w)
+                        except:
+                            pass
+                # Extract channels (arg4)
+                if "arg4" in arg:
+                    channels = arg["arg4"]
+                    if isinstance(channels, (int, str)) and channels != "nullopt":
+                        try:
+                            params["channels"] = int(channels)
+                        except:
+                            pass
+                # Extract kernel_size (arg5) - list format [H, W]
+                if "arg5" in arg:
+                    kernel_size = arg["arg5"]
+                    if isinstance(kernel_size, list) and len(kernel_size) == 2:
+                        params["kernel_size"] = kernel_size
+                    elif isinstance(kernel_size, str):
+                        # Try to parse string like "[5, 5]"
+                        parsed = OperationParameterExtractors._parse_list_from_string(kernel_size)
+                        if parsed and isinstance(parsed, list) and len(parsed) == 2:
+                            params["kernel_size"] = parsed
+                # Extract stride (arg6) - list format [H, W]
+                if "arg6" in arg:
+                    stride = arg["arg6"]
+                    if isinstance(stride, list) and len(stride) == 2:
+                        params["stride"] = stride
+                    elif isinstance(stride, str):
+                        parsed = OperationParameterExtractors._parse_list_from_string(stride)
+                        if parsed and isinstance(parsed, list) and len(parsed) == 2:
+                            params["stride"] = parsed
+                # Extract padding (arg7) - list format [H, W]
+                if "arg7" in arg:
+                    padding = arg["arg7"]
+                    if isinstance(padding, list) and len(padding) == 2:
+                        params["padding"] = padding
+                    elif isinstance(padding, str):
+                        parsed = OperationParameterExtractors._parse_list_from_string(padding)
+                        if parsed and isinstance(parsed, list) and len(parsed) == 2:
+                            params["padding"] = parsed
+                # Extract dilation (arg8) - list format [H, W]
+                if "arg8" in arg:
+                    dilation = arg["arg8"]
+                    if isinstance(dilation, list) and len(dilation) == 2:
+                        params["dilation"] = dilation
+                    elif isinstance(dilation, str):
+                        parsed = OperationParameterExtractors._parse_list_from_string(dilation)
+                        if parsed and isinstance(parsed, list) and len(parsed) == 2:
+                            params["dilation"] = parsed
+                # Extract applied_shard_scheme (arg11) - TensorMemoryLayout enum
+                if "arg11" in arg:
+                    applied_shard_scheme = arg["arg11"]
+                    if isinstance(applied_shard_scheme, str):
+                        # Parse enum string like "TensorMemoryLayout::BLOCK_SHARDED"
+                        if "BLOCK_SHARDED" in applied_shard_scheme:
+                            params["applied_shard_scheme"] = "BLOCK_SHARDED"
+                        elif "HEIGHT_SHARDED" in applied_shard_scheme:
+                            params["applied_shard_scheme"] = "HEIGHT_SHARDED"
+                        elif "WIDTH_SHARDED" in applied_shard_scheme:
+                            params["applied_shard_scheme"] = "WIDTH_SHARDED"
+                        elif "INTERLEAVED" in applied_shard_scheme:
+                            params["applied_shard_scheme"] = "INTERLEAVED"
+                        elif applied_shard_scheme == "nullopt":
+                            params["applied_shard_scheme"] = None
+
+            if params:
+                return params
+            return None
+        except Exception as e:
+            return None
+
+    @staticmethod
+    def _extract_upsample_parameters(config: List) -> Optional[Dict]:
+        """Extract parameters for upsample operation
+
+        Extracts from JSON:
+        - arg1: scale_factor (int or [int, int] array)
+        - arg2: mode (e.g., "nearest")
+        """
+        try:
+            params = {}
+            for arg in config:
+                if not isinstance(arg, dict):
+                    continue
+                # Extract scale_factor (arg1) - can be int or [int, int] array
+                if "arg1" in arg:
+                    scale_factor = arg["arg1"]
+                    if isinstance(scale_factor, int):
+                        params["scale_factor"] = scale_factor
+                    elif isinstance(scale_factor, list) and len(scale_factor) == 2:
+                        # If array, use first element (or could use both)
+                        params["scale_factor"] = scale_factor[0] if scale_factor[0] == scale_factor[1] else scale_factor
+                    elif isinstance(scale_factor, str):
+                        # Try to parse string - could be int like "2" or array like "[2, 2]"
+                        if scale_factor.isdigit():
+                            params["scale_factor"] = int(scale_factor)
+                        else:
+                            # Try parsing as array
+                            parsed = OperationParameterExtractors._parse_list_from_string(scale_factor)
+                            if parsed and isinstance(parsed, list) and len(parsed) == 2:
+                                # If both elements are same, use single value
+                                if parsed[0] == parsed[1]:
+                                    params["scale_factor"] = parsed[0]
+                                else:
+                                    params["scale_factor"] = parsed
+                # Extract mode (arg2)
+                if "arg2" in arg:
+                    mode = arg["arg2"]
+                    if isinstance(mode, str) and mode != "nullopt":
+                        params["mode"] = mode
+
+            if params:
+                return params
+            return None
+        except Exception as e:
+            return None
+
+    @staticmethod
     def _extract_paged_scaled_dot_product_attention_decode_parameters(config: List) -> Optional[Dict]:
         """Extract parameters for paged_scaled_dot_product_attention_decode operation
 
@@ -1479,6 +1636,26 @@ OperationParameterExtractors.register_extractor(
     "ttnn::transformer::paged_scaled_dot_product_attention_decode",
     extract_func=OperationParameterExtractors._extract_paged_scaled_dot_product_attention_decode_parameters,
     transform_func=OperationParameterExtractors._transform_paged_scaled_dot_product_attention_decode_parameters,
+)
+
+# Register max_pool2d extractor
+OperationParameterExtractors.register_extractor(
+    "max_pool2d",
+    extract_func=OperationParameterExtractors._extract_max_pool2d_parameters,
+)
+OperationParameterExtractors.register_extractor(
+    "ttnn::max_pool2d",
+    extract_func=OperationParameterExtractors._extract_max_pool2d_parameters,
+)
+
+# Register upsample extractor
+OperationParameterExtractors.register_extractor(
+    "upsample",
+    extract_func=OperationParameterExtractors._extract_upsample_parameters,
+)
+OperationParameterExtractors.register_extractor(
+    "ttnn::upsample",
+    extract_func=OperationParameterExtractors._extract_upsample_parameters,
 )
 
 

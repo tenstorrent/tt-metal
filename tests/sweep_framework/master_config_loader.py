@@ -168,7 +168,7 @@ class MasterConfigLoader:
     def _is_valid_sharding_config(self, memory_config: Dict, tensor_shape: list = None) -> bool:
         """
         Check if a sharding configuration is valid for the current hardware.
-        Validates that num_shards <= num_compute_banks.
+        Validates that num_shards <= num_compute_banks and shard shape is tile-aligned.
 
         Args:
             memory_config: Memory config dictionary
@@ -181,6 +181,14 @@ class MasterConfigLoader:
             shard_spec = memory_config.get("nd_shard_spec") or memory_config.get("shard_spec")
             if not shard_spec or shard_spec == "std::nullopt":
                 return True  # Non-sharded configs are always valid
+
+            # Check if shard shape is tile-aligned (must be divisible by 32x32)
+            shape_data = shard_spec.get("shape", [])
+            if shape_data and isinstance(shape_data, list) and len(shape_data) >= 2:
+                height, width = shape_data[0], shape_data[1]
+                TILE_HEIGHT, TILE_WIDTH = 32, 32
+                if height % TILE_HEIGHT != 0 or width % TILE_WIDTH != 0:
+                    return False  # Shard shape not tile-aligned
 
             grid_data = shard_spec.get("grid", [])
             if not grid_data:
@@ -207,7 +215,7 @@ class MasterConfigLoader:
                         if isinstance(start, dict) and isinstance(end, dict):
                             start_x, start_y = start.get("x", 0), start.get("y", 0)
                             end_x, end_y = end.get("x", 0), end.get("y", 0)
-                            num_cores = (end_x - start_x + 1) * (end_y - start_y + 1)
+                            num_cores = (end_x - start_x + 1) * (end_y - end_y + 1)
 
             # For wormhole_b0, we have 56 compute banks
             # Filter out configs that require more cores than available
@@ -283,6 +291,18 @@ class MasterConfigLoader:
                         numbers = re.findall(r"\d+", shard_shape_str)
                         if len(numbers) >= 2:
                             shard_shape = [int(numbers[0]), int(numbers[1])]
+
+                # Adjust shard shape to be tile-aligned (round to nearest multiple of 32)
+                # This ensures compatibility even if traced configs have non-tile-aligned shapes
+                if shard_shape and len(shard_shape) >= 2:
+                    TILE_SIZE = 32
+                    height, width = shard_shape[0], shard_shape[1]
+                    # Round to nearest tile-aligned size (round up to ensure we don't shrink)
+                    adjusted_height = ((height + TILE_SIZE - 1) // TILE_SIZE) * TILE_SIZE
+                    adjusted_width = ((width + TILE_SIZE - 1) // TILE_SIZE) * TILE_SIZE
+                    if adjusted_height != height or adjusted_width != width:
+                        # Only adjust if needed - prefer rounding up to preserve data
+                        shard_shape = [adjusted_height, adjusted_width]
 
                 # Parse orientation
                 orientation_str = shard_spec.get("orientation", "ShardOrientation::ROW_MAJOR")
@@ -764,6 +784,19 @@ class MasterConfigLoader:
                     ]
                     else None
                 )
+                # max_pool2d specific parameters
+                batch_size_list = [] if operation_name in ["max_pool2d", "ttnn::max_pool2d"] else None
+                input_h_list = [] if operation_name in ["max_pool2d", "ttnn::max_pool2d"] else None
+                input_w_list = [] if operation_name in ["max_pool2d", "ttnn::max_pool2d"] else None
+                channels_list = [] if operation_name in ["max_pool2d", "ttnn::max_pool2d"] else None
+                kernel_size_list = [] if operation_name in ["max_pool2d", "ttnn::max_pool2d"] else None
+                stride_list = [] if operation_name in ["max_pool2d", "ttnn::max_pool2d"] else None
+                padding_list_maxpool = [] if operation_name in ["max_pool2d", "ttnn::max_pool2d"] else None
+                dilation_list = [] if operation_name in ["max_pool2d", "ttnn::max_pool2d"] else None
+                applied_shard_scheme_list = [] if operation_name in ["max_pool2d", "ttnn::max_pool2d"] else None
+                # upsample specific parameters
+                scale_factor_list = [] if operation_name in ["upsample", "ttnn::upsample"] else None
+                mode_list = [] if operation_name in ["upsample", "ttnn::upsample"] else None
 
                 for idx, cfg in enumerate(paired_configs):
                     # For reshape, only include configs that have target_shape
@@ -772,6 +805,9 @@ class MasterConfigLoader:
                     if operation_name == "reshape":
                         if "target_shape" not in cfg:
                             continue  # Skip configs without target_shape
+
+                    # Note: We don't filter configs here - let them fail if invalid
+                    # Shard shapes are adjusted to tile-aligned in parse_memory_config
 
                     input_shapes.append(cfg["shape"])
                     input_a_dtypes.append(cfg["dtype"])
@@ -807,6 +843,32 @@ class MasterConfigLoader:
                         and "num_heads" in cfg
                     ):
                         num_heads_list.append(cfg["num_heads"])
+                    # Extract max_pool2d parameters
+                    if operation_name in ["max_pool2d", "ttnn::max_pool2d"]:
+                        if "batch_size" in cfg:
+                            batch_size_list.append(cfg["batch_size"])
+                        if "input_h" in cfg:
+                            input_h_list.append(cfg["input_h"])
+                        if "input_w" in cfg:
+                            input_w_list.append(cfg["input_w"])
+                        if "channels" in cfg:
+                            channels_list.append(cfg["channels"])
+                        if "kernel_size" in cfg:
+                            kernel_size_list.append(cfg["kernel_size"])
+                        if "stride" in cfg:
+                            stride_list.append(cfg["stride"])
+                        if "padding" in cfg:
+                            padding_list_maxpool.append(cfg["padding"])
+                        if "dilation" in cfg:
+                            dilation_list.append(cfg["dilation"])
+                        if "applied_shard_scheme" in cfg:
+                            applied_shard_scheme_list.append(cfg["applied_shard_scheme"])
+                    # Extract upsample parameters
+                    if operation_name in ["upsample", "ttnn::upsample"]:
+                        if "scale_factor" in cfg:
+                            scale_factor_list.append(cfg["scale_factor"])
+                        if "mode" in cfg:
+                            mode_list.append(cfg["mode"])
 
                 # Convert to exact configurations format (prevents Cartesian product)
                 # Use comma-separated parameter names to pass tuples of values together
@@ -855,6 +917,34 @@ class MasterConfigLoader:
                 ):
                     param_names.append("num_heads")
                     param_lists.append(num_heads_list)
+                # Add max_pool2d parameters
+                if operation_name in ["max_pool2d", "ttnn::max_pool2d"]:
+                    if batch_size_list and input_h_list and input_w_list and channels_list:
+                        param_names.extend(["batch_size", "input_h", "input_w", "channels"])
+                        param_lists.extend([batch_size_list, input_h_list, input_w_list, channels_list])
+                    if kernel_size_list:
+                        param_names.append("kernel_size")
+                        param_lists.append(kernel_size_list)
+                    if stride_list:
+                        param_names.append("stride")
+                        param_lists.append(stride_list)
+                    if padding_list_maxpool:
+                        param_names.append("padding")
+                        param_lists.append(padding_list_maxpool)
+                    if dilation_list:
+                        param_names.append("dilation")
+                        param_lists.append(dilation_list)
+                    if applied_shard_scheme_list:
+                        param_names.append("applied_shard_scheme")
+                        param_lists.append(applied_shard_scheme_list)
+                # Add upsample parameters
+                if operation_name in ["upsample", "ttnn::upsample"]:
+                    if scale_factor_list:
+                        param_names.append("scale_factor")
+                        param_lists.append(scale_factor_list)
+                    if mode_list:
+                        param_names.append("mode")
+                        param_lists.append(mode_list)
 
                 # NOTE: traced_config_name is metadata only, not passed to run()
                 # param_names.append("traced_config_name")
@@ -872,7 +962,8 @@ class MasterConfigLoader:
 
                 print(f"✅ Loaded {len(paired_configs)} traced configurations for {operation_name} (model_traced suite)")
                 dedup_msg = " (unique inputs)" if deduplicate_inputs else " (all input/output pairs)"
-                print(f"   📊 Will generate {len(paired_configs)} test vectors{dedup_msg}")
+                valid_configs = len(input_shapes) if input_shapes else 0
+                print(f"   📊 Will generate {valid_configs} test vectors{dedup_msg}")
                 if failed_configs > 0:
                     print(f"⚠️ Failed to parse {failed_configs} configurations")
 
