@@ -447,30 +447,30 @@ def _apply_rope(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tens
 
 def optimal_groups(group_count: int, group_size: int, device_count: int) -> tuple[int, int, int]:
     # In order to distribute heads evenly on devices, three operations are possibly performed:
-    # 1. Pad heads to increase group size.
-    # 2. Pad heads to increase group count (= number of key/value heads).
+    # 1. Pad to increase group size.
+    # 2. Pad to increase group count (= number of key/value heads).
     # 3. Split groups into smaller groups defined by a split factor.
-    # For a particular split factor, padding sizes follow from the requirements that the new group
-    # size must be divisible by this factor and the new group count must be divisible by the device
-    # count. We choose this factor such that memory requirments are minimized.
+    # For a particular split factor, padding sizes follow from the requirements that the padded
+    # group size must be divisible by this factor and the new group count must be divisible by the
+    # device count. We choose this factor such that memory requirments are minimized.
 
     best_split_factor = 1
     best_size = math.inf
     best_group_count = group_count
     best_group_size = group_size
 
-    for split_factor in range(1, device_count + 1):
-        f = device_count // math.gcd(split_factor, device_count)
+    for s in range(1, device_count + 1):
+        f = device_count // math.gcd(s, device_count)
 
-        new_group_size = -(-group_size // split_factor)
-        new_group_count = split_factor * (-(-group_count // f)) * f
+        new_group_size = -(-group_size // s)  # = ceil(group_size / s)
+        new_group_count = s * (-(-group_count // f)) * f
 
         # query heads + 2 * key/value heads
         size = new_group_size * new_group_count + 2 * new_group_count
 
         if size < best_size:
             best_size = size
-            best_split_factor = split_factor
+            best_split_factor = s
             best_group_count = new_group_count
             best_group_size = new_group_size
 
