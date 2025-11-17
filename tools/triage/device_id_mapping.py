@@ -26,7 +26,7 @@ script_config = ScriptConfig(
 
 class DeviceIdMapping:
     """
-    Provides mapping between logical chip IDs (device IDs) and hardware unique IDs.
+    Provides mapping between logical chip IDs (metal device IDs) and hardware unique IDs.
 
     Logical chip IDs are remapped when TT_VISIBLE_DEVICES is used, but unique IDs
     remain stable regardless of visible device configuration.
@@ -100,63 +100,6 @@ class DeviceIdMapping:
                 f"Available unique IDs: {list(self._unique_id_to_chip_id.keys())}"
             )
         return self._unique_id_to_chip_id[unique_id]
-
-    def remap_chip_ids_to_unique_ids(self, chip_ids: list[int]) -> list[int]:
-        """
-        Remap a list of logical chip IDs to unique IDs.
-
-        Args:
-            chip_ids: List of logical chip IDs
-
-        Returns:
-            List of unique IDs in the same order
-        """
-        return [self.chip_id_to_unique_id(chip_id) for chip_id in chip_ids]
-
-    def remap_unique_ids_to_chip_ids(self, unique_ids: list[int]) -> list[int]:
-        """
-        Remap a list of unique IDs to logical chip IDs.
-
-        Args:
-            unique_ids: List of unique IDs
-
-        Returns:
-            List of logical chip IDs in the same order
-        """
-        return [self.unique_id_to_chip_id(unique_id) for unique_id in unique_ids]
-
-    def get_all_mappings(self) -> dict[int, int]:
-        """
-        Get the complete mapping from logical chip ID to unique ID.
-
-        Returns:
-            Dictionary mapping logical chip_id -> unique_id
-        """
-        return self._chip_id_to_unique_id.copy()
-
-    def has_chip_id(self, chip_id: int) -> bool:
-        """
-        Check if a logical chip ID exists in the mapping.
-
-        Args:
-            chip_id: Logical chip ID to check
-
-        Returns:
-            True if chip_id exists in the mapping, False otherwise
-        """
-        return chip_id in self._chip_id_to_unique_id
-
-    def has_unique_id(self, unique_id: int) -> bool:
-        """
-        Check if a unique ID exists in the mapping.
-
-        Args:
-            unique_id: Unique ID to check
-
-        Returns:
-            True if unique_id exists in the mapping, False otherwise
-        """
-        return unique_id in self._unique_id_to_chip_id
 
 
 @triage_singleton

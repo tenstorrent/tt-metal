@@ -32,6 +32,7 @@ from ttexalens.context import Context
 from ttexalens.device import Device
 from ttexalens.coordinate import OnChipCoordinate
 from utils import ORANGE, RST
+from device_id_mapping import run as get_device_id_mapping, DeviceIdMapping
 
 script_config = ScriptConfig(
     data_provider=True,
@@ -76,7 +77,7 @@ class CheckResult:
 
 @dataclass
 class PerDeviceCheckResult(CheckResult):
-    device: Device = triage_field("Dev")
+    device: DeviceDescription = triage_field("Dev", device_description_serializer)
 
 
 @dataclass
@@ -118,7 +119,52 @@ def get_block_locations_to_check(block_type: BlockType, device: Device) -> list[
             return device.get_block_locations(block_type)
 
 
-def get_devices(devices: list[str], inspector_data: InspectorData | None, context: Context) -> list[Device]:
+@dataclass
+class DeviceDescription:
+    """
+    Wrapper for Device that determines whether to use unique_id for display
+    based on Metal/Exalens ID mismatch.
+    """
+
+    device: Device
+    use_unique_id: bool  # True if metal_device_id != exalens_device_id (mismatch detected)
+
+    @classmethod
+    def create(cls, device: Device, device_id_mapping: DeviceIdMapping | None) -> "DeviceDescription":
+        """Create a DeviceDescription from a Device object."""
+        use_unique_id = False
+
+        if device_id_mapping is not None:
+            try:
+                # Check if exalens device._id maps to the same unique_id as device.unique_id
+                inspector_unique_id = device_id_mapping.chip_id_to_unique_id(device._id)
+                if inspector_unique_id != device.unique_id:
+                    # Mismatch: inspector's logical ID maps to different unique_id
+                    use_unique_id = True
+            except KeyError:
+                # exalens device._id not in inspector mapping → mismatch
+                use_unique_id = True
+
+        return cls(
+            device=device,
+            use_unique_id=use_unique_id,
+        )
+
+
+def device_description_serializer(device_desc: DeviceDescription) -> str:
+    """Custom serializer: returns device._id if IDs match, or unique_id if mismatch."""
+    if device_desc.use_unique_id:
+        return str(device_desc.device.unique_id)
+    else:
+        return str(device_desc.device._id)
+
+
+def get_devices(
+    devices: list[str],
+    inspector_data: InspectorData | None,
+    context: Context,
+    device_id_mapping: DeviceIdMapping | None = None,
+) -> list[DeviceDescription]:
     if len(devices) == 1 and devices[0].lower() == "in_use":
         if inspector_data is not None:
             device_ids = list(inspector_data.getDevicesInUse().deviceIds)
@@ -134,16 +180,21 @@ def get_devices(devices: list[str], inspector_data: InspectorData | None, contex
         device_ids = [int(id) for id in context.devices.keys()]
     else:
         device_ids = [int(id) for id in devices]
-    return [context.devices[id] for id in device_ids]
+
+    # Convert Device objects to DeviceDescription objects
+    device_objects = [context.devices[id] for id in device_ids]
+    return [DeviceDescription.create(device, device_id_mapping) for device in device_objects]
 
 
 class RunChecks:
-    def __init__(self, devices: list[Device]):
-        self.devices = devices
-        # Pre-compute block locations for all devices and block types
+    def __init__(self, devices: list[DeviceDescription]):
+        self.devices = devices  # Now list[DeviceDescription]
+        # Pre-compute block locations - need to extract Device from DeviceDescription
         self.block_locations: dict[Device, dict[BlockType, list[OnChipCoordinate]]] = {
-            device: {block_type: get_block_locations_to_check(block_type, device) for block_type in BLOCK_TYPES}
-            for device in devices
+            device_desc.device: {
+                block_type: get_block_locations_to_check(block_type, device_desc.device) for block_type in BLOCK_TYPES
+            }
+            for device_desc in devices
         }
 
     def _collect_results(
@@ -168,11 +219,10 @@ class RunChecks:
     def run_per_device_check(self, check: Callable[[Device], object]) -> list[PerDeviceCheckResult] | None:
         """Run a check function on each device, collecting results."""
         result: list[PerDeviceCheckResult] = []
-        for device in self.devices:
-            check_result = check(device)
+        for device_desc in self.devices:
+            check_result = check(device_desc.device)  # Pass underlying Device to check function
             # Use the common result collection helper
-            self._collect_results(result, check_result, PerDeviceCheckResult, device=device)
-
+            self._collect_results(result, check_result, PerDeviceCheckResult, device=device_desc)
         return result if len(result) > 0 else None
 
     def run_per_block_check(
@@ -183,9 +233,10 @@ class RunChecks:
             BLOCK_TYPES if block_filter is None else [block_filter] if isinstance(block_filter, str) else block_filter
         )
 
-        def per_device_blocks_check(device: Device) -> list[PerBlockCheckResult] | None:
+        def per_device_blocks_check(device_desc: DeviceDescription) -> list[PerBlockCheckResult] | None:
             """Check all block locations for a single device."""
             result: list[PerBlockCheckResult] = []
+            device = device_desc.device  # Extract Device from DeviceDescription
             for block_type in block_types_to_check:
                 for location in self.block_locations[device][block_type]:
                     check_result = check(location)
@@ -194,7 +245,7 @@ class RunChecks:
                         result,
                         check_result,
                         PerBlockCheckResult,
-                        device=device,
+                        device=device_desc,
                         location=location,
                     )
             return result if len(result) > 0 else None
@@ -253,7 +304,8 @@ class RunChecks:
 def run(args, context: Context):
     devices_to_check = args["--dev"]
     inspector_data = get_inspector_data(args, context)
-    devices = get_devices(devices_to_check, inspector_data, context)
+    device_id_mapping = get_device_id_mapping(args, context)
+    devices = get_devices(devices_to_check, inspector_data, context, device_id_mapping)
     return RunChecks(devices)
 
 
