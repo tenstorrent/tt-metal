@@ -198,6 +198,28 @@ bool FabricTensixDatamoverConfig::initialize_channel_mappings() {
         }
     }
 
+    // Third pass: Build the fabric_router_direction_map_ to track which routers/tensix exist in each direction
+    // for each fabric node and routing plane (link index)
+    for (const auto& device : all_active_devices) {
+        auto dev_id = device->id();
+        auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dev_id);
+
+        // Get all active ethernet channels for this device
+        auto active_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
+
+        // For each active ethernet channel, record its direction info in the map
+        // By looping through all channels, we naturally cover all directions that have active routers
+        for (auto [eth_chan_id, eth_chan_dir] : active_channels) {
+            routing_plane_id_t routing_plane_id = control_plane.get_routing_plane_id(fabric_node_id, eth_chan_id);
+
+            // Get the tensix NOC coordinates for this channel
+            auto [noc_x, noc_y] = get_noc_xy(device, eth_chan_id);
+
+            // Record this direction's router/tensix NOC coordinates for this fabric node + routing plane
+            fabric_router_noc_coords_map_[fabric_node_id][routing_plane_id][eth_chan_dir] = {noc_x, noc_y};
+        }
+    }
+
     return true;
 }
 
@@ -419,6 +441,26 @@ std::pair<uint32_t, uint32_t> FabricTensixDatamoverConfig::get_termination_addre
     auto config = get_config(core_id);
     return std::make_pair(
         config->get_termination_signal_address(), tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
+}
+
+const std::pair<uint32_t, uint32_t>* FabricTensixDatamoverConfig::get_router_noc_coords(
+    const FabricNodeId& fabric_node_id, routing_plane_id_t routing_plane_id, eth_chan_directions direction) const {
+    auto node_it = fabric_router_noc_coords_map_.find(fabric_node_id);
+    if (node_it == fabric_router_noc_coords_map_.end()) {
+        return nullptr;
+    }
+
+    auto plane_it = node_it->second.find(routing_plane_id);
+    if (plane_it == node_it->second.end()) {
+        return nullptr;
+    }
+
+    auto dir_it = plane_it->second.find(direction);
+    if (dir_it == plane_it->second.end()) {
+        return nullptr;
+    }
+
+    return &(dir_it->second);
 }
 
 // FabricTensixDatamoverBuilder implementation

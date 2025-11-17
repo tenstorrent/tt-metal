@@ -498,8 +498,7 @@ FORCE_INLINE void fabric_fast_read_any_len(
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header = get_or_allocate_header();
 
     fabric_read_set_unicast_route(packet_header, dst_dev_id, dst_mesh_id, src_l1_addr, size_bytes, trid);
-    // TODO: remove the 16B once we properly support reads in fabric router
-    packet_header->to_noc_unicast_read(NocUnicastCommandHeader{dest_addr}, 16);
+    packet_header->to_noc_unicast_read(NocUnicastCommandHeader{dest_addr}, 0);
     connection.wait_for_empty_write_slot();
     connection.send_payload_blocking_from_address(
         reinterpret_cast<uint32_t>(packet_header), sizeof(PACKET_HEADER_TYPE));

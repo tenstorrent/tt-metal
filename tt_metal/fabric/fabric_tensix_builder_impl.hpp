@@ -33,10 +33,12 @@ enum class FabricTensixCoreType : uint8_t;
  * - Channel 2: Inter-mux channel (for forwarding traffic between muxes)
  */
 enum class UdmMuxChannelId : uint32_t {
-    WORKER_CHANNEL_BASE = 0,  // Local worker traffic
-    RELAY_CHANNEL = 1,        // Relay connects to mux on this channel
-    INTER_MUX_CHANNEL = 2,    // Inter-mux forwarding channel
-    NUM_CHANNELS = 3
+    WORKER_CHANNEL_BASE = 0,          // Local worker traffic
+    LOCAL_RELAY_CHANNEL = 1,          // Relay connects to mux on this channel
+    EAST_OR_NORTH_RELAY_CHANNEL = 2,  // Upstream East or North Relay connects to mux on this channel
+    WEST_OR_SOUTH_RELAY_CHANNEL = 3,  // Upstream West or South Relay connects to mux on this channel
+    INTER_MUX_CHANNEL = 4,            // Inter-mux forwarding channel
+    NUM_CHANNELS = 5
 };
 
 /**
@@ -105,9 +107,6 @@ public:
 
     // Returns vector of pairs of base addresses and size to clear
     std::vector<std::pair<size_t, size_t>> get_memory_regions_to_clear() const;
-
-    // Pure virtual methods to be implemented by derived classes
-    virtual std::vector<uint32_t> get_compile_time_args() const = 0;
 
     virtual std::vector<uint32_t> get_run_time_args(
         const FabricNodeId& src_fabric_node_id,
@@ -205,17 +204,9 @@ public:
         size_t base_l1_address,
         CoreType core_type = CoreType::WORKER);
 
-    std::vector<uint32_t> get_compile_time_args() const override;
-
-    size_t get_mux_relay_flow_control_semaphore_address() const {
-        return mux_relay_flow_control_semaphore_region_.get_address();
-    }
-    size_t get_mux_relay_teardown_semaphore_address() const {
-        return mux_relay_teardown_semaphore_region_.get_address();
-    }
-    size_t get_mux_relay_buffer_index_semaphore_address() const {
-        return mux_relay_buffer_index_semaphore_region_.get_address();
-    }
+    // Get compile-time args with fabric node, link, and direction for downstream mux connection info
+    std::vector<uint32_t> get_compile_time_args(
+        const FabricNodeId& fabric_node_id, routing_plane_id_t routing_plane_id, eth_chan_directions direction) const;
 
     // Get relay termination signal address (for mux to write during teardown)
     size_t get_relay_termination_signal_address() const { return termination_signal_region_.get_address(); }
@@ -225,10 +216,35 @@ public:
     size_t get_udm_memory_pool_size() const { return udm_memory_pool_region_.get_total_size(); }
 
 private:
-    // Semaphore regions for relay → mux connection (mux writes to these in relay's L1)
-    MemoryRegion mux_relay_flow_control_semaphore_region_{};
-    MemoryRegion mux_relay_teardown_semaphore_region_{};
-    MemoryRegion mux_relay_buffer_index_semaphore_region_{};
+    // Helper struct to collect mux connection info
+    struct MuxConnectionInfo {
+        uint32_t active;
+        uint32_t noc_x;
+        uint32_t noc_y;
+        size_t buffer_base_addr;
+        size_t connection_handshake_addr;
+        size_t worker_location_info_addr;
+        size_t buffer_index_addr;
+        size_t relay_flow_control_semaphore_addr;
+        size_t relay_teardown_semaphore_addr;
+        size_t relay_buffer_index_semaphore_addr;
+        size_t stream_id;
+    };
+
+    // Helper to collect mux connection info
+    MuxConnectionInfo get_mux_connection_info(
+        const std::pair<uint32_t, uint32_t>* noc_coords,
+        uint32_t mux_channel_id,
+        uint32_t mux_idx,
+        uint32_t stream_id) const;
+
+    // Number of mux connections: [0]=local, [1]=downstream_en, [2]=downstream_ws
+    static constexpr uint32_t NUM_MUX_CONNECTIONS = 3;
+
+    // Semaphore regions for relay → mux connections (mux writes to these in relay's L1)
+    std::array<MemoryRegion, NUM_MUX_CONNECTIONS> mux_flow_control_semaphore_regions_{};
+    std::array<MemoryRegion, NUM_MUX_CONNECTIONS> mux_teardown_semaphore_regions_{};
+    std::array<MemoryRegion, NUM_MUX_CONNECTIONS> mux_buffer_index_semaphore_regions_{};
 
     // Memory pool for storing read response data temporarily
     MemoryRegion udm_memory_pool_region_{};

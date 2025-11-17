@@ -97,6 +97,11 @@ public:
 
     std::pair<uint32_t, uint32_t> get_termination_address_and_signal(FabricTensixCoreType core_id) const;
 
+    // Get router NOC coordinates for a specific fabric node, routing plane, and direction
+    // Returns pointer to pair (noc_x, noc_y) if router exists, nullptr otherwise
+    const std::pair<uint32_t, uint32_t>* get_router_noc_coords(
+        const FabricNodeId& fabric_node_id, routing_plane_id_t routing_plane_id, eth_chan_directions direction) const;
+
 private:
     std::vector<CoreCoord> logical_fabric_mux_cores_;
     std::vector<CoreCoord> logical_dispatch_mux_cores_;
@@ -126,6 +131,13 @@ private:
     // In MUX mode: only MUX has config
     // In UDM mode: both MUX and RELAY have configs
     std::unordered_map<FabricTensixCoreType, std::shared_ptr<FabricTensixDatamoverBaseConfig>> configs_;
+
+    // Mapping: [fabric_node_id] -> [routing_plane_id] -> [direction (E/W/N/S)] -> (noc_x, noc_y)
+    // If an entry exists, the router/tensix is active in that direction; otherwise it doesn't exist
+    std::unordered_map<
+        FabricNodeId,
+        std::unordered_map<routing_plane_id_t, std::unordered_map<eth_chan_directions, std::pair<uint32_t, uint32_t>>>>
+        fabric_router_noc_coords_map_;
 
     // Helper methods for initialization
     bool initialize_channel_mappings();
