@@ -77,6 +77,13 @@ class TtConv1d:
         # Create conv config once
         self.conv_config = ttnn.Conv2dConfig(
             weights_dtype=self.weight.dtype,
+            output_layout=ttnn.TILE_LAYOUT,
+            deallocate_activation=True,  # Keep activation tensors (improves performance)
+            reallocate_halo_output=True,  # Reallocate halo output for memory efficiency
+            enable_act_double_buffer=True,  # Enable activation double buffering
+            enable_weights_double_buffer=True,  # Enable weights double buffering
+            config_tensors_in_dram=False,  # Keep config tensors in L1 for speed
+            reshard_if_not_optimal=False,  # Don't auto-reshard for consistency
         )
 
     def __call__(self, x, batch_size, input_length):
@@ -115,7 +122,6 @@ class TtConv1d:
             return_weights_and_bias=True,
             return_output_dim=True,
         )
-        result = ttnn.to_memory_config(result, ttnn.L1_MEMORY_CONFIG)
 
         # PHASE 3: Reshape back (L1 outputs)
         result = ttnn.reshape(
