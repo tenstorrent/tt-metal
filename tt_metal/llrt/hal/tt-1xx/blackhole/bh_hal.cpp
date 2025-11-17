@@ -9,11 +9,13 @@
 #include <string>
 #include <string_view>
 #include <tt-logger/tt-logger.hpp>
+#include <umd/device/utils/semver.hpp>
 
 #include "blackhole/bh_hal.hpp"
 #include "dev_mem_map.h"
 #include "eth_fw_api.h"
 #include "hal_types.hpp"
+#include "impl/context/metal_context.hpp"
 #include "llrt/hal.hpp"
 #include "noc/noc_overlay_parameters.h"
 #include "noc/noc_parameters.h"
@@ -58,26 +60,24 @@ static constexpr float EPS_BH = 1.19209e-7f;
 static constexpr float NAN_BH = 7.0040e+19;
 static constexpr float INF_BH = 1.7014e+38;
 
-namespace tt::tt_metal::blackhole {
-bool is_2_erisc_mode() {
-    // rtoptions not included in here due to circular dependency
-    return getenv("TT_METAL_MULTI_AERISC") != nullptr;
-}
-}  // namespace tt::tt_metal::blackhole
-
 namespace tt {
 
 namespace tt_metal {
 
 class HalJitBuildQueryBlackHole : public hal_1xx::HalJitBuildQueryBase {
+private:
+    bool enable_2_erisc_mode_;
+
 public:
+    HalJitBuildQueryBlackHole(bool enable_2_erisc_mode) : enable_2_erisc_mode_(enable_2_erisc_mode) {}
+
     std::vector<std::string> link_objs(const Params& params) const override {
         std::vector<std::string> objs;
         if (params.is_fw) {
             // Needed to setup gp, sp, etc. for all processors which are launched with assert/deassert PC method
             // For 2 erisc, erisc0 is launched from base firmware so it's not needed
             if (!(params.core_type == HalProgrammableCoreType::ACTIVE_ETH && params.processor_id == 0 &&
-                  blackhole::is_2_erisc_mode())) {
+                  enable_2_erisc_mode_)) {
                 objs.push_back("runtime/hw/lib/blackhole/tmu-crt0.o");
             }
         }
@@ -132,8 +132,14 @@ public:
     std::vector<std::string> defines(const Params& params) const override {
         auto defines = HalJitBuildQueryBase::defines(params);
         defines.push_back("ARCH_BLACKHOLE");
-        if (blackhole::is_2_erisc_mode() && params.core_type == HalProgrammableCoreType::ACTIVE_ETH) {
-            defines.push_back("ENABLE_2_ERISC_MODE");
+        // Push back the physical erisc id
+        if (params.core_type == HalProgrammableCoreType::ACTIVE_ETH) {
+            if (enable_2_erisc_mode_) {
+                defines.push_back("ENABLE_2_ERISC_MODE");
+                defines.push_back("PHYSICAL_AERISC_ID=" + std::to_string(params.processor_id));
+            } else {
+                defines.push_back("PHYSICAL_AERISC_ID=1");
+            }
         }
         return defines;
     }
@@ -145,7 +151,7 @@ public:
                 case 0:
                     if (params.is_fw) {
                         srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/active_erisc.cc");
-                        if (blackhole::is_2_erisc_mode()) {
+                        if (enable_2_erisc_mode_) {
                             // not tmu-crt0
                             srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/active_erisc-crt0.cc");
                         }
@@ -178,12 +184,13 @@ public:
         }
         // Unlike other core types, the stack on erisc0 is not dynamic because it's setup by base firmware.
         // Trigger an error for kernels which may exceed the static stack usage to prevent difficult to debug issues
-        // 1536 B = stack size taken from the base firmware
+        // 2048 B = stack size taken from the base firmware
+        // 64 B = Reserved for base firmware usage
         // 72 B = Approx. stack usage at the time the kernel is launched
-        // 1536 B - 64 B = 1464 B free for kernel
+        // 2048 B - 64 B - 72 B = 1912 B free for kernel
         if (params.core_type == HalProgrammableCoreType::ACTIVE_ETH && params.processor_id == 0 &&
-            blackhole::is_2_erisc_mode()) {
-            cflags += "-Werror=stack-usage=1464 ";
+            enable_2_erisc_mode_) {
+            cflags += "-Werror=stack-usage=1912 ";
         }
         return cflags;
     }
@@ -206,9 +213,9 @@ public:
                         "{}/{}_{}aerisc.ld",
                         path,
                         fork,
-                        params.processor_id            ? "subordinate_"
-                        : blackhole::is_2_erisc_mode() ? "main_"
-                        : "");
+                        params.processor_id    ? "subordinate_"
+                        : enable_2_erisc_mode_ ? "main_"
+                                               : "");
                 }
                 break;
             case HalProgrammableCoreType::IDLE_ETH:
@@ -236,7 +243,7 @@ public:
     }
 };
 
-void Hal::initialize_bh() {
+void Hal::initialize_bh(bool enable_2_erisc_mode) {
     using namespace blackhole;
     static_assert(static_cast<int>(HalProgrammableCoreType::TENSIX) == static_cast<int>(ProgrammableCoreType::TENSIX));
     static_assert(
@@ -247,7 +254,7 @@ void Hal::initialize_bh() {
     HalCoreInfoType tensix_mem_map = blackhole::create_tensix_mem_map();
     this->core_info_.push_back(tensix_mem_map);
 
-    HalCoreInfoType active_eth_mem_map = blackhole::create_active_eth_mem_map();
+    HalCoreInfoType active_eth_mem_map = blackhole::create_active_eth_mem_map(enable_2_erisc_mode);
     this->core_info_.push_back(active_eth_mem_map);
 
     HalCoreInfoType idle_eth_mem_map = blackhole::create_idle_eth_mem_map();
@@ -395,19 +402,22 @@ void Hal::initialize_bh() {
         NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_4),
         NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_5)};
 
-    this->jit_build_query_ = std::make_unique<HalJitBuildQueryBlackHole>();
+    this->jit_build_query_ = std::make_unique<HalJitBuildQueryBlackHole>(enable_2_erisc_mode);
 
-    this->verify_eth_fw_version_func_ = [](tt::umd::tt_version fw_version) {
-        if (blackhole::is_2_erisc_mode()) {
-            tt::umd::tt_version min_version(1, 6, 2);
+    this->verify_eth_fw_version_func_ = [=](tt::umd::semver_t fw_version) {
+        if (enable_2_erisc_mode) {
+            tt::umd::semver_t min_version(1, 7, 0);
             if (!(fw_version >= min_version)) {
-                log_critical(
+                log_warning(
                     tt::LogLLRuntime,
-                    "In 2-erisc mode, the minimum supported ethernet firmware version is {}. Detected version is {}",
-                    min_version.str(),
-                    fw_version.str());
+                    "Blackhole multi erisc mode requires ethernet firmware version {} or higher, but detected version "
+                    "{}. Automatically falling back to single erisc mode for compatibility.",
+                    min_version.to_string(),
+                    fw_version.to_string());
+                return false;
             }
         }
+        return true;
     };
 }
 

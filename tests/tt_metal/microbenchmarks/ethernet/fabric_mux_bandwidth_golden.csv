@@ -5,7 +5,7 @@ full_size_channels,4,0,8,0,10000,4096,1,32,15.3842
 full_size_channels,8,0,8,0,10000,4096,1,32,15.2765
 full_size_channel_packet_size,8,0,8,0,10000,16,1,32,0.24635
 full_size_channel_packet_size,8,0,8,0,10000,1024,1,32,5.58161
-full_size_channel_packet_size,8,0,8,0,10000,2048,1,32,10.0571
+full_size_channel_packet_size,8,0,8,0,10000,2048,1,32,10.2622
 full_size_channel_packet_size,8,0,8,0,10000,4096,1,32,15.2756
 full_size_channel_buffers,8,0,1,0,10000,4096,1,32,15.9066
 full_size_channel_buffers,8,0,2,0,10000,4096,1,32,15.0639

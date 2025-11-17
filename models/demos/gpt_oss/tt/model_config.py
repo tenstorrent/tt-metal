@@ -17,6 +17,8 @@ from tqdm import tqdm
 from transformers import AutoConfig, AutoTokenizer
 
 import ttnn
+from models.common.utility_functions import is_blackhole, is_wormhole_b0
+from models.tt_transformers.tt.load_checkpoints import convert_hf_qkv_to_meta_format
 
 
 class ModelArgs:
@@ -39,6 +41,7 @@ class ModelArgs:
         self.max_seq_len = max_seq_len
         self.optimizations = optimizations
         self.cache_hf = cache_hf
+        self.can_enable_trace = lambda seqlen: False
 
         # GPT-OSS specific paths - use HF_MODEL environment variable (tt_transformers standard)
         # Default paths are internal CI paths for automated testing
@@ -92,6 +95,37 @@ class ModelArgs:
             self.tokenizer = AutoTokenizer.from_pretrained(self.weights_path, trust_remote_code=True)
             self.processor = None  # GPT-OSS doesn't use vision processor
 
+        self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
+
+    def get_trace_prefill_supported_seq_lens(self):
+        default_supported_seq_lens = {
+            "N150": [128, 256, 512],
+            "N300": [128, 256, 512, 1024],
+            "T3K": [128, 256, 512, 1024],
+            "TG": [128, 256, 512, 1024],
+        }
+
+        # TODO: If no specific sequence lengths are listed for a model and device, the default one will be used (from the default_supported_seq_lens dictionary)
+        model_specific_supported_seq_lens = {
+            # exmaple : #base_model_name : {device_name : [sequence_lengths]}
+        }
+
+        model_name = self.model_name
+        device_name = determine_device_name(self.mesh_device)
+
+        # Try model-specific sequence lengths first
+        result = model_specific_supported_seq_lens.get(model_name, {}).get(device_name)
+        if result:
+            return result
+
+        # Fall back to default sequence lengths
+        result = default_supported_seq_lens.get(device_name)
+        if result:
+            return result
+
+        # No supported sequence lengths found, return empty list
+        return []
+
     def encode_prompt(self, prompt_text, instruct=True, system_prompt_text=None):
         """
         Encode prompts using HuggingFace tokenizer with chat template
@@ -108,8 +142,13 @@ class ModelArgs:
             # prompt_text is already a list of chat messages
             return self.tokenizer.apply_chat_template(prompt_text, add_generation_prompt=True, tokenize=True)
 
-    def load_state_dict(self):
-        """Load model state dict compatible with tt_transformers"""
+    def load_state_dict(self, convert_to_meta_format=True):
+        """Load model state dict compatible with tt_transformers
+
+        Args:
+            convert_to_meta_format: If True, convert HF QKV weights to Meta format for RoPE.
+                                   Set to False when loading for HuggingFace reference models.
+        """
         if self.dummy_weights:
             # Return dummy state dict for testing
             return {}
@@ -137,6 +176,11 @@ class ModelArgs:
                     k: v.to(torch.bfloat16) if v.dtype == torch.float32 else v
                     for k, v in tqdm(weights_dict.items(), desc="Converting to bfloat16")
                 }
+
+            # Convert HF QKV weights to Meta format for RoPE compatibility (if requested)
+            if convert_to_meta_format:
+                logger.info("Converting QKV weights from HuggingFace to Meta format for RoPE")
+                weights_dict = convert_hf_qkv_to_meta_format(weights_dict, self.hf_config.head_dim)
 
             return weights_dict
 
@@ -172,3 +216,48 @@ class ModelArgs:
     def max_grid_size(self):
         """Return maximum grid size for the device"""
         return ttnn.CoreGrid(y=8, x=8)  # Standard grid size
+
+
+def determine_device_name(mesh_device):
+    """
+    Determine device name based on number of devices and architecture.
+
+    Args:
+        mesh_device (MeshDevice): MeshDevice object
+
+    Returns:
+        str: Device name (e.g., "CPU", "N150", "P100", etc.)
+
+    Raises:
+        ValueError: If architecture or device count is unsupported
+    """
+    num_devices = mesh_device.get_num_devices() if mesh_device else 0
+    arch_name = ttnn.get_arch_name()
+    dram_grid_size = mesh_device.dram_grid_size() if mesh_device else None  # CoreCoord with (x, y)
+
+    if num_devices == 0:
+        return "CPU"
+
+    if is_blackhole():
+        dict_device_names = {
+            1: "P100" if dram_grid_size and dram_grid_size.x == 7 else "P150",  # P100 DRAM grid is 7x1, P150 is 8x1
+            2: "P300",
+            4: "P150x4",
+            8: "P150x8",
+            32: "BHGLX",
+        }
+    elif is_wormhole_b0():
+        dict_device_names = {
+            1: "N150",
+            2: "N300",
+            4: "N150x4",
+            8: "T3K",
+            32: "TG",
+        }
+    else:
+        raise ValueError(f"Unsupported architecture: {arch_name}")
+
+    if num_devices in dict_device_names:
+        return dict_device_names[num_devices]
+    else:
+        raise ValueError(f"Unsupported number of devices: {num_devices} for {arch_name}")

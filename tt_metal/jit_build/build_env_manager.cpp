@@ -60,17 +60,7 @@ std::map<std::string, std::string> initialize_device_kernel_defines(ChipId devic
     // # of L1 banks needs to match allocator. For L1BankingAllocator this is the # of storage cores. TODO: when
     // allocator is pulled out of device, use it to get that info here.
     const auto& dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
-    const size_t num_compute_and_storage_cores =
-        tt::get_logical_compute_cores(device_id, num_hw_cqs, dispatch_core_config).size();
-    const size_t num_storage_only_cores =
-        tt::get_logical_storage_cores(device_id, num_hw_cqs, dispatch_core_config).size();
-    size_t num_banks_per_storage_core = 0;
-    if (num_storage_only_cores > 0) {
-        num_banks_per_storage_core =
-            static_cast<size_t>(soc_d.worker_l1_size) /
-            tt::get_storage_core_bank_size(device_id, num_hw_cqs, dispatch_core_config).value();
-    }
-    const size_t num_l1_banks = num_compute_and_storage_cores + (num_storage_only_cores * num_banks_per_storage_core);
+    const size_t num_l1_banks = tt::get_logical_compute_cores(device_id, num_hw_cqs, dispatch_core_config).size();
 
     bool is_dram_pow2 = ceil(log2(num_dram_banks)) == log2(num_dram_banks);
     bool is_l1_pow2 = ceil(log2(num_l1_banks)) == log2(num_l1_banks);
@@ -131,8 +121,7 @@ uint64_t compute_build_key(ChipId device_id, uint8_t num_hw_cqs) {
     return static_cast<uint64_t>(hash);
 }
 
-std::vector<JitBuildState> create_build_state(
-    JitBuildEnv& build_env, ChipId /*device_id*/, uint8_t num_hw_cqs, bool is_fw) {
+std::vector<JitBuildState> create_build_state(JitBuildEnv& build_env, ChipId /*device_id*/, bool is_fw) {
     // Get the dispatch message address for this device
     uint32_t dispatch_message_addr = MetalContext::instance().dispatch_mem_map().get_dispatch_message_addr_start();
 
@@ -174,14 +163,12 @@ void BuildEnvManager::add_build_env(ChipId device_id, uint8_t num_hw_cqs) {
     auto device_kernel_defines = initialize_device_kernel_defines(device_id, num_hw_cqs);
     const size_t fw_compile_hash =
         std::hash<std::string>{}(tt::tt_metal::MetalContext::instance().rtoptions().get_compile_hash_string());
-
-    device_id_to_build_env_[device_id].build_key = build_key;
     device_id_to_build_env_[device_id].build_env.init(
         build_key, fw_compile_hash, tt::tt_metal::MetalContext::instance().get_cluster().arch(), device_kernel_defines);
     device_id_to_build_env_[device_id].firmware_build_states =
-        create_build_state(device_id_to_build_env_[device_id].build_env, device_id, num_hw_cqs, true);
+        create_build_state(device_id_to_build_env_[device_id].build_env, device_id, true);
     device_id_to_build_env_[device_id].kernel_build_states =
-        create_build_state(device_id_to_build_env_[device_id].build_env, device_id, num_hw_cqs, false);
+        create_build_state(device_id_to_build_env_[device_id].build_env, device_id, false);
 }
 
 const DeviceBuildEnv& BuildEnvManager::get_device_build_env(ChipId device_id) {
@@ -234,7 +221,7 @@ std::vector<BuildEnvInfo> BuildEnvManager::get_all_build_envs_info() {
     std::vector<BuildEnvInfo> build_env_info;
     build_env_info.reserve(device_id_to_build_env_.size());
     for (const auto& [device_id, build_env] : device_id_to_build_env_) {
-        build_env_info.emplace_back(device_id, build_env.build_key, build_env.build_env.get_out_firmware_root_path());
+        build_env_info.emplace_back(device_id, build_env.build_key(), build_env.build_env.get_out_firmware_root_path());
     }
     return build_env_info;
 }

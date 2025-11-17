@@ -17,7 +17,6 @@ from tt_lib.utils import (
 )
 from models.common.utility_functions import print_diff_argmax, comp_pcc
 from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero
-from models.common.utility_functions import is_grayskull
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
@@ -115,9 +114,6 @@ def test_softmax_causal_mask(device, in_dtype, in0_mem_config):
     ids=["float32", "bfloat8_b"],
 )
 def test_softmax(device, in_dtype, in0_mem_config, causal_mask):
-    if is_grayskull() and in_dtype == ttnn.float32:
-        pytest.skip("Skipping float32 tests on Grayskull")
-
     torch.manual_seed(0)
     sm_op = ttnn.scale_mask_softmax_in_place
 
@@ -208,9 +204,6 @@ def test_softmax(device, in_dtype, in0_mem_config, causal_mask):
     ids=["float32", "bfloat8_b"],
 )
 def test_scale_mask_softmax_rm(device, in_dtype, in0_mem_config, causal_mask):
-    if is_grayskull() and in_dtype == ttnn.float32:
-        pytest.skip("Skipping float32 tests on Grayskull")
-
     torch.manual_seed(0)
     sm_op = ttnn.scale_mask_softmax_in_place
 

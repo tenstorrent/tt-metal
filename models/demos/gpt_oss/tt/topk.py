@@ -37,7 +37,16 @@ def topk_router(g, experts_per_token):
         The softmax normalization uses HiFi4 math fidelity and FP32 accumulation
         for numerical stability, as routing decisions are critical for model quality.
     """
+    typecast_needed = False
+    if g.dtype != ttnn.bfloat16:
+        g_og = g
+        typecast_needed = True
+        g = ttnn.typecast(g, dtype=ttnn.bfloat16)
+
     expert_weights, expert_indices = ttnn.topk(g, k=experts_per_token, dim=-1, sorted=True)
+    if typecast_needed:
+        g.deallocate(True)
+        g = g_og
     compute_config = ttnn.init_device_compute_kernel_config(
         g.device().arch(),
         math_fidelity=ttnn.MathFidelity.HiFi4,

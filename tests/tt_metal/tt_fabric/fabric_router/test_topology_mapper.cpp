@@ -16,6 +16,8 @@ namespace tt::tt_fabric {
 class TopologyMapperTest : public ::testing::Test {
 protected:
     void SetUp() override {
+        setenv("TT_METAL_OPERATION_TIMEOUT_SECONDS", "10", 1);
+
         auto distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
         const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         const auto& hal = tt::tt_metal::MetalContext::instance().hal();
@@ -38,7 +40,7 @@ bool contains(const std::vector<tt::tt_metal::AsicID>& asic_ids, const tt::tt_me
 TEST_F(TopologyMapperTest, T3kMeshGraphTest) {
     const std::filesystem::path t3k_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml";
+        "tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.textproto";
 
     auto mesh_graph = MeshGraph(t3k_mesh_graph_desc_path.string());
 
@@ -92,7 +94,7 @@ TEST_F(TopologyMapperTest, T3kMeshGraphTest) {
 TEST_F(TopologyMapperTest, DualGalaxyBigMeshTest) {
     const std::filesystem::path dual_galaxy_big_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.yaml";
+        "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto";
 
     auto mesh_graph = MeshGraph(dual_galaxy_big_mesh_graph_desc_path.string());
 
@@ -154,7 +156,7 @@ TEST_F(TopologyMapperTest, DualGalaxyBigMeshTest) {
 TEST_F(TopologyMapperTest, N300MeshGraphTest) {
     const std::filesystem::path n300_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/n300_mesh_graph_descriptor.yaml";
+        "tt_metal/fabric/mesh_graph_descriptors/n300_mesh_graph_descriptor.textproto";
 
     auto mesh_graph = MeshGraph(n300_mesh_graph_desc_path.string());
 
@@ -194,7 +196,7 @@ TEST_F(TopologyMapperTest, N300MeshGraphTest) {
 TEST_F(TopologyMapperTest, P100MeshGraphTest) {
     const std::filesystem::path p100_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/p100_mesh_graph_descriptor.yaml";
+        "tt_metal/fabric/mesh_graph_descriptors/p100_mesh_graph_descriptor.textproto";
 
     auto mesh_graph = MeshGraph(p100_mesh_graph_desc_path.string());
 
@@ -287,6 +289,92 @@ TEST_F(TopologyMapperTest, BHQB4x4MeshGraphTest) {
     EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_15), asic_id_3));
     EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_3), asic_id_15));
 
+    const MeshId mesh_id{0};
+
+    // Check that the rank bindings line up
+    auto host_ranks = mesh_graph.get_host_ranks(mesh_id);
+    const auto& tp_host_ranks = topology_mapper.get_host_ranks(mesh_id);
+    EXPECT_EQ(host_ranks, tp_host_ranks);
+
+    // Check coord range of host ranks are right
+    for (const auto& [_, host_rank] : host_ranks) {
+        auto coord_range = mesh_graph.get_coord_range(mesh_id, host_rank);
+        auto tp_coord_range = topology_mapper.get_coord_range(mesh_id, host_rank);
+
+        EXPECT_EQ(coord_range, tp_coord_range);
+    }
+
+    // Check chip ids of host ranks are right
+    for (const auto& [_, host_rank] : host_ranks) {
+        auto chip_ids = mesh_graph.get_chip_ids(mesh_id, host_rank);
+        auto tp_chip_ids = topology_mapper.get_chip_ids(mesh_id, host_rank);
+        EXPECT_EQ(chip_ids, tp_chip_ids);
+    }
+
+    // Check mesh shape of host ranks are right
+    for (const auto& [_, host_rank] : host_ranks) {
+        auto mesh_shape = mesh_graph.get_mesh_shape(mesh_id, host_rank);
+        auto tp_mesh_shape = topology_mapper.get_mesh_shape(mesh_id, host_rank);
+        EXPECT_EQ(mesh_shape, tp_mesh_shape);
+    }
+
+    // Check the full shape and sub shape are right
+    MeshShape full_shape = mesh_graph.get_mesh_shape(mesh_id);
+    EXPECT_EQ(full_shape, MeshShape(4, 4));
+    EXPECT_EQ(topology_mapper.get_mesh_shape(mesh_id), full_shape);
+}
+
+TEST_F(TopologyMapperTest, BHQB4x4StrictReducedMeshGraphTest) {
+    const std::filesystem::path bh_qb_4x4_strict_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_qb_4x4_strict_reduced_mesh_graph_descriptor.textproto";
+
+    auto mesh_graph = MeshGraph(bh_qb_4x4_strict_mesh_graph_desc_path.string());
+
+    // Create a local mesh binding for testing
+    LocalMeshBinding local_mesh_binding;
+    if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 0) {
+        local_mesh_binding.mesh_ids = {MeshId{0}};
+        local_mesh_binding.host_rank = MeshHostRankId{0};
+    } else if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 1) {
+        local_mesh_binding.mesh_ids = {MeshId{0}};
+        local_mesh_binding.host_rank = MeshHostRankId{1};
+    } else if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 2) {
+        local_mesh_binding.mesh_ids = {MeshId{0}};
+        local_mesh_binding.host_rank = MeshHostRankId{2};
+    } else if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 3) {
+        local_mesh_binding.mesh_ids = {MeshId{0}};
+        local_mesh_binding.host_rank = MeshHostRankId{3};
+    }
+
+    auto topology_mapper = TopologyMapper(mesh_graph, *physical_system_descriptor_, local_mesh_binding);
+
+    // Physical System Descriptor: 4x4 Blackhole mesh
+    // 0  1  | 2  3
+    // 4  5  | 6  7
+    // ------+-------
+    // 8  9  | 10 11
+    // 12 13 | 14 15
+
+    auto asic_id_0 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 0));
+    auto asic_id_1 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 1));
+    auto asic_id_7 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 7));
+    auto asic_id_4 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 4));
+    auto asic_id_13 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 13));
+    auto asic_id_14 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 14));
+    auto asic_id_15 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 15));
+    auto asic_id_3 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 3));
+
+    // Check for adjacency
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_0), asic_id_1));
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_1), asic_id_0));
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_7), asic_id_4));
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_4), asic_id_7));
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_13), asic_id_14));
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_14), asic_id_13));
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_15), asic_id_3));
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_3), asic_id_15));
+
     // Check the host ranks are right
     const MeshId mesh_id{0};
     const auto& host_ranks = topology_mapper.get_host_ranks(mesh_id);
@@ -296,6 +384,94 @@ TEST_F(TopologyMapperTest, BHQB4x4MeshGraphTest) {
     MeshShape full_shape = mesh_graph.get_mesh_shape(mesh_id);
     EXPECT_EQ(full_shape, MeshShape(4, 4));
     EXPECT_EQ(topology_mapper.get_mesh_shape(mesh_id), full_shape);
+}
+
+TEST_F(TopologyMapperTest, BHQB4x4RelaxedMeshGraphTest) {
+    const std::filesystem::path bh_qb_4x4_relaxed_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_qb_4x4_relaxed_mesh_graph_descriptor.textproto";
+
+    auto mesh_graph = MeshGraph(bh_qb_4x4_relaxed_mesh_graph_desc_path.string());
+
+    // Create a local mesh binding for testing
+    LocalMeshBinding local_mesh_binding;
+    if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 0) {
+        local_mesh_binding.mesh_ids = {MeshId{0}};
+        local_mesh_binding.host_rank = MeshHostRankId{0};
+    } else if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 1) {
+        local_mesh_binding.mesh_ids = {MeshId{0}};
+        local_mesh_binding.host_rank = MeshHostRankId{1};
+    } else if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 2) {
+        local_mesh_binding.mesh_ids = {MeshId{0}};
+        local_mesh_binding.host_rank = MeshHostRankId{2};
+    } else if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 3) {
+        local_mesh_binding.mesh_ids = {MeshId{0}};
+        local_mesh_binding.host_rank = MeshHostRankId{3};
+    }
+
+    auto topology_mapper = TopologyMapper(mesh_graph, *physical_system_descriptor_, local_mesh_binding);
+
+    // Physical System Descriptor: 4x4 Blackhole mesh
+    // 0  1  | 2  3
+    // 4  5  | 6  7
+    // ------+-------
+    // 8  9  | 10 11
+    // 12 13 | 14 15
+
+    auto asic_id_0 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 0));
+    auto asic_id_1 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 1));
+    auto asic_id_7 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 7));
+    auto asic_id_4 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 4));
+    auto asic_id_13 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 13));
+    auto asic_id_14 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 14));
+    auto asic_id_15 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 15));
+    auto asic_id_3 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 3));
+
+    // Check for adjacency
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_0), asic_id_1));
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_1), asic_id_0));
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_7), asic_id_4));
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_4), asic_id_7));
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_13), asic_id_14));
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_14), asic_id_13));
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_15), asic_id_3));
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_3), asic_id_15));
+
+    // Check the host ranks are right
+    const MeshId mesh_id{0};
+    const auto& host_ranks = topology_mapper.get_host_ranks(mesh_id);
+    EXPECT_EQ(host_ranks.size(), 4u);
+
+    // Check the full shape and sub shape are right
+    MeshShape full_shape = mesh_graph.get_mesh_shape(mesh_id);
+    EXPECT_EQ(full_shape, MeshShape(4, 4));
+    EXPECT_EQ(topology_mapper.get_mesh_shape(mesh_id), full_shape);
+}
+
+TEST_F(TopologyMapperTest, BHQB4x4StrictInvalidMeshGraphTest) {
+    const std::filesystem::path bh_qb_4x4_strict_invalid_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_qb_4x4_strict_invalid_mesh_graph_descriptor.textproto";
+
+    auto mesh_graph = MeshGraph(bh_qb_4x4_strict_invalid_mesh_graph_desc_path.string());
+
+    // Create a local mesh binding for testing
+    LocalMeshBinding local_mesh_binding;
+    if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 0) {
+        local_mesh_binding.mesh_ids = {MeshId{0}};
+        local_mesh_binding.host_rank = MeshHostRankId{0};
+    } else if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 1) {
+        local_mesh_binding.mesh_ids = {MeshId{0}};
+        local_mesh_binding.host_rank = MeshHostRankId{1};
+    } else if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 2) {
+        local_mesh_binding.mesh_ids = {MeshId{0}};
+        local_mesh_binding.host_rank = MeshHostRankId{2};
+    } else if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 3) {
+        local_mesh_binding.mesh_ids = {MeshId{0}};
+        local_mesh_binding.host_rank = MeshHostRankId{3};
+    }
+
+    EXPECT_THROW(TopologyMapper(mesh_graph, *physical_system_descriptor_, local_mesh_binding), std::exception);
 }
 
 TEST_F(TopologyMapperTest, T3kMultiMeshTest) {
@@ -314,6 +490,123 @@ TEST_F(TopologyMapperTest, T3kMultiMeshTest) {
     local_mesh_binding.host_rank = MeshHostRankId{0};
 
     auto topology_mapper = TopologyMapper(mesh_graph, *physical_system_descriptor_, local_mesh_binding);
+}
+
+TEST_F(TopologyMapperTest, PinningHonorsFixedAsicPositionOnDualGalaxyMesh_1pin) {
+    const std::filesystem::path galaxy_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto";
+
+    auto mesh_graph = MeshGraph(galaxy_mesh_graph_desc_path.string());
+
+    // Local mesh binding for single-host
+    LocalMeshBinding local_mesh_binding;
+    if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 0) {
+        local_mesh_binding.mesh_ids = {MeshId{0}};
+        local_mesh_binding.host_rank = MeshHostRankId{0};
+    } else {
+        local_mesh_binding.mesh_ids = {MeshId{0}};
+        local_mesh_binding.host_rank = MeshHostRankId{1};
+    }
+
+    // Choose a real ASIC on this host and pin its (tray, location) to logical node (mesh 0, chip 0)
+    const auto my_host = physical_system_descriptor_->my_host_name();
+    auto pinned_asic = AsicPosition{1, 1};
+
+    std::vector<std::pair<AsicPosition, FabricNodeId>> pins = {
+        {pinned_asic, FabricNodeId(MeshId{0}, 0)},
+    };
+
+    TopologyMapper topology_mapper_with_pins(mesh_graph, *physical_system_descriptor_, local_mesh_binding, pins);
+
+    tt::tt_metal::AsicID mapped_asic;
+    for (const auto& asics : physical_system_descriptor_->get_asics_connected_to_host(my_host)) {
+        auto tray = physical_system_descriptor_->get_tray_id(asics);
+        auto loc = physical_system_descriptor_->get_asic_location(asics);
+        if (tray == pinned_asic.first && loc == pinned_asic.second) {
+            mapped_asic = topology_mapper_with_pins.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 0));
+            break;
+        }
+    }
+
+    // Verify that the mapping for FabricNodeId(0,0) resolves to the pinned ASIC
+    auto mapped_asic_for_node0 = topology_mapper_with_pins.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 0));
+    EXPECT_EQ(mapped_asic_for_node0, mapped_asic);
+}
+
+TEST_F(TopologyMapperTest, PinningHonorsFixedAsicPositionOnDualGalaxyMesh_2pins) {
+    const std::filesystem::path galaxy_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto";
+
+    auto mesh_graph = MeshGraph(galaxy_mesh_graph_desc_path.string());
+
+    // Local mesh binding for single-host
+    LocalMeshBinding local_mesh_binding;
+    if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 0) {
+        local_mesh_binding.mesh_ids = {MeshId{0}};
+        local_mesh_binding.host_rank = MeshHostRankId{0};
+    } else {
+        local_mesh_binding.mesh_ids = {MeshId{0}};
+        local_mesh_binding.host_rank = MeshHostRankId{1};
+    }
+
+    // Choose a real ASIC on this host and pin its (tray, location) to logical node (mesh 0, chip 0)
+    auto pinned_asic = AsicPosition{1, 1};
+    auto pinned_asic2 = AsicPosition{1, 5};
+
+    std::vector<std::pair<AsicPosition, FabricNodeId>> pins = {
+        {pinned_asic, FabricNodeId(MeshId{0}, 0)},
+        {pinned_asic2, FabricNodeId(MeshId{0}, 1)},
+    };
+
+    TopologyMapper topology_mapper_with_pins(mesh_graph, *physical_system_descriptor_, local_mesh_binding, pins);
+
+    // Check that the potential mapped ASICs are correctly for the pinned ASICs
+    std::vector<tt::tt_metal::AsicID> potential_mapped_asics;
+    std::vector<tt::tt_metal::AsicID> potential_mapped_asics2;
+    for (const auto& [asic_id, _] : physical_system_descriptor_->get_asic_descriptors()) {
+        auto tray = physical_system_descriptor_->get_tray_id(asic_id);
+        auto loc = physical_system_descriptor_->get_asic_location(asic_id);
+        if (tray == pinned_asic.first && loc == pinned_asic.second) {
+            potential_mapped_asics.push_back(asic_id);
+        }
+        if (tray == pinned_asic2.first && loc == pinned_asic2.second) {
+            potential_mapped_asics2.push_back(asic_id);
+        }
+    }
+
+    // Verify that the mapping for FabricNodeId(0,0) resolves to the pinned ASIC
+    auto mapped_asic_for_node0 = topology_mapper_with_pins.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 0));
+    auto mapped_asic_for_node1 = topology_mapper_with_pins.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 1));
+    EXPECT_TRUE(contains(potential_mapped_asics, mapped_asic_for_node0));
+    EXPECT_TRUE(contains(potential_mapped_asics2, mapped_asic_for_node1));
+}
+
+TEST_F(TopologyMapperTest, PinningThrowsOnBadAsicPositionGalaxyMesh) {
+    const std::filesystem::path galaxy_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto";
+
+    auto mesh_graph = MeshGraph(galaxy_mesh_graph_desc_path.string());
+
+    LocalMeshBinding local_mesh_binding;
+    if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 0) {
+        local_mesh_binding.mesh_ids = {MeshId{0}};
+        local_mesh_binding.host_rank = MeshHostRankId{0};
+    } else {
+        local_mesh_binding.mesh_ids = {MeshId{0}};
+        local_mesh_binding.host_rank = MeshHostRankId{1};
+    }
+
+    // Use an ASIC position that does not exist in this environment
+    std::vector<std::pair<AsicPosition, FabricNodeId>> pins_missing = {
+        {AsicPosition{tt::tt_metal::TrayID{1}, tt::tt_metal::ASICLocation{3}}, FabricNodeId(MeshId{0}, 0)},
+    };
+
+    // Expect a throw due to missing ASIC position in the local mesh physical topology
+    EXPECT_THROW(
+        TopologyMapper(mesh_graph, *physical_system_descriptor_, local_mesh_binding, pins_missing), std::exception);
 }
 
 }  // namespace tt::tt_fabric

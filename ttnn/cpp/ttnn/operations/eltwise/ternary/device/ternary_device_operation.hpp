@@ -25,7 +25,7 @@ struct TernaryDeviceOperation {
         std::optional<DeviceComputeKernelConfig> compute_kernel_config;
 
         // Scalar values for TTS/TST/TSS variants
-        std::optional<float> scalar_input_a;  // For TST/TSS
+        std::optional<float> scalar_input_a;  // For TST/TSS, and for ADDCMUL scalar value
         std::optional<float> scalar_input_b;  // For TTS/TSS
 
         tt::stl::hash::hash_t to_hash() const;
@@ -82,6 +82,17 @@ struct TernaryDeviceOperation {
         const std::optional<MemoryConfig>& memory_config,
         const std::optional<Tensor>& optional_output_tensor);
 
+    // tensor-tensor-tensor invocation (TTT) with additional scalar
+    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
+        TernaryOpType op_type,
+        const Tensor& input_a,
+        const Tensor& input_b,
+        const Tensor& input_c,
+        float scalar,
+        const std::optional<const DataType>& output_dtype,
+        const std::optional<MemoryConfig>& memory_config,
+        const std::optional<Tensor>& optional_output_tensor);
+
     // tensor-tensor-scalar invocation (TTS)
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         TernaryOpType op_type,
@@ -108,4 +119,5 @@ struct TernaryDeviceOperation {
 namespace ttnn::prim {
 constexpr auto ternary =
     ttnn::register_operation<"ttnn::prim::ternary", ttnn::operations::ternary::TernaryDeviceOperation>();
+
 }  // namespace ttnn::prim

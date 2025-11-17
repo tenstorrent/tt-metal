@@ -72,6 +72,37 @@ namespace tt::tt_fabric {
  * @param is_receiver_channel_serviced Output parameter for receiver channel service flags
  */
 namespace {
+// Returns true when fabric 2-ERISC should be considered enabled for builders.
+// This is disabled for Wormhole and enabled for Blackhole when 2-eriscs can be dispatched to
+// and if we are not building with the tensix mux extension (due to stack size issue).
+bool is_fabric_two_erisc_enabled() {
+    auto &mc = tt::tt_metal::MetalContext::instance();
+    // Force-disable if the override is present
+    bool force_disable_2_erisc = mc.rtoptions().get_disable_fabric_2_erisc_mode();
+    if (force_disable_2_erisc) {
+        log_debug(tt::LogFabric, "Disabling fabric 2-ERISC mode due to force disable");
+        return false;
+    }
+
+    const auto &hal = mc.hal();
+    // by default, enable only single erisc mode for future architectures as well to simplify bringup
+    bool arch_bh = hal.get_arch() == tt::ARCH::BLACKHOLE;
+
+    // out of stack size issue on the erisc, to be investigated
+    bool tensix_extensions_enabled = mc.get_fabric_tensix_config() != tt::tt_fabric::FabricTensixConfig::DISABLED;
+
+    bool single_erisc_dispatch = hal.get_num_risc_processors(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH) < 2;
+
+    // 2d dynamic fabric doesn't properly support 2-erisc yet but is being deprecated anyways so we
+    // simply disable 2-erisc on it for now.
+    // Issue [#32419](https://github.com/tenstorrent/tt-metal/issues/32419)
+    bool is_2d_dynamic = mc.get_fabric_config() == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC ||
+                         mc.get_fabric_config() == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_X ||
+                         mc.get_fabric_config() == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_Y ||
+                         mc.get_fabric_config() == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY;
+
+    return arch_bh && !tensix_extensions_enabled && !single_erisc_dispatch && !is_2d_dynamic;
+}
 void configure_risc_settings(
     size_t num_riscv_cores,
     size_t risc_id,
@@ -158,16 +189,12 @@ void update_sender_channel_servicing(
 }
 
 size_t get_num_riscv_cores() {
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_is_fabric_2_erisc_mode_enabled()) {
+    if (is_fabric_two_erisc_enabled()) {
         size_t nriscs = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
             tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
-        if (nriscs > 1) {
-            log_warning(tt::LogFabric, "Launching fabric in experimental 2-erisc mode.");
-        }
         return nriscs;
-    } else {
-        return 1;
     }
+    return 1;
 }
 
 
@@ -198,11 +225,9 @@ bool requires_forced_assignment_to_noc1() {
     // When creating a kernel on erisc0 and 2 erisc mode is disabled, the physical processor is erisc1 while erisc0 is
     // running base firmware. As base firmware may occasionally use noc0 force fabric on "erisc0" to use noc1
     //
-    // When 2 erisc mode is enabled on the runtime, erisc index == noc index is enforced hence the condition
-    // !get_enable_2_erisc_mode() below.
+    // When 2 erisc mode is enabled on the runtime, erisc index == noc index is enforced in tt_metal.cpp
     //
-    return tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE &&
-           get_num_riscv_cores() == 1 && !tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode();
+    return tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE && get_num_riscv_cores() == 1;
 }
 }  // anonymous namespace
 
@@ -238,7 +263,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
 
     // issue: https://github.com/tenstorrent/tt-metal/issues/29073. TODO: Re-enable after hang is resolved.
     // Ethernet txq IDs on WH are 0,1 and on BH are 0,1,2.
-    if (tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE && tt::tt_metal::MetalContext::instance().rtoptions().get_is_fabric_2_erisc_mode_enabled()) {
+    if (is_fabric_two_erisc_enabled()) {
         this->receiver_txq_id = 1;
     }
     this->num_riscv_cores = get_num_riscv_cores();
@@ -657,20 +682,20 @@ void append_worker_to_fabric_edm_sender_rt_args(
     std::ranges::copy(values, std::back_inserter(args_out));
 }
 
-size_t log_worker_to_fabric_edm_sender_rt_args(const std::vector<uint32_t>& args, size_t starting_arg_idx) {
-    log_trace(tt::LogOp, "Worker to fabric EDM Sender has {} RT Args: {}", args.size(), args);
-    log_trace(tt::LogOp, "arg[{}]: edm_noc_xy {}", starting_arg_idx, args[starting_arg_idx++]);
-    log_trace(tt::LogOp, "arg[{}]: edm_buffer_base_addr {}", starting_arg_idx, args[starting_arg_idx++]);
-    log_trace(tt::LogOp, "arg[{}]: num_buffers_per_channel {}", starting_arg_idx, args[starting_arg_idx++]);
-    log_trace(tt::LogOp, "arg[{}]: edm_l1_sem_addr {}", starting_arg_idx, args[starting_arg_idx++]);
-    log_trace(tt::LogOp, "arg[{}]: edm_connection_handshake_addr {}", starting_arg_idx, args[starting_arg_idx++]);
-    log_trace(tt::LogOp, "arg[{}]: edm_worker_location_info_addr {}", starting_arg_idx, args[starting_arg_idx++]);
-    log_trace(tt::LogOp, "arg[{}]: buffer_size_bytes {}", starting_arg_idx, args[starting_arg_idx++]);
-    log_trace(tt::LogOp, "arg[{}]: buffer_index_semaphore_id {}", starting_arg_idx, args[starting_arg_idx++]);
+size_t log_worker_to_fabric_edm_sender_rt_args(const std::vector<uint32_t>& args [[maybe_unused]], size_t starting_arg_idx) {
+    log_trace(tt::LogFabric, "Worker to fabric EDM Sender has {} RT Args: {}", args.size(), args);
+    log_trace(tt::LogFabric, "arg[{}]: edm_noc_xy {}", starting_arg_idx, args[starting_arg_idx++]);
+    log_trace(tt::LogFabric, "arg[{}]: edm_buffer_base_addr {}", starting_arg_idx, args[starting_arg_idx++]);
+    log_trace(tt::LogFabric, "arg[{}]: num_buffers_per_channel {}", starting_arg_idx, args[starting_arg_idx++]);
+    log_trace(tt::LogFabric, "arg[{}]: edm_l1_sem_addr {}", starting_arg_idx, args[starting_arg_idx++]);
+    log_trace(tt::LogFabric, "arg[{}]: edm_connection_handshake_addr {}", starting_arg_idx, args[starting_arg_idx++]);
+    log_trace(tt::LogFabric, "arg[{}]: edm_worker_location_info_addr {}", starting_arg_idx, args[starting_arg_idx++]);
+    log_trace(tt::LogFabric, "arg[{}]: buffer_size_bytes {}", starting_arg_idx, args[starting_arg_idx++]);
+    log_trace(tt::LogFabric, "arg[{}]: buffer_index_semaphore_id {}", starting_arg_idx, args[starting_arg_idx++]);
     log_trace(
-        tt::LogOp, "arg[{}]: sender_worker_flow_control_semaphore_id {}", starting_arg_idx, args[starting_arg_idx++]);
+        tt::LogFabric, "arg[{}]: sender_worker_flow_control_semaphore_id {}", starting_arg_idx, args[starting_arg_idx++]);
     log_trace(
-        tt::LogOp, "arg[{}]: sender_worker_buffer_index_semaphore_id {}", starting_arg_idx, args[starting_arg_idx++]);
+        tt::LogFabric, "arg[{}]: sender_worker_buffer_index_semaphore_id {}", starting_arg_idx, args[starting_arg_idx++]);
     return starting_arg_idx + 10;
 }
 
@@ -739,7 +764,7 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
 
     // Add this log right at the beginning of the constructor body
     log_debug(
-        tt::LogOp,
+        tt::LogFabric,
         "FabricEriscDatamoverBuilder config for device (local chip_id: {}, peer chip_id: {}): "
         "buffer_size={}, topology={}, num_sender_ch={}, num_receiver_ch={}, direction={}",
         local_fabric_node_id.chip_id,
@@ -1149,7 +1174,7 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     bool has_tensix_extension) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     log_debug(
-        tt::LogOp,
+        tt::LogFabric,
         "Building FabricEriscDatamover for device {}:  "
         "channel_buffer_size={}, topology={}, num_sender_channels={}, num_receiver_channels={}",
         device->id(),
@@ -1172,7 +1197,7 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
 
 FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     tt::tt_metal::IDevice* device,
-    tt::tt_metal::Program& program,
+    tt::tt_metal::Program& /*program*/,
     const CoreCoord& ethernet_core,
     const FabricNodeId& local_fabric_node_id,
     const FabricNodeId& peer_fabric_node_id,
@@ -1197,7 +1222,7 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
         std::move(remote_pool_allocators), std::move(remote_pool_types));
 
     log_debug(
-        tt::LogOp,
+        tt::LogFabric,
         "FABRIC NODE ID: M={},D={} eth=(x={},y={})\n"
         "\tnum_sender_channels={}, num_receiver_channels={}\n"
         "\tchannel_allocator={}\n"
@@ -1275,7 +1300,7 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
 }
 
 // SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_worker_channel() const {
-//     log_trace(tt::LogOp, "Building connection to persistent fabric");
+//     log_trace(tt::LogFabric, "Building connection to persistent fabric");
 //     static constexpr uint32_t worker_chan = 0;
 //     TT_FATAL(
 //         sender_channels_buffer_index_semaphore_id[worker_chan] !=

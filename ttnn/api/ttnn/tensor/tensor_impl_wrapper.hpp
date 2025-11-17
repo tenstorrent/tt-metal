@@ -57,4 +57,6 @@ WRAP_FUNCTION(to_string)
 #undef WRAP_FUNCTION
 #undef AS_LAMBDA
 
+Tensor to_dtype(const Tensor& input_tensor, DataType dtype);
+
 }  // namespace tt::tt_metal::tensor_impl

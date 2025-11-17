@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <enchantum/enchantum.hpp>
+#include <mutex>
 #include <unordered_map>
 #include <vector>
 #include <stdexcept>
@@ -34,11 +35,23 @@ void add_sequential_port(
     uint32_t asic_id,
     uint32_t start_channel,
     uint32_t end_channel) {
-    uint32_t num_channels = end_channel - start_channel + 1;
+    uint32_t num_channels;
     std::vector<AsicChannel> channels;
-    channels.reserve(num_channels);
-    for (uint32_t i = start_channel; i <= end_channel; ++i) {
-        channels.push_back({asic_id, ChanId(i)});
+
+    if (start_channel <= end_channel) {
+        // Forward counting
+        num_channels = end_channel - start_channel + 1;
+        channels.reserve(num_channels);
+        for (uint32_t i = start_channel; i <= end_channel; ++i) {
+            channels.push_back({asic_id, ChanId(i)});
+        }
+    } else {
+        // Backward counting (start > end)
+        num_channels = start_channel - end_channel + 1;
+        channels.reserve(num_channels);
+        for (uint32_t i = 0; i < num_channels; ++i) {
+            channels.push_back({asic_id, ChanId(start_channel - i)});
+        }
     }
     add_port(ports, port_type, port_id, channels);
 }
@@ -91,6 +104,18 @@ Board::Board(
         case BoardType::P300:
         case BoardType::UBB_BLACKHOLE: arch_ = tt::ARCH::BLACKHOLE; break;
         default: throw std::runtime_error("Invalid board type");
+    }
+    // Validate that there are no duplicate ASIC channels
+    std::unordered_set<AsicChannel> found_asic_channels;
+    for (const auto& [port_type, port_mapping] : ports) {
+        for (const auto& [port_id, asic_channels] : port_mapping) {
+            for (const auto& asic_channel : asic_channels) {
+                if (found_asic_channels.find(asic_channel) != found_asic_channels.end()) {
+                    throw std::runtime_error("Duplicate ASIC channel found");
+                }
+                found_asic_channels.insert(asic_channel);
+            }
+        }
     }
     // Initialize available_ports from ports
     for (const auto& [port_type, port_mapping] : ports) {
@@ -361,7 +386,7 @@ private:
 
         // TRACE ports
         add_sequential_port(ports, PortType::TRACE, PortId(1), 1, 8, 9);  // ASIC 1, channels 8,9
-        add_sequential_port(ports, PortType::TRACE, PortId(2), 0, 3, 4);  // ASIC 0, channels 3,4
+        add_sequential_port(ports, PortType::TRACE, PortId(2), 0, 3, 2);  // ASIC 0, channels 3,2
 
         return ports;
     }
@@ -442,17 +467,31 @@ private:
     }
 };
 
-// Factory function to create boards by type (for backward compatibility)
+// Factory function to create boards by type
 Board create_board(BoardType board_type) {
-    switch (board_type) {
-        case BoardType::N150: return N150();
-        case BoardType::N300: return N300();
-        case BoardType::UBB_WORMHOLE: return UBB_WORMHOLE();
-        case BoardType::P150: return P150();
-        case BoardType::P300: return P300();
-        case BoardType::UBB_BLACKHOLE: return UBB_BLACKHOLE();
-        default: throw std::runtime_error("Unknown board type: " + std::string(enchantum::to_string(board_type)));
+    // Lazily initialized map
+    // Used to avoid repeated construction and validation overhead
+    static std::unordered_map<BoardType, Board> templates;
+    static std::mutex templates_mutex;
+
+    std::lock_guard<std::mutex> lock(templates_mutex);
+    auto it = templates.find(board_type);
+    if (it == templates.end()) {
+        Board board = [board_type]() -> Board {
+            switch (board_type) {
+                case BoardType::N150: return N150();
+                case BoardType::N300: return N300();
+                case BoardType::UBB_WORMHOLE: return UBB_WORMHOLE();
+                case BoardType::P150: return P150();
+                case BoardType::P300: return P300();
+                case BoardType::UBB_BLACKHOLE: return UBB_BLACKHOLE();
+                default:
+                    throw std::runtime_error("Unknown board type: " + std::string(enchantum::to_string(board_type)));
+            }
+        }();
+        it = templates.emplace(board_type, std::move(board)).first;
     }
+    return it->second;
 }
 
 BoardType get_board_type_from_string(const std::string& board_name) {

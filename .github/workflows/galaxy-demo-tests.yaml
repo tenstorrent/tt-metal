@@ -2,6 +2,26 @@ name: "(Galaxy) demo tests"
 
 on:
   workflow_dispatch:
+    inputs:
+      model:
+        description: 'Select model to test'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - llama3
+          - llama3_long_context
+          - llama3_evals
+          - llama3_8b_dp
+          - llama3_70b_dp
+          - falcon7b
+          - sentence_bert
+          - sd35
+          - flux1
+          - gpt-oss
+          - wan22
+          - mochi
   schedule:
     - cron: "0 0 * * *" # This cron schedule runs demo tests every day at 12am UTC
     - cron: "0 9 * * 1,3,6" # frequency of galaxy tests
@@ -22,6 +42,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      model: ${{ inputs.model || 'all' }}
       topology: topology-6u
   galaxy-deepseek-tests:
     needs: build-artifact

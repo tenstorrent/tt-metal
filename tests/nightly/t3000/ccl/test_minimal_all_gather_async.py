@@ -110,6 +110,7 @@ def run_all_gather_impl(
     all_gather_function=ttnn.experimental.all_gather_async,
     use_semaphore_free_all_gather_impl=False,
 ):
+    use_sub_devices = False
     torch.manual_seed(0)
 
     tile = (32, 32)
@@ -146,8 +147,9 @@ def run_all_gather_impl(
     worker_sub_device_id = ttnn.SubDeviceId(0)
     sub_device_stall_group = [worker_sub_device_id]
 
-    sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
-    mesh_device.load_sub_device_manager(sub_device_manager)
+    if use_sub_devices:
+        sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
+        mesh_device.load_sub_device_manager(sub_device_manager)
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
     # create global semaphore handles
@@ -321,7 +323,8 @@ def run_all_gather_impl(
             assert eq, f"{i} FAILED ag: {output}"
 
     mesh_device.reset_sub_device_stall_group()
-    mesh_device.clear_loaded_sub_device_manager()
+    if use_sub_devices:
+        mesh_device.clear_loaded_sub_device_manager()
 
 
 @skip_for_blackhole("Requires wormhole_b0 to run")
@@ -1108,3 +1111,9 @@ def test_all_gather_async_2x4_non_flat_mesh(mesh_device, input_shape):
     torch_reference = torch_input.repeat([devices, 1, 1, 1])
     eq, output = comp_equal(torch_output, torch_reference)
     assert eq, f"Output mismatch between torch and ttnn all-gather: {output}"
+
+    output_placements = tt_output.tensor_topology().placements()
+    assert len(output_placements) == 1, f"Expected 1 placement, got {len(output_placements)}"
+    assert isinstance(
+        output_placements[0], ttnn.PlacementReplicate
+    ), f"Expected PlacementReplicate, got {type(output_placements[0])}"

@@ -243,7 +243,7 @@ void Hal::initialize_qa() {
     this->mem_alignments_with_pcie_[static_cast<std::size_t>(HalMemType::HOST)] =
         std::lcm(PCIE_ALIGNMENT, PCIE_ALIGNMENT);
 
-    this->relocate_func_ = [](uint64_t addr, uint64_t local_init_addr, bool has_shared_local_mem) {
+    this->relocate_func_ = [](uint64_t addr, uint64_t local_init_addr, bool /*has_shared_local_mem*/) {
         if ((addr & MEM_LOCAL_BASE) == MEM_LOCAL_BASE) {
             // For RISC0 we have a shared local memory with base firmware so offset by that
             // if (has_shared_local_mem) {
@@ -261,7 +261,7 @@ void Hal::initialize_qa() {
 
     this->erisc_iram_relocate_func_ = [](uint64_t addr) { return addr; };
 
-    this->valid_reg_addr_func_ = [](uint32_t addr) {
+    this->valid_reg_addr_func_ = [](uint32_t /*addr*/) {
         return true;  // used to program start addr for eth FW TODO: add correct value
     };
 
@@ -330,8 +330,9 @@ void Hal::initialize_qa() {
 
     this->jit_build_query_ = std::make_unique<HalJitBuildQueryQuasar>();
 
-    this->verify_eth_fw_version_func_ = [](tt::umd::tt_version /*eth_fw_version*/) {
+    this->verify_eth_fw_version_func_ = [](tt::umd::semver_t /*eth_fw_version*/) {
         // No checks
+        return true;
     };
 }
 

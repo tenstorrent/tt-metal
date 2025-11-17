@@ -119,7 +119,7 @@ def test_clip_stack_all_layers(
         if key.startswith("text_model.embeddings."):
             new_key = key.replace("text_model.embeddings.", "")
             embeddings_state_dict[new_key] = value
-    tt_embedding.load_state_dict(embeddings_state_dict)
+    tt_embedding.load_torch_state_dict(embeddings_state_dict)
 
     hidden_states = tt_embedding(tt_prompt, encoder_submesh)
 
@@ -134,7 +134,7 @@ def test_clip_stack_all_layers(
         if key.startswith("text_model.encoder."):
             new_key = key.replace("text_model.encoder.", "")
             encoder_state_dict[new_key] = value
-    tt_clip_stack.load_state_dict(encoder_state_dict)
+    tt_clip_stack.load_torch_state_dict(encoder_state_dict)
 
     tt_start_time = time.time()
     tt_all_hidden_states = tt_clip_stack(hidden_states, causal_attention_mask, ccl_manager, parallel_config)
@@ -179,7 +179,7 @@ def test_clip_stack_all_layers(
 
     # convert mesh tensor to torch tensor for pcc (final layer output)
     # since weights are replicated, can get the tensor from any single device
-    tt_final_layer_output = ttnn.to_torch(ttnn.get_device_tensors(tt_all_hidden_states[-2])[0])
+    tt_final_layer_output = ttnn.to_torch(ttnn.get_device_tensors(tt_all_hidden_states[-1])[0])
     hf_final_layer_output = hf_all_hidden_states[-1]
 
     logger.info(f"TT CLIPStack (all {config.num_hidden_layers} layers) execution time: {tt_execution_time:.4f} seconds")

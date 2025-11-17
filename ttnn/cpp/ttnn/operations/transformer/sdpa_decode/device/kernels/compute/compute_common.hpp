@@ -94,6 +94,57 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
     cb_push_back(out_cb, rows);
 }
 
+#ifdef TRISC_MATH
+/**
+ * recip_tile on only the columns 0:8 of a face
+ */
+template <bool legacy_compat = true>
+void calculate_recip_first_column() {
+    constexpr int ITERATIONS_HALF_FACE = 4;
+    if constexpr (legacy_compat) {
+        for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
+            sfpi::vFloat in = sfpi::dst_reg[0];
+            sfpi::vFloat out = ckernel::sfpu::_reciprocal_compat_<APPROX ? 2 : 3>(in);
+            // Note: negate check removed since in always >= 0.0
+            // v_if (in < 0.0)
+            // {
+            //     out = -out;
+            // }
+            // v_endif;
+            if constexpr (DST_ACCUM_MODE || APPROX) {
+                sfpi::dst_reg[0] = out;
+            } else {
+                sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(out, 0));
+            }
+            sfpi::dst_reg += 2;
+        }
+    } else {
+        for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
+            sfpi::vFloat in = sfpi::dst_reg[0];
+
+            if constexpr (APPROX) {
+                sfpi::dst_reg[0] = ckernel::sfpu::_sfpu_reciprocal_<0>(in);
+            } else {
+                if constexpr (DST_ACCUM_MODE) {
+                    sfpi::dst_reg[0] = ckernel::sfpu::_sfpu_reciprocal_<2>(in);
+                } else {
+                    sfpi::vFloat out = ckernel::sfpu::_sfpu_reciprocal_<1>(in);
+                    sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(out, 0));
+                }
+            }
+
+            sfpi::dst_reg += 2;
+        }
+    }
+}
+
+template <bool legacy_compat = true>
+void recip_tile_first_column(uint32_t idst) {
+    _llk_math_eltwise_unary_sfpu_params_<APPROX /*APPROXIMATE*/>(
+        calculate_recip_first_column<legacy_compat>, idst, (int)VectorMode::C);
+}
+#endif
+
 /**
  * in_cb = 1 / in_cb
  */
@@ -107,7 +158,7 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
     for (uint32_t i = 0; i < num_tiles; ++i) {
         acquire_dst();
         copy_tile(in_cb, i, 0);
-        recip_tile(0, static_cast<int>(vector_mode));
+        MATH((recip_tile_first_column(0)));
         pack_tile(0, in_cb);
         release_dst();
     }
@@ -290,6 +341,44 @@ void mul_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
     }
 }
 
+#ifdef TRISC_MATH
+/**
+ * exp_tile on only the columns 0:8 of a face
+ */
+template <bool SDPA_EXP_APPROX_MODE>
+void calculate_exponential_first_column(int scale_bf16) {
+    constexpr int ITERATIONS_HALF_FACE = 4;
+    if constexpr (SDPA_EXP_APPROX_MODE) {
+        for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
+            sfpi::vFloat val = sfpi::dst_reg[0];
+            sfpi::vFloat result = ckernel::sfpu::
+                _calculate_exponential_piecewise_<EXP_APPROX_MODE, true /*SCALE_EN*/, true /*SKIP_POSITIVE_CHECK*/>(
+                    val, scale_bf16);
+            sfpi::dst_reg[0] = result;
+
+            // Stride by 2 to skip columns 8:16 of the face
+            sfpi::dst_reg += 2;
+        }
+    } else {
+        for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
+            sfpi::vFloat val = sfpi::dst_reg[0];
+            val = val * sfpi::s2vFloat16b(scale_bf16);
+            sfpi::vFloat result = ckernel::sfpu::_sfpu_exp_improved_<DST_ACCUM_MODE>(val);
+            sfpi::dst_reg[0] = result;
+
+            // Stride by 2 to skip columns 8:16 of the face
+            sfpi::dst_reg += 2;
+        }
+    }
+}
+
+template <bool SDPA_EXP_APPROX_MODE>
+void exp_tile_first_column(uint32_t idst, int scale_bf16) {
+    _llk_math_eltwise_unary_sfpu_params_<false /*APPROXIMATE*/>(
+        calculate_exponential_first_column<SDPA_EXP_APPROX_MODE>, idst, (int)VectorMode::C, scale_bf16);
+}
+#endif
+
 /**
  * out_cb = exp((in0_cb - in1_cb) * scale_fp32)
  */
@@ -311,7 +400,7 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
         invalidate_l1_cache();
         acquire_dst();
         sub_tiles(in0_cb, in1_cb, i, i, 0);
-        exp_tile<EXP_APPROX_MODE, false, true, true>(0, static_cast<int>(vector_mode), scale_bf16);
+        MATH((exp_tile_first_column<EXP_APPROX_MODE>(0, scale_bf16)));
         pack_tile(0, out_cb);
         cb_push_back(out_cb, 1);
         release_dst();

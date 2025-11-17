@@ -291,13 +291,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_width_sharded(
     uint32_t act_subblock_num_tiles = act_subblock_h_ntiles * act_block_w_ntiles;
 
     // bias
-    tt::tt_metal::Buffer* bias_buffer = nullptr;
     uint32_t bias_ntiles = 0;
-    bool bias_in_dram = true;
     if (has_bias) {
-        bias_buffer = bias.value().buffer();
         bias_ntiles = weight_block_w_ntiles;
-        bias_in_dram = bias_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     }
 
     uint32_t num_blocks_act_h_per_core =

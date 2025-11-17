@@ -32,12 +32,11 @@ jobs:
       matrix:
         test-group:
           - name: CCL APC test
-            cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/all_post_commit
+            cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/all_post_commit
     name: ${{ inputs.arch }} ${{ inputs.runner-label }} ${{ matrix.test-group.name }}
     runs-on:
       - in-service
       - arch-blackhole
-      - pipeline-functional
       - ${{ inputs.runner-label }}
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved' }}
@@ -64,6 +63,7 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
+        timeout-minutes: 10
         with:
           runner-label: ${{ inputs.runner-label }}
       - name: ${{ matrix.test-group.name }} tests

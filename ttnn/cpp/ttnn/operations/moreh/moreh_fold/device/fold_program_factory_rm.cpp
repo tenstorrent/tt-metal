@@ -7,6 +7,8 @@
 #include "fold_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/hal.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 namespace ttnn::operations::moreh::moreh_fold {
@@ -68,16 +70,33 @@ MorehFoldOperation::ProgramFactory::cached_program_t MorehFoldOperation::Program
     uint32_t input_cb_page_size = unit_size * input.logical_shape()[-1];
     uint32_t output_cb_page_size = unit_size * output.logical_shape()[-1];
 
+    // For L1 circular buffer alignment
     uint32_t aligned_input_cb_page_size = round_up_to_mul32(input_cb_page_size);
     uint32_t aligned_output_cb_page_size = round_up_to_mul32(output_cb_page_size);
 
+    // For DRAM reads, we need DRAM-aligned size
+    bool src_is_dram = input.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    bool is_blackhole = (device->arch() == tt::ARCH::BLACKHOLE);
+    uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+    uint32_t dram_aligned_input_cb_page_size = tt::align(input_cb_page_size, dram_alignment);
+
     uint32_t input_cb_index = tt::CBIndex::c_0;    // input
+    uint32_t scratch_cb_index = tt::CBIndex::c_1;  // scratch for DRAM alignment
     uint32_t output_cb_index = tt::CBIndex::c_16;  // ouput
 
     CircularBufferConfig input_cb_config =
         CircularBufferConfig(aligned_input_cb_page_size * 2, {{input_cb_index, data_format}})
             .set_page_size(input_cb_index, aligned_input_cb_page_size);
     CreateCircularBuffer(program, all_cores, input_cb_config);
+
+    // Create scratch CB for DRAM alignment
+    if ((src_is_dram && (input_cb_page_size % dram_alignment != 0)) || is_blackhole) {
+        uint32_t scratch_cb_page_size = dram_aligned_input_cb_page_size;
+        CircularBufferConfig scratch_cb_config =
+            CircularBufferConfig(4 * scratch_cb_page_size, {{scratch_cb_index, data_format}})
+                .set_page_size(scratch_cb_index, scratch_cb_page_size);
+        CreateCircularBuffer(program, all_cores, scratch_cb_config);
+    }
 
     CircularBufferConfig output_cb_config =
         CircularBufferConfig(aligned_output_cb_page_size * 2, {{output_cb_index, data_format}})
@@ -102,6 +121,7 @@ MorehFoldOperation::ProgramFactory::cached_program_t MorehFoldOperation::Program
     std::vector<uint32_t> reader_compile_time_args{
         static_cast<uint32_t>(input_cb_index),
         static_cast<uint32_t>(output_cb_index),
+        static_cast<uint32_t>(scratch_cb_index),
     };
     TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
 
@@ -128,6 +148,11 @@ MorehFoldOperation::ProgramFactory::cached_program_t MorehFoldOperation::Program
         const CoreCoord& core = cores.at(i);
         uint32_t num_units_per_core = i < g1_numcores ? num_units_per_core_group_1 : num_units_per_core_group_2;
 
+        // Calculate alignment info for the kernel
+        // On Blackhole, always use two-step read for DRAM
+        uint32_t aligned = (src_is_dram ? (input_cb_page_size % dram_alignment == 0) : 1);
+        aligned = aligned && !is_blackhole;
+
         std::vector<uint32_t> reader_args = {
             input.buffer()->address(),
             N,
@@ -144,10 +169,12 @@ MorehFoldOperation::ProgramFactory::cached_program_t MorehFoldOperation::Program
             dilation_w,
             LH,
             LW,
-            aligned_input_cb_page_size,
+            input_cb_page_size,
+            dram_aligned_input_cb_page_size,
             aligned_output_cb_page_size,
             start_id,
-            num_units_per_core};
+            num_units_per_core,
+            aligned};
 
         std::vector<uint32_t> writer_args = {
             output.buffer()->address(), aligned_output_cb_page_size, start_id, num_units_per_core};

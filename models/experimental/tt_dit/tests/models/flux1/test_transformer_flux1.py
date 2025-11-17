@@ -114,7 +114,8 @@ def test_single_transformer_block(
 
     with torch.no_grad():
         torch_combined = torch_model.forward(
-            combined,
+            hidden_states=combined[:, prompt_seq_len:],
+            encoder_hidden_states=combined[:, :prompt_seq_len],
             temb=time_embed,
             image_rotary_emb=(rope_cos, rope_sin),
         )
@@ -167,6 +168,7 @@ def test_single_transformer_block(
     )[:batch_size]
 
     tt_combined_torch = torch.concat([tt_prompt_torch, tt_spatial_torch], dim=1)
+    torch_combined = torch.concat(torch_combined, dim=1)
 
     assert_quality(torch_combined, tt_combined_torch, pcc=0.99959, relative_rmse=6.3)
 
@@ -260,7 +262,7 @@ def test_transformer(
     )
 
     if not cache.initialize_from_cache(
-        tt_model, torch_model, "flux.1-dev", "transformer", parallel_config, tuple(submesh_device.shape), "bf16"
+        tt_model, torch_model, "Flux.1-dev", "transformer", parallel_config, tuple(submesh_device.shape), "bf16"
     ):
         logger.info(
             "Loading transformer weights from PyTorch state dict. To use cache, set TT_DIT_CACHE_DIR environment variable."

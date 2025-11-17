@@ -127,7 +127,7 @@ void Logger::log_program_compile_started(const ProgramData& program_data) noexce
     }
 }
 
-void Logger::log_program_compile_already_exists(const ProgramData& program_data) noexcept {
+void Logger::log_program_compile_already_exists(const ProgramData& /*program_data*/) noexcept {
     // Long running programs call this log entry too many times, so we don't want to log it.
 }
 

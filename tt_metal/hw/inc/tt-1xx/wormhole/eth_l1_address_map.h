@@ -40,7 +40,7 @@ struct address_map {
 
     // Kernel config buffer is WIP
     // Size is presently based on the old sizes of the RTAs + CB config + Sems
-    static constexpr std::int32_t ERISC_L1_KERNEL_CONFIG_SIZE = (96 * 4) + (16 * 16);
+    static constexpr std::int32_t ERISC_L1_KERNEL_CONFIG_SIZE = MEM_ERISC_L1_KERNEL_CONFIG_SIZE;
 
     // Base addresses
     static constexpr std::int32_t FIRMWARE_BASE = 0x9040;
@@ -48,7 +48,7 @@ struct address_map {
     static constexpr std::int32_t KERNEL_BASE = 0xA840;
     static constexpr std::int32_t ROUTING_FW_RESERVED_BASE = L1_EPOCH_Q_BASE + APP_FIRMWARE_SIZE;
 
-    static constexpr std::int32_t MAX_L1_LOADING_ADDR = 0x3DC00;
+    static constexpr std::int32_t MAX_L1_LOADING_ADDR = MEM_ERISC_MAX_L1_LOADING_ADDR;
 
     // TT Metal Specific
     //     Optional FW reserved space for routing FW
@@ -74,30 +74,30 @@ struct address_map {
     static_assert((ERISC_L1_UNRESERVED_BASE % 32) == 0);
 
     // CONFIG SPACE starting from MAX_L1_LOADING_ADDR to MAX_SIZE
-    static constexpr std::int32_t MAX_NUM_CONCURRENT_TRANSACTIONS = 8;
-    static constexpr std::int32_t ERISC_APP_ROUTING_INFO_SIZE = 48;
-    static constexpr std::int32_t ERISC_APP_SYNC_INFO_SIZE = 160 + (16 * MAX_NUM_CONCURRENT_TRANSACTIONS);
+    static constexpr std::int32_t MAX_NUM_CONCURRENT_TRANSACTIONS = MEM_MAX_NUM_CONCURRENT_TRANSACTIONS;
+    static constexpr std::int32_t ERISC_APP_ROUTING_INFO_SIZE = MEM_ERISC_APP_ROUTING_INFO_SIZE;
+    static constexpr std::int32_t ERISC_APP_SYNC_INFO_SIZE = MEM_ERISC_SYNC_INFO_SIZE;
 
     static constexpr std::int32_t ERISC_APP_ROUTING_INFO_BASE = MAX_L1_LOADING_ADDR;
-    static constexpr std::int32_t ERISC_APP_SYNC_INFO_BASE = ERISC_APP_ROUTING_INFO_BASE + ERISC_APP_ROUTING_INFO_SIZE;
+    static constexpr std::int32_t ERISC_APP_SYNC_INFO_BASE = MEM_ERISC_APP_SYNC_INFO_BASE;
 
-    static constexpr std::int32_t ERISC_MEM_MAILBOX_BASE = ERISC_APP_SYNC_INFO_BASE + ERISC_APP_SYNC_INFO_SIZE;
+    static constexpr std::int32_t ERISC_MEM_MAILBOX_BASE = MEM_AERISC_MAILBOX_BASE;
 
-    static constexpr std::uint32_t ERISC_MEM_MAILBOX_SIZE = 5072;
-    static constexpr std::uint32_t ERISC_MEM_MAILBOX_END = ERISC_MEM_MAILBOX_BASE + ERISC_MEM_MAILBOX_SIZE;
+    static constexpr std::uint32_t ERISC_MEM_MAILBOX_SIZE = MEM_AERISC_MAILBOX_SIZE;
+    static constexpr std::uint32_t ERISC_MEM_MAILBOX_END = MEM_AERISC_MAILBOX_END;
     static constexpr std::int32_t ERISC_L1_KERNEL_CONFIG_BASE = ERISC_MEM_MAILBOX_END;
-    static constexpr std::int32_t FABRIC_ROUTER_RESERVED_BASE =
-        (ERISC_L1_KERNEL_CONFIG_BASE + ERISC_L1_KERNEL_CONFIG_SIZE + 31) & ~31;
-    static constexpr std::int32_t FABRIC_ROUTER_RESERVED_SIZE = 3088;
+    static constexpr std::int32_t FABRIC_ROUTER_RESERVED_BASE = MEM_ERISC_FABRIC_ROUTER_RESERVED_BASE;
+    static constexpr std::int32_t FABRIC_ROUTER_RESERVED_SIZE = MEM_ERISC_FABRIC_ROUTER_RESERVED_SIZE;
 
-    static constexpr std::int32_t FABRIC_ROUTER_CONFIG_BASE = FABRIC_ROUTER_RESERVED_BASE;
-    static constexpr std::int32_t FABRIC_ROUTER_CONFIG_SIZE = 1296;
+    static constexpr std::int32_t FABRIC_ROUTER_CONFIG_BASE = MEM_AERISC_FABRIC_ROUTER_CONFIG_BASE;
+    static constexpr std::int32_t FABRIC_ROUTER_CONFIG_SIZE = MEM_AERISC_FABRIC_ROUTER_CONFIG_SIZE;
+    static constexpr std::int32_t AERISC_ROUTING_TABLE_BASE = MEM_AERISC_ROUTING_TABLE_BASE;
 
-    static constexpr std::uint32_t FABRIC_COMPRESSED_ROUTING_PATH_SIZE_1D = 0;
-    static constexpr std::uint32_t FABRIC_COMPRESSED_ROUTING_PATH_SIZE_2D = 512;
-    static constexpr std::uint32_t FABRIC_ROUTING_PATH_SIZE_1D = 64;
+    static constexpr std::uint32_t FABRIC_COMPRESSED_ROUTING_PATH_SIZE_1D = COMPRESSED_ROUTING_PATH_SIZE_1D;
+    static constexpr std::uint32_t FABRIC_COMPRESSED_ROUTING_PATH_SIZE_2D = COMPRESSED_ROUTING_PATH_SIZE_2D;
+    static constexpr std::uint32_t FABRIC_ROUTING_PATH_SIZE_1D = ROUTING_PATH_SIZE_1D;
     static constexpr std::uint32_t FABRIC_ROUTING_PATH_SIZE_2D = FABRIC_COMPRESSED_ROUTING_PATH_SIZE_2D;
-    static constexpr std::int32_t FABRIC_ROUTING_PATH_BASE = FABRIC_ROUTER_CONFIG_BASE + FABRIC_ROUTER_CONFIG_SIZE;
+    static constexpr std::int32_t FABRIC_ROUTING_PATH_BASE = AERISC_ROUTING_TABLE_BASE + MEM_OFFSET_OF_ROUTING_PATHS;
     static constexpr std::int32_t AERISC_FABRIC_ROUTING_PATH_BASE_1D = FABRIC_ROUTING_PATH_BASE;
     static constexpr std::int32_t AERISC_FABRIC_ROUTING_PATH_BASE_2D =
         FABRIC_ROUTING_PATH_BASE + FABRIC_ROUTING_PATH_SIZE_1D;
@@ -105,7 +105,10 @@ struct address_map {
     static constexpr std::int32_t IERISC_FABRIC_ROUTING_PATH_BASE_2D = MEM_IERISC_FABRIC_ROUTING_PATH_BASE_2D;
     static constexpr std::int32_t FABRIC_ROUTING_PATH_SIZE = FABRIC_ROUTING_PATH_SIZE_1D + FABRIC_ROUTING_PATH_SIZE_2D;
 
-
+    static_assert(
+        AERISC_FABRIC_ROUTING_PATH_BASE_2D + FABRIC_ROUTING_PATH_SIZE_2D <
+            FABRIC_ROUTER_RESERVED_BASE + FABRIC_ROUTER_RESERVED_SIZE,
+        "Active Erisc region is greater than MAX_SIZE");
     static constexpr std::int32_t ERISC_BARRIER_BASE =
         (FABRIC_ROUTER_RESERVED_BASE + FABRIC_ROUTER_RESERVED_SIZE + 31) & ~31;
     static_assert(ERISC_BARRIER_BASE < MAX_SIZE, "Erisc config region is greater than MAX_SIZE");

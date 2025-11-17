@@ -21,6 +21,7 @@ Welcome to TT-NN documentation!
    ttnn/adding_new_ttnn_operation
    ttnn/profiling_ttnn_operations
    ttnn/demos
+   tools/index
 
 .. toctree::
    :caption: Resources

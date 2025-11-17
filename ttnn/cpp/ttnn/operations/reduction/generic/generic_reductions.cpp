@@ -376,7 +376,7 @@ static Tensor std_var_impl(
     Tensor output_tensor =
         ttnn::subtract(mean_square_tensor, ttnn::pow(mean_tensor, 2.0f, memory_config), std::nullopt, memory_config);
     if constexpr (reduce_type == ReduceType::Std) {
-        output_tensor = ttnn::sqrt(output_tensor, memory_config);
+        output_tensor = ttnn::sqrt(output_tensor, false, memory_config);
     }
     return output_tensor;
 }

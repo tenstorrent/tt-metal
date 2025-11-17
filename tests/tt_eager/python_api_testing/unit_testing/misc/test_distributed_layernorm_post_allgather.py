@@ -22,7 +22,8 @@ def reference_layernorm(x, gamma, beta, epsilon, is_rmsnorm):
 
 
 def run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, input_dtype, output_dtype, device, fp32_enabled=False):
-    kernel_config = ttnn.WormholeComputeKernelConfig(
+    kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi4,  # Highest fidelity
         math_approx_mode=False,
         fp32_dest_acc_en=fp32_enabled,

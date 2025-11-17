@@ -403,18 +403,26 @@ RuntimeArgsData& Kernel::common_runtime_args_data() { return this->common_runtim
 void Kernel::validate_runtime_args_size(
     size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord& logical_core) {
     uint32_t total_rt_args = (num_unique_rt_args + num_common_rt_args);
-    uint32_t idle_eth_max_runtime_args = MetalContext::instance().hal().get_dev_size(
-                                             HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::KERNEL_CONFIG) /
-                                         sizeof(uint32_t);
-    uint32_t max_rt_args = is_idle_eth() ? idle_eth_max_runtime_args : max_runtime_args;
+    uint32_t expected_max_rt_args = 0;
 
-    if (total_rt_args > max_rt_args) {
+    switch (this->get_kernel_programmable_core_type()) {
+        case HalProgrammableCoreType::TENSIX: expected_max_rt_args = max_runtime_args; break;
+        case HalProgrammableCoreType::ACTIVE_ETH:
+        case HalProgrammableCoreType::IDLE_ETH:
+            expected_max_rt_args = MetalContext::instance().hal().get_dev_size(
+                                       this->get_kernel_programmable_core_type(), HalL1MemAddrType::KERNEL_CONFIG) /
+                                   sizeof(uint32_t);
+            break;
+        default: TT_THROW("Invalid programmable core type: {}", this->get_kernel_programmable_core_type());
+    }
+
+    if (total_rt_args > expected_max_rt_args) {
         TT_THROW(
             "{} unique+common runtime args targeting kernel {} on {} are too large. Max allowable is {}",
             total_rt_args,
             this->name(),
             logical_core.str(),
-            max_runtime_args);
+            expected_max_rt_args);
     }
 }
 
@@ -520,13 +528,13 @@ detail::KernelMeta Kernel::meta(IDevice* device) const {
 
 uint32_t KernelImpl::get_binary_packed_size(IDevice* device, int index) const {
     // In testing situations we can query the size w/o a binary
-    auto iter = binaries_.find(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
+    auto iter = binaries_.find(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key());
     return iter != this->binaries_.end() ? iter->second[index]->get_packed_size() : 0;
 }
 
 uint32_t KernelImpl::get_binary_text_size(IDevice* device, int index) const {
     // In testing situations we can query the size w/o a binary
-    auto iter = binaries_.find(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
+    auto iter = binaries_.find(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key());
     return iter != this->binaries_.end() ? iter->second[index]->get_text_size() : 0;
 }
 
@@ -607,7 +615,7 @@ void DataMovementKernel::read_binaries(IDevice* device) {
     [[maybe_unused]] uint32_t binary_size = binary_mem.get_packed_size();
     log_debug(LogLoader, "RISC={}, name={}, size={} (bytes)", riscv_id, this->name(), binary_size);
     this->set_binaries(
-        BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key, std::move(binaries));
+        BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key(), std::move(binaries));
 }
 
 void EthernetKernel::read_binaries(IDevice* device) {
@@ -643,7 +651,7 @@ void EthernetKernel::read_binaries(IDevice* device) {
     [[maybe_unused]] uint32_t binary_size = binary_mem.get_packed_size();
     log_debug(LogLoader, "ERISC={}, name={}, size={} (bytes)", erisc_id, this->name(), binary_size);
     this->set_binaries(
-        BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key, std::move(binaries));
+        BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key(), std::move(binaries));
 }
 
 void ComputeKernel::read_binaries(IDevice* device) {
@@ -664,7 +672,7 @@ void ComputeKernel::read_binaries(IDevice* device) {
         binaries.push_back(&binary_mem);
     }
     this->set_binaries(
-        BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key, std::move(binaries));
+        BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key(), std::move(binaries));
 }
 
 bool DataMovementKernel::configure(
@@ -675,7 +683,7 @@ bool DataMovementKernel::configure(
     auto device_id = device->id();
     auto worker_core = device->worker_core_from_logical_core(logical_core);
     const ll_api::memory& binary_mem =
-        *this->binaries(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key)[0];
+        *this->binaries(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key())[0];
     int riscv_id = static_cast<std::underlying_type<DataMovementProcessor>::type>(this->config_.processor);
     llrt::write_binary_to_address(binary_mem, device_id, worker_core, base_address + offsets[riscv_id]);
 
@@ -688,7 +696,7 @@ bool EthernetKernel::configure(
     auto device_id = device->id();
     auto ethernet_core = device->ethernet_core_from_logical_core(logical_core);
     const ll_api::memory& binary_mem =
-        *this->binaries(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key)[0];
+        *this->binaries(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key())[0];
 
     if (hal.get_core_kernel_stored_in_config_buffer(this->get_kernel_programmable_core_type())) {
         uint32_t offset_idx = hal.get_processor_index(
@@ -716,7 +724,7 @@ bool ComputeKernel::configure(
     auto device_id = device->id();
     auto worker_core = device->worker_core_from_logical_core(logical_core);
     const std::vector<const ll_api::memory*>& binaries =
-        this->binaries(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
+        this->binaries(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key());
     for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
         llrt::write_binary_to_address(
             *binaries[trisc_id], device_id, worker_core, base_address + offsets[2 + trisc_id]);
