@@ -75,6 +75,7 @@ target_link_libraries(
 target_link_libraries(
     run_cluster_validation
     PRIVATE
+        scaleout_tools
         enchantum::enchantum
         protobuf::libprotobuf
         tt_metal
@@ -142,14 +143,25 @@ set_target_properties(
 
 add_dependencies(generate_mgd scaleout_generated_protos)
 
+# Add dependency on fabric protos being generated (but don't link the full library)
+add_custom_target(
+    fabric_protos_for_mgd
+    DEPENDS
+        ${CMAKE_BINARY_DIR}/tt_metal/fabric/protobuf/mesh_graph_descriptor.pb.cc
+        ${CMAKE_BINARY_DIR}/tt_metal/fabric/protobuf/mesh_graph_descriptor.pb.h
+)
+add_dependencies(generate_mgd fabric_protos_for_mgd)
+
 target_include_directories(generate_mgd PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(generate_mgd SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 target_include_directories(generate_mgd SYSTEM PRIVATE ${CMAKE_BINARY_DIR}/tt_metal/fabric)
+
+# Manually add the fabric protobuf object file since we only need the proto definitions
+target_sources(generate_mgd PRIVATE ${CMAKE_BINARY_DIR}/tt_metal/fabric/protobuf/mesh_graph_descriptor.pb.cc)
 
 target_link_libraries(
     generate_mgd
     PRIVATE
         scaleout_tools
-        TT::Metalium::Fabric
         protobuf::libprotobuf
 )
