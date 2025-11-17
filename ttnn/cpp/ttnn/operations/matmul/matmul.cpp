@@ -149,6 +149,14 @@ ttnn::Tensor bound_matmul(
             input_tensor_b.logical_shape());
     }
 
+    if (input_tensor_a.is_sharded() || input_tensor_b.is_sharded()) {
+        TT_FATAL(
+            !parameters.user_fused_activation.has_value(),
+            "Sharded matmul run with {} activation: this should be placed in the program config's fused_activation "
+            "field",
+            parameters.user_fused_activation.value().op_type);
+    }
+
     // Check for zero volume tensors
     if (input_tensor_a.logical_volume() == 0 || input_tensor_b.logical_volume() == 0) [[unlikely]] {
         return detail::handle_zero_volume_matmul(
@@ -210,11 +218,20 @@ ttnn::Tensor bound_matmul(
             optional_output_tensor);
     }
 
-    if (parameters.user_fused_activation.has_value() && !parameters.user_core_coord.has_value()) {
-        const UnaryWithParam& activation = parameters.user_fused_activation.value();
+    log_debug(tt::LogOp, "Performing the unfused activation: {}", parameters.user_fused_activation.value().op_type);
 
+    if (parameters.user_fused_activation.has_value() && !parameters.user_core_coord.has_value()) {
+        // const UnaryWithParam& activation = parameters.user_fused_activation.value();
+        const UnaryWithParam activation = UnaryWithParam(UnaryOpType::GELU, static_cast<float>(false));
+        log_debug(tt::LogOp, "invoking");
+        log_debug(tt::LogOp, "output_tensor: {}", output_tensor.logical_shape());
+        log_debug(tt::LogOp, "Optional output tensor has_value: {}", optional_output_tensor.has_value());
+        log_debug(tt::LogOp, "Activation is: {}", activation.op_type);
+        log_debug(tt::LogOp, "Activation params: {}", activation.params);
+        log_debug(tt::LogOp, "Output Memory Config: {}", parameters.output_mem_config);
         output_tensor = ttnn::operations::unary::Unary_chain::invoke(
-            output_tensor, {activation}, parameters.output_mem_config, optional_output_tensor);
+            output_tensor, {activation}, parameters.output_mem_config);  //, optional_output_tensor);
+        log_debug(tt::LogOp, "done");
     }
 
     return output_tensor;
