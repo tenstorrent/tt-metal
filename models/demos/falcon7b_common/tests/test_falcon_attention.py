@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from pathlib import Path
+
 import pytest
 import torch
 from loguru import logger
@@ -14,6 +16,7 @@ from models.demos.falcon7b_common.tests.test_utils import (
 )
 from models.demos.falcon7b_common.tt.falcon_attention import TtFalconAttentionDecode, TtFalconAttentionPrefill
 from models.demos.falcon7b_common.tt.model_config import get_model_config
+from models.tt_transformers.tt.common import get_hf_tt_cache_path
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 
@@ -46,12 +49,11 @@ def run_test_FalconAttention_inference(
     pcc,
     model_config,
     tt_cache_path,
-    model_location_generator,
 ):
     num_devices = get_num_devices(mesh_device)
     global_batch = batch * num_devices
 
-    hugging_face_reference_model, state_dict = load_hf_model(model_location_generator, model_version)
+    hugging_face_reference_model, state_dict = load_hf_model(model_version)
     configuration = hugging_face_reference_model.config
 
     use_cache = True
@@ -179,17 +181,13 @@ def test_FalconAttention_inference(
     kv_cache_len,
     pcc,
     model_config_str,
-    model_location_generator,
-    get_tt_cache_path,
     mesh_device,
 ):
     if model_config_str == "BFLOAT16-L1_SHARDED" and llm_mode == "prefill":
         pytest.skip(f"prefill does not support L1_SHARDED")
 
     model_config = get_model_config(model_config_str, seq_len, batch)
-    tt_cache_path = get_tt_cache_path(
-        model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
-    )
+    tt_cache_path = Path(get_hf_tt_cache_path(model_version))
 
     run_test_FalconAttention_inference(
         mesh_device,
@@ -201,5 +199,4 @@ def test_FalconAttention_inference(
         pcc,
         model_config,
         tt_cache_path,
-        model_location_generator,
     )

@@ -22,6 +22,7 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/distributed.hpp>
+#include "common/tt_backend_api_types.hpp"
 
 namespace tt {
 namespace tt_metal {
@@ -82,8 +83,8 @@ TEST_P(DeviceParamFixture, DeviceInitializeAndTeardown) {
     }
 
     ASSERT_TRUE(num_devices > 0);
-    vector<chip_id_t> ids;
-    for (chip_id_t id : tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids()) {
+    vector<ChipId> ids;
+    for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids()) {
         ids.push_back(id);
     }
     const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
@@ -101,8 +102,8 @@ TEST_P(DeviceParamFixture, TensixDeviceLoadBlankKernels) {
         GTEST_SKIP();
     }
     ASSERT_TRUE(num_devices > 0);
-    vector<chip_id_t> ids;
-    for (chip_id_t id : tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids()) {
+    vector<ChipId> ids;
+    for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids()) {
         ids.push_back(id);
     }
     const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();

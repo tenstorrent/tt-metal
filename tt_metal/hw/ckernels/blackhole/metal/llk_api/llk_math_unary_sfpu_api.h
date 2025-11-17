@@ -25,3 +25,4 @@
 #include "llk_math_eltwise_unary_sfpu_tiled_prod.h"
 #include "llk_math_eltwise_unary_sfpu_topk.h"
 #include "llk_math_eltwise_unary_sfpu_alt_complex_rotate90.h"
+#include "llk_math_eltwise_unary_sfpu_reduce.h"

@@ -22,13 +22,26 @@ namespace ckernel {
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | param0          | The value the output is if the input is greater than 0                     | float    |                                                       | True     |
+ * | param0          | Value to fill tile with.                                                   | float    |                                                       | True     |
  */
 // clang-format on
 ALWI void fill_tile(uint32_t idst, float param0) {
     MATH(SFPU_UNARY_ONE_PARAM_KERNEL_EXTRA_PARAM(_calculate_fill_, RC, APPROX, 8, idst, param0));
 }
 
+// clang-format off
+/**
+ * Performs element-wise fill operation. The value to be filled in the tile is provided as const param0. The DST
+ * register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available on the
+ * compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | param0          | Value to fill tile with (unsigned integer)                                 | uint32_t |                                                       | True     |
+ */
 ALWI void fill_tile_int(uint32_t idst, uint param0) {
     MATH(SFPU_UNARY_ONE_PARAM_KERNEL_EXTRA_PARAM(_calculate_fill_int_, RC, APPROX, 8, idst, param0));
 }

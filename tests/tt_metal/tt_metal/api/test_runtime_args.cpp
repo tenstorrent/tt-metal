@@ -36,6 +36,7 @@
 // Access to internal API: ProgramImpl::num_kernel, get_kernel
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel_impl.hpp"
+#include "impl/context/metal_context.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -609,6 +610,168 @@ TEST_F(MeshDeviceFixture, TensixSetCommonRuntimeArgsMultipleCreateKernel) {
         }
         distributed::EnqueueMeshWorkload(cq, workload, false);
         unit_tests::runtime_args::verify_results(true, mesh_device, workload, {}, common_rtas);
+    }
+}
+
+// Test that active ethernet cores correctly validate max runtime args
+TEST_F(MeshDeviceFixture, ActiveEthIllegalTooManyRuntimeArgs) {
+    auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    uint32_t active_eth_max_runtime_args =
+        hal.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::KERNEL_CONFIG) / sizeof(uint32_t);
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        auto mesh_device = this->devices_.at(id);
+        auto device = mesh_device->get_devices()[0];
+        auto active_eth_cores = device->get_active_ethernet_cores(true);
+
+        // Skip test if no active ethernet cores available
+        if (active_eth_cores.empty()) {
+            log_info(LogTest, "Skipping ActiveEthIllegalTooManyRuntimeArgs test - no active ethernet cores available");
+            continue;
+        }
+
+        auto zero_coord = distributed::MeshCoordinate(0, 0);
+        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+        distributed::MeshWorkload workload;
+        tt::tt_metal::Program program = tt_metal::CreateProgram();
+
+        // Create kernel on first active ethernet core
+        CoreCoord eth_core = *active_eth_cores.begin();
+        CoreRange eth_core_range(eth_core, eth_core);
+
+        auto kernel = tt_metal::CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints.cpp",
+            eth_core_range,
+            tt_metal::EthernetConfig{.eth_mode = Eth::RECEIVER, .noc = tt_metal::NOC::NOC_0});
+
+        workload.add_program(device_range, std::move(program));
+        auto& program_ref = workload.get_programs().at(device_range);
+
+        // Verify that setting exactly max common args works when no unique args are set (should not throw)
+        // Note: We test this FIRST because even failed SetRuntimeArgs calls can pollute max_runtime_args_per_core_
+        std::vector<uint32_t> max_common_args(active_eth_max_runtime_args);
+        EXPECT_NO_THROW(SetCommonRuntimeArgs(program_ref, kernel, max_common_args));
+
+        // Try to set too many unique runtime args (should fail)
+        // Note: This must come after testing max common args because it pollutes the kernel state
+        std::vector<uint32_t> too_many_args(active_eth_max_runtime_args + 1);
+        EXPECT_ANY_THROW(SetRuntimeArgs(program_ref, kernel, eth_core, too_many_args));
+
+        // Try to set too many common runtime args (should fail)
+        // Create a new kernel for this test since common args can only be set once
+        tt::tt_metal::Program program_common_test = tt_metal::CreateProgram();
+        auto kernel_common_test = tt_metal::CreateKernel(
+            program_common_test,
+            "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints.cpp",
+            eth_core_range,
+            tt_metal::EthernetConfig{.eth_mode = Eth::RECEIVER, .noc = tt_metal::NOC::NOC_0});
+
+        auto device_range_common_test = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+        distributed::MeshWorkload workload_common_test;
+        workload_common_test.add_program(device_range_common_test, std::move(program_common_test));
+        auto& program_common_test_ref = workload_common_test.get_programs().at(device_range_common_test);
+
+        std::vector<uint32_t> too_many_common_args(active_eth_max_runtime_args + 1);
+        EXPECT_ANY_THROW(SetCommonRuntimeArgs(program_common_test_ref, kernel_common_test, too_many_common_args));
+
+        // Verify that setting exactly max active eth unique runtime args works (should not throw)
+        // However, we can't do this now because common args are already set to max, and unique+common must <= max
+        // So we create a new program/kernel for this test
+        tt::tt_metal::Program program2 = tt_metal::CreateProgram();
+        auto kernel2 = tt_metal::CreateKernel(
+            program2,
+            "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints.cpp",
+            eth_core_range,
+            tt_metal::EthernetConfig{.eth_mode = Eth::RECEIVER, .noc = tt_metal::NOC::NOC_0});
+
+        auto device_range2 = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+        distributed::MeshWorkload workload2;
+        workload2.add_program(device_range2, std::move(program2));
+        auto& program2_ref = workload2.get_programs().at(device_range2);
+
+        std::vector<uint32_t> max_unique_args(active_eth_max_runtime_args);
+        EXPECT_NO_THROW(SetRuntimeArgs(program2_ref, kernel2, eth_core, max_unique_args));
+    }
+}
+
+// Test that idle ethernet cores correctly validate max runtime args using IDLE_ETH kernel config size
+TEST_F(MeshDeviceFixture, IdleEthIllegalTooManyRuntimeArgs) {
+    auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    uint32_t idle_eth_max_runtime_args =
+        hal.get_dev_size(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::KERNEL_CONFIG) / sizeof(uint32_t);
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        auto mesh_device = this->devices_.at(id);
+        auto device = mesh_device->get_devices()[0];
+        auto idle_eth_cores = device->get_inactive_ethernet_cores();
+
+        // Skip test if no idle ethernet cores available
+        if (idle_eth_cores.empty()) {
+            log_info(LogTest, "Skipping IdleEthIllegalTooManyRuntimeArgs test - no idle ethernet cores available");
+            continue;
+        }
+
+        auto zero_coord = distributed::MeshCoordinate(0, 0);
+        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+        distributed::MeshWorkload workload;
+        tt::tt_metal::Program program = tt_metal::CreateProgram();
+
+        // Create kernel on first idle ethernet core
+        CoreCoord eth_core = *idle_eth_cores.begin();
+        CoreRange eth_core_range(eth_core, eth_core);
+
+        auto kernel = tt_metal::CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints.cpp",
+            eth_core_range,
+            tt_metal::EthernetConfig{.eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0});
+
+        workload.add_program(device_range, std::move(program));
+        auto& program_ref = workload.get_programs().at(device_range);
+
+        // Verify that setting exactly max common args works when no unique args are set (should not throw)
+        // Note: We test this FIRST because even failed SetRuntimeArgs calls can pollute max_runtime_args_per_core_
+        std::vector<uint32_t> max_common_args(idle_eth_max_runtime_args);
+        EXPECT_NO_THROW(SetCommonRuntimeArgs(program_ref, kernel, max_common_args));
+
+        // Try to set too many unique runtime args (should fail)
+        // Note: This must come after testing max common args because it pollutes the kernel state
+        std::vector<uint32_t> too_many_args(idle_eth_max_runtime_args + 1);
+        EXPECT_ANY_THROW(SetRuntimeArgs(program_ref, kernel, eth_core, too_many_args));
+
+        // Try to set too many common runtime args (should fail)
+        // Create a new kernel for this test since common args can only be set once
+        tt::tt_metal::Program program_common_test = tt_metal::CreateProgram();
+        auto kernel_common_test = tt_metal::CreateKernel(
+            program_common_test,
+            "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints.cpp",
+            eth_core_range,
+            tt_metal::EthernetConfig{.eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0});
+
+        auto device_range_common_test = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+        distributed::MeshWorkload workload_common_test;
+        workload_common_test.add_program(device_range_common_test, std::move(program_common_test));
+        auto& program_common_test_ref = workload_common_test.get_programs().at(device_range_common_test);
+
+        std::vector<uint32_t> too_many_common_args(idle_eth_max_runtime_args + 1);
+        EXPECT_ANY_THROW(SetCommonRuntimeArgs(program_common_test_ref, kernel_common_test, too_many_common_args));
+
+        // Verify that setting exactly max idle eth unique runtime args works (should not throw)
+        // However, we can't do this now because common args are already set to max, and unique+common must <= max
+        // So we create a new program/kernel for this test
+        tt::tt_metal::Program program2 = tt_metal::CreateProgram();
+        auto kernel2 = tt_metal::CreateKernel(
+            program2,
+            "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints.cpp",
+            eth_core_range,
+            tt_metal::EthernetConfig{.eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0});
+
+        auto device_range2 = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+        distributed::MeshWorkload workload2;
+        workload2.add_program(device_range2, std::move(program2));
+        auto& program2_ref = workload2.get_programs().at(device_range2);
+
+        std::vector<uint32_t> max_unique_args(idle_eth_max_runtime_args);
+        EXPECT_NO_THROW(SetRuntimeArgs(program2_ref, kernel2, eth_core, max_unique_args));
     }
 }
 

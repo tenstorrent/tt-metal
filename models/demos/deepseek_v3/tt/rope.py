@@ -141,6 +141,10 @@ class RotarySetup:
             (1, self.batch_size_per_row * self.device.shape[0]),
         ], "position idxs must either be row-interleaved or row-sharded"
         interleaved = position_idxs.shape[1] == self.batch_size_per_row
+
+        # If any element of position_idxs is < 0, set it to 0. This is needed for vLLM.
+        position_idxs = position_idxs.clamp_min(0)
+
         assert torch.min(position_idxs) >= 0, "position idxs must be non-negative"
 
         # Add padding if needed

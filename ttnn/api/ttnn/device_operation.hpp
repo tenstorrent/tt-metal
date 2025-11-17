@@ -198,10 +198,7 @@ void enqueue_mesh_workload(
     if (mesh_device_operation_utils::track_workload(workload, mesh_device)) {
         return;
     }
-    {
-        ZoneScopedN("EnqueueMeshWorkload");
-        tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
-    }
+    tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
 
     TracyOpMeshWorkload(
         mesh_device, workload, mesh_device_operation_t{}, operation_attributes, tensor_args, tensor_return_value);
@@ -232,7 +229,6 @@ void handle_mesh_adapter_cache_hit(
     ttnn::MeshDevice* mesh_device,
     tt::tt_metal::program_cache::detail::ProgramCache& program_cache,
     tt::stl::hash::hash_t program_hash) {
-    ZoneScopedN("Handle Mesh Adapter Cache Hit");
     mesh_device_operation_t::validate_on_program_cache_hit(operation_attributes, tensor_args);
 
     auto& cached_program_factory = program_cache.get(program_hash);
@@ -262,7 +258,6 @@ void create_and_cache_mesh_workload(
     ttnn::MeshDevice* mesh_device,
     tt::tt_metal::program_cache::detail::ProgramCache& program_cache,
     tt::stl::hash::hash_t program_hash) {
-    ZoneScopedN("Handle Mesh Adapter Cache Miss");
     mesh_device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
 
     auto program_factory = mesh_device_operation_t::select_program_factory(operation_attributes, tensor_args);
@@ -311,8 +306,6 @@ void launch_operation_with_adapter(
     const typename mesh_device_operation_t::tensor_args_t& tensor_args,
     typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
     ttnn::MeshDevice* mesh_device) {
-    ZoneScopedN("Launch With MeshDeviceAdapter");
-
     // Skip if operation should be skipped
     if constexpr (HasSkipLaunch<mesh_device_operation_t>) {
         if (mesh_device_operation_t::skip_launch(operation_attributes, tensor_args, tensor_return_value)) {
@@ -350,6 +343,16 @@ void launch_operation_with_adapter(
     }
 }
 
+// Returns true if the tensor is fully replicated, false otherwise.
+inline bool is_fully_replicated(const Tensor& tensor) {
+    for (const auto& placement : tensor.tensor_topology().placements()) {
+        if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placement)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // Default TensorTopology for output tensors is determined only by the input tensors with the highest distribution rank
 // (highest number of dimensions). The output tensor will have the same distribution rank as these input tensors, taking
 // the max strides of all input tensors. The placement for each distribution dimension will be Shard if at least one
@@ -362,18 +365,33 @@ std::pair<
     tt::tt_metal::distributed::MeshShape>
 get_output_placements_and_shape(
     const typename device_operation_t::tensor_args_t& tensor_args, const Tensor& first_tensor) {
-    size_t max_distribution_rank = 0;
+    std::vector<Tensor> sharded_tensors;
     tt::stl::reflection::visit_object_of_type<Tensor>(
         [&](const Tensor& tensor) {
-            max_distribution_rank =
-                std::max(max_distribution_rank, tensor.tensor_topology().distribution_shape().dims());
+            if (!is_fully_replicated(tensor)) {
+                sharded_tensors.push_back(tensor);
+            }
         },
         tensor_args);
+
+    // Compute max distribution rank: use only sharded tensors if they exist, otherwise use all tensors (fully
+    // replicated)
+    size_t max_distribution_rank = 0;
+    if (!sharded_tensors.empty()) {
+        tt::stl::reflection::visit_object_of_type<Tensor>(
+            [&](const Tensor& tensor) {
+                max_distribution_rank =
+                    std::max(max_distribution_rank, tensor.tensor_topology().distribution_shape().dims());
+            },
+            sharded_tensors);
+    } else {
+        max_distribution_rank = first_tensor.tensor_topology().distribution_shape().dims();
+    }
 
     auto result_strides = tt::stl::SmallVector<uint32_t>(max_distribution_rank, 1);
     auto result_placements = tt::stl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>(
         max_distribution_rank, tt::tt_metal::distributed::MeshMapperConfig::Replicate{});
-    std::unordered_set<int> shard_dims;
+    std::unordered_map<int, int> shard_dim_to_distribution_dim;
     bool dim_mismatch = false;
 
     // TODO: #25340 - Add back logging / validation. Currently, this results in a lot of log spam.
@@ -397,8 +415,8 @@ get_output_placements_and_shape(
                             std::get<tt::tt_metal::distributed::MeshMapperConfig::Shard>(tensor_placements[i]);
 
                         // Only shard if the tensor dimension is not already sharded
-                        if (!shard_dims.contains(new_shard_placement.dim)) {
-                            shard_dims.insert(new_shard_placement.dim);
+                        if (!shard_dim_to_distribution_dim.contains(new_shard_placement.dim)) {
+                            shard_dim_to_distribution_dim.insert({new_shard_placement.dim, i});
                             if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(
                                     output_placement)) {
                                 auto existing_shard_placement =
@@ -419,7 +437,7 @@ get_output_placements_and_shape(
                                 continue;
                             }
                             output_placement = new_shard_placement;
-                        } else if (kEnableLogging) {
+                        } else if (shard_dim_to_distribution_dim.at(new_shard_placement.dim) != i && kEnableLogging) {
                             log_warning(
                                 tt::LogOp,
                                 "Duplicate tensor shard dimension {} across distribution dim {} replaced with "
@@ -430,7 +448,7 @@ get_output_placements_and_shape(
                     }
                     result_placements[i] = output_placement;
                 }
-            } else {
+            } else if (!is_fully_replicated(tensor)) {
                 dim_mismatch = true;
             }
         },
@@ -448,8 +466,6 @@ template <DeviceOperationConcept device_operation_t>
 typename device_operation_t::tensor_return_value_t launch_on_device(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args) {
-    ZoneScopedN("Launch Device Operation");
-
     auto tensor_return_value = device_operation_t::create_output_tensors(operation_attributes, tensor_args);
     if (!mesh_device_operation_utils::all_tensors_have_uniform_storage(tensor_args)) {
         mesh_device_operation_utils::filter_tensor_shards(
@@ -458,16 +474,40 @@ typename device_operation_t::tensor_return_value_t launch_on_device(
 
     auto first_tensor = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args);
     auto mesh_device = first_tensor.device();
-    auto [output_topology_placements, output_topology_shape] =
-        detail::get_output_placements_and_shape<device_operation_t>(tensor_args, first_tensor);
 
-    tensor_return_value = tt::stl::reflection::transform_object_of_type<Tensor>(
-        [&output_topology_placements, &output_topology_shape](const Tensor& output_tensor) {
-            auto topology = tt::tt_metal::TensorTopology(
-                output_topology_shape, output_topology_placements, output_tensor.tensor_topology().mesh_coords());
-            return output_tensor.with_tensor_topology(topology);
-        },
-        tensor_return_value);
+    // Check if op provides custom output topologies
+    std::vector<tt::tt_metal::TensorTopology> custom_topologies;
+    if constexpr (requires {
+                      {
+                          device_operation_t::compute_output_topologies(operation_attributes, tensor_args)
+                      } -> std::same_as<std::vector<tt::tt_metal::TensorTopology>>;
+                  }) {
+        custom_topologies = device_operation_t::compute_output_topologies(operation_attributes, tensor_args);
+    }
+
+    if (!custom_topologies.empty()) {
+        // Use custom topologies provided by the op
+        tensor_return_value = tt::stl::reflection::transform_object_of_type<Tensor>(
+            [&custom_topologies, topology_idx = size_t{0}](const Tensor& output_tensor) mutable {
+                TT_FATAL(
+                    topology_idx < custom_topologies.size(),
+                    "Not enough custom topologies provided for output tensors");
+                return output_tensor.with_tensor_topology(custom_topologies[topology_idx++]);
+            },
+            tensor_return_value);
+    } else {
+        // Fall back to default topology imputation
+        auto [output_topology_placements, output_topology_shape] =
+            detail::get_output_placements_and_shape<device_operation_t>(tensor_args, first_tensor);
+
+        tensor_return_value = tt::stl::reflection::transform_object_of_type<Tensor>(
+            [&output_topology_placements, &output_topology_shape](const Tensor& output_tensor) {
+                auto topology = tt::tt_metal::TensorTopology(
+                    output_topology_shape, output_topology_placements, output_tensor.tensor_topology().mesh_coords());
+                return output_tensor.with_tensor_topology(topology);
+            },
+            tensor_return_value);
+    }
 
     launch_operation_with_adapter<MeshDeviceOperationAdapter<device_operation_t>>(
         operation_attributes, tensor_args, tensor_return_value, mesh_device);
@@ -478,8 +518,6 @@ template <DeviceOperationConcept device_operation_t>
 typename device_operation_t::tensor_return_value_t invoke(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args) {
-    ZoneScopedN("Run Device Operation");
-
     // TODO: Add GraphTracker::instance().track_device_operation to track device operations specifically?
     tt::tt_metal::GraphTracker::instance().track_function_start(
         get_operation_name<device_operation_t>(operation_attributes), operation_attributes, tensor_args);

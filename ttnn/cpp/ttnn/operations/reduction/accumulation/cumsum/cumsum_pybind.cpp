@@ -20,8 +20,6 @@ namespace py = pybind11;
 void bind_reduction_cumsum_operation(py::module& module) {
     auto docstring =
         R"doc(
-        ``ttnn.cumsum(input: ttnn.Tensor, dim: int, dtype: Optional[ttnn.DataType] = None, reverse_order: bool = False, out: Optional[ttnn.Tensor] = None, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor``
-
         Returns cumulative sum of :attr:`input` along dimension :attr:`dim`
         For a given :attr:`input` of size N, the :attr:`output` will also contain N elements and be such that:
 
@@ -52,21 +50,16 @@ void bind_reduction_cumsum_operation(py::module& module) {
                  - Layouts
                  - Ranks
                  - dim
-               * - BFLOAT16, FLOAT32
+               * - BFLOAT16, FLOAT32, INT32, UINT32
                  - TILE
                  - 1, 2, 3, 4, 5
                  - -rank <= dim < rank
-               * - INT32, UINT32
-                 - TILE
-                 - 3, 4, 5
-                 - dim in {0, 1, ..., rank - 3} or dim in {-rank, -rank + 1, ..., -3}
 
         Memory Support:
             - Interleaved: DRAM and L1
 
         Limitations:
             - Preallocated output must have the same shape as the input
-            - Preallocated output for integer types is not supported
 
         Example:
             .. code-block:: python

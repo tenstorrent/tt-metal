@@ -14,14 +14,35 @@ void NlpKVCacheLoadSliceDeviceOperation::validate(const std::vector<Tensor>& inp
     TT_FATAL(
         input_tensor_a.storage_type() == tt::tt_metal::StorageType::DEVICE, "Operands to unpad need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to unpad need to be allocated in buffers on device!");
-    TT_FATAL(input_tensor_a.layout() == tt::tt_metal::Layout::TILE, "Error");
+    TT_FATAL(
+        input_tensor_a.layout() == tt::tt_metal::Layout::TILE,
+        "Input tensor layout must be TILE but got {}",
+        input_tensor_a.layout());
 
     for (uint32_t i = 0; i < input_tensor_a.padded_shape().rank(); i++) {
-        TT_FATAL(this->output_tensor_start[i] < input_tensor_a.padded_shape()[i], "Error");
-        TT_FATAL(this->output_tensor_end[i] < input_tensor_a.padded_shape()[i], "Error");
+        TT_FATAL(
+            this->output_tensor_start[i] < input_tensor_a.padded_shape()[i],
+            "Output tensor start[{}] ({}) must be less than input tensor shape[{}] ({})",
+            i,
+            this->output_tensor_start[i],
+            i,
+            input_tensor_a.padded_shape()[i]);
+        TT_FATAL(
+            this->output_tensor_end[i] < input_tensor_a.padded_shape()[i],
+            "Output tensor end[{}] ({}) must be less than input tensor shape[{}] ({})",
+            i,
+            this->output_tensor_end[i],
+            i,
+            input_tensor_a.padded_shape()[i]);
 
         // Check if start shape is <= end shape
-        TT_FATAL(this->output_tensor_start[i] <= this->output_tensor_end[i], "Error");
+        TT_FATAL(
+            this->output_tensor_start[i] <= this->output_tensor_end[i],
+            "Output tensor start[{}] ({}) must be <= output tensor end[{}] ({})",
+            i,
+            this->output_tensor_start[i],
+            i,
+            this->output_tensor_end[i]);
     }
 
     Shape output_tensor_shape = this->compute_output_specs(input_tensors)[0].padded_shape();
@@ -33,8 +54,16 @@ void NlpKVCacheLoadSliceDeviceOperation::validate(const std::vector<Tensor>& inp
     auto fused_batch_heads = dim0 * dim1;
     auto core_grid = input_tensor_a.device()->compute_with_storage_grid_size();
     // Need at least fused_batch_heads cores to unpad into sharded tensor
-    TT_FATAL(fused_batch_heads <= core_grid.x * core_grid.y, "Error");
-    TT_FATAL(input_tensor_a.physical_volume() % TILE_HW == 0, "Error");
+    TT_FATAL(
+        fused_batch_heads <= core_grid.x * core_grid.y,
+        "Fused batch heads ({}) must be <= total grid size ({})",
+        fused_batch_heads,
+        core_grid.x * core_grid.y);
+    TT_FATAL(
+        input_tensor_a.physical_volume() % TILE_HW == 0,
+        "Input tensor physical volume ({}) must be divisible by TILE_HW ({})",
+        input_tensor_a.physical_volume(),
+        TILE_HW);
     TT_FATAL(
         (output_tensor_shape[-2] % TILE_HEIGHT == 0) && (this->output_tensor_start[-2] % TILE_HEIGHT == 0),
         "Can only unpad tilized tensor with full tiles");

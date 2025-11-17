@@ -29,7 +29,7 @@ protected:
     }
 
 private:
-    std::map<chip_id_t, std::shared_ptr<distributed::MeshDevice>> device_ids_to_devices_;
+    std::map<ChipId, std::shared_ptr<distributed::MeshDevice>> device_ids_to_devices_;
 };
 
 class TGFixture : public GalaxyFixture {

@@ -80,9 +80,9 @@ constexpr uint32_t PCIE_TRANSFER_SIZE_DEFAULT = 4096;
 
 constexpr uint32_t host_data_dirty_pattern = 0xbaadf00d;
 
-constexpr CoreType DISPATCH_CORE_TYPE =
-    CoreType::WORKER;  // If this changes, need to pass it into CreateDevice. TODO: Clean this up when when we clean up
-                       // single device creation.
+constexpr tt::CoreType DISPATCH_CORE_TYPE =
+    tt::CoreType::WORKER;  // If this changes, need to pass it into CreateDevice. TODO: Clean this up when when we clean
+                           // up single device creation.
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // Test dispatch program performance
@@ -885,18 +885,14 @@ void gen_rnd_dram_paged_cmd(
     uint32_t start_page = std::rand() % num_dram_banks_g;
     uint32_t max_page_size = big_g ? MAX_PAGE_SIZE : 4096;
     uint32_t page_size = (std::rand() % (max_page_size + 1)) & ~(dram_alignment - 1);
-    if (page_size < dram_alignment) {
-        page_size = dram_alignment;
-    }
+    page_size = std::max(page_size, dram_alignment);
     uint32_t max_data = big_g ? DEVICE_DATA_SIZE : DEVICE_DATA_SIZE / 8;
     uint32_t max = DEVICE_DATA_SIZE - (device_data.size() * sizeof(uint32_t));
     max = (max > max_data) ? max_data : max;
     // start in bottom half of valid dram data to not worry about overflowing valid data
     uint32_t base_addr = (std::rand() % (DRAM_DATA_SIZE_BYTES / 2)) & ~(dram_alignment - 1);
     uint32_t size = std::rand() % max;
-    if (size < page_size) {
-        size = page_size;
-    }
+    size = std::max(size, page_size);
     uint32_t pages = size / page_size;
     TT_ASSERT(base_addr + (start_page * page_size + pages * page_size / num_dram_banks_g) < DRAM_DATA_SIZE_BYTES);
 
@@ -1775,7 +1771,7 @@ void write_prefetcher_cmd(
     uint32_t prefetch_q_base,
     uint32_t prefetch_q_rd_ptr_addr,
     CoreCoord phys_prefetch_core,
-    tt::Writer& prefetch_q_writer) {
+    umd::Writer& prefetch_q_writer) {
     static vector<uint32_t> read_vec;  // static to avoid realloc
 
     // wait for space
@@ -1834,7 +1830,7 @@ void write_prefetcher_cmds(
     uint32_t prefetch_q_base,
     uint32_t prefetch_q_rd_ptr_addr,
     CoreCoord phys_prefetch_core,
-    tt::Writer& prefetch_q_writer,
+    umd::Writer& prefetch_q_writer,
     bool is_control_only) {
     static uint32_t* host_mem_ptr;
     static uint32_t prefetch_q_dev_ptr;
@@ -1920,7 +1916,7 @@ std::chrono::duration<double> run_test(
     uint32_t prefetch_q_base,
     uint32_t prefetch_q_rd_ptr_addr,
     CoreCoord phys_prefetch_core,
-    tt::Writer& prefetch_q_writer) {
+    umd::Writer& prefetch_q_writer) {
     auto start = std::chrono::system_clock::now();
 
     std::thread t1([&]() {
@@ -2011,7 +2007,7 @@ void configure_for_single_chip(
     TT_ASSERT(cmddat_q_size_g >= 2 * max_prefetch_command_size_g);
 
     // NOTE: this test hijacks hugepage
-    chip_id_t mmio_device_id =
+    ChipId mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
     uint16_t channel =
         tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device->id());
@@ -2441,7 +2437,7 @@ int main(int argc, char** argv) {
         }
         log_info(LogTest, "Iterations: {}", iterations_g);
 
-        tt::Writer prefetch_q_writer = tt::tt_metal::MetalContext::instance().get_cluster().get_static_tlb_writer(
+        umd::Writer prefetch_q_writer = tt::tt_metal::MetalContext::instance().get_cluster().get_static_tlb_writer(
             tt_cxy_pair(device->id(), phys_prefetch_core_g));
 
         vector<uint32_t> cmds, terminate_cmds;

@@ -20,10 +20,14 @@
 namespace ttnn {
 namespace ccl {
 
+bool is_fabric_2d();
+
 uint32_t get_topological_dimension(
     const Tensor& tensor, const std::optional<uint32_t>& cluster_axis);
 
-tt::tt_fabric::Topology get_usable_topology(const Tensor& tensor, tt::tt_fabric::Topology whole_device_topology, const std::optional<uint32_t>& cluster_axis = std::nullopt);
+tt::tt_fabric::Topology get_usable_topology(const Tensor& tensor, const std::optional<tt::tt_fabric::Topology>& topology, const std::optional<uint32_t>& cluster_axis = std::nullopt);
+
+tt::tt_fabric::Topology convert_2d_to_1d_topology(tt::tt_fabric::Topology topology);
 
 uint32_t get_linearized_index_from_physical_coord(
     const Tensor& tensor,
@@ -62,8 +66,8 @@ tt::tt_metal::operation::MeshWorkloadWithCallbacks create_mesh_workload_from_pro
 // Configuration structure for a device, containing its receiver and sender device ids.
 struct SenderReceiverConfig {
     uint32_t device_index = 0;
-    std::optional<chip_id_t> sender_device_id;
-    std::optional<chip_id_t> receiver_device_id;
+    std::optional<tt::ChipId> sender_device_id;
+    std::optional<tt::ChipId> receiver_device_id;
 };
 
 // Returns `SenderReceiverConfig` for a given device, given topology.
@@ -191,7 +195,6 @@ class CclOpShardedTensorConfig final : public virtual CclOpTensorConfig {
     tt::tt_metal::ShardSpec const& get_shard_spec() const;
 
    private:
-       uint32_t page_size{};
        tt::tt_metal::ShardSpec const shard_spec;
 };
 
@@ -521,8 +524,7 @@ class InterleavedRingAllGatherTensorSlicer : public LegacyCclTensorSlicer {
    public:
     ~InterleavedRingAllGatherTensorSlicer() override = default;
     InterleavedRingAllGatherTensorSlicer(
-         const Tensor & input_tensor,  const Tensor & output_tensor, int slice_dim, uint32_t slice_idx) :
-        LegacyCclTensorSlicer() {
+        const Tensor& input_tensor, const Tensor& output_tensor, int slice_dim, uint32_t slice_idx) {
         this->row_major = input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR;
         this->slice_dim_is_width = input_tensor.padded_shape().rank() - 1 == slice_dim;
         this->is_sharded = input_tensor.is_sharded();

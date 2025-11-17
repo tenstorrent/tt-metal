@@ -388,10 +388,22 @@ void validate_output_with_keepdim(const Tensor& input, const Tensor& output, con
         expand_to_max_dim(output_dim_wo_padding, output_shape_wo_padding);
 
         for (int i = 0; i < input_shape.rank(); ++i) {
-            TT_FATAL(input_dim[i] == output_dim[i], "Error");
+            TT_FATAL(
+                input_dim[i] == output_dim[i],
+                "Input dimension[{}] ({}) must equal output dimension[{}] ({})",
+                i,
+                input_dim[i],
+                i,
+                output_dim[i]);
         }
         for (int i = 0; i < input_shape_wo_padding.rank(); ++i) {
-            TT_FATAL(input_dim_wo_padding[i] == output_dim_wo_padding[i], "Error");
+            TT_FATAL(
+                input_dim_wo_padding[i] == output_dim_wo_padding[i],
+                "Input dimension without padding[{}] ({}) must equal output dimension without padding[{}] ({})",
+                i,
+                input_dim_wo_padding[i],
+                i,
+                output_dim_wo_padding[i]);
         }
     } else {
         ttnn::SmallVector<uint32_t> expected_output_shape;
@@ -413,10 +425,23 @@ void validate_output_with_keepdim(const Tensor& input, const Tensor& output, con
         log_debug(
             LogOp, "{}:{} expected_output_shape_wo_padding {}", __func__, __LINE__, expected_output_shape_wo_padding);
         for (int i = 0; i < expected_output_shape.size(); ++i) {
-            TT_FATAL(i == padded_dim || input_shape[i] == expected_output_shape[i], "Error");
+            TT_FATAL(
+                i == padded_dim || input_shape[i] == expected_output_shape[i],
+                "Input shape[{}] ({}) must equal expected output shape[{}] ({}) when not padded dimension",
+                i,
+                input_shape[i],
+                i,
+                expected_output_shape[i]);
         }
         for (int i = 0; i < expected_output_shape_wo_padding.size(); ++i) {
-            TT_FATAL(i == dim || input_shape_wo_padding[i] == expected_output_shape_wo_padding[i], "Error");
+            TT_FATAL(
+                i == dim || input_shape_wo_padding[i] == expected_output_shape_wo_padding[i],
+                "Input shape without padding[{}] ({}) must equal expected output shape without padding[{}] ({}) when "
+                "not target dimension",
+                i,
+                input_shape_wo_padding[i],
+                i,
+                expected_output_shape_wo_padding[i]);
         }
     }
 }

@@ -21,14 +21,18 @@ run_dual_galaxy_unit_tests() {
   local mpi_args_reversed="--host g10glx04,g10glx03 $mpi_args_base"
   local rank_binding="tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml"
 
+  mpirun-ulfm $mpi_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/test/tt_metal/tt_fabric/test_physical_discovery ; fail+=$?
+  mpirun-ulfm $mpi_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/tools/scaleout/run_cluster_validation --print-connectivity --send-traffic --hard-fail ; fail+=$?
   tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/tt_fabric/test_system_health --gtest_filter="Cluster.ReportIntermeshLinks" ; fail+=$?
   tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.TestDualGalaxyControlPlaneInit" ; fail+=$?
   tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.TestDualGalaxyFabric2DSanity" ; fail+=$?
   tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_dual_galaxy_fabric_2d_sanity.yaml ; fail+=$?
-  tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args_reversed" bash -c "source ./python_env/bin/activate && pytest -svv \"tests/ttnn/unit_tests/operations/ccl/test_all_to_all_dispatch_6U.py::test_all_to_all_dispatch_no_trace[silicon_arch_name=wormhole_b0-dram-l1-dtype=DataType.BFLOAT16-topology=None-num_links=1-s2-hidden_size=7168-select_experts_k=8-experts=256-batches_per_device=32-cluster_axis=1-8x8_grid-trace_mode=False-fabric_2d]\"" ; fail+=$?
-  tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args_reversed" bash -c "source ./python_env/bin/activate && pytest -svv \"tests/ttnn/unit_tests/operations/ccl/test_all_to_all_dispatch_6U.py::test_all_to_all_dispatch_no_trace[silicon_arch_name=wormhole_b0-dram-l1-dtype=DataType.BFLOAT16-topology=None-num_links=1-s2-hidden_size=7168-select_experts_k=8-experts=256-batches_per_device=32-cluster_axis=1-8x8_grid-trace_mode=False-fabric_1d_line]\"" ; fail+=$?
+  tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args_reversed" bash -c "source ./python_env/bin/activate && pytest -svv \"tests/nightly/tg/ccl/test_all_to_all_dispatch_6U.py::test_all_to_all_dispatch_8x8_dual_galaxy[wormhole_b0-dram-dram-dtype0-None-1-s2-7168-8-256-32-1-8x8_grid-False-fabric_2d]\"" ; fail+=$?
+  tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args_reversed" bash -c "source ./python_env/bin/activate && pytest -svv \"tests/nightly/tg/ccl/test_all_to_all_dispatch_6U.py::test_all_to_all_dispatch_8x8_dual_galaxy[wormhole_b0-dram-dram-dtype0-None-1-s2-7168-8-256-32-1-8x8_grid-False-fabric_1d_line]\"" ; fail+=$?
+  tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args_reversed" bash -c "source ./python_env/bin/activate && pytest -svv \"tests/nightly/tg/ccl/test_all_to_all_combine_6U.py::test_all_to_all_combine_8x8_dual_galaxy[wormhole_b0-dram-dram-dtype0-None-num_links_1-2-sparse-s2-7168-8-256-32-axis_1-8x8_grid-False-fabric_1d_line]\"" ; fail+=$?
   tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args_reversed" bash -c "source ./python_env/bin/activate && pytest -svv \"tests/nightly/tg/ccl/test_minimal_reduce_scatter_async.py::test_reduce_scatter_async_big_mesh\"" ; fail+=$?
   tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args_reversed" bash -c "source ./python_env/bin/activate && pytest -svv \"tests/nightly/tg/ccl/test_minimal_all_gather_async.py::test_all_gather_async_big_mesh\"" ; fail+=$?
+  tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args_reversed" bash -c "source ./python_env/bin/activate && pytest -svv \"tests/ttnn/unit_tests/base_functionality/test_multi_host_clusters.py::test_dual_galaxy_mesh_device_trace\"" ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)

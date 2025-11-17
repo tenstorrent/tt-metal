@@ -20,12 +20,25 @@
 #include "hal_types.hpp"
 #include "prefetch.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/debug/inspector/inspector.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
 
 #include "tt_metal/api/tt-metalium/device_pool.hpp"
 
 using namespace tt::tt_metal;
+
+DispatchSKernel::DispatchSKernel(
+    int node_id, ChipId device_id, ChipId servicing_device_id, uint8_t cq_id, noc_selection_t noc_selection) :
+    FDKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection) {
+    uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id);
+    this->logical_core_ = tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().dispatcher_s_core(
+        device_id, channel, cq_id_);
+    this->kernel_type_ = FDKernelType::DISPATCH;
+    // Log dispatch_s core info based on virtual core to inspector
+    auto virtual_core = this->GetVirtualCore();
+    tt::tt_metal::Inspector::set_dispatch_s_core_info(virtual_core, DISPATCH_S, cq_id, device_id, servicing_device_id);
+}
 
 void DispatchSKernel::GenerateStaticConfigs() {
     auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map(GetCoreType());

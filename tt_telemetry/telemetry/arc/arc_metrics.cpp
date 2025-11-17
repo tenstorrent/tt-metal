@@ -7,6 +7,8 @@
  *
  * TODO:
  * -----
+ * - Only create chips specified by FSD? At the very least, should capture downed chips but we
+ *   would need a way to test this and create metrics that are in a bad state.
  * - How to handle cases where an ARC telemetry value is not returned by FirmwareInfoProvider?
  *   For now, we set it to 0. But maybe we want to stop updating it at all and retain the old
  *   stale value instead?
@@ -28,13 +30,15 @@ void create_arc_metrics(
     std::vector<std::unique_ptr<BoolMetric>>& bool_metrics,
     std::vector<std::unique_ptr<UIntMetric>>& uint_metrics,
     std::vector<std::unique_ptr<DoubleMetric>>& double_metrics,
+    std::vector<std::unique_ptr<StringMetric>>& string_metrics,
     const std::unique_ptr<tt::umd::Cluster>& cluster,
     const std::unique_ptr<TopologyHelper>& topology_translation,
     const std::unique_ptr<tt::tt_metal::Hal>& hal) {
-    tt::umd::tt_ClusterDescriptor* cluster_descriptor = cluster->get_cluster_description();
+    log_info(tt::LogAlways, "Creating ARC firmware metrics...");
+    tt::umd::ClusterDescriptor* cluster_descriptor = cluster->get_cluster_description();
 
     // Iterate through all chips and create ARC metrics for MMIO-capable ones
-    for (chip_id_t chip_id : cluster_descriptor->get_all_chips()) {
+    for (tt::ChipId chip_id : cluster_descriptor->get_all_chips()) {
         // Check if this chip has MMIO capability (is a local chip)
         if (cluster_descriptor->is_chip_mmio_capable(chip_id)) {
             tt::umd::TTDevice* device = cluster->get_tt_device(chip_id);
@@ -43,6 +47,12 @@ void create_arc_metrics(
                 std::optional<tt::tt_metal::ASICDescriptor> asic_descriptor =
                     topology_translation->get_asic_descriptor_for_local_chip(chip_id);
                 TT_FATAL(asic_descriptor.has_value(), "No ASIC descriptor for chip ID {}", chip_id);
+                log_info(
+                    tt::LogAlways,
+                    "Creating ARC firmware metrics for tray_id={}, asic_location={}, chip_id={}...",
+                    *asic_descriptor.value().tray_id,
+                    *asic_descriptor.value().asic_location,
+                    chip_id);
 
                 // Get FirmwareInfoProvider from the device
                 auto firmware_provider = device->get_firmware_info_provider();
@@ -113,10 +123,47 @@ void create_arc_metrics(
                         "BoardTemperature",
                         [firmware_provider]() { return firmware_provider->get_board_temperature(); },
                         MetricUnit::CELSIUS));
+
+                    // Create String metrics for firmware version information
+                    // Note: Additional firmware versions (ARC, M3, Flash) are not yet exposed
+                    // and require UMD support. See related UMD issue for details.
+                    string_metrics.push_back(std::make_unique<ARCStringMetric>(
+                        asic_descriptor.value(),
+                        firmware_provider,
+                        "FirmwareBundleVersion",
+                        [firmware_provider]() -> std::optional<std::string> {
+                            return firmware_provider->get_firmware_version().to_string();
+                        },
+                        MetricUnit::UNITLESS));
+
+                    string_metrics.push_back(std::make_unique<ARCStringMetric>(
+                        asic_descriptor.value(),
+                        firmware_provider,
+                        "EthernetFirmwareVersion",
+                        [firmware_provider]() -> std::optional<std::string> {
+                            // Decode using tt_version constructor which handles the bit packing
+                            tt::umd::tt_version eth_ver(firmware_provider->get_eth_fw_version());
+                            return eth_ver.str();
+                        },
+                        MetricUnit::UNITLESS));
+                } else {
+                    log_error(
+                        tt::LogAlways,
+                        "Unable to create ARC firmware metrics for tray_id={}, asic_location={}, chip_id={}, because "
+                        "firmware provider does not exist",
+                        *asic_descriptor.value().tray_id,
+                        *asic_descriptor.value().asic_location,
+                        chip_id);
                 }
+            } else {
+                log_error(
+                    tt::LogAlways,
+                    "Unable to create ARC firmware metrics for chip_id={} because device is not accessible",
+                    chip_id);
             }
         }
     }
+
     log_info(tt::LogAlways, "Created ARC metrics using FirmwareInfoProvider");
 }
 
@@ -159,9 +206,7 @@ void ARCUintMetric::update(
     uint64_t old_value = value_;
     changed_since_transmission_ = new_value != old_value;
     value_ = new_value;
-    timestamp_ =
-        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
-            .count();
+    set_timestamp_now();
 }
 
 /**************************************************************************************************
@@ -197,7 +242,40 @@ void ARCDoubleMetric::update(
     double old_value = value_;
     changed_since_transmission_ = new_value != old_value;
     value_ = new_value;
-    timestamp_ =
-        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
-            .count();
+    set_timestamp_now();
+}
+
+/**************************************************************************************************
+| ARCStringMetric Class
+**************************************************************************************************/
+
+ARCStringMetric::ARCStringMetric(
+    tt::tt_metal::ASICDescriptor asic_descriptor,
+    tt::umd::FirmwareInfoProvider* firmware_provider,
+    const std::string& metric_name,
+    std::function<std::optional<std::string>()> getter_func,
+    MetricUnit units) :
+    StringMetric(units),
+    asic_descriptor_(asic_descriptor),
+    firmware_provider_(firmware_provider),
+    metric_name_(metric_name),
+    getter_func_(getter_func) {
+    TT_ASSERT(firmware_provider_ != nullptr, "FirmwareInfoProvider cannot be null");
+    value_ = "";
+}
+
+const std::vector<std::string> ARCStringMetric::telemetry_path() const {
+    return arc_telemetry_path(asic_descriptor_.tray_id, asic_descriptor_.asic_location, metric_name_);
+}
+
+void ARCStringMetric::update(
+    const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
+    // Get the value using the getter function
+    auto optional_value = getter_func_();
+
+    // Update the metric value and timestamp
+    std::string new_value = optional_value.value_or("");
+    changed_since_transmission_ = (new_value != value_);
+    value_ = std::move(new_value);
+    set_timestamp_now();
 }

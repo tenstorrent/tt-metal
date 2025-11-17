@@ -43,9 +43,10 @@ void kernel_main() {
     }
 
     // Test stateful read one packet API
-    noc_async_read_one_packet_set_state(addr_self_noc, page_size, noc_index);
+    constexpr uint32_t vc = 0;
+    noc_async_read_one_packet_set_state(addr_self_noc, page_size, vc, noc_index);
     for (uint32_t i = 0; i < iteration; i++) {
-        noc_async_read_one_packet_with_state(l1_read_addr, l1_read_addr, noc_index);
+        noc_async_read_one_packet_with_state(l1_read_addr, l1_read_addr, vc, noc_index);
     }
 
     // Test stateful write one packet API
@@ -105,7 +106,8 @@ void kernel_main() {
     reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, noc_index);
 
     // DRAM sharded read API
-    uint32_t src_addr = noc_async_read_tile_dram_sharded_set_state<true>(DRAM_ALIGNMENT, page_size, 0, 0, noc_index);
+    uint64_t src_addr = get_noc_addr_from_bank_id<true>(0, DRAM_ALIGNMENT);
+    noc_async_read_one_packet_set_state<true>(src_addr, page_size, vc, noc_index);
     for (uint32_t i = 0; i < iteration; i++) {
         uint32_t trid = i % (NOC_MAX_TRANSACTION_ID + 1);
         noc_async_read_tile_dram_sharded_with_state_with_trid(src_addr, DRAM_ALIGNMENT, l1_read_addr, trid, noc_index);

@@ -18,8 +18,6 @@ from triage import ScriptConfig, triage_field, log_check, run_script
 from ttexalens.context import Context
 from ttexalens.device import Device, OnChipCoordinate
 from ttexalens.register_store import read_word_from_device
-from ttexalens.hw.tensix.blackhole.blackhole import BlackholeDevice
-from ttexalens.hw.tensix.wormhole.wormhole import WormholeDevice
 import utils
 
 script_config = ScriptConfig(
@@ -195,10 +193,10 @@ class BlackholeEthCore(EthCore):
 
 def get_eth_core_data(device: Device, location: OnChipCoordinate, context: Context) -> EthCoreCheckData:
     """Create appropriate EthCore instance based on device type and get results."""
-    if type(device) == WormholeDevice:
+    if device.is_wormhole():
         eth_core = WormholeEthCore(location, context)
         eth_core.get_results()
-    elif type(device) == BlackholeDevice:
+    elif device.is_blackhole():
         eth_core = BlackholeEthCore(location, context)
         eth_core.get_results()
     else:

@@ -20,6 +20,7 @@ class TtCrossAttnDownBlock2D(LightweightModule):
         num_attn_heads,
         out_dim,
         has_downsample=False,
+        debug_mode=False,
     ):
         super().__init__()
 
@@ -44,7 +45,12 @@ class TtCrossAttnDownBlock2D(LightweightModule):
         for i in range(num_layers):
             self.resnets.append(
                 TtResnetBlock2D(
-                    device, state_dict, f"{module_path}.resnets.{i}", model_config=model_config, conv_shortcut=(i == 0)
+                    device,
+                    state_dict,
+                    f"{module_path}.resnets.{i}",
+                    model_config=model_config,
+                    conv_shortcut=(i == 0),
+                    debug_mode=debug_mode,
                 )
             )
 
@@ -58,6 +64,7 @@ class TtCrossAttnDownBlock2D(LightweightModule):
                 (1, 1),
                 1,
                 model_config=model_config,
+                debug_mode=debug_mode,
             )
             if has_downsample
             else None

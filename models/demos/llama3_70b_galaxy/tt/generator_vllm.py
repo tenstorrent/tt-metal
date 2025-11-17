@@ -23,7 +23,7 @@ def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, model: TtTransform
         for _ in tqdm(range(num_layers), desc=f"Allocating TT kv caches for each layer (submesh {mesh_idx+1})"):
             kv_tt_i = [
                 ttnn.as_tensor(
-                    lp,
+                    cache_kv,
                     device=submesh,
                     # TODO: this could be ShardTensorToMesh, removing the need for vLLM to know about TP for num_kv_heads.
                     # Could affect other calculations which use TTCacheEngine.num_kv_heads, though.
@@ -31,9 +31,10 @@ def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, model: TtTransform
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     dtype=ttnn.bfloat8_b,
-                    cache_file_name=tt_cache_path / f"empty_cache_paged_attention{kv_cache_shape}",
+                    # Separate cache files for K and V to avoid collision.
+                    cache_file_name=tt_cache_path / f"empty_{kv}cache_paged_attention{kv_cache_shape}",
                 )
-                for lp in (cache_kv, cache_kv)
+                for kv in ["k", "v"]
             ]
 
             kv_tt.append(kv_tt_i)
@@ -103,8 +104,16 @@ class LlamaForCausalLM(Generator):
 
     @classmethod
     def initialize_vllm_model(
-        cls, hf_config, mesh_device, max_batch_size, max_seq_len=131072, n_layers=None, tt_data_parallel=1
+        cls,
+        hf_config,
+        mesh_device,
+        max_batch_size,
+        max_seq_len=131072,
+        n_layers=None,
+        tt_data_parallel=1,
+        optimizations=None,
     ):
+        assert optimizations is None, "Custom optimizations are not supported for this model"
         # max_seq_len = 128
         # n_layers = 1
         tt_model, model_args = initialize_vllm_text_transformer(

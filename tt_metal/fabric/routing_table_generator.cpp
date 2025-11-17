@@ -42,8 +42,9 @@ std::ostream& operator<<(std::ostream& os, const FabricNodeId& fabric_node_id) {
     return os;
 }
 
-RoutingTableGenerator::RoutingTableGenerator(const std::string& mesh_graph_desc_file) {
-    this->mesh_graph = std::make_unique<MeshGraph>(mesh_graph_desc_file);
+RoutingTableGenerator::RoutingTableGenerator(
+    const std::string& mesh_graph_desc_file, std::optional<FabricConfig> fabric_config) {
+    this->mesh_graph = std::make_unique<MeshGraph>(mesh_graph_desc_file, fabric_config);
     // Use IntraMeshConnectivity to size all variables
     const auto& intra_mesh_connectivity = this->mesh_graph->get_intra_mesh_connectivity();
     const auto& inter_mesh_connectivity = this->mesh_graph->get_inter_mesh_connectivity();
@@ -122,8 +123,8 @@ void RoutingTableGenerator::generate_intramesh_routing_table(const IntraMeshConn
     };
     for (std::uint32_t mesh_id_val = 0; mesh_id_val < this->intra_mesh_table_.size(); mesh_id_val++) {
         MeshId mesh_id{mesh_id_val};
-        for (chip_id_t src_chip_id = 0; src_chip_id < this->intra_mesh_table_[mesh_id_val].size(); src_chip_id++) {
-            for (chip_id_t dst_chip_id = 0; dst_chip_id < this->intra_mesh_table_[mesh_id_val].size(); dst_chip_id++) {
+        for (ChipId src_chip_id = 0; src_chip_id < this->intra_mesh_table_[mesh_id_val].size(); src_chip_id++) {
+            for (ChipId dst_chip_id = 0; dst_chip_id < this->intra_mesh_table_[mesh_id_val].size(); dst_chip_id++) {
                 auto src_mesh_coord = this->mesh_graph->chip_to_coordinate(mesh_id, src_chip_id);
                 auto dst_mesh_coord = this->mesh_graph->chip_to_coordinate(mesh_id, dst_chip_id);
                 // X first routing, traverse rows first
@@ -157,7 +158,7 @@ void RoutingTableGenerator::generate_intramesh_routing_table(const IntraMeshConn
 
 // Shortest Path
 // TODO: Put into mesh algorithms?
-std::vector<std::vector<std::vector<std::pair<chip_id_t, MeshId>>>> RoutingTableGenerator::get_paths_to_all_meshes(
+std::vector<std::vector<std::vector<std::pair<ChipId, MeshId>>>> RoutingTableGenerator::get_paths_to_all_meshes(
     MeshId src, const InterMeshConnectivity& inter_mesh_connectivity) const {
     // TODO: add more tests for this
     std::uint32_t num_meshes = inter_mesh_connectivity.size();
@@ -165,7 +166,7 @@ std::vector<std::vector<std::vector<std::pair<chip_id_t, MeshId>>>> RoutingTable
     std::vector<std::uint8_t> visited(num_meshes, false);
 
     // paths[target_mesh_id][path_count][next_chip and next_mesh];
-    std::vector<std::vector<std::vector<std::pair<chip_id_t, MeshId>>>> paths;
+    std::vector<std::vector<std::vector<std::pair<ChipId, MeshId>>>> paths;
     paths.resize(num_meshes);
     paths[*src] = {{{}}};
 
@@ -181,8 +182,7 @@ std::vector<std::vector<std::vector<std::pair<chip_id_t, MeshId>>>> RoutingTable
         q.pop();
 
         // Captures paths at the chip level
-        for (chip_id_t chip_in_mesh = 0; chip_in_mesh < inter_mesh_connectivity[*current_mesh_id].size();
-             chip_in_mesh++) {
+        for (ChipId chip_in_mesh = 0; chip_in_mesh < inter_mesh_connectivity[*current_mesh_id].size(); chip_in_mesh++) {
             for (const auto& [connected_mesh_id, edge] : inter_mesh_connectivity[*current_mesh_id][chip_in_mesh]) {
                 if (!visited[*connected_mesh_id]) {
                     q.push(connected_mesh_id);
@@ -225,7 +225,7 @@ void RoutingTableGenerator::generate_intermesh_routing_table(
         auto paths = get_paths_to_all_meshes(src_mesh_id, inter_mesh_connectivity);
         MeshShape mesh_shape = this->mesh_graph->get_mesh_shape(src_mesh_id);
         std::uint32_t ew_size = mesh_shape[1];
-        for (chip_id_t src_chip_id = 0; src_chip_id < this->inter_mesh_table_[src_mesh_id_val].size(); src_chip_id++) {
+        for (ChipId src_chip_id = 0; src_chip_id < this->inter_mesh_table_[src_mesh_id_val].size(); src_chip_id++) {
             for (std::uint32_t dst_mesh_id_val = 0; dst_mesh_id_val < this->inter_mesh_table_.size(); dst_mesh_id_val++) {
                 MeshId dst_mesh_id{dst_mesh_id_val};
                 if (dst_mesh_id == src_mesh_id) {
@@ -240,16 +240,16 @@ void RoutingTableGenerator::generate_intermesh_routing_table(
                 if (candidate_paths.empty()) {
                     this->inter_mesh_table_[src_mesh_id_val][src_chip_id][dst_mesh_id_val] = RoutingDirection::NONE;
                     this->exit_node_lut_[src_mesh_id_val][src_chip_id][dst_mesh_id_val] =
-                        std::numeric_limits<chip_id_t>::max();
+                        std::numeric_limits<ChipId>::max();
                     continue;
                 }
                 // TODO: This exit_chip_id doesn't make sense since it is always chip 0
-                chip_id_t exit_chip_id = candidate_paths[0][1].first;
+                ChipId exit_chip_id = candidate_paths[0][1].first;
                 MeshId next_mesh_id = candidate_paths[0][1].second;
                 for (auto& path : candidate_paths) {
                     // First element is itself, second is next mesh
                     TT_ASSERT(!path.empty(), "Expecting at least two entries in path");
-                    chip_id_t candidate_exit_chip_id = path[1].first;  // first element is the first hop to target mesh
+                    ChipId candidate_exit_chip_id = path[1].first;  // first element is the first hop to target mesh
                     MeshId candidate_next_mesh_id = path[1].second;
                     if (candidate_exit_chip_id == src_chip_id) {
                         // optimization for latency, always use src chip if it is an exit chip to next mesh, regardless
@@ -324,9 +324,9 @@ void RoutingTableGenerator::print_routing_tables() const {
     ss << "Routing Table Generator: IntraMesh Routing Tables" << std::endl;
     for (std::uint32_t mesh_id_val = 0; mesh_id_val < this->intra_mesh_table_.size(); mesh_id_val++) {
         ss << "M" << mesh_id_val << ":" << std::endl;
-        for (chip_id_t src_chip_id = 0; src_chip_id < this->intra_mesh_table_[mesh_id_val].size(); src_chip_id++) {
+        for (ChipId src_chip_id = 0; src_chip_id < this->intra_mesh_table_[mesh_id_val].size(); src_chip_id++) {
             ss << "   D" << src_chip_id << ": ";
-            for (chip_id_t dst_chip_or_mesh_id = 0;
+            for (ChipId dst_chip_or_mesh_id = 0;
                  dst_chip_or_mesh_id < this->intra_mesh_table_[mesh_id_val][src_chip_id].size();
                  dst_chip_or_mesh_id++) {
                 auto direction = this->intra_mesh_table_[mesh_id_val][src_chip_id][dst_chip_or_mesh_id];
@@ -340,9 +340,9 @@ void RoutingTableGenerator::print_routing_tables() const {
     ss << "Routing Table Generator: InterMesh Routing Tables" << std::endl;
     for (std::uint32_t mesh_id_val = 0; mesh_id_val < this->inter_mesh_table_.size(); mesh_id_val++) {
         ss << "M" << mesh_id_val << ":" << std::endl;
-        for (chip_id_t src_chip_id = 0; src_chip_id < this->inter_mesh_table_[mesh_id_val].size(); src_chip_id++) {
+        for (ChipId src_chip_id = 0; src_chip_id < this->inter_mesh_table_[mesh_id_val].size(); src_chip_id++) {
             ss << "   D" << src_chip_id << ": ";
-            for (chip_id_t dst_chip_or_mesh_id = 0;
+            for (ChipId dst_chip_or_mesh_id = 0;
                  dst_chip_or_mesh_id < this->inter_mesh_table_[mesh_id_val][src_chip_id].size();
                  dst_chip_or_mesh_id++) {
                 auto direction = this->inter_mesh_table_[mesh_id_val][src_chip_id][dst_chip_or_mesh_id];
@@ -363,17 +363,17 @@ const std::vector<FabricNodeId>& RoutingTableGenerator::get_exit_nodes_routing_t
 }
 
 FabricNodeId RoutingTableGenerator::get_exit_node_from_mesh_to_mesh(
-    MeshId src_mesh_id, chip_id_t src_chip_id, MeshId dst_mesh_id) const {
+    MeshId src_mesh_id, ChipId src_chip_id, MeshId dst_mesh_id) const {
     TT_FATAL(*src_mesh_id < this->exit_node_lut_.size(), "src_mesh_id out of range");
     TT_FATAL(src_chip_id < this->exit_node_lut_[*src_mesh_id].size(), "src_chip_id out of range");
     TT_FATAL(*dst_mesh_id < this->exit_node_lut_[*src_mesh_id][src_chip_id].size(), "dst_mesh_id out of range");
 
-    chip_id_t exit_chip = this->exit_node_lut_[*src_mesh_id][src_chip_id][*dst_mesh_id];
+    ChipId exit_chip = this->exit_node_lut_[*src_mesh_id][src_chip_id][*dst_mesh_id];
     if (src_mesh_id == dst_mesh_id) {
         return FabricNodeId(src_mesh_id, src_chip_id);
     }
     TT_FATAL(
-        exit_chip != std::numeric_limits<chip_id_t>::max(),
+        exit_chip != std::numeric_limits<ChipId>::max(),
         "No exit chip mapped from M{}D{} to M{}",
         *src_mesh_id,
         src_chip_id,

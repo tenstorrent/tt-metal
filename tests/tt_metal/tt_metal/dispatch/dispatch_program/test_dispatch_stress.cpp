@@ -129,7 +129,7 @@ TEST(DispatchStress, TensixRunManyTimes) {
         log_info(LogTest, "Running iteration #{}", idx);
         // Need to open/close the device each time in order to reproduce original issue.
         auto num_devices = tt::tt_metal::GetNumAvailableDevices();
-        std::vector<chip_id_t> chip_ids;
+        std::vector<ChipId> chip_ids;
         chip_ids.reserve(num_devices);
         for (unsigned int id = 0; id < num_devices; id++) {
             chip_ids.push_back(id);

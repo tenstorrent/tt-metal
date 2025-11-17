@@ -26,8 +26,8 @@ constexpr NOC k_dispatch_downstream_noc = NOC::NOC_0;
 
 struct DispatchKernelNode {
     int id;
-    chip_id_t device_id;             // Device that this kernel is located on
-    chip_id_t servicing_device_id;   // Remote device that this kernel services, used for kernels on MMIO
+    ChipId device_id;                // Device that this kernel is located on
+    ChipId servicing_device_id;      // Remote device that this kernel services, used for kernels on MMIO
     uint8_t cq_id;                   // CQ this kernel implements
     DispatchWorkerType kernel_type;  // Type of dispatch kernel this is
     std::vector<int> upstream_ids;   // Upstream dispatch kernels
@@ -40,7 +40,7 @@ struct DispatchKernelNode {
 // a created Device to fill out the settings. First version automatically generates the topology based on devices, num
 // cqs, and detected board. Second version uses the topology passed in.
 void populate_fd_kernels(const std::vector<IDevice*>& devices, uint32_t num_hw_cqs);
-void populate_fd_kernels(const std::set<chip_id_t>& device_ids, uint32_t num_hw_cqs);
+void populate_fd_kernels(const std::set<ChipId>& device_ids, uint32_t num_hw_cqs);
 void populate_fd_kernels(const std::vector<DispatchKernelNode>& nodes);
 
 // Populate the static arguments for a device.
@@ -61,13 +61,13 @@ std::unique_ptr<tt::tt_metal::Program> get_compiled_cq_program(tt::tt_metal::IDe
 void configure_dispatch_cores(tt::tt_metal::IDevice* device);
 
 // Return the virtual dispatch cores running on a given device
-const std::unordered_set<CoreCoord>& get_virtual_dispatch_cores(chip_id_t dev_id);
+const std::unordered_set<CoreCoord>& get_virtual_dispatch_cores(ChipId dev_id);
 
 // Return the virtual cores used for dispatch routing/tunneling on a given device
-const std::unordered_set<CoreCoord>& get_virtual_dispatch_routing_cores(chip_id_t dev_id);
+const std::unordered_set<CoreCoord>& get_virtual_dispatch_routing_cores(ChipId dev_id);
 
 // Return the set of termination targets that were registered for this device
-const std::unordered_set<tt::tt_metal::TerminationInfo>& get_registered_termination_cores(chip_id_t dev_id);
+const std::unordered_set<tt::tt_metal::TerminationInfo>& get_registered_termination_cores(ChipId dev_id);
 
 // Must be called at the end of the application to cleanup any static state allocated by this module.
 void reset_topology_state();

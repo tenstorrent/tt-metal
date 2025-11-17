@@ -9,6 +9,7 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -217,6 +218,23 @@ bool validation(
                 }
             }
 
+        } else if (df == 2) {
+            auto result_bfp4 = unpack_bfp4_tiles_into_float_vec(result_vec, true, true);
+            auto input_bfp4 = unpack_bfp4_tiles_into_float_vec(input_vec, true, true);
+
+            for (uint32_t i = 0; i < num_slices; ++i) {
+                uint32_t input_step = start_index + (i * num_datum_per_slice * num_banks);
+                std::vector<float> input_slice(
+                    input_bfp4.begin() + input_step, input_bfp4.begin() + input_step + num_datum_per_slice);
+                uint32_t result_step = i * num_datum_per_slice;
+                std::vector<float> result_slice(
+                    result_bfp4.begin() + result_step, result_bfp4.begin() + result_step + num_datum_per_slice);
+
+                if (input_slice != result_slice) {
+                    return false;
+                }
+            }
+
         } else {
             auto result_bf16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
             auto input_bf16 = unpack_uint32_vec_into_bfloat16_vec(input_vec);
@@ -326,13 +344,7 @@ int main(int argc, char** argv) {
         }
 
         if (use_device_profiler) {
-#if !defined(TRACY_ENABLE)
-            log_error(
-                LogTest,
-                "Metal library and test code should be build with "
-                "profiler option using ./build_metal.sh --enable-profiler");
-#endif
-            auto device_profiler = getenv("TT_METAL_DEVICE_PROFILER");
+            bool device_profiler = tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_enabled();
             TT_FATAL(
                 device_profiler,
                 "Before running the program, do one of the following in a shell: "
@@ -351,6 +363,9 @@ int main(int argc, char** argv) {
         } else if (df == 1) {
             input_size = k * n * 2;
             tile_format = tt::DataFormat::Float16_b;
+        } else if (df == 2) {
+            input_size = k * n * 576 / 1024;
+            tile_format = tt::DataFormat::Bfp4_b;
         } else {
             TT_THROW("Input data format {} is invalid. Please change.", df);
         }
@@ -413,6 +428,8 @@ int main(int argc, char** argv) {
             // input_vec = create_constant_vector_of_bfp8(
             //     input_size, 100, true);
             input_vec = test_utils::create_random_vector_of_bfp8(input_size, true, 100, 1234);
+        } else if (tile_format == tt::DataFormat::Bfp4_b) {
+            input_vec = test_utils::create_random_vector_of_bfp4(input_size, true, 100, 1234);
         } else {
             // input_vec = create_constant_vector_of_bfloat16(
             //     input_size * total_banks / num_banks, 100);
@@ -520,9 +537,9 @@ int main(int argc, char** argv) {
 
     if (pass) {
         log_info(LogTest, "Test Passed");
+        return 0;
     } else {
         log_error(LogTest, "Test Failed");
+        return 1;
     }
-
-    return 0;
 }

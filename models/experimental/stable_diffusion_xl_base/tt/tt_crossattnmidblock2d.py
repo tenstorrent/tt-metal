@@ -17,6 +17,7 @@ class TtUNetMidBlock2DCrossAttn(LightweightModule):
         query_dim,
         num_attn_heads,
         out_dim,
+        debug_mode=False,
     ):
         super().__init__()
 
@@ -40,7 +41,9 @@ class TtUNetMidBlock2DCrossAttn(LightweightModule):
 
         for i in range(num_layers_resn):
             self.resnets.append(
-                TtResnetBlock2D(device, state_dict, f"{module_path}.resnets.{i}", model_config=model_config)
+                TtResnetBlock2D(
+                    device, state_dict, f"{module_path}.resnets.{i}", model_config=model_config, debug_mode=debug_mode
+                )
             )
 
     def forward(self, input_tensor, input_shape, temb=None, encoder_hidden_states=None, attention_mask=None):

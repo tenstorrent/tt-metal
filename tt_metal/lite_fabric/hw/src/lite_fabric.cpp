@@ -7,7 +7,7 @@
 #include <utility>
 
 #include "tt_metal/api/tt-metalium/hal_types.hpp"
-#include "blackhole/noc_nonblocking_api.h"
+#include "noc_nonblocking_api.h"
 #include "dataflow_api.h"
 #include "eth_chan_noc_mapping.h"
 #include "firmware_common.h"
@@ -19,6 +19,8 @@
 #include "tt_metal/lite_fabric/hw/inc/header.hpp"
 #include "tt_metal/lite_fabric/hw/inc/types.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
+#include "hw/inc/ethernet/tunneling.h"
+#include "risc_interface.hpp"
 
 #if !defined(tt_l1_ptr)
 #define tt_l1_ptr __attribute__((rvtt_l1_ptr))
@@ -85,9 +87,18 @@ ReceiverChannelPointersTupleImpl receiver_channel_pointers_tuple __attribute__((
 // object_init and routing_init are expected to be called before this
 __attribute__((noinline)) void service_lite_fabric() {
     invalidate_l1_cache();
-    if (!reinterpret_cast<volatile lite_fabric::FabricLiteMemoryMap*>(LITE_FABRIC_CONFIG_START)
-             ->config.routing_enabled) {
-        return;
+    switch (reinterpret_cast<volatile lite_fabric::FabricLiteMemoryMap*>(LITE_FABRIC_CONFIG_START)
+                ->config.routing_enabled) {
+        case lite_fabric::RoutingEnabledState::ENABLED: break;
+        case lite_fabric::RoutingEnabledState::STOPPED: return;
+        case lite_fabric::RoutingEnabledState::STOP:
+            reinterpret_cast<volatile lite_fabric::FabricLiteMemoryMap*>(LITE_FABRIC_CONFIG_START)
+                ->config.routing_enabled = lite_fabric::RoutingEnabledState::STOPPED;
+            ConnectedRiscInterface::assert_connected_dm1_reset();
+            constexpr uint32_t routing_enabled_address =
+                LITE_FABRIC_CONFIG_START + offsetof(lite_fabric::FabricLiteConfig, routing_enabled);
+            internal_::eth_send_packet<false>(0, routing_enabled_address >> 4, routing_enabled_address >> 4, 1);
+            return;
     }
     lite_fabric::run_sender_channel_step<0>();
     lite_fabric::run_receiver_channel_step<0>();
@@ -95,10 +106,10 @@ __attribute__((noinline)) void service_lite_fabric() {
 
 inline void object_init(volatile lite_fabric::FabricLiteMemoryMap* mem_map) {
     local_sender_channels =
-        tt::tt_fabric::EthChannelBuffers<lite_fabric::FabricLiteHeader, SENDER_NUM_BUFFERS_ARRAY>::make(
+        tt::tt_fabric::StaticSizedSenderEthChannelBuffers<lite_fabric::FabricLiteHeader, SENDER_NUM_BUFFERS_ARRAY>::make(
             std::make_index_sequence<NUM_SENDER_CHANNELS>{});
     remote_receiver_channels =
-        tt::tt_fabric::EthChannelBuffers<lite_fabric::FabricLiteHeader, RECEIVER_NUM_BUFFERS_ARRAY>::make(
+        tt::tt_fabric::StaticSizedEthChannelBuffers<lite_fabric::FabricLiteHeader, RECEIVER_NUM_BUFFERS_ARRAY>::make(
             std::make_index_sequence<NUM_RECEIVER_CHANNELS>{});
     outbound_to_receiver_channel_pointers_tuple = OutboundReceiverChannelPointersTuple::make();
     receiver_channel_pointers_tuple = ReceiverChannelPointersTuple::make();
@@ -156,7 +167,7 @@ inline void teardown(volatile lite_fabric::FabricLiteMemoryMap* mem_map) {
     noc_async_write_barrier();
     noc_async_atomic_barrier();
 
-    lite_fabric::ConnectedRisc1Interface::assert_connected_dm1_reset();
+    lite_fabric::ConnectedRiscInterface::assert_connected_dm1_reset();
 
     mem_map->config.current_state = lite_fabric::InitState::READY;
 }

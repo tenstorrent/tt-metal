@@ -10,7 +10,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/fabric_edm_types.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>  // chip_id_t
+#include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
 #include <vector>
 #include <umd/device/types/core_coordinates.hpp>
 #include <optional>
@@ -92,7 +92,7 @@ void append_routing_plane_connection_manager_rt_args(
 std::vector<uint32_t> get_forwarding_link_indices(
     const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id);
 
-FabricNodeId get_fabric_node_id_from_physical_chip_id(chip_id_t physical_chip_id);
+FabricNodeId get_fabric_node_id_from_physical_chip_id(ChipId physical_chip_id);
 
 std::vector<chan_id_t> get_active_fabric_eth_routing_planes_in_direction(
     FabricNodeId fabric_node_id, RoutingDirection routing_direction);
@@ -111,16 +111,20 @@ tt::tt_fabric::Topology get_fabric_topology();
  *
  * Return value: void
  *
- * | Argument           | Description                         | Data type         | Valid range | Required |
- * |--------------------|-------------------------------------|-------------------|-------------|----------|
- * | fabric_config      | Fabric config to set                | FabricConfig      |             | Yes      |
- * | num_routing_planes | Number of routing planes for fabric | optional<uint8_t> |             | No       |
+ * | Argument             | Description                      | Data type              | Required |
+ * |---------------------|----------------------------------|------------------------|----------|
+ * | fabric_config       | Fabric config to set             | FabricConfig           | Yes      |
+ * | reliability_mode    | Reliability mode for fabric      | FabricReliabilityMode  | No       |
+ * | num_routing_planes  | Number of routing planes         | optional<uint8_t>      | No       |
+ * | fabric_tensix_config| Tensix fabric configuration      | FabricTensixConfig     | No       |
+ * | fabric_udm_mode     | Unified DataMovement mode        | FabricUDMMode          | No       |
  */
 void SetFabricConfig(
     FabricConfig fabric_config,
     FabricReliabilityMode reliability_mode = FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
     std::optional<uint8_t> num_routing_planes = std::nullopt,
-    FabricTensixConfig fabric_tensix_config = FabricTensixConfig::DISABLED);
+    FabricTensixConfig fabric_tensix_config = FabricTensixConfig::DISABLED,
+    FabricUDMMode fabric_udm_mode = FabricUDMMode::DISABLED);
 
 FabricConfig GetFabricConfig();
 

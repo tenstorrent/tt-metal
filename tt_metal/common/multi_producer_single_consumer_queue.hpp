@@ -99,7 +99,7 @@ public:
 
     void clear() {
         while (!empty()) {
-            void(pop());
+            (void)pop();
         }
     }
 

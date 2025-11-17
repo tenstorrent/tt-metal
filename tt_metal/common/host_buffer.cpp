@@ -14,7 +14,7 @@
 
 namespace tt::tt_metal {
 
-HostBuffer::HostBuffer() : pin_(), view_(tt::stl::Span<std::byte>()), type_info_(nullptr) {}
+HostBuffer::HostBuffer() : type_info_(nullptr) {}
 
 HostBuffer::HostBuffer(const HostBuffer& other) = default;
 

@@ -60,18 +60,18 @@ public:
     Board(
         const std::unordered_map<PortType, std::unordered_map<PortId, std::vector<AsicChannel>>>& ports,
         const std::unordered_map<PortType, std::vector<std::pair<PortId, PortId>>>& internal_connections,
-        const tt::umd::BoardType& board_type);
+        const BoardType& board_type);
 
     // Constructor that takes a pair of ports and connections
     Board(
         const std::pair<
             std::unordered_map<PortType, std::unordered_map<PortId, std::vector<AsicChannel>>>,
             std::unordered_map<PortType, std::vector<std::pair<PortId, PortId>>>>& ports_and_connections,
-        const tt::umd::BoardType& board_type);
+        const BoardType& board_type);
 
     tt::ARCH get_arch() const;
 
-    tt::umd::BoardType get_board_type() const;
+    BoardType get_board_type() const;
 
     // Get available port IDs for a specific port type
     const std::vector<PortId>& get_available_port_ids(PortType port_type) const;
@@ -99,12 +99,12 @@ protected:
     std::unordered_map<PortType, std::vector<std::pair<PortId, PortId>>> internal_connections_;
     tt::ARCH arch_ = tt::ARCH::Invalid;
     std::unordered_map<AsicChannel, Port> asic_to_port_map_;
-    tt::umd::BoardType board_type_ = tt::umd::BoardType::UNKNOWN;
+    BoardType board_type_ = BoardType::UNKNOWN;
     std::unordered_set<uint32_t> asic_locations_;
 };
 
-Board create_board(tt::umd::BoardType board_type);
+Board create_board(BoardType board_type);
 
-tt::umd::BoardType get_board_type_from_string(const std::string& board_name);
+BoardType get_board_type_from_string(const std::string& board_name);
 
 }  // namespace tt::scaleout_tools

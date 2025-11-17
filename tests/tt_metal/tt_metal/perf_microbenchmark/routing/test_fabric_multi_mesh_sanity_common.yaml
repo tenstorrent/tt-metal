@@ -1,0 +1,18 @@
+Tests:
+  - name: "FlowControlMeshDynamic"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+
+    parametrization_params:
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      num_links: [1, 2, 3, 4]
+      size: [1024, 2048, 4096]
+
+    defaults:
+      ftype: unicast
+      num_packets: 10000
+
+    patterns:
+      - type: sequential_all_to_all

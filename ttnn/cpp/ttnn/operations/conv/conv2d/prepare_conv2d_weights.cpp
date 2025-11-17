@@ -997,6 +997,7 @@ static Conv2dBlockConfig get_opt_block_config(
         output_dtype,
         input_memory_config,
         kernel_size,
+        stride,
         dilation,
         padding,
         groups,
@@ -1009,7 +1010,7 @@ static Conv2dBlockConfig get_opt_block_config(
     const uint32_t in_channels_alignment = get_input_channels_alignment(
         conv_config.shard_layout.value(),
         input_layout,
-        input_memory_config.buffer_type(),
+        input_memory_config.buffer_type() == BufferType::DRAM,
         mm_conv,
         input_memory_config);
 
@@ -1114,12 +1115,15 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
     auto orig_stride = stride;
     const bool is_conv1d = is_1d_conv(kernel_size[1], input_width);
     conv_config.enable_kernel_stride_folding = auto_enable_kernel_folding(
+        input_memory_config,
+        input_layout,
+        input_dtype,
         conv_config.enable_kernel_stride_folding,
-        input_memory_config.is_dram(),
         input_height,
         input_width,
         kernel_size,
         stride,
+        dilation,
         padding_n4);
     if (conv_config.enable_kernel_stride_folding.value()) {
         auto folding_result = compute_kernel_stride_folding_params(
@@ -1171,11 +1175,7 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
                 .mm_conv = mm_conv},
             device);
         const uint32_t input_channels_alignment = get_input_channels_alignment(
-            TensorMemoryLayout::INTERLEAVED,
-            input_layout,
-            is_dram_conv ? BufferType::DRAM : BufferType::L1,
-            mm_conv,
-            input_memory_config);
+            TensorMemoryLayout::INTERLEAVED, input_layout, is_dram_conv, mm_conv, input_memory_config);
         if (mm_conv) {
             return Conv2dWeightsBiasPrepConfig(
                 input_channels_alignment,
@@ -1256,11 +1256,7 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
     }
 
     uint32_t input_channels_alignment = get_input_channels_alignment(
-        conv_config.shard_layout.value(),
-        input_layout,
-        is_dram_conv ? BufferType::DRAM : BufferType::L1,
-        mm_conv,
-        input_memory_config);
+        conv_config.shard_layout.value(), input_layout, is_dram_conv, mm_conv, input_memory_config);
 
     ParallelConfig parallel_config;
     if (input_memory_config.shard_spec().has_value() && !conv_config.reshard_if_not_optimal) {
@@ -1324,11 +1320,7 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
             has_bias);
 
         input_channels_alignment = get_input_channels_alignment(
-            conv_config.shard_layout.value(),
-            input_layout,
-            BufferType::L1,
-            mm_conv,
-            input_tensor_sharded_memory_config);
+            conv_config.shard_layout.value(), input_layout, false, mm_conv, input_tensor_sharded_memory_config);
     }
 
     ParallelConfig output_parallel_config = determine_output_parallel_config(

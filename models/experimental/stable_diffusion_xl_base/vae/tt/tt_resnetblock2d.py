@@ -19,7 +19,7 @@ from models.experimental.stable_diffusion_xl_base.vae.tt.vae_utility import (
 
 
 class TtResnetBlock2D(LightweightModule):
-    def __init__(self, device, state_dict, module_path, model_config, conv_shortcut=False):
+    def __init__(self, device, state_dict, module_path, model_config, conv_shortcut=False, debug_mode=False):
         super().__init__()
 
         self.device = device
@@ -29,6 +29,7 @@ class TtResnetBlock2D(LightweightModule):
         self.padding = (1, 1)
         self.dilation = (1, 1)
         self.groups = 1
+        self.debug_mode = debug_mode
 
         self.norm_groups = 32
         self.norm_eps = 1e-6
@@ -200,7 +201,7 @@ class TtResnetBlock2D(LightweightModule):
 
         hidden_states = ttnn.silu(hidden_states)
 
-        [hidden_states, [H, W], [self.tt_conv1_weights, self.tt_conv1_bias]] = ttnn.conv2d(
+        [hidden_states, [H, W], [tt_conv1_weights, tt_conv1_bias]] = ttnn.conv2d(
             input_tensor=hidden_states,
             weight_tensor=self.tt_conv1_weights,
             in_channels=self.conv1_params["input_channels"],
@@ -224,6 +225,9 @@ class TtResnetBlock2D(LightweightModule):
             dtype=self.conv_output_dtype,
         )
         C = self.conv1_params["output_channels"]
+        if not self.debug_mode:
+            self.tt_conv1_weights = tt_conv1_weights
+            self.tt_conv1_bias = tt_conv1_bias
 
         if self.is_sharded_gn2:
             shard_shape = B * H * W // self.norm_core_grid_2.x, C // self.norm_core_grid_2.y
@@ -277,7 +281,7 @@ class TtResnetBlock2D(LightweightModule):
 
         hidden_states = ttnn.silu(hidden_states)  # note: silu hangs if not tile
 
-        [hidden_states, [H, W], [self.tt_conv2_weights, self.tt_conv2_bias]] = ttnn.conv2d(
+        [hidden_states, [H, W], [tt_conv2_weights, tt_conv2_bias]] = ttnn.conv2d(
             input_tensor=hidden_states,
             weight_tensor=self.tt_conv2_weights,
             in_channels=self.conv2_params["input_channels"],
@@ -301,6 +305,9 @@ class TtResnetBlock2D(LightweightModule):
             dtype=self.conv_output_dtype,
         )
         C = self.conv2_params["output_channels"]
+        if not self.debug_mode:
+            self.tt_conv2_weights = tt_conv2_weights
+            self.tt_conv2_bias = tt_conv2_bias
 
         if self.tt_conv3_weights is not None:
             input_tensor_pre_conv = input_tensor

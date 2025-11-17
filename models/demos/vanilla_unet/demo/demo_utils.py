@@ -23,7 +23,7 @@ def data_loader(args):
         transform=None,  # Add any transformations if necessary
     )
 
-    loader = torch.utils.data.DataLoader(dataset, batch_size=args.batch_size, drop_last=False, num_workers=1)
+    loader = torch.utils.data.DataLoader(dataset, batch_size=args.batch_size, drop_last=False, num_workers=0)
     return loader
 
 
@@ -34,7 +34,7 @@ def data_loader_imageset(args):
         image_size=args.image_size,
         random_sampling=False,
     )
-    loader = torch.utils.data.DataLoader(dataset, batch_size=args.batch_size, drop_last=False, num_workers=1)
+    loader = torch.utils.data.DataLoader(dataset, batch_size=args.batch_size, drop_last=False, num_workers=0)
     return loader
 
 

@@ -6,7 +6,6 @@ import pytest
 import torch
 import ttnn
 import numpy as np
-from models.common.utility_functions import skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_allclose
 
 TILE_HEIGHT = 32
@@ -30,6 +29,10 @@ TILE_HEIGHT = 32
         ([2, 256, 2, 32], [2, 128, 2, 32], 1),
         ([2, 32, 96], [2, 32, 32], 1),
         ([128, 128], [128, 64], 1),
+        ([1, 2, 128, 1, 768], [1, 2, 8, 1, 768], 2),
+        ([1, 2, 8, 1, 768], [1, 2, 8, 1, 128], -1),
+        ([1, 2, 8, 2, 768], [1, 2, 8, 2, 128], -1),
+        ([1, 1, 2, 8, 2, 768], [1, 1, 2, 8, 2, 128], -2),
     ],
 )
 def test_gather_general(input_shape, index_shape, dim, device):

@@ -95,66 +95,90 @@ run_t3000_sentence_bert_tests() {
   fi
 }
 
+run_t3000_dit_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+  test_name=${FUNCNAME[1]}
+  test_cmd=$1
+
+  echo "LOG_METAL: Running ${test_name}"
+
+  pytest ${test_cmd} ; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: ${test_name} $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
+run_t3000_gemma3_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-27b-it pytest models/demos/gemma3/tests/test_perf_vision_cross_attention_transformer.py ; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: Gemma3 27B ViT test completed"
+  echo "LOG_METAL: run_t3000_gemma3_tests $duration seconds to complete"
+
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
+run_t3000_wan22_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_wan22_tests"
+
+  export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
+  pytest models/experimental/tt_dit/tests/models/wan2_2/test_transformer_wan.py::test_wan_transformer_model_caching -k "2x4sp0tp1"
+  pytest models/experimental/tt_dit/tests/models/wan2_2/test_performance_wan.py -k "2x4sp0tp1 and resolution_480p"; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_wan22_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
+run_t3000_mochi_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_mochi_tests"
+
+  export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
+  pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_transformer_mochi.py::test_mochi_transformer_model_caching -k "2x4sp0tp1"
+  pytest models/experimental/tt_dit/tests/models/mochi/test_performance_mochi.py -k "2x4sp0tp1 and yes_use_cache" --timeout 1800; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_mochi_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 run_t3000_stable_diffusion_35_large_tests() {
-  # Record the start time
-  fail=0
-  start_time=$(date +%s)
-
-  echo "LOG_METAL: Running run_t3000_stable_diffusion_35_large_tests"
-
-  pytest models/experimental/tt_dit/tests/models/test_performance_sd35.py -k "2x4cfg1sp0tp1" ; fail+=$?
-
-  # Record the end time
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_stable_diffusion_35_large_tests $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
+  run_t3000_dit_tests "models/experimental/tt_dit/tests/models/sd35/test_performance_sd35.py -k 2x4cfg1sp0tp1"
 }
 
-run_t3000_ccl_all_gather_perf_tests() {
-  # Record the start time
-  fail=0
-  start_time=$(date +%s)
-
-  echo "LOG_METAL: Running run_t3000_ccl_all_gather_perf_tests"
-
-  tests/ttnn/unit_tests/operations/ccl/perf/run_all_gather_profile.sh -t t3000
-  fail+=$?
-
-  # Record the end time
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_ccl_all_gather_perf_tests $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
-}
-
-run_t3000_ccl_reduce_scatter_perf_tests() {
-  # Record the start time
-  fail=0
-  start_time=$(date +%s)
-
-  echo "LOG_METAL: Running run_t3000_ccl_reduce_scatter_perf_tests"
-
-  tests/ttnn/unit_tests/operations/ccl/perf/run_reduce_scatter_profile.sh -t t3000
-  fail+=$?
-
-  # Record the end time
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_ccl_reduce_scatter_perf_tests $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
-}
-
-run_t3000_ccl_tests() {
-  # Run ccl performance tests
-  run_t3000_ccl_all_gather_perf_tests
-  run_t3000_ccl_reduce_scatter_perf_tests
+run_t3000_flux1_tests() {
+  run_t3000_dit_tests "models/experimental/tt_dit/tests/models/flux1/test_performance_flux1.py"
 }
 
 run_t3000_model_perf_tests() {
@@ -204,9 +228,7 @@ main() {
   cd $TT_METAL_HOME
   export PYTHONPATH=$TT_METAL_HOME
 
-  if [[ "$pipeline_type" == "ccl_perf_t3000_device" ]]; then
-    run_t3000_ccl_tests
-  elif [[ "$pipeline_type" == "model_perf_t3000" ]]; then
+  if [[ "$pipeline_type" == "model_perf_t3000" ]]; then
     run_t3000_model_perf_tests
   else
     echo "$pipeline_type is invalid (supported: [ccl_perf_t3000_device, model_perf_t3000])" 2>&1

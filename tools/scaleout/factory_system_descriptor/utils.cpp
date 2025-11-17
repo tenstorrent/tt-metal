@@ -24,29 +24,14 @@
 
 namespace tt::scaleout_tools {
 
-void validate_fsd_against_gsd(
-    const std::string& fsd_filename,
-    const std::string& gsd_filename,
+std::set<PhysicalChannelConnection> validate_fsd_against_gsd_impl(
+    const tt::scaleout_tools::fsd::proto::FactorySystemDescriptor& generated_fsd,
+    const YAML::Node& discovered_gsd,
     bool strict_validation,
-    bool assert_on_connection_mismatch) {
-    // Read the generated FSD using protobuf
-    tt::scaleout_tools::fsd::proto::FactorySystemDescriptor generated_fsd;
-    std::ifstream fsd_file(fsd_filename);
-    if (!fsd_file.is_open()) {
-        throw std::runtime_error("Failed to open FSD file: " + fsd_filename);
-    }
-
-    std::string fsd_content((std::istreambuf_iterator<char>(fsd_file)), std::istreambuf_iterator<char>());
-    fsd_file.close();
-
-    if (!google::protobuf::TextFormat::ParseFromString(fsd_content, &generated_fsd)) {
-        throw std::runtime_error("Failed to parse FSD protobuf from file: " + fsd_filename);
-    }
+    bool assert_on_connection_mismatch,
+    bool log_output) {
 
     const auto& hosts = generated_fsd.hosts();
-
-    // Read the discovered GSD (Global System Descriptor) - still using YAML
-    YAML::Node discovered_gsd = YAML::LoadFile(gsd_filename);
 
     // Compare the FSD with the discovered GSD
     // First, compare hostnames from the hosts field
@@ -180,11 +165,6 @@ void validate_fsd_against_gsd(
     bool has_global_eth_connections = discovered_gsd["global_eth_connections"] &&
                                       !discovered_gsd["global_eth_connections"].IsNull() &&
                                       discovered_gsd["global_eth_connections"].size() > 0;
-
-    // At least one connection type should exist
-    if (!(has_local_eth_connections || has_global_eth_connections)) {
-        throw std::runtime_error("No connection types found in discovered GSD");
-    }
 
     // Convert generated connections to a comparable format
     std::set<std::pair<PhysicalChannelEndpoint, PhysicalChannelEndpoint>> generated_connections;
@@ -342,8 +322,8 @@ void validate_fsd_against_gsd(
 
         for (const auto& conn : connections) {
             // Get board types from FSD for both connections independently
-            tt::umd::BoardType board_type_a = tt::umd::BoardType::UNKNOWN;
-            tt::umd::BoardType board_type_b = tt::umd::BoardType::UNKNOWN;
+            BoardType board_type_a = BoardType::UNKNOWN;
+            BoardType board_type_b = BoardType::UNKNOWN;
 
             // Find host_id for each connection by matching hostname
             uint32_t host_id_a = 0;
@@ -455,7 +435,9 @@ void validate_fsd_against_gsd(
         for (const auto& conn : missing_port_info) {
             oss << "  - " << conn.first << " <-> " << conn.second << "\n";
         }
-        std::cout << oss.str() << std::endl;
+        if (log_output) {
+            std::cout << oss.str() << std::endl;
+        }
     }
 
     // Report extra connections (in GSD but not in FSD) - both modes check this
@@ -475,7 +457,9 @@ void validate_fsd_against_gsd(
         for (const auto& conn : extra_port_info) {
             oss << "  - " << conn.first << " <-> " << conn.second << "\n";
         }
-        std::cout << oss.str() << std::endl;
+        if (log_output) {
+            std::cout << oss.str() << std::endl;
+        }
     }
 
     // Handle validation results
@@ -487,14 +471,61 @@ void validate_fsd_against_gsd(
         }
     } else {
         // Success message differs based on validation mode
-        if (strict_validation) {
-            std::cout << "All connections match between FSD and GSD (" << generated_connections.size()
-                      << " connections)" << std::endl;
-        } else {
-            std::cout << "All GSD connections found in FSD (" << discovered_connections.size()
-                      << " connections checked)" << std::endl;
+        if (log_output) {
+            if (strict_validation) {
+                std::cout << "All connections match between FSD and GSD (" << generated_connections.size()
+                          << " connections)" << std::endl;
+            } else {
+                std::cout << "All GSD connections found in FSD (" << discovered_connections.size()
+                          << " connections checked)" << std::endl;
+            }
         }
     }
+    return missing_in_gsd;
+}
+
+std::set<PhysicalChannelConnection> validate_fsd_against_gsd(
+    const std::string& fsd_filename,
+    const std::string& gsd_filename,
+    bool strict_validation,
+    bool assert_on_connection_mismatch,
+    bool log_output) {
+    // Read the generated FSD using protobuf
+    tt::scaleout_tools::fsd::proto::FactorySystemDescriptor generated_fsd;
+    std::ifstream fsd_file(fsd_filename);
+    if (!fsd_file.is_open()) {
+        throw std::runtime_error("Failed to open FSD file: " + fsd_filename);
+    }
+
+    std::string fsd_content((std::istreambuf_iterator<char>(fsd_file)), std::istreambuf_iterator<char>());
+    fsd_file.close();
+
+    if (!google::protobuf::TextFormat::ParseFromString(fsd_content, &generated_fsd)) {
+        throw std::runtime_error("Failed to parse FSD protobuf from file: " + fsd_filename);
+    }
+
+    // Read the discovered GSD (Global System Descriptor) - still using YAML
+    YAML::Node discovered_gsd = YAML::LoadFile(gsd_filename);
+
+    // Call a shared validation function that does the actual work
+    return validate_fsd_against_gsd_impl(generated_fsd, discovered_gsd, strict_validation, assert_on_connection_mismatch, log_output);
+}
+
+std::set<PhysicalChannelConnection> validate_cabling_descriptor_against_gsd(
+    const std::string& cabling_descriptor_path,
+    const std::vector<std::string>& hostnames,
+    const YAML::Node& gsd_yaml_node,
+    bool strict_validation,
+    bool assert_on_connection_mismatch,
+    bool log_output) {
+    // Generate FSD from the cabling descriptor using CablingGenerator
+    CablingGenerator cabling_generator(cabling_descriptor_path, hostnames);
+
+    // Generate the FSD protobuf object in memory
+    auto generated_fsd = cabling_generator.generate_factory_system_descriptor();
+
+    // Call a shared validation function that does the actual work
+    return validate_fsd_against_gsd_impl(generated_fsd, gsd_yaml_node, strict_validation, assert_on_connection_mismatch, log_output);
 }
 
 }  // namespace tt::scaleout_tools

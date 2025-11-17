@@ -648,7 +648,7 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
             ? "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_same_width_reader.cpp"
             : "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_same_width_writer.cpp";
 
-    bool interface_with_dram = (remote_core_type == CoreType::DRAM);
+    bool interface_with_dram = (remote_core_type == tt::CoreType::DRAM);
     tt::tt_metal::KernelHandle kernel_id_0 = tt::tt_metal::CreateKernel(
         program,
         kernel_name,
@@ -915,7 +915,7 @@ operation::ProgramWithCallbacks reshard_multi_core_same_height(const Tensor& inp
     const auto& all_cores = local_shard_spec.grid;
 
     const auto remote_core_type = remote_tensor.buffer()->core_type();
-    bool interface_with_dram = (remote_core_type == CoreType::DRAM);
+    bool interface_with_dram = (remote_core_type == tt::CoreType::DRAM);
     const auto local_cores = corerange_to_cores(
         local_shard_spec.grid, std::nullopt, local_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
     const auto remote_cores = corerange_to_cores(

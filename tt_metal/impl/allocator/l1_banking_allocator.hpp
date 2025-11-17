@@ -20,7 +20,7 @@ class L1BankingAllocator : public Allocator {
 public:
     explicit L1BankingAllocator(const AllocatorConfig& alloc_config);
     static AllocatorConfig generate_config(
-        chip_id_t device_id,
+        ChipId device_id,
         uint8_t num_hw_cqs,
         size_t l1_small_size,
         size_t trace_region_size,

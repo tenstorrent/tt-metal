@@ -48,6 +48,13 @@ using Shape = tt::tt_metal::Shape;
 using MeshHostRankId = tt::tt_fabric::MeshHostRankId;
 using SystemMesh = tt::tt_metal::distributed::SystemMesh;
 using MeshDeviceConfig = tt::tt_metal::distributed::MeshDeviceConfig;
+using HalProgrammableCoreType = tt::tt_metal::HalProgrammableCoreType;
+using HalL1MemAddrType = tt::tt_metal::HalL1MemAddrType;
+using ShardOrientation = tt::tt_metal::ShardOrientation;
+using ShardSpecBuffer = tt::tt_metal::ShardSpecBuffer;
+using BufferType = tt::tt_metal::BufferType;
+using TensorMemoryLayout = tt::tt_metal::TensorMemoryLayout;
+using BufferShardingArgs = tt::tt_metal::BufferShardingArgs;
 
 using Topology = tt::tt_fabric::Topology;
 
@@ -104,7 +111,7 @@ public:
             local_mesh_id_, MeshScope::LOCAL);
     }
 
-    void open_devices(const TestFabricSetup& fabric_setup) {
+    bool open_devices(const TestFabricSetup& fabric_setup) {
         const auto& topology = fabric_setup.topology;
         const auto& routing_type = fabric_setup.routing_type.value();
         const auto& fabric_tensix_config = fabric_setup.fabric_tensix_config.value();
@@ -142,6 +149,20 @@ public:
             new_fabric_config = it->second;
         }
 
+        // Use the new ControlPlane validation API - always skip on mismatch
+        const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        try {
+            if (cluster.get_cluster_type() == tt::tt_metal::ClusterType::GALAXY &&
+                !control_plane.is_fabric_config_valid(new_fabric_config)) {
+                log_warning(tt::LogTest, "Fabric configuration validation failed - can't open device");
+                return false;
+            }
+        } catch (const std::exception& e) {
+            log_warning(tt::LogTest, "Fabric configuration validation failed: {} - can't open device", e.what());
+            return false;
+        }
+
         if (new_fabric_config != current_fabric_config_ || fabric_tensix_config != current_fabric_tensix_config_ ||
             reliability_mode != current_fabric_reliability_mode_) {
             if (are_devices_open_) {
@@ -156,6 +177,7 @@ public:
         } else {
             log_info(tt::LogTest, "Reusing existing device setup with fabric config: {}", current_fabric_config_);
         }
+        return true;
     }
 
     void setup_workload() {
@@ -169,7 +191,11 @@ public:
     }
 
     void run_programs() {
-        tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *mesh_workload_, true);
+        if (mesh_workload_->get_programs().empty()) {
+            return;
+        }
+
+        tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *mesh_workload_, false);
     }
 
     void wait_for_programs() { tt::tt_metal::distributed::Finish(mesh_device_->mesh_command_queue()); }
@@ -197,7 +223,7 @@ public:
     // ======================================================================================
     // IDeviceInfoProvider methods
     // ======================================================================================
-    FabricNodeId get_fabric_node_id(const chip_id_t physical_chip_id) const override {
+    FabricNodeId get_fabric_node_id(const ChipId physical_chip_id) const override {
         return tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_node_id_from_physical_chip_id(
             physical_chip_id);
     }
@@ -220,6 +246,10 @@ public:
     uint32_t get_worker_noc_encoding(const CoreCoord logical_core) const override {
         const auto virtual_core = mesh_device_->worker_core_from_logical_core(logical_core);
         return tt_metal::MetalContext::instance().hal().noc_xy_encoding(virtual_core.x, virtual_core.y);
+    }
+
+    CoreCoord get_virtual_core_from_logical_core(CoreCoord logical_core) const override {
+        return mesh_device_->worker_core_from_logical_core(logical_core);
     }
 
     CoreCoord get_worker_grid_size() const override { return mesh_device_->compute_with_storage_grid_size(); }
@@ -328,18 +358,19 @@ public:
         auto all_cores = CoreRangeSet(all_cores_set);
         auto num_cores = all_cores_set.size();
         auto total_size = size_bytes * num_cores;
-        auto shard_params = tt::tt_metal::ShardSpecBuffer(all_cores, {1, 1}, tt::tt_metal::ShardOrientation::ROW_MAJOR, {1, 1}, {num_cores, 1});
+        auto shard_params = tt::tt_metal::ShardSpecBuffer(
+            all_cores, {1, 1}, tt::tt_metal::ShardOrientation::ROW_MAJOR, {1, 1}, {num_cores, 1});
 
-        auto buffer_distribution_spec =
-            tt::tt_metal::BufferDistributionSpec(Shape{num_cores, 1}, Shape{1, 1}, all_cores, tt::tt_metal::ShardOrientation::ROW_MAJOR);
+        auto buffer_distribution_spec = tt::tt_metal::BufferDistributionSpec(
+            Shape{num_cores, 1}, Shape{1, 1}, all_cores, tt::tt_metal::ShardOrientation::ROW_MAJOR);
 
         auto buffer_page_mapping = buffer_distribution_spec.compute_page_mapping();
 
         DeviceLocalBufferConfig buffer_specs = {
             .page_size = size_bytes,
             .buffer_type = tt::tt_metal::BufferType::L1,
-            .sharding_args =
-                tt::tt_metal::BufferShardingArgs(buffer_distribution_spec, shard_params, tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED),
+            .sharding_args = tt::tt_metal::BufferShardingArgs(
+                buffer_distribution_spec, shard_params, tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED),
             .bottom_up = std::nullopt,
             .sub_device_id = std::nullopt,
         };
@@ -352,12 +383,21 @@ public:
         return mesh_buffer;
     }
 
-    // Data reading helpers
-    std::unordered_map<CoreCoord, std::vector<uint32_t>> read_buffer_from_cores(
+    // Structure to hold read operation state
+    struct ReadBufferOperation {
+        std::shared_ptr<MeshBuffer> mesh_buffer;
+        tt::tt_metal::UncompressedBufferPageMapping buffer_page_mapping;
+        std::vector<uint32_t> data;
+        uint32_t size_bytes = 0;
+    };
+
+    // Start non-blocking read operation
+    ReadBufferOperation initiate_read_buffer_from_cores(
         const MeshCoordinate& device_coord,
         const std::vector<CoreCoord>& cores,
         uint32_t address,
-        uint32_t size_bytes) const override {
+        uint32_t size_bytes) const {
+
         auto mesh_buffer = create_mesh_buffer_helper(cores, address, size_bytes);
 
         const auto& buffer_distribution_spec =
@@ -365,18 +405,33 @@ public:
         TT_FATAL(buffer_distribution_spec.has_value(), "Buffer distribution spec is not set");
         const auto buffer_page_mapping = buffer_distribution_spec->compute_page_mapping();
 
+        // Preallocate data buffer
         auto total_size = size_bytes * buffer_page_mapping.all_cores.size();
-        std::vector<uint32_t> data;
-        data.resize(total_size / sizeof(uint32_t));
-        tt::tt_metal::distributed::ReadShard(mesh_device_->mesh_command_queue(), data, mesh_buffer, device_coord);
+        std::vector<uint32_t> data(total_size / sizeof(uint32_t));
 
-        // splice up data into map
+        // Start non-blocking read
+        tt::tt_metal::distributed::ReadShard(
+            mesh_device_->mesh_command_queue(),
+            data,
+            mesh_buffer,
+            device_coord,
+            false  // blocking=false
+        );
+
+        return {mesh_buffer, buffer_page_mapping, std::move(data), size_bytes};
+    }
+
+    // Process results after barrier_reads() has been called
+    std::unordered_map<CoreCoord, std::vector<uint32_t>> complete_read_buffer_from_cores(
+        const ReadBufferOperation& op) const {
+
+        // Process results (existing splice logic)
         std::unordered_map<CoreCoord, std::vector<uint32_t>> results;
-        auto num_words_per_core = size_bytes / sizeof(uint32_t);
+        auto num_words_per_core = op.size_bytes / sizeof(uint32_t);
 
-        for (auto i = 0; i < buffer_page_mapping.all_cores.size(); i++) {
-            const auto& core = buffer_page_mapping.all_cores[i];
-            const auto& page_indices = buffer_page_mapping.core_host_page_indices[i];
+        for (auto i = 0; i < op.buffer_page_mapping.all_cores.size(); i++) {
+            const auto& core = op.buffer_page_mapping.all_cores[i];
+            const auto& page_indices = op.buffer_page_mapping.core_host_page_indices[i];
             std::vector<uint32_t> core_data;
             core_data.reserve(page_indices.size() * num_words_per_core);
             for (const auto& page_idx : page_indices) {
@@ -385,12 +440,23 @@ public:
                 }
                 auto start_idx = page_idx * num_words_per_core;
                 auto end_idx = start_idx + num_words_per_core;
-                core_data.insert(core_data.end(), data.begin() + start_idx, data.begin() + end_idx);
+                core_data.insert(core_data.end(), op.data.begin() + start_idx, op.data.begin() + end_idx);
             }
             results.emplace(core, core_data);
         }
 
         return results;
+    }
+
+    // Data reading helpers - preserve backward compatibility
+    std::unordered_map<CoreCoord, std::vector<uint32_t>> read_buffer_from_cores(
+        const MeshCoordinate& device_coord,
+        const std::vector<CoreCoord>& cores,
+        uint32_t address,
+        uint32_t size_bytes) const override {
+        auto op = initiate_read_buffer_from_cores(device_coord, cores, address, size_bytes);
+        barrier_reads();  // Wait for read to complete
+        return complete_read_buffer_from_cores(op);
     }
 
     // When blocking is enabled, results_out must be pre-allocated for each core
@@ -421,7 +487,7 @@ public:
         }
     }
 
-    void barrier_reads() {
+    void barrier_reads() const {
         mesh_device_->mesh_command_queue().finish();
     }
 
@@ -500,7 +566,7 @@ public:
         }
 
         const MeshCoordinate& src_coord = get_device_coord(src_node);
-        return compute_destination_nodes_from_hops(src_coord, hops, chip_send_type);
+        return compute_destination_nodes_from_hops(src_node, src_coord, hops, chip_send_type);
     }
 
     bool are_devices_linear(const std::vector<FabricNodeId>& node_ids) const override {
@@ -679,6 +745,77 @@ public:
         return hops;
     }
 
+    std::vector<RoutingDirection> get_neighbor_directions_for_topology() const {
+        switch (topology_) {
+            case Topology::Mesh:
+            case Topology::Torus:
+                return {RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W};
+            case Topology::Linear: return {RoutingDirection::E, RoutingDirection::W};
+            case Topology::Ring:
+                // Ring topology handled separately - no directional logic
+                return {};
+        }
+        return {};
+    }
+
+    std::vector<std::pair<FabricNodeId, FabricNodeId>> get_neighbor_exchange_pairs() const override {
+        const auto device_ids = get_global_node_ids();
+        std::vector<std::pair<FabricNodeId, FabricNodeId>> pairs;
+
+        auto directions = get_neighbor_directions_for_topology();
+
+        if (!directions.empty()) {
+            // Handle mesh, torus, and linear topologies with directional neighbors
+            for (const auto& src_node : device_ids) {
+                for (const auto& direction : directions) {
+                    // Check if neighbor exists in this direction
+                    const auto& neighbors =
+                        tt::tt_metal::MetalContext::instance().get_control_plane().get_chip_neighbors(
+                            src_node, direction);
+
+                    if (!neighbors.empty()) {
+                        // Get the first (and should be only) neighbor mesh
+                        auto neighbor_mesh_it = neighbors.begin();
+                        const auto& neighbor_chips = neighbor_mesh_it->second;
+
+                        if (!neighbor_chips.empty()) {
+                            // Get the first (and should be only) neighbor chip
+                            FabricNodeId neighbor(neighbor_mesh_it->first, neighbor_chips[0]);
+
+                            // Only add if neighbor exists and is different from source
+                            bool is_valid_neighbor = (neighbor != src_node);
+
+                            // For linear topology, also check if devices are on the same line
+                            if (topology_ == Topology::Linear) {
+                                is_valid_neighbor &= are_devices_linear({src_node, neighbor});
+                            }
+
+                            if (is_valid_neighbor) {
+                                pairs.emplace_back(src_node, neighbor);
+                            }
+                        }
+                    }
+                }
+            }
+        } else if (topology_ == Topology::Ring) {
+            // Handle ring topology with logical ring neighbors
+            for (const auto& src_node : device_ids) {
+                auto ring_neighbors = get_wrap_around_mesh_ring_neighbors(src_node, device_ids);
+                if (ring_neighbors.has_value()) {
+                    auto [forward_neighbor, backward_neighbor] = ring_neighbors.value();
+                    if (forward_neighbor != src_node) {
+                        pairs.emplace_back(src_node, forward_neighbor);
+                    }
+                    if (backward_neighbor != src_node) {
+                        pairs.emplace_back(src_node, backward_neighbor);
+                    }
+                }
+            }
+        }
+
+        return pairs;
+    }
+
     std::optional<std::pair<FabricNodeId, FabricNodeId>> get_wrap_around_mesh_ring_neighbors(
         const FabricNodeId& src_node, const std::vector<FabricNodeId>& devices) const override {
         // Get mesh dimensions
@@ -699,7 +836,7 @@ public:
 
         // Calculate ring neighbors based on position on perimeter
         // forward always try to go right/up first, backward always try to go left/down first
-        chip_id_t forward_chip_id, backward_chip_id;
+        ChipId forward_chip_id, backward_chip_id;
 
         if (row == 0 && col == 0) {
             // Top-left corner (0): forward=1, backward=4 (4x4 mesh)
@@ -1211,7 +1348,7 @@ public:
         for (uint32_t hop = 0; hop < total_hops; ++hop) {
             // Try to move in current direction
             MeshCoordinate next_coord = current_coord;
-            bool need_wraparound = false;
+            [[maybe_unused]] bool need_wraparound = false;
 
             switch (current_direction) {
                 case RoutingDirection::N:
@@ -1381,7 +1518,7 @@ private:
         const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
 
         // ethernet coordinate chip mapping, which should be migrated away from
-        std::map<FabricNodeId, chip_id_t> chip_to_eth_coord_mapping;
+        std::map<FabricNodeId, ChipId> chip_to_eth_coord_mapping;
         for (std::uint32_t mesh_id = 0; mesh_id < eth_coord_mapping.size(); mesh_id++) {
             if (mesh_id == *local_mesh_id) {
                 for (std::uint32_t chip_id = 0; chip_id < eth_coord_mapping[mesh_id].size(); chip_id++) {
@@ -1508,14 +1645,18 @@ private:
         return hops;
     }
 
+    // In a multi-host setup, we currently dont store info about how the meshes are connected across hosts
+    // So we only compute destinations within the local mesh from hops
     std::vector<FabricNodeId> compute_destination_nodes_from_hops(
+        const FabricNodeId& src_node,
         const MeshCoordinate& src_coord,
         const std::unordered_map<RoutingDirection, uint32_t>& hops,
         ChipSendType send_type) const {
+        // for now src_node is only passed for multicast, since we dont allow unicast hop expansion across hosts
         if (send_type == ChipSendType::CHIP_UNICAST) {
             return compute_unicast_destinations(src_coord, hops);
         } else if (send_type == ChipSendType::CHIP_MULTICAST) {
-            return compute_multicast_destinations(src_coord, hops);
+            return compute_multicast_destinations(src_node, src_coord, hops);
         } else {
             TT_THROW("Unsupported send type: {}", send_type);
             return {};
@@ -1599,14 +1740,17 @@ private:
     }
 
     std::vector<FabricNodeId> compute_multicast_destinations(
-        const MeshCoordinate& src_coord, const std::unordered_map<RoutingDirection, uint32_t>& hops) const {
+        const FabricNodeId& src_node,
+        const MeshCoordinate& src_coord,
+        const std::unordered_map<RoutingDirection, uint32_t>& hops) const {
+        // src_node is needed to grab the right mesh id to convert from coord to node id
         // Assume hops is pre-split single map from builder - simulate directly
         auto visited = simulate_multicast_split(src_coord, hops);
 
         std::unordered_set<FabricNodeId> unique_nodes;
         for (const auto& coord : visited) {
             if (coord != src_coord) {
-                unique_nodes.insert(get_fabric_node_id(coord));
+                unique_nodes.insert(get_fabric_node_id(src_node.mesh_id, coord));
             }
         }
 

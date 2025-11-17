@@ -289,7 +289,7 @@ TestResult mem_bench_copy_active_kernel_different_page(benchmark::State& state) 
 
 // Common Multi MMIO device test.
 TestResult mem_bench_multi_mmio_devices(
-    benchmark::State& state, std::map<chip_id_t, IDevice*>& devices, const Context& ctx) {
+    benchmark::State& state, std::map<ChipId, IDevice*>& devices, const Context& ctx) {
     TestResult results;
 
     // One thread to wait for program on each device
