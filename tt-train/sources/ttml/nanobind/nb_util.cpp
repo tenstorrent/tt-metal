@@ -304,13 +304,14 @@ nb::object make_numpy_tensor(
 
         // If composer is provided, use it to compose distributed tensor shards
         if (composer != nullptr) {
-            auto composed_result = composer->compose<MetalType>(cpu_tensor);
-            auto& vec = std::get<0>(composed_result);
-            auto& shape = std::get<1>(composed_result);
+            const auto composed_result = composer->compose<MetalType>(cpu_tensor);
+            const auto& vec = std::get<0>(composed_result);
+            const auto& shape = std::get<1>(composed_result);
 
             // Create a temporary tensor spec with the composed shape
-            auto composed_spec = tt::tt_metal::TensorSpec(shape, cpu_tensor.tensor_spec().tensor_layout());
-            return make_numpy_tensor_from_data.template operator()<NumpyType>(vec, composed_spec, cpu_tensor_strides);
+            const auto composed_spec = tt::tt_metal::TensorSpec(shape, cpu_tensor.tensor_spec().tensor_layout());
+            const auto composed_strides = tt::tt_metal::compute_strides(shape);
+            return make_numpy_tensor_from_data.template operator()<NumpyType>(vec, composed_spec, composed_strides);
         }
 
         const auto cpu_tensor_data = tt::tt_metal::host_buffer::get_as<const MetalType>(cpu_tensor);
