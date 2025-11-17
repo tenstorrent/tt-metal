@@ -7,6 +7,8 @@ import random
 from time import time
 import numpy as np
 import ttml
+from ttml.common.config import SchedulerConfig
+from typing import Optional
 
 
 def set_seed(seed: int = 42):
@@ -81,6 +83,21 @@ def create_optimizer(model, yaml_config: dict):
     else:
         return ttml.optimizers.AdamW(model.parameters(), adamw_cfg)
 
+def get_loss_over_devices(loss):
+    """Aggregate loss over all devices and return mean."""
+    device = ttml.autograd.AutoContext.get_instance().get_device()
+    composer = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0)
+    loss_numpy = loss.to_numpy(composer=composer)
+    return loss_numpy.mean()
+
+
+def build_logits_mask(vocab_size: int, padded_vocab_size: int) -> ttml.autograd.Tensor:
+    logits_mask = np.zeros((1, 1, 1, padded_vocab_size), dtype=np.float32)
+    logits_mask[:, :, :, vocab_size:] = 1e4
+    return ttml.autograd.Tensor.from_numpy(
+        logits_mask, ttml.Layout.TILE, ttml.autograd.DataType.BFLOAT16
+    )  # [1,1,1,T], bfloat16"
+
 
 class PerformanceMeter:
     def __init__(self, cfg, window_size=10):
@@ -104,6 +121,54 @@ class PerformanceMeter:
         samples_per_second = samples / time_window
         tokens_per_second = samples * self.cfg.seq_len / time_window
         return samples_per_second, tokens_per_second
+
+
+class SpeedrunScheduler:
+    """Linear warmup -> optional hold -> linear decay; optional beta1 warmup."""
+
+    def __init__(self, cfg: SchedulerConfig):
+        self.cfg = cfg
+
+    def lr_at(self, step: int) -> float:
+        s = step
+        w = max(0, self.cfg.warmup_steps)
+        h = max(0, self.cfg.hold_steps)
+        T = max(1, self.cfg.total_steps)
+        peak = self.cfg.max_lr
+        min_lr = self.cfg.min_lr
+
+        if s <= w:
+            # linear warmup 0 -> lr_max
+            return peak * (s / max(1, w))
+        elif s <= w + h:
+            # hold at lr_max
+            return peak
+        else:
+            # linear decay from lr_max at (w+h) to min_lr at T
+            s2 = min(s, T)
+            frac = (s2 - (w + h)) / max(1, (T - (w + h)))
+            return peak + (min_lr - peak) * frac
+
+    def beta1_at(self, step: int) -> Optional[float]:
+        if (
+            self.cfg.beta1_start is None
+            or self.cfg.beta1_end is None
+            or self.cfg.beta1_warmup_steps <= 0
+        ):
+            return None
+        s = min(step, self.cfg.beta1_warmup_steps)
+        t = s / float(self.cfg.beta1_warmup_steps)
+        return (1.0 - t) * self.cfg.beta1_start + t * self.cfg.beta1_end
+
+
+class OptimParamSetter:
+    def __init__(self, optim):
+        self.optim = optim
+        self._warned_lr = False
+        self._warned_beta1 = False
+
+    def set_lr(self, lr: float):
+        self.optim.set_lr(float(lr))
 
 
 class no_grad:
