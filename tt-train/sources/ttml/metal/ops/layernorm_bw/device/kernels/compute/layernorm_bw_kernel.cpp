@@ -113,8 +113,6 @@ inline void compute_dy_gamma_sum(const uint32_t row) {
 
     tile_regs_acquire();
 
-    zero_dst_reg(sum_register);
-
     reconfig_data_format(cb_dL_out_idx, cb_gamma_idx);
 
     // Accumulate dy * gamma into sum_register
@@ -122,20 +120,26 @@ inline void compute_dy_gamma_sum(const uint32_t row) {
         // Mask the tile if needed
         if constexpr (do_mask_w) {
             if (col + 1 == Wt) {
+                const uint32_t target_register = (col == 0) ? sum_register : working_register;
                 mul_bcast_rows_init_short(cb_dL_out_idx, cb_gamma_idx);
-                mul_tiles_bcast_rows(cb_dL_out_idx, cb_gamma_idx, col, col, working_register);
+                mul_tiles_bcast_rows(cb_dL_out_idx, cb_gamma_idx, col, col, target_register);
 
                 // Limitation: mask_tile only works when the mask register is immediately next to the data register.
-                const uint32_t mask_register = working_register + 1U;
+                const uint32_t mask_register = target_register + 1U;
 
                 copy_tile_init(cb_mask_w_idx);
                 copy_tile(cb_mask_w_idx, /* tile_idx */ 0, /* register idx */ mask_register);
 
                 mask_tile_init();
-                mask_tile(working_register, mask_register);
+                mask_tile(target_register, mask_register);
 
-                add_binary_tile_init();
-                add_binary_tile(sum_register, working_register, sum_register);
+                if (col > 0) {
+                    add_binary_tile_init();
+                    add_binary_tile(sum_register, target_register, sum_register);
+                }
+            } else {
+                mul_bcast_rows_init_short(cb_dL_out_idx, cb_gamma_idx);
+                mul_tiles_bcast_rows(cb_dL_out_idx, cb_gamma_idx, col, col, sum_register);
             }
         } else {
             mul_bcast_rows_init_short(cb_dL_out_idx, cb_gamma_idx);
@@ -182,8 +186,6 @@ inline void compute_dy_gamma_xnorm_sum(const uint32_t row) {
     const uint32_t temp_register = 2U;
 
     tile_regs_acquire();
-
-    zero_dst_reg(sum_register);
 
     reconfig_data_format(cb_dL_out_idx, cb_dL_out_idx);
 
@@ -262,8 +264,6 @@ inline void compute_dy_gamma_sum(const uint32_t row) {
 
     tile_regs_acquire();
 
-    zero_dst_reg(sum_register);
-
     reconfig_data_format(cb_dL_out_idx, cb_gamma_idx);
 
     // Accumulate dy * gamma into sum_register
@@ -277,20 +277,26 @@ inline void compute_dy_gamma_sum(const uint32_t row) {
             // Mask the tile if needed
             if constexpr (do_mask_w) {
                 if (global_col + 1 == Wt) {
+                    const uint32_t target_register = (global_col == 0) ? sum_register : working_register;
                     mul_bcast_rows_init_short(cb_dL_out_idx, cb_gamma_idx);
-                    mul_tiles_bcast_rows(cb_dL_out_idx, cb_gamma_idx, block_idx, block_idx, working_register);
+                    mul_tiles_bcast_rows(cb_dL_out_idx, cb_gamma_idx, block_idx, block_idx, target_register);
 
                     // Limitation: mask_tile only works when the mask register is immediately next to the data register.
-                    const uint32_t mask_register = working_register + 1U;
+                    const uint32_t mask_register = target_register + 1U;
 
                     copy_tile_init(cb_mask_w_idx);
                     copy_tile(cb_mask_w_idx, /* tile_idx */ 0, /* register idx */ mask_register);
 
                     mask_tile_init();
-                    mask_tile(working_register, mask_register);
+                    mask_tile(target_register, mask_register);
 
-                    add_binary_tile_init();
-                    add_binary_tile(sum_register, working_register, sum_register);
+                    if (global_col > 0) {
+                        add_binary_tile_init();
+                        add_binary_tile(sum_register, target_register, sum_register);
+                    }
+                } else {
+                    mul_bcast_rows_init_short(cb_dL_out_idx, cb_gamma_idx);
+                    mul_tiles_bcast_rows(cb_dL_out_idx, cb_gamma_idx, block_idx, block_idx, sum_register);
                 }
             } else {
                 mul_bcast_rows_init_short(cb_dL_out_idx, cb_gamma_idx);
@@ -340,8 +346,6 @@ inline void compute_dy_gamma_xnorm_sum(const uint32_t row) {
     const uint32_t x_norm_register = 2U;
 
     tile_regs_acquire();
-
-    zero_dst_reg(sum_register);
 
     reconfig_data_format(cb_dL_out_idx, cb_dL_out_idx);
 
