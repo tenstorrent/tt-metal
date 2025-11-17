@@ -50,7 +50,6 @@ void py_module(nb::module_& mod) {
 
     mod.def("string_to_unary_with_param", &utils::string_to_unary_with_param);
 
-    // TODO_NANOBIND: finish conversion with placement new
     auto eltwise_unary_with_param = static_cast<nb::class_<EltwiseUnaryWithParam>>(mod.attr("EltwiseUnaryWithParam"));
     eltwise_unary_with_param.def(nb::init<UnaryOpType>())
         .def(nb::init<UnaryOpType, float>())

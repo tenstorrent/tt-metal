@@ -42,6 +42,7 @@ void py_module_types(nb::module_& mod) {
         .value("LEVEL_4", compute_throttle_utils::ThrottleLevel::LEVEL_4)
         .value("LEVEL_5", compute_throttle_utils::ThrottleLevel::LEVEL_5);
 
+    // variant of (Grayskull|Wormhole)ComputeKernelConfig
     nb::class_<DeviceComputeKernelConfig>(mod, "DeviceComputeKernelConfig");
 
     nb::class_<GrayskullComputeKernelConfig>(mod, "GrayskullComputeKernelConfig")

@@ -252,6 +252,9 @@ void py_module_types(nb::module_& mod) {
     // nb::module_::import_("types");
     // nb::module_::import_("ttnn.types");
 
+    // in ttnn-nanobind/types.cpp
+    // export_enum<tt::CoreType>(mod, "CoreType");
+
     // Bind SemaphoreDescriptor
     nb::class_<tt::tt_metal::SemaphoreDescriptor>(mod, "SemaphoreDescriptor", R"pbdoc(
         Descriptor for synchronization semaphores.
@@ -261,7 +264,7 @@ void py_module_types(nb::module_& mod) {
         .def(nb::init<>(), R"pbdoc(
         Default constructor for SemaphoreDescriptor.
     )pbdoc")
-        .def(  // TODO_NANOBIND: FIX. AFFECTS BEHAVIOR!
+        .def(
             nb::init<tt::CoreType, CoreRangeSet, uint32_t>(),
             nb::arg("core_type") = nb::cast(tt::CoreType::WORKER),  // TODO_NANOBIND causes segfault when import ttnn???
             nb::arg("core_ranges"),

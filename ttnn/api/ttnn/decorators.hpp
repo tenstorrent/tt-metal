@@ -5,19 +5,17 @@
 #pragma once
 
 #include <cstddef>  // size_t
-#include <tuple>
-#include <type_traits>  // is_same_v, decay
-#include <optional>
 #include <string>
-#include <utility>  // index_sequence, forward
-#include <vector>
+#include <type_traits>  // is_same_v, decay
+#include <utility>      // index_sequence, forward
 
 #include <fmt/format.h>
 #include <reflect>
-#include <tt-metalium/graph_tracking.hpp>
-#include <tracy/Tracy.hpp>
+
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operation.hpp"
+#include <tracy/Tracy.hpp>
+#include <tt-metalium/graph_tracking.hpp>
 
 namespace ttnn {
 namespace decorators {
