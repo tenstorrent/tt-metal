@@ -1,0 +1,71 @@
+name: "Code Coverage Report Generator"
+description: "Generate unified code coverage reports combining C++, Python, and kernel coverage"
+
+inputs:
+  coverage-dir:
+    description: 'Directory containing coverage data files'
+    required: false
+    default: 'coverage'
+
+  kernel-names-file:
+    description: 'Path to kernel_names.txt file relative to repository root'
+    required: false
+    default: 'generated/watcher/kernel_names.txt'
+
+  source-dir:
+    description: 'Root directory of source code (repository root)'
+    required: false
+    default: '.'
+
+  cpp-objects:
+    description: 'Space or newline-separated list of C++ binaries/objects for coverage (e.g., libtt_metal.so, test binaries)'
+    required: false
+    default: ''
+
+  enable-cpp-coverage:
+    description: 'Enable C++ coverage collection'
+    required: false
+    default: 'true'
+
+  enable-python-coverage:
+    description: 'Enable Python coverage collection'
+    required: false
+    default: 'true'
+
+  enable-kernel-coverage:
+    description: 'Enable kernel coverage (via kernel_names.txt)'
+    required: false
+    default: 'true'
+
+  html-output-dir:
+    description: 'Directory for HTML report output'
+    required: false
+    default: 'coverage/html'
+
+  llvm-profdata-path:
+    description: 'Path to llvm-profdata binary'
+    required: false
+    default: 'llvm-profdata'
+
+  llvm-cov-path:
+    description: 'Path to llvm-cov binary'
+    required: false
+    default: 'llvm-cov'
+
+runs:
+  using: "composite"
+  steps:
+    - name: Generate Coverage Report
+      shell: bash
+      run: |
+        "${{ github.action_path }}/entrypoint.sh" \
+          --coverage-dir "${{ inputs.coverage-dir }}" \
+          --kernel-names-file "${{ inputs.kernel-names-file }}" \
+          --source-dir "${{ inputs.source-dir }}" \
+          --cpp-objects "${{ inputs.cpp-objects }}" \
+          --enable-cpp-coverage "${{ inputs.enable-cpp-coverage }}" \
+          --enable-python-coverage "${{ inputs.enable-python-coverage }}" \
+          --enable-kernel-coverage "${{ inputs.enable-kernel-coverage }}" \
+          --html-output-dir "${{ inputs.html-output-dir }}" \
+          --llvm-profdata-path "${{ inputs.llvm-profdata-path }}" \
+          --llvm-cov-path "${{ inputs.llvm-cov-path }}"
