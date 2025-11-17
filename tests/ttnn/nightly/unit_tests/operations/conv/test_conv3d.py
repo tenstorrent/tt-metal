@@ -217,7 +217,6 @@ def test_conv3d_mochi_shapes(
         padding=padding,
         padding_mode=padding_mode,
         dtype=ttnn.bfloat16,
-        groups=1,
         config=config,
         compute_kernel_config=kernel_config,
     )

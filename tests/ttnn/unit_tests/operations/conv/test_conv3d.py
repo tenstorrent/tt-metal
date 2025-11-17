@@ -145,7 +145,6 @@ def run_conv3d_test(device, input_shape, out_channels, kernel_size, stride, padd
         padding=padding,
         padding_mode=padding_mode,
         dtype=ttnn.bfloat16,
-        groups=1,
         config=config,
         compute_kernel_config=kernel_config,
     )

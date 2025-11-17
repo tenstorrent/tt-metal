@@ -49,7 +49,6 @@ def get_conv3d_config(in_channels, grid_size):
         H_out_block=H_out_block,
         C_out_block=C_out_block,
         C_in_block=C_in_block,
-        groups=1,
         compute_with_storage_grid_size=grid_size,
     )
 

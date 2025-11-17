@@ -370,7 +370,6 @@ class WanCausalConv3d:
             padding=self.internal_padding,
             padding_mode="zeros",
             dtype=ttnn.bfloat16,
-            groups=1,
             config=self.conv_config,
             compute_kernel_config=self.compute_kernel_config,
         )
@@ -747,7 +746,6 @@ class WanConv2d:
             padding=self.internal_padding,
             padding_mode="zeros",
             dtype=ttnn.bfloat16,
-            groups=1,
             config=self.conv_config,
             compute_kernel_config=self.compute_kernel_config,
         )
