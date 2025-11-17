@@ -27,6 +27,7 @@ on:
 
 jobs:
   quick-wh-glx-health:
+    if: ${{ !((github.event_name == 'workflow_dispatch' && inputs.bh == 'true') || (github.event_name == 'schedule' && inputs.bh_scheduled == 'true')) }}
     runs-on:
       - topology-6u
       - arch-wormhole_b0
@@ -82,7 +83,7 @@ jobs:
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
   quick-wh-glx-quick:
-    if: ${{ inputs.bh != 'true' || (github.event_name == 'schedule' && inputs.bh_scheduled == 'true') }}
+    if: ${{ !((github.event_name == 'workflow_dispatch' && inputs.bh == 'true') || (github.event_name == 'schedule' && inputs.bh_scheduled == 'true')) }}
     runs-on:
       - topology-6u
       - arch-wormhole_b0
