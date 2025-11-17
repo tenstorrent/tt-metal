@@ -299,27 +299,81 @@ constexpr bool is_spine_direction(eth_chan_directions direction) {
     return direction == eth_chan_directions::NORTH || direction == eth_chan_directions::SOUTH;
 }
 
-// Map compact index to actual direction (inverse of map_downstream_direction_to_compact_index)
-// For 2D fabric: sender channels 1-3 map to compact indices 0-2, which map to actual directions
-// Examples:
-// - EAST router (my_direction=0): compact 0→WEST(1), 1→NORTH(2), 2→SOUTH(3)
-// - WEST router (my_direction=1): compact 0→EAST(0), 1→NORTH(2), 2→SOUTH(3)
-// - NORTH router (my_direction=2): compact 0→EAST(0), 1→WEST(1), 2→SOUTH(3)
-// - SOUTH router (my_direction=3): compact 0→EAST(0), 1→WEST(1), 2→NORTH(2)
-FORCE_INLINE constexpr eth_chan_directions map_compact_index_to_direction(size_t compact_index) {
-    if constexpr (is_2d_fabric) {
-        if constexpr (my_direction == 0) {
-            // EAST router: compact 0→WEST(1), 1→NORTH(2), 2→SOUTH(3)
-            return static_cast<eth_chan_directions>(compact_index + 1);
-        } else {
-            // For other directions: if compact_index < my_direction, use as-is; else add 1
-            return static_cast<eth_chan_directions>(
-                (compact_index < my_direction) ? compact_index : (compact_index + 1));
-        }
+// Defined here because sender_channel_0_free_slots_stream_id does not come from
+// fabric_erisc_router_ct_args.hpp
+static constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_channel_free_slots_stream_ids = {
+    tt::tt_fabric::connection_interface::sender_channel_0_free_slots_stream_id,
+    sender_channel_1_free_slots_stream_id,
+    sender_channel_2_free_slots_stream_id,
+    sender_channel_3_free_slots_stream_id,
+    sender_channel_4_free_slots_stream_id};
+static_assert(sender_channel_free_slots_stream_ids[0] == 17);
+static_assert(sender_channel_free_slots_stream_ids[1] == 18);
+static_assert(sender_channel_free_slots_stream_ids[2] == 19);
+static_assert(sender_channel_free_slots_stream_ids[3] == 20);
+static_assert(sender_channel_free_slots_stream_ids[4] == 21);
+
+// For 2D fabric: maps compact index to downstream direction for each my_direction
+// For 1D fabric: only 1 downstream direction per router (EAST forwards to WEST in 1D linear topology)
+#if defined(FABRIC_2D)
+constexpr uint32_t edm_index_to_edm_direction[eth_chan_directions::COUNT][NUM_DOWNSTREAM_SENDERS_VC0] = {
+    {eth_chan_directions::WEST, eth_chan_directions::NORTH, eth_chan_directions::SOUTH},  // EAST router
+    {eth_chan_directions::EAST, eth_chan_directions::NORTH, eth_chan_directions::SOUTH},  // WEST router
+    {eth_chan_directions::EAST, eth_chan_directions::WEST, eth_chan_directions::SOUTH},   // NORTH router
+    {eth_chan_directions::EAST, eth_chan_directions::WEST, eth_chan_directions::NORTH},   // SOUTH router
+};
+
+// sender_channel_free_slots_stream_ids[] mapping:
+//   [0] → Local worker (always uses sender channel 0 on the outgoing router).
+//   [1–3] → Sender channels 1–3 on the outgoing router, corresponding to
+//           inbound traffic from neighboring routers.
+//
+// The mapping is relative to the outgoing router's direction:
+//
+//   • East-outbound router:
+//         sender channel 1 (idx 0) ← West inbound
+//         sender channel 2 (idx 1) ← North inbound
+//         sender channel 3 (idx 2) ← South inbound
+//
+//   • West-outbound router:
+//         sender channel 1 (idx 0) ← East inbound
+//         sender channel 2 (idx 1) ← North inbound
+//         sender channel 3 (idx 2) ← South inbound
+//
+//   • North-outbound router:
+//         sender channel 1 (idx 0) ← East inbound
+//         sender channel 2 (idx 1) ← West inbound
+//         sender channel 3 (idx 2) ← South inbound
+//
+//   • South-outbound router:
+//         sender channel 1 (idx 0) ← East inbound
+//         sender channel 2 (idx 1) ← West inbound
+//         sender channel 3 (idx 2) ← North inbound
+constexpr uint32_t get_vc0_downstream_sender_channel_free_slots_stream_id(uint32_t compact_index) {
+    auto ds_edm_direction = edm_index_to_edm_direction[my_direction][compact_index];
+    if (my_direction > ds_edm_direction) {
+        // downstream sender channel = my_direction
+        // stream id = sender_channel_free_slots_stream_ids[downstream sender channel]
+        return sender_channel_free_slots_stream_ids[my_direction];
     } else {
-        // For 1D fabric, no mapping needed
-        return static_cast<eth_chan_directions>(compact_index);
+        // downstream sender channel = my_direction + 1
+        // stream id = sender_channel_free_slots_stream_ids[downstream sender channel]
+        return sender_channel_free_slots_stream_ids[(1 + my_direction)];
     }
+}
+#endif
+
+FORCE_INLINE constexpr eth_chan_directions map_compact_index_to_direction(size_t compact_index) {
+#if defined(FABRIC_2D)
+    if (compact_index == 3) {
+        // this is to ignore the dateline vc for the turn status calculation.
+        return static_cast<eth_chan_directions>(MAX_NUM_SENDER_CHANNELS);
+    } else {
+        return static_cast<eth_chan_directions>(edm_index_to_edm_direction[my_direction][compact_index]);
+    }
+#else
+    return static_cast<eth_chan_directions>(compact_index);
+#endif
 }
 
 // Determine which sender channels are "turn" channels (i.e., north/south for east/west routers)
@@ -343,22 +397,31 @@ constexpr auto get_sender_channel_turn_statuses() -> std::array<bool, MAX_NUM_SE
     return turn_statuses;
 }
 
+// Map downstream direction to compact array index [0-2], excluding my_direction
+// This function assumes 2D fabric where routers don't forward to themselves
+// Examples:
+// - EAST router (my_direction=0): WEST(1)→0, NORTH(2)→1, SOUTH(3)→2
+// - WEST router (my_direction=1): EAST(0)→0, NORTH(2)→1, SOUTH(3)→2
+// - NORTH router (my_direction=2): EAST(0)→0, WEST(1)→1, SOUTH(3)→2
+// - SOUTH router (my_direction=3): EAST(0)→0, WEST(1)→1, NORTH(2)→2
+constexpr size_t direction_to_compact_index_map[eth_chan_directions::COUNT][eth_chan_directions::COUNT] = {
+    {0, 0, 1, 2},  // EAST router -> WEST, NORTH, SOUTH
+    {0, 0, 1, 2},  // WEST router -> EAST, NORTH, SOUTH
+    {0, 1, 0, 2},  // NORTH router -> EAST, WEST, SOUTH
+    {0, 1, 2, 0},  // SOUTH router -> EAST, WEST, NORTH
+};
+
+template <eth_chan_directions downstream_direction>
+FORCE_INLINE constexpr size_t map_downstream_direction_to_compact_index() {
+    return direction_to_compact_index_map[my_direction][downstream_direction];
+}
+
+FORCE_INLINE constexpr size_t map_downstream_direction_to_compact_index(eth_chan_directions downstream_direction) {
+    return direction_to_compact_index_map[my_direction][downstream_direction];
+}
+
 static constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> sender_channels_turn_status =
     get_sender_channel_turn_statuses();
-
-// Defined here because sender_channel_0_free_slots_stream_id does not come from
-// fabric_erisc_router_ct_args.hpp
-static constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_channel_free_slots_stream_ids = {
-    tt::tt_fabric::connection_interface::sender_channel_0_free_slots_stream_id,
-    sender_channel_1_free_slots_stream_id,
-    sender_channel_2_free_slots_stream_id,
-    sender_channel_3_free_slots_stream_id,
-    sender_channel_4_free_slots_stream_id};
-static_assert(sender_channel_free_slots_stream_ids[0] == 17);
-static_assert(sender_channel_free_slots_stream_ids[1] == 18);
-static_assert(sender_channel_free_slots_stream_ids[2] == 19);
-static_assert(sender_channel_free_slots_stream_ids[3] == 20);
-static_assert(sender_channel_free_slots_stream_ids[4] == 21);
 
 static constexpr std::array<uint32_t, NUM_ROUTER_CARDINAL_DIRECTIONS> vc_0_free_slots_stream_ids = {
     vc_0_free_slots_from_downstream_edge_1_stream_id,
@@ -487,29 +550,6 @@ FORCE_INLINE bool can_forward_packet_completely(
                                tt::tt_fabric::LowLatencyRoutingFields::WRITE_ONLY;
     }
     return deliver_locally_only || downstream_edm_interface.edm_has_space_for_packet();
-}
-
-// Map downstream direction to compact array index [0-2], excluding my_direction
-// This function assumes 2D fabric where routers don't forward to themselves
-// Examples:
-// - EAST router (my_direction=0): WEST(1)→0, NORTH(2)→1, SOUTH(3)→2
-// - WEST router (my_direction=1): EAST(0)→0, NORTH(2)→1, SOUTH(3)→2
-// - NORTH router (my_direction=2): EAST(0)→0, WEST(1)→1, SOUTH(3)→2
-// - SOUTH router (my_direction=3): EAST(0)→0, WEST(1)→1, NORTH(2)→2
-constexpr size_t direction_to_compact_index_map[eth_chan_directions::COUNT][eth_chan_directions::COUNT] = {
-    {0, 0, 1, 2},  // EAST router -> WEST, NORTH, SOUTH
-    {0, 0, 1, 2},  // WEST router -> EAST, NORTH, SOUTH
-    {0, 1, 0, 2},  // NORTH router -> EAST, WEST, SOUTH
-    {0, 1, 2, 0},  // SOUTH router -> EAST, WEST, NORTH
-};
-
-template <eth_chan_directions downstream_direction>
-FORCE_INLINE constexpr size_t map_downstream_direction_to_compact_index() {
-    return direction_to_compact_index_map[my_direction][downstream_direction];
-}
-
-FORCE_INLINE constexpr size_t map_downstream_direction_to_compact_index(eth_chan_directions downstream_direction) {
-    return direction_to_compact_index_map[my_direction][downstream_direction];
 }
 
 template <uint8_t rx_channel_id, eth_chan_directions downstream_direction>
@@ -2231,56 +2271,6 @@ void
         }
     }
 }
-
-// For 2D fabric: maps compact index to downstream direction for each my_direction
-// For 1D fabric: only 1 downstream direction per router (EAST forwards to WEST in 1D linear topology)
-#if defined(FABRIC_2D)
-constexpr uint32_t edm_index_to_edm_direction[eth_chan_directions::COUNT][NUM_DOWNSTREAM_SENDERS_VC0] = {
-    {eth_chan_directions::WEST, eth_chan_directions::NORTH, eth_chan_directions::SOUTH},  // EAST router
-    {eth_chan_directions::EAST, eth_chan_directions::NORTH, eth_chan_directions::SOUTH},  // WEST router
-    {eth_chan_directions::EAST, eth_chan_directions::WEST, eth_chan_directions::SOUTH},   // NORTH router
-    {eth_chan_directions::EAST, eth_chan_directions::WEST, eth_chan_directions::NORTH},   // SOUTH router
-};
-
-// sender_channel_free_slots_stream_ids[] mapping:
-//   [0] → Local worker (always uses sender channel 0 on the outgoing router).
-//   [1–3] → Sender channels 1–3 on the outgoing router, corresponding to
-//           inbound traffic from neighboring routers.
-//
-// The mapping is relative to the outgoing router's direction:
-//
-//   • East-outbound router:
-//         sender channel 1 (idx 0) ← West inbound
-//         sender channel 2 (idx 1) ← North inbound
-//         sender channel 3 (idx 2) ← South inbound
-//
-//   • West-outbound router:
-//         sender channel 1 (idx 0) ← East inbound
-//         sender channel 2 (idx 1) ← North inbound
-//         sender channel 3 (idx 2) ← South inbound
-//
-//   • North-outbound router:
-//         sender channel 1 (idx 0) ← East inbound
-//         sender channel 2 (idx 1) ← West inbound
-//         sender channel 3 (idx 2) ← South inbound
-//
-//   • South-outbound router:
-//         sender channel 1 (idx 0) ← East inbound
-//         sender channel 2 (idx 1) ← West inbound
-//         sender channel 3 (idx 2) ← North inbound
-constexpr uint32_t get_vc0_downstream_sender_channel_free_slots_stream_id(uint32_t compact_index) {
-    auto ds_edm_direction = edm_index_to_edm_direction[my_direction][compact_index];
-    if (my_direction > ds_edm_direction) {
-        // downstream sender channel = my_direction
-        // stream id = sender_channel_free_slots_stream_ids[downstream sender channel]
-        return sender_channel_free_slots_stream_ids[my_direction];
-    } else {
-        // downstream sender channel = my_direction + 1
-        // stream id = sender_channel_free_slots_stream_ids[downstream sender channel]
-        return sender_channel_free_slots_stream_ids[(1 + my_direction)];
-    }
-}
-#endif
 
 void populate_local_sender_channel_free_slots_stream_id_ordered_map(
     uint32_t has_downstream_edm_vc0_buffer_connection,
