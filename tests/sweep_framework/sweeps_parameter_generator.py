@@ -13,7 +13,7 @@ import json
 import random
 
 from framework.permutations import *
-from framework.serialize import serialize, serialize_structured
+from framework.serialize import serialize_structured
 from framework.statuses import VectorValidity, VectorStatus
 from framework.sweeps_logger import sweeps_logger as logger
 
@@ -73,7 +73,7 @@ def _serialize_vectors(vectors):
         vector = dict()
         for elem in vectors[i].keys():
             vector[elem] = serialize_structured(vectors[i][elem], warnings)
-        input_hash = hashlib.sha224(str(vector).encode("utf-8")).hexdigest()
+        input_hash = _compute_vector_hash(vector)
         vector["timestamp"] = current_time
         vector["input_hash"] = input_hash
         vector["tag"] = SWEEPS_TAG
@@ -91,7 +91,24 @@ def _compute_vector_hash(vector):
     Returns:
         str: Hexadecimal hash string
     """
-    return hashlib.sha224(str(vector).encode("utf-8")).hexdigest()
+    try:
+        # Deterministic JSON serialization for stable hashing
+        hash_input = json.dumps(vector, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    except (TypeError, ValueError):
+        # Fallback if non-serializable objects are present
+        hash_input = str(vector)
+    return hashlib.sha224(hash_input.encode("utf-8")).hexdigest()
+
+
+def _backup_corrupted_json_file(path: pathlib.Path) -> None:
+    """Rename a corrupted JSON file to a timestamped backup for inspection."""
+    try:
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = path.with_suffix(path.suffix + f".corrupted.{ts}")
+        path.rename(backup_path)
+        logger.warning(f"Backed up corrupted JSON file from {path} to {backup_path}")
+    except OSError as e:
+        logger.warning(f"Failed to back up corrupted JSON file {path}: {e}")
 
 
 def validate_exported_vectors(export_path, module_name, suite_name):
@@ -191,15 +208,26 @@ def export_suite_vectors_json(module_name, suite_name, vectors):
             if suite_name in existing_data:
                 existing_suite_data = existing_data[suite_name]
                 if isinstance(existing_suite_data, dict):
-                    existing_hashes = set(existing_suite_data.keys())
+                    # Only consider hashes for vectors with the same tag to avoid cross-tag dedup collisions
+                    existing_hashes = {
+                        input_hash
+                        for input_hash, vec in existing_suite_data.items()
+                        if isinstance(vec, dict) and vec.get("tag") == SWEEPS_TAG
+                    }
         except json.JSONDecodeError as e:
-            logger.warning(f"Failed to parse existing JSON file {EXPORT_PATH}: {e}. Will overwrite.")
+            logger.warning(f"Failed to parse existing JSON file {EXPORT_PATH}: {e}. Will overwrite after backup.")
+            _backup_corrupted_json_file(EXPORT_PATH)
             existing_data = {}
         except IOError as e:
-            logger.warning(f"Failed to read existing file {EXPORT_PATH}: {e}. Will overwrite.")
+            logger.warning(f"Failed to read existing file {EXPORT_PATH}: {e}. Will overwrite after backup if possible.")
+            try:
+                _backup_corrupted_json_file(EXPORT_PATH)
+            except Exception:
+                pass
             existing_data = {}
         except Exception as e:
-            logger.warning(f"Unexpected error reading existing file {EXPORT_PATH}: {e}. Will overwrite.")
+            logger.warning(f"Unexpected error reading existing file {EXPORT_PATH}: {e}. Will overwrite after backup.")
+            _backup_corrupted_json_file(EXPORT_PATH)
             existing_data = {}
 
     # Check for deduplication: skip write if vectors haven't changed
@@ -232,36 +260,22 @@ def export_suite_vectors_json(module_name, suite_name, vectors):
 
         # Validate the exported file
         if not validate_exported_vectors(EXPORT_PATH, module_name, suite_name):
-            logger.warning(f"Validation failed for exported vectors, but file was written to {EXPORT_PATH}")
+            logger.warning(
+                f"Validation failed after export. File was written to {EXPORT_PATH}. "
+                f"If issues persist, delete the file and regenerate."
+            )
 
         logger.info(f"SWEEPS: Generated {len(vectors)} test vectors for suite {suite_name}.")
-    except IOError as e:
-        # Clean up temp file on error
-        if tmp_path.exists():
-            try:
-                tmp_path.unlink()
-            except OSError:
-                pass
+    except (IOError, OSError) as e:
         logger.error(f"Failed to write vectors to {EXPORT_PATH}: {e}")
         raise
-    except OSError as e:
-        # Clean up temp file on error
+    finally:
+        # Ensure temporary file is removed on success or failure
         if tmp_path.exists():
             try:
                 tmp_path.unlink()
             except OSError:
                 pass
-        logger.error(f"Failed to write vectors to {EXPORT_PATH}: {e}")
-        raise
-    except Exception as e:
-        # Clean up temp file on error
-        if tmp_path.exists():
-            try:
-                tmp_path.unlink()
-            except OSError:
-                pass
-        logger.error(f"Unexpected error writing vectors to {EXPORT_PATH}: {e}")
-        raise
 
 
 # Generate one or more sets of test vectors depending on module_name
