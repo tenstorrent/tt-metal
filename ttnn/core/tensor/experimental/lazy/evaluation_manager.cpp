@@ -96,18 +96,18 @@ void print_lazy_tensor(const std::shared_ptr<LazyTensor>& tensor, const std::str
 }
 }  // namespace
 
-void evaluate(const std::shared_ptr<LazyTensor>& lazy_tensor) {
-    auto sorted_tensors = GraphUtils::topological_sort(lazy_tensor);
-    for (auto& tensor : sorted_tensors) {
-        print_lazy_tensor(tensor, "Evaluate");
-        tensor->evaluate();
+void evaluate(const tt::tt_metal::Tensor& tensor) {
+    auto sorted_tensors = GraphUtils::topological_sort(tensor.lazy());
+    for (auto& lazy_tensor : sorted_tensors) {
+        print_lazy_tensor(lazy_tensor, "Evaluate");
+        lazy_tensor->evaluate();
     }
 }
 
-void print_graph(const std::shared_ptr<LazyTensor>& lazy_tensor) {
-    auto sorted_tensors = GraphUtils::topological_sort(lazy_tensor);
-    for (auto& tensor : sorted_tensors) {
-        print_lazy_tensor(tensor, "Print Graph");
+void print_graph(const tt::tt_metal::Tensor& tensor) {
+    auto sorted_tensors = GraphUtils::topological_sort(tensor.lazy());
+    for (auto& lazy_tensor : sorted_tensors) {
+        print_lazy_tensor(lazy_tensor, "Print Graph");
     }
 }
 

@@ -143,7 +143,7 @@ Tensor Tensor::pad(
 Tensor Tensor::cpu(bool blocking, std::optional<ttnn::QueueId> cq_id) const {
     // To cpu will always materialize the tensors, always.
     if (!lazy()->is_materialized()) {
-        ttnn::experimental::lazy::evaluate(lazy());
+        ttnn::experimental::lazy::evaluate(*this);
     }
 
     return Tensor(get_materialized_tensor().cpu(blocking, cq_id));

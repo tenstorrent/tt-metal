@@ -7,9 +7,8 @@ class Tensor;
 }
 
 namespace ttnn::experimental::lazy {
-class LazyTensor;
 
-void evaluate(const std::shared_ptr<LazyTensor>& lazy_tensor);
+void evaluate(const tt::tt_metal::Tensor& tensor);
 
-void print_graph(const std::shared_ptr<LazyTensor>& lazy_tensor);
+void print_graph(const tt::tt_metal::Tensor& tensor);
 }  // namespace ttnn::experimental::lazy
