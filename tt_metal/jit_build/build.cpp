@@ -177,6 +177,12 @@ void JitBuildEnv::init(
             profiler_options |= PROFILER_OPT_DO_TRACE_ONLY;
         }
         this->defines_ += "-DPROFILE_KERNEL=" + std::to_string(profiler_options) + " ";
+
+        this->defines_ += "-DPROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC=" +
+                          std::to_string(get_profiler_dram_bank_size_per_risc_bytes(rtoptions) / sizeof(uint32_t)) +
+                          " ";
+        this->defines_ += "-DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=" +
+                          std::to_string(get_profiler_dram_bank_size_per_risc_bytes(rtoptions)) + " ";
     }
     if (rtoptions.get_profiler_noc_events_enabled()) {
         // force profiler on if noc events are being profiled

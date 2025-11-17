@@ -8,12 +8,40 @@
 #include <unordered_set>
 
 #include "core_coord.hpp"
+#include "hostdevcommon/profiler_common.h"
 #include "profiler.hpp"
+#include "rtoptions.hpp"
+#include "tt_stl/assert.hpp"
 #include <tt-metalium/experimental/profiler.hpp>
 
 namespace tt {
 
 namespace tt_metal {
+
+// static function should store default op support count and return the actual op support count, outside of the class
+
+// env var should control PROFILER_OP_SUPPORT_COUNT; cli option in tracy module shouldn't be a number, it should be
+// {small, medium, large} default to 1000 if env var is not set
+constexpr static uint32_t DEFAULT_PROFILER_PROGRAM_SUPPORT_COUNT = 1000;
+
+uint32_t get_profiler_dram_bank_size_per_risc_bytes(const llrt::RunTimeOptions& rtoptions) {
+    const uint32_t dram_bank_size_per_risc_bytes =
+        kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE *
+        (kernel_profiler::PROFILER_L1_PROGRAM_ID_COUNT + kernel_profiler::PROFILER_L1_GUARANTEED_MARKER_COUNT +
+         kernel_profiler::PROFILER_L1_OP_MIN_OPTIONAL_MARKER_COUNT) *
+        rtoptions.get_profiler_program_support_count() * sizeof(uint32_t);
+    TT_ASSERT(dram_bank_size_per_risc_bytes > kernel_profiler::PROFILER_L1_BUFFER_SIZE);
+    return dram_bank_size_per_risc_bytes;
+}
+
+// these 2 vars should be passed to kernel_profiler with -D flag at jit build time
+// constexpr static std::uint32_t PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC =
+//     kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE *
+//     (kernel_profiler::PROFILER_L1_PROGRAM_ID_COUNT + kernel_profiler::PROFILER_L1_GUARANTEED_MARKER_COUNT +
+//      kernel_profiler::PROFILER_L1_OP_MIN_OPTIONAL_MARKER_COUNT) *
+//     PROFILER_OP_SUPPORT_COUNT;
+// constexpr static std::uint32_t PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC =
+//     PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC * sizeof(uint32_t);
 
 struct ProfilerStateManager {
 public:
