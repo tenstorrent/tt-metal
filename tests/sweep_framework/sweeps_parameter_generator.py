@@ -180,11 +180,11 @@ def export_suite_vectors_json(module_name, suite_name, vectors):
     # Create export directory with proper error handling
     try:
         EXPORT_DIR_PATH.mkdir(parents=True, exist_ok=True)
-    except OSError as e:
-        logger.error(f"Failed to create export directory {EXPORT_DIR_PATH}: {e}")
-        raise
     except PermissionError as e:
         logger.error(f"Permission denied creating export directory {EXPORT_DIR_PATH}: {e}")
+        raise
+    except OSError as e:
+        logger.error(f"Failed to create export directory {EXPORT_DIR_PATH}: {e}")
         raise
 
     # Randomize order only when explicitly requested via --randomize
