@@ -17,9 +17,6 @@ permissions:
   packages: write
   contents: write
 
-env:
-  BH_GALAXY_SCHEDULED_ENABLED: 'true' #Set 'true' to opt-in for cron runs
-
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
@@ -31,6 +28,8 @@ jobs:
       version: 22.04
 
   galaxy-quick-test:
+    env:
+      BH_GALAXY_SCHEDULED_ENABLED: 'false'
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/galaxy-quick-impl.yaml
