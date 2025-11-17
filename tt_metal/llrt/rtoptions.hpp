@@ -234,6 +234,9 @@ class RunTimeOptions {
     // Force JIT compile even if dependencies are up to date
     bool force_jit_compile = false;
 
+    // To be used for NUMA node based thread binding
+    bool numa_based_affinity = false;
+
 public:
     RunTimeOptions();
     RunTimeOptions(const RunTimeOptions&) = delete;
@@ -550,6 +553,8 @@ public:
 
     bool get_force_jit_compile() const { return force_jit_compile; }
     void set_force_jit_compile(bool enable) { force_jit_compile = enable; }
+
+    bool get_numa_based_affinity() const { return numa_based_affinity; }
 
     // Parse all feature-specific environment variables, after hal is initialized.
     // (Needed because syntax of some env vars is arch-dependent.)
