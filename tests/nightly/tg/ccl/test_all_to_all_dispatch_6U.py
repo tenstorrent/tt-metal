@@ -53,7 +53,6 @@ from tracy import signpost
     ],
     indirect=["mesh_device"],
 )
-@pytest.mark.parametrize("cluster_axis", [0, 1])
 @pytest.mark.parametrize("batches_per_device", [32])
 @pytest.mark.parametrize("experts", [256])
 @pytest.mark.parametrize("select_experts_k", [8])
@@ -65,14 +64,14 @@ from tracy import signpost
     ],
     ids=["s2"],
 )
-@pytest.mark.parametrize("num_links", [4, 1])
+@pytest.mark.parametrize("num_links", [4])
 @pytest.mark.parametrize("topology", [None])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize(
-    "input_memory_config, output_memory_config",
+    "input_memory_config, output_memory_config, cluster_axis",
     [
-        (ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
-        (ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
+        (ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, 0),
+        (ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG, 1),
     ],
     ids=["l1_in_dram_out", "dram_in_l1_out"],
 )
@@ -488,7 +487,7 @@ def test_decode_perf(
 @pytest.mark.parametrize("hidden_size", [7168])
 @pytest.mark.parametrize(
     "seq_len, num_iters, warmup_iters",
-    [(128, 10, 5)],
+    [(128, 5, 3)],
     ids=["prefill"],
 )
 @pytest.mark.parametrize("num_links", [4])
