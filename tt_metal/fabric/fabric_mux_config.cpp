@@ -6,6 +6,7 @@
 #include <vector>
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/control_plane.hpp>
+#include "host_api.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include <umd/device/types/core_coordinates.hpp>
@@ -220,6 +221,22 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_main_args(
         (uint32_t)wait_for_fabric_endpoint_ready_};
 }
 
+std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_args_no_mux() const {
+    const auto& fabric_router_config =
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().get_fabric_router_config();
+    fabric_endpoint_status_address_ = fabric_router_config.edm_status_address;
+    log_info(
+        tt::LogOp,
+        "Fabric Mux No Mux CT Args: fabric_endpoint_status_address_: {}",
+        // local_fabric_router_status_region_.get_address(),
+        fabric_endpoint_status_address_);
+    return std::vector<uint32_t>{
+        // local_fabric_router_status_region_.get_address(),
+        fabric_endpoint_status_address_};
+}
+        
+        
+
 std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_args() const {
     const auto& fabric_router_config =
         tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().get_fabric_router_config();
@@ -239,6 +256,10 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_args() const 
             static_channel_allocator != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator.");
         fabric_endpoint_channel_num_buffers_ = static_channel_allocator->get_sender_channel_number_of_slots(0);
     }
+    log_info(
+        tt::LogOp,
+        "Fabric Mux CT Args: fabric_endpoint_channel_num_buffers_: {}",
+        fabric_endpoint_channel_num_buffers_);
     fabric_endpoint_status_address_ = fabric_router_config.edm_status_address;
 
     auto ct_args = get_fabric_mux_compile_time_main_args(fabric_router_config);
