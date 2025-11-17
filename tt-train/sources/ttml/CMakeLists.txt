@@ -397,14 +397,21 @@ else()
     set(MESH_COORDINATE_FBS "${TT_METAL_API_DIR}/tt-metalium/serialized_descriptors/mesh_coordinate.fbs")
     # Ensure the parent output directory exists before flatc runs
     file(MAKE_DIRECTORY ${TTNN_FLATBUFFER_GEN_DIR})
+    # Ensure the subdirectory exists for mesh_coordinate_generated.h
+    file(MAKE_DIRECTORY ${MESH_COORDINATE_GEN_DIR})
 
     # Generate mesh_coordinate_generated.h
     add_custom_command(
         OUTPUT
             ${MESH_COORDINATE_GEN_DIR}/mesh_coordinate_generated.h
         COMMAND
+            ${CMAKE_COMMAND} -E make_directory "${MESH_COORDINATE_GEN_DIR}"
+        COMMAND
             flatc --keep-prefix --cpp --scoped-enums -I ${TT_METAL_API_DIR} -o "${TTNN_FLATBUFFER_GEN_DIR}"
             ${MESH_COORDINATE_FBS}
+        COMMAND
+            ${CMAKE_COMMAND} -E copy_if_different "${TTNN_FLATBUFFER_GEN_DIR}/mesh_coordinate_generated.h"
+            "${MESH_COORDINATE_GEN_DIR}/mesh_coordinate_generated.h"
         DEPENDS
             flatc
             ${MESH_COORDINATE_FBS}
@@ -534,6 +541,34 @@ target_include_directories(ttml PUBLIC ${FLATBUFFER_GENERATED_DIR})
 # flatc creates the directory structure matching the include path, so TTNN_FLATBUFFER_GEN_DIR
 # contains all generated headers in the correct subdirectory structure
 target_include_directories(ttml PUBLIC ${TTNN_FLATBUFFER_GEN_DIR})
+
+# Link zstd library for compression support
+if(zstd_ADDED)
+    # zstd creates different targets depending on build configuration
+    # Try common target names in order of preference
+    if(TARGET zstd::libzstd_static)
+        target_link_libraries(ttml PRIVATE zstd::libzstd_static)
+    elseif(TARGET libzstd_static)
+        target_link_libraries(ttml PRIVATE libzstd_static)
+    elseif(TARGET zstd::libzstd_shared)
+        target_link_libraries(ttml PRIVATE zstd::libzstd_shared)
+    elseif(TARGET libzstd_shared)
+        target_link_libraries(ttml PRIVATE libzstd_shared)
+    elseif(TARGET zstd)
+        target_link_libraries(ttml PRIVATE zstd)
+    else()
+        message(WARNING "zstd was added but no known target found. Available targets may differ.")
+        # Try to find and link zstd library directly
+        find_library(ZSTD_LIBRARY zstd)
+        if(ZSTD_LIBRARY)
+            target_link_libraries(ttml PRIVATE ${ZSTD_LIBRARY})
+        else()
+            message(FATAL_ERROR "zstd library not found and no CMake target available")
+        endif()
+    endif()
+else()
+    message(WARNING "zstd package was not added, zstd compression will not work")
+endif()
 
 find_package(
     Python3

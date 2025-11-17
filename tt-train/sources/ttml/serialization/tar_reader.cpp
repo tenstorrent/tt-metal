@@ -9,6 +9,10 @@
 #include <fstream>
 #include <stdexcept>
 
+// Include zstd for decompression
+#define ZSTD_STATIC_LINKING_ONLY
+#include <zstd.h>
+
 #include "tar_format.hpp"
 
 namespace ttml::serialization {
@@ -65,11 +69,54 @@ void TarReader::read_from_file(std::string_view filename) {
         throw std::runtime_error("Unable to open file for reading: " + std::string(filename));
     }
 
-    std::vector<uint8_t> tarball((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+    std::vector<uint8_t> file_data((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
     ifs.close();
 
-    if (tarball.empty()) {
+    if (file_data.empty()) {
         throw std::runtime_error("Tarball file is empty: " + std::string(filename));
+    }
+
+    std::vector<uint8_t> tarball;
+
+    // Check if file is zstd compressed by checking magic number
+    // ZSTD magic number is 0xFD2FB528 (little-endian)
+    constexpr uint32_t ZSTD_MAGIC = 0xFD2FB528;
+    bool is_zstd_compressed = false;
+    if (file_data.size() >= sizeof(uint32_t)) {
+        uint32_t magic = *reinterpret_cast<const uint32_t*>(file_data.data());
+        if (magic == ZSTD_MAGIC) {
+            is_zstd_compressed = true;
+        }
+    }
+
+    if (is_zstd_compressed) {
+        // Decompress zstd data
+        // First, get the decompressed size from the frame header
+        unsigned long long decompressed_size = ZSTD_getFrameContentSize(file_data.data(), file_data.size());
+
+        if (decompressed_size == ZSTD_CONTENTSIZE_ERROR) {
+            throw std::runtime_error("Invalid zstd compressed file: " + std::string(filename));
+        }
+        if (decompressed_size == ZSTD_CONTENTSIZE_UNKNOWN) {
+            // Content size unknown, need to decompress in streaming mode or estimate
+            // For simplicity, use a reasonable estimate and resize if needed
+            decompressed_size = file_data.size() * 4;  // Conservative estimate
+        }
+
+        tarball.resize(decompressed_size);
+        size_t actual_decompressed_size =
+            ZSTD_decompress(tarball.data(), decompressed_size, file_data.data(), file_data.size());
+
+        if (ZSTD_isError(actual_decompressed_size)) {
+            throw std::runtime_error(
+                "ZSTD decompression failed: " + std::string(ZSTD_getErrorName(actual_decompressed_size)));
+        }
+
+        // Resize to actual decompressed size
+        tarball.resize(actual_decompressed_size);
+    } else {
+        // Not compressed, use data as-is
+        tarball = std::move(file_data);
     }
 
     // Check if file is too small to be a valid tarball (must be at least one header block)

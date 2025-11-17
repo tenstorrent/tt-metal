@@ -13,6 +13,10 @@
 #include <sstream>
 #include <stdexcept>
 
+// Include zstd for compression
+#define ZSTD_STATIC_LINKING_ONLY
+#include <zstd.h>
+
 namespace ttml::serialization {
 
 TarWriter::TarWriter() = default;
@@ -129,13 +133,31 @@ std::vector<uint8_t> TarWriter::get_tarball() const {
 
 void TarWriter::write_to_file(std::string_view filename) const {
     auto tarball = get_tarball();
+
+    // Compress tarball with zstd
+    const size_t compressed_bound = ZSTD_compressBound(tarball.size());
+    std::vector<uint8_t> compressed_data(compressed_bound);
+
+    const int compression_level = 3;  // Default compression level (balanced speed/ratio)
+    size_t compressed_size =
+        ZSTD_compress(compressed_data.data(), compressed_bound, tarball.data(), tarball.size(), compression_level);
+
+    if (ZSTD_isError(compressed_size)) {
+        throw std::runtime_error("ZSTD compression failed: " + std::string(ZSTD_getErrorName(compressed_size)));
+    }
+
+    // Resize to actual compressed size
+    compressed_data.resize(compressed_size);
+
+    // Write compressed data to file
     std::ofstream ofs(std::string(filename), std::ios::binary);
     if (!ofs.is_open()) {
         throw std::runtime_error("Unable to open file for writing: " + std::string(filename));
     }
-    ofs.write(reinterpret_cast<const char*>(tarball.data()), static_cast<std::streamsize>(tarball.size()));
+    ofs.write(
+        reinterpret_cast<const char*>(compressed_data.data()), static_cast<std::streamsize>(compressed_data.size()));
     if (!ofs.good()) {
-        throw std::runtime_error("Error writing tarball to file: " + std::string(filename));
+        throw std::runtime_error("Error writing compressed tarball to file: " + std::string(filename));
     }
 }
 
