@@ -249,6 +249,8 @@ void WatcherServer::Impl::read_kernel_ids_from_file() {
         s = s.substr(0, s.length() - 1);  // Strip newline
         kernel_names_.push_back(s.substr(s.find(":") + 2));
     }
+    free(line);
+    fclose(f);
 }
 
 std::string WatcherServer::Impl::exception_message() {
@@ -308,18 +310,32 @@ void WatcherServer::Impl::create_log_file() {
 
 void WatcherServer::Impl::create_kernel_file() {
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    const char* fmode = rtoptions.get_watcher_append() ? "a" : "w";
     std::filesystem::path output_dir(rtoptions.get_root_dir() + LOG_FILE_PATH);
     std::filesystem::create_directories(output_dir);
     std::string fname = output_dir.string() + KERNEL_FILE_NAME;
+
+    bool append_mode = rtoptions.get_watcher_append();
+    bool file_exists = std::filesystem::exists(fname);
+
+    // In append mode, read existing kernel names first
+    if (append_mode && file_exists) {
+        read_kernel_ids_from_file();
+    } else {
+        kernel_names_.clear();
+        kernel_names_.push_back("blank");
+    }
+
+    const char* fmode = append_mode ? "a" : "w";
     FILE* f = fopen(fname.c_str(), fmode);
     if (!f) {
         TT_THROW("Watcher failed to create kernel name file\n");
     }
-    kernel_names_.clear();
-    kernel_names_.push_back("blank");
-    fprintf(f, "0: blank\n");
-    fflush(f);
+
+    // Only write "0: blank" if file is new/empty
+    if (!append_mode || !file_exists) {
+        fprintf(f, "0: blank\n");
+        fflush(f);
+    }
 
     kernel_file_ = f;
 }
@@ -329,13 +345,22 @@ void WatcherServer::Impl::create_kernel_elf_file() {
     std::filesystem::path output_dir(rtoptions.get_root_dir() + LOG_FILE_PATH);
     std::filesystem::create_directories(output_dir);
     std::string fname = output_dir.string() + KERNEL_ELF_FILE_NAME;
-    FILE* f = fopen(fname.c_str(), "w");
+
+    bool append_mode = rtoptions.get_watcher_append();
+    bool file_exists = std::filesystem::exists(fname);
+
+    const char* fmode = append_mode ? "a" : "w";
+    FILE* f = fopen(fname.c_str(), fmode);
     if (!f) {
         TT_THROW("Watcher failed to create kernel ELF file\n");
     }
     kernel_elf_file_ = f;
-    fprintf(f, "0: blank\n");
-    fflush(f);
+
+    // Only write "0: blank" if file is new/empty
+    if (!append_mode || !file_exists) {
+        fprintf(f, "0: blank\n");
+        fflush(f);
+    }
 }
 
 void WatcherServer::Impl::init_device(ChipId device_id) {
