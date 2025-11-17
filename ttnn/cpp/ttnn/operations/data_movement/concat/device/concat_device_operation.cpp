@@ -201,7 +201,7 @@ Tensor concat_impl(
             // Note: TILE layout is always tile-aligned, ROW_MAJOR needs no padding for concat
             formatted_tensors = input_tensors;
         } else {
-            // Mustbe ROW_MAJOR → TILE conversion
+            // Must be ROW_MAJOR → TILE conversion
             formatted_tensors.reserve(input_tensors.size());
             for (const auto& input_tensor : input_tensors) {
                 // Calculate tile-aligned shape
