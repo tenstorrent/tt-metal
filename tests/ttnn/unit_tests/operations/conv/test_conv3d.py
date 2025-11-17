@@ -141,12 +141,23 @@ def run_conv3d_test(device, input_shape, out_channels, kernel_size, stride, padd
     N, D_out, H_out, W_out = output_dims
     C = input_shape[1]
 
-    # Prepare weights and bias for TTNN
-    tt_weight, tt_bias = prepare_weights(conv3d_module, C, out_channels, device, C_in_block=0)
-
     # Create config and run TTNN conv3d
     config = create_conv3d_config(
         out_channels, kernel_size, stride, padding, padding_mode, compute_with_storage_grid_size=grid_size
+    )
+    # Prepare weights and bias for TTNN
+    tt_weight = ttnn.prepare_conv3d_weights(
+        weight_tensor=ttnn.from_torch(conv3d_module.weight.data, dtype=ttnn.bfloat16, device=device),
+        in_channels=C,
+        out_channels=out_channels,
+        conv_config=config,
+        device=device,
+        alignment=ALIGNMENT,
+    )
+    tt_bias = ttnn.prepare_conv3d_bias(
+        bias_tensor=ttnn.from_torch(conv3d_module.bias.data, dtype=ttnn.bfloat16, device=device),
+        out_channels=out_channels,
+        device=device,
     )
 
     tt_output = ttnn.experimental.conv3d(
