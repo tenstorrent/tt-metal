@@ -3,14 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/graph/graph_argument_serializer.hpp"
-#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include <boost/algorithm/string/replace.hpp>
 #include <tt_stl/small_vector.hpp>
 #include <tt_stl/optional_reference.hpp>
-#include <tt-metalium/fabric_edm_types.hpp>
 
 std::ostream& operator<<(std::ostream& os, const std::vector<bool>& value) {
     os << "[";
@@ -54,34 +51,6 @@ std::ostream& operator<<(
 std::ostream& operator<<(
     std::ostream& os,
     const tt::stl::StrongType<unsigned long, tt::tt_metal::experimental::GlobalCircularBuffer>& value) {
-    tt::stl::reflection::operator<<(os, value);
-    return os;
-}
-
-std::ostream& operator<<(
-    std::ostream& os,
-    const std::variant<ttnn::GrayskullComputeKernelConfig, ttnn::WormholeComputeKernelConfig>& value) {
-    tt::stl::reflection::operator<<(os, value);
-    return os;
-}
-
-std::ostream& operator<<(
-    std::ostream& os,
-    const std::variant<
-        ttnn::operations::matmul::MatmulMultiCoreProgramConfig,
-        ttnn::operations::matmul::MatmulMultiCoreReuseProgramConfig>& value) {
-    tt::stl::reflection::operator<<(os, value);
-    return os;
-}
-
-std::ostream& operator<<(
-    std::ostream& os,
-    const std::variant<
-        ttnn::operations::matmul::MatmulMultiCoreProgramConfig,
-        ttnn::operations::matmul::MatmulMultiCoreReuseProgramConfig,
-        ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig,
-        ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig,
-        ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>& value) {
     tt::stl::reflection::operator<<(os, value);
     return os;
 }
@@ -502,14 +471,6 @@ void GraphArgumentSerializer::initialize() {
     GraphArgumentSerializer::register_type<tt::tt_metal::Tile>();
     GraphArgumentSerializer::register_type<tt::tt_metal::QueueId>();
     GraphArgumentSerializer::register_type<ttnn::types::CoreGrid>();
-    GraphArgumentSerializer::register_type<
-        std::variant<ttnn::GrayskullComputeKernelConfig, ttnn::WormholeComputeKernelConfig>>();
-    GraphArgumentSerializer::register_type<std::variant<
-        ttnn::operations::matmul::MatmulMultiCoreProgramConfig,
-        ttnn::operations::matmul::MatmulMultiCoreReuseProgramConfig,
-        ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig,
-        ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig,
-        ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>>();
     GraphArgumentSerializer::register_type<std::variant<float, int>>();
     GraphArgumentSerializer::register_type<std::variant<int, float>>();
     GraphArgumentSerializer::register_type<std::variant<unsigned int, float>>();
@@ -525,7 +486,6 @@ void GraphArgumentSerializer::initialize() {
     GraphArgumentSerializer::register_type<tt::tt_metal::distributed::MeshDevice>();
     GraphArgumentSerializer::register_type<tt::tt_metal::distributed::MeshCoordinate>();
     GraphArgumentSerializer::register_type<tt::tt_metal::GlobalSemaphore>();
-    GraphArgumentSerializer::register_type<tt::tt_fabric::Topology>();
     GraphArgumentSerializer::register_type<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag>>();
     GraphArgumentSerializer::register_type<
         ttsl::StrongType<unsigned long, tt::tt_metal::experimental::GlobalCircularBuffer>>();
