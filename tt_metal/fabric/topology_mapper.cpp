@@ -207,11 +207,17 @@ void TopologyMapper::build_asic_physical_chip_id_mappings() {
         physical_chip_id_to_asic_id_.emplace(physical_chip_id, asic_id);
     }
 
-    // Check the physical chip asic ids from UMD cluster with the physical chip asic ids from the physical system descriptor
+    // Check the physical chip asic ids from UMD cluster with the physical chip asic ids from the physical system
+    // descriptor
     for (const auto& [physical_chip_id, unique_id] : cluster.get_unique_chip_ids()) {
         tt::tt_metal::AsicID asic_id{unique_id};
-        auto asic_ids_for_host = physical_system_descriptor_.get_asics_connected_to_host(physical_system_descriptor_.my_host_name());
-        TT_FATAL(std::find(asic_ids_for_host.begin(), asic_ids_for_host.end(), asic_id) != asic_ids_for_host.end(), "Asic id {} in UMD cluster not found for in Physical System {}", asic_id, physical_system_descriptor_.my_host_name());
+        auto asic_ids_for_host =
+            physical_system_descriptor_.get_asics_connected_to_host(physical_system_descriptor_.my_host_name());
+        TT_FATAL(
+            std::find(asic_ids_for_host.begin(), asic_ids_for_host.end(), asic_id) != asic_ids_for_host.end(),
+            "Asic id {} in UMD cluster not found for in Physical System {}",
+            asic_id,
+            physical_system_descriptor_.my_host_name());
     }
 }
 
@@ -424,8 +430,12 @@ std::unordered_map<MeshId, LogicalAdjacencyMap> TopologyMapper::build_adjacency_
         auto adjacent_map = mesh_graph_.get_intra_mesh_connectivity()[*mesh_id][fabric_node_id.chip_id];
 
         std::vector<tt::tt_fabric::FabricNodeId> adjacents;
+        bool relaxed = mesh_graph_.is_intra_mesh_policy_relaxed(mesh_id);
         for (const auto& [neighbor_chip_id, edge] : adjacent_map) {
-            adjacents.push_back(tt::tt_fabric::FabricNodeId(mesh_id, neighbor_chip_id));
+            size_t repeat_count = relaxed ? 1 : edge.connected_chip_ids.size();
+            for (size_t i = 0; i < repeat_count; ++i) {
+                adjacents.push_back(tt::tt_fabric::FabricNodeId(mesh_id, neighbor_chip_id));
+            }
         }
         return adjacents;
     };
@@ -452,7 +462,10 @@ std::unordered_map<MeshId, PhysicalAdjacencyMap> TopologyMapper::build_adjacency
             for (const auto& neighbor : physical_system_descriptor_.get_asic_neighbors(asic_id)) {
                 // Make sure that the neighbor is in the mesh
                 if (mesh_hostnames.contains(physical_system_descriptor_.get_host_name_for_asic(neighbor))) {
-                    adjacents.push_back(neighbor);
+                    auto connections = physical_system_descriptor_.get_eth_connections(asic_id, neighbor);
+                    for (size_t i = 0; i < connections.size(); ++i) {
+                        adjacents.push_back(neighbor);
+                    }
                 }
             }
             return adjacents;
@@ -1298,7 +1311,8 @@ std::optional<MeshHostRankId> TopologyMapper::get_host_rank_for_chip(MeshId mesh
     return get_host_rank_for_coord(mesh_id, coord);
 }
 
-std::optional<MeshHostRankId> TopologyMapper::get_host_rank_for_coord(MeshId mesh_id, const MeshCoordinate& coord) const {
+std::optional<MeshHostRankId> TopologyMapper::get_host_rank_for_coord(
+    MeshId mesh_id, const MeshCoordinate& coord) const {
     for (const auto& [key, range] : mesh_host_rank_coord_ranges_) {
         if (key.first == mesh_id && range.contains(coord)) {
             return key.second;
