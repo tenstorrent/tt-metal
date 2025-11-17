@@ -432,11 +432,6 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     std::bit_cast<uint32_t>(param1))};
             break;
         }
-        case UnaryOpType::LOGSIGMOID: {
-            op_init_and_name = {
-                "logsigmoid_tile_init();", "logsigmoid_tile(0, 1, 0);"};  // Two inputs (x, exp(-x)), output to dst[0]
-            break;
-        }
         case UnaryOpType::PRELU_SFPU: {
             op_init_and_name = {
                 "prelu_tile_init();", fmt::format("prelu_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
@@ -821,6 +816,7 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::HARDMISH:
             op_init_and_name = {"hardmish_tile_init();", fmt::format("hardmish_tile({});", idst)};
             break;
+        case UnaryOpType::LOGSIGMOID: op_init_and_name = {}; break;
         default: TT_THROW("Undefined non-parametrized op type {}", op_type);
     }
     return op_init_and_name;

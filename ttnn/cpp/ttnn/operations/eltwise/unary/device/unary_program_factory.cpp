@@ -57,15 +57,6 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
         tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_tmp0_config);
     }
 
-    // Additional temp buffer for logsigmoid (cb_tmp1 for exp(-x))
-    uint32_t tmp1_cb_index = tt::CBIndex::c_3;
-    if (ops_chain[0].type() == UnaryOpType::LOGSIGMOID) {
-        tt::tt_metal::CircularBufferConfig cb_tmp1_config =
-            tt::tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{tmp1_cb_index, cb_data_format}})
-                .set_page_size(tmp1_cb_index, single_tile_size);
-        tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_tmp1_config);
-    }
-
     uint32_t output_cb_index = tt::CBIndex::c_2;
     uint32_t num_output_tiles = 2;
     tt::tt_metal::CircularBufferConfig cb_output_config =
@@ -127,15 +118,6 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
             case UnaryOpType::WHERE_TSS:
                 packed_scalar1 = utils::pack_scalar_runtime_arg(ops_chain[0], 0, input.dtype());
                 packed_scalar2 = utils::pack_scalar_runtime_arg(ops_chain[0], 1, input.dtype());
-                break;
-            default: break;
-        }
-    } else {
-        switch (ops_chain[0].type()) {
-            case UnaryOpType::CBRT:
-                if (input.dtype() == DataType::FLOAT32) {
-                    unary_defines["CBRT_FLOAT"] = "mul_binary_tile";
-                }
                 break;
             default: break;
         }

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,23 +11,19 @@
 
 namespace ckernel {
 
+// clang-format off
 /**
- * Performs logsigmoid operation using pre-computed scaled input and exponential values.
+ * Performs logsigmoid operation: logsigmoid(x) = -softplus(-x) = -log(1 + exp(-x))
  *
  * Return value: None
  *
- * | Argument       | Description                                                              | Type     | Valid Range
- * | Required |
- * |----------------|--------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst_in0       | Index of tile in DST with scaled input (beta * x)                        | uint32_t | Must be less
- * than the size of the DST register buffer | True     | | idst_in1       | Index of tile in DST with exp value
- * exp(-beta * x)                       | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | idst_out       | Index of tile in DST for output                                          | uint32_t | Must be less
- * than the size of the DST register buffer | True     | | param0         | Beta value encoded as uint32_t | uint32_t |
- * Float value bit-cast to uint32_t                      | True     | | param1         | Threshold value encoded as
- * uint32_t                                      | uint32_t | Float value bit-cast to uint32_t                      |
- * True     |
+ * | Argument       | Description                                       | Type     | Valid Range                                           | Required |
+ * |----------------|---------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst_in0       | Index of tile in DST with input (x)               | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | idst_in1       | Index of tile in DST with exp(-x)                 | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | idst_out       | Index of tile in DST for output                   | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
+// clang-format on
 ALWI void logsigmoid_tile(uint32_t idst_in0, uint32_t idst_in1, uint32_t idst_out) {
     MATH((llk_math_eltwise_binary_sfpu_logsigmoid<APPROX>(idst_in0, idst_in1, idst_out)));
 }
