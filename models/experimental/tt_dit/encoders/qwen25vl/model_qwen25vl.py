@@ -200,7 +200,7 @@ class Qwen25VlAttention(Module):
             msg = f"hidden_size {hidden_size} must be divisible by num_heads {num_heads}"
             raise ValueError(msg)
 
-        self._qkv_parallel = False  # TODO: remove
+        self._qkv_parallel = True  # TODO: remove
 
         head_dim = hidden_size // num_heads
         tp_factor = ctx.device.shape[ctx.tp_axis] if ctx.tp_axis is not None and self._qkv_parallel else 1
