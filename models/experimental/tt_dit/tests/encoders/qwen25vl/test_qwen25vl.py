@@ -67,29 +67,7 @@ def test_qwen25vl_text_encoder(
 
     tokens = torch.randint(0, torch_model.config.vocab_size, [batch_size, sequence_length])
     attention_mask = torch.randint(0, 2, [batch_size, sequence_length])
-
-    # causal_attention_mask = attention_mask[:, None, :].expand(-1, sequence_length, -1).tril()
-    position_ids, _ = torch_model.model.get_rope_index(tokens, attention_mask=attention_mask)
-
-    head_dim = torch_model.config.hidden_size // torch_model.config.num_attention_heads
-    inv_freq = torch_model.config.rope_theta ** (
-        -torch.arange(0, head_dim, 2, dtype=torch.int64).to(dtype=torch.float) / head_dim
-    )
-    # In contrast to other models, Qwen2_5_VL has different position ids for the grids
-    # So we expand the inv_freq to shape (3, ...)
-    inv_freq_expanded = inv_freq[None, None, :, None].float().expand(3, position_ids.shape[1], -1, 1)
-    position_ids_expanded = position_ids[:, :, None, :].float()  # shape (3, bs, 1, positions)
-    freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(2, 3)
-    emb = torch.cat((freqs, freqs), dim=-1)
-    cos = emb.cos()
-    sin = emb.sin()
-    mrope_section = torch_model.config.rope_scaling["mrope_section"] * 2
-    cos = torch.cat([m[i % 3] for i, m in enumerate(cos.split(mrope_section, dim=-1))], dim=-1).unsqueeze(1)
-    sin = torch.cat([m[i % 3] for i, m in enumerate(sin.split(mrope_section, dim=-1))], dim=-1).unsqueeze(1)
-
-    # convert ROPE to interleaved format
-    cos = cos.unflatten(-1, [2, -1]).transpose(-2, -1).flatten(-2, -1)
-    sin = sin.unflatten(-1, [2, -1]).transpose(-2, -1).flatten(-2, -1)
+    cos, sin = model.create_rope_tensors(batch_size, sequence_length, attention_mask=attention_mask)
 
     tt_tokens = tensor.from_torch(tokens, device=mesh_device, dtype=ttnn.uint32)
     tt_attention_mask = tensor.from_torch(attention_mask, device=mesh_device) if attention_mask is not None else None

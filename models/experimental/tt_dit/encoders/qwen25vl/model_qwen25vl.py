@@ -16,7 +16,6 @@ from ...layers.linear import ColParallelLinear, RowParallelLinear
 from ...layers.module import Module, ModuleList, Parameter
 from ...parallel.config import EncoderParallelConfig
 from ...parallel.manager import CCLManager
-from ...utils import tensor
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -69,7 +68,6 @@ class Qwen25VlTextEncoder(Module):
                 num_attention_heads=num_attention_heads,
                 num_key_value_heads=num_key_value_heads,
                 rms_norm_eps=rms_norm_eps,
-                mrope_section=mrope_section,
                 ctx=ctx,
             )
             for _ in range(num_hidden_layers)
@@ -79,8 +77,12 @@ class Qwen25VlTextEncoder(Module):
         #     ctx=ctx, head_dim=hidden_size // num_attention_heads, rope_theta=rope_theta
         # )
 
+        self._device = ctx.device
         self._tp_axis = ctx.tp_axis
         self._ccl_manager = ctx.ccl_manager
+        self._mrope_section = mrope_section
+        self._head_dim = hidden_size // num_attention_heads
+        self._rope_theta = rope_theta
 
     def forward(
         self,
@@ -129,6 +131,40 @@ class Qwen25VlTextEncoder(Module):
 
         return hidden_states_list
 
+    # adapted from https://github.com/huggingface/transformers/blob/v4.57.1/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py#L491
+    # and https://github.com/huggingface/transformers/blob/v4.57.1/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py#L545
+    def create_rope_tensors(
+        self, batch_size: int, sequence_length: int, *, attention_mask: torch.Tensor | None
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if attention_mask is not None:
+            assert attention_mask.shape == (batch_size, sequence_length)
+
+            position_ids = attention_mask.long().cumsum(-1) - 1
+            position_ids.masked_fill_(attention_mask == 0, 1)
+            position_ids = position_ids.unsqueeze(0).expand(3, -1, -1)
+        else:
+            position_ids = torch.arange(sequence_length).view(1, 1, -1).expand(3, batch_size, -1)
+
+        inv_freq = self._rope_theta ** (
+            -torch.arange(0, self._head_dim, 2, dtype=torch.int64).to(dtype=torch.float) / self._head_dim
+        )
+        inv_freq_expanded = inv_freq[None, None, :, None].float().expand(3, batch_size, -1, 1)
+        position_ids_expanded = position_ids[:, :, None, :].float()
+        freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(2, 3)
+        emb = torch.cat((freqs, freqs), dim=-1)
+        cos = emb.cos()
+        sin = emb.sin()
+
+        mrope_section = self._mrope_section * 2
+        cos = torch.cat([m[i % 3] for i, m in enumerate(cos.split(mrope_section, dim=-1))], dim=-1).unsqueeze(1)
+        sin = torch.cat([m[i % 3] for i, m in enumerate(sin.split(mrope_section, dim=-1))], dim=-1).unsqueeze(1)
+
+        # convert to interleaved format
+        cos = cos.unflatten(-1, [2, -1]).transpose(-2, -1).flatten(-2, -1)
+        sin = sin.unflatten(-1, [2, -1]).transpose(-2, -1).flatten(-2, -1)
+
+        return cos, sin
+
 
 # adapted from https://github.com/huggingface/transformers/blob/v4.57.1/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py#L684
 class Qwen25VlDecoderLayer(Module):
@@ -141,7 +177,6 @@ class Qwen25VlDecoderLayer(Module):
         intermediate_size: int,
         hidden_act: str,
         rms_norm_eps: float,
-        mrope_section: Sequence[int],
         ctx: Qwen25VlContext,
     ) -> None:
         super().__init__()
@@ -150,7 +185,6 @@ class Qwen25VlDecoderLayer(Module):
             hidden_size=hidden_size,
             num_heads=num_attention_heads,
             num_key_value_heads=num_key_value_heads,
-            mrope_section=mrope_section,
             ctx=ctx,
         )
         self.mlp = Qwen25VlMlp(
@@ -187,7 +221,6 @@ class Qwen25VlAttention(Module):
         hidden_size: int,
         num_heads: int,
         num_key_value_heads: int,
-        mrope_section: Sequence[int],
         ctx: Qwen25VlContext,
     ) -> None:
         super().__init__()
@@ -238,7 +271,6 @@ class Qwen25VlAttention(Module):
         self._head_dim = head_dim
         self._num_kv_heads = group_count
         self._group_size = group_size
-        self._mrope_section = mrope_section
         self._num_local_heads = padded_heads // tp_factor
         self._num_local_kv_heads = opt_group_count // tp_factor
         self._group_size_padding = opt_group_size * repeat_kv_heads - group_size
@@ -254,7 +286,7 @@ class Qwen25VlAttention(Module):
             k = k.unflatten(0, [self._num_kv_heads, 1, self._head_dim])
             v = v.unflatten(0, [self._num_kv_heads, 1, self._head_dim])
 
-            # convert ROPE to interleaved format
+            # convert to interleaved ROPE format
             q = q.unflatten(2, [2, -1]).transpose(2, 3).flatten(2, 3)
             k = k.unflatten(2, [2, -1]).transpose(2, 3).flatten(2, 3)
 
