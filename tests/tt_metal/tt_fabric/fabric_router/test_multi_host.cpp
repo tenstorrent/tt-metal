@@ -517,6 +517,17 @@ TEST(MultiHost, TestBHQB4x4Fabric1DSanity) {
     }
 }
 
+TEST(MultiHost, TestClosetBox3PodTTSwitchControlPlaneInit) {
+    const std::filesystem::path mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_closetbox_3pod_ttswitch_mgd.textproto";
+    auto control_plane = std::make_unique<ControlPlane>(mesh_graph_desc_path.string());
+
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels(
+        tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY,
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+}
+
 TEST(MultiHost, TestBHQB4x4RelaxedControlPlaneInit) {
     // This test is intended for Blackhole 4x4 mesh spanning 2x2 hosts (BHQB)
     if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::P150_X4) {
@@ -524,6 +535,7 @@ TEST(MultiHost, TestBHQB4x4RelaxedControlPlaneInit) {
         GTEST_SKIP();
     }
 
+    // Get the mesh graph descriptor path for the BHQB 4x4 mesh
     const std::filesystem::path bhqb_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_qb_4x4_relaxed_mesh_graph_descriptor.textproto";
@@ -532,6 +544,93 @@ TEST(MultiHost, TestBHQB4x4RelaxedControlPlaneInit) {
     control_plane->configure_routing_tables_for_fabric_ethernet_channels(
         tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY,
         tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+}
+
+TEST(MultiHost, TestClosetBox3PodTTSwitchAPIs) {
+    const std::filesystem::path mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_closetbox_3pod_ttswitch_mgd.textproto";
+
+    auto control_plane = std::make_unique<ControlPlane>(mesh_graph_desc_path.string());
+    const auto& mesh_graph = control_plane->get_mesh_graph();
+
+    // ========== MeshGraph API Tests ==========
+    // Test get_switch_ids()
+    const auto& switch_ids = mesh_graph.get_switch_ids();
+    ASSERT_EQ(switch_ids.size(), 1) << "Should have exactly 1 switch";
+    EXPECT_EQ(*switch_ids[0], 3) << "Switch ID should be 0";
+
+    SwitchId switch_id = switch_ids[0];
+    MeshId switch_mesh_id = MeshId(*switch_id);
+
+    EXPECT_EQ(*switch_id, 3) << "Switch should have a mapped mesh_id";
+    // Verify switch mesh_id is unique (not used by regular meshes)
+    const auto& all_mesh_ids = mesh_graph.get_mesh_ids();
+    size_t switch_mesh_id_count = 0;
+    for (const auto& mesh_id : all_mesh_ids) {
+        if (mesh_id == switch_mesh_id) {
+            switch_mesh_id_count++;
+        }
+    }
+    EXPECT_EQ(switch_mesh_id_count, 1) << "Switch mesh_id should be unique";
+
+    // Test get_meshes_connected_to_switch()
+    const auto& connected_meshes = mesh_graph.get_meshes_connected_to_switch(switch_id);
+    EXPECT_EQ(connected_meshes.size(), 3) << "Switch should be connected to 3 meshes";
+
+    // Verify connected meshes are the expected ones (mesh_ids 0, 1, 2)
+    std::set<uint32_t> connected_mesh_id_values;
+    for (const auto& mesh_id : connected_meshes) {
+        connected_mesh_id_values.insert(*mesh_id);
+    }
+    EXPECT_EQ(connected_mesh_id_values.size(), 3) << "Should have 3 unique connected meshes";
+    EXPECT_TRUE(connected_mesh_id_values.find(0) != connected_mesh_id_values.end());
+    EXPECT_TRUE(connected_mesh_id_values.find(1) != connected_mesh_id_values.end());
+    EXPECT_TRUE(connected_mesh_id_values.find(2) != connected_mesh_id_values.end());
+
+    // Test is_mesh_connected_to_switch() for each connected mesh
+    for (const auto& mesh_id : connected_meshes) {
+        EXPECT_TRUE(mesh_graph.is_mesh_connected_to_switch(mesh_id, switch_id))
+            << "Mesh " << *mesh_id << " should be connected to switch";
+    }
+
+    // Test is_mesh_connected_to_switch() for non-connected mesh (if any exists)
+    // In this topology, all meshes are connected to the switch, so we test with a non-existent mesh_id
+    MeshId non_existent_mesh_id(999);
+    EXPECT_FALSE(mesh_graph.is_mesh_connected_to_switch(non_existent_mesh_id, switch_id))
+        << "Non-existent mesh should not be connected to switch";
+
+    // Test get_switch_for_mesh() for each connected mesh
+    for (const auto& mesh_id : connected_meshes) {
+        auto switch_for_mesh = mesh_graph.get_switch_for_mesh(mesh_id);
+        ASSERT_TRUE(switch_for_mesh.has_value()) << "Mesh " << *mesh_id << " should have a connected switch";
+        EXPECT_EQ(*switch_for_mesh.value(), *switch_id) << "Mesh " << *mesh_id << " should be connected to switch 0";
+    }
+
+    // Test get_switch_for_mesh() for non-connected mesh
+    auto switch_for_non_existent = mesh_graph.get_switch_for_mesh(non_existent_mesh_id);
+    EXPECT_FALSE(switch_for_non_existent.has_value()) << "Non-existent mesh should not have a switch";
+
+    // Test that switch mesh_id works with other MeshGraph APIs
+    const auto& host_ranks = mesh_graph.get_host_ranks(switch_mesh_id);
+    EXPECT_EQ(host_ranks.size(), 1) << "Switch should have exactly 1 host rank (single host constraint)";
+
+    const auto& chip_ids = mesh_graph.get_chip_ids(switch_mesh_id);
+    EXPECT_EQ(chip_ids.size(), 8) << "Switch should have 2*4=8 chips";
+
+    const auto& mesh_shape = mesh_graph.get_mesh_shape(switch_mesh_id);
+    EXPECT_EQ(mesh_shape, MeshShape(2, 4)) << "Switch should have 2x4 shape";
+
+    // Test coord range for switch
+    const auto& coord_range = mesh_graph.get_coord_range(switch_mesh_id);
+    EXPECT_EQ(coord_range, MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(1, 3)))
+        << "Switch should have coord range (0,0) to (1,3)";
+
+    // Test host rank for chips in switch
+    for (uint32_t chip_id = 0; chip_id < 8; ++chip_id) {
+        auto host_rank = mesh_graph.get_host_rank_for_chip(switch_mesh_id, chip_id);
+        EXPECT_EQ(*host_rank, MeshHostRankId{0}) << "All switch chips should be on host rank 0";
+    }
 }
 
 }  // namespace multi_host_tests
