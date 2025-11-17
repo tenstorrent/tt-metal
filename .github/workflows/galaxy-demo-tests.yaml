@@ -53,7 +53,7 @@ jobs:
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/galaxy-deepseek-tests-impl.yaml
-    if: ${{ (github.event_name == 'workflow_dispatch' && inputs.deepseek == 'true') || (github.event_name == 'schedule' && github.event.schedule == '0 9 * * 6') }}
+    if: ${{ (github.event_name == 'workflow_dispatch' && inputs.deepseek) || (github.event_name == 'schedule' && github.event.schedule == '0 9 * * 6') }}
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
