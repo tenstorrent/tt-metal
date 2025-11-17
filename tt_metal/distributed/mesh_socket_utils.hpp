@@ -46,6 +46,14 @@ void write_socket_configs(
 SocketPeerDescriptor generate_local_endpoint_descriptor(
     const MeshSocket& socket_endpoint, std::optional<multihost::DistributedContextId> context_id = std::nullopt);
 
+// Overload that generates endpoint descriptor from buffers directly (without requiring MeshSocket)
+SocketPeerDescriptor generate_local_endpoint_descriptor(
+    const std::shared_ptr<MeshBuffer>& config_buffer,
+    const std::shared_ptr<MeshBuffer>& data_buffer,
+    const SocketConfig& config,
+    SocketEndpoint socket_endpoint,
+    std::optional<multihost::DistributedContextId> context_id = std::nullopt);
+
 void forward_descriptor_to_peer(
     const SocketPeerDescriptor& desc,
     SocketEndpoint socket_endpoint_type,
@@ -60,5 +68,37 @@ std::array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, 2> g
     const SocketConfig& config,
     const SocketPeerDescriptor& sender_descriptor,
     const SocketPeerDescriptor& receiver_descriptor);
+
+// Helper functions to perform socket initialization side effects without creating MeshSocket objects
+// These functions replicate the side effects of MeshSocket constructor:
+// - Create and allocate socket buffers (config and data)
+// - Perform handshaking with peer endpoint
+// - Write socket configuration to buffers
+// - Synchronize with peer via barrier
+
+// Initialize socket connection for a given socket config.
+// This performs all the side effects of MeshSocket construction:
+// creates buffers, performs handshaking, writes configs, and synchronizes.
+// The socket config object will be updated with any necessary state.
+void initialize_socket_connection(
+    const std::shared_ptr<MeshDevice>& device,
+    const SocketConfig& config,
+    const std::shared_ptr<multihost::DistributedContext>& context = nullptr);
+
+// More granular helper functions for socket initialization side effects:
+
+// Step 1: Create socket buffers (config and optionally data buffer for receiver)
+// Returns: pair of (config_buffer, data_buffer), where data_buffer is nullptr for sender
+std::pair<std::shared_ptr<MeshBuffer>, std::shared_ptr<MeshBuffer>> create_socket_buffers(
+    const std::shared_ptr<MeshDevice>& device, const SocketConfig& config, SocketEndpoint socket_endpoint);
+
+// Step 2: Perform socket handshaking with peer and write configs
+// This exchanges descriptors with peer, generates fabric node ID maps, writes configs, and synchronizes
+void connect_socket_with_peer(
+    const std::shared_ptr<MeshBuffer>& config_buffer,
+    const std::shared_ptr<MeshBuffer>& data_buffer,
+    const SocketConfig& config,
+    SocketEndpoint socket_endpoint,
+    const std::shared_ptr<multihost::DistributedContext>& context = nullptr);
 
 }  // namespace tt::tt_metal::distributed

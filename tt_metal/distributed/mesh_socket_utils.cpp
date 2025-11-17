@@ -395,6 +395,31 @@ SocketPeerDescriptor generate_local_endpoint_descriptor(
     return local_endpoint_desc;
 }
 
+SocketPeerDescriptor generate_local_endpoint_descriptor(
+    const std::shared_ptr<MeshBuffer>& config_buffer,
+    const std::shared_ptr<MeshBuffer>& data_buffer,
+    const SocketConfig& config,
+    SocketEndpoint socket_endpoint,
+    std::optional<DistributedContextId> context_id) {
+    bool is_sender = socket_endpoint == SocketEndpoint::SENDER;
+
+    auto peer_rank = is_sender ? config.receiver_rank : config.sender_rank;
+    SocketPeerDescriptor local_endpoint_desc = {
+        .config = config,
+        .config_buffer_address = config_buffer->address(),
+        .data_buffer_address = (is_sender || !data_buffer) ? 0 : data_buffer->address(),
+        .exchange_tag = generate_descriptor_exchange_tag(peer_rank, context_id)  // Unique tag for this exchange
+    };
+    auto device = config_buffer->device();
+    for (const auto& [sender_core, recv_core] : config.socket_connection_config) {
+        const auto& device_coord = is_sender ? sender_core.device_coord : recv_core.device_coord;
+        auto fabric_node_id = device->get_fabric_node_id(device_coord);
+        local_endpoint_desc.mesh_ids.push_back(*fabric_node_id.mesh_id);
+        local_endpoint_desc.chip_ids.push_back(fabric_node_id.chip_id);
+    }
+    return local_endpoint_desc;
+}
+
 void forward_descriptor_to_peer(
     const SocketPeerDescriptor& desc,
     SocketEndpoint socket_endpoint_type,
@@ -483,6 +508,118 @@ std::array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, 2> g
                 tt_fabric::MeshId{receiver_descriptor.mesh_ids[i]}, receiver_descriptor.chip_ids[i]));
     }
     return fabric_node_id_map;
+}
+
+namespace {
+
+void point_to_point_barrier(
+    const std::vector<multihost::Rank>& ranks,
+    const std::shared_ptr<multihost::DistributedContext>& distributed_context) {
+    TT_FATAL(ranks.size() == 2, "Point-to-point barrier requires exactly two ranks.");
+    TT_FATAL(ranks[0] != ranks[1], "Point-to-Point barrier cannot be used for synchronization within the same rank.");
+    TT_FATAL(
+        distributed_context->rank() == ranks[0] || distributed_context->rank() == ranks[1],
+        "Point-to-Point barrier for ranks {} and {} cannot be called on rank {}.",
+        *ranks[0],
+        *ranks[1],
+        *distributed_context->rank());
+
+    if (distributed_context->rank() == ranks[0]) {
+        int sync_msg = 1;
+        distributed_context->ssend(
+            tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&sync_msg), sizeof(sync_msg)),
+            ranks[1],
+            multihost::Tag{0});
+    } else {
+        int sync_msg = 0;
+        distributed_context->recv(
+            tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&sync_msg), sizeof(sync_msg)),
+            ranks[0],
+            multihost::Tag{0});
+        TT_FATAL(sync_msg == 1, "Received unexpected message during point-to-point barrier.");
+    }
+}
+
+}  // namespace
+
+std::pair<std::shared_ptr<MeshBuffer>, std::shared_ptr<MeshBuffer>> create_socket_buffers(
+    const std::shared_ptr<MeshDevice>& device, const SocketConfig& config, SocketEndpoint socket_endpoint) {
+    auto config_buffer = create_socket_config_buffer(device, config, socket_endpoint);
+    std::shared_ptr<MeshBuffer> data_buffer = nullptr;
+
+    if (socket_endpoint == SocketEndpoint::RECEIVER) {
+        data_buffer = create_socket_data_buffer(device, config);
+    }
+
+    return {config_buffer, data_buffer};
+}
+
+void connect_socket_with_peer(
+    const std::shared_ptr<MeshBuffer>& config_buffer,
+    const std::shared_ptr<MeshBuffer>& data_buffer,
+    const SocketConfig& config,
+    SocketEndpoint socket_endpoint,
+    const std::shared_ptr<multihost::DistributedContext>& context) {
+    auto distributed_context = context ? context : multihost::DistributedContext::get_current_world();
+
+    // Generate local endpoint descriptor
+    auto local_endpoint_desc = generate_local_endpoint_descriptor(
+        config_buffer, data_buffer, config, socket_endpoint, distributed_context->id());
+
+    SocketPeerDescriptor remote_endpoint_desc;
+
+    // Convention:
+    //  - Sender Endpoint sends its descriptor first, then receives the peer's descriptor.
+    //  - Receiver Endpoint receives the peer's descriptor first, then sends its own descriptor.
+    // Asymmetry ensures that the blocking send/recv do not deadlock.
+    if (socket_endpoint == SocketEndpoint::SENDER) {
+        forward_descriptor_to_peer(local_endpoint_desc, socket_endpoint, distributed_context);
+        remote_endpoint_desc =
+            receive_and_verify_descriptor_from_peer(local_endpoint_desc, socket_endpoint, distributed_context);
+    } else {
+        remote_endpoint_desc =
+            receive_and_verify_descriptor_from_peer(local_endpoint_desc, socket_endpoint, distributed_context);
+        forward_descriptor_to_peer(local_endpoint_desc, socket_endpoint, distributed_context);
+    }
+
+    // Write socket configs to buffer
+    write_socket_configs(config_buffer, local_endpoint_desc, remote_endpoint_desc, socket_endpoint);
+
+    // Synchronize with peer via barrier
+    point_to_point_barrier({config.sender_rank, config.receiver_rank}, distributed_context);
+}
+
+void initialize_socket_connection(
+    const std::shared_ptr<MeshDevice>& device,
+    const SocketConfig& config,
+    const std::shared_ptr<multihost::DistributedContext>& context) {
+    auto distributed_context = context ? context : multihost::DistributedContext::get_current_world();
+
+    if (!(distributed_context->rank() == config.sender_rank || distributed_context->rank() == config.receiver_rank)) {
+        log_warning(
+            LogMetal,
+            "Initializing socket connection on host rank {} with sender rank {} and receiver rank {} - this will be a "
+            "no-op.",
+            *distributed_context->rank(),
+            *config.sender_rank,
+            *config.receiver_rank);
+        return;
+    }
+
+    TT_FATAL(
+        config.sender_rank != config.receiver_rank,
+        "Socket connection must only be used for communication between different host ranks, not within the same "
+        "rank.");
+
+    // Determine socket endpoint type based on current rank
+    SocketEndpoint socket_endpoint =
+        (distributed_context->rank() == config.sender_rank) ? SocketEndpoint::SENDER : SocketEndpoint::RECEIVER;
+
+    // Step 1: Create socket buffers
+    auto [config_buffer, data_buffer] = create_socket_buffers(device, config, socket_endpoint);
+
+    // Step 2: Perform handshaking and write configs
+    connect_socket_with_peer(config_buffer, data_buffer, config, socket_endpoint, distributed_context);
 }
 
 }  // namespace tt::tt_metal::distributed
