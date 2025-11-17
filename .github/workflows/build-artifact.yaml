@@ -489,8 +489,13 @@ jobs:
 
   build-evaluation-image:
     name: "📦 Build Evaluation Docker Image"
-    if: ${{ inputs.build-evaluation-image }}
-    needs: [build-docker-image, build-artifact, build-wheel]
+    if: |
+      inputs.build-evaluation-image &&
+      (
+        (inputs.use-artifacts-from-run == '' && !cancelled()) ||
+        (inputs.use-artifacts-from-run != '' && needs.download-artifacts.result == 'success')
+      )
+    needs: [build-docker-image, build-artifact, build-wheel, download-artifacts]
     uses: ./.github/workflows/build-evaluation-image.yaml
     secrets: inherit
     with:
