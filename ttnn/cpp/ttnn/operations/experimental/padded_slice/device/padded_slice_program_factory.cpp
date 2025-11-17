@@ -21,6 +21,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <vector>
+#include <tt-metalium/tt_align.hpp>
 
 #include "padded_slice_op.hpp"
 using namespace tt::constants;
@@ -268,7 +269,6 @@ static operation::ProgramWithCallbacks padded_slice_rm_multi_core(
     auto dst_buffer_alignment = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? ::hal::get_dram_alignment()
                                     : ::hal::get_l1_alignment();
-
     TT_FATAL(
         output_row_size_bytes % dst_buffer_alignment == 0,
         "Output row size {} must be aligned to the destination buffer {} alignment {}",
@@ -303,13 +303,14 @@ static operation::ProgramWithCallbacks padded_slice_rm_multi_core(
     } else {
         non_aligned_temp_cb_index = temp_pad_cb_index;  // Use the unused temp pad index so that CBs are continuous.
     }
+    // uint32_t dram_alignment = hal::get_dram_alignment();
     if (is_non_aligned) {
         tt::tt_metal::create_cb(
             non_aligned_temp_cb_index,
             program,
             total_cores,
-            a.logical_shape()[-1] * a.element_size(),
-            2,
+            tt::align(a.logical_shape()[-1] * a.element_size(), src_buffer_alignment),
+            4,
             cb_data_format);
     }
 
