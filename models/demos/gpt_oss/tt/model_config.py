@@ -46,8 +46,8 @@ class ModelArgs:
         # GPT-OSS specific paths - use HF_MODEL environment variable (tt_transformers standard)
         # Default paths are internal CI paths for automated testing
         default_models = [
-            "/mnt/MLPerf/tt_dnn-models/tt/GPT-OSS-20B",  # Internal CI path
-            "/mnt/MLPerf/tt_dnn-models/tt/GPT-OSS-120B",  # Internal CI path
+            "/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-20b",  # Internal CI path
+            "/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-120b",  # Internal CI path
         ]
 
         # Use first available model as default, or HF_MODEL environment variable override
