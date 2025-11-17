@@ -185,6 +185,8 @@ def build_mpi_command(
             logger.warning(f"{TT_RUN_PREFIX} mpirun-ulfm not found in PATH, falling back to mpirun")
             mpi_launcher = "mpirun"
 
+    mpi_launcher = "mpirun"
+
     cmd = [mpi_launcher]
 
     # Check if --bind-to is already specified in mpi_args
