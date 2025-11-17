@@ -10,7 +10,6 @@ from .config import ExpertConfig, ProgramConfig
 from .operations import (
     apply_expert_parallel_allreduce,
     apply_routing_weights,
-    apply_sequence_parallel_allgather,
     apply_swiglu,
     apply_tensor_parallel_allreduce,
     reduce_experts,
@@ -152,7 +151,7 @@ def _process_prefill_chunk(
 
         # Apply bias and routing weights
         split_seq_len = seq_len if seq_len < split_size else split_size
-        next_states = ttnn.reshape(down, (batch_size, config.num_experts, split_seq_len, config.hidden_size))
+        next_states = ttnn.reshape(down, (batch_size, config.num_experts, split_seq_len, down.shape[-1]))
         bias_transposed = ttnn.transpose(weights.down_proj_bias, 1, 0)
         next_states = ttnn.add(next_states, bias_transposed, output_tensor=next_states)
         next_states = apply_routing_weights(next_states, routing_weights_list[i])
@@ -271,14 +270,8 @@ def prefill_forward(
         )
 
     # Sequence parallel all-gather
+    print("before sp ag", next_states.shape)
     if sp > 1:
-        next_states = apply_sequence_parallel_allgather(next_states, mesh_config, ccl_manager)
-
-    # Final reshape
-    next_states = ttnn.reshape(
-        next_states,
-        (batch_size, seq_len_global, config.hidden_size),
-        (batch_size, max(32, seq_len_global), config.hidden_size),
-    )
+        next_states = ttnn.all_gather(next_states, dim=-2, topology=ttnn.Topology.Linear, cluster_axis=0)
 
     return next_states

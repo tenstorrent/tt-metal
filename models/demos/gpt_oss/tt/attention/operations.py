@@ -6,19 +6,41 @@ import ttnn
 from .weights import AttentionWeights
 
 
-def apply_qkv_projection(hidden_states, weights: AttentionWeights):
+def apply_qkv_projection(hidden_states, weights: AttentionWeights, mesh_config, ccl_manager):
     """
-    Apply QKV projection and add bias.
+    Apply QKV projection with 2D sharding and all-reduce.
+
+    With 2D weights (input across rows, output across columns):
+    - Input: row-sharded (4), column-replicated (8)
+    - Matmul produces partial results
+    - All-reduce along rows to get full results
+    - Output: row-replicated (4), column-sharded (8)
 
     Args:
         hidden_states: Input tensor [batch, seq_len, hidden_size]
-        weights: Attention weights container
+        weights: Attention weights container (2D sharded)
+        mesh_config: Mesh configuration for communication
+        ccl_manager: Communication manager
 
     Returns:
-        Fused QKV tensor [batch, seq_len, total_qkv_dim]
+        Fused QKV tensor [batch, seq_len, total_qkv_dim] column-sharded
     """
+    # Matmul with 2D sharded weights produces partial results
     xqkv_fused = ttnn.matmul(hidden_states, weights.wqkv, dtype=ttnn.bfloat16)
     xqkv_fused = ttnn.add(xqkv_fused, weights.wqkv_bias, output_tensor=xqkv_fused)
+
+    # All-reduce along ROWS (cluster_axis=0) to sum partial results
+    # After this: row-replicated, column-sharded (ready for head splitting)
+    num_rows = mesh_config.mesh_shape[0]
+    if num_rows > 1:
+        xqkv_fused = ttnn.all_reduce(
+            xqkv_fused,
+            num_links=1,
+            topology=ttnn.Topology.Linear,
+            cluster_axis=0,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+
     return xqkv_fused
 
 
@@ -97,42 +119,41 @@ def concat_heads(tensor, is_decode_mode: bool):
     return ttnn.experimental.nlp_concat_heads(tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
-def apply_output_projection(tensor, weights: AttentionWeights, activation_dtype):
+def apply_output_projection(tensor, weights: AttentionWeights, activation_dtype, mesh_config, ccl_manager):
     """
-    Apply output projection and bias.
+    Apply output projection with 2D sharding and all-reduce.
+
+    With 2D weights (input across columns, output across rows):
+    - Input: column-sharded (8), row-replicated (4)
+    - Matmul produces partial results
+    - All-reduce along columns to get full results
+    - Output: column-replicated (8), row-sharded (4)
 
     Args:
-        tensor: Attention output tensor
-        weights: Attention weights container
+        tensor: Attention output tensor [batch, seq_len, hidden_size] column-sharded
+        weights: Attention weights container (2D sharded)
         activation_dtype: Target dtype for output
+        mesh_config: Mesh configuration for communication
+        ccl_manager: Communication manager
 
     Returns:
-        Output tensor after projection
+        Output tensor [batch, seq_len, hidden_size] row-sharded
     """
     tensor = ttnn.typecast(tensor, ttnn.bfloat8_b)
+    # Matmul with 2D sharded weights produces partial results
     out = ttnn.matmul(tensor, weights.o_proj, dtype=activation_dtype)
     tensor.deallocate(True)
     out = ttnn.add(out, weights.o_proj_bias, output_tensor=out)
-    return out
 
-
-def apply_allreduce(tensor, mesh_config, ccl_manager, batch_size: int, seq_len: int, hidden_size: int):
-    """
-    Apply tensor parallel allreduce if needed.
-
-    Args:
-        tensor: Input tensor
-        mesh_config: Mesh configuration
-        ccl_manager: Communication manager
-        batch_size: Batch size for final reshape
-        seq_len: Sequence length for final reshape
-        hidden_size: Hidden size for final reshape
-
-    Returns:
-        Tensor after allreduce (if TP > 1) or original tensor
-    """
+    # All-reduce along COLUMNS (cluster_axis=1) to sum partial results
+    # After this: column-replicated, row-sharded (ready for residual add)
     if mesh_config.tp > 1:
-        tensor = ttnn.unsqueeze(tensor, 0)
-        tensor = mesh_config.allreduce(tensor, ccl_manager, pad_size=0, axis=mesh_config.tp_axis)
-        tensor = ttnn.reshape(tensor, (batch_size, seq_len, hidden_size))
-    return tensor
+        out = ttnn.all_reduce(
+            out,
+            num_links=4,
+            topology=ttnn.Topology.Ring,
+            cluster_axis=1,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+
+    return out

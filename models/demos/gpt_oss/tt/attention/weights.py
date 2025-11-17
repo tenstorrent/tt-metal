@@ -54,10 +54,30 @@ def load_attention_weights(
     k_proj_weight = substate(state_dict, "k_proj")["weight"]  # [num_kv_heads * head_dim, hidden_size]
     v_proj_weight = substate(state_dict, "v_proj")["weight"]  # [num_kv_heads * head_dim, hidden_size]
 
-    o_proj = substate(state_dict, "o_proj")["weight"].transpose(-1, -2)
-    o_proj_bias = substate(state_dict, "o_proj")["bias"]
+    # Calculate padded hidden size for row-sharding (must be divisible by num_rows * TILE_SIZE)
+    hidden_size = config.hidden_size
+    num_rows = mesh_config.mesh_shape[0]
+    shard_chunk_size = num_rows * ttnn.TILE_SIZE  # e.g., 4 * 32 = 128
+    if hidden_size % shard_chunk_size != 0:
+        padded_hidden_size = ((hidden_size + shard_chunk_size - 1) // shard_chunk_size) * shard_chunk_size
+    else:
+        padded_hidden_size = hidden_size
 
-    # Create fused QKV weight
+    # Load and pad o_proj weights for 2D sharding
+    o_proj = substate(state_dict, "o_proj")["weight"].transpose(-1, -2)  # [hidden_size, hidden_size]
+    o_proj_bias = substate(state_dict, "o_proj")["bias"]  # [hidden_size]
+
+    # Pad BOTH dimensions of o_proj to padded_hidden_size
+    if padded_hidden_size > hidden_size:
+        padding_size = padded_hidden_size - hidden_size
+        # Pad both dimensions: [hidden_size, hidden_size] -> [padded_hidden_size, padded_hidden_size]
+        o_proj = torch.nn.functional.pad(o_proj, (0, padding_size, 0, 0), value=0.0)
+        # Pad bias: [hidden_size] -> [padded_hidden_size]
+        o_proj_bias = torch.nn.functional.pad(o_proj_bias, (0, padding_size), value=0.0)
+
+    print("o_proj_bias", o_proj.shape, o_proj_bias.shape)
+    # Create fused QKV weight for 2D sharding
+    # For 2D sharding: don't pre-chunk, let mesh_mapper handle distribution
     # Split Q, K, V across devices, then concatenate per device
     qkv_list = []
     for i in range(mesh_config.tp):
@@ -76,24 +96,40 @@ def load_attention_weights(
         qkv_list.append(qkv)
 
     # Concatenate across devices: [hidden_size, total_qkv_dim]
-    qkv_cat = torch.cat(qkv_list, dim=-1).unsqueeze(0).unsqueeze(0)  # [1, 1, hidden_size, total_qkv_dim]
+    qkv_cat = torch.cat(qkv_list, dim=-1)  # [hidden_size, total_qkv_dim]
 
-    # Clean mesh mapping using MeshConfig
+    # Pad input dimension (hidden_size) to padded_hidden_size for row-sharding
+    if padded_hidden_size > hidden_size:
+        padding_size = padded_hidden_size - hidden_size
+        # Pad first dimension: [hidden_size, total_qkv_dim] -> [padded_hidden_size, total_qkv_dim]
+        qkv_cat = torch.nn.functional.pad(qkv_cat, (0, 0, 0, padding_size), value=0.0)
+
+    # Add batch dimensions: [padded_hidden_size, total_qkv_dim] -> [1, 1, padded_hidden_size, total_qkv_dim]
+    qkv_cat = qkv_cat.unsqueeze(0).unsqueeze(0)
+    print("qkv_cat", qkv_cat.shape)
+
+    # 2D sharding mappers
+    # QKV: input dim (hidden) across ROWS, output dim (qkv) across COLUMNS
+    qkv_2d_mapper = mesh_config.attention_2d_qkv(mesh_device)
+    # WO: input dim (hidden) across COLUMNS, output dim (hidden) across ROWS
+    wo_2d_mapper = mesh_config.attention_2d_wo(mesh_device)
+
+    # For biases and other 1D-sharded tensors
     col_mesh_mapper = mesh_config.column_parallel(mesh_device)
     row_mesh_mapper = mesh_config.row_parallel(mesh_device)
 
-    # Load QKV weight
+    # Load QKV weight with 2D sharding
     wqkv = ttnn.as_tensor(
         qkv_cat,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=weight_dtype,
-        mesh_mapper=col_mesh_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, "wqkv"),
+        mesh_mapper=qkv_2d_mapper,
+        cache_file_name=get_cache_file_name(tensor_cache_path, "wqkv_2d"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    # Handle biases - create fused QKV bias
+    # Handle biases - column-sharded for output dimension
     q_proj_bias = substate(state_dict, "q_proj")["bias"]
     k_proj_bias = substate(state_dict, "k_proj")["bias"]
     v_proj_bias = substate(state_dict, "v_proj")["bias"]
@@ -113,7 +149,7 @@ def load_attention_weights(
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=bias_dtype,
-        mesh_mapper=col_mesh_mapper,
+        mesh_mapper=col_mesh_mapper,  # Column-sharded on output dimension
         cache_file_name=get_cache_file_name(tensor_cache_path, "wqkv_bias"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
@@ -125,17 +161,32 @@ def load_attention_weights(
     )
     decode_sinks /= config.scaling
 
-    # Output projection
-    if mesh_config.tp > 1:
-        o_proj_bias = torch.cat([o_proj_bias] + [torch.zeros_like(o_proj_bias)] * (mesh_config.tp - 1), dim=-1)
+    # Output projection with 2D sharding
+    num_rows = mesh_config.mesh_shape[0]
+
+    # Handle bias for 2D sharding
+    # After WO matmul + allreduce_cols, output is: row-sharded, column-replicated
+    # Bias should match: row-sharded (already padded_hidden_size), column-replicated
+    #
+    # For 2D mesh: shard dim=-1 (padded_hidden_size) across mesh axis 0 (rows)
+    # For 1D mesh: column-parallel sharding (TP dimension)
+    if num_rows > 1:
+        # 2D mesh: shard along rows
+        # dims=(-1, None) means: shard tensor dim -1 on mesh axis 0 (rows), replicate on mesh axis 1 (cols)
+        o_bias_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_config.mesh_shape, dims=(-1, None))
+    else:
+        # 1D mesh: pad bias by TP factor and use column-parallel sharding
+        if mesh_config.tp > 1:
+            o_proj_bias = torch.cat([o_proj_bias] + [torch.zeros_like(o_proj_bias)] * (mesh_config.tp - 1), dim=-1)
+        o_bias_mapper = col_mesh_mapper
 
     o_proj_tt = ttnn.as_tensor(
-        o_proj,
+        o_proj.unsqueeze(0).unsqueeze(0),  # [1, 1, hidden_size, hidden_size]
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=weight_dtype,
-        mesh_mapper=row_mesh_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, "o_proj"),
+        mesh_mapper=wo_2d_mapper,  # 2D sharding: input across cols, output across rows
+        cache_file_name=get_cache_file_name(tensor_cache_path, "o_proj_2d"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
@@ -144,7 +195,7 @@ def load_attention_weights(
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=bias_dtype,
-        mesh_mapper=col_mesh_mapper,
+        mesh_mapper=o_bias_mapper,  # Choose based on mesh shape
         cache_file_name=get_cache_file_name(tensor_cache_path, "o_proj_bias"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )

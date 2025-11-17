@@ -4,14 +4,7 @@
 import ttnn
 
 from .config import AttentionConfig, ProgramConfig
-from .operations import (
-    apply_allreduce,
-    apply_output_projection,
-    apply_qkv_projection,
-    apply_rope,
-    concat_heads,
-    split_qkv_heads_prefill,
-)
+from .operations import apply_output_projection, apply_qkv_projection, apply_rope, concat_heads, split_qkv_heads_prefill
 from .weights import AttentionWeights
 
 
@@ -59,8 +52,8 @@ def prefill_forward(
     if batch_size != 1:
         raise NotImplementedError(f"Currently only batch_size=1 supported, got {batch_size}")
 
-    # QKV projection
-    xqkv_fused = apply_qkv_projection(hidden_states, weights)
+    # QKV projection with 2D sharding (includes all-reduce along rows)
+    xqkv_fused = apply_qkv_projection(hidden_states, weights, mesh_config, ccl_manager)
 
     # Split into Q, K, V heads
     num_local_heads = mesh_config.shard_size(config.num_heads)
@@ -104,13 +97,12 @@ def prefill_forward(
         attention_sink=weights.sinks,
     )
 
-    # Concat heads and apply output projection
+    # Concat heads and apply output projection (with 2D sharding all-reduce)
     tt_sdpa_out = concat_heads(tt_sdpa_out, is_decode_mode=False)
 
-    tt_out = apply_output_projection(tt_sdpa_out, weights, activation_dtype)
+    tt_out = apply_output_projection(tt_sdpa_out, weights, activation_dtype, mesh_config, ccl_manager)
     tt_out = ttnn.reshape(tt_out, (batch_size, seq_len, hidden_size))
 
-    # Tensor parallel allreduce
-    tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, batch_size, seq_len, hidden_size)
+    # Note: all-reduce is now handled inside apply_output_projection for 2D sharding
 
     return tt_out
