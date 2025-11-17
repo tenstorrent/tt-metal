@@ -466,6 +466,8 @@ void MAIN {
                 // We need to wait for them and send to reducer's compute
                 // Iterate through each worker
                 for (uint32_t i = 0; i < num_cores_to_wait; i++) {
+                    move_block<true>(cb_l_in, cb_prev_sum_2, Sq_chunk_t);
+
                     // Fused Softmax Correction
                     // * Fused Correction is a fused operation that performs the following steps:
                     // * 1. CUR_MAX = max(PREV_MAX, WORKER_MAX)
@@ -476,8 +478,8 @@ void MAIN {
                     // * 6. CUR_SUM = PREV_SUM_2 + PREV_SUM
                     // */
                     correction_block<scale_fp32, (int)VectorMode::C>(
-                        cb_m_in,  // cb worker max
-                        cb_l_in,  // cb worker sum
+                        cb_m_in,        // cb worker max
+                        cb_prev_sum_2,  // cb worker sum
                         cb_cur_max,
                         cb_prev_max,
                         cb_cur_sum,
