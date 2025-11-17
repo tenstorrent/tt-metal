@@ -144,7 +144,6 @@ class TtLlamaAttention(LightweightModule):
         self.wqkv = ttnn.as_tensor(
             qkv_cat,
             dtype=self.dtype,
-            # dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=self.model_config["SHARDED_QKV_RING_MEMCFG"] if self.TG else wqkv_mem_config,
@@ -156,7 +155,6 @@ class TtLlamaAttention(LightweightModule):
         self.wqkv_interleaved = ttnn.as_tensor(
             qkv_cat,
             dtype=self.dtype,
-            # dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
