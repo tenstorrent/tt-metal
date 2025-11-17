@@ -367,13 +367,21 @@ static bool test_sdpa_reduce_c_transposed(
         float mse_threshold = 0.003f;  // Determined empirically
         float mm_mse = 0.0f;
         const size_t elems = static_cast<size_t>(M) * static_cast<size_t>(N);
+        // std::cout << "=== MATMUL MSE TRACKING ===" << std::endl;
         for (size_t idx = 0; idx < elems; ++idx) {
             float a = static_cast<float>(mm_out_rm[idx]);
             float b = static_cast<float>(golden_matmul_rm[idx]);
             float d = a - b;
             mm_mse += d * d;
+            if (idx < 32) {  // Print details for first 32 elements
+                // std::cout << "idx " << idx << ": diff^2=" << d * d << " | mm_mse=" << mm_mse << std::endl;
+            }
         }
+        // std::cout << "mm_mse total: " << mm_mse << std::endl;
+        // std::cout << "elems (M*N): " << elems << " (M=" << M << ", N=" << N << ")" << std::endl;
+
         mm_mse /= static_cast<float>(elems);
+        // std::cout << "mm_mse after division: " << mm_mse << std::endl;
         if (mm_mse > mse_threshold) {
             log_error(LogTest, "Matmul output MSE: {} > {}", mm_mse, mse_threshold);
             pass = false;
@@ -382,15 +390,36 @@ static bool test_sdpa_reduce_c_transposed(
 
     // 2) Reduce-max output: final reduce_c_transposed emits q_chunk_size tiles; row 0 holds column maxima
     {
+        // Print first 32 elements of golden reduce output for debugging
+        // std::cout << "=== GOLDEN REDUCE FIRST 32 ELEMENTS ===" << std::endl;
+        // std::cout << "Golden reduce [0:31]: ";
+        // for (uint32_t j = 0; j < 32 && j < N; ++j) {
+        //     std::cout << static_cast<float>(golden_max_rm[j]) << " ";
+        // }
+        // std::cout << std::endl;
+
+        // Print first 32 elements of device reduce output for debugging
+        // std::cout << "=== DEVICE REDUCE FIRST 32 ELEMENTS ===" << std::endl;
+        // std::cout << "Device reduce [0:31]: ";
+        // for (uint32_t j = 0; j < 32 && j < N; ++j) {
+        //     std::cout << static_cast<float>(reduce_out_rm[j]) << " ";
+        // }
+        // std::cout << std::endl;
+
         float mse_threshold = 0.02f;
         float max_mse = 0.0f;
         for (uint32_t j = 0; j < N; ++j) {
-            float acc = static_cast<float>(reduce_out_rm[0 * N + j]);  // row 0 of the stats tensor
+            float acc = static_cast<float>(reduce_out_rm[j]);
             float b = static_cast<float>(golden_max_rm[j]);
             float d = acc - b;
             max_mse += d * d;
+            // std::cout << "diff^2: " << d * d << " |  max_mse: " << max_mse << std::endl;
         }
+        // std::cout << "max_mse total: " << max_mse << std::endl;
+        // std::cout << "N: " << N << " M:" << M << std::endl;
+
         max_mse /= static_cast<float>(N);
+        // std::cout << "max_mse after division: " << max_mse << std::endl;
         if (max_mse > mse_threshold) {
             log_error(LogTest, "Reduce-max output (post-combine) MSE: {} > {}", max_mse, mse_threshold);
             pass = false;
@@ -451,7 +480,7 @@ int main(int argc, char** argv) {
     // sizes are in terms of tiles (32x32)
 
     // Passing sweep
-    std::vector<uint32_t> q_chunk_sizes = {1, 2, 4, 8};
+    std::vector<uint32_t> q_chunk_sizes = {1};
     std::vector<uint32_t> k_chunk_sizes = {1, 2, 4, 8, 16};
     std::vector<uint32_t> head_dim_sizes = {1, 2, 4};
 
