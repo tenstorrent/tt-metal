@@ -213,9 +213,8 @@ class TtLlamaMLP(LightweightModule):
         if 1024 <= seq_len < 4096:
             x = ttnn.reshape(x, (1, seq_len // 1024, 1024, -1))
 
-        if (
-            seq_len < 4096
-        ):  # For shorter sequence lengths use the original matmul since it performs better than the minimal matmul
+        # For shorter sequence lengths use the original matmul since it performs better than the minimal matmul
+        if seq_len < 4096:
             w1_out = ttnn.linear(
                 x,
                 self.w1_interleaved if use_w1_w3_interleaved else self.w1,
@@ -242,6 +241,7 @@ class TtLlamaMLP(LightweightModule):
         )
         ttnn.deallocate(w1_out)
 
+        # For shorter sequence lengths use the original matmul since it performs better than the minimal matmul
         if seq_len < 4096:
             w3_out = ttnn.linear(
                 x,
@@ -280,6 +280,7 @@ class TtLlamaMLP(LightweightModule):
         )
         ttnn.deallocate(w2_in)
 
+        # For shorter sequence lengths use the original matmul since it performs better than the minimal matmul
         if seq_len < 4096:
             w2_out = ttnn.linear(
                 w2_in_gathered,
