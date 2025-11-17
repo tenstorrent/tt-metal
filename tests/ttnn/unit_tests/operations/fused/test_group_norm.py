@@ -43,7 +43,7 @@ def manual_group_norm(input_tensor, num_groups, eps=1e-2):
 @pytest.mark.parametrize("C", [320])
 @pytest.mark.parametrize("H", [32])
 @pytest.mark.parametrize("W", [32])
-@pytest.mark.parametrize("num_groups", [32])
+@pytest.mark.parametrize("num_groups", [16])
 @pytest.mark.parametrize("use_welford", welford_flavors, ids=welford_ids)
 def test_group_norm_with_height_sharded(device, N, C, H, W, num_groups, use_welford):
     torch.manual_seed(0)
