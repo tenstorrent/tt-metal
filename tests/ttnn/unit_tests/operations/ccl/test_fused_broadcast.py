@@ -7,6 +7,7 @@ from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from models.common.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
+import numpy as np
 
 
 def run_fused_broadcast_impl(
@@ -48,6 +49,7 @@ def run_fused_broadcast_impl(
     input_tensor_mesh_list = []
     input_tensor_golden_list = []
 
+    print("output shape: ", output_shape)
     for iter_idx in range(num_iters):
         # Create input tensor on root device only
         torch_input = torch.randn(output_shape, dtype=torch.bfloat16)
@@ -56,17 +58,20 @@ def run_fused_broadcast_impl(
         # Create mesh tensor - input only exists on root device, zeros elsewhere
         device_tensors = []
         mesh_rows, mesh_cols = mesh_shape
+        num_devices = mesh_rows * mesh_cols
+        cluster_axis = -1  # last dimension
+        for device_idx in range(num_devices):
+            row = device_idx // mesh_cols
+            col = device_idx % mesh_cols
+            if (row, col) == root_coord:
+                device_tensors.append(torch_input)
+            else:
+                device_tensors.append(torch.zeros_like(torch_input))
 
-        for row in range(mesh_rows):
-            for col in range(mesh_cols):
-                if (row, col) == root_coord:
-                    device_tensors.append(torch_input)
-                else:
-                    device_tensors.append(torch.zeros_like(torch_input))
-
-        # Concatenate along last dimension for mesh mapper
-        mesh_tensor = torch.cat(device_tensors, dim=-1)
-
+        # Reshape device_tensors to match mesh shape (4, 2, 1, 1, 1, 32)
+        output_shape_1 = (1, 32)
+        mesh_tensor = torch.stack(device_tensors, dim=0).reshape(mesh_rows, mesh_cols, *output_shape_1)
+        # Remove squeezing, just use the correct shape
         input_tensor_mesh = ttnn.from_torch(
             mesh_tensor,
             device=mesh_device,
@@ -76,13 +81,15 @@ def run_fused_broadcast_impl(
             mesh_mapper=ttnn.create_mesh_mapper(
                 mesh_device,
                 ttnn.MeshMapperConfig(
-                    [ttnn.PlacementReplicate(), ttnn.PlacementShard(-1)], ttnn.MeshShape(mesh_rows, mesh_cols)
+                    [ttnn.PlacementShard(0), ttnn.PlacementShard(1)], ttnn.MeshShape(mesh_rows, mesh_cols)
                 ),
             ),
         )
         input_tensor_mesh_list.append(input_tensor_mesh)
 
     # Run fused broadcast operation
+    print("input tensor mesh list length: ", len(input_tensor_mesh_list))
+    print("input tensor mesh shape: ", input_tensor_mesh_list[0])
     tt_out_tensor_list = []
     for i in range(num_iters):
         tt_out_tensor = ttnn.fused_broadcast(
@@ -143,7 +150,7 @@ def run_fused_broadcast_impl(
 @pytest.mark.parametrize(
     "root_coord, output_shape, layout, input_dtype, mem_config",
     [
-        ((1, 0), [1, 1, 1, 1024], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG),
+        ((1, 0), [1, 1, 1, 32], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG),
         # ((4, 2), (2, 0), [1, 1, 64, 64], ttnn.TILE_LAYOUT, ttnn.bfloat16, ttnn.L1_MEMORY_CONFIG),
         # ((4, 2), (1, 1), [2, 1, 32, 64], ttnn.TILE_LAYOUT, ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG),
     ],
@@ -184,6 +191,113 @@ def test_fused_broadcast(
     )
 
 
-if __name__ == "__main__":
-    # Run basic tests if executed directly
-    pytest.main([__file__, "-v"])
+@pytest.mark.parametrize("r_star", [1])
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [pytest.param((4, 2), id="4x2_grid")], indirect=True)
+def test_unfused_seed_ops_ttnn(mesh_device, r_star):
+    """
+    Unfused seed: P2P replicate input across TP ranks in row r*, MM for Q-proj, then broadcast Q down each column.
+    """
+    # Mesh shape: 4 rows x 2 cols
+    mesh_shape = (4, 2)
+    NUM_ROWS, NUM_COLS = mesh_shape
+    HIDDEN_SIZE = 1536
+    Q_DIM = 24576
+    BATCH = 1
+    input_dtype = ttnn.bfloat16
+    layout = ttnn.TILE_LAYOUT
+    mem_config = ttnn.DRAM_MEMORY_CONFIG
+
+    # Step 1: P2P replicate input across TP ranks in row r*
+    input_tensor = torch.randn((BATCH, HIDDEN_SIZE), dtype=torch.bfloat16)
+    # Place input on (r*, 0), zeros elsewhere in row r*
+    tp_input_mesh = torch.zeros((NUM_ROWS, NUM_COLS, BATCH, HIDDEN_SIZE), dtype=torch.bfloat16)
+    tp_input_mesh[r_star, 0] = input_tensor
+    tt_tp_input = ttnn.from_torch(
+        tp_input_mesh,
+        device=mesh_device,
+        layout=layout,
+        dtype=input_dtype,
+        memory_config=mem_config,
+        mesh_mapper=ttnn.create_mesh_mapper(
+            mesh_device,
+            ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementShard(1)], ttnn.MeshShape(NUM_ROWS, NUM_COLS)),
+        ),
+    )
+    sender = ttnn.MeshCoordinate(r_star, 0)
+    receiver = ttnn.MeshCoordinate(r_star, 1)
+    # print("shaoe if point to point input: ", tt_tp_input)
+    tt_tp_input = ttnn.point_to_point(tt_tp_input, sender, receiver, topology=ttnn.Topology.Linear)
+    # print("shape after p2p: ", tt_tp_input)
+
+    # Step 2: MM for Q-projection on both TP ranks in row r*
+    Q_proj = torch.randn((HIDDEN_SIZE, Q_DIM), dtype=torch.bfloat16)
+    tt_Q_proj = ttnn.from_torch(
+        Q_proj, device=mesh_device, layout=layout, dtype=input_dtype, memory_config=mem_config, mesh_mapper=None
+    )
+    Qs = []
+    # Get the input for matmul for (r*,0): input to p2p
+    input_c0 = tp_input_mesh[r_star, 0].unsqueeze(0)  # (1, 1536)
+    tt_input_c0 = ttnn.from_torch(
+        input_c0,
+        device=mesh_device,
+        layout=layout,
+        dtype=input_dtype,
+        memory_config=mem_config,
+        mesh_mapper=None,
+    )
+    tt_Q_c0 = ttnn.matmul(tt_input_c0, tt_Q_proj)
+    # Get the input for matmul for (r*,1): output of p2p
+    # Convert tt_tp_input to torch and slice out the correct device's chunk
+    tp_input_mesh_torch = ttnn.to_torch(tt_tp_input, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+    # Each device chunk is (1, 1536), so for (r*,1): index = r_star * NUM_COLS + 1
+    idx_1 = r_star * NUM_COLS + 1
+    input_c1 = tp_input_mesh_torch[idx_1, 0]  # (1, 1536)
+    tt_input_c1 = ttnn.from_torch(
+        input_c1.unsqueeze(0),
+        device=mesh_device,
+        layout=layout,
+        dtype=input_dtype,
+        memory_config=mem_config,
+        mesh_mapper=None,
+    )
+    tt_Q_c1 = ttnn.matmul(tt_input_c1, tt_Q_proj)
+    # print("shape of Q_c0: ", tt_Q_c0)
+    # print("shape of Q_c1: ", tt_Q_c1)
+    print("data of Q_c0: ", tt_Q_c0)
+
+    Q_c0 = ttnn.to_torch(tt_Q_c0, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+    Q_c1 = ttnn.to_torch(tt_Q_c1, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+    Qs.append(Q_c0)
+    Qs.append(Q_c1)
+    # Step 3: Broadcast each Q_c down its column
+    # For each column, create and map the data separately for broadcast
+    for c in range(NUM_COLS):
+        mesh_data = torch.zeros((NUM_ROWS, NUM_COLS, 1, Q_DIM), dtype=torch.bfloat16)
+        mesh_data[r_star, c, 0] = Qs[c][0]
+        # Mesh mapping: shard along row axis, replicate along column axis
+        mesh_mapper = ttnn.create_mesh_mapper(
+            mesh_device,
+            ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementReplicate()], ttnn.MeshShape(NUM_ROWS, 1)),
+        )
+        # Place mesh_data only on sender device in column c
+        # Use mesh_mapper for vertical sharding (row axis only)
+        tt_mesh_data = ttnn.from_torch(
+            mesh_data[:, c : c + 1],  # select column c only
+            device=mesh_device,
+            layout=layout,
+            dtype=input_dtype,
+            memory_config=mem_config,
+            mesh_mapper=mesh_mapper,
+        )
+        sender_coord = ttnn.MeshCoordinate(r_star, 0)  # sender is (r*, 0) in this column's mesh
+        tt_Qs_mesh = ttnn.broadcast(
+            tt_mesh_data,
+            sender_coord=ttnn.MeshCoordinate(r_star, 0),
+            num_links=1,
+            memory_config=mem_config,
+            topology=ttnn.Topology.Linear,
+            cluster_axis=0,
+        )
+        print("broadcast op output shape: ", tt_Qs_mesh)
+        print("broadcast op output data: ", tt_Qs_mesh)

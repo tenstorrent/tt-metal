@@ -25,6 +25,7 @@ void kernel_main() {
     ///////////////////////////////////////////////////
     // COMPILE TIME ARGS (Combined P2P + Broadcast)
     ///////////////////////////////////////////////////
+    DPRINT << "start of root writer" << ENDL();
     constexpr uint32_t sender_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t packet_header_cb_id = get_compile_time_arg_val(1);
     constexpr uint32_t packet_cb_id = get_compile_time_arg_val(2);
@@ -380,4 +381,5 @@ void kernel_main() {
 
     close_connections(sp_fabric_connection);
     noc_async_write_barrier();
+    DPRINT << "end of root writer" << ENDL();
 }

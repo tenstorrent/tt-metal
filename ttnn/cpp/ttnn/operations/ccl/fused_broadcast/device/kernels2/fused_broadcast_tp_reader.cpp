@@ -12,6 +12,7 @@
 using tt::data_movement::common::tt_memmove;
 // similar to P2P receiver reader
 void kernel_main() {
+    DPRINT << "start of TP reader" << ENDL();
     constexpr uint32_t packet_header_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t packet_cb_id = get_compile_time_arg_val(1);
     constexpr uint32_t receiver_cb_id = get_compile_time_arg_val(2);
@@ -113,4 +114,5 @@ void kernel_main() {
 
     // clean up semaphore in case it is reused
     noc_semaphore_set(local_semaphore_ptr, 0);
+    DPRINT << "end of TP reader" << ENDL();
 }

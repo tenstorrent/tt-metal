@@ -171,6 +171,13 @@ tt::tt_metal::operation::ProgramWithCallbacks fused_broadcast_multicore(
     // Calculate packet parameters following reference patterns
     const uint32_t input_num_pages = input_tensor.buffer()->num_pages();
     const uint32_t input_page_size_bytes = input_tensor.tensor_spec().compute_page_size_bytes();
+    printf(
+        "input shape: %u %u %u %u\n",
+        input_tensor.logical_shape()[0],
+        input_tensor.logical_shape()[1],
+        input_tensor.logical_shape()[2],
+        input_tensor.logical_shape()[3]);
+    printf("input page size: %u\n", input_page_size_bytes);
     const uint32_t l1_alignment = tt::tt_metal::hal::get_l1_alignment();
 
     // For P2P packet sizing
@@ -248,17 +255,17 @@ tt::tt_metal::operation::ProgramWithCallbacks fused_broadcast_multicore(
     root_writer_compile_args.insert(
         root_writer_compile_args.end(),
         {
-            input_page_size_bytes,                  // page_size (index 8)
-            row_size,                               // row_size (index 9)
-            packet_size_bytes,                      // max_packet_size (index 10)
-            num_rows_per_packet,                    // num_rows_per_packet (index 11)
-            num_packets_per_page,                   // num_packets_per_row (index 12)
-            sp_forward_coord.has_value() ? 1 : 0,   // num_targets_forward_direction (index 13)
-            sp_backward_coord.has_value() ? 1 : 0,  // num_targets_backward_direction (index 14)
-            1,                                      // start_distance_in_hops_forward (index 16)  ????
-            mesh_shape[sp_axis] - 1,                // range_hops_forward (index 17)   ????
-            1,                                      // start_distance_in_hops_backward (index 18) ????
-            mesh_shape[sp_axis] - 1                 // range_hops_backward (index 19) ????
+            input_page_size_bytes,                  // page_size
+            row_size,                               // row_size
+            packet_size_bytes,                      // max_packet_size
+            num_rows_per_packet,                    // num_rows_per_packet
+            num_packets_per_page,                   // num_packets_per_row
+            sp_forward_coord.has_value() ? 2 : 0,   // num_targets_forward_direction
+            sp_backward_coord.has_value() ? 1 : 0,  // num_targets_backward_direction
+            1,                                      // start_distance_in_hops_forward   ????
+            2,                                      // range_hops_forward  ????
+            1,                                      // start_distance_in_hops_backward  ????
+            1                                       // range_hops_backward  ????
         });
 
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(root_writer_compile_args);

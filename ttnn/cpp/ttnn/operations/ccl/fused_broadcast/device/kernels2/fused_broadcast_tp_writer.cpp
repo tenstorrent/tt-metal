@@ -46,6 +46,7 @@ void kernel_main() {
     ///////////////////////////////////////////////////
     // RUNTIME ARGS - Unified P2P + Broadcast
     ///////////////////////////////////////////////////
+    DPRINT << "start of TP writer" << ENDL();
     size_t arg_idx = 0;
 
     // Local tensor args (P2P writer part)
@@ -238,4 +239,5 @@ void kernel_main() {
 
     close_connections(fabric_connection);
     noc_async_write_barrier();
+    DPRINT << "end of TP writer" << ENDL();
 }

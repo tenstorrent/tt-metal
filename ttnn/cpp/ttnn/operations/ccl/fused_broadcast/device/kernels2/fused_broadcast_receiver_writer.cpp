@@ -44,6 +44,7 @@ inline constexpr uint32_t sharded_args_start_idx = 13;
  * dispatch implementations depending on those invocation parameters.
  */
 void kernel_main() {
+    DPRINT << "start of RECEIVER WRITER" << ENDL();
     // Debug: Print compile-time args
     DPRINT << "RECEIVER WRITER: cb0_id=" << (uint32_t)cb0_id << ", page_size=" << (uint32_t)page_size
            << ", row_size=" << (uint32_t)row_size << ENDL();
@@ -173,4 +174,5 @@ void kernel_main() {
     close_connections(fabric_connection);
 
     noc_async_write_barrier();
+    DPRINT << "end of RECEIVER WRITER" << ENDL();
 }

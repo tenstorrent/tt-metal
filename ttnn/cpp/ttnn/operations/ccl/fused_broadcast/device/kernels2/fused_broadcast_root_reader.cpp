@@ -13,12 +13,14 @@ void kernel_main() {
 
     constexpr auto src_args = TensorAccessorArgs<0>();
     constexpr uint32_t cb_id_in0 = 0;
+    DPRINT << "strat of root reader" << ENDL();
 
     // Debug: Print runtime args
     DPRINT << "ROOT READER: src_addr=" << (uint32_t)src_addr << ", num_tiles=" << (uint32_t)num_tiles
            << ", start_id=" << (uint32_t)start_id << ENDL();
 
-    const uint32_t page_bytes = get_arg_val<uint32_t>(4);
+    const uint32_t page_bytes = get_arg_val<uint32_t>(3);
+    DPRINT << "ROOT READER: page_bytes=" << (uint32_t)page_bytes << ENDL();
     const auto s = TensorAccessor(src_args, src_addr, page_bytes);
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
@@ -33,4 +35,5 @@ void kernel_main() {
 
         cb_push_back(cb_id_in0, 1);
     }
+    DPRINT << "end of root reader" << ENDL();
 }
