@@ -517,5 +517,22 @@ TEST(MultiHost, TestBHQB4x4Fabric1DSanity) {
     }
 }
 
+TEST(MultiHost, TestBHQB4x4RelaxedControlPlaneInit) {
+    // This test is intended for Blackhole 4x4 mesh spanning 2x2 hosts (BHQB)
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::P150_X4) {
+        log_info(tt::LogTest, "This test is only for Blackhole QuietBox (BHQB)");
+        GTEST_SKIP();
+    }
+
+    const std::filesystem::path bhqb_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_qb_4x4_relaxed_mesh_graph_descriptor.textproto";
+    auto control_plane = std::make_unique<ControlPlane>(bhqb_mesh_graph_desc_path.string());
+
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels(
+        tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY,
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+}
+
 }  // namespace multi_host_tests
 }  // namespace tt::tt_fabric
