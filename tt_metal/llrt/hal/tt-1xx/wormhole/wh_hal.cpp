@@ -205,6 +205,7 @@ public:
     }
 };
 
+// profiler base and size should be passed as args
 void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
     using namespace wormhole;
     static_assert(static_cast<int>(HalProgrammableCoreType::TENSIX) == static_cast<int>(ProgrammableCoreType::TENSIX));
