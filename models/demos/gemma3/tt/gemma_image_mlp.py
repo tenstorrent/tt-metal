@@ -117,7 +117,7 @@ class TtGemmaImageFeedForward(LightweightModule):
                 persistent_output_buffer=None,
                 dim=1,
                 multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
-                num_links=1,
+                num_links=4 if self.args.is_galaxy else 1,
                 topology=ttnn.Topology.Ring,
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
                 chunks_per_sync=10,
