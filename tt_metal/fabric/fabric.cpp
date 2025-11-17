@@ -197,7 +197,8 @@ void append_fabric_connection_rt_args(
             dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator);
         TT_FATAL(
             static_channel_allocator != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator.");
-        const auto sender_channel = is_2d_fabric ? router_direction : 0;
+        // Sender channel 0 is always for local worker in the new design
+        const auto sender_channel = 0;
         tt::tt_fabric::SenderWorkerAdapterSpec edm_connection = {
             .edm_noc_x = fabric_router_virtual_core.x,
             .edm_noc_y = fabric_router_virtual_core.y,
