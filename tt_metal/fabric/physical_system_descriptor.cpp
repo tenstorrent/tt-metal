@@ -12,7 +12,6 @@
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/distributed_context.hpp>
 
-#include "tt_metal/llrt/tunnels_from_mmio_device.hpp"
 #include "tt_metal/llrt/hal.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
@@ -81,7 +80,6 @@ std::pair<TrayID, ASICLocation> get_asic_position(
         tt::ARCH arch = cluster_desc->get_arch(chip_id);
         if (arch == tt::ARCH::WORMHOLE_B0) {
             // Query ASIC Location from the Cluster Descriptor for WH.
-            // This now relies on UMD instead of discover_tunnels_from_mmio_device.
             asic_location = ASICLocation{cluster_desc->get_asic_location(chip_id)};
         } else if (arch == tt::ARCH::BLACKHOLE) {
             // Query ASIC Location from the Cluster Descriptor for BH.

@@ -24,6 +24,10 @@
 
 namespace tt::scaleout_tools {
 
+// Timeout is based on the assumption that 30s should be enough for an iteration to run.
+// Any longer and we assume that a hang has been encountered. We may need to tune this in future.
+static constexpr std::chrono::seconds WORKLOAD_TIMEOUT_DURATION{30};
+
 // ============================================================================
 // Data Structures
 // ============================================================================
@@ -53,6 +57,8 @@ struct LinkMetricsResult {
         all_link_metrics;  // All metrics for all iterations (when log_ethernet_metrics is true)
     std::vector<EthernetLinkMetrics> unhealthy_links;  // Only unhealthy links
 };
+
+enum class WorkloadResult { Completed, TimedOut };
 
 struct ClusterContext {
     PhysicalSystemDescriptor& physical_system_descriptor;
@@ -252,7 +258,7 @@ void configure_cross_host_kernels(
     }
 }
 
-bool execute_workloads(
+WorkloadResult execute_workloads(
     std::unordered_map<ChipId, tt::tt_metal::Program>& programs,
     std::map<int, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>>& devices) {
     std::unordered_map<ChipId, tt::tt_metal::distributed::MeshWorkload> mesh_workloads;
@@ -269,7 +275,6 @@ bool execute_workloads(
     distributed_context.barrier();
 
     // Launch async tasks
-    constexpr std::chrono::seconds TIMEOUT_DURATION{30};
     static std::vector<std::future<void>> futures;  // Static to avoid destructor blocking
     futures.clear();
     futures.reserve(mesh_workloads.size());
@@ -285,19 +290,19 @@ bool execute_workloads(
     for (auto& future : futures) {
         auto elapsed = std::chrono::steady_clock::now() - start_time;
         auto remaining = std::max(
-            TIMEOUT_DURATION - std::chrono::duration_cast<std::chrono::seconds>(elapsed), std::chrono::seconds(0));
+            WORKLOAD_TIMEOUT_DURATION - std::chrono::duration_cast<std::chrono::seconds>(elapsed),
+            std::chrono::seconds(0));
 
         if (future.wait_for(remaining) != std::future_status::ready) {
-            log_output_rank0("ERROR: Workload execution timed out after 30 seconds");
             // Don't wait for futures to complete because they're stuck. Just abandon them.
             // Static storage prevents destructor from blocking.
-            return false;
+            return WorkloadResult::TimedOut;
         }
         // Get the result to propagate any exceptions
         future.get();
     }
 
-    return true;
+    return WorkloadResult::Completed;
 }
 
 // ============================================================================
@@ -924,18 +929,45 @@ void handle_workload_timeout(
     std::vector<uint32_t>& inputs,
     size_t data_size,
     size_t packet_size_bytes,
-    bool log_ethernet_metrics) {
-    log_output_rank0("ERROR: Workload execution timed out after 30 seconds");
-    log_output_rank0("Cluster is not in a healthy state.");
+    bool log_ethernet_metrics,
+    const ConnectivityValidationConfig& validation_config) {
+    log_output_rank0(
+        "ERROR: Workload execution timed out after " + std::to_string(WORKLOAD_TIMEOUT_DURATION.count()) +
+        " seconds, cluster is not in a healthy state.");
 
-    log_output_rank0("Current ethernet link status:");
     dump_link_stats(ctx, inputs, statuses_per_link, data_size, packet_size_bytes);
     auto current_result = process_link_statuses(statuses_per_link, true);
     if (log_ethernet_metrics) {
-        // Log all ethernet metrics
-        log_link_metrics(current_result.all_link_metrics, std::filesystem::current_path(), true);
+        log_link_metrics(current_result.all_link_metrics, std::filesystem::current_path(), true /*log_all_metrics*/);
     }
-    log_link_metrics(current_result.unhealthy_links, std::filesystem::current_path(), false);
+    log_link_metrics(current_result.unhealthy_links, std::filesystem::current_path(), false /*log_all_metrics*/);
+
+    if (validation_config.cabling_descriptor_path.has_value() || validation_config.fsd_path.has_value()) {
+        log_output_rank0("Re-running discovery to check for link failures");
+        ctx.physical_system_descriptor.run_discovery(true, true);
+
+        const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+        std::string gsd_yaml_filename =
+            "timeout_global_system_descriptor_" + std::to_string(*distributed_context.rank()) + ".yaml";
+        std::string gsd_yaml_path = validation_config.output_path / gsd_yaml_filename;
+        ctx.physical_system_descriptor.dump_to_yaml(gsd_yaml_path);
+
+        const auto fsd_file_path = get_factory_system_descriptor_path(
+            validation_config.cabling_descriptor_path,
+            validation_config.deployment_descriptor_path,
+            validation_config.fsd_path,
+            validation_config.output_path.string());
+        validate_connectivity(
+            fsd_file_path, gsd_yaml_path, validation_config.fail_on_warning, ctx.physical_system_descriptor);
+    } else {
+        log_output_rank0(
+            "WARNING: Cannot validate Global System Descriptor against Factory System Descriptor, "
+            "no cabling descriptor or factory descriptor provided.");
+    }
+
+    // Exit immediately since the cluster is in an unhealthy state
+    TT_THROW(
+        "Workload execution timed out after {} seconds. Cluster validation failed.", WORKLOAD_TIMEOUT_DURATION.count());
 }
 
 LinkMetricsResult send_traffic_and_validate_links(
@@ -945,7 +977,8 @@ LinkMetricsResult send_traffic_and_validate_links(
     bool sweep_traffic_configs,
     uint32_t packet_size_bytes,
     uint32_t data_size,
-    std::unordered_map<uint64_t, ChipId>& asic_id_to_chip_id) {
+    std::unordered_map<uint64_t, ChipId>& asic_id_to_chip_id,
+    const ConnectivityValidationConfig& validation_config) {
     std::vector<TrafficConfig> traffic_configs;
     if (sweep_traffic_configs) {
         traffic_configs = generate_sweep_traffic_configs();
@@ -989,19 +1022,20 @@ LinkMetricsResult send_traffic_and_validate_links(
 
             configure_cross_host_kernels(ctx, inputs, programs, pkt_size_bytes, pkt_size_words, d_size, fwd);
 
-            bool local_success = execute_workloads(programs, devices);
+            WorkloadResult local_result = execute_workloads(programs, devices);
+            bool did_hang_locally = (local_result == WorkloadResult::TimedOut);
 
-            // Check if all ranks succeeded
+            // Check if any rank experienced a hang/timeout
             const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
-            bool global_success;
+            bool any_rank_hung;
             distributed_context.all_reduce(
-                tt::stl::Span<bool>(&local_success, 1),
-                tt::stl::Span<bool>(&global_success, 1),
-                tt::tt_metal::distributed::multihost::ReduceOp::LAND);
+                tt::stl::Span<bool>(&did_hang_locally, 1),
+                tt::stl::Span<bool>(&any_rank_hung, 1),
+                tt::tt_metal::distributed::multihost::ReduceOp::LOR);
 
-            if (!global_success) {
-                handle_workload_timeout(ctx, statuses_per_link, inputs, d_size, pkt_size_bytes, log_ethernet_metrics);
-                return LinkMetricsResult{};
+            if (any_rank_hung) {
+                handle_workload_timeout(
+                    ctx, statuses_per_link, inputs, d_size, pkt_size_bytes, log_ethernet_metrics, validation_config);
             }
 
             dump_link_stats(ctx, inputs, statuses_per_link, d_size, pkt_size_bytes);
@@ -1320,7 +1354,7 @@ bool generate_link_metrics(
     bool sweep_traffic_configs,
     uint32_t packet_size_bytes,
     uint32_t data_size,
-    const std::filesystem::path& output_path) {
+    const ConnectivityValidationConfig& validation_config) {
     std::unordered_map<uint64_t, ChipId> asic_id_to_chip_id;
     for (const auto& [chip_id, asic_id] : tt::tt_metal::MetalContext::instance().get_cluster().get_unique_chip_ids()) {
         asic_id_to_chip_id[asic_id] = chip_id;
@@ -1336,27 +1370,23 @@ bool generate_link_metrics(
             sweep_traffic_configs,
             packet_size_bytes,
             data_size,
-            asic_id_to_chip_id);
-
-        // Check if we got an empty result (indicates timeout occurred)
-        if (result.all_link_metrics.empty() && result.unhealthy_links.empty()) {
-            TT_THROW("Workload execution timed out. Cluster validation failed.");
-        }
+            asic_id_to_chip_id,
+            validation_config);
     } else if (log_ethernet_metrics) {
         std::unordered_map<EthChannelIdentifier, std::vector<LinkStatus>> statuses_per_link;
         std::vector<uint32_t> inputs = {};
         std::map<int, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> empty_devices;
         ClusterContext ctx{physical_system_descriptor, asic_id_to_chip_id, empty_devices};
-        dump_link_stats(ctx, inputs, statuses_per_link, 0, 0);
+        dump_link_stats(ctx, inputs, statuses_per_link, 0 /*data_size*/, 0 /*packet_size_bytes*/);
         result = process_link_statuses(statuses_per_link, log_ethernet_metrics);
     }
 
     // Log metrics
     if (log_ethernet_metrics) {
         // Log all ethernet metrics
-        log_link_metrics(result.all_link_metrics, output_path, true);
+        log_link_metrics(result.all_link_metrics, validation_config.output_path, true /*log_all_metrics*/);
     }
-    log_link_metrics(result.unhealthy_links, output_path, false);
+    log_link_metrics(result.unhealthy_links, validation_config.output_path, false /*log_all_metrics*/);
     return result.unhealthy_links.empty();
 }
 
@@ -1397,6 +1427,44 @@ AsicTopology generate_asic_topology_from_connections(
         }
     }
     return asic_topology;
+}
+
+std::string get_factory_system_descriptor_path(
+    const std::optional<std::string>& cabling_descriptor_path,
+    const std::optional<std::string>& deployment_descriptor_path,
+    const std::optional<std::string>& fsd_path,
+    const std::string& output_path) {
+    std::string fsd_file_path;
+    if (cabling_descriptor_path.has_value()) {
+        const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+        log_output_rank0("Creating Factory System Descriptor (Golden Representation)");
+        tt::scaleout_tools::CablingGenerator cabling_generator(
+            cabling_descriptor_path.value(), deployment_descriptor_path.value());
+        std::string filename =
+            "generated_factory_system_descriptor_" + std::to_string(*distributed_context.rank()) + ".textproto";
+        fsd_file_path = std::filesystem::path(output_path) / filename;
+        cabling_generator.emit_factory_system_descriptor(fsd_file_path);
+    } else {
+        fsd_file_path = fsd_path.value();
+    }
+    return fsd_file_path;
+}
+
+tt_metal::AsicTopology validate_connectivity(
+    const std::string& fsd_path,
+    const std::string& gsd_yaml_path,
+    bool fail_on_warning,
+    PhysicalSystemDescriptor& physical_system_descriptor) {
+    log_output_rank0("Validating Factory System Descriptor (Golden Representation) against Global System Descriptor");
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+    auto missing_physical_connections = tt::scaleout_tools::validate_fsd_against_gsd(
+        fsd_path,
+        gsd_yaml_path,
+        true /* strict_validation */,
+        fail_on_warning,
+        *distributed_context.rank() == 0 /* log_output */);
+    log_output_rank0("Factory System Descriptor (Golden Representation) Validation Complete");
+    return generate_asic_topology_from_connections(missing_physical_connections, physical_system_descriptor);
 }
 
 }  // namespace tt::scaleout_tools
