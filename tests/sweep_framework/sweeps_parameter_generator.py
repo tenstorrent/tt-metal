@@ -56,20 +56,19 @@ def invalidate_vectors(test_module, vectors) -> None:
             vector["invalid_reason"] = reason
 
 
-def export_suite_vectors_json(module_name, suite_name, vectors):
-    EXPORT_DIR_PATH = SWEEPS_DIR / "vectors_export"
-    EXPORT_PATH = EXPORT_DIR_PATH / str(module_name + ".json")
-    if not EXPORT_DIR_PATH.exists():
-        EXPORT_DIR_PATH.mkdir()
+def _serialize_vectors(vectors):
+    """Serialize vectors and compute their hashes.
 
-    # Randomize order only when explicitly requested via --randomize
-    if DO_RANDOMIZE:
-        rng = random.Random(SHUFFLE_SEED)
-        rng.shuffle(vectors)
+    Args:
+        vectors: List of vector dictionaries to serialize
 
+    Returns:
+        dict: Dictionary mapping input_hash to serialized vector
+    """
     current_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     serialized_vectors = dict()
     warnings = []
+
     for i in range(len(vectors)):
         vector = dict()
         for elem in vectors[i].keys():
@@ -80,16 +79,189 @@ def export_suite_vectors_json(module_name, suite_name, vectors):
         vector["tag"] = SWEEPS_TAG
         serialized_vectors[input_hash] = vector
 
-    if EXPORT_PATH.exists():
-        with open(EXPORT_PATH, "r") as file:
+    return serialized_vectors
+
+
+def _compute_vector_hash(vector):
+    """Compute SHA224 hash of a serialized vector.
+
+    Args:
+        vector: Dictionary representing a vector
+
+    Returns:
+        str: Hexadecimal hash string
+    """
+    return hashlib.sha224(str(vector).encode("utf-8")).hexdigest()
+
+
+def validate_exported_vectors(export_path, module_name, suite_name):
+    """Validate that exported JSON file can be read back correctly.
+
+    Args:
+        export_path: Path to the exported JSON file
+        module_name: Name of the module
+        suite_name: Name of the suite
+
+    Returns:
+        bool: True if validation succeeds, False otherwise
+    """
+    try:
+        if not export_path.exists():
+            logger.warning(f"Validation failed: export file does not exist at {export_path}")
+            return False
+
+        with open(export_path, "r", encoding="utf-8") as file:
             data = json.load(file)
-        with open(EXPORT_PATH, "w") as file:
-            data[suite_name] = serialized_vectors
-            json.dump(data, file, indent=2)
-    else:
-        with open(EXPORT_PATH, "w") as file:
-            json.dump({suite_name: serialized_vectors}, file, indent=2)
-    logger.info(f"SWEEPS: Generated {len(vectors)} test vectors for suite {suite_name}.")
+
+        if not isinstance(data, dict):
+            logger.warning(f"Validation failed: exported file is not a dictionary")
+            return False
+
+        if suite_name not in data:
+            logger.warning(f"Validation failed: suite '{suite_name}' not found in exported file")
+            return False
+
+        suite_data = data[suite_name]
+        if not isinstance(suite_data, dict):
+            logger.warning(f"Validation failed: suite data is not a dictionary")
+            return False
+
+        # Check that vectors have required fields
+        for vector_id, vector_data in suite_data.items():
+            if not isinstance(vector_data, dict):
+                logger.warning(f"Validation failed: vector {vector_id} is not a dictionary")
+                return False
+            required_fields = ["input_hash", "timestamp", "tag"]
+            for field in required_fields:
+                if field not in vector_data:
+                    logger.warning(f"Validation failed: vector {vector_id} missing required field '{field}'")
+                    return False
+
+        return True
+    except json.JSONDecodeError as e:
+        logger.warning(f"Validation failed: JSON decode error - {e}")
+        return False
+    except IOError as e:
+        logger.warning(f"Validation failed: IO error - {e}")
+        return False
+    except Exception as e:
+        logger.warning(f"Validation failed: unexpected error - {e}")
+        return False
+
+
+def export_suite_vectors_json(module_name, suite_name, vectors):
+    """Export test vectors to JSON file with atomic writes and deduplication.
+
+    Args:
+        module_name: Name of the test module
+        suite_name: Name of the test suite
+        vectors: List of vector dictionaries to export
+    """
+    EXPORT_DIR_PATH = SWEEPS_DIR / "vectors_export"
+    EXPORT_PATH = EXPORT_DIR_PATH / f"{module_name}.json"
+
+    # Create export directory with proper error handling
+    try:
+        EXPORT_DIR_PATH.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        logger.error(f"Failed to create export directory {EXPORT_DIR_PATH}: {e}")
+        raise
+    except PermissionError as e:
+        logger.error(f"Permission denied creating export directory {EXPORT_DIR_PATH}: {e}")
+        raise
+
+    # Randomize order only when explicitly requested via --randomize
+    if DO_RANDOMIZE:
+        rng = random.Random(SHUFFLE_SEED)
+        rng.shuffle(vectors)
+
+    # Serialize vectors
+    serialized_vectors = _serialize_vectors(vectors)
+
+    # Load existing data and check for deduplication
+    existing_data = {}
+    existing_hashes = set()
+
+    if EXPORT_PATH.exists():
+        try:
+            with open(EXPORT_PATH, "r", encoding="utf-8") as file:
+                existing_data = json.load(file)
+
+            # Check if suite already exists and compare hashes
+            if suite_name in existing_data:
+                existing_suite_data = existing_data[suite_name]
+                if isinstance(existing_suite_data, dict):
+                    existing_hashes = set(existing_suite_data.keys())
+        except json.JSONDecodeError as e:
+            logger.warning(f"Failed to parse existing JSON file {EXPORT_PATH}: {e}. Will overwrite.")
+            existing_data = {}
+        except IOError as e:
+            logger.warning(f"Failed to read existing file {EXPORT_PATH}: {e}. Will overwrite.")
+            existing_data = {}
+        except Exception as e:
+            logger.warning(f"Unexpected error reading existing file {EXPORT_PATH}: {e}. Will overwrite.")
+            existing_data = {}
+
+    # Check for deduplication: skip write if vectors haven't changed
+    new_hashes = set(serialized_vectors.keys())
+    if existing_hashes == new_hashes:
+        logger.info(
+            f"Vectors generated for module {module_name}, suite {suite_name} already exist with tag {SWEEPS_TAG}, "
+            f"and have not changed. ({len(existing_hashes)} existing tests). Skipping..."
+        )
+        return
+
+    # Prepare data for atomic write
+    data_to_write = existing_data.copy()
+    data_to_write[suite_name] = serialized_vectors
+
+    # Atomic write using temporary file
+    tmp_path = EXPORT_PATH.with_suffix(EXPORT_PATH.suffix + ".tmp")
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as file:
+            json.dump(data_to_write, file, indent=2)
+            file.flush()
+            try:
+                os.fsync(file.fileno())
+            except OSError:
+                # fsync may fail on some systems, but file is still written
+                pass
+
+        # Atomic replace
+        os.replace(tmp_path, EXPORT_PATH)
+
+        # Validate the exported file
+        if not validate_exported_vectors(EXPORT_PATH, module_name, suite_name):
+            logger.warning(f"Validation failed for exported vectors, but file was written to {EXPORT_PATH}")
+
+        logger.info(f"SWEEPS: Generated {len(vectors)} test vectors for suite {suite_name}.")
+    except IOError as e:
+        # Clean up temp file on error
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+        logger.error(f"Failed to write vectors to {EXPORT_PATH}: {e}")
+        raise
+    except OSError as e:
+        # Clean up temp file on error
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+        logger.error(f"Failed to write vectors to {EXPORT_PATH}: {e}")
+        raise
+    except Exception as e:
+        # Clean up temp file on error
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+        logger.error(f"Unexpected error writing vectors to {EXPORT_PATH}: {e}")
+        raise
 
 
 # Generate one or more sets of test vectors depending on module_name
@@ -142,7 +314,7 @@ if __name__ == "__main__":
         "--dump-file",
         required=False,
         action="store_true",
-        help="[DEPRECATED] This flag is now the default behavior. Elasticsearch support has been removed. Vectors are always dumped to disk in JSON format.",
+        help="[DEPRECATED - will be removed in a future version] This flag is now the default behavior. Elasticsearch support has been removed. Vectors are always dumped to disk in JSON format. This flag is ignored and will be removed.",
     )
     parser.add_argument(
         "--randomize",
@@ -161,8 +333,9 @@ if __name__ == "__main__":
     # Elasticsearch support has been removed. Vectors are always dumped to disk.
     if args.dump_file:
         logger.warning(
-            "The --dump-file flag is deprecated. Elasticsearch support has been removed. "
-            "Vectors are now always dumped to disk in JSON format by default."
+            "The --dump-file flag is deprecated and will be removed in a future version. "
+            "Elasticsearch support has been removed. Vectors are now always dumped to disk in JSON format by default. "
+            "Please remove this flag from your scripts."
         )
 
     global SWEEPS_TAG
