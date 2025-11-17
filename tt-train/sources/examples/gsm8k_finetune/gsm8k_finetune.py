@@ -23,7 +23,7 @@ from typing import Optional
 import ttml
 from ttml.common.config import get_config, TrainingConfig, SchedulerConfig, DeviceConfig
 from ttml.common.model_factory import TransformerModelFactory
-from ttml.common.utils import round_up_to_tile, create_optimizer, initialize_device
+from ttml.common.utils import round_up_to_tile, create_optimizer, initialize_device, no_grad
 from ttml.common.data import build_causal_mask
 
 # Configuration
@@ -292,24 +292,23 @@ def validate(
     current_step,
 ):
     reduce = ttml.ops.ReduceType.NONE
-    ttml.autograd.AutoContext.get_instance().set_gradient_mode(
-        ttml.autograd.GradMode.DISABLED
-    )
 
     tt_model.eval()
-    eval_batch_count = 4
-    cur_val_losses = []
-    for _ in range(eval_batch_count):
-        val_X, val_y, val_loss_scaler = next(val_batch_generator)
-        val_logits = tt_model(val_X, causal_mask)
+    
+    with no_grad():
+        eval_batch_count = 4
+        cur_val_losses = []
+        for _ in range(eval_batch_count):
+            val_X, val_y, val_loss_scaler = next(val_batch_generator)
+            val_logits = tt_model(val_X, causal_mask)
 
-        # Compute validation loss
-        val_loss = loss_fn(val_logits, val_y, reduce)
-        val_loss = val_loss * val_loss_scaler
-        val_loss = ttml.ops.unary.mean(val_loss)
-        cur_val_losses.append(get_loss_over_devices(val_loss))
+            # Compute validation loss
+            val_loss = loss_fn(val_logits, val_y, reduce)
+            val_loss = val_loss * val_loss_scaler
+            val_loss = ttml.ops.unary.mean(val_loss)
+            cur_val_losses.append(get_loss_over_devices(val_loss))
 
-    checks_count = 4
+        checks_count = 4
 
     with open("validation.txt", "a+") as val_file:
         val_file.write(f"Validation at step {current_step}\n")
@@ -340,9 +339,6 @@ def validate(
             "Last validation loss: {:.4f}\n\n\n".format(np.mean(cur_val_losses))
         )
 
-    ttml.autograd.AutoContext.get_instance().set_gradient_mode(
-        ttml.autograd.GradMode.ENABLED
-    )
     tt_model.train()
     return np.mean(cur_val_losses)
 
