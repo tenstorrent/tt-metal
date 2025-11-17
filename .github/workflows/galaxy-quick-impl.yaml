@@ -16,6 +16,14 @@ on:
         required: false
         type: string
         default: "in-service"
+      bh:
+        required: false
+        type: string
+        default: 'false'
+      bh_scheduled:
+        required: false
+        type: string
+        default: 'false'
 
 jobs:
   quick-wh-glx-health:
