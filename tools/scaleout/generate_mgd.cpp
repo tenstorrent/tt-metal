@@ -41,7 +41,7 @@ std::vector<std::string> generate_hostnames(size_t num_hosts) {
 }
 
 std::unordered_map<std::string, std::unordered_map<std::string, uint32_t>> compute_intermesh_connections(
-    const std::vector<std::string>& hostnames, const std::vector<ChipConnection>& chip_connections) {
+    const std::vector<std::string>& hostnames, const std::vector<LogicalChannelConnection>& chip_connections) {
     std::unordered_map<std::string, std::unordered_map<std::string, uint32_t>> intermesh_connections;
 
     for (const auto& connection : chip_connections) {
