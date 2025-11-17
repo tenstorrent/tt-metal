@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/fabric/builder/connection_writer_adapter.hpp"
+#include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
 
 namespace tt::tt_fabric {
 
@@ -31,15 +32,7 @@ void StaticSizedChannelConnectionWriterAdapter::add_downstream_connection(
             // For WEST router (my_direction=1): EAST(0)→0, NORTH(2)→1, SOUTH(3)→2
             // For NORTH router (my_direction=2): EAST(0)→0, WEST(1)→1, SOUTH(3)→2
             // For SOUTH router (my_direction=3): EAST(0)→0, WEST(1)→1, NORTH(2)→2
-            size_t compact_index;
-            if (my_direction == 0) {
-                // EAST router: skip index 0, map 1→0, 2→1, 3→2
-                compact_index = downstream_direction - 1;
-            } else {
-                // For other directions: if downstream < my_direction, use as-is; else subtract 1
-                compact_index =
-                    (downstream_direction < my_direction) ? downstream_direction : (downstream_direction - 1);
-            }
+            size_t compact_index = get_receiver_channel_compact_index(my_direction, downstream_direction);
             this->downstream_edms_connected |= (1 << compact_index);
 
             // Store addresses indexed by [vc_idx][compact_index]
@@ -86,8 +79,6 @@ void StaticSizedChannelConnectionWriterAdapter::pack_inbound_channel_rt_args(uin
         // Pack 3 buffer base addresses (one per compact index 0-2)
         for (size_t compact_idx = 0; compact_idx < builder_config::num_downstream_edms_2d_vc0; compact_idx++) {
             uint32_t buffer_addr = this->downstream_edm_buffer_base_addresses[vc_idx][compact_idx].value_or(0);
-            // log_info(tt::LogOp, "VC0 2D: my_direction: {}, downstream_edm_buffer_base_addresses[{}][{}] = 0x{:x}",
-            // my_direction, vc_idx, compact_idx, buffer_addr);
             args_out.push_back(buffer_addr);
         }
 
@@ -115,8 +106,6 @@ void StaticSizedChannelConnectionWriterAdapter::pack_inbound_channel_rt_args(uin
                                           : this->downstream_edm_buffer_base_addresses[vc_idx][0].has_value();
 
         uint32_t buffer_addr = this->downstream_edm_buffer_base_addresses[vc_idx][0].value_or(0);
-        // log_info(tt::LogOp, "VC{} 1D: my_direction: {}, downstream_edm_buffer_base_addresses[{}][0] = 0x{:x}",
-        // vc_idx, my_direction, vc_idx, buffer_addr);
 
         auto rt_args = std::initializer_list<uint32_t>{
             has_connection,
@@ -165,12 +154,7 @@ uint32_t StaticSizedChannelConnectionWriterAdapter::encode_noc_ord_for_2d(
         uint32_t ord = 0;
         for (const auto& [direction, noc_xy] : downstream_edms_connected_by_vc[vc_idx]) {
             // Calculate compact index based on direction relative to my_direction
-            size_t compact_index;
-            if (my_direction == 0) {
-                compact_index = direction - 1;
-            } else {
-                compact_index = (direction < my_direction) ? direction : (direction - 1);
-            }
+            size_t compact_index = get_receiver_channel_compact_index(my_direction, direction);
             ord |= (get_noc_ord(noc_xy) << (compact_index * 8));
         }
         return ord;

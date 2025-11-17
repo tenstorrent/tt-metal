@@ -2137,11 +2137,7 @@ void
 // to 0.
 template <size_t i>
 constexpr size_t get_credits_init_val() {
-    if constexpr (is_2d_fabric) {
-        return i == 0 ? 0 : SENDER_NUM_BUFFERS_ARRAY[i];
-    } else {
-        return i == 0 ? 0 : SENDER_NUM_BUFFERS_ARRAY[i];
-    }
+    return i == 0 ? 0 : SENDER_NUM_BUFFERS_ARRAY[i];
 };
 
 template <size_t NUM_SENDER_CHANNELS, typename EdmChannelWorkerIFs>
@@ -2246,11 +2242,41 @@ constexpr uint32_t edm_index_to_edm_direction[eth_chan_directions::COUNT][NUM_DO
     {eth_chan_directions::EAST, eth_chan_directions::WEST, eth_chan_directions::NORTH},   // SOUTH router
 };
 
-constexpr uint32_t get_vc0_downstream_sender_channel_free_slots_stream_id(uint32_t edm_index) {
-    auto ds_edm_direction = edm_index_to_edm_direction[my_direction][edm_index];
+// sender_channel_free_slots_stream_ids[] mapping:
+//   [0] → Local worker (always uses sender channel 0 on the outgoing router).
+//   [1–3] → Sender channels 1–3 on the outgoing router, corresponding to
+//           inbound traffic from neighboring routers.
+//
+// The mapping is relative to the outgoing router's direction:
+//
+//   • East-outbound router:
+//         sender channel 1 (idx 0) ← West inbound
+//         sender channel 2 (idx 1) ← North inbound
+//         sender channel 3 (idx 2) ← South inbound
+//
+//   • West-outbound router:
+//         sender channel 1 (idx 0) ← East inbound
+//         sender channel 2 (idx 1) ← North inbound
+//         sender channel 3 (idx 2) ← South inbound
+//
+//   • North-outbound router:
+//         sender channel 1 (idx 0) ← East inbound
+//         sender channel 2 (idx 1) ← West inbound
+//         sender channel 3 (idx 2) ← South inbound
+//
+//   • South-outbound router:
+//         sender channel 1 (idx 0) ← East inbound
+//         sender channel 2 (idx 1) ← West inbound
+//         sender channel 3 (idx 2) ← North inbound
+constexpr uint32_t get_vc0_downstream_sender_channel_free_slots_stream_id(uint32_t compact_index) {
+    auto ds_edm_direction = edm_index_to_edm_direction[my_direction][compact_index];
     if (my_direction > ds_edm_direction) {
+        // downstream sender channel = my_direction
+        // stream id = sender_channel_free_slots_stream_ids[downstream sender channel]
         return sender_channel_free_slots_stream_ids[my_direction];
     } else {
+        // downstream sender channel = my_direction + 1
+        // stream id = sender_channel_free_slots_stream_ids[downstream sender channel]
         return sender_channel_free_slots_stream_ids[(1 + my_direction)];
     }
 }
