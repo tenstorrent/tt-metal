@@ -431,16 +431,6 @@ class Operation:
             self.postprocess_golden_function_outputs or default_postprocess_golden_function_outputs
         )
 
-        def set_output_tensor_id_decorator(function):
-            @wraps(function)
-            def call_wrapper(*function_args, **function_kwargs):
-                output = function(*function_args, **function_kwargs)
-                output_tensors = get_all_tensors(output)
-                # Set new tensor id to store the outputs of in-place operations correctly
-                return output
-
-            return call_wrapper
-
         def duration_decorator(function):
             @wraps(function)
             def call_wrapper(*function_args, **function_kwargs):
@@ -575,7 +565,6 @@ class Operation:
 
                 if ttnn.CONFIG.enable_logging or ttnn.CONFIG.enable_comparison_mode:
                     input_tensors = get_all_tensors((function_args, function_kwargs))
-                    decorated_function = set_output_tensor_id_decorator(decorated_function)
 
                 if ttnn.CONFIG.enable_logging:
                     devices = get_devices((function_args, function_kwargs))
@@ -953,14 +942,6 @@ def register_python_operation(
         return operation
 
     return operation_decorator
-
-
-def register_ttl_operation_as_ttnn_operation(python_fully_qualified_name, function):
-    function = register_python_operation(
-        name=python_fully_qualified_name,
-        is_experimental=True,
-    )(function)
-    return function
 
 
 def save_cluster_descriptor(dest_path):

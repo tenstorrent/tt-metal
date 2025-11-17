@@ -311,10 +311,9 @@ node_id GraphProcessor::add_tensor(const Tensor& t) {
         storage);
 
     std::uint64_t tensor_id = t.get_tensor_id().value_or(tt::tt_metal::Tensor::INVALID_TENSOR_ID);
-    auto tensor_counter =
-        tensor_id != tt::tt_metal::Tensor::INVALID_TENSOR_ID && tensor_id_to_counter.count(tensor_id) > 0
-            ? tensor_id_to_counter[tensor_id]
-            : graph.size();
+    auto tensor_counter = t.get_tensor_id() && tensor_id_to_counter.count(tensor_id.value()) > 0
+                              ? tensor_id_to_counter[tensor_id.value()]
+                              : graph.size();
     auto shape = t.logical_shape();
 
     std::unordered_map<std::string, std::string> params = {
