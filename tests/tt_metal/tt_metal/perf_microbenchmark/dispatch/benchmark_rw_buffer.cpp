@@ -19,7 +19,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/pinned_memory.hpp>
+#include <tt-metalium/experimental/pinned_memory.hpp>
 #include <tt-metalium/memory_pin.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/vector_aligned.hpp>
@@ -173,8 +173,8 @@ static void BM_read_pinned_memory(benchmark::State& state, std::shared_ptr<MeshD
     // Pin the aligned host memory region for the shard
     auto coord = MeshCoordinate(0, 0);
     auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
-    auto pinned_unique = mesh_device->pin_memory(coordinate_range_set, host_buffer, /*map_to_noc=*/true);
-    std::shared_ptr<PinnedMemory> pinned_mem = std::move(pinned_unique);
+    auto pinned_unique = experimental::PinMemory(*mesh_device, coordinate_range_set, host_buffer, /*map_to_noc=*/true);
+    std::shared_ptr<experimental::PinnedMemory> pinned_mem = std::move(pinned_unique);
 
     // Prepare the read transfer using pinned memory
     MeshCommandQueue::ShardDataTransfer read_transfer = {

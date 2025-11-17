@@ -33,7 +33,7 @@
 #include <tracy/Tracy.hpp>
 #include <tt_stl/overloaded.hpp>
 // For pinned memory NOC addressing (host-only)
-#include "tt_metal/api/tt-metalium/pinned_memory.hpp"
+#include "tt_metal/api/tt-metalium/experimental/pinned_memory.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 
@@ -833,7 +833,7 @@ void issue_read_buffer_dispatch_command_sequence(
     uint32_t pinned_dst_addr_lo = 0;
 
     if (has_pinned_inputs && is_unpadded) {
-        const chip_id_t mmio_device_id =
+        const ChipId mmio_device_id =
             tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(
                 dispatch_params.device->id());
         auto noc_addr_pair_opt = dispatch_params.pinned_memory->get_noc_addr(dispatch_params.device->id());
@@ -853,7 +853,7 @@ void issue_read_buffer_dispatch_command_sequence(
                 const uint64_t dst_noc_addr = pinned_noc_base + dst_offset_base;
                 pinned_dst_addr_lo = static_cast<uint32_t>(dst_noc_addr - pcie_base);
                 const auto& soc = cluster.get_soc_desc(mmio_device_id);
-                const auto& pcie_cores = soc.get_cores(CoreType::PCIE, tt::umd::CoordSystem::NOC0);
+                const auto& pcie_cores = soc.get_cores(CoreType::PCIE,CoordSystem::NOC0);
                 TT_FATAL(!pcie_cores.empty(), "No PCIE core found on MMIO device {}", mmio_device_id);
                 pinned_dst_noc_xy =
                     MetalContext::instance().hal().noc_xy_encoding(pcie_cores.front().x, pcie_cores.front().y);
@@ -969,7 +969,7 @@ void copy_interleaved_buffer_to_completion_queue(
     tt::stl::Span<const SubDeviceId> sub_device_ids,
     CoreType dispatch_core_type,
     void* dst,
-    const std::shared_ptr<PinnedMemory>& pinned_memory) {
+    const std::shared_ptr<experimental::PinnedMemory>& pinned_memory) {
     if (dispatch_params.total_pages_to_read > 0) {
         // Only 8 bits are assigned for the page offset in CQPrefetchRelayPagedCmd
         // To handle larger page offsets move bank base address up and update page offset to be relative to the new

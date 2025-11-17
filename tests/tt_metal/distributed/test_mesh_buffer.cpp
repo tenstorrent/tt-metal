@@ -33,7 +33,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/shape2d.hpp>
-#include <tt-metalium/pinned_memory.hpp>
+#include <tt-metalium/experimental/pinned_memory.hpp>
 #include <tt-metalium/memory_pin.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
@@ -594,7 +594,7 @@ TEST_F(MeshBufferTestSuite, MultiShardReadWriteMultiThread) {
 }
 
 TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithPinnedMemoryFullRange) {
-    if (!mesh_device_->get_memory_pinning_parameters().can_map_to_noc) {
+    if (!experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
         GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
         return;
     }
@@ -633,11 +633,11 @@ TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithPinnedMemoryFullRange) {
         tt::stl::Span<uint32_t>(dst_ptr_aligned, bytes_per_device / sizeof(uint32_t)), MemoryPin(dst));
 
     auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
-    auto pinned_unique = mesh_device_->pin_memory(
+    auto pinned_unique = experimental::PinMemory(*mesh_device_,
         coordinate_range_set,
         host_buffer,
         /*map_to_noc=*/true);
-    std::shared_ptr<PinnedMemory> pinned_shared = std::move(pinned_unique);
+    std::shared_ptr<experimental::PinnedMemory> pinned_shared = std::move(pinned_unique);
 
     // Read back using enqueue_read_shards with pinned_memory populated
     auto read_transfer = distributed::MeshCommandQueue::ShardDataTransfer{
@@ -654,7 +654,7 @@ TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithPinnedMemoryFullRange) {
 }
 
 TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithPinnedMemoryFullRangeUnaligned) {
-    if (!mesh_device_->get_memory_pinning_parameters().can_map_to_noc) {
+    if (!experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
         GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
         return;
     }
@@ -694,11 +694,11 @@ TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithPinnedMemoryFullRangeUnaligned)
         tt::stl::Span<uint8_t>(dst_ptr_unaligned, bytes_per_device), MemoryPin(dst));
 
     auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
-    auto pinned_unique = mesh_device_->pin_memory(
+    auto pinned_unique = experimental::PinMemory(*mesh_device_,
         coordinate_range_set,
         host_buffer,
         /*map_to_noc=*/true);
-    std::shared_ptr<PinnedMemory> pinned_shared = std::move(pinned_unique);
+    std::shared_ptr<experimental::PinnedMemory> pinned_shared = std::move(pinned_unique);
 
     // Read back using enqueue_read_shards with pinned_memory populated
     auto read_transfer = distributed::MeshCommandQueue::ShardDataTransfer{
