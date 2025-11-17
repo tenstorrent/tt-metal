@@ -1,15 +1,15 @@
-name: "[internal] T3000 demo tests impl"
+name: "[internal] T3000 integration tests impl"
 
 on:
   workflow_call:
     inputs:
+      docker-image:
+        required: true
+        type: string
       build-artifact-name:
         required: true
         type: string
       wheel-artifact-name:
-        required: true
-        type: string
-      docker-image:
         required: true
         type: string
       model:
@@ -20,11 +20,6 @@ on:
         required: false
         type: string
         default: "in-service"
-      mlperf-read-only:
-        required: false
-        type: boolean
-        default: true
-        description: "Set to false to allow write access to MLPerf mount"
 
 jobs:
   load-test-matrix:
@@ -32,7 +27,7 @@ jobs:
     outputs:
       matrix: ${{ steps.load-test-matrix.outputs.matrix }}
     env:
-      TESTS_YAML_PATH: ./tests/pipeline_reorg/t3k_demo_tests.yaml
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/t3k_integration_tests.yaml
     steps:
       - name: Checkout the repository
         uses: actions/checkout@v4
@@ -47,7 +42,7 @@ jobs:
           python3 .github/scripts/utils/verify_time_budget.py \
             ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
-            "demo"
+            "integration"
       - name: Load test matrix
         id: load-test-matrix
         run: |
@@ -70,7 +65,7 @@ jobs:
           echo "${json_output}"
           echo "matrix=${json_output}" >> $GITHUB_OUTPUT
 
-  t3000-demo-tests:
+  t3000-integration-tests:
     needs: load-test-matrix
     strategy:
       fail-fast: false
@@ -80,24 +75,22 @@ jobs:
     runs-on:
       - arch-wormhole_b0
       - config-t3000
-      - pipeline-perf
+      - pipeline-functional
       - ${{ inputs.extra-tag }}
     container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ inputs.docker-image }}
       env:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
-        ARCH_NAME: wormhole_b0
+        ARCH_NAME: ${{ matrix.test-group.sku }}
         LOGURU_LEVEL: INFO
-        GITHUB_ACTIONS: true
-        GTEST_OUTPUT: xml:/work/generated/test_reports/
         HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf${{ inputs.mlperf-read-only && ':ro' || ':rw' }}
-      options: "--device /dev/tenstorrent --privileged -v /sys:/sys"
+        - /mnt/MLPerf:/mnt/MLPerf:ro
+      options: "--device /dev/tenstorrent"
     defaults:
       run:
         shell: bash
@@ -117,54 +110,22 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-      - name: Enable Performance mode
-        uses: tenstorrent/tt-metal/.github/actions/set-cpu-governor@main
-        with:
-          governor: performance
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
-          source tests/scripts/t3000/run_t3000_demo_tests.sh
+          ls -lart /mnt/MLPerf/
+          source tests/scripts/t3000/run_t3000_integration_tests.sh
           echo ${{ matrix.test-group.cmd }}
           ${{ matrix.test-group.cmd }}
-
-      - name: Save environment data
-        id: save-environment-data
-        if: ${{ !cancelled() }}
-        shell: bash
-        run: |
-          if [ -d "generated/benchmark_data" ]; then
-            echo "has_benchmark_data=true" >> $GITHUB_OUTPUT
-            python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
-          else
-            echo "::warning::Benchmark data directory 'generated/benchmark_data' does not exist"
-            echo "has_benchmark_data=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Upload benchmark data
-        if: ${{ !cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
-        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
-        with:
-          ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
-          sftp-batchfile: .github/actions/upload-data-via-sftp/benchmark_data_batchfile.txt
-          path: /work
-          username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
-          hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
-
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: ${{ matrix.test-group.owner_id }}
-
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
-          path: generated/test_reports/
           prefix: "test_reports_"
-      - name: Disable Performance mode
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
-        uses: tenstorrent/tt-metal/.github/actions/set-cpu-governor@main
-        with:
-          governor: ondemand

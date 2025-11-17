@@ -1,4 +1,4 @@
-name: "(T3K) T3000 frequent tests"
+name: "(T3K) T3000 integration tests"
 
 on:
   workflow_dispatch:
@@ -32,6 +32,9 @@ on:
           - mochi
   schedule:
     - cron: "0 */8 * * *" # This cron schedule runs the workflow every 8 hours
+  push:
+    branches:
+      - roseli/30675-reorg-t3k-pipelines-rebased
 
 jobs:
   build-artifact:
@@ -42,10 +45,10 @@ jobs:
     with:
       build-wheel: true
       version: 22.04
-  t3000-frequent-tests:
+  t3000-integration-tests:
     needs: build-artifact
     secrets: inherit
-    uses: ./.github/workflows/t3000-frequent-tests-impl.yaml
+    uses: ./.github/workflows/t3000-integration-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
