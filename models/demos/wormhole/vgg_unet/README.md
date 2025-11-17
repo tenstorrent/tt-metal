@@ -29,7 +29,7 @@ Use the following command to run the e2e perf with trace 2cq:
 ```sh
 pytest models/demos/wormhole/vgg_unet/tests/perf/test_e2e_performant.py::test_vgg_unet_e2e_dp
 ```
-- end-2-end perf with Trace+2CQs is 303 FPS
+- end-2-end perf with Trace+2CQs is 318 FPS
 
 ### Performant Demo with Trace+2CQ
 #### Single Device (BS=1):
