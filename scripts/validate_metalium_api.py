@@ -2,6 +2,7 @@ import os
 import re
 import sys
 from collections import defaultdict
+from typing import NamedTuple, Optional
 
 # List of files or paths (relative or absolute) to skip
 SKIP_FILES = {
@@ -106,12 +107,15 @@ STD_HEADERS = {
     "vector",
     "version",
     # C library headers (C++ style)
+    "cctype",
     "cerrno",
     "cfenv",
     "cfloat",
     "cinttypes",
     "ciso646",
+    "climits",
     "clocale",
+    "cmath",
     "csetjmp",
     "csignal",
     "cstdarg",
@@ -156,69 +160,73 @@ STD_HEADERS = {
 ANGLE_INCLUDE_PATTERN = re.compile(r"^\s*#include\s*<([^>]+)>")
 QUOTED_INCLUDE_PATTERN = re.compile(r'^\s*#include\s*"([^"]+)"')
 
-# Track which prefixes were used
-used_prefix_counts = defaultdict(int)
 
+class Include(NamedTuple):
+    source_file: str
+    line_num: int
+    path: str
+    quoted: bool
 
-def is_standard_include(include: str) -> bool:
-    return include in STD_HEADERS
+    @staticmethod
+    def from_line(source_file: str, line_num: int, line: str) -> Optional["Include"]:
+        if match := QUOTED_INCLUDE_PATTERN.match(line):
+            return Include(source_file, line_num, match.group(1), quoted=True)
+        if match := ANGLE_INCLUDE_PATTERN.match(line):
+            return Include(source_file, line_num, match.group(1), quoted=False)
 
+    @property
+    def prefix(self) -> Optional[str]:
+        """Extract the prefix from the include path (part before first /)."""
+        parts = self.path.split("/", 1)
+        return parts[0] if len(parts) > 1 else None
 
-def is_valid_include(include: str) -> bool:
-    if is_standard_include(include):
-        return True
-    parts = include.split("/")
-    prefix = parts[0]
-    if prefix in ALLOWED_PREFIXES:
-        used_prefix_counts[prefix] += 1
-        return True
-    return False
+    def check_for_errors(self, prefix_counts: dict[str, int]) -> Optional[str]:
+        if self.quoted:
+            return f"{self.source_file}:{self.line_num}: Quoted includes are not allowed. Use angle brackets <...> ({self.path})"
 
+        is_standard = self.path in STD_HEADERS
+        has_valid_prefix = self.prefix and self.prefix in ALLOWED_PREFIXES
+        if not (is_standard or has_valid_prefix):
+            return f"{self.source_file}:{self.line_num}: Invalid or missing namespace prefix ({self.path})"
 
-def check_includes_in_file(filepath):
-    errors = []
-    with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
-        for line_num, line in enumerate(f, 1):
-            # Disallow quoted includes
-            if QUOTED_INCLUDE_PATTERN.match(line):
-                include = QUOTED_INCLUDE_PATTERN.match(line).group(1)
-                errors.append((line_num, include, "Quoted includes are not allowed. Use angle brackets <...>"))
+        if has_valid_prefix:
+            prefix_counts[self.prefix] += 1
 
-            # Validate angle-bracket includes
-            match = ANGLE_INCLUDE_PATTERN.match(line)
-            if match:
-                include = match.group(1)
-                if not is_valid_include(include):
-                    reason = "Invalid or missing namespace prefix"
-                    errors.append((line_num, include, reason))
-    return errors
+        return None
 
 
 def main(directory):
-    has_error = False
-    for root, _, files in os.walk(directory):
-        for fname in files:
-            if fname.endswith((".hpp", ".h", ".cpp", ".cc", ".cxx")):
-                if fname in SKIP_FILES:
+    CPP_EXTENSIONS = (".hpp", ".h", ".cpp", ".cc", ".cxx")
+    prefix_counts = defaultdict(int)
+
+    def iter_source_files():
+        for root, _, files in os.walk(directory):
+            for fname in files:
+                if not fname.endswith(CPP_EXTENSIONS) or fname in SKIP_FILES:
                     continue
+                yield os.path.join(root, fname)
 
-                path = os.path.join(root, fname)
+    def iter_includes(filepath):
+        with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+            for line_num, line in enumerate(f, 1):
+                if include := Include.from_line(filepath, line_num, line):
+                    yield include
 
-                errors = check_includes_in_file(path)
-                if errors:
-                    has_error = True
-                    print(f"\nErrors in {path}:")
-                    for line_num, include, reason in errors:
-                        print(f"  Line {line_num}: {include} — {reason}")
+    all_includes = [include for path in iter_source_files() for include in iter_includes(path)]
 
-    unused_prefixes = ALLOWED_PREFIXES - used_prefix_counts.keys()
+    # Validate all includes and print errors
+    errors = [err for include in all_includes if (err := include.check_for_errors(prefix_counts)) is not None]
+    unused_prefixes = ALLOWED_PREFIXES - prefix_counts.keys()
+
+    for error in errors:
+        print(error)
+
     if unused_prefixes:
-        has_error = True
         print("\nUnused allowed prefixes (not seen in any #include):")
         for prefix in sorted(unused_prefixes):
             print(f"  - {prefix}")
 
-    if has_error:
+    if errors or unused_prefixes:
         print("\nInclude check failed.")
         sys.exit(1)
     else:
