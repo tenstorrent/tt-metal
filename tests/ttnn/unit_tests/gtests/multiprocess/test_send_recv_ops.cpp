@@ -356,7 +356,7 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
     // auto sender_logical_coord = CoreCoord(0, 0);
     // auto recv_logical_coord = CoreCoord(0, 1);
 
-    uint32_t socket_fifo_size = 70 * 1024;
+    uint32_t socket_fifo_size = 42 * 1024;
     auto mesh_shape = mesh_device_->shape();
 
     auto physical_system_descriptor = create_physical_system_descriptor();
@@ -380,15 +380,15 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
     };
 
     auto tensor_spec = TensorSpec(
-        ttnn::Shape({1, 1, 1, 7168}),
+        ttnn::Shape({1, 1, 1, 3584}),
         tt::tt_metal::TensorLayout(
-            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::DataType::UINT32,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
-            tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1)));
+            tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM)));
 
-    constexpr uint32_t num_iters = 1000;
-    // uint64_t start_time = 0;
-    // uint64_t end_time = 0;
+    constexpr uint32_t num_iters = 100000;
+    uint64_t start_time = 0;
+    uint64_t end_time = 0;
 
     if (*distributed_context->rank() == *pipeline_start_rank) {
         const auto& input_shape = tensor_spec.logical_shape();
@@ -398,6 +398,26 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
         auto dtype = tensor_spec.data_type();
         auto [my_sender, downstream_recv] =
             get_connecting_coords(physical_system_descriptor, recv_mesh_id, asic_id_to_mesh_coord);
+
+        distributed::MeshCoordinate start_coord = distributed::MeshCoordinate(1, 3);
+        auto start_fabric_node_id = mesh_device_->get_fabric_node_id(start_coord);
+        auto sender_fabric_node_id = mesh_device_->get_fabric_node_id(my_sender);
+        std::cout << "Sender coords: " << my_sender[0] << ", " << my_sender[1] << std::endl;
+        std::cout << "Sender Fabric Node ID: " << *sender_fabric_node_id.mesh_id << ", "
+                  << sender_fabric_node_id.chip_id << std::endl;
+        std::cout << "Start coords: " << start_coord[0] << ", " << start_coord[1] << std::endl;
+        std::cout << "Start Fabric Node ID: " << *start_fabric_node_id.mesh_id << ", " << start_fabric_node_id.chip_id
+                  << std::endl;
+
+        distributed::SocketConnection intermed_connection = {
+            .sender_core = {start_coord, CoreCoord(0, 0)}, .receiver_core = {my_sender, CoreCoord(0, 0)}};
+        distributed::SocketConfig intermed_socket_config = {
+            .socket_connection_config = {intermed_connection},
+            .socket_mem_config = socket_mem_config,
+        };
+        auto [intermed_send, intermed_recv] =
+            distributed::MeshSocket::create_socket_pair(mesh_device_, mesh_device_, intermed_socket_config);
+
         fwd_connection = {
             .sender_core = {my_sender, CoreCoord(0, 0)}, .receiver_core = {downstream_recv, CoreCoord(0, 0)}};
         distributed::SocketConfig send_socket_config = {
@@ -414,13 +434,13 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
                 .to_device(mesh_device_.get(), memory_config);
         // Block after sending data. We will profile the time taken to forward data over sockets
         // after the write has completed.
-        // ttnn::experimental::send_async(input_tensor, send_socket);
-
-        for (int i = 0; i < num_iters; i++) {
-            ttnn::experimental::send_async(input_tensor, send_socket);
-        }
+        // Send data from start device to socked on exit node
+        ttnn::experimental::send_async(input_tensor, intermed_send);
+        ttnn::experimental::socket_copy(input_tensor, intermed_recv, send_socket, num_elems * sizeof(uint32_t));
         Synchronize(mesh_device_.get(), std::nullopt);
         distributed_context->barrier();
+        ttnn::experimental::send_async(input_tensor, intermed_send);
+        ttnn::experimental::socket_copy(input_tensor, intermed_recv, send_socket, num_elems * sizeof(uint32_t));
     } else {
         auto [my_recv, upstream_send] =
             get_connecting_coords(physical_system_descriptor, send_mesh_id, asic_id_to_mesh_coord);
@@ -456,56 +476,55 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
             };
             std::tie(intermed_send, intermed_recv) =
                 distributed::MeshSocket::create_socket_pair(mesh_device_, mesh_device_, intermed_socket_config);
+        } else {
+            distributed::MeshCoordinate end_coord = distributed::MeshCoordinate(0, 0);
+            distributed::SocketConnection end_connection = {
+                .sender_core = {my_recv, CoreCoord(0, 0)}, .receiver_core = {end_coord, CoreCoord(0, 0)}};
+            distributed::SocketConfig end_socket_config = {
+                .socket_connection_config = {end_connection},
+                .socket_mem_config = socket_mem_config,
+            };
+            std::tie(intermed_send, intermed_recv) =
+                distributed::MeshSocket::create_socket_pair(mesh_device_, mesh_device_, end_socket_config);
         }
         // Allocate Output Tensor on the last device in the pipeline
-        Tensor output_tensor;
-        if (*distributed_context->rank() == *pipeline_end_rank) {
-            output_tensor = tt::tt_metal::allocate_tensor_on_device(tensor_spec, mesh_device_.get());
-        }
-        for (int i = 0; i < num_iters; i++) {
-            if (*distributed_context->rank() < *pipeline_end_rank) {
-                // Copy from previous pipeline stage to my exit node
-                ttnn::experimental::socket_copy(recv_socket, intermed_send, 14336);
-                // Copy from my exit node to the next pipeline stage
-                ttnn::experimental::socket_copy(intermed_recv, send_socket, 14336);
-            } else {
-                // Receive into output tensor on last device in the pipeline
-                ttnn::experimental::recv_async(output_tensor, recv_socket);
+        Tensor output_tensor = tt::tt_metal::allocate_tensor_on_device(tensor_spec, mesh_device_.get());
 
-                auto composer = ttnn::distributed::concat_mesh_to_tensor_composer(*mesh_device_, /*dim=*/0);
-                auto output_data = ttnn::distributed::aggregate_tensor(output_tensor, *composer).to_vector<bfloat16>();
-                auto expected_output_data = ttnn::arange(0, 7168, 1, tt::tt_metal::DataType::BFLOAT16);
-                auto expected_output_data_vector = expected_output_data.to_vector<bfloat16>();
-
-                auto chunked_output_vector =
-                    std::vector<bfloat16>(output_data.begin() + 6 * 7168, output_data.begin() + 7 * 7168);
-                EXPECT_EQ(chunked_output_vector, expected_output_data_vector);
-            }
+        if (*distributed_context->rank() < *pipeline_end_rank) {
+            // Copy from previous pipeline stage to my exit node
+            ttnn::experimental::socket_copy(output_tensor, recv_socket, intermed_send, 14336);
+            // Copy from my exit node to the next pipeline stage
+            ttnn::experimental::socket_copy(output_tensor, intermed_recv, send_socket, 14336);
+        } else {
+            // Receive into output tensor on last device in the pipeline
+            ttnn::experimental::socket_copy(output_tensor, recv_socket, intermed_send, 14336);
+            ttnn::experimental::recv_async(output_tensor, intermed_recv);
         }
+
         Synchronize(mesh_device_.get(), std::nullopt);
         distributed_context->barrier();
 
-        // if (*distributed_context->rank() == *pipeline_end_rank) {
-        //     start_time = std::chrono::duration_cast<std::chrono::microseconds>(
-        //                      std::chrono::high_resolution_clock::now().time_since_epoch())
-        //                      .count();
-        // }
-        // ttnn::experimental::recv_async(output_tensor, recv_socket,);
-        // if (*distributed_context->rank() < *pipeline_end_rank) {
-        //     ttnn::experimental::send_async(output_tensor, send_socket);
-        // }
+        if (*distributed_context->rank() < *pipeline_end_rank) {
+            ttnn::experimental::socket_copy(output_tensor, recv_socket, intermed_send, 14336);
+            ttnn::experimental::socket_copy(output_tensor, intermed_recv, send_socket, 14336);
+        } else {
+            start_time = std::chrono::duration_cast<std::chrono::microseconds>(
+                             std::chrono::high_resolution_clock::now().time_since_epoch())
+                             .count();
+            ttnn::experimental::socket_copy(output_tensor, recv_socket, intermed_send, 14336);
+            ttnn::experimental::recv_async(output_tensor, intermed_recv);
+        }
     }
 
-    // distributed::Synchronize(mesh_device_.get(), std::nullopt);
-    // std::cout << "Send/Recv Benchmark Complete" << std::endl;
-    // if (distributed_context->rank() == pipeline_end_rank) {
-    //     end_time = std::chrono::duration_cast<std::chrono::microseconds>(
-    //                    std::chrono::high_resolution_clock::now().time_since_epoch())
-    //                    .count();
-    //     std::cout << "Time taken to forward: " << num_iters << " Packets: " << end_time - start_time << " us"
-    //               << std::endl;
-    //     std::cout << "Time per iteration: " << (end_time - start_time) / num_iters << " us" << std::endl;
-    // }
+    distributed::Synchronize(mesh_device_.get(), std::nullopt);
+    if (distributed_context->rank() == pipeline_end_rank) {
+        end_time = std::chrono::duration_cast<std::chrono::microseconds>(
+                       std::chrono::high_resolution_clock::now().time_since_epoch())
+                       .count();
+        std::cout << "Time taken to forward: " << num_iters << " Packets: " << end_time - start_time << " us"
+                  << std::endl;
+        std::cout << "Time per iteration: " << (end_time - start_time) / num_iters << " us" << std::endl;
+    }
 }
 
 }  // namespace tt::tt_metal

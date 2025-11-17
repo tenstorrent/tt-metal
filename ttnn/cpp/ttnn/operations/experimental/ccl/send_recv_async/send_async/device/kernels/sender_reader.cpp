@@ -71,30 +71,14 @@ void kernel_main() {
     else {
         // TODO #24995: Could read whole page into scratch, then copy locally
         // Read entire tensor in a single shot
-        auto noc_read_addr = input_addr_gen.get_noc_addr(0);
-        cb_reserve_back(cb0_id, 1);
-        auto l1_write_addr = get_write_ptr(cb0_id);
-        noc_async_read<input_page_size>(noc_read_addr, l1_write_addr, input_page_size);
-        noc_async_read_barrier();
-        cb_push_back(cb0_id, 1);
-        // for (uint32_t i = 0; i < num_pages; ++i) {
-        //     auto noc_read_addr = input_addr_gen.get_noc_addr(page_index);
-        //     for (uint32_t j = 0; j < num_whole_packets_per_page; ++j) {
-        //         cb_reserve_back(cb0_id, 1);
-        //         auto l1_write_addr = get_write_ptr(cb0_id);
-        //         noc_async_read<whole_packet_size>(noc_read_addr, l1_write_addr, whole_packet_size);
-        //         noc_read_addr += whole_packet_size;
-        //         noc_async_read_barrier();
-        //         cb_push_back(cb0_id, 1);
-        //     }
-        //     if constexpr (partial_packet_size > 0) {
-        //         cb_reserve_back(cb0_id, 1);
-        //         auto l1_write_addr = get_write_ptr(cb0_id);
-        //         noc_async_read<partial_packet_size>(noc_read_addr, l1_write_addr, partial_packet_size);
-        //         noc_async_read_barrier();
-        //         cb_push_back(cb0_id, 1);
-        //     }
-        //     page_index++;
-        // }
+        for (int i = 0; i < 10000000; i++) {
+            uint32_t page_index = 0;
+            auto noc_read_addr = input_addr_gen.get_noc_addr(0);
+            cb_reserve_back(cb0_id, 1);
+            auto l1_write_addr = get_write_ptr(cb0_id);
+            noc_async_read<input_page_size>(noc_read_addr, l1_write_addr, input_page_size);
+            noc_async_read_barrier();
+            cb_push_back(cb0_id, 1);
+        }
     }
 }

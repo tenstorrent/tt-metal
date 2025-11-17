@@ -60,6 +60,7 @@ tt::tt_metal::operation::ProgramWithCallbacks socket_copy_single_core(
 namespace operations::experimental::ccl {
 
 std::vector<Tensor> socket_copy(
+    const Tensor& input_tensor,
     const tt::tt_metal::distributed::MeshSocket& recv_socket,
     const tt::tt_metal::distributed::MeshSocket& send_socket,
     std::size_t num_bytes);

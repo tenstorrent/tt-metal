@@ -14,6 +14,7 @@ namespace operations::experimental::ccl {
 
 struct ExecuteSocketCopy {
     static std::vector<ttnn::Tensor> invoke(
+        const ttnn::Tensor& input_tensor,
         const tt::tt_metal::distributed::MeshSocket& recv_socket,
         const tt::tt_metal::distributed::MeshSocket& send_socket,
         std::size_t num_bytes);

@@ -67,7 +67,7 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
         socket_block_size = socket_aligned_page_size;
     }
 
-    uint32_t cb_num_pages = 2;
+    uint32_t cb_num_pages = 4;
     uint32_t cb_page_size = socket_aligned_page_size;
 
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());

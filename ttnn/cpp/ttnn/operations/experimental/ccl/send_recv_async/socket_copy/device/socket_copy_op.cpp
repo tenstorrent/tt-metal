@@ -67,17 +67,10 @@ tt::tt_metal::operation::Hash SocketCopy::compute_program_hash(const std::vector
 namespace operations::experimental::ccl {
 
 std::vector<Tensor> socket_copy(
+    const Tensor& input_tensor,
     const tt::tt_metal::distributed::MeshSocket& recv_socket,
     const tt::tt_metal::distributed::MeshSocket& send_socket,
     std::size_t num_bytes) {
-    Tensor input_tensor =
-        ttnn::distributed::distribute_tensor(
-            ttnn::experimental::view(
-                ttnn::arange(0, 1024, 1, tt::tt_metal::DataType::BFLOAT16), ttnn::Shape({1, 1, 1, 1024}))
-                .to_layout(tt::tt_metal::Layout::ROW_MAJOR),
-            *ttnn::distributed::replicate_tensor_to_mesh_mapper(*recv_socket.get_device()),
-            std::nullopt)
-            .to_device(recv_socket.get_device());
     return tt::tt_metal::operation::run(ttnn::SocketCopy(recv_socket, send_socket, num_bytes), {input_tensor});
 }
 

@@ -85,13 +85,29 @@ void kernel_main() {
     }
     // Large pages. We write page chunks from multiple packets.
     else {
-        auto noc_write_addr = output_addr_gen.get_noc_addr(page_index);
-        socket_wait_for_pages(receiver_socket, 1);
-        noc_async_write<output_page_size>(receiver_socket.read_ptr, noc_write_addr, output_page_size);
-        page_index++;
-        socket_pop_pages(receiver_socket, 1);
-        noc_async_writes_flushed();
-        fabric_socket_notify_sender(receiver_socket, fabric_connection, socket_packet_header_addr);
+        for (int i = 0; i < 10000000; i++) {
+            uint32_t page_index = 0;
+            auto noc_write_addr = output_addr_gen.get_noc_addr(page_index);
+            // DPRINT << "Wait for pages:" << i << ENDL();
+            socket_wait_for_pages(receiver_socket, 1);
+            // DPRINT << "Done waiting for pages:" << i << ENDL();
+            // uint32_t l1_read_addr = receiver_socket.read_ptr;
+            // uint32_t val = 0;
+            // for (uint32_t j = 0; j < output_page_size / 4; j += 4) {
+            //     if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_read_addr + j) != val) {
+            //         while (true);
+            //     }
+            //     val++;
+            // }
+            noc_async_write<output_page_size>(receiver_socket.read_ptr, noc_write_addr, output_page_size);
+            page_index++;
+            socket_pop_pages(receiver_socket, 1);
+            DPRINT << "Done popping pages:" << i << ENDL();
+            noc_async_writes_flushed();
+            DPRINT << "Done flushing writes:" << i << ENDL();
+            fabric_socket_notify_sender(receiver_socket, fabric_connection, socket_packet_header_addr);
+            DPRINT << "Done notifying sender:" << i << ENDL();
+        }
     }
     update_socket_config(receiver_socket);
     fabric_connection.close();

@@ -7,6 +7,7 @@
 
 #include "dataflow_api.h"
 #include "socket_api.h"
+#include "debug/dprint.h"
 
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
@@ -67,6 +68,7 @@ void kernel_main() {
 
     set_sender_socket_page_size(send_socket, socket_block_size);
     set_receiver_socket_page_size(recv_socket, socket_block_size);
+    DPRINT << "Socket Copy Page Size: " << socket_block_size << ENDL();
 
     // Only one downstream in this op
     sender_downstream_encoding downstream_enc = get_downstream_encoding(send_socket, 0);
@@ -76,39 +78,43 @@ void kernel_main() {
         downstream_bank_id, 0, tt::tt_fabric::connection_interface::edm_fabric_write_noc_index);
 
     // Reserve pages downstream and wait for pages to come from upstream
-    socket_reserve_pages(send_socket, 1);
-    socket_wait_for_pages(recv_socket, 1);
+    for (int i = 0; i < 10000000; i++) {
+        DPRINT << "Reserving page:" << i << ENDL();
+        socket_reserve_pages(send_socket, 1);
+        DPRINT << "Done reserving page:" << i << ENDL();
+        socket_wait_for_pages(recv_socket, 1);
+        DPRINT << "Done waiting for pages:" << i << ENDL();
+        auto l1_read_addr = recv_socket.read_ptr;
+        uint64_t dst_addr = receiver_noc_coord_addr + send_socket.write_ptr;
 
-    auto l1_read_addr = recv_socket.read_ptr;
-    uint64_t dst_addr = receiver_noc_coord_addr + send_socket.write_ptr;
+        // Forward data to downstream
+        for (uint32_t j = 0; j < num_whole_packets_per_page; ++j) {
+            downstream_data_packet_header_addr->to_noc_unicast_write(
+                NocUnicastCommandHeader{dst_addr}, whole_packet_size);
+            downstream_fabric_connection.wait_for_empty_write_slot();
+            downstream_fabric_connection.send_payload_without_header_non_blocking_from_address(
+                l1_read_addr, whole_packet_size);
+            downstream_fabric_connection.send_payload_flush_blocking_from_address(
+                (uint32_t)downstream_data_packet_header_addr, sizeof(PACKET_HEADER_TYPE));
+            dst_addr += whole_packet_size;
+            l1_read_addr += whole_packet_size;
+        }
+        if constexpr (aligned_partial_packet_size > 0) {
+            downstream_data_packet_header_addr->to_noc_unicast_write(
+                NocUnicastCommandHeader{dst_addr}, aligned_partial_packet_size);
+            downstream_fabric_connection.wait_for_empty_write_slot();
+            downstream_fabric_connection.send_payload_without_header_non_blocking_from_address(
+                l1_read_addr, aligned_partial_packet_size);
+            downstream_fabric_connection.send_payload_flush_blocking_from_address(
+                (uint32_t)downstream_data_packet_header_addr, sizeof(PACKET_HEADER_TYPE));
+        }
 
-    // Forward data to downstream
-    for (uint32_t j = 0; j < num_whole_packets_per_page; ++j) {
-        downstream_data_packet_header_addr->to_noc_unicast_write(NocUnicastCommandHeader{dst_addr}, whole_packet_size);
-        downstream_fabric_connection.wait_for_empty_write_slot();
-        downstream_fabric_connection.send_payload_without_header_non_blocking_from_address(
-            l1_read_addr, whole_packet_size);
-        downstream_fabric_connection.send_payload_flush_blocking_from_address(
-            (uint32_t)downstream_data_packet_header_addr, sizeof(PACKET_HEADER_TYPE));
-        dst_addr += whole_packet_size;
-        l1_read_addr += whole_packet_size;
+        // Notify Upstream and Downstream that data has been consumed or produced
+        socket_pop_pages(recv_socket, 1);
+        socket_push_pages(send_socket, 1);
+        fabric_socket_notify_receiver(send_socket, downstream_fabric_connection, downstream_socket_packet_header_addr);
+        fabric_socket_notify_sender(recv_socket, upstream_fabric_connection, upstream_socket_packet_header_addr);
     }
-    if constexpr (aligned_partial_packet_size > 0) {
-        downstream_data_packet_header_addr->to_noc_unicast_write(
-            NocUnicastCommandHeader{dst_addr}, aligned_partial_packet_size);
-        downstream_fabric_connection.wait_for_empty_write_slot();
-        downstream_fabric_connection.send_payload_without_header_non_blocking_from_address(
-            l1_read_addr, aligned_partial_packet_size);
-        downstream_fabric_connection.send_payload_flush_blocking_from_address(
-            (uint32_t)downstream_data_packet_header_addr, sizeof(PACKET_HEADER_TYPE));
-    }
-
-    // Notify Upstream and Downstream that data has been consumed or produced
-    socket_pop_pages(recv_socket, 1);
-    socket_push_pages(send_socket, 1);
-    fabric_socket_notify_receiver(send_socket, downstream_fabric_connection, downstream_socket_packet_header_addr);
-    fabric_socket_notify_sender(recv_socket, upstream_fabric_connection, upstream_socket_packet_header_addr);
-
     update_socket_config(send_socket);
     update_socket_config(recv_socket);
     upstream_fabric_connection.close();
