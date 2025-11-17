@@ -523,6 +523,14 @@ Tensor ExecuteRdiv::invoke(
         ttnn::eqz(input_tensor, memory_config), t_inf * value, result, memory_config, optional_output_tensor);
 }
 
+// ReLU Squared: relu(x)^2 = square(relu(x))
+// Uses unary_chain to fuse relu and square into a single kernel
+Tensor _relu_squared(const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+    std::vector<EltwiseUnaryWithParam> ops_chain = {
+        EltwiseUnaryWithParam(UnaryOpType::RELU), EltwiseUnaryWithParam(UnaryOpType::SQUARE)};
+    return Unary_chain::invoke(input, ops_chain, output_mem_config);
+}
+
 // logit(input, eps)=log(input / 1 - input)
 Tensor _logit(const Tensor& input_a, float eps, const std::optional<MemoryConfig>& output_mem_config) {
     float t1m_eps = 1 - eps;

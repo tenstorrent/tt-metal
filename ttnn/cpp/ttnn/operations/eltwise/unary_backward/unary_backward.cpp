@@ -513,6 +513,26 @@ std::vector<Tensor> ExecuteUnaryBackwardRelu::invoke(
     return grad_tensor;
 }
 
+// ReLU Squared backward: d/dx(relu(x)^2) = 2 * relu(x)
+// Since relu(x) = 0 when x <= 0, we don't need the gtz mask
+// Uses unary_chain to compute 2 * relu(x) efficiently, then multiplies by grad
+std::vector<Tensor> ExecuteUnaryBackwardReluSquared::invoke(
+    const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    using ttnn::operations::unary::EltwiseUnaryWithParam;
+    using ttnn::operations::unary::UnaryOpType;
+
+    // Compute 2 * relu(x) using unary_chain (fuses RELU and multiply by 2)
+    std::vector<EltwiseUnaryWithParam> ops_chain = {
+        EltwiseUnaryWithParam{UnaryOpType::RELU}, EltwiseUnaryWithParam{UnaryOpType::MUL_UNARY_SFPU, 2.0f}};
+    Tensor two_relu_input = ttnn::unary_chain(input, ops_chain, output_mem_config);
+
+    // Multiply by grad (binary operation, cannot be chained)
+    Tensor grad_result = ttnn::multiply(grad, two_relu_input, std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(grad_result);
+    return grad_tensor;
+}
+
 // fill_bw:
 // name: fill.Scalar(Tensor self, Scalar value) -> Tensor
 // self: zeros_like(grad)

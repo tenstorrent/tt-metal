@@ -32,6 +32,7 @@ enum class UnaryCompositeOpType {
     LOGICAL_NOT_,
     NORMALIZE_GLOBAL,
     FRAC,
+    RELU_SQUARED,
 };
 Tensor _digamma(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _lgamma(const Tensor&, const std::optional<MemoryConfig>&);
@@ -55,6 +56,7 @@ Tensor _logit(const Tensor& a, float eps = 0.0f, const std::optional<MemoryConfi
 Tensor _logical_not_(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _normalize_global(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _frac(const Tensor&, const std::optional<MemoryConfig>&);
+Tensor _relu_squared(const Tensor&, const std::optional<MemoryConfig>&);
 
 // OpHandler struct template
 template <UnaryCompositeOpType OpType>
@@ -177,5 +179,12 @@ struct OpHandler<UnaryCompositeOpType::LOGICAL_NOT_> {
 template <>
 struct OpHandler<UnaryCompositeOpType::FRAC> {
     static Tensor handle(const Tensor& t1, const std::optional<MemoryConfig>& mem_cfg) { return _frac(t1, mem_cfg); }
+};
+
+template <>
+struct OpHandler<UnaryCompositeOpType::RELU_SQUARED> {
+    static Tensor handle(const Tensor& t1, const std::optional<MemoryConfig>& mem_cfg) {
+        return _relu_squared(t1, mem_cfg);
+    }
 };
 }  // namespace ttnn::operations::unary

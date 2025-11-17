@@ -90,6 +90,13 @@ struct ExecuteUnaryBackwardRelu {
         const std::optional<MemoryConfig>& memory_config = std::nullopt);
 };
 
+struct ExecuteUnaryBackwardReluSquared {
+    static std::vector<Tensor> invoke(
+        const Tensor& grad_tensor_arg,
+        const Tensor& input_tensor_arg,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+};
+
 struct ExecuteUnaryBackwardAcosh {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
@@ -676,6 +683,8 @@ constexpr auto silu_bw =
     ttnn::register_operation<"ttnn::silu_bw", operations::unary_backward::ExecuteUnaryBackwardSilu>();
 constexpr auto relu_bw =
     ttnn::register_operation<"ttnn::relu_bw", operations::unary_backward::ExecuteUnaryBackwardRelu>();
+constexpr auto relu_squared_bw =
+    ttnn::register_operation<"ttnn::relu_squared_bw", operations::unary_backward::ExecuteUnaryBackwardReluSquared>();
 constexpr auto logit_bw =
     ttnn::register_operation<"ttnn::logit_bw", operations::unary_backward::ExecuteUnaryBackwardLogit>();
 constexpr auto floor_bw =

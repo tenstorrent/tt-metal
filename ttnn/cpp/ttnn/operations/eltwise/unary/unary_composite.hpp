@@ -200,5 +200,8 @@ constexpr auto polygamma = ttnn::register_operation<
 constexpr auto normalize_global = ttnn::register_operation<
     "ttnn::normalize_global",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::NORMALIZE_GLOBAL>>();
+constexpr auto relu_squared = ttnn::register_operation<
+    "ttnn::relu_squared",
+    operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::RELU_SQUARED>>();
 
 }  // namespace ttnn

@@ -1536,6 +1536,12 @@ void py_module(py::module& module) {
 
     bind_unary_backward_op(
         module,
+        ttnn::relu_squared_bw,
+        R"doc(Performs backward operations for relu_squared on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc",
+        R"doc(BFLOAT16, BFLOAT8_B)doc");
+
+    bind_unary_backward_op(
+        module,
         ttnn::logit_bw,
         R"doc(Performs backward operations for logit on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc",
         R"doc(BFLOAT16)doc",

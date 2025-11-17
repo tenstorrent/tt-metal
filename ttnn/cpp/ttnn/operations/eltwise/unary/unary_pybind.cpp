@@ -2441,6 +2441,12 @@ void py_module(py::module& module) {
         R"doc(BFLOAT16, BFLOAT8_B)doc");
     bind_unary_composite(
         module,
+        ttnn::relu_squared,
+        R"doc(Performs ReLU squared function on :attr:`input_tensor`: \mathrm{{output\_tensor}}_i = \verb|relu|(\mathrm{{input\_tensor}}_i)^2)doc",
+        "",
+        R"doc(BFLOAT16, BFLOAT8_B)doc");
+    bind_unary_composite(
+        module,
         ttnn::swish,
         R"doc(Performs swish function on :attr:`input_tensor`.)doc",
         "",
