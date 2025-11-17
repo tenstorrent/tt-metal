@@ -190,6 +190,7 @@ struct StreamRegAssignments {
             vc_0_free_slots_from_downstream_edge_2,
             vc_0_free_slots_from_downstream_edge_3,
             vc_1_free_slots_from_downstream_edge_1,
+            sender_channel_0_free_slots_stream_id,
             sender_channel_1_free_slots_stream_id,
             sender_channel_2_free_slots_stream_id,
             sender_channel_3_free_slots_stream_id,
