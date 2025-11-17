@@ -7,6 +7,7 @@
 # Debug shebang
 #!/usr/bin/env -S python3 -m pdb
 
+import ast
 import os
 import csv
 from pathlib import Path
@@ -17,7 +18,8 @@ import copy
 from collections import deque
 import pandas as pd
 from math import nan, isnan
-from typing import Any, Dict, List, Optional, Tuple
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import click
 from loguru import logger
@@ -47,6 +49,51 @@ PROFILER_OP_TO_OP_OVERHEAD_NANO_SEC = 1500
 OpDict = Dict[str, Any]
 TraceReplayDict = Dict[int, Dict[int, List[int]]]
 DeviceOpsDict = Dict[int, List[OpDict]]
+
+
+@dataclass
+class _TraceReplayState:
+    timestamps: List[int]
+    current_index: int = 0
+    seen_ops: Set[int] = field(default_factory=set)
+
+    @property
+    def session_id(self) -> int:
+        return self.current_index + 1
+
+
+class TraceReplayTracker:
+    """Utility that dispenses trace replay timestamps and session ids per device."""
+
+    def __init__(self, trace_replays: Optional[TraceReplayDict]) -> None:
+        self._states: Dict[int, Dict[int, _TraceReplayState]] = {}
+        self._has_traces = bool(trace_replays)
+        if trace_replays:
+            for device_id, traces in trace_replays.items():
+                self._states[device_id] = {}
+                for trace_id, timestamps in traces.items():
+                    self._states[device_id][trace_id] = _TraceReplayState(list(timestamps))
+
+    def has_traces(self) -> bool:
+        return self._has_traces
+
+    def consume(self, device_id: int, trace_id: int, op_id: int) -> Tuple[int, int]:
+        assert (
+            device_id in self._states and trace_id in self._states[device_id]
+        ), f"Trace metadata missing for device {device_id}, trace {trace_id}"
+        state = self._states[device_id][trace_id]
+
+        if op_id in state.seen_ops:
+            state.current_index += 1
+            state.seen_ops = set()
+
+        if state.current_index >= len(state.timestamps):
+            raise AssertionError("Wrong trace replay count: Device has more ops than trace replay issued commands")
+
+        state.seen_ops.add(op_id)
+        tracy_time = state.timestamps[state.current_index]
+        return tracy_time, state.session_id
+
 
 OPS_CSV_HEADER = [
     "OP CODE",
@@ -308,9 +355,13 @@ def extract_dispatch_op_id(dispatchOps: Dict[str, Any]) -> int:
 
     opId = 0
     for ts in dispatchOps["timeseries"]:
-        if "meta_data" in ts[0] and "workers_runtime_id" in ts[0]["meta_data"]:
-            metaData = eval(ts[0]["meta_data"])
-            opId = metaData["workers_runtime_id"]
+        meta_data = ts[0].get("meta_data")
+        if meta_data and "workers_runtime_id" in meta_data:
+            try:
+                metadata_dict = ast.literal_eval(meta_data)
+            except (SyntaxError, ValueError) as exc:
+                raise ValueError(f"Failed to parse dispatch meta_data for op: {meta_data}") from exc
+            opId = metadata_dict["workers_runtime_id"]
             break
     return opId
 
@@ -359,13 +410,10 @@ def append_device_data(
 ) -> Tuple[DeviceOpsDict, Dict[int, OpDict]]:
     """Join host metadata with device profiler entries (and optional NoC stats)."""
 
-    traceReplays = traceReplays or {}
-    traceReplayCounts = {}
-    for deviceID in traceReplays:
-        traceReplayCounts[deviceID] = {}
-        for traceID in traceReplays[deviceID]:
-            traceReplayCounts[deviceID][traceID] = len(traceReplays[deviceID][traceID])
+    trace_tracker = TraceReplayTracker(traceReplays)
     devicesOps, hasTraceRuns = get_device_op_data(ops)
+    if hasTraceRuns and not trace_tracker.has_traces():
+        raise AssertionError("Host ops reference trace runs but trace replay metadata was not parsed.")
     logger.info(f"Appending device data")
     deviceTimesLog = os.path.join(logFolder, PROFILER_DEVICE_SIDE_LOG)
     traceOps = {}
@@ -397,7 +445,6 @@ def append_device_data(
                     ), f"Host op ID cannot be repeated: op ID {opID} was reported twice by the host"
                     opIDHostDataDict[opID] = copy.deepcopy(deviceOp)
 
-                traceOps = {}
                 for deviceOpTime in deviceOpsTime:
                     if len(deviceOpTime["timeseries"]) > 0:
                         timeID, ts, statData, risc, core = deviceOpTime["timeseries"][0]
@@ -408,24 +455,9 @@ def append_device_data(
                         ), f"Device op ID not present: Device op ID {deviceOpID} not present in host data on device {device}"
                         traceID = opIDHostDataDict[deviceOpID]["metal_trace_id"]
                         if traceID is not None:
-                            if device in traceOps:
-                                if traceID in traceOps[device]:
-                                    if deviceOpID in traceOps[device][traceID]:
-                                        traceReplays[device][traceID].pop(0)
-                                        traceOps[device][traceID] = set([deviceOpID])
-                                    else:
-                                        traceOps[device][traceID].add(deviceOpID)
-                                else:
-                                    traceOps[device][traceID] = set([deviceOpID])
-                            else:
-                                traceOps[device] = {traceID: set([deviceOpID])}
-                            assert (
-                                len(traceReplays[device][traceID]) > 0
-                            ), "Wrong trace replay count: Device has more ops than trace replay issued commands"
-                            opIDHostDataDict[deviceOpID]["tracy_time"] = traceReplays[device][traceID][0]
-                            opIDHostDataDict[deviceOpID]["metal_trace_replay_session_id"] = (
-                                traceReplayCounts[device][traceID] - len(traceReplays[device][traceID]) + 1
-                            )
+                            tracy_time, session_id = trace_tracker.consume(device, traceID, deviceOpID)
+                            opIDHostDataDict[deviceOpID]["tracy_time"] = tracy_time
+                            opIDHostDataDict[deviceOpID]["metal_trace_replay_session_id"] = session_id
                         generatedHostData.append(copy.deepcopy(opIDHostDataDict[deviceOpID]))
                 devicesOps[device] = generatedHostData
 
