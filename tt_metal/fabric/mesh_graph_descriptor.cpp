@@ -110,7 +110,7 @@ std::unordered_map<GlobalNodeId, std::vector<ConnectionData>> get_valid_connecti
                 .count = channels_count,
                 .policy = policy,
                 .parent_instance_id = instance.global_id,
-                .routing_direction = direction,  // TODO: Remove after MGD 1.0 is deprecated
+                .routing_direction = direction,
             };
 
             connections[src_device_id].push_back(data);
@@ -182,7 +182,7 @@ void MeshGraphDescriptor::set_defaults(proto::MeshGraphDescriptor& proto) {
     // Set the default for channel policy to strict if not specified
     for (auto& mesh : *proto.mutable_mesh_descriptors()) {
         if (mesh.has_channels() && !mesh.channels().has_policy()) {
-            mesh.mutable_channels()->set_policy(proto::Policy::STRICT);
+            mesh.mutable_channels()->set_policy(proto::Policy::RELAXED);
         }
     }
 
@@ -583,13 +583,20 @@ void MeshGraphDescriptor::validate_graph_topology_and_connections(const proto::M
 }
 
 void MeshGraphDescriptor::validate_legacy_requirements(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages) {
-    // Validate that channels count must all be exactly the same
-    const uint32_t first_channels_count = proto.mesh_descriptors(0).channels().count();
+    // Topology must be 2D
     for (const auto& mesh : proto.mesh_descriptors()) {
-        if (mesh.channels().count() != first_channels_count) {
-            error_messages.push_back(
-                fmt::format( "MGD 1.0 Compatibility requirement: Channel count must all be exactly the same (Mesh: {})", mesh.name()
-            ));
+        if (mesh.device_topology().dims_size() != 2) {
+            error_messages.push_back(fmt::format(
+                "MGD 1.0 Compatibility requirement: There can only be 2 dimensions in the device topology (Mesh: {})",
+                mesh.name()));
+        }
+    }
+
+    // Express connections are currently not supported
+    for (const auto& mesh : proto.mesh_descriptors()) {
+        if (mesh.express_connections_size() > 0) {
+            error_messages.push_back(fmt::format(
+                "MGD 1.0 Compatibility requirement: Express connections are not supported (Mesh: {})", mesh.name()));
         }
     }
 
@@ -615,15 +622,6 @@ void MeshGraphDescriptor::validate_legacy_requirements(const proto::MeshGraphDes
             error_messages.push_back(fmt::format(
                 "MGD 1.0 Compatibility requirement: There can only be one FABRIC level graph (Graph: {})",
                 graph.name()));
-        }
-    }
-
-    // Disable graph layout topologies for now
-    for (const auto& graph : proto.graph_descriptors()) {
-        if (graph.has_graph_topology()) {
-            error_messages.push_back(
-                fmt::format( "MGD 1.0 Compatibility requirement: Graph layout topologies are not supported (Graph: {})", graph.name())
-            );
         }
     }
 
@@ -849,7 +847,6 @@ void MeshGraphDescriptor::pre_populate_connections_lookups() {
         }
     }
 
-    // TODO: Remove this after MGD 1.0 is deprecated
     if (connections_by_type_.find("FABRIC") == connections_by_type_.end()) {
         connections_by_type_.emplace("FABRIC", std::vector<ConnectionId>());
     }
@@ -906,7 +903,7 @@ void MeshGraphDescriptor::populate_intra_mesh_express_connections(GlobalNodeId m
             .count = mesh_desc->channels().count(),
             .policy = mesh_desc->channels().policy(),
             .parent_instance_id = mesh_id,
-            .routing_direction = proto::RoutingDirection::C,  // TODO: Remove after MGD 1.0 is deprecated
+            .routing_direction = proto::RoutingDirection::C,
         };
 
         add_connection_to_fast_lookups(data, instance.type);
@@ -917,7 +914,7 @@ void MeshGraphDescriptor::populate_intra_mesh_express_connections(GlobalNodeId m
             .count = mesh_desc->channels().count(),
             .policy = mesh_desc->channels().policy(),
             .parent_instance_id = mesh_id,
-            .routing_direction = proto::RoutingDirection::C,  // TODO: Remove after MGD 1.0 is deprecated
+            .routing_direction = proto::RoutingDirection::C,
         };
 
         add_connection_to_fast_lookups(data_reverse, instance.type);
@@ -1024,17 +1021,12 @@ void MeshGraphDescriptor::populate_inter_mesh_manual_connections(GlobalNodeId gr
             std::vector<GlobalNodeId> nodes_copy = nodes;
             std::swap(nodes_copy[0], nodes_copy[i]);
 
-            proto::RoutingDirection routing_direction = proto::RoutingDirection::NONE;
-            if (connection.routing_direction_size() != 0) {
-                routing_direction = connection.routing_direction(i);
-            }
-
             ConnectionData data{
                 .nodes = nodes_copy,
                 .count = connection.channels().count(),
                 .policy = connection.channels().policy(),
                 .parent_instance_id = graph_id,
-                .routing_direction = routing_direction,
+                .routing_direction = proto::RoutingDirection::NONE,
             };
 
             add_connection_to_fast_lookups(data, instance.type);

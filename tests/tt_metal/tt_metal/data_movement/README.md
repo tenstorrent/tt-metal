@@ -14,13 +14,26 @@ Some test suites use slow dispatch mode for reliable program execution. These te
 - **Conv Hardcoded** (IDs 21-23)
 - **Reshard Hardcoded** (IDs 17-20)
 
+## Device 2.0 API Support
+This test suite now includes tests using the new device 2.0 experimental NOC API alongside the original implementations. These tests provide validation and performance comparison for the updated API design:
+
+### Key Features of Device 2.0 API Tests:
+- **Experimental NOC API**: Uses `experimental::Noc`, `experimental::UnicastEndpoint`, and `experimental::noc_traits_t` for structured NOC operations
+- **Structured Arguments**: Source and destination arguments are defined using structured `noc_traits_t` types
+
+### Device 2.0 Test Suites:
+- **One to One** (ID: 158): Device 2.0 version of packet sizes tests using experimental write API
+- **One From One** (ID: 159): Device 2.0 version of packet sizes tests using experimental read API
+
+Both API versions run the same test cases but use different underlying implementations. The device 2.0 tests serve as validation and performance comparison for the new experimental API.
+
 ## Tests in the Test Suite
 
 | Name                        | ID(s)                | Description                                                                             |
 | ----------                  | -----                | ----------------------------------------------------                                    |
 | DRAM Unary                  | 0-3                  | Transactions between DRAM and a single Tensix core.                                     |
-| One to One                  | 4, 50, 150-151       | Write transactions between two Tensix cores.                                            |
-| One From One                | 5, 51, 152-153       | Read transactions between two Tensix cores.                                             |
+| One to One                  | 4, 50, 150-151, 158  | Write transactions between two Tensix cores.                                            |
+| One From One                | 5, 51, 152-153, 159  | Read transactions between two Tensix cores.                                             |
 | One to all                  | 6-8, 52, 154-155     | Writes transaction from one core to all cores.                                          |
 | One to all Multicast        | 9-14, 53-54, 100-102 | Writes transaction from one core to all cores using multicast.                          |
 | One From All                | 15, 30, 156-157      | Read transactions between one gatherer Tensix core and multiple sender Tensix cores.    |

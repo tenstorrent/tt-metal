@@ -1346,6 +1346,51 @@ class ModelArgs:
             )
             logger.info(f"LM head grid: {self.lm_head_core_grid}")
 
+        self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
+
+    def get_trace_prefill_supported_seq_lens(self):
+        default_supported_seq_lens = {
+            "N150": [128, 256, 512],
+            "N300": [128, 256, 512, 1024],
+            "T3K": [128, 256, 512, 1024],
+            "TG": [128, 256, 512, 1024],
+        }
+
+        # TODO: If no specific sequence lengths are listed for a model and device, the default one will be used (from the default_supported_seq_lens dictionary)
+        model_specific_supported_seq_lens = {
+            "Llama-3.1-8B": {
+                "P100": [128, 256, 512, 1024],
+                "N150": [128, 256, 512, 1024],
+                "N300": [128, 256, 512, 1024, 2048, 4096, 8192],
+                "T3K": [128, 256, 512, 1024, 2048, 4096, 8192],
+                "TG": [128, 256, 512, 1024, 2048, 4096, 8192],
+            },
+            "Llama-3.1-70B": {
+                "T3K": [128, 256, 512, 1024, 2048, 4096, 8192],
+                "TG": [128, 256, 512, 1024, 2048, 4096, 8192],
+            },
+            "Llama-3.3-70B": {
+                "T3K": [128, 256, 512, 1024, 2048, 4096, 8192],
+                "TG": [128, 256, 512, 1024, 2048, 4096, 8192],
+            },
+        }
+
+        model_name = self.base_model_name
+        device_name = self.device_name
+
+        # Try model-specific sequence lengths first
+        result = model_specific_supported_seq_lens.get(model_name, {}).get(device_name)
+        if result:
+            return result
+
+        # Fall back to default sequence lengths
+        result = default_supported_seq_lens.get(device_name)
+        if result:
+            return result
+
+        # No supported sequence lengths found, return empty list
+        return []
+
     @staticmethod
     def __get_llama_local_params_name(model_name):
         if "3.2-1B" in model_name:
@@ -1837,17 +1882,17 @@ class ModelArgs:
         """
         # Trace in prefill is currently supported only for Llama-3.1-8B, Llama-3.1-70B, Llama-3.3-70B
         # TODO: (https://github.com/tenstorrent/tt-metal/issues/25722) Support all other models that use tt_transformers
-        if self.base_model_name not in ["Llama-3.1-8B", "Llama-3.1-70B", "Llama-3.3-70B"]:
-            return False
+
         if hasattr(self, "sliding_window") and getattr(self, "sliding_window") != None:
             return False
 
-        if self.device_name == "N150":
-            allowed_seq_lens = [128, 256, 512, 1024]
-        else:
-            allowed_seq_lens = [128, 256, 512, 1024, 2048, 4096, 8192]
+        allowed_seq_lens = self.trace_prefill_supported_seq_lens
 
-        return prefill_seq_len in allowed_seq_lens and prefill_seq_len <= self.max_prefill_chunk_size
+        return (
+            prefill_seq_len in allowed_seq_lens
+            and prefill_seq_len <= self.max_prefill_chunk_size
+            and prefill_seq_len <= self.max_seq_len
+        )
 
     def get_state_dict_prefix(self, module_name, layer_num, is_vision=False):
         text_prefix = self.state_dict_text_prefix
@@ -3031,7 +3076,18 @@ class DecodersPrecision:
             PrecisionSetting.BF16: ttnn.bfloat16,
             None: None,  # this signals that original dtype should be used
         }
-        return precision_setting_lookup[self.decoder_optimizations[decoder_id].tensor_dtype_settings[tensor]]
+        if (
+            decoder_id not in self.decoder_optimizations
+            or tensor not in self.decoder_optimizations[decoder_id].tensor_dtype_settings
+        ):
+            return None
+
+        key = self.decoder_optimizations[decoder_id].tensor_dtype_settings[tensor]
+
+        if key is None or key not in precision_setting_lookup:
+            return None
+
+        return precision_setting_lookup[key]
 
     def get_math_fidelity(self, decoder_id, op: OpGroup, configuration: ModelArgs):
         math_fidelity_setting_lookup = {
