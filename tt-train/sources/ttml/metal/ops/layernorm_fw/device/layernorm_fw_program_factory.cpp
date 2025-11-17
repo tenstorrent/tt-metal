@@ -201,7 +201,6 @@ LayerNormForwardProgramFactory::cached_program_t LayerNormForwardProgramFactory:
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     tt::tt_metal::IDevice* device = input.device();
 
-    tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     uint32_t bfloat16_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float16_b);
     uint32_t float32_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float32);
 
@@ -252,44 +251,60 @@ LayerNormForwardProgramFactory::cached_program_t LayerNormForwardProgramFactory:
     const uint32_t num_x_hat_tiles = (everything_fits_in_l1) ? Wt : twice_block_size;
     const uint32_t num_output_tiles = (everything_fits_in_l1) ? Wt : twice_block_size;
 
+    tt::DataFormat default_data_format = tt::DataFormat::Float16_b;
     // Input data CBs
     [[maybe_unused]] auto cb_scaler = create_circular_buffer(
-        program, all_cores, kScalerCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
+        program, all_cores, kScalerCbIndex, default_data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
     [[maybe_unused]] auto cb_mask_w = create_circular_buffer(
-        program, all_cores, kMaskWCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumMaskTiles);
+        program, all_cores, kMaskWCbIndex, default_data_format, bfloat16_single_tile_size_bytes, kNumMaskTiles);
     [[maybe_unused]] auto cb_eps = create_circular_buffer(
-        program, all_cores, kEpsCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumEpsTiles);
+        program, all_cores, kEpsCbIndex, default_data_format, bfloat16_single_tile_size_bytes, kNumEpsTiles);
     [[maybe_unused]] auto cb_gamma = create_circular_buffer(
-        program, all_cores, kGammaCbIndex, data_format, bfloat16_single_tile_size_bytes, num_gamma_tiles);
+        program, all_cores, kGammaCbIndex, default_data_format, bfloat16_single_tile_size_bytes, num_gamma_tiles);
     [[maybe_unused]] auto cb_beta = create_circular_buffer(
-        program, all_cores, kBetaCbIndex, data_format, bfloat16_single_tile_size_bytes, num_beta_tiles);
+        program, all_cores, kBetaCbIndex, default_data_format, bfloat16_single_tile_size_bytes, num_beta_tiles);
     [[maybe_unused]] auto cb_input = create_circular_buffer(
-        program, all_cores, kInputCbIndex, data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
+        program, all_cores, kInputCbIndex, default_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
 
     // Output CBs
     [[maybe_unused]] auto cb_output = create_circular_buffer(
-        program, all_cores, kOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, num_output_tiles);
+        program, all_cores, kOutputCbIndex, default_data_format, bfloat16_single_tile_size_bytes, num_output_tiles);
     if (return_mean_rstd) {
         [[maybe_unused]] auto cb_mean = create_circular_buffer(
-            program, all_cores, kMeanCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumMeanBcastTiles);
+            program, all_cores, kMeanCbIndex, default_data_format, bfloat16_single_tile_size_bytes, kNumMeanBcastTiles);
         [[maybe_unused]] auto cb_rstd = create_circular_buffer(
-            program, all_cores, kRstdCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumRstdBcastTiles);
+            program, all_cores, kRstdCbIndex, default_data_format, bfloat16_single_tile_size_bytes, kNumRstdBcastTiles);
     }
 
     // Intermediate computation CBs
     [[maybe_unused]] auto cb_sum = create_circular_buffer(
-        program, all_cores, kSumCbIndex, data_format, float32_single_tile_size_bytes, kNumSumTiles);
+        program, all_cores, kSumCbIndex, default_data_format, float32_single_tile_size_bytes, kNumSumTiles);
     [[maybe_unused]] auto cb_mean_bcast = create_circular_buffer(
-        program, all_cores, kMeanBcastCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumMeanBcastTiles);
+        program,
+        all_cores,
+        kMeanBcastCbIndex,
+        default_data_format,
+        bfloat16_single_tile_size_bytes,
+        kNumMeanBcastTiles);
     [[maybe_unused]] auto cb_variance_sum = create_circular_buffer(
-        program, all_cores, kVarianceSumCbIndex, data_format, float32_single_tile_size_bytes, kNumSumTiles);
+        program, all_cores, kVarianceSumCbIndex, default_data_format, float32_single_tile_size_bytes, kNumSumTiles);
     [[maybe_unused]] auto cb_rstd_bcast = create_circular_buffer(
-        program, all_cores, kRstdBcastCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumRstdBcastTiles);
+        program,
+        all_cores,
+        kRstdBcastCbIndex,
+        default_data_format,
+        bfloat16_single_tile_size_bytes,
+        kNumRstdBcastTiles);
     [[maybe_unused]] auto cb_x_hat = create_circular_buffer(
-        program, all_cores, kXHatCbIndex, data_format, bfloat16_single_tile_size_bytes, num_x_hat_tiles);
+        program, all_cores, kXHatCbIndex, default_data_format, bfloat16_single_tile_size_bytes, num_x_hat_tiles);
     // Intermediate CB for output computation (x_hat * gamma before adding beta)
     [[maybe_unused]] auto cb_output_intermediate = create_circular_buffer(
-        program, all_cores, kOutputIntermediateCbIndex, data_format, bfloat16_single_tile_size_bytes, block_size);
+        program,
+        all_cores,
+        kOutputIntermediateCbIndex,
+        default_data_format,
+        bfloat16_single_tile_size_bytes,
+        block_size);
 
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
