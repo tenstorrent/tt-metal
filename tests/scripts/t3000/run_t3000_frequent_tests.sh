@@ -41,11 +41,7 @@ run_t3000_llama3_tests() {
 
   # Run test model for llama3 - 1B, 3B, 8B and 11B weights
   for hf_model in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
-    if [[ "$hf_model" == "meta-llama/Llama-3.2-11B-Vision-Instruct" ]]; then
-      tt_cache=$TT_CACHE_HOME/$hf_model"_temp"
-    else
-      tt_cache=$TT_CACHE_HOME/$hf_model
-    fi
+    tt_cache=$TT_CACHE_HOME/$hf_model
     HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest -n auto models/tt_transformers/tests/test_model.py -k full ; fail+=$?
     HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest -n auto models/tt_transformers/tests/test_model_prefill.py ; fail+=$?
     echo "LOG_METAL: Llama3 tests for $hf_model completed"
@@ -95,7 +91,7 @@ run_t3000_llama3_90b_tests() {
 
   # Run test_model (decode and prefill) for llama3 70B
   llama90b=meta-llama/Llama-3.2-90B-Vision-Instruct
-  tt_cache_llama90b=$TT_CACHE_HOME/$llama90b"_temp"
+  tt_cache_llama90b=$TT_CACHE_HOME/$llama90b
   HF_MODEL=$llama90b TT_CACHE_PATH=$tt_cache_llama90b pytest -n auto models/tt_transformers/tests/test_model.py -k quick ; fail+=$?
   HF_MODEL=$llama90b TT_CACHE_PATH=$tt_cache_llama90b pytest -n auto models/tt_transformers/tests/test_model_prefill.py -k "performance and 1layer" ; fail+=$?
 
@@ -126,11 +122,7 @@ run_t3000_llama3_accuracy_tests() {
 
   # Run test accuracy llama3 - 1B, 3B, 8B, and 11B weights
   for hf_model in "$llama1b" "$llama3b" "$llama8b" "$llama11b" ; do
-    if [[ "$hf_model" == "meta-llama/Llama-3.2-11B-Vision-Instruct" ]]; then
-      tt_cache=$TT_CACHE_HOME/$hf_model"_temp"
-    else
-      tt_cache=$TT_CACHE_HOME/$hf_model
-    fi
+    tt_cache=$TT_CACHE_HOME/$hf_model
     HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-token-matching" ; fail+=$?
     echo "LOG_METAL: Llama3 accuracy tests for $hf_model completed"
   done
@@ -158,11 +150,7 @@ run_t3000_llama3_70n90b_accuracy_tests() {
 
   # Run test accuracy llama3 - 1B, 3B, 8B, 11B and 70B weights
   for hf_model in "$llama70b" "$llama90b"; do
-    if [[ "$hf_model" == "meta-llama/Llama-3.2-90B-Vision-Instruct" ]]; then
-      tt_cache=$TT_CACHE_HOME/$hf_model"_temp"
-    else
-      tt_cache=$TT_CACHE_HOME/$hf_model
-    fi
+    tt_cache=$TT_CACHE_HOME/$hf_model
     HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-token-matching" --timeout 4200 ; fail+=$?
     echo "LOG_METAL: Llama3 accuracy tests for $hf_model completed"
   done
@@ -185,7 +173,7 @@ run_t3000_llama3.2-11b-vision_freq_tests() {
 
   # Llama3.2-11B
   llama11b=meta-llama/Llama-3.2-11B-Vision-Instruct
-  tt_cache_llama11b=$TT_CACHE_HOME/$llama11b"_temp"
+  tt_cache_llama11b=$TT_CACHE_HOME/$llama11b
 
   HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b  pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_transformer.py ; fail+=$?
   HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_vision_encoder.py ; fail+=$?
@@ -210,7 +198,7 @@ run_t3000_spoof_n300_llama3.2-11b-vision_freq_tests() {
 
   # Llama3.2-11B
   llama11b=meta-llama/Llama-3.2-11B-Vision-Instruct
-  tt_cache_llama11b=$TT_CACHE_HOME/$llama11b"_temp"
+  tt_cache_llama11b=$TT_CACHE_HOME/$llama11b
   # Use MESH_DEVICE env variable to run on an N300 mesh
   mesh_device=N300
 
@@ -237,7 +225,7 @@ run_t3000_llama3.2-90b-vision_freq_tests() {
 
   # Llama3.2-90B -- use repacked weights when acceptable for faster testing
   llama90b=meta-llama/Llama-3.2-90B-Vision-Instruct
-  tt_cache_llama90b=$TT_CACHE_HOME/$llama90b"_temp"
+  tt_cache_llama90b=$TT_CACHE_HOME/$llama90b
   HF_MODEL=$llama90b TT_CACHE_PATH=$tt_cache_llama90b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_text.py --timeout 2400; fail+=$?
   HF_MODEL=$llama90b TT_CACHE_PATH=$tt_cache_llama90b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_transformer.py ; fail+=$?
   HF_MODEL=$llama90b TT_CACHE_PATH=$tt_cache_llama90b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_vision_encoder.py ; fail+=$?

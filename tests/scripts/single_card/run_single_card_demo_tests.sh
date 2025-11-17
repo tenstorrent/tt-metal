@@ -121,11 +121,7 @@ run_llama3_func() {
 
   # Run Llama3 accuracy tests for 1B, 3B, 8B, 11b weights
   for hf_model in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
-    if [[ "$hf_model" == "meta-llama/Llama-3.2-11B-Vision-Instruct" ]]; then
-      cache_path=$TT_CACHE_HOME/$hf_model"_temp"
-    else
-      cache_path=$TT_CACHE_HOME/$hf_model
-    fi
+    cache_path=$TT_CACHE_HOME/$hf_model
     HF_MODEL=$hf_model TT_CACHE_PATH=$cache_path pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k ci-token-matching  --timeout 420 || fail=1
     echo "LOG_METAL: Llama3 accuracy tests for $hf_model completed"
   done
@@ -262,11 +258,7 @@ run_llama3_perf() {
   done
   # Run all Llama3 tests for 1B, 3B, 8B and 11B weights
   for hf_model in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
-    if [[ "$hf_model" == "meta-llama/Llama-3.2-11B-Vision-Instruct" ]]; then
-      cache_path=$TT_CACHE_HOME/$hf_model"_temp"
-    else
-      cache_path=$TT_CACHE_HOME/$hf_model
-    fi
+    cache_path=$TT_CACHE_HOME/$hf_model
     HF_MODEL=$hf_model TT_CACHE_PATH=$cache_path pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1" || fail=1
     echo "LOG_METAL: Llama3 tests for $hf_model completed"
   done

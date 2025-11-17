@@ -109,7 +109,7 @@ run_t3000_llama3_perplexity_tests_single_card() {
   done
 
   # 11B test does not run on N150
-  tt_cache_llama11b=$TT_CACHE_HOME/$llama11b"_temp"
+  tt_cache_llama11b=$TT_CACHE_HOME/$llama11b
   MESH_DEVICE=N300 HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k ci-token-matching --timeout=4600 ; fail+=$?
 
   # Record the end time
@@ -153,21 +153,13 @@ run_t3000_llama3_perplexity_tests_t3000() {
 
   for MESH_DEVICE in T3K; do
     for hf_model in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
-      if [[ "$hf_model" == "meta-llama/Llama-3.2-11B-Vision-Instruct" ]]; then
-        tt_cache=$TT_CACHE_HOME/$hf_model"_temp"
-      else
-        tt_cache=$TT_CACHE_HOME/$hf_model
-      fi
+      tt_cache=$TT_CACHE_HOME/$hf_model
       MESH_DEVICE=$MESH_DEVICE HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k ci-token-matching --timeout=3600 ; fail+=$?
     done
 
     # 70B and 90B tests has the same configuration between `-k "attention-accuracy"` and `-k "attention-performance"` so we only run one of them
     for hf_model in "$llama70b" "$llama90b"; do
-      if [[ "$hf_model" == "meta-llama/Llama-3.2-90B-Vision-Instruct" ]]; then
-        tt_cache=$TT_CACHE_HOME/$hf_model"_temp"
-      else
-        tt_cache=$TT_CACHE_HOME/$hf_model
-      fi
+      tt_cache=$TT_CACHE_HOME/$hf_model
       MESH_DEVICE=$MESH_DEVICE HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-token-matching" --timeout=3600 ; fail+=$?
     done
   done
