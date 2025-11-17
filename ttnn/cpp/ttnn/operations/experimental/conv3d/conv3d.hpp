@@ -28,6 +28,7 @@ struct ExecuteConv3d {
         uint32_t groups,
         const std::optional<ttnn::Tensor>& bias_tensor,
         const Conv3dConfig& config,
+        const std::optional<ttnn::DataType> dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 };

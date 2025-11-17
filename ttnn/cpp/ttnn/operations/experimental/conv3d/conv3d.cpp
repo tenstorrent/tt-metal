@@ -28,6 +28,7 @@ ttnn::Tensor ExecuteConv3d::invoke(
     uint32_t groups,
     const std::optional<ttnn::Tensor>& bias_tensor,
     const Conv3dConfig& config,
+    const std::optional<ttnn::DataType> dtype,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -43,6 +44,7 @@ ttnn::Tensor ExecuteConv3d::invoke(
                    .padding_mode = padding_mode,
                    .groups = groups,
                    .config = config,
+                   .dtype = dtype,
                    .output_mem_config = memory_config.value_or(operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
                    .compute_kernel_config = kernel_config_val},
                {input_tensor, weight_tensor},

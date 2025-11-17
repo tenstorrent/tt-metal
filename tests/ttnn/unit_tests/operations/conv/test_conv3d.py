@@ -71,7 +71,6 @@ def create_conv3d_config(
 ):
     """Create Conv3d configuration."""
     return ttnn.Conv3dConfig(
-        dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat16,
         output_layout=ttnn.ROW_MAJOR_LAYOUT,
         T_out_block=T_out_block,
@@ -145,6 +144,7 @@ def run_conv3d_test(device, input_shape, out_channels, kernel_size, stride, padd
         stride=stride,
         padding=padding,
         padding_mode=padding_mode,
+        dtype=ttnn.bfloat16,
         groups=1,
         config=config,
         compute_kernel_config=kernel_config,

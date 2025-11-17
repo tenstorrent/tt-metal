@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from numpy import dtype
 from loguru import logger
 import torch
 import pytest
@@ -113,6 +114,7 @@ def test_conv3d_sweep_blocks(device, input_shape, out_channels, kernel_size, str
             stride=stride,
             padding=padding,
             padding_mode=padding_mode,
+            dtype=ttnn.bfloat16,
             groups=1,
             config=config,
             compute_kernel_config=kernel_config,
@@ -214,6 +216,7 @@ def test_conv3d_mochi_shapes(
         stride=stride,
         padding=padding,
         padding_mode=padding_mode,
+        dtype=ttnn.bfloat16,
         groups=1,
         config=config,
         compute_kernel_config=kernel_config,

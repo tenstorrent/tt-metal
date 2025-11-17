@@ -61,6 +61,7 @@ void py_bind_conv3d(py::module& module) {
                const std::optional<uint32_t>& groups,
                const std::optional<ttnn::Tensor>& bias_tensor,
                const Conv3dConfig& config,
+               const std::optional<ttnn::DataType>& dtype,
                const std::optional<const MemoryConfig>& memory_config,
                const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
                 return self(
@@ -75,6 +76,7 @@ void py_bind_conv3d(py::module& module) {
                     groups.value_or(1u),
                     bias_tensor,
                     config,
+                    dtype,
                     memory_config,
                     compute_kernel_config);
             },
@@ -90,6 +92,7 @@ void py_bind_conv3d(py::module& module) {
             py::arg("groups") = std::nullopt,
             py::arg("bias_tensor") = std::nullopt,
             py::arg("config"),
+            py::arg("dtype") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("compute_kernel_config") = std::nullopt});
 
@@ -102,9 +105,8 @@ void py_bind_conv3d(py::module& module) {
                             )doc")
             .def(py::init<>())
             .def(
-                py::init<DataType, DataType, Layout, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, CoreCoord>(),
+                py::init<DataType, Layout, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, CoreCoord>(),
                 py::kw_only(),
-                py::arg("dtype") = DataType::BFLOAT16,
                 py::arg("weights_dtype") = DataType::BFLOAT16,
                 py::arg("output_layout") = Layout::ROW_MAJOR,
                 py::arg("T_out_block") = 1,
@@ -114,7 +116,6 @@ void py_bind_conv3d(py::module& module) {
                 py::arg("C_in_block") = 0,
                 py::arg("compute_with_storage_grid_size") = CoreCoord{1, 1});
 
-    py_conv3d_config.def_readwrite("dtype", &Conv3dConfig::dtype, "");
     py_conv3d_config.def_readwrite("weights_dtype", &Conv3dConfig::weights_dtype, "");
     py_conv3d_config.def_readwrite("output_layout", &Conv3dConfig::output_layout, "");
     py_conv3d_config.def_readwrite("T_out_block", &Conv3dConfig::T_out_block, "");

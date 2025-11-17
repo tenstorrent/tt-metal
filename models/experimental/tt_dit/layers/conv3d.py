@@ -31,7 +31,6 @@ def get_conv3d_config(in_channels, grid_size):
     else:
         C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = blocking
     return ttnn.Conv3dConfig(
-        dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat16,
         output_layout=ttnn.ROW_MAJOR_LAYOUT,
         T_out_block=T_out_block,
@@ -243,6 +242,7 @@ class ContextParallelConv3d:
             stride=self.stride,
             padding=self.padding,
             padding_mode=self.padding_mode,
+            dtype=ttnn.bfloat16,
             groups=self.groups,
             config=self.conv_config,
             compute_kernel_config=self.compute_kernel_config,

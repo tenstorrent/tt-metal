@@ -18,6 +18,7 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
     const std::array<uint32_t, 3>& padding,
     const std::string& padding_mode,
     uint32_t groups,
+    const std::optional<tt::tt_metal::DataType> dtype,
     const Conv3dConfig& config,
     const Tensor& output_tensor,
     const DeviceComputeKernelConfig& compute_kernel_config);

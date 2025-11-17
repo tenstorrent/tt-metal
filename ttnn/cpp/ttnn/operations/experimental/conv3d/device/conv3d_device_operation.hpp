@@ -27,7 +27,6 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_output_dims(
 
 struct Conv3dConfig {
     Conv3dConfig(
-        tt::tt_metal::DataType dtype_ = tt::tt_metal::DataType::BFLOAT16,
         tt::tt_metal::DataType weights_dtype_ = tt::tt_metal::DataType::BFLOAT16,
         tt::tt_metal::Layout output_layout_ = tt::tt_metal::Layout::ROW_MAJOR,
         uint32_t T_out_block_ = 1,
@@ -36,7 +35,6 @@ struct Conv3dConfig {
         uint32_t C_out_block_ = 0,
         uint32_t C_in_block_ = 0,
         CoreCoord compute_with_storage_grid_size_ = {1, 1}) :
-        dtype(dtype_),
         weights_dtype(weights_dtype_),
         output_layout(output_layout_),
         T_out_block(T_out_block_),
@@ -46,7 +44,6 @@ struct Conv3dConfig {
         C_in_block(C_in_block_),
         compute_with_storage_grid_size(compute_with_storage_grid_size_) {}
 
-    tt::tt_metal::DataType dtype;
     tt::tt_metal::DataType weights_dtype;
     tt::tt_metal::Layout output_layout;
     uint32_t T_out_block;
@@ -57,7 +54,6 @@ struct Conv3dConfig {
     CoreCoord compute_with_storage_grid_size;
 
     static constexpr auto attribute_names = std::make_tuple(
-        "dtype",
         "weights_dtype",
         "output_layout",
         "T_out_block",
@@ -69,7 +65,6 @@ struct Conv3dConfig {
 
     auto attribute_values() const {
         return std::forward_as_tuple(
-            this->dtype,
             this->weights_dtype,
             this->output_layout,
             this->T_out_block,
@@ -90,6 +85,7 @@ struct Conv3dOp {
     std::string padding_mode;
     uint32_t groups;
     Conv3dConfig config;
+    std::optional<tt::tt_metal::DataType> dtype;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
 

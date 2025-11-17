@@ -171,7 +171,7 @@ std::vector<TensorSpec> Conv3dOp::compute_output_specs(const std::vector<Tensor>
     ttnn::Shape output_shape({N, T_out, H_out, W_out, C_out});
 
     const auto& memory_config = input_tensor_a.memory_config();
-    auto dtype = input_tensor_a.dtype();
+    auto dtype = this->dtype.value_or(input_tensor_a.dtype());
 
     return {TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::ROW_MAJOR), memory_config))};
 }
@@ -194,6 +194,7 @@ tt::tt_metal::operation::ProgramWithCallbacks Conv3dOp::create_program(
         this->padding,
         this->padding_mode,
         this->groups,
+        this->dtype,
         config,
         output_tensor,
         compute_kernel_config);
