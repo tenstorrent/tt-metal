@@ -38,7 +38,6 @@ constexpr uint32_t start_distance_in_hops_backward = get_compile_time_arg_val(11
 constexpr uint32_t range_hops_backward = get_compile_time_arg_val(12);
 
 inline constexpr uint32_t sharded_args_start_idx = 13;
-constexpr auto dst_buffer_args = TensorAccessorArgs<sharded_args_start_idx>();
 
 /*
  * CCL Send will present various operating modes. Although there is only a single send kernel, it may (compile time)

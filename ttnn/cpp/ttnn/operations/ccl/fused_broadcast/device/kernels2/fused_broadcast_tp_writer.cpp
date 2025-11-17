@@ -69,25 +69,6 @@ void kernel_main() {
     const uint32_t num_connections = get_arg_val<uint32_t>(arg_idx++);
     size_t fabric_arg_idx = arg_idx;
 
-    // Runtime args
-    uint32_t rt_args_idx = 0;
-
-    // P2P receiver writer args
-    const uint32_t eth_receiver_l1_base_addr = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t eth_receiver_l1_sem_addr = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t eth_receiver_noc_x = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t eth_receiver_noc_y = get_arg_val<uint32_t>(rt_args_idx++);
-
-    // Output tensor accessor
-    tt_l1_ptr uint32_t* output_tensor_addr = (tt_l1_ptr uint32_t*)(get_arg_val<uint32_t>(rt_args_idx++));
-
-    // Debug: Print runtime args
-    DPRINT << "TP WRITER: P2P receiver - l1_base=" << (uint32_t)eth_receiver_l1_base_addr
-           << " l1_sem=" << (uint32_t)eth_receiver_l1_sem_addr << ENDL();
-    DPRINT << "TP WRITER: P2P receiver - noc_x=" << (uint32_t)eth_receiver_noc_x
-           << " noc_y=" << (uint32_t)eth_receiver_noc_y << ENDL();
-    DPRINT << "TP WRITER: output_tensor_addr=" << (uint32_t)output_tensor_addr << ENDL();
-
     // Debug: Print compile-time args
     DPRINT << "TP WRITER: cb_id_in=" << (uint32_t)cb_id_in
            << ", packet_size_in_pages=" << (uint32_t)packet_size_in_pages << ", page_size=" << (uint32_t)page_size
@@ -117,7 +98,7 @@ void kernel_main() {
     DPRINT << "TP WRITER: num_connections=" << (uint32_t)num_connections << ENDL();
 
     // Setup local tensor accessor (P2P writer part)
-    constexpr auto local_tensor_args = TensorAccessorArgs<0>();
+    constexpr auto local_tensor_args = TensorAccessorArgs<10>();
     const auto local_tensor_accessor = TensorAccessor(local_tensor_args, local_tensor_addr, page_size);
 
     // Setup broadcast fabric connection and tensor accessor
@@ -125,29 +106,30 @@ void kernel_main() {
     auto scatter_route_id = PacketHeaderPool::allocate_header_n(num_connections);
     auto sem_route_id = PacketHeaderPool::allocate_header_n(num_connections);
     tt::tt_fabric::RoutingPlaneConnectionManager fabric_connection;
+    /*
+    #ifdef SHARDED
+        typedef ShardedInfo<
+            get_compile_time_arg_val(sharded_args_start_idx),
+            get_compile_time_arg_val(sharded_args_start_idx + 1),
+            get_compile_time_arg_val(sharded_args_start_idx + 2),
+            get_compile_time_arg_val(sharded_args_start_idx + 3),
+            get_compile_time_arg_val(sharded_args_start_idx + 4),
+            get_compile_time_arg_val(sharded_args_start_idx + 5),
+            get_compile_time_arg_val(sharded_args_start_idx + 6)>
+            tensor_shard_info;
 
-#ifdef SHARDED
-    typedef ShardedInfo<
-        get_compile_time_arg_val(sharded_args_start_idx),
-        get_compile_time_arg_val(sharded_args_start_idx + 1),
-        get_compile_time_arg_val(sharded_args_start_idx + 2),
-        get_compile_time_arg_val(sharded_args_start_idx + 3),
-        get_compile_time_arg_val(sharded_args_start_idx + 4),
-        get_compile_time_arg_val(sharded_args_start_idx + 5),
-        get_compile_time_arg_val(sharded_args_start_idx + 6)>
-        tensor_shard_info;
-
-    const auto [mapping_table, rt_increment] =
-        experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(fabric_arg_idx));
-    experimental::ShardedAddrGen<tensor_shard_info> broadcast_tensor_addrgen = {
-        .bank_base_address = broadcast_tensor_addr, .shard_array = mapping_table};
-    size_t fab_idx = fabric_arg_idx + rt_increment;
-    open_connections(fabric_connection, num_connections, fab_idx);
-#else
-    constexpr auto broadcast_tensor_args = TensorAccessorArgs<sharded_args_start_idx>();
+        const auto [mapping_table, rt_increment] =
+            experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(fabric_arg_idx));
+        experimental::ShardedAddrGen<tensor_shard_info> broadcast_tensor_addrgen = {
+            .bank_base_address = broadcast_tensor_addr, .shard_array = mapping_table};
+        size_t fab_idx = fabric_arg_idx + rt_increment;
+        open_connections(fabric_connection, num_connections, fab_idx);
+    */
+    // #else
+    constexpr auto broadcast_tensor_args = TensorAccessorArgs<10>();
     auto broadcast_tensor_addrgen = TensorAccessor(broadcast_tensor_args, broadcast_tensor_addr, page_size);
     open_connections(fabric_connection, num_connections, fabric_arg_idx);
-#endif
+    // #endif
 
     // Setup broadcast fabric routing
     uint8_t starts[] = {

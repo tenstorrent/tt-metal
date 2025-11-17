@@ -14,8 +14,7 @@
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
-#include "ttnn/operations/point_to_point/device/kernels/dataflow/common.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/heterogeneous_data_structs.hpp"
+#include "ttnn/operations/point_to_point/device/kernels/common.hpp"
 
 using tt::data_movement::common::round_up;
 using tt::data_movement::common::tt_memmove;
@@ -69,7 +68,7 @@ void kernel_main() {
     size_t arg_idx = 0;
 
     // SP fabric arg start index (passed from program factory)
-    const size_t sp_fabric_arg_start = get_arg_val<uint32_t>(arg_idx++);
+    size_t sp_fabric_arg_start = get_arg_val<uint32_t>(arg_idx++);
 
     // P2P Phase arguments (TP horizontal)
     const uint32_t tp_receiver_base_address = get_arg_val<uint32_t>(arg_idx++);
@@ -241,28 +240,30 @@ void kernel_main() {
     auto sp_sem_route_id = PacketHeaderPool::allocate_header_n(sp_num_connections);
     tt::tt_fabric::RoutingPlaneConnectionManager sp_fabric_connection;
     // SP Broadcast tensor setup
-#ifdef SHARDED
-    typedef ShardedInfo<
-        get_compile_time_arg_val(20),
-        get_compile_time_arg_val(21),
-        get_compile_time_arg_val(22),
-        get_compile_time_arg_val(23),
-        get_compile_time_arg_val(24),
-        get_compile_time_arg_val(25),
-        get_compile_time_arg_val(26)>
-        sp_tensor_shard_info;
-    const auto [sp_mapping_table, sp_rt_increment] =
-        experimental::shard_addr_gen_utils::get_shard_map<sp_tensor_shard_info>(get_arg_addr(sp_fabric_arg_start));
-    experimental::ShardedAddrGen<sp_tensor_shard_info> sp_tensor_addrgen = {
-        .bank_base_address = sp_tensor_address, .shard_array = sp_mapping_table};
-    size_t sp_fab_idx = sp_fabric_arg_start + sp_rt_increment;
-    open_connections(sp_fabric_connection, sp_num_connections, sp_fab_idx);
-#else
-    constexpr auto sp_tensor_args = TensorAccessorArgs<20>();
+    /*
+    #ifdef SHARDED
+        typedef ShardedInfo<
+            get_compile_time_arg_val(20),
+            get_compile_time_arg_val(21),
+            get_compile_time_arg_val(22),
+            get_compile_time_arg_val(23),
+            get_compile_time_arg_val(24),
+            get_compile_time_arg_val(25),
+            get_compile_time_arg_val(26)>
+            sp_tensor_shard_info;
+        const auto [sp_mapping_table, sp_rt_increment] =
+            experimental::shard_addr_gen_utils::get_shard_map<sp_tensor_shard_info>(get_arg_addr(sp_fabric_arg_start));
+        experimental::ShardedAddrGen<sp_tensor_shard_info> sp_tensor_addrgen = {
+            .bank_base_address = sp_tensor_address, .shard_array = sp_mapping_table};
+        size_t sp_fab_idx = sp_fabric_arg_start + sp_rt_increment;
+        open_connections(sp_fabric_connection, sp_num_connections, sp_fab_idx);
+    */
+    // #else
+    constexpr auto sp_tensor_args = dst_buffer_args;  // TensorAccessorArgs<20>();
     auto sp_tensor_addrgen = TensorAccessor(sp_tensor_args, sp_tensor_address, page_size);
     open_connections(sp_fabric_connection, sp_num_connections, sp_fabric_arg_start);
-#endif
-    // SP Broadcast routing setup (vertical - down column)
+    // #endif
+    //  SP Broadcast routing setup (vertical - down column)
     uint8_t sp_starts[] = {
         static_cast<uint8_t>(start_distance_in_hops_forward), static_cast<uint8_t>(start_distance_in_hops_backward)};
     uint8_t sp_ranges[] = {static_cast<uint8_t>(range_hops_forward), static_cast<uint8_t>(range_hops_backward)};

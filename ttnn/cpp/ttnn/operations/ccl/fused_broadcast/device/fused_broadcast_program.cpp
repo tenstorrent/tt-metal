@@ -112,41 +112,6 @@ tt::tt_metal::operation::ProgramWithCallbacks fused_broadcast_multicore(
             ? fmt::format("({}, {})", sp_backward_coord.value()[0], sp_backward_coord.value()[1])
             : "None");
 
-    // Debug print for role determination
-    printf(
-        "DEVICE ROLE DEBUG: Device ID=%d, coord=(%d,%d), root_coord=(%d,%d)\n",
-        device->id(),
-        device_coord[0],
-        device_coord[1],
-        root_coord[0],
-        root_coord[1]);
-    printf("  is_root check: device_coord == root_coord ? %s\n", (device_coord == root_coord) ? "TRUE" : "FALSE");
-    if (tp_forward_coord.has_value()) {
-        printf(
-            "  tp_forward_coord exists: (%d,%d), equals root? %s\n",
-            tp_forward_coord.value()[0],
-            tp_forward_coord.value()[1],
-            (tp_forward_coord.value() == root_coord) ? "TRUE" : "FALSE");
-    } else {
-        printf("  tp_forward_coord: NONE\n");
-    }
-    if (tp_backward_coord.has_value()) {
-        printf(
-            "  tp_backward_coord exists: (%d,%d), equals root? %s\n",
-            tp_backward_coord.value()[0],
-            tp_backward_coord.value()[1],
-            (tp_backward_coord.value() == root_coord) ? "TRUE" : "FALSE");
-    } else {
-        printf("  tp_backward_coord: NONE\n");
-    }
-
-    printf(
-        "Device: %d, device_coord=(%d,%d), mesh_shape=(%d,%d)\n",
-        device->id(),
-        device_coord[0],
-        device_coord[1],
-        mesh_shape[0],
-        mesh_shape[1]);
     // Validate device coordinates are within mesh bounds
     TT_FATAL(
         device_coord[0] < mesh_shape[0] && device_coord[1] < mesh_shape[1],
@@ -156,13 +121,6 @@ tt::tt_metal::operation::ProgramWithCallbacks fused_broadcast_multicore(
         mesh_shape[0],
         mesh_shape[1]);
 
-    // Determine device role in the fused broadcast
-    printf(
-        "device coord vs root coord: (%d,%d) vs (%d,%d)\n",
-        device_coord[0],
-        device_coord[1],
-        root_coord[0],
-        root_coord[1]);
     bool is_root = (device_coord == root_coord);
     bool is_tp_partner = false;
     bool is_receiver = false;
@@ -322,6 +280,7 @@ tt::tt_metal::operation::ProgramWithCallbacks fused_broadcast_multicore(
         1,                                      // start_distance_in_hops_backward
         mesh_shape[sp_axis] - 1                 // range_hops_backward
     };
+    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(tp_writer_compile_args);
 
     // Receiver reader compile args: empty since receiver reader is empty (fabric writes directly)
     receiver_reader_compile_args = {};
@@ -347,8 +306,10 @@ tt::tt_metal::operation::ProgramWithCallbacks fused_broadcast_multicore(
     // Debug: Print all compile-time arguments for verification
     printf("=== FUSED BROADCAST COMPILE-TIME ARGS DEBUG ===\n");
     printf(
-        "Device: %d, is_root: %d, is_tp_partner: %d, is_receiver: %d\n",
+        "Device: %d, coord=(%d,%d), is_root: %d, is_tp_partner: %d, is_receiver: %d\n",
         device->id(),
+        device_coord[0],
+        device_coord[1],
         is_root,
         is_tp_partner,
         is_receiver);
@@ -645,8 +606,10 @@ tt::tt_metal::operation::ProgramWithCallbacks fused_broadcast_multicore(
     // Debug: Print runtime arguments
     printf("=== FUSED BROADCAST RUNTIME ARGS DEBUG ===\n");
     printf(
-        "Device: %d, is_root: %d, is_tp_partner: %d, is_receiver: %d\n",
+        "Device: %d, coord=(%d,%d), is_root: %d, is_tp_partner: %d, is_receiver: %d\n",
         device->id(),
+        device_coord[0],
+        device_coord[1],
         is_root,
         is_tp_partner,
         is_receiver);

@@ -143,14 +143,16 @@ def run_fused_broadcast_impl(
 @pytest.mark.parametrize(
     "root_coord, output_shape, layout, input_dtype, mem_config",
     [
-        ((0, 1), [1, 1, 1, 1024], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG),
+        ((1, 0), [1, 1, 1, 1024], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG),
         # ((4, 2), (2, 0), [1, 1, 64, 64], ttnn.TILE_LAYOUT, ttnn.bfloat16, ttnn.L1_MEMORY_CONFIG),
         # ((4, 2), (1, 1), [2, 1, 32, 64], ttnn.TILE_LAYOUT, ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG),
     ],
 )
 @pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
 @pytest.mark.parametrize("num_iters", [1])
-@pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["t3k"], indirect=True)
+@pytest.mark.parametrize("mesh_shape", [(4, 2)])
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [pytest.param((4, 2), id="4x2_grid")], indirect=True)
 def test_fused_broadcast(
     mesh_shape,
     root_coord,

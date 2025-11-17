@@ -6,7 +6,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
-#include "../common.hpp"
+#include "ttnn/operations/point_to_point/device/kernels/common.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 
 using tt::data_movement::common::tt_memmove;
@@ -31,19 +31,6 @@ void kernel_main() {
     const uint8_t sender_num_hops = get_arg_val<uint32_t>(8);
     const bool sender_is_forward = get_arg_val<uint32_t>(9);
 
-    // Runtime args
-    uint32_t rt_args_idx = 0;
-    const uint32_t eth_receiver_l1_base_addr = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t eth_receiver_l1_sem_addr = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t eth_receiver_noc_x = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t eth_receiver_noc_y = get_arg_val<uint32_t>(rt_args_idx++);
-
-    // Debug: Print runtime args
-    DPRINT << "TP READER: P2P receiver - l1_base=" << (uint32_t)eth_receiver_l1_base_addr
-           << " l1_sem=" << (uint32_t)eth_receiver_l1_sem_addr << ENDL();
-    DPRINT << "TP READER: P2P receiver - noc_x=" << (uint32_t)eth_receiver_noc_x
-           << " noc_y=" << (uint32_t)eth_receiver_noc_y << ENDL();
-
     // Debug: Print compile-time args
     DPRINT << "TP READER: packet_header_cb_id=" << (uint32_t)packet_header_cb_id
            << ", packet_cb_id=" << (uint32_t)packet_cb_id << ", receiver_cb_id=" << (uint32_t)receiver_cb_id << ENDL();
@@ -61,7 +48,7 @@ void kernel_main() {
            << ENDL();
 
     // reusing the last arg for fabric setup, therefore index overlaps.
-    size_t conn_arg_idx = 9;
+    size_t conn_arg_idx = 10;
 
     auto fabric_connection = FabricConnectionManager::build_from_args<
         FabricConnectionManager::BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION_START_ONLY>(conn_arg_idx);
