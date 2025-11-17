@@ -12,7 +12,7 @@ from models.experimental.panoptic_deeplab.reference.pytorch_model import DEEPLAB
     [
         (
             "pytest models/experimental/panoptic_deeplab/tests/pcc/test_tt_model.py::test_model_panoptic_deeplab -k test_panoptic_deeplab",
-            31_016_904,
+            30_539_964,
             PANOPTIC_DEEPLAB,
             PANOPTIC_DEEPLAB,
             1,
