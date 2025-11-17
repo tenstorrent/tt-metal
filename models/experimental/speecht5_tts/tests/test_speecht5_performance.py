@@ -458,14 +458,242 @@ def test_speecht5_full_pipeline_performance_2_tokens(device):
     return results
 
 
+def test_memory_allocation_strategies(device):
+    """
+    Test and compare memory allocation strategies:
+    1. Pre-allocate in DRAM, then move to L1 when needed
+    2. Allocate directly to L1 during inference
+
+    This helps determine the optimal approach for tensor allocation in inference loops.
+    """
+    import time
+    import torch
+
+    logger.info("\n" + "=" * 80)
+    logger.info("MEMORY ALLOCATION STRATEGY COMPARISON TEST")
+    logger.info("=" * 80)
+
+    # Test parameters
+    batch_size = 1
+    seq_len = 50  # Moderate sequence length
+    hidden_size = 768  # SpeechT5 hidden size
+    num_iterations = 100  # Multiple iterations for stable timing
+
+    results = {"dram_prealloc_l1_move": [], "direct_l1_alloc": []}
+
+    logger.info(f"Testing with tensor shape: [{batch_size}, {seq_len}, {hidden_size}]")
+    logger.info(f"Running {num_iterations} iterations per strategy...")
+
+    # ============================================================================
+    # STRATEGY 1: Pre-allocate in DRAM (during init), then move to L1 during inference
+    # ============================================================================
+    logger.info("\n🟡 Testing DRAM pre-allocation + L1 move strategy...")
+
+    # Pre-allocate large buffer in DRAM (simulating init time - NOT measured)
+    logger.info("   Pre-allocating DRAM buffer (simulating model init)...")
+    dram_buffer = ttnn.from_torch(
+        torch.randn(batch_size, seq_len, hidden_size),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    logger.info("   DRAM buffer ready. Now measuring inference-time operations...")
+
+    for i in range(num_iterations):
+        # Only measure inference-time operations (DRAM-to-L1 transfer + computation)
+        start_time = time.time()
+
+        # Simulate inference: move from DRAM to L1 when needed
+        l1_tensor = ttnn.to_memory_config(dram_buffer, ttnn.L1_MEMORY_CONFIG)
+
+        # Simulate some computation (simple addition)
+        result = ttnn.add(l1_tensor, l1_tensor)
+
+        # Ensure result is in L1 (as would happen in real inference)
+        result = ttnn.to_memory_config(result, ttnn.L1_MEMORY_CONFIG)
+
+        ttnn.synchronize_device(device)  # Ensure operations complete
+        end_time = time.time()
+
+        results["dram_prealloc_l1_move"].append(end_time - start_time)
+
+        # Cleanup for next iteration (only L1 tensors, DRAM buffer persists)
+        ttnn.deallocate(l1_tensor)
+        ttnn.deallocate(result)
+
+    ttnn.deallocate(dram_buffer)
+
+    # ============================================================================
+    # STRATEGY 2: Allocate directly to L1 during inference
+    # ============================================================================
+    logger.info("\n🟠 Testing direct L1 allocation strategy...")
+
+    for i in range(num_iterations):
+        start_time = time.time()
+
+        # Simulate inference: allocate directly to L1
+        l1_tensor = ttnn.from_torch(
+            torch.randn(batch_size, seq_len, hidden_size),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+
+        # Simulate some computation (simple addition)
+        result = ttnn.add(l1_tensor, l1_tensor)
+
+        # Ensure result is in L1
+        result = ttnn.to_memory_config(result, ttnn.L1_MEMORY_CONFIG)
+
+        ttnn.synchronize_device(device)  # Ensure operations complete
+        end_time = time.time()
+
+        results["direct_l1_alloc"].append(end_time - start_time)
+
+        # Cleanup for next iteration
+        ttnn.deallocate(l1_tensor)
+        ttnn.deallocate(result)
+
+    # ============================================================================
+    # ANALYSIS AND RESULTS
+    # ============================================================================
+
+    # Calculate statistics
+    def calc_stats(times):
+        return {
+            "mean": sum(times) / len(times),
+            "min": min(times),
+            "max": max(times),
+            "std": (sum((t - sum(times) / len(times)) ** 2 for t in times) / len(times)) ** 0.5,
+        }
+
+    dram_stats = calc_stats(results["dram_prealloc_l1_move"])
+    l1_stats = calc_stats(results["direct_l1_alloc"])
+
+    # Calculate relative performance
+    dram_mean = dram_stats["mean"]
+    l1_mean = l1_stats["mean"]
+    faster_strategy = "DRAM+L1" if dram_mean < l1_mean else "Direct L1"
+    speedup = max(dram_mean, l1_mean) / min(dram_mean, l1_mean)
+
+    logger.info("\n" + "=" * 80)
+    logger.info("RESULTS SUMMARY")
+    logger.info("=" * 80)
+
+    logger.info(
+        f"Tensor shape: [{batch_size}, {seq_len}, {hidden_size}] ({seq_len * hidden_size * 2 / 1024:.1f} KB per tensor)"
+    )
+    logger.info(f"Iterations: {num_iterations}")
+
+    logger.info(f"\n📊 DRAM Pre-alloc + L1 Move:")
+    logger.info(f"   Mean: {dram_stats['mean']:.6f}s ± {dram_stats['std']:.6f}s")
+    logger.info(f"   Range: {dram_stats['min']:.6f}s - {dram_stats['max']:.6f}s")
+
+    logger.info(f"\n📊 Direct L1 Allocation:")
+    logger.info(f"   Mean: {l1_stats['mean']:.6f}s ± {l1_stats['std']:.6f}s")
+    logger.info(f"   Range: {l1_stats['min']:.6f}s - {l1_stats['max']:.6f}s")
+
+    logger.info(f"\n🏆 WINNER: {faster_strategy} strategy")
+    logger.info(f"   Speedup: {speedup:.2f}x {'faster' if speedup > 1.01 else 'slower'}")
+
+    # Memory usage analysis
+    tensor_size_kb = seq_len * hidden_size * 2 / 1024  # bfloat16 = 2 bytes
+
+    logger.info(f"\n💾 Memory Usage Analysis:")
+    logger.info(f"   Tensor size: {tensor_size_kb:.1f} KB")
+    logger.info(f"   DRAM strategy: Pre-allocates {tensor_size_kb:.1f} KB in DRAM during init")
+    logger.info(f"   L1 strategy: Allocates {tensor_size_kb:.1f} KB in L1 per inference call")
+    logger.info(f"\n⏱️  Timing Breakdown:")
+    logger.info(f"   DRAM strategy measures: DRAM→L1 transfer + computation")
+    logger.info(f"   L1 strategy measures: L1 allocation + computation")
+
+    # Recommendations
+    logger.info(f"\n💡 RECOMMENDATIONS:")
+    if dram_mean < l1_mean:
+        logger.info(f"   ✅ DRAM pre-allocation + L1 inference-time move is faster ({speedup:.2f}x)")
+        logger.info(f"   ✅ Use for large buffers that need frequent L1 access")
+        logger.info(f"   ✅ DRAM allocation cost paid once during init")
+    else:
+        logger.info(f"   ✅ Direct L1 allocation is faster ({speedup:.2f}x)")
+        logger.info(f"   ✅ Use when L1 memory is plentiful")
+        logger.info(f"   ✅ Avoids DRAM-L1 transfer overhead entirely")
+
+    # Performance threshold check
+    min_acceptable_time = 0.001  # 1ms
+    if dram_stats["mean"] < min_acceptable_time and l1_stats["mean"] < min_acceptable_time:
+        logger.info(f"   ✅ Both strategies meet performance target (< {min_acceptable_time*1000:.0f}ms)")
+    else:
+        logger.info(f"   ⚠️  Performance below target ({min_acceptable_time*1000:.0f}ms) - investigate memory config")
+
+    # Store detailed results for external analysis
+    detailed_results = {
+        "test_config": {
+            "batch_size": batch_size,
+            "seq_len": seq_len,
+            "hidden_size": hidden_size,
+            "num_iterations": num_iterations,
+            "tensor_size_kb": tensor_size_kb,
+        },
+        "dram_prealloc_l1_move": {"times": results["dram_prealloc_l1_move"], "stats": dram_stats},
+        "direct_l1_alloc": {"times": results["direct_l1_alloc"], "stats": l1_stats},
+        "comparison": {
+            "faster_strategy": faster_strategy,
+            "speedup": speedup,
+            "dram_vs_l1_ratio": dram_mean / l1_mean if l1_mean > 0 else float("inf"),
+        },
+    }
+
+    import json
+
+    results_file = "/tmp/memory_allocation_test_results.json"
+    with open(results_file, "w") as f:
+        json.dump(detailed_results, f, indent=2)
+    logger.info(f"\n📄 Detailed results saved to {results_file}")
+
+    return detailed_results
+
+
+@pytest.mark.parametrize("device", [run_for_wormhole_b0()], indirect=True)
+def test_memory_allocation_performance_comparison(device):
+    """Pytest wrapper for memory allocation strategy comparison."""
+    results = test_memory_allocation_strategies(device)
+
+    # Basic assertions to ensure test ran properly
+    assert len(results["dram_prealloc_l1_move"]["times"]) == results["test_config"]["num_iterations"]
+    assert len(results["direct_l1_alloc"]["times"]) == results["test_config"]["num_iterations"]
+
+    # Ensure both strategies completed in reasonable time (< 1 second per iteration)
+    assert results["dram_prealloc_l1_move"]["stats"]["mean"] < 1.0
+    assert results["direct_l1_alloc"]["stats"]["mean"] < 1.0
+
+    logger.info("Memory allocation performance test passed!")
+
+    return results
+
+
 if __name__ == "__main__":
     # Allow running standalone for quick testing
     import ttnn
 
-    device = ttnn.open_device(device_id=0, l1_small_size=24576)
+    device = ttnn.open_device(device_id=0, l1_small_size=50000)  # Increased for memory test
     try:
-        results = test_speecht5_full_pipeline_performance_2_tokens(device)
+        # Run memory allocation strategy comparison first
+        print("Running memory allocation strategy comparison test...")
+        memory_results = test_memory_allocation_strategies(device)
+        print("\nMemory allocation test completed!")
+
+        # Then run the existing performance test
+        print("\nRunning full pipeline performance test...")
+        perf_results = test_speecht5_full_pipeline_performance_2_tokens(device)
         print("\n2-token full pipeline performance test completed successfully!")
-        print("Results:", results)
+
+        print("\n" + "=" * 60)
+        print("ALL TESTS COMPLETED")
+        print("=" * 60)
+        print("Memory test results saved to: /tmp/memory_allocation_test_results.json")
+        print("Performance test results saved to: /tmp/speecht5_performance_results.json")
+
     finally:
         ttnn.close_device(device)

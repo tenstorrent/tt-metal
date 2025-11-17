@@ -70,16 +70,6 @@ def l1_linear(input_tensor, weight, bias=None, *args, **kwargs):
     return ttnn.linear(input_tensor, weight, bias=bias, *args, **kwargs)
 
 
-def l1_concat(tensors, *args, **kwargs):
-    """Optimized concatenation with L1 memory."""
-    return ttnn.concat(tensors, *args, memory_config=ttnn.L1_MEMORY_CONFIG, **kwargs)
-
-
-def ensure_l1_memory(tensor):
-    """Ensure tensor is in L1 memory for optimal performance."""
-    return ttnn.to_memory_config(tensor, ttnn.L1_MEMORY_CONFIG)
-
-
 def generate_speech_ttnn(
     text,
     speaker_embeddings,
@@ -132,7 +122,6 @@ def generate_speech_ttnn(
 
     # Encoder forward pass
     encoder_output = ttnn_encoder(ttnn_input_ids)[0]
-    encoder_output = ensure_l1_memory(encoder_output)
 
     # No KV cache for this demo
 
@@ -190,7 +179,6 @@ def generate_speech_ttnn(
 
         # PHASE 2: Memory management
         memory_mgmt_start = time.time()
-        decoder_hidden_states = ensure_l1_memory(decoder_hidden_states)
         memory_mgmt_time = time.time() - memory_mgmt_start
 
         decoder_time = time.time() - decoder_start
@@ -225,8 +213,6 @@ def generate_speech_ttnn(
 
         # PHASE 2: Memory management
         postnet_memory_start = time.time()
-        mel_after = ensure_l1_memory(mel_after)
-        stop_logits = ensure_l1_memory(stop_logits)
         postnet_memory_time = time.time() - postnet_memory_start
 
         postnet_time = time.time() - postnet_start
@@ -294,7 +280,9 @@ def generate_speech_ttnn(
         if spectrogram_ttnn is None:
             spectrogram_ttnn = new_frames_ttnn
         else:
-            spectrogram_ttnn = l1_concat([spectrogram_ttnn, new_frames_ttnn], dim=1)
+            spectrogram_ttnn = ttnn.concat(
+                [spectrogram_ttnn, new_frames_ttnn], dim=1, memory_config=ttnn.L1_MEMORY_CONFIG
+            )
 
         # Extend sequence with last frame from new frames (directly from mel_after)
         last_frame_idx = start_idx + 1
@@ -304,7 +292,9 @@ def generate_speech_ttnn(
             [batch_size, last_frame_idx + 1, num_mel_bins],  # end indices
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        output_sequence_ttnn = l1_concat([output_sequence_ttnn, last_frame_ttnn], dim=1)
+        output_sequence_ttnn = ttnn.concat(
+            [output_sequence_ttnn, last_frame_ttnn], dim=1, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
 
         steps_completed += 1
 
@@ -389,7 +379,7 @@ def main():
         ttnn.device.EnablePersistentKernelCache()
 
         # Initialize device
-        device = ttnn.open_device(device_id=0, l1_small_size=50000, trace_region_size=10000000)
+        device = ttnn.open_device(device_id=0, l1_small_size=100000, trace_region_size=10000000)
 
         # Enable program cache for faster inference
         device.enable_program_cache()
@@ -471,7 +461,7 @@ def main():
         print("🔥 Warming up TTNN operations...")
         print("   This may take ~30-45 seconds as TTNN compiles kernels for optimal performance")
         print("   TTNN will optimize operations for the decoder, postnet, and memory management")
-        warmup_text = "Hi there. How are you? What are you doing? How Can I help you? Do you need any help?"
+        warmup_text = "Hi there. How are you? What are you doing? How Can I help you? Do you need any help? Hi there. How are you? What are you doing? How Can I help you? Do you need any help?Hi there. How are you? What are you doing? How Can I help you? Do you need any help?"
         warmup_speech = generate_speech_ttnn(
             warmup_text,
             speaker_embeddings,
