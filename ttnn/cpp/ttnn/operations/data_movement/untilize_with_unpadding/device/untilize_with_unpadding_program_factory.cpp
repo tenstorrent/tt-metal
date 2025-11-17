@@ -899,7 +899,6 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
     auto out_shard_spec = output.shard_spec().has_value() ? output.shard_spec().value() : shard_spec;
 
     bool row_major = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
-
     auto all_cores = shard_spec.grid;
     uint32_t ntiles_per_block = shard_spec.shape[1] / TILE_WIDTH;
     uint32_t nblocks_per_core = shard_spec.shape[0] / TILE_HEIGHT;
