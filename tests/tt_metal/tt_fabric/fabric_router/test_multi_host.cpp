@@ -535,6 +535,7 @@ TEST(MultiHost, TestBHQB4x4RelaxedControlPlaneInit) {
         GTEST_SKIP();
     }
 
+    // Get the mesh graph descriptor path for the BHQB 4x4 mesh
     const std::filesystem::path bhqb_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_qb_4x4_relaxed_mesh_graph_descriptor.textproto";
