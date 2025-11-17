@@ -11,6 +11,7 @@ sharded ttnn.Tensor's topology metadata and use it to compose shards on host.
 from typing import Optional
 
 import torch
+from loguru import logger
 
 import ttnn
 
@@ -54,6 +55,11 @@ def get_device_from_tensor(tensor: ttnn.Tensor) -> Optional[ttnn.MeshDevice]:
     """Get device from tensor or fallback to provided mesh_device."""
     device = tensor.device()
     # tensor.device() returns None if the tensor is on the host (ttnn/core/tensor/tensor.cpp --> Tensor::device())
+    if device is None:
+        logger.debug("tensor.device() returns None, tensor is on the host")
+    else:
+        logger.debug(f"tensor.device() returns {device}")
+
     return device
 
 

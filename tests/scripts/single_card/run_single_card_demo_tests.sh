@@ -60,7 +60,7 @@ run_ds_r1_qwen_func() {
   HF_MODEL=$ds_r1_qwen_14b MESH_DEVICE=N300 pytest models/tt_transformers/demo/simple_text_demo.py -k performance-ci-1
 
   ds_r1_qwen_1_5b=deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
-  HF_MODEL=$ds_r1_qwen_1_5b MESH_DEVICE=N300 python models/experimental/tt_transformers_v2/ds_r1_qwen.py
+  HF_MODEL=$ds_r1_qwen_1_5b MESH_DEVICE=N300 pytest models/experimental/tt_transformers_v2/ds_r1_qwen.py
 }
 
 run_gemma3_func() {
