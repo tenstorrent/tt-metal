@@ -47,16 +47,16 @@ jobs:
         fetch-depth: 0
         skip-tt-train: false
 
-  # galaxy-demos:
-  #   needs: build-artifact
-  #   if: ${{ github.ref == 'refs/heads/main' || (github.ref == 'refs/heads/stable' && inputs.is-release-candidate == 'true' ) }}
-  #   uses: ./.github/workflows/galaxy-demo-tests-impl.yaml
-  #   secrets: inherit
-  #   with:
-  #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-  #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-  #     topology: topology-6u
+  galaxy-demos:
+    needs: build-artifact
+    if: ${{ github.ref == 'refs/heads/main' || (github.ref == 'refs/heads/stable' && inputs.is-release-candidate == 'true' ) }}
+    uses: ./.github/workflows/galaxy-demo-tests-impl.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      topology: topology-6u
 
 
   create-docker-release-image:
