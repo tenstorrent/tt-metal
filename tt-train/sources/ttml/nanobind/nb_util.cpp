@@ -300,6 +300,7 @@ nb::object make_numpy_tensor(
         // Move to CPU and convert to row major
         auto cpu_tensor = tensor.cpu(/*blocking=*/true);
         cpu_tensor = cpu_tensor.to_layout(tt::tt_metal::Layout::ROW_MAJOR);
+        const auto cpu_tensor_strides = cpu_tensor.strides();
 
         // If composer is provided, use it to compose distributed tensor shards
         if (composer != nullptr) {
@@ -309,21 +310,20 @@ nb::object make_numpy_tensor(
 
             // Create a temporary tensor spec with the composed shape
             auto composed_spec = tt::tt_metal::TensorSpec(shape, cpu_tensor.tensor_spec().tensor_layout());
-            return make_numpy_tensor_from_data.template operator()<NumpyType>(vec, composed_spec, cpu_tensor.strides());
+            return make_numpy_tensor_from_data.template operator()<NumpyType>(vec, composed_spec, cpu_tensor_strides);
         }
 
         const auto cpu_tensor_data = tt::tt_metal::host_buffer::get_as<const MetalType>(cpu_tensor);
         const auto cpu_tensor_spec = cpu_tensor.tensor_spec();
-        const auto cpu_tensor_strides = cpu_tensor.strides();
 
         if (tt::tt_metal::tensor_impl::logical_matches_physical(cpu_tensor_spec)) {
             return make_numpy_tensor_from_data.template operator()<NumpyType>(
-                cpu_tensor_data, cpu_tensor_spec, cpu_tensor.strides());
+                cpu_tensor_data, cpu_tensor_spec, cpu_tensor_strides);
         }
 
         const auto decoded_data = tt::tt_metal::tensor_impl::decode_tensor_data(cpu_tensor_data, cpu_tensor_spec);
         return make_numpy_tensor_from_data.template operator()<NumpyType>(
-            decoded_data, cpu_tensor_spec, cpu_tensor.strides());
+            decoded_data, cpu_tensor_spec, cpu_tensor_strides);
     };
 
     const auto& tensor_spec = t.tensor_spec();
