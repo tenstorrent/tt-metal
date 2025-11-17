@@ -243,7 +243,17 @@ def test_model_inference(
 
     # Embedding on host
     embd = model_args.reference_embedding(reference_model)
-    embd.load_state_dict({"emb.weight": state_dict[f"{state_dict_prefix}tok_embeddings.weight"]})
+    if model_args.is_llama_vision():
+        weight = torch.cat(
+            [
+                state_dict[f"{state_dict_prefix}tok_embeddings.weight"],
+                state_dict[f"{state_dict_prefix}learnable_embedding.weight"],
+            ],
+            dim=0,
+        )
+    else:
+        weight = state_dict[f"{state_dict_prefix}tok_embeddings.weight"]
+    embd.load_state_dict({"emb.weight": weight})
 
     generation_start_pos = 0
     generation_length = iterations

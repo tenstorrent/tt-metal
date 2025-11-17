@@ -214,7 +214,17 @@ def test_model_inference(
         reference_model.load_state_dict(reference_state_dict)
         # Embedding on host
         embd = model_args.reference_embedding()
-        embd.load_state_dict({"emb.weight": state_dict[f"{state_dict_prefix}tok_embeddings.weight"]})
+        if model_args.is_llama_vision():
+            weight = torch.cat(
+                [
+                    state_dict[f"{state_dict_prefix}tok_embeddings.weight"],
+                    state_dict[f"{state_dict_prefix}learnable_embedding.weight"],
+                ],
+                dim=0,
+            )
+        else:
+            weight = state_dict[f"{state_dict_prefix}tok_embeddings.weight"]
+        embd.load_state_dict({"emb.weight": weight})
         logger.info("Finished loading reference model.")
 
     # Select the first token from the prompt for initial decoding
