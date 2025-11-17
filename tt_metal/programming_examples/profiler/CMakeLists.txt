@@ -3,6 +3,7 @@ set(PROFILER_EXAMPLES_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/test_custom_cycle_count_slow_dispatch/test_custom_cycle_count_slow_dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_full_buffer/test_full_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_multi_op/test_multi_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_multi_op_buffer_overflow/test_multi_op_buffer_overflow.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_dispatch_cores/test_dispatch_cores.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_timestamped_events/test_timestamped_events.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_noc_event_profiler/test_noc_event_profiler.cpp
