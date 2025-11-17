@@ -860,17 +860,8 @@ def run_tt_image_gen(
 
     # Skip VAE decoding if return_latents is True
     if return_latents:
-        profiler.start("read_output_tensor")
-        latents = ttnn.to_torch(tt_latents, mesh_composer=ttnn.ConcatMeshToTensor(ttnn_device, dim=0))[:batch_size, ...]
-        profiler.end("read_output_tensor")
-
-        # Reshape latents to match expected format
-        B, C, H, W = input_shape
-        latents = latents.reshape(batch_size * B, H, W, C)
-        latents = torch.permute(latents, (0, 3, 1, 2))
-
         profiler.end("image_gen")
-        return latents, tid, output_device, output_shape, tid_vae
+        return tt_latents, tid, output_device, output_shape, tid_vae
 
     vae_on_device = isinstance(vae, TtAutoencoderKL)
 

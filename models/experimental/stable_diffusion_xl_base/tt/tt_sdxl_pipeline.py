@@ -582,7 +582,10 @@ class TtSDXLPipeline(LightweightModule):
         device_tensors = [self.tt_latents_device, self.tt_prompt_embeds_device, self.tt_text_embeds_device]
 
         for host_tensor, device_tensor in zip(host_tensors, device_tensors):
-            ttnn.copy_host_to_device_tensor(host_tensor, device_tensor)
+            if host_tensor.device() is None:
+                ttnn.copy_host_to_device_tensor(host_tensor, device_tensor)
+            else:
+                ttnn.copy(host_tensor, device_tensor)
 
         ttnn.synchronize_device(self.ttnn_device)
         profiler.end("prepare_input_tensors")
@@ -764,6 +767,8 @@ class TtSDXLPipeline(LightweightModule):
                 layout=ttnn.TILE_LAYOUT,
                 mesh_mapper=ttnn.ShardTensor2dMesh(self.ttnn_device, list(self.ttnn_device.shape), dims=(None, 0)),
             )
+        else:
+            tt_latents = latents
 
         tt_prompt_embeds = ttnn.from_torch(
             all_prompt_embeds_torch,
