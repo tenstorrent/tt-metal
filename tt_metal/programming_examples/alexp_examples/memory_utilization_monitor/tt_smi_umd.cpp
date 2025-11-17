@@ -38,6 +38,8 @@
 #include "umd/device/tt_device/tt_device.hpp"
 #include "umd/device/firmware/firmware_info_provider.hpp"
 #include "umd/device/types/arch.hpp"
+#include "umd/device/cluster.hpp"
+#include "umd/device/cluster_descriptor.hpp"
 
 // TT-Metal includes (for device enumeration fallback)
 #include <tt-metalium/host_api.hpp>
@@ -591,6 +593,9 @@ private:
     // Cache of UMD devices for telemetry (device_id -> TTDevice)
     mutable std::map<int, std::unique_ptr<tt::umd::TTDevice>> umd_device_cache_;
 
+    // Cluster descriptor for topology discovery (to handle remote devices)
+    mutable std::unique_ptr<tt::umd::ClusterDescriptor> cluster_descriptor_;
+
     // View mode: 1 = main, 2 = charts, 3 = detailed telemetry
     int current_view_;
 
@@ -599,6 +604,18 @@ private:
 
     // Helper to clear to end of line (prevents artifacts from previous output)
     void clear_eol() const { std::cout << "\033[K"; }
+
+    // Ensure cluster descriptor is initialized
+    void ensure_cluster_descriptor_initialized() const {
+        if (!cluster_descriptor_) {
+            try {
+                cluster_descriptor_ = tt::umd::Cluster::create_cluster_descriptor();
+            } catch (const std::exception& e) {
+                // If topology discovery fails, we'll fall back to local-only mode
+                cluster_descriptor_ = nullptr;
+            }
+        }
+    }
 
     // History tracking for charts
     std::map<int, DeviceHistory> device_histories_;
@@ -627,7 +644,20 @@ private:
         }
     }
 
-    // Get or create cached UMD device for telemetry
+    // Check if a device is remote (without initializing it)
+    bool is_device_remote(int device_id) const {
+        ensure_cluster_descriptor_initialized();
+        if (cluster_descriptor_) {
+            try {
+                return cluster_descriptor_->is_chip_remote(device_id);
+            } catch (...) {
+                return false;
+            }
+        }
+        return false;
+    }
+
+    // Get or create cached UMD device for telemetry (local devices only)
     tt::umd::TTDevice* get_umd_device(int device_id, bool show_status = false) const {
         // Check if device is already cached
         auto it = umd_device_cache_.find(device_id);
@@ -635,7 +665,16 @@ private:
             return it->second.get();
         }
 
-        // Create and cache new device
+        // Skip remote devices - they don't need UMD telemetry
+        if (is_device_remote(device_id)) {
+            if (show_status) {
+                std::cout << Color::YELLOW << "⚙️  Skipping device " << device_id
+                          << " (remote - memory tracking only)..." << Color::RESET << std::endl;
+            }
+            return nullptr;
+        }
+
+        // Create and cache new device (local PCIe only)
         try {
             if (show_status) {
                 std::cout << Color::YELLOW << "⚙️  Initializing device " << device_id << " for telemetry..."
@@ -643,6 +682,7 @@ private:
             }
 
             std::unique_ptr<tt::umd::TTDevice> tt_device = tt::umd::TTDevice::create(device_id);
+
             if (!tt_device) {
                 if (show_status) {
                     std::cout << " " << Color::RED << "Failed" << Color::RESET << std::endl;
@@ -1147,56 +1187,148 @@ public:
                     devices.push_back(dev);
                 }
             } else {
-                // Without server, enumerate devices manually
-                // This is a simplified approach - in production, use proper device discovery
-                for (int i = 0; i < 8; ++i) {  // Try up to 8 devices
-                    DeviceInfo dev;
-                    dev.device_id = i;
-                    dev.arch_name = "Unknown";
-                    dev.total_dram = 0;
-                    dev.total_l1 = 0;
-                    dev.total_l1_small = 0;
-                    dev.total_trace = 0;
-                    dev.used_dram = 0;
-                    dev.used_l1 = 0;
-                    dev.used_l1_small = 0;
-                    dev.used_trace = 0;
-                    dev.used_cb = 0;
-                    dev.used_kernel = 0;
+                // Without server, enumerate devices using cluster descriptor
+                // This handles both local PCIe and remote devices
+                ensure_cluster_descriptor_initialized();
 
-                    // Try to read telemetry (show status on first run)
-                    if (use_sysfs) {
-                        dev.telemetry = read_telemetry_sysfs(i);
-                    } else {
-                        auto* tt_device = get_umd_device(i, first_run);
-                        if (tt_device) {
-                            dev.telemetry = read_telemetry_from_cached_device(tt_device);
+                if (cluster_descriptor_) {
+                    // Use topology discovery to enumerate all devices
+                    auto all_chips = cluster_descriptor_->get_all_chips();
+
+                    // Sort chips so local ones are initialized first (needed for remote device creation)
+                    auto chips_local_first = cluster_descriptor_->get_chips_local_first(all_chips);
+
+                    for (int chip_id : chips_local_first) {
+                        DeviceInfo dev;
+                        dev.device_id = chip_id;
+                        dev.total_dram = 0;
+                        dev.total_l1 = 0;
+                        dev.total_l1_small = 0;
+                        dev.total_trace = 0;
+                        dev.used_dram = 0;
+                        dev.used_l1 = 0;
+                        dev.used_l1_small = 0;
+                        dev.used_trace = 0;
+                        dev.used_cb = 0;
+                        dev.used_kernel = 0;
+
+                        // Check if this is a remote device
+                        bool is_remote = cluster_descriptor_->is_chip_remote(chip_id);
+
+                        if (is_remote) {
+                            // Remote device - get arch from cluster descriptor
+                            auto arch = cluster_descriptor_->get_arch(chip_id);
+                            if (arch == tt::ARCH::WORMHOLE_B0) {
+                                dev.arch_name = "Wormhole_B0";
+                            } else if (arch == tt::ARCH::BLACKHOLE) {
+                                dev.arch_name = "Blackhole";
+                            } else if (arch == tt::ARCH::GRAYSKULL) {
+                                dev.arch_name = "Grayskull";
+                            } else {
+                                dev.arch_name = "Unknown";
+                            }
+                            // No telemetry for remote devices (memory tracking only)
+                            dev.telemetry = TelemetryData();
                         } else {
-                            // Device initialization failed - likely in use by another process
-                            dev.telemetry = TelemetryData();  // Empty telemetry
+                            // Local device - try to read telemetry
+                            dev.arch_name = "Unknown";
+                            if (use_sysfs) {
+                                dev.telemetry = read_telemetry_sysfs(chip_id);
+                            } else {
+                                auto* tt_device = get_umd_device(chip_id, first_run);
+                                if (tt_device) {
+                                    dev.telemetry = read_telemetry_from_cached_device(tt_device);
+                                    // Get architecture name from device
+                                    auto arch = tt_device->get_arch();
+                                    if (arch == tt::ARCH::WORMHOLE_B0) {
+                                        dev.arch_name = "Wormhole_B0";
+                                    } else if (arch == tt::ARCH::BLACKHOLE) {
+                                        dev.arch_name = "Blackhole";
+                                    } else if (arch == tt::ARCH::GRAYSKULL) {
+                                        dev.arch_name = "Grayskull";
+                                    }
+                                } else {
+                                    // Device initialization failed
+                                    dev.telemetry = TelemetryData();
+                                }
+                            }
                         }
-                    }
 
-                    // Only add if we got valid telemetry
-                    if (dev.telemetry.asic_temperature >= 0) {
+                        // Add device (remote devices will show N/A for telemetry but can show memory stats)
                         devices.push_back(dev);
+                    }
+                } else {
+                    // Fallback: cluster descriptor failed, try local PCIe devices only
+                    for (int i = 0; i < 8; ++i) {
+                        DeviceInfo dev;
+                        dev.device_id = i;
+                        dev.arch_name = "Unknown";
+                        dev.total_dram = 0;
+                        dev.total_l1 = 0;
+                        dev.total_l1_small = 0;
+                        dev.total_trace = 0;
+                        dev.used_dram = 0;
+                        dev.used_l1 = 0;
+                        dev.used_l1_small = 0;
+                        dev.used_trace = 0;
+                        dev.used_cb = 0;
+                        dev.used_kernel = 0;
+
+                        // Try to read telemetry (show status on first run)
+                        if (use_sysfs) {
+                            dev.telemetry = read_telemetry_sysfs(i);
+                        } else {
+                            auto* tt_device = get_umd_device(i, first_run);
+                            if (tt_device) {
+                                dev.telemetry = read_telemetry_from_cached_device(tt_device);
+                            } else {
+                                // Device initialization failed
+                                dev.telemetry = TelemetryData();
+                            }
+                        }
+
+                        // Only add if we got valid telemetry (for fallback mode)
+                        if (dev.telemetry.asic_temperature >= 0) {
+                            devices.push_back(dev);
+                        }
                     }
                 }
                 num_devices = devices.size();
             }
 
             if (first_run && !use_sysfs) {
-                // Check if any devices failed to initialize
-                bool any_failed = (num_devices == 0 || umd_device_cache_.size() < num_devices);
+                // Count how many devices we expected to initialize with telemetry
+                int expected_local_devices = 0;
+                if (cluster_descriptor_) {
+                    auto all_chips = cluster_descriptor_->get_all_chips();
+                    for (int chip_id : all_chips) {
+                        if (!cluster_descriptor_->is_chip_remote(chip_id)) {
+                            expected_local_devices++;
+                        }
+                    }
+                } else {
+                    expected_local_devices = num_devices;
+                }
+
+                // Check if any local devices failed to initialize
+                bool any_failed = (num_devices == 0 || umd_device_cache_.size() < expected_local_devices);
                 if (any_failed) {
                     std::cout << Color::YELLOW
-                              << "⚠  Some devices couldn't be initialized (may be in use by another process)"
+                              << "⚠  Some local devices couldn't be initialized (may be in use by another process)"
                               << Color::RESET << std::endl;
                     std::cout << Color::CYAN << "   Tip: Close other tools using the devices (like tt-smi -r)"
-                              << Color::RESET << std::endl
-                              << std::endl;
+                              << Color::RESET << std::endl;
+                    if (cluster_descriptor_) {
+                        std::cout << Color::CYAN << "   Note: Remote devices will show memory stats only (no telemetry)"
+                                  << Color::RESET << std::endl;
+                    }
+                    std::cout << std::endl;
                 } else {
-                    std::cout << Color::GREEN << "✓ Telemetry initialized" << Color::RESET << std::endl << std::endl;
+                    std::cout << Color::GREEN << "✓ Telemetry initialized for local devices" << Color::RESET;
+                    if (cluster_descriptor_ && num_devices > expected_local_devices) {
+                        std::cout << Color::CYAN << " (remote devices: memory tracking only)" << Color::RESET;
+                    }
+                    std::cout << std::endl << std::endl;
                 }
                 first_run = false;
             }

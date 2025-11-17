@@ -27,6 +27,11 @@
 #include <tt-metalium/host_api.hpp>
 #include <fstream>
 #include <sstream>
+// UMD-only includes for telemetry (no hugepage allocation)
+#include "umd/device/tt_device/tt_device.hpp"
+#include "umd/device/cluster.hpp"
+#include "umd/device/cluster_descriptor.hpp"
+#include "umd/device/soc_descriptor.hpp"
 
 #define TT_ALLOC_SERVER_SOCKET "/tmp/tt_allocation_server.sock"
 #define MAX_DEVICES 8
@@ -196,44 +201,54 @@ private:
     }
 
     void detect_devices() {
-        // Use TT-Metal APIs directly for accurate device detection
-        std::cout << "🔍 Device detection (using TT-Metal APIs):" << std::endl;
+        // Use UMD-only APIs for device detection (no hugepage allocation)
+        std::cout << "🔍 Device detection (using UMD - no hugepage allocation):" << std::endl;
 
         try {
-            // Get actual number of available devices (including remote devices)
-            size_t num_available_devices = tt::tt_metal::GetNumAvailableDevices();
+            // Detect devices using cluster descriptor (doesn't allocate hugepages!)
+            std::unique_ptr<tt::umd::ClusterDescriptor> cluster_descriptor =
+                tt::umd::Cluster::create_cluster_descriptor();
 
-            if (num_available_devices == 0) {
+            if (!cluster_descriptor) {
                 std::cout << "   No devices detected" << std::endl;
                 std::cout << "   Server will track allocations anyway" << std::endl;
                 return;
             }
 
-            if (num_available_devices > MAX_DEVICES) {
-                std::cout << "   Warning: Found " << num_available_devices << " devices, limiting to " << MAX_DEVICES
-                          << std::endl;
-                num_available_devices = MAX_DEVICES;
+            size_t detected_num_chips = cluster_descriptor->get_number_of_chips();
+
+            if (detected_num_chips == 0) {
+                std::cout << "   No devices detected" << std::endl;
+                std::cout << "   Server will track allocations anyway" << std::endl;
+                return;
             }
 
-            num_available_devices_ = num_available_devices;
+            if (detected_num_chips > MAX_DEVICES) {
+                std::cout << "   Warning: Found " << detected_num_chips << " devices, limiting to " << MAX_DEVICES
+                          << std::endl;
+                detected_num_chips = MAX_DEVICES;
+            }
 
-            // Query each device for detailed information
-            // Note: CreateDeviceMinimal devices should not be manually closed
-            // They are managed by the device pool and will clean up automatically
-            for (size_t i = 0; i < num_available_devices; ++i) {
+            num_available_devices_ = detected_num_chips;
+
+            // Get device specs from cluster descriptor (no hugepage allocation!)
+            for (size_t i = 0; i < detected_num_chips; ++i) {
                 try {
-                    // Create minimal device (lightweight, doesn't fully initialize)
-                    // This only initializes enough to query basic device info
-                    auto device = tt::tt_metal::CreateDeviceMinimal(i);
+                    // Get arch from cluster descriptor
+                    tt::ARCH arch = cluster_descriptor->get_arch(i);
 
-                    tt::ARCH arch = device->arch();
-                    int num_dram_channels = device->num_dram_channels();
-                    uint32_t dram_size_per_channel = device->dram_size_per_channel();
-                    uint32_t l1_size_per_core = device->l1_size_per_core();
-                    auto grid = device->grid_size();
+                    // Create SOC descriptor from arch (no device initialization needed!)
+                    tt::umd::SocDescriptor soc_desc(arch);
+
+                    // Extract device information from SOC descriptor
+                    uint32_t grid_x = soc_desc.grid_size.x;
+                    uint32_t grid_y = soc_desc.grid_size.y;
+                    size_t num_dram_channels = soc_desc.get_num_dram_channels();
+                    uint32_t dram_size_per_channel = soc_desc.dram_bank_size;
+                    uint32_t l1_size_per_core = soc_desc.worker_l1_size;
 
                     uint64_t total_dram = (uint64_t)num_dram_channels * dram_size_per_channel;
-                    uint64_t total_l1 = (uint64_t)l1_size_per_core * grid.x * grid.y;
+                    uint64_t total_l1 = (uint64_t)l1_size_per_core * grid_x * grid_y;
 
                     // Store device info
                     device_info_[i].is_available = true;
@@ -243,19 +258,16 @@ private:
                     device_info_[i].l1_size_per_core = l1_size_per_core;
                     device_info_[i].total_dram_size = total_dram;
                     device_info_[i].total_l1_size = total_l1;
-                    device_info_[i].grid_x = grid.x;
-                    device_info_[i].grid_y = grid.y;
+                    device_info_[i].grid_x = grid_x;
+                    device_info_[i].grid_y = grid_y;
 
+                    bool is_remote = cluster_descriptor->is_chip_remote(i);
                     std::cout << "   Device " << i << ": " << arch_to_string(arch) << " ("
                               << (total_dram / (1024 * 1024 * 1024)) << "GB DRAM, " << (total_l1 / (1024 * 1024))
-                              << "MB L1)" << std::endl;
-
-                    // Note: Do NOT call CloseDevice on minimal devices!
-                    // They are managed internally and closing them causes segfaults.
+                              << "MB L1) " << (is_remote ? "[Remote]" : "[Local]") << std::endl;
 
                 } catch (const std::exception& e) {
                     std::cerr << "   Warning: Could not query device " << i << ": " << e.what() << std::endl;
-                    // Set some default values for this device
                     device_info_[i].is_available = false;
                 }
             }
@@ -855,7 +867,7 @@ public:
 
         while (running_) {
             // Sleep for 10 seconds
-            int sleep_seconds = 5;
+            int sleep_seconds = 3;
             for (int i = 0; i < sleep_seconds && running_; i++) {
                 std::this_thread::sleep_for(std::chrono::seconds(1));
             }

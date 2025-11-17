@@ -77,6 +77,30 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tt_smi_umd.cpp")
 endif()
 
 # ============================================================================
+# tt_smi_simple: Simplified telemetry tool for MMIO-based devices
+# ============================================================================
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tt_smi_simple.cpp")
+    add_executable(tt_smi_simple tt_smi_simple.cpp)
+
+    target_link_libraries(
+        tt_smi_simple
+        PUBLIC
+            TT::Metalium # TT-Metal provides UMD access
+        PRIVATE
+            pthread
+            stdc++fs
+    )
+
+    # Disable specific warnings
+    target_compile_options(
+        tt_smi_simple
+        PRIVATE
+            -Wno-error=unused-parameter
+            -Wno-unused-parameter
+    )
+endif()
+
+# ============================================================================
 # Optional: Allocation Client Demo
 # ============================================================================
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/allocation_client_demo.cpp")
@@ -98,6 +122,11 @@ if(TARGET tt_smi_umd)
     list(APPEND INSTALL_TARGETS tt_smi_umd)
 endif()
 
+# Add tt_smi_simple to install if it was built
+if(TARGET tt_smi_simple)
+    list(APPEND INSTALL_TARGETS tt_smi_simple)
+endif()
+
 install(TARGETS ${INSTALL_TARGETS} RUNTIME DESTINATION bin)
 
 # ============================================================================
@@ -111,5 +140,8 @@ message(STATUS "    • allocation_server_poc     (with TT::Metalium)")
 message(STATUS "    • allocation_monitor_client (standalone)")
 if(TARGET tt_smi_umd)
     message(STATUS "    • tt_smi_umd                (nvtop-style TUI with ncurses, UMD telemetry & real-time charts)")
+endif()
+if(TARGET tt_smi_simple)
+    message(STATUS "    • tt_smi_simple             (simple telemetry-only tool, no memory tracking)")
 endif()
 message(STATUS "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
