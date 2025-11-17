@@ -153,6 +153,8 @@ public:
     // Load Inter-Mesh Connectivity into the Mesh Graph.
     void load_intermesh_connections(const AnnotatedIntermeshConnections& intermesh_connections);
 
+    bool is_intra_mesh_policy_relaxed(MeshId mesh_id) const;
+
 private:
     void validate_mesh_id(MeshId mesh_id) const;
     std::unordered_map<ChipId, RouterEdge> get_valid_connections(
@@ -180,6 +182,7 @@ private:
     std::vector<std::unordered_map<port_id_t, ChipId, hash_pair>> mesh_edge_ports_to_chip_id_;
     RequestedIntermeshConnections requested_intermesh_connections_;
     RequestedIntermeshPorts requested_intermesh_ports_;
+    std::unordered_map<MeshId, bool> intra_mesh_relaxed_policy_;
 };
 
 }  // namespace tt::tt_fabric
