@@ -86,8 +86,8 @@ Tests:
     top_level_iterations: 3
 
     parametrization_params:
-      size: [64, 128]
-      num_packets: [50]
+      size: [128, 512, 1024, 2048, 4096]
+      num_packets: [250]
 
     defaults:
       ftype: unicast
