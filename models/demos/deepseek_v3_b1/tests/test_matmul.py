@@ -18,7 +18,7 @@ def test_matmul(device, tile_height):
 
     # Hardcoded matrix dimensions
     m = tile_height  # set to minimum tile height for b1
-    k = 7168
+    k = 32 * 128
 
     # Core grid: 48 cores (6x8 grid)
     # n = 1536
@@ -35,6 +35,7 @@ def test_matmul(device, tile_height):
     torch_a = torch.randn((m, k), dtype=torch.bfloat16)
     torch_b = torch.randn((k, n), dtype=torch.bfloat16)
     torch_output = torch.matmul(torch_a.float(), torch_b.float()).bfloat16()
+    # torch_output = torch.matmul(torch_a[..., :32], torch_b[..., :32, :]).bfloat16()
 
     # Create width-sharded memory config for input A
     # Width sharding distributes along the K dimension (7168)
@@ -107,7 +108,7 @@ def test_matmul(device, tile_height):
 
     # Use the new simplified DeepSeek B1 matmul_1d operation
     print(f"ttnn_a: {ttnn_a}")
-    for i in range(1):
+    for i in range(100):
         ttnn_output = ttnn.experimental.deepseek_b1.matmul_1d(
             ttnn_a,
             ttnn_b,

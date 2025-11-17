@@ -4,7 +4,11 @@
 
 #include <cstdint>
 
+// Set to 1 to use original matmul APIs, 0 to use craqmm APIs
+#define USE_ORIGINAL_MATMUL 0
+
 #include "compute_kernel_api/matmul.h"
+#include "compute_kernel_api/craqmm.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include <tools/profiler/kernel_profiler.hpp>
 
@@ -30,8 +34,12 @@ void MAIN {
 
     constexpr uint32_t in1_transpose_tile = false;
 
+#if USE_ORIGINAL_MATMUL
     mm_block_init(
         in0_cb_id, in1_cb_id, mm_partials_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+#else
+    craqmm_block_init(in0_cb_id, in1_cb_id, mm_partials_cb_id, in1_transpose_tile, in0_block_w);
+#endif
 
     cb_wait_front(in0_cb_id, in0_block_num_tiles);
     cb_wait_front(in1_cb_id, in1_block_num_tiles);
@@ -39,31 +47,62 @@ void MAIN {
     tile_regs_acquire();
 
     // Compute output sub-block
-    uint32_t dst_index = 0;  // start at 0, each call to matmul_block internally increments dst_index
+    uint32_t dst_index = 0;  // start at 0, each call to craqmm_block internally increments dst_index
     uint32_t in0_index = 0;
     uint32_t in1_index = 0;
     // inner dim that we accumulate is the inner dim of in0/in1, which is in0_block_w
 
+#if USE_ORIGINAL_MATMUL
+    // Original matmul_block: nested loops over output tiles
+    for (uint32_t inner_dim_idx = 0; inner_dim_idx < in0_block_w; ++inner_dim_idx) {
+        matmul_block(
+            in0_cb_id,
+            in1_cb_id,
+            in0_index,
+            in1_index,
+            dst_index,
+            in1_transpose_tile,
+            out_subblock_w,
+            out_subblock_h,
+            in0_block_w);
+        in0_index++;
+        in1_index += in1_block_w;
+    }
+#else
     {
-        DeviceZoneScopedN("matmul_block");
+        DeviceZoneScopedN("craqmm_block");
+        // UNPACK: Single call with MOP looping over kt_dim (in0_block_w) internally
+        // The MOP replay buffer handles unpacking both SrcA and SrcB in a tight hardware loop
+        // for (uint32_t inner_dim_idx = 0; inner_dim_idx < in0_block_w; ++inner_dim_idx) {
+        //     craqmm_block_unpack(in0_cb_id, in1_cb_id, in0_index, in1_index, dst_index, in1_transpose_tile, 1);
+        //     in0_index++;
+        //     in1_index += in1_block_w;
+        // }
+        if constexpr (in0_block_w > 128) {
+            // Doesn't work yet
+            uint32_t inner_dim_count = in0_block_w / 128;
+            uint32_t inner_dim_last = in0_block_w % 128;
+
+            for (uint32_t inner_dim_chunk_idx = 0; inner_dim_chunk_idx < inner_dim_count; ++inner_dim_chunk_idx) {
+                craqmm_block_unpack(in0_cb_id, in1_cb_id, in0_index, in1_index, dst_index, in1_transpose_tile, 128);
+                in0_index += 128;                // stride right by 128 tiles in K
+                in1_index += 128 * in1_block_w;  // stride down by 128 rows, each row is in1_block_w tiles wide
+            }
+            if (inner_dim_last > 0) {
+                craqmm_block_unpack(
+                    in0_cb_id, in1_cb_id, in0_index, in1_index, dst_index, in1_transpose_tile, inner_dim_last);
+            }
+        } else {
+            craqmm_block_unpack(in0_cb_id, in1_cb_id, in0_index, in1_index, dst_index, in1_transpose_tile, in0_block_w);
+        }
+        // MATH: Outer loop around ckernel_template::run() to execute math operations
+        // Each iteration processes one tile from the K dimension
         for (uint32_t inner_dim_idx = 0; inner_dim_idx < in0_block_w; ++inner_dim_idx) {
-            // matmul outer product of (out_subblock_h x out_subblock_w) tiles that fill dst
-            // accumulation is done by iterating matmul_block across inner dim
-            // in0_block_w is passed as inner dim (kt) to matmul_block, internally used to stride in0
-            matmul_block(
-                in0_cb_id,
-                in1_cb_id,
-                in0_index,
-                in1_index,
-                dst_index,
-                in1_transpose_tile,
-                out_subblock_w,
-                out_subblock_h,
-                in0_block_w);
-            in0_index++;               // stride right by 1
-            in1_index += in1_block_w;  // stride down by 1
+            craqmm_block_math(in0_cb_id, in1_cb_id, in0_index, in1_index, dst_index, in1_transpose_tile, in0_block_w);
+            // in0_index and in1_index are not used by compute; so not actually needed
         }
     }
+#endif
 
     tile_regs_commit();
     // Pack out to output buffer
