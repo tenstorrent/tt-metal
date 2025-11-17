@@ -20,6 +20,7 @@ Updated to use refactored TestFactory and MeshConfig patterns:
 import pytest
 import torch
 from loguru import logger
+from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import run_for_wormhole_b0
@@ -136,7 +137,7 @@ def prepare_gpt_oss_generator_args(
             1,
             1,
             4 * 1024,
-            200,
+            2,
             True,
             {"page_block_size": 64, "page_max_num_blocks_per_dp": 4 * 1024 // 64},
             {"temperature": 0, "top_p": 0.08},
@@ -281,6 +282,7 @@ def test_gpt_oss_demo(
 
         logger.info(f"Starting prefill...")
         profiler.start(f"inference_prefill", iteration=batch_idx)
+        signpost("prefill")
         logits = generator.prefill_forward_text(
             input_tokens_prefill_pt,
             page_table=page_table,
@@ -315,6 +317,7 @@ def test_gpt_oss_demo(
                 profiler.start(f"inference_decode_time_{iteration}", iteration=batch_idx)
 
             # Decode forward (matching tt_transformers call)
+            signpost("decode")
             logits = generator.decode_forward_text(
                 out_tok,
                 current_pos,
