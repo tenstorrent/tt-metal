@@ -325,7 +325,7 @@ def main():
         ttnn.device.EnablePersistentKernelCache()
 
         # Initialize device
-        device = ttnn.open_device(device_id=0, l1_small_size=100000, trace_region_size=10000000)
+        device = ttnn.open_device(device_id=0, l1_small_size=130000, trace_region_size=10000000)
 
         # Enable program cache for faster inference
         device.enable_program_cache()
