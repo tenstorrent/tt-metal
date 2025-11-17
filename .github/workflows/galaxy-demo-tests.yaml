@@ -29,7 +29,7 @@ on:
         type: boolean
   schedule:
     - cron: "0 0 * * *" # This cron schedule runs demo tests every day at 12am UTC
-    - cron: "0 9 * * 1,3,6" # frequency of galaxy tests
+    - cron: "0 9 * * 6" # frequency of galaxy tests
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
