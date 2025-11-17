@@ -576,7 +576,7 @@ FORCE_INLINE void noc_async_read_one_packet_set_state(
         Read responses - assigned VCs dynamically
     */
     DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc, DEBUG_SANITIZE_NOC_UNICAST);
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ_SET_STATE, src_noc_addr, size, (use_vc) ? vc : -1);
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ_SET_STATE, src_noc_addr, size, (use_vc) ? static_cast<int8_t>(vc) : -1);
 
     WAYPOINT("NASW");
     ncrisc_noc_read_set_state<noc_mode, true /* one_packet */, use_vc>(noc, read_cmd_buf, src_noc_addr, size, vc);
@@ -608,7 +608,7 @@ FORCE_INLINE void noc_async_read_one_packet_with_state(
         Read responses - assigned VCs dynamically
     */
     RECORD_NOC_EVENT_WITH_ADDR(
-        NocEventType::READ_WITH_STATE, static_cast<uint64_t>(src_local_l1_addr), 0, (use_vc) ? vc : -1);
+        NocEventType::READ_WITH_STATE, static_cast<uint64_t>(src_local_l1_addr), 0, (use_vc) ? static_cast<int8_t>(vc) : -1);
 
     WAYPOINT("NATW");
 
@@ -2367,6 +2367,8 @@ public:
 
     enum class BarrierMode { TXN_ID, FULL };
 
+    enum class McastMode { INCLUDE_SRC, EXCLUDE_SRC };
+
     static constexpr uint32_t INVALID_TXN_ID = 0xFFFFFFFF;
 
 private:
@@ -2814,7 +2816,9 @@ public:
      * @param noc_y_end The ending Y coordinate of the region (inclusive).
      * @param num_dests The number of destination cores in the region.
      * @param linked Whether to link this operation with the next (default is false).
+     * @tparam mcast_mode Indicates whether to include the sender in the multicast (default is EXCLUDE_SRC)
      */
+    template <Noc::McastMode mcast_mode = Noc::McastMode::EXCLUDE_SRC>
     void set_multicast(
         const Noc& noc,
         uint32_t noc_x_start,
@@ -2825,32 +2829,11 @@ public:
         bool linked = false) {
         uint64_t multicast_addr =
             get_noc_multicast_addr(noc_x_start, noc_y_start, noc_x_end, noc_y_end, local_l1_addr_, noc.get_noc_id());
-        noc_semaphore_set_multicast(local_l1_addr_, multicast_addr, num_dests, linked, noc.get_noc_id());
-    }
-
-    /**
-     * @brief Set the semaphore value on multiple cores in a specified rectangular region of the NoC, including the
-     * sender.
-     *
-     * @param noc The Noc object representing the NoC to use for the transaction.
-     * @param noc_x_start The starting X coordinate of the region (inclusive).
-     * @param noc_y_start The starting Y coordinate of the region (inclusive).
-     * @param noc_x_end The ending X coordinate of the region (inclusive).
-     * @param noc_y_end The ending Y coordinate of the region (inclusive).
-     * @param num_dests The number of destination cores in the region.
-     * @param linked Whether to link this operation with the next (default is false).
-     */
-    void set_multicast_loopback_src(
-        const Noc& noc,
-        uint32_t noc_x_start,
-        uint32_t noc_y_start,
-        uint32_t noc_x_end,
-        uint32_t noc_y_end,
-        uint32_t num_dests,
-        bool linked = false) {
-        uint64_t multicast_addr =
-            get_noc_multicast_addr(noc_x_start, noc_y_start, noc_x_end, noc_y_end, local_l1_addr_, noc.get_noc_id());
-        noc_semaphore_set_multicast_loopback_src(local_l1_addr_, multicast_addr, num_dests, linked, noc.get_noc_id());
+        if constexpr (mcast_mode == Noc::McastMode::INCLUDE_SRC) {
+            noc_semaphore_set_multicast_loopback_src(local_l1_addr_, multicast_addr, num_dests, linked, noc.get_noc_id());
+        } else if constexpr (mcast_mode == Noc::McastMode::EXCLUDE_SRC) {
+            noc_semaphore_set_multicast(local_l1_addr_, multicast_addr, num_dests, linked, noc.get_noc_id());
+        }
     }
 
 private:
@@ -2910,15 +2893,21 @@ struct noc_traits_t<UnicastEndpoint> {
     };
     template <Noc::AddressType address_type>
     static auto src_addr(const UnicastEndpoint& src, const Noc& noc, const src_args_type& args) {
-        static_assert(address_type == Noc::AddressType::NOC);
-        uint64_t noc_addr = src.get_noc_unicast_addr(args.noc_x, args.noc_y, args.addr, noc.get_noc_id());
-        return noc_addr;
+        if constexpr (address_type == Noc::AddressType::LOCAL_L1) {
+            return args.addr;
+        } else {
+            uint64_t noc_addr = src.get_noc_unicast_addr(args.noc_x, args.noc_y, args.addr, noc.get_noc_id());
+            return noc_addr;
+        }
     }
     template <Noc::AddressType address_type>
     static auto dst_addr(const UnicastEndpoint& dst, const Noc& noc, const dst_args_type& args) {
-        static_assert(address_type == Noc::AddressType::NOC);
-        uint64_t noc_addr = dst.get_noc_unicast_addr(args.noc_x, args.noc_y, args.addr, noc.get_noc_id());
-        return noc_addr;
+        if constexpr (address_type == Noc::AddressType::LOCAL_L1) {
+            return args.addr;
+        } else {
+            uint64_t noc_addr = dst.get_noc_unicast_addr(args.noc_x, args.noc_y, args.addr, noc.get_noc_id());
+            return noc_addr;
+        }
     }
 };
 

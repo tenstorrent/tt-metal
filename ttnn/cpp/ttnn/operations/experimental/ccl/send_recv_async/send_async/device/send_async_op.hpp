@@ -53,10 +53,7 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
 
 namespace operations::experimental::ccl {
 
-std::vector<Tensor> send_async(
-    const Tensor& input_tensor,
-    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
-    const tt::tt_metal::distributed::SocketConfig& socket_config);
+std::vector<Tensor> send_async(const Tensor& input_tensor, const tt::tt_metal::distributed::MeshSocket& mesh_socket);
 
 }  // namespace operations::experimental::ccl
 

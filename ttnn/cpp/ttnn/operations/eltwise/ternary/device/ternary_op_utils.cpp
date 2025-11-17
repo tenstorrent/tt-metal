@@ -171,6 +171,7 @@ std::string get_kernel_file_path(KernelName kernel_name, bool is_fpu) {
 
         case KernelName::ComputeNoBcastTTT: return fmt::format(compute, root, "ternary_sfpu_no_bcast_ttt.cpp");
         case KernelName::ComputeBcastTTT: return fmt::format(compute, root, "ternary_sfpu_col_scalar_bcast_ttt.cpp");
+        case KernelName::ComputeRowBcastTTT: return fmt::format(compute, root, "ternary_sfpu_row_bcast_ttt.cpp");
         case KernelName::ComputeBcastTTS_TST:
             return fmt::format(compute, root, "ternary_sfpu_col_scalar_bcast_tts_tst.cpp");
         case KernelName::ComputeNoBcastTTS_TST: return fmt::format(compute, root, "ternary_sfpu_no_bcast_tts_tst.cpp");
@@ -179,6 +180,8 @@ std::string get_kernel_file_path(KernelName kernel_name, bool is_fpu) {
         case KernelName::ComputeBcastAddcmul:
             return fmt::format(
                 compute, root, is_fpu ? "ternary_addcmul_fpu_bcast.cpp" : "ternary_addcmul_sfpu_bcast.cpp");
+        case KernelName::ComputeRowBcastAddcmul:
+            return fmt::format(compute, root, is_fpu ? "ternary_addcmul_fpu_rowbcast.cpp" : "ternary_addcmul_sfpu.cpp");
         default: __builtin_unreachable();
     }
 }

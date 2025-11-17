@@ -116,11 +116,7 @@ test_suite_bh_multi_pcie_metal_unit_tests() {
         sleep 5
     done
     ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
-
-    # Remove this once https://github.com/tenstorrent/tt-metal/issues/28352 is fixed
-    if [[ "$hw_topology" != "blackhole_qb_ge" ]]; then
-        ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
-    fi
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
 
     ./build/test/tt_metal/unit_tests_eth
     if [[ "$hw_topology" == "blackhole_llmbox" ]]; then
@@ -237,12 +233,22 @@ test_suite_bh_glx_metal_unit_tests() {
 
     # Dispatch
     build/test/tt_metal/unit_tests_eth --gtest_filter=UnitMeshCQMultiDeviceProgramFixture.ActiveEthKernelsSendInterleavedBufferAllConnectedChips
-    build/test/tt_metal/unit_tests_dispatch --gtest_filter=**RandomProgram**
-    build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshCQSingleCardBufferFixture.ShardedBufferLargeL1ReadWrites
-    build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshCQSingleCardBufferFixture.ShardedBufferLargeDRAMReadWrites
-    build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshCQSingleCardFixture.TensixTestSubDeviceAllocations
-    build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshMultiCQMultiDeviceEventFixture.*
-    build/test/tt_metal/unit_tests_device --gtest_filter=UnitMeshCQSingleCardFixture.TensixTestReadWriteMultipleCoresL1
+
+    build/test/tt_metal/unit_tests_dispatch --gtest_filter="\
+UnitMeshCQProgramFixture.TensixTestRandomizedProgram:\
+UnitMeshRandomProgramFixture.TensixActiveEthTestPrograms:\
+UnitMeshRandomProgramFixture.TensixTestLargeProgramInBetweenFiveSmallPrograms:\
+UnitMeshRandomProgramTraceFixture.TensixActiveEthTestProgramsTraceAndNoTrace:\
+UnitMeshRandomProgramTraceFixture.TensixActiveEthTestProgramsTrace:\
+UnitMeshRandomProgramTraceFixture.TensixTestLargeProgramInBetweenFiveSmallProgramsTrace:\
+UnitMeshRandomProgramTraceFixture.TensixTestSimpleProgramsTrace:\
+UnitMeshCQTraceFixture.TensixEnqueueMultiProgramTraceBenchmark:\
+UnitMeshCQTraceFixture.TensixEnqueueTwoProgramTrace:\
+UnitMeshCQSingleCardBufferFixture.ShardedBufferLargeL1ReadWrites:\
+UnitMeshCQSingleCardBufferFixture.ShardedBufferLargeDRAMReadWrites:\
+UnitMeshCQSingleCardFixture.TensixTestSubDeviceAllocations:\
+UnitMeshMultiCQMultiDeviceEventFixture.*:\
+UnitMeshCQSingleCardFixture.TensixTestReadWriteMultipleCoresL1"
 }
 
 test_suite_bh_glx_python_unit_tests() {
@@ -257,7 +263,6 @@ test_suite_bh_glx_llama_demo_tests() {
     verify_llama_dir_
 
     pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 32
-    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-stress-1" --data_parallel 32 --max_generated_tokens 220
 }
 
 # Define test suite mappings for different hardware topologies

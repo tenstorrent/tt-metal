@@ -140,11 +140,14 @@ ALWI void log_with_base_tile(uint32_t idst, uint32_t base_scale) {
 // TODO: Move to trigonometry.h
 /**
  * Please refer to documentation for any_init.
+ *
+ * If using fast and approximate implementation of tanh_tile(), then tanh_tile_init() should be also be called with
+ * fast_and_approx = true.
  */
+template <bool fast_and_approx = false>
 ALWI void tanh_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_tanh_init<APPROX>()));  // TODO(AP): move out init
+    MATH((llk_math_eltwise_unary_sfpu_tanh_init<fast_and_approx, DST_ACCUM_MODE>()));  // TODO(AP): move out init
 }
-
 
 // TODO: Move to trigonometry.h
 // clang-format off
@@ -154,14 +157,20 @@ ALWI void tanh_tile_init() {
  * acquired state via *acquire_dst* call. This call is blocking and is only
  * available on the compute engine.
  *
+ * If using fast and approximate mode, then tanh_tile_init() should be also be called with fast_and_approx = true beforehand.
+ *
  * Return value: None
  *
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | fast_and_approx | Whether to use fast and approximate mode                                   | bool     | True or False                                         | False    |
  */
- // clang-format on
-ALWI void tanh_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_tanh<APPROX>(idst))); }
+// clang-format on
+template <bool fast_and_approx = false>
+ALWI void tanh_tile(uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_tanh<fast_and_approx, DST_ACCUM_MODE>(idst)));
+}
 
 /**
  * Please refer to documentation for any_init.
@@ -635,6 +644,39 @@ ALWI void sfpu_reduce_init() {
         "Unsupported data format. Supported formats: Float32, Int32, UInt32");
     MATH((llk_math_eltwise_unary_sfpu_reduce_init<true, format>()));
 }
+
+// clang-format off
+/**
+ * Performs element-wise add_top_row operation between the top rows of two tiles in DST register.
+ * Takes the top row of tile at dst_tile_0 and adds it with the top row of tile at dst_tile_1,
+ * storing the result in the top row of tile at dst_tile_out.
+ * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Only 32x32 tile dimensions are supported.
+ * All tile indices must reference valid tiles within the DST register.
+ *
+ * | Argument        | Description                                                              | Type      | Valid Range                                           | Required |
+ * |-----------------|--------------------------------------------------------------------------|-----------|-------------------------------------------------------|----------|
+ * | dst_tile_0      | The index of the first tile in DST register                              | uint32_t  | Must be less than the size of the DST register buffer | True     |
+ * | dst_tile_1      | The index of the second tile in DST register                             | uint32_t  | Must be less than the size of the DST register buffer | True     |
+ * | dst_tile_out    | The index of the output tile in DST register                             | uint32_t  | Must be less than the size of the DST register buffer | True     |
+ * | format          | The data format for the add_top_row operation                            | DataFormat| Float32, Int32, UInt32                                | True     |
+ */
+// clang-format on
+template <DataFormat format>
+ALWI void sfpu_add_top_row(uint32_t dst_tile_0, uint32_t dst_tile_1, uint32_t dst_tile_out) {
+    static_assert(
+        format == DataFormat::Float32 || format == DataFormat::Int32 || format == DataFormat::UInt32,
+        "Unsupported data format. Supported formats: Float32, Int32, UInt32");
+
+    MATH((llk_math_eltwise_binary_sfpu_add_top_row<format>(dst_tile_0, dst_tile_1, dst_tile_out)));
+}
+
+/**
+ * Please refer to documentation for any_init.
+ */
+ALWI void sfpu_add_top_row_init() { MATH((llk_math_eltwise_binary_sfpu_add_top_row_init())); }
 
 /**
  * Pauses the cores so that the debug interface can be used to inspect the value of the registers.
