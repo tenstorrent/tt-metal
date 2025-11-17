@@ -299,8 +299,6 @@ def validate(
         ttml.autograd.GradMode.DISABLED
     )
 
-    with ttml.autograd.no_grad():
-
     tt_model.eval()
     eval_batch_count = 4
     cur_val_losses = []
