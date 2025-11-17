@@ -24,7 +24,7 @@ using sliding_window::SlidingWindowConfig;
 namespace conv_transpose2d {
 
 Result conv_transpose2d(
-    const ttnn::Tensor& input_tensor,
+    ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     MeshDevice* device,
     uint32_t in_channels,
@@ -313,7 +313,7 @@ Result conv_transpose2d(
 }
 
 Result ConvTranpose2dOperation::invoke(
-    const ttnn::Tensor& input_tensor,
+    ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     MeshDevice* device,
     uint32_t in_channels,

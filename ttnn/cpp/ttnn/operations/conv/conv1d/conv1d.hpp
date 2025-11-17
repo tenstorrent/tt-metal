@@ -29,7 +29,7 @@ using Result = std::variant<
 using Conv1dConfig = ttnn::operations::conv::conv2d::Conv2dConfig;
 
 Result conv1d(
-    const ttnn::Tensor& input_tensor,
+    ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     MeshDevice* device,
     uint32_t in_channels,
@@ -54,7 +54,7 @@ Result conv1d(
 // The input and weight tensors are reshaped to 4D tensors before invoking the Conv2dOperation.
 struct Conv1dOperation {
     static Result invoke(
-        const ttnn::Tensor& input_tensor,
+        ttnn::Tensor& input_tensor,
         const ttnn::Tensor& weight_tensor,
         MeshDevice* device,
         uint32_t in_channels,
