@@ -576,7 +576,7 @@ FORCE_INLINE void noc_async_read_one_packet_set_state(
         Read responses - assigned VCs dynamically
     */
     DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc, DEBUG_SANITIZE_NOC_UNICAST);
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ_SET_STATE, src_noc_addr, size, (use_vc) ? vc : -1);
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ_SET_STATE, src_noc_addr, size, (use_vc) ? static_cast<int8_t>(vc) : -1);
 
     WAYPOINT("NASW");
     ncrisc_noc_read_set_state<noc_mode, true /* one_packet */, use_vc>(noc, read_cmd_buf, src_noc_addr, size, vc);
@@ -608,7 +608,7 @@ FORCE_INLINE void noc_async_read_one_packet_with_state(
         Read responses - assigned VCs dynamically
     */
     RECORD_NOC_EVENT_WITH_ADDR(
-        NocEventType::READ_WITH_STATE, static_cast<uint64_t>(src_local_l1_addr), 0, (use_vc) ? vc : -1);
+        NocEventType::READ_WITH_STATE, static_cast<uint64_t>(src_local_l1_addr), 0, (use_vc) ? static_cast<int8_t>(vc) : -1);
 
     WAYPOINT("NATW");
 
@@ -2893,15 +2893,21 @@ struct noc_traits_t<UnicastEndpoint> {
     };
     template <Noc::AddressType address_type>
     static auto src_addr(const UnicastEndpoint& src, const Noc& noc, const src_args_type& args) {
-        static_assert(address_type == Noc::AddressType::NOC);
-        uint64_t noc_addr = src.get_noc_unicast_addr(args.noc_x, args.noc_y, args.addr, noc.get_noc_id());
-        return noc_addr;
+        if constexpr (address_type == Noc::AddressType::LOCAL_L1) {
+            return args.addr;
+        } else {
+            uint64_t noc_addr = src.get_noc_unicast_addr(args.noc_x, args.noc_y, args.addr, noc.get_noc_id());
+            return noc_addr;
+        }
     }
     template <Noc::AddressType address_type>
     static auto dst_addr(const UnicastEndpoint& dst, const Noc& noc, const dst_args_type& args) {
-        static_assert(address_type == Noc::AddressType::NOC);
-        uint64_t noc_addr = dst.get_noc_unicast_addr(args.noc_x, args.noc_y, args.addr, noc.get_noc_id());
-        return noc_addr;
+        if constexpr (address_type == Noc::AddressType::LOCAL_L1) {
+            return args.addr;
+        } else {
+            uint64_t noc_addr = dst.get_noc_unicast_addr(args.noc_x, args.noc_y, args.addr, noc.get_noc_id());
+            return noc_addr;
+        }
     }
 };
 
