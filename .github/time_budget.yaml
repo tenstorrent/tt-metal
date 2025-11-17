@@ -13,3 +13,17 @@ ops:
         time_budget: 540
       P150b:
         time_budget: 540
+  nightly:
+    skus:
+      wh_llmbox:
+        time_budget: 90
+fabric:
+  nightly:
+    skus:
+      wh_llmbox:
+        time_budget: 165
+scaleout:
+  nightly:
+    skus:
+      wh_llmbox:
+        time_budget: 30
