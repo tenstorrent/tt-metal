@@ -33,7 +33,11 @@ from tests.ttnn.unit_tests.operations.conv.test_conv3d import (
     ],
     ids=["stride_111", "stride_135"],
 )
-@pytest.mark.parametrize("padding", [(0, 1, 1)], ids=["padding_011"])
+@pytest.mark.parametrize(
+    "padding",
+    [(0, 1, 1), (1, 1, 1), (2, 0, 1), (3, 2, 1)],
+    ids=["padding_011", "padding111", "padding201", "padding321"],
+)
 @pytest.mark.parametrize("padding_mode", ["zeros", "replicate"])
 def test_conv3d_sweep_shapes(device, B, C_in, C_out, T, H, W, kernel_size, stride, padding, padding_mode):
     if padding == (0, 0, 0) and padding_mode == "replicate":
@@ -52,6 +56,8 @@ def test_conv3d_sweep_shapes(device, B, C_in, C_out, T, H, W, kernel_size, strid
     "input_shape, out_channels, kernel_size, stride, padding, padding_mode",
     [
         [(1, 128, 16, 16, 16), 128, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
+        [(1, 128, 16, 16, 16), 128, (3, 3, 3), (1, 1, 1), (1, 1, 1), "replicate"],
+        [(1, 128, 16, 16, 16), 128, (3, 3, 3), (1, 1, 1), (1, 1, 1), "zeros"],
     ],
 )
 @pytest.mark.timeout(1000)
@@ -142,12 +148,30 @@ def test_conv3d_sweep_blocks(device, input_shape, out_channels, kernel_size, str
             (128, 96, 1, 2, 16),
         ],  # Best blocking found so far
         [
+            (1, 768, 4, 60, 106),
+            768,
+            (3, 3, 3),
+            (1, 1, 1),
+            (1, 1, 1),
+            "replicate",
+            (128, 96, 1, 2, 16),
+        ],  # Best blocking found so far
+        [
             (1, 512, 11, 120, 212),
             512,
             (3, 3, 3),
             (1, 1, 1),
             (0, 1, 1),
             "replicate",
+            (128, 128, 1, 8, 4),
+        ],  # Best blocking found so far
+        [
+            (1, 512, 11, 120, 212),
+            512,
+            (3, 3, 3),
+            (1, 1, 1),
+            (1, 1, 1),
+            "zeros",
             (128, 128, 1, 8, 4),
         ],  # Best blocking found so far
         [
@@ -160,6 +184,15 @@ def test_conv3d_sweep_blocks(device, input_shape, out_channels, kernel_size, str
             (128, 128, 4, 4, 2),
         ],  # Best blocking found so far
         [
+            (1, 256, 21, 240, 424),
+            256,
+            (3, 3, 3),
+            (1, 1, 1),
+            (1, 1, 1),
+            "replicate",
+            (128, 128, 4, 4, 2),
+        ],  # Best blocking found so far
+        [
             (1, 128, 21, 480, 848),
             128,
             (3, 3, 3),
@@ -168,8 +201,17 @@ def test_conv3d_sweep_blocks(device, input_shape, out_channels, kernel_size, str
             "replicate",
             (128, 128, 1, 2, 16),
         ],  # Best blocking found so far
+        [
+            (1, 128, 21, 480, 848),
+            128,
+            (3, 3, 3),
+            (1, 1, 1),
+            (1, 1, 1),
+            "zeros",
+            (128, 128, 1, 2, 16),
+        ],  # Best blocking found so far
     ],
-    ids=["variant1", "variant2", "variant3", "variant4"],
+    ids=["variant1", "variant2", "variant3", "variant4", "variant5", "variant6", "variant7", "variant8"],
 )
 def test_conv3d_mochi_shapes(
     device,
