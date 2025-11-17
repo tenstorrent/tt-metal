@@ -17,6 +17,7 @@
 
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <tt-metalium/mesh_socket.hpp>
+#include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "send_recv_op_utils.hpp"
 
 namespace tt::tt_metal {
@@ -51,10 +52,10 @@ void test_send_recv_async_(
 
     distributed::SocketConfig socket_config = {
         .socket_connection_config = socket_connections, .socket_mem_config = socket_mem_config};
-    auto [forward_send_socket, forward_recv_socket] =
-        distributed::MeshSocket::create_socket_pair(md0, md1, socket_config);
-    auto [backward_send_socket, backward_recv_socket] =
-        distributed::MeshSocket::create_socket_pair(md1, md0, socket_config);
+    // Initialize socket pairs - this performs all the side effects needed for socket communication
+    // (creates buffers, generates descriptors, writes configs) without requiring MeshSocket objects
+    distributed::initialize_socket_pair(md0, md1, socket_config);
+    distributed::initialize_socket_pair(md1, md0, socket_config);
     const auto& input_shape = tensor_spec.logical_shape();
     const auto& memory_config = tensor_spec.memory_config();
     uint32_t num_elems = input_shape.volume();

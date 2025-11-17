@@ -101,4 +101,16 @@ void connect_socket_with_peer(
     SocketEndpoint socket_endpoint,
     const std::shared_ptr<multihost::DistributedContext>& context = nullptr);
 
+// Helper function for single-host socket pair initialization (both sender and receiver on same host)
+// This performs all the side effects of create_socket_pair without requiring MeshSocket objects:
+// - Creates config buffers (sender and receiver)
+// - Creates data buffer (receiver)
+// - Generates peer descriptors
+// - Writes socket configs to buffers
+// - Generates fabric node ID maps
+void initialize_socket_pair(
+    const std::shared_ptr<MeshDevice>& sender_device,
+    const std::shared_ptr<MeshDevice>& receiver_device,
+    const SocketConfig& config);
+
 }  // namespace tt::tt_metal::distributed

@@ -622,4 +622,28 @@ void initialize_socket_connection(
     connect_socket_with_peer(config_buffer, data_buffer, config, socket_endpoint, distributed_context);
 }
 
+void initialize_socket_pair(
+    const std::shared_ptr<MeshDevice>& sender_device,
+    const std::shared_ptr<MeshDevice>& receiver_device,
+    const SocketConfig& config) {
+    // Create buffers
+    auto sender_config_buffer = create_socket_config_buffer(sender_device, config, SocketEndpoint::SENDER);
+    auto recv_config_buffer = create_socket_config_buffer(receiver_device, config, SocketEndpoint::RECEIVER);
+    auto socket_data_buffer = create_socket_data_buffer(receiver_device, config);
+
+    // Generate peer descriptors using buffers directly (no MeshSocket objects needed)
+    auto send_peer_descriptor =
+        generate_local_endpoint_descriptor(sender_config_buffer, nullptr, config, SocketEndpoint::SENDER);
+    auto recv_peer_descriptor =
+        generate_local_endpoint_descriptor(recv_config_buffer, socket_data_buffer, config, SocketEndpoint::RECEIVER);
+
+    // Write socket configs to buffers
+    write_socket_configs(sender_config_buffer, send_peer_descriptor, recv_peer_descriptor, SocketEndpoint::SENDER);
+    write_socket_configs(recv_config_buffer, recv_peer_descriptor, send_peer_descriptor, SocketEndpoint::RECEIVER);
+
+    // Note: fabric_node_id_map generation is done internally by MeshSocket constructor,
+    // but since we're not keeping the sockets, we don't need to store it.
+    // The configs written to buffers contain all necessary information.
+}
+
 }  // namespace tt::tt_metal::distributed
