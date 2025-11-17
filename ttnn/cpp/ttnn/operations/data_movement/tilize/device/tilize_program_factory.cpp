@@ -123,7 +123,7 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor& a, Tensor& outp
 
     tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/tilize.cpp",
+        "ttnn/cpp/ttnn/kernel/compute/tilize.cpp",
         core,
         tt::tt_metal::ComputeConfig{
             .fp32_dest_acc_en = fp32_llk_acc,
@@ -527,7 +527,7 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, T
     if (!core_range.ranges().empty()) {
         CreateKernel(
             program,
-            "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/tilize.cpp",
+            "ttnn/cpp/ttnn/kernel/compute/tilize.cpp",
             core_range,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_llk_acc,
@@ -537,7 +537,7 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, T
     if (!core_range_cliff.empty()) {
         CreateKernel(
             program,
-            "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/tilize.cpp",
+            "ttnn/cpp/ttnn/kernel/compute/tilize.cpp",
             core_range_cliff,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_llk_acc,
@@ -687,7 +687,7 @@ operation::ProgramWithCallbacks tilize_multi_core_sharded(const Tensor& input, T
 
     tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/tilize.cpp",
+        "ttnn/cpp/ttnn/kernel/compute/tilize.cpp",
         all_cores,
         tt::tt_metal::ComputeConfig{
             .fp32_dest_acc_en = fp32_llk_acc,

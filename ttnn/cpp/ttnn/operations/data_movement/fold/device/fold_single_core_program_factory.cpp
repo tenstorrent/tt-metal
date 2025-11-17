@@ -70,7 +70,7 @@ Fold::SingleCore::cached_program_t fold_single_core(
 
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/reader_unary_stick_layout_interleaved_start_id.cpp",
+        "ttnn/cpp/ttnn/kernel/dataflow/reader_unary_stick_layout_interleaved_start_id.cpp",
         core,
         ReaderDataMovementConfig(reader_compile_time_args));
 

@@ -296,7 +296,6 @@ if(NOT TARGET TT::Metalium)
             "$ENV{TT_METAL_HOME}/ttnn"
             "$ENV{TT_METAL_HOME}/ttnn/api"
             "$ENV{TT_METAL_HOME}/ttnn/cpp"
-            "$ENV{TT_METAL_HOME}/ttnn/cpp/ttnn/deprecated"
             "${reflect_SOURCE_DIR}"
         )
 
