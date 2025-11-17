@@ -239,6 +239,15 @@ class TtSDXLCombinedPipeline:
 
         logger.info("Combined pipeline initialized successfully")
 
+    def set_denoising_split(self, denoising_split: float):
+        assert self.config.use_refiner, "Cannot set denoising split when use_refiner=False"
+        if not isinstance(denoising_split, (float)):
+            raise ValueError(f"denoising_split must be float but is {type(denoising_split)}")
+        if not (0.0 <= denoising_split <= 1.0):
+            raise ValueError(f"denoising_split must be in range [0.0, 1.0] but is {denoising_split}")
+
+        self.config.denoising_split = denoising_split
+
     def _auto_compile_if_needed(self):
         if self._compiled:
             return
@@ -316,6 +325,7 @@ class TtSDXLCombinedPipeline:
         guidance_scale=None,
         crop_coords_top_left=None,
         guidance_rescale=None,
+        denoising_split=None,
     ):
         if isinstance(prompts, str):
             prompts = [prompts]
@@ -353,6 +363,9 @@ class TtSDXLCombinedPipeline:
 
             if self.config.use_refiner:
                 self.refiner_pipeline.set_num_inference_steps(num_inference_steps)
+
+        if denoising_split is not None and denoising_split != self.config.denoising_split:
+            self.set_denoising_split(denoising_split)
 
         self._auto_compile_if_needed()
 
