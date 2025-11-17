@@ -663,13 +663,71 @@ class MasterConfigLoader:
 
                     if parsed_dtype and parsed_layout and parsed_mem_config:
                         # Hardcode specific operation requirements
-                        # tilize: JSON doesn't have layout field, but tilize requires ROW_MAJOR_LAYOUT
-                        if operation_name in ["tilize", "ttnn::tilize"]:
+                        # tilize and tilize_with_val_padding: JSON doesn't have layout field, but these ops require ROW_MAJOR_LAYOUT
+                        if operation_name in [
+                            "tilize",
+                            "ttnn::tilize",
+                            "tilize_with_val_padding",
+                            "ttnn::tilize_with_val_padding",
+                        ]:
                             parsed_layout = ttnn.ROW_MAJOR_LAYOUT
 
+                        # pad: If padding has front padding (non-zero first element), use ROW_MAJOR layout
+                        # (TILE layout doesn't support front padding, but ROW_MAJOR does)
+                        if operation_name in ["pad", "ttnn::pad"]:
+                            # Extract padding from config to check for front padding
+                            padding = None
+                            for arg in config:
+                                if isinstance(arg, dict) and "arg1" in arg:
+                                    padding_str = arg["arg1"]
+                                    # Parse padding string/list
+                                    if isinstance(padding_str, str):
+                                        # Try parsing as JSON list string like "[[0, 0], [0, 13], [0, 0], [0, 0]]"
+                                        try:
+                                            import ast
+
+                                            padding = ast.literal_eval(padding_str)
+                                        except Exception:
+                                            padding = OperationParameterExtractors._parse_list_from_string(padding_str)
+                                    elif isinstance(padding_str, list):
+                                        padding = padding_str
+                                    break
+
+                            if padding:
+                                # Check if any dimension has front padding (non-zero first element)
+                                has_front_padding = False
+                                if isinstance(padding, list):
+                                    # Handle nested format: [[dim0_front, dim0_back], [dim1_front, dim1_back], ...]
+                                    if len(padding) > 0 and isinstance(padding[0], (list, tuple)):
+                                        for dim_pad in padding:
+                                            if len(dim_pad) >= 1:
+                                                if dim_pad[0] != 0:  # Front padding is non-zero
+                                                    has_front_padding = True
+                                                    break
+                                    # Handle flat format: [front_H, back_H, front_W, back_W] (4 elements)
+                                    elif len(padding) == 4 and all(isinstance(x, int) for x in padding):
+                                        # Check front padding for H and W dimensions (indices 0 and 2)
+                                        if padding[0] != 0 or padding[2] != 0:
+                                            has_front_padding = True
+
+                                if has_front_padding:
+                                    parsed_layout = ttnn.ROW_MAJOR_LAYOUT
+
                         # upsample: C++ code requires INTERLEAVED memory layout (see upsample_op.cpp:22-23)
+                        # Also, if shape is not tile-aligned, use ROW_MAJOR layout (TILE layout requires tile-aligned shapes)
                         if operation_name in ["upsample", "ttnn::upsample"]:
                             parsed_mem_config = ttnn.DRAM_MEMORY_CONFIG  # INTERLEAVED DRAM
+
+                            # Check if shape is tile-aligned
+                            if (
+                                tensor_config.shape
+                                and isinstance(tensor_config.shape, list)
+                                and len(tensor_config.shape) >= 4
+                            ):
+                                h, w = tensor_config.shape[1], tensor_config.shape[2]
+                                if h % 32 != 0 or w % 32 != 0:
+                                    # Shape is not tile-aligned, use ROW_MAJOR layout
+                                    parsed_layout = ttnn.ROW_MAJOR_LAYOUT
 
                         # Determine output memory config based on operation
                         if operation_name == "sharded_to_interleaved":
@@ -678,6 +736,17 @@ class MasterConfigLoader:
                         elif operation_name in ["upsample", "ttnn::upsample"]:
                             # upsample output also needs INTERLEAVED
                             output_mem_config = ttnn.DRAM_MEMORY_CONFIG
+                        elif operation_name in ["untilize_with_unpadding", "ttnn::untilize_with_unpadding"]:
+                            # untilize_with_unpadding: Output memory config must be INTERLEAVED for block sharded input
+                            # (see untilize_with_unpadding_op.cpp:37)
+                            if parsed_mem_config.memory_layout in [
+                                ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                            ]:
+                                output_mem_config = ttnn.DRAM_MEMORY_CONFIG  # INTERLEAVED DRAM
+                            else:
+                                output_mem_config = parsed_mem_config
                         else:
                             # For most unary ops, output matches input
                             output_mem_config = parsed_mem_config
