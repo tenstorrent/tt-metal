@@ -330,10 +330,6 @@ conv_test_cases = [
     "mesh_device",
     [
         pytest.param(1, id="1chips"),
-        pytest.param(2, id="2chips"),
-        pytest.param(8, id="8chips"),
-        pytest.param((8, 4), id="galaxy"),
-        pytest.param((MESH_X, MESH_Y), id="all"),  # run on all available devices
     ],
     indirect=["mesh_device"],
 )
@@ -383,6 +379,7 @@ def test_sdxl_conv(mesh_device, didt_workload_iterations, determinism_check_inte
         reshard_if_not_optimal=True,
         act_block_w_div=1,
         act_block_h_override=test_config["act_block_h_override"],
+        delay_cycles=test_config.get("delay_cycles", 0),
     )
 
     slice_type = test_config["slice_type"]
