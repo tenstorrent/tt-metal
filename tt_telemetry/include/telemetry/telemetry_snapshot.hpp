@@ -308,6 +308,28 @@ private:
                 continue;
             }
 
+            // Additional check: if metric exists in base but wasn't just merged,
+            // verify that 'other' didn't send a conflicting metric that was rejected
+            if (!was_just_merged && path_exists_in_base) {
+                // This could be a label-only update OR labels from a rejected metric
+                // Check if 'other' tried to send a metric value for this path
+                bool other_sent_metric = other.bool_metrics.find(path) != other.bool_metrics.end() ||
+                                         other.uint_metrics.find(path) != other.uint_metrics.end() ||
+                                         other.double_metrics.find(path) != other.double_metrics.end() ||
+                                         other.string_metrics.find(path) != other.string_metrics.end();
+
+                if (other_sent_metric) {
+                    // Other sent a metric that was rejected due to type conflict
+                    // Don't adopt its labels onto our different metric type
+                    log_error(
+                        tt::LogAlways,
+                        "Label rejected: path '{}' had metric rejected due to type conflict, not adopting labels",
+                        path);
+                    continue;
+                }
+                // Else: True label-only update, safe to merge below
+            }
+
             // Check for conflicting label values and reject if found
             auto existing = metric_labels.find(path);
             if (existing != metric_labels.end()) {
