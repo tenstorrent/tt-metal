@@ -68,7 +68,7 @@ class TtSDXLImg2ImgPipeline(TtSDXLPipeline):
         self,
         all_prompt_embeds_torch,
         torch_add_text_embeds,
-        torch_image=None,
+        torch_image,
         start_latent_seed=None,  # need this to generate noise tensors, and in the future if we want to support strength_max == 1.0
         fixed_seed_for_batch=False,
         timesteps=None,

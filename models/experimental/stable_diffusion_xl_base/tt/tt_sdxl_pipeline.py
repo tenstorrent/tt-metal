@@ -587,21 +587,6 @@ class TtSDXLPipeline(LightweightModule):
         ttnn.synchronize_device(self.ttnn_device)
         profiler.end("prepare_input_tensors")
 
-    def set_input_latents(self, latents):
-        # Load pre-denoised latents from base pipeline into refiner.
-        # Used when refiner continues denoising from base output.
-
-        assert self.allocated_device_tensors, "Device tensors are not allocated"
-
-        logger.info("Setting input latents for refiner...")
-        profiler.start("set_input_latents")
-
-        # Copy latents to device tensor
-        ttnn.copy_host_to_device_tensor(latents, self.tt_latents_device)
-
-        ttnn.synchronize_device(self.ttnn_device)
-        profiler.end("set_input_latents")
-
     def generate_images(self, return_latents=False):
         # SDXL inference run.
         # If return_latents=True, skip VAE decoding and return latents instead of images
