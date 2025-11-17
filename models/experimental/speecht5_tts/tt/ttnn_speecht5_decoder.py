@@ -51,15 +51,6 @@ def get_high_perf_compute_config():
     )
 
 
-def l1_matmul(a, b, *args, **kwargs):
-    """Matmul with L1 memory config and high-performance compute kernel"""
-    if "compute_kernel_config" not in kwargs:
-        kwargs["compute_kernel_config"] = get_high_perf_compute_config()
-    if "memory_config" not in kwargs:
-        kwargs["memory_config"] = ttnn.L1_MEMORY_CONFIG
-    return ttnn.matmul(a, b, *args, **kwargs)
-
-
 @dataclass
 class TTNNDecoderConfig:
     """Configuration for TTNN SpeechT5 Decoder."""
@@ -440,8 +431,9 @@ class TTNNSpeechT5Attention:
 
         # PHASE 5: Compute attention scores: Q @ K^T (L1 outputs)
         key_t = ttnn.permute(key, [0, 2, 1])
-        attn_weights = l1_matmul(query, key_t)
-        attn_weights = ttnn.to_memory_config(attn_weights, ttnn.L1_MEMORY_CONFIG)
+        attn_weights = ttnn.matmul(
+            query, key_t, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=get_high_perf_compute_config()
+        )
 
         # PHASE 6: Apply attention mask if provided (L1 outputs)
         if attention_mask is not None:
@@ -461,8 +453,12 @@ class TTNNSpeechT5Attention:
         attn_weights = ttnn.to_memory_config(attn_weights, ttnn.L1_MEMORY_CONFIG)
 
         # PHASE 8: Apply attention to values (L1 output)
-        attn_output = l1_matmul(attn_weights, value)
-        attn_output = ttnn.to_memory_config(attn_output, ttnn.L1_MEMORY_CONFIG)
+        attn_output = ttnn.matmul(
+            attn_weights,
+            value,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            compute_kernel_config=get_high_perf_compute_config(),
+        )
 
         # PHASE 9: Reshape back to [B, S, H] (L1 output)
         attn_output = self._reshape_from_multihead(attn_output, batch, seq_len)

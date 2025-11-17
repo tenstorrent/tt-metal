@@ -404,7 +404,9 @@ def generate_speech_full_ttnn(token_ids, speaker_embeddings, vocoder=None):
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        output_sequence_ttnn = l1_concat([output_sequence_ttnn, last_frame_ttnn], dim=1)
+        output_sequence_ttnn = ttnn.concat(
+            [output_sequence_ttnn, last_frame_ttnn], dim=1, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
 
         # Stop condition
         prob = torch.sigmoid(stop_logits_torch)

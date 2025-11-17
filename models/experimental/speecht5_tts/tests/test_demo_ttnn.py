@@ -296,7 +296,7 @@ def test_demo_ttnn_performance_5_tokens(ttnn_device, speecht5_models):
 def test_demo_ttnn_autoregressive_components_performance(ttnn_device, speecht5_models):
     """Test performance of individual autoregressive components used in the demo."""
     import time
-    from models.experimental.speecht5_tts.demo_ttnn import l1_concat, ensure_l1_memory
+    from models.experimental.speecht5_tts.demo_ttnn import ensure_l1_memory
 
     # Test parameters - match demo
     text = "Hello, my dog is cute."
@@ -382,7 +382,9 @@ def test_demo_ttnn_autoregressive_components_performance(ttnn_device, speecht5_m
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
-        output_sequence_ttnn = l1_concat([output_sequence_ttnn, last_frame_ttnn], dim=1)
+        output_sequence_ttnn = ttnn.concat(
+            [output_sequence_ttnn, last_frame_ttnn], dim=1, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
 
         ttnn.synchronize_device(ttnn_device)
         step_time = time.time() - step_start

@@ -91,7 +91,8 @@ class TtConv1d:
         Returns:
             Output tensor [B, out_channels, L]
         """
-        # PHASE 1: Reshape (L1 outputs)
+        # PHASE 1: Ensure input is in L1 and reshape (L1 outputs)
+        x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
         x = ttnn.permute(x, [0, 2, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
         x = ttnn.reshape(x, [batch_size, input_length, 1, self.in_channels], memory_config=ttnn.L1_MEMORY_CONFIG)
 
@@ -114,6 +115,7 @@ class TtConv1d:
             return_weights_and_bias=True,
             return_output_dim=True,
         )
+        result = ttnn.to_memory_config(result, ttnn.L1_MEMORY_CONFIG)
 
         # PHASE 3: Reshape back (L1 outputs)
         result = ttnn.reshape(
@@ -121,7 +123,8 @@ class TtConv1d:
         )
         result = ttnn.permute(result, [0, 2, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        return result
+        # PHASE 4: Final output must be in L1
+        return ttnn.to_memory_config(result, ttnn.L1_MEMORY_CONFIG)
 
 
 class TTNNSpeechT5BatchNormConvLayer:
@@ -174,6 +177,9 @@ class TTNNSpeechT5BatchNormConvLayer:
         Returns:
             output: [batch, channels, time_steps]
         """
+        # PHASE 1: Ensure input is in L1
+        hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
+
         # Get batch and sequence length from input
         # hidden_states shape: [batch, in_channels, seq_len]
         batch_size = hidden_states.shape[0]
@@ -181,6 +187,7 @@ class TTNNSpeechT5BatchNormConvLayer:
 
         # PHASE 2: Op 1: Conv1d (L1 output)
         conv_result = self.conv(hidden_states, batch_size, input_length)
+        conv_result = ttnn.to_memory_config(conv_result, ttnn.L1_MEMORY_CONFIG)
 
         # PHASE 3: Op 2: BatchNorm (L1 outputs)
         # Reshape for batch_norm: [B, C, L] -> [B, C, L, 1] for TTNN
@@ -196,8 +203,8 @@ class TTNNSpeechT5BatchNormConvLayer:
             bias=self.bn_bias,
             training=False,  # Inference mode
             eps=1e-05,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
+        bn_result = ttnn.to_memory_config(bn_result, ttnn.L1_MEMORY_CONFIG)
 
         # Reshape back: [B, C, L, 1] -> [B, C, L]
         bn_result = ttnn.reshape(
@@ -206,13 +213,16 @@ class TTNNSpeechT5BatchNormConvLayer:
 
         # PHASE 4: Op 3: Tanh activation (if present) (L1 output)
         if self.has_activation:
-            bn_result = ttnn.tanh(bn_result, memory_config=ttnn.L1_MEMORY_CONFIG)
+            bn_result = ttnn.tanh(bn_result)
+            bn_result = ttnn.to_memory_config(bn_result, ttnn.L1_MEMORY_CONFIG)
 
         # PHASE 5: Op 4: Dropout (only in training mode, skip in inference)
         # In inference, dropout is a no-op
         hidden_states = bn_result
+        hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
 
-        return hidden_states
+        # PHASE 6: Final output must be in L1
+        return ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
 
 
 class TTNNSpeechT5SpeechDecoderPostnet:
@@ -265,8 +275,12 @@ class TTNNSpeechT5SpeechDecoderPostnet:
         Returns:
             refined: [batch, time_steps, mel_bins]
         """
+        # PHASE 1: Ensure input is in L1
+        hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
+
         # Save input for residual connection
         residual = hidden_states
+        residual = ttnn.to_memory_config(residual, ttnn.L1_MEMORY_CONFIG)
 
         # PHASE 2: Op 1: Transpose for Conv1d ([B, L, C] → [B, C, L]) (L1 output)
         layer_output = ttnn.permute(hidden_states, [0, 2, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -274,14 +288,17 @@ class TTNNSpeechT5SpeechDecoderPostnet:
         # PHASE 3: Op 2-6: Apply 5 conv layers (L1 outputs)
         for layer in self.layers:
             layer_output = layer(layer_output)
+            layer_output = ttnn.to_memory_config(layer_output, ttnn.L1_MEMORY_CONFIG)
 
         # PHASE 4: Op 7: Transpose back ([B, C, L] → [B, L, C]) (L1 output)
         layer_output = ttnn.permute(layer_output, [0, 2, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # PHASE 5: Op 8: Residual connection (L1 output)
         output = ttnn.add(residual, layer_output, memory_config=ttnn.L1_MEMORY_CONFIG)
+        output = ttnn.to_memory_config(output, ttnn.L1_MEMORY_CONFIG)
 
-        return output
+        # PHASE 6: Final output must be in L1
+        return ttnn.to_memory_config(output, ttnn.L1_MEMORY_CONFIG)
 
     def __call__(
         self, hidden_states: ttnn.Tensor, timing_details: bool = False
@@ -306,8 +323,9 @@ class TTNNSpeechT5SpeechDecoderPostnet:
         seq_len = hidden_states.shape[1]
         hidden_size = hidden_states.shape[2]
 
-        # PHASE 1: Get shapes and timing
+        # PHASE 1: Ensure input is in L1
         start_time = time.time()
+        hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
         timing["memory_input"] = time.time() - start_time
 
         # PHASE 2: Op 1: Project to mel features (high-performance compute kernel)
@@ -334,6 +352,7 @@ class TTNNSpeechT5SpeechDecoderPostnet:
         # PHASE 4: Op 3: Apply convolutional post-net (with residual) (L1 output)
         start_time = time.time()
         outputs_after_postnet = self.postnet(outputs_before_postnet)
+        outputs_after_postnet = ttnn.to_memory_config(outputs_after_postnet, ttnn.L1_MEMORY_CONFIG)
         timing["conv_postnet"] = time.time() - start_time
 
         # PHASE 5: Op 4: Predict stop tokens (high-performance compute kernel)
@@ -354,8 +373,11 @@ class TTNNSpeechT5SpeechDecoderPostnet:
         stop_logits = ttnn.reshape(prob_out, [batch_size, mel_seq_len], memory_config=ttnn.L1_MEMORY_CONFIG)
         timing["stop_reshape"] = time.time() - start_time
 
-        # PHASE 7: All outputs are already in L1 from operations above
+        # PHASE 7: All outputs must be in L1
         start_time = time.time()
+        outputs_before_postnet = ttnn.to_memory_config(outputs_before_postnet, ttnn.L1_MEMORY_CONFIG)
+        outputs_after_postnet = ttnn.to_memory_config(outputs_after_postnet, ttnn.L1_MEMORY_CONFIG)
+        stop_logits = ttnn.to_memory_config(stop_logits, ttnn.L1_MEMORY_CONFIG)
         timing["memory_output"] = time.time() - start_time
 
         if timing_details:

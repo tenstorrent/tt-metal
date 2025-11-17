@@ -305,7 +305,9 @@ def _generate_speech_internal(
         if spectrogram_ttnn is None:
             spectrogram_ttnn = new_frames_ttnn
         else:
-            spectrogram_ttnn = l1_concat([spectrogram_ttnn, new_frames_ttnn], dim=1)
+            spectrogram_ttnn = ttnn.concat(
+                [spectrogram_ttnn, new_frames_ttnn], dim=1, memory_config=ttnn.L1_MEMORY_CONFIG
+            )
 
         # Extend sequence with last frame from new frames (directly from mel_after)
         last_frame_idx = start_idx + 1
@@ -315,7 +317,9 @@ def _generate_speech_internal(
             [batch_size, last_frame_idx + 1, num_mel_bins],  # end indices
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        output_sequence_ttnn = l1_concat([output_sequence_ttnn, last_frame_ttnn], dim=1)
+        output_sequence_ttnn = ttnn.concat(
+            [output_sequence_ttnn, last_frame_ttnn], dim=1, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
 
         steps_completed += 1
 

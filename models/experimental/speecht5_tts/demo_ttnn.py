@@ -52,24 +52,6 @@ def get_high_perf_compute_config():
     )
 
 
-def l1_matmul(a, b, *args, **kwargs):
-    """Optimized matrix multiplication with L1 memory."""
-    if "compute_kernel_config" not in kwargs:
-        kwargs["compute_kernel_config"] = get_high_perf_compute_config()
-    if "memory_config" not in kwargs:
-        kwargs["memory_config"] = ttnn.L1_MEMORY_CONFIG
-    return ttnn.matmul(a, b, *args, **kwargs)
-
-
-def l1_linear(input_tensor, weight, bias=None, *args, **kwargs):
-    """Optimized linear layer with L1 memory."""
-    if "compute_kernel_config" not in kwargs:
-        kwargs["compute_kernel_config"] = get_high_perf_compute_config()
-    if "memory_config" not in kwargs:
-        kwargs["memory_config"] = ttnn.L1_MEMORY_CONFIG
-    return ttnn.linear(input_tensor, weight, bias=bias, *args, **kwargs)
-
-
 def generate_speech_ttnn(
     text,
     speaker_embeddings,
