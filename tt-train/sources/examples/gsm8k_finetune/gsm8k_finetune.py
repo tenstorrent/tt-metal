@@ -153,9 +153,6 @@ class CollateFn:
 
         return X_np, y_np, loss_scaler_np
 
-    def __call__(self, batch):
-        return self.collate_fn(batch)
-
 
 def get_batch_generator(
     dataloader,
