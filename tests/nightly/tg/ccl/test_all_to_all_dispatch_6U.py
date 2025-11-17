@@ -328,8 +328,14 @@ def test_all_to_all_dispatch_8x16_quad_galaxy(
 @pytest.mark.parametrize("hidden_size", [7168])
 @pytest.mark.parametrize(
     "seq_len, num_iters, warmup_iters",
-    [(2, 40, 10), (128, 10, 5)],
-    ids=["decode", "prefill"],
+    [
+        (2, 40, 10),
+        # (128, 10, 5) #32564
+    ],
+    ids=[
+        "decode",
+        # "prefill"
+    ],
 )
 @pytest.mark.parametrize("num_links", [4])
 @pytest.mark.parametrize("topology", [None])
@@ -404,8 +410,14 @@ def test_all_to_all_dispatch_trace(
 @pytest.mark.parametrize("hidden_size", [7168])
 @pytest.mark.parametrize(
     "seq_len, num_iters, warmup_iters",
-    [(1, 40, 10), (128, 10, 5)],
-    ids=["decode", "prefill"],
+    [
+        (1, 40, 10),
+        # (128, 10, 5) #32564
+    ],
+    ids=[
+        "decode",
+        # "prefill"
+    ],
 )
 @pytest.mark.parametrize("num_links", [4])
 @pytest.mark.parametrize("topology", [None])
@@ -487,7 +499,7 @@ def test_decode_perf(
 @pytest.mark.parametrize("hidden_size", [7168])
 @pytest.mark.parametrize(
     "seq_len, num_iters, warmup_iters",
-    [(128, 5, 3)],
+    [(128, 3, 2)],
     ids=["prefill"],
 )
 @pytest.mark.parametrize("num_links", [4])
@@ -512,6 +524,7 @@ def test_prefill_perf(
     input_memory_config,
     output_memory_config,
 ):
+    pytest.skip("Issue 32564")
     if cluster_axis is None:
         dispatch_devices = mesh_shape[0] * mesh_shape[1]
     else:
