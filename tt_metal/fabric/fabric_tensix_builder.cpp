@@ -215,9 +215,9 @@ void FabricTensixDatamoverConfig::calculate_buffer_allocations() {
         case tt::tt_fabric::Topology::Ring:
             num_channels_ = tt::tt_fabric::builder_config::num_sender_channels_1d_linear;
             break;
-        // case tt::tt_fabric::Topology::NeighborExchange:
-        //     num_channels_ = tt::tt_fabric::builder_config::num_sender_channels_1d_neighbor_exchange;
-        //     break;
+        case tt::tt_fabric::Topology::NeighborExchange:
+            num_channels_ = tt::tt_fabric::builder_config::num_sender_channels_1d_neighbor_exchange;
+            break;
         case tt::tt_fabric::Topology::Mesh:
         case tt::tt_fabric::Topology::Torus:
             num_channels_ = tt::tt_fabric::builder_config::num_sender_channels_2d_mesh;
@@ -520,6 +520,9 @@ std::vector<uint32_t> FabricTensixDatamoverBuilder::get_compile_time_args(tt::tt
                 worker_stream_id,                                                             // default 17
                 tt::tt_fabric::StreamRegAssignments::sender_channel_1_free_slots_stream_id};  // 18
             break;
+        case tt::tt_fabric::Topology::NeighborExchange:             // no forwarding, only one sender channel
+            fabric_stream_ids_check_by_local = {worker_stream_id};  // default 17
+            break;
         case tt::tt_fabric::Topology::Mesh:
         case tt::tt_fabric::Topology::Torus:
             fabric_stream_ids_check_by_local = {
@@ -537,6 +540,9 @@ std::vector<uint32_t> FabricTensixDatamoverBuilder::get_compile_time_args(tt::tt
 
     uint8_t num_full_size_channels =
         fabric_mux_config_->get_num_channels(tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL);
+    std::cout << "worker stream id: " << worker_stream_id << std::endl;
+    std::cout << "Worker channel: " << worker_channel << std::endl;
+    std::cout << "num_full_size_channels: " << static_cast<int>(num_full_size_channels) << std::endl;
     TT_FATAL(
         num_full_size_channels == fabric_stream_ids_check_by_local.size(),
         "the number of fabric stream ids used must equal to the number of mux channels");
