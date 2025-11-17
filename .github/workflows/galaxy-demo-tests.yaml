@@ -25,11 +25,11 @@ on:
       deepseek:
         description: 'Run DeepSeek tests'
         required: false
-        default: 'false'
+        default: false
         type: boolean
   schedule:
     - cron: "0 0 * * *" # This cron schedule runs demo tests every day at 12am UTC
-    - cron: "0 9 * * 6" # frequency of galaxy tests
+    - cron: "0 9 * * 6" # frequency of galaxy deepseek tests
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
