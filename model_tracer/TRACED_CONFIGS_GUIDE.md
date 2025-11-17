@@ -157,12 +157,12 @@ python model_tracer/analyze_operations.py sigmoid_accurate
 ```bash
 # Generate test vectors
 python3 tests/sweep_framework/sweeps_parameter_generator.py \
-  --module-name eltwise.unary.sigmoid_accurate.sigmoid_accurate \
+  --module-name model_traced.add_model_traced \
   --dump-file
 
 # Run model_traced suite
 python3 tests/sweep_framework/sweeps_runner.py \
-  --module-name eltwise.unary.sigmoid_accurate.sigmoid_accurate \
+  --module-name model_traced.add_model_traced \
   --suite model_traced \
   --vector-source vectors_export \
   --result-dest results_export

@@ -215,7 +215,7 @@ class MasterConfigLoader:
                         if isinstance(start, dict) and isinstance(end, dict):
                             start_x, start_y = start.get("x", 0), start.get("y", 0)
                             end_x, end_y = end.get("x", 0), end.get("y", 0)
-                            num_cores = (end_x - start_x + 1) * (end_y - end_y + 1)
+                            num_cores = (end_x - start_x + 1) * (end_y - start_y + 1)
 
             # For wormhole_b0, we have 56 compute banks
             # Filter out configs that require more cores than available
@@ -227,6 +227,49 @@ class MasterConfigLoader:
         except Exception:
             # If we can't validate, assume it's valid (let it fail at runtime if needed)
             return True
+
+    def _is_valid_ttnn_memory_config(self, mem_config, operation_name: str = None) -> bool:
+        """
+        Check if a TTNN MemoryConfig object is valid for the operation.
+        Used to validate parsed memory configs before adding to test parameters.
+
+        Args:
+            mem_config: TTNN MemoryConfig object
+            operation_name: Name of the operation (for operation-specific checks)
+
+        Returns:
+            True if valid, False otherwise
+        """
+        try:
+            if not mem_config:
+                return False
+
+            # Check shard spec if present
+            if hasattr(mem_config, "shard_spec") and mem_config.shard_spec:
+                shard_shape = mem_config.shard_spec.shape
+                core_range_set = mem_config.shard_spec.core_range_set
+
+                # Check tile alignment
+                if shard_shape and len(shard_shape) >= 2:
+                    height, width = shard_shape[0], shard_shape[1]
+                    if height % 32 != 0 or width % 32 != 0:
+                        return False
+
+                # Check number of cores
+                if core_range_set:
+                    num_cores = 0
+                    for core_range in core_range_set.core_ranges:
+                        start = core_range.start
+                        end = core_range.end
+                        num_cores += (end.x - start.x + 1) * (end.y - start.y + 1)
+
+                    MAX_COMPUTE_BANKS = 56
+                    if num_cores > MAX_COMPUTE_BANKS:
+                        return False
+
+            return True
+        except Exception:
+            return True  # If we can't check, assume valid
 
     def parse_memory_config(self, memory_config: Dict, tensor_shape: list = None) -> Any:
         """Convert memory config dict to ttnn memory config
@@ -619,23 +662,25 @@ class MasterConfigLoader:
                     parsed_mem_config = self.parse_memory_config(tensor_config.memory_config, tensor_config.shape)
 
                     if parsed_dtype and parsed_layout and parsed_mem_config:
+                        # Hardcode specific operation requirements
+                        # tilize: JSON doesn't have layout field, but tilize requires ROW_MAJOR_LAYOUT
+                        if operation_name in ["tilize", "ttnn::tilize"]:
+                            parsed_layout = ttnn.ROW_MAJOR_LAYOUT
+
+                        # upsample: C++ code requires INTERLEAVED memory layout (see upsample_op.cpp:22-23)
+                        if operation_name in ["upsample", "ttnn::upsample"]:
+                            parsed_mem_config = ttnn.DRAM_MEMORY_CONFIG  # INTERLEAVED DRAM
+
                         # Determine output memory config based on operation
                         if operation_name == "sharded_to_interleaved":
                             # This operation converts sharded to interleaved, so output must be INTERLEAVED
                             output_mem_config = ttnn.DRAM_MEMORY_CONFIG  # Interleaved DRAM
+                        elif operation_name in ["upsample", "ttnn::upsample"]:
+                            # upsample output also needs INTERLEAVED
+                            output_mem_config = ttnn.DRAM_MEMORY_CONFIG
                         else:
                             # For most unary ops, output matches input
                             output_mem_config = parsed_mem_config
-
-                        # Override layout for operations that require ROW_MAJOR
-                        if operation_name in [
-                            "pad",
-                            "tilize_with_val_padding",
-                            "ttnn::pad",
-                            "ttnn::tilize_with_val_padding",
-                        ]:
-                            # These operations require ROW_MAJOR layout
-                            parsed_layout = ttnn.ROW_MAJOR_LAYOUT
 
                         config_dict = {
                             "shape": tensor_config.shape,
@@ -800,6 +845,7 @@ class MasterConfigLoader:
                 # typecast specific parameters
                 output_dtype_list = [] if operation_name in ["typecast", "ttnn::typecast"] else None
 
+                invalid_configs = []
                 for idx, cfg in enumerate(paired_configs):
                     # For reshape, only include configs that have target_shape
                     # Note: We don't filter based on element count matching here because
@@ -808,8 +854,69 @@ class MasterConfigLoader:
                         if "target_shape" not in cfg:
                             continue  # Skip configs without target_shape
 
-                    # Note: We don't filter configs here - let them fail if invalid
-                    # Shard shapes are adjusted to tile-aligned in parse_memory_config
+                    # Validate and report invalid configs (but don't filter - let them fail)
+                    mem_config = cfg.get("memory_config")
+                    output_mem_config = cfg.get("output_memory_config")
+                    shape = cfg.get("shape", [])
+                    layout = cfg.get("layout")
+
+                    # Check for invalid shard specs (too many cores, non-tile-aligned shard shapes)
+                    invalid_reasons = []
+
+                    if mem_config and hasattr(mem_config, "shard_spec") and mem_config.shard_spec:
+                        shard_shape = mem_config.shard_spec.shape
+
+                        # Check tile alignment of shard shape
+                        if shard_shape and len(shard_shape) >= 2:
+                            height, width = shard_shape[0], shard_shape[1]
+                            if height % 32 != 0 or width % 32 != 0:
+                                # Round up to tile-aligned (only allowed conversion)
+                                height_aligned = ((height + 31) // 32) * 32
+                                width_aligned = ((width + 31) // 32) * 32
+                                # Update shard shape in memory config
+                                mem_config.shard_spec.shape = (height_aligned, width_aligned)
+                                invalid_reasons.append(
+                                    f"shard_shape adjusted from ({height}, {width}) to ({height_aligned}, {width_aligned})"
+                                )
+
+                        # Check number of cores (report but don't filter)
+                        if hasattr(mem_config.shard_spec, "num_cores"):
+                            num_cores = mem_config.shard_spec.num_cores()
+                            MAX_COMPUTE_BANKS = 56
+                            if num_cores > MAX_COMPUTE_BANKS:
+                                invalid_reasons.append(f"too_many_cores: {num_cores} > {MAX_COMPUTE_BANKS}")
+
+                    # Check output memory config too
+                    if output_mem_config and hasattr(output_mem_config, "shard_spec") and output_mem_config.shard_spec:
+                        shard_shape = output_mem_config.shard_spec.shape
+                        if shard_shape and len(shard_shape) >= 2:
+                            height, width = shard_shape[0], shard_shape[1]
+                            if height % 32 != 0 or width % 32 != 0:
+                                height_aligned = ((height + 31) // 32) * 32
+                                width_aligned = ((width + 31) // 32) * 32
+                                output_mem_config.shard_spec.shape = (height_aligned, width_aligned)
+                                invalid_reasons.append(
+                                    f"output_shard_shape adjusted from ({height}, {width}) to ({height_aligned}, {width_aligned})"
+                                )
+
+                        # Check number of cores for output too
+                        if hasattr(output_mem_config.shard_spec, "num_cores"):
+                            num_cores = output_mem_config.shard_spec.num_cores()
+                            MAX_COMPUTE_BANKS = 56
+                            if num_cores > MAX_COMPUTE_BANKS:
+                                invalid_reasons.append(f"output_too_many_cores: {num_cores} > {MAX_COMPUTE_BANKS}")
+
+                    # Check operation-specific requirements (report but don't convert)
+                    # Note: tilize and upsample are hardcoded above, so these checks are just for reporting
+                    if operation_name in ["upsample", "ttnn::upsample"]:
+                        if isinstance(shape, list) and len(shape) >= 4:
+                            h, w = shape[1], shape[2]
+                            if h % 32 != 0 or w % 32 != 0:
+                                invalid_reasons.append(f"shape H={h}, W={w} not tile-aligned (must be multiples of 32)")
+
+                    # Report invalid configs
+                    if invalid_reasons:
+                        invalid_configs.append({"index": idx, "shape": shape, "reasons": invalid_reasons})
 
                     input_shapes.append(cfg["shape"])
                     input_a_dtypes.append(cfg["dtype"])
@@ -874,7 +981,11 @@ class MasterConfigLoader:
                     # Extract typecast parameters
                     if operation_name in ["typecast", "ttnn::typecast"]:
                         if "output_dtype" in cfg:
-                            output_dtype_list.append(cfg["output_dtype"])
+                            # Parse output_dtype string to TTNN dtype
+                            output_dtype_str = cfg["output_dtype"]
+                            parsed_output_dtype = self.parse_dtype(f"DataType::{output_dtype_str}")
+                            if parsed_output_dtype:
+                                output_dtype_list.append(parsed_output_dtype)
 
                 # Convert to exact configurations format (prevents Cartesian product)
                 # Use comma-separated parameter names to pass tuples of values together
@@ -973,6 +1084,16 @@ class MasterConfigLoader:
                 print(f"   📊 Will generate {valid_configs} test vectors{dedup_msg}")
                 if failed_configs > 0:
                     print(f"⚠️ Failed to parse {failed_configs} configurations")
+                if invalid_configs:
+                    print(
+                        f"⚠️ Found {len(invalid_configs)} configurations with potential issues (will fail at runtime):"
+                    )
+                    for inv_cfg in invalid_configs[:5]:  # Show first 5
+                        print(f"   Config {inv_cfg['index']}: shape={inv_cfg['shape']}")
+                        for reason in inv_cfg["reasons"]:
+                            print(f"      - {reason}")
+                    if len(invalid_configs) > 5:
+                        print(f"   ... and {len(invalid_configs) - 5} more")
 
             return result
         else:
