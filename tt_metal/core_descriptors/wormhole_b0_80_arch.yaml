@@ -56,7 +56,7 @@ nebula_x1:
     1:
       compute_with_storage_grid_range: # Logical only start and end [x, y]
         start: [0, 0]
-        end: [7, 7]
+        end: [3, 3]
 
       tg_compute_with_storage_grid_range: # Logical only start and end [x, y]
         start: [0, 0]
@@ -79,7 +79,7 @@ nebula_x1:
     2:
       compute_with_storage_grid_range: # Logical only start and end [x, y]
         start: [0, 0]
-        end: [7, 7]
+        end: [3, 3]
 
       tg_compute_with_storage_grid_range: # Logical only start and end [x, y]
         start: [0, 0]
@@ -102,7 +102,7 @@ nebula_x1:
     1:
       compute_with_storage_grid_range: # Logical only start and end [x, y]
         start: [0, 0]
-        end: [6, 8]
+        end: [3, 3]
 
       tg_compute_with_storage_grid_range: # Logical only start and end [x, y]
         start: [0, 0]
@@ -125,7 +125,7 @@ nebula_x1:
     2:
       compute_with_storage_grid_range: # Logical only start and end [x, y]
         start: [0, 0]
-        end: [6, 8]
+        end: [3, 3]
 
       tg_compute_with_storage_grid_range: # Logical only start and end [x, y]
         start: [0, 0]
