@@ -109,18 +109,63 @@ echo "Kernel names file: $KERNEL_NAMES_FILE"
 echo "HTML output: $HTML_OUTPUT_DIR"
 echo ""
 
-# Check required tools
-check_tool() {
-    if ! command -v "$1" &> /dev/null; then
-        echo "ERROR: Required tool '$1' not found in PATH"
-        exit 1
+# Find LLVM tool with version suffix
+find_llvm_tool() {
+    local tool_base="$1"
+    local default_path="$2"
+
+    # First try the provided path
+    if command -v "$default_path" &> /dev/null; then
+        echo "$default_path"
+        return 0
     fi
+
+    # Try versioned names (llvm-profdata-17, llvm-profdata-18, etc.)
+    for version in 17 18 19 16 15; do
+        local versioned_tool="${tool_base}-${version}"
+        if command -v "$versioned_tool" &> /dev/null; then
+            echo "$versioned_tool"
+            return 0
+        fi
+    done
+
+    # Try in common LLVM installation directories
+    for version in 17 18 19 16 15; do
+        local alt_path="/usr/lib/llvm-${version}/bin/${tool_base}"
+        if [ -f "$alt_path" ] && [ -x "$alt_path" ]; then
+            echo "$alt_path"
+            return 0
+        fi
+    done
+
+    return 1
 }
 
 echo "Checking required tools..."
 if [ "$ENABLE_CPP_COVERAGE" = "true" ]; then
-    check_tool "$LLVM_PROFDATA_PATH"
-    check_tool "$LLVM_COV_PATH"
+    # Find llvm-profdata
+    FOUND_PROFDATA=$(find_llvm_tool "llvm-profdata" "$LLVM_PROFDATA_PATH")
+    if [ -n "$FOUND_PROFDATA" ]; then
+        LLVM_PROFDATA_PATH="$FOUND_PROFDATA"
+        echo "✓ Found llvm-profdata: $LLVM_PROFDATA_PATH"
+    else
+        echo "ERROR: Required tool 'llvm-profdata' not found in PATH"
+        echo "  Searched for: llvm-profdata, llvm-profdata-17, llvm-profdata-18, etc."
+        echo "  Try installing: apt-get install llvm-17-tools (or llvm-18-tools)"
+        exit 1
+    fi
+
+    # Find llvm-cov
+    FOUND_COV=$(find_llvm_tool "llvm-cov" "$LLVM_COV_PATH")
+    if [ -n "$FOUND_COV" ]; then
+        LLVM_COV_PATH="$FOUND_COV"
+        echo "✓ Found llvm-cov: $LLVM_COV_PATH"
+    else
+        echo "ERROR: Required tool 'llvm-cov' not found in PATH"
+        echo "  Searched for: llvm-cov, llvm-cov-17, llvm-cov-18, etc."
+        echo "  Try installing: apt-get install llvm-17-tools (or llvm-18-tools)"
+        exit 1
+    fi
 fi
 
 if [ "$ENABLE_PYTHON_COVERAGE" = "true" ]; then
@@ -156,7 +201,8 @@ if [ "$ENABLE_CPP_COVERAGE" = "true" ]; then
     else
         echo "  Found ${#PROFRAW_FILES[@]} .profraw file(s)"
 
-        # Merge profraw files
+        # Merge profraw files into a temporary .profdata file
+        # Note: .profdata files are intermediate - we'll clean them up after generating .info files
         PROFDATA_FILE="$COVERAGE_DIR/coverage.profdata"
         echo "  Merging profraw files..."
         "$LLVM_PROFDATA_PATH" merge -sparse "${PROFRAW_FILES[@]}" -o "$PROFDATA_FILE"
@@ -206,6 +252,12 @@ if [ "$ENABLE_CPP_COVERAGE" = "true" ]; then
             else
                 touch "$CPP_COVERAGE_FILE"
             fi
+        fi
+
+        # Clean up intermediate .profdata file after generating .info files
+        # (keep .profraw files as they might be useful for debugging)
+        if [ -f "$PROFDATA_FILE" ]; then
+            rm -f "$PROFDATA_FILE"
         fi
     fi
     echo "  ✓ C++ coverage collected: $CPP_COVERAGE_FILE"
@@ -273,14 +325,28 @@ else
 fi
 echo ""
 
-# Step 4: Merge All Coverage
-echo "Step 4: Merging all coverage files..."
+# Step 4: Generate Zero-Coverage for All Files
+ZERO_COVERAGE_FILE="$COVERAGE_DIR/zero_coverage.info"
+echo "Step 4: Generating zero-coverage entries for all source files..."
+echo "  This ensures all files appear in the report, even with 0% coverage..."
+python3 "$SCRIPT_DIR/generate_zero_coverage.py" \
+    --source-dir "$SOURCE_DIR" \
+    --output "$ZERO_COVERAGE_FILE" || {
+    echo "  ⚠ Warning: Failed to generate zero-coverage (continuing anyway)"
+    touch "$ZERO_COVERAGE_FILE"
+}
+echo "  ✓ Zero-coverage generated: $ZERO_COVERAGE_FILE"
+echo ""
+
+# Step 5: Merge All Coverage
+echo "Step 5: Merging all coverage files..."
 MERGED_COVERAGE_FILE="$COVERAGE_DIR/merged_coverage.info"
 
 COVERAGE_FILES=()
 [ -f "$CPP_COVERAGE_FILE" ] && COVERAGE_FILES+=("$CPP_COVERAGE_FILE")
 [ -f "$PYTHON_COVERAGE_FILE" ] && COVERAGE_FILES+=("$PYTHON_COVERAGE_FILE")
 [ -f "$KERNEL_COVERAGE_FILE" ] && COVERAGE_FILES+=("$KERNEL_COVERAGE_FILE")
+[ -f "$ZERO_COVERAGE_FILE" ] && COVERAGE_FILES+=("$ZERO_COVERAGE_FILE")
 
 if [ ${#COVERAGE_FILES[@]} -eq 0 ]; then
     echo "  ⚠ No coverage files to merge!"
@@ -292,8 +358,8 @@ python3 "$SCRIPT_DIR/merge_coverage.py" "${COVERAGE_FILES[@]}" > "$MERGED_COVERA
 echo "  ✓ Merged coverage: $MERGED_COVERAGE_FILE"
 echo ""
 
-# Step 5: Generate HTML Report
-echo "Step 5: Generating HTML report..."
+# Step 6: Generate HTML Report
+echo "Step 6: Generating HTML report..."
 echo "  Output directory: $HTML_OUTPUT_DIR"
 genhtml -o "$HTML_OUTPUT_DIR" "$MERGED_COVERAGE_FILE" --ignore-errors source || {
     echo "  ⚠ Warning: genhtml encountered errors but continuing..."

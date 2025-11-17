@@ -25,7 +25,25 @@ if [ ! -f "$REPO_ROOT/build_metal.sh" ]; then
     exit 1
 fi
 
-# Check prerequisites
+# Setup coverage environment (installs missing dependencies and sets env vars)
+echo "Setting up coverage environment..."
+if [ -f "$SCRIPT_DIR/setup_coverage_env.sh" ]; then
+    # Source the setup script to get environment variables
+    # Temporarily unset LD_PRELOAD to avoid instrumenting bash itself
+    OLD_LD_PRELOAD="${LD_PRELOAD:-}"
+    unset LD_PRELOAD
+    # Source the setup script (this will install dependencies and set env vars)
+    source "$SCRIPT_DIR/setup_coverage_env.sh" || {
+        echo "⚠ Warning: setup_coverage_env.sh had errors, but continuing..."
+    }
+    # Don't restore LD_PRELOAD here - we'll set it only when running actual tests
+    # The setup script sets it, but we'll manage it more carefully
+else
+    echo "⚠ Warning: setup_coverage_env.sh not found, skipping auto-setup"
+fi
+
+# Check prerequisites (after setup script may have installed them)
+echo ""
 echo "Checking prerequisites..."
 
 MISSING_TOOLS=()
@@ -51,6 +69,9 @@ if [ ${#MISSING_TOOLS[@]} -gt 0 ]; then
     for tool in "${MISSING_TOOLS[@]}"; do
         echo "  - $tool"
     done
+    echo ""
+    echo "Please run: source .github/actions/code-coverage/setup_coverage_env.sh"
+    echo "Or install manually and try again."
     exit 1
 fi
 
@@ -156,12 +177,27 @@ echo ""
 
 cd "$REPO_ROOT"
 
+# Save LD_PRELOAD if it was set, but unset it for running the script
+# The entrypoint.sh doesn't need LD_PRELOAD - it's only needed when running actual tests
+SAVED_LD_PRELOAD="${LD_PRELOAD:-}"
+unset LD_PRELOAD
+
+# Run entrypoint.sh (it will handle coverage collection)
 "$SCRIPT_DIR/entrypoint.sh" \
     --coverage-dir "$COVERAGE_DIR" \
     --kernel-names-file "generated/watcher/kernel_names.txt" \
     --source-dir "$REPO_ROOT" \
     --cpp-objects "$CPP_OBJECTS_STR" \
-    --html-output-dir "$HTML_OUTPUT_DIR"
+    --html-output-dir "$HTML_OUTPUT_DIR" || {
+    echo ""
+    echo "⚠ Warning: Coverage report generation had errors"
+    echo "Check the output above for details"
+}
+
+# Restore LD_PRELOAD if it was set (for future test runs)
+if [ -n "$SAVED_LD_PRELOAD" ]; then
+    export LD_PRELOAD="$SAVED_LD_PRELOAD"
+fi
 
 echo ""
 echo "=========================================="

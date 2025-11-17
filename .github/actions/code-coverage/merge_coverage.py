@@ -171,6 +171,8 @@ def merge_coverage_data(all_coverage_data):
             merged_data = merged[file_path]
 
             # Merge lines
+            # Sum execution counts. Zero-coverage entries have 0, so they don't affect the sum.
+            # This allows multiple test runs to accumulate coverage correctly.
             for line_num, exec_count in data.lines.items():
                 merged_data.lines[line_num] = merged_data.lines.get(line_num, 0) + exec_count
 
@@ -201,8 +203,19 @@ def merge_coverage_data(all_coverage_data):
 def write_lcov_file(coverage_data, output_file):
     """
     Write merged coverage data to LCOV format file.
+    output_file can be a file path (string) or a file object.
     """
-    with open(output_file, "w") as f:
+    # Handle file object vs file path
+    if hasattr(output_file, "write"):
+        # It's already a file object
+        f = output_file
+        should_close = False
+    else:
+        # It's a file path, open it
+        f = open(output_file, "w")
+        should_close = True
+
+    try:
         for file_path, data in sorted(coverage_data.items()):
             # Test name
             if data.test_name:
@@ -249,6 +262,9 @@ def write_lcov_file(coverage_data, output_file):
 
             # End of record
             f.write("end_of_record\n")
+    finally:
+        if should_close:
+            f.close()
 
 
 def main():

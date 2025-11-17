@@ -143,8 +143,13 @@ ls -la build  # Should point to build_ASanCoverage
 # 4. Setup environment
 export LLVM_PROFILE_FILE="coverage/%p.profraw"
 export TT_METAL_WATCHER_APPEND=1
-export LD_LIBRARY_PATH=$(pwd)/build/lib:$LD_LIBRARY_PATH
+export LD_LIBRARY_PATH="$(pwd)/build/lib:${LD_LIBRARY_PATH}"
 mkdir -p coverage
+
+# ASanCoverage builds require AddressSanitizer runtime - ensure it's available
+# The ASan library should be in standard paths, but if you get undefined symbol errors,
+# you may need to add it explicitly (usually not needed):
+# export LD_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH}"
 
 # 5. Run Python tests with coverage
 coverage run -m pytest tests/ttnn/unit_tests/operations/matmul/test_matmul.py

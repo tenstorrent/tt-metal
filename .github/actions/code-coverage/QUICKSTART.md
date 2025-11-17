@@ -8,27 +8,63 @@
 ./build_metal.sh --build-type ASanCoverage --build-tests
 ```
 
-### 2. Run Tests (collect coverage data)
+### 2. Setup Coverage Environment
 
 ```bash
-# Setup environment
-export LLVM_PROFILE_FILE="coverage/%p.profraw"
-export TT_METAL_WATCHER_APPEND=1
-mkdir -p coverage
+# This installs missing dependencies and sets up environment variables
+source .github/actions/code-coverage/setup_coverage_env.sh
+```
 
-# Run some tests
+### 3. Run Tests (collect coverage data)
+
+**For C++ Binaries:**
+```bash
+# Run your C++ test binary
+./build_ASanCoverage/test/tt_metal/test_add_two_ints
+# This will generate .profraw files in coverage/
+```
+
+**For Python Tests:**
+```bash
+# Run Python tests with coverage
 coverage run -m pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv -k "test_add" || true
-./build_ASanCoverage/test/tt_metal/unit_tests --gtest_filter="*Add*" || true
 ```
 
-### 3. Generate Report
-
-**Option A: Use the test script (easiest)**
+**For Both:**
 ```bash
-./.github/actions/code-coverage/test_local.sh
+# Run C++ tests
+./build_ASanCoverage/test/tt_metal/unit_tests --gtest_filter="*Add*" || true
+
+# Run Python tests
+coverage run -m pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv -k "test_add" || true
 ```
 
-**Option B: Run manually**
+**Important**: `ASanCoverage` builds require AddressSanitizer runtime libraries. If you get errors like `undefined symbol: __asan_option_detect_stack_use_after_return`, make sure:
+- `LD_LIBRARY_PATH` includes your build directory: `export LD_LIBRARY_PATH="$(pwd)/build/lib:${LD_LIBRARY_PATH}"`
+- The ASan library is available (usually in `/usr/lib/x86_64-linux-gnu/` or similar)
+
+### 4. Generate Report
+
+**For C++ Binary Only:**
+```bash
+./.github/actions/code-coverage/entrypoint.sh \
+  --coverage-dir coverage \
+  --source-dir . \
+  --cpp-objects "./build_ASanCoverage/test/tt_metal/test_add_two_ints ./build_ASanCoverage/lib/libtt_metal.so ./build_ASanCoverage/lib/libtt_stl.so" \
+  --enable-python-coverage false \
+  --html-output-dir coverage/html
+```
+
+**For Python Tests Only:**
+```bash
+./.github/actions/code-coverage/entrypoint.sh \
+  --coverage-dir coverage \
+  --source-dir . \
+  --enable-cpp-coverage false \
+  --html-output-dir coverage/html
+```
+
+**For Both C++ and Python:**
 ```bash
 ./.github/actions/code-coverage/entrypoint.sh \
   --coverage-dir coverage \
@@ -37,7 +73,12 @@ coverage run -m pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv -k 
   --html-output-dir coverage/html
 ```
 
-### 4. View Report
+**Or use the test script (auto-detects everything):**
+```bash
+./.github/actions/code-coverage/test_local.sh
+```
+
+### 5. View Report
 
 ```bash
 # Open in browser
