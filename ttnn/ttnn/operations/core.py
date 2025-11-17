@@ -274,12 +274,6 @@ def from_torch(
 
     Returns:
         ttnn.Tensor: The resulting `ttnn` tensor.
-
-    Example:
-        >>> tensor = ttnn.from_torch(torch.randn((2,3)), dtype=ttnn.bfloat16)
-        >>> print(tensor)
-        Tensor([[1.375, -1.30469, -0.714844],
-            [-0.761719, 0.53125, -0.652344]], dtype=bfloat16)
     """
 
     if spec is not None:
@@ -356,13 +350,6 @@ def to_torch(
 
     Returns:
         torch.Tensor: The converted `torch` tensor.
-
-    Example:
-        >>> ttnn_tensor = ttnn.from_torch(torch.randn((2,3)), dtype=ttnn.bfloat16)
-        >>> torch_tensor = ttnn.to_torch(ttnn_tensor)
-        >>> print(torch_tensor)
-        tensor([[-0.3008, -0.8438,  0.3242],
-                [ 0.9023, -0.5820,  0.5312]], dtype=torch.bfloat16)
     """
     import torch
 
@@ -400,15 +387,6 @@ Args:
     * :attr:`tensor`: the ttnn.Tensor
     * :attr:`device`: the ttnn.MeshDevice
     * :attr:`memory_config`: the optional MemoryConfig (DRAM_MEMORY_CONFIG or L1_MEMORY_CONFIG). Defaults to DRAM_MEMORY_CONFIG.
-
-Example::
-
-    >>> device_id = 0
-    >>> device = ttnn.open_device(device_id=device_id)
-    >>> tensor_on_host = ttnn.from_torch(torch.randn((10, 64, 32)), dtype=ttnn.bfloat16)
-    >>> tensor_on_device = ttnn.to_device(tensor_on_host, device, memory_config=ttnn.L1_MEMORY_CONFIG)
-    >>> print(tensor_on_device[0,0,:3])
-    Tensor([ 0.800781, -0.455078, -0.585938], dtype=bfloat16 )
 """
 
 ttnn.register_python_operation(
@@ -427,14 +405,6 @@ Copies the `ttnn.Tensor` :attr:`tensor` to the host.
 
 Args:
     * :attr:`tensor`: the ttnn.Tensor
-
-Example::
-    >>> device_id = 0
-    >>> device = ttnn.open_device(device_id=device_id)
-    >>> tensor_on_device = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
-    >>> tensor_on_host = ttnn.from_device(tensor_on_device)
-    >>> print(tensor_on_host[0,0,:3])
-    Tensor([ 0.365234, 0.130859, 0.75], dtype=bfloat16 )
 """
 
 
@@ -464,13 +434,6 @@ Releases the resources for `ttnn.Tensor` :attr:`tensor` explicitly.
 Args:
     tensor (ttnn.Tensor): The tensor whose resources will be released.
     force (bool, optional): Whether to force deallocation, even if the buffer may have multiple references. Defaults to True.
-
-Example:
-    >>> device_id = 0
-    >>> device = ttnn.open_device(device_id=device_id)
-    >>> tensor = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
-    >>> tensor = ttnn.to_layout(tensor, layout=ttnn.TILE_LAYOUT)
-    >>> ttnn.deallocate(tensor)
 """
 
 ttnn.register_python_operation(name="ttnn.deallocate", doc=doc)(ttnn._ttnn.operations.core.deallocate)
@@ -530,10 +493,6 @@ def load_tensor(file_name: Union[str, pathlib.Path], *, device: ttnn.MeshDevice 
 
     Returns:
         ttnn.Tensor: the loaded tensor.
-
-    Example:
-        >>> device = ttnn.open_device(0)
-        >>> tensor = ttnn.load_tensor(file_name=str(tensor.tensorbin), device=device)
     """
     file_name = pathlib.Path(file_name)
     _validate_file_extension(file_name)
@@ -556,10 +515,6 @@ def dump_tensor(file_name: Union[str, pathlib.Path], tensor: ttnn.Tensor) -> Non
 
     Returns:
         `None`: tensor saved to a specified file.
-
-    Example:
-        >>> tensor = ttnn.ones([2, 3], bfloat16, ttnn.ROW_MAJOR_LAYOUT)
-        >>> dump_tensor(file_name=str(tensor.tensorbin), tensor=tensor)
     """
     file_name = pathlib.Path(file_name)
     _validate_file_extension(file_name)
@@ -598,12 +553,6 @@ def as_tensor(
 
     Returns:
         ttnn.Tensor: The resulting `ttnn` tensor.
-
-    Examples:
-        >>> tensor = ttnn.as_tensor(torch.randn((2,3)), dtype=ttnn.bfloat16)
-        >>> print(tensor)
-        Tensor([[1.375, -1.30469, -0.714844],
-            [-0.761719, 0.53125, -0.652344]], dtype=bfloat16)
     """
 
     if device is not None and memory_config is None:
