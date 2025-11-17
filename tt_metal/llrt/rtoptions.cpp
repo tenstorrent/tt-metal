@@ -107,6 +107,7 @@ enum class EnvVarID {
     TT_METAL_PROFILER_TRACE_TRACKING,              // Enable trace tracking
     TT_METAL_PROFILER_MID_RUN_DUMP,                // Force mid-run profiler dumps
     TT_METAL_PROFILER_CPP_POST_PROCESS,            // Enable C++ post-processing for profiler
+    TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT,       // Maximum number of programs supported by the profiler
     TT_METAL_TRACY_MID_RUN_PUSH,                   // Force Tracy mid-run pushes
     TT_METAL_GTEST_NUM_HW_CQS,                     // Number of HW command queues in tests
     TT_METAL_ARC_DEBUG_BUFFER_SIZE,                // ARC processor debug buffer size
@@ -691,6 +692,18 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             // Only enable C++ post-processing if device profiler is also enabled
             if (this->profiler_enabled && is_env_enabled(value)) {
                 this->profiler_cpp_post_process = true;
+            }
+            break;
+        }
+
+        // TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT
+        // Specifies the maximum number of programs supported by the profiler.
+        // Default: 1000
+        // Usage: export TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=500
+        case EnvVarID::TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT: {
+            // Only set the program support count if device profiler is also enabled
+            if (this->profiler_enabled && value) {
+                this->profiler_program_support_count = std::stoi(value);
             }
             break;
         }
