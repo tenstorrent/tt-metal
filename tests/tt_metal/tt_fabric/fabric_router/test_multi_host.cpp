@@ -10,6 +10,7 @@
 #include <vector>
 #include <tt_stl/span.hpp>
 #include <cstring>
+#include <unistd.h>
 
 #include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -533,6 +534,16 @@ TEST(MultiHost, TestBHQB4x4RelaxedControlPlaneInit) {
         tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY,
         tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
 }
+
+TEST(MultiHost, TestBHQalaxy4x32ControlPlaneInit) {
+    // Get the host name
+    char hostname[HOST_NAME_MAX + 1];
+    gethostname(hostname, sizeof(hostname));
+    std::string host_name(hostname);
+    // serialize the cluster descriptor to file
+    auto cluster_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_desc();
+    std::string filename = host_name + "_cluster_desc.yaml";
+    cluster_desc->serialize_to_file(filename);
 
 }  // namespace multi_host_tests
 }  // namespace tt::tt_fabric
