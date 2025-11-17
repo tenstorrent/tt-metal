@@ -300,6 +300,7 @@ jobs:
 
   convert-draft-to-prerelease:
     needs: [create-and-upload-draft-release, create-tag]
+    concurrency: create_upload_draft_release
     runs-on: ubuntu-latest
     if: ${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v')) && !inputs.dry-run }}
     steps:
