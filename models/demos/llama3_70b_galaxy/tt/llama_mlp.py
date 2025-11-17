@@ -87,8 +87,8 @@ class TtLlamaMLP(LightweightModule):
         self.four_bit_mlp = args.optimizations.bfp4_mlp
 
         # Sharded weights
-        w1_dim = (-1, -2) if args.is_galaxy else (-2, -1)
-        w2_dim = (-2, -1) if args.is_galaxy else (-1, -2)
+        w1_dim = (-1, -2)
+        w2_dim = (-2, -1)
 
         # sharded
         self.w1 = as_sharded_tensor(

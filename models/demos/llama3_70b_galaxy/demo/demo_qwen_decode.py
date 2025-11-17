@@ -3,16 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import json
 from time import time
 from datetime import datetime
 from loguru import logger
 import os
 import ttnn
 import pytest
-import requests
-from pathlib import Path
-import hashlib
 
 
 from models.demos.llama3_70b_galaxy.tt.llama_common import (
@@ -22,6 +18,7 @@ from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
 from models.demos.llama3_70b_galaxy.tt.llama_embedding import TtLlamaEmbedding
 from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
 from models.demos.llama3_70b_galaxy.tt.sampling import TTSampling
+from models.demos.llama3_70b_galaxy.demo.demo_common import load_inputs_simple
 
 from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
 from models.demos.llama3_70b_galaxy.tt.model_config import LlamaOptimizations
@@ -33,66 +30,12 @@ from transformers import AutoTokenizer  # This replaces the llama31_8b tokenizer
 # stable performance without breaking CI prematurely.
 TSU_PERF_DROP_LIMIT_PERCENT = 10
 
-# Constants for TSU thresholds based on the number of layers
-TSU_THRESHOLDS = {
-    "4U": {1: {"min": 390, "max": 448}, 10: {"min": 230, "max": 253}, 80: {"min": 52, "max": 56}},
-    # TODO: Update thresholds for 6U 10L and 80L based on actual perf when 6U are available and added into CI
-    "6U": {1: {"min": 480, "max": 550}, 10: {"min": 230, "max": 250}, 80: {"min": 65, "max": 70}},
-}
+# Constants for TSU thresholds based on the number of layers (6U Galaxy configuration)
+TSU_THRESHOLDS = {1: {"min": 480, "max": 550}, 10: {"min": 230, "max": 250}, 80: {"min": 65, "max": 70}}
 
 
-def load_and_cache_context(context_url, cache_dir, max_length=None):
-    cache_file = cache_dir / hashlib.md5(context_url.encode()).hexdigest()
-
-    if cache_file.exists():
-        with open(cache_file, "r") as f:
-            context_text = f.read()
-        logger.info(f"Loaded context from cache: {context_url}")
-    else:
-        try:
-            response = requests.get(context_url)
-            if response.status_code == 200:
-                context_text = response.text
-                with open(cache_file, "w") as f:
-                    f.write(context_text)
-                logger.info(f"Downloaded and cached context: {context_url}")
-            else:
-                logger.warning(f"Failed to fetch context from URL: {context_url}. Status code: {response.status_code}")
-                context_text = ""
-        except Exception as e:
-            logger.error(f"Error fetching context from URL: {context_url}. Error: {str(e)}")
-            context_text = ""
-
-    # Clip the context to the max length provided
-    if max_length:
-        context_text = context_text[:max_length]
-        logger.info(f"Clipped the context text to {max_length} characters")
-
-    return context_text
-
-
-# load from json, return as a list
-def load_inputs(user_input, batch, instruct_mode):
-    if isinstance(user_input, str):
-        with open(user_input, "r") as f:
-            user_input = json.load(f)
-    assert len(user_input) >= batch, f"Number of users (batch) must be {batch}!"
-    in_prompt = []
-    cache_dir = Path("models/demos/qwen3/demo/context_cache")
-    cache_dir.mkdir(parents=True, exist_ok=True)
-
-    for i in range(batch):
-        prompt = user_input[i]["prompt"]
-        if "context" in user_input[i]:
-            if "max_length" in user_input[i]:  # Clip the context to the max length provided
-                context_text = load_and_cache_context(
-                    user_input[i]["context"], cache_dir, max_length=user_input[i]["max_length"]
-                )
-            else:
-                context_text = load_and_cache_context(user_input[i]["context"], cache_dir)
-            prompt = context_text
-        in_prompt.append(prompt)
-    return in_prompt
+# Use common functions from demo_common.py
+# load_and_cache_context and load_inputs are now imported from demo_common
 
 
 def run_qwen_demo(
@@ -114,8 +57,9 @@ def run_qwen_demo(
     stress_test,
     start_pos,
     enable_prefetcher_performance_mode=True,
-    galaxy_type="6U",
 ):
+    max_supported_seq_len = 190190
+
     # Create batch output file
     benchmark_data = BenchmarkData()
     profiler_step_name = "tg-qwen-demo-e2e"
@@ -127,7 +71,7 @@ def run_qwen_demo(
 
     dtype = ttnn.bfloat8_b
     assert batch_size <= 32, "Max batch size currently supported is 32"
-    assert max_seq_len <= 190190, "Max sequence length must be less than 128k tokens"
+    assert max_seq_len <= max_supported_seq_len, "Max sequence length must be less than 128k tokens"
 
     top_k = sampling_params["top_k"]
     if isinstance(top_k, int):
@@ -156,7 +100,9 @@ def run_qwen_demo(
     if len(user_input) == 1:
         input_prompts = user_input * batch_size
     else:
-        input_prompts = load_inputs(user_input, batch_size, instruct_mode)
+        input_prompts = load_inputs_simple(
+            user_input, batch_size, instruct_mode, "models/demos/qwen3/demo/context_cache"
+        )
     profiler.end("loading_inputs")
 
     # Generate the batched prompts (rotate the inputs between the users, for each batch)
@@ -169,7 +115,7 @@ def run_qwen_demo(
     model_args = TtQwenModelArgs(
         mesh_device,
         max_batch_size=32,
-        max_seq_len=190190,
+        max_seq_len=max_supported_seq_len,
         dummy_weights=False,
     )
     model_args.n_layers = layers
@@ -235,7 +181,6 @@ def run_qwen_demo(
     tt_sampling = TTSampling(
         args=model_args,
         mesh_device=mesh_device,
-        # temperature=temperature,
         tt_ccl=tt_model.tt_ccl,
     )
     profiler.end("loading_weights_to_device")
@@ -409,8 +354,8 @@ def run_qwen_demo(
     logger.info(f"Starting decode loop in trace mode...")
     profiler.start(f"inference_decode", iteration=iteration)
 
-    # Determine TSU threshold based on layer count
-    tsu_thresholds = TSU_THRESHOLDS[galaxy_type].get(
+    # Determine TSU threshold based on layer count (6U Galaxy configuration)
+    tsu_thresholds = TSU_THRESHOLDS.get(
         layers, {"min": 0, "max": 9999999}
     )  # do not check TSU if layers is not in the dict
 
@@ -531,7 +476,7 @@ def run_qwen_demo(
     if is_ci_env and tokens_per_second_per_user_token127 is not None:
         benchmark_data.add_measurement(profiler, 0, profiler_step_name, "tsu_e2e", tokens_per_second_per_user_token127)
 
-        run_type = "tg_qwen_demo_decode" if galaxy_type == "4U" else "tg_qwen_demo_decode_6u"
+        run_type = "tg_qwen_demo_decode_6u"  # Always 6U Galaxy configuration
 
         benchmark_data.save_partial_run_json(
             profiler,
@@ -736,7 +681,6 @@ def test_qwen_demo(
     is_ci_env,
     reset_seeds,
     request,
-    galaxy_type,
 ):
     if is_ci_env and ("long" in input_prompts or optimizations == LlamaOptimizations.accuracy):
         pytest.skip("Do not run the 'long-context' or accuracy tests on CI to reduce load")
@@ -744,8 +688,7 @@ def test_qwen_demo(
     # TODO: Remove this once all batch sizes are supported on Galaxy
     if batch_size not in [1, 32]:
         pytest.skip("Galaxy only supports batch 1 and 32")
-    if galaxy_type != "6U" and galaxy_type != "4U":
-        raise Exception("Not running on Galaxy 4U nor on 6U, you must run on those systems for this test")
+    # Always assume 6U Galaxy configuration
 
     if paged_attention:
         paged_attention_config = PagedAttentionConfig(
@@ -776,5 +719,4 @@ def test_qwen_demo(
         stress_test=stress_test,
         start_pos=start_pos,
         enable_prefetcher_performance_mode=enable_pf_perf_mode,
-        galaxy_type=galaxy_type,
     )

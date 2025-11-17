@@ -110,7 +110,6 @@ class TtTransformer(LightweightModule):
                 sharded_output_config=self.model_config["LM_HEAD_INPUT_MEMCFG"],
             ),
             args,
-            args.is_galaxy,
             tt_ccl=self.tt_ccl,
             ccl_topology=self.model_config["CCL_TOPOLOGY"],
         )
@@ -396,7 +395,7 @@ class TtTransformer(LightweightModule):
             dtype=ttnn.int32,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 self.mesh_device,
-                dims=(None, cur_pos_shard_dim) if (self.args.is_galaxy and B > 1) else (None, None),
+                dims=(None, cur_pos_shard_dim) if (B > 1) else (None, None),
                 mesh_shape=self.args.cluster_shape,
             ),
         )
@@ -414,7 +413,7 @@ class TtTransformer(LightweightModule):
                 dtype=ttnn.uint16 if is_page_table_sharded else ttnn.int32,
                 mesh_mapper=ttnn.ShardTensor2dMesh(
                     self.mesh_device,
-                    dims=(None, -2) if (self.args.is_galaxy and B > 1) else (None, None),
+                    dims=(None, -2) if (B > 1) else (None, None),
                     mesh_shape=self.args.cluster_shape,
                 ),
             )
@@ -655,9 +654,6 @@ class TtTransformer(LightweightModule):
                 enable_performance_mode=self.enable_prefetcher_performance_mode,
             )
             self.mesh_device.set_sub_device_stall_group([self.prefetcher_setup.worker_sub_device_id])
-
-        if mode == "decode" and not self.args.is_galaxy:
-            x = ttnn.to_memory_config(x, self.model_config["DECODE_RESIDUAL_MEMCFG"])
 
         h = None
         # x needs to be in bfloat16_b as it gets reused as the residual tensor

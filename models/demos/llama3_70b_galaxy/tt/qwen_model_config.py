@@ -292,17 +292,14 @@ class TtQwenModelArgs(TtModelArgs):
 
         device = mesh_device if mesh_device is not None else None
         self.cluster_shape = list(mesh_device.shape)
-        self.is_galaxy = self.num_devices == 32
-        self.galaxy_type = None
 
-        if self.is_galaxy:
-            self.galaxy_type = "6U" if ttnn.GetNumPCIeDevices() == 32 else "4U"
-        else:
+        # Always assume Galaxy 6U configuration
+        if self.num_devices != 32:
             raise ValueError(
                 f"Unsupported number of devices: {self.num_devices}. Only 32 devices (Galaxy) are supported."
             )
-        self.model_config["GALAXY_NUM_LINKS"] = {"6U": 4, "4U": 3}.get(self.galaxy_type)
-        self.model_config["CCL_TOPOLOGY"] = {"6U": ttnn.Topology.Ring, "4U": ttnn.Topology.Linear}.get(self.galaxy_type)
+        self.model_config["GALAXY_NUM_LINKS"] = 4  # 6U configuration
+        self.model_config["CCL_TOPOLOGY"] = ttnn.Topology.Ring  # 6U configuration
         if device is not None:
             self.n_local_heads = self.n_heads // self.cluster_shape[1]
 
@@ -363,35 +360,23 @@ class TtQwenModelArgs(TtModelArgs):
             # num_cores_ln = 20
             num_cores_ln = 10
             residual_grid = self.dram_shard_core_grid_for_k(self.dim // self.num_devices)
-            self.model_config["DECODE_RESIDUAL_MEMCFG"] = (
-                ttnn.create_sharded_memory_config(
-                    shape=(
-                        1,
-                        1,
-                        32,
-                        1280 // num_cores_ln,
-                    ),
-                    core_grid=ttnn.CoreRangeSet(
-                        [
-                            core_range,
-                            # ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, 0)),
-                            # ttnn.CoreRange(ttnn.CoreCoord(3, 3), ttnn.CoreCoord(3, 5)),  # use 16 + 4 = 20 cores here
-                        ]
-                    ),
-                    strategy=ttnn.ShardStrategy.WIDTH,
-                    use_height_and_width_as_shard_shape=True,
-                )
-                if self.is_galaxy
-                else ttnn.create_sharded_memory_config(
-                    (
-                        self.tile_padded_batch_rows,
-                        self.dim // residual_grid.num_cores // self.num_devices,
-                    ),
-                    residual_grid,
-                    ttnn.ShardStrategy.WIDTH,
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                    use_height_and_width_as_shard_shape=True,
-                )
+            # Always use Galaxy configuration
+            self.model_config["DECODE_RESIDUAL_MEMCFG"] = ttnn.create_sharded_memory_config(
+                shape=(
+                    1,
+                    1,
+                    32,
+                    1280 // num_cores_ln,
+                ),
+                core_grid=ttnn.CoreRangeSet(
+                    [
+                        core_range,
+                        # ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, 0)),
+                        # ttnn.CoreRange(ttnn.CoreCoord(3, 3), ttnn.CoreCoord(3, 5)),  # use 16 + 4 = 20 cores here
+                    ]
+                ),
+                strategy=ttnn.ShardStrategy.WIDTH,
+                use_height_and_width_as_shard_shape=True,
             )
 
             start_core = ttnn.CoreCoord(1, 0)
@@ -445,16 +430,8 @@ class TtQwenModelArgs(TtModelArgs):
                 self.n_heads % self.cluster_shape[1] == 0
             ), f"n_heads must be divisible by num_devices: {self.n_heads} % {self.cluster_shape[1]}"
 
-            self.model_config["ATTN_OUTPUT_PROGCFG"] = (
-                None
-                if self.is_galaxy
-                else self.dram_matmul_config(
-                    m=self.tile_padded_batch_rows,
-                    k=self.dim // self.num_devices,
-                    n=self.dim,
-                    num_cores=self.n_heads // self.num_devices,
-                )
-            )
+            # Always use Galaxy configuration (None)
+            self.model_config["ATTN_OUTPUT_PROGCFG"] = None
 
             # All Gather Matmul for Dense Out (DO)
             # TODO: Is there a better way to decide if fused all gather matmul should be used? And is there a better way to use the flag, instead of passing it into model_config?
@@ -706,7 +683,9 @@ class TtQwenModelArgs(TtModelArgs):
             self.model_config["LM_HEAD_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
                 (
                     self.tile_padded_batch_rows,
-                    nearest_32((self.dim // (4 if self.is_galaxy else 1)) // self.lm_head_core_grid.num_cores),
+                    nearest_32(
+                        (self.dim // 4) // self.lm_head_core_grid.num_cores
+                    ),  # Always use Galaxy configuration (div by 4)
                 ),  # Shard shape: [32, 128] -> 1 shard per core
                 self.lm_head_core_grid,
                 ttnn.ShardStrategy.WIDTH,
@@ -823,12 +802,8 @@ class TtQwenModelArgs(TtModelArgs):
                 ),
             )
 
-            # MLP configs
-            mlp_core_grid = (
-                self.dram_shard_core_grid_for_k(self.dim)
-                if self.is_galaxy
-                else self.dram_shard_core_grid_for_k_and_n(self.dim, self.dim // self.num_devices)
-            )
+            # MLP configs - Always use Galaxy configuration
+            mlp_core_grid = self.dram_shard_core_grid_for_k(self.dim)
 
             self.model_config["SHARDED_MLP_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
                 (
@@ -847,15 +822,12 @@ class TtQwenModelArgs(TtModelArgs):
                 num_cores=mlp_core_grid.num_cores,
             )
 
-            mlp2_core_grid = (
-                ttnn.CoreGrid(y=1, x=8)
-                if self.is_galaxy
-                else self.dram_shard_core_grid_for_k_and_n(self.hidden_dim // self.num_devices, self.dim)
-            )
+            # Always use Galaxy configuration
+            mlp2_core_grid = ttnn.CoreGrid(y=1, x=8)
 
             self.model_config["SHARDED_MLP2_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
                 (
-                    32 if self.is_galaxy else self.tile_padded_batch_rows,
+                    32,  # Always use Galaxy configuration
                     self.hidden_dim // self.cluster_shape[1] // mlp2_core_grid.num_cores,
                 ),
                 mlp2_core_grid,
@@ -892,26 +864,13 @@ class TtQwenModelArgs(TtModelArgs):
                 ]
             )
 
-            # QKV
-            self.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"] = (
-                ttnn.create_sharded_memory_config(
-                    shape=(32, 6144 // 4 // RING_SIZE),  # Use padded K
-                    core_grid=ring_core_range_set,
-                    strategy=ttnn.ShardStrategy.WIDTH,
-                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                    use_height_and_width_as_shard_shape=True,
-                )
-                if self.is_galaxy
-                else ttnn.create_sharded_memory_config(
-                    (
-                        self.tile_padded_batch_rows,
-                        self.dim // attn_input_grid.num_cores,
-                    ),  # Shard shape: [32, 128] -> 1 shard per core
-                    attn_input_grid,
-                    ttnn.ShardStrategy.WIDTH,
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                    use_height_and_width_as_shard_shape=True,
-                )
+            # QKV - Always use Galaxy configuration
+            self.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
+                shape=(32, 6144 // 4 // RING_SIZE),  # Use padded K
+                core_grid=ring_core_range_set,
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
             )
             qkv_shape_ring = (5120 // 4, 12288 // 8)  # Use padded K and N
             self.model_config["SHARDED_QKV_RING_MEMCFG"] = self.create_dram_sharded_mem_config(
@@ -1169,47 +1128,26 @@ class TtQwenModelArgs(TtModelArgs):
             attn_input_sub_core_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(
                 self.start_core, 32, self.sub_core_grids, row_wise=True
             )
-            self.model_config["SHARDED_ATTN_INPUT_MEMCFG"] = (
-                ttnn.create_sharded_memory_config(
-                    shape=(32, nearest_32(self.dim // (8 * lm_head_num_rows) // 4)),
-                    core_grid=attn_input_sub_core_grid,
-                    strategy=ttnn.ShardStrategy.WIDTH,
-                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                    use_height_and_width_as_shard_shape=True,
-                )
-                if self.is_galaxy
-                else ttnn.create_sharded_memory_config(
-                    (
-                        self.tile_padded_batch_rows,
-                        self.dim // attn_input_grid.num_cores,
-                    ),  # Shard shape: [32, 128] -> 1 shard per core
-                    attn_input_grid,
-                    ttnn.ShardStrategy.WIDTH,
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                    use_height_and_width_as_shard_shape=True,
-                )
+            # Always use Galaxy configuration
+            self.model_config["SHARDED_ATTN_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
+                shape=(32, nearest_32(self.dim // (8 * lm_head_num_rows) // 4)),
+                core_grid=attn_input_sub_core_grid,
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
             )
 
-            # glx doesn't support DRAM sharded matmuls yet
-            self.model_config["XQKV_DECODE_PROGCFG"] = (
-                ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                    compute_with_storage_grid_size=(8, 5 if self.is_70b else lm_head_num_rows),
-                    in0_block_w=2 if self.is_70b else 1,
-                    out_subblock_h=1,
-                    out_subblock_w=1,
-                    per_core_M=1,
-                    per_core_N=1,
-                    fuse_batch=True,
-                    fused_activation=None,
-                    mcast_in0=True,
-                )
-                if self.is_galaxy
-                else self.dram_matmul_config(
-                    m=self.tile_padded_batch_rows,
-                    k=self.dim,
-                    n=self.qkv_size // self.num_devices,
-                    num_cores=attn_input_grid.num_cores,
-                )
+            # Always use Galaxy configuration
+            self.model_config["XQKV_DECODE_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=(8, 5 if self.is_70b else lm_head_num_rows),
+                in0_block_w=2 if self.is_70b else 1,
+                out_subblock_h=1,
+                out_subblock_w=1,
+                per_core_M=1,
+                per_core_N=1,
+                fuse_batch=True,
+                fused_activation=None,
+                mcast_in0=True,
             )
 
             full_grid = ttnn.CoreRangeSet(
@@ -1396,9 +1334,7 @@ class TtQwenModelArgs(TtModelArgs):
 
             self.is_multichip = self.num_devices > 1
             self.num_reduce_scatter_links = 1
-            self.num_all_gather_links = (
-                2 if self.is_galaxy else 1
-            )  # TODO: try out 3 for short axis and 4 for long axis (TG only) <- should work but untested in model
+            self.num_all_gather_links = 2  # Always use Galaxy configuration
             self.ccl_dtype = ttnn.bfloat8_b
 
     def is_distributed_norm(self, mode):
@@ -1727,9 +1663,7 @@ class TtQwenModelArgs(TtModelArgs):
         per_core_N = math.ceil(n / (self.tile_size * grid_size[0]))
 
         out_subblock_h = 1
-        out_subblock_w = (
-            get_out_subblock_w(per_core_N, out_subblock_h) if not self.is_galaxy else 1
-        )  # TODO: Needed for TG hang workaround
+        out_subblock_w = 1  # Always use Galaxy configuration (TG hang workaround)
 
         if in0_block_w is None:
             in0_block_w = min(4, max(1, k // (self.tile_size * grid_size[0])))

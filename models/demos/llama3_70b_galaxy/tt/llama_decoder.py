@@ -88,7 +88,6 @@ class TtTransformerBlock(LightweightModule):
                 output_mem_config=self.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"],
             ),
             args,
-            TG=args.is_galaxy,
             tt_ccl=tt_ccl,
             ccl_topology=self.model_config["CCL_TOPOLOGY"],
         )
@@ -107,7 +106,6 @@ class TtTransformerBlock(LightweightModule):
                 output_mem_config=self.model_config["SHARDED_FF12_RING_MEMCFG"],
             ),
             args,
-            TG=args.is_galaxy,
             tt_ccl=tt_ccl,
             ccl_topology=self.model_config["CCL_TOPOLOGY"],
         )
@@ -134,7 +132,6 @@ class TtTransformerBlock(LightweightModule):
         kv_cache=None,
         batch_size=1,
     ) -> ttnn.Tensor:
-        TG = self.args.is_galaxy
         # x contains input in layer 0 and ffout of previous layer thereafter, x should be dealocated
         # h contains 0 in layer 0 and h_prev+x_prev+attn_out_prev thereafter, h is persistent
         skip_mem_cfg = self.model_config["DECODE_RESIDUAL_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG

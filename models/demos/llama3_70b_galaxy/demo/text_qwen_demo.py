@@ -1,11 +1,8 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-from pathlib import Path
 from loguru import logger
 from datetime import datetime
-import hashlib
-import requests
 import json
 import torch
 import pytest
@@ -26,81 +23,16 @@ from models.common.utility_functions import (
 # Qwen-specific imports
 from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
 from transformers import AutoTokenizer
+from models.demos.llama3_70b_galaxy.demo.demo_common import load_inputs_advanced
 
 
-def load_and_cache_context(context_url, cache_dir, max_length=None):
-    cache_file = cache_dir / hashlib.md5(context_url.encode()).hexdigest()
-
-    if cache_file.exists():
-        with open(cache_file, "r") as f:
-            context_text = f.read()
-        logger.info(f"Loaded context from cache: {context_url}")
-    else:
-        try:
-            response = requests.get(context_url)
-            if response.status_code == 200:
-                context_text = response.text
-                with open(cache_file, "w") as f:
-                    f.write(context_text)
-                logger.info(f"Downloaded and cached context: {context_url}")
-            else:
-                logger.warning(f"Failed to fetch context from URL: {context_url}. Status code: {response.status_code}")
-                context_text = ""
-        except Exception as e:
-            logger.error(f"Error fetching context from URL: {context_url}. Error: {str(e)}")
-            context_text = ""
-
-    # Clip the context to the max length provided
-    if max_length:
-        context_text = context_text[:max_length]
-        logger.info(f"Clipped the context text to {max_length} characters")
-
-    return context_text
+# Use common functions from demo_common.py
+# load_and_cache_context and load_inputs are now imported from demo_common
 
 
-# load input prompts from json, return as a list
-def load_inputs(user_input, len_per_batch, instruct):
-    if isinstance(user_input, str):
-        with open(user_input, "r") as f:
-            user_input = json.load(f)
-    batch = len(len_per_batch)
-    user_input = user_input * batch
-    in_prompt = []
-    all_prompts = []
-    cache_dir = Path("models/demos/qwen3/demo/context_cache")
-    cache_dir.mkdir(parents=True, exist_ok=True)
-
-    # The demo supports a custom prompt file, where the context is provided by a link to a book from the gutenberg project
-    # It clips the excerpt to the max length provided to allow testing different long context lengthts
-    for i in range(len(user_input)):
-        prompt = user_input[i]["prompt"]
-        if "context" in user_input[i]:
-            # TODO This might override the expected input size give in the prompt file
-            if "max_length" in user_input[i]:  # Clip the context to the max length provided
-                context_text = load_and_cache_context(
-                    user_input[i]["context"],
-                    cache_dir,
-                    max_length=(user_input[i]["max_length"]) if batch == 1 else len_per_batch[i],
-                )
-            else:
-                context_text = load_and_cache_context(user_input[i]["context"], cache_dir)
-            if instruct:
-                prompt = (
-                    "```" + context_text + "```\n\n" + prompt
-                )  # Add the markdown block to the context to comply with the prompt
-            else:
-                prompt = context_text
-
-        all_prompts.append(prompt)  # return all the prompts taken from the input file to be used when repeat_batch > 1
-        if i in range(batch):
-            in_prompt.append(prompt)
-
-    return in_prompt, all_prompts
-
-
-def load_demo_targets(filename, galaxy_type):
+def load_demo_targets(filename):
     """
-    Load expected demo targets from a JSON file.
+    Load expected demo targets from a JSON file (6U Galaxy configuration).
     """
     if not os.path.exists(filename):
         logger.warning(f"Expected outputs file {filename} does not exist. Skipping loading targets.")
@@ -113,7 +45,8 @@ def load_demo_targets(filename, galaxy_type):
             logger.error(f"Error decoding JSON from {filename}: {e}. Returning empty list.")
             return []
 
-    demo_targets = demo_targets["targets"][galaxy_type]
+    # Always use 6U Galaxy configuration
+    demo_targets = demo_targets["targets"]["6U"]
 
     return demo_targets
 
@@ -135,7 +68,6 @@ def create_tt_qwen_model(
 
     tt_model_args = TtQwenModelArgs(
         mesh_device,
-        # instruct=instruct,
         max_batch_size=32,
         max_seq_len=max_seq_len,
         dummy_weights=dummy_weights,
@@ -490,7 +422,6 @@ def test_qwen_demo_text(
     pcc_decode_len,
     reset_seeds,
     request,
-    galaxy_type,
     print_outputs,
     is_cur_pos_sharded,
     is_page_table_sharded,
@@ -501,12 +432,13 @@ def test_qwen_demo_text(
     # TODO: Remove this once all batch sizes are supported on TG
     if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [1, 32]:
         pytest.skip("Qwen TG only supports batch-32")
-    if galaxy_type == "6U" and apc_test:
+    # Always assume 6U Galaxy configuration - skip APC test if needed
+    if apc_test:
         pytest.skip("Skipping test since there is no 6U machines dedicated for APC")
     if apc_test and not pcc_check:
         raise ValueError("APC test requires PCC check to be enabled")
     if apc_test:
-        demo_targets = load_demo_targets("models/demos/llama3_70b_galaxy/demo/qwen_demo_targets.json", galaxy_type)
+        demo_targets = load_demo_targets("models/demos/llama3_70b_galaxy/demo/qwen_demo_targets.json")
 
     if prefill_profile:  # Special mode where we only run prefill with tracy
         from tracy import signpost
@@ -577,10 +509,11 @@ def test_qwen_demo_text(
 
     logger.info(f"Reading inputs...")
     profiler.start("loading_inputs")
-    input_prompts, all_prompts = load_inputs(
+    input_prompts, all_prompts = load_inputs_advanced(
         input_prompts,
         input_lengths,
         instruct,
+        "models/demos/qwen3/demo/context_cache",
     )
     profiler.end("loading_inputs")
 
@@ -600,7 +533,7 @@ def test_qwen_demo_text(
                     )
                 else:
                     f.seek(0)
-                    loaded_json = json.load(f)[galaxy_type]
+                    loaded_json = json.load(f)["6U"]  # Always use 6U Galaxy configuration
                     if isinstance(loaded_json, list) and all(isinstance(item, str) for item in loaded_json):
                         expected_outputs_data = loaded_json
                         logger.info(
@@ -678,7 +611,8 @@ def test_qwen_demo_text(
         # Load reference outputs for PCC check
         if pcc_check:
             vocab_size = 151936  # Qwen vocab size
-            if is_ci_env or galaxy_type == "6U":
+            # Always assume 6U Galaxy configuration
+            if is_ci_env:
                 ref_output_path = f"/mnt/MLPerf/tt_dnn-models/qwen/Qwen3-70B-Instruct/qwen3_70b_text_demo_ref_outputs/qwen3_32b_ref_outputs_{num_layers}L_decode.refpt"
             else:
                 ref_output_path = f"/proj_sw/user_dev/qwen3_70b_text_demo_ref_outputs/qwen3_32b_ref_outputs_{num_layers}L_decode.refpt"
@@ -731,7 +665,9 @@ def test_qwen_demo_text(
             logger.info("Starting prefill warmup...")
             profiler.start(f"compile_prefill", iteration=batch_idx)
             try:
-                tt_out_logits_all_users = torch.zeros(batch_size, 1, 155648) if pcc_check else None
+                tt_out_logits_all_users = (
+                    torch.zeros(batch_size, 1, model_args.padded_vocab_size) if pcc_check else None
+                )
                 toks = generator.prefill_forward_text(
                     input_tokens_prefill_pt,  # Just warmup prefill for 1 user
                     page_table=page_table,
@@ -752,7 +688,7 @@ def test_qwen_demo_text(
         profiler.start(f"inference_prefill", iteration=batch_idx)
 
         try:
-            tt_out_logits_all_users = torch.zeros(batch_size, 1, 155648) if pcc_check else None
+            tt_out_logits_all_users = torch.zeros(batch_size, 1, model_args.padded_vocab_size) if pcc_check else None
             if prefill_profile:
                 signpost("start")
             toks = generator.prefill_forward_text(
@@ -943,10 +879,7 @@ def test_qwen_demo_text(
                 if not pcc_check:
                     for user in range(batch_size):
                         user_tok = out_tok.tolist()[user]
-                        # if (
-                        #     user_tok not in tokenizer.stop_tokens and user_done[user] == False
-                        # ):  # Read until an eos token (e.g. <|eot_id|>); create_tokenizer adds stop_tokens to HF tokenizers
-                        if user_done[user] == False:
+                        if user_tok != "<|end_of_text|>" and user_done[user] == False:
                             all_outputs[user].append(user_tok)
                         else:
                             if (
