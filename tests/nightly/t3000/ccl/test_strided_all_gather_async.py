@@ -11,7 +11,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 from tests.nightly.t3000.ccl.test_minimal_all_gather_async import is_unsupported_case
 from models.common.utility_functions import skip_for_blackhole
 
-from ttnn import ShardTensorToMesh, ConcatMeshToTensor
+from ttnn import ShardTensorTo2dMesh, ConcatMesh2dToTensor
 from tracy import signpost
 
 
@@ -118,6 +118,8 @@ def run_strided_all_gather_impl(
     ag_output_tensor_goldens_list = []
     _, _, _, hidden_dim = ag_output_shape
 
+    other_dim = 2 if dim == 3 else 2
+    shard_dims = [other_dim, dim]
     for i in range(num_iters):
         ag_output_tensor = torch.rand(ag_output_shape).bfloat16()
         ag_output_tensor_goldens_list.append(ag_output_tensor)
@@ -128,7 +130,7 @@ def run_strided_all_gather_impl(
             layout=layout,
             dtype=ag_input_dtype,
             memory_config=mem_config_input,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=dim),
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=tuple(mesh_device.shape)),
         )
 
         input_tensor_mesh_list.append(input_tensor_mesh)
@@ -197,7 +199,10 @@ def run_strided_all_gather_impl(
             expected_tensor = torch_ag_out_tensor
 
             tt_ag_out = ttnn.from_device(tt_ag_out_tensor)
-            tt_ag_out = ttnn.to_torch(tt_ag_out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=3))
+            tt_ag_out = ttnn.to_torch(
+                tt_ag_out,
+                mesh_composer=ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+            )
 
             tt_ag_out = tt_ag_out[:, :, :, 0 : expected_tensor.shape[3]]
             eq, output = comp_pcc(tt_ag_out, expected_tensor, allowed_pcc)
