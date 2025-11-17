@@ -40,7 +40,7 @@ public:
      * Fills the provided vector with uint32_t values representing the allocation configuration.
      * @param ct_args Vector to be filled with compile-time arguments
      */
-    virtual void emit_ct_args(std::vector<uint32_t>& ct_args, size_t num_fwd_paths, size_t num_used_sender_channels, size_t num_used_receiver_channels) const = 0;
+    virtual void emit_ct_args(std::vector<uint32_t>& ct_args) const = 0;
 
     /**
      * Get the total available memory size across all regions.
@@ -110,7 +110,7 @@ public:
         size_t max_buffers_per_chunk
         );
 
-    void emit_ct_args(std::vector<uint32_t>& ct_args, size_t num_fwd_paths, size_t num_used_sender_channels, size_t num_used_receiver_channels) const override;
+    void emit_ct_args(std::vector<uint32_t>& ct_args) const override;
 
     void print(std::ostream& os) const override { os << "ElasticChannelsAllocator (not yet fully implemented)"; }
 };
