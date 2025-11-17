@@ -149,12 +149,12 @@ inline void compute_dy_gamma_sum(const uint32_t row) {
 
     tile_regs_commit();
     pack_and_push(sum_register, cb_scaled_dy_gamma_sum_idx);
-    tile_regs_acquire();
 
     // Reduce sum across inner dimension and scale by 1/N using matmul
     cb_wait_front(cb_scaled_dy_gamma_sum_idx, onetile);
 
     const uint32_t reduced_sum_register = 0U;
+    tile_regs_acquire();
 
     reconfig_data_format(cb_scaled_dy_gamma_sum_idx, cb_scaler_idx);
     mm_init(cb_scaled_dy_gamma_sum_idx, cb_scaler_idx, cb_scaled_dy_gamma_sum_idx, 0);
@@ -229,11 +229,11 @@ inline void compute_dy_gamma_xnorm_sum(const uint32_t row) {
 
     tile_regs_commit();
     pack_and_push(sum_register, cb_scaled_dy_gamma_xnorm_sum_idx);
-    tile_regs_acquire();
 
     // Reduce sum across inner dimension and scale by 1/N using matmul
     cb_wait_front(cb_scaled_dy_gamma_xnorm_sum_idx, onetile);
     const uint32_t reduced_sum_register = 0U;
+    tile_regs_acquire();
 
     reconfig_data_format(cb_scaled_dy_gamma_xnorm_sum_idx, cb_scaler_idx);
     mm_init(cb_scaled_dy_gamma_xnorm_sum_idx, cb_scaler_idx, cb_scaled_dy_gamma_xnorm_sum_idx, 0);
@@ -310,11 +310,11 @@ inline void compute_dy_gamma_sum(const uint32_t row) {
 
     tile_regs_commit();
     pack_and_push(sum_register, cb_scaled_dy_gamma_sum_idx);
-    tile_regs_acquire();
 
     // Reduce using matmul and scale by 1/N
     cb_wait_front(cb_scaled_dy_gamma_sum_idx, onetile);
     const uint32_t reduced_sum_register = 0U;
+    tile_regs_acquire();
 
     reconfig_data_format(cb_scaled_dy_gamma_sum_idx, cb_scaler_idx);
     mm_init(cb_scaled_dy_gamma_sum_idx, cb_scaler_idx, cb_scaled_dy_gamma_sum_idx, 0);
@@ -344,7 +344,6 @@ inline void compute_dy_gamma_xnorm_sum(const uint32_t row) {
     const uint32_t sum_register = 0U;
     const uint32_t working_register = 1U;
     const uint32_t x_norm_register = 2U;
-
     tile_regs_acquire();
 
     reconfig_data_format(cb_dL_out_idx, cb_dL_out_idx);
@@ -354,7 +353,6 @@ inline void compute_dy_gamma_xnorm_sum(const uint32_t row) {
         // Compute x_hat from input for this block
         cb_wait_front(cb_input_idx, block_size);
         compute_x_hat_preprocessing(block_size);
-        tile_regs_acquire();
 
         cb_wait_front(cb_x_hat_idx, block_size);
         cb_wait_front(cb_dL_out_idx, block_size);
@@ -407,10 +405,10 @@ inline void compute_dy_gamma_xnorm_sum(const uint32_t row) {
 
     tile_regs_commit();
     pack_and_push(sum_register, cb_scaled_dy_gamma_xnorm_sum_idx);
-    tile_regs_acquire();
 
     // Reduce using matmul and scale by 1/N
     const uint32_t reduced_sum_register = 0U;
+    tile_regs_acquire();
     cb_wait_front(cb_scaled_dy_gamma_xnorm_sum_idx, onetile);
 
     reconfig_data_format(cb_scaled_dy_gamma_xnorm_sum_idx, cb_scaler_idx);
