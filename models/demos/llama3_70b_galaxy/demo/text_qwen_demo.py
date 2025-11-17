@@ -300,12 +300,12 @@ def create_tt_qwen_model(
             False,  # is_page_table_sharded
         ),
         (  # prefill-profile [default 4K seqlen] - Runs 1L prefill-only
-            "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_4k.json",  # input_prompts
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
-            1,  # batch_size
-            10,  # max_generated_tokens
+            32,  # batch_size
+            1,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
@@ -386,9 +386,10 @@ def create_tt_qwen_model(
     "device_params",
     [
         {
-            "trace_region_size": 102000000,
+            "trace_region_size": 184915840,
             "num_command_queues": 1,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "worker_l1_size": 1345000,
             "fabric_config": True,
         }
     ],
