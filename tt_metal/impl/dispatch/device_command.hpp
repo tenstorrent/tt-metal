@@ -93,7 +93,7 @@ public:
     void add_dispatch_write_linear_h(
         uint8_t num_mcast_dests,
         uint32_t noc_xy_addr,
-        uint32_t addr,
+        DeviceAddr addr,
         uint32_t data_sizeB,
         const void* data = nullptr,
         uint32_t write_offset_index = 0);
