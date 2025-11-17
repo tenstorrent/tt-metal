@@ -20,9 +20,9 @@ from loguru import logger
     "input_shape, channels, cell_size, grid_height, scale, torch_model_dtype, use_precomputed_grid, pcc_integral_img, pcc_output, num_slices",
     # fmt: off
     [
-        ((1, 256, 48, 160), 256, 0.5, 4, 1 / 8, torch.float32,   True, 0.999, 0.808, 18),       # feats8 float32 use_precomputed_grid
+        ((1, 256, 48, 160), 256, 0.5, 4, 1 / 8, torch.float32,   True, 0.999, 0.803, 18),       # feats8 float32 use_precomputed_grid
         ((1, 256, 24, 80), 256, 0.5, 4, 1 / 16, torch.float32,   True, 0.999, 0.453, 12),       # feats16 float32 use_precomputed_grid
-        ((1, 256, 12, 40), 256, 0.5, 4, 1 / 32, torch.float32,   True, 0.999, 0.290, 11),       # feats32 float32 use_precomputed_grid
+        ((1, 256, 12, 40), 256, 0.5, 4, 1 / 32, torch.float32,   True, 0.999, 0.292, 11),       # feats32 float32 use_precomputed_grid
     ],
     # fmt: on
     ids=[

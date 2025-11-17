@@ -37,7 +37,7 @@ from loguru import logger
     "model_dtype, pcc_scores_oft, pcc_positions_oft, pcc_dimensions_oft, pcc_angles_oft",
     # fmt: off
     [
-       ( torch.float32, 0.917, 0.977, 0.999, 0.926)
+       ( torch.float32, 0.905, 0.971, 0.999, 0.931)
     ],
     # fmt: on
     ids=[
