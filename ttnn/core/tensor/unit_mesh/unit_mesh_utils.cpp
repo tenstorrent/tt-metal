@@ -41,6 +41,9 @@ Tensor aggregate(const std::vector<tt::tt_metal::Tensor>& tensors) {
     for (const auto& tensor : tensors) {
         auto* device = tensor.device();
         TT_FATAL(device != nullptr, "All tensors must be on device");
+        TT_FATAL(
+            device->get_active_sub_device_manager_id() == device->get_default_sub_device_manager_id(),
+            "Cannot aggregate tensors when non-default sub-device manager is active");
 
         const auto& shape = device->shape();
         TT_FATAL(shape.mesh_size() == 1, "Expected unit mesh (1x1), but got mesh of size {}", shape.mesh_size());
@@ -99,6 +102,9 @@ std::vector<tt::tt_metal::Tensor> disaggregate(const tt::tt_metal::Tensor& tenso
     // Validate the tensor is allocated on mesh device, that is parent mesh of unit meshes.
     auto* mesh_device = tensor.device();
     TT_FATAL(mesh_device != nullptr, "Tensor must be allocated on a mesh device");
+    TT_FATAL(
+        mesh_device->get_active_sub_device_manager_id() == mesh_device->get_default_sub_device_manager_id(),
+        "Cannot disaggregate tensor when non-default sub-device manager is active");
     const auto submeshes = mesh_device->get_submeshes();
     TT_FATAL(
         submeshes.size() == mesh_device->shape().mesh_size(),
