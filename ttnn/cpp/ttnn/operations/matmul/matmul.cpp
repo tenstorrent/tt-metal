@@ -219,12 +219,10 @@ ttnn::Tensor bound_matmul(
     }
 
     if (parameters.user_fused_activation.has_value() && !parameters.user_core_coord.has_value()) {
-        // const UnaryWithParam& activation = parameters.user_fused_activation.value();
-        const UnaryWithParam activation = UnaryWithParam(UnaryOpType::GELU, static_cast<float>(false));
+        const UnaryWithParam& activation = parameters.user_fused_activation.value();
 
         output_tensor = ttnn::operations::unary::Unary_chain::invoke(
-            output_tensor, {activation}, parameters.output_mem_config);  //, optional_output_tensor);
-        log_debug(tt::LogOp, "done");
+            output_tensor, {activation}, parameters.output_mem_config, optional_output_tensor);
     }
 
     return output_tensor;
