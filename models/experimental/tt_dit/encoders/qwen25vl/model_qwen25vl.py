@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING
 
 import torch
 import ttnn
-from models.tt_transformers.tt.common import get_rot_transformation_mat
 
 from ...layers.embeddings import Embedding
 from ...layers.linear import ColParallelLinear, RowParallelLinear
@@ -236,11 +235,6 @@ class Qwen25VlAttention(Module):
             # packer_l1_acc=True,
         )
 
-        self._rope_mat = tensor.from_torch(
-            get_rot_transformation_mat(head_dim),
-            device=ctx.device,
-        )  # TODO: bloat4_b?
-
         self._head_dim = head_dim
         self._num_kv_heads = group_count
         self._group_size = group_size
@@ -256,12 +250,13 @@ class Qwen25VlAttention(Module):
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         def _prepare_qkv(q: ttnn.Tensor, k: ttnn.Tensor, v: ttnn.Tensor) -> ttnn.Tensor:
-            # k = k.unflatten(0, [2, -1]).transpose(0, 1).flatten(0, 1)
-            # q = q.unflatten(0, [2, -1]).transpose(0, 1).flatten(0, 1)
-
             q = q.unflatten(0, [self._num_kv_heads, self._group_size, self._head_dim])
             k = k.unflatten(0, [self._num_kv_heads, 1, self._head_dim])
             v = v.unflatten(0, [self._num_kv_heads, 1, self._head_dim])
+
+            # convert ROPE to interleaved format
+            q = q.unflatten(2, [2, -1]).transpose(2, 3).flatten(2, 3)
+            k = k.unflatten(2, [2, -1]).transpose(2, 3).flatten(2, 3)
 
             # repeat KV heads
             n = self._repeat_kv_heads
@@ -322,9 +317,6 @@ class Qwen25VlAttention(Module):
         cos, sin = pos_embeds
         q = _apply_rope(q, cos, sin)
         k = _apply_rope(k, cos, sin)
-
-        # q = ttnn.experimental.rotary_embedding_llama(q, cos, sin, self._rope_mat, is_decode_mode=False)
-        # k = ttnn.experimental.rotary_embedding_llama(k, cos, sin, self._rope_mat, is_decode_mode=False)
 
         # k = ttnn.repeat_interleave(k, repeats=self._num_local_heads // self._num_local_kv_heads, dim=1)
         # v = ttnn.repeat_interleave(v, repeats=self._num_local_heads // self._num_local_kv_heads, dim=1)
@@ -418,13 +410,7 @@ class Qwen25VlRmsNorm(Module):
 
 
 def _apply_rope(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
-    return x * cos + _rotate_half(x) * sin
-
-
-def _rotate_half(x: ttnn.Tensor) -> ttnn.Tensor:
-    x1 = x[..., : x.shape[-1] // 2]
-    x2 = x[..., x.shape[-1] // 2 :]
-    return ttnn.concat([ttnn.neg(x2), x1], dim=-1)
+    return x * cos + ttnn.alt_complex_rotate90(x) * sin
 
 
 def optimal_groups(group_count: int, group_size: int, device_count: int) -> tuple[int, int, int]:

@@ -87,6 +87,10 @@ def test_qwen25vl_text_encoder(
     cos = torch.cat([m[i % 3] for i, m in enumerate(cos.split(mrope_section, dim=-1))], dim=-1).unsqueeze(1)
     sin = torch.cat([m[i % 3] for i, m in enumerate(sin.split(mrope_section, dim=-1))], dim=-1).unsqueeze(1)
 
+    # convert ROPE to interleaved format
+    cos = cos.unflatten(-1, [2, -1]).transpose(-2, -1).flatten(-2, -1)
+    sin = sin.unflatten(-1, [2, -1]).transpose(-2, -1).flatten(-2, -1)
+
     tt_tokens = tensor.from_torch(tokens, device=mesh_device, dtype=ttnn.uint32)
     tt_attention_mask = tensor.from_torch(attention_mask, device=mesh_device) if attention_mask is not None else None
     tt_pos_embeds_cos = tensor.from_torch(cos, device=mesh_device)
