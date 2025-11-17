@@ -4,7 +4,6 @@
 
 #include <tt-metalium/buffer_page_mapping.hpp>
 
-#include <iostream>
 namespace tt::tt_metal {
 
 namespace {
