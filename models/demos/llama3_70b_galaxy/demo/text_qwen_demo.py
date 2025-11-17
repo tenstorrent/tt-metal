@@ -98,9 +98,9 @@ def load_inputs(user_input, len_per_batch, instruct):
     return in_prompt, all_prompts
 
 
-def load_demo_targets(filename, galaxy_type):
+def load_demo_targets(filename):
     """
-    Load expected demo targets from a JSON file.
+    Load expected demo targets from a JSON file (6U only).
     """
     if not os.path.exists(filename):
         logger.warning(f"Expected outputs file {filename} does not exist. Skipping loading targets.")
@@ -113,7 +113,7 @@ def load_demo_targets(filename, galaxy_type):
             logger.error(f"Error decoding JSON from {filename}: {e}. Returning empty list.")
             return []
 
-    demo_targets = demo_targets["targets"][galaxy_type]
+    demo_targets = demo_targets["targets"]["6U"]  # Always 6U
 
     return demo_targets
 
@@ -491,7 +491,6 @@ def test_qwen_demo_text(
     pcc_decode_len,
     reset_seeds,
     request,
-    galaxy_type,
     print_outputs,
     is_cur_pos_sharded,
     is_page_table_sharded,
@@ -502,12 +501,12 @@ def test_qwen_demo_text(
     # TODO: Remove this once all batch sizes are supported on TG
     if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [1, 32]:
         pytest.skip("Qwen TG only supports batch-32")
-    if galaxy_type == "6U" and apc_test:
+    if apc_test:
         pytest.skip("Skipping test since there is no 6U machines dedicated for APC")
     if apc_test and not pcc_check:
         raise ValueError("APC test requires PCC check to be enabled")
     if apc_test:
-        demo_targets = load_demo_targets("models/demos/llama3_70b_galaxy/demo/qwen_demo_targets.json", galaxy_type)
+        demo_targets = load_demo_targets("models/demos/llama3_70b_galaxy/demo/qwen_demo_targets.json")
 
     if prefill_profile:  # Special mode where we only run prefill with tracy
         from tracy import signpost
@@ -601,7 +600,7 @@ def test_qwen_demo_text(
                     )
                 else:
                     f.seek(0)
-                    loaded_json = json.load(f)[galaxy_type]
+                    loaded_json = json.load(f)["6U"]  # Always 6U
                     if isinstance(loaded_json, list) and all(isinstance(item, str) for item in loaded_json):
                         expected_outputs_data = loaded_json
                         logger.info(
@@ -679,7 +678,7 @@ def test_qwen_demo_text(
         # Load reference outputs for PCC check
         if pcc_check:
             vocab_size = 151936  # Qwen vocab size
-            if is_ci_env or galaxy_type == "6U":
+            if is_ci_env:  # Always 6U, so no need to check galaxy_type
                 ref_output_path = f"/mnt/MLPerf/tt_dnn-models/qwen/Qwen3-70B-Instruct/qwen3_70b_text_demo_ref_outputs/qwen3_70b_ref_outputs_{num_layers}L_decode.refpt"
             else:
                 ref_output_path = f"/proj_sw/user_dev/qwen3_70b_text_demo_ref_outputs/qwen3_70b_ref_outputs_{num_layers}L_decode.refpt"
@@ -1187,7 +1186,7 @@ def test_qwen_demo_text(
     # }
     # # TODO This is suppose to check the config `repeat2`. Since right now that config is the only using a repeat_batches=2 this if statement works
     # if repeat_batches == 2 and batch_size == 1:
-    #     target = 56.5 if galaxy_type == "6U" else 99
+    #     target = 56.5  # Always 6U
     #     assert (
     #         avg_time_to_first_token * 1000 < target
     #     ), f"TTFT {avg_time_to_first_token} ms is too high, should be < {target}."
@@ -1198,7 +1197,7 @@ def test_qwen_demo_text(
     #         profiler,
     #         1,  # grab the second repeat batch of prefill
     #         "inference_prefill",
-    #         f"ttft_e2e_{galaxy_type}",
+    #         f"ttft_e2e_6u",  # Always 6U
     #         round(avg_time_to_first_token * 1000, 2),
     #     )  # average TTFT in ms
 

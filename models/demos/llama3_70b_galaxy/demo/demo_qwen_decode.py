@@ -33,12 +33,8 @@ from transformers import AutoTokenizer  # This replaces the llama31_8b tokenizer
 # stable performance without breaking CI prematurely.
 TSU_PERF_DROP_LIMIT_PERCENT = 10
 
-# Constants for TSU thresholds based on the number of layers
-TSU_THRESHOLDS = {
-    "4U": {1: {"min": 390, "max": 448}, 10: {"min": 230, "max": 253}, 80: {"min": 52, "max": 56}},
-    # TODO: Update thresholds for 6U 10L and 80L based on actual perf when 6U are available and added into CI
-    "6U": {1: {"min": 480, "max": 550}, 10: {"min": 230, "max": 250}, 80: {"min": 65, "max": 70}},
-}
+# Constants for TSU thresholds based on the number of layers (6U only)
+TSU_THRESHOLDS = {1: {"min": 480, "max": 550}, 10: {"min": 230, "max": 250}, 80: {"min": 65, "max": 70}}
 
 
 def load_and_cache_context(context_url, cache_dir, max_length=None):
@@ -116,6 +112,8 @@ def run_qwen_demo(
     enable_prefetcher_performance_mode=True,
     galaxy_type="6U",
 ):
+    max_supported_seq_len = 190190
+
     # Create batch output file
     benchmark_data = BenchmarkData()
     profiler_step_name = "tg-qwen-demo-e2e"
@@ -127,7 +125,7 @@ def run_qwen_demo(
 
     dtype = ttnn.bfloat8_b
     assert batch_size <= 32, "Max batch size currently supported is 32"
-    assert max_seq_len <= 190190, "Max sequence length must be less than 128k tokens"
+    assert max_seq_len <= max_supported_seq_len, "Max sequence length must be less than 190k tokens"
 
     top_k = sampling_params["top_k"]
     if isinstance(top_k, int):
@@ -169,7 +167,7 @@ def run_qwen_demo(
     model_args = TtQwenModelArgs(
         mesh_device,
         max_batch_size=32,
-        max_seq_len=190190,
+        max_seq_len=max_supported_seq_len,
         dummy_weights=False,
     )
     model_args.n_layers = layers
@@ -270,7 +268,7 @@ def run_qwen_demo(
         dtype=ttnn.int32,
         mesh_mapper=ttnn.ShardTensor2dMesh(
             mesh_device,
-            dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+            dims=(None, 0) if batch_size > 1 else (None, None),
             mesh_shape=model_args.cluster_shape,
         ),
     )
@@ -376,7 +374,7 @@ def run_qwen_demo(
         dtype=ttnn.int32,
         mesh_mapper=ttnn.ShardTensor2dMesh(
             mesh_device,
-            dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+            dims=(None, 0) if batch_size > 1 else (None, None),
             mesh_shape=model_args.cluster_shape,
         ),
     )
@@ -409,8 +407,8 @@ def run_qwen_demo(
     logger.info(f"Starting decode loop in trace mode...")
     profiler.start(f"inference_decode", iteration=iteration)
 
-    # Determine TSU threshold based on layer count
-    tsu_thresholds = TSU_THRESHOLDS[galaxy_type].get(
+    # Determine TSU threshold based on layer count (6U only)
+    tsu_thresholds = TSU_THRESHOLDS.get(
         layers, {"min": 0, "max": 9999999}
     )  # do not check TSU if layers is not in the dict
 
@@ -531,7 +529,7 @@ def run_qwen_demo(
     if is_ci_env and tokens_per_second_per_user_token127 is not None:
         benchmark_data.add_measurement(profiler, 0, profiler_step_name, "tsu_e2e", tokens_per_second_per_user_token127)
 
-        run_type = "tg_qwen_demo_decode" if galaxy_type == "4U" else "tg_qwen_demo_decode_6u"
+        run_type = "tg_qwen_demo_decode_6u"  # Always 6U
 
         benchmark_data.save_partial_run_json(
             profiler,
@@ -744,8 +742,6 @@ def test_qwen_demo(
     # TODO: Remove this once all batch sizes are supported on Galaxy
     if batch_size not in [1, 32]:
         pytest.skip("Galaxy only supports batch 1 and 32")
-    if galaxy_type != "6U" and galaxy_type != "4U":
-        raise Exception("Not running on Galaxy 4U nor on 6U, you must run on those systems for this test")
 
     if paged_attention:
         paged_attention_config = PagedAttentionConfig(
