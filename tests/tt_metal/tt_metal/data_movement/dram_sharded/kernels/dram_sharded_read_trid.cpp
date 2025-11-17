@@ -27,7 +27,7 @@ void kernel_main() {
     DeviceTimestampedData("Test id", test_id);
 
     uint32_t dst_addr = l1_addr;
-    uint32_t curr_trid = 0;
+    uint32_t curr_trid = 1;  // Start trids from 1, 0 may break in the future
     {
         DeviceZoneScopedN("RISCV0");
         for (uint32_t n = 0; n < num_of_transactions; n++) {
@@ -41,10 +41,10 @@ void kernel_main() {
                         src_noc_addr, i * page_size_bytes, dst_addr, curr_trid);
                     dst_addr += page_size_bytes;
                 }
-                curr_trid = (curr_trid + 1) % num_of_trids;  // keep trid between 0 and num_of_trids-1
+                curr_trid = (curr_trid % (num_of_trids - 1)) + 1;  // keep trid between 1 and num_of_trids-1
             }
         }
-        for (uint32_t t = 0; t < num_of_trids; t++) {
+        for (uint32_t t = 1; t < num_of_trids; t++) {
             noc_async_read_barrier_with_trid(t);
         }
     }
