@@ -19,6 +19,7 @@ file(
     layernorm_distributed/device/kernels/*
     rmsnorm_distributed/device/kernels/*
     softmax/device/kernels/*
+    softmax_backward/device/kernels/*
     kernel_util/compute/*
 )
 target_sources(

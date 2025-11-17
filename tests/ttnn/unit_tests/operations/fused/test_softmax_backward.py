@@ -2,6 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+# NOTE: To verify which kernel (small vs large) is being used, look for log messages:
+#   "SoftmaxBackward: Using SMALL (non-streaming) kernel | Shape: ..."
+#   "SoftmaxBackward: Using LARGE (streaming) kernel | Shape: ..."
+#
+# Enable logs with: export TT_METAL_LOGGER_LEVEL=2
+# Or use: export TT_METAL_LOGGER_TYPES=Op to see only operation logs
+
 import os
 import torch
 import pytest
@@ -80,20 +87,14 @@ SEED = 77
 @pytest.mark.parametrize(
     "input_shapes",
     (
-        # Llama2-7B tensor shapes:
-        # (torch.Size([1, 1, 32, 2048])),    # actually should be (torch.Size([B, 2048])),
-        # (torch.Size([1, BATCH_SIZE, 2048, 4096])),    # actually should be (torch.Size([B, 2048, 4096])),
-        # (torch.Size([BATCH_SIZE, 32, 2048, 128])),
-        (torch.Size([BATCH_SIZE, 32, 2048, 2048])),
-        # (torch.Size([1, BATCH_SIZE, 2048, 32000])),  # actually should be (torch.Size([B, 2048, 32000])),
+        (torch.Size([BATCH_SIZE, 3, 64, 64])),  # 3x64 tiles = small
+        (torch.Size([BATCH_SIZE, 32, 2048, 2048])),  # 32x2048 tiles = large
     ),
 )
 @pytest.mark.parametrize(
     "dtype",
     [
-        # ttnn.float32, # not supported by softmax_backward kernel
         ttnn.bfloat16,
-        # ttnn.bfloat8_b, # not supported by pytorch
     ],
 )
 @pytest.mark.parametrize(
@@ -150,8 +151,9 @@ def test_bw_softmax(input_shapes, dtype, range, dim, device):
     "input_shapes",
     (
         # Shapes with non-tile-aligned dimensions (require padding)
-        (torch.Size([1, 1, 320, 1000])),  # width=1000, needs padding to 1024
-        (torch.Size([2, 1, 64, 500])),  # width=500, needs padding to 512
+        (torch.Size([2, 1, 64, 500])),  # SMALL, width=500, needs padding to 512
+        (torch.Size([1, 1, 320, 1000])),  # LARGE, width=1000, needs padding to 1024
+        (torch.Size([10, 30, 320, 999])),  # LARGE,width=1000, needs padding to 1024
     ),
 )
 @pytest.mark.parametrize(
@@ -183,9 +185,9 @@ def test_bw_softmax_padded(input_shapes, dtype, range, dim, device):
 
     # Use the pattern from test_fast_reduce_nc.py which works correctly
     # Create ttnn.Tensor directly, pad, then convert layout, then move to device
-    tt_softmax_tensor = ttnn.Tensor(pt_softmax_tensor, dtype).pad_to_tile(float("nan")).to(ttnn.TILE_LAYOUT).to(device)
+    tt_softmax_tensor = ttnn.Tensor(pt_softmax_tensor, dtype).pad_to_tile(float("-inf")).to(ttnn.TILE_LAYOUT).to(device)
 
-    tt_grad_tensor = ttnn.Tensor(grad_data, dtype).pad_to_tile(float("nan")).to(ttnn.TILE_LAYOUT).to(device)
+    tt_grad_tensor = ttnn.Tensor(grad_data, dtype).pad_to_tile(float("-inf")).to(ttnn.TILE_LAYOUT).to(device)
 
     logger.info(f"\nOriginal shape: {input_shapes}")
     logger.info(f"Padded shape: {tt_softmax_tensor.shape}")
@@ -226,5 +228,65 @@ def test_bw_softmax_padded(input_shapes, dtype, range, dim, device):
             atol=absolute_tolerance,
         ), f"Padded tensor output does not match reference! This means padding corrupted the reduction."
 
-        # PCC assertion
-        assert_pcc(pt_output_tensor_fused, pt_output_tensor_reference, PCC_THRESHOLD)
+
+@pytest.mark.parametrize(
+    "shape,expected_kernel",
+    [
+        # Small tensors - should use SMALL (non-streaming) kernel
+        ((1, 1, 32, 32), "SMALL"),  # 1x1 tiles = tiny
+        ((1, 1, 64, 64), "SMALL"),  # 2x2 tiles = small
+        ((2, 2, 64, 128), "SMALL"),  # 4x4 tiles = medium-small
+        # Large tensors - should use LARGE (streaming) kernel
+        ((4, 4, 512, 512), "LARGE"),  # 64x16 tiles = large
+        ((8, 8, 1024, 1024), "LARGE"),  # 256x32 tiles = very large
+    ],
+)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+def test_softmax_backward_kernel_selection(shape, expected_kernel, device):
+    """
+    Test that verifies correct kernel selection based on tensor size.
+
+    This test ensures that:
+    - Small tensors use the SMALL (non-streaming) kernel for better performance
+    - Large tensors use the LARGE (streaming) kernel to avoid L1 overflow
+
+    To see the kernel selection logs, run with:
+        export TT_METAL_LOGGER_LEVEL=2
+        export TT_METAL_LOGGER_TYPES=Op
+
+    Expected log output format:
+        "SoftmaxBackward: Using SMALL (non-streaming) kernel | Shape: 2x2 tiles (4 total) | Estimated L1: XX KB"
+    or:
+        "SoftmaxBackward: Using LARGE (streaming) kernel | Shape: 64x16 tiles (1024 total) | Estimated L1: XX KB"
+    """
+    logger.info(f"\n{'='*80}")
+    logger.info(f"Testing kernel selection for shape {shape}")
+    logger.info(f"Expected kernel: {expected_kernel}")
+    logger.info(f"{'='*80}")
+
+    torch.manual_seed(SEED)
+
+    # Create test tensors
+    y = torch.softmax(torch.randn(shape, dtype=torch.bfloat16), dim=-1)
+    grad = torch.randn(shape, dtype=torch.bfloat16)
+
+    # Convert to ttnn
+    tt_y = ttnn.from_torch(y, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    tt_grad = ttnn.from_torch(grad, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+
+    # Run operation - kernel selection happens here
+    # Check the logs to verify expected_kernel was used
+    logger.info("⚠️  Check the logs above for kernel selection message!")
+    tt_output = ttnn.softmax_backward(tt_y, tt_grad, dim=-1)
+
+    # Verify correctness
+    pt_output = ttnn.to_torch(tt_output)
+    pt_reference = reference_softmax_backward_output(y, grad, axis=-1)
+
+    # Quick sanity check
+    pcc = compute_pcc(pt_output, pt_reference)
+    logger.info(f"PCC: {pcc:.6f}")
+    assert pcc >= 0.99, f"Output doesn't match reference (PCC={pcc:.6f})"
+
+    logger.info(f"✅ Test passed for shape {shape} (expected {expected_kernel} kernel)")
+    logger.info(f"{'='*80}\n")

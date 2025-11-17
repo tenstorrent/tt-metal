@@ -16,19 +16,36 @@ void kernel_main() {
     // Set up tensor accessor
     constexpr auto output_args = TensorAccessorArgs<2>();
 
-    // Runtime args
-    uint32_t rt_args_idx = 0;
-    const uint32_t start_tile = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t num_rows = get_arg_val<uint32_t>(rt_args_idx++);
-
     // Common runtime args (shared across all cores)
     const uint32_t output_addr = get_common_arg_val<uint32_t>(0);
+    const uint32_t total_num_rows = get_common_arg_val<uint32_t>(1);
+    const uint32_t num_cores_x = get_common_arg_val<uint32_t>(2);
+    const uint32_t num_cores_y = get_common_arg_val<uint32_t>(3);
+
+    // Calculate work assignment for this core based on coordinates
+    const uint32_t core_id_x = get_absolute_logical_x();
+    const uint32_t core_id_y = get_absolute_logical_y();
+    // Match factory's column-major indexing: core_idx = x * num_cores_y + y
+    const uint32_t core_id = core_id_x * num_cores_y + core_id_y;
+
+    const uint32_t num_cores = num_cores_x * num_cores_y;
+    const uint32_t tiles_per_core = (total_num_rows + num_cores - 1) / num_cores;
+
+    const uint32_t start_tile = core_id * tiles_per_core;
+    const uint32_t end_tile =
+        ((start_tile + tiles_per_core) < total_num_rows) ? (start_tile + tiles_per_core) : total_num_rows;
+    const uint32_t num_rows = (start_tile < total_num_rows) ? (end_tile - start_tile) : 0;
 
     // Get tile size
     const uint32_t out_tile_size = get_tile_size(out_cb_id);
 
     // Create tensor accessor
     const auto output_accessor = TensorAccessor(output_args, output_addr, out_tile_size);
+
+    // Early exit if this core has no work
+    if (num_rows == 0) {
+        return;
+    }
 
     // Write output rows in blockes
     for (uint32_t row_idx = 0; row_idx < num_rows; ++row_idx) {

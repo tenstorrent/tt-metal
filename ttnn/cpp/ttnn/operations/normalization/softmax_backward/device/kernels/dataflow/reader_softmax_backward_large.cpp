@@ -26,14 +26,26 @@ void kernel_main() {
     constexpr auto softmax_output_args = TensorAccessorArgs<4>();
     constexpr auto upstream_grad_args = TensorAccessorArgs<softmax_output_args.next_compile_time_args_offset()>();
 
-    // Runtime args
-    uint32_t rt_args_idx = 0;
-    const uint32_t start_tile = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t num_tiles = get_arg_val<uint32_t>(rt_args_idx++);
-
     // Common runtime args (shared across all cores)
     const uint32_t softmax_output_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t upstream_grad_addr = get_common_arg_val<uint32_t>(1);
+    const uint32_t total_num_rows = get_common_arg_val<uint32_t>(2);
+    const uint32_t num_cores_x = get_common_arg_val<uint32_t>(3);
+    const uint32_t num_cores_y = get_common_arg_val<uint32_t>(4);
+
+    // Calculate work assignment for this core based on coordinates
+    const uint32_t core_id_x = get_absolute_logical_x();
+    const uint32_t core_id_y = get_absolute_logical_y();
+    // Match factory's column-major indexing: core_idx = x * num_cores_y + y
+    const uint32_t core_id = core_id_x * num_cores_y + core_id_y;
+
+    const uint32_t num_cores = num_cores_x * num_cores_y;
+    const uint32_t tiles_per_core = (total_num_rows + num_cores - 1) / num_cores;
+
+    const uint32_t start_tile = core_id * tiles_per_core;
+    const uint32_t end_tile =
+        ((start_tile + tiles_per_core) < total_num_rows) ? (start_tile + tiles_per_core) : total_num_rows;
+    const uint32_t num_tiles = (start_tile < total_num_rows) ? (end_tile - start_tile) : 0;
 
     // Get tile sizes
     const uint32_t src0_tile_size = get_tile_size(src0_cb_id);
@@ -42,6 +54,11 @@ void kernel_main() {
     // Create tensor accessors
     const auto softmax_output_accessor = TensorAccessor(softmax_output_args, softmax_output_addr, src0_tile_size);
     const auto upstream_grad_accessor = TensorAccessor(upstream_grad_args, upstream_grad_addr, src1_tile_size);
+
+    // Early exit if this core has no work
+    if (num_tiles == 0) {
+        return;
+    }
 
     // Generate a BF16 column vector of ones for matmul-based reduction
     constexpr uint32_t identity_scalar_packed = 0x3f803f80;  // BF16(1.0) packed twice into u32
