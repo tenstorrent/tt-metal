@@ -7,7 +7,6 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/data_movement/clone/clone.hpp"
-#include "ttnn/operations/data_movement/tilize/tilize.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/run_operation.hpp"
 #include <tt-logger/tt-logger.hpp>
@@ -204,38 +203,18 @@ Tensor concat_impl(
             // Must be ROW_MAJOR → TILE conversion
             formatted_tensors.reserve(input_tensors.size());
             for (const auto& input_tensor : input_tensors) {
-                // Calculate tile-aligned shape
-                auto input_shape = input_tensor.padded_shape();
-                auto rank = input_shape.rank();
-                std::vector<uint32_t> padded_shape_vec(rank);
-                for (auto i = 0; i < rank; ++i) {
-                    padded_shape_vec[i] = input_shape[i];
-                }
-                if (rank >= 1) {
-                    padded_shape_vec[rank - 1] = tt::round_up(input_shape[rank - 1], TILE_WIDTH);
-                }
-                if (rank >= 2) {
-                    padded_shape_vec[rank - 2] = tt::round_up(input_shape[rank - 2], TILE_HEIGHT);
-                }
-                Shape tile_aligned_shape(padded_shape_vec);
+                // Use compute_padded_shape to calculate tile-aligned shape
+                Shape tile_aligned_shape = compute_padded_shape(input_tensor.padded_shape(), TILE_HEIGHT, TILE_WIDTH);
 
-                // Check if padding and/or tilization needed
-                bool needs_padding = (input_tensor.padded_shape() != tile_aligned_shape);
-
-                if (needs_padding) {
-                    // Need both padding and tilization
-                    PadValue pad_value_variant;
-                    if (input_tensor.dtype() == DataType::BFLOAT16 || input_tensor.dtype() == DataType::FLOAT32) {
-                        pad_value_variant = 0.0f;
-                    } else {
-                        pad_value_variant = (uint32_t)0;
-                    }
-                    formatted_tensors.push_back(ttnn::tilize_with_val_padding(
-                        input_tensor, tile_aligned_shape, pad_value_variant, input_tensor.memory_config()));
+                PadValue pad_value_variant;
+                if (input_tensor.dtype() == DataType::BFLOAT16 || input_tensor.dtype() == DataType::FLOAT32) {
+                    pad_value_variant = 0.0f;
                 } else {
-                    // Only need tilization (already tile-aligned)
-                    formatted_tensors.push_back(ttnn::tilize(input_tensor, input_tensor.memory_config()));
+                    pad_value_variant = (uint32_t)0;
                 }
+                // tilize_with_val_padding handles both padding and tilization
+                formatted_tensors.push_back(ttnn::tilize_with_val_padding(
+                    input_tensor, tile_aligned_shape, pad_value_variant, input_tensor.memory_config()));
             }
         }
 
