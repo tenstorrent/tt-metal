@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -28,7 +28,7 @@ def _linear_coord(coord, mesh_shape):
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("enable_trace", [False, True])
 def test_point_to_point_deepseek(mesh_device, test_config, layout, enable_trace):
-    # receive, send
+    # send, sreceive
     coord0, coord1, shape, dtype, memory_config = test_config
 
     devices = prod(list(mesh_device.shape))
@@ -46,7 +46,7 @@ def test_point_to_point_deepseek(mesh_device, test_config, layout, enable_trace)
         input_tensor_torch,
         layout=layout,
         device=mesh_device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=memory_config,
         dtype=dtype,
         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
     )

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -128,6 +128,7 @@ def test_concat_deepseek(mesh_device, test_config, layout, enable_trace):
         memory_config=input_mem_config,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         device=mesh_device,
+        dtype=dtype,
     )
 
     def run_op():

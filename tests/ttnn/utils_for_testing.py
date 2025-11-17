@@ -325,6 +325,7 @@ def maybe_trace(op_func, enable_trace, device):
 
         # Execute trace
         ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)
+        ttnn.release_trace(device, trace_id)
         ttnn.synchronize_device(device)
     else:
         output = op_func()
