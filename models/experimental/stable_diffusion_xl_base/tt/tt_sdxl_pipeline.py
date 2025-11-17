@@ -757,12 +757,13 @@ class TtSDXLPipeline(LightweightModule):
         # Instantiation of user host input tensors for the TT model.
 
         profiler.start("create_user_tensors")
-        tt_latents = ttnn.from_torch(
-            latents,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.ttnn_device, list(self.ttnn_device.shape), dims=(None, 0)),
-        )
+        if not isinstance(latents, ttnn.Tensor):
+            tt_latents = ttnn.from_torch(
+                latents,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.ttnn_device, list(self.ttnn_device.shape), dims=(None, 0)),
+            )
 
         tt_prompt_embeds = ttnn.from_torch(
             all_prompt_embeds_torch,

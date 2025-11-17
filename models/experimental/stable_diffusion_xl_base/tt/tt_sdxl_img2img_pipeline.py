@@ -113,9 +113,10 @@ class TtSDXLImg2ImgPipeline(TtSDXLPipeline):
             add_noise,
             None,  # passed in latents
         )
-        B, C, H, W = img_latents.shape  # 1, 4, 128, 128
-        img_latents = torch.permute(img_latents, (0, 2, 3, 1))  # [1, H, W, C]
-        tt_img_latents = img_latents.reshape(B, 1, H * W, C)  # [1, 1, H*W, C]
+        if not isinstance(img_latents, ttnn.Tensor):
+            B, C, H, W = img_latents.shape  # 1, 4, 128, 128
+            img_latents = torch.permute(img_latents, (0, 2, 3, 1))  # [1, H, W, C]
+            tt_img_latents = img_latents.reshape(B, 1, H * W, C)  # [1, 1, H*W, C]
 
         self.extra_step_kwargs = self.torch_pipeline.prepare_extra_step_kwargs(None, 0.0)
         text_encoder_projection_dim = self.torch_pipeline.text_encoder_2.config.projection_dim
@@ -146,7 +147,7 @@ class TtSDXLImg2ImgPipeline(TtSDXLPipeline):
             tt_prompt_embeds,
             tt_add_text_embeds,
         ) = super()._TtSDXLPipeline__create_user_tensors(
-            latents=tt_img_latents,
+            latents=tt_img_latents if not isinstance(img_latents, ttnn.Tensor) else img_latents,
             all_prompt_embeds_torch=all_prompt_embeds_torch,
             torch_add_text_embeds=torch_add_text_embeds,
         )

@@ -529,23 +529,23 @@ def prepare_image_latents(
         int(width) // torch_pipeline.vae_scale_factor,
     )
 
-    cpu_device = torch.device("cpu")
-    image = image.to(device=cpu_device, dtype=dtype)
-
-    if image.shape[1] == 4:
+    if isinstance(image, ttnn.Tensor):
         image_latents = image
     else:
-        if tt_pipeline.pipeline_config.vae_on_device:
-            image_latents = [latent.sample() for latent in tt_pipeline.tt_vae.encode(image).latent_dist]
-            image_latents = torch.cat(image_latents, dim=0)
+        if image.shape[1] == 4:
+            image_latents = image
         else:
-            image_latents = [
-                torch_pipeline.vae.encode(img).latent_dist.sample()
-                for img in torch.chunk(image, chunks=batch_size, dim=0)
-            ]
-            image_latents = torch.cat(image_latents, dim=0)
-        image_latents = tt_pipeline.torch_pipeline.vae.config.scaling_factor * image_latents
-    image_latents = image_latents.repeat(batch_size // image_latents.shape[0], 1, 1, 1)
+            if tt_pipeline.pipeline_config.vae_on_device:
+                image_latents = [latent.sample() for latent in tt_pipeline.tt_vae.encode(image).latent_dist]
+                image_latents = torch.cat(image_latents, dim=0)
+            else:
+                image_latents = [
+                    torch_pipeline.vae.encode(img).latent_dist.sample()
+                    for img in torch.chunk(image, chunks=batch_size, dim=0)
+                ]
+                image_latents = torch.cat(image_latents, dim=0)
+            image_latents = tt_pipeline.torch_pipeline.vae.config.scaling_factor * image_latents
+        image_latents = image_latents.repeat(batch_size // image_latents.shape[0], 1, 1, 1)
 
     if add_noise:
         torch_noise = torch.randn(shape, generator=None, device=cpu_device, dtype=dtype)
@@ -573,10 +573,7 @@ def prepare_image_latents(
         )
         latents = tt_pipeline.tt_scheduler.add_noise(tt_image_latents, tt_noise)
 
-        return ttnn.to_torch(
-            latents,
-            mesh_composer=ttnn.ConcatMeshToTensor(tt_pipeline.ttnn_device, dim=0),
-        )[:batch_size, ...]
+        return latents
     else:
         return image_latents
 
