@@ -169,8 +169,22 @@ if [ "$ENABLE_CPP_COVERAGE" = "true" ]; then
 fi
 
 if [ "$ENABLE_PYTHON_COVERAGE" = "true" ]; then
-    if ! python3 -c "import coverage" 2>/dev/null; then
+    # Check for coverage module without LD_PRELOAD interfering (ASan can cause import failures)
+    OLD_LD_PRELOAD="${LD_PRELOAD:-}"
+    unset LD_PRELOAD
+    COVERAGE_AVAILABLE=false
+    if python3 -c "import coverage" 2>/dev/null; then
+        COVERAGE_AVAILABLE=true
+    fi
+    # Restore LD_PRELOAD if it was set
+    if [ -n "$OLD_LD_PRELOAD" ]; then
+        export LD_PRELOAD="$OLD_LD_PRELOAD"
+    fi
+
+    if [ "$COVERAGE_AVAILABLE" = false ]; then
         echo "ERROR: Python 'coverage' module not found. Install with: pip install coverage"
+        echo "  Note: If coverage is installed but this check fails, LD_PRELOAD may be interfering."
+        echo "  Try: unset LD_PRELOAD && python3 -c 'import coverage'"
         exit 1
     fi
 fi
@@ -286,10 +300,17 @@ if [ "$ENABLE_PYTHON_COVERAGE" = "true" ]; then
         echo "  Found coverage file: $COVERAGE_FILE"
         echo "  Converting to LCOV format..."
         cd "$SOURCE_DIR"
+        # Temporarily unset LD_PRELOAD for coverage command to avoid ASan interference
+        OLD_LD_PRELOAD_COV="${LD_PRELOAD:-}"
+        unset LD_PRELOAD
         coverage lcov -o "$PYTHON_COVERAGE_FILE" --data-file="$COVERAGE_FILE" || {
             echo "  ⚠ Warning: Failed to convert Python coverage to LCOV"
             touch "$PYTHON_COVERAGE_FILE"
         }
+        # Restore LD_PRELOAD if it was set
+        if [ -n "$OLD_LD_PRELOAD_COV" ]; then
+            export LD_PRELOAD="$OLD_LD_PRELOAD_COV"
+        fi
         cd - > /dev/null
     fi
     echo "  ✓ Python coverage collected: $PYTHON_COVERAGE_FILE"

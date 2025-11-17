@@ -9,6 +9,9 @@ if(isMultiConfig)
     if(NOT "ASanCoverage" IN_LIST CMAKE_CONFIGURATION_TYPES)
         list(APPEND CMAKE_CONFIGURATION_TYPES ASanCoverage)
     endif()
+    if(NOT "LLVMCoverage" IN_LIST CMAKE_CONFIGURATION_TYPES)
+        list(APPEND CMAKE_CONFIGURATION_TYPES LLVMCoverage)
+    endif()
 endif()
 
 set_property(
@@ -19,6 +22,7 @@ set_property(
             ASan
             TSan
             ASanCoverage
+            LLVMCoverage
 )
 
 # ASan, LSan and UBSan do not conflict with each other and are each fast enough that we can combine them.
@@ -43,3 +47,14 @@ set(CMAKE_CXX_FLAGS_ASANCOVERAGE "${CMAKE_CXX_FLAGS_ASAN} -fprofile-instr-genera
 set(CMAKE_EXE_LINKER_FLAGS_ASANCOVERAGE "${CMAKE_EXE_LINKER_FLAGS_ASAN} -fprofile-instr-generate")
 set(CMAKE_SHARED_LINKER_FLAGS_ASANCOVERAGE "${CMAKE_SHARED_LINKER_FLAGS_ASAN} -fprofile-instr-generate")
 set(CMAKE_MODULE_LINKER_FLAGS_ASANCOVERAGE "${CMAKE_MODULE_LINKER_FLAGS_ASAN} -fprofile-instr-generate")
+
+# LLVMCoverage build type: LLVM coverage mapping only (no ASan - faster, no hangs)
+# Based on RelWithDebInfo for good performance with debug symbols
+# Note: We use "LLVMCoverage" instead of "Coverage" to avoid dependencies (like benchmark)
+# auto-detecting it as CMake's standard Coverage build type and adding GCC --coverage flags
+set(coverage_flags "-fprofile-instr-generate -fcoverage-mapping")
+set(CMAKE_C_FLAGS_LLVMCOVERAGE "${CMAKE_C_FLAGS_RELWITHDEBINFO} ${coverage_flags}")
+set(CMAKE_CXX_FLAGS_LLVMCOVERAGE "${CMAKE_CXX_FLAGS_RELWITHDEBINFO} ${coverage_flags}")
+set(CMAKE_EXE_LINKER_FLAGS_LLVMCOVERAGE "${CMAKE_EXE_LINKER_FLAGS_RELWITHDEBINFO} -fprofile-instr-generate")
+set(CMAKE_SHARED_LINKER_FLAGS_LLVMCOVERAGE "${CMAKE_SHARED_LINKER_FLAGS_RELWITHDEBINFO} -fprofile-instr-generate")
+set(CMAKE_MODULE_LINKER_FLAGS_LLVMCOVERAGE "${CMAKE_MODULE_LINKER_FLAGS_RELWITHDEBINFO} -fprofile-instr-generate")

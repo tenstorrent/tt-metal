@@ -183,10 +183,31 @@ else
     CLANG_ASAN_RUNTIME=$(find /usr/lib/llvm-* -name "libclang_rt.asan-x86_64.so" 2>/dev/null | head -1)
 fi
 
+# Detect build type and determine if ASan is needed
+BUILD_TYPE=""
+NEEDS_ASAN=false
+if [ -L "$REPO_ROOT/build" ]; then
+    BUILD_LINK="$(readlink -f "$REPO_ROOT/build")"
+    if [[ "$BUILD_LINK" == *"build_LLVMCoverage"* ]]; then
+        BUILD_TYPE="LLVMCoverage"
+        NEEDS_ASAN=false
+    elif [[ "$BUILD_LINK" == *"build_ASanCoverage"* ]]; then
+        BUILD_TYPE="ASanCoverage"
+        NEEDS_ASAN=true
+    fi
+elif [ -d "$REPO_ROOT/build_LLVMCoverage" ]; then
+    BUILD_TYPE="LLVMCoverage"
+    NEEDS_ASAN=false
+elif [ -d "$REPO_ROOT/build_ASanCoverage" ]; then
+    BUILD_TYPE="ASanCoverage"
+    NEEDS_ASAN=true
+fi
+
 # Check if binaries are statically linked with ASan (common for executables)
 # If so, we don't need LD_PRELOAD - it will cause "incompatible ASan runtimes" errors
-NEEDS_LD_PRELOAD=true
-if [ -d "$REPO_ROOT/build_ASanCoverage" ] || [ -d "$REPO_ROOT/build" ]; then
+NEEDS_LD_PRELOAD=false
+if [ "$NEEDS_ASAN" = true ] && ([ -d "$REPO_ROOT/build_ASanCoverage" ] || [ -d "$REPO_ROOT/build" ]); then
+    NEEDS_LD_PRELOAD=true
     # Check a sample binary to see if ASan is statically linked
     SAMPLE_BINARY=""
     if [ -f "$REPO_ROOT/build_ASanCoverage/test/tt_metal/test_add_two_ints" ]; then
@@ -202,9 +223,11 @@ if [ -d "$REPO_ROOT/build_ASanCoverage" ] || [ -d "$REPO_ROOT/build" ]; then
             echo "✓ Detected statically-linked ASan in binaries - LD_PRELOAD not needed"
         fi
     fi
+elif [ "$BUILD_TYPE" = "LLVMCoverage" ]; then
+    echo "✓ Detected LLVMCoverage build type (no ASan needed)"
 fi
 
-if [ "$NEEDS_LD_PRELOAD" = true ] && [ -n "$CLANG_ASAN_RUNTIME" ] && [ -f "$CLANG_ASAN_RUNTIME" ]; then
+if [ "$NEEDS_ASAN" = true ] && [ "$NEEDS_LD_PRELOAD" = true ] && [ -n "$CLANG_ASAN_RUNTIME" ] && [ -f "$CLANG_ASAN_RUNTIME" ]; then
     # Only set LD_PRELOAD if not already set (to avoid overriding user settings)
     # LD_PRELOAD is needed for Python tests that load shared libraries with ASan
     if [ -z "$LD_PRELOAD" ]; then
@@ -222,7 +245,7 @@ elif [ "$NEEDS_LD_PRELOAD" = false ]; then
         echo "  Current LD_PRELOAD: $LD_PRELOAD"
         echo "  For C++ binaries, run: unset LD_PRELOAD"
     fi
-else
+elif [ "$NEEDS_ASAN" = true ]; then
     echo "⚠ Warning: Clang ASan runtime not found. If you're using ASanCoverage build, you may encounter errors."
     echo "  Searched in: /usr/lib/llvm-*/lib/clang/*/lib/linux/libclang_rt.asan-x86_64.so"
 fi

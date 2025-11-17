@@ -8,7 +8,7 @@
 #
 # Examples:
 #   # C++ binary
-#   .github/actions/code-coverage/run_coverage.sh ./build_ASanCoverage/test/tt_metal/test_add_two_ints
+#   .github/actions/code-coverage/run_coverage.sh ./build_LLVMCoverage/test/tt_metal/test_add_two_ints
 #
 #   # Python pytest
 #   .github/actions/code-coverage/run_coverage.sh tests/ttnn/unit_tests/operations/matmul/test_matmul.py
@@ -33,7 +33,7 @@ if [ $# -eq 0 ]; then
     echo "Usage: $0 <test>"
     echo ""
     echo "Examples:"
-    echo "  $0 ./build_ASanCoverage/test/tt_metal/test_add_two_ints"
+    echo "  $0 ./build_LLVMCoverage/test/tt_metal/test_add_two_ints"
     echo "  $0 tests/ttnn/unit_tests/operations/matmul/test_matmul.py"
     echo "  $0 \"tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul\""
     exit 1
@@ -54,14 +54,19 @@ echo ""
 IS_CPP_TEST=false
 IS_PYTHON_TEST=false
 
-if [ -f "$TEST" ] && [ -x "$TEST" ]; then
-    # It's an executable file (C++ binary)
-    IS_CPP_TEST=true
-    echo "Detected: C++ binary"
-elif [[ "$TEST" == *.py ]] || [[ "$TEST" == *test*.py ]] || [[ "$TEST" == *pytest* ]] || command -v pytest &> /dev/null && python3 -m pytest --collect-only "$TEST" &>/dev/null; then
+# Check for Python test first (before checking if file is executable, since .py files can be executable)
+if [[ "$TEST" == *.py ]] || [[ "$TEST" == *test*.py ]] || [[ "$TEST" == *pytest* ]]; then
     # It's a Python test file
     IS_PYTHON_TEST=true
     echo "Detected: Python test"
+elif [ -f "$TEST" ] && [ -x "$TEST" ]; then
+    # It's an executable file (C++ binary)
+    IS_CPP_TEST=true
+    echo "Detected: C++ binary"
+elif command -v pytest &> /dev/null && python3 -m pytest --collect-only "$TEST" &>/dev/null 2>&1; then
+    # Try pytest collection as fallback (might be a pytest path like "tests/path::test_function")
+    IS_PYTHON_TEST=true
+    echo "Detected: Python test (via pytest)"
 else
     echo "Error: Could not determine test type for: $TEST"
     echo "  - For C++ binaries, provide full path to executable"
@@ -87,6 +92,13 @@ else
     echo "  ℹ No existing coverage directory to clean"
 fi
 
+# Clean up generated folder (contains kernel_names.txt which is regenerated during test execution)
+if [ -d "$REPO_ROOT/generated" ]; then
+    echo "Cleaning up generated folder..."
+    rm -rf "$REPO_ROOT/generated" 2>/dev/null || true
+    echo "  ✓ Cleaned generated folder (kernel_names.txt will be regenerated)"
+fi
+
 # Clean up old HTML output
 if [ -d "$HTML_OUTPUT_DIR" ]; then
     rm -rf "$HTML_OUTPUT_DIR" 2>/dev/null || true
@@ -106,8 +118,61 @@ source "$SCRIPT_DIR/setup_coverage_env.sh" || {
     exit 1
 }
 
-# Restore LD_PRELOAD if it was set (for Python tests)
-if [ -n "$OLD_LD_PRELOAD" ]; then
+# For Python tests with ASanCoverage builds, we MUST have LD_PRELOAD set (Python loads shared libraries dynamically)
+# But for Coverage builds (no ASan), we don't need LD_PRELOAD
+# Detect build type to determine if ASan is needed
+    BUILD_TYPE=""
+    if [ -L "$REPO_ROOT/build" ]; then
+        BUILD_LINK="$(readlink -f "$REPO_ROOT/build")"
+        if [[ "$BUILD_LINK" == *"build_LLVMCoverage"* ]]; then
+            BUILD_TYPE="LLVMCoverage"
+        elif [[ "$BUILD_LINK" == *"build_ASanCoverage"* ]]; then
+            BUILD_TYPE="ASanCoverage"
+        fi
+    elif [ -d "$REPO_ROOT/build_LLVMCoverage" ]; then
+        BUILD_TYPE="LLVMCoverage"
+    elif [ -d "$REPO_ROOT/build_ASanCoverage" ]; then
+        BUILD_TYPE="ASanCoverage"
+    fi
+
+if [ "$IS_PYTHON_TEST" = true ] && [ "$BUILD_TYPE" = "ASanCoverage" ]; then
+    # Find Clang ASan runtime if not already set
+    CLANG_ASAN_RUNTIME=""
+    if [ -z "$LD_PRELOAD" ]; then
+        if [ -f "/usr/lib/llvm-17/lib/clang/17/lib/linux/libclang_rt.asan-x86_64.so" ]; then
+            CLANG_ASAN_RUNTIME="/usr/lib/llvm-17/lib/clang/17/lib/linux/libclang_rt.asan-x86_64.so"
+        elif [ -f "/usr/lib/llvm-18/lib/clang/18/lib/linux/libclang_rt.asan-x86_64.so" ]; then
+            CLANG_ASAN_RUNTIME="/usr/lib/llvm-18/lib/clang/18/lib/linux/libclang_rt.asan-x86_64.so"
+        else
+            CLANG_ASAN_RUNTIME=$(find /usr/lib/llvm-* -name "libclang_rt.asan-x86_64.so" 2>/dev/null | head -1)
+        fi
+
+        if [ -n "$CLANG_ASAN_RUNTIME" ] && [ -f "$CLANG_ASAN_RUNTIME" ]; then
+            export LD_PRELOAD="$CLANG_ASAN_RUNTIME"
+            echo "✓ Set LD_PRELOAD for Python test (ASanCoverage build): $CLANG_ASAN_RUNTIME"
+        else
+            echo "⚠ Warning: Could not find Clang ASan runtime for LD_PRELOAD"
+            echo "  Python tests may fail with ASan symbol errors"
+        fi
+    else
+        # LD_PRELOAD is already set, extract the runtime directory from it
+        CLANG_ASAN_RUNTIME="$LD_PRELOAD"
+    fi
+
+    # Also ensure LD_LIBRARY_PATH includes the Clang runtime directory
+    if [ -n "$CLANG_ASAN_RUNTIME" ] && [ -f "$CLANG_ASAN_RUNTIME" ]; then
+        CLANG_RUNTIME_DIR=$(dirname "$CLANG_ASAN_RUNTIME")
+        if [[ ":$LD_LIBRARY_PATH:" != *":$CLANG_RUNTIME_DIR:"* ]]; then
+            export LD_LIBRARY_PATH="$CLANG_RUNTIME_DIR:${LD_LIBRARY_PATH}"
+            echo "✓ Added Clang runtime to LD_LIBRARY_PATH: $CLANG_RUNTIME_DIR"
+        fi
+    fi
+elif [ "$IS_PYTHON_TEST" = true ] && [ "$BUILD_TYPE" = "LLVMCoverage" ]; then
+    echo "✓ LLVMCoverage build detected - no ASan runtime needed for Python tests"
+fi
+
+# Restore LD_PRELOAD if it was set before (but Python tests take precedence)
+if [ "$IS_PYTHON_TEST" != true ] && [ -n "$OLD_LD_PRELOAD" ]; then
     export LD_PRELOAD="$OLD_LD_PRELOAD"
 fi
 
@@ -140,7 +205,10 @@ if [ "$IS_CPP_TEST" = true ]; then
     BUILD_DIR=""
     if [ -L "$REPO_ROOT/build" ]; then
         BUILD_DIR="$(readlink -f "$REPO_ROOT/build")"
+    elif [ -d "$REPO_ROOT/build_LLVMCoverage" ]; then
+        BUILD_DIR="$REPO_ROOT/build_LLVMCoverage"
     elif [ -d "$REPO_ROOT/build_ASanCoverage" ]; then
+        # Fallback to ASanCoverage for backwards compatibility
         BUILD_DIR="$REPO_ROOT/build_ASanCoverage"
     else
         # Try to find build directory from binary path
@@ -168,12 +236,45 @@ elif [ "$IS_PYTHON_TEST" = true ]; then
     echo "Running Python test: $TEST"
 
     # Ensure coverage is installed
-    if ! python3 -c "import coverage" 2>/dev/null; then
+    # Check without LD_PRELOAD to avoid ASan interfering with the check
+    OLD_LD_PRELOAD_CHECK="${LD_PRELOAD:-}"
+    unset LD_PRELOAD
+    COVERAGE_AVAILABLE=false
+    if python3 -c "import coverage" 2>/dev/null; then
+        COVERAGE_AVAILABLE=true
+    fi
+    if [ -n "$OLD_LD_PRELOAD_CHECK" ]; then
+        export LD_PRELOAD="$OLD_LD_PRELOAD_CHECK"
+    fi
+
+    if [ "$COVERAGE_AVAILABLE" = false ]; then
         echo "Installing coverage module..."
-        pip install coverage || {
+        # Temporarily unset LD_PRELOAD for pip install to avoid ASan errors
+        TEMP_LD_PRELOAD="${LD_PRELOAD:-}"
+        unset LD_PRELOAD
+        # Don't fail on LeakSanitizer warnings - they're from Python itself, not the installation
+        set +e
+        pip install coverage 2>&1 | grep -v "LeakSanitizer\|SUMMARY: AddressSanitizer" || true
+        PIP_EXIT_CODE=$?
+        set -e
+        # Restore LD_PRELOAD
+        if [ -n "$TEMP_LD_PRELOAD" ]; then
+            export LD_PRELOAD="$TEMP_LD_PRELOAD"
+        fi
+        # Check if coverage is actually installed (without LD_PRELOAD to avoid ASan)
+        unset LD_PRELOAD
+        if ! python3 -c "import coverage" 2>/dev/null; then
             echo "Error: Failed to install coverage module"
             exit 1
-        }
+        fi
+        if [ -n "$TEMP_LD_PRELOAD" ]; then
+            export LD_PRELOAD="$TEMP_LD_PRELOAD"
+        fi
+        if [ $PIP_EXIT_CODE -ne 0 ]; then
+            echo "⚠ Note: pip exited with code $PIP_EXIT_CODE (likely LeakSanitizer warnings), but coverage is installed"
+        fi
+    else
+        echo "✓ Coverage module already installed"
     fi
 
     # Run pytest with coverage
@@ -228,6 +329,10 @@ if [ "$HAS_COVERAGE_DATA" = false ] && [ "$ENABLE_KERNEL_COVERAGE" != "true" ]; 
 fi
 
 # Generate the coverage report
+# Temporarily unset LD_PRELOAD for entrypoint.sh to avoid ASan interfering with Python imports
+# entrypoint.sh will handle its own environment setup
+OLD_LD_PRELOAD_FOR_REPORT="${LD_PRELOAD:-}"
+unset LD_PRELOAD
 "$SCRIPT_DIR/entrypoint.sh" \
     --coverage-dir "$COVERAGE_DIR" \
     --source-dir "$REPO_ROOT" \
@@ -236,6 +341,16 @@ fi
     --enable-python-coverage "$ENABLE_PYTHON_COVERAGE" \
     --enable-kernel-coverage "$ENABLE_KERNEL_COVERAGE" \
     --html-output-dir "$HTML_OUTPUT_DIR"
+ENTRYPOINT_EXIT_CODE=$?
+# Restore LD_PRELOAD if it was set
+if [ -n "$OLD_LD_PRELOAD_FOR_REPORT" ]; then
+    export LD_PRELOAD="$OLD_LD_PRELOAD_FOR_REPORT"
+fi
+
+if [ $ENTRYPOINT_EXIT_CODE -ne 0 ]; then
+    echo "ERROR: Failed to generate coverage report (exit code: $ENTRYPOINT_EXIT_CODE)"
+    exit $ENTRYPOINT_EXIT_CODE
+fi
 
 echo ""
 echo "=========================================="
@@ -245,6 +360,8 @@ echo ""
 echo "HTML Report: $HTML_OUTPUT_DIR/index.html"
 echo ""
 echo "To view the report:"
-echo "  1. Copy it out of the container: docker cp <container>:$HTML_OUTPUT_DIR ./coverage_report"
-echo "  2. Or open it directly if you have access to the container filesystem"
+echo "  0. turn the report into a zip file: .github/actions/code-coverage/zip_coverage.sh"
+echo "  1. Copy it out of the container: docker cp <container>:.github/coverage/coverage_report.tar.gz ./coverage_report.tar.gz"
+echo "  2. unzip the file on your local machine: tar -xzf coverage_report.tar.gz"
+echo "  3. open the index.html file: open coverage_report/html/index.html"
 echo ""
