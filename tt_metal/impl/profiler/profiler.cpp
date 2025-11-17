@@ -1750,8 +1750,6 @@ DeviceProfiler::DeviceProfiler(const IDevice* device, const bool new_logs [[mayb
         return;
     }
 
-    // this->clearProfilerDramBuffer(device);
-
     this->device_logs_output_dir = std::filesystem::path(get_profiler_logs_dir());
     std::filesystem::create_directories(this->device_logs_output_dir);
 
@@ -2106,44 +2104,6 @@ void DeviceProfiler::updateTracyContexts(
     }
 #endif
 }
-
-// void DeviceProfiler::clearProfilerDramBuffer(const IDevice* device) {
-// #if defined(TRACY_ENABLE)
-//     ZoneScoped;
-//     if (!getDeviceProfilerState() || device == nullptr) {
-//         return;
-//     }
-
-//     const auto& hal = MetalContext::instance().hal();
-//     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-//     const auto& soc_desc = cluster.get_soc_desc(device_id);
-
-//     const uint32_t cores_per_dram_bank = soc_desc.profiler_ceiled_core_count_perf_dram_bank;
-//     if (cores_per_dram_bank == 0) {
-//         return;
-//     }
-
-//     const uint32_t bank_size_bytes =
-//         PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * hal.get_max_processors_per_core() * cores_per_dram_bank;
-//     TT_ASSERT(bank_size_bytes <= hal.get_dev_size(HalDramMemAddrType::PROFILER));
-
-//     if (bank_size_bytes == 0) {
-//         return;
-//     }
-
-//     const DeviceAddr profiler_addr = hal.get_dev_addr(HalDramMemAddrType::PROFILER);
-//     const uint32_t num_dram_views = soc_desc.get_num_dram_views();
-
-//     std::vector<uint32_t> zero_buffer(bank_size_bytes / sizeof(uint32_t), 1);
-//     for (uint32_t view = 0; view < num_dram_views; ++view) {
-//         cluster.write_dram_vec(zero_buffer.data(), bank_size_bytes, device_id, view, profiler_addr);
-//     }
-
-//     if (!profile_buffer.empty()) {
-//         std::fill(profile_buffer.begin(), profile_buffer.end(), 1);
-//     }
-// #endif
-// }
 
 void DeviceProfiler::updateTracyContext(const std::pair<ChipId, CoreCoord>& device_core) {
 #if defined(TRACY_ENABLE)
