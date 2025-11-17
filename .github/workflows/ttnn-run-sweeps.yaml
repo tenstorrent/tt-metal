@@ -738,7 +738,14 @@ jobs:
           elif [[ "${{ matrix.generate_mode }}" == "ccl_only" ]]; then
             # Generate only CCL modules on n300-llmbox by skipping all non-CCL modules
             # Use single-line Python command to avoid YAML parsing issues with multiline strings
-            NON_CCL_MODULES=$(python3 -c "import pathlib; sweeps_dir = pathlib.Path('tests/sweep_framework/sweeps'); all_modules = [str(py_file.relative_to(sweeps_dir))[:-3].replace('/', '.') for py_file in sorted(sweeps_dir.glob('**/*.py')) if '__init__' not in str(py_file.relative_to(sweeps_dir))[:-3].replace('/', '.') and not str(py_file.relative_to(sweeps_dir))[:-3].replace('/', '.').startswith('ccl.')]; print(','.join(all_modules))")
+            NON_CCL_MODULES=$(python3 -c "import pathlib; sweeps_dir = pathlib.Path('tests/sweep_framework/sweeps'); all_modules = [str(py_file.relative_to(sweeps_dir))[:-3].replace('/', '.') for py_file in sorted(sweeps_dir.glob('**/*.py')) if '__init__' not in str(py_file.relative_to(sweeps_dir))[:-3].replace('/', '.') and not str(py_file.relative_to(sweeps_dir))[:-3].replace('/', '.').startswith('ccl.')]; print(','.join(all_modules))") || {
+              echo "Error: Failed to compute non-CCL modules"
+              exit 1
+            }
+            if [[ -z "$NON_CCL_MODULES" ]]; then
+              echo "Error: No non-CCL modules found - this would skip all modules"
+              exit 1
+            fi
             SKIP_MODULES_FLAG="--skip-modules $NON_CCL_MODULES"
           fi
 
