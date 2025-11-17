@@ -236,11 +236,10 @@ class Qwen25VlAttention(Module):
 
         head_dim = hidden_size // num_heads
         tp_factor = ctx.device.shape[ctx.tp_axis] if ctx.tp_axis is not None and self._qkv_parallel else 1
-
-        group_size = num_heads // num_key_value_heads
         group_count = num_key_value_heads
+        group_size = num_heads // num_key_value_heads
 
-        opt_group_count, opt_group_size, repeat_kv_heads = optimal_groups(group_count, group_size, tp_factor)
+        opt_group_count, opt_group_size, split_factor = optimal_groups(group_count, group_size, tp_factor)
         padded_heads = opt_group_count * opt_group_size
 
         self.qkv_proj = ColParallelLinear(
@@ -269,34 +268,36 @@ class Qwen25VlAttention(Module):
         )
 
         self._head_dim = head_dim
-        self._num_kv_heads = group_count
+        self._group_count = group_count
         self._group_size = group_size
         self._num_local_heads = padded_heads // tp_factor
         self._num_local_kv_heads = opt_group_count // tp_factor
-        self._group_size_padding = opt_group_size * repeat_kv_heads - group_size
-        self._group_count_padding = opt_group_count // repeat_kv_heads - group_count
-        self._repeat_kv_heads = repeat_kv_heads
+        self._group_size_padding = opt_group_size * split_factor - group_size
+        self._group_count_padding = opt_group_count - group_count * split_factor
+        self._split_factor = split_factor
         self._tp_axis = ctx.tp_axis
         self._tp_factor = tp_factor
         self._ccl_manager = ctx.ccl_manager
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         def _prepare_qkv(q: ttnn.Tensor, k: ttnn.Tensor, v: ttnn.Tensor) -> ttnn.Tensor:
-            q = q.unflatten(0, [self._num_kv_heads, self._group_size, self._head_dim])
-            k = k.unflatten(0, [self._num_kv_heads, 1, self._head_dim])
-            v = v.unflatten(0, [self._num_kv_heads, 1, self._head_dim])
+            q = q.unflatten(0, [self._group_count, self._group_size, self._head_dim])
+            k = k.unflatten(0, [self._group_count, 1, self._head_dim])
+            v = v.unflatten(0, [self._group_count, 1, self._head_dim])
 
             # convert to interleaved ROPE format
             q = q.unflatten(2, [2, -1]).transpose(2, 3).flatten(2, 3)
             k = k.unflatten(2, [2, -1]).transpose(2, 3).flatten(2, 3)
 
-            # repeat KV heads
-            n = self._repeat_kv_heads
-            k = k.repeat_interleave(n, dim=1)
-            v = v.repeat_interleave(n, dim=1)
-
-            # pad
+            # pad group size
             q = _pad(q, self._group_size_padding, dim=1)
+
+            # split groups
+            s = self._split_factor
+            q = q.flatten(0, 1).unflatten(0, [self._group_count * s, -1])
+            k = k.repeat_interleave(s, dim=0)
+            v = v.repeat_interleave(s, dim=0)
+            # pad group count
             q = _pad(q, self._group_count_padding, dim=0)
             k = _pad(k, self._group_count_padding, dim=0)
             v = _pad(v, self._group_count_padding, dim=0)
@@ -315,16 +316,21 @@ class Qwen25VlAttention(Module):
 
         if "q_proj.bias" in state and "k_proj.bias" in state and "v_proj.bias" in state:
             state["qkv_proj.bias"] = _prepare_qkv(
-                state.pop("q_proj.bias").unsqueeze(1),
-                state.pop("k_proj.bias").unsqueeze(1),
-                state.pop("v_proj.bias").unsqueeze(1),
-            ).squeeze(1)
+                state.pop("q_proj.bias"), state.pop("k_proj.bias"), state.pop("v_proj.bias")
+            )
 
         if "o_proj.weight" in state:
             o = state["o_proj.weight"]
 
-            o = o.unflatten(1, [self._num_kv_heads, self._group_size, self._head_dim])
+            o = o.unflatten(1, [self._group_count, self._group_size, self._head_dim])
+
+            # pad group size
             o = _pad(o, self._group_size_padding, dim=2)
+
+            # split groups
+            o = o.flatten(1, 2).unflatten(1, [self._group_count * self._split_factor, -1])
+
+            # pad group count
             o = _pad(o, self._group_count_padding, dim=1)
 
             state["o_proj.weight"] = o.flatten(1, 3)
@@ -459,11 +465,9 @@ def optimal_groups(group_count: int, group_size: int, device_count: int) -> tupl
     best_group_count = group_count
     best_group_size = group_size
 
-    for s in range(1, device_count + 1):
-        f = device_count // math.gcd(s, device_count)
-
+    for s in range(1, group_size + 1):
         new_group_size = -(-group_size // s)  # = ceil(group_size / s)
-        new_group_count = s * (-(-group_count // f)) * f
+        new_group_count = -(-group_count * s // device_count) * device_count
 
         # query heads + 2 * key/value heads
         size = new_group_size * new_group_count + 2 * new_group_count
