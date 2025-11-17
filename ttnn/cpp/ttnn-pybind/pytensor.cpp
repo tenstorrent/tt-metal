@@ -528,6 +528,17 @@ py::object convert_tt_tensor_to_torch_tensor(const RowMajorHostBuffer& row_major
         return frombuffer(row_major_host_buffer.buffer, py::arg("dtype") = torch_dtype);
     }();
 
+    // torch does not support unsigned integers. To preserve the full range of the TTNN tensor,
+    // for uint16/32 read with dtype matching element width, then widen the data and
+    // fix up the values
+    if (row_major_host_buffer.data_type == DataType::UINT16) {
+        auto bitwise_and = torch.attr("bitwise_and");
+        tensor = bitwise_and(tensor.attr("to")(torch.attr("int32")), py::int_(0xFFFF));
+    } else if (row_major_host_buffer.data_type == DataType::UINT32) {
+        auto bitwise_and = torch.attr("bitwise_and");
+        tensor = bitwise_and(tensor.attr("to")(torch.attr("int64")), py::int_(0xFFFFFFFF));
+    }
+
     tensor = tensor.attr("reshape")(row_major_host_buffer.shape);
     tensor = tensor.attr("contiguous")();
 
@@ -545,9 +556,9 @@ py::object convert_tt_tensor_to_numpy_tensor(const RowMajorHostBuffer& row_major
     py::object np_dtype = [&]() {
         switch (row_major_host_buffer.data_type) {
             case DataType::UINT8: return np.attr("ubyte");
-            case DataType::UINT16: return np.attr("int16");
-            case DataType::INT32:
-            case DataType::UINT32: return np.attr("int32");
+            case DataType::UINT16: return np.attr("uint16");
+            case DataType::INT32: return np.attr("int32");
+            case DataType::UINT32: return np.attr("uint32");
             case DataType::BFLOAT16: TT_THROW("Bfloat16 is not supported for numpy!");
             case DataType::BFLOAT8_B:
             case DataType::BFLOAT4_B:
