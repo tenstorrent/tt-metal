@@ -83,12 +83,14 @@ void StaticSizedChannelConnectionWriterAdapter::add_local_tensix_connection(
 }
 
 void StaticSizedChannelConnectionWriterAdapter::pack_inbound_channel_rt_args(uint32_t vc_idx, std::vector<uint32_t>& args_out) const {
-    if (vc_idx == 0 && is_2D_routing) {
-        // For VC0 in 2D: pack connection mask and data for 3 downstream EDMs
+    if ((vc_idx == 0 || vc_idx == 1) && is_2D_routing) {
+        // For VC0 and VC1 in 2D: pack connection mask and data for 3 downstream EDMs
+        size_t num_downstream =
+            (vc_idx == 0) ? builder_config::num_downstream_edms_2d_vc0 : builder_config::num_downstream_edms_2d_vc1;
         args_out.push_back(this->downstream_edms_connected);  // 3-bit mask
 
         // Pack 3 buffer base addresses (one per compact index 0-2)
-        for (size_t compact_idx = 0; compact_idx < builder_config::num_downstream_edms_2d_vc0; compact_idx++) {
+        for (size_t compact_idx = 0; compact_idx < num_downstream; compact_idx++) {
             uint32_t buffer_addr = this->downstream_edm_buffer_base_addresses[vc_idx][compact_idx].value_or(0);
             args_out.push_back(buffer_addr);
         }
@@ -98,17 +100,17 @@ void StaticSizedChannelConnectionWriterAdapter::pack_inbound_channel_rt_args(uin
         args_out.push_back(this->pack_downstream_noc_y_rt_arg(vc_idx));
 
         // Pack 3 worker registration addresses (connection handshake addresses)
-        for (size_t compact_idx = 0; compact_idx < builder_config::num_downstream_edms_2d_vc0; compact_idx++) {
+        for (size_t compact_idx = 0; compact_idx < num_downstream; compact_idx++) {
             args_out.push_back(this->downstream_edm_worker_registration_addresses[vc_idx][compact_idx].value_or(0));
         }
 
         // Pack 3 worker location info addresses
-        for (size_t compact_idx = 0; compact_idx < builder_config::num_downstream_edms_2d_vc0; compact_idx++) {
+        for (size_t compact_idx = 0; compact_idx < num_downstream; compact_idx++) {
             args_out.push_back(this->downstream_edm_worker_location_info_addresses[vc_idx][compact_idx].value_or(0));
         }
 
         // Pack 3 buffer index semaphore addresses
-        for (size_t compact_idx = 0; compact_idx < builder_config::num_downstream_edms_2d_vc0; compact_idx++) {
+        for (size_t compact_idx = 0; compact_idx < num_downstream; compact_idx++) {
             args_out.push_back(this->downstream_edm_buffer_index_semaphore_addresses[vc_idx][compact_idx].value_or(0));
         }
     } else {

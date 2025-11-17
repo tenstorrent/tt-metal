@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <array>
 #include "tt_metal/lite_fabric/hw/inc/header.hpp"
+#include "tt_metal/fabric/hw/inc/fabric_stream_ids.hpp"
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
 #include "tt_metal/fabric/hw/inc/edm_fabric/compile_time_arg_tmp.hpp"
@@ -17,13 +18,15 @@
 namespace lite_fabric {
 
 // STREAM REGISTER ASSIGNMENT
-// Consult tt_metal/fabric/erisc_datamover_builder.hpp StreamRegAssignments to ensure no conflicts
-constexpr uint32_t to_receiver_0_pkts_sent_id = 23;
-constexpr uint32_t to_sender_0_pkts_acked_id = 24;
-constexpr uint32_t to_sender_0_pkts_completed_id = 25;
-constexpr uint32_t to_receiver_1_pkts_sent_id = 26;
-constexpr uint32_t to_sender_1_pkts_acked_id = 27;
-constexpr uint32_t to_sender_1_pkts_completed_id = 28;
+// Use reserved stream IDs from fabric datamover to avoid conflicts
+constexpr uint32_t to_receiver_0_pkts_sent_id = tt::tt_fabric::StreamRegAssignments::reserved_lite_fabric_0_stream_id;
+constexpr uint32_t to_sender_0_pkts_acked_id = tt::tt_fabric::StreamRegAssignments::reserved_lite_fabric_1_stream_id;
+constexpr uint32_t to_sender_0_pkts_completed_id =
+    tt::tt_fabric::StreamRegAssignments::reserved_lite_fabric_2_stream_id;
+constexpr uint32_t to_receiver_1_pkts_sent_id = tt::tt_fabric::StreamRegAssignments::reserved_lite_fabric_3_stream_id;
+constexpr uint32_t to_sender_1_pkts_acked_id = tt::tt_fabric::StreamRegAssignments::reserved_lite_fabric_4_stream_id;
+constexpr uint32_t to_sender_1_pkts_completed_id =
+    tt::tt_fabric::StreamRegAssignments::reserved_lite_fabric_5_stream_id;
 
 // Max two but only using 1 for now
 constexpr size_t MAX_NUM_RECEIVER_CHANNELS = 2;

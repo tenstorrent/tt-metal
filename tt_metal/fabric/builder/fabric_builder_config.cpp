@@ -48,6 +48,10 @@ uint32_t get_vc0_downstream_edm_count(bool is_2D_routing) {
     return is_2D_routing ? builder_config::num_downstream_edms_2d_vc0 : builder_config::num_downstream_edms_vc0;
 }
 
+uint32_t get_vc1_downstream_edm_count(bool is_2D_routing) {
+    return is_2D_routing ? builder_config::num_downstream_edms_2d_vc1 : builder_config::num_downstream_edms_vc1;
+}
+
 }  // namespace builder_config
 
 }  // namespace tt::tt_fabric

@@ -58,6 +58,7 @@
 #include "tt_metal/fabric/serialization/intermesh_connections_serialization.hpp"
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
+#include "tt_metal/fabric/erisc_datamover_builder.hpp"
 
 namespace tt::tt_fabric {
 
@@ -2137,11 +2138,12 @@ void ControlPlane::populate_fabric_connection_info(
     tt::tt_fabric::fabric_connection_info_t& tensix_connection_info,
     ChipId physical_chip_id,
     chan_id_t eth_channel_id) const {
-    constexpr uint16_t WORKER_FREE_SLOTS_STREAM_ID = 17;
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& fabric_context = this->get_fabric_context();
     // Sender channel 0 is always for local worker in the new design
     const auto sender_channel = 0;
+    constexpr uint16_t sender_channel_free_slots_stream_id =
+        StreamRegAssignments::sender_channel_0_free_slots_stream_id;
 
     const auto& fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
     // Always populate fabric router config for normal workers
@@ -2150,7 +2152,11 @@ void ControlPlane::populate_fabric_connection_info(
     CoreCoord fabric_router_virtual_core = cluster.get_virtual_eth_core_from_channel(physical_chip_id, eth_channel_id);
 
     fill_connection_info_fields(
-        worker_connection_info, fabric_router_virtual_core, edm_config, sender_channel, WORKER_FREE_SLOTS_STREAM_ID);
+        worker_connection_info,
+        fabric_router_virtual_core,
+        edm_config,
+        sender_channel,
+        sender_channel_free_slots_stream_id);
 
     // Check if fabric tensix config is enabled, if so populate different configs for dispatcher and tensix
     if (fabric_tensix_config != tt::tt_fabric::FabricTensixConfig::DISABLED) {
@@ -2161,7 +2167,7 @@ void ControlPlane::populate_fabric_connection_info(
             fabric_router_virtual_core,
             default_edm_config,
             sender_channel,
-            WORKER_FREE_SLOTS_STREAM_ID);
+            sender_channel_free_slots_stream_id);
 
         const auto& tensix_config = fabric_context.get_tensix_config();
         CoreCoord mux_core_logical = tensix_config.get_core_for_channel(physical_chip_id, eth_channel_id);

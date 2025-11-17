@@ -154,15 +154,15 @@ struct SenderChannelFromReceiverCounterBasedCreditsReceiver {
 struct SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver {
     SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver() = default;
     SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver(size_t sender_channel_index) :
-        to_sender_packets_acked_stream(to_sender_packets_acked_streams[sender_channel_index]),
         to_sender_packets_completed_stream(to_sender_packets_completed_streams[sender_channel_index]) {}
 
+    // Ack streams removed - only completion streams are now used
     FORCE_INLINE uint32_t get_num_unprocessed_acks_from_receiver() {
-        return get_ptr_val(to_sender_packets_acked_stream);
+        return 0;  // Acks no longer tracked separately
     }
 
     FORCE_INLINE void increment_num_processed_acks(size_t num_acks) {
-        increment_local_update_ptr_val(to_sender_packets_acked_stream, -num_acks);
+        // No-op - acks no longer tracked separately
     }
 
     FORCE_INLINE uint32_t get_num_unprocessed_completions_from_receiver() {
@@ -173,7 +173,6 @@ struct SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver {
         increment_local_update_ptr_val(to_sender_packets_completed_stream, -num_completions);
     }
 
-    uint32_t to_sender_packets_acked_stream;
     uint32_t to_sender_packets_completed_stream;
 };
 

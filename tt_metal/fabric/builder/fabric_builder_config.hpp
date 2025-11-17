@@ -65,25 +65,37 @@ static constexpr std::size_t num_sender_channels_1d_ring = 2;
 static constexpr std::size_t num_sender_channels_2d_torus = 4;
 
 static constexpr std::size_t num_sender_channels_1d = 2;
-static constexpr std::size_t num_sender_channels_2d = 4;
+static constexpr std::size_t num_sender_channels_2d = 7;  // Channels 0-6 (includes VC1 channels 4-6 for 2D)
 static constexpr std::size_t num_sender_channels = std::max(num_sender_channels_1d, num_sender_channels_2d);
 static constexpr std::size_t num_downstream_sender_channels = num_sender_channels - 1;
 
-static constexpr std::size_t num_receiver_channels = 1;
+static constexpr std::size_t num_receiver_channels_1d = 1;
+static constexpr std::size_t num_receiver_channels_2d = 2;
+static constexpr std::size_t num_receiver_channels = std::max(num_receiver_channels_1d, num_receiver_channels_2d);
 
 static constexpr std::size_t num_downstream_edms_vc0 = 1;
+static constexpr std::size_t num_downstream_edms_vc1 = 0;  // VC1 not used in 1D
 static constexpr std::size_t num_downstream_edms_2d_vc0 = 3;
-static constexpr std::size_t num_downstream_edms = num_downstream_edms_vc0;
-static constexpr std::size_t num_downstream_edms_2d = num_downstream_edms_2d_vc0;
+static constexpr std::size_t num_downstream_edms_2d_vc1 = 3;  // VC1 has 3 downstream EDMs in 2D
+static constexpr std::size_t num_downstream_edms =
+    num_downstream_edms_vc0 + num_downstream_edms_vc1;
+static constexpr std::size_t num_downstream_edms_2d =
+    num_downstream_edms_2d_vc0 + num_downstream_edms_2d_vc1;
 static constexpr std::size_t max_downstream_edms = std::max(num_downstream_edms, num_downstream_edms_2d);
 
-uint32_t get_sender_channel_count(bool is_2D_routing);
+uint32_t get_sender_channel_count(const bool is_2D_routing);
+
+inline uint32_t get_receiver_channel_count(const bool is_2D_routing) {
+    return is_2D_routing ? builder_config::num_receiver_channels_2d : builder_config::num_receiver_channels_1d;
+}
 
 uint32_t get_num_tensix_sender_channels(Topology topology, tt::tt_fabric::FabricTensixConfig fabric_tensix_config);
 
 uint32_t get_downstream_edm_count(bool is_2D_routing);
 
 uint32_t get_vc0_downstream_edm_count(bool is_2D_routing);
+
+uint32_t get_vc1_downstream_edm_count(bool is_2D_routing);
 
 }  // namespace builder_config
 

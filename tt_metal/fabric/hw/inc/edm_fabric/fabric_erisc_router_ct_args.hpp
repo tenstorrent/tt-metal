@@ -21,14 +21,18 @@
 
 constexpr size_t NUM_ROUTER_CARDINAL_DIRECTIONS = 4;
 
-constexpr size_t MAX_NUM_RECEIVER_CHANNELS = 2;
-constexpr size_t MAX_NUM_SENDER_CHANNELS = 5;
+constexpr size_t MAX_NUM_RECEIVER_CHANNELS = 2;    // VC0, VC1 (VC1 only in 2D)
+constexpr size_t MAX_NUM_SENDER_CHANNELS = 7;      // Channels 0-6 (channels 4-6 for VC1, only in 2D)
+constexpr size_t MAX_NUM_SENDER_CHANNELS_VC0 = 4;  // Channels 0-3
+constexpr size_t MAX_NUM_SENDER_CHANNELS_VC1 = 3;  // Channels 4-6 (2D only)
+
+constexpr size_t MAX_NUM_SENDER_CHANNELS_INTRA_MESH = MAX_NUM_SENDER_CHANNELS_VC0;
 
 // Compile Time args
 
 constexpr bool SPECIAL_MARKER_CHECK_ENABLED = true;
 
-// Stream IDs from compile time arguments (first 23 arguments)
+// Stream IDs from compile time arguments (first 27 arguments)
 constexpr size_t STREAM_ID_ARGS_START_IDX = 0;
 constexpr uint32_t to_receiver_0_pkts_sent_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 0);
 constexpr uint32_t to_receiver_1_pkts_sent_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 1);
@@ -36,30 +40,43 @@ constexpr uint32_t to_sender_0_pkts_acked_id = get_compile_time_arg_val(STREAM_I
 constexpr uint32_t to_sender_1_pkts_acked_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 3);
 constexpr uint32_t to_sender_2_pkts_acked_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 4);
 constexpr uint32_t to_sender_3_pkts_acked_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 5);
-constexpr uint32_t to_sender_4_pkts_acked_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 6);
-constexpr uint32_t to_sender_0_pkts_completed_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 7);
-constexpr uint32_t to_sender_1_pkts_completed_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 8);
-constexpr uint32_t to_sender_2_pkts_completed_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 9);
-constexpr uint32_t to_sender_3_pkts_completed_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 10);
-constexpr uint32_t to_sender_4_pkts_completed_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 11);
+constexpr uint32_t to_sender_0_pkts_completed_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 6);
+constexpr uint32_t to_sender_1_pkts_completed_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 7);
+constexpr uint32_t to_sender_2_pkts_completed_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 8);
+constexpr uint32_t to_sender_3_pkts_completed_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 9);
+constexpr uint32_t to_sender_4_pkts_completed_id =
+    get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 10);  // VC1 (2D only)
+constexpr uint32_t to_sender_5_pkts_completed_id =
+    get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 11);  // VC1 sender ch 1 (2D only)
+constexpr uint32_t to_sender_6_pkts_completed_id =
+    get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 12);  // VC1 sender ch 2 (2D only)
 constexpr uint32_t vc_0_free_slots_from_downstream_edge_1_stream_id =
-    get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 12);
-constexpr uint32_t vc_0_free_slots_from_downstream_edge_2_stream_id =
     get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 13);
-constexpr uint32_t vc_0_free_slots_from_downstream_edge_3_stream_id =
+constexpr uint32_t vc_0_free_slots_from_downstream_edge_2_stream_id =
     get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 14);
-constexpr uint32_t vc_1_free_slots_from_downstream_edge_1_stream_id =
+constexpr uint32_t vc_0_free_slots_from_downstream_edge_3_stream_id =
     get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 15);
-constexpr uint32_t sender_channel_1_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 16);
-constexpr uint32_t sender_channel_2_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 17);
-constexpr uint32_t sender_channel_3_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 18);
-constexpr uint32_t sender_channel_4_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 19);
-constexpr uint32_t tensix_relay_local_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 20);
-// vc1_sender_channel_free_slots_stream_id is the same as sender_channel_4_free_slots_stream_id (stream ID 21)
-constexpr uint32_t MULTI_RISC_TEARDOWN_SYNC_STREAM_ID = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 21);
+constexpr uint32_t vc_1_free_slots_from_downstream_edge_1_stream_id =
+    get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 16);  // VC1 (2D only)
+constexpr uint32_t vc_1_free_slots_from_downstream_edge_2_stream_id =
+    get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 17);  // VC1 (2D only)
+constexpr uint32_t vc_1_free_slots_from_downstream_edge_3_stream_id =
+    get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 18);  // VC1 (2D only)
+constexpr uint32_t sender_channel_0_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 19);
+constexpr uint32_t sender_channel_1_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 20);
+constexpr uint32_t sender_channel_2_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 21);
+constexpr uint32_t sender_channel_3_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 22);
+constexpr uint32_t sender_channel_4_free_slots_stream_id =
+    get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 23);  // VC1 (2D only)
+constexpr uint32_t sender_channel_5_free_slots_stream_id =
+    get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 24);  // VC1 (2D only)
+constexpr uint32_t sender_channel_6_free_slots_stream_id =
+    get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 25);  // VC1 (2D only)
+constexpr uint32_t tensix_relay_local_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 26);
+constexpr uint32_t MULTI_RISC_TEARDOWN_SYNC_STREAM_ID = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 27);
 
 // Special marker after stream IDs
-constexpr size_t STREAM_IDS_END_MARKER_IDX = STREAM_ID_ARGS_START_IDX + 22;
+constexpr size_t STREAM_IDS_END_MARKER_IDX = STREAM_ID_ARGS_START_IDX + 28;
 constexpr size_t STREAM_IDS_END_MARKER = 0xFFEE0001;
 static_assert(
     !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(STREAM_IDS_END_MARKER_IDX) == STREAM_IDS_END_MARKER,
@@ -94,14 +111,14 @@ static_assert(
     NUM_SENDER_CHANNELS <= MAX_NUM_SENDER_CHANNELS,
     "NUM_SENDER_CHANNELS must be less than or equal to MAX_NUM_SENDER_CHANNELS");
 static_assert(
-    wait_for_host_signal_IDX == 28,
-    "wait_for_host_signal_IDX must be 28 (24 stream IDs + 1 marker + 1 tensix connections + 4 config args)");
+    wait_for_host_signal_IDX == 34,
+    "wait_for_host_signal_IDX must be 34 (28 stream IDs + 1 marker + 1 tensix connections + 4 config args)");
 static_assert(
     get_compile_time_arg_val(wait_for_host_signal_IDX) == 0 || get_compile_time_arg_val(wait_for_host_signal_IDX) == 1,
     "wait_for_host_signal must be 0 or 1");
 static_assert(
-    MAIN_CT_ARGS_START_IDX == 29,
-    "MAIN_CT_ARGS_START_IDX must be 29 (24 stream IDs + 1 marker + 1 tensix connections + 5 config args)");
+    MAIN_CT_ARGS_START_IDX == 35,
+    "MAIN_CT_ARGS_START_IDX must be 35 (28 stream IDs + 1 marker + 1 tensix connections + 5 config args)");
 
 constexpr uint32_t SWITCH_INTERVAL =
 #ifndef DEBUG_PRINT_ENABLED
@@ -494,7 +511,7 @@ constexpr std::array<uint32_t, MAX_NUM_RECEIVER_CHANNELS> to_receiver_packets_se
     take_first_n_elements<MAX_NUM_RECEIVER_CHANNELS, MAX_NUM_RECEIVER_CHANNELS, uint32_t>(
         std::array<uint32_t, MAX_NUM_RECEIVER_CHANNELS>{to_receiver_0_pkts_sent_id, to_receiver_1_pkts_sent_id});
 
-// not in symbol table - because not used
+// data section
 constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> to_sender_packets_acked_streams =
     take_first_n_elements<MAX_NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, uint32_t>(
         std::array<uint32_t, MAX_NUM_SENDER_CHANNELS>{
@@ -502,9 +519,10 @@ constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> to_sender_packets_acked_
             to_sender_1_pkts_acked_id,
             to_sender_2_pkts_acked_id,
             to_sender_3_pkts_acked_id,
-            to_sender_4_pkts_acked_id});
+            0,    // No ack for sender channel 4
+            0,    // No ack for sender channel 5
+            0});  // No ack for sender channel 6
 
-// data section
 constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> to_sender_packets_completed_streams =
     take_first_n_elements<MAX_NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, uint32_t>(
         std::array<uint32_t, MAX_NUM_SENDER_CHANNELS>{
@@ -512,7 +530,9 @@ constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> to_sender_packets_comple
             to_sender_1_pkts_completed_id,
             to_sender_2_pkts_completed_id,
             to_sender_3_pkts_completed_id,
-            to_sender_4_pkts_completed_id});
+            to_sender_4_pkts_completed_id,
+            to_sender_5_pkts_completed_id,    // VC1 sender ch 1 (2D only)
+            to_sender_6_pkts_completed_id});  // VC1 sender ch 2 (2D only)
 
 // Miscellaneous configuration
 
