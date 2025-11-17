@@ -1564,8 +1564,8 @@ void ControlPlane::compute_and_embed_2d_routing_path_table(
     uint16_t num_chips = mesh_shape[0] * mesh_shape[1];
     TT_ASSERT(num_chips <= 256, "Number of chips exceeds 256 for mesh {}", *mesh_id);
     TT_ASSERT(
-        mesh_shape[0] <= 16 && mesh_shape[1] <= 16,
-        "One or both of mesh axis exceed 16 for mesh {}: {}x{}",
+        mesh_shape[0] <= 32 && mesh_shape[1] <= 32,
+        "One or both of mesh axis exceed 32 for mesh {}: {}x{}",
         *mesh_id,
         mesh_shape[0],
         mesh_shape[1]);
