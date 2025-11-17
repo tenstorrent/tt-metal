@@ -29,7 +29,7 @@ runs:
   using: "composite"
   steps:
     - name: 🧬 Checkout Repository
-      if: ${{ inputs.use-evaluation-image == false }}
+      if: ${{ inputs.use-evaluation-image == 'false' }}
       uses: actions/checkout@v4
       with:
         fetch-depth: ${{ inputs.fetch-depth }}
@@ -44,27 +44,27 @@ runs:
       shell: bash
 
     - name: 📦 Download Build Artifact
-      if: ${{ inputs.build-artifact-name != '' && inputs.use-evaluation-image == false }}
+      if: ${{ inputs.build-artifact-name != '' && inputs.use-evaluation-image == 'false' }}
       uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
       with:
         name: ${{ inputs.build-artifact-name }}
         path: ${{ inputs.path }}
 
     - name: 📂 Extract Build Files
-      if: ${{ inputs.build-artifact-name != '' && inputs.use-evaluation-image == false }}
+      if: ${{ inputs.build-artifact-name != '' && inputs.use-evaluation-image == 'false' }}
       working-directory: ${{ inputs.path }}
       run: tar --zstd -xf ttm_any.tar.zst
       shell: bash
 
     - name: 🧪 Download Python Wheel
-      if: ${{ inputs.wheel-artifact-name != '' && inputs.use-evaluation-image == false }}
+      if: ${{ inputs.wheel-artifact-name != '' && inputs.use-evaluation-image == 'false' }}
       uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
       with:
         name: ${{ inputs.wheel-artifact-name }}
         path: ${{ inputs.path }}
 
     - name: 💿 Install Wheel
-      if: ${{ inputs.wheel-artifact-name != '' && inputs.use-evaluation-image == false }}
+      if: ${{ inputs.wheel-artifact-name != '' && inputs.use-evaluation-image == 'false' }}
       working-directory: ${{ inputs.path }}
       run: |
         echo "📂 In directory: $(pwd)"
