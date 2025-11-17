@@ -253,7 +253,7 @@ def create_tt_model(
             False,  # apc_test
             False,  # pcc_check
             False,  # prefill-only profile
-            1,  # num layers
+            80,  # num layers
             False,  # print_outputs
             False,  # is_cur_pos_sharded
             False,  # is_page_table_sharded
@@ -372,12 +372,12 @@ def create_tt_model(
             False,  # is_cur_pos_sharded
             False,  # is_page_table_sharded
         ),
-        (  # long-16k-b32 - 32 users, 16K long prompt
+        (  # long-16k-b1 - 1 user, 16K long prompt
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
-            32,  # batch_size
+            1,  # batch_size
             128,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
@@ -516,7 +516,7 @@ def create_tt_model(
         "repeat2",  # latency with 2 repeat batches
         "long-4k-b1",  # 4k context for 1 user
         "long-8k-b1",  # 4k context for 1 user
-        "long-16k-b32",  # 16K context for 32 users
+        "long-16k-b1",  # 16K context for 1 user
         "long-32k-b1",  # 32k context for 1 user
         "long-64k-b1",  # 64k context for 1 user
         "long-128k-b1",  # 128k context for 1 user
