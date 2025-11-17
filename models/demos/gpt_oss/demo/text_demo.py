@@ -33,7 +33,6 @@ from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_in
 
 # Import specific utilities from tt_transformers
 from models.tt_transformers.tt.generator import Generator, create_submeshes
-from models.tt_transformers.tt.model_config import DecodersPrecision
 
 
 def prepare_gpt_oss_generator_args(
@@ -171,8 +170,8 @@ def test_gpt_oss_demo(
     profiler.start("run")
     batch_idx = 0
 
-    # Use performance optimizations
-    optimizations = lambda model_args: DecodersPrecision.performance(model_args.n_layers, model_args.model_name)
+    # GPT-OSS doesn't support any performance optimizations
+    optimizations = None
 
     # Prepare GPT-OSS with tt_transformers infrastructure
     profiler.start(f"generator_setup", iteration=batch_idx)

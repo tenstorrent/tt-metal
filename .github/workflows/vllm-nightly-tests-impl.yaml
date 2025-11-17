@@ -196,6 +196,21 @@ jobs:
             additional-args: "--num_scheduler_steps 1",
             owner_id: U091SNDA4TS, # Tomasz Cheda
           },
+          {
+            name: "[WH-GLX] GPT-OSS-120B",
+            model: "openai/gpt-oss-120b",
+            server-timeout: 35,
+            benchmark-timeout: 10,
+            runner-label: topology-6u,
+            arch: arch-wormhole_b0,
+            mesh-device: "\"(4, 8)\"",
+            multimodal: false,
+            tt-llama-text-ver: "tt_transformers",
+            additional-args: "--max_num_seqs 1 --num_scheduler_steps 1",
+            use-vllm-v1: true,
+            co-owner-1-id: U08TJ70UFRT, # Harry Andrews
+            co-owner-2-id: U06F3ER8X9A, # Stuti Raizada
+          },
         ]
     runs-on:
       - ${{ matrix.test-group.runner-label }}
