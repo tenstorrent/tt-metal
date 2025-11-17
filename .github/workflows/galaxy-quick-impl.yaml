@@ -16,18 +16,14 @@ on:
         required: false
         type: string
         default: "in-service"
-      bh:
+      blackhole:
         required: false
-        type: string
-        default: 'false'
-      bh_scheduled:
-        required: false
-        type: string
-        default: 'false'
+        type: boolean
+        default: false
 
 jobs:
   quick-wh-glx-health:
-    if: ${{ !((inputs.bh == 'true') || (github.event_name == 'schedule' && inputs.bh_scheduled == 'true')) }}
+    if: ${{ (inputs.bh == 'false') && (github.event_name != 'schedule') }}
     runs-on:
       - topology-6u
       - arch-wormhole_b0
@@ -83,7 +79,7 @@ jobs:
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
   quick-wh-glx-quick:
-    if: ${{ !((inputs.bh == 'true') || (github.event_name == 'schedule' && inputs.bh_scheduled == 'true')) }}
+    if: ${{ (inputs.bh == 'false') && (github.event_name != 'schedule') }}
     runs-on:
       - topology-6u
       - arch-wormhole_b0
@@ -146,7 +142,7 @@ jobs:
         if: always()
 
   quick-bh-glx-health:
-    if: ${{ (github.event_name == 'workflow_dispatch' && inputs.bh == 'true') || (github.event_name == 'schedule' && inputs.bh_scheduled == 'true') }}
+    if: ${{ (inputs.bh == 'true') && (github.event_name == 'schedule') }}
     runs-on:
       - topology-6u
       - arch-blackhole

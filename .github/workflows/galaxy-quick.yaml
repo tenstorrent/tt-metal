@@ -34,6 +34,5 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      bh: ${{ github.event.inputs.bh_glx }}
-      bh_scheduled: 'true' # Always true for scheduled runs
+      blackhole: ${{ github.event.inputs.bh_glx }}
     secrets: inherit
