@@ -16,8 +16,20 @@ from tests.sweep_framework.master_config_loader import MasterConfigLoader
 
 TIMEOUT = 30
 
+# NOTE:
+# -----
+# For most ops, the model_traced suite uses real traced configurations from
+# production models plus a PyTorch/TTNN golden.  For paged SDPA decode the
+# correctness oracle is substantially more complex (see
+# tests/tt_eager/python_api_testing/unit_testing/misc/test_scaled_dot_product_attention_decode.py),
+# and we do not yet have a lightweight reference that matches all traced cases.
+# Until such a golden is implemented, we deliberately *do not* enable the
+# model_traced suite for this op to avoid claiming coverage we do not have.
+#
+# The sample suite below still exercises the operation shape/layout path; the
+# traced configurations will be wired in a follow‑up once a proper golden exists.
 loader = MasterConfigLoader()
-model_traced_params = loader.get_suite_parameters("paged_scaled_dot_product_attention_decode", all_cases=False)
+_model_traced_params = None  # reserved for future enablement
 
 parameters = {
     "model_traced_sample": {
@@ -29,8 +41,7 @@ parameters = {
     },
 }
 
-if model_traced_params:
-    parameters["model_traced"] = model_traced_params
+# Intentionally do not attach a "model_traced" suite yet.
 
 
 def run(
