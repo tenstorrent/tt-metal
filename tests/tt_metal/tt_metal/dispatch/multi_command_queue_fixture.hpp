@@ -29,11 +29,7 @@ protected:
             GTEST_SKIP();
         }
 
-        this->num_cqs_ = tt::tt_metal::MetalContext::instance().rtoptions().get_num_hw_cqs();
-        if (this->num_cqs_ != 2) {
-            log_info(tt::LogTest, "This suite must be run with TT_METAL_GTEST_NUM_HW_CQS=2");
-            GTEST_SKIP();
-        }
+        this->num_cqs_ = 2;
 
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         auto enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
@@ -101,7 +97,7 @@ protected:
             GTEST_SKIP();
         }
 
-        this->num_cqs_ = tt::tt_metal::MetalContext::instance().rtoptions().get_num_hw_cqs();
+        this->num_cqs_ = 2;
 
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     }
@@ -118,12 +114,6 @@ protected:
         if (slow_dispatch) {
             log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
             this->slow_dispatch_ = true;
-            GTEST_SKIP();
-        }
-
-        auto num_cqs = tt::tt_metal::MetalContext::instance().rtoptions().get_num_hw_cqs();
-        if (num_cqs != 2) {
-            log_info(tt::LogTest, "This suite must be run with TT_METAL_GTEST_NUM_HW_CQS=2");
             GTEST_SKIP();
         }
 

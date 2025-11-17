@@ -224,15 +224,6 @@ RunTimeOptions::RunTimeOptions() {
     const char* validate_kernel_binaries = std::getenv("TT_METAL_VALIDATE_PROGRAM_BINARIES");
     set_validate_kernel_binaries(validate_kernel_binaries != nullptr && validate_kernel_binaries[0] == '1');
 
-    const char* num_cqs = getenv("TT_METAL_GTEST_NUM_HW_CQS");
-    if (num_cqs != nullptr) {
-        try {
-            set_num_hw_cqs(std::stoi(num_cqs));
-        } catch (const std::invalid_argument& ia) {
-            TT_THROW("Invalid TT_METAL_GTEST_NUM_HW_CQS: {}", num_cqs);
-        }
-    }
-
     using_slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr;
 
     const char* dispatch_data_collection_str = std::getenv("TT_METAL_DISPATCH_DATA_COLLECTION");

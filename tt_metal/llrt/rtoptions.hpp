@@ -151,7 +151,6 @@ class RunTimeOptions {
     uint32_t watcher_debug_delay = 0;
 
     bool validate_kernel_binaries = false;
-    unsigned num_hw_cqs = 1;
 
     bool using_slow_dispatch = false;
 
@@ -438,9 +437,6 @@ public:
     // Whether to compile with -g to include DWARF debug info in the binary.
     bool get_riscv_debug_info_enabled() const { return riscv_debug_info_enabled; }
     void set_riscv_debug_info_enabled(bool enable) { riscv_debug_info_enabled = enable; }
-
-    unsigned get_num_hw_cqs() const { return num_hw_cqs; }
-    void set_num_hw_cqs(unsigned num) { num_hw_cqs = num; }
 
     uint32_t get_watcher_debug_delay() const { return watcher_debug_delay; }
     void set_watcher_debug_delay(uint32_t delay) { watcher_debug_delay = delay; }

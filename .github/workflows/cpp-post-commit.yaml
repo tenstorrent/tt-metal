@@ -49,9 +49,6 @@ jobs:
           - name: dispatch
             cmd: |
               TT_METAL_ENABLE_ERISC_IRAM=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=$GTEST_FILTER
-          - name: dispatch multicmd queue
-            cmd: |
-              TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshMultiCQ*Fixture.${GTEST_FILTER}
           - name: distributed
             cmd: |
               ./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter=$GTEST_FILTER
