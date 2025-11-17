@@ -482,7 +482,7 @@ TEST_F(LazyModeFixture, MatmulWithElementwiseLazy) {
     auto eager_result = final_eager.cpu();
 
     log_info(tt::LogTest, "Printing eager graph...");
-    lazy::print_graph(final_eager.lazy());
+    lazy::print_graph(final_eager);
 
     // ========== Now run LAZY mode and compare ==========
     log_info(tt::LogTest, "Running same operations in LAZY mode...");
