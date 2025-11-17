@@ -36,6 +36,7 @@
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/normalization/softmax/softmax.hpp"
+#include "ttnn/operations/transformer/split_query_key_value_and_split_heads/split_query_key_value_and_split_heads.hpp"
 #include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
@@ -857,6 +858,52 @@ TEST_F(Conv2dOpIfTest, Conv2d) {
         EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 10000);
         ASSERT_TRUE(query.output_tensor_spec.has_value());
         EXPECT_EQ(query.output_tensor_spec.value(), output_spec);
+    }
+}
+
+// ============================================================================
+// Transformer tests
+// ============================================================================
+
+class SplitQKVAndSplitHeadsOpIfTest : public ttnn::TTNNFixtureWithDevice {};
+
+TEST_F(SplitQKVAndSplitHeadsOpIfTest, SplitQueryKeyValueAndSplitHeads) {
+    const auto& input_spec = ttnn::TensorSpec(
+        ttnn::Shape{1, 1024, 768},
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            ttnn::L1_MEMORY_CONFIG));
+    const uint32_t num_heads = 4;
+
+    // Run the test
+    {
+        tt::tt_metal::distributed::MeshDevice* device = device_;
+
+        // Calculate expected output shapes
+        const auto batch_size = input_spec.logical_shape()[0];
+        const auto M = input_spec.logical_shape()[-2];
+        const auto K = input_spec.logical_shape()[-1] / (num_heads * 3);
+
+        auto query = ttnn::graph::query_op_constraints(
+            ttnn::transformer::split_query_key_value_and_split_heads,
+            device,
+            input_spec,
+            std::optional<ttnn::TensorSpec>{},  // input_tensor_kv
+            num_heads,
+            std::nullopt,
+            true,                                  // transpose_key
+            std::optional<ttnn::MemoryConfig>{});  // memory_config
+
+        EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
+
+        EXPECT_EQ(query.resource_usage.peak_memory_usage_per_core, 49152);
+        EXPECT_EQ(query.resource_usage.l1_output_buffer_per_core, 8192);
+
+        EXPECT_EQ(query.output_tensor_spec->logical_shape(), ttnn::Shape({batch_size, num_heads, M, K}));
+        EXPECT_EQ(query.additional_output_tensor_specs.size(), 2);
+        EXPECT_EQ(query.additional_output_tensor_specs[0].logical_shape(), ttnn::Shape({batch_size, num_heads, K, M}));
+        EXPECT_EQ(query.additional_output_tensor_specs[1].logical_shape(), ttnn::Shape({batch_size, num_heads, M, K}));
     }
 }
 
