@@ -27,7 +27,7 @@ struct ApplyDeviceDelayDeviceOperation {
         ttnn::MeshDevice* mesh_device;
     };
 
-    using tensor_args_t = std::monostate;
+    struct tensor_args_t {};
 
     // Return a minimal dummy tensor since the infrastructure doesn't support void
     using tensor_return_value_t = std::vector<ttnn::Tensor>;

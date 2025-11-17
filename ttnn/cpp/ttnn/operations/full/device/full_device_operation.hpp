@@ -21,7 +21,7 @@ struct FullOperation {
         const MemoryConfig memory_config;
     };
 
-    using tensor_args_t = std::monostate;
+    struct tensor_args_t {};
 
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
