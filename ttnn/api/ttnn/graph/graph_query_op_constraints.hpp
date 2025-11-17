@@ -24,13 +24,11 @@ namespace detail {
 // Helper to temporarily change logger level
 class LogLevelGuard {
 public:
-    explicit LogLevelGuard(spdlog::level::level_enum new_level)
-        : saved_level_(tt::LoggerRegistry::instance().get(tt::LogOp)->level()) {
+    explicit LogLevelGuard(spdlog::level::level_enum new_level) :
+        saved_level_(tt::LoggerRegistry::instance().get(tt::LogOp)->level()) {
         tt::LoggerRegistry::instance().set_level(new_level);
     }
-    ~LogLevelGuard() {
-        tt::LoggerRegistry::instance().set_level(saved_level_);
-    }
+    ~LogLevelGuard() { tt::LoggerRegistry::instance().set_level(saved_level_); }
     LogLevelGuard(const LogLevelGuard&) = delete;
     LogLevelGuard& operator=(const LogLevelGuard&) = delete;
 
@@ -43,22 +41,32 @@ private:
 // supported and a new overload should be added
 
 // most ops just return a tensor
-inline Tensor extract_output_tensor(const Tensor& result) { return result; }
+inline std::pair<Tensor, ttsl::SmallVector<Tensor>> extract_output_tensor(const Tensor& result) { return {result, {}}; }
 
 // multi-output ops like sort
-inline Tensor extract_output_tensor(const std::vector<Tensor>& result) { return result[0]; }
+inline std::pair<Tensor, ttsl::SmallVector<Tensor>> extract_output_tensor(const std::vector<Tensor>& result) {
+    return {result[0], {result.begin() + 1, result.end()}};
+}
+
+// multi-output ops in a tuple, like split_query_key_value_and_split_heads
+inline std::pair<Tensor, ttsl::SmallVector<Tensor>> extract_output_tensor(
+    const std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor>& t) {
+    return {std::get<0>(t), {std::get<1>(t), std::get<2>(t)}};
+}
 
 // conv2d output
 template <typename... Args1, typename... Args2>
-Tensor extract_output_tensor(const std::variant<
-                             ttnn::Tensor,
-                             std::tuple<ttnn::Tensor, Args1...>,
-                             std::tuple<ttnn::Tensor, Args2...>,
-                             std::tuple<ttnn::Tensor, Args1..., Args2...>>& result) {
-    return std::visit<Tensor>(
+std::pair<Tensor, ttsl::SmallVector<Tensor>> extract_output_tensor(
+    const std::variant<
+        ttnn::Tensor,
+        std::tuple<ttnn::Tensor, Args1...>,
+        std::tuple<ttnn::Tensor, Args2...>,
+        std::tuple<ttnn::Tensor, Args1..., Args2...>>& result) {
+    Tensor output = std::visit<Tensor>(
         tt::stl::overloaded{
             [](const ttnn::Tensor& arg) { return arg; }, [](const auto& arg) { return std::get<0>(arg); }},
         result);
+    return {output, {}};
 }
 }  // namespace detail
 
@@ -73,6 +81,7 @@ struct ConstraintQueryResponse {
     ExecutionStatus status = ExecutionStatus::Error;
     ResourceUsage resource_usage;
     std::optional<TensorSpec> output_tensor_spec;
+    ttsl::SmallVector<TensorSpec> additional_output_tensor_specs;
     std::optional<std::string> error_message;
 };
 
@@ -96,6 +105,7 @@ auto query_op_constraints(Op op, tt::tt_metal::distributed::MeshDevice* device, 
     detail::LogLevelGuard log_guard(spdlog::level::level_enum::off);
     nlohmann::json op_trace;
     Tensor output;
+    ttsl::SmallVector<Tensor> additional_output_tensors{};
     // outer graph capture is to avoid dispatching/allocating dummy input tensors
     {
         auto capture_outer = ScopedGraphCapture(GraphProcessor::RunMode::NO_DISPATCH);
@@ -121,13 +131,14 @@ auto query_op_constraints(Op op, tt::tt_metal::distributed::MeshDevice* device, 
         // inner graph capture is to capture the actual op graph trace
         try {
             auto capture_inner = ScopedGraphCapture(GraphProcessor::RunMode::NO_DISPATCH);
-            output = detail::extract_output_tensor(std::apply(op, transformed_args));
+            std::tie(output, additional_output_tensors) =
+                detail::extract_output_tensor(std::apply(op, transformed_args));
             op_trace = capture_inner.end_graph_capture();
         }  // end of inner graph capture
         catch (const std::exception& e) {
             log_debug(tt::LogOp, "Error during graph capture: {}", e.what());
             return ConstraintQueryResponse{
-                ExecutionStatus::Error, {0, 0, 0}, /* output_tensor_spec= */ std::nullopt, e.what()};
+                ExecutionStatus::Error, {0, 0, 0}, /* output_tensor_spec= */ std::nullopt, {}, e.what()};
         }
 
     }  // end of outer graph capture
@@ -142,10 +153,17 @@ auto query_op_constraints(Op op, tt::tt_metal::distributed::MeshDevice* device, 
                                                                   : extract_l1_output_buffer_allocation_size_per_core(
                                                                         output, interleaved_storage_cores);
 
+    ttsl::SmallVector<TensorSpec> additional_output_tensor_specs;
+    std::transform(
+        additional_output_tensors.begin(),
+        additional_output_tensors.end(),
+        std::back_inserter(additional_output_tensor_specs),
+        [](const Tensor& tensor) { return tensor.tensor_spec(); });
     return ConstraintQueryResponse{
         ExecutionStatus::Success,
         {cb_peak_size_per_core, l1_buffers_peak_per_core, peak_memory_usage_per_core, l1_output_buffer_per_core},
-        output.tensor_spec()};
+        output.tensor_spec(),
+        additional_output_tensor_specs};
 }
 
 }  // namespace ttnn::graph
