@@ -1,0 +1,8 @@
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+WORKDIR /work
+ADD . /work
+
+RUN tar --zstd -xf artifacts/ttm_any.tar.zst -C /work
+RUN pip3 install artifacts/*.whl
