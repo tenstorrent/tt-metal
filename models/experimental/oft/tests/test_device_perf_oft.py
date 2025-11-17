@@ -11,7 +11,7 @@ from models.perf.device_perf_utils import run_model_device_perf_test
     [
         (
             "pytest models/experimental/oft/tests/pcc/test_oftnet.py::test_oftnet",
-            198_184_176,
+            195_580_212,
             "oft_oftnet",
             "oft_oftnet",
             1,
