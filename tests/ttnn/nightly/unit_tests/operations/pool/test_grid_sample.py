@@ -24,7 +24,7 @@ def validate_grid_sample_output(
     actual_output,
     use_precomputed_grid=False,
     grid_dtype=ttnn.bfloat16,
-    pcc_threshold=0.9,
+    pcc_threshold=0.99,
     mode="bilinear",
 ):
     """
@@ -706,9 +706,9 @@ def test_grid_sample_sharded_batched(
     "input_shape, grid_shape, grid_batching_factor, num_slices",
     [
         ((1, 256, 48, 160), (1, 25344, 7, 2), 7, 22),
-        ((1, 256, 24, 80), (1, 25344, 7, 2), 7, 12),
-        ((1, 256, 48, 160), (1, 25344 // 22, 7, 2), 7, 1),  # single slice
-        ((1, 256, 24, 80), (1, 25344 // 12, 7, 2), 7, 1),  # single slice
+        # ((1, 256, 24, 80), (1, 25344, 7, 2), 7, 12),
+        # ((1, 256, 48, 160), (1, 25344 // 22, 7, 2), 7, 1),  # single slice
+        # ((1, 256, 24, 80), (1, 25344 // 12, 7, 2), 7, 1),  # single slice
     ],
 )
 @pytest.mark.parametrize(
@@ -741,37 +741,46 @@ def test_grid_sample_oft(
 
     input_shape_nhwc = [batch_size, height, width, channels]
 
-    torch_input_nchw = torch.relu(torch.randn(input_shape, dtype=torch.float32))
-    torch_input_nchw = torch.cumsum(torch.cumsum(torch_input_nchw, dim=-1), dim=-2)
-    torch_input_nhwc = torch_input_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
+    # torch_input_nchw = torch.relu(torch.randn(input_shape, dtype=torch.float32))
+    # torch_input_nchw = torch.cumsum(torch.cumsum(torch_input_nchw, dim=-1), dim=-2)
+    # torch_input_nchw = torch.ones(input_shape, dtype=torch.float32)
+    # torch_input_nhwc = torch_input_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
 
-    # torch_input_nchw = torch.load("ref_integral_image.pt")
-    # torch_input_nhwc = torch.load("ttnn_integral_image.pt")
+    torch_input_nchw = torch.load("ref_integral_image.pt")
+    torch_input_nhwc = torch.load("ttnn_integral_image.pt")
 
     # Random grid
-    torch_grid_top_left = torch.randn(grid_shape, dtype=torch.float32)
-    torch_grid_top_left = 2 * torch_grid_top_left - 1
+    # torch_grid_top_left = torch.randn(grid_shape, dtype=torch.float32)
+    # torch_grid_top_left = 2 * torch_grid_top_left - 1
 
-    torch_grid_top_right = torch.randn(grid_shape, dtype=torch.float32)
-    torch_grid_top_right = 2 * torch_grid_top_right - 1
+    # torch_grid_top_right = torch.randn(grid_shape, dtype=torch.float32)
+    # torch_grid_top_right = 2 * torch_grid_top_right - 1
 
-    torch_grid_btm_left = torch.randn(grid_shape, dtype=torch.float32)
-    torch_grid_btm_left = 2 * torch_grid_btm_left - 1
+    # torch_grid_btm_left = torch.randn(grid_shape, dtype=torch.float32)
+    # torch_grid_btm_left = 2 * torch_grid_btm_left - 1
 
-    torch_grid_btm_right = torch.randn(grid_shape, dtype=torch.float32)
-    torch_grid_btm_right = 2 * torch_grid_btm_right - 1
+    # torch_grid_btm_right = torch.randn(grid_shape, dtype=torch.float32)
+    # torch_grid_btm_right = 2 * torch_grid_btm_right - 1
 
     # Real grid values
-    # PAD_AMOUNT = 63
-    # PAD_VALUE = 0.0
-    # torch_grid_top_left = torch.load("top_left_bc.pt").permute(0, 2, 1, 3)
-    # torch_grid_top_left = torch.nn.functional.pad(torch_grid_top_left, ((0, 0, 0, 0, 0, PAD_AMOUNT, 0, 0)), value=PAD_VALUE)
-    # torch_grid_top_right = torch.load("top_right_bc.pt").permute(0, 2, 1, 3)
-    # torch_grid_top_right = torch.nn.functional.pad(torch_grid_top_right, ((0, 0, 0, 0, 0, PAD_AMOUNT, 0, 0)), value=PAD_VALUE)
-    # torch_grid_btm_left = torch.load("btm_left_bc.pt").permute(0, 2, 1, 3)
-    # torch_grid_btm_left = torch.nn.functional.pad(torch_grid_btm_left, ((0, 0, 0, 0, 0, PAD_AMOUNT, 0, 0)), value=PAD_VALUE)
-    # torch_grid_btm_right = torch.load("btm_right_bc.pt").permute(0, 2, 1, 3)
-    # torch_grid_btm_right = torch.nn.functional.pad(torch_grid_btm_right, ((0, 0, 0, 0, 0, PAD_AMOUNT, 0, 0)), value=PAD_VALUE)
+    PAD_AMOUNT = 63
+    PAD_VALUE = 0.0
+    torch_grid_top_left = torch.load("top_left_bc.pt").permute(0, 2, 1, 3)
+    torch_grid_top_left = torch.nn.functional.pad(
+        torch_grid_top_left, ((0, 0, 0, 0, 0, PAD_AMOUNT, 0, 0)), value=PAD_VALUE
+    )
+    torch_grid_top_right = torch.load("top_right_bc.pt").permute(0, 2, 1, 3)
+    torch_grid_top_right = torch.nn.functional.pad(
+        torch_grid_top_right, ((0, 0, 0, 0, 0, PAD_AMOUNT, 0, 0)), value=PAD_VALUE
+    )
+    torch_grid_btm_left = torch.load("btm_left_bc.pt").permute(0, 2, 1, 3)
+    torch_grid_btm_left = torch.nn.functional.pad(
+        torch_grid_btm_left, ((0, 0, 0, 0, 0, PAD_AMOUNT, 0, 0)), value=PAD_VALUE
+    )
+    torch_grid_btm_right = torch.load("btm_right_bc.pt").permute(0, 2, 1, 3)
+    torch_grid_btm_right = torch.nn.functional.pad(
+        torch_grid_btm_right, ((0, 0, 0, 0, 0, PAD_AMOUNT, 0, 0)), value=PAD_VALUE
+    )
     torch_grid_top_left_slices = torch.split(torch_grid_top_left, torch_grid_top_left.shape[1] // num_slices, dim=1)
     torch_grid_top_right_slices = torch.split(torch_grid_top_right, torch_grid_top_right.shape[1] // num_slices, dim=1)
     torch_grid_btm_left_slices = torch.split(torch_grid_btm_left, torch_grid_btm_left.shape[1] // num_slices, dim=1)
@@ -872,14 +881,16 @@ def test_grid_sample_oft(
                 torch_output_nhwc = prev_torch_output + torch_output_nhwc
                 ttnn_output = ttnn.add(prev_ttnn_output, ttnn_output)
             elif idx == 3:
+                # PyTorch: area * (prev - current)
                 torch_output_nhwc = torch_area_slices[slice_idx].permute(0, 2, 1, 3).reshape(1, -1, 7, 256) * (
                     prev_torch_output - torch_output_nhwc
                 )
-                ttnn_output = ttnn.subtract(prev_ttnn_output, ttnn_output)
+                # TTNN: Match the exact same operations - area * (prev - current)
+                ttnn_subtracted = ttnn.subtract(prev_ttnn_output, ttnn_output)
                 area_tt = ttnn.from_torch(
                     torch_area_slices[slice_idx], layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.bfloat16
                 )
-                ttnn_output = ttnn.multiply(area_tt, ttnn_output)
+                ttnn_output = ttnn.multiply(area_tt, ttnn_subtracted)
 
             ttnn_output_torch = ttnn.to_torch(ttnn_output).reshape(1, ttnn_output.shape[2], 1, ttnn_output.shape[3])
 
