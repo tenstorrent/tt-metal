@@ -90,11 +90,11 @@ def test_graph_capture_with_all_parameters(device):
     )
 
     # tt::tt_metal::create_device_tensor
-    node7 = captured_graph[7]["arguments"]
-    assert node7[0] == "Shape([1, 4, 2048, 128])"
-    assert node7[1] == "DataType::BFLOAT16"
-    assert node7[2] == "Layout::ROW_MAJOR"
-    assert node7[3].isnumeric()
+    node6 = captured_graph[6]["arguments"]
+    assert node6[0] == "Shape([1, 4, 2048, 128])"
+    assert node6[1] == "DataType::BFLOAT16"
+    assert node6[2] == "Layout::ROW_MAJOR"
+    assert node6[3].isnumeric()
     assert (
         node6[4]
         == "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)"
@@ -138,7 +138,10 @@ def test_graph_capture_without_memory_config(device):
     assert node1[2] == "nullopt"
     assert node1[3] == "DataType::BFLOAT16"
     assert node1[4] == "nullopt"
-    assert node1[5] == "nullopt"
+    assert (
+        node1[5]
+        == "[ unsupported type , std::reference_wrapper<std::optional<std::variant<ttnn::GrayskullComputeKernelConfig, ttnn::WormholeComputeKernelConfig> > const>]"
+    )
 
     # ttnn::prim::moreh_dot
     node6 = captured_graph[6]["arguments"]
@@ -153,7 +156,10 @@ def test_graph_capture_without_memory_config(device):
     assert node6[2] == "nullopt"
     assert node6[3] == "DataType::BFLOAT16"
     assert node6[4] == "nullopt"
-    assert node6[5] == "nullopt"
+    assert (
+        node6[5]
+        == "[ unsupported type , std::reference_wrapper<std::optional<std::variant<ttnn::GrayskullComputeKernelConfig, ttnn::WormholeComputeKernelConfig> > const>]"
+    )
 
     # MorehDotOperation
     node7 = captured_graph[7]["arguments"]
@@ -167,11 +173,11 @@ def test_graph_capture_without_memory_config(device):
     )
 
     # tt::tt_metal::create_device_tensor
-    node10 = captured_graph[10]["arguments"]
-    assert node10[0] == "Shape([1, 1, 1, 1])"
-    assert node10[1] == "DataType::BFLOAT16"
-    assert node10[2] == "Layout::TILE"
-    assert node10[3].isnumeric()
+    node8 = captured_graph[8]["arguments"]
+    assert node8[0] == "Shape([1, 1, 1, 1])"
+    assert node8[1] == "DataType::BFLOAT16"
+    assert node8[2] == "Layout::TILE"
+    assert node8[3].isnumeric()
     assert (
         node8[4]
         == "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)"
@@ -219,11 +225,11 @@ def test_graph_capture_without_dtype(device):
     )
 
     # tt::tt_metal::create_device_tensor
-    node7 = captured_graph[7]["arguments"]
-    assert node7[0] == "Shape([32, 32])"
-    assert node7[1] == "DataType::INT32"
-    assert node7[2] == "Layout::TILE"
-    assert node7[3].isnumeric()
+    node6 = captured_graph[6]["arguments"]
+    assert node6[0] == "Shape([32, 32])"
+    assert node6[1] == "DataType::INT32"
+    assert node6[2] == "Layout::TILE"
+    assert node6[3].isnumeric()
     assert (
         node6[4]
         == "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)"
@@ -396,7 +402,9 @@ def test_graph_capture_without_memory_config_json_output(device):
     assert item0["arguments"][2]["arg2"] == "nullopt"
     assert item0["arguments"][3]["arg3"] == "DataType::BFLOAT16"
     assert item0["arguments"][4]["arg4"] == "nullopt"
-    assert item0["arguments"][5]["arg5"] == "nullopt"
+    assert item0["arguments"][5]["arg5"] == {
+        "unsupported type": "std::reference_wrapper<std::optional<std::variant<ttnn::GrayskullComputeKernelConfig, ttnn::WormholeComputeKernelConfig> > const>"
+    }
 
     # --- Content item 1 ---
     item1 = data["content"][1]
@@ -443,7 +451,9 @@ def test_graph_capture_without_memory_config_json_output(device):
     assert item1["arguments"][2]["arg2"] == "nullopt"
     assert item1["arguments"][3]["arg3"] == "DataType::BFLOAT16"
     assert item1["arguments"][4]["arg4"] == "nullopt"
-    assert item1["arguments"][5]["arg5"] == "nullopt"
+    assert item1["arguments"][5]["arg5"] == {
+        "unsupported type": "std::reference_wrapper<std::optional<std::variant<ttnn::GrayskullComputeKernelConfig, ttnn::WormholeComputeKernelConfig> > const>"
+    }
 
     # --- Content item 2 ---
     item2 = data["content"][2]
