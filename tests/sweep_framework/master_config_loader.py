@@ -797,6 +797,8 @@ class MasterConfigLoader:
                 # upsample specific parameters
                 scale_factor_list = [] if operation_name in ["upsample", "ttnn::upsample"] else None
                 mode_list = [] if operation_name in ["upsample", "ttnn::upsample"] else None
+                # typecast specific parameters
+                output_dtype_list = [] if operation_name in ["typecast", "ttnn::typecast"] else None
 
                 for idx, cfg in enumerate(paired_configs):
                     # For reshape, only include configs that have target_shape
@@ -869,6 +871,10 @@ class MasterConfigLoader:
                             scale_factor_list.append(cfg["scale_factor"])
                         if "mode" in cfg:
                             mode_list.append(cfg["mode"])
+                    # Extract typecast parameters
+                    if operation_name in ["typecast", "ttnn::typecast"]:
+                        if "output_dtype" in cfg:
+                            output_dtype_list.append(cfg["output_dtype"])
 
                 # Convert to exact configurations format (prevents Cartesian product)
                 # Use comma-separated parameter names to pass tuples of values together
@@ -945,20 +951,21 @@ class MasterConfigLoader:
                     if mode_list:
                         param_names.append("mode")
                         param_lists.append(mode_list)
+                # Add typecast parameters
+                if operation_name in ["typecast", "ttnn::typecast"]:
+                    if output_dtype_list:
+                        param_names.append("output_dtype")
+                        param_lists.append(output_dtype_list)
 
                 # NOTE: traced_config_name is metadata only, not passed to run()
                 # param_names.append("traced_config_name")
                 # param_lists.append(traced_config_names)
 
-                # For permute, return separate keys instead of tuple key
-                # This matches what the sweep test files expect
-                if (operation_name == "permute" or operation_name == "ttnn::permute") and dims_list:
-                    result = dict(zip(param_names, param_lists))
-                else:
-                    # Create tuples of exact configurations
-                    exact_configs = list(zip(*param_lists))
-                    param_key = ",".join(param_names)
-                    result = {param_key: exact_configs}
+                # Create tuples of exact configurations (prevents Cartesian product)
+                # This ensures we only test the exact traced configs, not all combinations
+                exact_configs = list(zip(*param_lists))
+                param_key = ",".join(param_names)
+                result = {param_key: exact_configs}
 
                 print(f"✅ Loaded {len(paired_configs)} traced configurations for {operation_name} (model_traced suite)")
                 dedup_msg = " (unique inputs)" if deduplicate_inputs else " (all input/output pairs)"

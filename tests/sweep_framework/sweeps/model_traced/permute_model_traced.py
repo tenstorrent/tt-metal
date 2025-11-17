@@ -35,12 +35,9 @@ parameters = {
     },
 }
 
-# Add default dims to model_traced parameters if missing
+# Only add model_traced suite if it has valid configurations
+# Note: dims is now included in the tuple format, so no need to add defaults
 if model_traced_params and any(len(v) > 0 for v in model_traced_params.values() if isinstance(v, list)):
-    if "dims" not in model_traced_params:
-        # Add default dims for all traced configurations (transpose last two dimensions)
-        num_configs = len(model_traced_params.get("input_shape", []))
-        model_traced_params["dims"] = [(0, 1, 3, 2)] * num_configs  # Default: swap H and W
     parameters["model_traced"] = model_traced_params
 
 

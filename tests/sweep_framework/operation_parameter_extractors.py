@@ -1659,6 +1659,51 @@ OperationParameterExtractors.register_extractor(
 )
 
 
+# Add typecast extractor method to the class
+def _extract_typecast_parameters(config: List) -> Optional[Dict]:
+    """Extract parameters for typecast operation
+
+    Extracts from JSON:
+    - arg1: output_dtype (e.g., "DataType::BFLOAT8_B")
+    """
+    try:
+        params = {}
+        for arg in config:
+            if not isinstance(arg, dict):
+                continue
+            # Extract output_dtype (arg1)
+            if "arg1" in arg:
+                output_dtype_str = arg["arg1"]
+                if isinstance(output_dtype_str, str) and "DataType::" in output_dtype_str:
+                    # Extract dtype name (e.g., "BFLOAT8_B" from "DataType::BFLOAT8_B")
+                    dtype_name = output_dtype_str.replace("DataType::", "").strip()
+                    params["output_dtype"] = dtype_name
+                elif output_dtype_str and output_dtype_str != "nullopt":
+                    params["output_dtype"] = output_dtype_str
+
+        return params if params else None
+    except Exception as e:
+        import traceback
+
+        print(f"Error extracting typecast parameters: {e}")
+        traceback.print_exc()
+        return None
+
+
+# Add method to class
+OperationParameterExtractors._extract_typecast_parameters = staticmethod(_extract_typecast_parameters)
+
+# Register typecast extractor
+OperationParameterExtractors.register_extractor(
+    "typecast",
+    extract_func=OperationParameterExtractors._extract_typecast_parameters,
+)
+OperationParameterExtractors.register_extractor(
+    "ttnn::typecast",
+    extract_func=OperationParameterExtractors._extract_typecast_parameters,
+)
+
+
 # Example: How users can easily add their own operation extractors
 def example_custom_operation_setup():
     """

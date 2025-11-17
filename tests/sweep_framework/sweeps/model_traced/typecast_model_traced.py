@@ -36,11 +36,8 @@ parameters = {
 }
 
 # Only add model_traced suite if it has valid configurations
+# Note: output_dtype is now included in the tuple format, so no need to add defaults
 if model_traced_params and any(len(v) > 0 for v in model_traced_params.values() if isinstance(v, list)):
-    # Add output_dtype parameter for typecast operation
-    # The traced configurations have output dtype as the second argument
-    # For now, use a common output dtype like float32
-    model_traced_params["output_dtype"] = [ttnn.float32] * len(list(model_traced_params.values())[0])
     parameters["model_traced"] = model_traced_params
 
 
