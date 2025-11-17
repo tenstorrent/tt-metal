@@ -29,7 +29,7 @@ def test_qwen25vl_text_encoder(
 ) -> None:
     torch.manual_seed(0)
 
-    batch_size = 1
+    batch_size = 2
     sequence_length = 512
     tp_axis = 1
 
