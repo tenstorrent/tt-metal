@@ -811,10 +811,8 @@ jobs:
           # Generate CCL-only batches for dedicated runners
           ccl_batches = chunk_modules(ccl_modules, BATCH_SIZE)
 
-          is_schedule = event_name == "schedule"
           is_comprehensive = schedule_expr == "0 4 * * 3" or schedule_expr == "0 5 * * 6" or sweep_name == "ALL SWEEPS (Comprehensive)"
           wormhole_suite_name = "nightly" if not is_comprehensive else None
-          should_add_n300 = True
 
           include_entries = []
 
@@ -833,7 +831,7 @@ jobs:
                   "suite_name": wormhole_suite_name,
               })
 
-          if should_add_n300 and ccl_batches:
+          if ccl_batches:
               n300_template = {
                   "test_group_name": "n300-llmbox-ccl",
                   "arch": "wormhole_b0",
