@@ -316,11 +316,11 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(
                     reader_id,
                     core,
                     {
-                        src_dram_buffer_a->address(),
-                        src_dram_buffer_b->address(),
+                        0,
+                        0,
                         Mt,
-                        Kt,
                         Nt,
+                        Kt,
                         MtKt,
                         in1_KtNt_skip,  // Skip to get next batch for in1 after reading in0 Kt
                         in1_KtNt_stride *
