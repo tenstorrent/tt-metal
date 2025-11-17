@@ -44,7 +44,7 @@ jobs:
           echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
           python3 .github/scripts/utils/verify_time_budget.py \
             ./tests/pipeline_reorg/ops/sanity/tests.yaml \
-            ./.github/time_budget.yaml
+            ./.github/time_budget.yaml \
             "sanity"
 
       - name: Load test matrix
