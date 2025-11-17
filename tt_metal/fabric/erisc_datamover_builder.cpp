@@ -411,7 +411,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
 
     this->channel_buffer_size_bytes = channel_buffer_size_bytes;
     this->num_used_sender_channels = builder_config::get_sender_channel_count(is_2D_routing);
-    this->num_used_receiver_channels = builder_config::num_receiver_channels;
+    this->num_used_receiver_channels = builder_config::get_receiver_channel_count(is_2D_routing);
 
     // Default, assuming deadlock avoidance is enabled
     // -1 to discount for the tensix worker channel
@@ -419,9 +419,11 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
 
     // If not a Ring/Torus, we need to discount for Dateline VC sender and receiver channels
     if (topology == Topology::Linear || topology == Topology::Mesh) {
-        this->num_used_sender_channels -= 1;
-        this->num_used_receiver_channels -= 1;
-        this->num_fwd_paths -= 1;
+        // TODO: fix this. For 2D routing, we need to discount for VC2 sender and receiver channels
+        // only when we have a single mesh. For multi-mesh topologies, we need VC2 for inter-mesh traffic.
+        this->num_used_sender_channels -= is_2D_routing ? 4 : 1;
+        this->num_used_receiver_channels -= is_2D_routing ? 2 : 1;
+        this->num_fwd_paths -= is_2D_routing ? 4 : 1;
     }
 
     for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
@@ -585,6 +587,7 @@ void append_worker_to_fabric_edm_sender_rt_args(
         connection.buffer_size_bytes,
         connection.buffer_index_semaphore_id,
         sender_worker_flow_control_semaphore_id,
+        StreamRegAssignments::sender_channel_0_free_slots_stream_id,  // Stream ID for sender channel 0
         sender_worker_terminate_semaphore_id,
         sender_worker_buffer_index_semaphore_id};
     args_out.reserve(args_out.size() + (values.size() / sizeof(size_t)));
@@ -669,9 +672,10 @@ size_t log_worker_to_fabric_edm_sender_rt_args(const std::vector<uint32_t>& args
     log_trace(tt::LogFabric, "arg[{}]: buffer_index_semaphore_id {}", starting_arg_idx, args[starting_arg_idx++]);
     log_trace(
         tt::LogFabric, "arg[{}]: sender_worker_flow_control_semaphore_id {}", starting_arg_idx, args[starting_arg_idx++]);
+    log_trace(tt::LogFabric, "arg[{}]: worker_free_slots_stream_id {}", starting_arg_idx, args[starting_arg_idx++]);
     log_trace(
         tt::LogFabric, "arg[{}]: sender_worker_buffer_index_semaphore_id {}", starting_arg_idx, args[starting_arg_idx++]);
-    return starting_arg_idx + 10;
+    return starting_arg_idx + 11;
 }
 
 FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
@@ -948,8 +952,12 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         config.risc_configs[risc_id].is_sender_channel_serviced(2),
         config.risc_configs[risc_id].is_sender_channel_serviced(3),
         config.risc_configs[risc_id].is_sender_channel_serviced(4),
+        config.risc_configs[risc_id].is_sender_channel_serviced(5),  // VC2 compact 0 (2D only)
+        config.risc_configs[risc_id].is_sender_channel_serviced(6),  // VC2 compact 1 (2D only)
+        config.risc_configs[risc_id].is_sender_channel_serviced(7),  // VC2 compact 2 (2D only)
         config.risc_configs[risc_id].is_receiver_channel_serviced(0),
         config.risc_configs[risc_id].is_receiver_channel_serviced(1),
+        config.risc_configs[risc_id].is_receiver_channel_serviced(2),  // VC2 (2D only)
         config.risc_configs[risc_id].enable_handshake(),
         config.risc_configs[risc_id].enable_context_switch(),
         config.risc_configs[risc_id].enable_interrupts(),
@@ -1108,17 +1116,24 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
     // downstream_connection_1->pack_inbound_channel_rt_args(0, rt_args);
     // downstream_connection_2->pack_inbound_channel_rt_args(1, rt_args);
 
+    // // Pack runtime args for all receiver channels based on the actual count
+    // for (uint32_t vc_idx = 0; vc_idx < config.num_used_receiver_channels; vc_idx++) {
+    //     receiver_channel_to_downstream_adapter->pack_inbound_channel_rt_args(vc_idx, rt_args);
+    // }
+
     // Pack runtime args - device side reads fixed MAX_NUM_SENDER_CHANNELS values
     // Only the first NUM_DOWNSTREAM_CHANNELS values are used based on topology
     auto args_pt2 = std::vector<uint32_t>{};
 
     // Pack downstream teardown semaphores (always send MAX_NUM_SENDER_CHANNELS for compatibility)
-    for (uint32_t i = 0; i < builder_config::num_sender_channels; i++) {
+    for (uint32_t i = 0; i < builder_config::num_sender_channels_2d_torus; i++) {
+        // TODO: fix this. Loop should be based on num downstream edms.
         args_pt2.push_back(this->receiver_channels_downstream_teardown_semaphore_id[i].value_or(-1));
     }
 
     // Pack sender flow control semaphores (always send MAX_NUM_SENDER_CHANNELS)
-    for (uint32_t i = 0; i < builder_config::num_sender_channels; i++) {
+    for (uint32_t i = 0; i < builder_config::num_sender_channels_2d_torus; i++) {
+        // TODO: fix this. Loop should be based on num_used_sender_channels
         args_pt2.push_back(this->sender_channels_flow_control_semaphore_id[i]);
     }
 

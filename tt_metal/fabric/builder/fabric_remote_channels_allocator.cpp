@@ -13,7 +13,7 @@ namespace tt::tt_fabric {
 FabricRemoteChannelsAllocator::FabricRemoteChannelsAllocator(
     const FabricStaticSizedChannelsAllocator& static_allocator) :
     FabricChannelAllocator(static_allocator.topology_, static_allocator.options_, static_allocator.memory_regions_),
-    num_used_receiver_channels_(builder_config::num_receiver_channels) {
+    num_used_receiver_channels_(static_allocator.get_num_receiver_channels()) {
     // Extract remote receiver channel information from the static allocator
     for (size_t i = 0; i < builder_config::num_receiver_channels; i++) {
         this->remote_receiver_channels_base_address_[i] = static_allocator.remote_receiver_channels_base_address[i];
