@@ -4,9 +4,6 @@
 
 #include "swiglu_fw.hpp"
 
-#include <iostream>
-
-#include "core/compute_kernel_config.hpp"
 #include "device/swiglu_fw_device_operation.hpp"
 #include "metal/ops/swiglu_fw/swiglu_fw.hpp"
 

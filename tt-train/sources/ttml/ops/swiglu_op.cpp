@@ -19,8 +19,7 @@ autograd::TensorPtr swiglu(
     const autograd::TensorPtr& tensor,
     const autograd::TensorPtr& w1,
     const autograd::TensorPtr& w2,
-    const autograd::TensorPtr& w3,
-    bool use_composite_fw) {
+    const autograd::TensorPtr& w3) {
     auto a_shape = tensor->get_value().logical_shape();
     if (a_shape.rank() != 4) {
         throw std::runtime_error("swiglu only supports rank-4 input tensors.");
@@ -28,22 +27,8 @@ autograd::TensorPtr swiglu(
 
     auto device = &autograd::ctx().get_device();
 
-    ttnn::Tensor swiglu_fw_result;
-
-    if (use_composite_fw) {
-        // TODO: Remove this composite implementation once both forward and backward passes are fused
-        auto linear1 = ttnn_fixed::matmul(tensor->get_value(), w1->get_value());  // x @ w1
-        autograd::TensorPtr linear1_ptr = autograd::create_tensor(linear1);
-        auto swished = ops::silu(linear1_ptr, device);                         // silu(x @ w1)
-        auto gate = ttnn_fixed::matmul(tensor->get_value(), w3->get_value());  // x @ w3
-        autograd::TensorPtr gate_ptr = autograd::create_tensor(gate);
-        auto gated = ops::mul(swished, gate_ptr);
-        swiglu_fw_result = ttnn_fixed::matmul(gated->get_value(), w2->get_value());  // gated @ w2
-    } else {
-        swiglu_fw_result =
-            ttml::metal::swiglu_fw(tensor->get_value(), w1->get_value(), w2->get_value(), w3->get_value());
-    }
-
+    ttnn::Tensor swiglu_fw_result =
+        ttml::metal::swiglu_fw(tensor->get_value(), w1->get_value(), w2->get_value(), w3->get_value());
     auto out = autograd::create_tensor(swiglu_fw_result);
 
     autograd::GradFunction grad = [tensor, w1, w2, w3, out]() {

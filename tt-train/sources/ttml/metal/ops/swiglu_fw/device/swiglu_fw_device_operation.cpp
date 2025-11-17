@@ -4,10 +4,6 @@
 
 #include "swiglu_fw_device_operation.hpp"
 
-#include <enchantum/enchantum.hpp>
-
-#include "swiglu_fw_program_factory.hpp"
-
 namespace ttml::metal::ops::swiglu_fw::device {
 
 SwiGLUForwardDeviceOperation::program_factory_t SwiGLUForwardDeviceOperation::select_program_factory(

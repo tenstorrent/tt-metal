@@ -6,14 +6,10 @@
 
 #include <gtest/gtest.h>
 
-#include <cassert>
-#include <core/ttnn_all_includes.hpp>
+#include <xtensor-blas/xlinalg.hpp>
 
 #include "autograd/auto_context.hpp"
-#include "autograd/tensor.hpp"
 #include "core/tt_tensor_utils.hpp"
-#include "xtensor-blas/xlinalg.hpp"
-#include "xtensor/misc/xmanipulation.hpp"
 
 class SwiGLUOpTest : public ::testing::Test {
 protected:
@@ -128,6 +124,7 @@ static void CompareKernelVsReferenceWithShape(const std::vector<uint32_t>& input
     using namespace ttml;
 
     // Generate random input data
+    // TODO(maciek): Use ttml::core::parallel_generate for random data generation.
     const float bound = 1.0F;
     xt::random::seed(42);
     xt::xarray<float> input_data = xt::random::rand<float>(input_shape, -bound, bound);
@@ -186,7 +183,17 @@ TEST_F(SwiGLUOpTest, SwiGLU_Large_4x1x64x256) {
     CompareKernelVsReferenceWithShape({4, 1, 64, 256}, 256);
 }
 
-// 7. NanoGPT-like shape: 32x1x256x384, hidden_dim=1024
-TEST_F(SwiGLUOpTest, SwiGLU_NanoGPT_32x1x256x384) {
+// 7. Large test: 2x1x128x512, hidden_dim=512
+TEST_F(SwiGLUOpTest, SwiGLU_Large_2x1x128x512) {
+    CompareKernelVsReferenceWithShape({2, 1, 128, 512}, 512);
+}
+
+// 8. Very large dimensions test: 1x1x1024x1024, hidden_dim=1024
+TEST_F(SwiGLUOpTest, NIGHTLY_SwiGLU_VeryLarge_1x1x1024x1024) {
+    CompareKernelVsReferenceWithShape({1, 1, 1024, 1024}, 1024);
+}
+
+// 9. NanoGPT-like shape: 32x1x256x384, hidden_dim=1024
+TEST_F(SwiGLUOpTest, NIGHTLY_SwiGLU_NanoGPT_32x1x256x384) {
     CompareKernelVsReferenceWithShape({32, 1, 256, 384}, 1024);
 }

@@ -4,8 +4,6 @@
 
 #include "swiglu_fw_program_factory.hpp"
 
-#include <cstdint>
-#include <enchantum/enchantum.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "metal/ops/common/program_utils.hpp"
@@ -20,6 +18,8 @@ constexpr auto kReaderKernelPath =
 
 constexpr auto kComputeKernelPath =
     "tt-train/sources/ttml/metal/ops/swiglu_fw/device/kernels/compute/swiglu_fw_kernel.cpp";
+constexpr auto kComputeKernelMfitsL1Path =
+    "tt-train/sources/ttml/metal/ops/swiglu_fw/device/kernels/compute/swiglu_fw_kernel_m_fits_l1.cpp";
 
 // Reader buffer indices
 constexpr uint32_t kInputBufferIdx = 0;
@@ -62,7 +62,8 @@ struct SwiGLUForwardKernels {
 
 // TODO(maciek): Consider refactoring this function to a common utils module with parameterized kernel handles and
 // buffer configurations, as different operations will have varying numbers and types of input/output buffers
-// and different kernel configurations (e.g., SwiGLU has 4 input buffers + 1 output, while other ops may differ)
+// and different kernel configurations (e.g., SwiGLU has 4 input buffers + 1 output, while other ops may differ).
+// See tracking issue #32533 for more details.
 void assign_per_core_runtime_args(
     tt::tt_metal::Program& program,
     const SwiGLUForwardKernels& kernels,
@@ -78,7 +79,7 @@ void assign_per_core_runtime_args(
     const tt::tt_metal::CoreRangeSet& core_group_1,
     const tt::tt_metal::CoreRangeSet& core_group_2) {
     for (uint32_t i = 0, num_rows_written = 0; i < num_cores; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         // Determine how many rows this core will process
         uint32_t num_rows_per_core = 0;
@@ -122,7 +123,7 @@ bool row_of_m_fits_in_l1_check(
     // Calculate memory requirements for "M fits in L1" algorithm
     // This algorithm caches full rows of XW1, XW3, and M in L1 for better performance
     // and uses flash-attention optimization to reduce X memory reads
-    const uint32_t hidden_Wt_rounded_up = ((hidden_Wt + block_size - 1) / block_size) * block_size;
+    const uint32_t hidden_Wt_rounded_up = ((hidden_Wt + block_size - 1U) / block_size) * block_size;
 
     // Memory for input CBs (always needed regardless of algorithm)
     const uint64_t input_memory = twice_block_size * bfloat16_single_tile_size_bytes;  // cb_input
@@ -189,7 +190,7 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
     uint32_t mask_w = num_inner % tt::constants::TILE_WIDTH;
     uint32_t mask_hw = hidden_num_inner % tt::constants::TILE_WIDTH;
 
-    // TODO(maciek): Consider to add masking. Now we assume that the N and C % 32 == 0.
+    // TODO(maciek): Consider adding masking. Now we assume that the N and C % 32 == 0.
     TT_FATAL(mask_w == 0, "Input inner dimension must be multiple of TILE_WIDTH");
     TT_FATAL(mask_hw == 0, "Hidden inner dimension must be multiple of TILE_WIDTH");
 
@@ -215,7 +216,7 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
         row_of_m_fits_in_l1_check(hidden_Wt, block_size, bfloat16_single_tile_size_bytes, device);
 
     // CB sizing based on whether row of M fits in L1
-    const uint32_t num_tiles_xw1 = row_of_m_fits_in_l1 ? ((hidden_Wt + block_size - 1) / block_size) *
+    const uint32_t num_tiles_xw1 = row_of_m_fits_in_l1 ? ((hidden_Wt + block_size - 1U) / block_size) *
                                                              block_size   // Round up to nearest block_size
                                                        : kNumXW1Tiles;    // Use small buffer for slow algorithm
     const uint32_t num_tiles_xw3 = row_of_m_fits_in_l1 ? num_tiles_xw1    // Same as XW1
@@ -228,7 +229,7 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
     // NOTE(maciek):
     // - fp32 input/output CBs are possible, but here both are always bf16 to match pipeline formats.
     // - matmul_tiles seems to require matching input/output CB dtypes, otherwise NaNs/infs may occur.
-    //   TODO(maciek): make minimal repro and report if this is a bug.
+    //   TODO(maciek): make minimal repro and report if this is a bug. See tracking issue #32529.
     // - Matmul runs on FPU; with fp32_dest_acc_en, accumulation is fp32.
     // - Using all CBs as fp32 showed no observable precision improvement in tests.
     [[maybe_unused]] auto cb_input = create_circular_buffer(
@@ -313,6 +314,11 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
     // 4) Create compute kernels for swiglu_fw
     // -------------------------------------------------------------------------
 
+    // Compute kernels for SwiGLUForward are implemented in two variants:
+    // - Standard kernel (swiglu_fw_kernel.cpp): used when row of M does not fit in L1
+    // - Optimized kernel (swiglu_fw_kernel_m_fits_l1.cpp): used when row of M fits in L1
+    const std::string& kComputeKernelToUse = row_of_m_fits_in_l1 ? kComputeKernelMfitsL1Path : kComputeKernelPath;
+
     // Group 1 compile-time arguments
     std::vector<uint32_t> compute_group_1_args = {
         num_rows_per_core_group_1,  // per_core_block_cnt
@@ -322,7 +328,7 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
     };
 
     kernels.compute_group_1 = create_compute_kernel(
-        program, core_group_1, compute_group_1_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
+        program, core_group_1, compute_group_1_args, defines, kComputeKernelToUse, /*fp32_dest_acc_en=*/true);
 
     // Group 2 (if present) compile-time arguments
     if (!core_group_2.ranges().empty()) {
@@ -335,7 +341,7 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
         };
 
         kernels.compute_group_2 = create_compute_kernel(
-            program, core_group_2, compute_group_2_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
+            program, core_group_2, compute_group_2_args, defines, kComputeKernelToUse, /*fp32_dest_acc_en=*/true);
     }
     // -------------------------------------------------------------------------
     // 5) Assign runtime args for each core
@@ -395,7 +401,7 @@ void SwiGLUForwardProgramFactory::override_runtime_arguments(
     auto& writer_runtime_args = GetRuntimeArgs(program, swiglu_fw_writer_kernel_id);
 
     for (uint32_t i = 0; i < num_cores; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         // Update input buffers for the reader kernel
         {

@@ -24,7 +24,7 @@ constexpr uint32_t Wt = get_compile_time_arg_val(1);         // output width (C)
 constexpr uint32_t hidden_Wt = get_compile_time_arg_val(2);  // inner dimension (K==P)
 
 // TODO(maciek): Move all read_tiles_by_row and read_tiles_by_col to common utils file, and reuse them in other
-// operations.
+// operations. See tracking issue #31125 for more details.
 
 // Utility: read contiguous tiles in row-major from DRAM to CB.
 template <typename AddrGen>
