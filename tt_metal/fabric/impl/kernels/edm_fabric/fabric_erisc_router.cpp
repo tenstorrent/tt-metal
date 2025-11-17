@@ -301,10 +301,9 @@ constexpr bool is_spine_direction(eth_chan_directions direction) {
     return direction == eth_chan_directions::NORTH || direction == eth_chan_directions::SOUTH;
 }
 
-// Defined here because sender_channel_0_free_slots_stream_id does not come from
-// fabric_erisc_router_ct_args.hpp
+// All sender channel free slots stream IDs are now passed via compile-time args
 static constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_channel_free_slots_stream_ids = {
-    tt::tt_fabric::connection_interface::sender_channel_0_free_slots_stream_id,
+    sender_channel_0_free_slots_stream_id,
     sender_channel_1_free_slots_stream_id,
     sender_channel_2_free_slots_stream_id,
     sender_channel_3_free_slots_stream_id,

@@ -115,7 +115,7 @@ struct WorkerToFabricEdmSenderImpl {
             auto writer_send_sem_id = get_arg_val<uint32_t>(arg_idx++);
             writer_send_sem_addr =
                 reinterpret_cast<volatile uint32_t*>(get_semaphore<my_core_type>(writer_send_sem_id));
-            worker_free_slots_stream_id = tt::tt_fabric::connection_interface::sender_channel_0_free_slots_stream_id;
+            worker_free_slots_stream_id = get_arg_val<uint32_t>(arg_idx++);
         }
 
         // DEAD CODE

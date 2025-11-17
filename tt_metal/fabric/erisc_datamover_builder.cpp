@@ -614,7 +614,8 @@ void append_worker_to_fabric_edm_sender_rt_args(
         connection.buffer_index_semaphore_id,
         sender_worker_flow_control_semaphore_id,
         sender_worker_terminate_semaphore_id,
-        sender_worker_buffer_index_semaphore_id};
+        sender_worker_buffer_index_semaphore_id,
+        StreamRegAssignments::sender_channel_0_free_slots_stream_id};  // Stream ID for sender channel 0
     args_out.reserve(args_out.size() + (values.size() / sizeof(size_t)));
     std::ranges::copy(values, std::back_inserter(args_out));
 }
@@ -699,6 +700,7 @@ size_t log_worker_to_fabric_edm_sender_rt_args(const std::vector<uint32_t>& args
         tt::LogFabric, "arg[{}]: sender_worker_flow_control_semaphore_id {}", starting_arg_idx, args[starting_arg_idx++]);
     log_trace(
         tt::LogFabric, "arg[{}]: sender_worker_buffer_index_semaphore_id {}", starting_arg_idx, args[starting_arg_idx++]);
+    log_trace(tt::LogFabric, "arg[{}]: worker_free_slots_stream_id {}", starting_arg_idx, args[starting_arg_idx++]);
     return starting_arg_idx + 10;
 }
 
