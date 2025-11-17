@@ -830,7 +830,7 @@ void issue_read_buffer_dispatch_command_sequence(
     const uint32_t xfer_bytes = dispatch_params.pages_per_txn * dispatch_params.padded_page_size;
     bool use_pinned_transfer = false;
     uint32_t pinned_dst_noc_xy = 0;
-    uint32_t pinned_dst_addr_lo = 0;
+    uint64_t pinned_dst_addr = 0;
 
     if (has_pinned_inputs && is_unpadded) {
         const ChipId mmio_device_id =
@@ -851,12 +851,12 @@ void issue_read_buffer_dispatch_command_sequence(
                 const auto& cluster = MetalContext::instance().get_cluster();
                 const uint64_t pcie_base = cluster.get_pcie_base_addr_from_device(mmio_device_id);
                 const uint64_t dst_noc_addr = pinned_noc_base + dst_offset_base;
-                pinned_dst_addr_lo = static_cast<uint32_t>(dst_noc_addr - pcie_base);
+                pinned_dst_addr = dst_noc_addr - pcie_base;
                 const auto& soc = cluster.get_soc_desc(mmio_device_id);
                 const auto& pcie_cores = soc.get_cores(CoreType::PCIE,CoordSystem::NOC0);
                 TT_FATAL(!pcie_cores.empty(), "No PCIE core found on MMIO device {}", mmio_device_id);
                 pinned_dst_noc_xy =
-                    MetalContext::instance().hal().noc_xy_encoding(pcie_cores.front().x, pcie_cores.front().y);
+                    MetalContext::instance().hal().noc_xy_pcie64_encoding(pcie_cores.front().x, pcie_cores.front().y);
                 use_pinned_transfer = true;
             }
         }
@@ -902,7 +902,7 @@ void issue_read_buffer_dispatch_command_sequence(
     if (use_pinned_transfer) {
         // fmt::println(stderr, "Reading pinned");
         command_sequence.add_dispatch_write_linear_h<false, false>(
-            0, pinned_dst_noc_xy | 0x8, pinned_dst_addr_lo, xfer_bytes);
+            0, pinned_dst_noc_xy, pinned_dst_addr, xfer_bytes);
     } else {
         bool flush_prefetch = false;
         // fmt::println(stderr, "Reading unpinned");
