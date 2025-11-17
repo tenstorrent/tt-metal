@@ -22,8 +22,8 @@ struct MorehClipGradNormStep3Operation {
     };
 
     struct tensor_args_t {
-        const std::vector<Tensor>& inputs;
-        const Tensor& clip_coef_clamped;
+        const std::vector<Tensor> inputs;
+        const Tensor clip_coef_clamped;
     };
 
     using spec_return_value_t = std::vector<TensorSpec>;

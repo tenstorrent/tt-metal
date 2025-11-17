@@ -29,7 +29,7 @@ struct ExampleMultipleReturnDeviceOperation {
     // tensors, etc.
     struct tensor_args_t {
         // This example will use a tensor that can only be used as an input
-        const Tensor& input_tensor;
+        const Tensor input_tensor;
 
         // However, the following examples show what else can be done with tensor_args_t
 

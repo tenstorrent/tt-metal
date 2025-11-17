@@ -21,7 +21,7 @@ struct FullOperation {
     };
 
     struct tensor_args_t {
-        const Tensor& any;
+        const Tensor any;
     };
 
     using spec_return_value_t = TensorSpec;

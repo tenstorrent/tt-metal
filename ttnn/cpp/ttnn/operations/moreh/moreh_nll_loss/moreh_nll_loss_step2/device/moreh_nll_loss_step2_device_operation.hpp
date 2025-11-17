@@ -20,11 +20,11 @@ struct MorehNllLossStep2DeviceOperation {
     };
 
     struct tensor_args_t {
-        const Tensor& input_tensor;
-        const Tensor& target_tensor;
-        const std::optional<Tensor>& weight_tensor;
-        const std::optional<Tensor>& divisor_tensor;
-        const std::optional<Tensor>& output_tensor;
+        const Tensor input_tensor;
+        const Tensor target_tensor;
+        const std::optional<Tensor> weight_tensor;
+        const std::optional<Tensor> divisor_tensor;
+        const std::optional<Tensor> output_tensor;
     };
 
     using spec_return_value_t = ttnn::TensorSpec;

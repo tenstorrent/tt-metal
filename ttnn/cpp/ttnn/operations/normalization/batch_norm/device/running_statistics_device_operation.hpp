@@ -21,8 +21,8 @@ struct RunningStatistics {
     };
 
     struct tensor_args_t {
-        const Tensor& batch_mean;
-        const Tensor& batch_var;
+        const Tensor batch_mean;
+        const Tensor batch_var;
         std::optional<Tensor> running_mean;
         std::optional<Tensor> running_var;
     };

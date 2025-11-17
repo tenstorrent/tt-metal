@@ -24,7 +24,7 @@ struct operation_attributes_type {
     }
 };
 struct tensor_args_type {
-    const Tensor& condition_tensor;
+    const Tensor condition_tensor;
     Tensor true_value_tensor;
     Tensor false_value_tensor;
     std::optional<Tensor> output_tensor;

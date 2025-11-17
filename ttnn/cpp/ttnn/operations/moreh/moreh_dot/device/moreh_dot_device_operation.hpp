@@ -20,9 +20,9 @@ struct MorehDotOperation {
     };
 
     struct tensor_args_t {
-        const Tensor& input_a;
-        const Tensor& input_b;
-        const std::optional<Tensor>& output;
+        const Tensor input_a;
+        const Tensor input_b;
+        const std::optional<Tensor> output;
     };
 
     using spec_return_value_t = TensorSpec;

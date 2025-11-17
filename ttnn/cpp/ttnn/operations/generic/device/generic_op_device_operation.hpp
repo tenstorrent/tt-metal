@@ -22,8 +22,8 @@ struct GenericOpDeviceOperation {
 
     // NOTE: output tensor is the last element in the vector io_tensors
     struct tensor_args_t {
-        const std::vector<Tensor>& io_tensors;
-        const Tensor& output_tensor;
+        const std::vector<Tensor> io_tensors;
+        const Tensor output_tensor;
     };
 
     struct GenericProgram {

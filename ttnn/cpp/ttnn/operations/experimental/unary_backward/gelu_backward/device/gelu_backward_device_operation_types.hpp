@@ -16,8 +16,8 @@ struct operation_attributes_t {
 };
 
 struct tensor_args_t {
-    const Tensor& grad_output;
-    const Tensor& input;
+    const Tensor grad_output;
+    const Tensor input;
     std::optional<Tensor> preallocated_input_grad;
 };
 

@@ -19,9 +19,9 @@ struct operation_attributes_t {
 };
 
 struct tensor_args_t {
-    const Tensor& input_tensor;
-    const Tensor& index_tensor;
-    const Tensor& src_tensor;
+    const Tensor input_tensor;
+    const Tensor index_tensor;
+    const Tensor src_tensor;
 };
 
 using spec_return_value_t = TensorSpec;

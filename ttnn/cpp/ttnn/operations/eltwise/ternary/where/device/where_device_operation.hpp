@@ -50,7 +50,7 @@ struct WhereDeviceOperation {
     };
 
     struct tensor_args_t {
-        const Tensor& predicate;
+        const Tensor predicate;
         std::optional<Tensor> value_true;
         std::optional<Tensor> value_false;
         std::optional<Tensor> optional_output_tensor;
