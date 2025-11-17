@@ -139,4 +139,5 @@ ttnn/ttnn/.rpath_checked__ttnn
 Testing
 
 *.profraw
-*/coverage/
+*.profdata
+.github/coverage/
