@@ -35,6 +35,5 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       bh: ${{ github.event.inputs.bh_glx }}
-      bh_scheduled: 'false'  # or 'true'
+      bh_scheduled: 'true' # Always true for scheduled runs
     secrets: inherit
-    
