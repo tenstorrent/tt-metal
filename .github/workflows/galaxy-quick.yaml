@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       bh_glx:
-        description: 'Run with BH Galaxy'
+        description: 'Run BH Galaxy'
         required: false
         type: boolean
         default: false
