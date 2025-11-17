@@ -323,7 +323,8 @@ void py_bind_conv2d(py::module& module) {
             bool,
             std::optional<bool>,
             bool,
-            std::optional<bool>>(),
+            std::optional<bool>,
+            uint32_t>(),
         py::kw_only(),
         py::arg("weights_dtype") = std::nullopt,
         py::arg("activation") = std::nullopt,
@@ -344,7 +345,8 @@ void py_bind_conv2d(py::module& module) {
         py::arg("in_place") = false,
         py::arg("enable_kernel_stride_folding") = std::nullopt,
         py::arg("enable_activation_reuse") = false,
-        py::arg("force_split_reader") = std::nullopt);
+        py::arg("force_split_reader") = std::nullopt,
+        py::arg("delay_cycles") = 0);
     py_conv_config.def_readwrite("weights_dtype", &Conv2dConfig::weights_dtype, R"doc(
         Optional argument which specifies the data type of the preprocessed weights & bias tensor if the Conv2D op is responsible for preparing the weights.
         Supports ttnn.bfloat16 and ttnn.bfloat8_b.
@@ -513,6 +515,13 @@ void py_bind_conv2d(py::module& module) {
         ===============================================================
     )doc");
 
+    py_conv_config.def_readwrite("delay_cycles", &Conv2dConfig::delay_cycles, R"doc(
+        ===================== EXPERIMENTAL FEATURE ======================
+
+        Adds a delay of the specified number of cycles after each activation mcast receiving is done ( delay_cycles for 1st receiver,
+        2*delay_cycles for 2nd receiver, etc.)
+        ===============================================================
+    )doc");
     py_conv_config.def("__repr__", [](const Conv2dConfig& config) { return fmt::format("{}", config); });
 }
 

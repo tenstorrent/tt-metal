@@ -187,7 +187,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
     bool full_inner_dim,
     bool enable_activation_reuse,
     bool config_tensors_in_dram,
-    std::optional<bool> force_split_reader) {
+    std::optional<bool> force_split_reader,
+    uint32_t delay_cycles) {
     distributed::MeshDevice* device = a.device();
     TT_FATAL(a.layout() == Layout::ROW_MAJOR, "Conv activation should be in row major layout");
     TT_FATAL(a.memory_config().is_sharded(), "Conv activation must be sharded.");
@@ -861,7 +862,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
         reader_compile_time_args.push_back(0);
         reader_compile_time_args.push_back(0);
     }
-    reader_compile_time_args.push_back(50);  // delay_cycles
+    if (block_sharded) {
+        reader_compile_time_args.push_back(delay_cycles);
+    }
     if (skip_activation_mcast) {
         reader_defines["SKIP_MCAST"] = "1";
     }
