@@ -17,6 +17,7 @@ import copy
 from collections import deque
 import pandas as pd
 from math import nan, isnan
+from typing import Any, Dict, List, Optional, Tuple
 
 import click
 from loguru import logger
@@ -42,6 +43,10 @@ TRACE_OP_ID_BITSHIFT = 32
 OUT_NAME = "ops_perf_results"
 PER_CORE_OP_TO_OP_OUT_NAME = "per_core_op_to_op_times"
 PROFILER_OP_TO_OP_OVERHEAD_NANO_SEC = 1500
+
+OpDict = Dict[str, Any]
+TraceReplayDict = Dict[int, Dict[int, List[int]]]
+DeviceOpsDict = Dict[int, List[OpDict]]
 
 OPS_CSV_HEADER = [
     "OP CODE",
@@ -117,11 +122,16 @@ OPS_CSV_HEADER = [
 ]
 
 
-def csv_header_format(header):
+def csv_header_format(header: str) -> str:
+    """Convert snake_case header strings into the canonical CSV header format."""
+
     return header.replace("_", " ").upper()
 
 
-def import_tracy_op_logs(logFolder):
+def import_tracy_op_logs(
+    logFolder: Path,
+) -> Tuple[Dict[int, OpDict], Dict[str, Dict[str, Any]], Optional[TraceReplayDict]]:
+    """Parse host-side Tracy logs into per-op dictionaries, signposts, and trace replay metadata."""
     logger.info(f"Importing ops logs")
     ops = {}
     signposts = {}
@@ -236,21 +246,27 @@ def import_tracy_op_logs(logFolder):
     return ops, signposts, traceReplays
 
 
-def host_device_op_compare(op):
+def host_device_op_compare(op: OpDict) -> Tuple[int, int]:
+    """Comparison key that keeps ops ordered by host id, then replay session."""
+
     if "metal_trace_replay_session_id" in op:
         return int(op["global_call_count"]), int(op["metal_trace_replay_session_id"])
     else:
         return int(op["global_call_count"]), 0
 
 
-def device_op_compare_time(op):
+def device_op_compare_time(op: Dict[str, Any]) -> int:
+    """Comparison key that sorts device ops by earliest timestamp."""
+
     if "timeseries" in op and len(op["timeseries"]) > 0 and len(op["timeseries"][0]) > 1:
         return int(op["timeseries"][0][1])
     else:
         return 0
 
 
-def device_op_compare_opID_time(op):
+def device_op_compare_opID_time(op: Dict[str, Any]) -> Tuple[int, int]:
+    """Comparison key that sorts by host op id, then timestamp fallback."""
+
     if (
         "timeseries" in op
         and len(op["timeseries"]) > 0
@@ -265,7 +281,9 @@ def device_op_compare_opID_time(op):
 
 
 # Generate a map of OP reference list per device.
-def get_device_op_data(ops):
+def get_device_op_data(ops: Dict[int, OpDict]) -> Tuple[DeviceOpsDict, bool]:
+    """Group host ops per device and record whether trace runs exist."""
+
     logger.info(f"Getting device ops")
     deviceOps = {}
     hasTraceRuns = False
@@ -285,7 +303,9 @@ def get_device_op_data(ops):
     return deviceOps, hasTraceRuns
 
 
-def extract_dispatch_op_id(dispatchOps):
+def extract_dispatch_op_id(dispatchOps: Dict[str, Any]) -> int:
+    """Return the host op id that a dispatch analysis entry corresponds to."""
+
     opId = 0
     for ts in dispatchOps["timeseries"]:
         if "meta_data" in ts[0] and "workers_runtime_id" in ts[0]["meta_data"]:
@@ -330,7 +350,16 @@ def extract_perf_counters(events):
 
 
 # Append device data to device ops and return the list of mapped device op ref list
-def append_device_data(ops, traceReplays, logFolder, analyze_noc_traces, device_analysis_types):
+def append_device_data(
+    ops: Dict[int, OpDict],
+    traceReplays: Optional[TraceReplayDict],
+    logFolder: Path,
+    analyze_noc_traces: bool,
+    device_analysis_types: Tuple[str, ...] | List[str],
+) -> Tuple[DeviceOpsDict, Dict[int, OpDict]]:
+    """Join host metadata with device profiler entries (and optional NoC stats)."""
+
+    traceReplays = traceReplays or {}
     traceReplayCounts = {}
     for deviceID in traceReplays:
         traceReplayCounts[deviceID] = {}
@@ -566,8 +595,16 @@ def append_device_data(ops, traceReplays, logFolder, analyze_noc_traces, device_
 
 
 def get_device_data_generate_report(
-    logFolder, outputFolder, date, nameAppend, export_csv=True, cleanup_device_log=False, device_analysis_types=[]
-):
+    logFolder: Path,
+    outputFolder: Optional[Path],
+    date: bool,
+    nameAppend: Optional[str],
+    export_csv: bool = True,
+    cleanup_device_log: bool = False,
+    device_analysis_types: Tuple[str, ...] | List[str] = (),
+) -> List[Dict[str, Any]]:
+    """Generate CSV rows using only device-side logs (no host metadata)."""
+
     deviceTimesLog = os.path.join(logFolder, PROFILER_DEVICE_SIDE_LOG)
     devicePreOpTime = {}
     devicePreOpDMStartTime = {}
@@ -763,7 +800,18 @@ def get_device_data_generate_report(
     return rowDicts
 
 
-def generate_reports(ops, deviceOps, traceOps, signposts, logFolder, outputFolder, date, nameAppend):
+def generate_reports(
+    ops: Dict[int, OpDict],
+    deviceOps: DeviceOpsDict,
+    traceOps: Dict[int, OpDict],
+    signposts: Dict[str, Dict[str, Any]],
+    logFolder: Path,
+    outputFolder: Optional[Path],
+    date: bool,
+    nameAppend: Optional[str],
+) -> None:
+    """Emit the final CSV report plus supporting artifacts."""
+
     logger.info(f"OPs' perf analysis is finished! Generating reports ...")
     outFolder = PROFILER_OUTPUT_DIR
     if outputFolder:
@@ -1069,7 +1117,7 @@ def generate_reports(ops, deviceOps, traceOps, signposts, logFolder, outputFolde
     logger.info(f"OPs csv generated at: {allOpsCSVPath}")
 
 
-def analyzeNoCTraces(logFolder):
+def analyzeNoCTraces(logFolder: Path):
     """Attempts to import tt-npe from $PYTHONPATH and process noc traces to
     obtain per-operation DRAM BW and NoC utilization statistics and create
     visualizer timeline files"""
@@ -1093,8 +1141,15 @@ def analyzeNoCTraces(logFolder):
 
 
 def process_ops(
-    output_folder, name_append, date, device_only=False, analyze_noc_traces=False, device_analysis_types=[]
-):
+    output_folder: Optional[Path],
+    name_append: Optional[str],
+    date: bool,
+    device_only: bool = False,
+    analyze_noc_traces: bool = False,
+    device_analysis_types: Tuple[str, ...] | List[str] = (),
+) -> None:
+    """Top-level entry point used by both CLI and importers."""
+
     if not output_folder:
         output_folder = PROFILER_ARTIFACTS_DIR
     logFolder = generate_logs_folder(output_folder)
