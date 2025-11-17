@@ -678,6 +678,7 @@ def shard_and_save(
     if path.exists():
         logger.warning(f"Overwriting existing cache file: {path}")
     ttnn.dump_tensor(path, ttnn_tensor)
+    # Issue: Get a better saving strategy in the future for relative path
     relative_path = Path(str(path).split("mesh_")[1].split("/", 1)[1])
     return SavedWeight(relative_path, memory_config)
 
