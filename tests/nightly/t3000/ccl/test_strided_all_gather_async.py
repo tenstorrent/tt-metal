@@ -11,7 +11,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 from tests.nightly.t3000.ccl.test_minimal_all_gather_async import is_unsupported_case
 from models.common.utility_functions import skip_for_blackhole
 
-from ttnn import ShardTensorTo2dMesh, ConcatMesh2dToTensor
+from ttnn import ShardTensor2dMesh, ConcatMesh2dToTensor
 from tracy import signpost
 
 
