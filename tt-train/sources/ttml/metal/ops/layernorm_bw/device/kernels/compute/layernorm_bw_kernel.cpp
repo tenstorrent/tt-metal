@@ -151,10 +151,9 @@ inline void compute_dy_gamma_sum(const uint32_t row) {
     pack_and_push(sum_register, cb_scaled_dy_gamma_sum_idx);
 
     // Reduce sum across inner dimension and scale by 1/N using matmul
-    cb_wait_front(cb_scaled_dy_gamma_sum_idx, onetile);
-
     const uint32_t reduced_sum_register = 0U;
     tile_regs_acquire();
+    cb_wait_front(cb_scaled_dy_gamma_sum_idx, onetile);
 
     reconfig_data_format(cb_scaled_dy_gamma_sum_idx, cb_scaler_idx);
     mm_init(cb_scaled_dy_gamma_sum_idx, cb_scaler_idx, cb_scaled_dy_gamma_sum_idx, 0);
@@ -231,9 +230,9 @@ inline void compute_dy_gamma_xnorm_sum(const uint32_t row) {
     pack_and_push(sum_register, cb_scaled_dy_gamma_xnorm_sum_idx);
 
     // Reduce sum across inner dimension and scale by 1/N using matmul
-    cb_wait_front(cb_scaled_dy_gamma_xnorm_sum_idx, onetile);
     const uint32_t reduced_sum_register = 0U;
     tile_regs_acquire();
+    cb_wait_front(cb_scaled_dy_gamma_xnorm_sum_idx, onetile);
 
     reconfig_data_format(cb_scaled_dy_gamma_xnorm_sum_idx, cb_scaler_idx);
     mm_init(cb_scaled_dy_gamma_xnorm_sum_idx, cb_scaler_idx, cb_scaled_dy_gamma_xnorm_sum_idx, 0);
@@ -312,9 +311,9 @@ inline void compute_dy_gamma_sum(const uint32_t row) {
     pack_and_push(sum_register, cb_scaled_dy_gamma_sum_idx);
 
     // Reduce using matmul and scale by 1/N
-    cb_wait_front(cb_scaled_dy_gamma_sum_idx, onetile);
     const uint32_t reduced_sum_register = 0U;
     tile_regs_acquire();
+    cb_wait_front(cb_scaled_dy_gamma_sum_idx, onetile);
 
     reconfig_data_format(cb_scaled_dy_gamma_sum_idx, cb_scaler_idx);
     mm_init(cb_scaled_dy_gamma_sum_idx, cb_scaler_idx, cb_scaled_dy_gamma_sum_idx, 0);
