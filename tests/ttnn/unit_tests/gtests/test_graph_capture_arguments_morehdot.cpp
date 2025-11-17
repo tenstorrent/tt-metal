@@ -84,7 +84,10 @@ TEST_F(TestGraphCaptureArgumentsMorehDot, MorehDot) {
     EXPECT_EQ(operation1.arguments[2], "nullopt");
     EXPECT_EQ(operation1.arguments[3], "DataType::BFLOAT16");
     EXPECT_EQ(operation1.arguments[4], "nullopt");
-    EXPECT_EQ(operation1.arguments[5], "nullopt");
+    EXPECT_EQ(
+        operation1.arguments[5],
+        "[ unsupported type , std::reference_wrapper<std::optional<std::variant<ttnn::GrayskullComputeKernelConfig, "
+        "ttnn::WormholeComputeKernelConfig> > const>]");
 
     const auto& operation2 = operations[2];
     EXPECT_EQ(operation2.operation_name, "MorehDotOperation");
