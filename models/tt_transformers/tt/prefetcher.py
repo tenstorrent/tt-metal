@@ -53,9 +53,12 @@ class PrefetcherCoreConfig:
 
         def bh_sender_cores(active: Optional[bool] = None):
             self.left_sender_range, self.right_sender_range = [list(r) for r in get_sender_range(active)]
-            return [ttnn.CoreCoord(0, i) for i in self.left_sender_range] + [
-                ttnn.CoreCoord(7, i) for i in self.right_sender_range
-            ]
+            return (
+                [ttnn.CoreCoord(0, i) for i in self.left_sender_range[:4]]
+                + [ttnn.CoreCoord(7, i) for i in self.right_sender_range[:4]]
+                + [ttnn.CoreCoord(0, i) for i in self.left_sender_range[4:]]
+                + [ttnn.CoreCoord(7, i) for i in self.right_sender_range[4:]]
+            )
 
         # Prefetcher receiver cores (num_receiver_cores worker cores adjacent to sender cores)
         def wh_receiver_cores(sender_active: Optional[bool] = None, receiver_active: Optional[bool] = None):
@@ -74,15 +77,32 @@ class PrefetcherCoreConfig:
         def bh_receiver_cores(sender_active: Optional[bool] = None, receiver_active: Optional[bool] = None):
             self.left_sender_range, self.right_sender_range = get_sender_range(sender_active)
             self.left_recv_range, self.right_recv_range = get_receiver_range(receiver_active)
-            return [
-                ttnn.CoreRange(ttnn.CoreCoord(self.left_recv_range[0], i), ttnn.CoreCoord(self.left_recv_range[-1], i))
-                for i in self.left_sender_range
-            ] + [
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(self.right_recv_range[0], i), ttnn.CoreCoord(self.right_recv_range[-1], i)
-                )
-                for i in self.right_sender_range
-            ]
+            return (
+                [
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(self.left_recv_range[0], i), ttnn.CoreCoord(self.left_recv_range[-1], i)
+                    )
+                    for i in self.left_sender_range[:4]
+                ]
+                + [
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(self.right_recv_range[0], i), ttnn.CoreCoord(self.right_recv_range[-1], i)
+                    )
+                    for i in self.right_sender_range[:4]
+                ]
+                + [
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(self.left_recv_range[0], i), ttnn.CoreCoord(self.left_recv_range[-1], i)
+                    )
+                    for i in self.left_sender_range[4:]
+                ]
+                + [
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(self.right_recv_range[0], i), ttnn.CoreCoord(self.right_recv_range[-1], i)
+                    )
+                    for i in self.right_sender_range[4:]
+                ]
+            )
 
         self.sender_cores = wh_sender_cores if is_wormhole_b0() else bh_sender_cores
         self.receiver_cores = wh_receiver_cores if is_wormhole_b0() else bh_receiver_cores
@@ -181,10 +201,15 @@ class Prefetcher(LightweightModule):
         self.all_worker_cores = [ttnn.CoreCoord(j, i) for i in range(self.height_cores) for j in range(1, 7)] + [
             ttnn.CoreCoord(j, i) for i in range(self.height_cores) for j in range(8, self.width_cores)
         ]
-
+        self.all_worker_cores_range_set = ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(4, 9)),
+                ttnn.CoreRange(ttnn.CoreCoord(8, 0), ttnn.CoreCoord(11, 9)),
+            ]
+        )
         self.sender_receiver_mapping = list(
             zip(
-                self.sender_cores(active=True),
+                self.sender_cores(),
                 self.to_core_range_set(self.receiver_cores(sender_active=None, receiver_active=True), return_list=True),
             )
         )
@@ -193,9 +218,9 @@ class Prefetcher(LightweightModule):
             case "decode":
                 self.prefetcher_sub_device.add_sub_device(self.to_core_range_set(self.sender_cores(active=True)))
                 self.prefetcher_sub_device.add_sub_device(
-                    self.to_core_range_set(self.receiver_cores(sender_active=None, receiver_active=True))
+                    self.all_worker_cores_range_set
+                    # self.to_core_range_set(self.receiver_cores(sender_active=None, receiver_active=True))
                 )
-                breakpoint()
                 self.prefetcher_sub_device.init_sub_device_manager()
             case "prefill":
                 self.prefetcher_sub_device.add_sub_device(self.to_core_range_set(self.all_cores))
@@ -236,7 +261,6 @@ class Prefetcher(LightweightModule):
         """
         Populates the tensor addressess that need to be prefetched
         """
-        # breakpoint()
         bytes_in_tile = {ttnn.bfloat4_b: 576, ttnn.bfloat8_b: 1088, ttnn.bfloat16: 2048}
         self.global_cb_size += (
             math.ceil(tensor.volume() / (ttnn.TILE_SIZE * ttnn.TILE_SIZE)) * bytes_in_tile[tensor.dtype] * 2
@@ -249,7 +273,6 @@ class Prefetcher(LightweightModule):
         Start prefetching weights into global CB with dram_prefetcher op
         """
         # Create global cb buffer if it was not
-        breakpoint()
         if self.global_cb is None:
             self.global_cb_size = 896 * 1088
             self.global_cb = ttnn.create_global_circular_buffer(

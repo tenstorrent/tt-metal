@@ -347,13 +347,14 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds, ensure_gc,
         1, 1, seq_len, model_args.dim, dtype=get_ref_model_dype(reference_model, model_args.model_name)
     )
     reference_output = reference_model(torch_input)
+
+    breakpoint()
     tt_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,
         mesh_mapper=ttnn.ShardTensor2dMesh(
             mesh_device,
-            dims=(None, 3),
-            # dims=(None, 3) if model_args.is_galaxy or model_else (None, None),
+            dims=(None, 3) if model_args.is_galaxy else (None, None),
             mesh_shape=model_args.cluster_shape,
         ),  # When both dims are None, the mapper used is `ReplicateTensorToMesh`
         dtype=ttnn.bfloat8_b,
@@ -372,7 +373,7 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds, ensure_gc,
         ),
         layout=ttnn.TILE_LAYOUT,
     )
-
+    breakpoint()
     logger.info("Run MLP")
     tt_output = tt_model(tt_input, mode)
 

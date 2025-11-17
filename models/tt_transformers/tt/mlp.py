@@ -67,6 +67,7 @@ class MLP(LightweightModule):
         )
 
         # Sharded weights
+        breakpoint()
         w1_dims = (-1, -2) if args.is_galaxy else (-2, -1)
         w2_dims = (-2, -1) if args.is_galaxy else (-1, -2)
 
@@ -84,6 +85,7 @@ class MLP(LightweightModule):
         )  # bfp4 normally ok here but sub .99 pcc for llama 3.1 weights
         self.w2 = as_sharded_tensor("w2_sharded", ff2_dtype, dims=w2_dims)
         self.w3 = as_sharded_tensor("w3_sharded", ff1_3_dtype, dims=w1_dims)
+        breakpoint()
 
         # Default activation is SILU
         self.activation_type = (

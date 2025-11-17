@@ -1072,7 +1072,7 @@ class ModelArgs:
 
             # Prefetcher Memory config for Input, FF1 and FF3 output
             self.model_config["SHARDED_MLP_INPUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
-                shape=(32, self.dim // self.cluster_shape[1] // self.prefetcher.ring_size),  # Use padded N
+                shape=(32, self.dim // self.prefetcher.ring_size),  # Use padded N
                 core_grid=self.prefetcher.to_core_range_set(
                     self.prefetcher.receiver_cores(sender_active=True, receiver_active=True)
                 ),
@@ -2310,19 +2310,19 @@ class ModelArgs:
         N,
         num_cores,
         prefetch=True,
-        num_global_cb_receivers=3,
+        num_global_cb_receivers=2,
     ):
         breakpoint()
         M *= B  # Fuse batch always enabled
 
-        in0_block_h = M // ttnn.TILE_SIZE
-        in0_block_w = K // num_cores // ttnn.TILE_SIZE
-        out_block_h = M // ttnn.TILE_SIZE
-        out_block_w = N // num_cores // ttnn.TILE_SIZE
+        in0_block_h = M // ttnn.TILE_SIZE  # 1
+        in0_block_w = K // num_cores // ttnn.TILE_SIZE  # 2
+        out_block_h = M // ttnn.TILE_SIZE  # 1
+        out_block_w = N // num_cores // ttnn.TILE_SIZE  # 14
 
-        num_blocks_y = (M // ttnn.TILE_SIZE - 1) // out_block_h + 1
-        num_blocks_x = (N // ttnn.TILE_SIZE - 1) // out_block_w + 1
-        num_blocks_total = num_blocks_y * num_blocks_x
+        num_blocks_y = (M // ttnn.TILE_SIZE - 1) // out_block_h + 1  # 1
+        num_blocks_x = (N // ttnn.TILE_SIZE - 1) // out_block_w + 1  # 32
+        num_blocks_total = num_blocks_y * num_blocks_x  # 1 * 32 = 32
 
         if num_blocks_total != num_cores:
             assert False, f"num_blocks_total {num_blocks_total} != num_cores {num_cores}"
@@ -2332,7 +2332,7 @@ class ModelArgs:
         while out_block_w % out_subblock_w != 0:
             out_subblock_w -= 1
 
-        hop_grid = [(3, 6)] if prefetch else []  # FIXME: Make not hard coded
+        hop_grid = []  # FIXME: Make not hard coded
         hop_core_range_set = ttnn.CoreRangeSet(
             {
                 ttnn.CoreRange(
@@ -2344,13 +2344,14 @@ class ModelArgs:
         )
         grid = num_to_coregrid(num_cores)
 
+        # tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_op_multi_core_reuse_mcast_1d_program_factory.cpp
         program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(grid.x, grid.y),
             in0_block_w=in0_block_w,
             out_subblock_h=out_subblock_h,
             out_subblock_w=out_subblock_w,
-            per_core_M=out_block_h,
-            per_core_N=out_block_w,
+            per_core_M=out_block_h,  # 1
+            per_core_N=out_block_w,  # 14
             fuse_batch=True,
             fused_activation=None,
             mcast_in0=False,
