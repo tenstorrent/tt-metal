@@ -629,40 +629,32 @@ class TTNNSpeechT5Decoder:
     """
 
     def __init__(self, device, parameters, config: TTNNDecoderConfig, max_sequence_length: int = 20):
-        print("  [Decoder Init] Starting...")
         self.device = device
         self.config = config
         self.parameters = parameters
         self.max_sequence_length = max_sequence_length  # Store the max length
 
         # Speech decoder prenet
-        print("  [Decoder Init] Creating prenet...")
         self.prenet = TTNNSpeechDecoderPrenet(
             device,
             parameters["prenet"],
             config,
         )
-        print("  [Decoder Init] Prenet done")
 
         # Decoder layers
-        print(f"  [Decoder Init] Creating {config.num_layers} decoder layers...")
         self.layers = []
         for i in range(config.num_layers):
-            print(f"  [Decoder Init] Creating layer {i+1}/{config.num_layers}...")
             layer = TTNNSpeechT5DecoderLayer(
                 device,
                 parameters["layers"][i],
                 config,
             )
             self.layers.append(layer)
-        print("  [Decoder Init] All layers created")
 
         # Pre-compute causal masks for common sequence lengths
         # This avoids dynamic tensor creation during forward pass (required for trace)
-        print(f"  [Decoder Init] Pre-computing causal masks up to length {max_sequence_length}...")
         self.causal_mask_cache = {}
         self._precompute_causal_masks()
-        print("  [Decoder Init] Done!")
 
     def _precompute_causal_masks(self):
         """
@@ -815,7 +807,6 @@ def preprocess_decoder_parameters(torch_model, config: TTNNDecoderConfig, device
     Returns:
         parameters: Dict of TTNN tensors
     """
-    print("[Preprocess Decoder] Starting...")
     parameters = {}
 
     # Memory configs
@@ -935,5 +926,4 @@ def preprocess_decoder_parameters(torch_model, config: TTNNDecoderConfig, device
 
         parameters["layers"].append(layer_params)
 
-    print("[Preprocess Decoder] Done!")
     return parameters

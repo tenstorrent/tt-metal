@@ -150,9 +150,14 @@ def generate_speech_ttnn(
 
     for step in range(max_steps):
         step_start = time.time()
-        current_seq_len = output_sequence_ttnn.shape[1]
-        if not warmup_mode or step % 10 == 0:  # Print every step normally, every 10th step in warmup mode
-            print(f"Step {step+1}/{max_steps} (seq_len={current_seq_len})", end="", flush=True)
+
+        # Show progress every 20 steps
+        if (step + 1) % 20 == 0 or step == 0:
+            if warmup_mode:
+                print(f"   Warm-up: Step {step+1}/{max_steps}", end="", flush=True)
+            else:
+                print(f"   Inference: Step {step+1}/{max_steps}", end="", flush=True)
+
         # Decoder step (with detailed timing breakdown)
         decoder_start = time.time()
 
@@ -184,17 +189,6 @@ def generate_speech_ttnn(
         decoder_time = time.time() - decoder_start
         total_decoder_time += decoder_time
 
-        # Log timing for steps (show every 10th step to avoid spam, skip in warmup mode)
-        if not warmup_mode:
-            if step < 3:
-                print(
-                    f" [Decoder: {decoder_time:.3f}s = inference({decoder_inference_time:.3f}s) + mem_mgmt({memory_mgmt_time:.3f}s)]",
-                    end="",
-                    flush=True,
-                )
-            elif step % 10 == 0:
-                print(f" [Decoder: {decoder_time:.3f}s]", end="", flush=True)
-
         # Postnet (with detailed timing)
         postnet_start = time.time()
 
@@ -218,46 +212,12 @@ def generate_speech_ttnn(
         postnet_time = time.time() - postnet_start
         total_postnet_time += postnet_time
 
-        # Log postnet timing (show every 10th step to avoid spam, skip in warmup mode)
-        if not warmup_mode:
-            if step < 3:
-                print(
-                    f" [Postnet: {postnet_time:.3f}s = inference({postnet_inference_time:.3f}s) + mem_mgmt({postnet_memory_time:.3f}s)]",
-                    end="",
-                    flush=True,
-                )
-            elif step % 10 == 0:
-                print(f" [Postnet: {postnet_time:.3f}s]", end="", flush=True)
-
-        # Print detailed breakdown for first 10 steps (skip in warmup mode)
-        if step < 10 and not warmup_mode:
-            print(f"\n🔍 Detailed timing breakdown (Step {step+1}):")
-            print(f"  Decoder phases:")
-            print(f"    Input memory: {decoder_timing['memory_input']:.4f}s")
-            print(f"    Prenet: {decoder_timing['prenet']:.4f}s")
-            print(f"    Causal mask: {decoder_timing['causal_mask']:.4f}s")
-            print(f"    Decoder layers: {decoder_timing['decoder_layers']:.4f}s")
-            for i, layer_time in enumerate(decoder_timing["layer_times"]):
-                print(f"      Layer {i+1}: {layer_time:.4f}s")
-            print(f"    Output memory: {decoder_timing['memory_output']:.4f}s")
-            print(f"  Postnet phases:")
-            print(f"    Input memory: {postnet_timing['memory_input']:.4f}s")
-            print(f"    Mel projection: {postnet_timing['mel_projection']:.4f}s")
-            print(f"    Mel reshape: {postnet_timing['mel_reshape']:.4f}s")
-            print(f"    Conv postnet: {postnet_timing['conv_postnet']:.4f}s")
-            print(f"    Stop projection: {postnet_timing['stop_projection']:.4f}s")
-            print(f"    Stop reshape: {postnet_timing['stop_reshape']:.4f}s")
-            print(f"    Output memory: {postnet_timing['memory_output']:.4f}s")
-            if step < 9:  # Don't show "Continuing..." for the last detailed step
-                print("  Continuing...", end="", flush=True)
-
         # Check stopping condition (fully device-side comparison)
         sigmoid_logits = ttnn.sigmoid(stop_logits, memory_config=ttnn.L1_MEMORY_CONFIG)
         sum_prob = ttnn.sum(sigmoid_logits, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
         should_stop = ttnn.ge(sum_prob, 0.5, memory_config=ttnn.L1_MEMORY_CONFIG)
         any_stop_scalar = ttnn.sum(should_stop)
         if ttnn.to_torch(any_stop_scalar).item() > 0:
-            print(f" (Early stop at step {step+1})", flush=True)
             break
 
         # ========== Device-only operations ==========
@@ -298,25 +258,17 @@ def generate_speech_ttnn(
 
         steps_completed += 1
 
+        # Complete progress message
+        if (step + 1) % 20 == 0:
+            print(" ✓", flush=True)
+
     # Transfer final spectrogram from device to host (only final transfer)
     if spectrogram_ttnn is not None:
         final_spectrogram = ttnn.to_torch(spectrogram_ttnn)
     else:
         final_spectrogram = torch.zeros(batch_size, 1, num_mel_bins)
 
-    # Performance Analysis
-    print(f"\\n\\n🎯 Performance Analysis:")
-    print(f"   Total steps completed: {steps_completed}")
-    print(f"   Total decoder time: {total_decoder_time:.3f}s ({total_decoder_time/steps_completed:.3f}s/step)")
-    print(f"   Total postnet time: {total_postnet_time:.3f}s ({total_postnet_time/steps_completed:.3f}s/step)")
-    print(f"   Total conversion time: {total_conversion_time:.3f}s ({total_conversion_time/steps_completed:.3f}s/step)")
-    print(f"   Total concat time: {total_concat_time:.3f}s ({total_concat_time/steps_completed:.3f}s/step)")
-    print(
-        f"   Total generation time: {total_decoder_time + total_postnet_time + total_conversion_time + total_concat_time:.3f}s"
-    )
-    print(
-        f"   Tokens/sec: {steps_completed / (total_decoder_time + total_postnet_time + total_conversion_time + total_concat_time):.2f}"
-    )
+    # Performance Analysis (silently collected for final summary)
 
     # Generate audio (skip in warmup mode)
     if not warmup_mode:
@@ -363,12 +315,6 @@ def main():
 
     args = parser.parse_args()
 
-    print("🎵 TTNN SpeechT5 Clean Demo")
-    print("=" * 40)
-    print(f"📝 Processing {len(args.texts)} input text(s)")
-    print(f"🎯 Max steps per generation: {args.max_steps}")
-    print(f"📁 Output directory: {args.output_dir}")
-
     # Create output directory if it doesn't exist
     import os
 
@@ -385,7 +331,6 @@ def main():
         device.enable_program_cache()
 
         # Load models
-        print("Loading models...")
         processor = SpeechT5Processor.from_pretrained("microsoft/speecht5_tts")
         model = SpeechT5ForTextToSpeech.from_pretrained("microsoft/speecht5_tts")
         vocoder = SpeechT5HifiGan.from_pretrained("microsoft/speecht5_hifigan")
@@ -395,7 +340,6 @@ def main():
         speaker_embeddings = torch.tensor(embeddings_dataset[7306]["xvector"]).unsqueeze(0)
 
         # Initialize TTNN models
-        print("Initializing TTNN models...")
 
         # Encoder config
         encoder_config = TTNNEncoderConfig(
@@ -481,8 +425,6 @@ def main():
         # Generate speech for each input text
         results = []
         for i, text in enumerate(args.texts, 1):
-            print(f"\n🎵 [{i}/{len(args.texts)}] Generating speech for: '{text}'")
-
             # Generate filename from text (sanitize for filesystem)
             safe_text = "".join(c for c in text[:50] if c.isalnum() or c in (" ", "-", "_")).rstrip()
             if not safe_text:
@@ -525,10 +467,6 @@ def main():
                 "sequence_length": generation_stats.get("final_seq_len", 0),
             }
             results.append(result)
-
-            print(f"✅ Audio saved to {output_file}")
-            print(".3f")
-            print(".2f")
 
         # Display summary table
         print("\n" + "=" * 120)
