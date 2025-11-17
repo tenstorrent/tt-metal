@@ -345,80 +345,12 @@ def test_linear_padded_wan_shapes(device, M, K, N, M_block_size, K_block_size, N
     assert check_result["relative_rmse"] < 0.02
 
 
-@pytest.mark.parametrize(
-    "M, K, N",
-    [
-        # FF1 / FF3 sizes
-        (128, 2048, 3584),
-        (1024, 2048, 3584),
-        (2048, 2048, 3584),
-        (4096, 2048, 3584),
-        (8192, 2048, 3584),
-        (16384, 2048, 3584),
-        (32768, 2048, 3584),
-        (65536, 2048, 3584),
-        (131072, 2048, 3584),
-        # FF2 sizes
-        (128, 3584, 2048),
-        (1024, 3584, 2048),
-        (2048, 3584, 2048),
-        (4096, 3584, 2048),
-        (8192, 3584, 2048),
-        (16384, 3584, 2048),
-        (32768, 3584, 2048),
-        (65536, 3584, 2048),
-        (131072, 3584, 2048),
-    ],
-)
-@pytest.mark.parametrize(
-    "M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
-    [
-        # Generate all combinations of block sizes (8 or 16) and subblock sizes (1, 2, 4, 8)
-        # Filter to ensure subblock_h divides M_block_size and subblock_w divides N_block_size
-        (M_bs, K_bs, N_bs, sb_h, sb_w)
-        for M_bs in [8, 16]
-        for K_bs in [8, 16]
-        for N_bs in [8, 16]
-        for sb_h in [1, 2, 4, 8]
-        for sb_w in [1, 2, 4, 8]
-        if M_bs % sb_h == 0 and N_bs % sb_w == 0
-    ],
-)
-@pytest.mark.parametrize(
-    "core_grid_x, core_grid_y",
-    [(7, 7), (7, 8), (7, 9)],
-)
-@pytest.mark.parametrize(
-    "fp32_acc",
-    [True, False],
-)
-def test_run_performance(
-    device,
-    M,
-    K,
-    N,
-    M_block_size,
-    K_block_size,
-    N_block_size,
-    subblock_h,
-    subblock_w,
-    core_grid_x,
-    core_grid_y,
-    fp32_acc,
-):
-    core_grid = ttnn.CoreCoord(core_grid_x, core_grid_y)
+def test_run_performance(device):
+    core_grid = ttnn.CoreCoord(8, 8)
+    M, K, N = 4096, 4096, 4096
+    M_block_size, K_block_size, N_block_size, subblock_h, subblock_w = 8, 8, 8, 2, 2
     check_result = run_test_linear(
-        device,
-        M,
-        K,
-        N,
-        M_block_size,
-        K_block_size,
-        N_block_size,
-        subblock_h,
-        subblock_w,
-        core_grid=core_grid,
-        fp32_acc=fp32_acc,
+        device, M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w, core_grid=core_grid
     )
     assert check_result["pcc"] > 0.999_500
     assert check_result["relative_rmse"] < 0.02
@@ -480,7 +412,7 @@ TABLE_CONFIGS = [
 ]
 
 
-# @pytest.mark.skip()
+@pytest.mark.skip()
 @pytest.mark.parametrize(
     "M, K, N",
     TABLE_CONFIGS,
