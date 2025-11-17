@@ -32,6 +32,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
+#include "tt_metal/impl/dispatch/data_collector.hpp"
 
 namespace tt::tt_metal {
 
@@ -134,6 +135,8 @@ void MetalContext::initialize(
         profiler_state_manager_ = std::make_unique<ProfilerStateManager>();
     }
 
+    data_collector_ = std::make_unique<DataCollector>();
+
     // Minimal setup, don't initialize FW/Dispatch/etc.
     if (minimal) {
         return;
@@ -195,10 +198,7 @@ void MetalContext::initialize(
     for (ChipId device_id : all_devices) {
         ClearNocData(device_id);
 
-        // TODO: as optimization, investigate removing all this call for already initialized devivces
-        if (!rtoptions_.get_skip_reset_cores_on_init()) {
-            reset_cores(device_id);
-        }
+        reset_cores(device_id);
 
         initialize_and_launch_firmware(device_id);
     }
@@ -226,6 +226,11 @@ void MetalContext::teardown() {
     // Set internal routing to false to exit active ethernet FW & go back to base FW
     cluster_->set_internal_routing_info_for_ethernet_cores(false);
 
+    if (data_collector_) {
+        data_collector_->DumpData();
+        data_collector_.reset();
+    }
+
     if (dprint_server_) {
         dprint_server_->detach_devices();
         dprint_server_.reset();
@@ -250,6 +255,7 @@ void MetalContext::teardown() {
             mem_map.reset();
         }
     }
+
     dispatch_query_manager_.reset();
     dispatch_core_manager_.reset();
     tt::tt_metal::reset_topology_state();
@@ -267,6 +273,13 @@ MetalContext& MetalContext::instance() {
     return inst.get();
 }
 
+void MetalContext::teardown_base_objects() {
+    // Teardown in backward order of dependencies to avoid dereferencing uninitialized objects
+    distributed_context_.reset();
+    cluster_.reset();
+    hal_.reset();
+}
+
 MetalContext::MetalContext() {
     // If a custom fabric mesh graph descriptor is specified as an RT Option, use it by default
     // to initialize the control plane.
@@ -274,12 +287,27 @@ MetalContext::MetalContext() {
         custom_mesh_graph_desc_path_ = rtoptions_.get_custom_fabric_mesh_graph_desc_path();
     }
 
-    bool is_base_routing_fw_enabled =
+    const bool is_base_routing_fw_enabled =
         Cluster::is_base_routing_fw_enabled(Cluster::get_cluster_type_from_cluster_desc(rtoptions_));
-    hal_ = std::make_unique<Hal>(get_platform_architecture(rtoptions_), is_base_routing_fw_enabled);
-    rtoptions_.ParseAllFeatureEnv(*hal_);
-    cluster_ = std::make_unique<Cluster>(rtoptions_, *hal_);
-    distributed_context_ = distributed::multihost::DistributedContext::get_current_world();
+    const auto platform_arch = get_platform_architecture(rtoptions_);
+
+    const auto initialize_objects = [&]() {
+        hal_ = std::make_unique<Hal>(platform_arch, is_base_routing_fw_enabled, rtoptions_.get_enable_2_erisc_mode());
+        rtoptions_.ParseAllFeatureEnv(*hal_);
+        cluster_ = std::make_unique<Cluster>(rtoptions_, *hal_);
+        distributed_context_ = distributed::multihost::DistributedContext::get_current_world();
+    };
+
+    initialize_objects();
+
+    // Requires reinit with features disabled
+    // This will maintain backward compatibility with clusters that have legacy firmware but it will cause a slowdown
+    // during the first init
+    if (!cluster_->verify_eth_fw_capability()) {
+        rtoptions_.set_enable_2_erisc_mode(false);
+        teardown_base_objects();
+        initialize_objects();
+    }
 
     // We do need to call Cluster teardown at the end of the program, use atexit temporarily until we have clarity on
     // how MetalContext lifetime will work through the API.
@@ -296,11 +324,7 @@ std::shared_ptr<distributed::multihost::DistributedContext> MetalContext::get_di
     return distributed_context_;
 }
 
-MetalContext::~MetalContext() {
-    distributed_context_.reset();
-    cluster_.reset();
-    hal_.reset();
-}
+MetalContext::~MetalContext() { teardown_base_objects(); }
 
 llrt::RunTimeOptions& MetalContext::rtoptions() { return rtoptions_; }
 
@@ -470,7 +494,8 @@ void MetalContext::set_fabric_config(
     const tt_fabric::FabricConfig fabric_config,
     tt_fabric::FabricReliabilityMode reliability_mode,
     std::optional<uint8_t> num_routing_planes,
-    tt_fabric::FabricTensixConfig fabric_tensix_config) {
+    tt_fabric::FabricTensixConfig fabric_tensix_config,
+    tt_fabric::FabricUDMMode fabric_udm_mode) {
     // Changes to fabric force a re-init. TODO: We should supply the fabric config in the same way as the dispatch
     // config, not through this function exposed in the detail API.
     force_reinit_ = true;
@@ -526,6 +551,7 @@ void MetalContext::set_fabric_config(
 
     // Set the fabric tensix config
     this->set_fabric_tensix_config(fabric_tensix_config);
+    this->fabric_udm_mode_ = fabric_udm_mode;
 }
 
 void MetalContext::initialize_fabric_config() {
@@ -563,6 +589,8 @@ void MetalContext::set_fabric_tensix_config(tt_fabric::FabricTensixConfig fabric
 
 tt_fabric::FabricTensixConfig MetalContext::get_fabric_tensix_config() const { return fabric_tensix_config_; }
 
+tt_fabric::FabricUDMMode MetalContext::get_fabric_udm_mode() const { return fabric_udm_mode_; }
+
 void MetalContext::construct_control_plane(const std::filesystem::path& mesh_graph_desc_path) {
     if (!logical_mesh_chip_id_to_physical_chip_id_mapping_.empty()) {
         log_info(tt::LogDistributed, "Using custom Fabric Node Id to physical chip mapping.");
@@ -587,21 +615,13 @@ void MetalContext::initialize_control_plane() {
         return;
     }
     log_debug(tt::LogDistributed, "Using default mesh graph descriptor.");
-
-    if (!rtoptions_.get_use_mesh_graph_descriptor_1_0()) {
-        log_debug(tt::LogDistributed, "Using MGD 2.0 mesh graph descriptor.");
-    } else {
-        log_debug(tt::LogDistributed, "Using MGD 1.0 mesh graph descriptor.");
-    }
+    log_debug(tt::LogDistributed, "Using MGD mesh graph descriptor.");
 
     auto cluster_type = cluster_->get_cluster_type();
     auto fabric_type = tt::tt_fabric::get_fabric_type(this->fabric_config_);
     std::filesystem::path mesh_graph_desc_path =
         tt::tt_fabric::MeshGraph::get_mesh_graph_descriptor_path_for_cluster_type(
-            cluster_type,
-            std::filesystem::path(rtoptions_.get_root_dir()),
-            !rtoptions_.get_use_mesh_graph_descriptor_1_0(),
-            fabric_type);
+            cluster_type, rtoptions_.get_root_dir(), fabric_type);
 
     log_debug(tt::LogMetal, "Using mesh graph descriptor: {}", mesh_graph_desc_path);
 

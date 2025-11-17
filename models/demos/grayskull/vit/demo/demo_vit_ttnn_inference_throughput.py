@@ -19,8 +19,8 @@ from models.common.utility_functions import (
     is_wormhole_b0,
     torch2tt_tensor,
 )
-from models.demos.vit.tt import ttnn_optimized_sharded_vit_gs
-from models.demos.wormhole.vit.demo.vit_helper_funcs import get_batch, get_data_loader
+from models.demos.grayskull.vit.tt import ttnn_optimized_sharded_vit_gs
+from models.demos.vit.tests.vit_helper_funcs import get_batch, get_data_loader
 from models.perf.perf_utils import prep_perf_report
 
 
