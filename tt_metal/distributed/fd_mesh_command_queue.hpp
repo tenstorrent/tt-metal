@@ -271,6 +271,9 @@ public:
     std::pair<bool, size_t> query_prefetcher_cache(uint64_t workload_id, uint32_t lengthB);
     void reset_prefetcher_cache_manager();
     int get_prefetcher_cache_sizeB() const;
+
+    void wait_for_completion(bool reset_launch_msg_state) override;
+    void finish_and_reset_in_use() override;
 };
 
 }  // namespace tt::tt_metal::distributed
