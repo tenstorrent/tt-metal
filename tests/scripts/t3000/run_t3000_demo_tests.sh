@@ -65,7 +65,11 @@ run_t3000_llama3_tests() {
 
   # Run all Llama3 tests for 8B, 1B, and 3B weights
   for hf_model in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
-    tt_cache=$TT_CACHE_HOME/$hf_model
+    if [[ "$hf_model" == "meta-llama/Llama-3.2-11B-Vision-Instruct" ]]; then
+      tt_cache=$TT_CACHE_HOME/$hf_model"_temp"
+    else
+      tt_cache=$TT_CACHE_HOME/$hf_model
+    fi
     HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1"; fail+=$?
     echo "LOG_METAL: Llama3 tests for $hf_model completed"
   done
@@ -167,7 +171,7 @@ run_t3000_llama3_vision_tests() {
 
   # Llama3.2-11B
   llama11b=meta-llama/Llama-3.2-11B-Vision-Instruct
-  tt_cache_llama11b=$TT_CACHE_HOME/$llama11b
+  tt_cache_llama11b=$TT_CACHE_HOME/$llama11b"_temp"
   n300=N300
   t3k=T3K
 
@@ -196,7 +200,7 @@ run_t3000_llama3_90b_vision_tests() {
 
   # Llama3.2-90B
   llama90b=meta-llama/Llama-3.2-90B-Vision-Instruct
-  tt_cache_llama90b=$TT_CACHE_HOME/$llama90b
+  tt_cache_llama90b=$TT_CACHE_HOME/$llama90b"_temp"
   mesh_device=T3K
 
   MESH_DEVICE=$mesh_device HF_MODEL=$llama90b TT_CACHE_PATH=$tt_cache_llama90b pytest -n auto models/tt_transformers/demo/simple_vision_demo.py -k "batch1-trace" --timeout 3000 || fail=1

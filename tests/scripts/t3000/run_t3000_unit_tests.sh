@@ -241,7 +241,7 @@ run_t3000_llama3.2-11b_tests() {
 
   # Llama3.2-11B weights
   llama11b=meta-llama/Llama-3.2-11B-Vision-Instruct
-  tt_cache_llama11b=$TT_CACHE_HOME/$llama11b
+  tt_cache_llama11b=$TT_CACHE_HOME/$llama11b"_temp"
 
   HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b pytest -n auto models/tt_transformers/tests/test_attention.py ; fail+=$?
   HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b pytest -n auto models/tt_transformers/tests/test_attention_prefill.py ; fail+=$?
@@ -298,7 +298,7 @@ run_t3000_llama3.2-90b_tests() {
   # Llama3.2-90B weights
   # use repacked weights to shorten unit test time by loading only the necessary weights
   llama90b=meta-llama/Llama-3.2-90B-Vision-Instruct
-  tt_cache_llama90b=$TT_CACHE_HOME/$llama90b
+  tt_cache_llama90b=$TT_CACHE_HOME/$llama90b"_temp"
 
   HF_MODEL=$llama90b TT_CACHE_PATH=$tt_cache_llama90b pytest -n auto models/tt_transformers/tests/test_attention.py ; fail+=$?
   HF_MODEL=$llama90b TT_CACHE_PATH=$tt_cache_llama90b pytest -n auto models/tt_transformers/tests/test_attention_prefill.py ; fail+=$?
@@ -344,7 +344,7 @@ run_t3000_llama3.2-11b-vision_unit_tests() {
 
   # Llama3.2-11B
   llama11b=meta-llama/Llama-3.2-11B-Vision-Instruct
-  tt_cache_llama11b=$TT_CACHE_HOME/$llama11b
+  tt_cache_llama11b=$TT_CACHE_HOME/$llama11b"_temp"
 
   HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_mlp.py ; fail+=$?
   HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_attention.py ; fail+=$?
@@ -374,7 +374,7 @@ run_t3000_spoof_n300_llama3.2-11b-vision_unit_tests() {
 
   # Llama3.2-11B
   llama11b=meta-llama/Llama-3.2-11B-Vision-Instruct
-  tt_cache_llama11b=$TT_CACHE_HOME/$llama11b
+  tt_cache_llama11b=$TT_CACHE_HOME/$llama11b"_temp"
   # Use MESH_DEVICE env variable to run on an N300 mesh
   mesh_device=N300
 
@@ -406,7 +406,7 @@ run_t3000_llama3.2-90b-vision_unit_tests() {
 
   # use repacked weights to shorten unit test time by loading only the necessary weights
   llama90b=meta-llama/Llama-3.2-90B-Vision-Instruct
-  tt_cache_llama90b=$TT_CACHE_HOME/$llama90b
+  tt_cache_llama90b=$TT_CACHE_HOME/$llama90b"_temp"
 
   HF_MODEL=$llama90b TT_CACHE_PATH=$tt_cache_llama90b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_mlp.py ; fail+=$?
   HF_MODEL=$llama90b TT_CACHE_PATH=$tt_cache_llama90b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_attention.py ; fail+=$?
