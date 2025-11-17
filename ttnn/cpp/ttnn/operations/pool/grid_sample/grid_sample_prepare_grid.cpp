@@ -13,6 +13,7 @@
 #include <cmath>
 #include <algorithm>
 #include <vector>
+#include <cstdint>
 
 namespace ttnn {
 namespace operations {
@@ -79,16 +80,9 @@ tt::tt_metal::HostBuffer create_host_buffer_for_grid_preprocessing(
                 float w_coord_image = ((x_coord + 1.0f) * width_scale) + width_offset;
 
                 if (mode == "nearest") {
-                    // For nearest neighbor: use round() for align_corners=True, floor(coord + 0.5) for
-                    // align_corners=False
-                    int32_t h_nearest, w_nearest;
-                    if (align_corners) {
-                        h_nearest = static_cast<int32_t>(std::round(h_coord_image));
-                        w_nearest = static_cast<int32_t>(std::round(w_coord_image));
-                    } else {
-                        h_nearest = static_cast<int32_t>(std::floor(h_coord_image + 0.5f));
-                        w_nearest = static_cast<int32_t>(std::floor(w_coord_image + 0.5f));
-                    }
+                    // For nearest neighbor: PyTorch uses nearbyint() for both align_corners modes
+                    int32_t h_nearest = static_cast<int32_t>(std::nearbyint(h_coord_image));
+                    int32_t w_nearest = static_cast<int32_t>(std::nearbyint(w_coord_image));
 
                     // Check if coordinates are valid - proper pixel bounds
                     bool h_valid = (h_nearest >= 0) && (h_nearest < static_cast<int32_t>(input_h));
