@@ -50,12 +50,23 @@ void test_send_recv_async_(
         .fifo_size = socket_fifo_size,
     };
 
+    // For single-host sockets, ranks must still be set (even though both devices are on same host)
+    // because send_async/recv_async create MeshSocket objects internally which require different ranks
     distributed::SocketConfig socket_config = {
-        .socket_connection_config = socket_connections, .socket_mem_config = socket_mem_config};
+        .socket_connection_config = socket_connections,
+        .socket_mem_config = socket_mem_config,
+        .sender_rank = distributed::multihost::Rank{0},
+        .receiver_rank = distributed::multihost::Rank{1}};
     // Initialize socket pairs - this performs all the side effects needed for socket communication
     // (creates buffers, generates descriptors, writes configs) without requiring MeshSocket objects
     distributed::initialize_socket_pair(md0, md1, socket_config);
-    distributed::initialize_socket_pair(md1, md0, socket_config);
+    // For reverse direction, swap the ranks
+    distributed::SocketConfig reverse_socket_config = {
+        .socket_connection_config = socket_connections,
+        .socket_mem_config = socket_mem_config,
+        .sender_rank = distributed::multihost::Rank{1},
+        .receiver_rank = distributed::multihost::Rank{0}};
+    distributed::initialize_socket_pair(md1, md0, reverse_socket_config);
     const auto& input_shape = tensor_spec.logical_shape();
     const auto& memory_config = tensor_spec.memory_config();
     uint32_t num_elems = input_shape.volume();
@@ -84,8 +95,8 @@ void test_send_recv_async_(
     auto md0_inc_output_tensor = tt::tt_metal::allocate_tensor_on_device(
         TensorSpec(input_shape, tt::tt_metal::TensorLayout(dtype, tt::tt_metal::PageConfig(layout), memory_config)),
         md0.get());
-    ttnn::experimental::send_async(md1_inc_output_tensor, md1, socket_config);
-    ttnn::experimental::recv_async(md0_inc_output_tensor, md0, socket_config);
+    ttnn::experimental::send_async(md1_inc_output_tensor, md1, reverse_socket_config);
+    ttnn::experimental::recv_async(md0_inc_output_tensor, md0, reverse_socket_config);
     distributed::Synchronize(md1.get(), std::nullopt);
     distributed::Synchronize(md0.get(), std::nullopt);
     auto md0_inc_output_data = ttnn::distributed::aggregate_tensor(md0_inc_output_tensor, *md0_composer).to_vector<T>();

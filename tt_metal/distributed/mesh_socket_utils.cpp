@@ -562,6 +562,15 @@ void connect_socket_with_peer(
     const std::shared_ptr<multihost::DistributedContext>& context) {
     auto distributed_context = context ? context : multihost::DistributedContext::get_current_world();
 
+    // Validate that ranks are set before using them
+    // For multi-host communication, both ranks must be explicitly set and different
+    TT_FATAL(
+        config.sender_rank != config.receiver_rank,
+        "Socket config ranks must be explicitly set and different for multi-host communication. "
+        "sender_rank: {}, receiver_rank: {}",
+        *config.sender_rank,
+        *config.receiver_rank);
+
     // Generate local endpoint descriptor
     auto local_endpoint_desc = generate_local_endpoint_descriptor(
         config_buffer, data_buffer, config, socket_endpoint, distributed_context->id());
@@ -594,6 +603,15 @@ void initialize_socket_connection(
     const SocketConfig& config,
     const std::shared_ptr<multihost::DistributedContext>& context) {
     auto distributed_context = context ? context : multihost::DistributedContext::get_current_world();
+
+    // Validate that ranks are set before using them
+    // For multi-host communication, both ranks must be explicitly set and different
+    TT_FATAL(
+        config.sender_rank != config.receiver_rank,
+        "Socket config ranks must be explicitly set and different for multi-host communication. "
+        "sender_rank: {}, receiver_rank: {}",
+        *config.sender_rank,
+        *config.receiver_rank);
 
     if (!(distributed_context->rank() == config.sender_rank || distributed_context->rank() == config.receiver_rank)) {
         log_warning(
