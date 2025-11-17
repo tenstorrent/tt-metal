@@ -1108,7 +1108,7 @@ KernelHandle CreateEthernetKernel(
     // |                | Valid NOC Configuration     |                             |
     // |----------------|-----------------------------|-----------------------------|
     // | **ERISC Mode** | **Physical ERISC0**         | **Physical ERISC1**         |
-    // | Single         | Not enabled for dispatch    | Dedicated NOC1, Dynamic NOC |
+    // | Single         | Not enabled for dispatch    | Dedicated NOC1              |
     // | Dual           | Dedicated NOC0, Dynamic NOC | Dedicated NOC1, Dynamic NOC |
     //
     if (!tt::tt_metal::MetalContext::instance().hal().get_eth_fw_is_cooperative() && config.eth_mode != Eth::IDLE &&
@@ -1122,14 +1122,14 @@ KernelHandle CreateEthernetKernel(
             if (is_erisc0) {
                 TT_FATAL(
                     config.noc == NOC::NOC_0,
-                    "EthernetKernel creation failure: In dual ERISC mode, ERISC0 must use NOC0 in dedicated mode. "
+                    "EthernetKernel creation failure: In dual ERISC mode, ERISC0 in dedicated mode must use NOC0. "
                     "Kernel: {}, Current NOC: {}, Required NOC: NOC_0. Use Dynamic NOC mode for flexible routing.",
                     kernel->name(),
                     config.noc);
             } else if (is_erisc1) {
                 TT_FATAL(
                     config.noc == NOC::NOC_1,
-                    "EthernetKernel creation failure: In dual ERISC mode, ERISC1 must use NOC1 in dedicated mode. "
+                    "EthernetKernel creation failure: In dual ERISC mode, ERISC1 in dedicated mode must use NOC1. "
                     "Kernel: {}, Current NOC: {}, Required NOC: NOC_1. Use Dynamic NOC mode for flexible routing.",
                     kernel->name(),
                     config.noc);
@@ -1138,11 +1138,22 @@ KernelHandle CreateEthernetKernel(
             // ERISC1 must use NOC1 in dedicated mode
             TT_FATAL(
                 config.noc == NOC::NOC_1,
-                "EthernetKernel creation failure: In single ERISC mode, ERISC1 must use NOC1 in dedicated mode. "
-                "Kernel: {}, Current NOC: {}, Required NOC: NOC_1. Use Dynamic NOC mode for flexible routing.",
+                "EthernetKernel creation failure: In single ERISC mode, ERISC0 must use NOC1. "
+                "Kernel: {}, Current NOC: {}, Required NOC: NOC_1.",
                 kernel->name(),
                 config.noc);
         }
+    }
+
+    // Dynamic noc is not supported on single erisc mode
+    if (!tt::tt_metal::MetalContext::instance().hal().get_eth_fw_is_cooperative() &&
+        !tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode()) {
+        TT_FATAL(
+            config.noc_mode == NOC_MODE::DM_DEDICATED_NOC,
+            "EthernetKernel creation failure: Dynamic NOC is not supported on single ERISC mode. "
+            "Kernel: {}, Current NOC Mode: {}, Required NOC Mode: DM_DEDICATED_NOC.",
+            kernel->name(),
+            config.noc_mode);
     }
 
     if (tt::tt_metal::MetalContext::instance().hal().get_eth_fw_is_cooperative()) {

@@ -293,6 +293,7 @@ FORCE_INLINE bool is_link_up() {
 }
 
 FORCE_INLINE void base_fw_dynamic_noc_local_state_init() {
+    // Reinitialize the dynamic NOC counters in base firmware
 #if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 1)
     constexpr uint32_t risc1_mailbox_addr = MEM_SYSENG_ETH_MAILBOX_ADDR + (MAILBOX_RISC1 * sizeof(eth_mailbox_t));
 
