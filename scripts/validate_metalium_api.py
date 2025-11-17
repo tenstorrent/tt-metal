@@ -1,8 +1,3 @@
-#!/usr/bin/env python3
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
-
-# SPDX-License-Identifier: Apache-2.0
-
 import os
 import re
 import sys
@@ -111,15 +106,12 @@ STD_HEADERS = {
     "vector",
     "version",
     # C library headers (C++ style)
-    "cctype",
     "cerrno",
     "cfenv",
     "cfloat",
     "cinttypes",
     "ciso646",
-    "climits",
     "clocale",
-    "cmath",
     "csetjmp",
     "csignal",
     "cstdarg",
@@ -158,21 +150,6 @@ STD_HEADERS = {
     "wchar.h",
     "wctype.h",
     "unistd.h",
-    # Common system / platform headers
-    "cxxabi.h",
-    "execinfo.h",
-    "dlfcn.h",
-    "pthread.h",
-    "sys/types.h",
-    "sys/stat.h",
-    "sys/mman.h",
-    "sys/time.h",
-    "sys/wait.h",
-    "sys/socket.h",
-    "netinet/in.h",
-    "arpa/inet.h",
-    "netdb.h",
-    "fcntl.h",
 }
 
 # Regex patterns
@@ -184,7 +161,7 @@ used_prefix_counts = defaultdict(int)
 
 
 def is_standard_include(include: str) -> bool:
-    return "/" not in include and include in STD_HEADERS
+    return include in STD_HEADERS
 
 
 def is_valid_include(include: str) -> bool:
