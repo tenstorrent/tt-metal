@@ -222,8 +222,8 @@ def export_suite_vectors_json(module_name, suite_name, vectors):
             logger.warning(f"Failed to read existing file {EXPORT_PATH}: {e}. Will overwrite after backup if possible.")
             try:
                 _backup_corrupted_json_file(EXPORT_PATH)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Failed to backup corrupted JSON file {EXPORT_PATH}: {e}. Will overwrite after backup.")
             existing_data = {}
         except Exception as e:
             logger.warning(f"Unexpected error reading existing file {EXPORT_PATH}: {e}. Will overwrite after backup.")
@@ -275,6 +275,7 @@ def export_suite_vectors_json(module_name, suite_name, vectors):
             try:
                 tmp_path.unlink()
             except OSError:
+                # It's safe to ignore errors when deleting the temporary file (file may not exist)
                 pass
 
 
