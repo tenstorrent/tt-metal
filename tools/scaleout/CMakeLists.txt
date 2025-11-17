@@ -141,7 +141,6 @@ set_target_properties(
 )
 
 add_dependencies(generate_mgd scaleout_generated_protos)
-add_dependencies(generate_mgd fabric_generated_protos)
 
 target_include_directories(generate_mgd PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(generate_mgd SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
@@ -151,5 +150,6 @@ target_link_libraries(
     generate_mgd
     PRIVATE
         scaleout_tools
+        TT::Metalium::Fabric
         protobuf::libprotobuf
 )
