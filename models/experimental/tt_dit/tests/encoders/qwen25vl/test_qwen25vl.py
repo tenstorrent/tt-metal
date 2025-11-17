@@ -46,7 +46,8 @@ def test_qwen25vl_text_encoder(
     torch_text_model = torch_model.model.language_model
 
     remove_layers = 0
-    del torch_text_model.layers[-remove_layers:]
+    if remove_layers > 0:
+        del torch_text_model.layers[-remove_layers:]
 
     model = Qwen25VlTextEncoder(
         vocab_size=torch_model.config.vocab_size,
