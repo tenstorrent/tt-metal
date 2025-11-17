@@ -6,7 +6,7 @@
 
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
-#include <pinned_memory.hpp>
+#include <api/tt-metalium/experimental/pinned_memory.hpp>
 #include <optional>
 
 #include "buffer.hpp"
