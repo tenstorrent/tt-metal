@@ -205,29 +205,20 @@ class Qwen25VlAttention(Module):
         head_dim = hidden_size // num_heads
         tp_factor = ctx.device.shape[ctx.tp_axis] if ctx.tp_axis is not None and self._qkv_parallel else 1
 
-        repeat_kv_heads = 1
-        # f = num_heads // num_key_value_heads
-        # num_additional_heads = math.inf
-        # repeat_kv_heads = 1
-        # for a in range(1, f + 1):
-        #     if f % a != 0:
-        #         continue
-        #     pad, pad_kv = _num_head_padding(num_heads, num_key_value_heads * a, tp_factor)
-        #     value = pad + pad_kv + (a - 1) * num_key_value_heads
-        #     if value < num_additional_heads:
-        #         num_additional_heads = value
-        #         repeat_kv_heads = a
+        group_size = num_heads // num_key_value_heads
+        group_count = num_key_value_heads
 
-        # pad, pad_kv = _num_head_padding(num_heads, num_key_value_heads * repeat_kv_heads, tp_factor)
+        opt_group_count, opt_group_size, repeat_kv_heads = optimal_groups(group_count, group_size, tp_factor)
+        padded_heads = opt_group_count * opt_group_size
 
         self.qkv_proj = ColParallelLinear(
             hidden_size,
-            (num_heads + 2 * num_key_value_heads * repeat_kv_heads) * head_dim,
+            (padded_heads + 2 * opt_group_count) * head_dim,
             mesh_device=ctx.device,
             mesh_axis=ctx.tp_axis if self._qkv_parallel else None,
         )
         self.o_proj = ColParallelLinear(
-            num_heads * head_dim, hidden_size, bias=False, mesh_device=ctx.device, mesh_axis=ctx.tp_axis
+            padded_heads * head_dim, hidden_size, bias=False, mesh_device=ctx.device, mesh_axis=ctx.tp_axis
         )
 
         grid_size = ctx.device.compute_with_storage_grid_size()
@@ -251,44 +242,65 @@ class Qwen25VlAttention(Module):
         )  # TODO: bloat4_b?
 
         self._head_dim = head_dim
+        self._num_kv_heads = group_count
+        self._group_size = group_size
         self._mrope_section = mrope_section
-        self._num_local_heads = num_heads // tp_factor
-        self._num_local_kv_heads = repeat_kv_heads * num_key_value_heads // tp_factor
+        self._num_local_heads = padded_heads // tp_factor
+        self._num_local_kv_heads = opt_group_count // tp_factor
+        self._group_size_padding = opt_group_size * repeat_kv_heads - group_size
+        self._group_count_padding = opt_group_count // repeat_kv_heads - group_count
         self._repeat_kv_heads = repeat_kv_heads
         self._tp_axis = ctx.tp_axis
         self._tp_factor = tp_factor
         self._ccl_manager = ctx.ccl_manager
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        def _merge_tensors(q: ttnn.Tensor, k: ttnn.Tensor, v: ttnn.Tensor) -> ttnn.Tensor:
-            # if self.padding_config is not None:
-            #     q = pad_weight_tensor(q, self.padding_config, pad_output_dim=True)
-            #     k = pad_weight_tensor(k, self.padding_config, pad_output_dim=True)
-            #     v = pad_weight_tensor(v, self.padding_config, pad_output_dim=True)
+        def _prepare_qkv(q: ttnn.Tensor, k: ttnn.Tensor, v: ttnn.Tensor) -> ttnn.Tensor:
+            # k = k.unflatten(0, [2, -1]).transpose(0, 1).flatten(0, 1)
+            # q = q.unflatten(0, [2, -1]).transpose(0, 1).flatten(0, 1)
 
-            # q = q.unflatten(0, [self._num_heads, 2, self._head_dim // 2]).transpose(1, 2).flatten(0, 2)
-            # k = k.unflatten(0, [self._num_kv_heads, 2, self._head_dim // 2]).transpose(1, 2).flatten(0, 2)
+            q = q.unflatten(0, [self._num_kv_heads, self._group_size, self._head_dim])
+            k = k.unflatten(0, [self._num_kv_heads, 1, self._head_dim])
+            v = v.unflatten(0, [self._num_kv_heads, 1, self._head_dim])
 
             # repeat KV heads
             n = self._repeat_kv_heads
-            k = k.unflatten(0, [-1, self._head_dim]).repeat_interleave(n, dim=0).flatten(0, 1)
-            v = v.unflatten(0, [-1, self._head_dim]).repeat_interleave(n, dim=0).flatten(0, 1)
+            k = k.repeat_interleave(n, dim=1)
+            v = v.repeat_interleave(n, dim=1)
+
+            # pad
+            q = _pad(q, self._group_size_padding, dim=1)
+            q = _pad(q, self._group_count_padding, dim=0)
+            k = _pad(k, self._group_count_padding, dim=0)
+            v = _pad(v, self._group_count_padding, dim=0)
 
             # fuse
-            q = q.unflatten(0, [self._tp_factor, self._num_local_heads, self._head_dim])
-            k = k.unflatten(0, [self._tp_factor, self._num_local_kv_heads, self._head_dim])
-            v = v.unflatten(0, [self._tp_factor, self._num_local_kv_heads, self._head_dim])
+            q = q.flatten(0, 1).unflatten(0, [self._tp_factor, self._num_local_heads])
+            k = k.flatten(0, 1).unflatten(0, [self._tp_factor, self._num_local_kv_heads])
+            v = v.flatten(0, 1).unflatten(0, [self._tp_factor, self._num_local_kv_heads])
+
             return torch.cat([q, k, v], dim=1).flatten(0, 2)
 
         if "q_proj.weight" in state and "k_proj.weight" in state and "v_proj.weight" in state:
-            state["qkv_proj.weight"] = _merge_tensors(
+            state["qkv_proj.weight"] = _prepare_qkv(
                 state.pop("q_proj.weight"), state.pop("k_proj.weight"), state.pop("v_proj.weight")
             )
 
         if "q_proj.bias" in state and "k_proj.bias" in state and "v_proj.bias" in state:
-            state["qkv_proj.bias"] = _merge_tensors(
-                state.pop("q_proj.bias"), state.pop("k_proj.bias"), state.pop("v_proj.bias")
-            )
+            state["qkv_proj.bias"] = _prepare_qkv(
+                state.pop("q_proj.bias").unsqueeze(1),
+                state.pop("k_proj.bias").unsqueeze(1),
+                state.pop("v_proj.bias").unsqueeze(1),
+            ).squeeze(1)
+
+        if "o_proj.weight" in state:
+            o = state["o_proj.weight"]
+
+            o = o.unflatten(1, [self._num_kv_heads, self._group_size, self._head_dim])
+            o = _pad(o, self._group_size_padding, dim=2)
+            o = _pad(o, self._group_count_padding, dim=1)
+
+            state["o_proj.weight"] = o.flatten(1, 3)
 
     def forward(
         self,
@@ -413,3 +425,42 @@ def _rotate_half(x: ttnn.Tensor) -> ttnn.Tensor:
     x1 = x[..., : x.shape[-1] // 2]
     x2 = x[..., x.shape[-1] // 2 :]
     return ttnn.concat([ttnn.neg(x2), x1], dim=-1)
+
+
+def optimal_groups(group_count: int, group_size: int, device_count: int) -> tuple[int, int, int]:
+    # In order to distribute heads evenly on devices, three operations are possibly performed:
+    # 1. Pad heads to increase group size.
+    # 2. Pad heads to increase group count (= number of key/value heads).
+    # 3. Split groups into smaller groups defined by a split factor.
+    # For a particular split factor, padding sizes follow from the requirements that the new group
+    # size must be divisible by this factor and the new group count must be divisible by the device
+    # count. We choose this factor such that memory requirments are minimized.
+
+    best_split_factor = 1
+    best_size = math.inf
+    best_group_count = group_count
+    best_group_size = group_size
+
+    for split_factor in range(1, device_count + 1):
+        f = device_count // math.gcd(split_factor, device_count)
+
+        new_group_size = -(-group_size // split_factor)
+        new_group_count = split_factor * (-(-group_count // f)) * f
+
+        # query heads + 2 * key/value heads
+        size = new_group_size * new_group_count + 2 * new_group_count
+
+        if size < best_size:
+            best_size = size
+            best_split_factor = split_factor
+            best_group_count = new_group_count
+            best_group_size = new_group_size
+
+    return best_group_count, best_group_size, best_split_factor
+
+
+def _pad(t: torch.Tensor, amount: int, *, dim: int) -> torch.Tensor:
+    """Pad tensor with `amount` zeros on the end of dimension `dim`."""
+    padding = [0] * (2 * t.ndim)
+    padding[-(dim * 2 + 1)] = amount
+    return torch.nn.functional.pad(t, padding)
