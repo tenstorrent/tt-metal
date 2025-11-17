@@ -23,12 +23,13 @@ from ttexalens.context import Context
 from ttexalens.tt_exalens_lib import read_word_from_device
 from ttexalens.elf import MemoryAccess
 from inspector_data import run as get_inspector_data, InspectorData
+from device_id_mapping import run as get_device_id_mapping, DeviceIdMapping
 from typing import Optional, Any
 
 # Dumping dispatch debug information for triage purposes
 # Shows dispatcher core info and purpose to help with issue diagnosis
 script_config = ScriptConfig(
-    depends=["run_checks", "dispatcher_data", "elfs_cache", "inspector_data"],
+    depends=["run_checks", "dispatcher_data", "elfs_cache", "inspector_data", "device_id_mapping"],
 )
 
 
@@ -113,19 +114,15 @@ class MultiCategoryCoreLookup:
 
 
 # This function builds a lookup map for core info for a given kernel name
-def build_core_lookup_map(inspector_data: InspectorData) -> dict[tuple[int, int, int], MultiCategoryCoreLookup]:
+def build_core_lookup_map(
+    inspector_data: InspectorData, device_id_mapping: DeviceIdMapping
+) -> dict[tuple[int, int, int], MultiCategoryCoreLookup]:
     """
     Build lookup map for core info for a given kernel name using unique_id as chip key.
 
     Returns a dictionary mapping (unique_id, x, y) to a MultiCategoryCoreLookup object
     MultiCategoryCoreLookup object contains dispatch_info, dispatch_s_info, and prefetch_info
     """
-    # Get chip_id to unique_id mapping from Inspector RPC
-    chip_id_to_unique_id: dict[int, int] = {}
-    unique_ids_result = inspector_data.getChipUniqueIds()
-    for mapping in unique_ids_result.mappings:
-        chip_id_to_unique_id[mapping.chipId] = mapping.uniqueId
-
     # Get all core info from inspector data
     all_cores = inspector_data.getAllDispatchCoreInfos()
 
@@ -140,7 +137,7 @@ def build_core_lookup_map(inspector_data: InspectorData) -> dict[tuple[int, int,
         for core_entry in category_group.entries:
             # core_entry.key.chip is logical device_id - convert to unique_id
             logical_chip_id = core_entry.key.chip
-            unique_id = chip_id_to_unique_id[logical_chip_id]
+            unique_id = device_id_mapping.chip_id_to_unique_id(logical_chip_id)
 
             # Use unique_id as the key
             key = (unique_id, core_entry.key.x, core_entry.key.y)
@@ -298,10 +295,11 @@ def run(args, context: Context):
     dispatcher_data = get_dispatcher_data(args, context)
     elfs_cache = get_elfs_cache(args, context)
 
-    # Get inspector data
+    # Get inspector data and device ID mapping
     inspector_data = get_inspector_data(args, context)
+    device_id_mapping = get_device_id_mapping(args, context)
     # Build lookup map for core info for a given kernel name
-    core_lookup = build_core_lookup_map(inspector_data)
+    core_lookup = build_core_lookup_map(inspector_data, device_id_mapping)
 
     # Build dispatch_core_pairs by finding all RISC cores with dispatcher kernels
     dispatch_core_pairs = []
