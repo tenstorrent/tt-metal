@@ -177,7 +177,7 @@ public:
                                      params.processor_class == HalProcessorClassType::COMPUTE
                                  ? "-mcpu=tt-bh-tensix "
                                  : "-mcpu=tt-bh ";
-        cflags += "-fno-rvtt-sfpu-replay ";
+        cflags += "-mno-tt-tensix-optimize-replay ";
         if (!(params.core_type == HalProgrammableCoreType::TENSIX &&
               params.processor_class == HalProcessorClassType::COMPUTE)) {
             cflags += "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
