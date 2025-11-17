@@ -480,7 +480,7 @@ int main(int argc, char** argv) {
     // sizes are in terms of tiles (32x32)
 
     // Passing sweep
-    std::vector<uint32_t> q_chunk_sizes = {1};
+    std::vector<uint32_t> q_chunk_sizes = {1, 2};
     std::vector<uint32_t> k_chunk_sizes = {1, 2, 4, 8, 16};
     std::vector<uint32_t> head_dim_sizes = {1, 2, 4};
 
