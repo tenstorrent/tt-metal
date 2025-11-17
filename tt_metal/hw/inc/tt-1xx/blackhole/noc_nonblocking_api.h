@@ -21,7 +21,10 @@ constexpr std::underlying_type_t<TensixProcessorTypes> proc_type =
 #elif defined(COMPILE_FOR_NCRISC)
 constexpr std::underlying_type_t<TensixProcessorTypes> proc_type =
     static_cast<std::underlying_type_t<TensixProcessorTypes>>(TensixProcessorTypes::DM1);
-#elif defined(COMPILE_FOR_AERISC) || defined(COMPILE_FOR_IDLE_ERISC)
+#elif defined(COMPILE_FOR_AERISC)
+constexpr std::underlying_type_t<EthProcessorTypes> proc_type =
+    static_cast<std::underlying_type_t<EthProcessorTypes>>(PHYSICAL_AERISC_ID);
+#elif defined(COMPILE_FOR_IDLE_ERISC)
 constexpr std::underlying_type_t<EthProcessorTypes> proc_type =
     static_cast<std::underlying_type_t<EthProcessorTypes>>(PROCESSOR_INDEX);
 #elif defined(COMPILE_FOR_TRISC)
@@ -30,8 +33,8 @@ constexpr std::underlying_type_t<TensixProcessorTypes> proc_type =
     static_cast<std::underlying_type_t<TensixProcessorTypes>>(TensixProcessorTypes::DM1);
 #else
 // Lite Fabric compile
-constexpr std::underlying_type_t<TensixProcessorTypes> proc_type =
-    static_cast<std::underlying_type_t<TensixProcessorTypes>>(TensixProcessorTypes::DM1);
+constexpr std::underlying_type_t<EthProcessorTypes> proc_type =
+    static_cast<std::underlying_type_t<EthProcessorTypes>>(EthProcessorTypes::DM1);
 #endif
 
 // Helper functions to convert NoC coordinates to NoC-0 coordinates, used in metal as "physical" coordinates.
@@ -104,6 +107,7 @@ struct NocBarrierCounter {
     RiscBarrierCounter noc[NUM_NOCS];
 };
 
+// Must update the allocated size for the counters in dev_mem_map.h AND base FW if this changes
 static_assert(sizeof(NocBarrierCounter) == 80, "NocBarrierCounter size is not 80 bytes");
 
 template <uint8_t proc_t, NocBarrierType barrier_type>
@@ -587,14 +591,6 @@ inline __attribute__((always_inline)) void dynamic_noc_local_barrier_init(
 }
 
 inline __attribute__((always_inline)) void dynamic_noc_local_state_init() {
-    // Active ERISC specific behavior
-    // This function should only be called from the (primary) active erisc.
-    // When the active_erisc is running on ERISC1 (Single ERISC mode), base firmware is running concurrently on ERISC0
-    // and we should delegate the execution to base firmware and stall until it completes.
-    //
-#if defined(COMPILE_FOR_AERISC)
-    base_fw_dynamic_noc_local_state_init();
-#else
     // Pipeline all register reads first to hide latency
     uint32_t noc0_reads_num_issued = NOC_STATUS_READ_REG(NOC_0, NIU_MST_RD_RESP_RECEIVED);
     uint32_t noc1_reads_num_issued = NOC_STATUS_READ_REG(NOC_1, NIU_MST_RD_RESP_RECEIVED);
@@ -616,7 +612,6 @@ inline __attribute__((always_inline)) void dynamic_noc_local_state_init() {
         noc0_nonposted_atomics_acked, noc1_nonposted_atomics_acked);
     dynamic_noc_local_barrier_init<NocBarrierType::POSTED_WRITES_NUM_ISSUED, NIU_MST_POSTED_WR_REQ_SENT>(
         noc0_posted_writes_num_issued, noc1_posted_writes_num_issued);
-#endif
 }
 
 template <uint8_t MAX_NOCS_TO_INIT = NUM_NOCS>

@@ -87,6 +87,7 @@ struct NocBarrierCounter {
     RiscBarrierCounter noc[NUM_NOCS];
 };
 
+// Must update the allocated size for the counters in dev_mem_map.h if this changes
 static_assert(sizeof(NocBarrierCounter) == 80, "NocBarrierCounter size is not 80 bytes");
 
 template <uint8_t proc_t, NocBarrierType barrier_type>

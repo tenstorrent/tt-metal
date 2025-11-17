@@ -26,8 +26,8 @@ constexpr std::underlying_type_t<TensixProcessorTypes> proc_type =
     static_cast<std::underlying_type_t<TensixProcessorTypes>>(TensixProcessorTypes::DM1);
 #else
 // Lite Fabric compile
-constexpr std::underlying_type_t<TensixProcessorTypes> proc_type =
-    static_cast<std::underlying_type_t<TensixProcessorTypes>>(TensixProcessorTypes::DM1);
+constexpr std::underlying_type_t<EthProcessorTypes> proc_type =
+    static_cast<std::underlying_type_t<EthProcessorTypes>>(EthProcessorTypes::DM1);
 #endif
 
 // Helper functions to convert NoC coordinates to NoC-0 coordinates, used in metal as "physical" coordinates.
@@ -100,6 +100,7 @@ struct NocBarrierCounter {
     RiscBarrierCounter noc[NUM_NOCS];
 };
 
+// Must update the allocated size for the counters in dev_mem_map.h if this changes
 static_assert(sizeof(NocBarrierCounter) == 80, "NocBarrierCounter size is not 80 bytes");
 
 template <uint8_t proc_t, NocBarrierType barrier_type>
