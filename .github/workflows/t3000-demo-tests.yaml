@@ -6,8 +6,8 @@ on:
       model:
         description: "Select model to test"
         required: true
-        default: all
         type: choice
+        default: all
         options:
           - all
           - mixtral
