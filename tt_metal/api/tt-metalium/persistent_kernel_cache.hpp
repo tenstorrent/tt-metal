@@ -15,12 +15,4 @@ namespace tt::tt_metal::detail {
 [[deprecated("Persistent kernel cache is no longer needed as the JIT build system now supports caching by default.  This API will be removed after December 11, 2025.")]]
 void EnablePersistentKernelCache();
 
-/**
- * Disables kernel compilation cache from being persistent across runs.
- *
- * Return value: void
- */
-[[deprecated("Persistent kernel cache is no longer needed as the JIT build system now supports caching by default.  This API will be removed after December 11, 2025.")]]
-void DisablePersistentKernelCache();
-
 }  // namespace tt::tt_metal::detail
