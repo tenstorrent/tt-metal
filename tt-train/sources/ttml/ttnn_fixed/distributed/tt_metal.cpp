@@ -41,7 +41,7 @@ void enable_fabric(uint32_t num_devices) {
         }
     }
 
-    tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
+    tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_2D);
 }
 
 }  // namespace ttml::ttnn_fixed::distributed

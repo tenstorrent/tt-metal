@@ -29,33 +29,33 @@ namespace tt::umd {
 
 class Cluster;
 
-}   // namespace tt::umd
+}  // namespace tt::umd
 
 namespace tt::tt_fabric {
 
 class TopologyMapper;
 
 // TODO: remove this once UMD provides API for UBB ID and bus ID
- struct UbbId {
-     std::uint32_t tray_id;
-     std::uint32_t asic_id;
- };
+struct UbbId {
+    std::uint32_t tray_id;
+    std::uint32_t asic_id;
+};
 
- uint16_t get_bus_id(tt::umd::Cluster& cluster, ChipId chip_id);
- UbbId get_ubb_id(tt::umd::Cluster& cluster, ChipId chip_id);
+uint16_t get_bus_id(tt::umd::Cluster& cluster, ChipId chip_id);
+UbbId get_ubb_id(tt::umd::Cluster& cluster, ChipId chip_id);
 
- class FabricContext;
+class FabricContext;
 
- // This struct provides information for how a process binds to a particular
- // mesh and local mesh rank (MeshHostRankId rename - #24178) in the mesh graph
- // descriptor.
- struct LocalMeshBinding {
-     // Can bind multiple meshes to a single host. Most use-cases
-     // only require a 1:1 host to mesh mapping. At least one mesh_id
-     // is guaranteed to be present in this vector.
-     std::vector<MeshId> mesh_ids;
-     MeshHostRankId host_rank;
- };
+// This struct provides information for how a process binds to a particular
+// mesh and local mesh rank (MeshHostRankId rename - #24178) in the mesh graph
+// descriptor.
+struct LocalMeshBinding {
+    // Can bind multiple meshes to a single host. Most use-cases
+    // only require a 1:1 host to mesh mapping. At least one mesh_id
+    // is guaranteed to be present in this vector.
+    std::vector<MeshId> mesh_ids;
+    MeshHostRankId host_rank;
+};
 
 // In multi-host context, APIs parameterized with MeshScope, can return
 // results for local mesh or global mesh.
@@ -174,6 +174,11 @@ public:
     // TODO: remove this converter, we should consolidate the directions here
     eth_chan_directions routing_direction_to_eth_direction(RoutingDirection direction) const;
 
+    // Return ethernet channels on a chip that face external meshes (inter-mesh exit nodes)
+    std::vector<chan_id_t> get_intermesh_facing_eth_chans(FabricNodeId fabric_node_id) const;
+    // Return ethernet channels on a chip that face other chips within the same mesh (intra-mesh)
+    std::vector<chan_id_t> get_intramesh_facing_eth_chans(FabricNodeId fabric_node_id) const;
+
     // The following apis should probably be private, and exposed only to some Metal runtime objects
     void set_routing_mode(uint16_t mode);
     uint16_t get_routing_mode() const;
@@ -282,7 +287,6 @@ private:
     // Takes RoutingTableGenerator table and converts to routing tables for each ethernet port
     void convert_fabric_routing_table_to_chip_routing_table();
 
-    void write_routing_tables_to_eth_cores(MeshId mesh_id, ChipId chip_id) const;
     void write_routing_tables_to_tensix_cores(MeshId mesh_id, ChipId chip_id) const;
     void write_fabric_connections_to_tensix_cores(MeshId mesh_id, ChipId chip_id) const;
     // Helper functions to compute and embed routing path tables
