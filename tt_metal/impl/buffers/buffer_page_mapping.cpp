@@ -169,10 +169,10 @@ BufferCorePageMapping::Iterator::Range BufferCorePageMapping::Iterator::next_ran
         return result;
     }
     const auto& host_range = mapping_->host_ranges[range_index_];
-    bool excess_padding_ignored = (device_page_offset_ < host_range.device_page_offset) &&
-                                  (host_range.device_page_offset - device_page_offset_ > host_range.host_page_start);
-    if (excess_padding_ignored) {
-        device_page_offset_ = host_range.device_page_offset;
+    bool excess_padding = (device_page_offset_ < host_range.device_page_offset) &&
+                          (host_range.device_page_offset - device_page_offset_ > host_range.host_page_start);
+    if (excess_padding) {
+        device_page_offset_ = host_range.device_page_offset - host_range.host_page_start;
     }
 
     uint32_t num_pages_left = host_range.device_page_offset + host_range.num_pages - device_page_offset_;
