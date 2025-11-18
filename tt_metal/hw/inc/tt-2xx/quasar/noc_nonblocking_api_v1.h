@@ -62,6 +62,8 @@ constexpr uint32_t RD_RESP_VC = 12;
 constexpr uint32_t WR_RESP_VC = 13;
 /* Multicast response virtual channel - used by both command buffers */
 constexpr uint32_t MCAST_RESP_VC = 14;
+/* Default transaction ID for both command buffers */
+constexpr uint32_t DEFAULT_TRID = 0;
 
 // BH has 64 bit address space but pipegen was not updated to support this so WH scheme of encoding addresses is used
 // (36 bits of address followed by coordinates) This means that lo and mid registers need to have the address portion
@@ -135,7 +137,7 @@ inline __attribute__((always_inline)) void NOC_CMD_BUF_WRITE_REG(
     } else if (buf == RD_CMD_BUF) {
         CMDBUF_WR_REG(RD_CMD_BUF, addr, val);
     } else if (buf == SIMPLE_CMD_BUF) {
-        SCMDBUF_WR_REG(addr, val);
+        // SCMDBUF_WR_REG(addr, val);
     } else {
         ASSERT(0);
     }
@@ -165,16 +167,11 @@ inline __attribute__((always_inline)) uint32_t NOC_CFG_READ_REG(uint32_t noc, ui
     return *ptr;
 }
 
+/* This is not needed in Qsr, as cpu will be blocked until the command buffer is ready */
 inline __attribute__((always_inline)) bool noc_cmd_buf_ready(uint32_t noc, uint32_t cmd_buf) { return true; }
 
+/* Not needed in Qsr */
 inline __attribute__((always_inline)) uint32_t noc_get_interim_inline_value_addr(uint32_t noc, uint64_t dst_noc_addr) {
-    // On Blackhole issuing inline writes and atomics requires all 4 memory ports to accept the transaction at the same
-    // time. If one port on the receipient has no back-pressure then the transaction will hang because there is no
-    // mechanism to allow one memory port to move ahead of another. To workaround this hang, we emulate inline writes on
-    // Blackhole by writing the value to be written to local L1 first and then issue a noc async write.
-
-    // If dst_noc_addr is not L1 aligned then we need to offset the src address by 4B since inline write dst address
-    // needs to respect 4B alignment.
     ASSERT(0);
     return 0;
 }
@@ -196,33 +193,29 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read(
     ASSERT(noc == 0);
     ASSERT(cmd_buf > SIMPLE_CMD_BUF);
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        ASSERT(0);
         inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
     }
 
+    uint32_t src_coord = (uint32_t)(src_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK;
+    uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(noc, 0, NOC_NODE_ID);
+    uint32_t my_x = noc_id_reg & NOC_NODE_ID_MASK;
+    uint32_t my_y = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
+    uint32_t dest_coord = NOC_XY_COORD(my_x, my_y);
+
     if (cmd_buf == WR_CMD_BUF) {
         reset_cmdbuf_0();
-        setup_as_copy_cmdbuf_0(false /* not wr*/, false /* mcast */, {0}, false /* wrapping_en */, false /* posted */);
-        /* Setup VCS */
-        CMDBUF_WR_REG(WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET, read_req_vc);
-        CMDBUF_WR_REG(WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET, RD_RESP_VC);
-        set_src_cmdbuf_0(src_addr);
-        set_dest_cmdbuf_0(dest_addr);
-        set_len_cmdbuf_0(len_bytes);
+        noc_read_setup_cmdbuf_0(
+            src_coord, src_addr, dest_coord, dest_addr, len_bytes, DEFAULT_TRID, read_req_vc, RD_RESP_VC);
         issue_read_cmdbuf_0();
     } else if (cmd_buf == RD_CMD_BUF) {
         reset_cmdbuf_1();
-        setup_as_copy_cmdbuf_1(false /* not wr*/, false /* mcast */, {0}, false /* wrapping_en */, false /* posted */);
-        /* Setup VCS */
-        CMDBUF_WR_REG(RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET, read_req_vc);
-        CMDBUF_WR_REG(RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET, RD_RESP_VC);
-        set_src_cmdbuf_1(src_addr);
-        set_dest_cmdbuf_1(dest_addr);
-        set_len_cmdbuf_1(len_bytes);
+        noc_read_setup_cmdbuf_1(
+            src_coord, src_addr, dest_coord, dest_addr, len_bytes, DEFAULT_TRID, read_req_vc, RD_RESP_VC);
         issue_read_cmdbuf_1();
     } else if (cmd_buf == SIMPLE_CMD_BUF) {
         reset_reg_cmdbuf();
-        setup_as_copy_reg_cmdbuf(
-            false /* not wr*/, false /* mcast */, {0}, false /* wrapping_en */, false /* posted */);
+        setup_as_copy_reg_cmdbuf(false);
         /* Setup VCS */
         SCMDBUF_WR_REG(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET, read_req_vc);
         SCMDBUF_WR_REG(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET, RD_RESP_VC);
@@ -269,46 +262,49 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write(
             inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, num_dests);
         }
     }
+
+    uint32_t dest_coord = (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK;
+    uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(noc, 0, NOC_NODE_ID);
+    uint32_t my_x = noc_id_reg & NOC_NODE_ID_MASK;
+    uint32_t my_y = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
+    uint32_t src_coord = NOC_XY_COORD(my_x, my_y);
+
     if (cmd_buf == WR_CMD_BUF) {
         reset_cmdbuf_0();
-        setup_as_copy_cmdbuf_0(
-            true /* wr*/,
-            mcast,
-            {0} /* mcast_exclude */,
-            false /* wrapping_en */,
+        noc_write_setup_cmdbuf_0(
+            src_coord,
+            src_addr,
+            dest_coord,
+            dest_addr,
+            len_bytes,
+            DEFAULT_TRID,
+            vc,
+            mcast ? MCAST_RESP_VC : WR_RESP_VC,
+            false, /* mcast */
+            false /* snoop_bit */,
+            false /* flush_bit */,
             posted,
             linked,
             false /* src_include */);
-        setup_ongoing_cmdbuf_0(false, false, false, false, false);
-
-        CMDBUF_WR_REG(WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET, vc);
-        CMDBUF_WR_REG(
-            WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET, mcast ? MCAST_RESP_VC : WR_RESP_VC);
-
-        set_src_cmdbuf_0(src_addr);
-        set_dest_cmdbuf_0(dest_addr);
-        set_len_cmdbuf_0(len_bytes);
-        issue_write_cmdbuf_0();
+        issue_cmdbuf_0();
     } else if (cmd_buf == RD_CMD_BUF) {
         reset_cmdbuf_1();
-        setup_as_copy_cmdbuf_1(
-            true /* wr*/,
-            mcast,
-            {0} /* mcast_exclude */,
-            false /* wrapping_en */,
+        noc_write_setup_cmdbuf_1(
+            src_coord,
+            src_addr,
+            dest_coord,
+            dest_addr,
+            len_bytes,
+            DEFAULT_TRID,
+            vc,
+            mcast ? MCAST_RESP_VC : WR_RESP_VC,
+            false, /* mcast */
+            false /* snoop_bit */,
+            false /* flush_bit */,
             posted,
             linked,
             false /* src_include */);
-        setup_ongoing_cmdbuf_1(false, false, false, false, false);
-
-        CMDBUF_WR_REG(RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET, vc);
-        CMDBUF_WR_REG(
-            RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET, mcast ? MCAST_RESP_VC : WR_RESP_VC);
-
-        set_src_cmdbuf_1(src_addr);
-        set_dest_cmdbuf_1(dest_addr);
-        set_len_cmdbuf_1(len_bytes);
-        issue_write_cmdbuf_1();
+        issue_cmdbuf_1();
     } else if (cmd_buf == SIMPLE_CMD_BUF) {
         reset_reg_cmdbuf();
         setup_as_copy_reg_cmdbuf(true /* wr*/, mcast, {0} /* mcast_exclude */, posted, linked, false /* src_include */);
@@ -319,6 +315,8 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write(
         set_dest_reg_cmdbuf(dest_addr);
         set_len_reg_cmdbuf(len_bytes);
         issue_write_reg_cmdbuf();
+    } else {
+        ASSERT(0);
     }
 
     if constexpr (update_counter && noc_mode == DM_DEDICATED_NOC) {
@@ -347,46 +345,48 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_loopback_src(
         inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
         inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, num_dests);
     }
+    uint32_t dest_coord = (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK;
+    uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(noc, 0, NOC_NODE_ID);
+    uint32_t my_x = noc_id_reg & NOC_NODE_ID_MASK;
+    uint32_t my_y = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
+    uint32_t src_coord = NOC_XY_COORD(my_x, my_y);
+
     if (cmd_buf == WR_CMD_BUF) {
         reset_cmdbuf_0();
-        setup_as_copy_cmdbuf_0(
-            true /* wr*/,
-            mcast,
-            {0} /* mcast_exclude */,
-            false /* wrapping_en */,
+        noc_write_setup_cmdbuf_0(
+            src_coord,
+            src_addr,
+            dest_coord,
+            dest_addr,
+            len_bytes,
+            DEFAULT_TRID,
+            vc,
+            mcast ? MCAST_RESP_VC : WR_RESP_VC,
+            false, /* mcast */
+            false /* snoop_bit */,
+            false /* flush_bit */,
             false,
             linked,
             true /* src_include */);
-        setup_ongoing_cmdbuf_0(false, false, false, false, false);
-
-        CMDBUF_WR_REG(WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET, vc);
-        CMDBUF_WR_REG(
-            WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET, mcast ? MCAST_RESP_VC : WR_RESP_VC);
-
-        set_src_cmdbuf_0(src_addr);
-        set_dest_cmdbuf_0(dest_addr);
-        set_len_cmdbuf_0(len_bytes);
-        issue_write_cmdbuf_0();
+        issue_cmdbuf_0();
     } else if (cmd_buf == RD_CMD_BUF) {
         reset_cmdbuf_1();
-        setup_as_copy_cmdbuf_1(
-            true /* wr*/,
-            mcast,
-            {0} /* mcast_exclude */,
-            false /* wrapping_en */,
+        noc_write_setup_cmdbuf_1(
+            src_coord,
+            src_addr,
+            dest_coord,
+            dest_addr,
+            len_bytes,
+            DEFAULT_TRID,
+            vc,
+            mcast ? MCAST_RESP_VC : WR_RESP_VC,
+            false, /* mcast */
+            false /* snoop_bit */,
+            false /* flush_bit */,
             false,
             linked,
             true /* src_include */);
-        setup_ongoing_cmdbuf_1(false, false, false, false, false);
-
-        CMDBUF_WR_REG(RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET, vc);
-        CMDBUF_WR_REG(
-            RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET, mcast ? MCAST_RESP_VC : WR_RESP_VC);
-
-        set_src_cmdbuf_1(src_addr);
-        set_dest_cmdbuf_1(dest_addr);
-        set_len_cmdbuf_1(len_bytes);
-        issue_write_cmdbuf_1();
+        issue_cmdbuf_1();
     } else if (cmd_buf == SIMPLE_CMD_BUF) {
         reset_reg_cmdbuf();
         setup_as_copy_reg_cmdbuf(true /* wr*/, mcast, {0} /* mcast_exclude */, false, linked, true /* src_include */);
@@ -413,6 +413,7 @@ inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_nonposted_writes_s
 }
 
 inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_writes_sent(uint32_t noc) {
+    // return CMDBUF_WR_SENT(cmdbuf) == noc_nonposted_writes_num_issued[noc];  // ToDo Vuk : fix this before merging
     return (NOC_STATUS_READ_REG(noc, NIU_MST_NONPOSTED_WR_REQ_SENT) == noc_nonposted_writes_num_issued[noc]);
 }
 
@@ -424,6 +425,7 @@ inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_posted_writes_sent
 }
 
 inline __attribute__((always_inline)) bool ncrisc_noc_posted_writes_sent(uint32_t noc) {
+    // return CMDBUF_WR_SENT(cmdbuf) == noc_nonposted_writes_num_issued[noc];  // ToDo Vuk : fix this before merging
     return (NOC_STATUS_READ_REG(noc, NIU_MST_POSTED_WR_REQ_SENT) == noc_posted_writes_num_issued[noc]);
 }
 
@@ -435,16 +437,20 @@ inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_nonposted_writes_f
 }
 
 inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_writes_flushed(uint32_t noc) {
+    // ToDo Vuk : fix this before merg
+    // return CMDBUF_TR_ACK(cmdbuf) == noc_nonposted_writes_acked[noc];
     return (NOC_STATUS_READ_REG(noc, NIU_MST_WR_ACK_RECEIVED) == noc_nonposted_writes_acked[noc]);
 }
 
 inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_write_with_transaction_id_sent(
     uint32_t noc, uint32_t transcation_id) {
+    // ToDo Vuk : fix this before merg
     return (NOC_STATUS_READ_REG(noc, NIU_MST_WRITE_REQS_OUTGOING_ID(transcation_id)) == 0);
 }
 
 inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_write_with_transaction_id_flushed(
     uint32_t noc, uint32_t transcation_id) {
+    // ToDo Vuk : fix this before merg
     return (NOC_STATUS_READ_REG(noc, NIU_MST_REQS_OUTSTANDING_ID(transcation_id)) == 0);
 }
 
@@ -456,88 +462,15 @@ inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_nonposted_atomics_
 }
 
 inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_atomics_flushed(uint32_t noc) {
+    // ToDo Vuk : fix this before merg
     return (NOC_STATUS_READ_REG(noc, NIU_MST_ATOMIC_RESP_RECEIVED) == noc_nonposted_atomics_acked[noc]);
 }
 
 inline __attribute__((always_inline)) void noc_init(uint32_t atomic_ret_val) {
-#pragma GCC unroll 0
-    for (int noc = 0; noc < NUM_NOCS; noc++) {
-        uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(noc, 0, NOC_CFG(0));
-        uint32_t my_x = noc_id_reg & NOC_NODE_ID_MASK;
-        uint32_t my_y = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
-        uint64_t xy_local_addr = NOC_XY_ADDR(my_x, my_y, 0);
-
-        NOC_CMD_BUF_WRITE_REG(noc, NCRISC_WR_CMD_BUF, NOC_TARG_ADDR_MID, 0x0);
-        NOC_CMD_BUF_WRITE_REG(
-            noc,
-            NCRISC_WR_CMD_BUF,
-            NOC_TARG_ADDR_COORDINATE,
-            (uint32_t)(xy_local_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
-        NOC_CMD_BUF_WRITE_REG(noc, NCRISC_WR_REG_CMD_BUF, NOC_TARG_ADDR_MID, 0x0);
-        NOC_CMD_BUF_WRITE_REG(
-            noc,
-            NCRISC_WR_REG_CMD_BUF,
-            NOC_TARG_ADDR_COORDINATE,
-            (uint32_t)(xy_local_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
-
-        uint64_t atomic_ret_addr = NOC_XY_ADDR(my_x, my_y, atomic_ret_val);
-        NOC_CMD_BUF_WRITE_REG(noc, NCRISC_AT_CMD_BUF, NOC_RET_ADDR_LO, (uint32_t)(atomic_ret_addr & 0xFFFFFFFF));
-        NOC_CMD_BUF_WRITE_REG(noc, NCRISC_AT_CMD_BUF, NOC_RET_ADDR_MID, 0x0);
-        NOC_CMD_BUF_WRITE_REG(
-            noc,
-            NCRISC_AT_CMD_BUF,
-            NOC_RET_ADDR_COORDINATE,
-            (uint32_t)(atomic_ret_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
-
-        uint32_t noc_rd_cmd_field =
-            NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
-        NOC_CMD_BUF_WRITE_REG(noc, NCRISC_RD_CMD_BUF, NOC_CTRL_LO, noc_rd_cmd_field);
-        NOC_CMD_BUF_WRITE_REG(noc, NCRISC_RD_CMD_BUF, NOC_RET_ADDR_MID, 0x0);  // get rid of this?
-        NOC_CMD_BUF_WRITE_REG(
-            noc,
-            NCRISC_RD_CMD_BUF,
-            NOC_RET_ADDR_COORDINATE,
-            (uint32_t)(xy_local_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
-    }
+    /* Fix command buffers for writing, reading and atomics*/
 }
 
-inline __attribute__((always_inline)) void dynamic_noc_init() {
-#pragma GCC unroll 0
-    for (int noc = 0; noc < NUM_NOCS; noc++) {
-        uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(noc, 0, NOC_CFG(0));
-        uint32_t my_x = noc_id_reg & NOC_NODE_ID_MASK;
-        uint32_t my_y = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
-        uint64_t xy_local_addr = NOC_XY_ADDR(my_x, my_y, 0);
-
-        // program brisc cmd_buf 0
-        NOC_CMD_BUF_WRITE_REG(
-            noc,
-            DYNAMIC_NOC_BRISC_RD_CMD_BUF,
-            NOC_RET_ADDR_COORDINATE,
-            (uint32_t)(xy_local_addr >> NOC_ADDR_COORD_SHIFT));
-
-        // program brisc cmd_buf 1
-        NOC_CMD_BUF_WRITE_REG(
-            noc,
-            DYNAMIC_NOC_BRISC_WR_CMD_BUF,
-            NOC_TARG_ADDR_COORDINATE,
-            (uint32_t)(xy_local_addr >> NOC_ADDR_COORD_SHIFT));
-
-        // program ncrisc cmd_buf 2
-        NOC_CMD_BUF_WRITE_REG(
-            noc,
-            DYNAMIC_NOC_NCRISC_RD_CMD_BUF,
-            NOC_RET_ADDR_COORDINATE,
-            (uint32_t)(xy_local_addr >> NOC_ADDR_COORD_SHIFT));
-
-        // program ncrisc cmd_buf 3
-        NOC_CMD_BUF_WRITE_REG(
-            noc,
-            DYNAMIC_NOC_NCRISC_WR_CMD_BUF,
-            NOC_TARG_ADDR_COORDINATE,
-            (uint32_t)(xy_local_addr >> NOC_ADDR_COORD_SHIFT));
-    }
-}
+inline __attribute__((always_inline)) void dynamic_noc_init() { ASSERT(0); }
 
 // set noc local memory state for a single kernel from the global state
 inline __attribute__((always_inline)) void noc_local_state_init(int noc) {
@@ -629,14 +562,6 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read_any_len(
     uint32_t dest_addr,
     uint32_t len_bytes,
     uint32_t read_req_vc = 1) {
-    while (len_bytes > NOC_MAX_BURST_SIZE) {
-        while (!noc_cmd_buf_ready(noc, cmd_buf));
-        ncrisc_noc_fast_read<noc_mode>(noc, cmd_buf, src_addr, dest_addr, NOC_MAX_BURST_SIZE, read_req_vc);
-        src_addr += NOC_MAX_BURST_SIZE;
-        dest_addr += NOC_MAX_BURST_SIZE;
-        len_bytes -= NOC_MAX_BURST_SIZE;
-    }
-    while (!noc_cmd_buf_ready(noc, cmd_buf));
     ncrisc_noc_fast_read<noc_mode>(noc, cmd_buf, src_addr, dest_addr, len_bytes, read_req_vc);
 }
 
@@ -654,28 +579,6 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len(
     bool multicast_path_reserve,
     bool posted = false,
     uint32_t trid = 0) {
-    if constexpr (!one_packet) {
-        while (len_bytes > NOC_MAX_BURST_SIZE) {
-            while (!noc_cmd_buf_ready(noc, cmd_buf));
-            ncrisc_noc_fast_write<noc_mode, use_trid>(
-                noc,
-                cmd_buf,
-                src_addr,
-                dest_addr,
-                NOC_MAX_BURST_SIZE,
-                vc,
-                mcast,
-                linked,
-                num_dests,
-                multicast_path_reserve,
-                posted,
-                trid);
-            src_addr += NOC_MAX_BURST_SIZE;
-            dest_addr += NOC_MAX_BURST_SIZE;
-            len_bytes -= NOC_MAX_BURST_SIZE;
-        }
-    }
-    while (!noc_cmd_buf_ready(noc, cmd_buf));
     ncrisc_noc_fast_write<noc_mode, use_trid>(
         noc,
         cmd_buf,
@@ -703,24 +606,6 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len_loopbac
     bool linked,
     uint32_t num_dests,
     bool multicast_path_reserve) {
-    while (len_bytes > NOC_MAX_BURST_SIZE) {
-        while (!noc_cmd_buf_ready(noc, cmd_buf));
-        ncrisc_noc_fast_write_loopback_src<noc_mode>(
-            noc,
-            cmd_buf,
-            src_addr,
-            dest_addr,
-            NOC_MAX_BURST_SIZE,
-            vc,
-            mcast,
-            linked,
-            num_dests,
-            multicast_path_reserve);
-        src_addr += NOC_MAX_BURST_SIZE;
-        dest_addr += NOC_MAX_BURST_SIZE;
-        len_bytes -= NOC_MAX_BURST_SIZE;
-    }
-    while (!noc_cmd_buf_ready(noc, cmd_buf));
     ncrisc_noc_fast_write_loopback_src<noc_mode>(
         noc, cmd_buf, src_addr, dest_addr, len_bytes, vc, mcast, linked, num_dests, multicast_path_reserve);
 }
@@ -737,6 +622,7 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline(
     bool posted = false,
     uint32_t customized_src_addr = 0) {
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        ASSERT(0, "Dynamic NOC is not supported in Qsr");
         if (posted) {
             inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
         } else {
@@ -744,26 +630,65 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline(
             inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, 1);
         }
     }
-    bool static_vc_alloc = true;
-    uint32_t noc_cmd_field = (static_vc_alloc ? NOC_CMD_VC_STATIC : 0x0) | NOC_CMD_STATIC_VC(static_vc) | NOC_CMD_CPY |
-                             NOC_CMD_WR | NOC_CMD_WR_INLINE |
-                             (mcast ? (NOC_CMD_PATH_RESERVE | NOC_CMD_BRCST_PACKET) : 0x0) |
-                             (posted ? 0x0 : NOC_CMD_RESP_MARKED);
 
     uint32_t be32 = be;
     // If we're given a misaligned address, don't write to the bytes in the word below the address
     uint32_t be_shift = (dest_addr & (NOC_WORD_BYTES - 1));
     be32 = (be32 << be_shift);
 
-    while (!noc_cmd_buf_ready(noc, cmd_buf));
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_DATA, val);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL_LO, noc_cmd_field);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, (uint32_t)(dest_addr));
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, (uint32_t)(dest_addr >> 32) & NOC_PCIE_MASK);
-    NOC_CMD_BUF_WRITE_REG(
-        noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN, be32);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+    if (cmd_buf == WR_CMD_BUF) {
+        reset_cmdbuf_0();
+        setup_as_copy_cmdbuf_0(
+            true /* wr*/,
+            mcast,
+            {0} /* mcast_exclude */,
+            false /* wrapping_en */,
+            posted,
+            false,
+            false /* src_include */);
+        setup_ongoing_cmdbuf_0(false, false, false, false, false);
+
+        CMDBUF_WR_REG(WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET, static_vc);
+        CMDBUF_WR_REG(
+            WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET, mcast ? MCAST_RESP_VC : WR_RESP_VC);
+
+        set_dest_cmdbuf_0(dest_addr);
+        set_len_cmdbuf_0(be32);
+
+        CMDBUF_ISSUE_INLINE_TRANS(WR_CMD_BUF, val);
+    } else if (cmd_buf == RD_CMD_BUF) {
+        reset_cmdbuf_1();
+        setup_as_copy_cmdbuf_1(
+            true /* wr*/,
+            mcast,
+            {0} /* mcast_exclude */,
+            false /* wrapping_en */,
+            posted,
+            false,
+            false /* src_include */);
+        setup_ongoing_cmdbuf_1(false, false, false, false, false);
+
+        CMDBUF_WR_REG(RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET, static_vc);
+        CMDBUF_WR_REG(
+            RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET, mcast ? MCAST_RESP_VC : WR_RESP_VC);
+
+        set_dest_cmdbuf_1(dest_addr);
+        set_len_cmdbuf_1(be32);
+        CMDBUF_ISSUE_INLINE_TRANS(RD_CMD_BUF, val);
+
+    } else if (cmd_buf == SIMPLE_CMD_BUF) {
+        reset_reg_cmdbuf();
+        setup_as_copy_reg_cmdbuf(true /* wr*/, mcast, {0} /* mcast_exclude */, posted, false, false /* src_include */);
+        SCMDBUF_WR_REG(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET, static_vc);
+        SCMDBUF_WR_REG(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET, mcast ? MCAST_RESP_VC : WR_RESP_VC);
+
+        set_dest_reg_cmdbuf(dest_addr);
+        set_len_reg_cmdbuf(be32);
+        SCMDBUF_ISSUE_INLINE_TRANS(val);
+    } else {
+        ASSERT(0);
+    }
+
     if constexpr (noc_mode == DM_DEDICATED_NOC) {
         if (posted) {
             noc_posted_writes_num_issued[noc] += 1;
@@ -785,41 +710,68 @@ inline __attribute__((always_inline)) void noc_fast_atomic_increment(
     bool linked,
     bool posted = false,
     uint32_t atomic_ret_val = 0) {
-    // On Blackhole issuing inline writes and atomics requires all 4 memory ports to accept the transaction at the same
-    // time. If one port on the receipient has no back-pressure then the transaction will hang because there is no
-    // mechanism to allow one memory port to move ahead of another. To workaround this hang, we emulate force atomics to
-    // be non-posted.
     posted = false;
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         if (!posted) {
             inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(noc, 1);
         }
     }
-    while (!noc_cmd_buf_ready(noc, cmd_buf));
+    uint64_t atomic_ret_addr;
     if constexpr (noc_mode == DM_DYNAMIC_NOC || program_ret_addr == true) {
         uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(noc, 0, NOC_NODE_ID);
         uint32_t my_x = noc_id_reg & NOC_NODE_ID_MASK;
         uint32_t my_y = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
-        uint64_t atomic_ret_addr = NOC_XY_ADDR(my_x, my_y, atomic_ret_val);
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)(atomic_ret_addr & 0xFFFFFFFF));
+        atomic_ret_addr = NOC_XY_ADDR(my_x, my_y, atomic_ret_val);
+        // NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)(atomic_ret_addr & 0xFFFFFFFF));
     }
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, (uint32_t)(addr & 0xFFFFFFFF));
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, (uint32_t)(addr >> 32) & NOC_PCIE_MASK);
-    NOC_CMD_BUF_WRITE_REG(
-        noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, (uint32_t)(addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
-    NOC_CMD_BUF_WRITE_REG(
-        noc,
-        cmd_buf,
-        NOC_CTRL_LO,
-        NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) | (linked ? NOC_CMD_VC_LINKED : 0x0) |
-            (posted ? 0 : NOC_CMD_RESP_MARKED) | NOC_CMD_AT);
-    NOC_CMD_BUF_WRITE_REG(
-        noc,
-        cmd_buf,
-        NOC_AT_LEN,
-        NOC_AT_INS(NOC_AT_INS_INCR_GET) | NOC_AT_WRAP(wrap) | NOC_AT_IND_32((addr >> 2) & 0x3) | NOC_AT_IND_32_SRC(0));
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_DATA, incr);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, 0x1);
+
+    if (cmd_buf == WR_CMD_BUF) {
+        uint64_t at_len = NOC_AT_INS(NOC_AT_INS_INCR_GET) | NOC_AT_WRAP(wrap) | NOC_AT_IND_32((addr >> 2) & 0x3) |
+                          NOC_AT_IND_32_SRC(0);
+        setup_as_atomic_cmdbuf_0(true);
+        setup_packet_tags_cmdbuf_0(true, false);
+
+        set_dest_cmdbuf_0(addr);
+        set_len_cmdbuf_0(at_len);
+        CMDBUF_WR_REG(WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_INLINE_DATA_REG_OFFSET, (uint64_t)incr);
+
+        if constexpr (program_ret_addr == true) {
+            set_src_cmdbuf_0(atomic_ret_addr);
+        }
+
+        issue_cmdbuf_0();
+    } else if (cmd_buf == RD_CMD_BUF) {
+        uint64_t at_len = NOC_AT_INS(NOC_AT_INS_INCR_GET) | NOC_AT_WRAP(wrap) | NOC_AT_IND_32((addr >> 2) & 0x3) |
+                          NOC_AT_IND_32_SRC(0);
+        setup_as_atomic_cmdbuf_1(true);
+        setup_packet_tags_cmdbuf_1(true, false);
+
+        set_dest_cmdbuf_1(addr);
+        set_len_cmdbuf_1(at_len);
+        CMDBUF_WR_REG(RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_INLINE_DATA_REG_OFFSET, (uint64_t)incr);
+
+        if constexpr (program_ret_addr == true) {
+            set_src_cmdbuf_1(atomic_ret_addr);
+        }
+        issue_cmdbuf_1();
+    } else if (cmd_buf == SIMPLE_CMD_BUF) {
+        uint64_t at_len = NOC_AT_INS(NOC_AT_INS_INCR_GET) | NOC_AT_WRAP(wrap) | NOC_AT_IND_32((addr >> 2) & 0x3) |
+                          NOC_AT_IND_32_SRC(0);
+        setup_as_atomic_reg_cmdbuf(true);
+        setup_packet_tags_reg_cmdbuf(true, false);
+
+        set_dest_reg_cmdbuf(addr);
+        set_len_reg_cmdbuf(at_len);
+        SCMDBUF_WR_REG(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_INLINE_DATA_REG_OFFSET, (uint64_t)incr);
+
+        if constexpr (program_ret_addr == true) {
+            set_src_reg_cmdbuf(atomic_ret_addr);
+        }
+        issue_reg_cmdbuf();
+    } else {
+        ASSERT(0);
+    }
+
     if constexpr (noc_mode == DM_DEDICATED_NOC) {
         if (!posted) {
             noc_nonposted_atomics_acked[noc] += 1;
@@ -837,12 +789,6 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read_with_transaction
     uint32_t src_addr_;
     src_addr_ = src_base_addr + src_addr;
 
-    while (!noc_cmd_buf_ready(noc, cmd_buf));
-    while (NOC_STATUS_READ_REG(noc, NIU_MST_REQS_OUTSTANDING_ID(trid)) > ((NOC_MAX_TRANSACTION_ID + 1) / 2));
-
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, dest_addr);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_addr_);  // (uint32_t)src_addr
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
     if constexpr (noc_mode == DM_DEDICATED_NOC && !skip_ptr_update) {
         noc_reads_num_issued[noc] += 1;
     }
@@ -863,11 +809,19 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read_with_transaction
 // clang-format on
 inline __attribute__((always_inline)) void ncrisc_noc_set_transaction_id(
     uint32_t noc, uint32_t cmd_buf, uint32_t trid) {
-    while (!noc_cmd_buf_ready(noc, cmd_buf));
-    // NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_PACKET_TAG, NOC_PACKET_TAG_TRANSACTION_ID(trid));
-}
+    if (cmd_buf == WR_CMD_BUF) {
+        CMDBUF_WR_REG(WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_WR_SENT_TR_ID_REG_OFFSET, trid);
+        CMDBUF_WR_REG(WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_TR_ACK_TR_ID_REG_OFFSET, trid);
+    } else if (cmd_buf == RD_CMD_BUF) {
+        CMDBUF_WR_REG(RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_WR_SENT_TR_ID_REG_OFFSET, trid);
+        CMDBUF_WR_REG(RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_TR_ACK_TR_ID_REG_OFFSET, trid);
+    } else if (cmd_buf == SIMPLE_CMD_BUF) {
+        SCMDBUF_WR_REG(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_TR_ID_REG_OFFSET, trid_offset);
+    } else {
+        ASSERT(0, "Command buffer does not exist");
+    }
 
-// clang-format off
+    // clang-format off
 /**
  * Sets the stateful registers for an asynchronous read from a specified source node located at NOC
  * coordinates (x,y) at a local address (encoded as a uint64_t using \a
@@ -889,34 +843,61 @@ inline __attribute__((always_inline)) void ncrisc_noc_set_transaction_id(
  * | one_packet (template parameter) | Whether transaction size is <= NOC_MAX_BURST_SIZE  | bool      | true or false                                            | False    |
  * | use_vc (template parameter)     | Use custom VC, enables vc parameter                | bool      | true or false                                            | False    |
  */
-// clang-format on
-template <uint8_t noc_mode = DM_DEDICATED_NOC, bool one_packet = false, bool use_vc = false>
-inline __attribute__((always_inline)) void ncrisc_noc_read_set_state(
-    uint32_t noc, uint32_t cmd_buf, uint64_t src_noc_addr, uint32_t len_bytes = 0, const uint32_t vc = 0) {
-    while (!noc_cmd_buf_ready(noc, cmd_buf));
+    // clang-format on
+    template <uint8_t noc_mode = DM_DEDICATED_NOC, bool one_packet = false, bool use_vc = false>
+    inline __attribute__((always_inline)) void ncrisc_noc_read_set_state(
+        uint32_t noc, uint32_t cmd_buf, uint64_t src_noc_addr, uint32_t len_bytes = 0, const uint32_t vc = 0) {
+        while (!noc_cmd_buf_ready(noc, cmd_buf));
 
-    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-        uint32_t noc_rd_cmd_field =
-            NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL_LO, noc_rd_cmd_field);
-    }
-    if constexpr (use_vc) {
-        uint32_t noc_rd_cmd_field =
-            NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc);
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL_LO, noc_rd_cmd_field);
-    }
-    // Handles reading from PCIe
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, (uint32_t)(src_noc_addr >> 32) & NOC_PCIE_MASK);
-    NOC_CMD_BUF_WRITE_REG(
-        noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, (uint32_t)(src_noc_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+        if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+            ASSERT(0, "Dynamic noc is not supported in QSR");
+        }
 
-    // If one packet, set data size
-    if constexpr (one_packet) {
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN, len_bytes);
-    }
-}
+        if (cmd_buf == WR_CMD_BUF) {
+        } else if (cmd_buf == RD_CMD_BUF) {
+            if constexpr (use_vc) {
+                uint32_t noc_rd_cmd_field =
+                    NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc);
+                NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL_LO, noc_rd_cmd_field);
+            }
+            // Handles reading from PCIe
+            NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, (uint32_t)(src_noc_addr >> 32) & NOC_PCIE_MASK);
+            NOC_CMD_BUF_WRITE_REG(
+                noc,
+                cmd_buf,
+                NOC_TARG_ADDR_COORDINATE,
+                (uint32_t)(src_noc_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
 
-// clang-format off
+            // If one packet, set data size
+            if constexpr (one_packet) {
+                NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN, len_bytes);
+            }
+        } else if (cmd_buf == SIMPLE_CMD_BUF) {
+        } else {
+            ASSERT(0, "Command buffer does not exist");
+        }
+
+        if constexpr (use_vc) {
+            uint32_t noc_rd_cmd_field =
+                NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc);
+            NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL_LO, noc_rd_cmd_field);
+        }
+
+        // Handles reading from PCIe
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, (uint32_t)(src_noc_addr >> 32) & NOC_PCIE_MASK);
+        NOC_CMD_BUF_WRITE_REG(
+            noc,
+            cmd_buf,
+            NOC_TARG_ADDR_COORDINATE,
+            (uint32_t)(src_noc_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+
+        // If one packet, set data size
+        if constexpr (one_packet) {
+            NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN, len_bytes);
+        }
+    }
+
+    // clang-format off
 /**
  * Initiates an asynchronous read from a specified source node located at NOC
  * coordinates (x,y) at a local address (encoded as a uint64_t using \a
@@ -937,29 +918,29 @@ inline __attribute__((always_inline)) void ncrisc_noc_read_set_state(
  * | inc_num_issued (template parameter) | Increment enable for transaction issued counters   | bool      | true or false                                            | False    |
  * | one_packet (template parameter)     | Whether transaction size is <= NOC_MAX_BURST_SIZE  | bool      | true or false                                            | False    |
  */
-// clang-format on
-template <uint8_t noc_mode = DM_DEDICATED_NOC, bool inc_num_issued = true, bool one_packet = false>
-inline __attribute__((always_inline)) void ncrisc_noc_read_with_state(
-    uint32_t noc, uint32_t cmd_buf, uint32_t src_local_addr, uint32_t dst_local_addr, uint32_t len_bytes = 0) {
-    if constexpr (inc_num_issued && noc_mode == DM_DYNAMIC_NOC) {
-        inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
+    // clang-format on
+    template <uint8_t noc_mode = DM_DEDICATED_NOC, bool inc_num_issued = true, bool one_packet = false>
+    inline __attribute__((always_inline)) void ncrisc_noc_read_with_state(
+        uint32_t noc, uint32_t cmd_buf, uint32_t src_local_addr, uint32_t dst_local_addr, uint32_t len_bytes = 0) {
+        if constexpr (inc_num_issued && noc_mode == DM_DYNAMIC_NOC) {
+            inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
+        }
+
+        while (!noc_cmd_buf_ready(noc, cmd_buf));
+
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, dst_local_addr);
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_local_addr);
+        if constexpr (!one_packet) {
+            NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN, len_bytes);
+        }
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+
+        if constexpr (inc_num_issued && noc_mode == DM_DEDICATED_NOC) {
+            noc_reads_num_issued[noc] += 1;
+        }
     }
 
-    while (!noc_cmd_buf_ready(noc, cmd_buf));
-
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, dst_local_addr);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_local_addr);
-    if constexpr (!one_packet) {
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN, len_bytes);
-    }
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-
-    if constexpr (inc_num_issued && noc_mode == DM_DEDICATED_NOC) {
-        noc_reads_num_issued[noc] += 1;
-    }
-}
-
-// clang-format off
+    // clang-format off
 /**
  * Initiates an asynchronous read for all transaction sizes.
  * Refer to \a ncrisc_noc_read_with_state for more details.
@@ -976,29 +957,29 @@ inline __attribute__((always_inline)) void ncrisc_noc_read_with_state(
  * | noc_mode (template parameter)       | NOC mode for the transaction                       | uint8_t   | DM_DEDICATED_NOC, DM_DYNAMIC_NOC or DM_INVALID_NOC (0-2) | False    |
  * | inc_num_issued (template parameter) | Increment enable for transaction issued counters   | bool      | true or false                                            | False    |
  */
-// clang-format on
-template <uint8_t noc_mode = DM_DEDICATED_NOC, bool inc_num_issued = true>
-inline __attribute__((always_inline)) void ncrisc_noc_read_any_len_with_state(
-    uint32_t noc, uint32_t cmd_buf, uint32_t src_local_addr, uint32_t dst_local_addr, uint32_t len_bytes) {
-    if (len_bytes > NOC_MAX_BURST_SIZE) {
-        // Set data size for while loop
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN, NOC_MAX_BURST_SIZE);
+    // clang-format on
+    template <uint8_t noc_mode = DM_DEDICATED_NOC, bool inc_num_issued = true>
+    inline __attribute__((always_inline)) void ncrisc_noc_read_any_len_with_state(
+        uint32_t noc, uint32_t cmd_buf, uint32_t src_local_addr, uint32_t dst_local_addr, uint32_t len_bytes) {
+        if (len_bytes > NOC_MAX_BURST_SIZE) {
+            // Set data size for while loop
+            NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN, NOC_MAX_BURST_SIZE);
 
-        while (len_bytes > NOC_MAX_BURST_SIZE) {
-            ncrisc_noc_read_with_state<noc_mode, inc_num_issued, true /* one_packet */>(
-                noc, cmd_buf, src_local_addr, dst_local_addr);
+            while (len_bytes > NOC_MAX_BURST_SIZE) {
+                ncrisc_noc_read_with_state<noc_mode, inc_num_issued, true /* one_packet */>(
+                    noc, cmd_buf, src_local_addr, dst_local_addr);
 
-            len_bytes -= NOC_MAX_BURST_SIZE;
-            src_local_addr += NOC_MAX_BURST_SIZE;
-            dst_local_addr += NOC_MAX_BURST_SIZE;
+                len_bytes -= NOC_MAX_BURST_SIZE;
+                src_local_addr += NOC_MAX_BURST_SIZE;
+                dst_local_addr += NOC_MAX_BURST_SIZE;
+            }
         }
+
+        // left-over packet
+        ncrisc_noc_read_with_state<noc_mode, inc_num_issued>(noc, cmd_buf, src_local_addr, dst_local_addr, len_bytes);
     }
 
-    // left-over packet
-    ncrisc_noc_read_with_state<noc_mode, inc_num_issued>(noc, cmd_buf, src_local_addr, dst_local_addr, len_bytes);
-}
-
-// clang-format off
+    // clang-format off
 /**
  * Sets the stateful registers for an asynchronous write to a specified destination node located at
  * NOC coordinates (x,y) at a local address (encoded as a uint64_t using \a
@@ -1020,30 +1001,33 @@ inline __attribute__((always_inline)) void ncrisc_noc_read_any_len_with_state(
  * | posted (template parameter)     | Whether the transaction is posted (i.e. no ack required) | bool      | true or false                    | False    |
  * | one_packet (template parameter) | Whether transaction size is <= NOC_MAX_BURST_SIZE        | bool      | true or false                    | False    |
  */
-// clang-format on
-template <bool posted = false, bool one_packet = false>
-inline __attribute__((always_inline)) void ncrisc_noc_write_set_state(
-    uint32_t noc, uint32_t cmd_buf, uint64_t dst_noc_addr, uint32_t len_bytes = 0, const uint32_t vc = 0) {
-    while (!noc_cmd_buf_ready(noc, cmd_buf));
+    // clang-format on
+    template <bool posted = false, bool one_packet = false>
+    inline __attribute__((always_inline)) void ncrisc_noc_write_set_state(
+        uint32_t noc, uint32_t cmd_buf, uint64_t dst_noc_addr, uint32_t len_bytes = 0, const uint32_t vc = 0) {
+        while (!noc_cmd_buf_ready(noc, cmd_buf));
 
-    uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) |
-                             0x0 |  // (linked ? NOC_CMD_VC_LINKED : 0x0)
-                             0x0 |  // (mcast ? (NOC_CMD_PATH_RESERVE | NOC_CMD_BRCST_PACKET) : 0x0)
-                             (!posted ? NOC_CMD_RESP_MARKED : 0x0);
+        uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) |
+                                 0x0 |  // (linked ? NOC_CMD_VC_LINKED : 0x0)
+                                 0x0 |  // (mcast ? (NOC_CMD_PATH_RESERVE | NOC_CMD_BRCST_PACKET) : 0x0)
+                                 (!posted ? NOC_CMD_RESP_MARKED : 0x0);
 
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL_LO, noc_cmd_field);
-    // Handles writing to PCIe
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(dst_noc_addr >> 32) & NOC_PCIE_MASK);
-    NOC_CMD_BUF_WRITE_REG(
-        noc, cmd_buf, NOC_RET_ADDR_COORDINATE, (uint32_t)(dst_noc_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL_LO, noc_cmd_field);
+        // Handles writing to PCIe
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(dst_noc_addr >> 32) & NOC_PCIE_MASK);
+        NOC_CMD_BUF_WRITE_REG(
+            noc,
+            cmd_buf,
+            NOC_RET_ADDR_COORDINATE,
+            (uint32_t)(dst_noc_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
 
-    // If one packet, set data size
-    if constexpr (one_packet) {
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN, len_bytes);
+        // If one packet, set data size
+        if constexpr (one_packet) {
+            NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN, len_bytes);
+        }
     }
-}
 
-// clang-format off
+    // clang-format off
 /**
  * Initiates an asynchronous write to a specified destination node located at
  * NOC coordinates (x,y) at a local address (encoded as a uint64_t using \a
@@ -1065,39 +1049,43 @@ inline __attribute__((always_inline)) void ncrisc_noc_write_set_state(
  * | update_counter (template parameter) | Whether to increment write counters                      | bool      | true or false                                            | False    |
  * | one_packet (template parameter)     | Whether transaction size is <= NOC_MAX_BURST_SIZE        | bool      | true or false                                            | False    |
  */
-// clang-format on
-template <uint8_t noc_mode = DM_DEDICATED_NOC, bool posted = false, bool update_counter = true, bool one_packet = false>
-inline __attribute__((always_inline)) void ncrisc_noc_write_with_state(
-    uint32_t noc, uint32_t cmd_buf, uint32_t src_local_addr, uint32_t dst_local_addr, uint32_t len_bytes = 0) {
-    if constexpr (update_counter && noc_mode == DM_DYNAMIC_NOC) {
-        if constexpr (posted) {
-            inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
-        } else {
-            inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
-            inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, 1);
+    // clang-format on
+    template <
+        uint8_t noc_mode = DM_DEDICATED_NOC,
+        bool posted = false,
+        bool update_counter = true,
+        bool one_packet = false>
+    inline __attribute__((always_inline)) void ncrisc_noc_write_with_state(
+        uint32_t noc, uint32_t cmd_buf, uint32_t src_local_addr, uint32_t dst_local_addr, uint32_t len_bytes = 0) {
+        if constexpr (update_counter && noc_mode == DM_DYNAMIC_NOC) {
+            if constexpr (posted) {
+                inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
+            } else {
+                inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
+                inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, 1);
+            }
+        }
+
+        while (!noc_cmd_buf_ready(noc, cmd_buf));
+
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_local_addr);
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, dst_local_addr);
+        if constexpr (!one_packet) {
+            NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN, len_bytes);
+        }
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+
+        if constexpr (update_counter && noc_mode == DM_DEDICATED_NOC) {
+            if constexpr (posted) {
+                noc_posted_writes_num_issued[noc] += 1;
+            } else {
+                noc_nonposted_writes_num_issued[noc] += 1;
+                noc_nonposted_writes_acked[noc] += 1;
+            }
         }
     }
 
-    while (!noc_cmd_buf_ready(noc, cmd_buf));
-
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_local_addr);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, dst_local_addr);
-    if constexpr (!one_packet) {
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN, len_bytes);
-    }
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-
-    if constexpr (update_counter && noc_mode == DM_DEDICATED_NOC) {
-        if constexpr (posted) {
-            noc_posted_writes_num_issued[noc] += 1;
-        } else {
-            noc_nonposted_writes_num_issued[noc] += 1;
-            noc_nonposted_writes_acked[noc] += 1;
-        }
-    }
-}
-
-// clang-format off
+    // clang-format off
 /**
  * Initiates an asynchronous write for all transaction sizes.
  * Refer to \a ncrisc_noc_write_with_state for more details.
@@ -1115,30 +1103,30 @@ inline __attribute__((always_inline)) void ncrisc_noc_write_with_state(
  * | posted (template parameter)         | Whether the transaction is posted (i.e. no ack required) | bool      | true or false                                            | False    |
  * | update_counter (template parameter) | Whether to increment write counters                      | bool      | true or false                                            | False    |
  */
-// clang-format on
-template <uint8_t noc_mode = DM_DEDICATED_NOC, bool posted = false, bool update_counter = true>
-inline __attribute__((always_inline)) void ncrisc_noc_write_any_len_with_state(
-    uint32_t noc, uint32_t cmd_buf, uint32_t src_local_addr, uint32_t dst_local_addr, uint32_t len_bytes) {
-    if (len_bytes > NOC_MAX_BURST_SIZE) {
-        // Set data size for while loop
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN, NOC_MAX_BURST_SIZE);
+    // clang-format on
+    template <uint8_t noc_mode = DM_DEDICATED_NOC, bool posted = false, bool update_counter = true>
+    inline __attribute__((always_inline)) void ncrisc_noc_write_any_len_with_state(
+        uint32_t noc, uint32_t cmd_buf, uint32_t src_local_addr, uint32_t dst_local_addr, uint32_t len_bytes) {
+        if (len_bytes > NOC_MAX_BURST_SIZE) {
+            // Set data size for while loop
+            NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN, NOC_MAX_BURST_SIZE);
 
-        while (len_bytes > NOC_MAX_BURST_SIZE) {
-            ncrisc_noc_write_with_state<noc_mode, posted, update_counter, true /* one_packet */>(
-                noc, cmd_buf, src_local_addr, dst_local_addr);
+            while (len_bytes > NOC_MAX_BURST_SIZE) {
+                ncrisc_noc_write_with_state<noc_mode, posted, update_counter, true /* one_packet */>(
+                    noc, cmd_buf, src_local_addr, dst_local_addr);
 
-            len_bytes -= NOC_MAX_BURST_SIZE;
-            src_local_addr += NOC_MAX_BURST_SIZE;
-            dst_local_addr += NOC_MAX_BURST_SIZE;
+                len_bytes -= NOC_MAX_BURST_SIZE;
+                src_local_addr += NOC_MAX_BURST_SIZE;
+                dst_local_addr += NOC_MAX_BURST_SIZE;
+            }
         }
+
+        // left-over packet
+        ncrisc_noc_write_with_state<noc_mode, posted, update_counter>(
+            noc, cmd_buf, src_local_addr, dst_local_addr, len_bytes);
     }
 
-    // left-over packet
-    ncrisc_noc_write_with_state<noc_mode, posted, update_counter>(
-        noc, cmd_buf, src_local_addr, dst_local_addr, len_bytes);
-}
-
-// clang-format off
+    // clang-format off
 /**
  * Sets the stateful registers for an inline write of a 32-bit value to a NOC destination.
  * This function is used to set up the state for \a noc_fast_write_dw_inline_with_state, which will issue the actual
@@ -1162,30 +1150,33 @@ inline __attribute__((always_inline)) void ncrisc_noc_write_any_len_with_state(
  * | posted (template parameter)  | Whether the call is posted (i.e. ack requirement)      | bool     | true or false                    | False    |
  * | set_val (template parameter) | Whether to set the value for the write here            | bool     | true or false                    | False    |
  */
-// clang-format on
-template <bool posted = false, bool set_val = false>
-inline __attribute__((always_inline)) void noc_fast_write_dw_inline_set_state(
-    uint32_t noc, uint32_t cmd_buf, uint64_t dest_addr, uint32_t be, uint32_t static_vc, uint32_t val = 0) {
-    while (!noc_cmd_buf_ready(noc, cmd_buf));
+    // clang-format on
+    template <bool posted = false, bool set_val = false>
+    inline __attribute__((always_inline)) void noc_fast_write_dw_inline_set_state(
+        uint32_t noc, uint32_t cmd_buf, uint64_t dest_addr, uint32_t be, uint32_t static_vc, uint32_t val = 0) {
+        while (!noc_cmd_buf_ready(noc, cmd_buf));
 
-    if constexpr (set_val) {
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_DATA, val);
+        if constexpr (set_val) {
+            NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_DATA, val);
+        }
+
+        uint32_t noc_cmd_field = NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(static_vc) | NOC_CMD_CPY | NOC_CMD_WR |
+                                 NOC_CMD_WR_INLINE | 0x0 | (posted ? 0x0 : NOC_CMD_RESP_MARKED);
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL_LO, noc_cmd_field);
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, (uint32_t)dest_addr);
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, (uint32_t)(dest_addr >> 32) & NOC_PCIE_MASK);
+        NOC_CMD_BUF_WRITE_REG(
+            noc,
+            cmd_buf,
+            NOC_TARG_ADDR_COORDINATE,
+            (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+
+        // If we're given a misaligned address, don't write to the bytes in the word below the address
+        uint32_t be32 = be << (dest_addr & (NOC_WORD_BYTES - 1));
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN, be32);
     }
 
-    uint32_t noc_cmd_field = NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(static_vc) | NOC_CMD_CPY | NOC_CMD_WR |
-                             NOC_CMD_WR_INLINE | 0x0 | (posted ? 0x0 : NOC_CMD_RESP_MARKED);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL_LO, noc_cmd_field);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, (uint32_t)dest_addr);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, (uint32_t)(dest_addr >> 32) & NOC_PCIE_MASK);
-    NOC_CMD_BUF_WRITE_REG(
-        noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
-
-    // If we're given a misaligned address, don't write to the bytes in the word below the address
-    uint32_t be32 = be << (dest_addr & (NOC_WORD_BYTES - 1));
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN, be32);
-}
-
-// clang-format off
+    // clang-format off
 /**
  * Initiates an inline write of a 32-bit value to a NOC destination.
  * This function must be preceded by a call to \a noc_fast_write_dw_inline_set_state.
@@ -1212,49 +1203,49 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_set_state(
  * | posted (template parameter)                | Whether the call is posted (i.e. ack requirement)      | bool     | true or false                    | False    |
  * | update_counter (template parameter)        | Whether to update the write counters                   | bool     | true or false                    | False    |
  */
-// clang-format on
-template <
-    uint8_t noc_mode = DM_DEDICATED_NOC,
-    bool update_addr_lo = false,
-    bool update_addr_hi = false,
-    bool update_val = false,
-    bool posted = false,
-    bool update_counter = true>
-inline __attribute__((always_inline)) void noc_fast_write_dw_inline_with_state(
-    uint32_t noc, uint32_t cmd_buf, uint32_t val = 0, uint64_t dest_addr = 0) {
-    static_assert("Error: Only High or Low address update is supported" && (update_addr_lo && update_addr_hi) == 0);
-    if constexpr (update_counter && noc_mode == DM_DYNAMIC_NOC) {
-        if constexpr (posted) {
-            inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
-        } else {
-            inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
-            inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, 1);
+    // clang-format on
+    template <
+        uint8_t noc_mode = DM_DEDICATED_NOC,
+        bool update_addr_lo = false,
+        bool update_addr_hi = false,
+        bool update_val = false,
+        bool posted = false,
+        bool update_counter = true>
+    inline __attribute__((always_inline)) void noc_fast_write_dw_inline_with_state(
+        uint32_t noc, uint32_t cmd_buf, uint32_t val = 0, uint64_t dest_addr = 0) {
+        static_assert("Error: Only High or Low address update is supported" && (update_addr_lo && update_addr_hi) == 0);
+        if constexpr (update_counter && noc_mode == DM_DYNAMIC_NOC) {
+            if constexpr (posted) {
+                inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
+            } else {
+                inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
+                inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, 1);
+            }
+        }
+
+        while (!noc_cmd_buf_ready(noc, cmd_buf));
+
+        if constexpr (update_addr_lo) {
+            NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, dest_addr);
+        } else if constexpr (update_addr_hi) {
+            NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, dest_addr);
+        }
+        if constexpr (update_val) {
+            NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_DATA, val);
+        }
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL_LO, NOC_CTRL_SEND_REQ);
+
+        if constexpr (update_counter && noc_mode == DM_DEDICATED_NOC) {
+            if constexpr (posted) {
+                noc_posted_writes_num_issued[noc] += 1;
+            } else {
+                noc_nonposted_writes_num_issued[noc] += 1;
+                noc_nonposted_writes_acked[noc] += 1;
+            }
         }
     }
 
-    while (!noc_cmd_buf_ready(noc, cmd_buf));
-
-    if constexpr (update_addr_lo) {
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, dest_addr);
-    } else if constexpr (update_addr_hi) {
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, dest_addr);
-    }
-    if constexpr (update_val) {
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_DATA, val);
-    }
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL_LO, NOC_CTRL_SEND_REQ);
-
-    if constexpr (update_counter && noc_mode == DM_DEDICATED_NOC) {
-        if constexpr (posted) {
-            noc_posted_writes_num_issued[noc] += 1;
-        } else {
-            noc_nonposted_writes_num_issued[noc] += 1;
-            noc_nonposted_writes_acked[noc] += 1;
-        }
-    }
-}
-
-// clang-format off
+    // clang-format off
 /**
  * The stateful NOC commands provide granular control over NOC register programming by writing
  * only a subset of registers for each transaction. This approach leverages the fact that many
@@ -1285,78 +1276,78 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_with_state(
  * WAIT/wait: wait, do not wait for command buffer readiness (NOC_CMD_CTRL)
  * SEND/send: send, do not send the transaction immediately (NOC_CTRL_SEND_REQ)
  */
-// clang-format on
-constexpr uint32_t CQ_NOC_FLAG_SRC = 0x01;
-constexpr uint32_t CQ_NOC_FLAG_NOC = 0x02;
-constexpr uint32_t CQ_NOC_FLAG_DST = 0x04;
-constexpr uint32_t CQ_NOC_FLAG_LEN = 0x08;
+    // clang-format on
+    constexpr uint32_t CQ_NOC_FLAG_SRC = 0x01;
+    constexpr uint32_t CQ_NOC_FLAG_NOC = 0x02;
+    constexpr uint32_t CQ_NOC_FLAG_DST = 0x04;
+    constexpr uint32_t CQ_NOC_FLAG_LEN = 0x08;
 
-constexpr uint32_t CQ_NOC_INLINE_FLAG_VAL = 0x10;
-constexpr uint32_t CQ_NOC_INLINE_FLAG_BE = 0x20;
+    constexpr uint32_t CQ_NOC_INLINE_FLAG_VAL = 0x10;
+    constexpr uint32_t CQ_NOC_INLINE_FLAG_BE = 0x20;
 
-constexpr uint32_t CQ_NOC_CMD_FLAG_MCAST = 0x01;
-constexpr uint32_t CQ_NOC_CMD_FLAG_LINKED = 0x02;
-constexpr uint32_t CQ_NOC_CMD_FLAG_POSTED = 0x04;
+    constexpr uint32_t CQ_NOC_CMD_FLAG_MCAST = 0x01;
+    constexpr uint32_t CQ_NOC_CMD_FLAG_LINKED = 0x02;
+    constexpr uint32_t CQ_NOC_CMD_FLAG_POSTED = 0x04;
 
-enum CQNocFlags {
-    CQ_NOC_sndl = 0,
-    CQ_NOC_sndL = CQ_NOC_FLAG_LEN,
-    CQ_NOC_snDl = CQ_NOC_FLAG_DST,
-    CQ_NOC_snDL = CQ_NOC_FLAG_DST | CQ_NOC_FLAG_LEN,
-    CQ_NOC_sNdl = CQ_NOC_FLAG_NOC,
-    CQ_NOC_sNdL = CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_LEN,
-    CQ_NOC_sNDl = CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST,
-    CQ_NOC_sNDL = CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST | CQ_NOC_FLAG_LEN,
-    CQ_NOC_Sndl = CQ_NOC_FLAG_SRC,
-    CQ_NOC_SndL = CQ_NOC_FLAG_SRC | CQ_NOC_FLAG_LEN,
-    CQ_NOC_SnDl = CQ_NOC_FLAG_SRC | CQ_NOC_FLAG_DST,
-    CQ_NOC_SnDL = CQ_NOC_FLAG_SRC | CQ_NOC_FLAG_DST | CQ_NOC_FLAG_LEN,
-    CQ_NOC_SNdl = CQ_NOC_FLAG_SRC | CQ_NOC_FLAG_NOC,
-    CQ_NOC_SNdL = CQ_NOC_FLAG_SRC | CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_LEN,
-    CQ_NOC_SNDl = CQ_NOC_FLAG_SRC | CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST,
-    CQ_NOC_SNDL = CQ_NOC_FLAG_SRC | CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST | CQ_NOC_FLAG_LEN,
-};
+    enum CQNocFlags {
+        CQ_NOC_sndl = 0,
+        CQ_NOC_sndL = CQ_NOC_FLAG_LEN,
+        CQ_NOC_snDl = CQ_NOC_FLAG_DST,
+        CQ_NOC_snDL = CQ_NOC_FLAG_DST | CQ_NOC_FLAG_LEN,
+        CQ_NOC_sNdl = CQ_NOC_FLAG_NOC,
+        CQ_NOC_sNdL = CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_LEN,
+        CQ_NOC_sNDl = CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST,
+        CQ_NOC_sNDL = CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST | CQ_NOC_FLAG_LEN,
+        CQ_NOC_Sndl = CQ_NOC_FLAG_SRC,
+        CQ_NOC_SndL = CQ_NOC_FLAG_SRC | CQ_NOC_FLAG_LEN,
+        CQ_NOC_SnDl = CQ_NOC_FLAG_SRC | CQ_NOC_FLAG_DST,
+        CQ_NOC_SnDL = CQ_NOC_FLAG_SRC | CQ_NOC_FLAG_DST | CQ_NOC_FLAG_LEN,
+        CQ_NOC_SNdl = CQ_NOC_FLAG_SRC | CQ_NOC_FLAG_NOC,
+        CQ_NOC_SNdL = CQ_NOC_FLAG_SRC | CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_LEN,
+        CQ_NOC_SNDl = CQ_NOC_FLAG_SRC | CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST,
+        CQ_NOC_SNDL = CQ_NOC_FLAG_SRC | CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST | CQ_NOC_FLAG_LEN,
+    };
 
-enum CQNocCmdFlags {
-    CQ_NOC_mkp = 0,
-    CQ_NOC_mkP = CQ_NOC_CMD_FLAG_POSTED,
-    CQ_NOC_mKp = CQ_NOC_CMD_FLAG_LINKED,
-    CQ_NOC_mKP = CQ_NOC_CMD_FLAG_LINKED | CQ_NOC_CMD_FLAG_POSTED,
-    CQ_NOC_Mkp = CQ_NOC_CMD_FLAG_MCAST,
-    CQ_NOC_MkP = CQ_NOC_CMD_FLAG_MCAST | CQ_NOC_CMD_FLAG_POSTED,
-    CQ_NOC_MKp = CQ_NOC_CMD_FLAG_MCAST | CQ_NOC_CMD_FLAG_LINKED,
-    CQ_NOC_MKP = CQ_NOC_CMD_FLAG_MCAST | CQ_NOC_CMD_FLAG_LINKED | CQ_NOC_CMD_FLAG_POSTED,
-};
+    enum CQNocCmdFlags {
+        CQ_NOC_mkp = 0,
+        CQ_NOC_mkP = CQ_NOC_CMD_FLAG_POSTED,
+        CQ_NOC_mKp = CQ_NOC_CMD_FLAG_LINKED,
+        CQ_NOC_mKP = CQ_NOC_CMD_FLAG_LINKED | CQ_NOC_CMD_FLAG_POSTED,
+        CQ_NOC_Mkp = CQ_NOC_CMD_FLAG_MCAST,
+        CQ_NOC_MkP = CQ_NOC_CMD_FLAG_MCAST | CQ_NOC_CMD_FLAG_POSTED,
+        CQ_NOC_MKp = CQ_NOC_CMD_FLAG_MCAST | CQ_NOC_CMD_FLAG_LINKED,
+        CQ_NOC_MKP = CQ_NOC_CMD_FLAG_MCAST | CQ_NOC_CMD_FLAG_LINKED | CQ_NOC_CMD_FLAG_POSTED,
+    };
 
-enum CQNocInlineFlags {
-    CQ_NOC_INLINE_ndvb = 0,
-    CQ_NOC_INLINE_ndvB = CQ_NOC_INLINE_FLAG_BE,
-    CQ_NOC_INLINE_ndVb = CQ_NOC_INLINE_FLAG_VAL,
-    CQ_NOC_INLINE_ndVB = CQ_NOC_INLINE_FLAG_VAL | CQ_NOC_INLINE_FLAG_BE,
-    CQ_NOC_INLINE_nDvb = CQ_NOC_FLAG_DST,
-    CQ_NOC_INLINE_nDvB = CQ_NOC_FLAG_DST | CQ_NOC_INLINE_FLAG_BE,
-    CQ_NOC_INLINE_nDVb = CQ_NOC_FLAG_DST | CQ_NOC_INLINE_FLAG_VAL,
-    CQ_NOC_INLINE_nDVB = CQ_NOC_FLAG_DST | CQ_NOC_INLINE_FLAG_VAL | CQ_NOC_INLINE_FLAG_BE,
-    CQ_NOC_INLINE_Ndvb = CQ_NOC_FLAG_NOC,
-    CQ_NOC_INLINE_NdvB = CQ_NOC_FLAG_NOC | CQ_NOC_INLINE_FLAG_BE,
-    CQ_NOC_INLINE_NdVb = CQ_NOC_FLAG_NOC | CQ_NOC_INLINE_FLAG_VAL,
-    CQ_NOC_INLINE_NdVB = CQ_NOC_FLAG_NOC | CQ_NOC_INLINE_FLAG_VAL | CQ_NOC_INLINE_FLAG_BE,
-    CQ_NOC_INLINE_NDvb = CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST,
-    CQ_NOC_INLINE_NDvB = CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST | CQ_NOC_INLINE_FLAG_BE,
-    CQ_NOC_INLINE_NDVb = CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST | CQ_NOC_INLINE_FLAG_VAL,
-    CQ_NOC_INLINE_NDVB = CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST | CQ_NOC_INLINE_FLAG_VAL | CQ_NOC_INLINE_FLAG_BE,
-};
+    enum CQNocInlineFlags {
+        CQ_NOC_INLINE_ndvb = 0,
+        CQ_NOC_INLINE_ndvB = CQ_NOC_INLINE_FLAG_BE,
+        CQ_NOC_INLINE_ndVb = CQ_NOC_INLINE_FLAG_VAL,
+        CQ_NOC_INLINE_ndVB = CQ_NOC_INLINE_FLAG_VAL | CQ_NOC_INLINE_FLAG_BE,
+        CQ_NOC_INLINE_nDvb = CQ_NOC_FLAG_DST,
+        CQ_NOC_INLINE_nDvB = CQ_NOC_FLAG_DST | CQ_NOC_INLINE_FLAG_BE,
+        CQ_NOC_INLINE_nDVb = CQ_NOC_FLAG_DST | CQ_NOC_INLINE_FLAG_VAL,
+        CQ_NOC_INLINE_nDVB = CQ_NOC_FLAG_DST | CQ_NOC_INLINE_FLAG_VAL | CQ_NOC_INLINE_FLAG_BE,
+        CQ_NOC_INLINE_Ndvb = CQ_NOC_FLAG_NOC,
+        CQ_NOC_INLINE_NdvB = CQ_NOC_FLAG_NOC | CQ_NOC_INLINE_FLAG_BE,
+        CQ_NOC_INLINE_NdVb = CQ_NOC_FLAG_NOC | CQ_NOC_INLINE_FLAG_VAL,
+        CQ_NOC_INLINE_NdVB = CQ_NOC_FLAG_NOC | CQ_NOC_INLINE_FLAG_VAL | CQ_NOC_INLINE_FLAG_BE,
+        CQ_NOC_INLINE_NDvb = CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST,
+        CQ_NOC_INLINE_NDvB = CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST | CQ_NOC_INLINE_FLAG_BE,
+        CQ_NOC_INLINE_NDVb = CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST | CQ_NOC_INLINE_FLAG_VAL,
+        CQ_NOC_INLINE_NDVB = CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST | CQ_NOC_INLINE_FLAG_VAL | CQ_NOC_INLINE_FLAG_BE,
+    };
 
-enum CQNocWait {
-    CQ_NOC_wait = 0,
-    CQ_NOC_WAIT = 1,
-};
-enum CQNocSend {
-    CQ_NOC_send = 0,
-    CQ_NOC_SEND = 1,
-};
+    enum CQNocWait {
+        CQ_NOC_wait = 0,
+        CQ_NOC_WAIT = 1,
+    };
+    enum CQNocSend {
+        CQ_NOC_send = 0,
+        CQ_NOC_SEND = 1,
+    };
 
-// clang-format off
+    // clang-format off
 /**
  * Initializes the stateful registers for NOC read operations using a specific command buffer.
  * This function sets up the basic NOC read command configuration that will be reused across
@@ -1369,16 +1360,16 @@ enum CQNocSend {
  * | noc                          | Which NOC to use for the transaction            | uint32_t  | 0 or 1      | True     |
  * | cmd_buf (template parameter) | Which command buffer to initialize              | uint32_t  | 0 - 3       | True     |
  */
-// clang-format on
-template <uint32_t cmd_buf>
-inline __attribute__((always_inline)) void noc_read_init_state(uint32_t noc) {
-    uint32_t noc_rd_cmd_field =
-        NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
+    // clang-format on
+    template <uint32_t cmd_buf>
+    inline __attribute__((always_inline)) void noc_read_init_state(uint32_t noc) {
+        uint32_t noc_rd_cmd_field =
+            NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
 
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL_LO, noc_rd_cmd_field);
-}
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL_LO, noc_rd_cmd_field);
+    }
 
-// clang-format off
+    // clang-format off
 /**
  * Initiates an asynchronous read transaction using previously initialized stateful registers.
  * This function must be preceded by a call to \a noc_read_init_state for the same command buffer.
@@ -1404,47 +1395,50 @@ inline __attribute__((always_inline)) void noc_read_init_state(uint32_t noc) {
  * | send (template parameter)     | Whether to send the transaction immediately              | enum CQNocSend   | CQ_NOC_SEND or CQ_NOC_send                               | False    |
  * | wait (template parameter)     | Whether to wait for command buffer readiness             | enum CQNocWait   | CQ_NOC_WAIT or CQ_NOC_wait                               | False    |
  */
-// clang-format on
-template <
-    uint8_t noc_mode = DM_DEDICATED_NOC,
-    uint32_t cmd_buf,
-    enum CQNocFlags flags,
-    enum CQNocSend send = CQ_NOC_SEND,
-    enum CQNocWait wait = CQ_NOC_WAIT>
-inline __attribute__((always_inline)) void noc_read_with_state(
-    uint32_t noc, uint64_t src_addr, uint32_t dst_addr, uint32_t size) {
-    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-        inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
+    // clang-format on
+    template <
+        uint8_t noc_mode = DM_DEDICATED_NOC,
+        uint32_t cmd_buf,
+        enum CQNocFlags flags,
+        enum CQNocSend send = CQ_NOC_SEND,
+        enum CQNocWait wait = CQ_NOC_WAIT>
+    inline __attribute__((always_inline)) void noc_read_with_state(
+        uint32_t noc, uint64_t src_addr, uint32_t dst_addr, uint32_t size) {
+        if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+            inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
+        }
+
+        if constexpr (wait) {
+            while (!noc_cmd_buf_ready(noc, cmd_buf));
+        }
+        if constexpr (flags & CQ_NOC_FLAG_SRC) {
+            NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, (uint32_t)src_addr);
+        }
+        if constexpr (flags & CQ_NOC_FLAG_DST) {
+            NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, dst_addr);
+        }
+        if constexpr (flags & CQ_NOC_FLAG_NOC) {
+            NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, (uint32_t)(src_addr >> 32) & NOC_PCIE_MASK);
+            NOC_CMD_BUF_WRITE_REG(
+                noc,
+                cmd_buf,
+                NOC_TARG_ADDR_COORDINATE,
+                (uint32_t)(src_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+        }
+        if constexpr (flags & CQ_NOC_FLAG_LEN) {
+            // TODO: Runtime assert for size < MAX_BURST_SIZE
+            NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN, size);
+        }
+        if constexpr (send) {
+            NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+        }
+
+        if constexpr (noc_mode == DM_DEDICATED_NOC) {
+            noc_reads_num_issued[noc] += 1;
+        }
     }
 
-    if constexpr (wait) {
-        while (!noc_cmd_buf_ready(noc, cmd_buf));
-    }
-    if constexpr (flags & CQ_NOC_FLAG_SRC) {
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, (uint32_t)src_addr);
-    }
-    if constexpr (flags & CQ_NOC_FLAG_DST) {
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, dst_addr);
-    }
-    if constexpr (flags & CQ_NOC_FLAG_NOC) {
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, (uint32_t)(src_addr >> 32) & NOC_PCIE_MASK);
-        NOC_CMD_BUF_WRITE_REG(
-            noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, (uint32_t)(src_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
-    }
-    if constexpr (flags & CQ_NOC_FLAG_LEN) {
-        // TODO: Runtime assert for size < MAX_BURST_SIZE
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN, size);
-    }
-    if constexpr (send) {
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-    }
-
-    if constexpr (noc_mode == DM_DEDICATED_NOC) {
-        noc_reads_num_issued[noc] += 1;
-    }
-}
-
-// clang-format off
+    // clang-format off
 /**
  * Initializes the stateful registers for NOC write operations using a specific command buffer.
  * This function sets up the basic NOC write command configuration including VC, multicast,
@@ -1460,21 +1454,21 @@ inline __attribute__((always_inline)) void noc_read_with_state(
  * | cmd_buf (template parameter)   | Which command buffer to initialize                 | uint32_t            | 0 - 3               | True     |
  * | cmd_flags (template parameter) | Command flags for multicast/linked/posted options  | enum CQNocCmdFlags  | CQ_NOC_mkp variants | False    |
  */
-// clang-format on
-template <uint32_t cmd_buf, enum CQNocCmdFlags cmd_flags = CQ_NOC_mkp>
-inline __attribute__((always_inline)) void noc_write_init_state(uint32_t noc, uint32_t vc) {
-    constexpr bool multicast_path_reserve = true;
-    uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) |
-                             ((cmd_flags & CQ_NOC_CMD_FLAG_LINKED) ? NOC_CMD_VC_LINKED : 0x0) |
-                             ((cmd_flags & CQ_NOC_CMD_FLAG_MCAST)
-                                  ? ((multicast_path_reserve ? NOC_CMD_PATH_RESERVE : 0) | NOC_CMD_BRCST_PACKET)
-                                  : 0x0) |
-                             ((cmd_flags & CQ_NOC_CMD_FLAG_POSTED) ? 0 : NOC_CMD_RESP_MARKED);
+    // clang-format on
+    template <uint32_t cmd_buf, enum CQNocCmdFlags cmd_flags = CQ_NOC_mkp>
+    inline __attribute__((always_inline)) void noc_write_init_state(uint32_t noc, uint32_t vc) {
+        constexpr bool multicast_path_reserve = true;
+        uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) |
+                                 ((cmd_flags & CQ_NOC_CMD_FLAG_LINKED) ? NOC_CMD_VC_LINKED : 0x0) |
+                                 ((cmd_flags & CQ_NOC_CMD_FLAG_MCAST)
+                                      ? ((multicast_path_reserve ? NOC_CMD_PATH_RESERVE : 0) | NOC_CMD_BRCST_PACKET)
+                                      : 0x0) |
+                                 ((cmd_flags & CQ_NOC_CMD_FLAG_POSTED) ? 0 : NOC_CMD_RESP_MARKED);
 
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL_LO, noc_cmd_field);
-}
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL_LO, noc_cmd_field);
+    }
 
-// clang-format off
+    // clang-format off
 /**
  * Initiates an asynchronous write transaction using previously initialized stateful registers.
  * This function must be preceded by a call to \a noc_write_init_state for the same command buffer.
@@ -1503,55 +1497,58 @@ inline __attribute__((always_inline)) void noc_write_init_state(uint32_t noc, ui
  * | update_counter (template parameter) | Whether to increment write counters                      | bool            | true or false                                            | False    |
  * | posted (template parameter)         | Whether the transaction is posted (no ack required)      | bool            | true or false                                            | False    |
  */
-// clang-format on
-template <
-    uint8_t noc_mode = DM_DEDICATED_NOC,
-    uint32_t cmd_buf,
-    enum CQNocFlags flags,
-    enum CQNocSend send = CQ_NOC_SEND,
-    enum CQNocWait wait = CQ_NOC_WAIT,
-    bool update_counter = true,
-    bool posted = false>
-inline __attribute__((always_inline)) void noc_write_with_state(
-    uint32_t noc, uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0, uint32_t ndests = 1) {
-    if constexpr (update_counter && noc_mode == DM_DYNAMIC_NOC) {
-        if constexpr (posted) {
-            inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
-        } else {
-            inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
-            inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, ndests);
+    // clang-format on
+    template <
+        uint8_t noc_mode = DM_DEDICATED_NOC,
+        uint32_t cmd_buf,
+        enum CQNocFlags flags,
+        enum CQNocSend send = CQ_NOC_SEND,
+        enum CQNocWait wait = CQ_NOC_WAIT,
+        bool update_counter = true,
+        bool posted = false>
+    inline __attribute__((always_inline)) void noc_write_with_state(
+        uint32_t noc, uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0, uint32_t ndests = 1) {
+        if constexpr (update_counter && noc_mode == DM_DYNAMIC_NOC) {
+            if constexpr (posted) {
+                inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
+            } else {
+                inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
+                inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, ndests);
+            }
+        }
+
+        if constexpr (wait) {
+            while (!noc_cmd_buf_ready(noc, cmd_buf));
+        }
+        if constexpr (flags & CQ_NOC_FLAG_SRC) {
+            NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_addr);
+        }
+        if constexpr (flags & CQ_NOC_FLAG_DST) {
+            NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)dst_addr);
+        }
+        if constexpr (flags & CQ_NOC_FLAG_NOC) {
+            // Handles writing to PCIe
+            NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(dst_addr >> 32) & NOC_PCIE_MASK);
+            NOC_CMD_BUF_WRITE_REG(
+                noc,
+                cmd_buf,
+                NOC_RET_ADDR_COORDINATE,
+                (uint32_t)(dst_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+        }
+        if constexpr (flags & CQ_NOC_FLAG_LEN) {
+            // TODO: Runtime assert for size < MAX_BURST_SIZE
+            NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN, size);
+        }
+        if constexpr (send) {
+            NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+        }
+
+        if constexpr (update_counter && noc_mode == DM_DEDICATED_NOC) {
+            if constexpr (posted) {
+                noc_posted_writes_num_issued[noc] += 1;
+            } else {
+                noc_nonposted_writes_num_issued[noc] += 1;
+                noc_nonposted_writes_acked[noc] += ndests;
+            }
         }
     }
-
-    if constexpr (wait) {
-        while (!noc_cmd_buf_ready(noc, cmd_buf));
-    }
-    if constexpr (flags & CQ_NOC_FLAG_SRC) {
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_addr);
-    }
-    if constexpr (flags & CQ_NOC_FLAG_DST) {
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)dst_addr);
-    }
-    if constexpr (flags & CQ_NOC_FLAG_NOC) {
-        // Handles writing to PCIe
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(dst_addr >> 32) & NOC_PCIE_MASK);
-        NOC_CMD_BUF_WRITE_REG(
-            noc, cmd_buf, NOC_RET_ADDR_COORDINATE, (uint32_t)(dst_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
-    }
-    if constexpr (flags & CQ_NOC_FLAG_LEN) {
-        // TODO: Runtime assert for size < MAX_BURST_SIZE
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN, size);
-    }
-    if constexpr (send) {
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-    }
-
-    if constexpr (update_counter && noc_mode == DM_DEDICATED_NOC) {
-        if constexpr (posted) {
-            noc_posted_writes_num_issued[noc] += 1;
-        } else {
-            noc_nonposted_writes_num_issued[noc] += 1;
-            noc_nonposted_writes_acked[noc] += ndests;
-        }
-    }
-}
