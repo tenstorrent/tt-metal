@@ -9,9 +9,6 @@ DEFAULT:
     - MIT
     - BSD-2-Clause
     - BSD-3-Clause
-    - ISC
-    - CC0-1.0
-    - Unlicense
   license_for_new_files: Apache-2.0  # license to be used when inserting a new copyright notice
   new_notice_c: |  # notice for new C, CPP, H, HPP and LD files
     // SPDX-FileCopyrightText: © {years} Tenstorrent AI ULC
@@ -29,11 +26,12 @@ DEFAULT:
   # or
   # SPDX-FileContributor: year[-year] Espressif Systems
   # are replaced with this template prefixed with the correct comment notation (# or // or *) and SPDX- notation
-  espressif_copyright: '© {years} Tenstorrent AI ULC'
-  include:
-    - "*.cpp"
-    - "*.cc"
-    - "*.h"
+  # -- Jonathan Baker - Nov 18 2025 - the file must have an SPDX header, but may not have ours.  expressif_copyright will fail if ours is not found.  Commenting out
+  # espressif_copyright: '© {years} Tenstorrent AI ULC'
+  # include:
+  #   - "*.cpp"
+  #   - "*.cc"
+  #   - "*.h"
 
 ignore:  # You can also select ignoring files here
   perform_check: no  # Don't check files from that block
