@@ -57,6 +57,7 @@ void kernel_main() {
         (split_reader_cb_shared) ? get_semaphore(get_compile_time_arg_val(33)) : 0;
     constexpr uint32_t act_write_offset = get_compile_time_arg_val(34);
     constexpr uint32_t act_write_offset_last = get_compile_time_arg_val(35);
+    constexpr uint32_t delay_cycles = get_compile_time_arg_val(36);
 
     volatile tt_l1_ptr uint32_t* act_split_reader_reserve_done_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_split_reader_reserve_done_semaphore_addr);
@@ -77,7 +78,8 @@ void kernel_main() {
     const uint32_t weights_mcast_sender_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(i++));
     const uint32_t weights_mcast_receiver_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(i++));
     const bool is_sender_core = get_arg_val<uint32_t>(i++) > 0;
-
+    const uint32_t core_axis_id = get_arg_val<uint32_t>(i++);
+    const uint32_t curr_delay_cycles = core_axis_id * delay_cycles;
     volatile tt_l1_ptr uint32_t* weights_mcast_receiver_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(weights_mcast_receiver_semaphore_addr);
     const uint64_t weights_mcast_sender_semaphore_noc_addr =
@@ -180,6 +182,9 @@ void kernel_main() {
 
                     // wait on weights semaphore value to become VALID (set by mcast sender after it multicasts data)
                     noc_semaphore_wait(weights_mcast_receiver_semaphore_addr_ptr, VALID);
+                    if constexpr (delay_cycles > 0) {
+                        delay_in_cycles(curr_delay_cycles);
+                    }
 
                     cb_push_back(cb_id_weight, weight_block_num_tiles);
                 }  // for weight_block_height_num_outer

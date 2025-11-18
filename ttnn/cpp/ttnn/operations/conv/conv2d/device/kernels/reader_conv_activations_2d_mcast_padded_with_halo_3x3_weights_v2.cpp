@@ -171,7 +171,9 @@ void kernel_main() {
     const bool is_receiver_core = get_arg_val<uint32_t>(i++) > 0;
     const bool is_sender_core = get_arg_val<uint32_t>(i++) > 0;
     uint32_t dram_config_reader_index = get_arg_val<uint32_t>(i++);
-
+    const uint32_t core_axis_id = get_arg_val<uint32_t>(i++);
+    const uint32_t curr_delay_cycles = core_axis_id * delay_cycles;
+    const uint32_t curr_delay_cycles_after = (core_axis_id + 1) * delay_cycles;
     tt_l1_ptr uint32_t* act_mcast_sender_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(i));
 
     load_config_tensor_if_in_dram<29, 30, 31, cb_reader_indices>(dram_config_reader_index);
@@ -328,7 +330,7 @@ void kernel_main() {
 
                     if constexpr (delay_cycles > 0) {
                         const uint32_t delay_cycles_current =
-                            ((act_w_outer_i < act_mcast_sender_id) ? act_w_outer_i + 1 : act_w_outer_i) * delay_cycles;
+                            ((act_w_outer_i < act_mcast_sender_id) ? curr_delay_cycles : curr_delay_cycles_after);
                         delay_in_cycles(delay_cycles_current);
                     }
                 }

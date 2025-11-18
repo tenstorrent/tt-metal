@@ -985,6 +985,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
             split_reader_args.end(), activation_reuse_dummy_args.begin(), activation_reuse_dummy_args.end());
     }
     writer_compile_time_args.insert(writer_compile_time_args.end(), split_reader_args.begin(), split_reader_args.end());
+    if (block_sharded) {
+        writer_compile_time_args.push_back(delay_cycles);
+    }
     tt::tt_metal::TensorAccessorArgs(b.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(bias ? bias->buffer() : nullptr).append_to(writer_compile_time_args);
 
@@ -1125,6 +1128,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
                 const bool is_receiver_core = output_cores.contains(core);
                 const bool is_sender_core = input_cores.contains(core);
                 std::vector<uint32_t> reader_rt_args;
+                uint32_t core_axis_id = 0;
                 if (transpose_mcast) {
                     CoreCoord bottom_core = {(std::size_t)core.x, (std::size_t)num_cores_y - 1};
                     CoreCoord bottom_core_physical = device->worker_core_from_logical_core(bottom_core);
@@ -1138,6 +1142,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
 
                     reader_rt_args.push_back(core.y);                  // act_mcast_sender_id
                     reader_rt_args.push_back(bottom_core_physical.x);  // act_mcast_sender_noc_x
+                    core_axis_id = core.y;
                 } else {
                     CoreCoord core_physical = device->worker_core_from_logical_core(core);
 
@@ -1149,10 +1154,12 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
                         core_physical.y);
                     reader_rt_args.push_back(core.x);           // act_mcast_sender_id
                     reader_rt_args.push_back(core_physical.y);  // act_mcast_sender_noc_x
+                    core_axis_id = core.x;
                 }
                 reader_rt_args.push_back(static_cast<uint32_t>(is_receiver_core));  // is_receiver_core
                 reader_rt_args.push_back(static_cast<uint32_t>(is_sender_core));    // is_receiver_core
                 reader_rt_args.push_back(transpose_mcast ? core.x : core.y);        // dram config reader index
+                reader_rt_args.push_back(core_axis_id);
                 reader_rt_args.insert(reader_rt_args.end(), act_mcast_noc_y.begin(), act_mcast_noc_y.end());
                 SetRuntimeArgs(program, reader_id, core, reader_rt_args);
             }
@@ -1299,17 +1306,21 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
 
         for (const CoreCoord& core : core_range) {
             std::vector<uint32_t> receiver_args;
+            uint32_t core_axis_id = 0;
             if (block_sharded) {
                 if (transpose_mcast) {
                     CoreCoord right_core = {(std::size_t)num_cores_x - 1, (std::size_t)core.y};
                     CoreCoord right_core_physical = device->worker_core_from_logical_core(right_core);
                     receiver_args = create_receiver_args(top_left_core_physical.x, right_core_physical.y);
+                    core_axis_id = core.x;
                 } else {
                     CoreCoord top_core = {(std::size_t)core.x, 0};
                     CoreCoord top_core_physical = device->worker_core_from_logical_core(top_core);
                     receiver_args = create_receiver_args(top_core_physical.x, top_left_core_physical.y);
+                    core_axis_id = core.y;
                 }
                 const bool is_sender_core = input_cores.contains(core);
+                receiver_args.push_back(core_axis_id);
                 receiver_args.push_back(static_cast<uint32_t>(is_sender_core));
             } else {
                 bool is_no_op_core = !input_cores.contains(core);

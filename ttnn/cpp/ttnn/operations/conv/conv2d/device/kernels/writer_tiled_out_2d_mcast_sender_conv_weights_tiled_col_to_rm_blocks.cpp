@@ -77,7 +77,7 @@ void kernel_main() {
         (split_reader_cb_shared) ? get_write_ptr(cb_id_act_second_reader) + act_write_offset_last : 0;
     const uint32_t split_reader_cb_write_addr_sum = split_reader_cb_write_addr + split_reader_cb_write_addr_last;
 
-    constexpr uint32_t ct_arg_idx = 36;
+    constexpr uint32_t ct_arg_idx = 37;
     constexpr auto s_weight_args = TensorAccessorArgs<ct_arg_idx>();
     constexpr auto s_bias_args = TensorAccessorArgs<s_weight_args.next_compile_time_args_offset()>();
 
