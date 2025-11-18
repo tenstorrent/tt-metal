@@ -794,16 +794,27 @@ void ControlPlane::order_ethernet_channels() {
                 }
             }
             const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(phys_chip_id);
-            if (src_asic_id > neighbor_asic_id) {
+            if (neighbor_asic_id.has_value() && src_asic_id > neighbor_asic_id.value()) {
                 std::sort(eth_chans.begin(), eth_chans.end(), [&soc_desc](const auto& a, const auto& b) {
                     auto translated_coords_a = soc_desc.get_eth_core_for_channel(a, CoordSystem::TRANSLATED);
                     auto translated_coords_b = soc_desc.get_eth_core_for_channel(b, CoordSystem::TRANSLATED);
                     return translated_coords_a.x < translated_coords_b.x;
                 });
             } else if (neighbor_asic_id.has_value()) {
-                std::sort(eth_connections.begin(), eth_connections.end(), [&soc_desc](const auto& a, const auto& b) {
-                    auto translated_coords_a = soc_desc.get_eth_core_for_channel(a.dst_chan, CoordSystem::TRANSLATED);
-                    auto translated_coords_b = soc_desc.get_eth_core_for_channel(b.dst_chan, CoordSystem::TRANSLATED);
+                // Find the physical chip ID for the neighbor AsicID
+                ChipId neighbor_phys_chip_id = 0;
+                const auto& chip_unique_ids = tt::tt_metal::MetalContext::instance().get_cluster().get_unique_chip_ids();
+                for (const auto& [physical_chip_id, unique_id] : chip_unique_ids) {
+                    if (tt::tt_metal::AsicID{unique_id} == neighbor_asic_id.value()) {
+                        neighbor_phys_chip_id = physical_chip_id;
+                        break;
+                    }
+                }
+                // Get the soc_desc for the neighbor chip
+                const auto& neighbor_soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(neighbor_phys_chip_id);
+                std::sort(eth_connections.begin(), eth_connections.end(), [&neighbor_soc_desc](const auto& a, const auto& b) {
+                    auto translated_coords_a = neighbor_soc_desc.get_eth_core_for_channel(a.dst_chan, CoordSystem::TRANSLATED);
+                    auto translated_coords_b = neighbor_soc_desc.get_eth_core_for_channel(b.dst_chan, CoordSystem::TRANSLATED);
                     return translated_coords_a.x < translated_coords_b.x;
                 });
                 for (uint32_t i = 0; i < eth_connections.size(); i++) {
