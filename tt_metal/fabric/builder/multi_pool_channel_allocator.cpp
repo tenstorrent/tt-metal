@@ -31,10 +31,7 @@ MultiPoolChannelAllocator::MultiPoolChannelAllocator(
 }
 
 void MultiPoolChannelAllocator::emit_ct_args(
-    std::vector<uint32_t>& ct_args,
-    size_t num_fwd_paths,
-    size_t num_used_sender_channels,
-    size_t num_used_receiver_channels) const {
+    std::vector<uint32_t>& ct_args, size_t num_used_sender_channels, size_t num_used_receiver_channels) const {
     // Step 0: Emit special tag (replaces the tag that was in static allocator)
     ct_args.push_back(0xabcd1234);
 
@@ -85,7 +82,7 @@ void MultiPoolChannelAllocator::emit_ct_args(
     // Step 3: Emit individual pool CT args
     // Each pool allocator emits its own compile-time arguments (WITHOUT special tags)
     for (const auto& pool_allocator : pool_allocators_) {
-        pool_allocator->emit_ct_args(ct_args, num_fwd_paths, num_used_sender_channels, num_used_receiver_channels);
+        pool_allocator->emit_ct_args(ct_args);
     }
 
     // Emit the sender channel to pool index
