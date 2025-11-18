@@ -144,8 +144,8 @@ int main(int argc, char** argv) {
         if (!cmdline_parser.check_filter(test_config, true)) {
             log_info(tt::LogTest, "Skipping Test Group: {} due to filter policy", test_config.name);
             continue;
-        } else if (builder.should_skip_test(test_config)) {
-            log_info(tt::LogTest, "Skipping Test Group: {} due to skip policy", test_config.name);
+        } else if (builder.should_skip_test_on_platform(test_config)) {
+            log_info(tt::LogTest, "Skipping Test Group: {} due to platform skip policy", test_config.name);
             continue;
         }
         log_info(tt::LogTest, "Running Test Group: {}", test_config.name);
@@ -168,6 +168,13 @@ int main(int argc, char** argv) {
         if (!open_devices_success) {
             log_warning(
                 tt::LogTest, "Skipping Test Group: {} due to unsupported fabric configuration", test_config.name);
+            continue;
+        }
+
+        // Check topology-based skip conditions after devices are opened
+        if (builder.should_skip_test_on_topology(test_config)) {
+            log_info(tt::LogTest, "Skipping Test Group: {} due to topology skip policy", test_config.name);
+            test_context.close_devices();
             continue;
         }
         tests_ran++;

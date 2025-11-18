@@ -300,8 +300,7 @@ private:
         tt::tt_fabric::fabric_connection_info_t& dispatcher_connection_info,
         tt::tt_fabric::fabric_connection_info_t& tensix_connection_info,
         ChipId physical_chip_id,
-        chan_id_t eth_channel_id,
-        eth_chan_directions router_direction) const;
+        chan_id_t eth_channel_id) const;
 
     void assign_direction_to_fabric_eth_chan(
         const FabricNodeId& fabric_node_id, chan_id_t chan_id, RoutingDirection direction);

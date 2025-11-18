@@ -454,6 +454,22 @@ Tests:
             destination:
               device: [0, 1]
 
+  - name: "FabricMuxSimpleUnicastWriteMesh"
+    skip: [GALAXY, BLACKHOLE_GALAXY]
+    fabric_setup:
+      topology: Mesh
+      fabric_tensix_config: Mux
+
+    senders:
+      - device: [0, 1]
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 1024
+            num_packets: 100
+            destination:
+              device: [0, 0]
+
   - name: "FabricMuxAllToAllUnicastMesh"
     skip: [GALAXY, BLACKHOLE_GALAXY]
     fabric_setup:
