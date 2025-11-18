@@ -200,6 +200,9 @@ tests:
   86:
     name: "DRAM Sharded Read Bank Numbers"
 
+  87:
+    name: "DRAM Sharded Read Transaction ID Directed Ideal"
+
   100:
     name: "Multicast Schemes (Loopback Enabled)"
 
