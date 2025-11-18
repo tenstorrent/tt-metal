@@ -169,6 +169,9 @@ def format_res_gt_by_classes(
     print("results path: {}".format(result_path))
 
     output_dir = osp.join(*osp.split(result_path)[:-1])
+    if isinstance(gen_results, dict):
+        valid_tokens = set(gen_results.keys())
+        annotations = [ann for ann in annotations if ann.get("sample_token") in valid_tokens]
     assert len(gen_results) == len(annotations)
 
     pool = Pool(nproc)
