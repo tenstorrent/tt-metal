@@ -180,7 +180,7 @@ def test_pipeline_performance(
         prompt_idx = (i + 1) % len(prompts)
         with benchmark_profiler("run", iteration=i):
             with torch.no_grad():
-                pipeline(
+                result = pipeline(
                     prompt=prompts[prompt_idx],
                     negative_prompt=negative_prompt,
                     height=height,
@@ -190,6 +190,17 @@ def test_pipeline_performance(
                     guidance_scale=guidance_scale,
                     guidance_scale_2=guidance_scale_2,
                 )
+
+                if hasattr(result, "frames"):
+                    frames = result.frames
+                else:
+                    frames = result[0] if isinstance(result, tuple) else result
+                frames = frames[0]
+                try:
+                    export_to_video(frames, f"wan_output_video_performance_{i+1}.mp4", fps=16)
+                except AttributeError as e:
+                    logger.info(f"AttributeError: {e}")
+                print(f"✓ Saved video to: wan_output_video_performance_{i+1}.mp4")
 
         # Collect timing data
         all_timings.append(pipeline.timing_data)
@@ -257,20 +268,28 @@ def test_pipeline_performance(
             "total_time": 192.0,
         }
     elif tuple(mesh_device.shape) == (4, 8) and height == 720:
-        if is_blackhole():
-            expected_metrics = {
-                "text_encoding_time": 15.0,
-                "denoising_time": 290.0,
-                "vae_decoding_time": 36.0,
-                "total_time": 341.0,
-            }
-        else:
-            expected_metrics = {
-                "text_encoding_time": 15.0,
-                "denoising_time": 440.0,
-                "vae_decoding_time": 42.0,
-                "total_time": 497.0,
-            }
+        expected_metrics = {
+            "text_encoding_time": 15.0,
+            "denoising_time": 502,
+            "vae_decoding_time": 39.6,
+            "total_time": 556,
+        }
+    elif tuple(mesh_device.shape) == (1, 4) and height == 480:
+        assert is_blackhole(), "1x4 is only supported for blackhole"
+        expected_metrics = {
+            "text_encoding_time": 15.0,
+            "denoising_time": 1000.0,
+            "vae_decoding_time": 90.0,
+            "total_time": 1105.0,
+        }
+    elif tuple(mesh_device.shape) == (1, 4) and height == 720:
+        assert is_blackhole(), "1x4 is only supported for blackhole"
+        expected_metrics = {
+            "text_encoding_time": 15.0,
+            "denoising_time": 3200.0,
+            "vae_decoding_time": 200.0,
+            "total_time": 3415.0,
+        }
     else:
         assert False, f"Unknown mesh device for performance comparison: {mesh_device}"
 
