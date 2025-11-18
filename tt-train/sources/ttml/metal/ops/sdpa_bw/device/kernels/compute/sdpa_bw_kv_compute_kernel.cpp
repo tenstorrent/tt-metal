@@ -149,16 +149,6 @@ void MAIN {
                     cb_attention_weights, cb_masked_interm, cb_mat_mul_reduction, num_of_interm_tiles);
 
                 // Step 2: Accumulate grad_V = Attention^T @ grad_output
-                // update_grad_value(
-                //     cb_attention_weights,
-                //     cb_transpose_wh,
-                //     cb_grad_output,
-                //     cb_mm_result_holder,
-                //     cb_grad_value,
-                //     tiles_per_row,
-                //     block_size,
-                //     h > 0);  // fix: accumulate after first row of first head
-
                 update_grad_value(
                     cb_attention_weights,
                     cb_transpose_wh,
@@ -221,3 +211,4 @@ void MAIN {
 }
 
 }  // namespace NAMESPACE
+

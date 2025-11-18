@@ -479,6 +479,54 @@ void update_grad_key(
     }
 }
 
+void update_grad_query(
+    uint32_t cb_grad_scores,
+    uint32_t cb_key,
+    uint32_t scaler_bits,
+    uint32_t cb_prev_grad_query,
+    uint32_t cb_cur_grad_query,
+    uint32_t tiles_per_row,
+    bool do_accumulate = false) {
+    cb_reserve_back(cb_cur_grad_query, tiles_per_row);
+    pack_reconfig_data_format(cb_cur_grad_query);
+    reconfig_data_format(cb_grad_scores, cb_key);
+    for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; tile_idx++) {
+        tile_regs_acquire();
+        mm_init_short(cb_grad_scores, cb_key, /* transpose */ 0);
+        matmul_tiles(
+            cb_grad_scores,
+            cb_key,
+            /* tile_idx */ 0,
+            /* tile_idx */ tile_idx,
+            /* dst_reg_idx*/ 0,
+            /* transpose */ 0);
+
+        // apply scaler factor to the result before matmul accumulation
+        // maybe will achive better accuracy
+        // binop_with_scalar_tile_init();
+        // mul_unary_tile(/* dst_reg_idx*/ 0, scaler_bits);  // multiply by scaler factor
+
+        if (do_accumulate) {
+            copy_tile_init(cb_prev_grad_query);
+            copy_tile(cb_prev_grad_query, /* tile_idx */ tile_idx, /* register idx */ 1U);
+
+            add_binary_tile_init();
+            add_binary_tile(0, 1U, 0);  // accumulate in register 0
+        }
+        tile_regs_commit();
+
+        tile_regs_wait();
+        pack_tile(0, cb_cur_grad_query);
+        tile_regs_release();
+    }
+    cb_push_back(cb_cur_grad_query, tiles_per_row);
+
+    cb_pop_front(cb_grad_scores, onetile);
+    if (do_accumulate) {
+        cb_pop_front(cb_prev_grad_query, tiles_per_row);
+    }
+}
+
 void pack_result(uint32_t cb_source, uint32_t cb_output, uint32_t num_tiles) {
     cb_wait_front(cb_source, num_tiles);
     cb_reserve_back(cb_output, num_tiles);
