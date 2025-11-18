@@ -93,7 +93,7 @@ inline bool intra_mesh_routing_path_t<1, false>::decode_route_to_buffer(
     }
 
     const uint8_t* packed_route = &this->paths[dst_chip_id * SINGLE_ROUTE_SIZE];
-    // Copy packed data directly to output buffer
+    // Copy packed data directly to output buffer -KKKKK
     for (uint16_t i = 0; i < SINGLE_ROUTE_SIZE; ++i) {
         out_route_buffer[i] = packed_route[i];
     }
