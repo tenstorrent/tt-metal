@@ -68,6 +68,7 @@ jobs:
 
       - name: Create ccache tmpdir
         run: |
+          # Look at me, ma!
           mkdir -p /tmp/ccache
 
       - name: Prepare ccache summary
