@@ -6,8 +6,9 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/bfloat16.hpp>
-#include "tt-metalium/constants.hpp"
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -86,17 +87,24 @@ int main() {
     // These kernels work together to form a pipeline. The reader reads data from the DRAM buffer and makes them
     // available in the compute kernel. The compute kernel does math and pushes the result into the writer kernel. The
     // writer kernel writes the result back to DRAM.
+    std::vector<uint32_t> reader_args;
+    TensorAccessorArgs(*src0_dram_buffer->get_backing_buffer()).append_to(reader_args);
+    TensorAccessorArgs(*src1_dram_buffer->get_backing_buffer()).append_to(reader_args);
     KernelHandle binary_reader_kernel_id = CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "add_2_integers_hang/kernels/dataflow/reader_binary_1_tile.cpp",
         core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_args});
 
+    std::vector<uint32_t> writer_args;
+    TensorAccessorArgs(*dst_dram_buffer->get_backing_buffer()).append_to(writer_args);
     KernelHandle unary_writer_kernel_id = CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "add_2_integers_hang/kernels/dataflow/writer_1_tile.cpp",
         core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = writer_args});
 
     // This kernel performs the actual addition of the two input tiles
     KernelHandle eltwise_binary_kernel_id = CreateKernel(
