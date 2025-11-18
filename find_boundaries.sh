@@ -87,10 +87,14 @@ RUN_IDS=$(echo "$VALID_RUNS" | jq -r '.[].id' | head -100)
 
 PROCESSED=0
 FOUND_SUCCESS=false
-FOUND_FAILURE=false
 
 # Process runs in reverse chronological order (newest first)
-# Fetch jobs on-demand and stop early when we have both results
+# Track the most recent failure we see, then when we find the last success,
+# that failure is the first failure after the success
+MOST_RECENT_FAILURE_RUN=""
+MOST_RECENT_FAILURE_RUN_ID=""
+MOST_RECENT_FAILURE_COMMIT=""
+
 for RUN_ID in $RUN_IDS; do
     RUN_DATA=$(echo "$VALID_RUNS" | jq -r ".[] | select(.id == ${RUN_ID})")
     RUN_COMMIT=$(echo "$RUN_DATA" | jq -r '.head_sha')
@@ -153,38 +157,31 @@ for RUN_ID in $RUN_IDS; do
 
     if [ "$JOB_CONCLUSION" = "success" ]; then
         if [ "$FOUND_SUCCESS" = false ]; then
+            # Found the last successful run
             LAST_SUCCESSFUL_RUN="$RUN_URL"
             LAST_SUCCESSFUL_RUN_ID="$RUN_ID"
             LAST_SUCCESSFUL_COMMIT="$RUN_COMMIT"
             FOUND_SUCCESS=true
-            echo -e "${GREEN}✓ SUCCESS${NC}"
 
-            # If we already found a failure, we can stop
-            if [ "$FOUND_FAILURE" = true ]; then
-                echo ""
-                echo -e "${GREEN}Found both success and failure - stopping search${NC}"
-                break
+            # The most recent failure we tracked is the first failure after this success
+            if [ -n "$MOST_RECENT_FAILURE_RUN" ]; then
+                FIRST_FAILING_RUN="$MOST_RECENT_FAILURE_RUN"
+                FIRST_FAILING_RUN_ID="$MOST_RECENT_FAILURE_RUN_ID"
+                FIRST_FAILING_COMMIT="$MOST_RECENT_FAILURE_COMMIT"
             fi
-        else
-            echo -e "${GREEN}Success (already found)${NC}"
+
+            echo -e "${GREEN}✓ SUCCESS (last successful)${NC}"
+            echo ""
+            echo -e "${GREEN}Found last success and first failure - stopping search${NC}"
+            break
         fi
     elif [ "$JOB_CONCLUSION" = "failure" ]; then
-        if [ "$FOUND_FAILURE" = false ]; then
-            FIRST_FAILING_RUN="$RUN_URL"
-            FIRST_FAILING_RUN_ID="$RUN_ID"
-            FIRST_FAILING_COMMIT="$RUN_COMMIT"
-            FOUND_FAILURE=true
-            echo -e "${RED}✗ FAILURE${NC}"
-
-            # If we already found a success, we can stop
-            if [ "$FOUND_SUCCESS" = true ]; then
-                echo ""
-                echo -e "${GREEN}Found both success and failure - stopping search${NC}"
-                break
-            fi
-        else
-            echo -e "${RED}Failure (already found)${NC}"
-        fi
+        # Track the most recent failure we've seen (newest failure)
+        # This will be the first failure after the last success
+        MOST_RECENT_FAILURE_RUN="$RUN_URL"
+        MOST_RECENT_FAILURE_RUN_ID="$RUN_ID"
+        MOST_RECENT_FAILURE_COMMIT="$RUN_COMMIT"
+        echo -e "${RED}✗ FAILURE${NC}"
     else
         echo -e "${YELLOW}Conclusion: ${JOB_CONCLUSION}${NC}"
     fi
@@ -195,6 +192,11 @@ echo -e "${BLUE}========================================${NC}"
 echo -e "${BLUE}RESULTS${NC}"
 echo -e "${BLUE}========================================${NC}"
 echo ""
+
+FOUND_FAILURE=false
+if [ -n "$FIRST_FAILING_RUN" ]; then
+    FOUND_FAILURE=true
+fi
 
 if [ "$FOUND_SUCCESS" = true ]; then
     echo -e "${GREEN}✓ LAST SUCCESSFUL RUN:${NC}"
