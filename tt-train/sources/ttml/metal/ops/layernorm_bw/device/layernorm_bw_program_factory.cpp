@@ -92,9 +92,9 @@ bool fits_in_l1_check(
     const uint32_t dL_dout_memory = bf16_row_memory;
 
     // Memory for output CBs
-    const uint32_t dx_memory = block_size;
-    const uint32_t dgamma_components_memory = block_size;
-    const uint32_t dbeta_components_memory = block_size;
+    const uint32_t dx_memory = 2 * block_size * bfloat16_single_tile_size_bytes;
+    const uint32_t dgamma_components_memory = 2 * block_size * bfloat16_single_tile_size_bytes;
+    const uint32_t dbeta_components_memory = 2 * block_size * bfloat16_single_tile_size_bytes;
 
     // Memory for intermediate computation CBs
     const uint32_t dy_gamma_sum_memory = kNumDyGammaSumTiles * float32_single_tile_size_bytes;
@@ -296,11 +296,21 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
 
     // Output CBs
     [[maybe_unused]] auto cb_dx = create_circular_buffer(
-        program, all_cores, kDxCbIndex, default_data_format, bfloat16_single_tile_size_bytes, block_size);
+        program, all_cores, kDxCbIndex, default_data_format, bfloat16_single_tile_size_bytes, twice_block_size);
     [[maybe_unused]] auto cb_dgamma_components = create_circular_buffer(
-        program, all_cores, kDgammaComponentsCbIndex, default_data_format, bfloat16_single_tile_size_bytes, block_size);
+        program,
+        all_cores,
+        kDgammaComponentsCbIndex,
+        default_data_format,
+        bfloat16_single_tile_size_bytes,
+        twice_block_size);
     [[maybe_unused]] auto cb_dbeta_components = create_circular_buffer(
-        program, all_cores, kDbetaComponentsCbIndex, default_data_format, bfloat16_single_tile_size_bytes, block_size);
+        program,
+        all_cores,
+        kDbetaComponentsCbIndex,
+        default_data_format,
+        bfloat16_single_tile_size_bytes,
+        twice_block_size);
 
     // Intermediate computation CBs
     [[maybe_unused]] auto cb_rstd_bcast = create_circular_buffer(
