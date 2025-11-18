@@ -1872,7 +1872,7 @@ jobs:
               [ -z "$team" ] && continue
 
               if [ "$team" = "@tenstorrent/codeowner-bypass" ]; then
-                echo "DEBUG: Skipping large-changes team"
+                echo "DEBUG: Skipping codeowner-bypass team"
                 continue
               fi
 
