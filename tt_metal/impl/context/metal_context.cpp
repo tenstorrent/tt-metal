@@ -602,6 +602,7 @@ void MetalContext::construct_control_plane(const std::filesystem::path& mesh_gra
 }
 
 void MetalContext::initialize_control_plane() {
+    log_critical(tt::LogFabric, "Using fabric config: {}", enchantum::to_string(this->fabric_config_));
     if (custom_mesh_graph_desc_path_.has_value()) {
         log_debug(tt::LogDistributed, "Using custom mesh graph descriptor: {}", custom_mesh_graph_desc_path_.value());
         std::filesystem::path mesh_graph_desc_path = std::filesystem::path(custom_mesh_graph_desc_path_.value());
@@ -622,6 +623,9 @@ void MetalContext::initialize_control_plane() {
     std::filesystem::path mesh_graph_desc_path =
         tt::tt_fabric::MeshGraph::get_mesh_graph_descriptor_path_for_cluster_type(
             cluster_type, rtoptions_.get_root_dir(), fabric_type);
+
+    log_critical(tt::LogFabric, "Using cluster type: {}", enchantum::to_string(cluster_type));
+    log_critical(tt::LogFabric, "Using fabric type: {}", enchantum::to_string(fabric_type));
 
     log_debug(tt::LogMetal, "Using mesh graph descriptor: {}", mesh_graph_desc_path);
 

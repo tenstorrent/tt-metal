@@ -336,6 +336,10 @@ TEST(MultiHost, Test32x4QuadGalaxyControlPlaneInit) {
         log_info(tt::LogTest, "This test is only for GALAXY");
         GTEST_SKIP();
     }
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
     const std::filesystem::path quad_galaxy_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/32x4_quad_galaxy_torus_xy_graph_descriptor.textproto";
@@ -625,17 +629,6 @@ TEST(MultiHost, TestBHQB4x4Fabric1DSanity) {
         const auto& eth_chans = control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id);
         EXPECT_TRUE(!eth_chans.empty());
     }
-}
-
-TEST(MultiHost, TestBHQalaxy4x32ControlPlaneInit) {
-    // Get the host name
-    char hostname[HOST_NAME_MAX + 1];
-    gethostname(hostname, sizeof(hostname));
-    std::string host_name(hostname);
-    // serialize the cluster descriptor to file
-    auto cluster_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_desc();
-    std::string filename = host_name + "_cluster_desc.yaml";
-    cluster_desc->serialize_to_file(filename);
 }
 
 }  // namespace multi_host_tests

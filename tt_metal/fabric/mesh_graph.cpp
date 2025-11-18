@@ -317,6 +317,8 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd, std::optiona
             effective_fabric_type = mgd_fabric_type;
         }
 
+        log_critical(tt::LogFabric, "Effective fabric type: {}", enchantum::to_string(effective_fabric_type));
+
         // Build connectivity using effective_fabric_type
         MeshCoordinateRange mesh_coord_range(mesh_shape);
         uint32_t mesh_size = mesh_shape[0] * mesh_shape[1];
