@@ -159,7 +159,7 @@ void fill_tile_partial_sliding_window(uint32_t cb_id, uint32_t tile_id, uint32_t
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id) + tile_id * tile_bytes);
 
     // Determine which faces to fill completely (before the window_start_pos_in_tile)
-    int face_start = (window_start_pos_in_tile < 15) ? 0 : 1;  // Last face to fill completely
+    int face_start = (window_start_pos_in_tile < 16) ? 0 : 1;  // Last face to fill completely
 
     // Fill complete faces (faces 0, 2, 4, 6... for faces before face_start)
     if (face_start == 1) {

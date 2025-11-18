@@ -27,6 +27,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <tracy/Tracy.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include <impl/debug/inspector/inspector.hpp>
 
 namespace tt::tt_metal {
 
@@ -176,6 +177,7 @@ SystemMemoryManager::SystemMemoryManager(ChipId device_id, uint8_t num_hw_cqs) :
 uint32_t SystemMemoryManager::get_next_event(const uint8_t cq_id) {
     cq_to_event_locks[cq_id].lock();
     uint32_t next_event = ++this->cq_to_event[cq_id];  // Event ids start at 1
+
     cq_to_event_locks[cq_id].unlock();
     return next_event;
 }
@@ -184,6 +186,15 @@ uint32_t SystemMemoryManager::get_next_event(const uint8_t cq_id) {
 uint32_t SystemMemoryManager::get_last_event(const uint8_t cq_id) {
     std::lock_guard<std::mutex> lock(cq_to_event_locks[cq_id]);
     return this->cq_to_event[cq_id];
+}
+
+void SystemMemoryManager::set_current_and_last_completed_event(
+    const uint8_t cq_id, const uint32_t current_event_id, const uint32_t last_completed_event_id) {
+    cq_to_event_locks[cq_id].lock();
+
+    this->cq_to_event[cq_id] = current_event_id;
+    this->cq_to_last_completed_event[cq_id] = last_completed_event_id;
+    cq_to_event_locks[cq_id].unlock();
 }
 
 void SystemMemoryManager::reset_event_id(const uint8_t cq_id) {
@@ -202,12 +213,21 @@ void SystemMemoryManager::set_last_completed_event(const uint8_t cq_id, const ui
     TT_ASSERT(
         wrap_ge(event_id, this->cq_to_last_completed_event[cq_id]),
         "Event ID is expected to increase. Wrapping not supported for sync. Completed event {} but last recorded "
-        "completed event is {}",
+        "completed event is {}, manager {}",
         event_id,
-        this->cq_to_last_completed_event[cq_id]);
+        this->cq_to_last_completed_event[cq_id],
+        fmt::ptr(this));
     cq_to_event_locks[cq_id].lock();
+
     this->cq_to_last_completed_event[cq_id] = event_id;
     cq_to_event_locks[cq_id].unlock();
+}
+
+uint32_t SystemMemoryManager::get_current_event(const uint8_t cq_id) {
+    cq_to_event_locks[cq_id].lock();
+    uint32_t current_event = this->cq_to_event[cq_id];
+    cq_to_event_locks[cq_id].unlock();
+    return current_event;
 }
 
 uint32_t SystemMemoryManager::get_last_completed_event(const uint8_t cq_id) {
@@ -282,6 +302,7 @@ ChipId SystemMemoryManager::get_device_id() const { return this->device_id; }
 std::vector<SystemMemoryCQInterface>& SystemMemoryManager::get_cq_interfaces() { return this->cq_interfaces; }
 
 void* SystemMemoryManager::issue_queue_reserve(uint32_t cmd_size_B, const uint8_t cq_id) {
+    TT_ASSERT(cmd_size_B > 0, "Command size must be greater than 0");
     if (this->bypass_enable) {
         uint32_t curr_size = this->bypass_buffer.size();
         uint32_t new_size = curr_size + (cmd_size_B / sizeof(uint32_t));
@@ -336,6 +357,7 @@ void SystemMemoryManager::cq_write(const void* data, uint32_t size_in_bytes, uin
 
 // TODO: RENAME issue_queue_stride ?
 void SystemMemoryManager::issue_queue_push_back(uint32_t push_size_B, const uint8_t cq_id) {
+    TT_ASSERT(push_size_B > 0, "Push size must be greater than 0");
     if (this->bypass_enable) {
         this->bypass_buffer_write_offset += push_size_B;
         return;
@@ -423,6 +445,10 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
 
         // Handler for timeout
         auto fetch_on_timeout = [&]() {
+            // Serialize Inspector RPC data before throwing
+            log_info(LogAlways, "Timeout detected - serializing Inspector RPC data");
+            Inspector::serialize_rpc();
+
             TT_THROW("TIMEOUT: device timeout in fetch queue wait, potential hang detected");
         };
 
@@ -474,6 +500,11 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
     // Handler for the timeout
     auto on_timeout = [&exit_condition]() {
         exit_condition.store(true);
+
+        // Serialize Inspector RPC data before throwing
+        log_info(LogAlways, "Timeout detected - serializing Inspector RPC data");
+        Inspector::serialize_rpc();
+
         TT_THROW("TIMEOUT: device timeout, potential hang detected, the device is unrecoverable");
     };
 
@@ -525,6 +556,7 @@ void SystemMemoryManager::fetch_queue_write(uint32_t command_size_B, const uint8
         max_command_size_B);
     TT_ASSERT(
         (command_size_B >> DispatchSettings::PREFETCH_Q_LOG_MINSIZE) < 0xFFFF, "FetchQ command too large to represent");
+    TT_ASSERT(command_size_B > 0, "Command size must be greater than 0");
     if (this->bypass_enable) {
         return;
     }
