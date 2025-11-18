@@ -17,16 +17,6 @@ on:
         required: false
         default: dev
         type: string
-      test-v1:
-        required: false
-        default: true
-        type: boolean
-        description: "include vLLM v1 tests?"
-      test-v0:
-        required: false
-        default: true
-        type: boolean
-        description: "include vLLM v0 tests?"
 
 jobs:
   vllm-tests:
@@ -360,9 +350,6 @@ jobs:
       - ${{ matrix.test-group.arch }}
       - in-service
       - pipeline-functional
-    if: |
-      ( inputs.test-v1 && matrix.test-group.use-vllm-v1 ) ||
-      ( inputs.test-v0 && !matrix.test-group.use-vllm-v1 )
     container:
       image: ${{ inputs.docker-image }}
       env:
