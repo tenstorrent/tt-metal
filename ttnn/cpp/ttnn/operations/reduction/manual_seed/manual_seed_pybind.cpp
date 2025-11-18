@@ -1,0 +1,49 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "manual_seed_pybind.hpp"
+
+#include "manual_seed.hpp"
+
+#include "ttnn-pybind/decorators.hpp"
+
+namespace ttnn::operations::reduction::detail {
+namespace py = pybind11;
+
+void bind_manual_seed_operation(py::module& module) {
+    auto doc = R"doc(
+            Sets the manual seed for random number generation on the specified device.
+
+            This operation allows users to set a specific seed or a tensor of seeds for random number generation,
+            ensuring reproducibility in operations that rely on randomness.
+
+            Args:
+                device (ttnn.MeshDevice): The device on which to set the manual seed.
+                seeds (int or ttnn.Tensor): A single integer seed or a tensor of seeds to initialize the random number generator.
+
+            Keyword Args:
+                user_ids (int or ttnn.Tensor, optional): An optional user ID or tensor of user IDs associated with the seeds.
+
+            Returns:
+                None
+        )doc";
+    using OperationType = decltype(ttnn::manual_seed);
+    bind_registered_operation(
+        module,
+        ttnn::manual_seed,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const OperationType& self,
+               MeshDevice& device,
+               std::variant<uint32_t, ttnn::Tensor> seeds,
+               std::optional<std::variant<uint32_t, ttnn::Tensor>> user_ids) -> uint32_t {
+                return self(device, seeds, user_ids);
+            },
+            py::arg("device").noconvert(),
+            py::arg("seeds"),
+            py::kw_only(),
+            py::arg("user_ids") = std::nullopt});
+}
+
+}  // namespace ttnn::operations::reduction::detail

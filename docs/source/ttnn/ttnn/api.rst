@@ -426,6 +426,7 @@ Reduction
    ttnn.prod
    ttnn.topk
    ttnn.cumsum
+   ttnn.manual_seed
 
 Data Movement
 =============
