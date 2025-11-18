@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <bit>
+
 #include "compute_kernel_api.h"
 #include "compute_kernel_api/cb_api.h"
 #include "compute_kernel_api/common.h"
@@ -55,7 +57,7 @@ inline void compute_two_times_relu() {
     // The result is stored in cb_two_relu_idx.
     cb_wait_front(cb_relu_idx, block_size);
 
-    const uint32_t two = 0x40000000;  // FP32 encoding of 2.0
+    const uint32_t two = std::bit_cast<uint32_t>(2.0f);
 
     tile_regs_acquire();
     for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
