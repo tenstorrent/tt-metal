@@ -96,12 +96,7 @@ bool is_fabric_two_erisc_enabled() {
     // 2d dynamic fabric doesn't properly support 2-erisc yet but is being deprecated anyways so we
     // simply disable 2-erisc on it for now.
     // Issue [#32419](https://github.com/tenstorrent/tt-metal/issues/32419)
-    bool is_2d_dynamic = mc.get_fabric_config() == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC ||
-                         mc.get_fabric_config() == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_X ||
-                         mc.get_fabric_config() == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_Y ||
-                         mc.get_fabric_config() == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY;
-
-    return arch_bh && !tensix_extensions_enabled && !single_erisc_dispatch && !is_2d_dynamic;
+    return arch_bh && !tensix_extensions_enabled && !single_erisc_dispatch;
 }
 void configure_risc_settings(
     size_t num_riscv_cores,
@@ -198,6 +193,20 @@ size_t get_num_riscv_cores() {
 
 
 }  // anonymous namespace
+
+static std::pair<bool, bool> compute_edge_facing_flags(
+    const ControlPlane& control_plane, const FabricNodeId& local_fabric_node_id, uint32_t my_eth_channel) {
+    const auto& intermesh_chans = control_plane.get_intermesh_facing_eth_chans(local_fabric_node_id);
+    const auto& intramesh_chans = control_plane.get_intramesh_facing_eth_chans(local_fabric_node_id);
+    if (intermesh_chans.empty()) {
+        return {false, false};
+    }
+    const bool is_intermesh =
+        std::find(intermesh_chans.begin(), intermesh_chans.end(), my_eth_channel) != intermesh_chans.end();
+    const bool is_intramesh =
+        std::find(intramesh_chans.begin(), intramesh_chans.end(), my_eth_channel) != intramesh_chans.end();
+    return {is_intermesh, is_intramesh};
+}
 
 FabricRiscConfig::FabricRiscConfig(uint32_t risc_id) :
     noc_(risc_id == 0 ? tt::tt_metal::NOC::NOC_0 : tt::tt_metal::NOC::NOC_1),
@@ -920,6 +929,10 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     bool vc1_has_different_downstream_dest =
         fabric_context.need_deadlock_avoidance_support(this->direction) && this->has_tensix_extension;
 
+    // Compute edge-facing flags for this ethernet core/channel
+    const auto [is_intermesh_router_on_edge, is_intramesh_router_on_edge] =
+        compute_edge_facing_flags(control_plane, this->local_fabric_node_id, this->my_eth_channel);
+
     // Get the VC0 downstream EDM count based on 2D routing
     uint32_t num_vc0_downstream_edms = builder_config::get_vc0_downstream_edm_count(is_2D_routing);
 
@@ -1019,7 +1032,8 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         update_pkt_hdr_on_rx_ch,
 
         requires_forced_assignment_to_noc1(),
-
+        is_intermesh_router_on_edge,
+        is_intramesh_router_on_edge,
         // Special marker to help with identifying misalignment bugs
         0x00c0ffee};
 
