@@ -25,7 +25,6 @@ using Rank = tt::tt_metal::distributed::multihost::Rank;
 
 enum class RoutingType : uint32_t {
     LowLatency = 0,
-    Dynamic = 1,
 };
 
 /*  TODO: Add support for other patterns.

@@ -11,7 +11,7 @@
 #include <cstdint>
 
 #include <tt-metalium/bfloat16.hpp>
-#include "ttnn/tensor/tensor_impl_wrapper.hpp"
+#include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 #include <tt-metalium/constants.hpp>
@@ -32,7 +32,7 @@ Tensor tensor_to_device(
         GraphTracker::instance().track_function_end(input_tensor);
         return input_tensor;
     }
-    auto device_tensor = tensor_impl::to_device_wrapper(input_tensor, mesh_device, mem_config, cq_id);
+    auto device_tensor = tensor_impl::to_device(input_tensor, mesh_device, mem_config, cq_id);
     GraphTracker::instance().track_function_end(device_tensor);
     return device_tensor;
 }

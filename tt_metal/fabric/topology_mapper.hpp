@@ -63,6 +63,14 @@ public:
         const LocalMeshBinding& local_mesh_binding,
         const std::vector<std::pair<AsicPosition, FabricNodeId>>& fixed_asic_position_pinnings);
 
+    // Construct a TopologyMapper from a pre-provided logical mesh chip to physical chip mapping.
+    // Skips discovery and builds fabric node id to asic id mapping directly from the provided mapping.
+    TopologyMapper(
+        const MeshGraph& mesh_graph,
+        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+        const LocalMeshBinding& local_mesh_binding,
+        const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping);
+
     /**
      * @brief Get logical mesh graph connectivity
      *
@@ -152,6 +160,32 @@ public:
     MeshShape get_mesh_shape(MeshId mesh_id, std::optional<MeshHostRankId> host_rank = std::nullopt) const;
 
     /**
+     * @brief Get hostname for a switch
+     *
+     * Maps switch_id to mesh_id internally and retrieves the hostname from the mesh mapping.
+     *
+     * @param switch_id The switch ID to get hostname for
+     * @return HostName The hostname of the switch
+     */
+    HostName get_hostname_for_switch(SwitchId switch_id) const;
+
+    /**
+     * @brief Get hostname for a mesh
+     *
+     * @param mesh_id The mesh ID to get hostname for
+     * @return HostName The hostname of the mesh
+     */
+    HostName get_hostname_for_mesh(MeshId mesh_id) const;
+
+    /**
+     * @brief Get hostname for a fabric node id
+     *
+     * @param fabric_node_id The fabric node id to get hostname for
+     * @return HostName The hostname of the fabric node id
+     */
+    HostName get_hostname_for_fabric_node_id(FabricNodeId fabric_node_id) const;
+
+    /**
      * @brief Get the coordinate range for the global mesh or a host's submesh
      *
      * When host_rank is not provided, returns the full logical mesh coordinate range (0..N-1, 0..M-1).
@@ -232,6 +266,17 @@ private:
      */
     std::unordered_map<MeshId, std::unordered_map<FabricNodeId, MeshHostRankId>>
     build_fabric_node_id_to_mesh_rank_mapping() const;
+
+    /**
+     * @brief Validate that all meshes in the mesh graph descriptor have rank bindings
+     *
+     * Compares the mesh IDs from the mesh graph descriptor with the mesh IDs that have
+     * hosts bound to them in rank_bindings.yaml. Throws an error if any meshes are missing
+     * bindings, listing all unbound mesh IDs.
+     *
+     * @param mesh_id_host_names Mapping of mesh IDs to the set of host names participating in each mesh
+     */
+    void validate_mesh_id_host_names(const HostMeshMapping& mesh_id_host_names) const;
 
     /**
      * @brief Build logical adjacency maps from mesh graph connectivity
