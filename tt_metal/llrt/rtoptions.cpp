@@ -102,6 +102,7 @@ enum class EnvVarID {
     TT_METAL_PROFILER_SYNC,                        // Enable synchronous profiling
     TT_METAL_DEVICE_PROFILER_NOC_EVENTS,           // Enable NoC events profiling
     TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH,  // NoC events report path
+    TT_METAL_PROFILE_PERF_COUNTERS,                // Enable Performance Counter profiling
     TT_METAL_MEM_PROFILER,                         // Enable memory/buffer profiling
     TT_METAL_TRACE_PROFILER,                       // Enable trace profiling
     TT_METAL_PROFILER_TRACE_TRACKING,              // Enable trace tracking
@@ -644,6 +645,17 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         case EnvVarID::TT_METAL_MEM_PROFILER:
             if (is_env_enabled(value)) {
                 this->profiler_buffer_usage_enabled = true;
+            }
+            break;
+
+        // TT_METAL_PROFILE_PERF_COUNTERS
+        // Enables Performance Counter profiling
+        // Default: 0
+        // Usage: export TT_METAL_PROFILE_PERF_COUNTERS=1
+        case EnvVarID::TT_METAL_PROFILE_PERF_COUNTERS:
+            sscanf(value, "%u", &this->profiler_perf_counter_mode);
+            if (this->profiler_perf_counter_mode != 0) {
+                this->profiler_enabled = true;
             }
             break;
 
