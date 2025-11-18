@@ -100,7 +100,8 @@ class Qwen25VlTextEncoder(Module):
             input_embeds = self._ccl_manager.all_gather_persistent_buffer(
                 input_embeds, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True
             )
-            self._ccl_manager._ping_pong_buffer_cache = {}  # TODO
+            # clone to move out of persistent buffer
+            input_embeds = ttnn.clone(input_embeds)
 
         hidden_states = input_embeds
         hidden_states_list = []
