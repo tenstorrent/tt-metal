@@ -159,13 +159,25 @@ class LMHead(LightweightModule):
                 outputs.append(output)
         else:
             for weight, pc in zip(self.output_weights_prefill, self.program_configs):
-                output = ttnn.linear(
-                    x,
-                    weight,
-                    compute_kernel_config=self.compute_kernel_config,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    program_config=self.prefill_pc,
-                    dtype=ttnn.bfloat8_b,
+                # output = ttnn.linear(
+                #     x,
+                #     weight,
+                #     compute_kernel_config=self.compute_kernel_config,
+                #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                #     program_config=self.prefill_pc,
+                #     dtype=ttnn.bfloat8_b,
+                # )
+                output = ttnn.experimental.minimal_matmul(
+                    input_tensor=x,
+                    weight_tensor=weight,
+                    # config=ttnn.MinimalMatmulConfig(
+                    #     M_block_size=4,
+                    #     K_block_size=8,
+                    #     N_block_size=16,
+                    #     subblock_h=4,
+                    #     subblock_w=2,
+                    #     compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
+                    # ),
                 )
                 x.deallocate(True)
                 outputs.append(output)
