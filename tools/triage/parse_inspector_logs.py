@@ -66,7 +66,7 @@ BinaryStatus: TypeAlias = Literal["notSent", "inFlight", "committed"]
 
 @dataclass
 class DeviceBinaryStatus:
-    deviceId: int
+    metalDeviceId: int
     status: BinaryStatus
 
 
@@ -263,7 +263,7 @@ def get_programs(log_directory: str, verbose: bool = False) -> dict[int, Program
         elif "program_binary_status_change" in entry:
             info = entry["program_binary_status_change"]
             program_id = int(info.get("id"))
-            device_id = int(info.get("device_id"))
+            device_id = int(info.get("metalDeviceId"))
             if program_id in programs:
                 programs[program_id].binary_status_per_device[device_id] = info.get("status")
             if verbose:
@@ -458,8 +458,8 @@ class InspectorLogsData:
 
     @cached_property
     def devices_in_use(self):
-        GetDevicesInUseResults = namedtuple("GetDevicesInUseResults", ["deviceIds"])
-        return GetDevicesInUseResults(deviceIds=list(get_devices_in_use(self.getPrograms().programs)))
+        GetDevicesInUseResults = namedtuple("GetDevicesInUseResults", ["metalDeviceIds"])
+        return GetDevicesInUseResults(metalDeviceIds=list(get_devices_in_use(self.getPrograms().programs)))
 
     def getDevicesInUse(self):
         return self.devices_in_use

@@ -32,7 +32,7 @@ from ttexalens.context import Context
 from ttexalens.device import Device
 from ttexalens.coordinate import OnChipCoordinate
 from utils import ORANGE, RST
-from device_id_mapping import run as get_device_id_mapping, DeviceIdMapping
+from metal_device_id_mapping import run as get_metal_device_id_mapping, MetalDeviceIdMapping
 
 script_config = ScriptConfig(
     data_provider=True,
@@ -77,7 +77,7 @@ class CheckResult:
 
 @dataclass
 class PerDeviceCheckResult(CheckResult):
-    device: DeviceDescription = triage_field("Dev", device_description_serializer)
+    device_description: DeviceDescription = triage_field("Dev", DeviceDescription.device_description_serializer)
 
 
 @dataclass
@@ -130,44 +130,36 @@ class DeviceDescription:
     use_unique_id: bool  # True if metal_device_id != exalens_device_id (mismatch detected)
 
     @classmethod
-    def create(cls, device: Device, device_id_mapping: DeviceIdMapping | None) -> "DeviceDescription":
+    def create(cls, device: Device, metal_device_id_mapping: MetalDeviceIdMapping) -> "DeviceDescription":
         """Create a DeviceDescription from a Device object."""
         use_unique_id = False
 
-        if device_id_mapping is not None:
-            try:
-                # Check if exalens device._id maps to the same unique_id as device.unique_id
-                inspector_unique_id = device_id_mapping.chip_id_to_unique_id(device._id)
-                if inspector_unique_id != device.unique_id:
-                    # Mismatch: inspector's logical ID maps to different unique_id
-                    use_unique_id = True
-            except KeyError:
-                # exalens device._id not in inspector mapping → mismatch
-                use_unique_id = True
+        # Check if exalens device._id maps to the same unique_id as device.unique_id
+        inspector_unique_id = metal_device_id_mapping.get_unique_id(device._id)
+        if inspector_unique_id != device.unique_id:
+            use_unique_id = True
 
         return cls(
             device=device,
             use_unique_id=use_unique_id,
         )
 
-
-def device_description_serializer(device_desc: DeviceDescription) -> str:
-    """Custom serializer: returns device._id if IDs match, or unique_id if mismatch."""
-    if device_desc.use_unique_id:
-        return str(device_desc.device.unique_id)
-    else:
-        return str(device_desc.device._id)
+    @staticmethod
+    def device_description_serializer(device_desc: DeviceDescription) -> str:
+        if device_desc.use_unique_id:
+            return str(device_desc.device.unique_id)
+        else:
+            return str(device_desc.device._id)
 
 
 def get_devices(
     devices: list[str],
     inspector_data: InspectorData | None,
     context: Context,
-    device_id_mapping: DeviceIdMapping | None = None,
-) -> list[DeviceDescription]:
+) -> list[Device]:
     if len(devices) == 1 and devices[0].lower() == "in_use":
         if inspector_data is not None:
-            device_ids = list(inspector_data.getDevicesInUse().deviceIds)
+            device_ids = list(inspector_data.getDevicesInUse().metalDeviceIds)
             if len(device_ids) == 0:
                 print(
                     f"  {ORANGE}No devices in use found in inspector data. Switching to use all available devices. If you are using ttnn check if you have enabled program cache.{RST}"
@@ -181,20 +173,17 @@ def get_devices(
     else:
         device_ids = [int(id) for id in devices]
 
-    # Convert Device objects to DeviceDescription objects
-    device_objects = [context.devices[id] for id in device_ids]
-    return [DeviceDescription.create(device, device_id_mapping) for device in device_objects]
+    return [context.devices[id] for id in device_ids]
 
 
 class RunChecks:
-    def __init__(self, devices: list[DeviceDescription]):
-        self.devices = devices  # Now list[DeviceDescription]
+    def __init__(self, devices: list[Device], metal_device_id_mapping: MetalDeviceIdMapping):
+        self.devices = devices
+        self._device_descriptions = [DeviceDescription.create(device, metal_device_id_mapping) for device in devices]
         # Pre-compute block locations - need to extract Device from DeviceDescription
         self.block_locations: dict[Device, dict[BlockType, list[OnChipCoordinate]]] = {
-            device_desc.device: {
-                block_type: get_block_locations_to_check(block_type, device_desc.device) for block_type in BLOCK_TYPES
-            }
-            for device_desc in devices
+            device: {block_type: get_block_locations_to_check(block_type, device) for block_type in BLOCK_TYPES}
+            for device in devices
         }
 
     def _collect_results(
@@ -219,8 +208,8 @@ class RunChecks:
     def run_per_device_check(self, check: Callable[[Device], object]) -> list[PerDeviceCheckResult] | None:
         """Run a check function on each device, collecting results."""
         result: list[PerDeviceCheckResult] = []
-        for device_desc in self.devices:
-            check_result = check(device_desc.device)  # Pass underlying Device to check function
+        for device in self.devices:
+            check_result = check(device)  # Pass underlying Device to check function
             # Use the common result collection helper
             self._collect_results(result, check_result, PerDeviceCheckResult, device=device_desc)
         return result if len(result) > 0 else None
@@ -304,9 +293,9 @@ class RunChecks:
 def run(args, context: Context):
     devices_to_check = args["--dev"]
     inspector_data = get_inspector_data(args, context)
-    device_id_mapping = get_device_id_mapping(args, context)
-    devices = get_devices(devices_to_check, inspector_data, context, device_id_mapping)
-    return RunChecks(devices)
+    metal_device_id_mapping = get_metal_device_id_mapping(args, context)
+    devices = get_devices(devices_to_check, inspector_data, context)
+    return RunChecks(devices, metal_device_id_mapping)
 
 
 if __name__ == "__main__":

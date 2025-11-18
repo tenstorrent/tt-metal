@@ -26,7 +26,7 @@ enum BinaryStatus {
 }
 
 struct DeviceBinaryStatus {
-    deviceId @0 :UInt64;
+    metalDeviceId @0 :UInt64;
     status @1 :BinaryStatus;
 }
 
@@ -76,15 +76,15 @@ struct BuildEnvData {
 }
 
 struct BuildEnvPerDevice {
-    deviceId @0 :UInt64;
+    metalDeviceId @0 :UInt64;
     buildInfo @1 :BuildEnvData;
 }
 
 # Per Dispatch Core Information
 struct CoreInfo {
     workType @0: Text;
-    deviceId @1: Int32;
-    servicingDeviceId @2: Int32;
+    metalDeviceId @1: Int32;
+    servicingMetalDeviceId @2: Int32;
     eventID @3: UInt32;
     cqId @4: UInt8;
 }
@@ -101,7 +101,7 @@ struct VirtualCore {
 # Contains virtual coordinates and associated information
 struct CoreEntry {
   key  @0 :VirtualCore;       # chip,x,y (virtual)
-  info @1 :CoreInfo;  # deviceId, servicingDeviceId, workType, cqId
+  info @1 :CoreInfo;  # metalDeviceId, servicingMetalDeviceId, workType, cqId
 }
 
 # Simplified core type enum for grouping cores by their storage category
@@ -137,7 +137,7 @@ interface Inspector {
     getMeshWorkloads @2 () -> (meshWorkloads :List(MeshWorkloadData));
 
     # Get list of local devices that are being used by this Metal runtime
-    getDevicesInUse @3 () -> (deviceIds :List(UInt64));
+    getDevicesInUse @3 () -> (metalDeviceIds :List(UInt64));
 
     # Search for a kernel
     getKernel @4 (watcherKernelId :Int32) -> (kernel :KernelData);
