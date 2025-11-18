@@ -111,7 +111,7 @@ void kernel_main() {
 
         // First pass: for computing sum(dy * gamma)
         for (uint32_t c = 0; c < Wt; c += block_size) {
-            const uint32_t current_block_size = (c + block_size > Wt) ? (Wt - c) : block_size;
+            const uint32_t current_block_size = std::min(block_size, Wt - c);
             uint32_t row_tile_idx = (r * Wt) + c;
 
             cb_reserve_back(cb_dL_out_idx, block_size);

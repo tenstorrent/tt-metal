@@ -50,8 +50,7 @@ constexpr auto kMeanBcastCbIndex = tt::CBIndex::c_10;    // broadcasted mean
 constexpr auto kVarianceSumCbIndex = tt::CBIndex::c_11;  // sum((x - mean)^2)
 constexpr auto kRstdBcastCbIndex = tt::CBIndex::c_12;    // broadcasted rstd
 constexpr auto kXHatCbIndex = tt::CBIndex::c_13;         // normalized x_hat
-[[maybe_unused]] constexpr auto kOutputIntermediateCbIndex =
-    tt::CBIndex::c_14;  // intermediate for output - reserved for future use
+constexpr auto kOutputIntermediateCbIndex = tt::CBIndex::c_14;  // intermediate for x_hat * gamma
 
 constexpr uint32_t kNumScalerTiles = 1U;
 constexpr uint32_t kNumMaskTiles = 1U;
@@ -67,6 +66,7 @@ const std::string kReturnMeanRstdDefineKey = "RETURN_MEAN_RSTD";
 
 bool fits_in_l1_check(
     const uint32_t Wt,
+    const uint32_t closest_to_Wt_multiple_of_block_size,
     const uint32_t block_size,
     const uint32_t bfloat16_single_tile_size_bytes,
     const uint32_t float32_single_tile_size_bytes,
@@ -77,6 +77,8 @@ bool fits_in_l1_check(
         device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
 
     const uint32_t bf16_row_memory = Wt * bfloat16_single_tile_size_bytes;
+    const uint32_t bf16_row_memory_padded_to_block_size =
+        closest_to_Wt_multiple_of_block_size * bfloat16_single_tile_size_bytes;
     // Memory for input data CBs
     const uint32_t scaler_memory = kNumScalerTiles * bfloat16_single_tile_size_bytes;
     const uint32_t mask_memory = kNumMaskTiles * bfloat16_single_tile_size_bytes;
@@ -86,7 +88,7 @@ bool fits_in_l1_check(
     const uint32_t input_memory = bf16_row_memory;
 
     // Memory for output CBs
-    const uint32_t output_memory = bf16_row_memory;
+    const uint32_t output_memory = bf16_row_memory_padded_to_block_size;
 
     // Memory for intermediate computation CBs
     const uint32_t sum_memory = kNumSumTiles * float32_single_tile_size_bytes;
@@ -94,7 +96,7 @@ bool fits_in_l1_check(
     const uint32_t variance_sum_memory = kNumSumTiles * float32_single_tile_size_bytes;
     const uint32_t variance_reduced_memory = kNumVarianceReducedTiles * bfloat16_single_tile_size_bytes;
     const uint32_t rstd_bcast_memory = kNumRstdBcastTiles * bfloat16_single_tile_size_bytes;
-    const uint32_t x_hat_memory = bf16_row_memory;
+    const uint32_t x_hat_memory = bf16_row_memory_padded_to_block_size;
     const uint32_t output_intermediate_memory = block_size * bfloat16_single_tile_size_bytes;
 
     // Total L1 memory required
@@ -229,7 +231,7 @@ LayerNormForwardProgramFactory::cached_program_t LayerNormForwardProgramFactory:
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     // Compile arguments
-    uint32_t block_size = get_block_size(Wt, 2U);  // Need 2 extra registers for layernorm forward
+    uint32_t block_size = 3U;  // Need 1 extra registers for layernorm forward
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_rows_to_process);
@@ -242,14 +244,19 @@ LayerNormForwardProgramFactory::cached_program_t LayerNormForwardProgramFactory:
     // -------------------------------------------------------------------------
     const uint32_t twice_block_size = 2U * block_size;
 
+    const uint32_t closest_to_Wt_multiple_of_block_size = ((Wt + block_size - 1) / block_size) * block_size;
+
     const bool everything_fits_in_l1 = fits_in_l1_check(
-        Wt, block_size, bfloat16_single_tile_size_bytes, float32_single_tile_size_bytes, device, return_mean_rstd);
+        Wt,
+        closest_to_Wt_multiple_of_block_size,
+        block_size,
+        bfloat16_single_tile_size_bytes,
+        float32_single_tile_size_bytes,
+        device,
+        return_mean_rstd);
 
     const uint32_t num_input_tiles = (everything_fits_in_l1) ? Wt : twice_block_size;
-    const uint32_t num_gamma_tiles = (everything_fits_in_l1) ? Wt : twice_block_size;
-    const uint32_t num_beta_tiles = (everything_fits_in_l1) ? Wt : twice_block_size;
-    const uint32_t num_x_hat_tiles = (everything_fits_in_l1) ? Wt : twice_block_size;
-    const uint32_t num_output_tiles = (everything_fits_in_l1) ? Wt : twice_block_size;
+    const uint32_t num_x_hat_tiles = (everything_fits_in_l1) ? closest_to_Wt_multiple_of_block_size : twice_block_size;
 
     tt::DataFormat default_data_format = tt::DataFormat::Float16_b;
     // Input data CBs
@@ -260,15 +267,15 @@ LayerNormForwardProgramFactory::cached_program_t LayerNormForwardProgramFactory:
     [[maybe_unused]] auto cb_eps = create_circular_buffer(
         program, all_cores, kEpsCbIndex, default_data_format, bfloat16_single_tile_size_bytes, kNumEpsTiles);
     [[maybe_unused]] auto cb_gamma = create_circular_buffer(
-        program, all_cores, kGammaCbIndex, default_data_format, bfloat16_single_tile_size_bytes, num_gamma_tiles);
+        program, all_cores, kGammaCbIndex, default_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
     [[maybe_unused]] auto cb_beta = create_circular_buffer(
-        program, all_cores, kBetaCbIndex, default_data_format, bfloat16_single_tile_size_bytes, num_beta_tiles);
+        program, all_cores, kBetaCbIndex, default_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
     [[maybe_unused]] auto cb_input = create_circular_buffer(
         program, all_cores, kInputCbIndex, default_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
 
     // Output CBs
     [[maybe_unused]] auto cb_output = create_circular_buffer(
-        program, all_cores, kOutputCbIndex, default_data_format, bfloat16_single_tile_size_bytes, num_output_tiles);
+        program, all_cores, kOutputCbIndex, default_data_format, bfloat16_single_tile_size_bytes, num_x_hat_tiles);
     if (return_mean_rstd) {
         [[maybe_unused]] auto cb_mean = create_circular_buffer(
             program, all_cores, kMeanCbIndex, default_data_format, bfloat16_single_tile_size_bytes, kNumMeanBcastTiles);
@@ -297,7 +304,6 @@ LayerNormForwardProgramFactory::cached_program_t LayerNormForwardProgramFactory:
         kNumRstdBcastTiles);
     [[maybe_unused]] auto cb_x_hat = create_circular_buffer(
         program, all_cores, kXHatCbIndex, default_data_format, bfloat16_single_tile_size_bytes, num_x_hat_tiles);
-    // Intermediate CB for output computation (x_hat * gamma before adding beta)
     [[maybe_unused]] auto cb_output_intermediate = create_circular_buffer(
         program,
         all_cores,

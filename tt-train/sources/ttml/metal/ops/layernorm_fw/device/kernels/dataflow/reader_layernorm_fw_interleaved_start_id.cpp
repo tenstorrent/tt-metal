@@ -18,6 +18,7 @@ constexpr uint32_t packed_eps = get_compile_time_arg_val(1);
 constexpr uint32_t block_size = get_compile_time_arg_val(2);
 constexpr uint32_t mask_w = get_compile_time_arg_val(3);
 constexpr uint32_t Wt = get_compile_time_arg_val(4);
+constexpr uint32_t closest_to_Wt_multiple_of_block_size = ((Wt + block_size - 1) / block_size) * block_size;
 
 #ifdef DO_MASK_W
 constexpr bool do_mask_w = true;
@@ -115,7 +116,7 @@ void kernel_main() {
         for (uint32_t c = 0; c < Wt; c += block_size) {
             uint32_t row_tile_idx = (r * Wt) + c;
             const uint32_t current_block_size = std::min(block_size, Wt - c);
-            cb_reserve_back(cb_input_idx, current_block_size);
+            cb_reserve_back(cb_input_idx, block_size);
             read_tiles(cb_input_idx, input_address_generator, row_tile_idx, current_block_size, tile_bytes, true);
             cb_push_back(cb_input_idx, block_size);
         }
@@ -125,17 +126,17 @@ void kernel_main() {
             uint32_t row_tile_idx = (r * Wt) + c;
             const uint32_t current_block_size = std::min(block_size, Wt - c);
 
-            cb_reserve_back(cb_input_idx, current_block_size);
-            cb_reserve_back(cb_gamma_idx, current_block_size);
-            cb_reserve_back(cb_beta_idx, current_block_size);
+            cb_reserve_back(cb_input_idx, block_size);
+            cb_reserve_back(cb_gamma_idx, block_size);
+            cb_reserve_back(cb_beta_idx, block_size);
 
             read_tiles(cb_input_idx, input_address_generator, row_tile_idx, current_block_size, tile_bytes);
             read_tiles(cb_gamma_idx, gamma_address_generator, c, current_block_size, tile_bytes);
             read_tiles(cb_beta_idx, beta_address_generator, c, current_block_size, tile_bytes, true);
 
-            cb_push_back(cb_input_idx, current_block_size);
-            cb_push_back(cb_gamma_idx, current_block_size);
-            cb_push_back(cb_beta_idx, current_block_size);
+            cb_push_back(cb_input_idx, block_size);
+            cb_push_back(cb_gamma_idx, block_size);
+            cb_push_back(cb_beta_idx, block_size);
         }
 #endif
     }

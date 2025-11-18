@@ -20,6 +20,7 @@ constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);
 constexpr uint32_t block_size = get_compile_time_arg_val(1);
 constexpr uint32_t mask_w = get_compile_time_arg_val(2);
 constexpr uint32_t Wt = get_compile_time_arg_val(3);
+constexpr uint32_t closest_to_Wt_multiple_of_block_size = ((Wt + block_size - 1) / block_size) * block_size;
 
 // CBs with input data
 constexpr uint32_t cb_scaler_idx = tt::CBIndex::c_0;  // 1/N scaler
@@ -40,7 +41,8 @@ constexpr uint32_t cb_mean_bcast_idx = tt::CBIndex::c_10;           // broadcast
 constexpr uint32_t cb_variance_sum_idx = tt::CBIndex::c_11;         // sum((x - mean)^2)
 constexpr uint32_t cb_rstd_bcast_idx = tt::CBIndex::c_12;           // broadcasted rstd
 constexpr uint32_t cb_x_hat_idx = tt::CBIndex::c_13;                // normalized x_hat
-constexpr uint32_t cb_output_intermediate_idx = tt::CBIndex::c_14;  // intermediate for output
+
+constexpr uint32_t cb_output_intermediate_idx = tt::CBIndex::c_14;  // intermediate for x_hat * gamma
 
 constexpr uint32_t onetile = 1;
 
@@ -310,7 +312,6 @@ inline void compute_rstd() {
 // Compute x_hat = (input - mean) * rstd (reusing logic from backward pass)
 #ifdef EVERYTHING_FITS_IN_L1
 inline void compute_x_hat() {
-    cb_wait_front(cb_input_idx, Wt);
     cb_wait_front(cb_mean_bcast_idx, onetile);
     cb_wait_front(cb_rstd_bcast_idx, onetile);
 
@@ -346,9 +347,7 @@ inline void compute_x_hat() {
 // Compute output = x_hat * gamma + beta
 #ifdef EVERYTHING_FITS_IN_L1
 inline void compute_output() {
-    cb_wait_front(cb_x_hat_idx, Wt);
-    cb_wait_front(cb_gamma_idx, Wt);
-    cb_wait_front(cb_beta_idx, Wt);
+    cb_wait_front(cb_x_hat_idx, closest_to_Wt_multiple_of_block_size);
 
     for (uint32_t col = 0; col < Wt; col += block_size) {
         const uint32_t current_block_size = std::min(block_size, Wt - col);
@@ -525,7 +524,7 @@ inline void MAIN {
 
 #ifdef EVERYTHING_FITS_IN_L1
         cb_pop_front(cb_input_idx, Wt);
-        cb_pop_front(cb_x_hat_idx, Wt);
+        cb_pop_front(cb_x_hat_idx, closest_to_Wt_multiple_of_block_size);
 #endif
     }
 

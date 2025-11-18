@@ -7,7 +7,6 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/eltwise_binary_sfpu.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/eltwise_unary/fill.h"
 #include "compute_kernel_api/mask.h"
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/reconfig_data_format.h"
@@ -21,6 +20,7 @@ constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);
 constexpr uint32_t block_size = get_compile_time_arg_val(1);
 constexpr uint32_t mask_w = get_compile_time_arg_val(2);
 constexpr uint32_t Wt = get_compile_time_arg_val(3);
+constexpr uint32_t closest_to_Wt_multiple_of_block_size = ((Wt + block_size - 1) / block_size) * block_size;
 
 // CBs with input data
 constexpr uint32_t cb_scaler_idx = tt::CBIndex::c_0;      // 1/N scaler
@@ -51,11 +51,6 @@ constexpr bool do_mask_w = true;
 #else
 constexpr bool do_mask_w = false;
 #endif
-
-inline void zero_dst_reg(const uint32_t i) {
-    constexpr float zero = 0.0f;
-    fill_tile(i, zero);
-}
 
 // Compute x_hat = (input - mean) * rstd
 // input is in cb_input_idx, mean is in cb_mean_idx (broadcasted), rstd is in cb_rstd_idx (broadcasted)
@@ -533,7 +528,7 @@ inline void MAIN {
         cb_wait_front(cb_input_idx, Wt);
         // Compute x_hat = (input - mean) * rstd for the entire row
         compute_x_hat_preprocessing(Wt);
-        cb_wait_front(cb_x_hat_idx, Wt);
+        cb_wait_front(cb_x_hat_idx, closest_to_Wt_multiple_of_block_size);
 
         cb_wait_front(cb_dL_out_idx, Wt);
         // If everything fits in L1, wait for gamma only once as its shared across all rows
@@ -632,7 +627,7 @@ inline void MAIN {
 #ifdef EVERYTHING_FITS_IN_L1
         // Pop per-row data
         cb_pop_front(cb_dL_out_idx, Wt);
-        cb_pop_front(cb_x_hat_idx, Wt);
+        cb_pop_front(cb_x_hat_idx, closest_to_Wt_multiple_of_block_size);
         cb_pop_front(cb_input_idx, Wt);
 
         // Pop gamma only on the last row (since it's shared across all rows)

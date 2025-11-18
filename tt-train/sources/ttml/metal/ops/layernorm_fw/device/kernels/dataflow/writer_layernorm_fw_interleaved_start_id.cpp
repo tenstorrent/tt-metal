@@ -60,7 +60,7 @@ void kernel_main() {
         // Write output in blocks
         for (uint32_t c = 0; c < Wt; c += block_size) {
             // Calculate actual number of tiles in this block (handles last block when Wt % block_size != 0)
-            const uint32_t current_block_size = (c + block_size > Wt) ? (Wt - c) : block_size;
+            const uint32_t current_block_size = std::min(block_size, Wt - c);
             uint32_t start_idx = (r * Wt) + c;
 
             // Write output block
