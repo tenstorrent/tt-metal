@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Jason Davies <jason@jasondavies.com>
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,143 +13,99 @@ namespace ckernel::sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void mul_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+
+    constexpr uint dst_tile_size = 64;
+
+    uint offset0 = dst_index_in0 * dst_tile_size;
+    uint offset1 = dst_index_in1 * dst_tile_size;
+    uint offset2 = dst_index_out * dst_tile_size;
+
+    constexpr uint z = 0;
+    constexpr uint a1 = 1;
+    constexpr uint b1 = 2;
+    constexpr uint b2 = 3;
+    constexpr uint c = 4;
+
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        // size of each tile in Dest is 64 rows
-        constexpr uint dst_tile_size = 64;
-        // operand A - int32
-        TT_SFPLOAD(p_sfpu::LREG0, INT32, ADDR_MOD_7, dst_index_in0 * dst_tile_size);
-        // operand B - int32
-        TT_SFPLOAD(p_sfpu::LREG1, INT32, ADDR_MOD_7, dst_index_in1 * dst_tile_size);
-
-        // INT32 split into 8-bit inputs
-        // mask
-        TTI_SFPLOADI(p_sfpu::LREG7, SFPLOADI_MOD0_USHORT, 0xFF);
-
-        // Copy A
-        TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG2, 0);
-        TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG3, 0);
-
-        // Extract A = [a3:a2:a1:a0] where each is 8-bit.
-        TTI_SFPAND(0, p_sfpu::LREG7, p_sfpu::LREG0, 0);               // LREG0 = a0 = A[7:0]
-        TTI_SFPSHFT((-8) & 0xfff, p_sfpu::LREG2, p_sfpu::LREG2, 1);   // LREG2 = a1 = A[15:8]
-        TTI_SFPAND(0, p_sfpu::LREG7, p_sfpu::LREG2, 0);               // clear other bits
-        TTI_SFPSHFT((-16) & 0xfff, p_sfpu::LREG3, p_sfpu::LREG3, 1);  // LREG3 = a2 = A[23:16]
-        TTI_SFPAND(0, p_sfpu::LREG7, p_sfpu::LREG3, 0);
-
-        // Copy B
-        TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG4, 0);
-        TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG5, 0);
-
-        // Extract B = [b3:b2:b1:b0] where each is 8-bit
-        TTI_SFPAND(0, p_sfpu::LREG7, p_sfpu::LREG1, 0);              // LREG1 = b0 = B[7:0]
-        TTI_SFPSHFT((-8) & 0xfff, p_sfpu::LREG4, p_sfpu::LREG4, 1);  // LREG5 = b1 = B[15:8]
-        TTI_SFPAND(0, p_sfpu::LREG7, p_sfpu::LREG4, 0);
-        TTI_SFPSHFT((-16) & 0xfff, p_sfpu::LREG5, p_sfpu::LREG5, 1);  // LREG6 = b2 = B[23:16]
-        TTI_SFPAND(0, p_sfpu::LREG7, p_sfpu::LREG5, 0);
-        // a3 and b3 will be extracted on the go due to limited registers.
-
-        // Cast all 8-bit values to FP32
-        TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, 0);
-        TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, 0);
-        TTI_SFPCAST(p_sfpu::LREG2, p_sfpu::LREG2, 0);
-        TTI_SFPCAST(p_sfpu::LREG3, p_sfpu::LREG3, 0);
-        TTI_SFPCAST(p_sfpu::LREG4, p_sfpu::LREG4, 0);
-        TTI_SFPCAST(p_sfpu::LREG5, p_sfpu::LREG5, 0);
-
-        // a0*b0 (bits 0-15)
-        TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG7, 0);
-        TTI_SFP_STOCH_RND(
-            SFPSTOCHRND_RND_EVEN,
-            0,
-            0,
-            p_sfpu::LREG7,
-            p_sfpu::LREG7,
-            SFPSTOCHRND_MOD1_FP32_TO_UINT16);  // fp32 -> uint16
-
-        // a0*b1 (bits 8-23)
-        TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG4, p_sfpu::LCONST_0, p_sfpu::LREG6, 0);
-        TTI_SFP_STOCH_RND(SFPSTOCHRND_RND_EVEN, 0, 0, p_sfpu::LREG6, p_sfpu::LREG6, SFPSTOCHRND_MOD1_FP32_TO_UINT16);
-        TTI_SFPSHFT(8, p_sfpu::LREG6, p_sfpu::LREG6, 1);                     // Shift left by 8
-        TTI_SFPIADD(0, p_sfpu::LREG6, p_sfpu::LREG7, SFPIADD_MOD1_CC_NONE);  // Accumulate in LREG7
-
-        // a0*b2 (bits 16-31)
-        TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG5, p_sfpu::LCONST_0, p_sfpu::LREG6, 0);
-        TTI_SFP_STOCH_RND(SFPSTOCHRND_RND_EVEN, 0, 0, p_sfpu::LREG6, p_sfpu::LREG6, SFPSTOCHRND_MOD1_FP32_TO_UINT16);
-        TTI_SFPSHFT(16, p_sfpu::LREG6, p_sfpu::LREG6, 1);  // Shift left by 16
-        TTI_SFPIADD(0, p_sfpu::LREG6, p_sfpu::LREG7, SFPIADD_MOD1_CC_NONE);
-
-        // a1*b0 (bits 8-23)
-        TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG6, 0);
-        TTI_SFP_STOCH_RND(SFPSTOCHRND_RND_EVEN, 0, 0, p_sfpu::LREG6, p_sfpu::LREG6, SFPSTOCHRND_MOD1_FP32_TO_UINT16);
-        TTI_SFPSHFT(8, p_sfpu::LREG6, p_sfpu::LREG6, 1);  // Shift left by 8
-        TTI_SFPIADD(0, p_sfpu::LREG6, p_sfpu::LREG7, SFPIADD_MOD1_CC_NONE);
-
-        // a1*b1 (bits 16-31)
-        TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG4, p_sfpu::LCONST_0, p_sfpu::LREG6, 0);
-        TTI_SFP_STOCH_RND(SFPSTOCHRND_RND_EVEN, 0, 0, p_sfpu::LREG6, p_sfpu::LREG6, SFPSTOCHRND_MOD1_FP32_TO_UINT16);
-        TTI_SFPSHFT(16, p_sfpu::LREG6, p_sfpu::LREG6, 1);  // Shift left by 16
-        TTI_SFPIADD(0, p_sfpu::LREG6, p_sfpu::LREG7, SFPIADD_MOD1_CC_NONE);
-
-        // a2*b0 (bits 16-31)
-        TTI_SFPMUL(p_sfpu::LREG3, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG6, 0);
-        TTI_SFP_STOCH_RND(SFPSTOCHRND_RND_EVEN, 0, 0, p_sfpu::LREG6, p_sfpu::LREG6, SFPSTOCHRND_MOD1_FP32_TO_UINT16);
-        TTI_SFPSHFT(16, p_sfpu::LREG6, p_sfpu::LREG6, 1);  // Shift left by 16
-        TTI_SFPIADD(0, p_sfpu::LREG6, p_sfpu::LREG7, SFPIADD_MOD1_CC_NONE);
-
-        TTI_SFPLOADI(p_sfpu::LREG6, SFPLOADI_MOD0_USHORT, 0x00FF);  // load 00FF to LREG6
-
-        // a1*b2 --> goes beyond 32-bits [24:39]. We need to extract the bits upto 32.
-        TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG5, p_sfpu::LCONST_0, p_sfpu::LREG5, 0);  // store result to LREG5
-        TTI_SFP_STOCH_RND(SFPSTOCHRND_RND_EVEN, 0, 0, p_sfpu::LREG5, p_sfpu::LREG5, SFPSTOCHRND_MOD1_FP32_TO_UINT16);
-        TTI_SFPAND(0, p_sfpu::LREG6, p_sfpu::LREG5, 0);    // zero out high overflow bits
-        TTI_SFPSHFT(24, p_sfpu::LREG5, p_sfpu::LREG5, 1);  // Shift left by 24
-        TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG7, SFPIADD_MOD1_CC_NONE);
-
-        // a2*b1 --> goes beyond 32-bits [24:39]. We need to extract the bits upto 32.
-        TTI_SFPMUL(p_sfpu::LREG3, p_sfpu::LREG4, p_sfpu::LCONST_0, p_sfpu::LREG5, 0);
-        TTI_SFP_STOCH_RND(SFPSTOCHRND_RND_EVEN, 0, 0, p_sfpu::LREG5, p_sfpu::LREG5, SFPSTOCHRND_MOD1_FP32_TO_UINT16);
-        TTI_SFPAND(0, p_sfpu::LREG6, p_sfpu::LREG5, 0);    // zero out high overflow bits
-        TTI_SFPSHFT(24, p_sfpu::LREG5, p_sfpu::LREG5, 1);  // Shift left by 24
-        TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG7, SFPIADD_MOD1_CC_NONE);
-
-        // Load operands again to extract a3 and b3
-        // operand A - int32
-        TT_SFPLOAD(p_sfpu::LREG2, INT32, ADDR_MOD_7, dst_index_in0 * dst_tile_size);
-        // operand B - int32
-        TT_SFPLOAD(p_sfpu::LREG3, INT32, ADDR_MOD_7, dst_index_in1 * dst_tile_size);
-        // mask
-        TTI_SFPLOADI(p_sfpu::LREG4, SFPLOADI_MOD0_USHORT, 0xFF);
-
-        // Extract A3
-        TTI_SFPSHFT((-24) & 0xfff, p_sfpu::LREG2, p_sfpu::LREG2, 1);  // LREG2 = a3 = A[31:24]
-        TTI_SFPAND(0, p_sfpu::LREG4, p_sfpu::LREG2, 0);
-
-        // Extract B3
-        TTI_SFPSHFT((-24) & 0xfff, p_sfpu::LREG3, p_sfpu::LREG3, 1);  // LREG3 = b3 = B[31:24]
-        TTI_SFPAND(0, p_sfpu::LREG4, p_sfpu::LREG3, 0);
-
-        // Cast to FP32
-        TTI_SFPCAST(p_sfpu::LREG2, p_sfpu::LREG2, 0);
-        TTI_SFPCAST(p_sfpu::LREG3, p_sfpu::LREG3, 0);
-
-        // a0*b3 --> goes beyond 32-bits [24:39]. We need to extract the bits upto 32.
-        TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG5, 0);
-        TTI_SFP_STOCH_RND(SFPSTOCHRND_RND_EVEN, 0, 0, p_sfpu::LREG5, p_sfpu::LREG5, SFPSTOCHRND_MOD1_FP32_TO_UINT16);
-        TTI_SFPAND(0, p_sfpu::LREG6, p_sfpu::LREG5, 0);    // zero out high overflow bits
-        TTI_SFPSHFT(24, p_sfpu::LREG5, p_sfpu::LREG5, 1);  // Shift left by 24
-        TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG7, SFPIADD_MOD1_CC_NONE);
-
-        // a3*b0 --> goes beyond 32-bits [24:39]. We need to extract the bits upto 32.
-        TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG5, 0);
-        TTI_SFP_STOCH_RND(SFPSTOCHRND_RND_EVEN, 0, 0, p_sfpu::LREG5, p_sfpu::LREG5, SFPSTOCHRND_MOD1_FP32_TO_UINT16);
-        TTI_SFPAND(0, p_sfpu::LREG6, p_sfpu::LREG5, 0);    // zero out high overflow bits
-        TTI_SFPSHFT(24, p_sfpu::LREG5, p_sfpu::LREG5, 1);  // Shift left by 24
-        TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG7, SFPIADD_MOD1_CC_NONE);
-
-        TT_SFPSTORE(p_sfpu::LREG7, INT32, ADDR_MOD_7, dst_index_out * dst_tile_size);
-        sfpi::dst_reg++;
+        // b0
+        TT_SFPLOAD(z, INT32, ADDR_MOD_7, offset1);
+        // a1
+        TT_SFPLOADMACRO((0 << 2) | (a1 & 3), INT32, ADDR_MOD_7, offset0 | (a1 >> 2));
+        // b1
+        TT_SFPLOADMACRO((1 << 2) | (b1 & 3), INT32, ADDR_MOD_7, offset1 | (b1 >> 2));
+        // a0
+        TT_SFPLOAD(z, INT32, ADDR_MOD_7, offset0);
+        // b2
+        TT_SFPLOADMACRO((2 << 2) | (b2 & 3), INT32, ADDR_MOD_7, offset1 | (b2 >> 2));
+        // c = mul24_hi(a0, b2)
+        TTI_SFPMUL24(z, b2, p_sfpu::LCONST_0, c, 1);
+        // b1 = b1 + a1
+        TTI_SFPIADD(0, a1, b1, SFPIADD_MOD1_CC_NONE);
+        // c
+        TT_SFPLOADMACRO((3 << 2) | (c & 3), INT32, ADDR_MOD_6, offset2 | (c >> 2));
     }
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+}
+
+template <bool APPROXIMATION_MODE>
+inline void mul_int32_init() {
+
+    constexpr uint z = 0;
+    constexpr uint b1 = 2;
+    constexpr uint c = 4;
+
+    TTI_SFPSHFT2(-23 & 0xfff, 0, 12, 6);
+    TTI_SFPMUL24(z, 0, p_sfpu::LCONST_0, 13, 0);
+    TTI_SFPSHFT(23, b1, 14, 1 | 4);
+    TTI_SFPIADD(0, c, 15, SFPIADD_MOD1_CC_NONE);
+
+    // Macro 0:
+    {
+        constexpr uint simple_bits = 0;
+        constexpr uint mad_bits = 0x80 | 0x00 | (1 << 3) | 5;
+        constexpr uint round_bits = 0x80 | 0x00 | (0 << 3) | 4;
+        constexpr uint store_bits = 0;
+
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
+
+        TTI_SFPCONFIG(0, 4, 0);
+    }
+    // Macro 1:
+    {
+        constexpr uint simple_bits = 0x80 | 0x00 | (4 << 3) | 7;
+        constexpr uint mad_bits = 0x80 | 0x00 | (1 << 3) | 5;
+        constexpr uint round_bits = 0x80 | 0x00 | (0 << 3) | 4;
+        constexpr uint store_bits = 0;
+
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
+
+        TTI_SFPCONFIG(0, 5, 0);
+    }
+    // Macro 2:
+    {
+        constexpr uint simple_bits = 0x80 | 0x40 | (4 << 3) | 7;
+        constexpr uint mad_bits = 0x80 | 0x00 | (1 << 3) | 5;
+
+        TTI_SFPCONFIG((mad_bits << 8) | simple_bits, 6, 1);
+    }
+    // Macro 3:
+    {
+        constexpr uint simple_bits = 0x80 | 0x00 | (0 << 3) | 6;
+        constexpr uint mad_bits = 0;
+        constexpr uint round_bits = 0;
+        constexpr uint store_bits = 0x00 | 0x40 | (2 << 3) | 3;
+
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
+
+        TTI_SFPCONFIG(0, 7, 0);
+    }
+    TTI_SFPCONFIG(0xff0, 8, 1);
 }
 
 }  // namespace ckernel::sfpu
