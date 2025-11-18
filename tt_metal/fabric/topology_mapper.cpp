@@ -957,25 +957,8 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
 
         // Select next logical node dynamically
         size_t li;
-        // Check if we're at the start (pos == 0 means no nodes assigned yet)
-        // and if we have a forced first logical node to try
-        bool at_start = true;
-        for (auto v : mapping) {
-            if (v != -1) {
-                at_start = false;
-                break;
-            }
-        }
-        if (at_start && forced_first_li.has_value()) {
-            // Use forced first logical node if we're at the start and one is specified
-            li = forced_first_li.value();
-            if (mapping[li] != -1) {
-                // Already assigned, fall back to normal selection
-                li = select_next_logical(mapping, used);
-            }
-        } else {
-            li = select_next_logical(mapping, used);
-        }
+        // Select next logical node dynamically
+        li = select_next_logical(mapping, used);
         if (li == n_log) {
             return false;
         }
