@@ -11,7 +11,7 @@ on:
           - manual
           - model-pr
           - models-accuracy
-        default: "manual"
+        default: manual
       build-type:
         required: false
         type: choice
@@ -21,7 +21,7 @@ on:
           - RelWithDebInfo
           - ASan
           - TSan
-        default: "Release"
+        default: Release
       extra-tag:
         required: true
         type: string
@@ -31,9 +31,31 @@ on:
         type: boolean
         default: false
       t3000-demo:
-        required: false
-        type: boolean
-        default: false
+        description: "Demo tests: Select all, specific model, or disabled"
+        type: choice
+        options:
+          - disabled
+          - all
+          - mixtral
+          - llama3_load_checkpoints
+          - falcon40b
+          - llama3
+          - qwen25
+          - llama3_vision
+          - llama3_90b_vision
+          - llama3_70b
+          - falcon7b
+          - resnet50
+          - sentence_bert
+          - sd35_large
+          - flux1
+          - mistral
+          - qwen3
+          - qwen25_vl
+          - gemma3
+          - wan22
+          - mochi
+        default: disabled
       t3000-frequent:
         required: false
         type: boolean
@@ -56,7 +78,7 @@ on:
         type: boolean
         default: false
 
-run-name: ${{ inputs.description }}
+run-name: ${{ inputs.trigger_type }}
 jobs:
   # Centralized logic to determine what should run
   determine-tests:
@@ -85,9 +107,9 @@ jobs:
               echo "run-perplexity=${{ inputs.t3000-perplexity }}" >> $GITHUB_OUTPUT
               ;;
             "model-pr")
-              echo "run-unit=false" >> $GITHUB_OUTPUT
-              echo "run-demo=false" >> $GITHUB_OUTPUT
-              echo "run-frequent=false" >> $GITHUB_OUTPUT
+              echo "run-unit=true" >> $GITHUB_OUTPUT  
+              echo "run-demo=true" >> $GITHUB_OUTPUT
+              echo "run-frequent=true" >> $GITHUB_OUTPUT
               echo "run-nightly=false" >> $GITHUB_OUTPUT
               echo "run-model-perf=false" >> $GITHUB_OUTPUT
               echo "run-profiler=false" >> $GITHUB_OUTPUT
@@ -100,16 +122,7 @@ jobs:
               echo "run-nightly=false" >> $GITHUB_OUTPUT
               echo "run-model-perf=false" >> $GITHUB_OUTPUT
               echo "run-profiler=false" >> $GITHUB_OUTPUT
-              echo "run-perplexity=false" >> $GITHUB_OUTPUT
-              ;;
-            *)
-              echo "run-unit=false" >> $GITHUB_OUTPUT
-              echo "run-demo=false" >> $GITHUB_OUTPUT
-              echo "run-frequent=false" >> $GITHUB_OUTPUT
-              echo "run-nightly=false" >> $GITHUB_OUTPUT
-              echo "run-model-perf=false" >> $GITHUB_OUTPUT
-              echo "run-profiler=false" >> $GITHUB_OUTPUT
-              echo "run-perplexity=false" >> $GITHUB_OUTPUT
+              echo "run-perplexity=true" >> $GITHUB_OUTPUT
               ;;
           esac
   build-artifact:
@@ -133,6 +146,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      model: ${{ inputs.trigger_type == 'manual' && inputs.t3000-unit-tests || 'all' }}
   t3000-demo-tests:
     if: ${{ needs.determine-tests.outputs.run-demo == 'true' }}
     needs: [build-artifact, determine-tests]
@@ -143,6 +157,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      model: ${{ inputs.trigger_type == 'manual' && inputs.t3000-demo || 'all' }}
   t3000-frequent-tests:
     if: ${{ needs.determine-tests.outputs.run-frequent == 'true' }}
     needs: [build-artifact, determine-tests]
@@ -153,6 +168,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      model: ${{ inputs.trigger_type == 'manual' && inputs.t3000-frequent || 'all' }}
   t3000-nightly-tests:
     if: ${{ needs.determine-tests.outputs.run-nightly == 'true' }}
     needs: [build-artifact, determine-tests]
@@ -173,6 +189,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      model: ${{ inputs.trigger_type == 'manual' && inputs.t3000-model-perf || 'all' }}
   t3000-profiler-tests:
     if: ${{ needs.determine-tests.outputs.run-profiler == 'true' }}
     needs: [build-artifact, determine-tests]

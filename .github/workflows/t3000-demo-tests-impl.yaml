@@ -12,6 +12,10 @@ on:
       docker-image:
         required: true
         type: string
+      model:
+        required: false
+        type: string
+        default: "all"
       extra-tag:
         required: false
         type: string
@@ -22,6 +26,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # TODO: filter the matrix based on ${{ inputs.model }}
         test-group: [
           { name: "t3k_mixtral_tests", arch: wormhole_b0, cmd: run_t3000_mixtral_tests, timeout: 50, owner_id: U03PUAKE719}, # Harry Zhou
           { name: "t3k llama3_load_checkpoints tests", arch: wormhole_b0, cmd: run_t3000_llama3_load_checkpoints_tests, timeout: 30, owner_id: U07RY6B5FLJ}, #Gongyu Wang
