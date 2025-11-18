@@ -70,6 +70,14 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE TRUE)
 
+option(TT_METAL_ENABLE_AVX "Enable AVX/AVX2 optimized host code paths" ON)
+if(TT_METAL_ENABLE_AVX)
+    set(TT_METAL_X86_MARCH "x86-64-v3")
+else()
+    set(TT_METAL_X86_MARCH "x86-64-v2")
+endif()
+add_compile_definitions(TT_METAL_ENABLE_AVX=$<IF:$<BOOL:${TT_METAL_ENABLE_AVX}>,1,0>)
+
 # CMake 3.19: "smartly dropping dependencies of static and object libraries"
 set(CMAKE_OPTIMIZE_DEPENDENCIES TRUE)
 
@@ -124,6 +132,8 @@ message(STATUS "Build with LTO: ${TT_LTO_ENABLED}")
 message(STATUS "Build with Shared TTNN Sublibraries: ${ENABLE_TTNN_SHARED_SUBLIBS}")
 message(STATUS "Build with LightMetal Trace Enabled: ${TT_ENABLE_LIGHT_METAL_TRACE}")
 message(STATUS "Build with Multihost Distributed Compute: ${ENABLE_DISTRIBUTED}")
+message(STATUS "Enable AVX optimizations: ${TT_METAL_ENABLE_AVX}")
+message(STATUS "Target x86 baseline: ${TT_METAL_X86_MARCH}")
 
 ############################################################################################################################
 
@@ -166,7 +176,7 @@ target_link_libraries(
 )
 
 add_compile_options(
-    "$<$<STREQUAL:${CMAKE_SYSTEM_PROCESSOR},x86_64>:-march=x86-64-v3>"
+    "$<$<STREQUAL:${CMAKE_SYSTEM_PROCESSOR},x86_64>:-march=${TT_METAL_X86_MARCH}>"
     -fPIC
     -fvisibility-inlines-hidden
     -Wall

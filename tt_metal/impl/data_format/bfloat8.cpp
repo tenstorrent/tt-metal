@@ -5,10 +5,13 @@
 #include <tt-metalium/bfloat8.hpp>
 #include <tt_stl/span.hpp>
 #include <array>
+#include <bit>
 #include <functional>
 #include <random>
 #include <vector>
+#if TT_METAL_ENABLE_AVX
 #include <simde/x86/avx2.h>
+#endif
 
 #include <tt_stl/assert.hpp>
 #include "blockfloat_common.hpp"
@@ -102,6 +105,14 @@ std::vector<float> unpack_bfp8_tiles_into_float_vec(
     int data_index;
     int subtile_r;
     int subtile_c;
+    uint32_t exp_word, sub_word_index;
+
+    uint32_t num_float_in_tile = subtiles_in_tile_row * subtiles_in_tile_col * subtile_rows * subtile_cols;
+    uint32_t fp32_element_index = 0;
+    std::vector<float> float_vec;
+    float_vec.resize(num_tiles * num_float_in_tile);
+
+#if TT_METAL_ENABLE_AVX
     const std::vector<uint32_t> mask_vec = {0xff, 0xff00, 0xff0000, 0xff000000};
     const std::vector<uint32_t> shift_vec = {0, 8, 16, 24};
     const simde__m128i mask = simde_mm_loadu_si128(reinterpret_cast<const simde__m128i*>(mask_vec.data()));
@@ -111,12 +122,7 @@ std::vector<float> unpack_bfp8_tiles_into_float_vec(
         rebias_offset =
             simde_mm256_set1_epi32(-112);  // This rebias offset must be added if we are working with BFP8 format.
     }
-    uint32_t exp_word, sub_word_index;
 
-    uint32_t num_float_in_tile = subtiles_in_tile_row * subtiles_in_tile_col * subtile_rows * subtile_cols;
-    uint32_t fp32_element_index = 0;
-    std::vector<float> float_vec;
-    float_vec.resize(num_tiles * num_float_in_tile);
     for (int tile_index = 0; tile_index < num_tiles; ++tile_index) {
         for (int tr = 0; tr < subtiles_in_tile_row; ++tr) {
             for (int tc = 0; tc < subtiles_in_tile_col; ++tc) {
@@ -216,5 +222,48 @@ std::vector<float> unpack_bfp8_tiles_into_float_vec(
             }
         }
     }
+#else
+    for (int tile_index = 0; tile_index < num_tiles; ++tile_index) {
+        for (int tr = 0; tr < subtiles_in_tile_row; ++tr) {
+            for (int tc = 0; tc < subtiles_in_tile_col; ++tc) {
+                for (int i = 0; i < subtile_rows; ++i) {
+                    subtile_r = tr * face_H + i;
+                    for (int j = 0; j < subtile_cols; j += 8) {
+                        subtile_c = tc * face_W + j;
+                        data_index =
+                            (tr * (subtiles_in_tile_col * face_HW / 4) + tc * (face_HW / 4) + i * (face_W / 4) + j / 4);
+                        int tile_and_data_index = data_index + (num_bfp8_in_tile * tile_index);
+                        int exponent_index = (data_index >> 4) + (num_bfp8_in_tile * tile_index);
+                        exp_word = bfp8_tiles[exponent_index];
+                        int num_exponent_words_skip = tile_index * num_exp_words;
+                        sub_word_index = ((tile_and_data_index - num_exponent_words_skip) >> 2) & exp_bit_mask;
+                        uint8_t shared_exp = get_byte(exp_word, sub_word_index);
+
+                        uint32_t word0 = bfp8_tiles[num_exp_words + tile_and_data_index];
+                        uint32_t word1 = bfp8_tiles[num_exp_words + tile_and_data_index + 1];
+                        uint32_t float_data_index =
+                            row_major_output ? (subtile_c + (tile_W * subtile_r) + (tile_index * num_float_in_tile))
+                                             : fp32_element_index;
+
+                        for (int lane = 0; lane < 8; ++lane) {
+                            uint8_t datum =
+                                (lane < 4) ? ((word0 >> (lane * 8)) & 0xFF) : ((word1 >> ((lane - 4) * 8)) & 0xFF);
+                            uint32_t bit_val = convert_bfp_to_u32(tt::DataFormat::Bfp8_b, datum, shared_exp, is_exp_a);
+                            float value = std::bit_cast<float>(bit_val);
+                            if (row_major_output) {
+                                float_vec[float_data_index + lane] = value;
+                            } else {
+                                float_vec[float_data_index + lane] = value;
+                            }
+                        }
+                        if (!row_major_output) {
+                            fp32_element_index += 8;
+                        }
+                    }
+                }
+            }
+        }
+    }
+#endif
     return float_vec;
 }
