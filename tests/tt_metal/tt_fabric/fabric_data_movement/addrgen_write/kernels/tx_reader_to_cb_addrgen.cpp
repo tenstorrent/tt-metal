@@ -17,7 +17,8 @@
 //   0: OPERATION_TYPE (OperationType enum: BasicWrite, Scatter, FusedAtomicInc)
 //   1: SRC_IS_DRAM (0=L1, 1=DRAM)
 //   2: NUM_PAGES
-//   3: PAGE_SIZE
+//   3: PAGE_SIZE (actual data size to transfer)
+//   4: ALIGNED_PAGE_SIZE (buffer spacing for address calculation)
 //
 // RT args:
 //   0: src_base (u32)
@@ -29,6 +30,7 @@ void kernel_main() {
     constexpr bool SRC_IS_DRAM = get_compile_time_arg_val(CTA_BASE + 1) == 1;
     constexpr uint32_t NUM_PAGES = get_compile_time_arg_val(CTA_BASE + 2);
     constexpr uint32_t PAGE_SIZE = get_compile_time_arg_val(CTA_BASE + 3);
+    constexpr uint32_t ALIGNED_PAGE_SIZE = get_compile_time_arg_val(CTA_BASE + 4);
     constexpr uint32_t CB_ID = tt::CBIndex::c_0;
 
     // Cast to enum type for clearer comparison
@@ -39,7 +41,8 @@ void kernel_main() {
     constexpr uint32_t GROUP_PAGES = (operation_type == OperationType::Scatter) ? 2 : 4;
 
     const uint32_t src_base = get_arg_val<uint32_t>(0);
-    const auto src_acc = TensorAccessor(ta_args, /*bank_base=*/src_base, /*page_size=*/PAGE_SIZE);
+    // Use ALIGNED_PAGE_SIZE for address calculation (buffer spacing)
+    const auto src_acc = TensorAccessor(ta_args, /*bank_base=*/src_base, /*page_size=*/ALIGNED_PAGE_SIZE);
 
     uint32_t sent = 0;
     while (sent < NUM_PAGES) {
@@ -57,7 +60,9 @@ void kernel_main() {
         // queue all reads for the group
         for (uint32_t i = 0; i < this_group; ++i) {
             uint64_t src_noc = src_acc.get_noc_addr(sent + i);
-            uint32_t l1_dst = l1_base + i * PAGE_SIZE;
+            // CB is configured with ALIGNED_PAGE_SIZE, so stride by that amount
+            uint32_t l1_dst = l1_base + i * ALIGNED_PAGE_SIZE;
+            // But only transfer PAGE_SIZE bytes (actual data)
             noc_async_read(src_noc, l1_dst, PAGE_SIZE);
         }
 

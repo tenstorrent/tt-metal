@@ -28,7 +28,8 @@ using namespace tt::tt_fabric::mesh::experimental;
 //   0: OPERATION_TYPE (OperationType enum: BasicWrite, Scatter, FusedAtomicInc)
 //   1: API_VARIANT (ApiVariant enum: Basic, WithState, SetState)
 //   2: TOTAL_PAGES
-//   3: PAGE_SIZE
+//   3: PAGE_SIZE (actual data size to transfer)
+//   4: ALIGNED_PAGE_SIZE (destination buffer spacing for address calculation)
 //
 // RT args (must match host):
 //   0: dst_base       (u32)  // receiver buffer base (L1 offset or DRAM base)
@@ -46,6 +47,7 @@ void kernel_main() {
     constexpr uint32_t API_VARIANT = get_compile_time_arg_val(CTA_BASE + 1);
     constexpr uint32_t TOTAL_PAGES = get_compile_time_arg_val(CTA_BASE + 2);
     constexpr uint32_t PAGE_SIZE = get_compile_time_arg_val(CTA_BASE + 3);
+    constexpr uint32_t ALIGNED_PAGE_SIZE = get_compile_time_arg_val(CTA_BASE + 4);
     constexpr uint32_t CB_ID = tt::CBIndex::c_0;
 
     // Cast to enum types for clearer comparisons
@@ -95,7 +97,8 @@ void kernel_main() {
 
     sender.open<true>();
 
-    const auto dst_acc = TensorAccessor(ta_args, /*bank_base=*/dst_base, /*page_size=*/PAGE_SIZE);
+    // Use ALIGNED_PAGE_SIZE for address calculation (destination buffer spacing)
+    const auto dst_acc = TensorAccessor(ta_args, /*bank_base=*/dst_base, /*page_size=*/ALIGNED_PAGE_SIZE);
 
     // FusedAtomicInc: compute semaphore NOC address before loop
     uint64_t sem_noc = 0;

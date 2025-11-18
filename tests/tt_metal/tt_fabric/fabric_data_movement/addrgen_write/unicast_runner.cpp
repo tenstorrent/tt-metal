@@ -89,7 +89,8 @@ inline bool lookup_devices_or_fail(
 inline std::vector<uint32_t> make_tx_pattern(size_t n_words) {
     std::vector<uint32_t> tx(n_words);
     for (size_t i = 0; i < n_words; ++i) {
-        tx[i] = 0xA5A50000u + static_cast<uint32_t>(i);
+        // tx[i] = 0xA5A50000u + static_cast<uint32_t>(i);
+        tx[i] = static_cast<uint32_t>(i);
     }
     return tx;
 }
@@ -104,6 +105,15 @@ inline void verify_payload_words(const std::vector<uint32_t>& rx, const std::vec
         if (rx[i] != tx[i]) {
             ADD_FAILURE() << "Data mismatch at word " << i << " (got 0x" << std::hex << rx[i] << ", exp 0x" << tx[i]
                           << std::dec << ")";
+            
+            // Print context around the failure
+            log_info(LogTest, "=== Mismatch Context ===");
+            size_t start = (i > 5) ? i - 5 : 0;
+            size_t end = std::min(i + 10, rx.size());
+            for (size_t j = start; j < end; j++) {
+                log_info(LogTest, "  Word {}: got 0x{:x} ({}), expected 0x{:x} ({}){}", 
+                         j, rx[j], rx[j], tx[j], tx[j], (j == i ? " <-- MISMATCH" : ""));
+            }
             return;
         }
     }
@@ -176,6 +186,28 @@ void run_unicast_write_test(HelpersFixture* fixture, const AddrgenTestParams& p)
     // Initialize shards on specific src/dst devices (pass CQ, use vectors)
     Dist::WriteShard(mcq, src_buf, tx, src_coord, /*blocking=*/true);
     Dist::WriteShard(mcq, dst_buf, zeros, dst_coord, /*blocking=*/true);
+
+    // Debug: Print buffer information
+    auto* src_device_buf = src_buf->get_device_buffer(src_coord);
+    auto* dst_device_buf = dst_buf->get_device_buffer(dst_coord);
+    const uint32_t NUM_PAGES_DEBUG = (p.tensor_bytes + p.page_size - 1) / p.page_size;
+    
+    log_info(LogTest, "=== Buffer Debug Info ===");
+    log_info(LogTest, "Test params: tensor_bytes={}, page_size={}, num_pages={}", 
+             p.tensor_bytes, p.page_size, NUM_PAGES_DEBUG);
+    log_info(LogTest, "SRC buffer - address: 0x{:x}, page_size: {}, aligned_page_size: {}", 
+             src_device_buf->address(), src_device_buf->page_size(), src_device_buf->aligned_page_size());
+    log_info(LogTest, "DST buffer - address: 0x{:x}, page_size: {}, aligned_page_size: {}, alignment: {}", 
+             dst_device_buf->address(), dst_device_buf->page_size(), 
+             dst_device_buf->aligned_page_size(), dst_device_buf->alignment());
+    
+    // Calculate expected addresses for each page
+    log_info(LogTest, "Expected page addresses:");
+    for (uint32_t i = 0; i < NUM_PAGES_DEBUG && i < 4; i++) {
+        tt::tt_metal::DeviceAddr page_addr = dst_device_buf->page_address(0, i);  // bank_id=0 for first bank
+        log_info(LogTest, "  Page {}: address offset = 0x{:x} (decimal: {})", 
+                 i, page_addr, page_addr);
+    }
 
     // ---------------------------- PROGRAM FACTORY ----------------------------
     /*
@@ -264,6 +296,15 @@ Notes:
 
     const uint32_t NUM_PAGES = (p.tensor_bytes + p.page_size - 1) / p.page_size;
 
+    // Calculate aligned page sizes for source and destination buffers
+    // DRAM uses 32-byte alignment, L1 uses 16-byte alignment
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    uint32_t src_alignment = hal.get_alignment(tt::tt_metal::HalMemType::DRAM);  // Source is always DRAM
+    uint32_t dst_alignment = p.use_dram_dst ? hal.get_alignment(tt::tt_metal::HalMemType::DRAM)
+                                            : hal.get_alignment(tt::tt_metal::HalMemType::L1);
+    uint32_t src_aligned_page_size = ((p.page_size + src_alignment - 1) / src_alignment) * src_alignment;
+    uint32_t dst_aligned_page_size = ((p.page_size + dst_alignment - 1) / dst_alignment) * dst_alignment;
+
     // For fused atomic inc, each write increments the semaphore, so receiver waits for NUM_PAGES
     // For regular unicast, a single atomic inc is sent after all writes, so receiver waits for 1
     const uint32_t sem_wait_value = is_fused_atomic_inc ? NUM_PAGES : 1u;
@@ -273,8 +314,9 @@ Notes:
     tt::tt_metal::Program sender_prog = tt::tt_metal::CreateProgram();
     const uint32_t CB_ID = tt::CBIndex::c_0;
     // CB holds 8 pages total so the reader can fill 4 while the writer drains 4.
-    auto cb_cfg = tt::tt_metal::CircularBufferConfig(8 * p.page_size, {{CB_ID, tt::DataFormat::Float16}})
-                      .set_page_size(CB_ID, p.page_size);
+    // Use source aligned page size (reader reads from DRAM buffer with DRAM alignment)
+    auto cb_cfg = tt::tt_metal::CircularBufferConfig(8 * src_aligned_page_size, {{CB_ID, tt::DataFormat::Float16}})
+                      .set_page_size(CB_ID, src_aligned_page_size);
     (void)tt::tt_metal::CreateCircularBuffer(sender_prog, p.sender_core, cb_cfg);
 
     // Reader kernel (DRAM->CB) - now uses unified kernel with OPERATION_TYPE compile-time arg
@@ -283,7 +325,8 @@ Notes:
     reader_cta.push_back(static_cast<uint32_t>(operation_type));  // OPERATION_TYPE
     reader_cta.push_back(1u);              // SRC_IS_DRAM
     reader_cta.push_back(NUM_PAGES);
-    reader_cta.push_back(p.page_size);
+    reader_cta.push_back(p.page_size);     // Raw page size (actual data size to transfer)
+    reader_cta.push_back(src_aligned_page_size);  // Aligned page size (source buffer spacing)
 
     auto reader_k = tt::tt_metal::CreateKernel(
         sender_prog,
@@ -302,7 +345,8 @@ Notes:
     writer_cta.push_back(static_cast<uint32_t>(operation_type));  // OPERATION_TYPE
     writer_cta.push_back(static_cast<uint32_t>(api_variant));     // API_VARIANT
     writer_cta.push_back(NUM_PAGES);       // TOTAL_PAGES
-    writer_cta.push_back(p.page_size);     // PAGE_SIZE
+    writer_cta.push_back(p.page_size);     // Raw page size (actual data size to transfer)
+    writer_cta.push_back(dst_aligned_page_size);  // Aligned page size (dest buffer addressing)
 
     auto writer_k = tt::tt_metal::CreateKernel(
         sender_prog,
@@ -338,6 +382,12 @@ Notes:
     // -------------------------- end PROGRAM FACTORY --------------------------
 
     // --- Simple single-run execution ---
+    log_info(LogTest, "=== About to run workloads ===");
+    log_info(LogTest, "NUM_PAGES: {}, PAGE_SIZE: {}, src_aligned: {}, dst_aligned: {}", 
+             NUM_PAGES, p.page_size, src_aligned_page_size, dst_aligned_page_size);
+    log_info(LogTest, "CB config: total_size={}, page_size={}", 
+             8 * src_aligned_page_size, src_aligned_page_size);
+    
     Dist::MeshWorkload receiver_workload;
     Dist::MeshWorkload sender_workload;
     receiver_workload.add_program(Dist::MeshCoordinateRange(dst_coord), std::move(receiver_prog));
