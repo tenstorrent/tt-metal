@@ -285,9 +285,7 @@ void kernel_main() {
             UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
             pkt_scatter_hdr,
             static_cast<uint8_t>(unicast_route_info.distance_in_hops),
-            NocUnicastScatterCommandHeader{
-                {0, 0},  // ignore
-                static_cast<uint16_t>(page_size)},
+            NocUnicastScatterCommandHeader({0, 0}, {static_cast<uint16_t>(page_size)}),
             page_size * 2);
 
         fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
@@ -344,7 +342,7 @@ void kernel_main() {
                                 mux_connection_handle,
                                 pkt_scatter_hdr,
                                 l1_read_addr,
-                                NocUnicastScatterCommandHeader{{noc_address0, noc_address1}, 0});
+                                NocUnicastScatterCommandHeader({noc_address0, noc_address1}));
                         }
                         uint64_t local_noc0_dest_noc_addr_tile_one = get_noc_addr(tile_one_id, output_addrgen);
                         uint64_t local_noc0_dest_noc_addr_tile_two = get_noc_addr(tile_two_id, output_addrgen);
@@ -358,7 +356,7 @@ void kernel_main() {
                                 mux_connection_handle,
                                 pkt_scatter_hdr,
                                 l1_read_addr,
-                                NocUnicastScatterCommandHeader{{noc_address0, noc_address1}, 0});
+                                NocUnicastScatterCommandHeader({noc_address0, noc_address1}));
                         }
                     }
                     tiles_read += 2;
@@ -537,7 +535,7 @@ void kernel_main() {
                             mux_connection_handle,
                             pkt_scatter_hdr,
                             l1_read_addr,
-                            NocUnicastScatterCommandHeader{{noc_address0, noc_address1}, 0});
+                            NocUnicastScatterCommandHeader({noc_address0, noc_address1}));
                         tiles_read += 2;
                         break;
                     }
