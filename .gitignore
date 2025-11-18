@@ -85,13 +85,13 @@ hf_data/
 venv/
 
 # exclude pytorch binaries
-*.pt
+# *.pt
 
 # exclude binaries
 *.bin
 
 # exclude serialized tensor binaries
-*.tensorbin
+# *.tensorbin
 
 # releases
 dist
