@@ -71,11 +71,7 @@ void Inspector::track_operation(
     }
 
     try {
-        auto& ctx = MetalContext::instance();
-        auto* data = ctx.get_inspector_data();
-        if (!data) {
-            return;
-        }
+        auto* data = get_inspector_data();
 
         // Get the callstack internally
         std::string call_stack = get_call_stack();
