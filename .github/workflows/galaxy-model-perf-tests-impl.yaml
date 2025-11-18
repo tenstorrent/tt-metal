@@ -275,12 +275,12 @@ jobs:
           name: perf-report-csv-${{ matrix.test-group.model-type }}-${{ matrix.test-group.arch }}-${{ matrix.test-group.model }}-bare-metal
           path:
             ${{ steps.check-perf-report.outputs.perf_report_filename_all_gather }}
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+      - uses: ./.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: ${{ matrix.test-group.owner_id }}
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+      - uses: ./.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:

@@ -78,7 +78,7 @@ jobs:
           reporter: jest-junit
           working-directory: /work
 
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+      - uses: ./.github/actions/upload-artifact-with-job-uuid@main
         if: ${{ !cancelled() }}
         timeout-minutes: 10
         with:
@@ -86,6 +86,6 @@ jobs:
           prefix: "test_reports_"
 
       - name: Check for slow tests
-        uses: tenstorrent/tt-metal/.github/actions/detect-slow-tests@main
+        uses: ./.github/actions/detect-slow-tests@main
         with:
           threshold: ${{ inputs.per-test-timeout }}

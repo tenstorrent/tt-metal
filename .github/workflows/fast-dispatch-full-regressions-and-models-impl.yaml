@@ -202,7 +202,7 @@ jobs:
             else
               pytest tests/nightly/single_card/${{ matrix.test-config.model }}
             fi
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+      - uses: ./.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
@@ -255,7 +255,7 @@ jobs:
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e GTEST_OUTPUT=xml:generated/test_reports/
           run_args: ${{ matrix.test-config.cmd }}
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+      - uses: ./.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
@@ -291,7 +291,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+        uses: ./.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -304,7 +304,7 @@ jobs:
           else
             pytest tests/nightly/single_card/${{ matrix.test-config.model }}
           fi
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+      - uses: ./.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:

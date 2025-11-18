@@ -87,7 +87,7 @@ jobs:
       test-everything: ${{ steps.set-test-everything.outputs.test-everything }}
     steps:
       - id: find-changes
-        uses: tenstorrent/tt-metal/.github/actions/find-changed-files@blozano-apc-savior
+        uses: ./.github/actions/find-changed-files@blozano-apc-savior
       - id: set-test-metalium
         run: |
           echo "test-metalium=${{ github.event_name != 'workflow_dispatch' ||

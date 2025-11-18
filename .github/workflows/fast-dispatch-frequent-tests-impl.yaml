@@ -90,30 +90,30 @@ jobs:
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e GTEST_OUTPUT=xml:generated/test_reports/
           run_args: ${{ matrix.test-group.run-args }}
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+      - uses: ./.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: U01Q0T3J3D0 # Paul Keller
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+      - uses: ./.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
           path: generated/test_reports/
           prefix: "test_reports_"
       - name: Generate gtest annotations on failure
-        uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
+        uses: ./.github/actions/generate-gtest-failure-message@main
         if: ${{ failure() }}
         with:
           test-report-path: generated/test_reports/
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+      - uses: ./.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
           path: |
             pgm_bench.json
           prefix: "pgm_benchmarks_json_"
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+      - uses: ./.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:

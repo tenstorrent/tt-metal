@@ -17,5 +17,5 @@ jobs:
       pull-requests: write
       issues: write
       id-token: write
-    uses: tenstorrent/tt-metal/.github/workflows/ai_tools_impl.yaml@ay/tools_job
+    uses: ./.github/workflows/ai_tools_impl.yaml@ay/tools_job
     secrets: inherit

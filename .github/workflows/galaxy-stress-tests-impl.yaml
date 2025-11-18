@@ -49,7 +49,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+        uses: ./.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -61,10 +61,10 @@ jobs:
             echo "🔁 Run #$i"
             timeout --preserve-status 1200 pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "nd-hang-test"
           done
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+      - uses: ./.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: U053W15B6JF # Djordje Ivanovic
-      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+      - uses: ./.github/actions/cleanup@main
         if: always()

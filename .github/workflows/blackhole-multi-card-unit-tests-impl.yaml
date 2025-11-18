@@ -100,12 +100,12 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+        uses: ./.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-      - uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
+      - uses: ./.github/actions/ensure-bh-links-online@main
         timeout-minutes: 10
         with:
           runner-label: ${{ matrix.runner-group.runner-label }}
@@ -121,16 +121,16 @@ jobs:
         if: ${{ failure() }}
         run: |
           tt-smi -s
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+      - uses: ./.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: U0883RN6CRE # William Ly
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+      - uses: ./.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
       - name: Generate gtest annotations on failure
-        uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
+        uses: ./.github/actions/generate-gtest-failure-message@main
         if: ${{ failure() }}

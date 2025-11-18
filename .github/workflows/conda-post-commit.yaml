@@ -143,17 +143,17 @@ jobs:
           export LD_LIBRARY_PATH=$CONDA_PREFIX/lib
           ${{ matrix.test-group.cmd }}
 
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+      - uses: ./.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: U07J3K6KS1K # Bryan Lozano
 
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+      - uses: ./.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
 
-      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+      - uses: ./.github/actions/cleanup@main
         if: always()

@@ -56,7 +56,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+        uses: ./.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -78,7 +78,7 @@ jobs:
           if (( fail )); then
             exit 1
           fi
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+      - uses: ./.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
@@ -96,16 +96,16 @@ jobs:
       #     fi
       # - name: Upload benchmark data
       #   if: ${{ !cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
-      #   uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
+      #   uses: ./.github/actions/upload-data-via-sftp@main
       #   with:
       #     ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
       #     sftp-batchfile: .github/actions/upload-data-via-sftp/benchmark_data_batchfile.txt
       #     username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
       #     hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
       #     path: /work
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+      - uses: ./.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
-      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+      - uses: ./.github/actions/cleanup@main
