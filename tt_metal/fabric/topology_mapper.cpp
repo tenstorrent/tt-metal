@@ -439,6 +439,10 @@ std::unordered_map<MeshId, LogicalAdjacencyMap> TopologyMapper::build_adjacency_
         std::vector<tt::tt_fabric::FabricNodeId> adjacents;
         bool relaxed = mesh_graph_.is_intra_mesh_policy_relaxed(mesh_id);
         for (const auto& [neighbor_chip_id, edge] : adjacent_map) {
+            // Skip self-connections
+            if (neighbor_chip_id == fabric_node_id.chip_id) {
+                continue;
+            }
             size_t repeat_count = relaxed ? 1 : edge.connected_chip_ids.size();
             for (size_t i = 0; i < repeat_count; ++i) {
                 adjacents.push_back(tt::tt_fabric::FabricNodeId(mesh_id, neighbor_chip_id));
@@ -490,6 +494,10 @@ std::unordered_map<MeshId, PhysicalAdjacencyMap> TopologyMapper::build_adjacency
                                    const std::unordered_set<tt::tt_metal::AsicID>& mesh_asics) {
         std::vector<tt::tt_metal::AsicID> adjacents;
         for (const auto& neighbor : physical_system_descriptor_.get_asic_neighbors(asic_id)) {
+            // Skip self-connections
+            if (neighbor == asic_id) {
+                continue;
+            }
             // Make sure that the neighbor is in the mesh
             if (mesh_asics.contains(neighbor)) {
                 adjacents.push_back(neighbor);
