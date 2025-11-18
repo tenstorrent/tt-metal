@@ -75,8 +75,6 @@ def test_all_gather_async(
     else:
         submesh_shape = (num_devices, 1)
         cluster_axis = 0
-    print(cluster_axis)
-    print(submesh_shape)
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape(submesh_shape))
     run_all_gather_impl(
         submesh_device,
