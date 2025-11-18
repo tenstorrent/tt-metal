@@ -10,21 +10,21 @@ on:
         default: all
         options:
           - all
-          - mixtral
-          - llama3_load_checkpoints
+          - falcon7b
           - falcon40b
           - llama3
-          - qwen25
+          - llama3_load_checkpoints
           - llama3_vision
           - llama3_90b_vision
           - llama3_70b
-          - falcon7b
           - resnet50
           - sentence_bert
           - sd35_large
           - flux1-dev
           - mistral
+          - mixtral
           - qwen3
+          - qwen25
           - qwen25_vl
           - gemma3
           - wan22

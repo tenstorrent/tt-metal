@@ -32,20 +32,12 @@ jobs:
         run: |
           FULL_MATRIX=$(jq -n -c '[
             {
-              "name": "t3k_mixtral_tests",
-              "model": "mixtral",
+              "name": "t3k_falcon7b_tests",
+              "model": "falcon7b",
               "arch": "wormhole_b0",
-              "cmd": "run_t3000_mixtral_tests",
-              "timeout": 50,
-              "owner_id": "U03PUAKE719"
-            },
-            {
-              "name": "t3k_llama3_load_checkpoints tests",
-              "model": "llama3_load_checkpoints,
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_llama3_load_checkpoints_tests",
-              "timeout": 30,
-              "owner_id": "U07RY6B5FLJ"
+              "cmd": "run_t3000_falcon7b_tests",
+              "timeout": 90,
+              "owner_id": "U05RWH3QUPM"
             },
             {
               "name": "t3k_falcon40b_tests",
@@ -64,12 +56,12 @@ jobs:
               "owner_id": "U03PUAKE719"
             },
             {
-              "name": "t3k_qwen25_tests",
-              "model": "qwen25",
+              "name": "t3k_llama3_load_checkpoints tests",
+              "model": "llama3_load_checkpoints,
               "arch": "wormhole_b0",
-              "cmd": "run_t3000_qwen25_tests",
-              "timeout": 60,
-              "owner_id": "U03HY7MK4BT"
+              "cmd": "run_t3000_llama3_load_checkpoints_tests",
+              "timeout": 30,
+              "owner_id": "U07RY6B5FLJ"
             },
             {
               "name": "t3k_llama3_vision_tests",
@@ -94,14 +86,6 @@ jobs:
               "cmd": "run_t3000_llama3_70b_tests",
               "timeout": 60,
               "owner_id": "U03FJB5TM5Y"
-            },
-            {
-              "name": "t3k_falcon7b_tests",
-              "model": "falcon7b",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_falcon7b_tests",
-              "timeout": 90,
-              "owner_id": "U05RWH3QUPM"
             },
             {
               "name": "t3k_resnet50_tests",
@@ -144,10 +128,26 @@ jobs:
               "owner_id": "U0896VBAKFC"
             },
             {
+              "name": "t3k_mixtral_tests",
+              "model": "mixtral",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_mixtral_tests",
+              "timeout": 50,
+              "owner_id": "U03PUAKE719"
+            },
+            {
               "name": "t3k_qwen3_tests",
               "model": "qwen3",
               "arch": "wormhole_b0",
               "cmd": "run_t3000_qwen3_tests",
+              "timeout": 60,
+              "owner_id": "U03HY7MK4BT"
+            },
+            {
+              "name": "t3k_qwen25_tests",
+              "model": "qwen25",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_qwen25_tests",
               "timeout": 60,
               "owner_id": "U03HY7MK4BT"
             },
