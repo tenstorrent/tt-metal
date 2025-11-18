@@ -245,7 +245,7 @@ def main():
             os.environ["TT_METAL_PROFILE_PERF_COUNTERS"] = str(bitfield)
             logger.info(f"Setting performance counter groups: {options.perf_counter_groups} (bitfield: {bitfield})")
 
-    if options.cpp_post_process:
+    if True:
         os.environ["TT_METAL_PROFILER_CPP_POST_PROCESS"] = "1"
 
     if options.device_memory_profiler:
