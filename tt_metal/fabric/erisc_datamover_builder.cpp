@@ -1404,9 +1404,9 @@ void FabricEriscDatamoverBuilder::connect_to_downstream_edm_impl(
         tt::LogTest,
         "EDM at x={}, y={}, Direction={}, FabricNodeId={} :: Connecting to downstream EDM at x={}, y={}, "
         "Direction={}",
-        my_noc_x,
-        my_noc_y,
-        direction,
+        this->get_noc_x(),
+        this->get_noc_y(),
+        this->get_direction(),
         local_fabric_node_id,
         downstream_builder->get_noc_x(),
         downstream_builder->get_noc_y(),
