@@ -27,12 +27,34 @@ on:
         type: string
         default: "in-service"
       t3000-unit:
-        required: false
-        type: boolean
-        default: false
-      t3000-demo:
-        description: "Demo tests: Select all, specific model, or disabled"
+        description: "Demo tests: Select `all`, specific model or `disabled`"
         type: choice
+        default: disabled
+        options:
+          - disabled
+          - all
+          - ttmetal
+          - ttnn
+          - tt_metal multiprocess
+          - falcon7b
+          - falcon40b
+          - llama3-small
+          - llama3.2-11b
+          - llama3.2-11b-vision
+          - n300 mesh llama3.2-11b-vision
+          - llama3.2-90b-vision
+          # - llama3.1-70b
+          - llama3.2-90b
+          - mixtral
+          - grok
+          - unet shallow
+          - mistral
+          - qwen25_vl
+          - gemma3-small
+      t3000-demo:
+        description: "Demo tests: Select `all`, specific model or `disabled`"
+        type: choice
+        default: disabled
         options:
           - disabled
           - all
@@ -55,7 +77,6 @@ on:
           - gemma3
           - wan22
           - mochi
-        default: disabled
       t3000-frequent:
         required: false
         type: boolean
@@ -98,7 +119,7 @@ jobs:
           case "${{ inputs.trigger_type }}" in
             "manual")
             # TODO: adapt to binary or choice types
-              echo "run-unit=${{ inputs.t3000-unit }}" >> $GITHUB_OUTPUT
+              echo "run-unit=${{ inputs.t3000-unit != 'disabled' }}" >> $GITHUB_OUTPUT
               echo "run-demo=${{ inputs.t3000-demo != 'disabled' }}" >> $GITHUB_OUTPUT
               echo "run-frequent=${{ inputs.t3000-frequent }}" >> $GITHUB_OUTPUT
               echo "run-nightly=${{ inputs.t3000-nightly }}" >> $GITHUB_OUTPUT
