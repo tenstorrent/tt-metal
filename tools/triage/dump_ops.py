@@ -25,14 +25,8 @@ from dataclasses import dataclass
 from run_checks import run as get_run_checks
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
 from inspector_data import run as get_inspector_data
-
-try:
-    from ttexalens.context import Context
-    from ttexalens.device import Device
-except ImportError:
-    print("Error: ttexalens module not found.")
-    print("Please run 'scripts/install_debugger.sh' to install the required debugging dependencies.")
-    exit(1)
+from ttexalens.context import Context
+from ttexalens.device import Device
 
 import re, textwrap, subprocess, shutil, linecache
 import os
