@@ -98,7 +98,10 @@ private:
         ScopedDevices& operator=(const ScopedDevices&) = delete;
 
         // Returns the list of devices opened by the root mesh device (i.e. not submeshes).
+        [[deprecated("This function is deprecated. Use opened_local_devices() instead.")]]
         const std::vector<IDevice*>& local_root_devices() const;
+
+        const std::map<ChipId, IDevice*>& opened_local_devices() const;
 
         const std::vector<MaybeRemote<IDevice*>>& root_devices() const;
     };
