@@ -19,27 +19,35 @@ from models.common.utility_functions import skip_for_blackhole, skip_for_wormhol
     "ag_output_shape, dim, num_links, num_workers_per_link, tiles_per_chunk, layout, ag_input_dtype, mm_cores_y, mm_block_h, mm_block_w",
     [
         ([1, 1, 256, 128], 3, 1, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 32),
-        ([1, 1, 256, 256], 3, 2, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 32),
+        ([1, 1, 256, 256], 3, 2, 1, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 64),
         # 2 row tests
-        ([1, 1, 64, 256], 3, 1, 1, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 64, 32),
+        ([1, 1, 512, 128], 3, 1, 1, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 64, 32),
+        ([1, 1, 512, 128], 3, 2, 1, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 64, 32),
+        ([1, 1, 512, 256], 3, 2, 1, 4, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 64, 64),
         # 4 row tests
-        ([1, 1, 128, 256], 3, 1, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 64, 32),
+        ([1, 1, 1024, 128], 3, 1, 1, 4, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 128, 32),
+        ([1, 1, 1024, 128], 3, 4, 1, 4, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 128, 32),
         # Multiple y core tests
-        ([1, 1, 128, 256], 3, 1, 1, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 2, 32, 32),
+        ([1, 1, 1024, 128], 3, 4, 1, 4, ttnn.TILE_LAYOUT, ttnn.bfloat16, 2, 128, 32),
         # Full tests
-        ([1, 1, 4096, 2560], 3, 1, 2, 1024, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 4096, 320),
+        ([1, 1, 4096, 2048], 3, 1, 1, 64, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 256, 256),
+        ([1, 1, 4096, 2048], 3, 4, 1, 64, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 256, 256),
     ],
     ids=[
         "1tile1chunk1worker1row1link",
         "1tile1chunk1worker1row2link",
         # 2 row tests
-        "2tile1chunk1worker2row",
+        "2tile1chunk1worker2row1link",
+        "2tile1chunk1worker2row2link",
+        "2tile1chunk1worker2row2col2link",
         # 4 row tests
-        "2tile2chunk2worker4row",
+        "4tile1chunk1worker4row1link",
+        "4tile1chunk1worker4row4link",
         # Multiple y core tests
-        "2tile2chunk1worker4row2ycores",
+        "multiycore",
         # Full tests
-        "4k4k",
+        "fulltest",
+        "fulltest4link",
     ],
 )
 @pytest.mark.parametrize(
