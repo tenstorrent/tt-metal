@@ -187,9 +187,31 @@ class Generator:
         if empty_slots is None:
             empty_slots = list(range(batch_size))
 
-        out_list = []
+        # Create a reordered list with (idx, user_id, model_id) for every user in empty_slots
+        reordered_idx_user_modelid = []
         for idx, user_id in enumerate(empty_slots):
             model_id = user_id // max_batch_size_per_model
+            reordered_idx_user_modelid.append((idx, user_id, model_id))
+        # Reorder reordered_idx_user_modelid so that model_ids are interleaved by dp (data parallel degree)
+        dp = len(self.model_args)
+        # Create sublists for each model_id
+        model_buckets = [[] for _ in range(dp)]
+        for item in reordered_idx_user_modelid:
+            idx, user_id, model_id = item
+            model_buckets[model_id].append(item)
+        # Interleave
+        reordered_idx_user_modelid = []
+        total = sum(len(bucket) for bucket in model_buckets)
+        bucket_pointers = [0 for _ in range(dp)]
+        while len(reordered_idx_user_modelid) < total:
+            for i in range(dp):
+                if bucket_pointers[i] < len(model_buckets[i]):
+                    reordered_idx_user_modelid.append(model_buckets[i][bucket_pointers[i]])
+                    bucket_pointers[i] += 1
+
+        out_list = [None for _ in range(total)]
+
+        for idx, user_id, model_id in reordered_idx_user_modelid:
             group_user_id = user_id % max_batch_size_per_model if page_table is None else 0
             seq_len = int(prompt_lens[idx])
             last_token_idx = seq_len - 1
@@ -259,7 +281,7 @@ class Generator:
             # if data parallel is greater than 1, we need to add logits to out_list and do the processing after all the prefill are done
             # otherwise, we can process the logits after prefill immediately
             if self.data_parallel > 1:
-                out_list.append(logits)
+                out_list[idx] = (idx, user_id, model_id, logits)
             else:
                 output_logits[idx] = self.model[model_id].process_output_prefill(
                     logits, last_token_idx=(last_token_idx % 32)
@@ -268,11 +290,9 @@ class Generator:
 
         # Process the logits after all the prefill are done in data parallel mode
         if self.data_parallel > 1:
-            for idx, out in enumerate(out_list):
+            for idx, user_id, model_id, out in out_list:
                 seq_len = int(prompt_lens[idx])
                 last_token_idx = seq_len - 1
-                user_id = empty_slots[idx]
-                model_id = user_id // max_batch_size_per_model
 
                 # Since we give unpadded_seq_len, only the tile containing the last token is returned
                 output_logits[idx] = self.model[model_id].process_output_prefill(
