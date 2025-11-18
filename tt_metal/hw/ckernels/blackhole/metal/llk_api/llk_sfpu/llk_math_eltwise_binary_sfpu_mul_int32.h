@@ -12,7 +12,7 @@ namespace ckernel {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_mul_int32_init() {
-    llk_math_eltwise_binary_sfpu_init<SfpuType::unused, APPROXIMATE>();
+    llk_math_eltwise_binary_sfpu_init<SfpuType::mul_int32, APPROXIMATE>(ckernel::sfpu::mul_int32_init<APPROXIMATE>);
 }
 
 template <bool APPROXIMATE>
