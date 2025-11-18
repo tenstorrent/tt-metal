@@ -193,11 +193,15 @@ void build_and_run_program_ethernet(
     if (erisc_count < 2) {
         GTEST_SKIP() << "Skipping test as this test requires at least 2 ERISCs, but only " << erisc_count
                      << " available.";
+        return;
     }
 
     // Get active ethernet cores
     const auto& active_eth_cores = device_0->get_active_ethernet_cores(true);
-    ASSERT_FALSE(active_eth_cores.empty()) << "No active ethernet cores available.";
+    if (active_eth_cores.empty()) {
+        GTEST_SKIP() << "Skipping test as this test requires at least 1 active ethernet core, but none are available.";
+        return;
+    }
 
     // Pick the first active ethernet core
     CoreCoord eth_core = *active_eth_cores.begin();
