@@ -97,7 +97,7 @@ def run_send_recv_test(
         10 * 1024,
     ],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_2D_DYNAMIC}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 def test_send_recv_multi_link(
     mesh_device,
@@ -109,7 +109,7 @@ def test_send_recv_multi_link(
     socket_fifo_size,
 ):
     if dtype == ttnn.bfloat8_b and layout == ttnn.ROW_MAJOR_LAYOUT:
-        pytest.skip("Skipping bfp8 row major test due to known issue.")
+        pytest.skip("Skipping bfp8 row major is not supported in our platform.")
 
     sender_mesh_device = mesh_device.create_submesh(ttnn.MeshShape(1, 4), ttnn.MeshCoordinate(0, 0))
     receiver_mesh_device = mesh_device.create_submesh(ttnn.MeshShape(1, 4), ttnn.MeshCoordinate(1, 0))

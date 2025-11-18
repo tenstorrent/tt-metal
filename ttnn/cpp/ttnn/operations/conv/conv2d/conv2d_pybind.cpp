@@ -364,6 +364,7 @@ void py_bind_conv2d(py::module& module) {
         Boolean that indicates whether the activation tensor should be deallocated after the conv op is done.
         If true, the activation tensor will be deallocated after the halo micro-op is done.
         Should not be used if the input to the conv op is used by another op.
+        Has no effect if input tensor is in DRAM.
         )doc");
     py_conv_config.def_readwrite("reallocate_halo_output", &Conv2dConfig::reallocate_halo_output, R"doc(
         reallocate_halo_output is a boolean that indicates whether the halo output tensor should be moved to reduce memory fragmentation, before the conv micro-op is called.

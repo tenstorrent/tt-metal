@@ -726,11 +726,6 @@ void bind_bitwise_binary_ops_operation(
                  - 2, 3, 4
 
             {6}
-
-        Example:
-            >>> tensor1 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor2 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> output = {1}(tensor1, tensor2/scalar)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -1192,11 +1187,6 @@ void bind_prelu(
                  - {4}
 
             {7}
-
-        Example:
-            >>> tensor1 = {5}
-            >>> tensor2 = {6}
-            >>> output = {1}(tensor1, tensor2/scalar)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -1639,12 +1629,6 @@ void bind_binary_overload_operation(
                  - 2, 3, 4
 
             {5}
-
-        Example:
-            >>> tensor1 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor2 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> output = {1}(tensor1, tensor2/scalar)
-
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),

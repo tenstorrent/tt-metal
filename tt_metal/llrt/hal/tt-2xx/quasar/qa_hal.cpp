@@ -133,8 +133,11 @@ public:
 
     std::string common_flags(const Params& params) const override {
         std::string cflags =
-            "-mcpu=tt-bh -fno-rvtt-sfpu-replay ";  // TODO: change to -mcpu=tt-qa once
-                                                   // https://github.com/tenstorrent/tt-metal/issues/29186 is ready
+            "-mcpu=tt-bh "
+            // TODO: change to -mcpu=tt-qsr64{,-rocc},
+            // -mcpu=tt-qsr32{,-tensixbh}, once
+            // https://github.com/tenstorrent/tt-metal/issues/29186 is ready
+            "-mno-tt-tensix-optimize-replay ";
         if (!(params.core_type == HalProgrammableCoreType::TENSIX &&
               params.processor_class == HalProcessorClassType::COMPUTE)) {
             cflags += "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
