@@ -22,14 +22,8 @@ on:
           - gpt-oss
           - wan22
           - mochi
-      deepseek:
-        description: 'Run DeepSeek tests'
-        required: false
-        default: false
-        type: boolean
   schedule:
     - cron: "0 0 * * *" # This cron schedule runs demo tests every day at 12am UTC
-    - cron: "0 9 * * 6" # frequency of galaxy deepseek tests
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
@@ -49,13 +43,4 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       model: ${{ inputs.model || 'all' }}
       topology: topology-6u
-  galaxy-deepseek-tests:
-    needs: build-artifact
-    secrets: inherit
-    uses: ./.github/workflows/galaxy-deepseek-tests-impl.yaml
-    if: ${{ (github.event_name == 'workflow_dispatch' && inputs.deepseek) || (github.event_name == 'schedule' && github.event.schedule == '0 9 * * 6') }}
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      topology: topology-6u
+      
