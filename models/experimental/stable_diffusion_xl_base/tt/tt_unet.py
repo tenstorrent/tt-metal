@@ -306,8 +306,6 @@ class TtUNet2DConditionModel(LightweightModule):
         sample = ttnn.to_memory_config(sample, ttnn.DRAM_MEMORY_CONFIG)
         residuals = (sample,)
 
-        temb = ttnn.typecast(temb, dtype=ttnn.bfloat16)
-
         ttnn.ReadDeviceProfiler(self.device)
         for i, down_block in enumerate(self.down_blocks):
             if isinstance(down_block, TtDownBlock2D):
@@ -371,8 +369,6 @@ class TtUNet2DConditionModel(LightweightModule):
         )
 
         sample = ttnn.silu(sample)
-
-        # sample = ttnn.sharded_to_interleaved(sample, ttnn.L1_MEMORY_CONFIG)
 
         [sample, [H, W], [tt_conv2_weights, tt_conv2_bias]] = ttnn.conv2d(
             input_tensor=sample,
