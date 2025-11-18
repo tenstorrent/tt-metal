@@ -190,7 +190,10 @@ void build_and_run_program_ethernet(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
 
     // We need at least 2 ERISCs (ERISC0 and ERISC1) to run this test
-    ASSERT_GE(erisc_count, 2) << "Test requires at least 2 ERISCs, but only " << erisc_count << " available.";
+    if (erisc_count < 2) {
+        GTEST_SKIP() << "Skipping test as this test requires at least 2 ERISCs, but only " << erisc_count
+                     << " available.";
+    }
 
     // Get active ethernet cores
     const auto& active_eth_cores = device_0->get_active_ethernet_cores(true);
