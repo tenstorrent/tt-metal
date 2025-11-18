@@ -35,10 +35,13 @@ void kernel_main() {
 
     start_page_size = page_size[0];
 
-    constexpr uint32_t cb_id_in1 = 1;
-    constexpr uint32_t sync_cb_id = 2;
-
     experimental::RemoteCircularBuffer remote_cb{remote_cb_id};
+
+    constexpr uint32_t cb_id_in1 = 1;
+    experimental::CircularBuffer local_cb{cb_id_in1};
+
+    constexpr uint32_t sync_cb_id = 2;
+    experimental::CircularBuffer sync_cb{sync_cb_id};
 
     for (uint32_t l = 0; l < num_layers; ++l) {
         uint32_t curr_page_size = page_size[l];
@@ -50,13 +53,13 @@ void kernel_main() {
         experimental::align_local_cbs_to_remote_cb<1>(remote_cb_id, {cb_id_in1});
 
         for (uint32_t block = 0; block < curr_num_blocks; ++block) {
-            cb_reserve_back(cb_id_in1, curr_block_num_tiles);
+            local_cb.reserve_back(curr_block_num_tiles);
             remote_cb.wait_front(1);
-            cb_push_back(cb_id_in1, curr_block_num_tiles);
+            local_cb.push_back(curr_block_num_tiles);
             // wait for compute done
-            cb_wait_front(sync_cb_id, 1);
+            sync_cb.wait_front(1);
             remote_cb.pop_front(1);
-            cb_pop_front(sync_cb_id, 1);
+            sync_cb.pop_front(1);
         }
     }
     remote_cb.commit();
