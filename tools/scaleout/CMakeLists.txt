@@ -127,7 +127,9 @@ target_link_libraries(
         cxxopts::cxxopts
 )
 
-# Generate MGD tool
+# =========================================================================
+# Generate MGD tool - Converts cabling descriptors to Mesh Graph Descriptors
+# =========================================================================
 add_executable(
     generate_mgd
     generate_mgd_main.cpp
@@ -141,9 +143,12 @@ set_target_properties(
             ${CMAKE_BINARY_DIR}/tools/scaleout
 )
 
+# Depend on scaleout protos (for cabling descriptor parsing)
 add_dependencies(generate_mgd scaleout_generated_protos)
 
-# Add dependency on fabric protos being generated (but don't link the full library)
+# Depend on fabric protos (for MGD generation)
+# We create a custom target to ensure the proto files are generated without
+# linking the entire fabric library (which would bring in unwanted dependencies)
 add_custom_target(
     fabric_protos_for_mgd
     DEPENDS
@@ -152,16 +157,18 @@ add_custom_target(
 )
 add_dependencies(generate_mgd fabric_protos_for_mgd)
 
+# Include directories for headers and generated protobuf files
 target_include_directories(generate_mgd PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(generate_mgd SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 target_include_directories(generate_mgd SYSTEM PRIVATE ${CMAKE_BINARY_DIR}/tt_metal/fabric)
 
-# Manually add the fabric protobuf object file since we only need the proto definitions
+# Manually add the mesh_graph_descriptor protobuf source file
+# This gives us just the proto definitions we need without linking the full fabric library
 target_sources(generate_mgd PRIVATE ${CMAKE_BINARY_DIR}/tt_metal/fabric/protobuf/mesh_graph_descriptor.pb.cc)
 
 target_link_libraries(
     generate_mgd
     PRIVATE
-        scaleout_tools
-        protobuf::libprotobuf
+        scaleout_tools # For CablingGenerator and cabling descriptor parsing
+        protobuf::libprotobuf # For protobuf runtime
 )

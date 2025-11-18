@@ -55,27 +55,50 @@ std::unordered_map<std::string, std::unordered_map<std::string, uint32_t>> compu
 }
 
 void generate_mesh_graph_descriptor(const std::string& cabling_descriptor_path, const std::string& output_path) {
-    // TODO: Make this auto-generate based on number of nodes
-    std::vector<std::string> hostnames = {
-        "M0", "M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8", "M9", "M10", "M11", "M12", "M13", "M14", "M15"};
+    // Validate input file exists
+    std::ifstream test_file(cabling_descriptor_path);
+    if (!test_file.is_open()) {
+        throw std::runtime_error("Cannot open cabling descriptor file: " + cabling_descriptor_path);
+    }
+    test_file.close();
 
+    std::cout << "Reading cabling descriptor: " << cabling_descriptor_path << std::endl;
+
+    // First pass: determine number of hosts by parsing the cabling descriptor
+    // We'll use a temporary hostname list to figure out the actual number of hosts needed
+    std::vector<std::string> temp_hostnames;
+    for (int i = 0; i < 256; ++i) {  // Max reasonable cluster size
+        temp_hostnames.push_back("M" + std::to_string(i));
+    }
+
+    auto temp_cabling = CablingGenerator(cabling_descriptor_path, temp_hostnames);
+    auto hosts = temp_cabling.get_deployment_hosts();
+
+    // Now generate the actual hostnames based on the number of hosts discovered
+    std::vector<std::string> hostnames = generate_hostnames(hosts.size());
+
+    // Create the final cabling descriptor with the correct number of hostnames
     auto cabling_descriptor = CablingGenerator(cabling_descriptor_path, hostnames);
-    auto hosts = cabling_descriptor.get_deployment_hosts();
+    hosts = cabling_descriptor.get_deployment_hosts();
     auto chip_connections = cabling_descriptor.get_chip_connections();
 
-    // Print host information
+    // Log cluster configuration
+    std::cout << "Discovered " << hosts.size() << " host(s) in cabling descriptor" << std::endl;
     for (const auto& host : hosts) {
-        std::cout << "Host: " << host.hostname << " Cluster Type: " << host.node_type << std::endl;
+        std::cout << "  " << host.hostname << ": " << host.node_type << std::endl;
     }
 
     // Compute intermesh connections
     auto intermesh_connections = compute_intermesh_connections(hostnames, chip_connections);
 
+    // Count total connections
+    size_t total_connections = 0;
     for (const auto& [src_host, conn] : intermesh_connections) {
         for (const auto& [dst_host, count] : conn) {
-            std::cout << "Intermesh Connection: " << src_host << " -> " << dst_host << " Count: " << count << std::endl;
+            total_connections++;
         }
     }
+    std::cout << "Computed " << total_connections << " inter-mesh connection(s)" << std::endl;
 
     // Create node type lookup
     auto node_type_lookup = create_node_type_lookup();
@@ -84,22 +107,25 @@ void generate_mesh_graph_descriptor(const std::string& cabling_descriptor_path, 
     tt::tt_fabric::proto::MeshGraphDescriptor mgd;
 
     // Determine common architecture, device topology, and channel count from first host
-    tt::tt_fabric::proto::Architecture arch = tt::tt_fabric::proto::Architecture::WORMHOLE_B0;
-    std::vector<int> device_dims = {1, 1};  // Default fallback
-    int channel_count = 2;                  // Default channel count
-
-    if (!hosts.empty()) {
-        const auto& first_host = hosts[0];
-        auto it = node_type_lookup.find(first_host.node_type);
-        if (it != node_type_lookup.end()) {
-            device_dims = it->second.device_dims;
-            arch = it->second.arch;
-            channel_count = it->second.channel_count;
-        } else {
-            std::cerr << "Warning: Unknown node type '" << first_host.node_type
-                      << "', using default 1x1 topology and 2 channels" << std::endl;
-        }
+    if (hosts.empty()) {
+        throw std::runtime_error("No hosts found in cabling descriptor");
     }
+
+    const auto& first_host = hosts[0];
+    auto it = node_type_lookup.find(first_host.node_type);
+    if (it == node_type_lookup.end()) {
+        throw std::runtime_error(
+            "Unknown node type '" + first_host.node_type + "'. " +
+            "Please add this node type to the node_type_lookup table in generate_mgd.cpp");
+    }
+
+    std::vector<int> device_dims = it->second.device_dims;
+    tt::tt_fabric::proto::Architecture arch = it->second.arch;
+    int channel_count = it->second.channel_count;
+
+    std::cout << "Using architecture: " << tt::tt_fabric::proto::Architecture_Name(arch) << std::endl;
+    std::cout << "Device topology: " << device_dims[0] << "x" << device_dims[1] << std::endl;
+    std::cout << "Channel count: " << channel_count << std::endl;
 
     // Create a single mesh descriptor that will be reused for all instances
     auto* mesh_desc = mgd.add_mesh_descriptors();
@@ -277,7 +303,10 @@ void generate_mesh_graph_descriptor(const std::string& cabling_descriptor_path, 
 
     mgd_file.close();
 
-    std::cout << "\nMesh Graph Descriptor written to: " << output_path << std::endl;
+    std::cout << "\n✓ Mesh Graph Descriptor successfully generated" << std::endl;
+    std::cout << "  Output: " << output_path << std::endl;
+    std::cout << "  Meshes: " << hosts.size() << std::endl;
+    std::cout << "  Connections: " << total_connections << std::endl;
 }
 
 }  // namespace tt::scaleout_tools
