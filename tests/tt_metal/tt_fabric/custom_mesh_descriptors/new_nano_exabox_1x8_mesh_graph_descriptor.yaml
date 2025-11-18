@@ -51,18 +51,18 @@ Mesh: [
   device_topology: [2, 4],
   host_topology: [1, 1],
 },
-{
-  id: 6,
-  board: 2x4,
-  device_topology: [2, 4],
-  host_topology: [1, 1],
-},
-{
-  id: 7,
-  board: 2x4,
-  device_topology: [2, 4],
-  host_topology: [1, 1],
-},
+# {
+#   id: 6,
+#   board: 2x4,
+#   device_topology: [2, 4],
+#   host_topology: [1, 1],
+# },
+# {
+#   id: 7,
+#   board: 2x4,
+#   device_topology: [2, 4],
+#   host_topology: [1, 1],
+# },
 ]
 
 RelaxedGraph: [
@@ -71,6 +71,6 @@ RelaxedGraph: [
   [M2, M3, 2],
   [M3, M4, 2],
   [M4, M5, 2],
-  [M5, M6, 2],
-  [M6, M7, 2],
+  # [M5, M6, 2],
+  # [M6, M7, 2],
 ]

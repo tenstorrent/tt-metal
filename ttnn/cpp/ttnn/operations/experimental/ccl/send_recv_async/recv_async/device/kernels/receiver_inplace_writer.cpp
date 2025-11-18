@@ -102,11 +102,10 @@ void kernel_main() {
             noc_async_write<output_page_size>(receiver_socket.read_ptr, noc_write_addr, output_page_size);
             page_index++;
             socket_pop_pages(receiver_socket, 1);
-            DPRINT << "Done popping pages:" << i << ENDL();
-            noc_async_writes_flushed();
-            DPRINT << "Done flushing writes:" << i << ENDL();
-            fabric_socket_notify_sender(receiver_socket, fabric_connection, socket_packet_header_addr);
-            DPRINT << "Done notifying sender:" << i << ENDL();
+            if (i % 20 == 0) {
+                noc_async_writes_flushed();
+                fabric_socket_notify_sender(receiver_socket, fabric_connection, socket_packet_header_addr);
+            }
         }
     }
     update_socket_config(receiver_socket);

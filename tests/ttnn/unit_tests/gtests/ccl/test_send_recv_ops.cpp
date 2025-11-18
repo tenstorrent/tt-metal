@@ -130,7 +130,7 @@ TEST_F(FabricSendRecv2x4Fixture, SRTest) {
     auto recv_logical_coord = CoreCoord(0, 0);
     auto copy_logical_coord = CoreCoord(0, 0);
 
-    auto socket_fifo_size = 56 * 1024;
+    auto socket_fifo_size = 420 * 1024;
 
     auto start_device_coord = distributed::MeshCoordinate(0, 0);
     auto intermed_device_coord = distributed::MeshCoordinate(0, 1);
@@ -176,16 +176,16 @@ TEST_F(FabricSendRecv2x4Fixture, SRTest) {
     };
 
     auto input_tensor_spec = TensorSpec(
-        ttnn::Shape({1, 1, 1, 7168}),
+        ttnn::Shape({1, 1, 1, 3584}),
         tt::tt_metal::TensorLayout(
-            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::DataType::UINT32,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
             tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1)));
 
     const auto output_tensor_spec = TensorSpec(
-        ttnn::Shape({1, 1, 1, 7168}),
+        ttnn::Shape({1, 1, 1, 3584}),
         tt::tt_metal::TensorLayout(
-            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::DataType::UINT32,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
             tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1)));
 
@@ -214,18 +214,18 @@ TEST_F(FabricSendRecv2x4Fixture, SRTest) {
             .to_device(mesh_device.get(), memory_config);
     // for (uint32_t i = 0; i < 3000; i++) {
     ttnn::experimental::send_async(input_tensor, send_socket_0);
-    ttnn::experimental::socket_copy(output_tensor, recv_socket_1, send_socket_1, num_elems * sizeof(bfloat16));
-    ttnn::experimental::socket_copy(output_tensor, recv_socket_2, send_socket_2, num_elems * sizeof(bfloat16));
+    ttnn::experimental::socket_copy(output_tensor, recv_socket_1, send_socket_1, num_elems * sizeof(uint32_t));
+    ttnn::experimental::socket_copy(output_tensor, recv_socket_2, send_socket_2, num_elems * sizeof(uint32_t));
     ttnn::experimental::recv_async(output_tensor, recv_socket_3);
     // }
 
     auto composer = ttnn::distributed::concat_mesh_to_tensor_composer(*mesh_device, /*dim=*/0);
-    auto output_data = ttnn::distributed::aggregate_tensor(output_tensor, *composer).to_vector<bfloat16>();
-    auto expected_output_data = ttnn::arange(0, num_elems, 1, tt::tt_metal::DataType::BFLOAT16);
-    auto expected_output_data_vector = expected_output_data.to_vector<bfloat16>();
+    auto output_data = ttnn::distributed::aggregate_tensor(output_tensor, *composer).to_vector<uint32_t>();
+    auto expected_output_data = ttnn::arange(0, num_elems, 1, tt::tt_metal::DataType::UINT32);
+    auto expected_output_data_vector = expected_output_data.to_vector<uint32_t>();
 
     auto chunked_output_vector =
-        std::vector<bfloat16>(output_data.begin() + 3 * num_elems, output_data.begin() + 4 * num_elems);
+        std::vector<uint32_t>(output_data.begin() + 3 * num_elems, output_data.begin() + 4 * num_elems);
     EXPECT_EQ(chunked_output_vector, expected_output_data_vector);
     // }
     Synchronize(mesh_device.get(), std::nullopt);

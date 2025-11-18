@@ -115,7 +115,7 @@ void socket_reserve_pages(const SocketSenderInterface& socket, uint32_t num_page
     }
 }
 
-void socket_push_pages(SocketSenderInterface& socket, uint32_t num_pages) {
+FORCE_INLINE void socket_push_pages(SocketSenderInterface& socket, uint32_t num_pages) {
     uint32_t num_bytes = num_pages * socket.page_size;
     ASSERT(num_bytes <= socket.downstream_fifo_curr_size);
     if (socket.write_ptr + num_bytes >= socket.downstream_fifo_curr_size + socket.downstream_fifo_addr) {
@@ -138,7 +138,7 @@ void socket_notify_receiver(const SocketSenderInterface& socket) {
     }
 }
 
-void fabric_socket_notify_receiver(
+FORCE_INLINE void fabric_socket_notify_receiver(
     const SocketSenderInterface& socket,
     tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* fabric_header_addr) {
@@ -153,6 +153,18 @@ void fabric_socket_notify_receiver(
         fabric_connection.send_payload_flush_blocking_from_address(
             (uint32_t)fabric_header_addr, sizeof(PACKET_HEADER_TYPE));
     }
+}
+
+FORCE_INLINE void fabric_socket_notify_receiver_stateful(
+    const SocketSenderInterface& socket,
+    tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* fabric_header_addr,
+    uint64_t downstream_bytes_sent_noc_addr) {
+    fabric_header_addr->to_noc_unicast_inline_write(
+        NocUnicastInlineWriteCommandHeader{downstream_bytes_sent_noc_addr, socket.bytes_sent});
+    fabric_connection.wait_for_empty_write_slot();
+    fabric_connection.send_payload_flush_blocking_from_address(
+        (uint32_t)fabric_header_addr, sizeof(PACKET_HEADER_TYPE));
 }
 #endif
 
@@ -238,7 +250,7 @@ void socket_wait_for_pages(const SocketReceiverInterface& socket, uint32_t num_p
 #endif
 }
 
-void socket_pop_pages(SocketReceiverInterface& socket, uint32_t num_pages) {
+FORCE_INLINE void socket_pop_pages(SocketReceiverInterface& socket, uint32_t num_pages) {
 #if !(defined TRISC_PACK || defined TRISC_MATH)
     uint32_t num_bytes = num_pages * socket.page_size;
     ASSERT(num_bytes <= socket.fifo_curr_size);
@@ -289,6 +301,19 @@ void fabric_socket_notify_sender(
     fabric_connection.send_payload_flush_blocking_from_address(
         (uint32_t)fabric_header_addr, sizeof(PACKET_HEADER_TYPE));
 }
+
+FORCE_INLINE void fabric_socket_notify_sender_stateful(
+    const SocketReceiverInterface& socket,
+    tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* fabric_header_addr,
+    uint64_t upstream_bytes_acked_noc_addr) {
+    fabric_header_addr->to_noc_unicast_inline_write(
+        NocUnicastInlineWriteCommandHeader{upstream_bytes_acked_noc_addr, socket.bytes_acked});
+    fabric_connection.wait_for_empty_write_slot();
+    fabric_connection.send_payload_flush_blocking_from_address(
+        (uint32_t)fabric_header_addr, sizeof(PACKET_HEADER_TYPE));
+}
+
 #endif
 
 void update_socket_config(const SocketReceiverInterface& socket) {
