@@ -97,7 +97,7 @@ def run_send_recv_test(
         10 * 1024,
     ],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_2D_DYNAMIC}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 def test_send_recv_multi_link(
     mesh_device,

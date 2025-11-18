@@ -43,9 +43,6 @@ FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config) {
         case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X: return FabricType::TORUS_X;
         case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y: return FabricType::TORUS_Y;
         case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY: return FabricType::TORUS_XY;
-        case tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_X: return FabricType::TORUS_X;
-        case tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_Y: return FabricType::TORUS_Y;
-        case tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY: return FabricType::TORUS_XY;
         default: return FabricType::MESH;
     }
 }
@@ -140,7 +137,7 @@ void set_routing_mode(uint16_t routing_mode) {
     control_plane.set_routing_mode(routing_mode);
 }
 
-void set_routing_mode(Topology topology, tt::tt_fabric::FabricConfig fabric_config, uint32_t dimension /*, take more*/) {
+void set_routing_mode(Topology topology, uint32_t dimension /*, take more*/) {
     // TODO: take more parameters to set detail routing mode
     TT_FATAL(
         dimension == 1 || dimension == 2 || dimension == 3,
@@ -158,11 +155,7 @@ void set_routing_mode(Topology topology, tt::tt_fabric::FabricConfig fabric_conf
         mode |= (ROUTING_MODE_2D | ROUTING_MODE_TORUS);
     }
 
-    if (tt::tt_fabric::FabricContext::is_dynamic_routing_config(fabric_config)) {
-        mode |= ROUTING_MODE_DYNAMIC;
-    } else {
-        mode |= ROUTING_MODE_LOW_LATENCY;
-    }
+    mode |= ROUTING_MODE_LOW_LATENCY;
     set_routing_mode(mode);
 }
 
