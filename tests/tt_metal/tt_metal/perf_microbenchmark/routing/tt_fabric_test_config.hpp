@@ -98,7 +98,6 @@ static const StringEnumMapper<Topology> topology_mapper({
 
 static const StringEnumMapper<RoutingType> routing_type_mapper({
     {"LowLatency", RoutingType::LowLatency},
-    {"Dynamic", RoutingType::Dynamic},
 });
 
 static const StringEnumMapper<FabricTensixConfig> fabric_tensix_type_mapper({
