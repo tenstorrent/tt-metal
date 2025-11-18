@@ -13,3 +13,4 @@ training_config:
   use_kahan_summation: false
   gradient_accumulation_steps: 1
   data_path: "data/tokenized_shakespeare.csv"
+  model_config: "gpt2s.yaml"
