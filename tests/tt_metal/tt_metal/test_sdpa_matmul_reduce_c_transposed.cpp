@@ -351,6 +351,10 @@ static bool test_sdpa_reduce_c_transposed(
 
     tt_metal::detail::LaunchProgram(device, program, true);
 
+    // std::cout << std::endl;
+    // std::cout << "M: " << M << ", N: " << N << std::endl;
+    // std::cout << std::endl;
+
     std::vector<uint32_t> reduce_out_vec;
     tt_metal::detail::ReadFromBuffer(max_out_buffer, reduce_out_vec);
     auto reduce_out_bfp16 = unpack_uint32_vec_into_bfloat16_vec(reduce_out_vec);
@@ -360,6 +364,48 @@ static bool test_sdpa_reduce_c_transposed(
     tt_metal::detail::ReadFromBuffer(mm_output_buffer, mm_out_vec);
     auto mm_out_bfp16 = unpack_uint32_vec_into_bfloat16_vec(mm_out_vec);
     auto mm_out_rm = untilize_nfaces(mm_out_bfp16, M, N);
+
+    // Debug: Print tile 1 in detail (columns 32-63)
+    // if (q_chunk_size > 1) {
+    //     std::cout << "\n=== TILE 1 FULL DATA DUMP (Columns 32-63) ===" << std::endl;
+
+    //     // Print entire device reduce output tile 1
+    //     std::cout << "\nDEVICE REDUCE OUTPUT TILE 1 (32x32 tile, but only row 0 should have valid data):" <<
+    //     std::endl; for (uint32_t row = 0; row < 32; ++row) {
+    //         std::cout << "Row " << row << ": ";
+    //         for (uint32_t col = 32; col < 64 && col < N; ++col) {
+    //             uint32_t idx = row * N + col;
+    //             if (idx < reduce_out_rm.size()) {
+    //                 std::cout << static_cast<float>(reduce_out_rm[idx]) << " ";
+    //             }
+    //         }
+    //         std::cout << std::endl;
+    //         if (row == 0) {
+    //             std::cout << "       (above should be the actual reduce results)" << std::endl;
+    //         }
+    //     }
+
+    //     // Print golden reduce values for tile 1
+    //     std::cout << "\nGOLDEN REDUCE VALUES FOR TILE 1 (expected in row 0):" << std::endl;
+    //     for (uint32_t col = 32; col < 64 && col < N; ++col) {
+    //         std::cout << static_cast<float>(golden_max_rm[col]) << " ";
+    //     }
+    //     std::cout << std::endl;
+
+    //     // Print matmul output tile 1 (all rows)
+    //     std::cout << "\nMATMUL OUTPUT TILE 1 (columns 32-63, all " << M << " rows):" << std::endl;
+    //     for (uint32_t row = 0; row < M; ++row) {
+    //         std::cout << "Row " << row << ": ";
+    //         for (uint32_t col = 32; col < 64 && col < N; ++col) {
+    //             uint32_t idx = row * N + col;
+    //             if (idx < mm_out_rm.size()) {
+    //                 std::cout << static_cast<float>(mm_out_rm[idx]) << " ";
+    //             }
+    //         }
+    //         std::cout << std::endl;
+    //     }
+    //     std::cout << "=====================================\n" << std::endl;
+    // }
 
     // Correctness: compare device outputs with golden
     // 1) Matmul output full MxN
@@ -390,35 +436,77 @@ static bool test_sdpa_reduce_c_transposed(
 
     // 2) Reduce-max output: final reduce_c_transposed emits q_chunk_size tiles; row 0 holds column maxima
     {
-        // Print first 32 elements of golden reduce output for debugging
-        // std::cout << "=== GOLDEN REDUCE FIRST 32 ELEMENTS ===" << std::endl;
-        // std::cout << "Golden reduce [0:31]: ";
-        // for (uint32_t j = 0; j < 32 && j < N; ++j) {
-        //     std::cout << static_cast<float>(golden_max_rm[j]) << " ";
-        // }
-        // std::cout << std::endl;
-
-        // Print first 32 elements of device reduce output for debugging
-        // std::cout << "=== DEVICE REDUCE FIRST 32 ELEMENTS ===" << std::endl;
-        // std::cout << "Device reduce [0:31]: ";
-        // for (uint32_t j = 0; j < 32 && j < N; ++j) {
-        //     std::cout << static_cast<float>(reduce_out_rm[j]) << " ";
-        // }
-        // std::cout << std::endl;
-
         float mse_threshold = 0.02f;
         float max_mse = 0.0f;
+        float prev_mse = 0.0f;
+
         for (uint32_t j = 0; j < N; ++j) {
             float acc = static_cast<float>(reduce_out_rm[j]);
             float b = static_cast<float>(golden_max_rm[j]);
             float d = acc - b;
-            max_mse += d * d;
-            // std::cout << "diff^2: " << d * d << " |  max_mse: " << max_mse << std::endl;
+            float d_squared = d * d;
+            prev_mse = max_mse;
+            max_mse += d_squared;
+
+            // Print detailed info when we see a large jump
+            if (d_squared > 1.0f || (max_mse - prev_mse) > 1.0f) {
+                // std::cout << "\n=== LARGE ERROR DETECTED at column " << j << " ===" << std::endl;
+                // std::cout << "Column index j = " << j << " (tile " << (j/32) << ", col " << (j%32) << ")" <<
+                // std::endl; std::cout << "Device value: " << acc << std::endl; std::cout << "Golden value: " << b <<
+                // std::endl; std::cout << "Difference: " << d << std::endl; std::cout << "Squared diff: " << d_squared
+                // << std::endl; std::cout << "MSE jump: " << prev_mse << " -> " << max_mse << std::endl;
+
+                // Print the column from the original matmul output
+                // std::cout << "\nColumn " << j << " values from matmul output (all " << M << " rows):" << std::endl;
+                // for (uint32_t i = 0; i < M; ++i) {
+                //     float matmul_val = static_cast<float>(golden_matmul_rm[i * N + j]);
+                //     std::cout << "  Row " << i << ": " << matmul_val;
+                //     if (i < 10 || i >= M - 10) {
+                //         std::cout << std::endl;
+                //     } else if (i == 10) {
+                //         std::cout << "\n  ... (skipping middle rows) ...\n";
+                //     }
+                // }
+
+                // // Also print surrounding columns for comparison
+                // std::cout << "\nNearby columns (j-2 to j+2) reduce values:" << std::endl;
+                // for (int offset = -2; offset <= 2; ++offset) {
+                //     int col = j + offset;
+                //     if (col >= 0 && col < (int)N) {
+                //         std::cout << "  Col " << col << ": device=" << static_cast<float>(reduce_out_rm[col])
+                //                   << ", golden=" << static_cast<float>(golden_max_rm[col])
+                //                   << ", diff=" << (static_cast<float>(reduce_out_rm[col]) -
+                //                   static_cast<float>(golden_max_rm[col]))
+                //                   << std::endl;
+                //     }
+                // }
+
+                // Check device matmul output for this column
+                //     std::cout << "\nDevice matmul output for column " << j << ":" << std::endl;
+                //     for (uint32_t i = 0; i < M && i < 10; ++i) {
+                //         float device_matmul = static_cast<float>(mm_out_rm[i * N + j]);
+                //         float golden_matmul = static_cast<float>(golden_matmul_rm[i * N + j]);
+                //         std::cout << "  Row " << i << ": device=" << device_matmul
+                //                   << ", golden=" << golden_matmul
+                //                   << ", diff=" << (device_matmul - golden_matmul) << std::endl;
+                //     }
+
+                //     std::cout << "===============================\n" << std::endl;
+            }
+
+            // Still print regular output for smaller errors
+            // if (d_squared > 0.001f) {
+            //     std::cout << "j=" << j << ": diff^2=" << d_squared << " | max_mse=" << max_mse
+            //               << " (device=" << acc << ", golden=" << b << ")" << std::endl;
+            // }
         }
         // std::cout << "max_mse total: " << max_mse << std::endl;
         // std::cout << "N: " << N << " M:" << M << std::endl;
 
         max_mse /= static_cast<float>(N);
+
+        // std::cout << "max_mse after division: " << max_mse << std::endl;
+
         // std::cout << "max_mse after division: " << max_mse << std::endl;
         if (max_mse > mse_threshold) {
             log_error(LogTest, "Reduce-max output (post-combine) MSE: {} > {}", max_mse, mse_threshold);
@@ -480,7 +568,7 @@ int main(int argc, char** argv) {
     // sizes are in terms of tiles (32x32)
 
     // Passing sweep
-    std::vector<uint32_t> q_chunk_sizes = {1, 2};
+    std::vector<uint32_t> q_chunk_sizes = {1, 2, 4, 8};
     std::vector<uint32_t> k_chunk_sizes = {1, 2, 4, 8, 16};
     std::vector<uint32_t> head_dim_sizes = {1, 2, 4};
 
