@@ -1,0 +1,8 @@
+hosts: {
+  hall: "SC_Floor_5"
+  aisle: "A"
+  rack: 1
+  shelf_u: 12
+  node_type: "BH_GALAXY_XY_TORUS"
+  host: "g08blx04"
+}

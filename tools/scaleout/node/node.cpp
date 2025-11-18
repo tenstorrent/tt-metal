@@ -296,6 +296,23 @@ private:
         add_connection(qsfp_connections, 1, 1, 2, 1);
         add_connection(qsfp_connections, 3, 1, 4, 1);
         add_connection(qsfp_connections, 3, 2, 4, 2);
+        // Z Link Connections
+        add_connection(qsfp_connections, 1, 7, 2, 7);
+        add_connection(qsfp_connections, 1, 8, 2, 8);
+        add_connection(qsfp_connections, 1, 9, 2, 9);
+        add_connection(qsfp_connections, 1, 10, 2, 10);
+        add_connection(qsfp_connections, 1, 11, 2, 11);
+        add_connection(qsfp_connections, 1, 12, 2, 12);
+        add_connection(qsfp_connections, 1, 13, 2, 13);
+        add_connection(qsfp_connections, 1, 14, 2, 14);
+        add_connection(qsfp_connections, 3, 7, 4, 7);
+        add_connection(qsfp_connections, 3, 8, 4, 8);
+        add_connection(qsfp_connections, 3, 9, 4, 9);
+        add_connection(qsfp_connections, 3, 10, 4, 10);
+        add_connection(qsfp_connections, 3, 11, 4, 11);
+        add_connection(qsfp_connections, 3, 12, 4, 12);
+        add_connection(qsfp_connections, 3, 13, 4, 13);
+        add_connection(qsfp_connections, 3, 14, 4, 14);
     }
 
 public:
