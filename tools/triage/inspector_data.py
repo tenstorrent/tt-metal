@@ -165,9 +165,8 @@ def run(args, context) -> InspectorData:
 
     # First try to connect to Inspector RPC
     try:
-        controller = InspectorRpcController(rpc_host, rpc_port)
-        return controller
-    except Exception:
+        return InspectorRpcController(rpc_host, rpc_port)
+    except:
         pass
 
     # Check for Inspector log directory
@@ -177,12 +176,10 @@ def run(args, context) -> InspectorData:
 
     # Try to load serialized RPC data
     try:
-        serialized = InspectorRpcSerialized(log_directory)
-        return serialized
-    except Exception:
+        return InspectorRpcSerialized(log_directory)
+    except:
         # Fall back to reading Inspector logs
-        logs_data = get_logs_data(log_directory)
-        return logs_data
+        return get_logs_data(log_directory)
 
 
 if __name__ == "__main__":
