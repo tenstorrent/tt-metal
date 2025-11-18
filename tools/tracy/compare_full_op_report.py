@@ -9,12 +9,17 @@ Example:
 import csv
 import sys
 from pathlib import Path
-from typing import Iterable, List, Sequence, Tuple, Optional
+from typing import Iterable, List, Sequence, Tuple, Optional, Set
 
 import click
 
 GLOBAL_CALL_HEADER = "GLOBAL CALL COUNT"
 HOST_START_HEADER = "HOST START TS"
+IGNORED_HEADERS = {
+    "DEVICE KERNEL DURATION PER CORE MIN [NS]",
+    "DEVICE KERNEL DURATION PER CORE MAX [NS]",
+    "DEVICE KERNEL DURATION PER CORE AVG [NS]",
+}
 
 
 def load_csv(path: Path) -> Tuple[List[str], List[List[str]]]:
@@ -70,8 +75,9 @@ def compare_cells(
     headers_b: List[str],
     rows_b: List[List[str]],
     max_differences: int,
-) -> List[str]:
+) -> Tuple[List[str], List[str]]:
     differences: List[str] = []
+    allowed: List[str] = []
 
     len_a = len(rows_a) + (1 if headers_a else 0)
     len_b = len(rows_b) + (1 if headers_b else 0)
@@ -106,24 +112,35 @@ def compare_cells(
             if value_a == value_b:
                 continue
 
+            header_name = headers_a[col_index] if headers_a and 0 <= col_index < len(headers_a) else ""
+            normalized_header = header_name.strip().upper() if header_name else ""
+            if not normalized_header and headers_b and 0 <= col_index < len(headers_b):
+                normalized_header = headers_b[col_index].strip().upper()
             header_hint = describe_header(headers_a, col_index) or describe_header(headers_b, col_index)
+
+            if normalized_header in IGNORED_HEADERS:
+                allowed.append(
+                    f"Row {row_index + 1}, Column {col_index + 1}{header_hint}: '{value_a}' != '{value_b}' (ignored)"
+                )
+                continue
+
             differences.append(f"Row {row_index + 1}, Column {col_index + 1}{header_hint}: '{value_a}' != '{value_b}'")
             if len(differences) >= max_differences:
-                return differences
+                return differences, allowed
 
     # Report any leftover rows explicitly once the shared ones match.
     if len(all_rows_a) > len(all_rows_b):
         for row_index in range(len(all_rows_b), len(all_rows_a)):
             differences.append(f"Extra row {row_index + 1} only present in first file: {all_rows_a[row_index]}")
             if len(differences) >= max_differences:
-                return differences
+                return differences, allowed
     elif len(all_rows_b) > len(all_rows_a):
         for row_index in range(len(all_rows_a), len(all_rows_b)):
             differences.append(f"Extra row {row_index + 1} only present in second file: {all_rows_b[row_index]}")
             if len(differences) >= max_differences:
-                return differences
+                return differences, allowed
 
-    return differences
+    return differences, allowed
 
 
 @click.command()
@@ -143,13 +160,18 @@ def main(first_csv: Path, second_csv: Path, max_differences: int) -> None:
     sorted_a = sort_rows(data_a, headers_a)
     sorted_b = sort_rows(data_b, headers_b)
 
-    differences = compare_cells(
+    differences, allowed = compare_cells(
         headers_a,
         sorted_a,
         headers_b,
         sorted_b,
         max_differences=max_differences,
     )
+
+    if allowed:
+        click.echo("Allowed differences (per-core stats columns):")
+        for note in allowed:
+            click.echo(f" * {note}")
 
     if differences:
         click.echo("CSV files differ:")
