@@ -1,0 +1,1043 @@
+
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+// Proof-of-Concept Allocation Server
+// Demonstrates cross-process memory tracking using Unix domain sockets
+
+#include <iostream>
+#include <unordered_map>
+#include <map>
+#include <set>
+#include <vector>
+#include <mutex>
+#include <thread>
+#include <atomic>
+#include <chrono>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
+#include <signal.h>
+#include <cstring>
+#include <algorithm>
+#include <string>
+
+// TT-Metal includes for device detection
+#include <tt-metalium/host_api.hpp>
+#include <fstream>
+#include <sstream>
+// UMD-only includes for telemetry (no hugepage allocation)
+#include "umd/device/tt_device/tt_device.hpp"
+#include "umd/device/cluster.hpp"
+#include "umd/device/cluster_descriptor.hpp"
+#include "umd/device/soc_descriptor.hpp"
+
+#define TT_ALLOC_SERVER_SOCKET "/tmp/tt_allocation_server.sock"
+#define MAX_DEVICES 8
+
+namespace {
+class NullBuffer : public std::streambuf {
+public:
+    int overflow(int c) override { return c; }
+};
+
+class NullStream : public std::ostream {
+public:
+    NullStream() : std::ostream(&buffer_) {}
+
+private:
+    NullBuffer buffer_;
+};
+}  // namespace
+
+// Message protocol - MUST match Python struct format exactly!
+// Use __attribute__((packed)) to avoid padding issues
+struct __attribute__((packed)) AllocMessage {
+    enum Type : uint8_t {
+        ALLOC = 1,
+        FREE = 2,
+        QUERY = 3,
+        RESPONSE = 4,
+        DUMP_REMAINING = 5,
+        DEVICE_INFO_QUERY = 6,
+        DEVICE_INFO_RESPONSE = 7,
+        CB_ALLOC = 8,        // Circular buffer allocation
+        CB_FREE = 9,         // Circular buffer free
+        KERNEL_LOAD = 10,    // Kernel loaded
+        KERNEL_UNLOAD = 11,  // Kernel unloaded
+        DUMP_KERNELS = 12    // NEW: Dump detailed kernel info
+    };
+
+    Type type;            // 1 byte
+    uint8_t pad1[3];      // 3 bytes padding (explicit)
+    int32_t device_id;    // 4 bytes
+    uint64_t size;        // 8 bytes
+    uint8_t buffer_type;  // 1 byte
+                          // For buffers: 0=DRAM, 1=L1, 2=L1_SMALL, 3=TRACE
+                          // For kernels: 0=Application, 1=Fabric, 2=Dispatch
+    uint8_t pad2[3];      // 3 bytes padding (explicit)
+    int32_t process_id;   // 4 bytes
+    uint64_t buffer_id;   // 8 bytes (for kernels: kernel_id)
+    uint64_t timestamp;   // 8 bytes
+
+    // Response fields (6x 8 bytes = 48 bytes)
+    uint64_t dram_allocated;
+    uint64_t l1_allocated;
+    uint64_t l1_small_allocated;
+    uint64_t trace_allocated;
+    uint64_t cb_allocated;      // NEW: Circular buffer memory
+    uint64_t kernel_allocated;  // NEW: Kernel code memory
+
+    // Device info fields (for DEVICE_INFO_RESPONSE)
+    uint64_t total_dram_size;
+    uint64_t total_l1_size;
+    uint32_t arch_type;  // 0=Invalid, 1=Grayskull, 2=Wormhole_B0, 3=Blackhole, 4=Quasar
+    uint32_t num_dram_channels;
+    uint32_t dram_size_per_channel;
+    uint32_t l1_size_per_core;
+    uint32_t is_available;  // 1 if device exists and is available, 0 otherwise
+    uint32_t num_devices;   // Total number of visible devices (only in response to query for device -1)
+
+    // Ring buffer stats (for real-time kernel L1 usage)
+    uint32_t ringbuffer_total_size;    // Total ring buffer capacity (~67KB)
+    uint32_t ringbuffer_used_bytes;    // Currently used by cached kernels
+    uint32_t ringbuffer_num_programs;  // Number of programs cached
+    uint32_t pad3;                     // Padding for alignment
+    // Total: 1+3+4+8+1+3+4+8+8+32+8+8+4+4+4+4+4+4+16 = 128 bytes
+};
+
+class AllocationServer {
+private:
+    struct BufferInfo {
+        uint64_t buffer_id;
+        int device_id;
+        uint64_t size;
+        uint8_t buffer_type;
+        pid_t owner_pid;
+        std::chrono::steady_clock::time_point alloc_time;
+        int ref_count;  // Track multiple allocations at the same address
+    };
+
+    struct CBInfo {
+        uint64_t cb_id;
+        int device_id;
+        uint64_t size;
+        pid_t owner_pid;
+        std::chrono::steady_clock::time_point alloc_time;
+    };
+
+    struct KernelInfo {
+        uint64_t kernel_id;
+        int device_id;
+        uint64_t size;
+        pid_t owner_pid;
+        uint8_t kernel_type;  // 0=Application, 1=Fabric, 2=Dispatch
+        std::chrono::steady_clock::time_point alloc_time;
+    };
+
+    struct DeviceStats {
+        std::atomic<uint64_t> dram_allocated{0};
+        std::atomic<uint64_t> l1_allocated{0};
+        std::atomic<uint64_t> l1_small_allocated{0};
+        std::atomic<uint64_t> trace_allocated{0};
+        std::atomic<uint64_t> cb_allocated{0};        // Circular buffers
+        std::atomic<uint64_t> kernel_allocated{0};    // Total kernel memory
+        std::atomic<uint64_t> kernel_application{0};  // Application kernels
+        std::atomic<uint64_t> kernel_fabric{0};       // Fabric kernels (56 KB each)
+        std::atomic<uint64_t> kernel_dispatch{0};     // Dispatch kernels (46 KB each)
+        std::atomic<uint64_t> num_buffers{0};
+    };
+
+    struct DeviceInfo {
+        bool is_available{false};
+        uint32_t arch_type{0};  // 0=Invalid, 1=Grayskull, 2=Wormhole_B0, 3=Blackhole, 4=Quasar
+        uint32_t num_dram_channels{0};
+        uint32_t dram_size_per_channel{0};
+        uint32_t l1_size_per_core{0};
+        uint64_t total_dram_size{0};
+        uint64_t total_l1_size{0};
+        uint32_t grid_x{0};
+        uint32_t grid_y{0};
+    };
+
+    // Composite key for buffer tracking: {device_id, buffer_id}
+    // Each device has its own address space, so addresses can overlap!
+    struct BufferKey {
+        int device_id;
+        uint64_t buffer_id;
+
+        bool operator==(const BufferKey& other) const {
+            return device_id == other.device_id && buffer_id == other.buffer_id;
+        }
+    };
+
+    struct BufferKeyHash {
+        std::size_t operator()(const BufferKey& k) const {
+            return std::hash<int>()(k.device_id) ^ (std::hash<uint64_t>()(k.buffer_id) << 1);
+        }
+    };
+
+    std::mutex registry_mutex_;
+    std::unordered_map<BufferKey, BufferInfo, BufferKeyHash> allocations_;
+    std::unordered_map<BufferKey, CBInfo, BufferKeyHash> cb_allocations_;          // CB tracking with PID
+    std::unordered_map<BufferKey, KernelInfo, BufferKeyHash> kernel_allocations_;  // Kernel tracking with PID
+    std::array<DeviceStats, MAX_DEVICES> device_stats_;
+    std::array<DeviceInfo, MAX_DEVICES> device_info_;
+    uint32_t num_available_devices_{0};
+
+    int server_socket_;
+    std::atomic<bool> running_{true};
+    std::thread cleanup_thread_;
+
+    const char* arch_to_string(tt::ARCH arch) {
+        switch (arch) {
+            case tt::ARCH::GRAYSKULL: return "Grayskull";
+            case tt::ARCH::WORMHOLE_B0: return "Wormhole_B0";
+            case tt::ARCH::BLACKHOLE: return "Blackhole";
+            case tt::ARCH::QUASAR: return "Quasar";
+            default: return "Unknown";
+        }
+    }
+
+    void detect_devices() {
+        // Device detection using UMD Cluster to get real SocDescriptors with harvesting
+        std::cout << "🔍 Device detection (using UMD Cluster for accurate specs):" << std::endl;
+
+        try {
+            // Create a minimal UMD Cluster with 0 hugepage channels (just for querying device info)
+            std::unique_ptr<tt::umd::Cluster> cluster = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
+                .num_host_mem_ch_per_mmio_device = 0,  // Don't allocate hugepages
+            });
+
+            if (!cluster) {
+                std::cout << "   No devices detected" << std::endl;
+                std::cout << "   Server will track allocations anyway" << std::endl;
+                return;
+            }
+
+            auto all_chip_ids = cluster->get_target_device_ids();
+            size_t detected_num_chips = all_chip_ids.size();
+
+            if (detected_num_chips == 0) {
+                std::cout << "   No devices detected" << std::endl;
+                std::cout << "   Server will track allocations anyway" << std::endl;
+                return;
+            }
+
+            if (detected_num_chips > MAX_DEVICES) {
+                std::cout << "   Warning: Found " << detected_num_chips << " devices, limiting to " << MAX_DEVICES
+                          << std::endl;
+                detected_num_chips = MAX_DEVICES;
+            }
+
+            num_available_devices_ = detected_num_chips;
+
+            // Get cluster descriptor for topology info
+            auto* cluster_desc = cluster->get_cluster_description();
+
+            // Iterate through all devices and get their real specs
+            size_t idx = 0;
+            for (int chip_id : all_chip_ids) {
+                if (idx >= MAX_DEVICES) {
+                    break;
+                }
+                idx++;
+
+                try {
+                    // Get the actual SocDescriptor from the cluster (has real harvesting info!)
+                    const tt::umd::SocDescriptor& soc_desc = cluster->get_soc_descriptor(chip_id);
+
+                    // Get arch from soc descriptor
+                    tt::ARCH arch = soc_desc.arch;
+
+                    // Extract device information
+                    size_t num_dram_channels = soc_desc.get_num_dram_channels();
+                    uint32_t l1_size_per_core = soc_desc.worker_l1_size;
+                    uint32_t grid_x = soc_desc.grid_size.x;
+                    uint32_t grid_y = soc_desc.grid_size.y;
+
+                    // Get DRAM size - use dram_bank_size if available
+                    uint64_t dram_size_per_channel = soc_desc.dram_bank_size;
+                    std::cout << "DRAM size per channel: " << dram_size_per_channel << std::endl;
+                    std::cout << "Number of DRAM channels: " << num_dram_channels << std::endl;
+                    std::cout << "L1 size per core: " << l1_size_per_core << std::endl;
+                    std::cout << "Grid size: " << grid_x << "x" << grid_y << std::endl;
+                    std::cout << "Arch: " << arch_to_string(arch) << std::endl;
+                    std::cout << "Is remote: " << (cluster_desc ? cluster_desc->is_chip_remote(chip_id) : false)
+                              << std::endl;
+                    // If dram_bank_size is 0, this is likely because UMD doesn't populate it
+                    // Use a default value based on architecture (Blackhole = ~4GB per channel)
+                    // if (dram_size_per_channel == 0) {
+                    //     if (arch == tt::ARCH::BLACKHOLE) {
+                    //         dram_size_per_channel = 4278190080ULL;  // From blackhole_140_arch.yaml
+                    //     } else if (arch == tt::ARCH::WORMHOLE_B0) {
+                    //         dram_size_per_channel = 2147483648ULL;  // From wormhole_b0_80_arch.yaml
+                    //     } else if (arch == tt::ARCH::GRAYSKULL) {
+                    //         dram_size_per_channel = 1073741824ULL;  // From grayskull_120_arch.yaml
+                    //     }
+                    // }
+
+                    uint64_t total_dram = (uint64_t)num_dram_channels * dram_size_per_channel;
+                    uint64_t total_l1 = (uint64_t)l1_size_per_core * grid_x * grid_y;
+
+                    // Store device info
+                    device_info_[chip_id].is_available = true;
+                    device_info_[chip_id].arch_type = static_cast<uint32_t>(arch);
+                    device_info_[chip_id].num_dram_channels = num_dram_channels;
+                    device_info_[chip_id].dram_size_per_channel = dram_size_per_channel;
+                    device_info_[chip_id].l1_size_per_core = l1_size_per_core;
+                    device_info_[chip_id].total_dram_size = total_dram;
+                    device_info_[chip_id].total_l1_size = total_l1;
+                    device_info_[chip_id].grid_x = grid_x;
+                    device_info_[chip_id].grid_y = grid_y;
+
+                    bool is_remote = cluster_desc ? cluster_desc->is_chip_remote(chip_id) : false;
+                    std::cout << "   Device " << chip_id << ": " << arch_to_string(arch) << " ("
+                              << (total_dram / (1024 * 1024 * 1024)) << "GB DRAM, " << (total_l1 / (1024 * 1024))
+                              << "MB L1) " << (is_remote ? "[Remote]" : "[Local]") << std::endl;
+
+                } catch (const std::exception& e) {
+                    std::cerr << "   Warning: Could not query device " << chip_id << ": " << e.what() << std::endl;
+                    device_info_[chip_id].is_available = false;
+                }
+            }
+
+            std::cout << "   Total: " << num_available_devices_ << " device(s) detected" << std::endl;
+
+        } catch (const std::exception& e) {
+            std::cerr << "   Error during device detection: " << e.what() << std::endl;
+            std::cout << "   Server will track allocations without device info" << std::endl;
+            num_available_devices_ = 0;
+        }
+    }
+
+public:
+    AllocationServer() {
+        server_socket_ = socket(AF_UNIX, SOCK_STREAM, 0);
+        if (server_socket_ < 0) {
+            throw std::runtime_error("Failed to create socket");
+        }
+
+        struct sockaddr_un addr;
+        memset(&addr, 0, sizeof(addr));
+        addr.sun_family = AF_UNIX;
+        strncpy(addr.sun_path, TT_ALLOC_SERVER_SOCKET, sizeof(addr.sun_path) - 1);
+
+        unlink(TT_ALLOC_SERVER_SOCKET);
+
+        if (bind(server_socket_, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+            throw std::runtime_error("Failed to bind socket");
+        }
+
+        if (listen(server_socket_, 128) < 0) {
+            throw std::runtime_error("Failed to listen on socket");
+        }
+
+        // Detect available devices
+        detect_devices();
+
+        std::cout << "🚀 Allocation Server started" << std::endl;
+        std::cout << "   Listening on: " << TT_ALLOC_SERVER_SOCKET << std::endl;
+        std::cout << "   Press Ctrl+C to stop" << std::endl;
+    }
+
+    ~AllocationServer() { stop(); }
+
+    void handle_allocation(const AllocMessage& msg) {
+        std::lock_guard<std::mutex> lock(registry_mutex_);
+
+        // Validate message sanity
+        if (msg.device_id < 0 || msg.device_id >= MAX_DEVICES) {
+            std::cerr << "⚠️  Invalid device_id " << msg.device_id << " - ignoring message" << std::endl;
+            return;
+        }
+
+        if (msg.size == 0 || msg.size > 100ULL * 1024 * 1024 * 1024) {  // 100GB sanity check
+            std::cerr << "⚠️  Invalid size " << msg.size << " - ignoring message" << std::endl;
+            return;
+        }
+
+        // Validate buffer_type to prevent array out of bounds
+        // BufferType: 0=DRAM, 1=L1, 2=SYSTEM_MEMORY(L1_SMALL), 3=L1_SMALL, 4=TRACE
+        if (msg.buffer_type > 4) {
+            std::cerr << "⚠️  Invalid buffer_type " << (int)msg.buffer_type << " for buffer " << msg.buffer_id
+                      << " on device " << msg.device_id << std::endl;
+            return;
+        }
+
+        BufferKey key{msg.device_id, msg.buffer_id};
+
+        // Check if buffer already exists (e.g., cached program buffers allocated multiple times)
+        auto it = allocations_.find(key);
+        if (it != allocations_.end()) {
+            // Buffer already exists - increment ref count
+            it->second.ref_count++;
+            const char* type_name[] = {"DRAM", "L1", "SYSTEM_MEMORY", "L1_SMALL", "TRACE"};
+            std::cout << "✓ [PID " << msg.process_id << "] Allocated " << msg.size << " bytes of "
+                      << type_name[msg.buffer_type] << " on device " << msg.device_id << " (buffer_id=0x" << std::hex
+                      << msg.buffer_id << std::dec << ", ref_count=" << it->second.ref_count << ")" << std::endl;
+            return;
+        }
+
+        // New buffer - create entry
+        BufferInfo info{
+            .buffer_id = msg.buffer_id,
+            .device_id = msg.device_id,
+            .size = msg.size,
+            .buffer_type = msg.buffer_type,
+            .owner_pid = msg.process_id,
+            .alloc_time = std::chrono::steady_clock::now(),
+            .ref_count = 1};
+
+        allocations_[key] = info;
+
+        auto& stats = device_stats_[msg.device_id];
+        stats.num_buffers++;
+
+        switch (msg.buffer_type) {
+            case 0: stats.dram_allocated += msg.size; break;      // DRAM
+            case 1: stats.l1_allocated += msg.size; break;        // L1
+            case 2: stats.l1_small_allocated += msg.size; break;  // SYSTEM_MEMORY (treat as L1_SMALL)
+            case 3: stats.l1_small_allocated += msg.size; break;  // L1_SMALL
+            case 4: stats.trace_allocated += msg.size; break;     // TRACE
+        }
+
+        const char* type_name[] = {"DRAM", "L1", "SYSTEM_MEMORY", "L1_SMALL", "TRACE"};
+        const char* type_str = (msg.buffer_type <= 4) ? type_name[msg.buffer_type] : "UNKNOWN";
+        std::cout << "✓ [PID " << msg.process_id << "] Allocated " << msg.size << " bytes of " << type_str
+                  << " on device " << msg.device_id << " (buffer_id=0x" << std::hex << msg.buffer_id << std::dec << ")"
+                  << std::endl;
+    }
+
+    void handle_deallocation(const AllocMessage& msg) {
+        std::lock_guard<std::mutex> lock(registry_mutex_);
+
+        // Use the device_id from the message
+        BufferKey key{msg.device_id, msg.buffer_id};
+        auto it = allocations_.find(key);
+
+        if (it == allocations_.end()) {
+            // Buffer not tracked - likely allocated before tracking started
+            std::cout << "⚠ [PID " << msg.process_id << "] Deallocation for unknown buffer 0x" << std::hex
+                      << msg.buffer_id << std::dec << " on device " << msg.device_id
+                      << " (allocated before tracking started)" << std::endl;
+            return;
+        }
+
+        auto& info = it->second;
+
+        // Decrement ref count
+        info.ref_count--;
+
+        if (info.ref_count > 0) {
+            // Still has references - don't fully deallocate yet
+            std::cout << "✗ [PID " << info.owner_pid << "] Freed buffer 0x" << std::hex << msg.buffer_id << std::dec
+                      << " on device " << info.device_id << " (" << info.size << " bytes, ref_count=" << info.ref_count
+                      << " remaining)" << std::endl;
+            return;
+        }
+
+        // ref_count reached 0 - fully deallocate
+        auto& stats = device_stats_[info.device_id];
+        stats.num_buffers--;
+
+        switch (info.buffer_type) {
+            case 0: stats.dram_allocated -= info.size; break;      // DRAM
+            case 1: stats.l1_allocated -= info.size; break;        // L1
+            case 2: stats.l1_small_allocated -= info.size; break;  // SYSTEM_MEMORY (treat as L1_SMALL)
+            case 3: stats.l1_small_allocated -= info.size; break;  // L1_SMALL
+            case 4: stats.trace_allocated -= info.size; break;     // TRACE
+        }
+
+        std::cout << "✗ [PID " << info.owner_pid << "] Freed buffer 0x" << std::hex << msg.buffer_id << std::dec
+                  << " on device " << info.device_id << " (" << info.size << " bytes, FINAL)" << std::endl;
+
+        allocations_.erase(it);
+    }
+
+    void handle_query(int client_socket, const AllocMessage& msg) {
+        AllocMessage response;
+        memset(&response, 0, sizeof(response));
+        response.type = AllocMessage::RESPONSE;
+        response.device_id = msg.device_id;
+
+        if (msg.device_id >= 0 && msg.device_id < MAX_DEVICES) {
+            auto& stats = device_stats_[msg.device_id];
+            response.dram_allocated = stats.dram_allocated.load();
+            response.l1_allocated = stats.l1_allocated.load();
+            response.l1_small_allocated = stats.l1_small_allocated.load();
+            response.trace_allocated = stats.trace_allocated.load();
+            response.cb_allocated = stats.cb_allocated.load();          // NEW
+            response.kernel_allocated = stats.kernel_allocated.load();  // NEW
+        }
+
+        send(client_socket, &response, sizeof(response), 0);
+    }
+
+    void handle_device_info_query(int client_socket, const AllocMessage& msg) {
+        AllocMessage response;
+        memset(&response, 0, sizeof(response));
+        response.type = AllocMessage::DEVICE_INFO_RESPONSE;
+        response.device_id = msg.device_id;
+
+        // Special case: device_id -1 means query for number of available devices
+        if (msg.device_id == -1) {
+            response.num_devices = num_available_devices_;
+            response.is_available = (num_available_devices_ > 0) ? 1 : 0;
+        } else if (msg.device_id >= 0 && msg.device_id < MAX_DEVICES) {
+            // Return info for specific device
+            auto& info = device_info_[msg.device_id];
+            response.is_available = info.is_available ? 1 : 0;
+            response.arch_type = info.arch_type;
+            response.num_dram_channels = info.num_dram_channels;
+            response.dram_size_per_channel = info.dram_size_per_channel;
+            response.l1_size_per_core = info.l1_size_per_core;
+            response.total_dram_size = info.total_dram_size;
+            response.total_l1_size = info.total_l1_size;
+
+            // Ring buffer stats not queried (would require opening device)
+            response.ringbuffer_total_size = 0;
+            response.ringbuffer_used_bytes = 0;
+            response.ringbuffer_num_programs = 0;
+        }
+
+        send(client_socket, &response, sizeof(response), 0);
+    }
+
+    void cleanup_dead_processes() {
+        std::lock_guard<std::mutex> lock(registry_mutex_);
+
+        // Check which PIDs are still alive
+        std::set<pid_t> dead_pids;
+        std::set<pid_t> all_pids;
+
+        // Collect PIDs from all tracking maps (buffers, CBs, kernels)
+        for (const auto& [key, info] : allocations_) {
+            all_pids.insert(info.owner_pid);
+        }
+        for (const auto& [key, info] : cb_allocations_) {
+            all_pids.insert(info.owner_pid);
+        }
+        for (const auto& [key, info] : kernel_allocations_) {
+            all_pids.insert(info.owner_pid);
+        }
+
+        for (pid_t pid : all_pids) {
+            // Check if process exists: kill(pid, 0) returns 0 if alive, -1 if dead
+            if (kill(pid, 0) != 0) {
+                dead_pids.insert(pid);
+            }
+        }
+
+        if (!dead_pids.empty()) {
+            std::cout << "\n⚠️  Detected dead processes, cleaning up orphaned buffers..." << std::endl;
+
+            for (pid_t dead_pid : dead_pids) {
+                std::cout << "   PID " << dead_pid << " is dead, removing its buffers..." << std::endl;
+
+                // Remove all buffers owned by this PID
+                auto it = allocations_.begin();
+                int removed_count = 0;
+                uint64_t removed_bytes = 0;
+
+                while (it != allocations_.end()) {
+                    if (it->second.owner_pid == dead_pid) {
+                        // Update stats
+                        auto& stats = device_stats_[it->second.device_id];
+                        stats.num_buffers--;
+
+                        switch (it->second.buffer_type) {
+                            case 0: stats.dram_allocated -= it->second.size; break;
+                            case 1: stats.l1_allocated -= it->second.size; break;
+                            case 2: stats.l1_small_allocated -= it->second.size; break;
+                            case 3: stats.l1_small_allocated -= it->second.size; break;
+                            case 4: stats.trace_allocated -= it->second.size; break;
+                        }
+
+                        removed_bytes += it->second.size;
+                        removed_count++;
+                        it = allocations_.erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
+
+                std::cout << "   ✓ Removed " << removed_count << " buffers (" << (removed_bytes / (1024.0 * 1024.0))
+                          << " MB) from PID " << dead_pid << std::endl;
+
+                // Clean up CBs from dead process
+                auto cb_it = cb_allocations_.begin();
+                int removed_cb_count = 0;
+                uint64_t removed_cb_bytes = 0;
+                while (cb_it != cb_allocations_.end()) {
+                    if (cb_it->second.owner_pid == dead_pid) {
+                        device_stats_[cb_it->second.device_id].cb_allocated -= cb_it->second.size;
+                        removed_cb_bytes += cb_it->second.size;
+                        removed_cb_count++;
+                        cb_it = cb_allocations_.erase(cb_it);
+                    } else {
+                        ++cb_it;
+                    }
+                }
+                if (removed_cb_count > 0) {
+                    std::cout << "   ✓ Removed " << removed_cb_count << " CBs ("
+                              << (removed_cb_bytes / (1024.0 * 1024.0)) << " MB) from PID " << dead_pid << std::endl;
+                }
+
+                // Clean up Kernels from dead process
+                auto kernel_it = kernel_allocations_.begin();
+                int removed_kernel_count = 0;
+                uint64_t removed_kernel_bytes = 0;
+                while (kernel_it != kernel_allocations_.end()) {
+                    if (kernel_it->second.owner_pid == dead_pid) {
+                        // Update per-type counters
+                        switch (kernel_it->second.kernel_type) {
+                            case 0:
+                                device_stats_[kernel_it->second.device_id].kernel_application -= kernel_it->second.size;
+                                break;
+                            case 1:
+                                device_stats_[kernel_it->second.device_id].kernel_fabric -= kernel_it->second.size;
+                                break;
+                            case 2:
+                                device_stats_[kernel_it->second.device_id].kernel_dispatch -= kernel_it->second.size;
+                                break;
+                        }
+                        device_stats_[kernel_it->second.device_id].kernel_allocated -= kernel_it->second.size;
+                        removed_kernel_bytes += kernel_it->second.size;
+                        removed_kernel_count++;
+                        kernel_it = kernel_allocations_.erase(kernel_it);
+                    } else {
+                        ++kernel_it;
+                    }
+                }
+                if (removed_kernel_count > 0) {
+                    std::cout << "   ✓ Removed " << removed_kernel_count << " kernels ("
+                              << (removed_kernel_bytes / (1024.0 * 1024.0)) << " MB) from PID " << dead_pid
+                              << std::endl;
+                }
+            }
+            std::cout << std::endl;
+        }
+    }
+
+    void handle_dump_remaining() {
+        // First, clean up any dead processes
+        cleanup_dead_processes();
+
+        std::lock_guard<std::mutex> lock(registry_mutex_);
+
+        const char* type_name[] = {"DRAM", "L1", "SYSTEM_MEMORY", "L1_SMALL", "TRACE"};
+
+        std::cout << "\n╔══════════════════════════════════════════════════════════════╗" << std::endl;
+        std::cout << "║           REMAINING ALLOCATED BUFFERS                       ║" << std::endl;
+        std::cout << "╚══════════════════════════════════════════════════════════════╝" << std::endl;
+        std::cout << "Total tracked allocations: " << allocations_.size() << "\n" << std::endl;
+        std::cout.flush();
+
+        if (allocations_.empty()) {
+            std::cout << "✓ No buffers remaining - perfect cleanup!" << std::endl;
+            std::cout.flush();
+            return;
+        }
+
+        // Group by device
+        std::map<int, std::vector<const BufferInfo*>> by_device;
+        for (const auto& [key, info] : allocations_) {
+            by_device[info.device_id].push_back(&info);
+        }
+
+        for (const auto& [device_id, buffers] : by_device) {
+            std::cout << "Device " << device_id << ":" << std::endl;
+
+            // Group by type
+            std::map<int, std::vector<const BufferInfo*>> by_type;
+            for (const auto* buf : buffers) {
+                by_type[buf->buffer_type].push_back(buf);
+            }
+
+            for (const auto& [type, type_buffers] : by_type) {
+                uint64_t total_size = 0;
+                for (const auto* buf : type_buffers) {
+                    total_size += buf->size;
+                }
+
+                std::cout << "  " << type_name[type] << ": " << type_buffers.size() << " buffers, "
+                          << (total_size / (1024.0 * 1024.0)) << " MB total" << std::endl;
+
+                // Show individual buffers if there are few
+                if (type_buffers.size() <= 10) {
+                    for (const auto* buf : type_buffers) {
+                        std::cout << "    - Buffer 0x" << std::hex << buf->buffer_id << std::dec << ": "
+                                  << (buf->size / 1024.0) << " KB"
+                                  << " (PID " << buf->owner_pid << ", ref_count=" << buf->ref_count << ")" << std::endl;
+                    }
+                }
+            }
+            std::cout << std::endl;
+        }
+
+        std::cout << "Total remaining buffers: " << allocations_.size() << "\n" << std::endl;
+        std::cout.flush();
+    }
+
+    void handle_client(int client_socket) {
+        AllocMessage msg;
+        size_t consecutive_errors = 0;
+        const size_t MAX_CONSECUTIVE_ERRORS = 10;
+
+        while (running_) {
+            // Try to read the full new-format message first
+            ssize_t n = recv(client_socket, &msg, sizeof(msg), MSG_PEEK);
+
+            if (n <= 0) {
+                break;
+            }
+
+            // Check for valid message
+            bool is_valid = (msg.type >= 1 && msg.type <= 12);
+
+            if (!is_valid) {
+                consecutive_errors++;
+
+                // After too many errors, assume stream is corrupted and close connection
+                if (consecutive_errors >= MAX_CONSECUTIVE_ERRORS) {
+                    std::cerr << "⚠️  Too many consecutive errors (" << consecutive_errors
+                              << ") - closing connection (likely protocol mismatch)" << std::endl;
+                    break;
+                }
+
+                // Try to recover by reading and discarding one byte at a time to resync
+                char discard;
+                recv(client_socket, &discard, 1, 0);
+                continue;
+            }
+
+            // Valid message - reset error counter
+            consecutive_errors = 0;
+
+            // Actually consume the message
+            n = recv(client_socket, &msg, sizeof(msg), 0);
+            if (n <= 0) {
+                break;
+            }
+
+            switch (msg.type) {
+                case AllocMessage::ALLOC: handle_allocation(msg); break;
+                case AllocMessage::FREE: handle_deallocation(msg); break;
+                case AllocMessage::QUERY: handle_query(client_socket, msg); break;
+                case AllocMessage::DEVICE_INFO_QUERY: handle_device_info_query(client_socket, msg); break;
+                case AllocMessage::DUMP_REMAINING:
+                    std::cout << "📋 Received DUMP_REMAINING request..." << std::endl;
+                    std::cout.flush();
+                    handle_dump_remaining();
+                    std::cout << "📋 DUMP_REMAINING complete." << std::endl;
+                    std::cout.flush();
+                    break;
+                case AllocMessage::CB_ALLOC: {
+                    // Circular buffer allocation with PID tracking
+                    std::lock_guard<std::mutex> lock(registry_mutex_);
+                    if (msg.device_id >= 0 && msg.device_id < MAX_DEVICES) {
+                        BufferKey key{msg.device_id, msg.buffer_id};
+                        CBInfo cb_info{
+                            msg.buffer_id, msg.device_id, msg.size, msg.process_id, std::chrono::steady_clock::now()};
+                        cb_allocations_[key] = cb_info;
+                        device_stats_[msg.device_id].cb_allocated += msg.size;
+                        std::cout << "✓ [CB_ALLOC] Device " << msg.device_id << ": +" << (msg.size / 1024.0 / 1024.0)
+                                  << " MB (Total: "
+                                  << (device_stats_[msg.device_id].cb_allocated.load() / 1024.0 / 1024.0) << " MB)"
+                                  << std::endl;
+                    }
+                    break;
+                }
+                case AllocMessage::CB_FREE: {
+                    // Circular buffer free with map removal
+                    std::lock_guard<std::mutex> lock(registry_mutex_);
+                    if (msg.device_id >= 0 && msg.device_id < MAX_DEVICES) {
+                        BufferKey key{msg.device_id, msg.buffer_id};
+                        cb_allocations_.erase(key);  // Remove from tracking map
+                        device_stats_[msg.device_id].cb_allocated -= msg.size;
+                        std::cout << "✗ [CB_FREE] Device " << msg.device_id << ": -" << (msg.size / 1024.0 / 1024.0)
+                                  << " MB (Total: "
+                                  << (device_stats_[msg.device_id].cb_allocated.load() / 1024.0 / 1024.0) << " MB)"
+                                  << std::endl;
+                    }
+                    break;
+                }
+                case AllocMessage::KERNEL_LOAD: {
+                    // Kernel loaded with PID and type tracking
+                    std::lock_guard<std::mutex> lock(registry_mutex_);
+                    if (msg.device_id >= 0 && msg.device_id < MAX_DEVICES) {
+                        BufferKey key{msg.device_id, msg.buffer_id};
+                        KernelInfo kernel_info{
+                            msg.buffer_id,
+                            msg.device_id,
+                            msg.size,
+                            msg.process_id,
+                            msg.buffer_type,  // 0=App, 1=Fabric, 2=Dispatch
+                            std::chrono::steady_clock::now()};
+                        kernel_allocations_[key] = kernel_info;
+                        device_stats_[msg.device_id].kernel_allocated += msg.size;
+
+                        // Update per-type counters
+                        const char* type_name = "Unknown";
+                        switch (msg.buffer_type) {
+                            case 0:
+                                device_stats_[msg.device_id].kernel_application += msg.size;
+                                type_name = "Application";
+                                break;
+                            case 1:
+                                device_stats_[msg.device_id].kernel_fabric += msg.size;
+                                type_name = "Fabric";
+                                break;
+                            case 2:
+                                device_stats_[msg.device_id].kernel_dispatch += msg.size;
+                                type_name = "Dispatch";
+                                break;
+                        }
+
+                        std::cout << "✓ [KERNEL_LOAD] " << type_name << " kernel on Device " << msg.device_id << ": +"
+                                  << (msg.size / 1024.0 / 1024.0) << " MB (Total: "
+                                  << (device_stats_[msg.device_id].kernel_allocated.load() / 1024.0 / 1024.0) << " MB)"
+                                  << std::endl;
+                    }
+                    break;
+                }
+                case AllocMessage::KERNEL_UNLOAD: {
+                    // Kernel unloaded with map removal and per-type tracking
+                    std::lock_guard<std::mutex> lock(registry_mutex_);
+                    if (msg.device_id >= 0 && msg.device_id < MAX_DEVICES) {
+                        BufferKey key{msg.device_id, msg.buffer_id};
+
+                        // Get kernel type before erasing
+                        auto it = kernel_allocations_.find(key);
+                        if (it != kernel_allocations_.end()) {
+                            uint8_t kernel_type = it->second.kernel_type;
+                            const char* type_name = "Unknown";
+
+                            // Update per-type counters
+                            switch (kernel_type) {
+                                case 0:
+                                    device_stats_[msg.device_id].kernel_application -= msg.size;
+                                    type_name = "Application";
+                                    break;
+                                case 1:
+                                    device_stats_[msg.device_id].kernel_fabric -= msg.size;
+                                    type_name = "Fabric";
+                                    break;
+                                case 2:
+                                    device_stats_[msg.device_id].kernel_dispatch -= msg.size;
+                                    type_name = "Dispatch";
+                                    break;
+                            }
+
+                            kernel_allocations_.erase(it);  // Remove from tracking map
+                            device_stats_[msg.device_id].kernel_allocated -= msg.size;
+                            std::cout << "✗ [KERNEL_UNLOAD] " << type_name << " kernel on Device " << msg.device_id
+                                      << ": -" << (msg.size / 1024.0 / 1024.0) << " MB (Total: "
+                                      << (device_stats_[msg.device_id].kernel_allocated.load() / 1024.0 / 1024.0)
+                                      << " MB)" << std::endl;
+                        }
+                    }
+                    break;
+                }
+                case AllocMessage::DUMP_KERNELS: {
+                    // Dump detailed kernel information
+                    std::lock_guard<std::mutex> lock(registry_mutex_);
+                    std::cout << "\n╔══════════════════════════════════════════════════════════════╗" << std::endl;
+                    std::cout << "║           DETAILED KERNEL ALLOCATIONS                       ║" << std::endl;
+                    std::cout << "╚══════════════════════════════════════════════════════════════╝" << std::endl;
+                    std::cout << "Total kernel allocations: " << kernel_allocations_.size() << std::endl;
+
+                    // Group kernels by device
+                    for (int dev = 0; dev < MAX_DEVICES; dev++) {
+                        uint64_t device_total = 0;
+                        std::vector<KernelInfo> device_kernels;
+
+                        for (const auto& [key, kernel] : kernel_allocations_) {
+                            if (kernel.device_id == dev) {
+                                device_kernels.push_back(kernel);
+                                device_total += kernel.size;
+                            }
+                        }
+
+                        if (!device_kernels.empty()) {
+                            std::cout << "\n📊 Device " << dev << " - Total: " << (device_total / 1024.0 / 1024.0)
+                                      << " MB (" << device_kernels.size() << " kernels)" << std::endl;
+                            std::cout << "  ┌─────────────────────────────────────────────────────────┐" << std::endl;
+
+                            for (const auto& kernel : device_kernels) {
+                                auto age = std::chrono::duration_cast<std::chrono::seconds>(
+                                               std::chrono::steady_clock::now() - kernel.alloc_time)
+                                               .count();
+
+                                std::cout << "  │ Kernel ID: 0x" << std::hex << kernel.kernel_id << std::dec
+                                          << std::endl;
+                                std::cout << "  │   Size:      " << (kernel.size / 1024.0) << " KB" << std::endl;
+                                std::cout << "  │   Owner PID: " << kernel.owner_pid << std::endl;
+                                std::cout << "  │   Age:       " << age << " seconds" << std::endl;
+                                std::cout << "  │" << std::endl;
+                            }
+                            std::cout << "  └─────────────────────────────────────────────────────────┘" << std::endl;
+                        }
+                    }
+
+                    std::cout << "\n📋 DUMP_KERNELS complete." << std::endl;
+                    std::cout.flush();
+                    break;
+                }
+                default: std::cerr << "Unknown message type: " << (int)msg.type << std::endl; break;
+            }
+        }
+
+        close(client_socket);
+    }
+
+    void background_cleanup_loop() {
+        std::cout << "🔄 Background cleanup thread started (checking every 10s)" << std::endl;
+
+        while (running_) {
+            // Sleep for 10 seconds
+            int sleep_seconds = 3;
+            for (int i = 0; i < sleep_seconds && running_; i++) {
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+            }
+
+            if (!running_) {
+                break;
+            }
+
+            // Check for dead processes
+            cleanup_dead_processes();
+        }
+
+        std::cout << "🔄 Background cleanup thread stopped" << std::endl;
+    }
+
+    void run() {
+        // Start background cleanup thread
+        cleanup_thread_ = std::thread(&AllocationServer::background_cleanup_loop, this);
+
+        while (running_) {
+            int client_socket = accept(server_socket_, nullptr, nullptr);
+            if (client_socket < 0) {
+                if (running_) {
+                    std::cerr << "Accept failed" << std::endl;
+                }
+                continue;
+            }
+
+            std::thread(&AllocationServer::handle_client, this, client_socket).detach();
+        }
+    }
+
+    void stop() {
+        running_ = false;
+
+        // Wait for cleanup thread to finish
+        if (cleanup_thread_.joinable()) {
+            cleanup_thread_.join();
+        }
+
+        if (server_socket_ >= 0) {
+            close(server_socket_);
+        }
+        unlink(TT_ALLOC_SERVER_SOCKET);
+        std::cout << "\n🛑 Allocation Server stopped" << std::endl;
+    }
+
+    void print_stats() {
+        std::lock_guard<std::mutex> lock(registry_mutex_);
+
+        std::cout << "\n📊 Current Statistics:" << std::endl;
+        std::cout.flush();
+
+        for (int i = 0; i < MAX_DEVICES; i++) {
+            auto& stats = device_stats_[i];
+            uint64_t total =
+                stats.dram_allocated + stats.l1_allocated + stats.l1_small_allocated + stats.trace_allocated;
+
+            if (total > 0 || stats.num_buffers > 0) {
+                std::cout << "  Device " << i << ":" << std::endl;
+                std::cout << "    Buffers: " << stats.num_buffers << std::endl;
+                std::cout << "    DRAM: " << stats.dram_allocated << " bytes (" << (stats.dram_allocated / 1024.0)
+                          << " KB)" << std::endl;
+                std::cout << "    L1: " << stats.l1_allocated << " bytes (" << (stats.l1_allocated / 1024.0) << " KB)"
+                          << std::endl;
+                std::cout << "    Total: " << total << " bytes" << std::endl;
+            }
+        }
+
+        std::cout << "  Active allocations: " << allocations_.size() << std::endl;
+        std::cout.flush();
+    }
+};
+
+AllocationServer* g_server = nullptr;
+
+void signal_handler(int sig) {
+    if (g_server) {
+        g_server->print_stats();
+        g_server->stop();
+    }
+    exit(0);
+}
+
+int main(int argc, char** argv) {
+    bool quiet_mode = false;
+
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "-q" || arg == "--quiet") {
+            quiet_mode = true;
+        } else if (arg == "-h" || arg == "--help") {
+            std::cout << "Usage: " << argv[0] << " [--quiet|-q]" << std::endl;
+            return 0;
+        }
+    }
+
+    NullStream null_stream;
+    std::streambuf* original_cout_buf = nullptr;
+    std::streambuf* original_cerr_buf = nullptr;
+    if (quiet_mode) {
+        original_cout_buf = std::cout.rdbuf(null_stream.rdbuf());
+        original_cerr_buf = std::cerr.rdbuf(null_stream.rdbuf());
+    }
+
+    // Disable stdout buffering to ensure immediate output
+    setbuf(stdout, NULL);
+    setbuf(stderr, NULL);
+
+    signal(SIGINT, signal_handler);
+    signal(SIGTERM, signal_handler);
+
+    try {
+        AllocationServer server;
+        g_server = &server;
+
+        // Print stats every 10 seconds in background
+        std::thread stats_thread([&]() {
+            while (true) {
+                std::this_thread::sleep_for(std::chrono::seconds(10));
+                server.print_stats();
+            }
+        });
+        stats_thread.detach();
+
+        server.run();
+    } catch (const std::exception& e) {
+        std::cerr << "Error: " << e.what() << std::endl;
+        return 1;
+    }
+
+    if (quiet_mode) {
+        if (original_cout_buf != nullptr) {
+            std::cout.rdbuf(original_cout_buf);
+        }
+        if (original_cerr_buf != nullptr) {
+            std::cerr.rdbuf(original_cerr_buf);
+        }
+    }
+
+    return 0;
+}

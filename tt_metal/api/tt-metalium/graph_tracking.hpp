@@ -118,6 +118,15 @@ public:
 
     void track_deallocate_cb(const IDevice* device);
 
+    void track_kernel_load(
+        uint64_t kernel_size,
+        uint64_t kernel_id,
+        const IDevice* device,
+        uint8_t kernel_type = 0,  // 0=Application (default), 1=Fabric, 2=Dispatch
+        uint32_t num_cores = 1);  // Number of cores this kernel runs on
+
+    void track_kernel_unload(uint64_t kernel_id, const IDevice* device);
+
     void track_program(Program* program, const IDevice* device);
 
     // NOLINTBEGIN(cppcoreguidelines-missing-std-forward)
@@ -175,6 +184,9 @@ public:
 
     void clear_hook();
 
+    // Print L1 memory usage summary (for debugging)
+    static void print_l1_summary();
+
 private:
     GraphTracker() = default;
     ~GraphTracker() = default;
@@ -185,5 +197,21 @@ private:
 
     std::mutex hooked_buffers_mutex;
     std::unordered_set<const Buffer*> hooked_buffers;
+
+    // Track circular buffer allocations for proper deallocation
+    struct CBAllocation {
+        uint64_t addr;
+        uint64_t size;
+    };
+    std::mutex cb_mutex;
+    std::unordered_map<const IDevice*, std::vector<CBAllocation>> device_cb_allocations;
+
+    // Track kernel allocations for proper deallocation
+    struct KernelAllocation {
+        uint64_t kernel_id;
+        uint64_t size;
+    };
+    std::mutex kernel_mutex;
+    std::unordered_map<const IDevice*, std::vector<KernelAllocation>> device_kernel_allocations;
 };
 }  // namespace tt::tt_metal

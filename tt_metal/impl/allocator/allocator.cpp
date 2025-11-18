@@ -4,6 +4,7 @@
 
 #include <allocator.hpp>
 #include <buffer.hpp>
+#include <device.hpp>
 #include <enchantum/enchantum.hpp>
 #include <functional>
 #include <string>
@@ -16,6 +17,10 @@
 #include "impl/allocator/allocator_types.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/xy_pair.hpp>
+
+// NEW: Allocation tracking support
+#include "allocation_client.hpp"
+#include <graph_tracking.hpp>
 
 namespace tt {
 
@@ -137,6 +142,11 @@ DeviceAddr Allocator::allocate_buffer(Buffer* buffer) {
         }
     }
     allocated_buffers_.insert(buffer);
+
+    // NOTE: Allocation tracking is now done in GraphTracker::track_allocate()
+    // which is called from Buffer::allocate_impl() after this function returns.
+    // This ensures ALL allocations are tracked, including hooked ones.
+
     return address;
 }
 
@@ -144,6 +154,11 @@ void Allocator::deallocate_buffer(Buffer* buffer) {
     std::lock_guard<std::mutex> lock(mutex_);
     auto address = buffer->address();
     auto buffer_type = buffer->buffer_type();
+
+    // NOTE: Deallocation tracking is now done in GraphTracker::track_deallocate()
+    // which is called from Buffer::deallocate_impl() before this function.
+    // This ensures ALL deallocations are tracked, including hooked ones.
+
     switch (buffer_type) {
         case BufferType::DRAM: dram_manager_->deallocate_buffer(address); break;
         case BufferType::L1: l1_manager_->deallocate_buffer(address); break;
@@ -158,6 +173,33 @@ void Allocator::deallocate_buffer(Buffer* buffer) {
 
 void Allocator::deallocate_buffers() {
     std::lock_guard<std::mutex> lock(mutex_);
+
+    // NOTE: Individual buffer deallocations are already tracked via GraphTracker::track_deallocate()
+    // which is called from Buffer::mark_as_deallocated() before buffers are destroyed.
+    // This function deallocates at the bank manager level and is called during cleanup.
+    // By this point, allocated_buffers_ is typically empty as buffers were already individually freed.
+
+    // DEBUG: Log if there are still buffers allocated
+    if (!allocated_buffers_.empty()) {
+        std::cout << "⚠️  [Device " << device_id_ << "] deallocate_buffers() called with " << allocated_buffers_.size()
+                  << " buffers still in allocated_buffers_ set:" << std::endl;
+        for (const auto* buffer : allocated_buffers_) {
+            std::cout << "   • Buffer " << buffer->address() << ": " << buffer->size() << " bytes of "
+                      << (buffer->buffer_type() == BufferType::DRAM       ? "DRAM"
+                          : buffer->buffer_type() == BufferType::L1       ? "L1"
+                          : buffer->buffer_type() == BufferType::L1_SMALL ? "L1_SMALL"
+                                                                          : "TRACE")
+                      << std::endl;
+        }
+
+        // Track deallocations for remaining buffers before clearing bank managers
+        std::vector<Buffer*> buffers_to_track(allocated_buffers_.begin(), allocated_buffers_.end());
+        for (auto* buffer : buffers_to_track) {
+            GraphTracker::instance().track_deallocate(buffer);
+        }
+        allocated_buffers_.clear();
+    }
+
     dram_manager_->deallocate_all();
     l1_manager_->deallocate_all();
     l1_small_manager_->deallocate_all();

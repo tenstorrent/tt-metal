@@ -774,4 +774,12 @@ void HWCommandQueue::reset_prefetcher_cache_manager() { prefetcher_cache_manager
 
 int HWCommandQueue::get_prefetcher_cache_sizeB() const { return this->prefetcher_cache_manager_->get_cache_sizeB(); }
 
+RingbufferCacheManager::RingbufferStats HWCommandQueue::get_ringbuffer_stats() const {
+    if (prefetcher_cache_manager_) {
+        return prefetcher_cache_manager_->get_statistics();
+    }
+    // Return empty stats if no cache manager (shouldn't happen in normal operation)
+    return {0, 0, 0};
+}
+
 }  // namespace tt::tt_metal

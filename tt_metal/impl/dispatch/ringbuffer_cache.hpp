@@ -57,6 +57,16 @@ public:
 
     int get_cache_sizeB() const { return this->cache_size_blocks_ * this->cache_block_sizeB_; }
 
+    /*! @brief Get current ring buffer utilization statistics
+     *  @return struct with total_size_bytes, used_bytes, num_entries
+     */
+    struct RingbufferStats {
+        uint32_t total_size_bytes;     // Total ring buffer size
+        uint32_t used_bytes;           // Currently used bytes
+        uint32_t num_cached_programs;  // Number of programs currently cached
+    };
+    RingbufferStats get_statistics() const;
+
 private:
     const uint32_t cache_block_sizeB_;
     const uint32_t cache_size_blocks_;

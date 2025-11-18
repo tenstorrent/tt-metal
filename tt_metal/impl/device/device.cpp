@@ -15,6 +15,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt_align.hpp>
 #include <tt_metal.hpp>
+#include <graph_tracking.hpp>
 #include <tt_stl/span.hpp>
 #include <algorithm>
 #include <array>
@@ -157,10 +158,13 @@ void Device::initialize_default_sub_device_state(
         CoreRangeSet(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1})),
         CoreRangeSet(std::move(active_eth_core_ranges))})};
 
-    sub_device_manager_tracker_ = std::make_unique<SubDeviceManagerTracker>(
-        this,
-        this->initialize_allocator(l1_small_size, trace_region_size, worker_l1_unreserved_start, l1_bank_remap),
-        sub_devices);
+    auto allocator =
+        this->initialize_allocator(l1_small_size, trace_region_size, worker_l1_unreserved_start, l1_bank_remap);
+
+    // Set device ID for allocation tracking
+    allocator->set_device_id(this->id_);
+
+    sub_device_manager_tracker_ = std::make_unique<SubDeviceManagerTracker>(this, std::move(allocator), sub_devices);
 }
 
 std::unique_ptr<Allocator> Device::initialize_allocator(
@@ -252,7 +256,10 @@ void Device::configure_command_queue_programs() {
     // Write device-side cq pointers
     configure_dispatch_cores(this);
 
-    // Run the cq program
+    // Run the cq program (Mark as Dispatch type for kernel tracking)
+    command_queue_program.impl().set_kernel_type(tt::tt_metal::detail::ProgramKernelType::DISPATCH);
+    std::cout << "🔧 [DEBUG] Set Dispatch program kernel_type to "
+              << static_cast<int>(command_queue_program.impl().get_kernel_type()) << std::endl;
     command_queue_program.impl().finalize_offsets(this);
     detail::ConfigureDeviceWithProgram(this, command_queue_program, true);
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(this->id());
@@ -362,6 +369,8 @@ void Device::configure_fabric() {
 
     tt::tt_fabric::configure_fabric_cores(this);
 
+    // Mark program as Fabric type (for kernel tracking)
+    fabric_program_->impl().set_kernel_type(tt::tt_metal::detail::ProgramKernelType::FABRIC);
     fabric_program_->impl().finalize_offsets(this);
 
     detail::WriteRuntimeArgsToDevice(this, *fabric_program_, using_fast_dispatch_);
@@ -459,7 +468,12 @@ bool Device::close() {
     this->disable_and_clear_program_cache();
     this->set_program_cache_misses_allowed(true);
 
+    std::cout << "🔍 [Device " << this->id_ << "] About to reset sub_device_manager_tracker_" << std::endl;
+    std::cout << "   This should trigger allocator cleanup..." << std::endl;
+
     sub_device_manager_tracker_.reset(nullptr);
+
+    std::cout << "✓  [Device " << this->id_ << "] sub_device_manager_tracker_ reset complete" << std::endl;
 
     this->compute_cores_.clear();
     this->ethernet_cores_.clear();
@@ -467,6 +481,8 @@ bool Device::close() {
     this->command_queues_.clear();
     this->sysmem_manager_.reset();
     this->initialized_ = false;
+
+    std::cout << "✓  [Device " << this->id_ << "] Device close complete" << std::endl;
 
     return true;
 }
@@ -835,6 +851,24 @@ HalMemType Device::get_mem_type_of_core(CoreCoord virtual_core) const {
 }
 
 std::shared_ptr<distributed::MeshDevice> Device::get_mesh_device() { return mesh_device.lock(); }
+
+IDevice::RingbufferUsage Device::get_ringbuffer_usage(std::optional<uint8_t> cq_id) const {
+    if (!using_fast_dispatch_ || command_queues_.empty()) {
+        // No command queues or not using fast dispatch - return empty stats
+        return {0, 0, 0};
+    }
+
+    auto actual_cq_id = cq_id.value_or(GetCurrentCommandQueueIdForThread());
+    if (actual_cq_id >= command_queues_.size()) {
+        return {0, 0, 0};
+    }
+
+    // Get stats from the HWCommandQueue
+    const auto& cq = dynamic_cast<const HWCommandQueue&>(*command_queues_[actual_cq_id]);
+    auto stats = cq.get_ringbuffer_stats();
+
+    return {stats.total_size_bytes, stats.used_bytes, stats.num_cached_programs};
+}
 
 }  // namespace tt_metal
 

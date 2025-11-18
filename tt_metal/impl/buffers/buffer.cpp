@@ -15,6 +15,9 @@
 #include <tt_stl/overloaded.hpp>
 #include <algorithm>
 #include <atomic>
+#include <chrono>
+#include <ctime>
+#include <fstream>
 #include <map>
 #include <mutex>
 #include <string>
@@ -28,9 +31,97 @@
 #include "tracy/Tracy.hpp"
 #include "tt_align.hpp"
 #include <tt-metalium/allocator.hpp>
+#include <execinfo.h>
+#include <cxxabi.h>
+#include <sstream>
+#include <iomanip>
+#include <map>
+#include <memory>
 
 namespace tt::tt_metal {
 namespace {
+
+// CRITICAL: Per-device mutex to protect the buffer allocation+tracking sequence
+// This prevents race conditions where an address is freed and reallocated
+// before the original allocation is tracked, causing out-of-order messages
+// Using map instead of array to support arbitrary number of devices (Galaxy=32, TG=36, etc.)
+std::mutex g_device_mutex_map_lock;
+std::map<int, std::unique_ptr<std::mutex>> g_device_buffer_lifecycle_mutexes;
+
+// Helper to get or create mutex for a device
+static std::mutex& get_device_lifecycle_mutex(int device_id) {
+    std::lock_guard<std::mutex> lock(g_device_mutex_map_lock);
+    auto it = g_device_buffer_lifecycle_mutexes.find(device_id);
+    if (it == g_device_buffer_lifecycle_mutexes.end()) {
+        // First time seeing this device - create mutex for it
+        it = g_device_buffer_lifecycle_mutexes.emplace(device_id, std::make_unique<std::mutex>()).first;
+    }
+    return *(it->second);
+}
+
+// Helper to capture and format stack trace
+static std::string get_call_stack(int skip_frames = 2, int max_frames = 10) {
+    void* callstack[32];
+    int frames = backtrace(callstack, 32);
+    char** symbols = backtrace_symbols(callstack, frames);
+
+    std::stringstream ss;
+    int shown = 0;
+    for (int i = skip_frames; i < frames && shown < max_frames; i++) {
+        // Try to demangle C++ names
+        char* mangled = nullptr;
+        char* offset_begin = nullptr;
+        char* offset_end = nullptr;
+
+        for (char* p = symbols[i]; *p; ++p) {
+            if (*p == '(') {
+                mangled = p;
+            } else if (*p == '+') {
+                offset_begin = p;
+            } else if (*p == ')') {
+                offset_end = p;
+                break;
+            }
+        }
+
+        if (mangled && offset_begin && offset_end && mangled < offset_begin) {
+            *mangled++ = '\0';
+            *offset_begin++ = '\0';
+            *offset_end = '\0';
+
+            int status;
+            char* demangled = abi::__cxa_demangle(mangled, nullptr, nullptr, &status);
+
+            if (status == 0 && demangled) {
+                ss << "    " << symbols[i] << ": " << demangled << "\n";
+                free(demangled);
+            } else {
+                ss << "    " << symbols[i] << ": " << mangled << "\n";
+            }
+        } else {
+            ss << "    " << symbols[i] << "\n";
+        }
+        shown++;
+    }
+
+    free(symbols);
+    return ss.str();
+}
+
+// Check if buffer debug logging is enabled
+static bool is_buffer_debug_enabled() {
+    static bool checked = false;
+    static bool enabled = false;
+    if (!checked) {
+        const char* env = std::getenv("TT_BUFFER_DEBUG_LOG");
+        enabled = (env && std::string(env) == "1");
+        checked = true;
+        if (enabled) {
+            std::cout << "[TT-Metal] Buffer debug logging enabled -> /tmp/tt_buffer_debug.log" << std::endl;
+        }
+    }
+    return enabled;
+}
 
 #if defined(TRACY_ENABLE)
 
@@ -321,6 +412,7 @@ std::shared_ptr<Buffer> Buffer::create(
     const std::optional<bool> bottom_up,
     const std::optional<SubDeviceId> sub_device_id) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
+
     auto buffer = std::make_shared<Buffer>(
         device,
         size,
@@ -334,6 +426,31 @@ std::shared_ptr<Buffer> Buffer::create(
 
     buffer->address_ = address;
     buffer->allocation_status_ = AllocationStatus::ALLOCATED;
+
+    // Track allocation for pre-allocated buffers (owns_data_ = false)
+    // This includes DRAM buffers and MeshBuffer device-local buffers
+    GraphTracker::instance().track_allocate(buffer.get());
+
+    // DEBUG: Log ALL pre-allocated buffer creations on Device 0
+    if (device->id() == 0) {
+        std::ofstream debug_log("/tmp/l1_buffer_creation.log", std::ios::app);
+        auto now = std::chrono::system_clock::now();
+        auto time = std::chrono::system_clock::to_time_t(now);
+        debug_log << "=== Pre-Allocated Buffer Created ===" << std::endl;
+        debug_log << "Time: " << std::ctime(&time);
+        debug_log << "Device ID: " << device->id() << std::endl;
+        debug_log << "Address: " << address << " (0x" << std::hex << address << std::dec << ")" << std::endl;
+        debug_log << "Size: " << size << " bytes" << std::endl;
+        debug_log << "Buffer Type: "
+                  << (buffer_type == BufferType::DRAM       ? "DRAM"
+                      : buffer_type == BufferType::L1       ? "L1"
+                      : buffer_type == BufferType::L1_SMALL ? "L1_SMALL"
+                                                            : "OTHER")
+                  << std::endl;
+        debug_log << "Buffer Pointer: " << (uintptr_t)buffer.get() << std::endl;
+        debug_log << std::endl;
+        debug_log.close();
+    }
 
     LIGHT_METAL_TRACE_FUNCTION_CALL(
         CaptureBufferCreate,
@@ -406,11 +523,47 @@ void Buffer::allocate_impl() {
     // Important! Graph tracker must called after the allocation status is updated.
     allocation_status_ = AllocationStatus::ALLOCATED;
 
-    GraphTracker::instance().track_allocate(this);
+    // CRITICAL: Lock device-specific mutex to protect allocation+tracking sequence
+    // This prevents race where another thread deallocates and reallocates at the same
+    // address before we finish tracking, which would cause out-of-order messages
+    {
+        std::lock_guard<std::mutex> lifecycle_lock(get_device_lifecycle_mutex(device_->id()));
+
+        // DEBUG: Detailed buffer allocation logging with call stack
+        if (is_buffer_debug_enabled()) {
+            std::ofstream log("/tmp/tt_buffer_debug.log", std::ios::app);
+            auto now = std::chrono::system_clock::now();
+            auto time = std::chrono::system_clock::to_time_t(now);
+
+            log << "═══════════════════════════════════════════════════════════\n";
+            log << "BUFFER ALLOCATED\n";
+            log << "Time: " << std::put_time(std::localtime(&time), "%H:%M:%S") << "\n";
+            log << "Device: " << device_->id() << "\n";
+            log << "Address: 0x" << std::hex << address_ << std::dec << " (" << address_ << ")\n";
+            log << "Size: " << size_ << " bytes (" << (size_ / 1024.0) << " KB)\n";
+            log << "Type: " << enchantum::to_string(buffer_type_) << "\n";
+            log << "Buffer*: " << this << "\n";
+            log << "Owns Data: " << (owns_data_ ? "yes" : "no") << "\n";
+            log << "Hooked: " << (hooked_allocation_ ? "yes" : "no") << "\n";
+            log << "Call Stack:\n";
+            log << get_call_stack(3, 8);  // Skip 3 frames, show 8
+            log << "\n";
+            log.flush();
+        }
+
+        GraphTracker::instance().track_allocate(this);
+    }  // Release lifecycle_lock
 }
 
 void Buffer::deallocate() {
     if (!owns_data_) {
+        // Pre-allocated buffers (e.g., DRAM, MeshBuffer device-local buffers)
+        // don't own memory, so we can't deallocate it, but we still need to
+        // track the deallocation for monitoring purposes
+        if (allocation_status_ == AllocationStatus::ALLOCATED && device_->is_initialized()) {
+            GraphTracker::instance().track_deallocate(this);
+            allocation_status_ = AllocationStatus::DEALLOCATED;
+        }
         return;
     }
     this->deallocate_impl();
@@ -425,7 +578,35 @@ void Buffer::deallocate_impl() {
 
     if (device_->is_initialized() && size_ != 0) {
         // address_ is only modified from this thread, no sync required
-        GraphTracker::instance().track_deallocate(this);
+
+        // CRITICAL: Lock device-specific mutex to protect tracking+deallocation sequence
+        // This must use the SAME mutex as allocate to prevent interleaved operations
+        {
+            std::lock_guard<std::mutex> lifecycle_lock(get_device_lifecycle_mutex(device_->id()));
+
+            // DEBUG: Detailed buffer deallocation logging with call stack
+            if (is_buffer_debug_enabled()) {
+                std::ofstream log("/tmp/tt_buffer_debug.log", std::ios::app);
+                auto now = std::chrono::system_clock::now();
+                auto time = std::chrono::system_clock::to_time_t(now);
+
+                log << "═══════════════════════════════════════════════════════════\n";
+                log << "BUFFER DEALLOCATED\n";
+                log << "Time: " << std::put_time(std::localtime(&time), "%H:%M:%S") << "\n";
+                log << "Device: " << device_->id() << "\n";
+                log << "Address: 0x" << std::hex << address_ << std::dec << " (" << address_ << ")\n";
+                log << "Size: " << size_ << " bytes (" << (size_ / 1024.0) << " KB)\n";
+                log << "Type: " << enchantum::to_string(buffer_type_) << "\n";
+                log << "Buffer*: " << this << "\n";
+                log << "Call Stack:\n";
+                log << get_call_stack(3, 8);
+                log << "\n";
+                log.flush();
+            }
+
+            GraphTracker::instance().track_deallocate(this);
+        }  // Release lifecycle_lock - now safe for another thread to allocate
+
         if (!GraphTracker::instance().hook_deallocate(this) && !hooked_allocation_) {
 #if defined(TRACY_ENABLE)
             if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_buffer_usage_enabled()) {
@@ -447,6 +628,27 @@ void Buffer::deallocate_impl() {
 
 Buffer::~Buffer() {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
+
+    // DEBUG: Log destructor calls to find leaks
+    if (is_buffer_debug_enabled() && allocation_status_ == AllocationStatus::ALLOCATED) {
+        std::ofstream log("/tmp/tt_buffer_debug.log", std::ios::app);
+        auto now = std::chrono::system_clock::now();
+        auto time = std::chrono::system_clock::to_time_t(now);
+
+        log << "═══════════════════════════════════════════════════════════\n";
+        log << "BUFFER DESTRUCTOR (still ALLOCATED - will deallocate)\n";
+        log << "Time: " << std::put_time(std::localtime(&time), "%H:%M:%S") << "\n";
+        log << "Device: " << device_->id() << "\n";
+        log << "Address: 0x" << std::hex << address_ << std::dec << " (" << address_ << ")\n";
+        log << "Size: " << size_ << " bytes (" << (size_ / 1024.0) << " KB)\n";
+        log << "Type: " << enchantum::to_string(buffer_type_) << "\n";
+        log << "Buffer*: " << this << "\n";
+        log << "Call Stack:\n";
+        log << get_call_stack(2, 8);
+        log << "\n";
+        log.flush();
+    }
+
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureBufferDelete, *this);
     if (this->allocation_status_ != AllocationStatus::DEALLOCATED) {
         this->deallocate();

@@ -862,7 +862,7 @@ void Cluster::verify_sw_fw_versions(
 }
 
 bool Cluster::verify_eth_fw_capability() const {
-    // get_ethernet_fw_version is not supported in the simulation environment. assume it's correct!
+    // get_ethernet_firmware_version is not supported in the simulation environment. assume it's correct!
     if (rtoptions_.get_simulator_enabled()) {
         return true;
     }
@@ -966,7 +966,31 @@ void Cluster::initialize_ethernet_sockets() {
                 continue;
             }
             for (const auto &eth_core : eth_cores) {
-                if (this->device_eth_routing_info_.at(chip_id).at(eth_core) == EthRouterMode::IDLE) {
+                auto routing_it = this->device_eth_routing_info_.find(chip_id);
+                if (routing_it == this->device_eth_routing_info_.end()) {
+                    log_warning(
+                        tt::LogDevice,
+                        "Missing routing info for chip {} while initializing ethernet sockets. Skipping core ({}, {}).",
+                        chip_id,
+                        eth_core.x,
+                        eth_core.y);
+                    continue;
+                }
+
+                const auto& routing_map = routing_it->second;
+                auto core_it = routing_map.find(eth_core);
+                if (core_it == routing_map.end()) {
+                    log_warning(
+                        tt::LogDevice,
+                        "Missing routing entry for ethernet core ({}, {}) on chip {} while initializing sockets. "
+                        "Skipping.",
+                        eth_core.x,
+                        eth_core.y,
+                        chip_id);
+                    continue;
+                }
+
+                if (core_it->second == EthRouterMode::IDLE) {
                     this->ethernet_sockets_.at(chip_id).at(connected_chip_id).emplace_back(eth_core);
                     this->ethernet_sockets_.at(connected_chip_id)
                         .at(chip_id)
