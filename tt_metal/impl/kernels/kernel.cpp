@@ -15,6 +15,7 @@
 #include <set>
 #include <string_view>
 #include <type_traits>
+#include <unordered_map>
 #include <utility>
 
 #include <tt_stl/assert.hpp>
@@ -23,6 +24,7 @@
 #include "hal_types.hpp"
 #include "jit_build/build.hpp"
 #include "jit_build/jit_build_options.hpp"
+#include "jit_build/jit_build_utils.hpp"
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/span.hpp>
@@ -352,21 +354,36 @@ std::string ComputeKernel::config_hash() const {
         unpack_mode_descriptor);
 }
 
-std::string Kernel::compute_hash() const {
-    size_t define_hash_value = 0;
+uint64_t Kernel::compute_hash() const {
+    jit_build::utils::FNV1a hasher;
+
     for (const auto& [define, value] : this->defines_) {
-        ttsl::hash::hash_combine(define_hash_value, std::hash<std::string>{}(define + value));
+        hasher.update(define.begin(), define.end());
+        hasher.update(value.begin(), value.end());
     }
 
-    size_t named_args_hash_value = ttsl::hash::hash_objects_with_default_seed(this->named_compile_time_args_);
+    // Sort the unordered map by key to make the hash order invariant
+    std::vector<std::unordered_map<std::string, uint32_t>::const_iterator> named_args_keys;
+    named_args_keys.reserve(this->named_compile_time_args_.size());
+    for (auto it = this->named_compile_time_args_.begin(); it != this->named_compile_time_args_.end(); ++it) {
+        named_args_keys.push_back(it);
+    }
+    std::sort(named_args_keys.begin(), named_args_keys.end(), [](const auto& a, const auto& b) {
+        return a->first < b->first;
+    });
+    for (const auto& it : named_args_keys) {
+        hasher.update(it->first.begin(), it->first.end());
+        hasher.update(it->second);
+    }
 
-    return fmt::format(
-        "{}_{}_{}_{}_{}",
-        std::hash<std::string>{}(this->kernel_src_.source_),
-        fmt::join(this->compile_time_args_, "_"),
-        define_hash_value,
-        named_args_hash_value,
-        this->config_hash());
+    hasher.update(this->kernel_src_.source_.begin(), this->kernel_src_.source_.end());
+    for (const auto& arg : this->compile_time_args_) {
+        hasher.update(arg);
+    }
+    auto config_hash_str = this->config_hash();
+    hasher.update(config_hash_str.begin(), config_hash_str.end());
+
+    return hasher.digest();
 }
 
 std::vector<uint32_t>& Kernel::runtime_args(const CoreCoord& logical_core) {

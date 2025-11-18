@@ -49,6 +49,7 @@
 #include "jit_build/build.hpp"
 #include <tt_stl/enum.hpp>
 #include "jit_build/jit_build_options.hpp"
+#include "jit_build/jit_build_utils.hpp"
 #include "kernel_types.hpp"
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include "lightmetal/lightmetal_capture.hpp"
@@ -166,27 +167,32 @@ void GenerateBinaries(IDevice* device, JitBuildOptions& build_options, const std
 size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions& build_options, uint64_t build_key) {
     // Store the build key into the KernelCompile hash. This will be unique per command queue
     // configuration (necessary for dispatch kernels).
-    // Also account for watcher/dprint enabled in hash because they enable additional code to
-    // be compiled into the kernel.
-    std::string compile_hash_str = fmt::format(
-        "{}_{}_{}_{}",
-        build_key,
-        std::to_string(std::hash<tt_hlk_desc>{}(build_options.hlk_desc)),
-        kernel->compute_hash(),
-        tt::tt_metal::MetalContext::instance().rtoptions().get_compile_hash_string());
-    size_t compile_hash = std::hash<std::string>{}(compile_hash_str);
+    jit_build::utils::FNV1a hasher;
 
-#ifdef GENERATE_HASH_LOG
-    static std::ofstream f("/tmp/hashlog.txt");
-    static std::mutex mutex_;
-    {
-        std::unique_lock<std::mutex> lock(mutex_);
-        f << kernel->name() << " :: " << build_key << "::" << std::hash<tt_hlk_desc>{}(build_options.hlk_desc)
-          << " :: " << kernel->compute_hash() << " :: " << compile_hash_str << " " << compile_hash << std::endl
-          << std::flush;
+    hasher.update(build_key);
+    const auto& hlk_desc = build_options.hlk_desc;
+    for (int i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
+        hasher.update(static_cast<uint64_t>(hlk_desc.get_buf_dataformat(i)));
+        hasher.update(hlk_desc.get_buf_tile_r_dim(i));
+        hasher.update(hlk_desc.get_buf_tile_c_dim(i));
     }
-#endif
-    return compile_hash;
+    hasher.update(static_cast<uint64_t>(hlk_desc.get_hlk_math_fidelity()));
+    hasher.update(hlk_desc.get_hlk_math_approx_mode());
+
+    // Get hash for hlk_args here
+    const char* hlk_args = reinterpret_cast<const char*>(hlk_desc.get_hlk_args());
+    size_t hlk_args_size = hlk_desc.get_hlk_args_size();
+    if (hlk_args != nullptr and hlk_args_size > 0) {
+        hasher.update(hlk_args, hlk_args + hlk_args_size);
+    } else if (hlk_args == nullptr and hlk_args_size == 0) {
+    } else {
+        TT_THROW("Invalid hlk_args, hlk_args == {}, hlk_args_size == {}", hlk_args, hlk_args_size);
+    }
+    hasher.update(kernel->compute_hash());
+    auto compile_hash_str = MetalContext::instance().rtoptions().get_compile_hash_string();
+    hasher.update(compile_hash_str.begin(), compile_hash_str.end());
+
+    return hasher.digest();
 }
 }  // namespace
 namespace detail {
