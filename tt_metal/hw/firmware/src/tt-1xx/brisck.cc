@@ -64,7 +64,9 @@ uint32_t _start() {
         DeviceZoneScopedMainChildN("BRISC-KERNEL");
         EARLY_RETURN_FOR_DEBUG
         WAYPOINT("K");
+        //StartPerfCounters();
         kernel_main();
+        //StopPerfCounters();
         WAYPOINT("KD");
         if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
             WAYPOINT("NKFW");

@@ -137,6 +137,8 @@ using byte = std::uint8_t;
 #define RISCV_DEBUG_REG_WALL_CLOCK_H (RISCV_DEBUG_REGS_START_ADDR | 0x1F8)
 #define RISCV_DEBUG_REG_TIMESTAMP (RISCV_DEBUG_REGS_START_ADDR | 0x1FC)
 #define RISCV_DEBUG_REG_TIMESTAMP_STATUS (RISCV_DEBUG_REGS_START_ADDR | 0x204)
+
+#define RISCV_DEBUG_REG_PERF_CNT_OUT_L_FPU (RISCV_DEBUG_REGS_START_ADDR | 0x120)
 struct riscv_debug_reg_dbg_dbus_cntl_t {
     uint dbg_sig_sel : 16;
     uint dbg_daisy_sel : 8;
