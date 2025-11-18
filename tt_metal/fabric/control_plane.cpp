@@ -1727,8 +1727,7 @@ void ControlPlane::write_fabric_connections_to_tensix_cores(MeshId mesh_id, Chip
                 dispatcher_connection_info,
                 tensix_connection_info,
                 physical_chip_id,
-                eth_channel_id,
-                router_direction);
+                eth_channel_id);
 
             // Mark this connection as valid for fabric communication
             fabric_worker_connections.valid_connections_mask |= (1u << eth_channel_id);
@@ -2116,13 +2115,12 @@ void ControlPlane::populate_fabric_connection_info(
     tt::tt_fabric::fabric_connection_info_t& dispatcher_connection_info,
     tt::tt_fabric::fabric_connection_info_t& tensix_connection_info,
     ChipId physical_chip_id,
-    chan_id_t eth_channel_id,
-    eth_chan_directions router_direction) const {
+    chan_id_t eth_channel_id) const {
     constexpr uint16_t WORKER_FREE_SLOTS_STREAM_ID = 17;
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& fabric_context = this->get_fabric_context();
-    const bool is_2d_fabric = fabric_context.is_2D_routing_enabled();
-    const auto sender_channel = is_2d_fabric ? router_direction : 0;
+    // Sender channel 0 is always for local worker in the new design
+    const auto sender_channel = 0;
 
     const auto& fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
     // Always populate fabric router config for normal workers
