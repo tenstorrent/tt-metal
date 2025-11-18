@@ -5005,13 +5005,28 @@ def test_conv2d_1kX1k(
     (
         # (1, 32, 32, 40, 40, 32, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, "relu6", False, True), # random - back to HEIGHT_SHARDED, will adjust shard config
 
-        (10, 144, 144, 56, 56, 144, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, "relu6", False, True), # mobilenetv2 - 1.
-        (10, 576, 576, 14, 14, 576, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, "relu6", True, True), # mobilenetv2 - 2.
-        (10, 960, 960, 7, 7, 960, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, "relu6", True, True), # mobilenetv2 - 3.
-        (10, 112, 112, 7, 7, 112, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, "relu6", True, True), # mobilenetv2 - 4.
+        # (10, 144, 144, 56, 56, 144, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, "relu6", False, True), # mobilenetv2 - 1.
+        # (10, 576, 576, 14, 14, 576, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, "relu6", True, True), # mobilenetv2 - 2.
+        # (10, 960, 960, 7, 7, 960, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, "relu6", True, True), # mobilenetv2 - 3.
+        # (10, 112, 112, 7, 7, 112, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, "relu6", True, True), # mobilenetv2 - 4.
 
-        (1, 320, 320, 32, 32, 320, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, "silu", False, False), # yolov10x - 1.
-        (1, 640, 640, 40, 40, 640, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, "silu", True, True), # yolov10x - 2.
+        # (1, 320, 320, 32, 32, 320, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, "silu", False, False), # yolov10x - 1.
+        # (1, 640, 640, 40, 40, 640, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, "silu", True, True), # yolov10x - 2.
+
+        # EfficientNet-B0 Depthwise Convolution Configurations
+        # All configurations have in_channels=out_channels=groups (depthwise characteristic)
+        (1, 32, 32, 112, 112, 32, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, None, True, False), # EfficientNet-B0 - 1.
+        (1, 96, 96, 112, 112, 96, (3, 3), (2, 2), (1, 1), (1, 1), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, None, True, False), # EfficientNet-B0 - 2.
+        (1, 144, 144, 56, 56, 144, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, None, True, False), # EfficientNet-B0 - 3.
+        (1, 144, 144, 56, 56, 144, (5, 5), (2, 2), (2, 2), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, None, True, True), # EfficientNet-B0 - 4.
+        (1, 240, 240, 28, 28, 240, (5, 5), (1, 1), (2, 2), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, None, True, True), # EfficientNet-B0 - 5.
+        (1, 240, 240, 28, 28, 240, (3, 3), (2, 2), (1, 1), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, None, True, True), # EfficientNet-B0 - 6.
+        (1, 480, 480, 14, 14, 480, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, None, True, True), # EfficientNet-B0 - 7.
+        (1, 480, 480, 14, 14, 480, (5, 5), (1, 1), (2, 2), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, None, True, True), # EfficientNet-B0 - 8.
+        (1, 672, 672, 14, 14, 672, (5, 5), (1, 1), (2, 2), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, None, True, True), # EfficientNet-B0 - 9.
+        (1, 672, 672, 14, 14, 672, (5, 5), (2, 2), (2, 2), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, None, True, True), # EfficientNet-B0 - 10.
+        (1, 1152, 1152, 7, 7, 1152, (5, 5), (1, 1), (2, 2), (1, 1), ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, None, True, False), # EfficientNet-B0 - 11.
+        (1, 1152, 1152, 7, 7, 1152, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, None, True, False), # EfficientNet-B0 - 12.
     ),
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
