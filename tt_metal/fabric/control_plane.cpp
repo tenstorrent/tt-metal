@@ -385,8 +385,8 @@ void ControlPlane::initialize_distributed_contexts() {
     std::array this_host = {*global_context->rank()};
     host_local_context_ = global_context->create_sub_context(this_host);
 
-    // Use mesh_graph to get all (mesh_id, host_rank) pairs - this follows topology_mapper's mesh_rank_bindings
-    // Use topology_mapper's helper function to get MPI rank for each (mesh_id, host_rank) pair
+    // Use mesh_graph to get all (mesh_id, host_rank) pairs (this follows topology_mapper's mesh_rank_bindings),
+    // then use topology_mapper's helper function to get the MPI rank for each (mesh_id, host_rank) pair.
     for (const auto& mesh_id : this->routing_table_generator_->mesh_graph->get_mesh_ids()) {
         const auto& host_ranks = this->routing_table_generator_->mesh_graph->get_host_ranks(mesh_id);
         for (const auto& [_, mesh_host_rank] : host_ranks) {
