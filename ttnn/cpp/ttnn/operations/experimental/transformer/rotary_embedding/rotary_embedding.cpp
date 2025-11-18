@@ -71,25 +71,10 @@ ttnn::Tensor RotaryEmbeddingOperation::invoke(
         default_memory_config = input_tensor.memory_config();
     }
 
-    // Format inputs: Convert to TILE layout if needed
-    auto format_input = [](const Tensor& input) -> Tensor {
-        if (input.layout() == Layout::TILE) {
-            // Already in TILE layout - no formatting needed
-            return input;
-        } else {
-            // ROW_MAJOR → TILE conversion needed
-            Shape tile_aligned_shape =
-                data_movement::compute_padded_shape(input.padded_shape(), TILE_HEIGHT, TILE_WIDTH);
-
-            PadValue pad_val =
-                input.dtype() == DataType::BFLOAT16 || input.dtype() == DataType::FLOAT32 ? 0.0f : (uint32_t)0;
-            return ttnn::tilize_with_val_padding(input, tile_aligned_shape, pad_val, input.memory_config());
-        }
-    };
-
-    Tensor formatted_input = format_input(input_tensor);
-    Tensor formatted_cos = format_input(cos_cache);
-    Tensor formatted_sin = format_input(sin_cache);
+    using namespace ttnn::operations::experimental::auto_format;
+    Tensor formatted_input = AutoFormat::format_input_tensor(input_tensor, 0, Layout::TILE);
+    Tensor formatted_cos = AutoFormat::format_input_tensor(cos_cache, 0, Layout::TILE);
+    Tensor formatted_sin = AutoFormat::format_input_tensor(sin_cache, 0, Layout::TILE);
 
     return tt::tt_metal::operation::run(
                tt::tt_metal::RotaryEmbedding{

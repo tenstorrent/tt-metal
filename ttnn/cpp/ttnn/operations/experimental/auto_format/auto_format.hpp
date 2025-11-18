@@ -96,6 +96,20 @@ public:
         std::optional<tt::tt_metal::MemoryConfig> target_mem_config = std::nullopt);
 
     /**
+     * Formats an input tensor a given layout + memory_config. If padding is needed it uses pad_value (e.g. RM->TILE)
+     * @param input Input tensor
+     * @param pad_value Value to use for padding
+     * @param target_layout Desired layout
+     * @param target_mem_config Optional memory configuration
+     * @return Formatted tensor
+     */
+    static Tensor format_input_tensor(
+        const Tensor& input,
+        float pad_value,
+        tt::tt_metal::Layout target_layout,
+        std::optional<tt::tt_metal::MemoryConfig> target_mem_config = std::nullopt);
+
+    /**
      * Formats an output tensor to meet shape and layout requirements
      * @param output Output tensor
      * @param shape Target shape

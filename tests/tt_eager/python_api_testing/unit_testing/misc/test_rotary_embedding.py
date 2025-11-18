@@ -337,8 +337,8 @@ def test_rotary_embedding_row_major(W, Z, Y, X, cache_size, device):
     assert xt.get_layout() == ttnn.ROW_MAJOR_LAYOUT, "Test expects input to be in ROW_MAJOR layout"
 
     xt = xt.to(device)
-    cost = ttnn.Tensor(cos_cached, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
-    sint = ttnn.Tensor(sin_cached, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+    cost = ttnn.Tensor(cos_cached, ttnn.bfloat16).to(device)
+    sint = ttnn.Tensor(sin_cached, ttnn.bfloat16).to(device)
 
     xtt = ttnn.experimental.rotary_embedding(xt, cost, sint)
 

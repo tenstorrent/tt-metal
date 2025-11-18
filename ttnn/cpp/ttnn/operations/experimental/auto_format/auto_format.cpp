@@ -157,6 +157,14 @@ Tensor AutoFormat::format_input_tensor(
     return formatted_input.to_device(device, mem_config);
 }
 
+Tensor AutoFormat::format_input_tensor(
+    const Tensor& input, float pad_value, Layout target_layout, std::optional<MemoryConfig> target_mem_config) {
+    TT_FATAL(input.storage_type() == StorageType::DEVICE, "Input tensor must be on device.");
+    auto padded_shape = pad_to_tile_shape(input.padded_shape());
+    return format_input_tensor(
+        input, input.device(), padded_shape, pad_value, target_layout, std::move(target_mem_config));
+}
+
 Tensor AutoFormat::format_output_tensor(
     const Tensor& output,
     const ttnn::Shape& shape,

@@ -79,29 +79,18 @@ Tensor BcastOperation::invoke(
         }
     }
 
-    // Format inputs: Convert to TILE layout if needed
-    auto format_input = [](const Tensor& input) -> Tensor {
-        if (input.layout() == Layout::TILE) {
-            // Already in TILE layout - no formatting needed
-            return input;
-        } else {
-            // ROW_MAJOR → TILE conversion needed
-            Shape tile_aligned_shape = compute_padded_shape(input.padded_shape(), TILE_HEIGHT, TILE_WIDTH);
-            PadValue pad_value_variant =
-                input.dtype() == DataType::BFLOAT16 || input.dtype() == DataType::FLOAT32 ? 0.0f : (uint32_t)0;
-            return ttnn::tilize_with_val_padding(input, tile_aligned_shape, pad_value_variant, input.memory_config());
-        }
-    };
+    // Bcast only works with tile layout, so we need to tilize the input tensors if neccessary
+    using namespace ttnn::operations::experimental::auto_format;
+    Tensor formatted_a = AutoFormat::format_input_tensor(input_tensor_a, 0, Layout::TILE);
+    Tensor formatted_b = AutoFormat::format_input_tensor(input_tensor_b, 0, Layout::TILE);
 
-    Tensor formatted_a = format_input(input_tensor_a);
-    Tensor formatted_b = format_input(input_tensor_b);
-
-    return tt::tt_metal::operation::run(
-               EltwiseBinaryBroadcast{bcast_op, bcast_dim, output_memory_config},
-               {formatted_a, formatted_b},
-               {},
-               {output_tensor})
-        .at(0);
+    auto output = tt::tt_metal::operation::run(
+                      EltwiseBinaryBroadcast{bcast_op, bcast_dim, output_memory_config},
+                      {input_tensor_a, input_tensor_b},
+                      {},
+                      {output_tensor})
+                      .at(0);
+    return AutoFormat::format_output_tensor(output, output.padded_shape(), output.device(), Layout::TILE);
 }
 
 }  // namespace ttnn::operations::data_movement
