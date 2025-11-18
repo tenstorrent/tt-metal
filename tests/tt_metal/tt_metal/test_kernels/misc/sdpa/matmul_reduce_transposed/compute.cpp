@@ -83,8 +83,8 @@ void matmul_blocks(
 
             tile_regs_wait();
 
-#ifdef TRISC_PACK
-            for (int k = 0; k < 750; k++) {
+#ifdef TRISC_MATH
+            for (int k = 0; k < 500; k++) {
                 TTI_NOP;
             }
 #endif
