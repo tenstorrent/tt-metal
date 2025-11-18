@@ -1,11 +1,14 @@
+#!/usr/bin/env python3
 """Validate #include directives in C++ source files."""
 
-import os
 import re
+import sys
 from collections import defaultdict
 from typing import NamedTuple, Optional
 
-# List of files or paths (relative or absolute) to skip
+from common import find_cpp_sources
+
+
 SKIP_FILES = {
     "fabric_edm_packet_header.hpp",
     "dev_msgs.h",
@@ -169,7 +172,6 @@ class Include(NamedTuple):
     quoted: bool
 
     def __str__(self) -> str:
-        """Return the full #include statement."""
         brackets = '""' if self.quoted else "<>"
         return f"#include {brackets[0]}{self.path}{brackets[1]}"
 
@@ -201,8 +203,14 @@ class Include(NamedTuple):
         return None
 
 
-def validate_includes_correct(files: list[str]) -> bool:
-    """Check includes in files and return True if all are correct."""
+def main() -> int:
+    if len(sys.argv) != 2:
+        print(f"Usage: {sys.argv[0]} <directory>")
+        return 1
+
+    directory = sys.argv[1]
+    source_files = find_cpp_sources(directory, SKIP_FILES)
+
     prefix_counts = defaultdict(int)
 
     def iter_includes(filepath):
@@ -211,9 +219,7 @@ def validate_includes_correct(files: list[str]) -> bool:
                 if include := Include.from_line(filepath, line_num, line):
                     yield include
 
-    all_includes = [include for path in files for include in iter_includes(path)]
-
-    # Validate all includes and print errors
+    all_includes = [include for path in source_files for include in iter_includes(path)]
     errors = [err for include in all_includes if (err := include.check_for_errors(prefix_counts)) is not None]
     unused_prefixes = ALLOWED_PREFIXES - prefix_counts.keys()
 
@@ -225,4 +231,10 @@ def validate_includes_correct(files: list[str]) -> bool:
         for prefix in sorted(unused_prefixes):
             print(f"  - {prefix}")
 
-    return not (errors or unused_prefixes)
+    print("Done.")
+
+    return 1 if (errors or unused_prefixes) else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
