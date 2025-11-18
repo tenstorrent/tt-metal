@@ -14,8 +14,8 @@ import json
 import yaml
 from datetime import datetime
 import copy
-from collections import deque
-from typing import Any, Dict, List, Optional, Tuple
+from collections import defaultdict, deque
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import click
 from loguru import logger
@@ -381,38 +381,87 @@ def get_device_op_data(ops: Dict[int, OpDict]) -> Tuple[DeviceOpsDict, bool]:
     return deviceOps, hasTraceRuns
 
 
-# Append device data to device ops and return the list of mapped device op ref list
-def append_device_data(
-    ops: Dict[int, OpDict],
-    traceReplays: Optional[TraceReplayDict],
-    logFolder: Path,
-    analyze_noc_traces: bool,
-    device_analysis_types: Tuple[str, ...] | List[str],
-    force_legacy_device_logs: bool = False,
-) -> Tuple[DeviceOpsDict, Dict[int, OpDict]]:
-    """Join host metadata with the device perf CSV (and optional NoC stats)."""
+def _duplicate_series_with_ns(series: List[Dict[str, Any]], freq: int) -> List[Dict[str, Any]]:
+    duplicated = []
+    for entry in series:
+        sample = entry.copy()
+        duration_cycles = sample.get("duration_cycles")
+        if duration_cycles is not None and freq:
+            sample["duration_ns"] = duration_cycles * 1000 / freq
+        duplicated.append(sample)
+    return duplicated
 
-    if device_analysis_types:
-        logger.warning("device_analysis_types is not supported when using cpp_device_perf_report.csv; ignoring option.")
 
-    device_perf_report = Path(logFolder) / PROFILER_CPP_DEVICE_PERF_REPORT
+def _convert_device_op_entry(device_op_time: Dict[str, Any], freq: int) -> OpDict:
+    """Translate a device profiler op entry into the legacy dictionary format."""
 
-    if force_legacy_device_logs:
-        raise NotImplementedError(
-            "Legacy device log parsing via --force-legacy-device-logs is not currently supported. "
-            f"Please ensure {PROFILER_CPP_DEVICE_PERF_REPORT} is generated during runtime."
+    device_op: OpDict = {}
+    cores_seen: Set[Any] = set()
+    last_time_id: Optional[Dict[str, Any]] = None
+
+    for time_id, *_rest, core in device_op_time["timeseries"]:
+        last_time_id = time_id
+        if "zone_name" in time_id and "FW" in time_id["zone_name"] and core not in cores_seen:
+            cores_seen.add(core)
+
+    device_op["core_usage"] = {"count": len(cores_seen), "cores": [str(core) for core in cores_seen]}
+    device_op["device_time"] = {}
+    for analysis, data in device_op_time["analysis"].items():
+        device_op["device_time"][analysis] = {
+            "series": _duplicate_series_with_ns(data["series"], freq),
+            "stats": data["stats"],
+        }
+
+    if last_time_id and "run_host_id" in last_time_id:
+        device_op["global_call_count"] = last_time_id["run_host_id"]
+    else:
+        run_host_id = device_op_time.get("op_id")
+        if run_host_id is None:
+            raise AssertionError("Unable to determine run_host_id for device operation entry")
+        device_op["global_call_count"] = run_host_id
+
+    return device_op
+
+
+def _load_legacy_device_ops(
+    log_folder: Path, device_analysis_types: Tuple[str, ...] | List[str]
+) -> Dict[int, Dict[int, OpDict]]:
+    """Parse device-side logs via import_log_run_stats for legacy enrichment."""
+
+    device_log_path = Path(log_folder) / PROFILER_DEVICE_SIDE_LOG
+    if not device_log_path.is_file():
+        raise AssertionError(
+            f"{PROFILER_CPP_DEVICE_PERF_REPORT} not found and legacy device log "
+            f"{PROFILER_DEVICE_SIDE_LOG} is also missing in {log_folder}."
         )
 
-    try:
-        device_perf_by_device = load_device_perf_report(device_perf_report)
-    except FileNotFoundError as exc:
-        raise AssertionError(
-            f"Device perf report {PROFILER_CPP_DEVICE_PERF_REPORT} not found in {logFolder}. "
-            "Ensure the profiler emitted cpp_device_perf_report.csv during runtime."
-        ) from exc
-    host_ops_by_device, _ = get_device_op_data(ops)
-    logger.info("Appending device data")
+    setup = device_post_proc_config.default_setup()
+    if device_analysis_types:
+        available_analysis = setup.timerAnalysis
+        picked_analysis = {}
+        for analysis in device_analysis_types:
+            assert analysis in available_analysis, f"{analysis} is not calculated in device analysis"
+            picked_analysis[analysis] = available_analysis[analysis]
+        setup.timerAnalysis = picked_analysis
+    setup.deviceInputLog = str(device_log_path)
 
+    device_data = import_log_run_stats(setup)
+    freq = device_data["deviceInfo"]["freq"]
+
+    per_device_ops: Dict[int, Dict[int, OpDict]] = defaultdict(dict)
+    for device_id, device_info in device_data["devices"].items():
+        tensix_ops = device_info["cores"]["DEVICE"]["riscs"]["TENSIX"]["ops"]
+        for device_op_time in tensix_ops:
+            device_op = _convert_device_op_entry(device_op_time, freq)
+            per_device_ops[device_id][device_op["global_call_count"]] = device_op
+    return per_device_ops
+
+
+def _enrich_ops_from_perf_csv(
+    host_ops_by_device: DeviceOpsDict,
+    device_perf_by_device: Dict[int, Dict[int, Dict[str, Any]]],
+    trace_replays: Optional[TraceReplayDict],
+) -> DeviceOpsDict:
     for device_id in host_ops_by_device:
         assert (
             device_id in device_perf_by_device
@@ -439,7 +488,7 @@ def append_device_data(
             session_id = perf_row.get("METAL TRACE REPLAY SESSION ID")
             if session_id is not None:
                 enriched_op["metal_trace_replay_session_id"] = session_id
-                tracy_time = lookup_trace_replay_timestamp(traceReplays, device_id, metal_trace_id, session_id)
+                tracy_time = lookup_trace_replay_timestamp(trace_replays, device_id, metal_trace_id, session_id)
                 if tracy_time is not None:
                     enriched_op["tracy_time"] = tracy_time
 
@@ -447,9 +496,34 @@ def append_device_data(
             enriched_ops.append(enriched_op)
 
         host_ops_by_device[device_id] = enriched_ops
+    return host_ops_by_device
 
+
+def _enrich_ops_from_device_logs(
+    host_ops_by_device: DeviceOpsDict,
+    log_folder: Path,
+    device_analysis_types: Tuple[str, ...] | List[str],
+) -> DeviceOpsDict:
+    legacy_device_ops = _load_legacy_device_ops(log_folder, device_analysis_types)
+
+    for device_id, host_ops in host_ops_by_device.items():
+        device_entries = legacy_device_ops.get(device_id, {})
+        enriched_ops = []
+        for host_op in host_ops:
+            op_id = int(host_op["global_call_count"])
+            enriched_op = copy.deepcopy(host_op)
+            device_entry = device_entries.get(op_id)
+            if device_entry:
+                enriched_op["core_usage"] = device_entry.get("core_usage")
+                enriched_op["device_time"] = device_entry.get("device_time")
+            enriched_ops.append(enriched_op)
+        host_ops_by_device[device_id] = enriched_ops
+    return host_ops_by_device
+
+
+def _build_trace_ops_mapping(host_ops_by_device: DeviceOpsDict, ops: Dict[int, OpDict]) -> Dict[int, OpDict]:
     trace_ops_by_augmented_id: Dict[int, OpDict] = {}
-    for device_id, per_device_ops in host_ops_by_device.items():
+    for _, per_device_ops in host_ops_by_device.items():
         for op in per_device_ops:
             if "metal_trace_replay_session_id" in op:
                 augmented_id = op["global_call_count"] | (op["metal_trace_replay_session_id"] << TRACE_OP_ID_BITSHIFT)
@@ -458,9 +532,47 @@ def append_device_data(
                 trace_ops_by_augmented_id[augmented_id] = trace_copy
             else:
                 ops[op["global_call_count"]] = op
+    return trace_ops_by_augmented_id
 
-    # if enabled, analyze noc trace files present in log folder and add
-    # relevant statistics to 'ops' dict
+
+# Append device data to device ops and return the list of mapped device op ref list
+def append_device_data(
+    ops: Dict[int, OpDict],
+    traceReplays: Optional[TraceReplayDict],
+    logFolder: Path,
+    analyze_noc_traces: bool,
+    device_analysis_types: Tuple[str, ...] | List[str],
+    force_legacy_device_logs: bool = False,
+) -> Tuple[DeviceOpsDict, Dict[int, OpDict]]:
+    """Join host metadata with either the perf CSV or legacy device logs."""
+
+    host_ops_by_device, _ = get_device_op_data(ops)
+    logger.info("Appending device data")
+
+    device_perf_report = Path(logFolder) / PROFILER_CPP_DEVICE_PERF_REPORT
+    use_perf_csv = device_perf_report.is_file() and not force_legacy_device_logs
+
+    if use_perf_csv:
+        if device_analysis_types:
+            logger.warning(
+                "device_analysis_types is not supported when using cpp_device_perf_report.csv; ignoring option."
+            )
+        device_perf_by_device = load_device_perf_report(device_perf_report)
+        host_ops_by_device = _enrich_ops_from_perf_csv(host_ops_by_device, device_perf_by_device, traceReplays)
+    else:
+        if device_perf_report.is_file() and force_legacy_device_logs:
+            logger.info(
+                f"Forcing legacy device-log parsing even though {PROFILER_CPP_DEVICE_PERF_REPORT} exists in {logFolder}."
+            )
+        else:
+            logger.warning(
+                f"Device perf report {PROFILER_CPP_DEVICE_PERF_REPORT} not found in {logFolder}. "
+                f"Falling back to legacy device-log parsing via import_log_run_stats(); this will take longer."
+            )
+        host_ops_by_device = _enrich_ops_from_device_logs(host_ops_by_device, logFolder, device_analysis_types)
+
+    trace_ops_by_augmented_id = _build_trace_ops_mapping(host_ops_by_device, ops)
+
     if analyze_noc_traces:
         npe_stats = analyzeNoCTraces(logFolder)
         if npe_stats is not None:
@@ -1123,7 +1235,7 @@ def process_ops(
 @click.option(
     "--force-legacy-device-logs",
     is_flag=True,
-    help="Force use of legacy device log parsing (currently not supported).",
+    help="Force use of legacy device log parsing instead of cpp_device_perf_report.csv.",
 )
 def main(output_folder, name_append, date, device_only, analyze_noc_traces, device_analysis_types, force_legacy_device_logs):
     if output_folder:
