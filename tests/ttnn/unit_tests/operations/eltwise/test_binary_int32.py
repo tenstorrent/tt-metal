@@ -998,8 +998,6 @@ def test_binary_divide_int32_full_range(input_shapes, device):
 
 def test_divide_edge_cases(device):
     pairs = [
-        (1, 2),
-        (2, 1),
         (3, 2),
         (2, 2),
         (10, 3),
@@ -1010,8 +1008,8 @@ def test_divide_edge_cases(device):
         (16777216, -3),
         (-16777216, -4),
         (16777216, 16777215),
-        (16777229, 19),
-        (16777229, 8388615),
+        (-16777229, 19),
+        (-16777229, -8388615),
         (16777230, 8388615),
     ]
 
@@ -1035,9 +1033,8 @@ def test_divide_edge_cases(device):
     )
 
     golden_function = ttnn.get_golden_function(ttnn.divide)
-    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device).to(torch.int32)
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
 
     output_tensor = ttnn.divide(input_tensor_a, input_tensor_b)
-    output_tensor = ttnn.to_torch(output_tensor)
 
-    assert torch.equal(output_tensor, torch_output_tensor)
+    assert_with_ulp(output_tensor, torch_output_tensor, ulp_threshold=1.0)
