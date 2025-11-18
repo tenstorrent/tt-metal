@@ -407,18 +407,28 @@ FORCE_INLINE void update_remote_cb_config_in_l1(uint32_t remote_cb_index) {
         remote_cb_interface.fifo_rd_ptr;
 }
 
+#ifndef COMPILE_FOR_TRISC
+
+class Noc;
+class CircularBuffer;
+
 class RemoteCircularBuffer {
 public:
     explicit RemoteCircularBuffer(uint32_t remote_cb_index) : remote_cb_index_(remote_cb_index), noc_(noc_index) {}
 
-    explicit RemoteCircularBuffer(uint32_t remote_cb_index, uint8_t noc) :
-        remote_cb_index_(remote_cb_index), noc_(noc) {}
-
     explicit RemoteCircularBuffer(uint32_t remote_cb_index, experimental::Noc noc) :
         remote_cb_index_(remote_cb_index), noc_(noc) {}
 
-    void reserve_back(int32_t num_pages) { remote_cb_reserve_back(remote_cb_index_, num_pages); }
+    /** @brief Reserves the specified number of pages on the remote circular buffer
+     *
+     * This is intended to be called by the producer core.
+     */
+    void reserve_back(uint32_t num_pages) { remote_cb_reserve_back(remote_cb_index_, num_pages); }
 
+    /** @brief Pushes the specified number of pages to the remote circular buffer
+     *
+     * This is intended to be called by the producer core.
+     */
     void push_back(
         experimental::CircularBuffer& src_local_cb,
         uint32_t num_pages,
@@ -435,21 +445,46 @@ public:
             noc_.get_noc_id());
     }
 
-    void wait_front() { remote_cb_wait_front(remote_cb_index_, num_pages); }
+    /** @brief Waits for the specified number of pages to be available in the remote circular buffer
+     *
+     * This is intended to be called by the receiver core.
+     */
+    void wait_front(uint32_t num_pages) { remote_cb_wait_front(remote_cb_index_, num_pages); }
 
-    void pop_front(int32_t num_pages) { remote_cb_pop_front(remote_cb_index_, num_pages, noc_.get_noc_id()); }
+    /** @brief Pops the specified number of pages from the remote circular buffer
+     *
+     * This function is used by a receiver core to signal it is done with the specified amount of data to its sender
+     * core. It will trigger NoC transactions to notify the remote CB that the data has been consumed. `wait_front`
+     * should be called before calling this function to ensure the data is available.
+     *
+     * This is intended to be called by the receiver core.
+     */
+    void pop_front(uint32_t num_pages) { remote_cb_pop_front(remote_cb_index_, num_pages, noc_.get_noc_id()); }
 
+    /** @brief Writes the read/write pointers to L1
+     *
+     * The read/write pointers of the remote circular buffers are stored in L1, so that subsequent programs can resume
+     * where the previous pointers were. During execution, this pointer is cached in a struct for optimal perf to avoid
+     * repeated L1 reads/writes. This requires the user to call this program at the end of their kernel execution in
+     * order to write the final value back to L1. This should only be called by one RISC per core which has the final
+     * updated value.
+     */
     void commit() { update_remote_cb_config_in_l1(remote_cb_index_); }
 
+    /** @brief Resizes the remote circular buffer's page size
+     *
+     * Resizes the remote circular buffer's page size. This may result in noc transactions for synchronizing with the
+     * receiver cores.
+     */
     void set_page_size(uint32_t page_size) {
         resize_remote_receiver_cb_interface(remote_cb_index_, page_size, noc_.get_noc_id());
     }
 
-    void set_noc(experimental::Noc noc) { noc_ = noc; }
-
 private:
-    experimental::Noc noc_;
     uint32_t remote_cb_index_;
+    experimental::Noc noc_;
 };
+
+#endif
 
 }  // namespace experimental
