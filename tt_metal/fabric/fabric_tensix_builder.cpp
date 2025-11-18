@@ -241,8 +241,8 @@ void FabricTensixDatamoverConfig::calculate_buffer_allocations() {
     size_t l1_alignment = hal.get_alignment(tt::tt_metal::HalMemType::L1);
 
     // Reserve space for both core types with proper alignment
-    size_t space_per_risc = l1_size / num_used_riscs_per_tensix_;     // Split between MUX and RELAY
-    space_per_risc = (space_per_risc / l1_alignment) * l1_alignment;  // Align down to L1 alignment
+    space_per_risc_ = l1_size / num_used_riscs_per_tensix_;             // Split between MUX and RELAY
+    space_per_risc_ = (space_per_risc_ / l1_alignment) * l1_alignment;  // Align down to L1 alignment
 
     // Get the maximum number of channels per core type based on fabric topology and mode
     auto topology = fabric_context.get_fabric_topology();
@@ -273,17 +273,20 @@ void FabricTensixDatamoverConfig::calculate_buffer_allocations() {
 
     // Calculate buffers per channel based on available space and max channels
     size_t space_needed_for_max_channels = num_channels_for_mux_ * buffer_size_bytes_full_size_channel_;
-    num_buffers_per_channel_ = std::bit_floor(space_per_risc / space_needed_for_max_channels);
+    num_buffers_per_channel_ = std::bit_floor(space_per_risc_ / space_needed_for_max_channels);
 
     // Set base addresses for each core type with proper L1 alignment
     for (size_t i = 0; i < num_used_riscs_per_tensix_; ++i) {
         FabricTensixCoreType core_id = static_cast<FabricTensixCoreType>(i);
-        base_l1_addresses_[core_id] = l1_base + (i * space_per_risc);
+        base_l1_addresses_[core_id] = l1_base + (i * space_per_risc_);
     }
 }
 
 std::shared_ptr<FabricTensixDatamoverMuxConfig> FabricTensixDatamoverConfig::create_mux_config(
     FabricTensixCoreType core_id) {
+    // Calculate the end address for this core's allocated L1 space
+    size_t l1_end_address = base_l1_addresses_[core_id] + space_per_risc_;
+
     return std::make_shared<FabricTensixDatamoverMuxConfig>(
         static_cast<uint8_t>(num_channels_for_mux_),     // num_full_size_channels
         0,                                               // num_header_only_channels
@@ -291,16 +294,21 @@ std::shared_ptr<FabricTensixDatamoverMuxConfig> FabricTensixDatamoverConfig::cre
         0,                                               // num_buffers_header_only_channel
         buffer_size_bytes_full_size_channel_,            // buffer_size_bytes_full_size_channel
         base_l1_addresses_[core_id],                     // base_l1_address
+        l1_end_address,                                  // l1_end_address
         CoreType::WORKER                                 // core_type
     );
 }
 
 std::shared_ptr<FabricTensixDatamoverRelayConfig> FabricTensixDatamoverConfig::create_relay_config(
     FabricTensixCoreType core_id) {
+    // Calculate the end address for this core's allocated L1 space
+    size_t l1_end_address = base_l1_addresses_[core_id] + space_per_risc_;
+
     return std::make_shared<FabricTensixDatamoverRelayConfig>(
         static_cast<uint8_t>(num_buffers_per_channel_),  // num_buffers_per_channel
         buffer_size_bytes_full_size_channel_,            // buffer_size_bytes
         base_l1_addresses_[core_id],                     // base_l1_address
+        l1_end_address,                                  // l1_end_address
         CoreType::WORKER                                 // core_type
     );
 }

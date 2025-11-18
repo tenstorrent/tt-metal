@@ -128,6 +128,7 @@ protected:
         uint8_t num_buffers_header_only_channel,
         size_t buffer_size_bytes_full_size_channel,
         size_t base_l1_address,
+        size_t l1_end_address,
         CoreType core_type = CoreType::WORKER);
 
     // Helper methods
@@ -185,6 +186,7 @@ public:
         uint8_t num_buffers_header_only_channel,
         size_t buffer_size_bytes_full_size_channel,
         size_t base_l1_address,
+        size_t l1_end_address,
         CoreType core_type = CoreType::WORKER);
 
     std::vector<uint32_t> get_compile_time_args() const;
@@ -202,6 +204,7 @@ public:
         uint8_t num_buffers_per_channel,
         size_t buffer_size_bytes,
         size_t base_l1_address,
+        size_t l1_end_address,
         CoreType core_type = CoreType::WORKER);
 
     // Get compile-time args with fabric node, link, and direction for downstream mux connection info

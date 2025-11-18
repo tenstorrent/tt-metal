@@ -117,6 +117,10 @@ void forward_data(
 
         fabric_connection.wait_for_empty_write_slot();
 
+        // for (int i=0; i<1000;++i) {
+        //     asm volatile("nop");
+        // }
+
         fabric_connection.send_payload_flush_non_blocking_from_address(
             (uint32_t)packet_header, packet_header->get_payload_size_including_header());
 
@@ -287,8 +291,6 @@ void kernel_main() {
             }
         }
     }
-
-    // wait for relay close connection
 
     // Signal relay to terminate (mux and relay are on the same core, so just write to L1 directly)
     volatile auto relay_termination_signal_ptr =

@@ -117,6 +117,7 @@ private:
     size_t num_channels_for_mux_{};  // Number of channels for MUX configuration
     size_t num_buffers_per_channel_{};
     size_t buffer_size_bytes_full_size_channel_{};
+    size_t space_per_risc_{};  // L1 space allocated per RISC
 
     // Base L1 addresses for each RISC ID, [risc id] -> [base addr] mapping
     std::unordered_map<FabricTensixCoreType, size_t> base_l1_addresses_;

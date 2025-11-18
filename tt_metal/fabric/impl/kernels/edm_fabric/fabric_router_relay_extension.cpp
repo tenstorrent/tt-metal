@@ -175,14 +175,12 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_noc_txn_to_lo
     tt::tt_fabric::NocSendType noc_send_type = header.noc_send_type;
     switch (noc_send_type) {
         case tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE: {
-            // DPRINT << "NOC_UNICAST_WRITE " << ENDL();
             const auto noc_addr = header.command_fields.unicast_write.noc_address;
             noc_async_write_one_packet(payload_start_address, noc_addr, payload_size_bytes);
             // temporarily place here until we have txn id support
             noc_async_writes_flushed();
             // writes done, send ack back
             tt::tt_fabric::udm::fabric_fast_write_ack(local_mux_connection, packet_header);
-            // DPRINT << "NOC_UNICAST_WRITE Done" << ENDL();
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_UNICAST_ATOMIC_INC: {
@@ -218,9 +216,7 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_noc_txn_to_lo
             if (header.command_fields.unicast_seminc_fused.flush) {
                 noc_async_write_barrier();
             }
-            noc_semaphore_inc<true>(semaphore_dest_address, increment);
-            // temporarily place here until we have txn id support
-            noc_async_atomic_barrier();
+            noc_semaphore_inc(semaphore_dest_address, increment);
             // writes done, send ack back - Do we also need to send atomic inc response back?
             tt::tt_fabric::udm::fabric_fast_write_ack(local_mux_connection, packet_header);
         } break;
@@ -245,7 +241,6 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_noc_txn_to_lo
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_UNICAST_READ: {
-            // DPRINT << "NOC_UNICAST_READ " << ENDL();
             const auto noc_addr = header.command_fields.unicast_read.noc_address;
             const auto size_bytes = header.udm_control.read.size_bytes;
             // allocate a chunk of memory for storing read response
@@ -258,7 +253,6 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_noc_txn_to_lo
                 local_mux_connection, packet_header, read_response_memory_pool_addr);
             // free memory chunk
             tt::tt_fabric::udm::UDMMemoryPool::deallocate_memory(size_bytes);
-            // DPRINT << "NOC_UNICAST_READ DONE " << ENDL();
         } break;
         default: {
             ASSERT(false);

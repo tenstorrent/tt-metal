@@ -66,6 +66,7 @@ FabricTensixDatamoverBaseConfig::FabricTensixDatamoverBaseConfig(
     uint8_t num_buffers_header_only_channel,
     size_t buffer_size_bytes_full_size_channel,
     size_t base_l1_address,
+    size_t l1_end_address,
     CoreType core_type) :
     core_type_(core_type),
     num_full_size_channels_(num_full_size_channels),
@@ -140,12 +141,10 @@ FabricTensixDatamoverBaseConfig::FabricTensixDatamoverBaseConfig(
     }
 
     core_type_index_ = hal.get_programmable_core_type_index(hal_core_type);
-    auto l1_end_address = hal.get_dev_addr(hal_core_type, tt_metal::HalL1MemAddrType::BASE) +
-                          hal.get_dev_size(hal_core_type, tt_metal::HalL1MemAddrType::BASE);
 
     TT_FATAL(
         memory_map_end_address_ <= l1_end_address,
-        "Memory map end address: {} is greater than L1 end address: {}",
+        "Memory map end address: {} is greater than allocated L1 end address: {}",
         memory_map_end_address_,
         l1_end_address);
 }
@@ -302,6 +301,7 @@ FabricTensixDatamoverMuxConfig::FabricTensixDatamoverMuxConfig(
     uint8_t num_buffers_header_only_channel,
     size_t buffer_size_bytes_full_size_channel,
     size_t base_l1_address,
+    size_t l1_end_address,
     CoreType core_type) :
     FabricTensixDatamoverBaseConfig(
         num_full_size_channels,
@@ -310,6 +310,7 @@ FabricTensixDatamoverMuxConfig::FabricTensixDatamoverMuxConfig(
         num_buffers_header_only_channel,
         buffer_size_bytes_full_size_channel,
         base_l1_address,
+        l1_end_address,
         core_type) {}
 
 // Overload that updates fabric endpoint info from fabric_router_config
@@ -362,6 +363,7 @@ FabricTensixDatamoverRelayConfig::FabricTensixDatamoverRelayConfig(
     uint8_t num_buffers_per_channel,
     size_t buffer_size_bytes,
     size_t base_l1_address,
+    size_t l1_end_address,
     CoreType core_type) :
     FabricTensixDatamoverBaseConfig(
         1,                        // num_full_size_channels - relay uses only 1 channel
@@ -370,6 +372,7 @@ FabricTensixDatamoverRelayConfig::FabricTensixDatamoverRelayConfig(
         0,                        // num_buffers_header_only_channel
         buffer_size_bytes,        // buffer_size_bytes_full_size_channel
         base_l1_address,
+        l1_end_address,
         core_type) {
     // Allocate semaphore regions for relay → mux connections (local, downstream_en, downstream_ws)
     // These are in relay's L1 memory for the mux to write flow control signals back to the relay
@@ -393,14 +396,9 @@ FabricTensixDatamoverRelayConfig::FabricTensixDatamoverRelayConfig(
 
     memory_map_end_address_ = current_address;
 
-    const auto& hal = tt_metal::MetalContext::instance().hal();
-    tt_metal::HalProgrammableCoreType hal_core_type = tt_metal::HalProgrammableCoreType::TENSIX;
-    auto l1_end_address = hal.get_dev_addr(hal_core_type, tt_metal::HalL1MemAddrType::BASE) +
-                          hal.get_dev_size(hal_core_type, tt_metal::HalL1MemAddrType::BASE);
-
     TT_FATAL(
         memory_map_end_address_ <= l1_end_address,
-        "Relay memory map end address: {} exceeds L1 end address: {}",
+        "Relay memory map end address: {} exceeds allocated L1 end address: {}",
         memory_map_end_address_,
         l1_end_address);
 }
