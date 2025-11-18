@@ -88,7 +88,7 @@ bool fits_in_l1_check(
     const uint32_t input_memory = bf16_row_memory;
 
     // Memory for output CBs
-    const uint32_t output_memory = bf16_row_memory_padded_to_block_size;
+    const uint32_t output_memory = block_size;
 
     // Memory for intermediate computation CBs
     const uint32_t sum_memory = kNumSumTiles * float32_single_tile_size_bytes;
@@ -275,7 +275,7 @@ LayerNormForwardProgramFactory::cached_program_t LayerNormForwardProgramFactory:
 
     // Output CBs
     [[maybe_unused]] auto cb_output = create_circular_buffer(
-        program, all_cores, kOutputCbIndex, default_data_format, bfloat16_single_tile_size_bytes, num_x_hat_tiles);
+        program, all_cores, kOutputCbIndex, default_data_format, bfloat16_single_tile_size_bytes, block_size);
     if (return_mean_rstd) {
         [[maybe_unused]] auto cb_mean = create_circular_buffer(
             program, all_cores, kMeanCbIndex, default_data_format, bfloat16_single_tile_size_bytes, kNumMeanBcastTiles);

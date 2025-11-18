@@ -70,6 +70,7 @@ const std::string kEverythingFitsInL1DefineKey = "EVERYTHING_FITS_IN_L1";
 bool fits_in_l1_check(
     const uint32_t Wt,
     const uint32_t closest_to_Wt_multiple_of_block_size,
+    const uint32_t block_size,
     const uint32_t bfloat16_single_tile_size_bytes,
     const uint32_t float32_single_tile_size_bytes,
     tt::tt_metal::IDevice* device) {
@@ -91,9 +92,9 @@ bool fits_in_l1_check(
     const uint32_t dL_dout_memory = bf16_row_memory;
 
     // Memory for output CBs
-    const uint32_t dx_memory = bf16_row_memory_padded_to_block_size;
-    const uint32_t dgamma_components_memory = bf16_row_memory_padded_to_block_size;
-    const uint32_t dbeta_components_memory = bf16_row_memory_padded_to_block_size;
+    const uint32_t dx_memory = block_size;
+    const uint32_t dgamma_components_memory = block_size;
+    const uint32_t dbeta_components_memory = block_size;
 
     // Memory for intermediate computation CBs
     const uint32_t dy_gamma_sum_memory = kNumDyGammaSumTiles * float32_single_tile_size_bytes;
@@ -256,6 +257,7 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
     const bool everything_fits_in_l1 = fits_in_l1_check(
         Wt,
         closest_to_Wt_multiple_of_block_size,
+        block_size,
         bfloat16_single_tile_size_bytes,
         float32_single_tile_size_bytes,
         device);
@@ -294,21 +296,11 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
 
     // Output CBs
     [[maybe_unused]] auto cb_dx = create_circular_buffer(
-        program, all_cores, kDxCbIndex, default_data_format, bfloat16_single_tile_size_bytes, num_x_hat_tiles);
+        program, all_cores, kDxCbIndex, default_data_format, bfloat16_single_tile_size_bytes, block_size);
     [[maybe_unused]] auto cb_dgamma_components = create_circular_buffer(
-        program,
-        all_cores,
-        kDgammaComponentsCbIndex,
-        default_data_format,
-        bfloat16_single_tile_size_bytes,
-        num_x_hat_tiles);
+        program, all_cores, kDgammaComponentsCbIndex, default_data_format, bfloat16_single_tile_size_bytes, block_size);
     [[maybe_unused]] auto cb_dbeta_components = create_circular_buffer(
-        program,
-        all_cores,
-        kDbetaComponentsCbIndex,
-        default_data_format,
-        bfloat16_single_tile_size_bytes,
-        num_x_hat_tiles);
+        program, all_cores, kDbetaComponentsCbIndex, default_data_format, bfloat16_single_tile_size_bytes, block_size);
 
     // Intermediate computation CBs
     [[maybe_unused]] auto cb_rstd_bcast = create_circular_buffer(
