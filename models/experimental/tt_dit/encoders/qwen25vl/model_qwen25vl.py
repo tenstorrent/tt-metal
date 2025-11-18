@@ -73,9 +73,6 @@ class Qwen25VlTextEncoder(Module):
             for _ in range(num_hidden_layers)
         )
         self.norm = Qwen25VlRmsNorm(hidden_size, eps=rms_norm_eps, device=ctx.device)
-        # self.rotary_emb = Qwen25VlRotaryEmbedding(
-        #     ctx=ctx, head_dim=hidden_size // num_attention_heads, rope_theta=rope_theta
-        # )
 
         self._device = ctx.device
         self._tp_axis = ctx.tp_axis
@@ -89,7 +86,6 @@ class Qwen25VlTextEncoder(Module):
         input_ids: ttnn.Tensor,
         *,
         attention_mask: ttnn.Tensor | None = None,
-        # position_ids: ttnn.Tensor,
         pos_embeds: tuple[ttnn.Tensor, ttnn.Tensor],
     ) -> list[ttnn.Tensor]:
         batch_size, seq_len = input_ids.shape
@@ -99,7 +95,6 @@ class Qwen25VlTextEncoder(Module):
             attention_mask = prepare_attention_mask(attention_mask)
 
         input_embeds = self.embed_tokens.forward(input_ids)
-        # pos_embeds = self.rotary_emb.forward(position_ids)
 
         if self._tp_axis is not None:
             input_embeds = self._ccl_manager.all_gather_persistent_buffer(
@@ -203,10 +198,8 @@ class Qwen25VlAttention(Module):
             msg = f"hidden_size {hidden_size} must be divisible by num_heads {num_heads}"
             raise ValueError(msg)
 
-        self._qkv_parallel = True  # TODO: remove
-
         head_dim = hidden_size // num_heads
-        tp_factor = ctx.device.shape[ctx.tp_axis] if ctx.tp_axis is not None and self._qkv_parallel else 1
+        tp_factor = ctx.device.shape[ctx.tp_axis] if ctx.tp_axis is not None else 1
         group_count = num_key_value_heads
         group_size = num_heads // num_key_value_heads
 
@@ -217,7 +210,7 @@ class Qwen25VlAttention(Module):
             hidden_size,
             (padded_heads + 2 * opt_group_count) * head_dim,
             mesh_device=ctx.device,
-            mesh_axis=ctx.tp_axis if self._qkv_parallel else None,
+            mesh_axis=ctx.tp_axis,
         )
         self.o_proj = ColParallelLinear(
             padded_heads * head_dim, hidden_size, bias=False, mesh_device=ctx.device, mesh_axis=ctx.tp_axis
@@ -327,9 +320,6 @@ class Qwen25VlAttention(Module):
         q = _apply_rope(q, cos, sin)
         k = _apply_rope(k, cos, sin)
 
-        # k = ttnn.repeat_interleave(k, repeats=self._num_local_heads // self._num_local_kv_heads, dim=1)
-        # v = ttnn.repeat_interleave(v, repeats=self._num_local_heads // self._num_local_kv_heads, dim=1)
-
         x = ttnn.transformer.scaled_dot_product_attention(
             q,
             k,
@@ -342,7 +332,7 @@ class Qwen25VlAttention(Module):
 
         x = ttnn.transformer.concatenate_heads(x)
 
-        if self._tp_axis is not None and self._qkv_parallel:
+        if self._tp_axis is not None:
             x = self._ccl_manager.all_gather_persistent_buffer(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
         x = self.o_proj.forward(x)
 
