@@ -5,16 +5,102 @@
 import diffusers.pipelines.qwenimage.pipeline_qwenimage as reference
 import pytest
 import torch
+import transformers
+import transformers.models.qwen2_5_vl.modeling_qwen2_5_vl
 import ttnn
 from loguru import logger
-from transformers import Qwen2_5_VLForConditionalGeneration
 
 from ....encoders.qwen25vl.encoder_pair import Qwen25VlTokenizerEncoderPair
-from ....encoders.qwen25vl.model_qwen25vl import Qwen25VlTextEncoder
+from ....encoders.qwen25vl.model_qwen25vl import (
+    Qwen25VlAttention,
+    Qwen25VlContext,
+    Qwen25VlTextEncoder,
+    create_rope_tensors,
+    prepare_attention_mask,
+)
 from ....parallel.config import EncoderParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils import tensor
 from ....utils.check import assert_quality
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=["mesh_device"])
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 31000000}],
+    indirect=True,
+)
+# TODO: test with and without attention mask
+def test_qwen25vl_attention(
+    mesh_device: ttnn.MeshDevice,
+) -> None:
+    torch.manual_seed(0)
+
+    batch_size = 2
+    sequence_length = 512
+    tp_axis = 1
+
+    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
+
+    parent_torch_model = transformers.Qwen2_5_VLForConditionalGeneration.from_pretrained(
+        "Qwen/Qwen-Image", subfolder="text_encoder"
+    )
+    torch_model = parent_torch_model.model.language_model.layers[0].self_attn
+    assert isinstance(torch_model, transformers.models.qwen2_5_vl.modeling_qwen2_5_vl.Qwen2_5_VLAttention)
+
+    model = Qwen25VlAttention(
+        hidden_size=torch_model.config.hidden_size,
+        num_heads=torch_model.config.num_attention_heads,
+        num_key_value_heads=torch_model.config.num_key_value_heads,
+        ctx=Qwen25VlContext(mesh_device, tp_axis, ccl_manager),
+    )
+    model.load_torch_state_dict(torch_model.state_dict())
+
+    sequence = torch.randn([batch_size, sequence_length, torch_model.config.hidden_size])
+    attention_mask = torch.randint(0, 2, [batch_size, sequence_length])
+    cos, sin = create_rope_tensors(
+        batch_size,
+        sequence_length,
+        head_dim=torch_model.config.hidden_size // torch_model.config.num_attention_heads,
+        rope_theta=torch_model.config.rope_theta,
+        mrope_section=torch_model.config.rope_scaling["mrope_section"],
+        attention_mask=attention_mask,
+    )
+
+    tt_sequence = tensor.from_torch(sequence, device=mesh_device)
+    tt_attention_mask = tensor.from_torch(attention_mask, device=mesh_device) if attention_mask is not None else None
+    tt_pos_embeds_cos = tensor.from_torch(cos, device=mesh_device)
+    tt_pos_embeds_sin = tensor.from_torch(sin, device=mesh_device)
+
+    tt_causal_mask = prepare_attention_mask(tt_attention_mask) if tt_attention_mask is not None else None
+
+    logger.info("running ttnn model...")
+    tt_out = model.forward(
+        tt_sequence,
+        causal_mask=tt_causal_mask,
+        pos_embeds=(tt_pos_embeds_cos, tt_pos_embeds_sin),
+    )
+    tt_out_torch = tensor.to_torch(tt_out)
+
+    logger.info("running torch model...")
+    position_ids, _ = parent_torch_model.model.get_rope_index(input_ids=sequence, attention_mask=attention_mask)
+    position_embeddings = torch_model.rotary_emb(sequence, position_ids)
+    if attention_mask is not None:
+        causal_attention_mask = attention_mask.unsqueeze(1).unsqueeze(1)
+        causal_attention_mask = causal_attention_mask.expand([-1, -1, sequence_length, -1])
+        causal_attention_mask = causal_attention_mask.tril()
+        causal_attention_mask = causal_attention_mask.bool()
+    else:
+        causal_attention_mask = None
+
+    with torch.no_grad():
+        out, _ = torch_model.forward(
+            sequence,
+            attention_mask=causal_attention_mask,
+            position_embeddings=position_embeddings,
+        )
+
+    assert_quality(out, tt_out_torch, pcc=0.983, relative_rmse=0.19)
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=["mesh_device"])
@@ -42,7 +128,9 @@ def test_qwen25vl_text_encoder(
         else None
     )
 
-    torch_model = Qwen2_5_VLForConditionalGeneration.from_pretrained("Qwen/Qwen-Image", subfolder="text_encoder")
+    torch_model = transformers.Qwen2_5_VLForConditionalGeneration.from_pretrained(
+        "Qwen/Qwen-Image", subfolder="text_encoder"
+    )
     torch_text_model = torch_model.model.language_model
 
     remove_layers = 0

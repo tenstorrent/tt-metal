@@ -96,15 +96,7 @@ class Qwen25VlTextEncoder(Module):
 
         if attention_mask is not None:
             assert attention_mask.shape == (batch_size, seq_len)
-
-            # convert to causal attention mask
-            attention_mask = ttnn.unsqueeze(attention_mask, 1)
-            attention_mask = ttnn.expand(attention_mask, [-1, seq_len, -1])
-            attention_mask = ttnn.tril(attention_mask)
-
-            attention_mask = (attention_mask - 1.0) * math.inf
-
-            attention_mask = ttnn.clone(attention_mask, dtype=ttnn.bfloat4_b)
+            attention_mask = prepare_attention_mask(attention_mask)
 
         input_embeds = self.embed_tokens.forward(input_ids)
         # pos_embeds = self.rotary_emb.forward(position_ids)
@@ -131,39 +123,17 @@ class Qwen25VlTextEncoder(Module):
 
         return hidden_states_list
 
-    # adapted from https://github.com/huggingface/transformers/blob/v4.57.1/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py#L491
-    # and https://github.com/huggingface/transformers/blob/v4.57.1/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py#L545
     def create_rope_tensors(
         self, batch_size: int, sequence_length: int, *, attention_mask: torch.Tensor | None
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        if attention_mask is not None:
-            assert attention_mask.shape == (batch_size, sequence_length)
-
-            position_ids = attention_mask.long().cumsum(-1) - 1
-            position_ids.masked_fill_(attention_mask == 0, 1)
-            position_ids = position_ids.unsqueeze(0).expand(3, -1, -1)
-        else:
-            position_ids = torch.arange(sequence_length).view(1, 1, -1).expand(3, batch_size, -1)
-
-        inv_freq = self._rope_theta ** (
-            -torch.arange(0, self._head_dim, 2, dtype=torch.int64).to(dtype=torch.float) / self._head_dim
+        return create_rope_tensors(
+            batch_size,
+            sequence_length,
+            attention_mask=attention_mask,
+            head_dim=self._head_dim,
+            rope_theta=self._rope_theta,
+            mrope_section=self._mrope_section,
         )
-        inv_freq_expanded = inv_freq[None, None, :, None].float().expand(3, batch_size, -1, 1)
-        position_ids_expanded = position_ids[:, :, None, :].float()
-        freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(2, 3)
-        emb = torch.cat((freqs, freqs), dim=-1)
-        cos = emb.cos()
-        sin = emb.sin()
-
-        mrope_section = self._mrope_section * 2
-        cos = torch.cat([m[i % 3] for i, m in enumerate(cos.split(mrope_section, dim=-1))], dim=-1).unsqueeze(1)
-        sin = torch.cat([m[i % 3] for i, m in enumerate(sin.split(mrope_section, dim=-1))], dim=-1).unsqueeze(1)
-
-        # convert to interleaved format
-        cos = cos.unflatten(-1, [2, -1]).transpose(-2, -1).flatten(-2, -1)
-        sin = sin.unflatten(-1, [2, -1]).transpose(-2, -1).flatten(-2, -1)
-
-        return cos, sin
 
 
 # adapted from https://github.com/huggingface/transformers/blob/v4.57.1/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py#L684
@@ -363,7 +333,7 @@ class Qwen25VlAttention(Module):
             q,
             k,
             v,
-            attn_mask=ttnn.unsqueeze(causal_mask, 1) if causal_mask is not None else None,
+            attn_mask=causal_mask,
             is_causal=causal_mask is None,
             program_config=self._sdpa_program_config,
             compute_kernel_config=self._sdpa_compute_kernel_config,
@@ -373,7 +343,6 @@ class Qwen25VlAttention(Module):
 
         if self._tp_axis is not None and self._qkv_parallel:
             x = self._ccl_manager.all_gather_persistent_buffer(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
-
         x = self.o_proj.forward(x)
 
         if self._tp_axis is not None:
@@ -486,3 +455,55 @@ def _pad(t: torch.Tensor, amount: int, *, dim: int) -> torch.Tensor:
     padding = [0] * (2 * t.ndim)
     padding[-(dim * 2 + 1)] = amount
     return torch.nn.functional.pad(t, padding)
+
+
+def prepare_attention_mask(attention_mask: ttnn.Tensor) -> ttnn.Tensor:
+    batch_size, seq_len = attention_mask.shape
+
+    # convert to causal attention mask
+    attention_mask = attention_mask.reshape([batch_size, 1, 1, seq_len])
+    attention_mask = ttnn.expand(attention_mask, [-1, -1, seq_len, -1])
+    attention_mask = ttnn.tril(attention_mask)
+
+    attention_mask = (attention_mask - 1.0) * math.inf
+
+    return ttnn.clone(attention_mask, dtype=ttnn.bfloat4_b)
+
+
+# adapted from https://github.com/huggingface/transformers/blob/v4.57.1/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py#L491
+# and https://github.com/huggingface/transformers/blob/v4.57.1/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py#L545
+def create_rope_tensors(
+    batch_size: int,
+    sequence_length: int,
+    *,
+    attention_mask: torch.Tensor | None,
+    head_dim: int,
+    rope_theta: float,
+    mrope_section: Sequence[int],
+) -> tuple[torch.Tensor, torch.Tensor]:
+    if attention_mask is not None:
+        assert attention_mask.shape == (batch_size, sequence_length)
+
+        position_ids = attention_mask.long().cumsum(-1) - 1
+        position_ids.masked_fill_(attention_mask == 0, 1)
+        position_ids = position_ids.unsqueeze(0).expand(3, -1, -1)
+    else:
+        position_ids = torch.arange(sequence_length).view(1, 1, -1).expand(3, batch_size, -1)
+
+    inv_freq = rope_theta ** (-torch.arange(0, head_dim, 2, dtype=torch.int64).to(dtype=torch.float) / head_dim)
+    inv_freq_expanded = inv_freq[None, None, :, None].float().expand(3, batch_size, -1, 1)
+    position_ids_expanded = position_ids[:, :, None, :].float()
+    freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(2, 3)
+    emb = torch.cat((freqs, freqs), dim=-1)
+    cos = emb.cos()
+    sin = emb.sin()
+
+    s = list(mrope_section) * 2
+    cos = torch.cat([m[i % 3] for i, m in enumerate(cos.split(s, dim=-1))], dim=-1).unsqueeze(1)
+    sin = torch.cat([m[i % 3] for i, m in enumerate(sin.split(s, dim=-1))], dim=-1).unsqueeze(1)
+
+    # convert to interleaved format
+    cos = cos.unflatten(-1, [2, -1]).transpose(-2, -1).flatten(-2, -1)
+    sin = sin.unflatten(-1, [2, -1]).transpose(-2, -1).flatten(-2, -1)
+
+    return cos, sin
