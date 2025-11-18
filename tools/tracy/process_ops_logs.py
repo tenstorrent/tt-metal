@@ -136,6 +136,10 @@ DEVICE_PERF_INT_FIELDS = {
     "DEVICE FW END CYCLE",
     "DEVICE KERNEL DURATION [ns]",
     "DEVICE KERNEL DURATION DM START [ns]",
+    "DEVICE KERNEL START CYCLE",
+    "DEVICE KERNEL END CYCLE",
+    "DEVICE KERNEL DM START CYCLE",
+    "DEVICE KERNEL DM END CYCLE",
     "DEVICE BRISC KERNEL DURATION [ns]",
     "DEVICE NCRISC KERNEL DURATION [ns]",
     "DEVICE TRISC0 KERNEL DURATION [ns]",
@@ -874,6 +878,11 @@ def generate_reports(
                 deviceID = active_op_record.get("device_id")
                 if deviceID is not None:
                     deviceID = int(deviceID)
+
+                kernel_series = None
+                dm_series = None
+                kernel_freq = None
+
                 if "device_time" in active_op_record:
                     assert deviceID is not None, "Op has device data without device_id"
                     for analysis, data in active_op_record["device_time"].items():
@@ -895,6 +904,11 @@ def generate_reports(
                         if analysis == "device_fw_duration":
                             csv_row["DEVICE FW START CYCLE"] = analysisData[0]["start_cycle"]
                             csv_row["DEVICE FW END CYCLE"] = analysisData[0]["end_cycle"]
+                        if analysis == "device_kernel_duration":
+                            kernel_series = analysisData[0]
+                            kernel_freq = freq
+                        if analysis == "device_kernel_duration_dm_start":
+                            dm_series = analysisData[0]
                 device_perf_row = active_op_record.pop("_device_perf_row", None)
                 if device_perf_row:
                     perf_device_id = device_perf_row.get("DEVICE ID", deviceID)
@@ -905,30 +919,42 @@ def generate_reports(
                         ns_per_cycle = compute_ns_per_cycle(device_perf_row)
                         device_ns_per_cycle[perf_device_id] = ns_per_cycle
 
-                    latency_ns: Optional[int] = None
-                    start_cycle = device_perf_row.get("DEVICE FW START CYCLE")
-                    prev_end_cycle = prev_device_fw_end_cycle.get(perf_device_id)
+                    kernel_start_cycle = device_perf_row.get("DEVICE KERNEL START CYCLE")
+                    kernel_end_cycle = device_perf_row.get("DEVICE KERNEL END CYCLE")
+                    dm_start_cycle = device_perf_row.get("DEVICE KERNEL DM START CYCLE")
+                    dm_end_cycle = device_perf_row.get("DEVICE KERNEL DM END CYCLE")
+
                     if (
                         ns_per_cycle
-                        and start_cycle is not None
-                        and prev_end_cycle is not None
-                        and start_cycle >= prev_end_cycle
+                        and kernel_start_cycle is not None
+                        and kernel_end_cycle is not None
+                        and perf_device_id is not None
                     ):
-                        latency_ns = round((start_cycle - prev_end_cycle) * ns_per_cycle)
-                    elif start_cycle is not None and prev_end_cycle is not None:
-                        latency_ns = 0
+                        if perf_device_id in prev_device_kernel_end_cycle:
+                            csv_row["OP TO OP LATENCY [ns]"] = round(
+                                (kernel_start_cycle - prev_device_kernel_end_cycle[perf_device_id]) * ns_per_cycle
+                            )
+                        else:
+                            csv_row["OP TO OP LATENCY [ns]"] = 0
+                        prev_device_kernel_end_cycle[perf_device_id] = kernel_end_cycle
 
-                    if latency_ns is not None:
-                        csv_row["OP TO OP LATENCY [ns]"] = latency_ns
-                        csv_row["OP TO OP LATENCY BR/NRISC START [ns]"] = latency_ns
+                    if (
+                        ns_per_cycle
+                        and dm_start_cycle is not None
+                        and dm_end_cycle is not None
+                        and perf_device_id is not None
+                    ):
+                        if perf_device_id in prev_device_dm_start_cycle:
+                            csv_row["OP TO OP LATENCY BR/NRISC START [ns]"] = round(
+                                (dm_start_cycle - prev_device_dm_start_cycle[perf_device_id]) * ns_per_cycle
+                            )
+                        else:
+                            csv_row["OP TO OP LATENCY BR/NRISC START [ns]"] = 0
+                        prev_device_dm_start_cycle[perf_device_id] = dm_end_cycle
 
-                    end_cycle = device_perf_row.get("DEVICE FW END CYCLE")
-                    if end_cycle is not None:
-                        prev_device_fw_end_cycle[perf_device_id] = end_cycle
-
-                    if "OP TO OP LATENCY [ns]" not in csv_row and deviceID is not None:
+                    if "OP TO OP LATENCY [ns]" not in csv_row and perf_device_id is not None:
                         csv_row["OP TO OP LATENCY [ns]"] = 0
-                    if "OP TO OP LATENCY BR/NRISC START [ns]" not in csv_row and deviceID is not None:
+                    if "OP TO OP LATENCY BR/NRISC START [ns]" not in csv_row and perf_device_id is not None:
                         csv_row["OP TO OP LATENCY BR/NRISC START [ns]"] = 0
 
                     skip_headers = {
@@ -949,6 +975,29 @@ def generate_reports(
                             continue
                         if header not in csv_row or csv_row[header] == "":
                             csv_row[header] = value
+
+                if kernel_series and kernel_freq and deviceID is not None and "OP TO OP LATENCY [ns]" not in csv_row:
+                    if deviceID in prev_device_kernel_end_cycle:
+                        csv_row["OP TO OP LATENCY [ns]"] = round(
+                            (kernel_series["start_cycle"] - prev_device_kernel_end_cycle[deviceID]) / kernel_freq
+                        )
+                    else:
+                        csv_row["OP TO OP LATENCY [ns]"] = 0
+                    prev_device_kernel_end_cycle[deviceID] = kernel_series["end_cycle"]
+
+                if (
+                    dm_series
+                    and kernel_freq
+                    and deviceID is not None
+                    and "OP TO OP LATENCY BR/NRISC START [ns]" not in csv_row
+                ):
+                    if deviceID in prev_device_dm_start_cycle:
+                        csv_row["OP TO OP LATENCY BR/NRISC START [ns]"] = round(
+                            (dm_series["start_cycle"] - prev_device_dm_start_cycle[deviceID]) / kernel_freq
+                        )
+                    else:
+                        csv_row["OP TO OP LATENCY BR/NRISC START [ns]"] = 0
+                    prev_device_dm_start_cycle[deviceID] = dm_series["end_cycle"]
 
                 if "child_calls" in active_op_record:
                     for childCall, duration in active_op_record["child_calls"].items():
