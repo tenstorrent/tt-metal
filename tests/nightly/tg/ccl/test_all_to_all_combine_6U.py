@@ -52,7 +52,7 @@ from tests.nightly.t3000.ccl.test_all_to_all_combine import (
 @pytest.mark.parametrize("num_iters", [2])
 @pytest.mark.parametrize("num_links", [4], ids=["num_links_4"])
 @pytest.mark.parametrize("topology", [None])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bfloat16"])
 @pytest.mark.parametrize(
     "input_memory_config, output_memory_config, axis",
     [
