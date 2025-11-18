@@ -102,17 +102,17 @@ void update_linear_write(
 }
 
 // Update DeviceData for paged write
-// // Tracks page-wise writes so validate() can check DRAM/L1 bank contents after the test runs
+// Tracks page-wise writes so validate() can check DRAM/L1 bank contents after the test runs
 void update_paged_write(
     const std::vector<uint32_t>& payload,
     DeviceData& device_data,
-    CoreCoord& bank_core,
+    const CoreCoord& bank_core,
     uint32_t bank_id,
-    uint32_t alignment) {
+    uint32_t page_alignment) {
     for (const uint32_t datum : payload) {
         device_data.push_one(bank_core, bank_id, datum);
     }
-    device_data.pad(bank_core, bank_id, alignment);
+    device_data.pad(bank_core, bank_id, page_alignment);
 }
 
 // Update DeviceData for packed write
@@ -145,8 +145,8 @@ void update_packed_large_write(
     for (uint32_t y = worker_range.start_coord.y; y <= worker_range.end_coord.y; y++) {
         for (uint32_t x = worker_range.start_coord.x; x <= worker_range.end_coord.x; x++) {
             const CoreCoord core = {x, y};
-            for (uint32_t j = 0; j < payload.size(); j++) {
-                device_data.push_one(core, 0, payload[j]);
+            for (const uint32_t datum : payload) {
+                device_data.push_one(core, 0, datum);
             }
             device_data.pad(core, 0, l1_alignment);
         }
@@ -195,6 +195,13 @@ uint32_t calculate_packed_large_write_command_size(uint32_t num_txns, uint32_t t
     return cmd_calc.write_offset_bytes();
 }
 
+// Calculate the command size for a wait command
+uint32_t calculate_wait_command_size() {
+    DeviceCommandCalculator cmd_calc;
+    cmd_calc.add_dispatch_wait();
+    return cmd_calc.write_offset_bytes();
+}
+
 };  // namespace CommandSizeHelper
 
 // Host-side helpers used by tests to emit the same CQ commands
@@ -208,7 +215,7 @@ HostMemDeviceCommand build_linear_write_command(
     const CoreRange& worker_range,
     bool is_mcast,
     uint32_t noc_xy,
-    uint32_t l1_addr,
+    uint32_t addr,
     uint32_t xfer_size_bytes) {
     // Calculate the command size
     const uint32_t command_size_bytes =
@@ -221,7 +228,7 @@ HostMemDeviceCommand build_linear_write_command(
     cmd.add_dispatch_write_linear<flush_prefetch, inline_data>(
         is_mcast ? worker_range.size() : 0,  // num_mcast_dests
         noc_xy,                              // NOC coordinates
-        l1_addr,                             // destination address
+        addr,                                // destination address
         xfer_size_bytes,                     // data size
         payload.data()                       // payload data
     );
@@ -342,6 +349,13 @@ HostMemDeviceCommand build_packed_large_write_command(
     return cmd;
 }
 
+HostMemDeviceCommand build_barrier_wait_command() {
+    uint32_t command_size_bytes = CommandSizeHelper::calculate_wait_command_size();
+    HostMemDeviceCommand cmd(command_size_bytes);
+    cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
+    return cmd;
+}
+
 };  // namespace CommandBuilder
 
 class DispatchPayloadGenerator {
@@ -404,8 +418,9 @@ public:
         payload.reserve(page_size_words);
 
         for (uint32_t i = 0; i < page_size_words; ++i) {
-            const uint32_t datum =
-                config_.use_coherent_data ? (((page_id & 0xFF) << 24) | coherent_count_++) : uint32_dist(rng_);
+            const uint32_t datum = config_.use_coherent_data
+                                       ? (((page_id & 0xFF) << 24) | (coherent_count_++ & 0xFFFFFF))
+                                       : uint32_dist(rng_);
             payload.push_back(datum);
         }
 
@@ -422,9 +437,10 @@ public:
         payload.reserve(size_words);
 
         for (uint32_t i = 0; i < size_words; ++i) {
-            const uint32_t datum = config_.use_coherent_data
-                                       ? ((core_id.x << 16) | (core_id.y << 24) | coherent_count_++)
-                                       : uint32_dist(rng_);
+            const uint32_t datum =
+                config_.use_coherent_data
+                    ? (((core_id.x & 0xFF) << 16) | ((core_id.y & 0xFF) << 24) | (coherent_count_++ & 0xFFFF))
+                    : uint32_dist(rng_);
             payload.push_back(datum);
         }
 
@@ -452,7 +468,7 @@ public:
 private:
     // Start offset to avoid 0x0 which matches DRAM prefill
     static constexpr uint32_t COHERENT_DATA_START_VALUE = 0x100;
-    Config config_;
+    Config config_{};
     uint32_t coherent_count_ = COHERENT_DATA_START_VALUE;
 
     // Random number generation using C++11 facilities
@@ -487,11 +503,6 @@ protected:
     uint32_t max_fetch_bytes_ = 0;
 
     // Knobs from globals
-    // Note: perf_test_ is kept here only if child classes (TEST_P) access it directly.
-    // If they use data_gen_->get_random_size(), this member can be removed.
-    bool perf_test_ = false;
-    uint32_t min_xfer_size_bytes_ = 0;
-    uint32_t max_xfer_size_bytes_ = 0;
     uint32_t dispatch_buffer_page_size_ = 0;
     bool send_to_all_ = false;
 
@@ -514,7 +525,6 @@ protected:
         log_info(tt::LogTest, "Random seed set to {}", cfg.seed);
 
         // These are used for test logic (loops, alignment, etc.) rather than generation
-        // These will be removed once test_prefetcher.cpp is refactored and common globals are removed
         dispatch_buffer_page_size_ = dispatch_buffer_page_size_g;
         send_to_all_ = send_to_all_g;
 
@@ -528,29 +538,6 @@ protected:
         // Initialize common HW properties
         host_alignment_ = tt_metal::MetalContext::instance().hal().get_alignment(tt_metal::HalMemType::HOST);
         max_fetch_bytes_ = tt_metal::MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
-    }
-
-    uint32_t get_wait_barrier_command_size() {
-        DeviceCommandCalculator cmd_calc;
-        cmd_calc.add_dispatch_wait();
-        return cmd_calc.write_offset_bytes();
-    }
-
-    uint64_t calculate_total_command_size(
-        const std::vector<HostMemDeviceCommand>& commands_per_iteration,
-        uint32_t num_iterations,
-        bool add_barrier_per_iteration = false) {
-        // Barrier wait command
-        const uint32_t wait_bytes = add_barrier_per_iteration ? get_wait_barrier_command_size() : 0;
-
-        uint64_t per_iter_total = 0;
-        for (const auto& cmd : commands_per_iteration) {
-            per_iter_total += cmd.size_bytes();
-        }
-
-        per_iter_total += wait_bytes;
-
-        return num_iterations * per_iter_total;
     }
 
     // Helper that mirrors the production issue/fetch queue
@@ -610,23 +597,13 @@ protected:
         const std::vector<HostMemDeviceCommand>& commands_per_iteration,
         HugepageDeviceCommand& dc,
         uint32_t num_iterations,
-        std::vector<uint32_t>& entry_sizes,
-        bool add_barrier_per_iteration = false) {
-        // Calculate the size of the wait command only if needed
-        const uint32_t wait_bytes = add_barrier_per_iteration ? get_wait_barrier_command_size() : 0;
-
+        std::vector<uint32_t>& entry_sizes) {
         // Write commands for all iterations
         for (uint32_t iter = 0; iter < num_iterations; ++iter) {
             for (const auto& cmd : commands_per_iteration) {
                 // Add the command data to the command buffer
                 dc.add_data(cmd.data(), cmd.size_bytes(), cmd.size_bytes());
                 entry_sizes.push_back(cmd.size_bytes());
-            }
-
-            // Add barrier wait command if requested
-            if (add_barrier_per_iteration) {
-                dc.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
-                entry_sizes.push_back(wait_bytes);
             }
         }
     }
@@ -661,11 +638,14 @@ protected:
         const std::vector<HostMemDeviceCommand>& commands_per_iteration,
         DeviceData& device_data,
         size_t num_cores_to_log,
-        uint32_t num_iterations,
-        bool add_barrier_per_iteration = false) {
+        uint32_t num_iterations) {
         // PHASE 2: Calculate total command buffer size
-        const uint64_t total_cmd_bytes =
-            calculate_total_command_size(commands_per_iteration, num_iterations, add_barrier_per_iteration);
+        uint64_t per_iter_total = 0;
+        for (const auto& cmd : commands_per_iteration) {
+            per_iter_total += cmd.size_bytes();
+        }
+
+        const uint64_t total_cmd_bytes = num_iterations * per_iter_total;
         log_info(tt::LogTest, "Total command bytes: {}", total_cmd_bytes);
 
         // PHASE 3: Reserve and write commands
@@ -679,12 +659,11 @@ protected:
 
         // Calculate the total number of entries to reserve
         // +1 for barrier wait if requested
-        size_t total_num_entries =
-            num_iterations * (commands_per_iteration.size() + (add_barrier_per_iteration ? 1 : 0));
+        size_t total_num_entries = num_iterations * commands_per_iteration.size();
         entry_sizes.reserve(total_num_entries);
 
         // Write commands to the command buffer
-        write_commands_to_buffer(commands_per_iteration, dc, num_iterations, entry_sizes, add_barrier_per_iteration);
+        write_commands_to_buffer(commands_per_iteration, dc, num_iterations, entry_sizes);
 
         // PHASE 4: Submit and execute
         execute_and_validate(entry_sizes, dc, device_data, total_cmd_bytes, num_cores_to_log, num_iterations);
@@ -749,7 +728,7 @@ public:
             }
 
             // Capture address before updating device_data
-            uint32_t l1_addr = device_data.get_result_data_addr(first_worker, 0);
+            uint32_t addr = device_data.get_result_data_addr(first_worker, 0);
 
             // Generate payload
             std::vector<uint32_t> payload = payload_generator_->generate_payload(xfer_size_bytes);
@@ -759,11 +738,15 @@ public:
 
             // Create the HostMemDeviceCommand
             HostMemDeviceCommand cmd = CommandBuilder::build_linear_write_command<flush_prefetch_, inline_data_>(
-                payload, worker_range, is_mcast_, noc_xy, l1_addr, xfer_size_bytes);
+                payload, worker_range, is_mcast_, noc_xy, addr, xfer_size_bytes);
 
             commands_per_iteration.push_back(std::move(cmd));
             remaining_bytes -= xfer_size_bytes;
         }
+
+        // Add barrier wait command
+        HostMemDeviceCommand cmd_barrier = CommandBuilder::build_barrier_wait_command();
+        commands_per_iteration.push_back(std::move(cmd_barrier));
 
         log_info(
             tt::LogTest,
@@ -789,6 +772,18 @@ class DispatchPagedWriteTestFixture : public BaseDispatchTestFixture,
     uint32_t dram_data_size_words_{};
     bool is_dram_{};
 
+    // Get the logical core for this bank
+    CoreCoord get_bank_core(uint32_t bank_id) const {
+        // If DRAM, get the logical core from the DRAM channel
+        if (is_dram_) {
+            const auto dram_channel = device_->allocator()->get_dram_channel_from_bank_id(bank_id);
+            return device_->logical_core_from_dram_channel(dram_channel);
+        }
+
+        // If L1, get logical core from the bank id
+        return device_->allocator()->get_logical_core_from_bank_id(bank_id);
+    }
+
 protected:
     static constexpr bool hugepage_write_ = true;
 
@@ -802,18 +797,6 @@ public:
         num_iterations_ = params.num_iterations;
         dram_data_size_words_ = params.dram_data_size_words;
         is_dram_ = params.is_dram;
-    }
-
-    // Get the logical core for this bank
-    CoreCoord get_bank_core(uint32_t bank_id) const {
-        // If DRAM, get the logical core from the DRAM channel
-        if (is_dram_) {
-            const auto dram_channel = device_->allocator()->get_dram_channel_from_bank_id(bank_id);
-            return device_->logical_core_from_dram_channel(dram_channel);
-        }
-
-        // If L1, get logical core from the bank id
-        return device_->allocator()->get_logical_core_from_bank_id(bank_id);
     }
 
     // Tiles the requested page count into fetch-sized chunks,
@@ -881,6 +864,10 @@ public:
             absolute_start_page += pages_in_chunk;
         }
 
+        // Add barrier wait command
+        HostMemDeviceCommand cmd_barrier = CommandBuilder::build_barrier_wait_command();
+        commands_per_iteration.push_back(std::move(cmd_barrier));
+
         log_info(
             tt::LogTest,
             "Generated {} paged write command chunks for {} total pages",
@@ -902,16 +889,6 @@ class DispatchPackedWriteTestFixture : public BaseDispatchTestFixture,
     uint32_t transfer_size_bytes_{};
     uint32_t num_iterations_{};
     uint32_t dram_data_size_words_{};
-
-public:
-    void SetUp() override {
-        BaseDispatchTestFixture::SetUp();
-
-        const auto params = GetParam();
-        transfer_size_bytes_ = params.transfer_size_bytes;
-        num_iterations_ = params.num_iterations;
-        dram_data_size_words_ = params.dram_data_size_words;
-    }
 
     // Build subcmds once - reused for all commands
     std::vector<CQDispatchWritePackedUnicastSubCmd> build_sub_cmds(const std::vector<CoreCoord>& worker_cores) {
@@ -950,6 +927,16 @@ public:
 
         return result;
     };
+
+public:
+    void SetUp() override {
+        BaseDispatchTestFixture::SetUp();
+
+        const auto params = GetParam();
+        transfer_size_bytes_ = params.transfer_size_bytes;
+        num_iterations_ = params.num_iterations;
+        dram_data_size_words_ = params.dram_data_size_words;
+    }
 
     // Picks a random subset of workers, then emits packed-unicast
     // commands with or without stride,
@@ -1021,6 +1008,10 @@ public:
             remaining_bytes -= xfer_size_bytes;
         }
 
+        // Add barrier wait command
+        HostMemDeviceCommand cmd_barrier = CommandBuilder::build_barrier_wait_command();
+        commands_per_iteration.push_back(std::move(cmd_barrier));
+
         log_info(
             tt::LogTest,
             "Generated {} packed write commands totaling {} bytes",
@@ -1043,6 +1034,8 @@ class DispatchPackedWriteLargeTestFixture : public DispatchPackedWriteTestFixtur
         uint32_t total_payload_bytes;
     };
 
+    // Helper function to generate random-sized
+    // transactions until remaining_bytes is exhausted or max_transactions is reached
     TransactionBatch generate_packed_large_transactions(
         uint32_t& remaining_bytes, uint32_t max_transactions, uint32_t l1_alignment) {
         std::vector<uint32_t> transaction_sizes;
@@ -1051,9 +1044,10 @@ class DispatchPackedWriteLargeTestFixture : public DispatchPackedWriteTestFixtur
         // Track payload size for this command
         uint32_t cumulative_payload_bytes = 0;
 
-        // Generate random-sized transactions until remaining_bytes is exhausted or max_transactions is reached
         for (int i = 0; i < max_transactions && remaining_bytes > 0; i++) {
-            // Generate a random transfer size constrained by max pages and alignment
+            // Generate a random transfer size
+            // We're first converting the max payload allowed by the packed large format into alignment units
+            // get_random_size will clamp the size to remaining_bytes
             uint32_t max_allowed = dispatch_buffer_page_size_ * max_pages_per_transaction / l1_alignment;
             uint32_t xfer_size_bytes =
                 payload_generator_->get_random_size(max_allowed, bytes_per_16B_unit, remaining_bytes);
@@ -1122,7 +1116,6 @@ protected:
         // Relevel once at start (all transactions target same fixed range)
         device_data.relevel(worker_range);
 
-        // Generate commands until remaining_bytes is exhausted
         // This loop generates random-sized packed-large commands until remaining_bytes is exhausted
         while (remaining_bytes > 0) {
             // Random number of transactions per command (1-16)
@@ -1146,10 +1139,10 @@ protected:
 
             for (const uint32_t xfer_size_bytes : transaction_batch.sizes) {
                 const CoreCoord& fw = worker_range.start_coord;
-                uint32_t common_addr = device_data.get_result_data_addr(fw);
+                uint32_t addr = device_data.get_result_data_addr(fw);
 
                 // Build sub-command
-                build_sub_cmd(sub_cmds, xfer_size_bytes, common_addr, fw, virtual_start, virtual_end, num_mcast_dests);
+                build_sub_cmd(sub_cmds, xfer_size_bytes, addr, fw, virtual_start, virtual_end, num_mcast_dests);
 
                 // Generate payload
                 std::vector<uint32_t> payload = payload_generator_->generate_payload_with_core(fw, xfer_size_bytes);
@@ -1167,12 +1160,16 @@ protected:
             log_info(
                 tt::LogTest,
                 "Generated packed-large command {} with {} transactions, {} bytes",
-                commands_per_iteration.size() + 1,
+                commands_per_iteration.size(),
                 sub_cmds.size(),
                 transaction_batch.total_payload_bytes);
 
             commands_per_iteration.push_back(std::move(cmd));
         }
+
+        // Add barrier wait command
+        HostMemDeviceCommand cmd_barrier = CommandBuilder::build_barrier_wait_command();
+        commands_per_iteration.push_back(std::move(cmd_barrier));
 
         log_info(tt::LogTest, "Generated {} packed-large commands total", commands_per_iteration.size());
 
@@ -1329,15 +1326,19 @@ TEST_P(DispatchPackedWriteTestFixture, WritePackedUnicast) {
 
     // Randomly pick worker cores once for all commands
     std::vector<CoreCoord> worker_cores;
-    while (worker_cores.empty()) {
-        for (uint32_t y = worker_range.start_coord.y; y <= worker_range.end_coord.y; ++y) {
-            for (uint32_t x = worker_range.start_coord.x; x <= worker_range.end_coord.x; ++x) {
-                if (send_to_all_ || payload_generator_->get_rand_bool()) {
-                    worker_cores.push_back({x, y});
-                }
+
+    for (uint32_t y = worker_range.start_coord.y; y <= worker_range.end_coord.y; ++y) {
+        for (uint32_t x = worker_range.start_coord.x; x <= worker_range.end_coord.x; ++x) {
+            if (send_to_all_ || payload_generator_->get_rand_bool()) {
+                worker_cores.push_back({x, y});
             }
         }
     }
+
+    if (worker_cores.empty()) {
+        worker_cores.push_back(default_worker_start);
+    }
+
     ASSERT_LE(worker_cores.size(), packed_write_max_unicast_sub_cmds);
 
     // PHASE 1: Generate random-sized packed write commands metadata
@@ -1345,7 +1346,7 @@ TEST_P(DispatchPackedWriteTestFixture, WritePackedUnicast) {
         generate_packed_write_commands(worker_cores, l1_alignment, packed_write_max_unicast_sub_cmds, device_data);
 
     // PHASE 2, 3, 4: Execute and Validate
-    execute_generated_commands(commands_per_iteration, device_data, worker_range.size(), num_iterations, true);
+    execute_generated_commands(commands_per_iteration, device_data, worker_range.size(), num_iterations);
 }
 
 // Large Packed Write - Multiple Commands with Random Transactions
@@ -1382,7 +1383,7 @@ TEST_P(DispatchPackedWriteLargeTestFixture, WriteLargePackedMulticast) {
     auto commands_per_iteration = generate_packed_large_write_commands(worker_range, l1_alignment, device_data);
 
     // PHASE 2, 3, 4: Execute and Validate
-    execute_generated_commands(commands_per_iteration, device_data, worker_range.size(), num_iterations, true);
+    execute_generated_commands(commands_per_iteration, device_data, worker_range.size(), num_iterations);
 }
 
 INSTANTIATE_TEST_SUITE_P(
