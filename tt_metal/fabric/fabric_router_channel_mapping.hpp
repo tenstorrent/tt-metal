@@ -53,19 +53,21 @@ struct InternalReceiverChannelMapping {
 /**
  * FabricRouterChannelMapping
  *
- * Defines the mapping from logical channels (VC + channel index) to internal builder channels.
+ * Defines the mapping from logical channels (VC + relative channel index within VC) to internal builder channels.
  * This mapping is computed based on topology, direction, and tensix extension mode.
  *
- * The mapping follows the design doc table:
- * - VC0: [0] = worker, [1] = vc0 forward channels (1D) or [0-3] = N/E/S/W/Worker (2D)
- * - VC1: [0] = vc1 forward channel (ring/torus only)
+ * Channel indices are relative to each VC:
+ * - VC0 (1D): [0] = local worker, [1] = forwarding from upstream
+ * - VC0 (2D): [0] = local worker, [1-3] = forwarding from upstream routers
+ * - VC1: [0] = vc1 forward channel (ring/torus only, for deadlock avoidance)
  * - VC2: [0-2] or [0-3] = intermesh channels (2D/2D+Z only)
  */
 class FabricRouterChannelMapping {
 public:
     FabricRouterChannelMapping(
         Topology topology,
-        eth_chan_directions direction);
+        eth_chan_directions direction,
+        bool has_tensix_extension = false);
 
     /**
      * Get the internal sender channel mapping for a logical sender channel
@@ -81,6 +83,7 @@ private:
     Topology topology_;
     // will become used when Z-link support is added
     [[maybe_unused]] eth_chan_directions direction_;
+    bool has_tensix_extension_;
 
     std::map<LogicalSenderChannelKey, InternalSenderChannelMapping> sender_channel_map_;
     std::map<LogicalReceiverChannelKey, InternalReceiverChannelMapping> receiver_channel_map_;

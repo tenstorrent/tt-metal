@@ -73,12 +73,8 @@ public:
      *
      * @param other The other router builder to connect to
      * @param vc Virtual channel ID
-     * @param receiver_channel_idx Logical receiver channel index within the VC on the other router
      */
-    void connect_to_downstream_router_over_noc(
-        FabricRouterBuilder& other,
-        uint32_t vc,
-        uint32_t receiver_channel_idx);
+    void connect_to_downstream_router_over_noc(FabricRouterBuilder& other, uint32_t vc);
 
     /**
      * Build connection to fabric channel (for sender channels)
@@ -88,6 +84,9 @@ public:
      * @return SenderWorkerAdapterSpec for external connections
      */
     SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t vc, uint32_t sender_channel_idx);
+
+
+    uint32_t get_downstream_sender_channel(bool is_2D_routing, eth_chan_directions downstream_direction) const;
 
     // Getters/delegators for wrapped builder properties
     eth_chan_directions get_direction() const;

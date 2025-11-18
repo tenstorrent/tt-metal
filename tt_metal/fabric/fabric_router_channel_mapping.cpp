@@ -4,14 +4,13 @@
 
 #include "fabric_router_channel_mapping.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
-#include "tt_metal/fabric/fabric_context.hpp"
 #include <tt_stl/assert.hpp>
 
 namespace tt::tt_fabric {
 
 FabricRouterChannelMapping::FabricRouterChannelMapping(
-    Topology topology, eth_chan_directions direction) :
-    topology_(topology), direction_(direction) {
+    Topology topology, eth_chan_directions direction, bool has_tensix_extension) :
+    topology_(topology), direction_(direction), has_tensix_extension_(has_tensix_extension) {
     initialize_mappings();
 }
 
@@ -24,28 +23,35 @@ void FabricRouterChannelMapping::initialize_mappings() {
 void FabricRouterChannelMapping::initialize_vc0_mappings() {
     const bool is_2d = is_2d_topology();
 
-    if (!is_2d) {
-        // 1D topology: [0] = worker, [1] = vc0 forward channels
-        // Sender channels
-        sender_channel_map_[LogicalSenderChannelKey{0, 0}] =
-            InternalSenderChannelMapping{BuilderType::ERISC, 0};  // worker channel
-        sender_channel_map_[LogicalSenderChannelKey{0, 1}] =
-            InternalSenderChannelMapping{BuilderType::ERISC, 1};  // forward channel
-
-        // Receiver channel (typically single receiver channel per VC)
-        receiver_channel_map_[LogicalReceiverChannelKey{0, 0}] =
-            InternalReceiverChannelMapping{BuilderType::ERISC, 0};
-    } else {
-        // 2D topology: [0-3] = N/E/S/W/Worker
-        // Map based on direction: 0=EAST, 1=WEST, 2=NORTH, 3=SOUTH
-        // For 2D, sender channels map to erisc builder channels 0-3
+    if (is_2d) {
+        // 2D topology VC0 has 4 sender channels (relative indices within VC0):
+        //   [0] = local worker channel
+        //   [1-3] = forwarding channels from upstream routers
+        // The mapping of which upstream router uses which channel depends on the downstream router's direction
         constexpr size_t max_2d_vc0_channels = 4;
         for (uint32_t i = 0; i < max_2d_vc0_channels; ++i) {
+            // When mux extension is enabled, ALL VC0 channels go to TENSIX mux
+            // because ERISC only has buffers for worker channel (used by VC1) and VC1 channel
+            BuilderType builder_type = has_tensix_extension_ ? BuilderType::TENSIX : BuilderType::ERISC;
             sender_channel_map_[LogicalSenderChannelKey{0, i}] =
-                InternalSenderChannelMapping{BuilderType::ERISC, i};
+                InternalSenderChannelMapping{builder_type, i};
         }
 
         // Receiver channel
+        receiver_channel_map_[LogicalReceiverChannelKey{0, 0}] =
+            InternalReceiverChannelMapping{BuilderType::ERISC, 0};
+    } else {
+        // 1D topology VC0 has 2 sender channels (relative indices within VC0):
+        //   [0] = local worker channel
+        //   [1] = forwarding channel from upstream router
+        // When mux extension is enabled, ALL VC0 channels go to TENSIX mux
+        BuilderType vc0_builder_type = has_tensix_extension_ ? BuilderType::TENSIX : BuilderType::ERISC;
+        sender_channel_map_[LogicalSenderChannelKey{0, 0}] =
+            InternalSenderChannelMapping{vc0_builder_type, 0};  // worker channel
+        sender_channel_map_[LogicalSenderChannelKey{0, 1}] =
+            InternalSenderChannelMapping{vc0_builder_type, 1};  // forward channel
+
+        // Receiver channel (typically single receiver channel per VC)
         receiver_channel_map_[LogicalReceiverChannelKey{0, 0}] =
             InternalReceiverChannelMapping{BuilderType::ERISC, 0};
     }

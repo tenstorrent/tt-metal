@@ -311,11 +311,11 @@ void build_tt_fabric_program(
         auto& router_builder1 = router_builders.at(eth_chan_dir1);
         auto& router_builder2 = router_builders.at(eth_chan_dir2);
 
-        uint32_t vc0_sender_channel_1 = is_2D_routing ? static_cast<uint32_t>(router_builder1->get_direction()) : 1;
-        router_builder1->connect_to_downstream_router_over_noc(*router_builder2, 0, vc0_sender_channel_1);
+        router_builder1->connect_to_downstream_router_over_noc(*router_builder2, 0);
+        router_builder2->connect_to_downstream_router_over_noc(*router_builder1, 0);
 
-        uint32_t vc0_sender_channel_2 = is_2D_routing ? static_cast<uint32_t>(router_builder2->get_direction()) : 1;
-        router_builder2->connect_to_downstream_router_over_noc(*router_builder1, 0, vc0_sender_channel_2);
+        router_builder1->connect_to_downstream_router_over_noc(*router_builder2, 1);
+        router_builder2->connect_to_downstream_router_over_noc(*router_builder1, 1);
     };
 
     auto connect_downstream_builders = [&](RoutingDirection dir1, RoutingDirection dir2) {
