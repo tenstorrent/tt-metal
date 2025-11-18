@@ -235,7 +235,8 @@ std::string get_cpp_callstack(int max_frames) {
                 // Use the actual address from buffer[i] for addr2line resolution.
                 // Format the address as hex for dump_ops.py to resolve later.
                 // We'll extract the binary path from the symbol string.
-                std::string func_info;
+                std::string_view func_info;
+                char* demangled = nullptr;
                 bool found_function = false;
 
                 // First, try to extract the binary path from the symbol string
@@ -260,11 +261,10 @@ std::string get_cpp_callstack(int max_frames) {
                     if (!is_just_offset && mangled.size() >= 2 && mangled[0] == '_' && mangled[1] == 'Z') {
                         int status = 0;
                         std::string mangled_str(mangled);  // c_str() requires null-terminated string
-                        char* demangled = abi::__cxa_demangle(mangled_str.c_str(), nullptr, nullptr, &status);
+                        demangled = abi::__cxa_demangle(mangled_str.c_str(), nullptr, nullptr, &status);
 
                         if (status == 0 && demangled) {
-                            func_info = std::string(demangled);
-                            free(demangled);
+                            func_info = std::string_view(demangled);
                             found_function = true;
                         }
                     } else if (!is_just_offset && !mangled.empty()) {
@@ -272,12 +272,11 @@ std::string get_cpp_callstack(int max_frames) {
                         // Try to demangle it even if it doesn't start with _Z (might be partial mangling)
                         int status = 0;
                         std::string mangled_str(mangled);  // c_str() requires null-terminated string
-                        char* demangled = abi::__cxa_demangle(mangled_str.c_str(), nullptr, nullptr, &status);
+                        demangled = abi::__cxa_demangle(mangled_str.c_str(), nullptr, nullptr, &status);
 
                         if (status == 0 && demangled) {
                             // Successfully demangled
-                            func_info = std::string(demangled);
-                            free(demangled);
+                            func_info = std::string_view(demangled);
                             found_function = true;
                         } else {
                             // Not a mangled name, use as-is (e.g., "main", "perform_final_add")
@@ -290,6 +289,7 @@ std::string get_cpp_callstack(int max_frames) {
 
                 // If we extracted a function name, format as [binary(function+offset)]
                 // If we couldn't extract a function name, format as [binary(+offset)]
+                std::string func_info_str;  // For when we need to build a string
                 if (!found_function) {
                     size_t path_end = symbol_str.find('[');
                     if (path_end != std::string_view::npos) {
@@ -322,20 +322,27 @@ std::string get_cpp_callstack(int max_frames) {
                         // Use the actual address from buffer[i] and convert to file offset
                         // For PIE executables and shared libraries, we need to subtract the base load address
                         Dl_info dl_info;
-                        std::stringstream addr_stream;
+                        // Reuse callstack stringstream temporarily
+                        callstack.str("");
+                        callstack.clear();
                         if (dladdr(buffer[i], &dl_info) && dl_info.dli_fbase != nullptr) {
                             // Calculate offset from module base address
                             uintptr_t offset =
                                 reinterpret_cast<uintptr_t>(buffer[i]) - reinterpret_cast<uintptr_t>(dl_info.dli_fbase);
-                            addr_stream << "(+0x" << std::hex << offset << ")";
+                            callstack << "[" << relative_path << "(+0x" << std::hex << offset << ")]";
                         } else {
                             // Fallback to absolute address if dladdr fails
-                            addr_stream << "(+0x" << std::hex << reinterpret_cast<uintptr_t>(buffer[i]) << ")";
+                            callstack << "[" << relative_path << "(+0x" << std::hex
+                                      << reinterpret_cast<uintptr_t>(buffer[i]) << ")]";
                         }
-                        std::string addr_str = addr_stream.str();
-
-                        func_info = "[" + relative_path + addr_str + "]";
+                        func_info_str = callstack.str();
+                        func_info = func_info_str;
+                        // Reset callstack for reuse
+                        callstack.str("");
+                        callstack.clear();
+                        callstack << std::dec;  // Reset to decimal
                     } else {
+                        free(demangled);
                         continue;  // Skip this frame if we can't extract any info
                     }
                 }
@@ -371,20 +378,19 @@ std::string get_cpp_callstack(int max_frames) {
 
                         // Format as: function [binary(+offset)]
                         Dl_info dl_info;
-                        std::stringstream addr_stream;
-                        if (dladdr(buffer[i], &dl_info) && dl_info.dli_fbase != nullptr) {
-                            uintptr_t offset =
-                                reinterpret_cast<uintptr_t>(buffer[i]) - reinterpret_cast<uintptr_t>(dl_info.dli_fbase);
-                            addr_stream << "(+0x" << std::hex << offset << ")";
-                        } else {
-                            addr_stream << "(+0x" << std::hex << reinterpret_cast<uintptr_t>(buffer[i]) << ")";
-                        }
-
                         if (valid_frames > 0) {
                             callstack << " ";
                         }
-                        callstack << "#" << valid_frames << " " << func_info << " [" << relative_path
-                                  << addr_stream.str() << "]";
+                        callstack << "#" << valid_frames << " " << func_info << " [" << relative_path << "(+0x"
+                                  << std::hex;
+                        if (dladdr(buffer[i], &dl_info) && dl_info.dli_fbase != nullptr) {
+                            uintptr_t offset =
+                                reinterpret_cast<uintptr_t>(buffer[i]) - reinterpret_cast<uintptr_t>(dl_info.dli_fbase);
+                            callstack << offset;
+                        } else {
+                            callstack << reinterpret_cast<uintptr_t>(buffer[i]);
+                        }
+                        callstack << std::dec << ")]";  // Reset to decimal
                         valid_frames++;
                     }
                 } else if (!func_info.empty()) {
@@ -394,6 +400,11 @@ std::string get_cpp_callstack(int max_frames) {
                     }
                     callstack << "#" << valid_frames << " " << func_info;
                     valid_frames++;
+                }
+
+                // Clean up demangled memory
+                if (demangled) {
+                    free(demangled);
                 }
             }
 
