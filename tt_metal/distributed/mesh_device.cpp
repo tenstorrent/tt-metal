@@ -177,6 +177,10 @@ MeshDevice::ScopedDevices::~ScopedDevices() {
     }
 }
 
+const std::map<ChipId, IDevice*>& MeshDevice::ScopedDevices::opened_local_devices() const {
+    return opened_local_devices_;
+}
+
 const std::vector<MaybeRemote<IDevice*>>& MeshDevice::ScopedDevices::root_devices() const { return devices_; }
 
 uint8_t MeshDevice::num_hw_cqs() const {
@@ -239,6 +243,21 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
         [&]() -> std::tuple<std::shared_ptr<ScopedDevices>, std::vector<tt::tt_fabric::FabricNodeId>, MeshShape> {
         if (config.physical_device_ids().empty()) {
             auto mapped_devices = SystemMesh::instance().get_mapped_devices(config.mesh_shape(), config.offset());
+            auto local_device_ids = extract_locals(mapped_devices.device_ids);
+
+            if (!local_device_ids.empty()) {
+                const auto& mpi_context = MetalContext::instance().global_distributed_context();
+                MetalContext::instance().set_active_distributed_context(mpi_context.split(
+                    distributed::multihost::Color(1), distributed::multihost::Key(*mpi_context.rank())));
+                // TODO(p1-0tr): handle error or throw in split
+            } else {
+                const auto& mpi_context = MetalContext::instance().global_distributed_context();
+                // TODO(p1-0tr): should probably use MPI_UNDEFINED instead of 3
+                MetalContext::instance().set_active_distributed_context(mpi_context.split(
+                    distributed::multihost::Color(3), distributed::multihost::Key(*mpi_context.rank())));
+                // TODO(p1-0tr): handle error or throw in split
+            }
+
             return std::make_tuple(
                 std::make_shared<ScopedDevices>(
                     mapped_devices.device_ids,
@@ -277,20 +296,33 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
 
     // Make a copy because we std::move the scoped_devices when creating MeshDevice
     const auto root_devices = scoped_devices->root_devices();
+    // Check opened_local_devices before moving scoped_devices, as accessing moved-from object causes undefined behavior
+    const bool has_local_devices = !scoped_devices->opened_local_devices().empty();
+
+    if (!has_local_devices) {
+        // If there are no local devices, set the fabric config to disabled. This should ensure the context
+        // is re-initialized when a new MeshDevice is created.
+        MetalContext::instance().set_fabric_config(tt_fabric::FabricConfig::DISABLED);
+        // TODO(p1-0tr): could we get away with not returning a MeshDevice in this case?
+    }
 
     auto mesh_device = std::make_shared<MeshDevice>(
         std::move(scoped_devices),
         std::make_unique<MeshDeviceView>(mesh_shape, root_devices, fabric_node_ids),
         std::shared_ptr<MeshDevice>());
 
-    mesh_device->initialize(num_command_queues, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap);
-    // TODO #20966: Remove these calls
-    for (auto device : extract_locals(root_devices)) {
-        dynamic_cast<Device*>(device)->set_mesh_device(mesh_device);
+    if (has_local_devices) {
+        mesh_device->initialize(num_command_queues, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap);
+
+        // TODO #20966: Remove these calls
+        for (auto device : extract_locals(root_devices)) {
+            dynamic_cast<Device*>(device)->set_mesh_device(mesh_device);
+        }
+        // The Device Profiler must be initialized before Fabric is loaded on the Cluster
+        DevicePool::instance().init_profiler();
+        DevicePool::instance().initialize_fabric_and_dispatch_fw();
     }
-    // The Device Profiler must be initialized before Fabric is loaded on the Cluster
-    DevicePool::instance().init_profiler();
-    DevicePool::instance().initialize_fabric_and_dispatch_fw();
+
     return mesh_device;
 }
 
@@ -306,6 +338,20 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
     const DispatchCoreConfig& dispatch_core_config,
     tt::stl::Span<const std::uint32_t> /*l1_bank_remap*/,
     size_t worker_l1_size) {
+    auto local_device_ids = extract_locals(wrap_to_maybe_remote(device_ids));
+    if (!local_device_ids.empty()) {
+        const auto& mpi_context = MetalContext::instance().global_distributed_context();
+        MetalContext::instance().set_active_distributed_context(
+            mpi_context.split(distributed::multihost::Color(1), distributed::multihost::Key(*mpi_context.rank())));
+        // TODO(p1-0tr): handle error or throw in split
+    } else {
+        const auto& mpi_context = MetalContext::instance().global_distributed_context();
+        // TODO(p1-0tr): should probably use MPI_UNDEFINED instead of 3
+        MetalContext::instance().set_active_distributed_context(
+            mpi_context.split(distributed::multihost::Color(3), distributed::multihost::Key(*mpi_context.rank())));
+        // TODO(p1-0tr): handle error or throw in split
+    }
+
     auto scoped_devices = std::make_shared<ScopedDevices>(
         wrap_to_maybe_remote(device_ids),
         l1_small_size,

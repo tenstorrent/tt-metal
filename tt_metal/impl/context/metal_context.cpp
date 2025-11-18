@@ -276,6 +276,9 @@ MetalContext& MetalContext::instance() {
 void MetalContext::teardown_base_objects() {
     // Teardown in backward order of dependencies to avoid dereferencing uninitialized objects
     distributed_context_.reset();
+    if (active_distributed_context_) {
+        active_distributed_context_.reset();
+    }
     cluster_.reset();
     hal_.reset();
 }
@@ -319,9 +322,24 @@ distributed::multihost::DistributedContext& MetalContext::global_distributed_con
     return *distributed_context_;
 }
 
+distributed::multihost::DistributedContext& MetalContext::active_distributed_context() {
+    TT_FATAL(active_distributed_context_, "Active distributed context not initialized.");
+    return *active_distributed_context_;
+}
+
 std::shared_ptr<distributed::multihost::DistributedContext> MetalContext::get_distributed_context_ptr() {
     TT_FATAL(distributed_context_, "Distributed context not initialized.");
     return distributed_context_;
+}
+
+std::shared_ptr<distributed::multihost::DistributedContext> MetalContext::get_active_distributed_context_ptr() {
+    TT_FATAL(active_distributed_context_, "Active distributed context not initialized.");
+    return active_distributed_context_;
+}
+
+void MetalContext::set_active_distributed_context(
+    std::shared_ptr<distributed::multihost::DistributedContext> distributed_context) {
+    active_distributed_context_ = distributed_context;
 }
 
 MetalContext::~MetalContext() { teardown_base_objects(); }
@@ -555,7 +573,9 @@ void MetalContext::set_fabric_config(
 }
 
 void MetalContext::initialize_fabric_config() {
+    ::std::cerr << "initialize_fabric_config" << std::endl;
     if (this->fabric_config_ == tt_fabric::FabricConfig::DISABLED) {
+        ::std::cerr << "fabric_config_ is DISABLED" << std::endl;
         return;
     }
 

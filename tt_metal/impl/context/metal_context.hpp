@@ -94,7 +94,11 @@ public:
     tt_fabric::FabricConfig get_fabric_config() const;
 
     distributed::multihost::DistributedContext& global_distributed_context();
+    distributed::multihost::DistributedContext& active_distributed_context();
     std::shared_ptr<distributed::multihost::DistributedContext> get_distributed_context_ptr();
+    std::shared_ptr<distributed::multihost::DistributedContext> get_active_distributed_context_ptr();
+    void set_active_distributed_context(
+        std::shared_ptr<distributed::multihost::DistributedContext> distributed_context);
 
     // Fabric tensix configuration
     void set_fabric_tensix_config(tt_fabric::FabricTensixConfig fabric_tensix_config);
@@ -191,6 +195,7 @@ private:
     tt_fabric::FabricTensixConfig fabric_tensix_config_ = tt_fabric::FabricTensixConfig::DISABLED;
     tt_fabric::FabricUDMMode fabric_udm_mode_ = tt_fabric::FabricUDMMode::DISABLED;
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;
+    std::shared_ptr<distributed::multihost::DistributedContext> active_distributed_context_;
 
     // We are using a thread_local to allow each thread to have its own command queue id stack.
     // This not only allows consumers to set active command queue for a thread
