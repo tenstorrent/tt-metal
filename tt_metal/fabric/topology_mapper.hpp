@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <unordered_map>
+#include <map>
 #include <unordered_set>
 #include <vector>
 
@@ -38,9 +38,9 @@ using AsicPosition = std::pair<tt::tt_metal::TrayID, tt::tt_metal::ASICLocation>
  * them to the ASIC IDs of the physical descriptor.
  */
 
-using HostMeshMapping = std::unordered_map<MeshId, std::unordered_set<HostName>>;
-using LogicalAdjacencyMap = std::unordered_map<tt::tt_fabric::FabricNodeId, std::vector<tt::tt_fabric::FabricNodeId>>;
-using PhysicalAdjacencyMap = std::unordered_map<tt::tt_metal::AsicID, std::vector<tt::tt_metal::AsicID>>;
+using HostMeshMapping = std::map<MeshId, std::unordered_set<HostName>>;
+using LogicalAdjacencyMap = std::map<tt::tt_fabric::FabricNodeId, std::vector<tt::tt_fabric::FabricNodeId>>;
+using PhysicalAdjacencyMap = std::map<tt::tt_metal::AsicID, std::vector<tt::tt_metal::AsicID>>;
 class TopologyMapper {
 public:
     /**
@@ -276,17 +276,6 @@ private:
     std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> build_fabric_node_id_to_mesh_rank_mapping() const;
 
     /**
-     * @brief Validate that all meshes in the mesh graph descriptor have rank bindings
-     *
-     * Compares the mesh IDs from the mesh graph descriptor with the mesh IDs that have
-     * hosts bound to them in rank_bindings.yaml. Throws an error if any meshes are missing
-     * bindings, listing all unbound mesh IDs.
-     *
-     * @param mesh_id_host_names Mapping of mesh IDs to the set of host names participating in each mesh
-     */
-    void validate_mesh_id_host_names(const HostMeshMapping& mesh_id_host_names) const;
-
-    /**
      * @brief Build logical adjacency maps from mesh graph connectivity
      *
      * Creates adjacency maps for each mesh based on the logical connectivity defined in the mesh graph.
@@ -294,9 +283,9 @@ private:
      * the intra-mesh connectivity from the mesh graph and creates a mapping of FabricNodeId to
      * its vector of adjacent FabricNodeIds.
      *
-     * @return std::unordered_map<MeshId, LogicalAdjacencyMap> Map from mesh ID to logical adjacency map
+     * @return std::map<MeshId, LogicalAdjacencyMap> Map from mesh ID to logical adjacency map
      */
-    std::unordered_map<MeshId, LogicalAdjacencyMap> build_adjacency_map_logical() const;
+    std::map<MeshId, LogicalAdjacencyMap> build_adjacency_map_logical() const;
 
     /**
      * @brief Build physical adjacency maps from system descriptor connectivity
@@ -307,9 +296,9 @@ private:
      * the same mesh. The resulting map contains ASIC IDs mapped to their vectors of adjacent ASIC IDs within the mesh.
      *
      * @param asic_id_to_mesh_rank Mapping of mesh IDs to ASIC IDs to mesh host ranks
-     * @return std::unordered_map<MeshId, PhysicalAdjacencyMap> Map from mesh ID to physical adjacency map
+     * @return std::map<MeshId, PhysicalAdjacencyMap> Map from mesh ID to physical adjacency map
      */
-    std::unordered_map<MeshId, PhysicalAdjacencyMap> build_adjacency_map_physical(
+    std::map<MeshId, PhysicalAdjacencyMap> build_adjacency_map_physical(
         const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank) const;
 
     /**
@@ -358,24 +347,24 @@ private:
     bool generate_mapping_locally_ = false;
 
     // Bidirectional mapping between FabricNodeId and AsicID
-    std::unordered_map<FabricNodeId, tt::tt_metal::AsicID> fabric_node_id_to_asic_id_;
-    std::unordered_map<tt::tt_metal::AsicID, FabricNodeId> asic_id_to_fabric_node_id_;
+    std::map<FabricNodeId, tt::tt_metal::AsicID> fabric_node_id_to_asic_id_;
+    std::map<tt::tt_metal::AsicID, FabricNodeId> asic_id_to_fabric_node_id_;
 
     // Bidirectional mapping between AsicID and physical chip id for fast lookups
-    std::unordered_map<tt::tt_metal::AsicID, ChipId> asic_id_to_physical_chip_id_;
-    std::unordered_map<ChipId, tt::tt_metal::AsicID> physical_chip_id_to_asic_id_;
+    std::map<tt::tt_metal::AsicID, ChipId> asic_id_to_physical_chip_id_;
+    std::map<ChipId, tt::tt_metal::AsicID> physical_chip_id_to_asic_id_;
 
     // Host-rank metadata for fabric-node-based queries (independent of MeshGraph's storage)
     std::vector<MeshContainer<MeshHostRankId>> mesh_host_ranks_;
-    std::unordered_map<std::pair<MeshId, MeshHostRankId>, MeshCoordinateRange, hash_pair> mesh_host_rank_coord_ranges_;
+    std::map<std::pair<MeshId, MeshHostRankId>, MeshCoordinateRange> mesh_host_rank_coord_ranges_;
 
     // Rebuild host-rank containers purely from fabric_node_id_to_asic_id_ mapping
     void rebuild_host_rank_structs_from_mapping(
         const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank);
 
-    void print_logical_adjacency_map(const std::unordered_map<MeshId, LogicalAdjacencyMap>& adj_map) const;
+    void print_logical_adjacency_map(const std::map<MeshId, LogicalAdjacencyMap>& adj_map) const;
 
-    void print_physical_adjacency_map(const std::unordered_map<MeshId, PhysicalAdjacencyMap>& adj_map) const;
+    void print_physical_adjacency_map(const std::map<MeshId, PhysicalAdjacencyMap>& adj_map) const;
 };
 
 }  // namespace tt::tt_fabric
