@@ -308,11 +308,11 @@ static constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_channel_fr
     sender_channel_2_free_slots_stream_id,
     sender_channel_3_free_slots_stream_id,
     sender_channel_4_free_slots_stream_id};
-static_assert(sender_channel_free_slots_stream_ids[0] == 17);
-static_assert(sender_channel_free_slots_stream_ids[1] == 18);
-static_assert(sender_channel_free_slots_stream_ids[2] == 19);
-static_assert(sender_channel_free_slots_stream_ids[3] == 20);
-static_assert(sender_channel_free_slots_stream_ids[4] == 21);
+static_assert(sender_channel_free_slots_stream_ids[0] == 11);
+static_assert(sender_channel_free_slots_stream_ids[1] == 12);
+static_assert(sender_channel_free_slots_stream_ids[2] == 13);
+static_assert(sender_channel_free_slots_stream_ids[3] == 14);
+static_assert(sender_channel_free_slots_stream_ids[4] == 15);
 
 // For 2D fabric: maps compact index to downstream direction for each my_direction
 // For 1D fabric: only 1 downstream direction per router (EAST forwards to WEST in 1D linear topology)
@@ -2156,9 +2156,7 @@ void kernel_main() {
     // initialized before the other side has any possibility of modifying them.
     init_ptr_val<to_receiver_packets_sent_streams[0]>(0);
     init_ptr_val<to_receiver_packets_sent_streams[1]>(0);
-    init_ptr_val<to_sender_packets_acked_streams[0]>(0);
-    init_ptr_val<to_sender_packets_acked_streams[1]>(0);
-    init_ptr_val<to_sender_packets_acked_streams[2]>(0);
+    // to_sender_packets_acked_streams initialization removed - ack streams no longer used
     init_ptr_val<to_sender_packets_completed_streams[0]>(0);
     init_ptr_val<to_sender_packets_completed_streams[1]>(0);
     init_ptr_val<to_sender_packets_completed_streams[2]>(0);
@@ -2179,8 +2177,7 @@ void kernel_main() {
     if constexpr (is_2d_fabric) {
         init_ptr_val<sender_channel_free_slots_stream_ids[3]>(SENDER_NUM_BUFFERS_ARRAY[3]);  // Compact index 2
         init_ptr_val<sender_channel_free_slots_stream_ids[4]>(SENDER_NUM_BUFFERS_ARRAY[4]);  // VC1
-        init_ptr_val<to_sender_packets_acked_streams[3]>(0);
-        init_ptr_val<to_sender_packets_acked_streams[4]>(0);
+        // to_sender_packets_acked_streams initialization removed - ack streams no longer used
         init_ptr_val<to_sender_packets_completed_streams[3]>(0);
         init_ptr_val<to_sender_packets_completed_streams[4]>(0);
     }
@@ -2563,9 +2560,9 @@ void kernel_main() {
     }
 
     // helps ubenchmark performance
-    __asm__("nop");
-    __asm__("nop");
-    __asm__("nop");
+    //__asm__("nop");
+    //__asm__("nop");
+    //__asm__("nop");
 
     // initialize the local receiver channel buffers
     local_receiver_channels.init<channel_pools_args>(
@@ -2592,9 +2589,9 @@ void kernel_main() {
             local_sender_channel_worker_interfaces);
     }
 
-    __asm__("nop");
-    __asm__("nop");
-    __asm__("nop");
+    //__asm__("nop");
+    //__asm__("nop");
+    //__asm__("nop");
 
     WriteTransactionIdTracker<
         RECEIVER_NUM_BUFFERS_ARRAY[0],
@@ -2776,6 +2773,9 @@ void kernel_main() {
         wait_for_other_local_erisc();
     }
 
+    //__asm__("nop");
+    //__asm__("nop");
+    //__asm__("nop");
     //////////////////////////////
     //////////////////////////////
     //        MAIN LOOP
