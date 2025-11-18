@@ -392,19 +392,33 @@ static bool test_sdpa_reduce_c_transposed(
     //     }
     //     std::cout << std::endl;
 
-    //     // Print matmul output tile 1 (all rows)
-    //     std::cout << "\nMATMUL OUTPUT TILE 1 (columns 32-63, all " << M << " rows):" << std::endl;
-    //     for (uint32_t row = 0; row < M; ++row) {
-    //         std::cout << "Row " << row << ": ";
-    //         for (uint32_t col = 32; col < 64 && col < N; ++col) {
-    //             uint32_t idx = row * N + col;
-    //             if (idx < mm_out_rm.size()) {
-    //                 std::cout << static_cast<float>(mm_out_rm[idx]) << " ";
-    //             }
+    // Print matmul output tile 1 (all rows)
+    // std::cout << "\nMATMUL OUTPUT TILE 0 (columns 0-32, all " << M << " rows):" << std::endl;
+    // for (uint32_t row = 0; row < M; ++row) {
+    //     std::cout << "Row " << row << ": ";
+    //     for (uint32_t col = 0; col < 32 && col < N; ++col) {
+    //         uint32_t idx = row * N + col;
+    //         if (idx < mm_out_rm.size()) {
+    //             std::cout << static_cast<float>(mm_out_rm[idx]) << " ";
     //         }
-    //         std::cout << std::endl;
     //     }
-    //     std::cout << "=====================================\n" << std::endl;
+    //     std::cout << std::endl;
+    // }
+    // std::cout << "=====================================\n" << std::endl;
+
+    // std::cout << "\nMATMUL GOLDEN TILE 0 (columns 0-32, all " << M << " rows):" << std::endl;
+    // for (uint32_t row = 0; row < M; ++row) {
+    //     std::cout << "Row " << row << ": ";
+    //     for (uint32_t col = 0; col < 32 && col < N; ++col) {
+    //         uint32_t idx = row * N + col;
+    //         if (idx < mm_out_rm.size()) {
+    //             std::cout << static_cast<float>(golden_matmul_rm[idx]) << " ";
+    //         }
+    //     }
+    //     std::cout << std::endl;
+    // }
+    // std::cout << "=====================================\n" << std::endl;
+
     // }
 
     // Correctness: compare device outputs with golden
