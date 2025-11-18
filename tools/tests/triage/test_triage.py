@@ -36,7 +36,7 @@ def cause_hang_with_app(request):
             pass
 
         # Check if the process has exited
-        if proc.returncode is None:
+        if proc.returncode != 0:
             raise RuntimeError("The application did not hang as expected.")
     else:
         time.sleep(timeout)

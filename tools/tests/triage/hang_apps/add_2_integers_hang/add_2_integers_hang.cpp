@@ -148,7 +148,16 @@ int main() {
     // Add the program to the workload and execute it.
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
-    distributed::Finish(cq);
+    try {
+        distributed::Finish(cq);
+    } catch (std::runtime_error& e) {
+        if (std::string(e.what()).find("device timeout") != std::string::npos) {
+            printf("Device timeout detected as expected.\n");
+            exit(0);
+        } else {
+            throw;
+        }
+    }
 
     // Data can be read from a MeshBuffer using the ReadShard function. This function is used to read data from a
     // specific shard of a MeshBuffer. The shard is specified by the MeshCoordinate. The last argument indicates if the
