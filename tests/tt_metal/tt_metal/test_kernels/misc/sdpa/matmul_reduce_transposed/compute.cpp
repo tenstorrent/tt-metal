@@ -75,19 +75,9 @@ void matmul_blocks(
                 in1_index += N;
             }
 
-            // for(int k = 0; k < 10000; k ++){
-            //     TTI_NOP;
-            // }
-
             tile_regs_commit();
 
             tile_regs_wait();
-
-#ifdef TRISC_MATH
-            for (int k = 0; k < 500; k++) {
-                TTI_NOP;
-            }
-#endif
 
             uint32_t pack_dst_idx = dst_index;
             uint32_t out_col_offset = in1_subblock * subblock_w;

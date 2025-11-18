@@ -582,13 +582,13 @@ int main(int argc, char** argv) {
     // sizes are in terms of tiles (32x32)
 
     // Passing sweep
+    // std::vector<uint32_t> q_chunk_sizes = {1, 2, 4, 8};
+    // std::vector<uint32_t> k_chunk_sizes = {1, 2, 4, 8, 16};
+    // std::vector<uint32_t> head_dim_sizes = {1, 2, 4};
+
     std::vector<uint32_t> q_chunk_sizes = {1, 2, 4, 8};
     std::vector<uint32_t> k_chunk_sizes = {1, 2, 4, 8, 16};
     std::vector<uint32_t> head_dim_sizes = {1, 2, 4};
-
-    // std::vector<uint32_t> q_chunk_sizes = {8};
-    // std::vector<uint32_t> k_chunk_sizes = {16};
-    // std::vector<uint32_t> head_dim_sizes = {4};
 
     // Excluding fp32_dest_acc_en since SFPU reduce_max overlap will initially only support bf16 dst
     std::vector<bool> fp32_dest_acc_ens = {false};
