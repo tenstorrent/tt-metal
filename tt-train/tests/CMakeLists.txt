@@ -43,7 +43,7 @@ set(SOURCES
     serialization/safetensors_test.cpp
     ops/cross_entropy_fw_op_test.cpp
     ops/positional_embedding_test.cpp
-    ops/layer_norm_op_test.cpp
+    ops/layer_norm_moreh_test.cpp
     ops/distributed/comm_ops_test.cpp
     ops/linear_op_test.cpp
     ops/profiler_no_op_test.cpp
@@ -57,6 +57,7 @@ set(SOURCES
     ops/sdpa_fw_op_test.cpp
     ops/layernorm_bw_fused_op_test.cpp
     ops/layernorm_fw_fused_op_test.cpp
+    ops/grpo_loss_test.cpp
 )
 
 add_executable(ttml_tests ${SOURCES})
