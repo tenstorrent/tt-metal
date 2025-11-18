@@ -7,7 +7,7 @@ Automatically extracts real-world operation configurations from model tests and 
 **Benefits:**
 - ✅ Test with real model configurations (EfficientNet, ResNet, BERT, etc.)
 - ✅ Automatic extraction and deduplication
-- ✅ Simple 3-line integration into sweep tests
+- ✅ Simple 2-step integration into sweep tests
 - ✅ Captures shapes, dtypes, layouts, and exact shard specs
 
 ---
@@ -26,7 +26,7 @@ Automatically extracts real-world operation configurations from model tests and 
 ### Key Files
 
 - **Tracer**: `model_tracer/generic_ops_tracer.py` - Employs methodology described in the [graph tracing tech report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/ttnn/graph-tracing.md)
-- **Master JSON**: `model_tracer/traced_operations/ttnn_operations_master.json` - Contains all traced configurations (1760 total configs, 41 operations)
+- **Master JSON**: `model_tracer/traced_operations/ttnn_operations_master.json` - Contains all traced configurations
 - **Analyzer**: `model_tracer/analyze_operations.py` - Query and view configurations
 - **Config Loader**: `tests/sweep_framework/master_config_loader.py` - Converts JSON configs to sweep test parameters
 
@@ -34,72 +34,20 @@ Automatically extracts real-world operation configurations from model tests and 
 
 ## Integration Pattern
 
-### Unary Operations (1 input)
-
-**Just 3 simple changes:**
+**Just 2 simple steps:**
 
 ```python
-# 1. Import
-from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_traced_config
+# 1. Import and load
+from tests.sweep_framework.master_config_loader import MasterConfigLoader
 
-# 2. Load and add to parameters
 loader = MasterConfigLoader()
 model_traced_params = loader.get_suite_parameters("your_operation_name")
 
+# 2. Add to parameters
 parameters = {
     "nightly": { ... },
     "model_traced": model_traced_params,  # Add this line!
 }
-
-# 3. Update run() function
-def run(
-    input_shape,  # Required parameter
-    input_a_dtype=ttnn.bfloat16,  # Set actual defaults
-    input_a_layout=ttnn.TILE_LAYOUT,
-    input_a_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    traced_config_name=None,  # Add this parameter
-    *,
-    device,
-):
-    # Unpack in ONE line
-    if traced_config_name:
-        input_shape, input_a_dtype, input_a_layout, input_a_memory_config, output_memory_config = unpack_traced_config(traced_config_name)
-
-    # Rest of your test logic stays the same!
-```
-
-### Binary Operations (2 inputs)
-
-```python
-# 1. Import BINARY helper
-from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_binary_traced_config
-
-# 2. Load (same as unary)
-loader = MasterConfigLoader()
-model_traced_params = loader.get_suite_parameters("add")
-
-parameters = {
-    "nightly": { ... },
-    "model_traced": model_traced_params,
-}
-
-# 3. Unpack BINARY config
-def run(
-    input_shape,  # Required parameter
-    input_a_dtype=ttnn.bfloat16,  # Set actual defaults
-    input_b_dtype=ttnn.bfloat16,
-    input_a_layout=ttnn.TILE_LAYOUT,
-    input_b_layout=ttnn.TILE_LAYOUT,
-    input_a_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    input_b_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    traced_config_name=None,
-    *,
-    device,
-):
-    if traced_config_name:
-        input_shape, input_a_dtype, input_b_dtype, input_a_layout, input_b_layout, \
-            input_a_memory_config, input_b_memory_config = unpack_binary_traced_config(traced_config_name)
 ```
 
 **Test Modes:**
@@ -137,6 +85,10 @@ python model_tracer/generic_ops_tracer.py <test_path> --store
 **Output:**
 - Updates `model_tracer/traced_operations/ttnn_operations_master.json`
 - Shows summary of unique configurations added
+
+**Note:** After tracing, if the summary shows operations that don't have corresponding `*_model_traced.py` test files in `tests/sweep_framework/sweeps/model_traced/`, you'll need to create test files for those operations to use the traced configurations in sweep tests.
+
+**Note:** Some operations may require custom parameter extraction code in `model_tracer/operation_parameter_extractors.py` if the default extraction doesn't properly parse operation-specific parameters (e.g., `output_dtype` for `typecast`, `dims` for `permute`). Check existing extractors in that file for examples.
 
 ### 2. View Configurations
 
@@ -184,7 +136,7 @@ tt-metal/
 │   ├── generic_ops_tracer.py          # Main tracing script
 │   ├── analyze_operations.py          # Query tool
 │   └── traced_operations/
-│       └── ttnn_operations_master.json # Master config storage (1760 configs, 41 ops)
+│       └── ttnn_operations_master.json # Master config storage
 └── tests/sweep_framework/
     ├── master_config_loader.py        # Config loader & utilities
     ├── sweeps_parameter_generator.py  # Generate test vectors
@@ -198,7 +150,10 @@ tt-metal/
 
 ## Complete Example
 
-See `tests/sweep_framework/sweeps/eltwise/unary/sigmoid_accurate/sigmoid_accurate.py` for a full working example.
+See any `*_model_traced.py` file in `tests/sweep_framework/sweeps/model_traced/` for a full working example, such as:
+- `tests/sweep_framework/sweeps/model_traced/add_model_traced.py`
+- `tests/sweep_framework/sweeps/model_traced/reshape_model_traced.py`
+- `tests/sweep_framework/sweeps/model_traced/pad_model_traced.py`
 
 ---
 
@@ -220,4 +175,4 @@ parameters = {"model_traced": loader.get_suite_parameters("your_op")}
 
 ---
 
-For complete documentation, see [Sweep Framework README](tests/sweep_framework/README.md).
+For complete documentation on running sweep tests, see [Sweep Framework README](tests/sweep_framework/README.md).
