@@ -289,15 +289,6 @@ void TopologyMapper::build_mapping() {
     // Build ASIC ID to mesh rank mapping using the gathered mesh bindings directly
     // This function gathers mesh_id and host_rank from all MPI ranks and maps them to ASICs
     auto asic_id_to_mesh_rank = build_asic_id_to_mesh_rank_mapping();
-    for (const auto& [mesh_id, asic_id_to_mesh_rank_map] : asic_id_to_mesh_rank) {
-        for (const auto& [asic_id, mesh_rank] : asic_id_to_mesh_rank_map) {
-            log_info(
-                tt::LogFabric,
-                "TopologyMapper: host {} has mesh rank {}",
-                physical_system_descriptor_.get_host_name_for_asic(asic_id),
-                mesh_rank.get());
-        }
-    }
     auto fabric_node_id_to_mesh_rank = build_fabric_node_id_to_mesh_rank_mapping();
 
     // Only 1 host builds the mapping the rest will wait and use the mapping from the 1st host
