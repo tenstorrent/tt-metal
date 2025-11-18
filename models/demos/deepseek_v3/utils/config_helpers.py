@@ -86,7 +86,6 @@ def try_decode_saved_weight(obj: dict[str, Any]) -> Any:
     if not isinstance(path_str, str):
         return obj
     memory_config_dict = obj.get("memory_config", None)
-
     if not isinstance(memory_config_dict, dict) or not {
         "buffer_type",
         "memory_layout",
@@ -678,8 +677,16 @@ def shard_and_save(
     if path.exists():
         logger.warning(f"Overwriting existing cache file: {path}")
     ttnn.dump_tensor(path, ttnn_tensor)
-    # Issue: Get a better saving strategy in the future for relative path
-    relative_path = Path(str(path).split("mesh_")[1].split("/", 1)[1])
+    # relative_path = Path(str(path).split("mesh_")[1].split("/", 1)[1])
+    path_str = str(path)
+    mesh_idx = path_str.find("mesh_")
+    if mesh_idx == -1:
+        raise ValueError(f"Expected 'mesh_' in path: {path}")
+    # Skip past "mesh_<rows>x<cols>/" to get relative path
+    parts = path_str[mesh_idx:].split("/", 1)
+    if len(parts) < 2:
+        raise ValueError(f"Invalid path structure after 'mesh_': {path}")
+    relative_path = Path(parts[1])
     return SavedWeight(relative_path, memory_config)
 
 
@@ -846,7 +853,7 @@ def get_weight_config(
         / f"mesh_{mesh_device.shape[0]}x{mesh_device.shape[1]}"
     )
     config_path = weight_cache_path / "config.json"
-
+    weight_path = weight_cache_path / "weights"
     for _ in range(1):
         if force_recalculate:
             break
