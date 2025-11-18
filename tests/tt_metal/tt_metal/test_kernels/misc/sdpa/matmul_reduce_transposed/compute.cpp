@@ -81,21 +81,18 @@ void matmul_blocks(
 
             tile_regs_wait();
 
-            // Perform reduce operation on current row block before packing
-            // This accumulates max values in LREGs 4-7
-
             // Now pack the tiles after reduce has processed them
-            uint32_t dst_idx = 0;
+            uint32_t pack_dst_idx = dst_index;
             uint32_t out_col_offset = in1_subblock * subblock_w;
             for (uint32_t r = 0; r < subblock_h; r++) {
                 uint32_t out_row_offset = (r + subblock_h * in0_subblock) * N;
                 for (uint32_t c = 0; c < subblock_w; c++) {
-                    pack_tile<true>(dst_idx, matmul_out_cb, out_row_offset + out_col_offset + c);
-                    dst_idx++;
+                    pack_tile<true>(pack_dst_idx, matmul_out_cb, out_row_offset + out_col_offset + c);
+                    pack_dst_idx++;
                 }
             }
 
-            sfpu_reduce_max_sdpa(0, subblock_h, (int)VectorMode::RC_custom);
+            sfpu_reduce_max_sdpa(dst_index, subblock_h, (int)VectorMode::RC_custom);
 
             // Only finalize and pack after processing all row blocks for this column
             if (in0_subblock == (in0_num_subblocks - 1)) {
@@ -150,8 +147,5 @@ void MAIN {
     // Ensure outputs are produced before exiting
     cb_wait_front(cb_matmul_out, k_chunk_size * q_chunk_size);
     cb_wait_front(reduce_out_cb, q_chunk_size);  // Expect q_chunk_size tiles from on-the-fly reduction
-
-    // PACK((tt::compute::common::print_full_tile(cb_matmul_out, 0)));
-    // PACK((tt::compute::common::print_full_tile(reduce_out_cb, 0)));
 }
 }  // namespace NAMESPACE
