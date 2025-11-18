@@ -407,4 +407,49 @@ FORCE_INLINE void update_remote_cb_config_in_l1(uint32_t remote_cb_index) {
         remote_cb_interface.fifo_rd_ptr;
 }
 
+class RemoteCircularBuffer {
+public:
+    explicit RemoteCircularBuffer(uint32_t remote_cb_index) : remote_cb_index_(remote_cb_index), noc_(noc_index) {}
+
+    explicit RemoteCircularBuffer(uint32_t remote_cb_index, uint8_t noc) :
+        remote_cb_index_(remote_cb_index), noc_(noc) {}
+
+    explicit RemoteCircularBuffer(uint32_t remote_cb_index, experimental::Noc noc) :
+        remote_cb_index_(remote_cb_index), noc_(noc) {}
+
+    void reserve_back(int32_t num_pages) { remote_cb_reserve_back(remote_cb_index_, num_pages); }
+
+    void push_back(
+        experimental::CircularBuffer& src_local_cb,
+        uint32_t num_pages,
+        uint32_t num_rows,
+        uint32_t coalesced_num_pages_per_row,
+        uint32_t coalesced_page_size) {
+        remote_cb_push_back_and_write_pages(
+            remote_cb_index_,
+            src_local_cb.get_write_ptr(),
+            num_pages,
+            num_rows,
+            coalesced_num_pages_per_row,
+            coalesced_page_size,
+            noc_.get_noc_id());
+    }
+
+    void wait_front() { remote_cb_wait_front(remote_cb_index_, num_pages); }
+
+    void pop_front(int32_t num_pages) { remote_cb_pop_front(remote_cb_index_, num_pages, noc_.get_noc_id()); }
+
+    void commit() { update_remote_cb_config_in_l1(remote_cb_index_); }
+
+    void set_page_size(uint32_t page_size) {
+        resize_remote_receiver_cb_interface(remote_cb_index_, page_size, noc_.get_noc_id());
+    }
+
+    void set_noc(experimental::Noc noc) { noc_ = noc; }
+
+private:
+    experimental::Noc noc_;
+    uint32_t remote_cb_index_;
+};
+
 }  // namespace experimental
