@@ -63,6 +63,14 @@ public:
         const LocalMeshBinding& local_mesh_binding,
         const std::vector<std::pair<AsicPosition, FabricNodeId>>& fixed_asic_position_pinnings);
 
+    // Construct a TopologyMapper from a pre-provided logical mesh chip to physical chip mapping.
+    // Skips discovery and builds fabric node id to asic id mapping directly from the provided mapping.
+    TopologyMapper(
+        const MeshGraph& mesh_graph,
+        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+        const LocalMeshBinding& local_mesh_binding,
+        const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping);
+
     /**
      * @brief Get logical mesh graph connectivity
      *
