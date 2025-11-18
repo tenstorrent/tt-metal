@@ -19,6 +19,34 @@
 
 set -e
 
+START_EPOCH_SECONDS="$(date +%s)"
+INVOCATION_CWD="$(pwd)"
+COVERAGE_DURATION_FILE="${INVOCATION_CWD}/coverage_duration.txt"
+
+write_duration_report() {
+    local exit_code="$1"
+    local end_epoch elapsed hours minutes
+
+    end_epoch="$(date +%s)"
+    elapsed=$((end_epoch - START_EPOCH_SECONDS))
+    if [ "$elapsed" -lt 0 ]; then
+        elapsed=0
+    fi
+    hours=$((elapsed / 3600))
+    minutes=$(((elapsed % 3600) / 60))
+
+    if {
+        printf "run_coverage.sh duration: %02dh %02dm\n" "$hours" "$minutes"
+        printf "Exit code: %s\n" "$exit_code"
+    } > "$COVERAGE_DURATION_FILE" 2>/dev/null; then
+        echo "✓ Duration written to $COVERAGE_DURATION_FILE"
+    else
+        echo "⚠ Warning: Unable to write duration file at $COVERAGE_DURATION_FILE"
+    fi
+}
+
+trap 'write_duration_report $?' EXIT
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
