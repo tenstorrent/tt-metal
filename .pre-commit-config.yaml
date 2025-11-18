@@ -47,7 +47,7 @@ repos:
   hooks:
     - id: validate-metalium-api
       name: validate-metalium-public-apis
-      entry: python3 scripts/validate_metalium_api.py tt_metal/api
+      entry: python3 scripts/validate_api/entry.py
       language: system
       pass_filenames: false
 - repo: local
