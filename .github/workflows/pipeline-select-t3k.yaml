@@ -81,11 +81,11 @@ on:
         required: false
         type: boolean
         default: false
-      t3000-nightly:
+      t3000-model-perf:
         required: false
         type: boolean
         default: false
-      t3000-model-perf:
+      t3000-nightly:
         required: false
         type: boolean
         default: false
@@ -122,8 +122,8 @@ jobs:
               echo "run-unit=${{ inputs.t3000-unit != 'disabled' }}" >> $GITHUB_OUTPUT
               echo "run-demo=${{ inputs.t3000-demo != 'disabled' }}" >> $GITHUB_OUTPUT
               echo "run-frequent=${{ inputs.t3000-frequent }}" >> $GITHUB_OUTPUT
-              echo "run-nightly=${{ inputs.t3000-nightly }}" >> $GITHUB_OUTPUT
               echo "run-model-perf=${{ inputs.t3000-model-perf }}" >> $GITHUB_OUTPUT
+              echo "run-nightly=${{ inputs.t3000-nightly }}" >> $GITHUB_OUTPUT
               echo "run-profiler=${{ inputs.t3000-profiler }}" >> $GITHUB_OUTPUT
               echo "run-perplexity=${{ inputs.t3000-perplexity }}" >> $GITHUB_OUTPUT
               ;;
@@ -131,8 +131,8 @@ jobs:
               echo "run-unit=true" >> $GITHUB_OUTPUT  
               echo "run-demo=true" >> $GITHUB_OUTPUT
               echo "run-frequent=true" >> $GITHUB_OUTPUT
-              echo "run-nightly=false" >> $GITHUB_OUTPUT
               echo "run-model-perf=false" >> $GITHUB_OUTPUT
+              echo "run-nightly=false" >> $GITHUB_OUTPUT
               echo "run-profiler=false" >> $GITHUB_OUTPUT
               echo "run-perplexity=false" >> $GITHUB_OUTPUT
               ;;
@@ -140,8 +140,8 @@ jobs:
               echo "run-unit=false" >> $GITHUB_OUTPUT
               echo "run-demo=false" >> $GITHUB_OUTPUT
               echo "run-frequent=false" >> $GITHUB_OUTPUT
-              echo "run-nightly=false" >> $GITHUB_OUTPUT
               echo "run-model-perf=false" >> $GITHUB_OUTPUT
+              echo "run-nightly=false" >> $GITHUB_OUTPUT
               echo "run-profiler=false" >> $GITHUB_OUTPUT
               echo "run-perplexity=true" >> $GITHUB_OUTPUT
               ;;
@@ -190,16 +190,6 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       model: ${{ inputs.trigger_type == 'manual' && inputs.t3000-frequent || 'all' }}
-  t3000-nightly-tests:
-    if: ${{ needs.determine-tests.outputs.run-nightly == 'true' }}
-    needs: [build-artifact, determine-tests]
-    secrets: inherit
-    uses: ./.github/workflows/t3000-nightly-tests-impl.yaml
-    with:
-      extra-tag: ${{ inputs.extra-tag }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   t3000-model-perf-tests:
     if: ${{ needs.determine-tests.outputs.run-model-perf == 'true' }}
     needs: [build-artifact, determine-tests]
@@ -211,6 +201,16 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       model: ${{ inputs.trigger_type == 'manual' && inputs.t3000-model-perf || 'all' }}
+  t3000-nightly-tests:
+    if: ${{ needs.determine-tests.outputs.run-nightly == 'true' }}
+    needs: [build-artifact, determine-tests]
+    secrets: inherit
+    uses: ./.github/workflows/t3000-nightly-tests-impl.yaml
+    with:
+      extra-tag: ${{ inputs.extra-tag }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   t3000-profiler-tests:
     if: ${{ needs.determine-tests.outputs.run-profiler == 'true' }}
     needs: [build-artifact, determine-tests]
