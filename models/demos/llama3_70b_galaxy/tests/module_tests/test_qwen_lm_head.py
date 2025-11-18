@@ -87,9 +87,7 @@ def test_qwen_lm_head_inference(seq_len, batch_size, mesh_device, reset_seeds):
     tt_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,
-        mesh_mapper=ttnn.ShardTensor2dMesh(
-            mesh_device, dims=(None, 3) if model_args.is_galaxy else (None, None), mesh_shape=model_args.cluster_shape
-        ),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 3), mesh_shape=model_args.cluster_shape),
         dtype=ttnn.bfloat8_b,
         memory_config=model_args.model_config["SHARDED_LM_HEAD_INPUT_RING_MEMCFG"],
         layout=ttnn.TILE_LAYOUT,
@@ -102,9 +100,7 @@ def test_qwen_lm_head_inference(seq_len, batch_size, mesh_device, reset_seeds):
     tt_outputs = [
         ttnn.to_torch(
             tt_output,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(
-                mesh_device, model_args.cluster_shape, dims=(3, 1) if model_args.is_galaxy else (1, 3)
-            ),
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, model_args.cluster_shape, dims=(3, 1)),
         )
         for tt_output in tt_outputs
     ]

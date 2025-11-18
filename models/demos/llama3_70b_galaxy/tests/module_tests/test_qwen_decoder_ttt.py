@@ -201,7 +201,7 @@ def test_qwen_decoder_ttt_inference(
         dtype=ttnn.int32,
         mesh_mapper=ttnn.ShardTensor2dMesh(
             mesh_device,
-            dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+            dims=(None, 0) if (batch_size > 1) else (None, None),
             mesh_shape=model_args.cluster_shape,
         ),
     )
@@ -225,7 +225,7 @@ def test_qwen_decoder_ttt_inference(
         decode_input = model_args.prepare_residual_tensor_decode(
             tt_decode_input,
             model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
-            force_replicated=False if model_args.is_galaxy else True,
+            force_replicated=False,
         )
 
         # Get cos/sin matrices for the current position of each user
@@ -279,7 +279,7 @@ def test_qwen_decoder_ttt_inference(
             dtype=ttnn.int32,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 mesh_device,
-                dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+                dims=(None, 0) if (batch_size > 1) else (None, None),
                 mesh_shape=model_args.cluster_shape,
             ),
         )

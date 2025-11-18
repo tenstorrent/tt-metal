@@ -176,7 +176,7 @@ def test_llama_decoder_inference(
         dtype=ttnn.int32,
         mesh_mapper=ttnn.ShardTensor2dMesh(
             mesh_device,
-            dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+            dims=(None, 0) if (batch_size > 1) else (None, None),
             mesh_shape=model_args.cluster_shape,
         ),
     )
@@ -245,7 +245,7 @@ def test_llama_decoder_inference(
             dtype=ttnn.int32,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 mesh_device,
-                dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+                dims=(None, 0) if (batch_size > 1) else (None, None),
                 mesh_shape=model_args.cluster_shape,
             ),
         )

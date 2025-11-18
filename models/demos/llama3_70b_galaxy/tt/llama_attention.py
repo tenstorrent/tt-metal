@@ -592,13 +592,26 @@ class TtLlamaAttention(LightweightModule):
         if seq_len > 2048:
             x_11SH = ttnn.reshape(x_11SH, [1, seq_len // 2048, 2048, -1])
 
-        xqkv = ttnn.linear(
-            x_11SH,
-            self.wqkv_interleaved,
-            dtype=self.ccl_dtype if self.TG else ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config_hifi2,
-            program_config=self.model_config["XQKV_PREFILL_PROGCFG"](seq_len),
+        # xqkv = ttnn.linear(
+        #     x_11SH,
+        #     self.wqkv_interleaved,
+        #     dtype=self.ccl_dtype if self.TG else ttnn.bfloat16,
+        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        #     compute_kernel_config=self.compute_kernel_config_hifi2,
+        #     program_config=self.model_config["XQKV_PREFILL_PROGCFG"](seq_len),
+        # )
+
+        xqkv = ttnn.experimental.minimal_matmul(
+            input_tensor=x_11SH,
+            weight_tensor=self.wqkv_interleaved,
+            config=ttnn.MinimalMatmulConfig(
+                M_block_size=8,
+                K_block_size=8,
+                N_block_size=8,
+                subblock_h=2,
+                subblock_w=2,
+                compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
+            ),
         )
 
         ttnn.deallocate(x_11SH)
@@ -801,13 +814,25 @@ class TtLlamaAttention(LightweightModule):
         if seq_len > 1024:
             attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // 1024, 1024, -1])
 
-        output_11SH = ttnn.linear(
-            attn_output_11SH,
-            self.wo_interleaved,
-            compute_kernel_config=self.compute_kernel_config_hifi2_fp16,
-            dtype=ttnn.bfloat8_b,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=self.model_config["WO_PREFILL_PROGCFG"](seq_len),
+        # output_11SH = ttnn.linear(
+        #     attn_output_11SH,
+        #     self.wo_interleaved,
+        #     compute_kernel_config=self.compute_kernel_config_hifi2_fp16,
+        #     dtype=ttnn.bfloat8_b,
+        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        #     program_config=self.model_config["WO_PREFILL_PROGCFG"](seq_len),
+        # )
+        output_11SH = ttnn.experimental.minimal_matmul(
+            input_tensor=attn_output_11SH,
+            weight_tensor=self.wo_interleaved,
+            config=ttnn.MinimalMatmulConfig(
+                M_block_size=8,
+                K_block_size=8,
+                N_block_size=8,
+                subblock_h=2,
+                subblock_w=2,
+                compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
+            ),
         )
 
         if seq_len > 1024:
