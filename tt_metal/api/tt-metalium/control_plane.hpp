@@ -29,33 +29,33 @@ namespace tt::umd {
 
 class Cluster;
 
-}   // namespace tt::umd
+}  // namespace tt::umd
 
 namespace tt::tt_fabric {
 
 class TopologyMapper;
 
 // TODO: remove this once UMD provides API for UBB ID and bus ID
- struct UbbId {
-     std::uint32_t tray_id;
-     std::uint32_t asic_id;
- };
+struct UbbId {
+    std::uint32_t tray_id;
+    std::uint32_t asic_id;
+};
 
- uint16_t get_bus_id(tt::umd::Cluster& cluster, ChipId chip_id);
- UbbId get_ubb_id(tt::umd::Cluster& cluster, ChipId chip_id);
+uint16_t get_bus_id(tt::umd::Cluster& cluster, ChipId chip_id);
+UbbId get_ubb_id(tt::umd::Cluster& cluster, ChipId chip_id);
 
- class FabricContext;
+class FabricContext;
 
- // This struct provides information for how a process binds to a particular
- // mesh and local mesh rank (MeshHostRankId rename - #24178) in the mesh graph
- // descriptor.
- struct LocalMeshBinding {
-     // Can bind multiple meshes to a single host. Most use-cases
-     // only require a 1:1 host to mesh mapping. At least one mesh_id
-     // is guaranteed to be present in this vector.
-     std::vector<MeshId> mesh_ids;
-     MeshHostRankId host_rank;
- };
+// This struct provides information for how a process binds to a particular
+// mesh and local mesh rank (MeshHostRankId rename - #24178) in the mesh graph
+// descriptor.
+struct LocalMeshBinding {
+    // Can bind multiple meshes to a single host. Most use-cases
+    // only require a 1:1 host to mesh mapping. At least one mesh_id
+    // is guaranteed to be present in this vector.
+    std::vector<MeshId> mesh_ids;
+    MeshHostRankId host_rank;
+};
 
 // In multi-host context, APIs parameterized with MeshScope, can return
 // results for local mesh or global mesh.
@@ -92,6 +92,7 @@ public:
     void configure_routing_tables_for_fabric_ethernet_channels(
         tt::tt_fabric::FabricConfig fabric_config, tt_fabric::FabricReliabilityMode reliability_mode);
     void write_routing_tables_to_all_chips() const;
+    void write_fabric_telemetry_to_all_chips(const FabricNodeId& fabric_node_id) const;
 
     // Return mesh_id, chip_id from physical chip id
     FabricNodeId get_fabric_node_id_from_physical_chip_id(ChipId physical_chip_id) const;

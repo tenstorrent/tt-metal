@@ -82,6 +82,7 @@ target_sources(
         topology/topology.cpp
         telemetry/ethernet/ethernet_helpers.cpp
         telemetry/ethernet/ethernet_metrics.cpp
+        telemetry/ethernet/fabric_telemetry_reader.cpp
         telemetry/arc/arc_metrics.cpp
         telemetry/system/system_metrics.cpp
         telemetry/hal/hal.cpp
