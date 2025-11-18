@@ -83,6 +83,8 @@ UntilizeWithHaloProgramFactory::cached_program_t UntilizeWithHaloProgramFactory:
     auto op_trace_metadata = sliding_window::generate_op_trace_metadata(operation_attributes.config);
     auto shard_boundaries = sliding_window::generate_shard_boundaries(operation_attributes.config);
     const uint32_t input_shard_height = input_tensor.memory_config().shard_spec()->shape[0];
+
+    // Use input shard height to correctly map pixels to input cores
     auto tensor_metadata =
         sliding_window::generate_tensor_metadata(pad_metadata, operation_attributes.config, input_shard_height);
 
@@ -155,7 +157,12 @@ UntilizeWithHaloProgramFactory::cached_program_t UntilizeWithHaloProgramFactory:
     const tt::DataFormat out_df = datatype_to_dataformat_converter(output_tensor.dtype());
     const uint32_t out_nbytes = datum_size(out_df);
 
-    const CoreRangeSet all_cores = output_tensor.shard_spec().value().grid;
+    // For cross-core transfer with remote_read=false, kernel runs on SOURCE cores (input grid)
+    // and pushes data to destination cores. So we need to run on input grid, not output grid.
+    const uint32_t input_num_cores = input_tensor.memory_config().shard_spec()->grid.num_cores();
+    const bool cross_core_transfer = (input_num_cores != ncores_nhw);
+    const CoreRangeSet all_cores = (!remote_read && cross_core_transfer) ? input_tensor.shard_spec().value().grid
+                                                                         : output_tensor.shard_spec().value().grid;
 
     const ShardOrientation shard_orientation = output_tensor.shard_spec().value().orientation;
     const auto input_shard_shape = input_tensor.shard_spec().value().shape;
@@ -173,7 +180,9 @@ UntilizeWithHaloProgramFactory::cached_program_t UntilizeWithHaloProgramFactory:
     if (skip_untilize) {
         uint32_t in_nbytes = datum_size(in_df);
         in_page_size = input_shard_shape[1] * in_nbytes;
-        input_npages = remapped_input_shard_shape_for_output_grid;
+        // For cross-core transfer, use actual input shard height for src_cb sizing
+        // since we're reading from input cores with their original shard layout
+        input_npages = cross_core_transfer ? input_shard_shape[0] : remapped_input_shard_shape_for_output_grid;
     }
 
     // Calculate aligned stick size - used for both input and output since channels don't change
@@ -187,6 +196,8 @@ UntilizeWithHaloProgramFactory::cached_program_t UntilizeWithHaloProgramFactory:
     CBIndices cb_indices = CBIndices();
 
     // The input CB can either be tiled or row-major
+    // For cross-core transfer with remote_read=false, all_cores is INPUT cores, so src_cb
+    // should be backed by src_buffer (both on input cores)
     cb_indices.src_cb_id = cb_indices.get_next_cb_id();
     auto src_cb =
         create_circular_buffer(program, all_cores, cb_indices.src_cb_id, in_df, input_npages, in_page_size, src_buffer);
@@ -203,6 +214,8 @@ UntilizeWithHaloProgramFactory::cached_program_t UntilizeWithHaloProgramFactory:
     uint32_t out_cb_pagesize = aligned_stick_nbytes;
     uint32_t out_cb_npages = max_out_nsticks_per_core;
     cb_indices.out_cb_id = cb_indices.get_next_cb_id();
+    // Always associate out_cb with dst_buffer to get the correct L1 address for NOC writes.
+    // For cross-core transfer, kernel uses this address to write to remote output cores.
     auto out_cb = create_circular_buffer(
         program, all_cores, cb_indices.out_cb_id, out_df, out_cb_npages, out_cb_pagesize, dst_buffer);
 

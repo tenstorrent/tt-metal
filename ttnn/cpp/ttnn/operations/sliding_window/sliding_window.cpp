@@ -663,14 +663,26 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
         ++core_id;
     }
 
+    // Compute maximum source core ID to properly size config vectors
+    // When input has more cores than output, src_core_id can exceed num_cores_nhw
+    uint32_t max_src_core_id = 0;
+    for (const auto& [src_dst, data] : per_core_gather_data) {
+        auto [src_core_id, dst_core_id] = src_dst;
+        if (src_core_id != PAD_LOCAL_SENTINAL && src_core_id > max_src_core_id) {
+            max_src_core_id = src_core_id;
+        }
+    }
+    uint32_t num_src_cores = max_src_core_id + 1;
+
     // construct the config tensors
-    // pad_config: length num_cores_nhw - each element (for core i): [dst_start0, length0, dst_start1, length1, ...]
+    // pad_config: indexed by dst_core_id (output cores)
+    // local_config/remote_config: indexed by src_core_id (input cores) for remote_read=false
     std::vector<std::vector<uint32_pair_t>> pad_config;
     std::vector<std::pair<uint32_triplet_t, std::vector<uint32_triplet_t>>> local_config;
     std::vector<std::vector<std::pair<uint32_triplet_t, std::vector<uint32_triplet_t>>>> remote_config;
     pad_config.resize(num_cores_nhw);
-    local_config.resize(num_cores_nhw);
-    remote_config.resize(num_cores_nhw);
+    local_config.resize(num_src_cores);
+    remote_config.resize(remote_read ? num_cores_nhw : num_src_cores);
 
     // Split off padding, local transfer, remote transfer operations into their own configs
     for (const auto& [src_dst, data] : per_core_gather_data) {
@@ -678,6 +690,7 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
         bool is_pad = src_core_id == PAD_LOCAL_SENTINAL;
         bool is_local = src_core_id == dst_core_id;
         bool is_remote = !is_local && !is_pad;
+
         if (is_pad) {
             for (auto [src_start, dst_start, length] : data) {
                 pad_config[dst_core_id].push_back({dst_start, length});
@@ -697,8 +710,12 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
         }
     }
 
-    std::vector<GatherConfig> gather_configs(num_cores_nhw);
-    for (int core_id = 0; core_id < local_config.size(); core_id++) {
+    // Size gather_configs based on where kernel runs:
+    // - remote_read=false: kernel on source cores, config indexed by src_core_id
+    // - remote_read=true: kernel on dest cores, config indexed by dst_core_id
+    const uint32_t num_gather_config_cores = remote_read ? num_cores_nhw : num_src_cores;
+    std::vector<GatherConfig> gather_configs(num_gather_config_cores);
+    for (uint32_t core_id = 0; core_id < local_config.size(); core_id++) {
         const auto& config = local_config[core_id];
         const auto& [src_core_id, dst_core_id, num_copies] = config.first;
         std::vector<GatherTransfer> transfers;
@@ -708,11 +725,11 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
             const uint16_t size = std::get<2>(transfer);
             transfers.emplace_back(src_offset_id, dst_offset_id, size);
         }
-        GatherHeader header{src_core_id, dst_core_id, transfers.size()};
+        GatherHeader header{src_core_id, dst_core_id, static_cast<uint16_t>(transfers.size())};
         gather_configs[core_id].routes.push_back(GatherRoute{header, transfers});
     }
 
-    for (int core_id = 0; core_id < remote_config.size(); core_id++) {
+    for (uint32_t core_id = 0; core_id < remote_config.size(); core_id++) {
         for (const auto& destination : remote_config[core_id]) {
             const auto& [src_core_id, dst_core_id, num_copies] = destination.first;
             std::vector<GatherTransfer> transfers;
@@ -722,7 +739,7 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
                 const uint16_t size = std::get<2>(transfer);
                 transfers.emplace_back(src_offset_id, dst_offset_id, size);
             }
-            GatherHeader header{src_core_id, dst_core_id, transfers.size()};
+            GatherHeader header{src_core_id, dst_core_id, static_cast<uint16_t>(transfers.size())};
             gather_configs[core_id].routes.push_back(GatherRoute{header, transfers});
         }
     }
@@ -773,9 +790,17 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
         return flattened_config;
     };
 
-    std::vector<std::vector<uint32_pair_t>> pad_config0(num_cores_nhw);
-    std::vector<std::vector<uint32_pair_t>> pad_config1(num_cores_nhw);
-    for (int core_idx = 0; core_idx < pad_config.size(); core_idx++) {
+    // Size pad_config to match where kernel runs:
+    // - remote_read=false: kernel on source cores, pad_config indexed by source core
+    // - remote_read=true: kernel on dest cores, pad_config indexed by dest core
+    // Note: pad_config is originally indexed by dst_core_id, need to remap for remote_read=false
+    const uint32_t num_config_cores = remote_read ? num_cores_nhw : num_src_cores;
+    std::vector<std::vector<uint32_pair_t>> pad_config0(num_config_cores);
+    std::vector<std::vector<uint32_pair_t>> pad_config1(num_config_cores);
+    // Copy pad_config entries, but limit to the number of config cores to avoid out-of-bounds
+    // For remote_read=false when src_cores < dst_cores, we only copy entries for cores where kernel runs
+    const uint32_t pad_config_copy_limit = std::min(static_cast<uint32_t>(pad_config.size()), num_config_cores);
+    for (uint32_t core_idx = 0; core_idx < pad_config_copy_limit; core_idx++) {
         const auto& config = pad_config[core_idx];
         auto middle = config.begin() + config.size() / 2;
         pad_config0[core_idx] = std::vector<uint32_pair_t>(config.begin(), middle);
