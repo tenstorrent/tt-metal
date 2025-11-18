@@ -23,11 +23,14 @@ void MAIN {
     constexpr auto cb_out = tt::CBIndex::c_2;
 
     unary_op_init_common(cb_in0, cb_out);
+
     BINARY_SFPU_INIT
+
+    cb_wait_front(cb_in1, num_tiles_per_cycle);
 
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
         cb_wait_front(cb_in0, num_tiles_per_cycle);
-        cb_wait_front(cb_in1, num_tiles_per_cycle);
+
         cb_reserve_back(cb_out, num_tiles_per_cycle);
 
         tile_regs_acquire();
@@ -62,7 +65,6 @@ void MAIN {
             FILL_LLK(i * 3 + 1, scalar_value);
 #endif
 #endif
-
             BINARY_SFPU_OP(i * 3, i * 3 + 1, i * 3 + 2, i * 3);
         }
 
@@ -74,9 +76,8 @@ void MAIN {
         }
         tile_regs_release();
 
-        cb_push_back(cb_out, num_tiles_per_cycle);
         cb_pop_front(cb_in0, num_tiles_per_cycle);
-        cb_pop_front(cb_in1, num_tiles_per_cycle);
+        cb_push_back(cb_out, num_tiles_per_cycle);
     }
 }
 }  // namespace NAMESPACE
