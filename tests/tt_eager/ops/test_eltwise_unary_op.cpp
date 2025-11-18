@@ -225,8 +225,7 @@ void test_numerically() {
         TT_FATAL(allclose, "Error");
     }
     {
-        // Increased absolute tolerance from 1e-2f to 2e-2f due to approximation mode differences
-        auto allclose = run_test<UnaryOpType::LOG>(device, shape, 0.0f, 1.0f, 1e-1f, 2e-2f);
+        auto allclose = run_test<UnaryOpType::LOG>(device, shape, 0.0f, 1.0f, 1e-1f, 1e-2f);
         TT_FATAL(allclose, "Error");
     }
     {
