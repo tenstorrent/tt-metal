@@ -90,6 +90,7 @@ python model_tracer/generic_ops_tracer.py <test_path> --store
 
 **Note:** Some operations may require custom parameter extraction code in `model_tracer/operation_parameter_extractors.py` if the default extraction doesn't properly parse operation-specific parameters (e.g., `output_dtype` for `typecast`, `dims` for `permute`). Check existing extractors in that file for examples.
 
+
 ### 2. View Configurations
 
 ```bash

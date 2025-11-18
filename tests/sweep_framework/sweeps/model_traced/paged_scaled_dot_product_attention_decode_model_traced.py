@@ -138,7 +138,7 @@ def run(
     torch_input_d = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), dtype_d)(shape_d)
     torch_input_e = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), dtype_e)(shape_e)
 
-    # Placeholder reference output (paged attention is complex)
+    # TODO: Compute a true PyTorch attention golden using traced K/V/page table inputs.
     torch_output_tensor = torch_input_a.clone()
 
     # Convert to TTNN tensors
