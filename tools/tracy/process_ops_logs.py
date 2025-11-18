@@ -742,7 +742,7 @@ def get_device_data_generate_report(
                     perCoreRowDicts.append(perCoreRowDict)
 
         csv_row_headers = set()
-        for row in csv_rows:
+        for row in rowDicts:
             for k in row:
                 csv_row_headers.add(k)
         if export_csv:
@@ -753,10 +753,10 @@ def get_device_data_generate_report(
                         allHeaders.append(header)
                 writer = csv.DictWriter(allOpsCSV, fieldnames=allHeaders)
                 writer.writeheader()
-                for csv_row in csv_rows:
-                    for field, fieldData in csv_row.items():
-                        csv_row[field] = str(fieldData).replace(",", ";")
-                    writer.writerow(csv_row)
+                for rowDict in rowDicts:
+                    for field, fieldData in rowDict.items():
+                        rowDict[field] = str(fieldData).replace(",", ";")
+                    writer.writerow(rowDict)
             logger.info(f"Device only OPs csv generated at: {allOpsCSVPath}")
             with open(perCoreCSVPath, "w") as perCoreCSV:
                 perCoreCSVHeader = ["device ID", "op2op ID"] + [core for core in perCoreCSVHeader]
