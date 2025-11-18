@@ -170,8 +170,6 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/serialization/serializable.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/serialization/serialization.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/serialization/serialization.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/tokenizers/bpe_tokenizer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/tokenizers/bpe_tokenizer.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tokenizers/char_tokenizer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tokenizers/char_tokenizer.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tokenizers/char_tokenizer_trainer.cpp
@@ -410,7 +408,6 @@ target_link_libraries(
         xtensor
         xtensor-blas
         xtl
-        tokenizers_cpp
         Boost::core
         Boost::container
         tt-logger
@@ -426,17 +423,7 @@ target_include_directories(ttml PUBLIC ${msgpack_SOURCE_DIR}/include)
 message(STATUS "cli11_SOURCE_DIR: ${CLI11_SOURCE_DIR}")
 target_include_directories(ttml PUBLIC ${CLI11_SOURCE_DIR}/include)
 
-target_include_directories(ttml PUBLIC ${TOKENZIER_CPP_PATH}/include)
-
 if(ENABLE_LIBCXX)
-    target_link_libraries(
-        tokenizers_cpp
-        PUBLIC
-            ${LIBC++}
-            ${LIBC++ABI}
-    )
-    target_compile_options(tokenizers_cpp PUBLIC -stdlib=libc++)
-
     target_link_libraries(
         PUBLIC
             ${LIBC++}
