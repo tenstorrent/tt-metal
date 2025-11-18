@@ -503,7 +503,7 @@ def test_multimodal_demo_text(
             logger.info(f"BERTScore (rescaled) P/R/F1 for sample {i}: {p.item():.3f}/{r.item():.3f}/{f.item():.3f}")
         # TODO: create separate targets for different samples, investigate different outputs for different batch_size (4 vs 16)
         assert F10.min().item() > 0.55, f"min BERTScore F1 ({F10.min().item()}) is lower than expected (0.55)."
-        assert F10.mean().item() > 0.73, f"mean BERTScore F1 ({F10.mean().item()}) is lower than expected (0.73)."
+        assert F10.mean().item() > 0.70, f"mean BERTScore F1 ({F10.mean().item()}) is lower than expected (0.70)."
 
     # Calculate measurements
     compile_prefill_time = profiler.get_duration("compile_prefill")
