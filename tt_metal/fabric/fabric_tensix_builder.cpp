@@ -96,12 +96,9 @@ size_t find_max_eth_channels(const std::vector<tt_metal::IDevice*>& all_active_d
 FabricTensixDatamoverConfig::FabricTensixDatamoverConfig() {
     // Initialize channel mappings and configurations, skipping the rest initilization if there are no ethernet found
     if (!initialize_channel_mappings()) {
-        std::cout << "Fabric Tensix Datamover Config Constructor: Skipping channel mappings and buffer allocations"
-                  << std::endl;
         return;
     }
     calculate_buffer_allocations();
-    std::cout << "Fabric Tensix Datamover Config Constructor: Calculated buffer allocations" << std::endl;
     create_configs();  // Mode-aware config creation
 }
 
@@ -256,17 +253,16 @@ void FabricTensixDatamoverConfig::calculate_buffer_allocations() {
     }
 
     // Calculate buffers per channel based on available space and max channels
-    std::cout << "Fabric Mux Buffer Allocation" << std::endl;
-    std::cout << "l1_base: " << l1_base << std::endl;
-    std::cout << "l1_size: " << l1_size << std::endl;
-    std::cout << "l1_alignment: " << l1_alignment << std::endl;
-    std::cout << "num_channels_: " << num_channels_ << std::endl;
-    std::cout << "buffer_size_bytes_full_size_channel_: " << buffer_size_bytes_full_size_channel_ << std::endl;
     size_t space_needed_for_max_channels = num_channels_for_mux_ * buffer_size_bytes_full_size_channel_;
-    num_buffers_per_channel_ = std::bit_floor(space_per_risc / space_needed_for_max_channels);
-    std::cout << "space_needed_for_max_channels: " << space_needed_for_max_channels << std::endl;
-    std::cout << "space_per_risc: " << space_per_risc << std::endl;
-    std::cout << "num_buffers_per_channel_: " << num_buffers_per_channel_ << std::endl;
+    size_t number_of_buffers_per_channel = std::bit_floor(space_per_risc / space_needed_for_max_channels);
+    // To prevent overflow of num_buffers_per_channel_ (which is uint8_t), we max number of buffers per channel to 128
+    if (number_of_buffers_per_channel > 128) {
+        log_warning(
+            tt::LogMetal, "Number of buffers per channel is greater than 128, setting to 128 to prevent bit overflow");
+        num_buffers_per_channel_ = 128;
+    } else {
+        num_buffers_per_channel_ = static_cast<uint8_t>(number_of_buffers_per_channel);
+    }
 
     // Set base addresses for each core type with proper L1 alignment
     for (size_t i = 0; i < num_used_riscs_per_tensix_; ++i) {
