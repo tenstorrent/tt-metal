@@ -54,7 +54,8 @@ std::unordered_map<std::string, std::unordered_map<std::string, uint32_t>> compu
     return intermesh_connections;
 }
 
-void generate_mesh_graph_descriptor(const std::string& cabling_descriptor_path, const std::string& output_path) {
+void generate_mesh_graph_descriptor(
+    const std::string& cabling_descriptor_path, const std::string& output_path, OutputFormat format, bool verbose) {
     // Validate input file exists
     std::ifstream test_file(cabling_descriptor_path);
     if (!test_file.is_open()) {
@@ -62,7 +63,9 @@ void generate_mesh_graph_descriptor(const std::string& cabling_descriptor_path, 
     }
     test_file.close();
 
-    std::cout << "Reading cabling descriptor: " << cabling_descriptor_path << std::endl;
+    if (verbose) {
+        std::cout << "Reading cabling descriptor: " << cabling_descriptor_path << std::endl;
+    }
 
     // First pass: determine number of hosts by parsing the cabling descriptor
     // We'll use a temporary hostname list to figure out the actual number of hosts needed
@@ -82,10 +85,28 @@ void generate_mesh_graph_descriptor(const std::string& cabling_descriptor_path, 
     hosts = cabling_descriptor.get_deployment_hosts();
     auto chip_connections = cabling_descriptor.get_chip_connections();
 
+    // Validate we have at least one host
+    if (hosts.empty()) {
+        throw std::runtime_error("No hosts found in cabling descriptor");
+    }
+
+    // Validate homogeneous cluster (all hosts must have the same node type)
+    const std::string& expected_node_type = hosts[0].node_type;
+    for (const auto& host : hosts) {
+        if (host.node_type != expected_node_type) {
+            throw std::runtime_error(
+                "Heterogeneous clusters not supported. Expected all hosts to have node type '" + expected_node_type +
+                "', but found '" + host.node_type + "' on " + host.hostname);
+        }
+    }
+
     // Log cluster configuration
     std::cout << "Discovered " << hosts.size() << " host(s) in cabling descriptor" << std::endl;
-    for (const auto& host : hosts) {
-        std::cout << "  " << host.hostname << ": " << host.node_type << std::endl;
+    std::cout << "Node type: " << expected_node_type << std::endl;
+    if (verbose) {
+        for (const auto& host : hosts) {
+            std::cout << "  " << host.hostname << ": " << host.node_type << std::endl;
+        }
     }
 
     // Compute intermesh connections
@@ -98,7 +119,15 @@ void generate_mesh_graph_descriptor(const std::string& cabling_descriptor_path, 
             total_connections++;
         }
     }
-    std::cout << "Computed " << total_connections << " inter-mesh connection(s)" << std::endl;
+
+    if (verbose) {
+        std::cout << "Computed " << total_connections << " inter-mesh connection(s)" << std::endl;
+        for (const auto& [src_host, conn] : intermesh_connections) {
+            for (const auto& [dst_host, count] : conn) {
+                std::cout << "  " << src_host << " <-> " << dst_host << ": " << count << " channel(s)" << std::endl;
+            }
+        }
+    }
 
     // Create node type lookup
     auto node_type_lookup = create_node_type_lookup();
@@ -106,26 +135,22 @@ void generate_mesh_graph_descriptor(const std::string& cabling_descriptor_path, 
     // Generate Mesh Graph Descriptor using protobuf
     tt::tt_fabric::proto::MeshGraphDescriptor mgd;
 
-    // Determine common architecture, device topology, and channel count from first host
-    if (hosts.empty()) {
-        throw std::runtime_error("No hosts found in cabling descriptor");
-    }
-
-    const auto& first_host = hosts[0];
-    auto it = node_type_lookup.find(first_host.node_type);
+    // Determine architecture, device topology, and channel count from node type
+    auto it = node_type_lookup.find(expected_node_type);
     if (it == node_type_lookup.end()) {
         throw std::runtime_error(
-            "Unknown node type '" + first_host.node_type + "'. " +
-            "Please add this node type to the node_type_lookup table in generate_mgd.cpp");
+            "Unknown node type '" + expected_node_type + "'. " +
+            "Supported types: N300_LB_DEFAULT, N300_QB_DEFAULT, WH_GALAXY*, P150_LB, P150_QB_AE_DEFAULT, " +
+            "P300_QB_GE, BH_GALAXY*. Please add this node type to the node_type_lookup table if needed.");
     }
 
     std::vector<int> device_dims = it->second.device_dims;
     tt::tt_fabric::proto::Architecture arch = it->second.arch;
     int channel_count = it->second.channel_count;
 
-    std::cout << "Using architecture: " << tt::tt_fabric::proto::Architecture_Name(arch) << std::endl;
+    std::cout << "Architecture: " << tt::tt_fabric::proto::Architecture_Name(arch) << std::endl;
     std::cout << "Device topology: " << device_dims[0] << "x" << device_dims[1] << std::endl;
-    std::cout << "Channel count: " << channel_count << std::endl;
+    std::cout << "Channels per connection: " << channel_count << std::endl;
 
     // Create a single mesh descriptor that will be reused for all instances
     auto* mesh_desc = mgd.add_mesh_descriptors();
@@ -305,8 +330,15 @@ void generate_mesh_graph_descriptor(const std::string& cabling_descriptor_path, 
 
     std::cout << "\n✓ Mesh Graph Descriptor successfully generated" << std::endl;
     std::cout << "  Output: " << output_path << std::endl;
+    std::cout << "  Format: " << (format == OutputFormat::YAML ? "YAML" : "TextProto") << std::endl;
     std::cout << "  Meshes: " << hosts.size() << std::endl;
     std::cout << "  Connections: " << total_connections << std::endl;
+
+    // Note: Currently both YAML and TextProto use the same protobuf text format
+    // The MGD reader supports both .textproto and .yaml extensions with the same syntax
+    if (format == OutputFormat::YAML && verbose) {
+        std::cout << "\nNote: YAML output uses protobuf text format (compatible with MGD reader)" << std::endl;
+    }
 }
 
 }  // namespace tt::scaleout_tools
