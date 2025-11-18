@@ -96,9 +96,12 @@ size_t find_max_eth_channels(const std::vector<tt_metal::IDevice*>& all_active_d
 FabricTensixDatamoverConfig::FabricTensixDatamoverConfig() {
     // Initialize channel mappings and configurations, skipping the rest initilization if there are no ethernet found
     if (!initialize_channel_mappings()) {
+        std::cout << "Fabric Tensix Datamover Config Constructor: Skipping channel mappings and buffer allocations"
+                  << std::endl;
         return;
     }
     calculate_buffer_allocations();
+    std::cout << "Fabric Tensix Datamover Config Constructor: Calculated buffer allocations" << std::endl;
     create_configs();  // Mode-aware config creation
 }
 
@@ -253,9 +256,17 @@ void FabricTensixDatamoverConfig::calculate_buffer_allocations() {
     }
 
     // Calculate buffers per channel based on available space and max channels
+    std::cout << "Fabric Mux Buffer Allocation" << std::endl;
+    std::cout << "l1_base: " << l1_base << std::endl;
+    std::cout << "l1_size: " << l1_size << std::endl;
+    std::cout << "l1_alignment: " << l1_alignment << std::endl;
+    std::cout << "num_channels_: " << num_channels_ << std::endl;
+    std::cout << "buffer_size_bytes_full_size_channel_: " << buffer_size_bytes_full_size_channel_ << std::endl;
     size_t space_needed_for_max_channels = num_channels_for_mux_ * buffer_size_bytes_full_size_channel_;
     num_buffers_per_channel_ = std::bit_floor(space_per_risc / space_needed_for_max_channels);
-    TT_FATAL(num_buffers_per_channel_ > 0, "num_buffers_per_channel_ msut be non-zero");
+    std::cout << "space_needed_for_max_channels: " << space_needed_for_max_channels << std::endl;
+    std::cout << "space_per_risc: " << space_per_risc << std::endl;
+    std::cout << "num_buffers_per_channel_: " << num_buffers_per_channel_ << std::endl;
 
     // Set base addresses for each core type with proper L1 alignment
     for (size_t i = 0; i < num_used_riscs_per_tensix_; ++i) {
@@ -560,106 +571,11 @@ tt::tt_fabric::SenderWorkerAdapterSpec FabricTensixDatamoverBuilder::build_conne
     return mux_builder_->build_connection_to_fabric_channel(channel_id);
 }
 
-<<<<<<< HEAD
 tt::tt_fabric::SenderWorkerAdapterSpec FabricTensixDatamoverBuilder::build_connection_to_relay_channel() const {
     // This method connects to relay's channel (for router-to-relay traffic in UDM mode)
     TT_FATAL(relay_builder_ != nullptr, "Relay builder must not be null in UDM mode");
     constexpr uint32_t relay_channel_id = static_cast<uint32_t>(UdmRelayChannelId::ROUTER_CHANNEL);
     return relay_builder_->build_connection_to_fabric_channel(relay_channel_id);
-=======
-std::vector<uint32_t> FabricTensixDatamoverBuilder::get_compile_time_args(tt::tt_metal::IDevice* device) const {
-    const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
-    const auto& fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
-
-    const bool has_dispatch_tunnel = device_has_dispatch_tunnel(device->id());
-    uint32_t dispatch_link_idx =
-        tt_metal::RelayMux::get_dispatch_link_index(local_fabric_node_id_, remote_fabric_node_id_, device);
-    bool is_dispatch_link = has_dispatch_tunnel && link_idx_ == dispatch_link_idx;
-
-    // use normal router config for dispatch link, since it doesn't have tensix extension
-    const auto& fabric_router_config = [&]() {
-        if (is_dispatch_link) {
-            return fabric_context.get_fabric_router_config();
-        } else {
-            return fabric_context.get_fabric_router_config(
-                tt::tt_fabric::FabricEriscDatamoverType::Default,
-                tt::tt_fabric::FabricEriscDatamoverAxis::Short,
-                fabric_tensix_config);
-        }
-    }();
-
-    auto channel_allocator_base = fabric_router_config.channel_allocator.get();
-    const auto channel_allocator =
-        dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator_base);
-    TT_FATAL(channel_allocator != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator.");
-    fabric_mux_config_->set_fabric_endpoint_channel_num_buffers(
-        channel_allocator->get_sender_channel_number_of_slots(0));
-    fabric_mux_config_->set_wait_for_fabric_endpoint_ready(true);
-    fabric_mux_config_->set_fabric_endpoint_status_address(fabric_router_config.edm_status_address);
-    auto ct_args = fabric_mux_config_->get_fabric_mux_compile_time_main_args(fabric_router_config);
-
-    // Add number of upstream routers and sync address
-    ct_args.push_back(static_cast<uint32_t>(upstream_routers_noc_x_.size()));
-    ct_args.push_back(fabric_router_config.edm_local_tensix_sync_address);
-
-    // Get topology-specific fabric router stream IDs based on topology
-    const auto topology = fabric_context.get_fabric_topology();
-    const bool is_2d_fabric = fabric_context.is_2D_routing_enabled();
-
-    const auto worker_channel = is_2d_fabric ? direction_ : 0;
-    const auto& tensix_config = fabric_context.get_tensix_config();
-    const auto worker_stream_id =
-        tensix_config.get_channel_credits_stream_id(device->id(), ethernet_channel_id_, worker_channel);
-
-    std::vector<uint32_t> fabric_stream_ids_ack_to_upstream;
-    std::vector<uint32_t> fabric_stream_ids_check_by_local;
-    switch (topology) {
-        case tt::tt_fabric::Topology::Linear:
-        case tt::tt_fabric::Topology::Ring:
-            fabric_stream_ids_check_by_local = {
-                worker_stream_id,                                                             // default 17
-                tt::tt_fabric::StreamRegAssignments::sender_channel_1_free_slots_stream_id};  // 18
-            break;
-        case tt::tt_fabric::Topology::NeighborExchange:             // no forwarding, only one sender channel
-            fabric_stream_ids_check_by_local = {worker_stream_id};  // default 17
-            break;
-        case tt::tt_fabric::Topology::Mesh:
-        case tt::tt_fabric::Topology::Torus:
-            fabric_stream_ids_check_by_local = {
-                tt::tt_fabric::StreamRegAssignments::sender_channel_1_free_slots_stream_id,  // 18
-                tt::tt_fabric::StreamRegAssignments::sender_channel_2_free_slots_stream_id,  // 19
-                tt::tt_fabric::StreamRegAssignments::sender_channel_3_free_slots_stream_id,  // 20
-                tt::tt_fabric::StreamRegAssignments::sender_channel_4_free_slots_stream_id   // 21
-            };
-            break;
-        default: TT_THROW("Unknown fabric topology: {}", static_cast<int>(topology)); break;
-    }
-
-    // override the worker channel stream id
-    fabric_stream_ids_check_by_local[worker_channel] = worker_stream_id;
-
-    uint8_t num_full_size_channels =
-        fabric_mux_config_->get_num_channels(tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL);
-    std::cout << "worker stream id: " << worker_stream_id << std::endl;
-    std::cout << "Worker channel: " << worker_channel << std::endl;
-    std::cout << "num_full_size_channels: " << static_cast<int>(num_full_size_channels) << std::endl;
-    TT_FATAL(
-        num_full_size_channels == fabric_stream_ids_check_by_local.size(),
-        "the number of fabric stream ids used must equal to the number of mux channels");
-    // Add fabric router stream IDs for full size channels
-    ct_args.insert(ct_args.end(), fabric_stream_ids_check_by_local.begin(), fabric_stream_ids_check_by_local.end());
-
-    // Add persistent channels flags - all channels are persistent except the worker channel.
-    std::vector<uint32_t> is_persistent_channels(num_full_size_channels, 0);
-    for (uint8_t i = 0; i < num_full_size_channels; i++) {
-        if (channel_connection_liveness_check_disable_array_[i]) {
-            is_persistent_channels[i] = 1;
-        }
-    }
-    ct_args.insert(ct_args.end(), is_persistent_channels.begin(), is_persistent_channels.end());
-
-    return ct_args;
->>>>>>> 29e0bda4e0 (Small bugfixes)
 }
 
 uint32_t FabricTensixDatamoverBuilder::get_noc_x() const { return FabricDatamoverBuilderBase::get_noc_x(); }
