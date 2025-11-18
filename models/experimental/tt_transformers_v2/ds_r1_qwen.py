@@ -1,4 +1,6 @@
-#!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 """Pure TTNN implementation of Qwen model (DeepSeek-R1-Distill-Qwen-1.5B)"""
 
 import math
