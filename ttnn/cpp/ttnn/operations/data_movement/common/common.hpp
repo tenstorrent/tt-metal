@@ -198,7 +198,7 @@ private:
 };
 
 ttnn::Shape compute_padded_shape(
-    const ttnn::Shape& logical_shape,
+    ttnn::Shape logical_shape,
     uint32_t tile_height = tt::constants::TILE_HEIGHT,
     uint32_t tile_width = tt::constants::TILE_WIDTH);
 
