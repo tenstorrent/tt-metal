@@ -43,6 +43,7 @@
 #include "ttnn/operations/experimental/ccl/ccl_experimental_pybind.hpp"
 #include "ttnn/operations/experimental/plusone/plusone_pybind.hpp"
 #include "ttnn/operations/experimental/dropout/dropout_pybind.hpp"
+#include "ttnn/operations/experimental/clip_grad_norm/clip_grad_norm_pybind.hpp"
 #include "ttnn/operations/experimental/bcast_to/bcast_to_pybind.hpp"
 #include "ttnn/operations/experimental/reshape/view_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/all_reduce_create_qkv_heads_pybind.hpp"
@@ -105,6 +106,7 @@ void py_module(py::module& module) {
 
     plusone::detail::bind_experimental_plusone_operation(module);
     dropout::detail::bind_experimental_dropout_operation(module);
+    clip_grad_norm::detail::bind_experimental_clip_grad_norm_operation(module);
     reshape::detail::py_bind_view(module);
 
     gelu_backward::detail::bind_experimental_gelu_backward_operation(module);
