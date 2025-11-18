@@ -76,7 +76,7 @@ void Data::rpc_get_programs(rpc::Inspector::GetProgramsResults::Builder& results
         uint32_t j = 0;
         for (const auto& [device_id, status] : program_data.binary_status_per_device) {
             auto device_status = binary_status_list[j++];
-            device_status.setDeviceId(static_cast<uint64_t>(device_id));
+            device_status.setMetalDeviceId(static_cast<uint64_t>(device_id));
             device_status.setStatus(convert_binary_status(status));
         }
 
@@ -161,7 +161,7 @@ void Data::rpc_get_devices_in_use(rpc::Inspector::GetDevicesInUseResults::Builde
     auto device_ids = DevicePool::instance().get_all_active_device_ids();
 
     // Write result
-    auto result_device_ids = results.initDeviceIds(device_ids.size());
+    auto result_device_ids = results.initMetalDeviceIds(device_ids.size());
     size_t i = 0;
     for (const auto& device_id : device_ids) {
         result_device_ids.set(i++, device_id);
@@ -209,7 +209,7 @@ void Data::rpc_get_all_build_envs(rpc::Inspector::GetAllBuildEnvsResults::Builde
     size_t i = 0;
     for (const auto& build_env : build_envs_info) {
         auto item = result_build_envs[i++];
-        item.setDeviceId(build_env.device_id);
+        item.setMetalDeviceId(build_env.device_id);
         // Populate RPC response with build environment info
         auto build_info = item.initBuildInfo();
         build_info.setBuildKey(build_env.build_key);
@@ -294,8 +294,8 @@ rpc::BinaryStatus Data::convert_binary_status(ProgramBinaryStatus status) {
 
 // Helper function to populate the core info
 void Data::populate_core_info(rpc::CoreInfo::Builder& out, const CoreInfo& info, uint32_t event_id) {
-    out.setDeviceId(info.device_id);
-    out.setServicingDeviceId(info.servicing_device_id);
+    out.setMetalDeviceId(info.device_id);
+    out.setServicingMetalDeviceId(info.servicing_device_id);
     // Convert enum to string
     std::string worker_type_str(enchantum::to_string(info.worker_type));
     out.setWorkType(worker_type_str);

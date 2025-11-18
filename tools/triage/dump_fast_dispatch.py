@@ -135,9 +135,9 @@ def build_core_lookup_map(
         category = category_group.category  # "dispatch", "dispatchS", or "prefetch"
 
         for core_entry in category_group.entries:
-            # core_entry.key.chip is logical device_id - convert to unique_id
-            logical_chip_id = core_entry.key.chip
-            unique_id = device_id_mapping.chip_id_to_unique_id(logical_chip_id)
+            # core_entry.key.chip is metal device_id
+            metal_device_id = core_entry.key.chip
+            unique_id = device_id_mapping.get_unique_id(metal_device_id)
 
             # Use unique_id as the key
             key = (unique_id, core_entry.key.x, core_entry.key.y)
@@ -278,7 +278,7 @@ def read_wait_globals(
         y=y,
         worker_type=getattr(core_info, "workType", None),
         cq_id=getattr(core_info, "cqId", None),
-        servicing_device_id=getattr(core_info, "servicingDeviceId", None),
+        servicing_device_id=getattr(core_info, "servicingMetalDeviceId", None),
         last_event_issued_to_cq=getattr(core_info, "eventID", None),
         sem_minus_local=sem_minus_local,
     )

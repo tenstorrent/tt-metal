@@ -16,7 +16,7 @@ from dataclasses import dataclass
 import os
 
 from inspector_data import run as get_inspector_data, InspectorData
-from device_id_mapping import run as get_device_id_mapping, DeviceIdMapping
+from metal_device_id_mapping import run as get_metal_device_id_mapping, MetalDeviceIdMapping
 from elfs_cache import run as get_elfs_cache, ElfsCache
 from triage import triage_singleton, ScriptConfig, run_script, log_check
 from ttexalens.coordinate import OnChipCoordinate
@@ -28,7 +28,7 @@ from run_checks import RunChecks
 
 script_config = ScriptConfig(
     data_provider=True,
-    depends=["inspector_data", "elfs_cache", "run_checks", "device_id_mapping"],
+    depends=["inspector_data", "elfs_cache", "run_checks", "metal_device_id_mapping"],
 )
 
 
@@ -64,7 +64,7 @@ class DispatcherData:
         context: Context,
         elfs_cache: ElfsCache,
         run_checks: RunChecks,
-        device_id_mapping: DeviceIdMapping,
+        metal_device_id_mapping: MetalDeviceIdMapping,
     ):
         self.inspector_data = inspector_data
         self.programs = inspector_data.getPrograms().programs
@@ -74,7 +74,6 @@ class DispatcherData:
         # Each device needs to have its own build_env to get the correct firmware path
         # Cache is keyed by unique_id for consistency
         self._build_env_cache = {}
-        self._device_id_mapping = device_id_mapping
 
         # Get the firmware paths from Inspector RPC build environment instead of relative paths
         # This ensures correct firmware paths for all devices and build configs
@@ -82,8 +81,8 @@ class DispatcherData:
         try:
             all_build_envs = inspector_data.getAllBuildEnvs().buildEnvs
             for build_env in all_build_envs:
-                # build_env.deviceId is logical - remap to unique_id for cache key
-                unique_id = device_id_mapping.chip_id_to_unique_id(build_env.deviceId)
+                # build_env.metalDeviceId is logical - remap to unique_id for cache key
+                unique_id = metal_device_id_mapping.get_unique_id(build_env.metalDeviceId)
                 self._build_env_cache[unique_id] = build_env.buildInfo
         except Exception:
             pass
@@ -380,8 +379,8 @@ def run(args, context: Context):
     inspector_data = get_inspector_data(args, context)
     elfs_cache = get_elfs_cache(args, context)
     run_checks = get_run_checks(args, context)
-    device_id_mapping = get_device_id_mapping(args, context)
-    return DispatcherData(inspector_data, context, elfs_cache, run_checks, device_id_mapping)
+    metal_device_id_mapping = get_metal_device_id_mapping(args, context)
+    return DispatcherData(inspector_data, context, elfs_cache, run_checks, metal_device_id_mapping)
 
 
 if __name__ == "__main__":
