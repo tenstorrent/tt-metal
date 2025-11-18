@@ -14,28 +14,27 @@ namespace ttnn::operations::ccl {
 
 void py_bind_mesh_partition(py::module& module) {
     auto doc =
-        R"doc(mesh_partition(input_tensor: ttnn.Tensor, dim: int, cluster_axis: Optional[int] = None, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+        R"doc(
+        Partitions the input tensor across the mesh such that each device has the i/num_devices-th partition of the input tensor along the specified dimension. This is the inverse of all_gather. When cluster axis is specified, we partition along the cluster axis.
 
-            Partitions the input tensor across the mesh such that each device has the i/num_devices-th partition of the input tensor along the specified dimension. This is the inverse of all_gather. When cluster axis is specified, we partition along the cluster axis.
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
+            dim (int): the dimension to partition along.
+            cluster_axis (int, optional): the cluster axis on the mesh. Defaults to `None`.
 
-            Args:
-                input_tensor (ttnn.Tensor): the input tensor.
-                dim (int): the dimension to partition along.
-                cluster_axis (int, optional): the cluster axis on the mesh. Defaults to `None`.
+        Keyword Args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
-            Keyword Args:
-                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+        Returns:
+            ttnn.Tensor: The partitioned tensor, with output_shape = input_shape for all the unspecified dimensions, and output_shape[dim] = input_shape[dim] / num_devices, where num_devices is the number of devices along the `cluster_axis` if specified, else the total number of devices along the mesh.
 
-           Returns:
-               ttnn.Tensor: The partitioned tensor, with output_shape = input_shape for all the unspecified dimensions, and output_shape[dim] = input_shape[dim] / num_devices, where num_devices is the number of devices along the `cluster_axis` if specified, else the total number of devices along the mesh.
-
-            Example:
-
-                >>> tensor = ttnn.mesh_partition(
-                                tt_input_tensors_list[i],
-                                dim,
-                                cluster_axis=1,
-                                memory_config=output_mem_config))doc";
+        Example:
+            >>> tensor = ttnn.mesh_partition(
+                            tt_input_tensors_list[i],
+                            dim,
+                            cluster_axis=1,
+                            memory_config=output_mem_config)
+        )doc";
 
     using OperationType = decltype(ttnn::mesh_partition);
     ttnn::bind_registered_operation(

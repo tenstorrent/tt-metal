@@ -72,6 +72,7 @@ Tensor Creation
    ttnn.full
    ttnn.full_like
    ttnn.rand
+   ttnn.from_buffer
 
 Matrix Multiplication
 =====================
@@ -516,6 +517,10 @@ CCL
    :toctree: api
    :nosignatures:
    :template: function.rst
+
+   ttnn.all_gather
+   ttnn.reduce_scatter
+   ttnn.all_reduce
 
 Embedding
 =========

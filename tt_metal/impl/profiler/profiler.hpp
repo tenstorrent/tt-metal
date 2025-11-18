@@ -79,7 +79,7 @@ private:
     int device_core_frequency{};
 
     // Thread pool used for processing data when dumping results
-    std::shared_ptr<ThreadPool> thread_pool{};
+    std::shared_ptr<ThreadPool> thread_pool;
 
     // Last fast dispatch read performed flag
     bool is_last_fd_read_done{};
@@ -88,7 +88,7 @@ private:
     uint64_t smallest_timestamp = (1lu << 63);
 
     // Output directory for device profiler logs
-    std::filesystem::path output_dir;
+    std::filesystem::path device_logs_output_dir;
 
     // Hash to zone source locations
     std::unordered_map<uint16_t, tracy::MarkerDetails> hash_to_zone_src_locations;
@@ -107,13 +107,6 @@ private:
 
     // Storage for all core's L1 data buffers
     std::unordered_map<CoreCoord, std::vector<uint32_t>> core_l1_data_buffers;
-
-    // Storage for all noc trace data
-    std::vector<std::unordered_map<RuntimeID, nlohmann::json::array_t>> noc_trace_data;
-
-    // Storage for all noc trace markers that have been converted to json to ensure that the same marker isn't processed
-    // twice
-    std::unordered_set<tracy::TTDeviceMarker> noc_trace_markers_processed;
 
     // Output directory for noc trace data
     std::filesystem::path noc_trace_data_output_dir;
@@ -182,6 +175,10 @@ private:
 
     // Track the smallest timestamp read
     void updateFirstTimestamp(uint64_t timestamp);
+
+    // Generate programs analysis results for device markers
+    void generateAnalysesForDeviceMarkers(
+        const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers) const;
 
     // Dump device results to files
     void writeDeviceResultsToFiles() const;

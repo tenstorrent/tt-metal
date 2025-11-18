@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+//
 // SPDX-License-Identifier: Apache-2.0
 
 #include <CLI/CLI.hpp>
@@ -6,7 +7,6 @@
 #include <core/ttnn_all_includes.hpp>
 #include <csignal>
 #include <cstdint>
-#include <wandbcpp.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
@@ -28,7 +28,6 @@
 #include "optimizers/adamw.hpp"
 #include "optimizers/no_op.hpp"
 #include "optimizers/remote_optimizer.hpp"
-#include "tokenizers/bpe_tokenizer.hpp"
 #include "tokenizers/char_tokenizer.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
@@ -36,15 +35,6 @@
 
 namespace {
 constexpr auto gpt2_tokenizer_file_name = "/gpt2-tokenizer.json";
-}
-
-/* WANDB BLocks this signal.
- Control+C didn't work.
-*/
-void signal_handler(int signum) {
-    std::cout << "\nInterrupt signal (" << signum << ") received.\n";
-    wandbcpp::finish();
-    exit(signum);
 }
 
 using Model = std::shared_ptr<ttml::models::BaseTransformer>;
@@ -100,149 +90,6 @@ using DataLoader = ttml::datasets::DataLoader<
     ttml::datasets::InMemoryTokenDataset,
     std::function<BatchType(std::vector<DatasetSample> &&samples)>,
     BatchType>;
-
-template <typename Tokenizer>
-void generate(
-    Model &model,
-    const Tokenizer &tokenizer,
-    uint32_t max_sequence_length,
-    uint32_t num_heads,
-    uint32_t tokens_to_generate = 1024U,
-    bool enable_tp = false,
-    // Additional sampling params:
-    float temperature = 1.0F,
-    float repetition_penalty = 1.0F,
-    int top_k = -1,
-    float top_p = 1.0F) {
-    model_to_eval(model);
-
-    std::string prompt;
-    fmt::print("Enter a prompt: ");
-    std::getline(std::cin, prompt);
-    if (prompt.empty()) {
-        prompt = "\n";
-    }
-
-    // Encode the prompt
-    auto prompt_tokens = tokenizer.encode(prompt);
-
-    // In case you need a pad token
-    auto pad_token_id = 0U;
-    auto original_vocab_size = tokenizer.get_vocab_size();
-    fmt::println("Original tokenizer vocab size: {}", original_vocab_size);
-
-    auto *device = &ttml::autograd::ctx().get_device();
-    auto num_devices = static_cast<uint32_t>(device->num_devices());
-    // this is workaround for tensor parallel case, we need to have vocab size divisible by 32 per device
-    auto padded_vocab_size = round_up_to_tile(original_vocab_size, (enable_tp ? num_devices : 1U) * 32U);
-
-    // Build mask (causal) for attention
-    std::vector<float> mask;
-    mask.reserve(static_cast<size_t>(max_sequence_length * max_sequence_length));
-    for (uint32_t i = 0; i < max_sequence_length; ++i) {
-        for (uint32_t j = 0; j < max_sequence_length; ++j) {
-            mask.push_back(i >= j ? 1.0F : 0.0F);
-        }
-    }
-
-    auto mask_tensor = ttml::autograd::create_tensor(
-        ttml::core::from_vector(mask, ttnn::Shape({1, 1, max_sequence_length, max_sequence_length}), device));
-
-    // Prepare a padded buffer for the prompt
-    std::vector<uint32_t> prompt_tokens_padded(max_sequence_length, pad_token_id);
-    std::vector<float> padded_logits_vector(padded_vocab_size, 0.0F);
-
-    fmt::print("Generated text:\n");
-    fmt::print("*******************\n");
-    fmt::print("{}", prompt);
-
-    // Sampling setup
-    uint32_t prompt_tokens_padded_size = 0U;
-    uint32_t next_token_id = 0U;
-
-    auto logits_tensor = ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(
-        std::vector<float>(original_vocab_size, 0.0F),
-        ttnn::Shape({1, 1, 1, original_vocab_size}),
-        device,
-        ttnn::Layout::ROW_MAJOR);
-
-    auto next_token_tensor = ttml::core::zeros(ttnn::Shape({1U, 1U, 1U}), device, tt::tt_metal::DataType::UINT32);
-
-    std::vector<uint32_t> next_token_vector;
-    std::vector<float> logits_vector(original_vocab_size, 0.0F);
-
-    // Create a large negative mask for out-of-vocab logits
-    bool need_logits_padding = (padded_vocab_size != original_vocab_size);
-    std::optional<ttnn::Tensor> logits_padding_mask;
-    if (need_logits_padding) {
-        auto vocab_mask = std::vector<float>(padded_vocab_size - original_vocab_size, 1e4F);
-
-        auto argmax_zeros =
-            ttml::core::zeros(ttnn::Shape({1U, 1U, 1U, original_vocab_size}), device, tt::tt_metal::DataType::BFLOAT16);
-
-        auto argmax_nonzero = ttml::core::from_vector<float, tt::tt_metal::DataType::BFLOAT16>(
-            vocab_mask, ttnn::Shape({1U, 1U, 1U, padded_vocab_size - original_vocab_size}), device, ttnn::Layout::TILE);
-
-        auto logits_padding_mask_vector = std::vector<ttnn::Tensor>{argmax_zeros, argmax_nonzero};
-
-        logits_padding_mask = ttnn::concat(logits_padding_mask_vector, 3);
-    }
-    // Main token generation loop
-    for (uint32_t token_idx = 0; token_idx < tokens_to_generate; ++token_idx) {
-        // Possibly truncate the prompt if it exceeds max_sequence_length
-        uint32_t start_idx = 0;
-        if (prompt_tokens.size() > max_sequence_length) {
-            start_idx = static_cast<uint32_t>(prompt_tokens.size() - max_sequence_length);
-        }
-        // Fill padded array
-        for (uint32_t i = 0; i < max_sequence_length; ++i) {
-            prompt_tokens_padded[i] = pad_token_id;
-        }
-        for (uint32_t i = start_idx; i < prompt_tokens.size(); ++i) {
-            prompt_tokens_padded[i - start_idx] = prompt_tokens[i];
-        }
-        prompt_tokens_padded_size = static_cast<uint32_t>(prompt_tokens_padded.size());
-        auto prompt_tensor = ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
-            prompt_tokens_padded,
-            ttnn::Shape({1U, 1U, 1U, prompt_tokens_padded_size}),
-            device,
-            ttnn::Layout::ROW_MAJOR));
-
-        // Forward pass
-        // 'output' shape is presumably [batch=1, 1, seq_len, padded_vocab_size] or something similar
-        auto output = run_model(model, prompt_tensor, mask_tensor);
-        next_token_tensor = ttml::ttnn_fixed::sample(
-            output->get_value(), temperature, ttml::autograd::ctx().get_generator()(), logits_padding_mask);
-
-        // The index of the last token in the "effective" input
-        // (Your indexing may vary depending on how your model outputs are shaped)
-        uint32_t predicted_token_idx =
-            (prompt_tokens.size() > max_sequence_length) ? (max_sequence_length - 1U) : (prompt_tokens.size() - 1U);
-
-        // ** TTNN Argmax **
-
-        auto next_token_vector = ttml::core::to_vector<uint32_t>(next_token_tensor);
-        next_token_id = next_token_vector[predicted_token_idx];
-
-        // Handle out-of-vocabulary token
-        if (next_token_id >= original_vocab_size) {
-            next_token_id = prompt_tokens.back();
-        }
-
-        // Append the new token
-        prompt_tokens.push_back(next_token_id);
-
-        // Decode and print
-        fmt::print("{}", tokenizer.decode({next_token_id}));
-        std::cout.flush();
-
-        // Reset the autograd graph if needed
-        ttml::autograd::ctx().reset_graph();
-    }
-
-    fmt::print("\n*******************\n");
-    model_to_train(model);  // return model to train mode if needed
-}
 
 struct EvalConfig {
     float repetition_penalty = 1.0F;
@@ -454,18 +301,16 @@ int main(int argc, char **argv) {
     CLI::App app{"NanoGPT Example"};
     argv = app.ensure_utf8(argv);
 
-    std::string config_name = std::string(CONFIGS_FOLDER) + "/training_shakespeare_nanogpt.yaml";
+    const char *tt_metal_home = std::getenv("TT_METAL_HOME");
+    TT_FATAL(tt_metal_home != nullptr, "TT_METAL_HOME environment variable is not set");
+    std::string config_name = std::string(tt_metal_home) + "/tt-train/configs/training_shakespeare_nanogpt.yaml";
 
     std::string run_name = "";
-    bool is_eval = false;
     bool add_time_to_name = true;
-    bool enable_wandb = false;
     std::string safetensors_path = "";
     std::string save_and_exit_path = "";
     app.add_option("-c,--config", config_name, "Yaml Config name")->default_val(config_name);
-    app.add_option("-e,--eval", is_eval, "Is evaluation")->default_val(is_eval);
     app.add_option("-t,--add_time_to_name", add_time_to_name, "Add time to run name")->default_val(add_time_to_name);
-    app.add_option("-w,--wandb", enable_wandb, "Enable wandb logging")->default_val(enable_wandb);
     app.add_option("-n,--name", run_name, "Run name")->default_val(run_name);
     app.add_option("-s,--save_and_exit", save_and_exit_path, "Save and exit (path to dumped msgpack)")
         ->default_val(save_and_exit_path);
@@ -475,7 +320,6 @@ int main(int argc, char **argv) {
 
     auto yaml_config = YAML::LoadFile(config_name);
     TrainingConfig config = parse_config(yaml_config);
-    EvalConfig eval_config = parse_eval_config(yaml_config);
     DeviceConfig device_config = parse_device_config(yaml_config);
 
     if (config.enable_mpi) {
@@ -484,9 +328,6 @@ int main(int argc, char **argv) {
 
         auto distributed_ctx = ctx.get_distributed_context();
         fmt::print("Size {}, Rank {}: Initializing MPI context\n", *distributed_ctx->size(), *distributed_ctx->rank());
-
-        // disable wandb for now in case of mpi example
-        enable_wandb = false;
     }
 
     if (device_config.enable_ddp || device_config.enable_tp) {
@@ -504,73 +345,11 @@ int main(int argc, char **argv) {
         fmt::print("  socket_type: {}\n", config.socket_type == SocketType::MPI ? "MPI" : "FABRIC");
     }
 
-    if (enable_wandb) {
-        auto result = signal(SIGINT, signal_handler);
-        if (result == SIG_ERR) {
-            std::cerr << "Failed to set signal handler\n";
-            return -1;
-        }
-    }
-
     if (device_config.enable_tp) {
         if (!config.model_path.empty()) {
             throw std::runtime_error("Save and load is not supported with Tensor Parallel model");
         }
 
-        if (is_eval) {
-            throw std::runtime_error("Evaluation is not supported with Tensor Parallel model");
-        }
-    }
-
-    if (enable_wandb) {
-        auto positional_embedding_type = std::visit(
-            [](auto &&arg) -> std::string {
-                if constexpr (requires { arg.positional_embedding_type; }) {
-                    return arg.positional_embedding_type == ttml::models::gpt2::PositionalEmbeddingType::Trainable
-                               ? "trainable"
-                               : "fixed";
-                } else {
-                    return "n/a";
-                }
-            },
-            config.transformer_config);
-
-        wandbcpp::init({.project = config.project_name, .name = generate_run_name(run_name, config, add_time_to_name)});
-        wandbcpp::update_config({
-            {"model", "transformer"},
-            {"num_heads",
-             static_cast<int>(std::visit([](auto &&arg) { return arg.num_heads; }, config.transformer_config))},
-            {"num_groups",
-             static_cast<int>(std::visit(
-                 [](auto &&arg) {
-                     if constexpr (requires { arg.num_groups; }) {
-                         return arg.num_groups;
-                     } else {
-                         return arg.num_heads;
-                     }
-                 },
-                 config.transformer_config))},
-            {"embedding_dim",
-             static_cast<int>(std::visit([](auto &&arg) { return arg.embedding_dim; }, config.transformer_config))},
-            {"num_blocks",
-             static_cast<int>(std::visit([](auto &&arg) { return arg.num_blocks; }, config.transformer_config))},
-            {"dropout_prob", std::visit([](auto &&arg) { return arg.dropout_prob; }, config.transformer_config)},
-            {"learning_rate", config.learning_rate},
-            {"weight_decay", config.weight_decay},
-            {"batch_size", static_cast<int>(config.batch_size)},
-            {"sequence_length",
-             static_cast<int>(
-                 std::visit([](auto &&arg) { return arg.max_sequence_length; }, config.transformer_config))},
-            {"max_steps", static_cast<int>(config.max_steps)},
-            {"seed", static_cast<int>(config.seed)},
-            {"tokenizer_type", config.tokenizer_type},
-            {"use_kahan_summation", config.use_kahan_summation},
-            {"gradient_accumulation_steps", static_cast<int>(config.gradient_accumulation_steps)},
-            {"positional_embedding_type", positional_embedding_type},
-            {"scheduler_type", config.scheduler_type},
-            {"using_clip_grad_norm", config.use_clip_grad_norm},
-            {"clip_grad_norm_max_norm", config.clip_grad_norm_max_norm},
-        });
     }
 
     // set seed
@@ -582,20 +361,6 @@ int main(int argc, char **argv) {
     }
     auto schedule_func = schedulers.at(config.scheduler_type);
 
-    std::string text;
-    std::variant<std::string, std::vector<uint32_t>> text_or_tokens;
-    try {
-        text = read_file_to_str(config.data_path);
-        // check file extension:
-        if (config.data_path.ends_with(".txt")) {
-            text_or_tokens = read_file_to_str(config.data_path);
-        } else {
-            text_or_tokens = ttml::datasets::load_tokens_from_space_separated_file(config.data_path);
-        }
-    } catch (const std::exception &e) {
-        std::cerr << e.what() << std::endl;
-        return -1;
-    }
     fmt::print("Max steps {}\n", config.max_steps);
     fmt::print("Batch size {}\n", config.batch_size);
     fmt::print("Gradient accumulation steps {}\n", config.gradient_accumulation_steps);
@@ -604,28 +369,22 @@ int main(int argc, char **argv) {
     fmt::print("Seed {}\n", ttml::autograd::ctx().get_seed());
     auto sequence_length = std::visit([](auto &&arg) { return arg.max_sequence_length; }, config.transformer_config);
 
-    auto create_dataset_and_tokenizer =
-        [](const auto &text, const auto sequence_length, const auto &tokenizer_path, const auto &tokenizer_type) {
-            if (tokenizer_type == "char") {
-                return ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::CharTokenizer>(
-                    std::get<0>(text), sequence_length);
-            } else if (tokenizer_type == "bpe") {
-                return std::visit(
-                    [&](const auto &tokens) {
-                        return ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::BPETokenizer>(
-                            tokens, sequence_length, tokenizer_path);
-                    },
-                    text);
-            } else {
-                throw std::runtime_error("Unknown tokenizer type: " + tokenizer_type);
-            }
-        };
+    std::vector<uint32_t> tokens_vector;
 
-    auto [dataset, tokenizer] =
-        create_dataset_and_tokenizer(text_or_tokens, sequence_length, config.tokenizer_path, config.tokenizer_type);
+    try
+    {
+        tokens_vector = ttml::datasets::load_tokens_from_space_separated_file(config.data_path);
+    } catch (const std::exception &e) {
+        std::cerr << e.what() << std::endl;
+        std::cerr << "\nDid you tokenize the dataset? See the README for details." << std::endl;
+        return -1;
+    }
+
+    auto dataset = ttml::datasets::InMemoryTokenDataset(
+        std::move(tokens_vector), sequence_length);
+
     fmt::print("Tokenizer path: {}\n", config.tokenizer_path);
     fmt::print("Dataset size: {}\n", dataset.get_size());
-    fmt::print("Vocab size: {}\n", tokenizer->get_vocab_size());
     fmt::print("Tokenizer type: {}\n", config.tokenizer_type);
 
     auto num_devices = device_config.mesh_shape[0] * device_config.mesh_shape[1];
@@ -644,7 +403,6 @@ int main(int argc, char **argv) {
     };
     CachedHostData cached_data;
     std::vector<float> mask;
-    auto num_heads = std::visit([](auto &&arg) { return arg.num_heads; }, config.transformer_config);
     mask.reserve(sequence_length * sequence_length);
     for (int i = 0; i < sequence_length; ++i) {
         for (int j = 0; j < sequence_length; ++j) {
@@ -721,7 +479,7 @@ int main(int argc, char **argv) {
         [&](auto &&arg) {
             if constexpr (requires { arg.vocab_size; }) {
                 arg.vocab_size =
-                    round_up_to_tile(tokenizer->get_vocab_size(), (device_config.enable_tp ? num_devices : 1U) * 32U);
+                    round_up_to_tile(arg.vocab_size, (device_config.enable_tp ? num_devices : 1U) * 32U);
             } else {
                 throw std::runtime_error(
                     "Unsupported transformer configuration type: " + std::string(typeid(arg).name()));
@@ -772,31 +530,12 @@ int main(int argc, char **argv) {
     }
 
     // Load model parameters if in eval mode and model path exists
-    if (is_eval && !config.model_path.empty() && std::filesystem::exists(config.model_path)) {
+    if (!safetensors_path.empty() && !config.model_path.empty() && std::filesystem::exists(config.model_path)) {
         fmt::print("Loading model from {}\n", config.model_path);
         std::string model_name = (config.model_type == "llama") ? "llama" : "transformer";
         fmt::print("Loading model parameters\n");
         load_model_parameters(config.model_path, model, model_name);
         fmt::print("Model loaded\n");
-    }
-
-    if (is_eval) {
-        fmt::print("\nEvaluation started\n");
-        for (;;) {
-            generate(
-                model,
-                *tokenizer,
-                std::visit([](auto &&arg) { return arg.max_sequence_length; }, config.transformer_config),
-                num_heads,
-                sequence_length,
-                device_config.enable_tp,
-                eval_config.temperature,
-                eval_config.repetition_penalty,
-                eval_config.top_k,
-                eval_config.top_p);
-        }
-        fmt::print("\nEvaluation finished\n");
-        return 0;
     }
 
     auto adamw_params = ttml::optimizers::AdamWConfig();
@@ -855,10 +594,6 @@ int main(int argc, char **argv) {
         }
     }
 
-    if (config.enable_mpi && is_eval) {
-        throw std::logic_error("Evaluation is not supported with 3 tier training");
-    }
-
     if (config.enable_mpi && config.use_clip_grad_norm) {
         throw std::logic_error("Clip grad norm is not supported with 3 tier training");
     }
@@ -872,10 +607,6 @@ int main(int argc, char **argv) {
                 num_devices));
         }
     }
-
-    auto get_samples_count = [&config](uint32_t global_step) {
-        return global_step * config.batch_size * config.gradient_accumulation_steps;
-    };
 
     auto get_loss_value = [](const TensorPtr &loss) {
         auto loss_xtensors = ttml::core::to_xtensor(loss->get_value(), ttml::core::IdentityComposer{});
@@ -895,6 +626,7 @@ int main(int argc, char **argv) {
 
     const bool needs_to_call_loss = pipeline_needs_to_call_loss(config);
 
+    // Training loop
     for (uint32_t epoch = 0; epoch < num_epochs; ++epoch) {
         for (auto [features, target, masks] : train_dataloader) {
             ttml::autograd::ctx().get_profiler().read_results(device, "dataloader_step_done");
@@ -913,13 +645,6 @@ int main(int argc, char **argv) {
                 loss = gradient_accumulator_helper.scale(loss);
                 loss_float = get_loss_value(loss);
                 ttml::autograd::ctx().get_profiler().read_results(device, "model_forward_done");
-
-                if (device_config.enable_tp) {
-                    auto ones_grad = ttnn::ones_like(loss->get_value());
-                    ones_grad = ttnn::multiply(
-                        ones_grad, 1.F / static_cast<float>(ttml::autograd::ctx().get_device().num_devices()));
-                    loss->set_grad(ones_grad);
-                }
 
                 loss->backward();
             } else {
@@ -954,15 +679,6 @@ int main(int argc, char **argv) {
                     fmt::print("Step: {}, Loss: {}\n", global_step, gradient_accumulator_helper.average_loss());
                 }
                 loss_meter.update(gradient_accumulator_helper.average_loss());
-
-                if (enable_wandb && global_step % 10 == 0 && needs_to_call_loss) {
-                    wandbcpp::log(
-                        {{"Step", (int)global_step},
-                         {"Samples", (int)get_samples_count(global_step)},
-                         {"Loss", loss_meter.average()},
-                         {"Learning rate", optimizer->get_lr()}});
-                    loss_meter.reset();
-                }
 
                 if (!config.enable_mpi) {
                     // save training state if it's not 3 tier training
@@ -1020,11 +736,8 @@ int main(int argc, char **argv) {
         fmt::print("Rank {}: Finalizing MPI context\n", distributed_ctx->rank());
     }
 
-    if (enable_wandb) {
-        wandbcpp::finish();
-    }
-
     ttml::autograd::ctx().get_profiler().read_results(device, "before close device", 0);
+    ttml::autograd::ctx().close_device();
     ttml::autograd::ctx().close_profiler();
     return 0;
 }

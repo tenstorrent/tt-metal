@@ -22,6 +22,7 @@ from tracy.common import (
     PROFILER_SCRIPTS_ROOT,
     PROFILER_ARTIFACTS_DIR,
     PROFILER_LOGS_DIR,
+    PROFILER_CPP_DEVICE_PERF_REPORT,
     clear_profiler_runtime_artifacts,
 )
 
@@ -29,6 +30,15 @@ from models.common.utility_functions import skip_for_blackhole
 
 PROG_EXMP_DIR = "programming_examples/profiler"
 TRACY_TESTS_DIR = "./tests/ttnn/tracy"
+
+
+def is_6u_wrapper():
+    ctx = mp.get_context("spawn")
+    with ctx.Pool() as pool:
+        result = pool.apply(is_6u)
+        pool.close()
+        pool.join()
+    return result
 
 
 def get_device_data(setupStr=""):
@@ -52,6 +62,8 @@ def set_env_vars(**kwargs):
         "slowDispatch": "TT_METAL_SLOW_DISPATCH_MODE=1 ",
         "enable_noc_tracing": "TT_METAL_DEVICE_PROFILER_NOC_EVENTS=1 ",
         "doDeviceTrace": "TT_METAL_TRACE_PROFILER=1 ",
+        "do_mid_run_dump": "TT_METAL_PROFILER_MID_RUN_DUMP=1 ",
+        "do_cpp_post_process": "TT_METAL_PROFILER_CPP_POST_PROCESS=1 ",
     }
     envVarsStr = " "
     for arg, argVal in kwargs.items():
@@ -61,9 +73,22 @@ def set_env_vars(**kwargs):
 
 
 # returns True if test passed, False if test was SKIPPED
-def run_gtest_profiler_test(testbin, testname, doSync=False, enable_noc_tracing=False, skip_get_device_data=False):
+def run_gtest_profiler_test(
+    testbin,
+    testname,
+    doSync=False,
+    enable_noc_tracing=False,
+    do_mid_run_dump=False,
+    do_cpp_post_process=False,
+    skip_get_device_data=False,
+):
     clear_profiler_runtime_artifacts()
-    envVars = set_env_vars(doSync=doSync, enable_noc_tracing=enable_noc_tracing)
+    envVars = set_env_vars(
+        doSync=doSync,
+        enable_noc_tracing=enable_noc_tracing,
+        do_mid_run_dump=do_mid_run_dump,
+        do_cpp_post_process=do_cpp_post_process,
+    )
     testCommand = f"cd {TT_METAL_HOME} && {envVars} {testbin} --gtest_filter={testname}"
     print()
     logger.info(f"Running: {testCommand}")
@@ -134,6 +159,60 @@ def test_multi_op():
 
     assert statName in stats.keys(), "Wrong device analysis format"
     assert stats[statName]["stats"]["Count"] in REF_COUNT_DICT[ENV_VAR_ARCH_NAME], "Wrong Marker Repeat count"
+
+
+def test_multi_op_buffer_overflow():
+    COMPUTE_OP_COUNT = 267
+    DATA_MOVEMENT_OP_COUNT = 1333
+    RUN_COUNT = 1
+    REF_COMPUTE_COUNT_DICT = {
+        "wormhole_b0": [
+            72 * COMPUTE_OP_COUNT * RUN_COUNT,
+            64 * COMPUTE_OP_COUNT * RUN_COUNT,
+            56 * COMPUTE_OP_COUNT * RUN_COUNT,
+        ],
+        "blackhole": [
+            130 * COMPUTE_OP_COUNT * RUN_COUNT,
+            120 * COMPUTE_OP_COUNT * RUN_COUNT,
+            110 * COMPUTE_OP_COUNT * RUN_COUNT,
+        ],
+    }
+    REF_DATA_MOVEMENT_COUNT_DICT = {
+        "wormhole_b0": [
+            72 * DATA_MOVEMENT_OP_COUNT * RUN_COUNT,
+            64 * DATA_MOVEMENT_OP_COUNT * RUN_COUNT,
+            56 * DATA_MOVEMENT_OP_COUNT * RUN_COUNT,
+        ],
+        "blackhole": [
+            130 * DATA_MOVEMENT_OP_COUNT * RUN_COUNT,
+            120 * DATA_MOVEMENT_OP_COUNT * RUN_COUNT,
+            110 * DATA_MOVEMENT_OP_COUNT * RUN_COUNT,
+        ],
+    }
+
+    ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
+    assert ENV_VAR_ARCH_NAME in REF_COMPUTE_COUNT_DICT.keys()
+    assert ENV_VAR_ARCH_NAME in REF_DATA_MOVEMENT_COUNT_DICT.keys()
+
+    devicesData = run_device_profiler_test(setupAutoExtract=True)
+
+    stats = devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["analysis"]
+
+    for risc in ["BRISC", "NCRISC"]:
+        statName = f"{risc} KERNEL_START->KERNEL_END"
+
+        assert statName in stats.keys(), "Wrong device analysis format"
+        assert (
+            stats[statName]["stats"]["Count"] in REF_DATA_MOVEMENT_COUNT_DICT[ENV_VAR_ARCH_NAME]
+        ), "Wrong Marker Repeat count"
+
+    for risc in ["TRISC_0", "TRISC_1", "TRISC_2"]:
+        statName = f"{risc} KERNEL_START->KERNEL_END"
+
+        assert statName in stats.keys(), "Wrong device analysis format"
+        assert (
+            stats[statName]["stats"]["Count"] in REF_COMPUTE_COUNT_DICT[ENV_VAR_ARCH_NAME]
+        ), "Wrong Marker Repeat count"
 
 
 def test_custom_cycle_count_slow_dispatch():
@@ -358,8 +437,8 @@ def test_device_trace_run():
 @skip_for_blackhole()
 def test_dispatch_cores():
     REF_COUNT_DICT = {
-        "Tensix CQ Dispatch*": [600, 760, 1310, 2330],
-        "Tensix CQ Prefetch": [900, 1440, 3870, 5000],
+        "Tensix CQ Dispatch*": [600, 760, 1310, 2330, 3558, 4915, 6383],
+        "Tensix CQ Prefetch": [900, 1440, 2012, 3870, 5000, 7752],
         "dispatch_total_cq_cmd_op_time": [236],
         "dispatch_go_send_wait_time": [236],
     }
@@ -384,7 +463,7 @@ def test_dispatch_cores():
 
     verify_stats(
         run_device_profiler_test(
-            testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_all_devices -k DispatchCoreType.WORKER",
+            testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_mesh_device -k DispatchCoreType.WORKER",
             setupAutoExtract=True,
             doDispatchCores=True,
         ),
@@ -407,8 +486,12 @@ def test_dispatch_cores():
 
 # Eth dispatch will be deprecated
 @skip_for_blackhole()
+@pytest.mark.skipif(is_6u_wrapper(), reason="Ethernet dispatch is not needed to be tested on 6U")
 def test_ethernet_dispatch_cores():
-    REF_COUNT_DICT = {"Ethernet CQ Dispatch": [590, 840, 1430, 1660, 2320], "Ethernet CQ Prefetch": [572, 4030]}
+    REF_COUNT_DICT = {
+        "Ethernet CQ Dispatch": [590, 1080, 1430, 1660, 1994, 2777, 3285, 3530, 3769, 4237, 4881, 6681, 7150],
+        "Ethernet CQ Prefetch": [572, 1058, 2108, 4030, 7795],
+    }
     devicesData = run_device_profiler_test(
         testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_with_ops -k DispatchCoreType.ETH",
         setupAutoExtract=True,
@@ -429,7 +512,7 @@ def test_ethernet_dispatch_cores():
                 ), f"Wrong ethernet dispatch zone count for {ref}, read {readCount} which is not within {allowedRange} cycle counts of any of the limits {counts}"
 
     devicesData = run_device_profiler_test(
-        testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_all_devices -k DispatchCoreType.ETH",
+        testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_mesh_device -k DispatchCoreType.ETH",
         setupAutoExtract=True,
         doDispatchCores=True,
     )
@@ -454,7 +537,7 @@ def test_profiler_host_device_sync():
     syncInfoFile = PROFILER_LOGS_DIR / PROFILER_HOST_DEVICE_SYNC_INFO
 
     deviceData = run_device_profiler_test(
-        testName=f"pytest {TRACY_TESTS_DIR}/test_profiler_sync.py::test_all_devices", doSync=True
+        testName=f"pytest {TRACY_TESTS_DIR}/test_profiler_sync.py::test_mesh_device", doSync=True
     )
     reportedFreq = deviceData["data"]["deviceInfo"]["freq"] * 1e6
     assert os.path.isfile(syncInfoFile)
@@ -504,7 +587,7 @@ def test_timestamped_events():
     OP_COUNT = 2
     RISC_COUNT = 5
     ZONE_COUNT = 100
-    WH_ERISC_COUNTS = [0, 3, 6]  # N150, N300, T3K
+    WH_ERISC_COUNTS = [0, 3, 6, 16]  # N150, N300, T3K, 6U
     WH_TENSIX_COUNTS = [72, 64, 56]
     BH_ERISC_COUNTS = [0, 1, 6, 8]
     BH_TENSIX_COUNTS = [130, 120, 110]
@@ -737,15 +820,6 @@ def test_fabric_event_profiler_fabric_mux():
         ), f"Incorrect number of fabric events found in noc trace: {fabric_event_count}, expected {expected_output['FABRIC_EVENT_COUNT']}"
 
 
-def is_6u_wrapper():
-    ctx = mp.get_context("spawn")
-    with ctx.Pool() as pool:
-        result = pool.apply(is_6u)
-        pool.close()
-        pool.join()
-    return result
-
-
 @skip_for_blackhole()
 def test_fabric_event_profiler_2d():
     ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
@@ -873,3 +947,68 @@ def test_sub_device_profiler():
         "./build/test/tt_metal/unit_tests_dispatch",
         "UnitMeshCQSingleCardTraceFixture.TensixTestSubDeviceTraceBasicPrograms",
     )
+
+
+def validate_programs_perf_durations(perf_data):
+    cpp_ops_perf_report = pd.read_csv(PROFILER_LOGS_DIR / PROFILER_CPP_DEVICE_PERF_REPORT).reset_index(drop=True)
+
+    for snapshot in perf_data:
+        for device in snapshot:
+            device_id = device["device"]
+            device_programs_analysis_data = device["programs_analysis_data"]
+            for program_analysis_data in device_programs_analysis_data:
+                runtime_id = program_analysis_data["program_execution_uid"]["runtime_id"]
+                program_analyses_results = program_analysis_data["program_analyses_results"]
+                for analysis_type in program_analyses_results:
+                    analysis_result = program_analyses_results[analysis_type]
+                    if analysis_result["duration"] == 0:
+                        continue
+
+                    row = cpp_ops_perf_report.loc[
+                        (cpp_ops_perf_report["GLOBAL CALL COUNT"] == runtime_id)
+                        & (cpp_ops_perf_report["DEVICE ID"] == device_id)
+                    ]
+
+                    assert row[analysis_type].values[0] == analysis_result["duration"]
+
+
+def test_get_programs_perf_data():
+    # Program execution UIDs and the number of programs are validated in the test_get_programs_perf_data gtests
+    # In this file, we validate the durations of the programs
+    test_get_programs_perf_data_binary = "./build/test/ttnn/tracy/test_get_programs_perf_data"
+
+    run_gtest_profiler_test(
+        test_get_programs_perf_data_binary,
+        "GetProgramsPerfDataFixture.TestGetProgramsPerfDataBeforeReadMeshDeviceProfilerResultsCall",
+        do_mid_run_dump=True,
+        do_cpp_post_process=True,
+    )
+
+    with open(PROFILER_LOGS_DIR / "test_get_programs_perf_data_latest.json", "r") as f:
+        validate_programs_perf_durations(json.load(f))
+    with open(PROFILER_LOGS_DIR / "test_get_programs_perf_data_all.json", "r") as f:
+        validate_programs_perf_durations(json.load(f))
+
+    run_gtest_profiler_test(
+        test_get_programs_perf_data_binary,
+        "GetProgramsPerfDataFixture.TestGetProgramsPerfDataAfterSingleReadMeshDeviceProfilerResultsCall",
+        do_mid_run_dump=True,
+        do_cpp_post_process=True,
+    )
+
+    with open(PROFILER_LOGS_DIR / "test_get_programs_perf_data_latest.json", "r") as f:
+        validate_programs_perf_durations(json.load(f))
+    with open(PROFILER_LOGS_DIR / "test_get_programs_perf_data_all.json", "r") as f:
+        validate_programs_perf_durations(json.load(f))
+
+    run_gtest_profiler_test(
+        test_get_programs_perf_data_binary,
+        "GetProgramsPerfDataFixture.TestGetProgramsPerfDataAfterMultipleReadMeshDeviceProfilerResultsCalls",
+        do_mid_run_dump=True,
+        do_cpp_post_process=True,
+    )
+
+    with open(PROFILER_LOGS_DIR / "test_get_programs_perf_data_latest.json", "r") as f:
+        validate_programs_perf_durations(json.load(f))
+    with open(PROFILER_LOGS_DIR / "test_get_programs_perf_data_all.json", "r") as f:
+        validate_programs_perf_durations(json.load(f))

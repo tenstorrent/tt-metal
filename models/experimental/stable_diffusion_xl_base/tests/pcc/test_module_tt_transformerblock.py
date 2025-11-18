@@ -20,7 +20,6 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
         ((1, 4096, 640), (1, 77, 2048), 1, 0, 640, 10, 640, 0.999),
         ((1, 4096, 640), (1, 77, 2048), 1, 1, 640, 10, 640, 0.998),
         ((1, 1024, 1280), (1, 77, 2048), 2, 0, 1280, 20, 1280, 0.998),
-        # TODO: restore pcc threshold after #28487 is resolved
         ((1, 1024, 1280), (1, 77, 2048), 2, 1, 1280, 20, 1280, 0.997),
     ],
 )
@@ -72,7 +71,7 @@ def test_transformerblock(
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     ttnn_input_tensor = ttnn.from_torch(
-        torch_input_tensor,
+        torch_input_tensor.unsqueeze(0),
         dtype=ttnn.bfloat16,
         device=device,
         layout=ttnn.TILE_LAYOUT,

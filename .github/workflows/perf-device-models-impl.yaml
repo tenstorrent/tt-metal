@@ -74,32 +74,6 @@ jobs:
         if: ${{ !cancelled() && !matrix.test-info.civ2-compatible }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
-      - name: yolov11 tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          device_perf_model_name: "yolov11"
-          commands: |
-            pytest models/demos/yolov11/tests/perf -m models_device_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-set1 }}
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-      - name: yolov11m tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          device_perf_model_name: "yolov11m"
-          commands: |
-            pytest models/demos/yolov11m/tests/perf -m models_device_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-set1 }}
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-
-      - name: yolov10x tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          device_perf_model_name: "yolov10x"
-          commands: |
-            pytest models/demos/yolov10x/tests/perf -m models_device_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-set1 }}
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-
       - name: stable_diffusion tests
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
@@ -107,7 +81,6 @@ jobs:
           commands: |
             pytest models/demos/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/stable_diffusion/tests -m models_device_performance_bare_metal --timeout=600
             ${{ matrix.test-info.arch == 'wormhole_b0' && 'pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py -m models_device_performance_bare_metal' || '' }}
-            ${{ matrix.test-info.arch == 'wormhole_b0' && 'pytest models/experimental/stable_diffusion_xl_refiner/tests/test_sdxl_refiner_perf.py -m models_device_performance_bare_metal' || '' }}
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && (matrix.test-info.job-set1 || matrix.test-info.job-blackhole-set1) }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -127,8 +100,16 @@ jobs:
           device_perf_model_name: "vgg"
           commands: |
             pytest models/demos/vgg/tests/ -m models_device_performance_bare_metal
-            pytest models/demos/vgg_unet/tests/perf -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-set1 }}
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+
+      - name: vgg_unet tests
+        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
+        with:
+          device_perf_model_name: "vgg_unet"
+          commands: |
+            pytest models/demos/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/vgg_unet/tests/perf -m models_device_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && (matrix.test-info.job-set1 || matrix.test-info.job-blackhole-set1) }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: bert_tiny tests
@@ -165,8 +146,8 @@ jobs:
         with:
           device_perf_model_name: "ufld_v2"
           commands: |
-            pytest models/demos/ufld_v2/tests/perf -m models_device_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-set1 }}
+            pytest models/demos/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/ufld_v2/tests/perf -m models_device_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && (matrix.test-info.job-set1 || matrix.test-info.job-blackhole-set1) }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: sentence_bert tests
@@ -174,8 +155,8 @@ jobs:
         with:
           device_perf_model_name: "sentence_bert"
           commands: |
-            pytest models/demos/sentence_bert/tests/perf -m models_device_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-set1 }}
+            pytest models/demos/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/sentence_bert/tests/perf -m models_device_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && (matrix.test-info.job-set1 || matrix.test-info.job-blackhole-set1) }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: functional_unet tests
@@ -205,15 +186,6 @@ jobs:
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 && !matrix.test-info.job-blackhole-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
-      - name: yolov4 tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          device_perf_model_name: "yolov4"
-          commands: |
-            pytest models/demos/yolov4/tests -m models_device_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 && !matrix.test-info.job-blackhole-set1 }}
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-
       - name: mobilenetv2 tests
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
@@ -223,51 +195,13 @@ jobs:
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 && !matrix.test-info.job-blackhole-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
-      - name: yolov8 tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          device_perf_model_name: "yolov8"
-          commands: |
-            pytest models/demos/yolov8x/tests/perf -m models_device_performance_bare_metal
-            pytest models/demos/yolov8s/tests/perf -m models_device_performance_bare_metal
-            pytest models/demos/yolov8s_world/tests/perf -m models_device_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 && !matrix.test-info.job-blackhole-set1 }}
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-
-      - name: yolov7 tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          device_perf_model_name: "yolov7"
-          commands: |
-            pytest models/demos/yolov7/tests/perf -m models_device_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 && !matrix.test-info.job-blackhole-set1 }}
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-
       - name: vit tests
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
           device_perf_model_name: "vit"
           commands: |
-            pytest models/demos/wormhole/vit/demo/ -m models_device_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 && !matrix.test-info.job-blackhole-set1 }}
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-
-      - name: yolov6l tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          device_perf_model_name: "yolov6l"
-          commands: |
-            pytest models/demos/yolov6l/tests/perf -m models_device_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 && !matrix.test-info.job-blackhole-set1 }}
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-
-      - name: yolov9c tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          device_perf_model_name: "yolov9c"
-          commands: |
-            pytest models/demos/yolov9c/tests/perf -m models_device_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 && !matrix.test-info.job-blackhole-set1 }}
+            pytest models/demos/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/vit/tests/ -m models_device_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && (matrix.test-info.job-set1 || matrix.test-info.job-blackhole-set1) }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: vanilla_unet tests
@@ -275,7 +209,7 @@ jobs:
         with:
           device_perf_model_name: "vanilla_unet"
           commands: |
-            pytest models/demos/vanilla_unet/tests/perf -m models_device_performance_bare_metal
+            pytest models/demos/vanilla_unet/tests -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 && !matrix.test-info.job-blackhole-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -297,30 +231,12 @@ jobs:
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 && !matrix.test-info.job-blackhole-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
-      - name: yolov5x tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          device_perf_model_name: "yolov5x"
-          commands: |
-            pytest models/demos/yolov5x/tests/perf -m models_device_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 && !matrix.test-info.job-blackhole-set1 }}
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-
       - name: vovnet tests
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
           device_perf_model_name: "VoVNet"
           commands: |
             pytest models/experimental/vovnet/tests/perf -m models_device_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 && !matrix.test-info.job-blackhole-set1 }}
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-
-      - name: yolov12x tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          device_perf_model_name: "yolov12x"
-          commands: |
-            pytest models/demos/yolov12x/tests/perf -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 && !matrix.test-info.job-blackhole-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -368,11 +284,19 @@ jobs:
           echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
 
       - name: Save environment data
+        id: save-environment-data
         if: ${{ !cancelled() }}
-        run: python3 /work/.github/scripts/data_analysis/create_benchmark_with_environment_json.py
+        run: |
+          if [ -d "generated/benchmark_data" ]; then
+            echo "has_benchmark_data=true" >> $GITHUB_OUTPUT
+            python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
+          else
+            echo "::warning::Benchmark data directory 'generated/benchmark_data' does not exist"
+            echo "has_benchmark_data=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Upload benchmark data
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
         uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}

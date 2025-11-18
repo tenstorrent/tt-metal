@@ -131,6 +131,7 @@ public:
 
     //! device driver and misc apis
     void verify_sw_fw_versions(int device_id, std::uint32_t sw_version, std::vector<std::uint32_t>& fw_versions) const;
+    bool verify_eth_fw_capability() const;
 
     void deassert_risc_reset_at_core(
         const tt_cxy_pair& physical_chip_coord,
@@ -405,7 +406,7 @@ private:
     void release_ethernet_cores_for_fabric_routers();
 
     // Tunnels setup in cluster
-    std::map<ChipId, std::vector<std::vector<ChipId>>> tunnels_from_mmio_device = {};
+    std::map<ChipId, std::vector<std::vector<ChipId>>> tunnels_from_mmio_device;
 
     // Currently, each device is mapped to its own channel in host memory to enable fast dispatch
     // Channels are unique within a group of devices all controlled by a particular MMIO device

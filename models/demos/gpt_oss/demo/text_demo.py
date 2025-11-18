@@ -33,7 +33,6 @@ from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_in
 
 # Import specific utilities from tt_transformers
 from models.tt_transformers.tt.generator import Generator, create_submeshes
-from models.tt_transformers.tt.model_config import DecodersPrecision
 
 
 def prepare_gpt_oss_generator_args(
@@ -109,10 +108,10 @@ def prepare_gpt_oss_generator_args(
             1,  # data_parallel
             1,  # batch_size
             1,  # repeat_batches
-            1024,  # max_seq_len
+            4 * 1024,  # max_seq_len
             200,  # max_generated_tokens
             True,  # instruct (set to False for base model, True for instruct model)
-            {"page_block_size": 64, "page_max_num_blocks_per_dp": 1024 // 64},  # page_params
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 4 * 1024 // 64},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
         ),
         (  # Galaxy (4×8) - Multi-device mesh, higher throughput
@@ -120,10 +119,10 @@ def prepare_gpt_oss_generator_args(
             1,  # data_parallel
             1,  # batch_size
             1,  # repeat_batches
-            1024,  # max_seq_len
+            4 * 1024,  # max_seq_len
             200,  # max_generated_tokens
             True,  # instruct
-            {"page_block_size": 64, "page_max_num_blocks_per_dp": 1024 // 64},  # page_params
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 4 * 1024 // 64},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params
         ),
     ],
@@ -162,7 +161,7 @@ def test_gpt_oss_demo(
     if data_parallel > num_devices or num_devices % data_parallel != 0:
         raise ValueError(f"Invalid number of DP groups: {data_parallel}, for {num_devices} devices")
 
-    enable_trace = False if mesh_config.ep > 1 else True  # ep > 1 currently has a fallback
+    enable_trace = True
 
     logger.info(f"Running GPT-OSS demo with tt_transformers generation pipeline")
 
@@ -171,8 +170,8 @@ def test_gpt_oss_demo(
     profiler.start("run")
     batch_idx = 0
 
-    # Use performance optimizations
-    optimizations = lambda model_args: DecodersPrecision.performance(model_args.n_layers, model_args.model_name)
+    # GPT-OSS doesn't support any performance optimizations
+    optimizations = None
 
     # Prepare GPT-OSS with tt_transformers infrastructure
     profiler.start(f"generator_setup", iteration=batch_idx)

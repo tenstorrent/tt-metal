@@ -29,10 +29,12 @@ void py_bind_sdpa(py::module& module) {
         Keyword args:
             attn_mask (ttnn.Tensor, optional): Defaults to `None`. [b x 1 x s x s]. Head broadcasting is implied.
             is_causal (bool): Defaults to `true`.
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             scale (float, optional): Defaults to `None`.
+            sliding_window_size (int, optional): Defaults to `None`. Size of sliding window for attention. If provided && is_causal, only attends to the last `sliding_window_size` tokens. If provided && !is_causal, attends to a window of size `sliding_window_size` centered at the current position.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             program_config (SDPAProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
+            attention_sink (ttnn.Tensor, optional): Defaults to `None`. [1 x nqh x 1 x 1]. Single attention sink value per head. The kernel will efficiently replicate this value across all query positions.
 
 
         Returns:
@@ -53,9 +55,11 @@ void py_bind_sdpa(py::module& module) {
                std::optional<ttnn::Tensor> attn_mask,
                bool is_causal,
                std::optional<float> scale,
+               std::optional<uint32_t> sliding_window_size,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<SDPAProgramConfig> program_config,
-               std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+               std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+               std::optional<ttnn::Tensor> attention_sink) {
                 return self(
                     input_tensor_q,
                     input_tensor_k,
@@ -63,9 +67,11 @@ void py_bind_sdpa(py::module& module) {
                     attn_mask,
                     is_causal,
                     scale,
+                    sliding_window_size,
                     memory_config,
                     program_config,
-                    compute_kernel_config);
+                    compute_kernel_config,
+                    attention_sink);
             },
             py::arg("input_tensor_q").noconvert(),
             py::arg("input_tensor_k").noconvert(),
@@ -74,9 +80,11 @@ void py_bind_sdpa(py::module& module) {
             py::arg("attn_mask").noconvert() = std::nullopt,
             py::arg("is_causal").noconvert() = true,
             py::arg("scale").noconvert() = std::nullopt,
+            py::arg("sliding_window_size").noconvert() = std::nullopt,
             py::arg("memory_config").noconvert() = std::nullopt,
             py::arg("program_config").noconvert() = std::nullopt,
-            py::arg("compute_kernel_config").noconvert() = std::nullopt});
+            py::arg("compute_kernel_config").noconvert() = std::nullopt,
+            py::arg("attention_sink").noconvert() = std::nullopt});
 
     auto chunked_doc =
         R"doc(

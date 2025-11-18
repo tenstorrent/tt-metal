@@ -40,17 +40,6 @@ struct ChipSpec {
     std::uint32_t num_z_ports;
 };
 
-enum class FabricType {
-    MESH = 1 << 0,
-    TORUS_X = 1 << 1,  // Connections along mesh_coord[1]
-    TORUS_Y = 1 << 2,  // Connections along mesh_coord[0]
-    TORUS_XY = (TORUS_X | TORUS_Y),
-};
-
-FabricType operator|(FabricType lhs, FabricType rhs);
-FabricType operator&(FabricType lhs, FabricType rhs);
-bool has_flag(FabricType flags, FabricType test_flag);
-
 enum class RoutingDirection {
     N = 0,
     E = 2,
@@ -110,7 +99,8 @@ using RequestedIntermeshPorts =
 
 class MeshGraph {
 public:
-    explicit MeshGraph(const std::string& mesh_graph_desc_file_path);
+    explicit MeshGraph(
+        const std::string& mesh_graph_desc_file_path, std::optional<FabricConfig> fabric_config = std::nullopt);
     MeshGraph() = delete;
     ~MeshGraph() = default;
 
@@ -138,6 +128,12 @@ public:
     // Otherwise, return the chip ids for the entire mesh
     MeshContainer<ChipId> get_chip_ids(MeshId mesh_id, std::optional<MeshHostRankId> host_rank = std::nullopt) const;
 
+    // Switch query APIs (internal representation uses MeshId, API uses SwitchId)
+    std::vector<SwitchId> get_switch_ids() const;
+    std::unordered_set<MeshId> get_meshes_connected_to_switch(SwitchId switch_id) const;
+    bool is_mesh_connected_to_switch(MeshId mesh_id, SwitchId switch_id) const;
+    std::optional<SwitchId> get_switch_for_mesh(MeshId mesh_id) const;
+
     // Get the host rank that owns a given chip in a mesh
     std::optional<MeshHostRankId> get_host_rank_for_chip(MeshId mesh_id, ChipId chip_id) const;
 
@@ -147,7 +143,9 @@ public:
 
     // Static functions for mesh graph descriptor management
     static std::filesystem::path get_mesh_graph_descriptor_path_for_cluster_type(
-        tt::tt_metal::ClusterType cluster_type, const std::string& root_dir, bool version_2 = true);
+        tt::tt_metal::ClusterType cluster_type,
+        const std::string& root_dir,
+        tt::tt_fabric::FabricType fabric_type = tt::tt_fabric::FabricType::MESH);
 
     // Get the number of active channels the user has requested between meshes
     const RequestedIntermeshConnections& get_requested_intermesh_connections() const;
@@ -161,14 +159,15 @@ public:
     // Load Inter-Mesh Connectivity into the Mesh Graph.
     void load_intermesh_connections(const AnnotatedIntermeshConnections& intermesh_connections);
 
+    bool is_intra_mesh_policy_relaxed(MeshId mesh_id) const;
+
 private:
     void validate_mesh_id(MeshId mesh_id) const;
     std::unordered_map<ChipId, RouterEdge> get_valid_connections(
         const MeshCoordinate& src_mesh_coord,
         const MeshCoordinateRange& mesh_coord_range,
         FabricType fabric_type) const;
-    void initialize_from_yaml(const std::string& mesh_graph_desc_file_path);
-    void initialize_from_mgd(const MeshGraphDescriptor& mgd2);
+    void initialize_from_mgd(const MeshGraphDescriptor& mgd, std::optional<FabricConfig> fabric_config);
 
     void add_to_connectivity(
         MeshId src_mesh_id,
@@ -189,6 +188,12 @@ private:
     std::vector<std::unordered_map<port_id_t, ChipId, hash_pair>> mesh_edge_ports_to_chip_id_;
     RequestedIntermeshConnections requested_intermesh_connections_;
     RequestedIntermeshPorts requested_intermesh_ports_;
+
+    // Switch tracking (switches use MeshId as their identifier)
+    std::vector<MeshId> switch_ids_;
+    std::map<MeshId, MeshContainer<ChipId>> switch_to_chip_ids_;
+    std::unordered_map<MeshId, std::vector<MeshId>> switch_to_connected_meshes_;
+    std::unordered_map<MeshId, bool> intra_mesh_relaxed_policy_;
 };
 
 }  // namespace tt::tt_fabric

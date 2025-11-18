@@ -8,7 +8,7 @@ from loguru import logger
 import ttnn
 import math
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-from tests.ttnn.unit_tests.operations.ccl.test_all_reduce_async import run_all_reduce_with_mesh_tensor_along_row
+from tests.nightly.tg.ccl.test_all_reduce_async import run_all_reduce_with_mesh_tensor_along_row
 
 
 # Enumerate the post-commit cases explicitly
@@ -127,18 +127,18 @@ def test_line_all_reduce_on_TG_cols_post_commit(
 
 
 @pytest.mark.parametrize(
-    "num_devices, num_links, per_chip_output_shape, layout",
+    "num_devices, num_links, per_chip_output_shape, layout, cluster_axis",
     [
-        (8, 3, [1, 1, 4096, 50304], ttnn.TILE_LAYOUT),
-        (8, 3, [1, 1, 2048, 50304], ttnn.TILE_LAYOUT),
-        (8, 3, [1, 1, 50304, 4096], ttnn.TILE_LAYOUT),
-        (8, 3, [1, 1, 50304, 2048], ttnn.TILE_LAYOUT),
-        (8, 3, [1, 1, 50304, 1024], ttnn.TILE_LAYOUT),
-        (8, 3, [1, 1, 128000, 4096], ttnn.TILE_LAYOUT),
-        (8, 3, [1, 1, 4096, 128000], ttnn.TILE_LAYOUT),
-        (8, 3, [1, 1, 1024, 50304], ttnn.TILE_LAYOUT),
-        (8, 3, [1, 1, 33, 66], ttnn.TILE_LAYOUT),
-        (8, 3, [1, 1, 4094, 50300], ttnn.TILE_LAYOUT),
+        (4, 3, [1, 1, 128000, 4096], ttnn.TILE_LAYOUT, 0),
+        (4, 3, [1, 1, 4096, 128000], ttnn.TILE_LAYOUT, 0),
+        (4, 3, [1, 1, 4096, 50304], ttnn.TILE_LAYOUT, 0),
+        (4, 3, [1, 1, 4094, 50300], ttnn.TILE_LAYOUT, 0),
+        (4, 3, [1, 1, 50304, 4096], ttnn.TILE_LAYOUT, 0),
+        (8, 3, [1, 1, 2048, 50304], ttnn.TILE_LAYOUT, 1),
+        (8, 3, [1, 1, 50304, 2048], ttnn.TILE_LAYOUT, 1),
+        (8, 3, [1, 1, 50304, 1024], ttnn.TILE_LAYOUT, 1),
+        (8, 3, [1, 1, 1024, 50304], ttnn.TILE_LAYOUT, 1),
+        (8, 3, [1, 1, 33, 66], ttnn.TILE_LAYOUT, 1),
     ],
 )
 @pytest.mark.parametrize(
@@ -168,13 +168,18 @@ def test_line_all_reduce_training(
     buffer_type,
     function_level_defaults,
     replication_factor,
+    cluster_axis,
     num_iters=1,
 ):
     if mesh_device.get_num_devices() != 32:
         pytest.skip("Not TG!")
+    if cluster_axis == 1:
+        submesh_device = mesh_device.create_submesh(ttnn.MeshShape((1, num_devices)))
+    else:
+        submesh_device = mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
 
     run_all_reduce_with_mesh_tensor_along_row(
-        mesh_device,
+        submesh_device,
         num_devices,
         per_chip_output_shape,
         num_links,
@@ -184,6 +189,6 @@ def test_line_all_reduce_training(
         buffer_type,
         function_level_defaults,
         num_iters=num_iters,
-        num_all_reduce_instances=replication_factor,
-        cluster_axis=1,
+        num_all_reduce_instances=1,
+        cluster_axis=cluster_axis,
     )

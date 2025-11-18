@@ -183,7 +183,7 @@ struct ReaderWriterConfig {
     size_t num_tiles = 0;
     size_t tile_byte_size = 0;
     tt::DataFormat l1_data_format = tt::DataFormat::Invalid;
-    CoreCoord core = {};
+    CoreCoord core;
 };
 /// @brief Does Dram --> Reader --> CB --> Writer --> Dram on a single core
 /// @param device
@@ -279,7 +279,7 @@ struct ReaderDatacopyWriterConfig {
     size_t tile_byte_size = 0;
     tt::DataFormat l1_input_data_format = tt::DataFormat::Invalid;
     tt::DataFormat l1_output_data_format = tt::DataFormat::Invalid;
-    CoreCoord core = {};
+    CoreCoord core;
 };
 /// @brief Does Dram --> Reader --> CB --> Datacopy --> CB --> Writer --> Dram on a single core
 /// @param device

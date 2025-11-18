@@ -18,8 +18,6 @@ namespace ttnn::operations::reduction::accumulation::detail {
 void bind_reduction_cumprod_operation(py::module& module) {
     auto docstring =
         R"doc(
-        ``ttnn.cumprod(input: ttnn.Tensor, dim: int, dtype: Optional[ttnn.DataType] = None, reverse_order: bool = False, out: Optional[ttnn.Tensor] = None, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor``
-
         Returns cumulative product of `input` along dimension `dim`
         For a given `input` of size N, the `output` will also contain N elements and be such that:
 

@@ -31,12 +31,12 @@ enum class FusedOpSignalerMode {
 
 struct AllGatherFusedOpSignaler {
     uint32_t num_fused_op_cores_to_signal = 0;
-    std::vector<CoreCoord> fused_op_receiver_cores_noc = {};
-    std::vector<uint32_t> fused_op_receiver_signal_semaphores = {};
+    std::vector<CoreCoord> fused_op_receiver_cores_noc;
+    std::vector<uint32_t> fused_op_receiver_signal_semaphores;
     FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::MULTI;
 
     /* All Gather specific */
-    std::vector<CoreCoord> all_gather_worker_cores_noc = {};
+    std::vector<CoreCoord> all_gather_worker_cores_noc;
     uint32_t all_gather_worker_sync_semaphore = 0;
 
     bool initialized_fused_op = false;
@@ -67,8 +67,8 @@ struct AllGatherFusedOpSignaler {
 // Used to propagate semaphore information from matmul to reduce scatter in matmul_reduce_scatter op
 struct ReduceScatterFusedOpSignaler {
     uint32_t num_fused_op_cores_to_signal = 1;
-    std::vector<CoreCoord> fused_op_receiver_cores_noc = {};
-    std::vector<uint32_t> fused_op_receiver_signal_semaphores = {};
+    std::vector<CoreCoord> fused_op_receiver_cores_noc;
+    std::vector<uint32_t> fused_op_receiver_signal_semaphores;
     FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::SINGLE;
 
     bool initialized_reduce_scatter = false;
@@ -92,8 +92,8 @@ struct MatmulFusedOpSignaler {
 
     /* Matmul info for All Gather */
     uint32_t num_fused_op_cores_to_signal = 0;
-    std::vector<CoreCoord> fused_op_receiver_cores_noc = {};
-    std::vector<uint32_t> fused_op_receiver_signal_semaphores = {};  // [dir0, dir1]
+    std::vector<CoreCoord> fused_op_receiver_cores_noc;
+    std::vector<uint32_t> fused_op_receiver_signal_semaphores;  // [dir0, dir1]
     FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::MULTI;
 
     /* All Gather specs */
@@ -107,8 +107,8 @@ struct MatmulFusedOpSignaler {
     uint32_t weight_output_page_offset = 0;
 
     /* Matmul info for Reduce Scatter */
-    std::vector<CoreCoord> matmul_worker_cores_noc = {};
-    std::vector<CoreCoord> matmul_worker_cores = {};
+    std::vector<CoreCoord> matmul_worker_cores_noc;
+    std::vector<CoreCoord> matmul_worker_cores;
     uint32_t matmul_worker_sync_semaphore = 0;
 
     /* Info for Llama Reduce Scatter*/

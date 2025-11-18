@@ -27,6 +27,13 @@ inputs:
     description: 'Run ID to use for testing (optional)'
     required: false
     default: ''
+  workflow_ids:
+    description: 'JSON array of workflow file paths to fetch runs for (e.g., [".github/workflows/workflow.yaml"])'
+    required: false
+  force-fresh:
+    description: 'If true, skip using past artifacts and redownload everything (default: false)'
+    required: false
+    default: 'false'
 
 outputs:
   total-runs:
@@ -41,10 +48,16 @@ outputs:
     description: 'Absolute path to directory containing per-run annotations'
   annotations-index-path:
     description: 'Absolute path to JSON mapping of run_id -> annotations dir'
-  logs-root:
-    description: 'Absolute path to directory containing downloaded logs per run (subset: failing gtest jobs)'
-  logs-index-path:
-    description: 'Absolute path to JSON mapping of run_id -> logs dir'
+  gtest-logs-root:
+    description: 'Absolute path to directory containing downloaded gtest logs per run'
+  gtest-logs-index-path:
+    description: 'Absolute path to JSON mapping of run_id -> gtest logs dir'
+  other-logs-root:
+    description: 'Absolute path to directory containing downloaded other logs per run (failures without annotations)'
+  other-logs-index-path:
+    description: 'Absolute path to JSON mapping of run_id -> other logs dir'
+  last-success-timestamps-path:
+    description: 'Absolute path to JSON mapping of workflow_name -> last success timestamp info'
 
 runs:
   using: 'node20'

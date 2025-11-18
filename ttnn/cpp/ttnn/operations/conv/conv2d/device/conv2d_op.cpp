@@ -96,14 +96,22 @@ void Conv2d::validate(
     TT_FATAL(input_tensor_a.memory_config().is_sharded(), "Activation tensor should be sharded.");
     TT_FATAL(!input_tensor_b.memory_config().is_sharded(), "Weights tensor should not be sharded.");
     if (this->untilize_out) {
-        TT_FATAL((this->dtype == DataType::BFLOAT16) || (this->dtype == DataType::FLOAT32), "Error");
+        TT_FATAL(
+            (this->dtype == DataType::BFLOAT16) || (this->dtype == DataType::FLOAT32),
+            "Untilize output requires BFLOAT16 or FLOAT32 data type but got {}",
+            this->dtype);
     }
     if (this->memory_config.is_sharded()) {
         uint32_t per_core_out_matrix_width_ntiles = parallelization_config.per_core_out_matrix_width_ntile;
         uint32_t out_width_ntiles =
             this->compute_output_specs(input_tensors).at(0).padded_shape()[-1] / tt::constants::TILE_WIDTH;
         if (this->memory_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
-            TT_FATAL(per_core_out_matrix_width_ntiles == out_width_ntiles, "Error");
+            TT_FATAL(
+                per_core_out_matrix_width_ntiles == out_width_ntiles,
+                "Per-core output matrix width in tiles ({}) must equal output width in tiles ({}) for height sharded "
+                "layout",
+                per_core_out_matrix_width_ntiles,
+                out_width_ntiles);
             TT_FATAL(
                 this->block_config.out_subblock_w_ntiles == out_width_ntiles ||
                     this->block_config.out_subblock_h_ntiles == 1,
@@ -197,7 +205,7 @@ tt::tt_metal::operation::ProgramWithCallbacks Conv2d::create_program(
         std::vector<uint32_t> op_trace_metadata =
             ttnn::operations::sliding_window::generate_op_trace_metadata(sliding_window_config);
         std::vector<sliding_window::ShardBoundary> shard_boundaries =
-            ttnn::operations::sliding_window::generate_shard_boundaries(sliding_window_config, op_trace_metadata);
+            ttnn::operations::sliding_window::generate_shard_boundaries(sliding_window_config);
 
         program_with_cbs = multi_core_conv2d_width_sharded(
             program,
@@ -233,7 +241,7 @@ tt::tt_metal::operation::ProgramWithCallbacks Conv2d::create_program(
         std::vector<uint32_t> op_trace_metadata =
             ttnn::operations::sliding_window::generate_op_trace_metadata(sliding_window_config);
         std::vector<sliding_window::ShardBoundary> shard_boundaries =
-            ttnn::operations::sliding_window::generate_shard_boundaries(sliding_window_config, op_trace_metadata);
+            ttnn::operations::sliding_window::generate_shard_boundaries(sliding_window_config);
 
         program_with_cbs = multi_core_conv2d_sharded(
             program,

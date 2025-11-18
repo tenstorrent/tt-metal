@@ -113,7 +113,7 @@ std::vector<uint32_t> GenerateInputTile(tt::DataFormat data_format) {
 }
 
 std::string GenerateExpectedData(tt::DataFormat data_format, std::vector<uint32_t>& input_tile) {
-    std::string data = "";
+    std::string data;
     if (data_format == tt::DataFormat::Float32) {
         for (uint32_t col = 0; col < 32; col += 8) {
             data += fmt::format(

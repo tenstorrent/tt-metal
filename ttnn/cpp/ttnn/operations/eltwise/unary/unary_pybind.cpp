@@ -49,19 +49,12 @@ void bind_unary_clamp(py::module& module, const unary_operation_t& operation) {
 
                * - Dtypes
                  - Layouts
+                 - Ranks
                * - BFLOAT16, BFLOAT8_B, INT32, FLOAT32
                  - TILE
+                 - 2, 3, 4
 
             INT32 is supported only for Tensor-scalar-scalar version.
-
-        Example:
-            >>> input_tensor = ttnn.from_torch(torch.tensor([[1, 2], [3,4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-            >>> min_tensor = ttnn.from_torch(torch.tensor([[0, 2], [0,4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-            >>> max_tensor = ttnn.from_torch(torch.tensor([[1, 2], [3,4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-            >>> output = {1}(input_tensor, min_tensor, max_tensor)
-
-            >>> input_tensor = ttnn.from_torch(torch.tensor([[1, 2], [3,4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-            >>> output = {1}(input_tensor, min = 2, max = 9)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name());
@@ -145,15 +138,6 @@ void bind_unary_composite_optional_floats_with_default(
                  - 2, 3, 4
 
             {10}
-
-        Example:
-            >>> input_tensor = ttnn.from_torch(torch.tensor([[1, 2], [3,4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-            >>> min_tensor = ttnn.from_torch(torch.tensor([[0, 2], [0,4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-            >>> max_tensor = ttnn.from_torch(torch.tensor([[1, 2], [3,4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-            >>> output = {1}(input_tensor, min_tensor, max_tensor)
-
-            >>> input_tensor = ttnn.from_torch(torch.tensor([[1, 2], [3,4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-            >>> output = {1}(input_tensor, min = 2, max = 9)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -241,9 +225,6 @@ void bind_unary_operation(
 
             {5}
 
-        Example:
-            >>> tensor = ttnn.from_torch({6}, layout=ttnn.TILE_LAYOUT, device=device)
-            >>> output = {1}(tensor)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -271,6 +252,69 @@ void bind_unary_operation(
 }
 
 template <typename unary_operation_t>
+void bind_unary_sqrt_operation(
+    py::module& module,
+    const unary_operation_t& operation,
+    const std::string& supported_dtype = "BFLOAT16",
+    const std::string& info_doc = "") {
+    auto doc = fmt::format(
+        R"doc(
+        Applies {0} to :attr:`input_tensor` element-wise.
+
+        .. math::
+            \mathrm{{output\_tensor}}_i = \verb|{0}|(\mathrm{{input\_tensor}}_i)
+
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
+
+        Keyword Args:
+            fast_approx_mode (bool, optional): use the fast and approximate mode. Defaults to `False`.
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - {2}
+                 - TILE
+                 - 2, 3, 4
+
+            {3}
+        )doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name(),
+        supported_dtype,
+        info_doc);
+
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const unary_operation_t& self,
+               const Tensor& input_tensor,
+               const bool fast_approx_mode,
+               const std::optional<MemoryConfig>& memory_config,
+               const std::optional<ttnn::Tensor>& output_tensor) -> ttnn::Tensor {
+                return self(input_tensor, fast_approx_mode, memory_config, output_tensor);
+            },
+            py::arg("input_tensor"),
+            py::kw_only(),
+            py::arg("fast_approx_mode") = false,
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt});
+}
+
+template <typename unary_operation_t>
 void bind_unary_operation_overload_complex(
     py::module& module,
     const unary_operation_t& operation,
@@ -291,7 +335,6 @@ void bind_unary_operation_overload_complex(
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
-
         Returns:
             ttnn.Tensor: the output tensor.
 
@@ -309,10 +352,6 @@ void bind_unary_operation_overload_complex(
                  - 2, 3, 4
 
             {4}
-
-        Example:
-            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> output = {1}(tensor)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -366,7 +405,6 @@ void bind_unary_operation_overload_complex_return_complex(
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
-
         Returns:
             ttnn.Tensor: the output tensor.
 
@@ -385,10 +423,6 @@ void bind_unary_operation_overload_complex_return_complex(
 
             {3}
             More information about the `BFLOAT8_B  <../tensor.html#limitation-of-bfloat8-b>`_.
-
-        Example:
-            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> output = {1}(tensor)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -443,7 +477,6 @@ void bind_unary_operation_with_fast_and_approximate_mode(
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
-
         Returns:
             ttnn.Tensor: the output tensor.
 
@@ -461,10 +494,6 @@ void bind_unary_operation_with_fast_and_approximate_mode(
                  - 2, 3, 4
 
             {4}
-
-        Example:
-            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-            >>> output = {1}(tensor, fast_and_approximate_mode=True)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -517,7 +546,6 @@ void bind_unary_operation_with_float_parameter(
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
-
         Returns:
             ttnn.Tensor: the output tensor.
 
@@ -535,11 +563,6 @@ void bind_unary_operation_with_float_parameter(
                  - 2, 3, 4
 
             {6}
-
-        Example:
-            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-            >>> {2} = 3
-            >>> output = {1}(tensor, {2})
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -557,6 +580,77 @@ void bind_unary_operation_with_float_parameter(
             [](const unary_operation_t& self,
                const Tensor& input_tensor,
                const float parameter,
+               const std::optional<MemoryConfig>& memory_config,
+               const std::optional<ttnn::Tensor>& output_tensor) {
+                return self(input_tensor, parameter, memory_config, output_tensor);
+            },
+            py::arg("input_tensor"),
+            py::arg(parameter_name.c_str()),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt});
+}
+
+template <typename unary_operation_t>
+void bind_unary_operation_with_scalar_parameter(
+    py::module& module,
+    const unary_operation_t& operation,
+    const std::string& parameter_name,
+    const std::string& parameter_doc,
+    const std::string& info_doc,
+    const std::string& supported_dtype = "BFLOAT16",
+    const std::string& note = "") {
+    auto doc = fmt::format(
+        R"doc(
+        Applies {0} to :attr:`input_tensor` element-wise with {2}.
+
+        {4}
+
+        .. math::
+            \mathrm{{output\_tensor}}_i = \verb|{0}|(\mathrm{{input\_tensor}}_i, \verb|{2}|)
+
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
+            {2} (float/int): {3}.
+
+        Keyword Args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - {5}
+                 - TILE
+                 - 1, 2, 3, 4, 5, 6
+
+            {6}
+        )doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name(),
+        parameter_name,
+        parameter_doc,
+        info_doc,
+        supported_dtype,
+        note);
+
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const unary_operation_t& self,
+               const Tensor& input_tensor,
+               ScalarVariant parameter,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor) {
                 return self(input_tensor, parameter, memory_config, output_tensor);
@@ -595,7 +689,6 @@ void bind_unary_operation_with_float_parameter_default(
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
-
         Returns:
             ttnn.Tensor: the output tensor.
 
@@ -613,11 +706,6 @@ void bind_unary_operation_with_float_parameter_default(
                  - 2, 3, 4
 
             {7}
-
-        Example:
-            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-            >>> {2} = 3
-            >>> output = {1}(tensor, {2}={2})
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -684,10 +772,6 @@ void bind_unary_composite_with_default_float(
                  - 2, 3, 4
 
             {6}
-
-        Example:
-            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-            >>> output = {1}(tensor, {2} = 5)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -725,8 +809,8 @@ void bind_unary_operation_with_int_parameter(
     const std::string& info_doc,
     const std::string& supported_dtype = "BFLOAT16",
     const std::string& note = "") {
-        auto doc = fmt::format(
-            R"doc(
+    auto doc = fmt::format(
+        R"doc(
         Applies {0} to :attr:`input_tensor` element-wise with {2}.
 
         {4}
@@ -741,7 +825,6 @@ void bind_unary_operation_with_int_parameter(
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
-
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -760,37 +843,32 @@ void bind_unary_operation_with_int_parameter(
                  - 2, 3, 4
 
             {6}
-
-        Example:
-            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-            >>> {2} = 3
-            >>> output = {1}(tensor, {2})
         )doc",
-            operation.base_name(),
-            operation.python_fully_qualified_name(),
-            parameter_name,
-            parameter_doc,
-            info_doc,
-            supported_dtype,
-            note);
+        operation.base_name(),
+        operation.python_fully_qualified_name(),
+        parameter_name,
+        parameter_doc,
+        info_doc,
+        supported_dtype,
+        note);
 
-        bind_registered_operation(
-            module,
-            operation,
-            doc,
-            ttnn::pybind_overload_t{
-                [](const unary_operation_t& self,
-                   const Tensor& input_tensor,
-                   const std::optional<int>& parameter,
-                   const std::optional<MemoryConfig>& memory_config,
-                   const std::optional<ttnn::Tensor>& output_tensor) {
-                    return self(input_tensor, parameter, memory_config, output_tensor);
-                },
-                py::arg("input_tensor"),
-                py::kw_only(),
-                py::arg(parameter_name.c_str()) = 0,
-                py::arg("memory_config") = std::nullopt,
-                py::arg("output_tensor") = std::nullopt});
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const unary_operation_t& self,
+               const Tensor& input_tensor,
+               const std::optional<int>& parameter,
+               const std::optional<MemoryConfig>& memory_config,
+               const std::optional<ttnn::Tensor>& output_tensor) {
+                return self(input_tensor, parameter, memory_config, output_tensor);
+            },
+            py::arg("input_tensor"),
+            py::kw_only(),
+            py::arg(parameter_name.c_str()) = 0,
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt});
 }
 
 template <typename unary_operation_t>
@@ -835,11 +913,6 @@ void bind_unary_operation_with_dim_parameter(
                  - 4
 
             {6}
-
-        Example:
-            >>> tensor = ttnn.from_torch(torch.rand([1, 1, 32, 64], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> {2} = 3
-            >>> output = {1}(tensor, {2})
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -889,7 +962,6 @@ void bind_unary_rdiv(
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
-
         Returns:
             ttnn.Tensor: the output tensor.
 
@@ -907,11 +979,6 @@ void bind_unary_rdiv(
                  - 2, 3, 4
 
             {9}
-
-        Example:
-            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-            >>> {2} = 2
-            >>> output = {1}(tensor, {2}, {4} = None)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -963,7 +1030,6 @@ void bind_softplus(py::module& module, const unary_operation_t& operation) {
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
-
         Returns:
             ttnn.Tensor: the output tensor.
 
@@ -979,10 +1045,6 @@ void bind_softplus(py::module& module, const unary_operation_t& operation) {
                * - BFLOAT16, BFLOAT8_B
                  - TILE
                  - 2, 3, 4
-
-        Example:
-            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-            >>> output = {1}(tensor, beta = 1.0, threshold = 20.0)
         )doc",
         ttnn::softplus.base_name(),
         ttnn::softplus.python_fully_qualified_name());
@@ -1042,10 +1104,6 @@ void bind_tanh_like(py::module& module, const unary_operation_t& operation) {
                  - 2, 3, 4
 
             BFLOAT8_B/BFLOAT4_B is supported only for approx=True mode.
-
-        Example:
-            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-            >>> output = {1}(tensor, fast_and_approximate_mode=False)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name());
@@ -1084,7 +1142,6 @@ void bind_sigmoid_accurate(py::module& module, const unary_operation_t& operatio
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
-
         Returns:
             ttnn.Tensor: the output tensor.
 
@@ -1100,13 +1157,6 @@ void bind_sigmoid_accurate(py::module& module, const unary_operation_t& operatio
                * - BFLOAT16, BFLOAT8_B
                  - TILE
                  - 2, 3, 4
-
-        Example:
-            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> output = {1}(tensor)
-
-            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> output = {1}(tensor, fast_and_approximate_mode = False)
         )doc",
         ttnn::sigmoid_accurate.base_name(),
         ttnn::sigmoid_accurate.python_fully_qualified_name());
@@ -1132,8 +1182,8 @@ void bind_sigmoid_accurate(py::module& module, const unary_operation_t& operatio
 
 template <typename unary_operation_t>
 void bind_sigmoid_mode_appx(py::module& module, const unary_operation_t& operation) {
-                            auto doc = fmt::format(
-                                R"doc(
+    auto doc = fmt::format(
+        R"doc(
         Applies {0} to :attr:`input_tensor` element-wise.
 
         .. math::
@@ -1147,7 +1197,6 @@ void bind_sigmoid_mode_appx(py::module& module, const unary_operation_t& operati
             fast_and_approximate_mode (bool, optional): Use the fast and approximate mode. Defaults to `False`.
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
-
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -1164,39 +1213,35 @@ void bind_sigmoid_mode_appx(py::module& module, const unary_operation_t& operati
                * - BFLOAT16
                  - TILE
                  - 2, 3, 4
-
-        Example:
-            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> output = {1}(tensor, vector_mode=4, fast_and_approximate_mode=True)
         )doc",
-                                ttnn::sigmoid.base_name(),
-                                ttnn::sigmoid.python_fully_qualified_name());
+        ttnn::sigmoid.base_name(),
+        ttnn::sigmoid.python_fully_qualified_name());
 
-                            bind_registered_operation(
-                                module,
-                                ttnn::sigmoid,
-                                doc,
-                                ttnn::pybind_overload_t{
-                                    [](const unary_operation_t& self,
-                                       const Tensor& input_tensor,
-                                       const int vector_mode,
-                                       const bool parameter,
-                                       const std::optional<MemoryConfig>& memory_config,
-                                       const std::optional<Tensor>& output_tensor) -> ttnn::Tensor {
-                                        return self(input_tensor, vector_mode, parameter, memory_config, output_tensor);
-                                    },
-                                    py::arg("input_tensor"),
-                                    py::kw_only(),
-                                    py::arg("vector_mode") = 4,
-                                    py::arg("fast_and_approximate_mode") = false,
-                                    py::arg("memory_config") = std::nullopt,
-                                    py::arg("output_tensor") = std::nullopt});
+    bind_registered_operation(
+        module,
+        ttnn::sigmoid,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const unary_operation_t& self,
+               const Tensor& input_tensor,
+               const int vector_mode,
+               const bool parameter,
+               const std::optional<MemoryConfig>& memory_config,
+               const std::optional<Tensor>& output_tensor) -> ttnn::Tensor {
+                return self(input_tensor, vector_mode, parameter, memory_config, output_tensor);
+            },
+            py::arg("input_tensor"),
+            py::kw_only(),
+            py::arg("vector_mode") = 4,
+            py::arg("fast_and_approximate_mode") = false,
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt});
 }
 
 template <typename unary_operation_t>
 void bind_unary_chain(py::module& module, const unary_operation_t& operation) {
-                                auto doc = fmt::format(
-                                    R"doc(
+    auto doc = fmt::format(
+        R"doc(
         Applies {0} to :attr:`input_tensor` element-wise.
 
         .. math::
@@ -1204,12 +1249,11 @@ void bind_unary_chain(py::module& module, const unary_operation_t& operation) {
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
-            ops_chain (list[ttnn.EltwiseUnaryWithParam]): list of unary ops to be chained.
+            ops_chain (list[ttnn.UnaryWithParam]): list of unary ops to be chained.
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
-
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -1226,38 +1270,32 @@ void bind_unary_chain(py::module& module, const unary_operation_t& operation) {
                * - BFLOAT16, BFLOAT8_B
                  - TILE
                  - 2, 3, 4
-
-        Example:
-
-            >>> tensor = ttnn.from_torch(torch.randn([32, 32], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> ops_chain = [ttnn.EltwiseUnaryWithParam(ttnn.UnaryOpType.RELU), ttnn.EltwiseUnaryWithParam(ttnn.UnaryOpType.EXP, False), ttnn.EltwiseUnaryWithParam(ttnn.UnaryOpType.POWER, 2)]
-            >>> output = {1}(tensor, ops_chain)
         )doc",
         ttnn::unary_chain.base_name(),
         ttnn::unary_chain.python_fully_qualified_name());
 
-                                bind_registered_operation(
-                                    module,
-                                    ttnn::unary_chain,
-                                    doc,
-                                    ttnn::pybind_overload_t{
-                                        [](const unary_operation_t& self,
-                                           const Tensor& input_tensor,
-                                           const EltwiseFusedActivations& ops_chain,
-                                           const std::optional<MemoryConfig>& memory_config,
-                                           const std::optional<Tensor>& output_tensor) {
-                                            return self(input_tensor, ops_chain, memory_config, output_tensor);
-                                        },
-                                        py::arg("input_tensor"),
-                                        py::arg("ops_chain"),
-                                        py::kw_only(),
-                                        py::arg("memory_config") = std::nullopt,
-                                        py::arg("output_tensor") = std::nullopt});
+    bind_registered_operation(
+        module,
+        ttnn::unary_chain,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const unary_operation_t& self,
+               const Tensor& input_tensor,
+               const EltwiseFusedActivations& ops_chain,
+               const std::optional<MemoryConfig>& memory_config,
+               const std::optional<Tensor>& output_tensor) {
+                return self(input_tensor, ops_chain, memory_config, output_tensor);
+            },
+            py::arg("input_tensor"),
+            py::arg("ops_chain"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt});
 }
 template <typename unary_operation_t>
 void bind_identity(py::module& module, const unary_operation_t& operation) {
-                                    auto doc = fmt::format(
-                                        R"doc(
+    auto doc = fmt::format(
+        R"doc(
         Returns a copy of the :attr:`input_tensor`; useful for profiling the SFPU.
         This shouldn't normally be used. Users should normally use clone operation instead for the same functionality since this results in lower performance.
 
@@ -1270,7 +1308,6 @@ void bind_identity(py::module& module, const unary_operation_t& operation) {
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
-
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -1287,29 +1324,23 @@ void bind_identity(py::module& module, const unary_operation_t& operation) {
                * - BFLOAT16, BFLOAT8_B, FLOAT32, UINT32, UINT16, UINT8
                  - TILE
                  - 2, 3, 4
-
-        Example:
-            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.float16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-            >>> output = {1}(tensor)
         )doc",
-                                        ttnn::identity.base_name(),
-                                        ttnn::identity.python_fully_qualified_name());
+        ttnn::identity.base_name(),
+        ttnn::identity.python_fully_qualified_name());
 
-                                    bind_registered_operation(
-                                        module,
-                                        ttnn::identity,
-                                        doc,
-                                        ttnn::pybind_overload_t{
-                                            [](const unary_operation_t& self,
-                                               const Tensor& input_tensor,
-                                               const std::optional<MemoryConfig>& memory_config,
-                                               const std::optional<Tensor>& output_tensor) {
-                                                return self(input_tensor, memory_config, output_tensor);
-                                            },
-                                            py::arg("input_tensor"),
-                                            py::kw_only(),
-                                            py::arg("memory_config") = std::nullopt,
-                                            py::arg("output_tensor") = std::nullopt});
+    bind_registered_operation(
+        module,
+        ttnn::identity,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const unary_operation_t& self,
+               const Tensor& input_tensor,
+               const std::optional<MemoryConfig>& memory_config,
+               const std::optional<Tensor>& output_tensor) { return self(input_tensor, memory_config, output_tensor); },
+            py::arg("input_tensor"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt});
 }
 
 template <typename unary_operation_t>
@@ -1326,6 +1357,9 @@ void bind_unary_composite(
     auto doc = fmt::format(
         R"doc(
         {2}
+
+        .. math::
+            \mathrm{{{{output\_tensor}}}}_i = \verb|{0}|(\mathrm{{{{input\_tensor}}}}_i)
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor. {3}
@@ -1350,10 +1384,6 @@ void bind_unary_composite(
                  - {6}
 
             {7}
-
-        Example:
-            >>> tensor = ttnn.from_torch({8}, layout=ttnn.TILE_LAYOUT, device=device)
-            >>> output = {1}(tensor)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -1393,6 +1423,9 @@ void bind_unary_composite_int_with_default(
         R"doc(
         {5}
 
+        .. math::
+            \mathrm{{{{output\_tensor}}}}_i = \verb|{0}|(\mathrm{{{{input\_tensor}}}}_i, \verb|{2}|)
+
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
 
@@ -1417,10 +1450,6 @@ void bind_unary_composite_int_with_default(
                  - 2, 3, 4
 
             {7}
-
-        Example:
-            >>> tensor = ttnn.from_torch(torch.rand([2, 2], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> output = {1}(tensor, {2} = {4})
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -1490,10 +1519,6 @@ void bind_unary_composite_floats_with_default(
                  - 2, 3, 4
 
             {9}
-
-        Example:
-            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-            >>> output = {1}(tensor, {2} = {4}, {5} = {7})
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -1559,10 +1584,6 @@ void bind_unary_composite_int(
                * - BFLOAT16
                  - TILE
                  - 2, 3, 4
-
-        Example:
-            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-            >>> output = {1}(tensor, 3)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -1601,6 +1622,9 @@ void bind_unary_threshold(
         R"doc(
         {6}
 
+        .. math::
+            \mathrm{{{{output\_tensor}}}}_i = \verb|{0}|(\mathrm{{{{input\_tensor}}}}_i, \verb|{2}|, \verb|{4}|)
+
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
             {2} (float): {3}.
@@ -1624,12 +1648,6 @@ void bind_unary_threshold(
                * - BFLOAT16
                  - TILE
                  - 2, 3, 4
-
-        Example:
-            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-            >>> {2} = 1.0
-            >>> {4} = 10.0
-            >>> output = {1}(tensor, {2}, {4})
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -1672,6 +1690,9 @@ void bind_unary_composite_float_with_default(
         R"doc(
         Performs {0} function on :attr:`input_tensor`, :attr:`{2}`.
 
+        .. math::
+            \mathrm{{{{output\_tensor}}}}_i = \verb|{0}|(\mathrm{{{{input\_tensor}}}}_i, \verb|{2}|)
+
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
 
@@ -1696,10 +1717,6 @@ void bind_unary_composite_float_with_default(
                  - 2, 3, 4
 
             {6}
-
-        Example:
-            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-            >>> output = {1}(tensor, {2} = 5)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -1764,11 +1781,6 @@ void bind_unary_composite_rpow(
                  - 2, 3, 4
 
             {7}
-
-        Example:
-            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-            >>> exponent = 2
-            >>> output = {1}(tensor, exponent)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -1823,9 +1835,9 @@ void py_module(py::module& module) {
     bind_unary_composite(
         module,
         ttnn::atanh,
-        R"doc(\mathrm{{output\_tensor}}_i = \verb|atanh|(\mathrm{{input\_tensor}}_i))doc",
+        R"doc(Performs atanh function on :attr:`input_tensor`.)doc",
         "",
-        R"doc(BFLOAT16, BFLAOT8_B, FLOAT32)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation(
         module,
         ttnn::cos,
@@ -2029,24 +2041,13 @@ void py_module(py::module& module) {
         R"doc(\mathrm{{output\_tensor}}_i = \verb|sin|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_operation(
-        module,
-        ttnn::sqrt,
-        R"doc(\mathrm{{output\_tensor}}_i = \verb|sqrt|(\mathrm{{input\_tensor}}_i))doc",
-        "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_operation(
-        module,
-        ttnn::rsqrt,
-        R"doc(\mathrm{{output\_tensor}}_i = \verb|rsqrt|(\mathrm{{input\_tensor}}_i))doc",
-        "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+
     bind_unary_operation(
         module,
         ttnn::square,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|square|(\mathrm{{input\_tensor}}_i))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT16 [0,255])doc");
+        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16 [0,255])doc");
     bind_unary_operation(
         module,
         ttnn::tan,
@@ -2117,10 +2118,14 @@ void py_module(py::module& module) {
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     //  Unaries with fast_and_approximate_mode
-    bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::exp, R"doc(BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::erf, R"doc(BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::erfc, R"doc(BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::gelu, R"doc(BFLOAT16, BFLOAT8_B)doc");
+    bind_unary_operation_with_fast_and_approximate_mode(
+        module, ttnn::sqrt, "", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+    bind_unary_operation_with_fast_and_approximate_mode(
+        module, ttnn::rsqrt, "", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+    bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::exp, "", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+    bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::erf, "", R"doc(BFLOAT16, BFLOAT8_B)doc");
+    bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::erfc, "", R"doc(BFLOAT16, BFLOAT8_B)doc");
+    bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::gelu, "", R"doc(BFLOAT16, BFLOAT8_B)doc");
     bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::log, "", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation_with_fast_and_approximate_mode(
         module, ttnn::log10, "", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
@@ -2148,14 +2153,6 @@ void py_module(py::module& module) {
         R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
     bind_unary_operation_with_float_parameter(
         module,
-        ttnn::fill,
-        "fill_value",
-        "The value to be filled in the output tensor",
-        "This will create a tensor of same shape and dtype as input reference tensor with fill_value.",
-        R"doc(BFLOAT16, BFLOAT8_B)doc",
-        R"doc(Support provided for float32 dtypes in Wormhole_B0. System memory is not supported.)doc");
-    bind_unary_operation_with_float_parameter(
-        module,
         ttnn::relu_max,
         "upper_limit",
         "The max value for ReLU function",
@@ -2171,11 +2168,7 @@ void py_module(py::module& module) {
         R"doc(BFLOAT16)doc",
         R"doc(System memory is not supported.)doc");
     bind_unary_operation_with_float_parameter(
-        module,
-        ttnn::rpow,
-        "exponent",
-        "exponent value. Non-positive values are not supported.",
-        R"doc(Performs rpow function on :attr:`input_tensor`, :attr:`exponent`.)doc");
+        module, ttnn::rpow, "exponent", "exponent value. Non-positive values are not supported.", "");
     bind_unary_operation_with_float_parameter_default(
         module,
         ttnn::celu,
@@ -2184,6 +2177,15 @@ void py_module(py::module& module) {
         1.0f,
         "",
         R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
+
+    bind_unary_operation_with_scalar_parameter(
+        module,
+        ttnn::fill,
+        "fill_value",
+        "The value to be filled in the output tensor",
+        "This will create a tensor of same shape and dtype as input reference tensor with fill_value.",
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32)doc",
+        R"doc(Host memory is not supported.)doc");
 
     // Unary ops with dim parameter
     bind_unary_operation_with_dim_parameter(

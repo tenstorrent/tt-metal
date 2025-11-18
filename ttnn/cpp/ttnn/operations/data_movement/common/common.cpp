@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/data_movement/common/common.hpp"
+
+#include <algorithm>
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/squeeze/squeeze.hpp"
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
@@ -116,9 +118,7 @@ uint32_t get_effective_l1_cores(
     auto aggregate_bw = max_bw * num_nocs;
     float achieved_l1_bw = get_transaction_noc_bw(transaction_size, is_write ? l1_write_bw : l1_read_bw, index);
     uint32_t effective_cores = std::ceil((float)aggregate_bw / (float)achieved_l1_bw);
-    if (effective_cores > num_cores) {
-        effective_cores = num_cores;  // Limit to available cores
-    }
+    effective_cores = std::min(effective_cores, num_cores);  // Limit to available cores
     return effective_cores;
 }
 
@@ -131,9 +131,7 @@ uint32_t get_effective_dram_cores(
     auto aggregate_bw = single_noc == 1 ? 190 : 265;
     float achieved_dram_bw = get_transaction_noc_bw(transaction_size, dram_bw, index);
     uint32_t effective_cores = std::ceil((float)aggregate_bw / (float)achieved_dram_bw);
-    if (effective_cores > num_cores) {
-        effective_cores = num_cores;  // Limit to available cores
-    }
+    effective_cores = std::min(effective_cores, num_cores);  // Limit to available cores
     return effective_cores;
 }
 
@@ -454,9 +452,7 @@ int common_tm_bw_model(
             output_only ? total_write_cycles_not_local
                         : std::max(total_read_cycles_not_local, total_write_cycles_not_local);
         ideal_dev_clock_cycles = output_only ? total_write_cycles : std::max(total_read_cycles, total_write_cycles);
-        if (ideal_dev_clock_cycles_not_local < ideal_dev_clock_cycles) {
-            ideal_dev_clock_cycles = ideal_dev_clock_cycles_not_local;
-        }
+        ideal_dev_clock_cycles = std::min<unsigned int>(ideal_dev_clock_cycles_not_local, ideal_dev_clock_cycles);
     }
     // latency for llk compute kernels
     int total_compute_cycles = 0;
@@ -559,10 +555,11 @@ uint32_t pack_two_uint16_into_uint32(std::pair<uint16_t, uint16_t> two_uint16s) 
     return (uint32_t)two_uint16s.first | ((uint32_t)two_uint16s.second << 16);
 }
 
-ttnn::Shape compute_padded_shape(
-    const ttnn::Shape& logical_shape, const uint32_t tile_height, const uint32_t tile_width) {
+ttnn::Shape compute_padded_shape(ttnn::Shape logical_shape, const uint32_t tile_height, const uint32_t tile_width) {
+    // Special case: if input tensor is 1D row-major, after tiling output tensor will have
+    // 1D logical shape but 2D padded shape
     if (logical_shape.rank() == 1) {
-        return ttnn::Shape{tile_height, tile_width};
+        logical_shape = ttnn::Shape({1, logical_shape[0]});
     }
 
     ttnn::SmallVector<uint32_t> output_shape_vec(logical_shape.rank());

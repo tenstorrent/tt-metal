@@ -16,7 +16,6 @@
 #include <tt-metalium/edm_fabric_counters.hpp>
 #include <tt-metalium/routing_table_generator.hpp>  // for FabricNodeId
 #include <hostdevcommon/fabric_common.h>
-#include <unordered_map>
 #include <optional>
 #include <cstdint>
 #include <vector>
@@ -33,6 +32,9 @@ namespace tt::tt_fabric {
 struct FabricRiscConfig;
 class FabricEriscDatamoverBuilder;
 class FabricTensixDatamoverBuilder;
+class MultiPoolChannelAllocator;
+class ChannelToPoolMapping;
+class FabricRemoteChannelsAllocator;
 
 // Type alias for any fabric datamover builder
 using FabricDatamoverBuilder = std::
@@ -151,17 +153,16 @@ struct StreamRegAssignments {
     static constexpr uint32_t to_sender_3_pkts_completed_id = 10;
     static constexpr uint32_t to_sender_4_pkts_completed_id = 11;
     // Receiver channel free slots stream IDs
-    static constexpr uint32_t receiver_channel_0_free_slots_from_east_stream_id = 12;
-    static constexpr uint32_t receiver_channel_0_free_slots_from_west_stream_id = 13;
-    static constexpr uint32_t receiver_channel_0_free_slots_from_north_stream_id = 14;
-    static constexpr uint32_t receiver_channel_0_free_slots_from_south_stream_id = 15;
-    static constexpr uint32_t receiver_channel_1_free_slots_from_downstream_stream_id = 16;
+    static constexpr uint32_t vc_0_free_slots_from_downstream_edge_1 = 12;
+    static constexpr uint32_t vc_0_free_slots_from_downstream_edge_2 = 13;
+    static constexpr uint32_t vc_0_free_slots_from_downstream_edge_3 = 14;
+    static constexpr uint32_t vc_1_free_slots_from_downstream_edge_1 = 15;
     // Sender channel free slots stream IDs
-    static constexpr uint32_t sender_channel_1_free_slots_stream_id = 18;
-    static constexpr uint32_t sender_channel_2_free_slots_stream_id = 19;
-    static constexpr uint32_t sender_channel_3_free_slots_stream_id = 20;
-    static constexpr uint32_t sender_channel_4_free_slots_stream_id = 21;
-    static constexpr uint32_t vc1_sender_channel_free_slots_stream_id = 22;
+    static constexpr uint32_t sender_channel_0_free_slots_stream_id = 17;  // for tensix worker
+    static constexpr uint32_t sender_channel_1_free_slots_stream_id = 18;  // for upstream edge on: 1D->VC0, 2D->VC0
+    static constexpr uint32_t sender_channel_2_free_slots_stream_id = 19;  // for upstream edge on: 1D->VC1, 2D->VC0
+    static constexpr uint32_t sender_channel_3_free_slots_stream_id = 20;  // for upstream edge on: 2D->VC0
+    static constexpr uint32_t sender_channel_4_free_slots_stream_id = 21;  // for upstream edge on: 2D->VC1
     // Used by Lite Fabric
     // Consult tt_metal/lite_fabric/hw/inc/constants.hpp to ensure no conflicts
     static constexpr uint32_t reserved_lite_fabric_0_stream_id = 23;
@@ -187,16 +188,14 @@ struct StreamRegAssignments {
             to_sender_2_pkts_completed_id,
             to_sender_3_pkts_completed_id,
             to_sender_4_pkts_completed_id,
-            receiver_channel_0_free_slots_from_east_stream_id,
-            receiver_channel_0_free_slots_from_west_stream_id,
-            receiver_channel_0_free_slots_from_north_stream_id,
-            receiver_channel_0_free_slots_from_south_stream_id,
-            receiver_channel_1_free_slots_from_downstream_stream_id,
+            vc_0_free_slots_from_downstream_edge_1,
+            vc_0_free_slots_from_downstream_edge_2,
+            vc_0_free_slots_from_downstream_edge_3,
+            vc_1_free_slots_from_downstream_edge_1,
             sender_channel_1_free_slots_stream_id,
             sender_channel_2_free_slots_stream_id,
             sender_channel_3_free_slots_stream_id,
             sender_channel_4_free_slots_stream_id,
-            vc1_sender_channel_free_slots_stream_id,
             multi_risc_teardown_sync_stream_id};
         return stream_ids;
     }
@@ -229,7 +228,7 @@ struct FabricEriscDatamoverConfig {
     static constexpr std::size_t dateline_upstream_adjcent_sender_channel_skip_idx = 2;
 
     static constexpr std::size_t num_downstream_edms_vc0 = 1;
-    static constexpr std::size_t num_downstream_edms_2d_vc0 = 4;
+    static constexpr std::size_t num_downstream_edms_2d_vc0 = 3;
     static constexpr std::size_t num_downstream_edms_vc1 = 1;
     static constexpr std::size_t num_downstream_edms = num_downstream_edms_vc0 + num_downstream_edms_vc1;
     static constexpr std::size_t num_downstream_edms_2d = num_downstream_edms_2d_vc0 + num_downstream_edms_vc1;
@@ -314,7 +313,7 @@ struct FabricEriscDatamoverConfig {
 
     // Channel Allocations
     std::size_t max_l1_loading_size = 0;
-    std::vector<MemoryRegion> available_buffer_memory_regions = {};
+    std::vector<MemoryRegion> available_buffer_memory_regions;
 
     FabricEriscDatamoverConfig(
         std::size_t channel_buffer_size_bytes,
@@ -351,7 +350,20 @@ struct FabricEriscDatamoverConfig {
     std::size_t edm_noc_vc = 0;
 
     // Fabric channel allocator for L1 memory management
+    // Points to the primary allocator (typically static allocator for single-pool configs)
     std::shared_ptr<FabricChannelAllocator> channel_allocator;
+
+    // Multi-pool allocator coordinator - manages all pool allocators
+    // Emits pool metadata and delegates to individual pools for CT args
+    std::shared_ptr<MultiPoolChannelAllocator> multi_pool_allocator;
+
+    // Channel-to-pool mapping for multi-pool support
+    std::shared_ptr<ChannelToPoolMapping> channel_to_pool_mapping;
+    // Channel-to-pool mapping for remote (over eth) channels multi-pool support
+    std::shared_ptr<ChannelToPoolMapping> remote_channel_to_pool_mapping;
+
+    // Remote channels allocator - tracks remote receiver channel info for the remote ethernet core
+    std::shared_ptr<FabricRemoteChannelsAllocator> remote_channels_allocator;
 
 private:
     void configure_skip_connection_flags(Topology topology, FabricEriscDatamoverOptions const& options);
@@ -421,6 +433,11 @@ size_t log_worker_to_fabric_edm_sender_rt_args(const std::vector<uint32_t>& args
 /*
  * The `FabricEriscDatamoverBuilder` is a general class that is used to build fabric router erisc kernels.
  * It is instantiated per fabric (erisc) router. It works closely with the `FabricEriscDatamoverConfig` class.
+ *
+ * Note on 2-ERISC enablement (Blackhole):
+ *   Builder logic may enable an effective "fabric 2-ERISC" mode by default when the platform exposes
+ *   two ERISCs on the Ethernet core and Fabric Tensix MUX is enabled. Decisions such as ERISC count and
+ *   TXQ selection are derived from this effective mode. A presence-based disable env exists to force-disable.
  */
 class FabricEriscDatamoverBuilder {
 public:
@@ -429,6 +446,9 @@ public:
     // payload only, no header
     static constexpr size_t default_packet_payload_size_bytes = tt::tile_size(tt::DataFormat::Bfp8_b) * 4;
     static constexpr size_t default_mesh_packet_payload_size_bytes = tt::tile_size(tt::DataFormat::Bfp8_b) * 4;
+
+    static_assert(default_packet_payload_size_bytes == 4352, "Packet size must be 4352 bytes");
+    static_assert(default_mesh_packet_payload_size_bytes == 4352, "Mesh packet size must be 4352 bytes");
 
     FabricEriscDatamoverBuilder(
         const CoreCoord& my_eth_core_logical,
@@ -520,7 +540,7 @@ public:
     size_t handshake_address = 0;
     size_t channel_buffer_size = 0;
 
-    std::shared_ptr<tt::tt_fabric::ChannelConnectionWriterAdapter> receiver_channel_to_downstream_adapter = {};
+    std::shared_ptr<tt::tt_fabric::ChannelConnectionWriterAdapter> receiver_channel_to_downstream_adapter;
     std::array<std::shared_ptr<tt::tt_fabric::FabricChannelAllocator>, FabricEriscDatamoverConfig::max_downstream_edms> downstream_allocators = {};
 
     std::array<size_t, builder_config::num_receiver_channels> receiver_channels_num_buffers = {};

@@ -125,7 +125,9 @@ public:
         // has progressed (data has been read).
         // A stall is only required when the ring_buffer_ backing the queue
         // is full. Realistically, this should never happen, given the size
-        while (tail_.load()->next == head_.load());
+        while (tail_.load()->next == head_.load()) {
+            ;
+        }
         tail_.load()->data = std::move(task);
         tail_.store(tail_.load()->next);
     }
@@ -174,7 +176,7 @@ private:
 // across threads.
 class NumaAwareExecutor {
 public:
-    NumaAwareExecutor(uint32_t physical_device_id) : tasks_() {
+    NumaAwareExecutor(uint32_t physical_device_id) {
         // Set the priority for this process to 0 (niceness value in linux)
         thread_binding::set_process_priority(0);
         worker = std::thread([this]() {
@@ -218,6 +220,12 @@ public:
         auto cpu_core_for_worker = thread_binding::get_cpu_core_for_physical_device(physical_device_id);
         thread_binding::set_worker_affinity(worker, cpu_core_for_worker);
     }
+
+    // Delete copy and move operations as this class manages a thread and should not be copied or moved
+    NumaAwareExecutor(const NumaAwareExecutor&) = delete;
+    NumaAwareExecutor& operator=(const NumaAwareExecutor&) = delete;
+    NumaAwareExecutor(NumaAwareExecutor&&) = delete;
+    NumaAwareExecutor& operator=(NumaAwareExecutor&&) = delete;
 
     ~NumaAwareExecutor() {
         // Destructor called in main thread.
@@ -337,7 +345,7 @@ private:
 class PassThroughThreadPool : public ThreadPool {
 public:
     PassThroughThreadPool() = default;
-    void enqueue(std::function<void()>&& f, std::optional<uint32_t> device_idx = std::nullopt) override { f(); }
+    void enqueue(std::function<void()>&& f, std::optional<uint32_t> /*device_idx*/ = std::nullopt) override { f(); }
     void wait() override {}
 };
 

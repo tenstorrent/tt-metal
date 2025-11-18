@@ -590,6 +590,7 @@ class ModelArgs:
                 "Qwen2.5-7B": {"N150": 4, "N300": 32, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 16, "TG": 128, "P150x4": 128},
                 "Qwen2.5-VL-3B": {"N150": 128, "N300": 128, "T3K": None, "TG": None, "P150x4": None},
+                "Qwen2.5-VL-7B": {"N150": 64, "N300": 128, "T3K": None, "TG": None, "P150x4": None},
                 "Qwen2.5-VL-32B": {"N150": None, "N300": None, "T3K": 64, "TG": None, "P150x4": None},
                 "Qwen2.5-VL-72B": {"N150": None, "N300": None, "T3K": 32, "TG": None, "P150x4": None},
                 "DeepSeek-R1-Distill-Qwen-14B": {"N150": 4, "N300": 64, "T3K": 128, "TG": None, "P150x4": None},
@@ -1345,6 +1346,51 @@ class ModelArgs:
             )
             logger.info(f"LM head grid: {self.lm_head_core_grid}")
 
+        self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
+
+    def get_trace_prefill_supported_seq_lens(self):
+        default_supported_seq_lens = {
+            "N150": [128, 256, 512],
+            "N300": [128, 256, 512, 1024],
+            "T3K": [128, 256, 512, 1024],
+            "TG": [128, 256, 512, 1024],
+        }
+
+        # TODO: If no specific sequence lengths are listed for a model and device, the default one will be used (from the default_supported_seq_lens dictionary)
+        model_specific_supported_seq_lens = {
+            "Llama-3.1-8B": {
+                "P100": [128, 256, 512, 1024],
+                "N150": [128, 256, 512, 1024],
+                "N300": [128, 256, 512, 1024, 2048, 4096, 8192],
+                "T3K": [128, 256, 512, 1024, 2048, 4096, 8192],
+                "TG": [128, 256, 512, 1024, 2048, 4096, 8192],
+            },
+            "Llama-3.1-70B": {
+                "T3K": [128, 256, 512, 1024, 2048, 4096, 8192],
+                "TG": [128, 256, 512, 1024, 2048, 4096, 8192],
+            },
+            "Llama-3.3-70B": {
+                "T3K": [128, 256, 512, 1024, 2048, 4096, 8192],
+                "TG": [128, 256, 512, 1024, 2048, 4096, 8192],
+            },
+        }
+
+        model_name = self.base_model_name
+        device_name = self.device_name
+
+        # Try model-specific sequence lengths first
+        result = model_specific_supported_seq_lens.get(model_name, {}).get(device_name)
+        if result:
+            return result
+
+        # Fall back to default sequence lengths
+        result = default_supported_seq_lens.get(device_name)
+        if result:
+            return result
+
+        # No supported sequence lengths found, return empty list
+        return []
+
     @staticmethod
     def __get_llama_local_params_name(model_name):
         if "3.2-1B" in model_name:
@@ -1616,6 +1662,9 @@ class ModelArgs:
 
         self.query_pre_attn_scalar = text_config.get("query_pre_attn_scalar", None)
 
+        # Sliding window attention
+        self.sliding_window = text_config.get("sliding_window", None)
+
         # Configurable MLP activation type
         self.mlp_activation_type = self._get_hidden_activation_type(text_config)
 
@@ -1823,6 +1872,28 @@ class ModelArgs:
     def is_llama_vision(self):
         return ("llama" in self.CKPT_DIR.lower()) and ("vision" in self.CKPT_DIR.lower())
 
+    def can_enable_trace(self, prefill_seq_len):
+        """
+        This function is used to determine if trace should be enabled for the prefill.
+        Tracing is used only for certain sequence lengths, because for bigger sequence lengths, op2op gaps are already small, so we don't need tracing.
+        If we have chunked prefill, we disable tracing because there is no support to pass parameters such as chunk_start and chunk_end to trace.
+        There is no support to pass them as a tensor, and then inside the trace read it as a number.
+        # TODO: Support sliding window attention - This PR disabled tracing if a model uses sliding window attention, because this PR mainly covers models without sliding window attention. (for example,Llama-8B).
+        """
+        # Trace in prefill is currently supported only for Llama-3.1-8B, Llama-3.1-70B, Llama-3.3-70B
+        # TODO: (https://github.com/tenstorrent/tt-metal/issues/25722) Support all other models that use tt_transformers
+
+        if hasattr(self, "sliding_window") and getattr(self, "sliding_window") != None:
+            return False
+
+        allowed_seq_lens = self.trace_prefill_supported_seq_lens
+
+        return (
+            prefill_seq_len in allowed_seq_lens
+            and prefill_seq_len <= self.max_prefill_chunk_size
+            and prefill_seq_len <= self.max_seq_len
+        )
+
     def get_state_dict_prefix(self, module_name, layer_num, is_vision=False):
         text_prefix = self.state_dict_text_prefix
         vision_prefix = self.state_dict_vision_prefix
@@ -1893,7 +1964,22 @@ class ModelArgs:
                     config.num_hidden_layers = self.n_layers
 
                 model_cls = self.get_hf_model_cls()
-                model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
+
+                try:
+                    # .from_pretrained + _init_weights works faster than .from_config
+                    model = model_cls.from_pretrained(
+                        self.CKPT_DIR,
+                        config=config,
+                        torch_dtype="auto",
+                        trust_remote_code=self.trust_remote_code_hf,
+                        local_files_only=True,
+                    )
+                    model.apply(model._init_weights)
+                except Exception as e:
+                    logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
+                    model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
+
+                # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
                 state_dict = model.state_dict()
             else:
                 reference_model = Transformer(self)
@@ -2432,7 +2518,7 @@ class ModelArgs:
                     raise e
 
             # Add meta-compatible stop token list to the HF tokenizer
-            if not "stop_tokens" in tokenizer.__dict__:
+            if not hasattr(tokenizer, "stop_tokens") or tokenizer.stop_tokens is None:
                 tokenizer.stop_tokens = [tokenizer.eos_token_id]
                 # Phi-3-mini uses "<|end|>" as EOS token
                 if "phi-3-mini" in self.base_model_name.lower():
@@ -2508,7 +2594,21 @@ class ModelArgs:
                 else:
                     config.num_layers = self.n_layers
                     config.num_hidden_layers = self.n_layers
-                model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
+
+                try:
+                    # .from_pretrained + _init_weights works faster than .from_config
+                    model = model_cls.from_pretrained(
+                        self.CKPT_DIR,
+                        config=config,
+                        torch_dtype="auto",
+                        trust_remote_code=self.trust_remote_code_hf,
+                        local_files_only=True,
+                    )
+                    model.apply(model._init_weights)
+                except Exception as e:
+                    logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
+                    model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
+                # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
             else:
                 if self.cache_hf_flag and self.cached_hf_model is None:
                     model = model_cls.from_pretrained(
@@ -2562,7 +2662,21 @@ class ModelArgs:
                 config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
                 config.num_layers = self.n_layers
                 config.num_hidden_layers = self.n_layers
-                model = model_cls.from_config(config)
+
+                try:
+                    # .from_pretrained + _init_weights works faster than .from_config
+                    model = model_cls.from_pretrained(
+                        self.CKPT_DIR,
+                        config=config,
+                        torch_dtype="auto",
+                        trust_remote_code=self.trust_remote_code_hf,
+                        local_files_only=True,
+                    )
+                    model.apply(model._init_weights)
+                except Exception as e:
+                    logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
+                    model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
+                # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
             else:
                 if self.cached_hf_model is None:
                     model = model_cls.from_pretrained(self.CKPT_DIR, local_files_only=os.getenv("CI") == "true")
@@ -2923,6 +3037,17 @@ class HfModelWrapper:
 
 class DecodersPrecision:
     @classmethod
+    def from_string(cls, optimizations: str):
+        if optimizations == "performance":
+            return cls.performance
+        elif optimizations == "accuracy":
+            return cls.accuracy
+        else:
+            raise ValueError(
+                f"Invalid optimization configuration: {optimizations}. Allowed values are 'performance' or 'accuracy'"
+            )
+
+    @classmethod
     def accuracy(cls, num_decoders, model_name):
         inst = cls._precision_factory(num_decoders, model_name, ModelOptimizations.accuracy)
         inst.__name__ = "accuracy"
@@ -2951,7 +3076,18 @@ class DecodersPrecision:
             PrecisionSetting.BF16: ttnn.bfloat16,
             None: None,  # this signals that original dtype should be used
         }
-        return precision_setting_lookup[self.decoder_optimizations[decoder_id].tensor_dtype_settings[tensor]]
+        if (
+            decoder_id not in self.decoder_optimizations
+            or tensor not in self.decoder_optimizations[decoder_id].tensor_dtype_settings
+        ):
+            return None
+
+        key = self.decoder_optimizations[decoder_id].tensor_dtype_settings[tensor]
+
+        if key is None or key not in precision_setting_lookup:
+            return None
+
+        return precision_setting_lookup[key]
 
     def get_math_fidelity(self, decoder_id, op: OpGroup, configuration: ModelArgs):
         math_fidelity_setting_lookup = {
@@ -3042,6 +3178,7 @@ def determine_device_name(mesh_device):
             2: "P300",
             4: "P150x4",
             8: "P150x8",
+            32: "BHGLX",
         }
     elif is_wormhole_b0():
         dict_device_names = {

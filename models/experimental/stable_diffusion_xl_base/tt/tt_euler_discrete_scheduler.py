@@ -36,6 +36,7 @@ class TtEulerDiscreteScheduler(LightweightModule):
     ):
         # implements the Euler Discrete Scheduler with default params as in
         # https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/blob/main/scheduler/scheduler_config.json
+        self.order = 1
         self.num_train_timesteps = num_train_timesteps
         self.beta_start = beta_start
         self.beta_end = beta_end
@@ -76,6 +77,11 @@ class TtEulerDiscreteScheduler(LightweightModule):
         self.device = device
         self.create_ttnn_timesteps(timesteps)
         self.create_ttnn_sigmas("sigmas")
+
+    def set_begin_index(self, begin_index: int):
+        self.begin_index = begin_index
+        if self.begin_index < len(self.sigmas) - 1:
+            self.set_step_index(self.begin_index)
 
     def inc_step_index(self):
         self.set_step_index(self.step_index + 1)
@@ -387,3 +393,11 @@ class TtEulerDiscreteScheduler(LightweightModule):
 
         # Note: We return None for pred_original_sample since it is never used
         return (prev_sample, None)
+
+    def add_noise(
+        self,
+        original_samples: ttnn._ttnn.tensor.Tensor,
+        noise: ttnn._ttnn.tensor.Tensor,
+    ) -> ttnn._ttnn.tensor.Tensor:
+        noisy_samples = original_samples + noise * self.tt_sigma_step
+        return noisy_samples

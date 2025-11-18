@@ -38,6 +38,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/tt_align.hpp>
+#include "common/tt_backend_api_types.hpp"
 
 #include <array>
 #include <bit>
@@ -214,10 +215,10 @@ TestConfig parse_cli_config(int argc, char** argv) {
 
 struct DeviceTestResources {
     std::shared_ptr<tt::tt_metal::distributed::MeshDevice> device = nullptr;
-    CoreRangeSet worker_cores = {};
+    CoreRangeSet worker_cores;
     std::vector<CoreCoord> worker_cores_vec;
-    CoreCoord eth_core = {};
-    tt_metal::Program program = {};
+    CoreCoord eth_core;
+    tt_metal::Program program;
     uint32_t worker_ack_semaphore_id = std::numeric_limits<uint32_t>::max();
     uint32_t worker_new_chunk_semaphore_id = std::numeric_limits<uint32_t>::max();
     uint32_t worker_src_buffer_address = std::numeric_limits<uint32_t>::max();

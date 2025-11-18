@@ -9,7 +9,6 @@ import torch.nn.functional as F
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
-from models.common.utility_functions import skip_for_wormhole_b0, is_grayskull
 from models.common.utility_functions import torch_random
 
 
@@ -32,9 +31,7 @@ def test_large_softmax(device, batch_size, h, w, dim):
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
 
     input_tensor = ttnn.to_device(input_tensor, device)
-    # TODO: need to fix a hang, which occurs when numeric_stable is True
-    # See: issue #28509
-    output_tensor = ttnn.softmax(input_tensor, dim=dim, numeric_stable=False)
+    output_tensor = ttnn.softmax(input_tensor, dim=dim, numeric_stable=True)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
@@ -59,18 +56,13 @@ def test_softmax_stable_neg_values(device, input_vector, math_approx, fp32_acc_e
     torch_input_tensor = torch.tensor([[[input_vector]]], dtype=torch.bfloat16)
     torch_output_tensor = F.softmax(torch_input_tensor, dim=-1, dtype=torch.bfloat16)
 
-    if is_grayskull():
-        compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=math_approx,
-        )
-    else:
-        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=math_approx,
-            fp32_dest_acc_en=fp32_acc_en,
-            packer_l1_acc=False,
-        )
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=math_approx,
+        fp32_dest_acc_en=fp32_acc_en,
+        packer_l1_acc=False,
+    )
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn.softmax(input_tensor, dim=-1, compute_kernel_config=compute_kernel_config, numeric_stable=True)
@@ -100,18 +92,13 @@ def run_softmax_stable_with_program_cache(
 
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
-    if is_grayskull():
-        compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=math_approx,
-        )
-    else:
-        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=math_approx,
-            fp32_dest_acc_en=fp32_acc_en,
-            packer_l1_acc=False,
-        )
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=math_approx,
+        fp32_dest_acc_en=fp32_acc_en,
+        packer_l1_acc=False,
+    )
 
     if not skip_scale_mask:
         output_tensor = ttnn.scale_mask_softmax(
@@ -186,18 +173,13 @@ def run_softmax_sharded_stable(
         block_h=h // 32,
         block_w=w // 32,
     )
-    if is_grayskull():
-        compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=math_approx,
-        )
-    else:
-        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=math_approx,
-            fp32_dest_acc_en=fp32_acc_en,
-            packer_l1_acc=False,
-        )
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=math_approx,
+        fp32_dest_acc_en=fp32_acc_en,
+        packer_l1_acc=False,
+    )
 
     input_tensor = ttnn.from_torch(
         torch_input_tensor, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
@@ -478,7 +460,8 @@ def test_softmax_accuracy(device, shape, fp32_acc_en, math_approx_mode, expected
     torch_output = torch.ops.aten._softmax.default(torch_tensor, dim=-1, half_to_float=False)
 
     # TTNN Softmax
-    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=math_approx_mode,
         fp32_dest_acc_en=fp32_acc_en,
