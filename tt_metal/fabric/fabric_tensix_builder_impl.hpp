@@ -231,7 +231,8 @@ private:
         size_t relay_flow_control_semaphore_addr;
         size_t relay_teardown_semaphore_addr;
         size_t relay_buffer_index_semaphore_addr;
-        size_t stream_id;
+        size_t stream_id;        // Mux's stream ID for credit tracking
+        size_t relay_stream_id;  // Relay's stream ID for credit tracking
     };
 
     // Helper to collect mux connection info
@@ -239,7 +240,8 @@ private:
         const std::pair<uint32_t, uint32_t>* noc_coords,
         uint32_t mux_channel_id,
         uint32_t mux_idx,
-        uint32_t stream_id) const;
+        uint32_t stream_id,
+        uint32_t relay_stream_id) const;
 
     // Number of mux connections: [0]=local, [1]=downstream_en, [2]=downstream_ws
     static constexpr uint32_t NUM_MUX_CONNECTIONS = 3;

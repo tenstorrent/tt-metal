@@ -117,10 +117,6 @@ void forward_data(
 
         fabric_connection.wait_for_empty_write_slot();
 
-        // for (int i=0; i<1000;++i) {
-        //     asm volatile("nop");
-        // }
-
         fabric_connection.send_payload_flush_non_blocking_from_address(
             (uint32_t)packet_header, packet_header->get_payload_size_including_header());
 
