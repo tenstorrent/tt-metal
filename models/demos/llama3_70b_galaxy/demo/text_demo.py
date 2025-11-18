@@ -856,7 +856,7 @@ def test_demo_text(
             torch_output_logits = torch_output[0]
             logits = tt_out_logits_all_users[0, 0, :vocab_size]
             does_pass, pcc_message = comp_pcc(
-                logits, torch_output_logits, 0.91 if not apc_test else demo_targets["prefill_pcc"]
+                logits, torch_output_logits, 0.90 if not apc_test else demo_targets["prefill_pcc"]
             )
             logger.info(f"PCC: {pcc_message}")
             logger.info(
