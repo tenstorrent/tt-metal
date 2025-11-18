@@ -1290,8 +1290,8 @@ def test_demo_text(
             "P150_Llama-3.1-8B": 23,  # TODO Update target
             "N300_Llama-3.1-8B": 38,
             "P300_Llama-3.1-8B": 38,
-            "T3K_Llama-3.1-8B": 45,
-            "TG_Llama-3.1-8B": 45,  # TODO Update target
+            "T3K_Llama-3.1-8B": 70,  # Updated with Ring topology + distributed norms
+            "TG_Llama-3.1-8B": 200,  # Projected with 32 devices + 2D mesh
             #
             "N150_Llama-3.2-11B": 23,
             "N300_Llama-3.2-11B": 38,  # TODO Update target

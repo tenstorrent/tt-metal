@@ -154,9 +154,10 @@ class ModelOptimizations:
         return inst
 
     @classmethod
-    def performance(cls, model_name):
+    def performance(cls, model_name, num_devices=0):
         """Configuration optimized for performance
-        All models use bfp4 in FF1 and FF3 MLPs in this configuration
+        Use BFP4 in FF1 and FF3 MLPs only for 32+ devices (70B-style optimization)
+        Use default optimizations for smaller device counts
         """
         base_model_name = get_base_model_name(model_name)
         if base_model_name == "Qwen2.5-7B":
@@ -181,10 +182,33 @@ class ModelOptimizations:
                 }
             )
         else:
-            settings = {
-                "TensorPrecision": {TensorGroup.FF1_FF3: PrecisionSetting.BFP4},
-                "OpFidelity": {OpGroup.LI_FF1_FF3: MathFidelitySetting.LOFI},
-            }
+            # Use 70B-style optimizations (BFP4 + LOFI) only for 32+ devices
+            if num_devices >= 32:
+                logger.info(
+                    f"Using 70B-style optimizations (BFP4 MLP weights) for {model_name} on {num_devices} devices"
+                )
+                settings = {
+                    "TensorPrecision": {TensorGroup.FF1_FF3: PrecisionSetting.BFP4},
+                    "OpFidelity": {OpGroup.LI_FF1_FF3: MathFidelitySetting.LOFI},
+                }
+            else:
+                logger.info(f"Using default optimizations for {model_name} on {num_devices} devices")
+                settings = {
+                    "TensorPrecision": {
+                        TensorGroup.WQKV: PrecisionSetting.BF16,
+                        TensorGroup.KV_CACHE: PrecisionSetting.BF16,
+                        TensorGroup.WO: PrecisionSetting.BF16,
+                    },
+                    "OpFidelity": {
+                        OpGroup.LI_QKV_DECODE: MathFidelitySetting.HIFI4,
+                        OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI4,
+                        OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI4,
+                        OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
+                        OpGroup.LI_O_DECODE: MathFidelitySetting.HIFI4,
+                        OpGroup.LI_O_PREFILL: MathFidelitySetting.HIFI4,
+                    },
+                }
+
             if model_name.startswith("Phi-3-mini"):  # TODO: Only do this for N150
                 logger.info(
                     f"Model {model_name} is running out of L1 memory under standard high-performance settings, using FP16 accumulate in attention prefill QKV Matmul"
@@ -206,6 +230,12 @@ class ModelOptimizations:
             self._names[key] = ", ".join(
                 [f"{k.value}: {curr[k].value if curr[k] else 'mixed'}" for k in list(enum_type)]
             )
+
+        # Log BFP4 activation for MLP weights (70B-style optimization)
+        if "TensorPrecision" in self._opt_settings:
+            ff_precision = self._opt_settings["TensorPrecision"].get(TensorGroup.FF1_FF3)
+            if ff_precision and ff_precision.value == "bfp4":
+                logger.info("BFP4 activated for FF1/FF3 MLP weights (70B-style optimization)")
 
         self._full_name = (
             "precision_cfg = {"
@@ -343,9 +373,10 @@ def parse_optimizations(string):
     return apply_settings
 
 
-def parse_decoder_json(json_file_path, default_optimization=ModelOptimizations.performance):
+def parse_decoder_json(json_file_path, default_optimization=ModelOptimizations.performance, num_devices=0):
     """
     Reads a JSON file and returns a DecodersPrecision instance.
+    Now supports conditional optimizations based on num_devices like Llama 70B.
     """
     if not json_file_path:
         return None
@@ -363,7 +394,9 @@ def parse_decoder_json(json_file_path, default_optimization=ModelOptimizations.p
 
         num_decoders = max(int(decoder_id) for decoder_id in config_data["decoders"].keys()) + 1
         placeholder_model_name = "model"
-        decoder_conf = default_optimization(placeholder_model_name)
+        decoder_conf = default_optimization(
+            placeholder_model_name, num_devices
+        )  # Use actual device count for conditional optimizations
         default_tensor_dtype_settings = decoder_conf.tensor_dtype_settings
         default_op_fidelity_settings = decoder_conf.op_fidelity_settings
         decoders_precision = DecodersPrecision(num_decoders, placeholder_model_name, decoder_conf)
@@ -1423,13 +1456,17 @@ class ModelArgs:
             return False
         if all([dim > 1 for dim in list(self.mesh_device.shape)]):  # 2D grid
             return True
-        elif self.dim > 4096 and mode == "prefill":  # Somewhere between 4k and 8k WH runs out of L1 if not distributed
+        elif self.dim > 4096 and mode == "prefill":
             return True
+        # Note: Distributed norms for Llama-3.1-8B (dim=4096) on 8+ devices showed performance degradation
+        # Keeping natural threshold of dim > 4096 for now
+        # elif mode == "prefill" and self.num_devices >= 8 and self.base_model_name in ["Llama-3.1-8B", "Llama-3.2-8B"]:
+        #     return True
         return False
 
     def ccl_topology(self):
-        # Use ring on a T3K or 6U galaxy submesh
-        if self.num_devices == 8 and ttnn.cluster.get_cluster_type() in [
+        # Use ring on T3K (8 devices) and TG (32 devices) for optimization
+        if self.num_devices in [8, 32] and ttnn.cluster.get_cluster_type() in [
             ttnn.cluster.ClusterType.T3K,
             ttnn.cluster.ClusterType.GALAXY,
         ]:
@@ -1437,6 +1474,17 @@ class ModelArgs:
         elif self.num_devices > 1:  # All other multi chip devices
             return ttnn.Topology.Linear
         return None
+
+    def get_mesh_shape_for_device_count(self):
+        """Return optimal mesh shape based on device count"""
+        if self.num_devices == 32:
+            # 2D grid: 4x8 for optimal CCL bandwidth
+            return [4, 8]
+        elif self.num_devices == 8:
+            # 1D line: 1x8 for T3K
+            return [1, 8]
+        else:
+            return [1, self.num_devices]
 
     def prepare_residual_tensor_decode(self, x, input_mem_cfg, force_replicated=False, on_host=False):
         """
@@ -3039,23 +3087,23 @@ class DecodersPrecision:
     @classmethod
     def from_string(cls, optimizations: str):
         if optimizations == "performance":
-            return cls.performance
+            return lambda args: cls.performance(args.n_layers, args.model_name, args.num_devices)
         elif optimizations == "accuracy":
-            return cls.accuracy
+            return lambda args: cls.accuracy(args.n_layers, args.model_name, args.num_devices)
         else:
             raise ValueError(
                 f"Invalid optimization configuration: {optimizations}. Allowed values are 'performance' or 'accuracy'"
             )
 
     @classmethod
-    def accuracy(cls, num_decoders, model_name):
-        inst = cls._precision_factory(num_decoders, model_name, ModelOptimizations.accuracy)
+    def accuracy(cls, num_decoders, model_name, num_devices=0):
+        inst = cls._precision_factory(num_decoders, model_name, ModelOptimizations.accuracy, num_devices)
         inst.__name__ = "accuracy"
         return inst
 
     @classmethod
-    def performance(cls, num_decoders, model_name):
-        inst = cls._precision_factory(num_decoders, model_name, ModelOptimizations.performance)
+    def performance(cls, num_decoders, model_name, num_devices=0):
+        inst = cls._precision_factory(num_decoders, model_name, ModelOptimizations.performance, num_devices)
         inst.__name__ = "performance"
         return inst
 
@@ -3106,7 +3154,7 @@ class DecodersPrecision:
         )
 
     @classmethod
-    def _precision_factory(cls, num_decoders, model_name, optimization_level):
+    def _precision_factory(cls, num_decoders, model_name, optimization_level, num_devices=0):
         # use respective configuration for each optimization level
         decoder_config_filename = None
         match optimization_level:
@@ -3122,12 +3170,15 @@ class DecodersPrecision:
         decoder_config_path = model_params_dir / "model_params" / model_name / decoder_config_filename
         inst = None
         if decoder_config_path.exists():
-            inst = parse_decoder_json(decoder_config_path, default_optimization=optimization_level)
+            # Pass num_devices so JSON configs can also be conditional like Llama 70B
+            inst = parse_decoder_json(
+                decoder_config_path, default_optimization=optimization_level, num_devices=num_devices
+            )
             logger.info(
                 f"Model {model_name} requires specific TensorPrecision and OpFidelity configuration, using {decoder_config_path}"
             )
         else:
-            inst = cls(num_decoders, model_name, optimization_level(model_name))
+            inst = cls(num_decoders, model_name, optimization_level(model_name, num_devices))
 
         return inst
 
