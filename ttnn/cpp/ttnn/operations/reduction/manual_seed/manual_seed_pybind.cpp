@@ -27,7 +27,32 @@ void bind_manual_seed_operation(py::module& module) {
 
             Returns:
                 Tensor: An empty tensor, as this operation does not produce a meaningful output. To be changed in the future.
+
+            Note:
+
+                Supported dtypes and layout for seeds tensor values:
+
+                .. list-table::
+                    :header-rows: 1
+
+                    * - Dtypes
+                      - Layouts
+                    * - X
+                      - X
+                    * - X
+                      - X
+
+                Supported dtypes and layout for user_ids tensor values:
+
+                .. list-table::
+                    :header-rows: 1
+
+                    * - Dtypes
+                      - Layouts
+                    * - X, X
+                      - X
         )doc";
+    // TODO: To be filled when implementing device logic
     using OperationType = decltype(ttnn::manual_seed);
     bind_registered_operation(
         module,
