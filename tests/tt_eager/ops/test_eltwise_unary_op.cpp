@@ -21,6 +21,8 @@
 #include "ttnn/operations/eltwise/unary/device/unary_device_operation.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_device_operation_types.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/eltwise/unary/unary_composite.hpp"
+#include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
@@ -44,6 +46,10 @@ float relu(float x) { return std::max(0.0f, x); }
 float sigmoid(float x) { return 1 / (1 + std::exp(-x)); }
 float log(float x) { return std::log(x); }
 float tanh(float x) { return std::tanh(x); }
+float relu_squared(float x) {
+    float relu_val = std::max(0.0f, x);
+    return relu_val * relu_val;
+}
 }  // namespace detail
 
 Tensor gelu_fast(const Tensor& t) { return ttnn::gelu(t, true); }
@@ -228,6 +234,73 @@ void test_numerically() {
     }
 }
 
+void test_relu_squared() {
+    log_info(tt::LogTest, "Running {}", __func__);
+
+    using tt::constants::TILE_HEIGHT;
+    using tt::constants::TILE_WIDTH;
+
+    int device_id = 0;
+    auto device_owner = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
+    auto device = device_owner.get();
+
+    ttnn::Shape shape({1, 1, TILE_HEIGHT, TILE_WIDTH});
+    auto input_tensor = ttnn::random::uniform(bfloat16(-10.0f), bfloat16(10.0f), shape).to_layout(Layout::TILE);
+
+    // Compute host reference
+    auto host_output = host_function<::detail::relu_squared>(input_tensor);
+
+    // Run device operation
+    auto device_output = ttnn::relu_squared(input_tensor.to_device(device)).cpu();
+
+    // Compare results
+    auto allclose = ttnn::allclose<bfloat16>(host_output, device_output, 1e-1f, 1e-5f);
+    TT_FATAL(allclose, "Error: relu_squared test failed");
+}
+
+void test_relu_squared_backward() {
+    log_info(tt::LogTest, "Running {}", __func__);
+
+    using tt::constants::TILE_HEIGHT;
+    using tt::constants::TILE_WIDTH;
+
+    int device_id = 0;
+    auto device_owner = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
+    auto device = device_owner.get();
+
+    ttnn::Shape shape({1, 1, TILE_HEIGHT, TILE_WIDTH});
+    auto input_tensor = ttnn::random::uniform(bfloat16(-10.0f), bfloat16(10.0f), shape).to_layout(Layout::TILE);
+    auto grad_tensor = ttnn::random::uniform(bfloat16(-100.0f), bfloat16(100.0f), shape).to_layout(Layout::TILE);
+
+    // Compute host reference: d/dx(relu(x)^2) = 2 * relu(x) * (x > 0)
+    auto input_buffer = tt::tt_metal::host_buffer::get_as<bfloat16>(input_tensor);
+    auto grad_buffer = tt::tt_metal::host_buffer::get_as<bfloat16>(grad_tensor);
+    auto golden_buffer = std::vector<bfloat16>(input_tensor.physical_volume());
+
+    for (size_t i = 0; i < golden_buffer.size(); i++) {
+        float x = static_cast<float>(input_buffer[i]);
+        float grad = static_cast<float>(grad_buffer[i]);
+        float relu_x = std::max(0.0f, x);
+        float gtz = (x > 0.0f) ? 1.0f : 0.0f;
+        float result = 2.0f * relu_x * gtz * grad;
+        golden_buffer[i] = bfloat16(result);
+    }
+
+    auto golden_tensor = Tensor(
+        tt::tt_metal::HostBuffer(std::move(golden_buffer)),
+        input_tensor.logical_shape(),
+        input_tensor.dtype(),
+        input_tensor.layout());
+
+    // Run device backward operation
+    auto device_output = ttnn::relu_squared_bw(grad_tensor.to_device(device), input_tensor.to_device(device));
+    auto output = device_output[0].cpu();
+
+    // Compare results
+    auto allclose = ttnn::allclose<bfloat16>(golden_tensor, output, 1e-1f, 1e-5f);
+    TT_FATAL(allclose, "Error: relu_squared_bw test failed");
+}
+
 void test_program_cache() {
     log_info(tt::LogTest, "Running {}", __func__);
 
@@ -290,5 +363,7 @@ int main(int argc, char** argv) {
     test_shape_padding();
     test_numerically();
     test_program_cache();
+    test_relu_squared();
+    test_relu_squared_backward();
     return 0;
 }
