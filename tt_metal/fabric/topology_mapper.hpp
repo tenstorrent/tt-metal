@@ -237,16 +237,6 @@ private:
     void build_asic_physical_chip_id_mappings();
 
     /**
-     * @brief Build MPI rank to mesh host rank mapping via distributed all-gather
-     *
-     * Gathers mesh bindings from all MPI ranks and builds a mapping from MPI rank to mesh host rank.
-     * This is used to correctly assign mesh ranks to ASICs based on local bindings.
-     *
-     * @return std::unordered_map<int, MeshHostRankId> Map from MPI rank to mesh host rank
-     */
-    std::unordered_map<int, MeshHostRankId> build_mpi_rank_to_mesh_host_rank_mapping() const;
-
-    /**
      * @brief Build the mapping between ASIC IDs and mesh host ranks
      *
      * This method iterates through all hosts in the physical system descriptor and creates mappings
@@ -255,11 +245,10 @@ private:
      * to gather the mappings from all ranks. The mesh host ranks come directly from the gathered
      * local bindings (TT_MESH_HOST_RANK environment variable).
      *
-     * @return std::unordered_map<MeshId, std::unordered_map<tt::tt_metal::AsicID, MeshHostRankId>> Map from mesh ID to
-     * ASIC ID to mesh host rank
+     * @return std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> Map from mesh ID to
+     * ASIC ID to mesh host rank (ordered for deterministic iteration)
      */
-    std::unordered_map<MeshId, std::unordered_map<tt::tt_metal::AsicID, MeshHostRankId>>
-    build_asic_id_to_mesh_rank_mapping() const;
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> build_asic_id_to_mesh_rank_mapping() const;
 
     /**
      * @brief Build the mapping between fabric node IDs and host ranks
@@ -267,9 +256,11 @@ private:
      * This method iterates through all fabric node IDs in the mesh graph and creates mappings
      * based on the fabric node IDs and host ranks from the local mesh binding, mapping them
      * to the host ranks of the physical descriptor.
+     *
+     * @return std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> Map from mesh ID to
+     * fabric node ID to mesh host rank (ordered for deterministic iteration)
      */
-    std::unordered_map<MeshId, std::unordered_map<FabricNodeId, MeshHostRankId>>
-    build_fabric_node_id_to_mesh_rank_mapping() const;
+    std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> build_fabric_node_id_to_mesh_rank_mapping() const;
 
     /**
      * @brief Validate that all meshes in the mesh graph descriptor have rank bindings
@@ -306,8 +297,7 @@ private:
      * @return std::unordered_map<MeshId, PhysicalAdjacencyMap> Map from mesh ID to physical adjacency map
      */
     std::unordered_map<MeshId, PhysicalAdjacencyMap> build_adjacency_map_physical(
-        const std::unordered_map<MeshId, std::unordered_map<tt::tt_metal::AsicID, MeshHostRankId>>&
-            asic_id_to_mesh_rank) const;
+        const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank) const;
 
     /**
      * @brief Create bidirectional mappings between logical fabric nodes and physical ASIC IDs
@@ -332,8 +322,8 @@ private:
         MeshId mesh_id,
         const PhysicalAdjacencyMap& adjacency_map_physical,
         const LogicalAdjacencyMap& adjacency_map_logical,
-        const std::unordered_map<tt::tt_metal::AsicID, MeshHostRankId>& asic_id_to_mesh_rank,
-        const std::unordered_map<FabricNodeId, MeshHostRankId>& fabric_node_id_to_mesh_rank);
+        const std::map<tt::tt_metal::AsicID, MeshHostRankId>& asic_id_to_mesh_rank,
+        const std::map<FabricNodeId, MeshHostRankId>& fabric_node_id_to_mesh_rank);
 
     /**
      * @brief Broadcast the mapping to all hosts
@@ -368,8 +358,7 @@ private:
 
     // Rebuild host-rank containers purely from fabric_node_id_to_asic_id_ mapping
     void rebuild_host_rank_structs_from_mapping(
-        const std::unordered_map<MeshId, std::unordered_map<tt::tt_metal::AsicID, MeshHostRankId>>&
-            asic_id_to_mesh_rank);
+        const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank);
 
     void print_logical_adjacency_map(const std::unordered_map<MeshId, LogicalAdjacencyMap>& adj_map) const;
 
