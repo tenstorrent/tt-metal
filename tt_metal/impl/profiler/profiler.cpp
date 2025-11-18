@@ -1989,7 +1989,7 @@ void dumpPerfCounters(const std::map<CoreCoord, std::map<tracy::RiscType, std::s
             for (const tracy::TTDeviceMarker& marker : device_markers) {
                 if (isMarkerATimestampedDatapoint(marker) && marker.marker_id == 12345) {
                     log_file_ofs << fmt::format(
-                        "{},{},{},{},{},{},{},{},{},{}\n",
+                        "{}, {}, {}, {}, {}, {}, {}, {}, {}, {}\n",
                         marker.runtime_host_id,
                         marker.op_name,
                         marker.chip_id,
