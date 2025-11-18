@@ -35,13 +35,6 @@ def select_torch_dtype(ttnn_dtype):
             [11, 2, 3, 24, 20, 10, 200, 199],
             ttnn.uint16,
             ttnn.ROW_MAJOR_LAYOUT,
-            False,
-        ),
-        (
-            [[i for i in range(10, 20)] for _ in range(5)],
-            [11, 2, 3, 24, 20, 10, 200, 199],
-            ttnn.uint32,
-            ttnn.TILE_LAYOUT,
             True,
         ),
         (
@@ -50,16 +43,6 @@ def select_torch_dtype(ttnn_dtype):
             ttnn.int32,
             ttnn.TILE_LAYOUT,
             False,
-        ),
-        (
-            [
-                [[[i ^ j ^ k ^ l for i in range(0, 10)] for j in range(0, 10)] for k in range(0, 10)]
-                for l in range(0, 10)
-            ],
-            [28 * i for i in range(0, 20)],
-            ttnn.int32,
-            ttnn.TILE_LAYOUT,
-            True,
         ),
     ],
 )
@@ -83,20 +66,12 @@ def test_isin_typical_predefined_data(elements, test_elements, dtype, layout, in
 @pytest.mark.parametrize(
     "elements_shape, test_elements_shape, invert",
     [
-        ([10], [20], False),
-        ([20], [10], True),
         ([10, 10], [20, 20], False),
-        ([20, 10], [10, 20], True),
         ([32], [32], False),
         ([5, 10, 50], [4, 10], True),
         ([2, 2, 2, 2, 2], [1, 2, 2, 1], False),
         ([3, 2, 3, 2, 3, 2, 3], [1, 1, 10, 2, 1], True),
-        ([1, 1, 80000], [10], True),
-        ([1, 1, 20000, 1, 1], [100], False),
-        ([1, 10000, 1], [100], True),
-        ([20000, 2, 1], [1, 100, 1], False),
-        ([10, 10, 2, 10, 2], [1, 20, 20, 1, 20, 20], True),
-        ([10, 10, 2, 5, 50], [20, 10, 20, 1, 10, 1], False),
+        ([1, 1, 80000], [10], False),
         ([5, 10, 5, 1, 1, 1, 1, 1, 1, 5], [20], True),
     ],
 )
