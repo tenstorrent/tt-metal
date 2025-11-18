@@ -310,6 +310,15 @@ def _golden_function_relu_max(input_tensor_a, upper_limit, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.relu_max, golden_function=_golden_function_relu_max)
 
 
+def _golden_function_relu_squared(input_tensor_a, *args, **kwargs):
+    import torch
+
+    return torch.square(torch.relu(input_tensor_a))
+
+
+ttnn.attach_golden_function(ttnn.relu_squared, golden_function=_golden_function_relu_squared)
+
+
 def _golden_function_heaviside(input_tensor_a, value, *args, **kwargs):
     import torch
 

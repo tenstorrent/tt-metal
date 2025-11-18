@@ -248,6 +248,14 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/silu_bw/device/silu_bw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/silu_bw/device/silu_bw_program_factory.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/silu_bw/device/silu_bw_program_factory.cpp
+    # ReLU Squared Backward
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/relu_sq_bw/relu_sq_bw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/relu_sq_bw/relu_sq_bw.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/relu_sq_bw/device/relu_sq_bw_device_operation_types.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/relu_sq_bw/device/relu_sq_bw_device_operation.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/relu_sq_bw/device/relu_sq_bw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/relu_sq_bw/device/relu_sq_bw_program_factory.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/relu_sq_bw/device/relu_sq_bw_program_factory.cpp
     # SDPA Forward
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/sdpa_fw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/sdpa_fw.hpp

@@ -607,6 +607,18 @@ def _golden_function_relu(grad_tensor, input_tensor, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.relu_bw, golden_function=_golden_function_relu)
 
 
+def _golden_function_relu_squared(grad_tensor, input_tensor, *args, **kwargs):
+    import torch
+
+    input_tensor.retain_grad()
+    pyt_y = torch.square(torch.nn.functional.relu(input_tensor))
+    pyt_y.backward(gradient=grad_tensor)
+    return [input_tensor.grad]
+
+
+ttnn.attach_golden_function(ttnn.relu_squared_bw, golden_function=_golden_function_relu_squared)
+
+
 def _golden_function_rsqrt(grad_tensor, input_tensor, *args, **kwargs):
     import torch
 
