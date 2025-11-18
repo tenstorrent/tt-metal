@@ -21,14 +21,14 @@ Automatically extracts real-world operation configurations from model tests and 
 | **Trace a model** | `python model_tracer/generic_ops_tracer.py <test_path>` |
 | **View configurations** | `python model_tracer/analyze_operations.py <operation_name>` |
 | **Generate sweep vectors** | `python3 tests/sweep_framework/sweeps_parameter_generator.py --module-name <op_name> --dump-file` |
-| **Run sweep test** | `python3 tests/sweep_framework/sweeps_runner.py --module-name <op_name> --suite model_traced --vector-source vectors_export --result-dest results_export` |
+| **Run single sweep test** | `python3 tests/sweep_framework/sweeps_runner.py --module-name <op_name> --suite-name model_traced --vector-source file --file-path <vector_file> --result-dest results_export` |
 
 ### Key Files
 
 - **Tracer**: `model_tracer/generic_ops_tracer.py` - Employs methodology described in the [graph tracing tech report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/ttnn/graph-tracing.md)
-- **Master JSON**: `model_tracer/traced_operations/ttnn_operations_master.json`
-- **Analyzer**: `model_tracer/analyze_operations.py`
-- **Config Loader**: `tests/sweep_framework/master_config_loader.py`
+- **Master JSON**: `model_tracer/traced_operations/ttnn_operations_master.json` - Contains all traced configurations (1760 total configs, 41 operations)
+- **Analyzer**: `model_tracer/analyze_operations.py` - Query and view configurations
+- **Config Loader**: `tests/sweep_framework/master_config_loader.py` - Converts JSON configs to sweep test parameters
 
 ---
 
@@ -103,8 +103,12 @@ def run(
 ```
 
 **Test Modes:**
-- **Default**: Runs exact N traced configs (fast, real-world patterns)
-- **All cases**: `loader.get_suite_parameters("op_name", all_cases=True)` - Cartesian product (comprehensive, slower)
+- **Default (`all_cases=False`)**: Runs exact N traced configs with deduplication (fast, real-world patterns)
+  - Deduplicates configurations with identical input tensor specs
+  - Example: 81 configs → ~67 unique configs tested
+- **All cases (`all_cases=True`)**: Cartesian product of all parameter combinations (comprehensive, slower)
+  - Generates all combinations of shapes, dtypes, layouts, etc.
+  - Use with caution - can generate thousands of test vectors
 
 ---
 
@@ -154,17 +158,19 @@ python model_tracer/analyze_operations.py sigmoid_accurate
 
 ### 3. Run Sweep Tests
 
+**Run individual operation:**
 ```bash
 # Generate test vectors
 python3 tests/sweep_framework/sweeps_parameter_generator.py \
-  --module-name model_traced.add_model_traced \
+  --module-name model_traced.pad_model_traced \
   --dump-file
 
 # Run model_traced suite
 python3 tests/sweep_framework/sweeps_runner.py \
-  --module-name model_traced.add_model_traced \
-  --suite model_traced \
-  --vector-source vectors_export \
+  --module-name model_traced.pad_model_traced \
+  --suite-name model_traced \
+  --vector-source file \
+  --file-path tests/sweep_framework/vectors_export/model_traced.pad_model_traced.json \
   --result-dest results_export
 ```
 
@@ -178,12 +184,14 @@ tt-metal/
 │   ├── generic_ops_tracer.py          # Main tracing script
 │   ├── analyze_operations.py          # Query tool
 │   └── traced_operations/
-│       └── ttnn_operations_master.json # Master config storage
+│       └── ttnn_operations_master.json # Master config storage (1760 configs, 41 ops)
 └── tests/sweep_framework/
     ├── master_config_loader.py        # Config loader & utilities
+    ├── sweeps_parameter_generator.py  # Generate test vectors
+    ├── sweeps_runner.py               # Run individual sweep tests
     └── sweeps/
-        └── eltwise/unary/sigmoid_accurate/
-            └── sigmoid_accurate.py    # Example sweep test
+        └── model_traced/              # Model-traced sweep tests
+            └── *_model_traced.py      # Individual operation tests
 ```
 
 ---
