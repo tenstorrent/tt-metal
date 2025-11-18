@@ -49,12 +49,6 @@ ElasticChannelsAllocator::ElasticChannelsAllocator(
     TT_THROW("Not implemented");
 }
 
-void ElasticChannelsAllocator::emit_ct_args(
-    std::vector<uint32_t>& /*ct_args*/,
-    size_t /*num_fwd_paths*/,
-    size_t /*num_used_sender_channels*/,
-    size_t /*num_used_receiver_channels*/) const {
-    TT_THROW("Not implemented");
-}
+void ElasticChannelsAllocator::emit_ct_args(std::vector<uint32_t>& /*ct_args*/) const { TT_THROW("Not implemented"); }
 
 }  // namespace tt::tt_fabric
