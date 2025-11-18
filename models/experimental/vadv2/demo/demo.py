@@ -117,6 +117,9 @@ def test_tt_demo(device, model_location_generator):
         fut_mode=6,
     )
 
+    if not ttnn.CONFIG.enable_model_cache:
+        ttnn.CONFIG.enable_model_cache = True
+
     time_tag = time.strftime("%Y%m%d_%H%M%S")
     vis_dir = osp.join("test", "vad_tt_results", time_tag, "visualizations")
     ttnn_outputs = single_cpu_test_tt(

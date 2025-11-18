@@ -354,18 +354,22 @@ def custom_preprocessor(model, name):
             parameters["img_neck"]["lateral_convs"] = {}
             parameters["img_neck"]["lateral_convs"]["conv"] = {}
             parameters["img_neck"]["lateral_convs"]["conv"]["weight"] = ttnn.from_torch(
-                neck.lateral_convs.conv.weight, dtype=ttnn.float32
+                neck.lateral_convs.conv.weight, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
             )
             bias = neck.lateral_convs.conv.bias.reshape((1, 1, 1, -1))
-            parameters["img_neck"]["lateral_convs"]["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+            parameters["img_neck"]["lateral_convs"]["conv"]["bias"] = ttnn.from_torch(
+                bias, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT
+            )
 
             parameters["img_neck"]["fpn_convs"] = {}
             parameters["img_neck"]["fpn_convs"]["conv"] = {}
             parameters["img_neck"]["fpn_convs"]["conv"]["weight"] = ttnn.from_torch(
-                neck.fpn_convs.conv.weight, dtype=ttnn.float32
+                neck.fpn_convs.conv.weight, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
             )
             bias = neck.fpn_convs.conv.bias.reshape((1, 1, 1, -1))
-            parameters["img_neck"]["fpn_convs"]["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+            parameters["img_neck"]["fpn_convs"]["conv"]["bias"] = ttnn.from_torch(
+                bias, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT
+            )
 
         if isinstance(model.img_backbone, ResNet):
             # if isinstance(model, ResNet):
@@ -375,8 +379,8 @@ def custom_preprocessor(model, name):
             # Initial conv + bn
             weight, bias = fold_batch_norm2d_into_conv2d(backbone.conv1, backbone.bn1)
             parameters["img_backbone"]["conv1"] = {
-                "weight": ttnn.from_torch(weight, dtype=ttnn.float32),
-                "bias": ttnn.from_torch(bias.reshape((1, 1, 1, -1)), dtype=ttnn.float32),
+                "weight": ttnn.from_torch(weight, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT),
+                "bias": ttnn.from_torch(bias.reshape((1, 1, 1, -1)), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT),
             }
 
             # Loop over all layers (layer1 to layer4)
@@ -392,8 +396,10 @@ def custom_preprocessor(model, name):
                         bn = getattr(block, f"bn{conv_name[-1]}")
                         w, b = fold_batch_norm2d_into_conv2d(conv, bn)
                         parameters["img_backbone"][prefix][conv_name] = {
-                            "weight": ttnn.from_torch(w, dtype=ttnn.float32),
-                            "bias": ttnn.from_torch(b.reshape((1, 1, 1, -1)), dtype=ttnn.float32),
+                            "weight": ttnn.from_torch(w, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT),
+                            "bias": ttnn.from_torch(
+                                b.reshape((1, 1, 1, -1)), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT
+                            ),
                         }
 
                     # downsample (if present)
@@ -404,8 +410,10 @@ def custom_preprocessor(model, name):
                             bn = ds[1]
                             w, b = fold_batch_norm2d_into_conv2d(conv, bn)
                             parameters["img_backbone"][prefix]["downsample"] = {
-                                "weight": ttnn.from_torch(w, dtype=ttnn.float32),
-                                "bias": ttnn.from_torch(b.reshape((1, 1, 1, -1)), dtype=ttnn.float32),
+                                "weight": ttnn.from_torch(w, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT),
+                                "bias": ttnn.from_torch(
+                                    b.reshape((1, 1, 1, -1)), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT
+                                ),
                             }
 
     return parameters
@@ -413,6 +421,7 @@ def custom_preprocessor(model, name):
 
 def create_vadv2_model_parameters_vad(model: ResNet, input_tensor: input, device=None):
     parameters = preprocess_model_parameters(
+        model_name="vadv2_tt_vad",
         initialize_model=lambda: model,
         custom_preprocessor=custom_preprocessor,
         device=device,
