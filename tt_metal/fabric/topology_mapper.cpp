@@ -56,7 +56,7 @@ FabricNodeId decode_fabric_node_id(std::uint64_t encoded_value) {
 std::chrono::duration<float> get_topology_mapping_timeout() {
     auto timeout = tt::tt_metal::MetalContext::instance().rtoptions().get_timeout_duration_for_operations();
     if (timeout.count() <= 0.0f) {
-        timeout = std::chrono::duration<float>(60.0f * 10.0f);
+        timeout = std::chrono::duration<float>(60.0f);
     }
     return timeout;
 }
@@ -490,23 +490,35 @@ std::unordered_map<MeshId, PhysicalAdjacencyMap> TopologyMapper::build_adjacency
         }
     }
 
-    auto get_local_adjacents = [&](tt::tt_metal::AsicID asic_id,
-                                   const std::unordered_set<tt::tt_metal::AsicID>& mesh_asics) {
-        std::vector<tt::tt_metal::AsicID> adjacents;
-        for (const auto& neighbor : physical_system_descriptor_.get_asic_neighbors(asic_id)) {
-            // Skip self-connections
-            if (neighbor == asic_id) {
-                continue;
-            }
-            // Make sure that the neighbor is in the mesh
-            if (mesh_asics.contains(neighbor)) {
-                adjacents.push_back(neighbor);
-            }
-        }
-        return adjacents;
-    };
-
     for (const auto& [mesh_id, mesh_asics] : mesh_asic_ids) {
+        bool relaxed = mesh_graph_.is_intra_mesh_policy_relaxed(mesh_id);
+
+        auto get_local_adjacents = [&](tt::tt_metal::AsicID asic_id,
+                                       const std::unordered_set<tt::tt_metal::AsicID>& mesh_asics) {
+            std::vector<tt::tt_metal::AsicID> adjacents;
+            for (const auto& neighbor : physical_system_descriptor_.get_asic_neighbors(asic_id)) {
+                // Skip self-connections
+                if (neighbor == asic_id) {
+                    continue;
+                }
+                // Make sure that the neighbor is in the mesh
+                if (mesh_asics.contains(neighbor)) {
+                    if (relaxed) {
+                        // In relaxed mode, add each neighbor once
+                        adjacents.push_back(neighbor);
+                    } else {
+                        // In strict mode, add each neighbor multiple times based on number of ethernet connections
+                        auto eth_connections = physical_system_descriptor_.get_eth_connections(asic_id, neighbor);
+                        size_t repeat_count = eth_connections.size();
+                        for (size_t i = 0; i < repeat_count; ++i) {
+                            adjacents.push_back(neighbor);
+                        }
+                    }
+                }
+            }
+            return adjacents;
+        };
+
         PhysicalAdjacencyMap physical_adjacency_map;
         for (const auto& asic_id : mesh_asics) {
             physical_adjacency_map[asic_id] = get_local_adjacents(asic_id, mesh_asics);
