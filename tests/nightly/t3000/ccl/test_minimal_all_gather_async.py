@@ -1073,6 +1073,35 @@ def test_nd(mesh_device, input_shape, dim, cluster_axis, dtype, memory_config, t
         eq, mess = comp_pcc(torch_reference, tt_output_tensor)
         assert eq, mess
 
+        # TODO 32474: Discuss how to handle composite all gather case since it is not currently a device operation
+
+        tile_size = 32
+        rank = len(input_shape)
+        gather_dim_normalized = dim if dim >= 0 else rank + dim
+        is_tile_padded = gather_dim_normalized >= rank - 2 and (
+            (gather_dim_normalized == rank - 2 and input_shape[-2] % tile_size != 0)
+            or (gather_dim_normalized == rank - 1 and input_shape[-1] % tile_size != 0)
+        )
+
+        input_topology = tt_input.tensor_topology()
+        actual_topology = tt_out_tensor.tensor_topology()
+
+        # Create expected topology based on which all-gather path was used
+        if is_tile_padded:
+            expected_topology = ttnn.TensorTopology(
+                input_topology.distribution_shape(), list(input_topology.placements()), input_topology.mesh_coords()
+            )
+        else:
+            expected_placements = list(input_topology.placements())
+            expected_placements[cluster_axis] = ttnn.PlacementReplicate()
+            expected_topology = ttnn.TensorTopology(
+                input_topology.distribution_shape(), expected_placements, input_topology.mesh_coords()
+            )
+
+        assert (
+            actual_topology == expected_topology
+        ), f"output TensorTopology mismatch (tile_padded={is_tile_padded}):\n  Expected: {expected_topology}\n  Actual: {actual_topology}"
+
 
 @pytest.mark.parametrize(
     "device_params",
@@ -1113,7 +1142,3 @@ def test_all_gather_async_2x4_non_flat_mesh(mesh_device, input_shape):
 
     output_placements = tt_output.tensor_topology().placements()
     assert len(output_placements) == 1, f"Expected 1 placement, got {len(output_placements)}"
-    # TODO: https://github.com/tenstorrent/tt-metal/issues/32474
-    # assert isinstance(
-    #     output_placements[0], ttnn.PlacementReplicate
-    # ), f"Expected PlacementReplicate, got {type(output_placements[0])}"
