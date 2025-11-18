@@ -659,7 +659,11 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
             post_activations.insert(post_activations.begin(), *op_config.postprocess);
         }
 
-        if (binary::utils::is_typecast(a_dtype, c_dtype) and !is_quant_op) {
+        bool is_integer_division =
+            (operation_attributes.binary_op_type == BinaryOpType::DIV && a_dtype == DataType::INT32 &&
+             b_dtype == DataType::INT32);
+
+        if (binary::utils::is_typecast(a_dtype, c_dtype) and !is_quant_op and !is_integer_division) {
             post_activations.push_back({
                 unary::UnaryOpType::TYPECAST,
                 {static_cast<int>(a_dtype), static_cast<int>(c_dtype)},
