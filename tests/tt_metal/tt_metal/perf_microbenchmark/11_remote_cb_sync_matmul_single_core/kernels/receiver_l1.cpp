@@ -38,24 +38,26 @@ void kernel_main() {
     constexpr uint32_t cb_id_in1 = 1;
     constexpr uint32_t sync_cb_id = 2;
 
+    experimental::RemoteCircularBuffer remote_cb{remote_cb_id};
+
     for (uint32_t l = 0; l < num_layers; ++l) {
         uint32_t curr_page_size = page_size[l];
         uint32_t curr_num_blocks = num_blocks[l];
         uint32_t curr_block_num_tiles = block_num_tiles[l];
 
         uint32_t curr_block_size = curr_block_num_tiles * curr_page_size;
-        experimental::resize_remote_receiver_cb_interface(remote_cb_id, curr_block_size, noc_index);
+        remote_cb.set_receiver_page_size(curr_block_size);
         experimental::align_local_cbs_to_remote_cb<1>(remote_cb_id, {cb_id_in1});
 
         for (uint32_t block = 0; block < curr_num_blocks; ++block) {
             cb_reserve_back(cb_id_in1, curr_block_num_tiles);
-            experimental::remote_cb_wait_front(remote_cb_id, 1);
+            remote_cb.wait_front(1);
             cb_push_back(cb_id_in1, curr_block_num_tiles);
             // wait for compute done
             cb_wait_front(sync_cb_id, 1);
-            experimental::remote_cb_pop_front(remote_cb_id, 1);
+            remote_cb.pop_front(1);
             cb_pop_front(sync_cb_id, 1);
         }
     }
-    experimental::update_remote_cb_config_in_l1(remote_cb_id);
+    remote_cb.commit();
 }
