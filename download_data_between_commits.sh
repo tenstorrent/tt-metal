@@ -21,7 +21,7 @@ fi
 
 START_COMMIT="$1"
 END_COMMIT="$2"
-OUTPUT_FILE="${3:-copilot_pr_overviews.json}"
+OUTPUT_FILE="${3:-commit_info.json}"
 
 # Validate commits exist
 if ! git rev-parse --verify "$START_COMMIT" >/dev/null 2>&1; then
@@ -83,27 +83,25 @@ while IFS= read -r commit_sha; do
 
     echo -n "PR #$pr_number... "
 
-    # Get PR reviews
+    # Get commit details first (we'll need these regardless)
+    commit_date=$(git log -1 --format="%ai" "$commit_sha" 2>/dev/null || echo "")
+    commit_subject=$(git log -1 --format="%s" "$commit_sha" 2>/dev/null || echo "")
+
+    # Get PR details (we'll need these regardless)
+    pr_info=$(gh api "repos/tenstorrent/tt-metal/pulls/$pr_number" 2>/dev/null || echo "{}")
+
+    # Try to get Copilot review
+    overview="wasn't found"
     reviews_json=$(gh api "repos/tenstorrent/tt-metal/pulls/$pr_number/reviews" 2>/dev/null || echo "[]")
 
-    if [ "$reviews_json" = "[]" ] || [ -z "$reviews_json" ]; then
-        echo -e "${YELLOW}No reviews${NC}"
-        SKIPPED=$((SKIPPED + 1))
-        continue
-    fi
+    if [ "$reviews_json" != "[]" ] && [ -n "$reviews_json" ]; then
+        # Find Copilot review
+        copilot_review=$(echo "$reviews_json" | jq -r ".[] | select(.user.login == \"copilot-pull-request-reviewer\" or .user.login == \"copilot-pull-request-reviewer[bot]\") | .body" 2>/dev/null || echo "")
 
-    # Find Copilot review
-    copilot_review=$(echo "$reviews_json" | jq -r ".[] | select(.user.login == \"copilot-pull-request-reviewer\" or .user.login == \"copilot-pull-request-reviewer[bot]\") | .body" 2>/dev/null || echo "")
-
-    if [ -z "$copilot_review" ]; then
-        echo -e "${YELLOW}No Copilot review${NC}"
-        SKIPPED=$((SKIPPED + 1))
-        continue
-    fi
-
-    # Extract Pull Request Overview section
-    # The overview is everything from "## Pull Request Overview" until "### Reviewed Changes" or end
-    overview=$(echo "$copilot_review" | python3 -c "
+        if [ -n "$copilot_review" ]; then
+            # Extract Pull Request Overview section
+            # The overview is everything from "## Pull Request Overview" until "### Reviewed Changes" or end
+            overview=$(echo "$copilot_review" | python3 -c "
 import sys
 content = sys.stdin.read()
 start_marker = '## Pull Request Overview'
@@ -124,29 +122,29 @@ if start_marker in content:
     print(overview)
 " 2>/dev/null || echo "")
 
-    # If Python extraction failed, try simpler approach
-    if [ -z "$overview" ]; then
-        # Extract everything between "## Pull Request Overview" and "### Reviewed Changes"
-        overview=$(echo "$copilot_review" | sed -n '/## Pull Request Overview/,/### Reviewed Changes/p' | sed '$d' | sed '1s/## Pull Request Overview//' | sed 's/^[[:space:]]*//' | head -c 5000 || echo "")
+            # If Python extraction failed, try simpler approach
+            if [ -z "$overview" ] || [ "$overview" = "" ]; then
+                # Extract everything between "## Pull Request Overview" and "### Reviewed Changes"
+                overview=$(echo "$copilot_review" | sed -n '/## Pull Request Overview/,/### Reviewed Changes/p' | sed '$d' | sed '1s/## Pull Request Overview//' | sed 's/^[[:space:]]*//' | head -c 5000 || echo "")
+            fi
+
+            # Final fallback: get first 2000 chars after the header
+            if [ -z "$overview" ] || [ "$overview" = "" ]; then
+                overview=$(echo "$copilot_review" | grep -A 50 "## Pull Request Overview" | tail -n +2 | head -n 30 | head -c 2000 || echo "")
+            fi
+
+            if [ -z "$overview" ] || [ "$overview" = "" ]; then
+                overview="wasn't found"
+            fi
+        fi
     fi
 
-    # Final fallback: get first 2000 chars after the header
-    if [ -z "$overview" ]; then
-        overview=$(echo "$copilot_review" | grep -A 50 "## Pull Request Overview" | tail -n +2 | head -n 30 | head -c 2000 || echo "")
+    # Set status message
+    if [ "$overview" = "wasn't found" ]; then
+        echo -e "${YELLOW}No Copilot overview${NC}"
+    else
+        echo -e "${GREEN}Found overview${NC}"
     fi
-
-    if [ -z "$overview" ]; then
-        echo -e "${YELLOW}No overview found${NC}"
-        SKIPPED=$((SKIPPED + 1))
-        continue
-    fi
-
-    # Get commit details
-    commit_date=$(git log -1 --format="%ai" "$commit_sha" 2>/dev/null || echo "")
-    commit_subject=$(git log -1 --format="%s" "$commit_sha" 2>/dev/null || echo "")
-
-    # Get PR details
-    pr_info=$(gh api "repos/tenstorrent/tt-metal/pulls/$pr_number" 2>/dev/null || echo "{}")
     pr_title=$(echo "$pr_info" | jq -r '.title // ""' 2>/dev/null || echo "")
     pr_url=$(echo "$pr_info" | jq -r '.html_url // ""' 2>/dev/null || echo "")
     pr_description=$(echo "$pr_info" | jq -r '.body // ""' 2>/dev/null || echo "")
