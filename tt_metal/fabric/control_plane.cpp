@@ -418,9 +418,15 @@ void ControlPlane::initialize_distributed_contexts() {
             distributed_contexts_.emplace(local_mesh_id, host_local_context_);
         } else {
             std::vector<int> mpi_neighbors;
+            // Sort mesh_host_ranks->second for deterministic iteration across hosts
+            std::vector<std::pair<MeshHostRankId, tt::tt_metal::distributed::multihost::Rank>> sorted_host_ranks(
+                mesh_host_ranks->second.begin(), mesh_host_ranks->second.end());
+            std::sort(sorted_host_ranks.begin(), sorted_host_ranks.end(), [](const auto& a, const auto& b) {
+                return a.first.get() < b.first.get();
+            });
             std::transform(
-                mesh_host_ranks->second.begin(),
-                mesh_host_ranks->second.end(),
+                sorted_host_ranks.begin(),
+                sorted_host_ranks.end(),
                 std::back_inserter(mpi_neighbors),
                 [](const auto& p) { return p.second.get(); });
             std::sort(mpi_neighbors.begin(), mpi_neighbors.end());
