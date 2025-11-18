@@ -153,7 +153,7 @@ int main() {
     } catch (std::runtime_error& e) {
         if (std::string(e.what()).find("device timeout") != std::string::npos) {
             printf("Device timeout detected as expected.\n");
-            exit(0);
+            std::_Exit(0);
         } else {
             throw;
         }
