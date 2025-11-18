@@ -510,7 +510,7 @@ def test_all_reduce_fabric_2d(
             assert (
                 mesh_device.num_program_cache_entries() == 3
             ), f"Number of program cache entries: {mesh_device.num_program_cache_entries()} but was expecting 3 as we are using fabric 2D, which fallsback to composite all gather + local reduce"
-        elif device_params["fabric_config"] == ttnn.FabricConfig.FABRIC_2D_DYNAMIC:
+        elif device_params["fabric_config"] == ttnn.FabricConfig.FABRIC_2D:
             logger.info(f"Number of program cache entries: {mesh_device.num_program_cache_entries()}")
             assert (
                 mesh_device.num_program_cache_entries() == 2
