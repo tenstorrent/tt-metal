@@ -202,6 +202,68 @@ def test_scatter_normal_with_callback(
 
 
 @pytest.mark.parametrize(
+    "input_shape, dim, index_and_source_shape, input_dtype, index_dtype, layout, reduction, expected_num_cache_entries",
+    [
+        ([100], -1, [80], ttnn.bfloat16, ttnn.uint16, ttnn.Layout.TILE, "add", 5),
+        ([2, 30, 200], -1, [2, 30, 200], ttnn.float32, ttnn.uint16, ttnn.Layout.ROW_MAJOR, "add", 1),
+        ([1, 1, 20, 20, 200], -1, [1, 1, 20, 20, 20], ttnn.bfloat16, ttnn.uint16, ttnn.Layout.TILE, "add", 5),
+        (
+            [2, 2, 2, 2, 2, 2, 2, 2],
+            -1,
+            [2, 2, 2, 2, 2, 2, 2, 2],
+            ttnn.float32,
+            ttnn.uint16,
+            ttnn.Layout.ROW_MAJOR,
+            "multiply",
+            1,
+        ),
+        ([10, 1, 10, 1, 10], 0, [10, 1, 10, 1, 10], ttnn.bfloat16, ttnn.uint16, ttnn.Layout.ROW_MAJOR, "multiply", 3),
+        ([1, 151936], -1, [1, 151936], ttnn.bfloat16, ttnn.int32, ttnn.Layout.ROW_MAJOR, "add", 1),
+        ([50, 20], 0, [50, 20], ttnn.float32, ttnn.int32, ttnn.Layout.ROW_MAJOR, "add", 4),
+        ([10, 10, 10, 10, 10], 0, [10, 10, 10, 10, 10], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE, "multiply", 6),
+        ([10, 10, 10, 10, 10], 0, [10, 10, 10, 10, 10], ttnn.float32, ttnn.int32, ttnn.Layout.ROW_MAJOR, "add", 3),
+        ([10, 10, 10, 10, 10], 2, [10, 10, 10, 10, 10], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE, "add", 6),
+        ([10, 10, 10, 10, 10], 2, [10, 10, 10, 10, 10], ttnn.float32, ttnn.int32, ttnn.Layout.ROW_MAJOR, "multiply", 3),
+        ([50, 200], 0, [50, 200], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE, "add", 7),
+    ],
+)
+def test_scatter_reduction(
+    input_shape,
+    dim,
+    index_and_source_shape,
+    input_dtype,
+    index_dtype,
+    layout,
+    reduction,
+    expected_num_cache_entries,
+    device,
+):
+    torch.manual_seed(0)
+    torch_dtype = select_torch_dtype(input_dtype)
+
+    torch_input = torch.randn(input_shape, dtype=torch_dtype)
+    ttnn_input = ttnn.from_torch(torch_input, dtype=input_dtype, layout=layout, device=device)
+
+    torch_index = torch.randint(0, input_shape[dim], index_and_source_shape)
+    ttnn_index = ttnn.from_torch(torch_index, dtype=index_dtype, layout=layout, device=device)
+
+    torch_src = torch.randn(index_and_source_shape, dtype=torch_dtype)
+    ttnn_src = ttnn.from_torch(torch_src, dtype=input_dtype, layout=layout, device=device)
+
+    torch_result = torch.scatter(torch_input, dim, index=torch_index, src=torch_src, reduce=reduction)
+    ttnn_result = ttnn.scatter(ttnn_input, dim, ttnn_index, ttnn_src, reduce=reduction)
+
+    torch_result_from_ttnn = ttnn.to_torch(ttnn_result)
+    assert torch_result_from_ttnn.shape == torch_result.shape
+    assert torch_result_from_ttnn.dtype == torch_result.dtype
+    if torch_dtype is torch.float32:
+        assert_allclose(torch_result_from_ttnn, torch_result, rtol=1e-3)
+    else:
+        assert_allclose(torch_result_from_ttnn, torch_result)
+    assert device.num_program_cache_entries() == expected_num_cache_entries
+
+
+@pytest.mark.parametrize(
     "dim, input_shape, index_shape, source_shape, torch_dtype, input_dtype, index_dtype, source_dtype",
     [
         (
