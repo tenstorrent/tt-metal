@@ -26,9 +26,9 @@ struct ExecuteConv3d {
         std::array<uint32_t, 3> dilation = std::array<uint32_t, 3>{1, 1, 1},
         std::string padding_mode = "zeros",
         uint32_t groups = 1,
-        const std::optional<ttnn::Tensor>& bias_tensor,
-        const Conv3dConfig& config,
-        const std::optional<ttnn::DataType> dtype = std::nullopt,
+        const std::optional<ttnn::Tensor>& bias_tensor = std::nullopt,
+        const std::optional<Conv3dConfig>& config = std::nullopt,
+        const std::optional<ttnn::DataType>& dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 };

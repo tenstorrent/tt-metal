@@ -30,6 +30,19 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_output_dims(
     uint32_t W_out = ((W_in + 2 * padding[2] - kernel_size[2]) / stride[2]) + 1;
     return {T_out, H_out, W_out};
 }
+
+std::tuple<uint32_t, uint32_t, uint32_t> compute_output_dims(
+    uint32_t T_in,
+    uint32_t H_in,
+    uint32_t W_in,
+    const std::array<uint32_t, 6>& padding,
+    const std::array<uint32_t, 3>& stride,
+    const std::array<uint32_t, 3>& kernel_size) {
+    uint32_t T_out = ((T_in + padding[4] + padding[5] - kernel_size[0]) / stride[0]) + 1;
+    uint32_t H_out = ((H_in + padding[2] + padding[3] - kernel_size[1]) / stride[1]) + 1;
+    uint32_t W_out = ((W_in + padding[0] + padding[1] - kernel_size[2]) / stride[2]) + 1;
+    return {T_out, H_out, W_out};
+}
 }  // namespace detail
 
 void Conv3dOp::validate(
@@ -71,12 +84,25 @@ void Conv3dOp::validate(
 
     TT_FATAL(this->groups == 1, "Groups must be 1. got {}", this->groups);
     // assert padding on T is zero
-    TT_FATAL(
-        this->padding[0] == 0,
-        "Padding must be (0,x,x). got ({}, {}, {})",
-        this->padding[0],
-        this->padding[1],
-        this->padding[2]);
+    std::visit(
+        [](const auto& padding) {
+            using PaddingType = std::decay_t<decltype(padding)>;
+            if constexpr (std::is_same_v<PaddingType, std::array<uint32_t, 3>>) {
+                TT_FATAL(
+                    padding[0] == 0, "Padding must be (0,x,x). got ({}, {}, {})", padding[0], padding[1], padding[2]);
+            } else if constexpr (std::is_same_v<PaddingType, std::array<uint32_t, 6>>) {
+                TT_FATAL(
+                    padding[4] == 0 && padding[5] == 0,
+                    "Padding must be (x,x,y,y,0,0). got ({}, {}, {}, {}, {}, {})",
+                    padding[0],
+                    padding[1],
+                    padding[2],
+                    padding[3],
+                    padding[4],
+                    padding[5]);
+            }
+        },
+        this->padding);
     TT_FATAL(
         this->padding_mode == "zeros" || this->padding_mode == "replicate",
         "Padding mode must be zeros or replicate. got {}",
@@ -165,8 +191,11 @@ std::vector<TensorSpec> Conv3dOp::compute_output_specs(const std::vector<Tensor>
     uint32_t W_in = input_tensor_a_shape[3];
     uint32_t C_out = this->output_channels;
 
-    auto [T_out, H_out, W_out] =
-        detail::compute_output_dims(T_in, H_in, W_in, this->padding, this->stride, this->kernel_size);
+    auto [T_out, H_out, W_out] = std::visit(
+        [&](const auto& padding) {
+            return detail::compute_output_dims(T_in, H_in, W_in, padding, this->stride, this->kernel_size);
+        },
+        this->padding);
 
     ttnn::Shape output_shape({N, T_out, H_out, W_out, C_out});
 

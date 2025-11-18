@@ -60,7 +60,7 @@ void py_bind_conv3d(py::module& module) {
                std::string padding_mode,
                uint32_t groups,
                const std::optional<ttnn::Tensor>& bias_tensor,
-               const Conv3dConfig& config,
+               const std::optional<Conv3dConfig>& config,
                const std::optional<ttnn::DataType>& dtype,
                const std::optional<const MemoryConfig>& memory_config,
                const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
@@ -91,7 +91,7 @@ void py_bind_conv3d(py::module& module) {
             py::arg("padding_mode") = "zeros",
             py::arg("groups") = 1,
             py::arg("bias_tensor") = std::nullopt,
-            py::arg("config"),
+            py::arg("config") = std::nullopt,
             py::arg("dtype") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("compute_kernel_config") = std::nullopt});
