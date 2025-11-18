@@ -33,7 +33,7 @@ extern int32_t bank_to_l1_offset[NUM_L1_BANKS];
 extern uint8_t worker_logical_col_to_virtual_col[round_up_to_mult_of_4(noc_size_x)];
 extern uint8_t worker_logical_row_to_virtual_row[round_up_to_mult_of_4(noc_size_y)];
 
-void l1_to_local_mem_copy(uint32_t* dst, uint32_t tt_l1_ptr* src, int32_t len);
+extern "C" void l1_to_local_mem_copy(uint32_t* dst, uint32_t tt_l1_ptr* src, int32_t len);
 
 inline void do_crt1(uint32_t tt_l1_ptr* data_image) {
     // Clear bss.

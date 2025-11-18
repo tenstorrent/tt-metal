@@ -95,7 +95,7 @@ inline void wait_subordinate_eriscs(uint32_t& heartbeat) {
     WAYPOINT("SED");
 }
 
-int main() {
+extern "C" int main() {
     configure_csr();
     WAYPOINT("I");
     do_crt1((uint32_t*)MEM_IERISC_INIT_LOCAL_L1_BASE_SCRATCH);

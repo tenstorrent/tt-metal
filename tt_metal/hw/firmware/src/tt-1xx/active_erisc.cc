@@ -190,7 +190,7 @@ extern "C" __attribute__((naked)) void enter_reset(void) {
     );
 }
 
-int __attribute__((noinline)) main(void) {
+extern "C" int __attribute__((noinline)) main(void) {
     WAYPOINT("I");
     configure_csr();
     initialize_local_memory();

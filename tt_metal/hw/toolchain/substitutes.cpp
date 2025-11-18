@@ -18,7 +18,11 @@ extern "C" void exit(int ec) {
 extern "C" void wzerorange(uint32_t* start, uint32_t* end) {
     // manually unrolled 4 times.
     start += 4;
+#ifdef __clang__
+#pragma clang loop unroll(disable)
+#else
 #pragma GCC unroll 0
+#endif
     while (start <= end) {
         start[-4] = start[-3] = start[-2] = start[-1] = 0;
         // Prevent optimizer considering this loop equivalent to
@@ -39,8 +43,13 @@ extern "C" void wzerorange(uint32_t* start, uint32_t* end) {
 }
 
 // Let the LTO decide if this needs to be inline.
-void l1_to_local_mem_copy(uint32_t* dst, uint32_t __attribute__((rvtt_l1_ptr))* src, int32_t len) {
+// extern "C" for C++ name mangling compatibility with LLVM (which doesn't support rvtt_l1_ptr attribute)
+extern "C" void l1_to_local_mem_copy(uint32_t* dst, uint32_t __attribute__((rvtt_l1_ptr))* src, int32_t len) {
+#ifdef __clang__
+#pragma clang loop unroll(disable)
+#else
 #pragma GCC unroll 0
+#endif
     while (len >= 3) {
         auto v0 = src[0], v1 = src[1], v2 = src[2];
         // 1) Make sure the optimizer does not think this is memcpy by

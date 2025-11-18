@@ -217,10 +217,7 @@ template <>
 uint8_t DebugPrintTypeToId<int64_t>() {
     return DPrintINT64;
 }
-template <>
-uint8_t DebugPrintTypeToId<int>() {
-    return DPrintINT32;
-}
+// Note: int specialization removed - on most platforms int==int32_t, causing redefinition with LLVM
 template <>
 uint8_t DebugPrintTypeToId<float>() {
     return DPrintFLOAT32;
