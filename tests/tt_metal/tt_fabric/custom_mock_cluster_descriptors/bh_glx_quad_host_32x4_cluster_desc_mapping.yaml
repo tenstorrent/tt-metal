@@ -1,5 +1,0 @@
-rank_to_cluster_mock_cluster_desc:
-  0: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/bh-glx-a05u08_cluster_desc.yaml"
-  1: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/bh-glx-a04u02_cluster_desc.yaml"
-  2: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/bh-glx-a05u02_cluster_desc.yaml"
-  3: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/bh-glx-a05u14_cluster_desc.yaml"
