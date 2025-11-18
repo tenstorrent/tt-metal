@@ -26,8 +26,11 @@
 #include <iostream>
 #include <filesystem>
 #include <vector>
+#include <string_view>
 
 namespace tt::tt_metal::inspector {
+
+using namespace std::string_view_literals;
 
 std::string get_python_callstack(int max_frames) {
     // Try to get Python callstack if we're called from Python
@@ -102,12 +105,12 @@ std::string get_python_callstack(int max_frames) {
                     if (filename_obj) {
                         const char* filename = dyn_PyUnicode_AsUTF8(filename_obj);
                         if (filename) {
-                            std::string filename_str(filename);
+                            std::string_view filename_str(filename);
                             // Skip internal frames
-                            if (filename_str.find("site-packages") == std::string::npos &&
-                                filename_str.find("ttnn/decorators.py") == std::string::npos &&
-                                filename_str.find("ttnn/api") == std::string::npos &&
-                                filename_str.find("_ttnn.so") == std::string::npos) {
+                            if (filename_str.find("site-packages"sv) == std::string_view::npos &&
+                                filename_str.find("ttnn/decorators.py"sv) == std::string_view::npos &&
+                                filename_str.find("ttnn/api"sv) == std::string_view::npos &&
+                                filename_str.find("_ttnn.so"sv) == std::string_view::npos) {
                                 // Get line number
                                 int lineno = dyn_PyFrame_GetLineNumber(frame);
 
@@ -217,15 +220,15 @@ std::string get_cpp_callstack(int max_frames) {
 
             // Skip the first 3 frames (this function, get_callstack, and track_operation)
             for (int i = 3; i < nptrs && i < 64 && valid_frames < max_frames; ++i) {
-                std::string symbol_str(symbols[i]);
+                std::string_view symbol_str(symbols[i]);
 
                 // Skip internal Inspector frames only (keep decorator frames for now to debug)
-                if (symbol_str.find("Inspector::") != std::string::npos ||
-                    symbol_str.find("inspector::") != std::string::npos ||
-                    symbol_str.find("get_callstack") != std::string::npos ||
-                    symbol_str.find("get_cpp_callstack") != std::string::npos ||
-                    symbol_str.find("get_python_callstack") != std::string::npos ||
-                    symbol_str.find("track_operation") != std::string::npos) {
+                if (symbol_str.find("Inspector::"sv) != std::string_view::npos ||
+                    symbol_str.find("inspector::"sv) != std::string_view::npos ||
+                    symbol_str.find("get_callstack"sv) != std::string_view::npos ||
+                    symbol_str.find("get_cpp_callstack"sv) != std::string_view::npos ||
+                    symbol_str.find("get_python_callstack"sv) != std::string_view::npos ||
+                    symbol_str.find("track_operation"sv) != std::string_view::npos) {
                     continue;
                 }
 
@@ -240,22 +243,24 @@ std::string get_cpp_callstack(int max_frames) {
                 size_t start = symbol_str.find('(');
                 size_t end = symbol_str.find(')', start);
 
-                if (start != std::string::npos && end != std::string::npos && end > start + 1) {
+                if (start != std::string_view::npos && end != std::string_view::npos && end > start + 1) {
                     // Extract everything between ( and )
-                    std::string mangled_with_offset = symbol_str.substr(start + 1, end - start - 1);
+                    std::string_view mangled_with_offset = symbol_str.substr(start + 1, end - start - 1);
 
                     // Remove offset if present (+0x123)
                     size_t plus_pos = mangled_with_offset.find('+');
-                    std::string mangled =
-                        (plus_pos != std::string::npos) ? mangled_with_offset.substr(0, plus_pos) : mangled_with_offset;
+                    std::string_view mangled = (plus_pos != std::string_view::npos)
+                                                   ? mangled_with_offset.substr(0, plus_pos)
+                                                   : mangled_with_offset;
 
                     // Check if this is just an offset (e.g., "+0x1234") without a function name
                     bool is_just_offset = (!mangled.empty() && mangled[0] == '+');
 
                     // Try to demangle if it looks like a C++ mangled name
-                    if (!is_just_offset && !mangled.empty() && mangled[0] == '_' && mangled[1] == 'Z') {
+                    if (!is_just_offset && mangled.size() >= 2 && mangled[0] == '_' && mangled[1] == 'Z') {
                         int status = 0;
-                        char* demangled = abi::__cxa_demangle(mangled.c_str(), nullptr, nullptr, &status);
+                        std::string mangled_str(mangled);  // c_str() requires null-terminated string
+                        char* demangled = abi::__cxa_demangle(mangled_str.c_str(), nullptr, nullptr, &status);
 
                         if (status == 0 && demangled) {
                             func_info = std::string(demangled);
@@ -283,7 +288,8 @@ std::string get_cpp_callstack(int max_frames) {
                         // We found a recognizable function name (like "main" or C++ mangled name)
                         // Try to demangle it even if it doesn't start with _Z (might be partial mangling)
                         int status = 0;
-                        char* demangled = abi::__cxa_demangle(mangled.c_str(), nullptr, nullptr, &status);
+                        std::string mangled_str(mangled);  // c_str() requires null-terminated string
+                        char* demangled = abi::__cxa_demangle(mangled_str.c_str(), nullptr, nullptr, &status);
 
                         if (status == 0 && demangled) {
                             // Successfully demangled
@@ -314,14 +320,17 @@ std::string get_cpp_callstack(int max_frames) {
                 // If we couldn't extract a function name, format as [binary(+offset)]
                 if (!found_function) {
                     size_t path_end = symbol_str.find('[');
-                    if (path_end != std::string::npos) {
-                        std::string path = symbol_str.substr(0, path_end);
+                    if (path_end != std::string_view::npos) {
+                        std::string_view path = symbol_str.substr(0, path_end);
                         // Trim whitespace
-                        path.erase(path.find_last_not_of(" \t") + 1);
+                        while (!path.empty() && (path.back() == ' ' || path.back() == '\t')) {
+                            path.remove_suffix(1);
+                        }
 
                         // Extract just the binary path (before the parenthesis)
                         size_t paren_pos = path.find('(');
-                        std::string binary_part = (paren_pos != std::string::npos) ? path.substr(0, paren_pos) : path;
+                        std::string_view binary_part =
+                            (paren_pos != std::string_view::npos) ? path.substr(0, paren_pos) : path;
 
                         // Make the binary path relative to current working directory for addr2line
                         std::filesystem::path binary_path(binary_part);
@@ -364,12 +373,16 @@ std::string get_cpp_callstack(int max_frames) {
                 if (!func_info.empty() && found_function) {
                     // We have a function name - also include binary+offset for addr2line resolution
                     size_t path_end = symbol_str.find('[');
-                    if (path_end != std::string::npos) {
-                        std::string path = symbol_str.substr(0, path_end);
-                        path.erase(path.find_last_not_of(" \t") + 1);
+                    if (path_end != std::string_view::npos) {
+                        std::string_view path = symbol_str.substr(0, path_end);
+                        // Trim whitespace
+                        while (!path.empty() && (path.back() == ' ' || path.back() == '\t')) {
+                            path.remove_suffix(1);
+                        }
 
                         size_t paren_pos = path.find('(');
-                        std::string binary_part = (paren_pos != std::string::npos) ? path.substr(0, paren_pos) : path;
+                        std::string_view binary_part =
+                            (paren_pos != std::string_view::npos) ? path.substr(0, paren_pos) : path;
 
                         std::filesystem::path binary_path(binary_part);
                         std::string relative_path;
