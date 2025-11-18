@@ -43,4 +43,3 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       model: ${{ inputs.model || 'all' }}
       topology: topology-6u
-      
