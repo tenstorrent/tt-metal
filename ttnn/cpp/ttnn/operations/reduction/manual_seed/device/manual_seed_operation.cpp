@@ -3,9 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "manual_seed_operation.hpp"
+
 #include "manual_seed/device/manual_seed_device_operation_types.hpp"
+
 #include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/types.hpp"
+
+#include <memory>
 
 using namespace tt::tt_metal;
 
@@ -34,11 +38,12 @@ ManualSeedDeviceOperation::tensor_return_value_t ManualSeedDeviceOperation::crea
     return create_device_tensor(output_specs, operation_attributes.device);
 }
 
-std::tuple<operation_attributes_t, tensor_args_t> ManualSeedDeviceOperation::invoke(
+std::tuple<ManualSeedDeviceOperation::operation_attributes_t, ManualSeedDeviceOperation::tensor_args_t>
+ManualSeedDeviceOperation::invoke(
     MeshDevice& device, std::variant<uint32_t, Tensor> seeds, std::optional<std::variant<uint32_t, Tensor>> user_ids) {
     // Prepare operation attributes
     operation_attributes_t operation_attributes{};
-    operation_attributes.device = &device;
+    operation_attributes.device = std::addressof(device);
     if (std::holds_alternative<uint32_t>(seeds)) {
         operation_attributes.seeds = std::get<uint32_t>(seeds);
     }
@@ -47,6 +52,15 @@ std::tuple<operation_attributes_t, tensor_args_t> ManualSeedDeviceOperation::inv
     }
     // Prepare tensor arguments
     tensor_args_t tensor_args{};
+
+    // TODO: To be removed when API will be fixed with https://github.com/tenstorrent/tt-metal/pull/32260
+    auto output_tensor = create_device_tensor(
+        ttnn::TensorSpec(
+            ttnn::Shape{1},
+            tt::tt_metal::TensorLayout(DataType::UINT32, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), MemoryConfig())),
+        std::addressof(device));
+    tensor_args.output = output_tensor;
+
     if (std::holds_alternative<Tensor>(seeds)) {
         tensor_args.seeds = std::get<Tensor>(seeds);
     }
