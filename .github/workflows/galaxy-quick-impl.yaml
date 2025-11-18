@@ -142,7 +142,7 @@ jobs:
         if: always()
 
   quick-bh-glx-health:
-    if: ${{ (inputs.blackhole == true) && (github.event_name == 'schedule') }}
+    if: ${{ (inputs.blackhole == true) || (github.event_name == 'schedule') }}
     runs-on:
       - topology-6u
       - arch-blackhole
