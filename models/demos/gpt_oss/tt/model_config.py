@@ -41,7 +41,6 @@ class ModelArgs:
             logger.warning("GPT-OSS doesn't support any performance optimizations - ignoring optimizations argument")
         self.optimizations = None
         self.cache_hf = cache_hf
-        self.can_enable_trace = lambda seqlen: False
 
         # GPT-OSS specific paths - use HF_MODEL environment variable (tt_transformers standard)
         # Default paths are internal CI paths for automated testing
@@ -97,12 +96,27 @@ class ModelArgs:
 
         self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
 
+    def can_enable_trace(self, prefill_seq_len):
+        """
+        This function is used to determine if trace should be enabled for the prefill.
+        Tracing is used only for certain sequence lengths, because for bigger sequence lengths, op2op gaps are already small, so we don't need tracing.
+        # TODO: Support chunked prefill with tracing
+        """
+
+        allowed_seq_lens = self.trace_prefill_supported_seq_lens
+
+        return (
+            prefill_seq_len in allowed_seq_lens
+            and prefill_seq_len <= self.max_prefill_chunk_size
+            and prefill_seq_len <= self.max_seq_len
+        )
+
     def get_trace_prefill_supported_seq_lens(self):
         default_supported_seq_lens = {
-            "N150": [128, 256, 512],
-            "N300": [128, 256, 512, 1024],
-            "T3K": [128, 256, 512, 1024],
-            "TG": [128, 256, 512, 1024],
+            "N150": [128],
+            "N300": [128],
+            "T3K": [128],
+            "TG": [128],
         }
 
         # TODO: If no specific sequence lengths are listed for a model and device, the default one will be used (from the default_supported_seq_lens dictionary)
