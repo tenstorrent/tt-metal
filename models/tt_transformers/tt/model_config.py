@@ -449,6 +449,7 @@ class ModelArgs:
         "Qwen2.5-VL-3B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-3B-Instruct",
         "Qwen2.5-VL-32B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-32B-Instruct",
         "Qwen2.5-VL-72B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-72B-Instruct",
+        "Qwen3-Embedding-8B": "models/tt_transformers/model_params/Qwen3-Embedding-8B",
     }
 
     MAX_QKV_MM_SEQ_LEN = 2048
@@ -588,6 +589,7 @@ class ModelArgs:
                 "Llama-3.2-90B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
                 "DeepSeek-R1-Distill-Llama-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
                 "Qwen2.5-7B": {"N150": 4, "N300": 32, "T3K": 128, "TG": 128, "P150x4": 128},
+                "Qwen3-Embedding-8B": {"N300": 32, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 16, "TG": 128, "P150x4": 128},
                 "Qwen2.5-VL-3B": {"N150": 128, "N300": 128, "T3K": None, "TG": None, "P150x4": None},
                 "Qwen2.5-VL-7B": {"N150": 64, "N300": 128, "T3K": None, "TG": None, "P150x4": None},
@@ -1419,6 +1421,9 @@ class ModelArgs:
         )
 
     def is_distributed_norm(self, mode):
+        # For embedding models, always use distributed norms to align with LM path
+        if "Embedding" in self.model_name:
+            return self.is_multichip
         if not self.is_multichip:
             return False
         if all([dim > 1 for dim in list(self.mesh_device.shape)]):  # 2D grid
@@ -1618,6 +1623,11 @@ class ModelArgs:
         if self.base_model_name == "Qwen2.5-7B" and self.num_devices not in [0, 2, 4]:
             raise AssertionError(
                 "Qwen2.5-7B is only supported on 2 or 4 devices, run on an N300 or use MESH_DEVICE=N150x4"
+            )
+
+        if self.base_model_name == "Qwen3-Embedding-8B" and self.num_devices not in [0, 2, 4, 8]:
+            raise AssertionError(
+                "Qwen3-Embedding-8B requires 2+ devices due to memory constraints. Use N300 (2 devices), T3K (8 devices), or TG"
             )
 
         self.unpadded_hidden_dim = self.hidden_dim
@@ -2442,6 +2452,7 @@ class ModelArgs:
                 "Qwen2.5-14B": "Qwen/Qwen2.5-14B-Instruct",
                 "Qwen2.5-32B": "Qwen/Qwen2.5-32B-Instruct",
                 "Qwen2.5-72B": "Qwen/Qwen2.5-72B-Instruct",
+                "Qwen3-Embedding-8B": "Qwen/Qwen3-Embedding-8B",
                 "Llama-3.1-8B": "meta-llama/Llama-3.1-8B-Instruct",
                 "Llama-3.1-70B": "meta-llama/Llama-3.1-70B-Instruct",
                 "Llama-3.2-1B": "meta-llama/Llama-3.2-1B-Instruct",

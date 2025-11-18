@@ -54,6 +54,18 @@ This configuration uses bfp4 MLP and bfp8 attention weights for all models excep
 | Mixtral-8x7B-v0.1 | T3K         | 95        | 100       | 67.82         | 53.93     |
 
 
+## Embedding Performance
+
+Performance metrics for text embedding models using mean pooling. Accuracy is measured as cosine similarity with sentence-transformers reference implementation.
+
+| Model             | Device      | Cosine Similarity | Speed (seq/s) |
+|-------------------|-------------|-------------------|---------------|
+| Qwen3-Embedding-8B| N150        | 0.99             | TBD           |
+| Qwen3-Embedding-8B| N300        | 0.99             | TBD           |
+| Qwen3-Embedding-8B| T3K         | 0.99             | TBD           |
+
+*Note: Embedding performance metrics will be updated once benchmarking is completed.*
+
 ## Accuracy
 
 This configuration uses bfp8 MLP and BF16 attention weights (70B+ models use bfp8 attention and bfp4 MLP).

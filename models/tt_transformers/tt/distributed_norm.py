@@ -44,6 +44,21 @@ class DistributedNorm(LightweightModule):
                 packer_l1_acc=False,
             )
         self.TG = TG
+        self.norm_gather_buffer = None
+
+    def _ensure_norm_gather_buffer(self, shape, dtype, layout, memory_config):
+        shape = tuple(shape)
+        if self.norm_gather_buffer is None or tuple(self.norm_gather_buffer.shape) != shape:
+            if self.norm_gather_buffer is not None:
+                ttnn.deallocate(self.norm_gather_buffer)
+            self.norm_gather_buffer = ttnn.empty(
+                shape,
+                dtype=dtype,
+                layout=layout,
+                device=self.args.mesh_device,
+                memory_config=memory_config,
+            )
+        return self.norm_gather_buffer
 
     def forward(self, x, mode):
         """Apply a norm, possibly gathering inputs if required."""
@@ -71,40 +86,31 @@ class DistributedNorm(LightweightModule):
 
         input_mem_cfg = self.norm.sharded_output_config if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
 
-        # Distributed norm already performs a gather
+        # Ensure x is on device with correct memory config
+        x = ttnn.to_device(x, self.args.mesh_device, memory_config=input_mem_cfg)
+
+        # If norm is not distributed and we are multichip, gather input before norm
+        cluster_axis = 0 if self.args.is_galaxy else None
+        num_links = 2 if self.args.is_galaxy else 1
         if self.args.is_multichip and not self.args.is_distributed_norm(mode):
+            # Allocate reusable buffer for all_gather_async output
+            output_shape = list(x.shape)
+            output_shape[3] *= self.args.num_devices  # Gather along dim=3
+            persistent_buffer = self._ensure_norm_gather_buffer(output_shape, x.dtype, x.layout, input_mem_cfg)
             x = ttnn.experimental.all_gather_async(
                 x,
-                persistent_output_buffer=None,
+                persistent_output_buffer=persistent_buffer,
                 dim=3,
-                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
-                num_links=1,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
+                num_links=num_links,
                 topology=self.args.ccl_topology(),
                 memory_config=input_mem_cfg,
-                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+                cluster_axis=cluster_axis,
                 chunks_per_sync=10,
                 num_workers_per_link=2,
                 num_buffers_per_channel=2,
             )
-        else:
-            x = ttnn.to_memory_config(x, input_mem_cfg)
 
         x = self.norm(x, mode=mode, in_sharded=(mode == "decode"), out_sharded=(mode == "decode"))
-
-        # Distributed norm requires a gather
-        if self.args.is_distributed_norm(mode):
-            x = ttnn.experimental.all_gather_async(
-                x,
-                persistent_output_buffer=None,
-                dim=3,
-                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
-                num_links=1,
-                topology=self.args.ccl_topology(),
-                memory_config=x.memory_config(),
-                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-                chunks_per_sync=10,
-                num_workers_per_link=2,
-                num_buffers_per_channel=2,
-            )
-
         return x

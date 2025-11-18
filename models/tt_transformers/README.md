@@ -17,6 +17,7 @@ The current version is verified to work with the following models:
 | [Qwen 2.5 Coder 32B](https://huggingface.co/Qwen/Qwen2.5-Coder-32B)                              | LoudBox / QuietBox          | ```Qwen/Qwen2.5-Coder-32B```                    |
 | [Qwen 2.5 72B](https://huggingface.co/Qwen/Qwen2.5-72B)                                          | LoudBox / QuietBox          | ```Qwen/Qwen2.5-72B```                          |
 | [Qwen 3 32B](https://huggingface.co/Qwen/Qwen3-32B)                                              | LoudBox / QuietBox          | ```Qwen/Qwen3-32B```                            |
+| [Qwen3-Embedding-8B](https://huggingface.co/Qwen/Qwen3-Embedding-8B)                             | n300 / T3K / TG             | ```Qwen/Qwen3-Embedding-8B```                   |
 | [Phi-3-mini-128k-instruct](https://huggingface.co/microsoft/Phi-3-mini-128k-instruct)            | n150 / n300                 | ```microsoft/Phi-3-mini-128k-instruct```        |
 
 <details>
@@ -229,6 +230,20 @@ pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and long"
 
 The above examples are run in `ModelOptimizations.performance` mode. You can override this by setting the `optimizations` or the `decoder_config_file` argument in the demo. To use instead the accuracy mode you can call the above tests with `-k "accuracy and ..."` instead of performance.
 
+### Run the Embedding Demo
+
+For text embedding models like Qwen3-Embedding-8B, you can run the embedding demo to see semantic search and similarity computation:
+
+```bash
+export HF_MODEL=Qwen/Qwen3-Embedding-8B
+python models/tt_transformers/demo/embedding_demo.py
+```
+
+The embedding demo showcases:
+- Batch encoding of multiple texts into embeddings
+- Semantic search with cosine similarity
+- Comparison of similar vs dissimilar text embeddings
+
 ## Details
 
 ### Extra compatibility settings for non-Llama models
@@ -244,13 +259,19 @@ You should also watch out for:
 
 Huggingface models specify their architecture in the `config.json` file. The following architectures are known to work:
 
+**Text Generation Models:**
 - LlamaForCausalLM
 - Qwen2ForCausalLM
 - Qwen3ForCausalLM
 - MistralForCausalLM
 - Phi3ForCausalLM
 
-At the time of writing this covers the majority of popular HuggingFace text-generation models. If you find another architecture that works or extend TT-Transformers to support one we would love to accept a PR!
+**Text Embedding Models:**
+- Qwen3ForCausalLM (adapted for embedding tasks)
+
+TT-Transformers supports both text generation and text embedding models. For embedding models, the framework automatically detects "Embedding" in the model name and uses the appropriate `EmbeddingTransformer` class that replaces the language modeling head with mean pooling for generating fixed-dimension embeddings.
+
+At the time of writing this covers the majority of popular HuggingFace text-generation and text-embedding models. If you find another architecture that works or extend TT-Transformers to support one we would love to accept a PR!
 
 ---
 

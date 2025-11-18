@@ -94,8 +94,31 @@ class TransformerBlock(LightweightModule):
                 model_config=self.model_config,
             )
 
-        self.attention_norm = DistributedNorm(
-            RMSNorm(
+        # Conditionally create distributed or regular norm based on configuration
+        if self.args.is_distributed_norm("prefill"):
+            self.attention_norm = DistributedNorm(
+                RMSNorm(
+                    device=mesh_device,
+                    dim=args.dim,
+                    eps=args.norm_eps,
+                    state_dict=state_dict,
+                    state_dict_prefix=args.get_state_dict_prefix("", layer_num),
+                    weight_cache_path=None if args.dummy_weights else weight_cache_path,
+                    weight_dtype=ttnn.bfloat16,
+                    weight_key="attention_norm",
+                    is_distributed=self.args.is_distributed_norm,
+                    add_unit_offset=self.args.rms_norm_add_unit_offset,
+                    sharded_program_config=self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"],
+                    sharded_output_config=self.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
+                    ccl_topology=self.args.ccl_topology(),
+                    tt_ccl=self.tt_ccl,
+                ),
+                args,
+                tt_ccl=self.tt_ccl,
+                TG=args.is_galaxy,
+            )
+        else:
+            self.attention_norm = RMSNorm(
                 device=mesh_device,
                 dim=args.dim,
                 eps=args.norm_eps,
@@ -108,15 +131,32 @@ class TransformerBlock(LightweightModule):
                 add_unit_offset=self.args.rms_norm_add_unit_offset,
                 sharded_program_config=self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"],
                 sharded_output_config=self.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
-                ccl_topology=self.args.ccl_topology(),
+            )
+        # Conditionally create distributed or regular norm based on configuration
+        if self.args.is_distributed_norm("prefill"):
+            self.ff_norm = DistributedNorm(
+                RMSNorm(
+                    device=mesh_device,
+                    dim=args.dim,
+                    eps=args.norm_eps,
+                    state_dict=state_dict,
+                    state_dict_prefix=args.get_state_dict_prefix("", layer_num),
+                    weight_cache_path=None if args.dummy_weights else weight_cache_path,
+                    weight_dtype=ttnn.bfloat16,
+                    weight_key="ffn_norm",
+                    is_distributed=self.args.is_distributed_norm,
+                    add_unit_offset=self.args.rms_norm_add_unit_offset,
+                    sharded_program_config=self.model_config["SHARDED_NORM_MLP_PRGM_CFG"],
+                    sharded_output_config=self.model_config["SHARDED_MLP_INPUT_MEMCFG"],
+                    ccl_topology=self.args.ccl_topology(),
+                    tt_ccl=self.tt_ccl,
+                ),
+                args,
                 tt_ccl=self.tt_ccl,
-            ),
-            args,
-            tt_ccl=self.tt_ccl,
-            TG=args.is_galaxy,
-        )
-        self.ff_norm = DistributedNorm(
-            RMSNorm(
+                TG=args.is_galaxy,
+            )
+        else:
+            self.ff_norm = RMSNorm(
                 device=mesh_device,
                 dim=args.dim,
                 eps=args.norm_eps,
@@ -129,16 +169,32 @@ class TransformerBlock(LightweightModule):
                 add_unit_offset=self.args.rms_norm_add_unit_offset,
                 sharded_program_config=self.model_config["SHARDED_NORM_MLP_PRGM_CFG"],
                 sharded_output_config=self.model_config["SHARDED_MLP_INPUT_MEMCFG"],
-                ccl_topology=self.args.ccl_topology(),
-                tt_ccl=self.tt_ccl,
-            ),
-            args,
-            tt_ccl=self.tt_ccl,
-            TG=args.is_galaxy,
-        )
+            )
         if f"layers.{layer_num}.pre_feedforward_layernorm.weight" in state_dict:
-            self.pre_ff_norm = DistributedNorm(  # pre_feedforward_layernorm
-                RMSNorm(
+            if self.args.is_distributed_norm("prefill"):
+                self.pre_ff_norm = DistributedNorm(  # pre_feedforward_layernorm
+                    RMSNorm(
+                        device=mesh_device,
+                        dim=args.dim,
+                        eps=args.norm_eps,
+                        state_dict=state_dict,
+                        add_unit_offset=self.args.rms_norm_add_unit_offset,
+                        state_dict_prefix=args.get_state_dict_prefix("", layer_num),
+                        weight_cache_path=None if args.dummy_weights else weight_cache_path,
+                        weight_dtype=ttnn.bfloat16,
+                        weight_key="pre_feedforward_layernorm",
+                        is_distributed=self.args.is_distributed_norm,
+                        sharded_program_config=self.model_config["SHARDED_NORM_MLP_PRGM_CFG"],
+                        sharded_output_config=self.model_config["SHARDED_MLP_INPUT_MEMCFG"],
+                        ccl_topology=self.args.ccl_topology(),
+                        tt_ccl=self.tt_ccl,
+                    ),
+                    args,
+                    tt_ccl=self.tt_ccl,
+                    TG=args.is_galaxy,
+                )
+            else:
+                self.pre_ff_norm = RMSNorm(
                     device=mesh_device,
                     dim=args.dim,
                     eps=args.norm_eps,
@@ -151,20 +207,36 @@ class TransformerBlock(LightweightModule):
                     is_distributed=self.args.is_distributed_norm,
                     sharded_program_config=self.model_config["SHARDED_NORM_MLP_PRGM_CFG"],
                     sharded_output_config=self.model_config["SHARDED_MLP_INPUT_MEMCFG"],
-                    ccl_topology=self.args.ccl_topology(),
-                    tt_ccl=self.tt_ccl,
-                ),
-                args,
-                tt_ccl=self.tt_ccl,
-                TG=args.is_galaxy,
-            )
+                )
         else:
             # If pre_feedforward_layernorm is not in state_dict, we do not use it
             self.pre_ff_norm = None
 
         if f"layers.{layer_num}.post_feedforward_layernorm.weight" in state_dict:
-            self.post_ff_norm = DistributedNorm(  # post_feedforward_layernorm
-                RMSNorm(
+            if self.args.is_distributed_norm("prefill"):
+                self.post_ff_norm = DistributedNorm(  # post_feedforward_layernorm
+                    RMSNorm(
+                        device=mesh_device,
+                        dim=args.dim,
+                        eps=args.norm_eps,
+                        add_unit_offset=self.args.rms_norm_add_unit_offset,
+                        state_dict=state_dict,
+                        state_dict_prefix=args.get_state_dict_prefix("", layer_num),
+                        weight_cache_path=None if args.dummy_weights else weight_cache_path,
+                        weight_dtype=ttnn.bfloat16,
+                        weight_key="post_feedforward_layernorm",
+                        is_distributed=self.args.is_distributed_norm,
+                        sharded_program_config=self.model_config["SHARDED_NORM_MLP_PRGM_CFG"],
+                        sharded_output_config=self.model_config["SHARDED_MLP_INPUT_MEMCFG"],
+                        ccl_topology=self.args.ccl_topology(),
+                        tt_ccl=self.tt_ccl,
+                    ),
+                    args,
+                    tt_ccl=self.tt_ccl,
+                    TG=args.is_galaxy,
+                )
+            else:
+                self.post_ff_norm = RMSNorm(
                     device=mesh_device,
                     dim=args.dim,
                     eps=args.norm_eps,
@@ -177,13 +249,7 @@ class TransformerBlock(LightweightModule):
                     is_distributed=self.args.is_distributed_norm,
                     sharded_program_config=self.model_config["SHARDED_NORM_MLP_PRGM_CFG"],
                     sharded_output_config=self.model_config["SHARDED_MLP_INPUT_MEMCFG"],
-                    ccl_topology=self.args.ccl_topology(),
-                    tt_ccl=self.tt_ccl,
-                ),
-                args,
-                tt_ccl=self.tt_ccl,
-                TG=args.is_galaxy,
-            )
+                )
         else:
             # If post_feedforward_layernorm is not in state_dict, we do not use it
             self.post_ff_norm = None

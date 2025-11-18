@@ -682,6 +682,7 @@ def create_tt_model(
     state_dict=None,
     num_layers=None,
 ):
+    from models.tt_transformers.tt.embedding_model import EmbeddingTransformer
     from models.tt_transformers.tt.model import Transformer
     from models.tt_transformers.tt.model_config import ModelArgs
 
@@ -699,14 +700,29 @@ def create_tt_model(
     if not state_dict:
         state_dict = tt_model_args.load_state_dict()
 
-    model = Transformer(
-        args=tt_model_args,
-        mesh_device=mesh_device,
-        dtype=dtype,
-        state_dict=state_dict,
-        weight_cache_path=tt_model_args.weight_cache_path(dtype),
-        paged_attention_config=paged_attention_config,
-    )
+    # Detect if this is an embedding model
+    is_embedding_model = "Embedding" in tt_model_args.model_name
+
+    if is_embedding_model:
+        # Create embedding model for text embedding tasks
+        model = EmbeddingTransformer(
+            args=tt_model_args,
+            mesh_device=mesh_device,
+            dtype=dtype,
+            state_dict=state_dict,
+            weight_cache_path=tt_model_args.weight_cache_path(dtype),
+            paged_attention_config=paged_attention_config,
+        )
+    else:
+        # Create standard transformer model for text generation
+        model = Transformer(
+            args=tt_model_args,
+            mesh_device=mesh_device,
+            dtype=dtype,
+            state_dict=state_dict,
+            weight_cache_path=tt_model_args.weight_cache_path(dtype),
+            paged_attention_config=paged_attention_config,
+        )
 
     tt_kv_cache = [l.attention.layer_past for l in model.layers] if paged_attention_config else None
 

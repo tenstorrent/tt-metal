@@ -33,6 +33,7 @@ class Attention(LightweightModule):
         self.tt_ccl = tt_ccl
         self.num_devices = configuration.num_devices
         self.TG = self.num_devices == 32
+        self.configuration = configuration
         self.hidden_size = configuration.dim
         self.n_heads = configuration.n_heads
         self.head_dim = configuration.head_dim
@@ -680,6 +681,24 @@ class Attention(LightweightModule):
                 raise ValueError(f"seq_len {seq_len} must be divisible by {self.MAX_QKV_MM_SEQ_LEN}")
             x_11SH = ttnn.reshape(x_11SH, [1, seq_len // self.MAX_QKV_MM_SEQ_LEN, self.MAX_QKV_MM_SEQ_LEN, -1])
 
+        # For embedding models, gather input before linear since weights are sharded
+        # NOTE: DistributedNorm in decoder layers should handle gathering, so no need here
+        # if "Embedding" in self.configuration.model_name and len(self.mesh_device.get_device_ids()) > 1 and self.tt_ccl is not None:
+        #     x_11SH = ttnn.experimental.all_gather_async(
+        #         x_11SH,
+        #         persistent_output_buffer=None,
+        #         dim=3,
+        #         multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+        #         num_links=1,
+        #         topology=self.ccl_topology,
+        #         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        #         barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+        #         cluster_axis=0,
+        #         chunks_per_sync=10,
+        #         num_workers_per_link=2,
+        #         num_buffers_per_channel=2,
+        #     )
+
         xqkv_fused = ttnn.linear(
             x_11SH,
             self.wqkv,
@@ -857,7 +876,7 @@ class Attention(LightweightModule):
             attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // 1024, 1024, -1])
 
         # Non fused All Gather Matmul
-        if self.use_fused_all_gather_matmul:  # is true for Ring topology
+        if self.use_fused_all_gather_matmul and not "Embedding" in self.args.model_name:  # is true for Ring topology
             attn_output_11SH = ttnn.experimental.all_gather_async(
                 attn_output_11SH,
                 persistent_output_buffer=None,
