@@ -82,7 +82,6 @@ private:
     // It is set to true when dispatch firmware is launched, and reset
     // after the terimnate command is sent.
     bool dispatch_firmware_active_ = false;
-    bool use_numa_node_based_thread_binding = false;
 
     mutable std::mutex lock;
     std::vector<std::unique_ptr<tt_metal::IDevice>> devices;
