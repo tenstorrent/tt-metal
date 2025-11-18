@@ -55,15 +55,25 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         TEST_DATA_DIR: /work/data
         ENABLE_CI_ONLY_TT_TRAIN_TESTS: 1
+        CCACHE_DIR: /tmp/ccache
+        TT_METAL_CCACHE_KERNEL_SUPPORT: 1
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-      options: "--device /dev/tenstorrent"
+        - /home/ubuntu/.ccache-ci:/github/home/.ccache # HOME is hardcoded for no clear reason: https://github.com/actions/runner/issues/863
+      options: >
+        --device /dev/tenstorrent
+        --tmpfs /tmp
     defaults:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
+      - name: Prepare ccache
+        run: |
+          mkdir -p /tmp/ccache
+          ccache -z
+
       - name: ⬇️  Setup Job
         uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
@@ -78,6 +88,13 @@ jobs:
           mkdir -p generated/test_reports
           ldd tests/ttml_tests || true
           ${{ matrix.test-group.cmd }}
+
+      - name: Publish ccache summary
+        run: |
+          echo '## CCache Summary' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          ccache -s >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
 
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
