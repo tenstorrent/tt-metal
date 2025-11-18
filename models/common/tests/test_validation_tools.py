@@ -289,7 +289,7 @@ def test_validation_attention(ttnn_mesh_device: ttnn.MeshDevice):
 
 @compare_to_torch(
     reference_fn=lambda tensor, device: tensor,
-    output_to_torch=lambda x: to_torch_auto_compose(x),
+    output_to_torch=to_torch_auto_compose,
     metric_tolerances={
         Metric.MAX_ABS_ERROR: 0.015,
         Metric.MEAN_ABS_ERROR: 0.01,
@@ -580,6 +580,7 @@ def test_validation_raises_on_reference_exception(ttnn_mesh_device: ttnn.MeshDev
     with pytest.raises(TypeError) as e:
         _ = _matmul(a_tt, b_tt)
     assert "missing 1 required positional argument: 'c'" in str(e.value)
+    assert len(registry.results) == before + 1
 
     # [INFO] make a mismatched signature on output_to_torch to force the reference function to raise an exception!
     @compare_to_torch(reference_fn=lambda a, b: ..., output_to_torch=lambda x, y: ..., raise_exceptions=True)
@@ -589,6 +590,7 @@ def test_validation_raises_on_reference_exception(ttnn_mesh_device: ttnn.MeshDev
     with pytest.raises(TypeError) as e:
         _ = _matmul_too(a_tt, b_tt)
     assert "missing 1 required positional argument: 'y'" in str(e.value)
+    assert len(registry.results) == before + 2
 
     # [INFO] make a mismatched signature on input_to_torch to force the reference function to raise an exception!
     @compare_to_torch(reference_fn=lambda a, b: ..., input_to_torch=lambda x: ..., raise_exceptions=True)
@@ -598,6 +600,7 @@ def test_validation_raises_on_reference_exception(ttnn_mesh_device: ttnn.MeshDev
     with pytest.raises(TypeError) as e:
         _ = _matmul_three(a_tt, b_tt)
     assert "takes 1 positional argument but 2 were given" in str(e.value)
+    assert len(registry.results) == before + 3
 
 
 @pytest.fixture(scope="module", autouse=True)

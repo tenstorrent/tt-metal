@@ -19,15 +19,9 @@ from models.common.auto_compose import to_torch_auto_compose
 
 import ttnn
 
-# TODO)) accumulate prompts that instructs AI to use testing tools to validate the model
-# -- where, how, what to add to validate_against decorator
-# -- get us to the debug iteration starting point!
-# -- almost automatically debugging a model by probing tensors and checking their pcc against reference tensors, through one prompt?!
-# -- TTTv2 could be agent-first toolkit! -- a set of prompts and libraries that users who comes to us with TTNN model can use to debug their model, add demo, add vllm, add perf checks, etc.
-
 
 # ============================================================================
-# Model Implementation by claude-4.5-sonnet thinking
+# Model Implementation by Claude and Codex with manually edits
 # ============================================================================
 
 
@@ -382,29 +376,11 @@ class TransformerBlock:
         if hf_layer is not None:
             self.hf_layer = hf_layer
             self._hf_past_kv = None  # HF DynamicCache for this layer
-            try:
-                self.attention.hf_attn = hf_layer.self_attn
-            except Exception:
-                pass
-            try:
-                # Use HF rotary embedding module for reference path
-                from transformers.models.qwen2.modeling_qwen2 import Qwen2RotaryEmbedding as HFQwen2RotaryEmbedding
-
-                self.attention.hf_rotary_emb = HFQwen2RotaryEmbedding(config)
-            except Exception:
-                pass
-            try:
-                self.input_layernorm.ref_module = hf_layer.input_layernorm
-            except Exception:
-                pass
-            try:
-                self.post_attention_layernorm.ref_module = hf_layer.post_attention_layernorm
-            except Exception:
-                pass
-            try:
-                self.mlp.ref_module = hf_layer.mlp
-            except Exception:
-                pass
+            self.attention.hf_attn = hf_layer.self_attn
+            self.attention.hf_rotary_emb = HFQwen2RotaryEmbedding(config)
+            self.input_layernorm.ref_module = hf_layer.input_layernorm
+            self.post_attention_layernorm.ref_module = hf_layer.post_attention_layernorm
+            self.mlp.ref_module = hf_layer.mlp
 
     def _ref_call(
         self,
@@ -570,10 +546,7 @@ class QwenModel:
         self.norm = RMSNorm(state_dict["model.norm.weight"], self.config.rms_norm_eps, device)
         # Hook HF final norm for validation
         if self._validate:
-            try:
-                self.norm.ref_module = hf_model.model.norm
-            except Exception:
-                pass
+            self.norm.ref_module = hf_model.model.norm
 
         # LM head (output projection)
         self.lm_head = ttnn.from_torch(

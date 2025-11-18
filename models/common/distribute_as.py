@@ -64,15 +64,6 @@ def _infer_mesh_mapper_from_topology(
     """
     placements, dist_shape = extract_tensor_topology_info(tensor)
 
-    # # No distribution or trivial 1-device case
-    # if len(dist_shape) == 0 or (len(dist_shape) == 1 and dist_shape[0] == 1):
-    #     mesh_device = get_device_from_tensor(tensor) or device or ttnn.GetDefaultDevice()
-    #     if mesh_device is None:
-    #         raise RuntimeError(
-    #             "Tensor is on host and no mesh_device provided. " "Set a default via ttnn.SetDefaultDevice(...)."
-    #         )
-    #     return None, mesh_device
-
     tensor_device = get_device_from_tensor(tensor)
     mesh_device = tensor_device or device
     if mesh_device is None:
