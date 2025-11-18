@@ -26,7 +26,7 @@ DEFAULT:
   # or
   # SPDX-FileContributor: year[-year] Espressif Systems
   # are replaced with this template prefixed with the correct comment notation (# or // or *) and SPDX- notation
-  # -- Jonathan Baker - Nov 18 2025 - the file must have an SPDX header, but may not have ours.  expressif_copyright will fail if ours is not found.  Commenting out
+  # -- Jonathan Baker - Nov 18 2025 - the file must have an SPDX header, but may not have ours.  espressif_copyright will fail if ours is not found.  Commenting out
   # espressif_copyright: '© {years} Tenstorrent AI ULC'
   # include:
   #   - "*.cpp"
