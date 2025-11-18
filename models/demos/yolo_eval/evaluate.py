@@ -15,7 +15,6 @@ from loguru import logger
 from sklearn.metrics import average_precision_score, precision_recall_curve
 
 import ttnn
-from models.common.utility_functions import disable_persistent_kernel_cache
 from models.demos.utils.common_demo_utils import LoadImages, postprocess, preprocess, save_yolo_predictions_by_model
 from models.demos.yolov4.post_processing import gen_yolov4_boxes_confs
 
@@ -94,8 +93,6 @@ def evaluation(
     save_dir,
     model_name=None,
 ):
-    disable_persistent_kernel_cache()
-
     num_iterations = 500
 
     if model_type == "torch_model":
@@ -692,8 +689,6 @@ def test_yolov7(device, model_type, res, reset_seeds, model_location_generator):
 def test_yolov12x(model_location_generator, device, model_type, reset_seeds):
     from models.demos.yolov12x.runner.performant_runner import YOLOv12xPerformantRunner
 
-    disable_persistent_kernel_cache()
-
     if model_type == "torch_model":
         model = load_torch_model(model_location_generator)
         logger.info("Inferencing [Torch] Model")
@@ -784,8 +779,6 @@ def test_yolov6l(device, model_type, res, reset_seeds):
 def test_yolov5x(model_location_generator, device, model_type, reset_seeds):
     from models.demos.yolov5x.common import load_torch_model
     from models.demos.yolov5x.runner.performant_runner import YOLOv5xPerformantRunner
-
-    disable_persistent_kernel_cache()
 
     if model_type == "torch_model":
         model = load_torch_model(model_location_generator)

@@ -11,8 +11,6 @@ from models.experimental.yolov5.tt.yolov5_detection_model import (
 from models.common.utility_functions import (
     torch2tt_tensor,
     Profiler,
-    disable_persistent_kernel_cache,
-    enable_persistent_kernel_cache,
 )
 from models.perf.perf_utils import prep_perf_report
 
@@ -21,7 +19,6 @@ BATCH_SIZE = 1
 
 def test_perf(device):
     profiler = Profiler()
-    disable_persistent_kernel_cache()
     first_key = "first_iter"
     second_key = "second_iter"
     cpu_key = "ref_key"
@@ -49,8 +46,6 @@ def test_perf(device):
         profiler.start(first_key)
         tt_output = tt_model(tt_inputs)
         profiler.end(first_key)
-
-        enable_persistent_kernel_cache()
 
         profiler.start(second_key)
         tt_output = tt_model(tt_inputs)
