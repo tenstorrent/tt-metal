@@ -286,7 +286,10 @@ def run_strided_all_gather_impl(
             torch_ag_out_tensor = ag_output_tensor_goldens_list[i if not enable_trace else 0]
 
             tt_ag_out = ttnn.from_device(tt_ag_out_tensor)
-            tt_ag_out = ttnn.to_torch(tt_ag_out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=3))
+            tt_ag_out = ttnn.to_torch(
+                tt_ag_out,
+                mesh_composer=ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+            )
 
             tt_ag_out = tt_ag_out[:, :, :, 0 : torch_ag_out_tensor.shape[3]]
             eq, output = comp_pcc(tt_ag_out, torch_ag_out_tensor, allowed_pcc)
