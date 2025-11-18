@@ -193,6 +193,7 @@ tt::tt_metal::operation::ProgramWithCallbacks Conv3dOp::create_program(
         this->stride,
         this->padding,
         this->padding_mode,
+        this->dilation,
         this->groups,
         this->dtype,
         config,

@@ -80,7 +80,7 @@ struct Conv3dOp {
     uint32_t output_channels;
     std::array<uint32_t, 3> kernel_size;
     std::array<uint32_t, 3> stride;
-    std::array<uint32_t, 3> padding;
+    std::variant<std::array<uint32_t, 3>, std::array<uint32_t, 6>> padding;
     std::array<uint32_t, 3> dilation;
     std::string padding_mode;
     uint32_t groups;
