@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -98,6 +98,11 @@ def test_bw_relu_squared_mathematical_correctness(device):
     pyt_output = torch.square(torch.relu(pyt_input))
     pyt_output.backward(gradient=grad_data)
     pyt_grad = pyt_input.grad
+
+    # Verify tt_output matches PyTorch gradient
+    assert torch.allclose(
+        tt_output, pyt_grad, atol=1e-3, rtol=1e-2
+    ), f"tt_output does not match PyTorch gradient. Max diff: {torch.max(torch.abs(tt_output - pyt_grad)).item():.6f}"
 
     comp_pass = compare_pcc(tt_output_tensor_on_device, [pyt_grad])
     assert comp_pass

@@ -1,7 +1,11 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include "relu_sq_bw.hpp"
 
 #include "core/compute_kernel_config.hpp"
-#include "device/relu_sq_bw_device_operation.hpp"  // Direct include to ensure registration is visible
+#include "device/relu_sq_bw_device_operation.hpp"
 
 namespace ttml::metal::ops::relu_sq_bw {
 
