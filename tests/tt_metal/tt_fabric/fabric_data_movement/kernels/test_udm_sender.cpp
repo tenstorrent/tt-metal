@@ -34,10 +34,6 @@ void kernel_main() {
 
     uint64_t start_timestamp = get_timestamp();
 
-    uint32_t local_notification_addr = notification_mailbox_address;  // Where we prepare notifications
-    uint32_t remote_notification_addr =
-        notification_mailbox_address;  // Where to send notifications (same offset on receiver)
-
     for (uint32_t i = 0; i < num_packets; i++) {
         time_seed = prng_next(time_seed);
 
@@ -67,18 +63,6 @@ void kernel_main() {
                 ASSERT(false);
             } break;
         }
-
-        uint32_t notification_buffer_addr = local_notification_addr + i * req_notification_size_bytes;
-        uint32_t remote_notification_dest = remote_notification_addr + i * req_notification_size_bytes;
-        notify_receiver(
-            dst_dev_id,
-            dst_mesh_id,
-            noc_x_start,
-            noc_y_start,
-            notification_buffer_addr,
-            remote_notification_dest,
-            time_seed,
-            req_notification_size_bytes);
 
         switch (noc_send_type) {
             case NOC_UNICAST_WRITE:

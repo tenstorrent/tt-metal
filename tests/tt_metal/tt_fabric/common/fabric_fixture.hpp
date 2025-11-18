@@ -156,7 +156,12 @@ protected:
     static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
 };
 
-class Fabric1DTensixFixture : public BaseFabricFixture {
+// Template base class for Tensix fixtures with Galaxy skip logic
+template <
+    tt::tt_fabric::FabricConfig FabricConfigValue,
+    tt::tt_fabric::FabricTensixConfig TensixConfigValue,
+    tt::tt_fabric::FabricUDMMode UDMModeValue = tt::tt_fabric::FabricUDMMode::DISABLED>
+class FabricTensixFixtureTemplate : public BaseFabricFixture {
 private:
     inline static bool should_skip_ = false;
 
@@ -167,21 +172,32 @@ protected:
             should_skip_ = true;
             return;
         }
-        BaseFabricFixture::DoSetUpTestSuite(
-            tt::tt_fabric::FabricConfig::FABRIC_1D, std::nullopt, tt::tt_fabric::FabricTensixConfig::MUX);
+        BaseFabricFixture::DoSetUpTestSuite(FabricConfigValue, std::nullopt, TensixConfigValue, UDMModeValue);
     }
+
     static void TearDownTestSuite() {
         if (!should_skip_) {
             BaseFabricFixture::DoTearDownTestSuite();
         }
     }
+
     void SetUp() override {
         if (should_skip_) {
-            GTEST_SKIP() << "Fabric1DTensixFixture tests are not supported on Galaxy systems";
+            GTEST_SKIP() << "Tensix fixture tests are not supported on Galaxy systems";
         }
         BaseFabricFixture::SetUp();
     }
 };
+
+// Concrete fixture types using the template
+using Fabric1DTensixFixture =
+    FabricTensixFixtureTemplate<tt::tt_fabric::FabricConfig::FABRIC_1D, tt::tt_fabric::FabricTensixConfig::MUX>;
+
+using Fabric2DTensixUdmFixture =
+    FabricTensixFixtureTemplate<tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricTensixConfig::UDM>;
+
+using NightlyFabric2DTensixUdmFixture =
+    FabricTensixFixtureTemplate<tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricTensixConfig::UDM>;
 
 class NightlyFabric1DFixture : public BaseFabricFixture {
 protected:
@@ -201,7 +217,7 @@ protected:
         BaseFabricFixture::DoSetUpTestSuite(
             tt::tt_fabric::FabricConfig::FABRIC_2D,
             std::nullopt,
-            tt_fabric::FabricTensixConfig::DISABLED,
+            tt_fabric::FabricTensixConfig::UDM,
             tt_fabric::FabricUDMMode::ENABLED);
     }
     static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
@@ -213,7 +229,7 @@ protected:
         BaseFabricFixture::DoSetUpTestSuite(
             tt::tt_fabric::FabricConfig::FABRIC_2D,
             std::nullopt,
-            tt_fabric::FabricTensixConfig::DISABLED,
+            tt_fabric::FabricTensixConfig::UDM,
             tt_fabric::FabricUDMMode::ENABLED);
     }
     static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }

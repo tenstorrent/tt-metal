@@ -172,6 +172,8 @@ struct StreamRegAssignments {
     static constexpr uint32_t reserved_lite_fabric_3_stream_id = 26;
     static constexpr uint32_t reserved_lite_fabric_4_stream_id = 27;
     static constexpr uint32_t reserved_lite_fabric_5_stream_id = 28;
+    // Local tensix relay free slots stream ID (UDM mode only)
+    static constexpr uint32_t tensix_relay_local_free_slots_stream_id = 29;
     // Multi-RISC teardown synchronization stream ID
     static constexpr uint32_t multi_risc_teardown_sync_stream_id = 31;
 
@@ -199,6 +201,7 @@ struct StreamRegAssignments {
             sender_channel_3_free_slots_stream_id,
             sender_channel_4_free_slots_stream_id,
             vc1_sender_channel_free_slots_stream_id,
+            tensix_relay_local_free_slots_stream_id,
             multi_risc_teardown_sync_stream_id};
         return stream_ids;
     }
@@ -313,6 +316,10 @@ struct FabricEriscDatamoverConfig {
     size_t to_sender_channel_remote_completion_counters_base_addr = 0;
     size_t receiver_channel_remote_ack_counters_base_addr = 0;
     size_t receiver_channel_remote_completion_counters_base_addr = 0;
+
+    // ----------- Local Tensix Relay Connection (UDM mode only)
+    // Connection buffer index for the local tensix relay interface
+    size_t tensix_relay_connection_buffer_index_id = 0;
 
     // Channel Allocations
     std::size_t max_l1_loading_size = 0;
@@ -510,6 +517,7 @@ public:
 
     void connect_to_downstream_edm(FabricDatamoverBuilder downstream_builder);
     void connect_to_downstream_edm(FabricDatamoverBuilder downstream_builder, FabricDatamoverBuilder vc1_edm_builder);
+    void connect_to_local_tensix_builder(FabricTensixDatamoverBuilder& tensix_builder);
 
     eth_chan_directions get_direction() const;
     size_t get_configured_risc_count() const;
@@ -584,6 +592,8 @@ public:
     bool wait_for_host_signal = false;
     bool has_tensix_extension = false;
     uint32_t num_downstream_tensix_connections = 0;
+    bool udm_mode = false;  // UDM mode: router connects to local tensix relay
+    uint32_t local_tensix_relay_num_buffers = 0;  // Number of buffers in the local relay channel
 
 private:
     // Shared helper for setting up VC connections
