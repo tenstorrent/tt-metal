@@ -62,7 +62,9 @@ uint32_t _start() {
     DeviceZoneScopedMainChildN("TRISC-KERNEL");
     EARLY_RETURN_FOR_DEBUG
     WAYPOINT("K");
+    StartPerfCounters();
     run_kernel();
+    StopPerfCounters();
     WAYPOINT("KD");
     EARLY_RETURN_FOR_DEBUG_EXIT;
 #endif

@@ -63,7 +63,9 @@ uint32_t _start() {
     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
     EARLY_RETURN_FOR_DEBUG
     WAYPOINT("K");
+    //StartPerfCounters();
     kernel_main();
+    //StopPerfCounters();
     WAYPOINT("KD");
     // Checking is disabled on NCRISC for dispatch because dispatch_s, which
     // runs on NCRISC, does not track all transactions correctly.
