@@ -236,7 +236,7 @@ TopologyMapper::TopologyMapper(
 
     // Build asic_id_to_mesh_rank mapping needed for rebuild_host_rank_structs_from_mapping
     // This maps each asic to its mesh host rank based on the fabric node it's mapped to
-    std::unordered_map<MeshId, std::unordered_map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
     for (const auto& [fabric_node_id, asic_id] : fabric_node_id_to_asic_id_) {
         auto host_rank = mesh_graph_.get_host_rank_for_chip(fabric_node_id.mesh_id, fabric_node_id.chip_id);
         TT_FATAL(host_rank.has_value(), "Fabric node id {} not found in mesh graph", fabric_node_id);
@@ -293,9 +293,6 @@ void TopologyMapper::build_mapping() {
 
     // Only 1 host builds the mapping the rest will wait and use the mapping from the 1st host
     if (generate_mapping_locally_ || *tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 0) {
-        // Validate that all meshes in the mesh graph descriptor have rank bindings
-        validate_mesh_id_host_names(mesh_id_host_names);
-
         // Build logical and physical adjacency maps
         auto adjacency_map_logical = build_adjacency_map_logical();
         auto adjacency_map_physical = build_adjacency_map_physical(asic_id_to_mesh_rank);
@@ -356,7 +353,7 @@ std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> TopologyMapper:
     }
 
     // Step 1: Build MPI rank -> hostname mapping (rank from PSD is the MPI rank)
-    std::unordered_map<int, HostName> mpi_rank_to_host;
+    std::map<int, HostName> mpi_rank_to_host;
     for (const auto& host : physical_system_descriptor_.get_all_hostnames()) {
         auto mpi_rank = physical_system_descriptor_.get_rank_for_hostname(host);
         mpi_rank_to_host[static_cast<int>(mpi_rank)] = host;
@@ -430,8 +427,8 @@ std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> TopologyMapper:
     return mapping;
 }
 
-std::unordered_map<MeshId, LogicalAdjacencyMap> TopologyMapper::build_adjacency_map_logical() const {
-    std::unordered_map<MeshId, LogicalAdjacencyMap> adjacency_map;
+std::map<MeshId, LogicalAdjacencyMap> TopologyMapper::build_adjacency_map_logical() const {
+    std::map<MeshId, LogicalAdjacencyMap> adjacency_map;
 
     auto get_local_adjacents = [&](tt::tt_fabric::FabricNodeId fabric_node_id, MeshId mesh_id) {
         auto adjacent_map = mesh_graph_.get_intra_mesh_connectivity()[*mesh_id][fabric_node_id.chip_id];
@@ -464,26 +461,12 @@ std::unordered_map<MeshId, LogicalAdjacencyMap> TopologyMapper::build_adjacency_
     return adjacency_map;
 }
 
-std::unordered_map<MeshId, PhysicalAdjacencyMap> TopologyMapper::build_adjacency_map_physical(
+std::map<MeshId, PhysicalAdjacencyMap> TopologyMapper::build_adjacency_map_physical(
     const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank) const {
-    std::unordered_map<MeshId, PhysicalAdjacencyMap> adjacency_map;
+    std::map<MeshId, PhysicalAdjacencyMap> adjacency_map;
 
-    auto get_local_adjacents =
-        [&](tt::tt_metal::AsicID asic_id, MeshId /*mesh_id*/, const std::unordered_set<HostName>& mesh_hostnames) {
-            std::vector<tt::tt_metal::AsicID> adjacents;
-            for (const auto& neighbor : physical_system_descriptor_.get_asic_neighbors(asic_id)) {
-                // Make sure that the neighbor is in the mesh
-                if (mesh_hostnames.contains(physical_system_descriptor_.get_host_name_for_asic(neighbor))) {
-                    auto connections = physical_system_descriptor_.get_eth_connections(asic_id, neighbor);
-                    for (size_t i = 0; i < connections.size(); ++i) {
-                        adjacents.push_back(neighbor);
-                    }
-                }
-            }
-            return adjacents;
-        };
     // Build a set of ASIC IDs for each mesh based on mesh rank mapping
-    std::unordered_map<MeshId, std::unordered_set<tt::tt_metal::AsicID>> mesh_asic_ids;
+    std::map<MeshId, std::unordered_set<tt::tt_metal::AsicID>> mesh_asic_ids;
     for (const auto& [mesh_id, asic_map] : asic_id_to_mesh_rank) {
         for (const auto& [asic_id, _] : asic_map) {
             mesh_asic_ids[mesh_id].insert(asic_id);
@@ -561,7 +544,7 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
         "MGD or use ./build/test/tt_metal/tt_fabric/test_system_health to check if all chips are connected",
         mesh_id.get());
 
-    std::unordered_map<FabricNodeId, size_t> log_to_idx;
+    std::map<FabricNodeId, size_t> log_to_idx;
     for (size_t i = 0; i < n_log; ++i) {
         log_to_idx[log_nodes[i]] = i;
     }
@@ -574,7 +557,7 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
         std::sort(log_adj_idx[i].begin(), log_adj_idx[i].end());
     }
 
-    std::unordered_map<tt::tt_metal::AsicID, size_t> phys_to_idx;
+    std::map<tt::tt_metal::AsicID, size_t> phys_to_idx;
     for (size_t i = 0; i < n_phys; ++i) {
         phys_to_idx[phys_nodes[i]] = i;
     }
@@ -636,7 +619,7 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
     std::vector<std::vector<size_t>> restricted_phys_indices_for_logical(n_log);
     if (!fixed_asic_position_pinnings_.empty()) {
         // Validate uniqueness of pins for this mesh and apply
-        std::unordered_map<FabricNodeId, AsicPosition> first_pinnings;
+        std::map<FabricNodeId, AsicPosition> first_pinnings;
 
         for (const auto& [pos, fabric_node] : fixed_asic_position_pinnings_) {
             if (fabric_node.mesh_id != mesh_id) {
@@ -1666,13 +1649,13 @@ MeshContainer<ChipId> TopologyMapper::get_chip_ids(MeshId mesh_id, std::optional
 void TopologyMapper::rebuild_host_rank_structs_from_mapping(
     const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank) {
     // Derive per-mesh host sets and per-host coord ranges from current mapping
-    std::unordered_map<MeshId, std::unordered_set<MeshHostRankId>> mesh_to_hosts;
-    std::unordered_map<MeshId, std::unordered_map<MeshHostRankId, MeshCoordinateRange>> mesh_host_to_range;
+    std::map<MeshId, std::unordered_set<MeshHostRankId>> mesh_to_hosts;
+    std::map<MeshId, std::map<MeshHostRankId, MeshCoordinateRange>> mesh_host_to_range;
     // For wraparound-aware construction, accumulate coordinates per host then compute minimal circular ranges.
-    std::unordered_map<MeshId, std::unordered_map<MeshHostRankId, std::vector<MeshCoordinate>>> mesh_host_to_coords;
+    std::map<MeshId, std::map<MeshHostRankId, std::vector<MeshCoordinate>>> mesh_host_to_coords;
 
     // Precompute coordinate per chip from MeshGraph
-    std::unordered_map<MeshId, std::unordered_map<ChipId, MeshCoordinate>> per_mesh_chip_to_coord;
+    std::map<MeshId, std::map<ChipId, MeshCoordinate>> per_mesh_chip_to_coord;
     // Convert to ordered map for deterministic iteration across hosts
     std::map<FabricNodeId, tt::tt_metal::AsicID> ordered_fabric_nodes(
         fabric_node_id_to_asic_id_.begin(), fabric_node_id_to_asic_id_.end());
@@ -1892,7 +1875,7 @@ int TopologyMapper::get_mpi_rank_for_mesh_host_rank(MeshId mesh_id, MeshHostRank
     return static_cast<int>(physical_system_descriptor_.get_rank_for_hostname(hostname));
 }
 
-void TopologyMapper::print_logical_adjacency_map(const std::unordered_map<MeshId, LogicalAdjacencyMap>& adj_map) const {
+void TopologyMapper::print_logical_adjacency_map(const std::map<MeshId, LogicalAdjacencyMap>& adj_map) const {
     log_debug(tt::LogFabric, "TopologyMapper: Logical Adjacency Map:");
     for (const auto& [mesh_id, node_map] : adj_map) {
         log_debug(tt::LogFabric, "  Mesh ID: {}", *mesh_id);
@@ -1909,8 +1892,7 @@ void TopologyMapper::print_logical_adjacency_map(const std::unordered_map<MeshId
     }
 }
 
-void TopologyMapper::print_physical_adjacency_map(
-    const std::unordered_map<MeshId, PhysicalAdjacencyMap>& adj_map) const {
+void TopologyMapper::print_physical_adjacency_map(const std::map<MeshId, PhysicalAdjacencyMap>& adj_map) const {
     log_debug(tt::LogFabric, "TopologyMapper: Physical Adjacency Map:");
     for (const auto& [mesh_id, node_map] : adj_map) {
         log_debug(tt::LogFabric, "  Mesh ID: {}", *mesh_id);
