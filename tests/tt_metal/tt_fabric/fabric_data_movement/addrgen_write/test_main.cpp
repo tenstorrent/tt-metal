@@ -121,6 +121,33 @@ INSTANTIATE_TEST_SUITE_P(
         }
     });
 
+// Test large page auto-packetization
+TEST(AddrgenLargePage, UnicastWriteLargePage) {
+    // Setup fixture
+    Fixture fixture;
+    fixture.setup();
+
+    // Test parameters with large page size
+    tt::tt_fabric::test::AddrgenTestParams p{
+        .mesh_id = 0,
+        .src_chip = 0,
+        .dst_chip = 1,
+        .use_dram_dst = false,
+        .tensor_bytes = 20480,
+        .page_size = 10240,
+        .sender_core = {0, 0},
+        .receiver_core = {0, 0},
+        .api_variant = tt::tt_fabric::test::AddrgenApiVariant::UnicastWrite,
+        .mesh_rows = 0,
+        .mesh_cols = 0};
+
+    // Run test
+    tt::tt_fabric::test::run_unicast_write_test(&fixture, p);
+
+    // Teardown
+    fixture.teardown();
+}
+
 int main(int argc, char** argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
