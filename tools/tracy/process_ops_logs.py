@@ -7,7 +7,6 @@
 # Debug shebang
 #!/usr/bin/env -S python3 -m pdb
 
-import ast
 import os
 import csv
 from pathlib import Path
@@ -16,10 +15,7 @@ import yaml
 from datetime import datetime
 import copy
 from collections import deque
-import pandas as pd
-from math import nan, isnan
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import click
 from loguru import logger
@@ -27,7 +23,7 @@ from loguru import logger
 from tracy.process_device_log import import_log_run_stats
 from tracy.common import (
     PROFILER_DEVICE_SIDE_LOG,
-    PROFILER_HOST_SIDE_LOG,
+    PROFILER_CPP_DEVICE_PERF_REPORT,
     PROFILER_ARTIFACTS_DIR,
     PROFILER_OUTPUT_DIR,
     TRACY_FILE_NAME,
@@ -49,50 +45,6 @@ PROFILER_OP_TO_OP_OVERHEAD_NANO_SEC = 1500
 OpDict = Dict[str, Any]
 TraceReplayDict = Dict[int, Dict[int, List[int]]]
 DeviceOpsDict = Dict[int, List[OpDict]]
-
-
-@dataclass
-class _TraceReplayState:
-    timestamps: List[int]
-    current_index: int = 0
-    seen_ops: Set[int] = field(default_factory=set)
-
-    @property
-    def session_id(self) -> int:
-        return self.current_index + 1
-
-
-class TraceReplayTracker:
-    """Utility that dispenses trace replay timestamps and session ids per device."""
-
-    def __init__(self, trace_replays: Optional[TraceReplayDict]) -> None:
-        self._states: Dict[int, Dict[int, _TraceReplayState]] = {}
-        self._has_traces = bool(trace_replays)
-        if trace_replays:
-            for device_id, traces in trace_replays.items():
-                self._states[device_id] = {}
-                for trace_id, timestamps in traces.items():
-                    self._states[device_id][trace_id] = _TraceReplayState(list(timestamps))
-
-    def has_traces(self) -> bool:
-        return self._has_traces
-
-    def consume(self, device_id: int, trace_id: int, op_id: int) -> Tuple[int, int]:
-        assert (
-            device_id in self._states and trace_id in self._states[device_id]
-        ), f"Trace metadata missing for device {device_id}, trace {trace_id}"
-        state = self._states[device_id][trace_id]
-
-        if op_id in state.seen_ops:
-            state.current_index += 1
-            state.seen_ops = set()
-
-        if state.current_index >= len(state.timestamps):
-            raise AssertionError("Wrong trace replay count: Device has more ops than trace replay issued commands")
-
-        state.seen_ops.add(op_id)
-        tracy_time = state.timestamps[state.current_index]
-        return tracy_time, state.session_id
 
 
 OPS_CSV_HEADER = [
@@ -167,6 +119,106 @@ OPS_CSV_HEADER = [
     "MATH Util Max (%)",
     "Avg Math util on full grid (%)",
 ]
+
+
+DEVICE_PERF_INT_FIELDS = {
+    "GLOBAL CALL COUNT",
+    "METAL TRACE ID",
+    "METAL TRACE REPLAY SESSION ID",
+    "DEVICE ID",
+    "CORE COUNT",
+    "AVAILABLE WORKER CORE COUNT",
+    "DEVICE TRACE FIRMWARE DURATION [ns]",
+    "DEVICE TRACE KERNEL DURATION [ns]",
+    "DEVICE KERNEL FIRST TO LAST START [ns]",
+    "DEVICE FW DURATION [ns]",
+    "DEVICE FW START CYCLE",
+    "DEVICE FW END CYCLE",
+    "DEVICE KERNEL DURATION [ns]",
+    "DEVICE KERNEL DURATION DM START [ns]",
+    "DEVICE BRISC KERNEL DURATION [ns]",
+    "DEVICE NCRISC KERNEL DURATION [ns]",
+    "DEVICE TRISC0 KERNEL DURATION [ns]",
+    "DEVICE TRISC1 KERNEL DURATION [ns]",
+    "DEVICE TRISC2 KERNEL DURATION [ns]",
+    "DEVICE ERISC KERNEL DURATION [ns]",
+}
+
+
+def _parse_int_field(value: str) -> Optional[int]:
+    if value is None:
+        return None
+    value = value.strip()
+    if value == "":
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return int(float(value))
+
+
+def load_device_perf_report(report_path: Path) -> Dict[int, Dict[int, Dict[str, Any]]]:
+    """Parse cpp_device_perf_report.csv into a per-device/per-op mapping."""
+
+    per_device: Dict[int, Dict[int, Dict[str, Any]]] = {}
+    report_path = Path(report_path)
+    if not report_path.is_file():
+        raise FileNotFoundError(f"Device perf report not found at {report_path}")
+
+    with report_path.open("r") as csv_file:
+        reader = csv.DictReader(csv_file)
+        for row in reader:
+            parsed_row: Dict[str, Any] = {}
+            for header, value in row.items():
+                value = value.strip() if value is not None else ""
+                if header in DEVICE_PERF_INT_FIELDS:
+                    parsed_row[header] = _parse_int_field(value)
+                else:
+                    parsed_row[header] = value
+
+            device_id = parsed_row.get("DEVICE ID")
+            op_id = parsed_row.get("GLOBAL CALL COUNT")
+            if device_id is None or op_id is None:
+                continue
+
+            if device_id not in per_device:
+                per_device[device_id] = {}
+            per_device[device_id][op_id] = parsed_row
+
+    return per_device
+
+
+def lookup_trace_replay_timestamp(
+    traceReplays: Optional[TraceReplayDict], device_id: int, trace_id: Optional[int], session_id: Optional[int]
+) -> Optional[int]:
+    """Return the tracy timestamp for the requested (device, trace, session)."""
+
+    if (
+        traceReplays is None
+        or trace_id is None
+        or session_id is None
+        or device_id not in traceReplays
+        or trace_id not in traceReplays[device_id]
+    ):
+        return None
+
+    timestamps = traceReplays[device_id][trace_id]
+    index = session_id - 1
+    if index < 0 or index >= len(timestamps):
+        return None
+    return timestamps[index]
+
+
+def compute_ns_per_cycle(perf_row: Dict[str, Any]) -> Optional[float]:
+    start_cycle = perf_row.get("DEVICE FW START CYCLE")
+    end_cycle = perf_row.get("DEVICE FW END CYCLE")
+    duration_ns = perf_row.get("DEVICE FW DURATION [ns]")
+    if start_cycle is None or end_cycle is None or duration_ns in (None, "", 0):
+        return None
+    cycle_delta = end_cycle - start_cycle
+    if cycle_delta <= 0:
+        return None
+    return duration_ns / cycle_delta
 
 
 def csv_header_format(header: str) -> str:
@@ -302,31 +354,6 @@ def host_device_op_compare(op: OpDict) -> Tuple[int, int]:
         return int(op["global_call_count"]), 0
 
 
-def device_op_compare_time(op: Dict[str, Any]) -> int:
-    """Comparison key that sorts device ops by earliest timestamp."""
-
-    if "timeseries" in op and len(op["timeseries"]) > 0 and len(op["timeseries"][0]) > 1:
-        return int(op["timeseries"][0][1])
-    else:
-        return 0
-
-
-def device_op_compare_opID_time(op: Dict[str, Any]) -> Tuple[int, int]:
-    """Comparison key that sorts by host op id, then timestamp fallback."""
-
-    if (
-        "timeseries" in op
-        and len(op["timeseries"]) > 0
-        and len(op["timeseries"][0]) > 1
-        and "run_host_id" in op["timeseries"][0][0]
-    ):
-        return int(op["timeseries"][0][0]["run_host_id"]), int(op["timeseries"][0][1])
-    elif "timeseries" in op and len(op["timeseries"]) > 0 and len(op["timeseries"][0]) > 1:
-        return 0, int(op["timeseries"][0][1])
-    else:
-        return 0, 0
-
-
 # Generate a map of OP reference list per device.
 def get_device_op_data(ops: Dict[int, OpDict]) -> Tuple[DeviceOpsDict, bool]:
     """Group host ops per device and record whether trace runs exist."""
@@ -350,56 +377,6 @@ def get_device_op_data(ops: Dict[int, OpDict]) -> Tuple[DeviceOpsDict, bool]:
     return deviceOps, hasTraceRuns
 
 
-def extract_dispatch_op_id(dispatchOps: Dict[str, Any]) -> int:
-    """Return the host op id that a dispatch analysis entry corresponds to."""
-
-    opId = 0
-    for ts in dispatchOps["timeseries"]:
-        meta_data = ts[0].get("meta_data")
-        if meta_data and "workers_runtime_id" in meta_data:
-            try:
-                metadata_dict = ast.literal_eval(meta_data)
-            except (SyntaxError, ValueError) as exc:
-                raise ValueError(f"Failed to parse dispatch meta_data for op: {meta_data}") from exc
-            opId = metadata_dict["workers_runtime_id"]
-            break
-    return opId
-
-
-def extract_perf_counters(events):
-    # If perf counter data exists, extract relevant columns and return as a dataframe
-    EVENT_METADATA_IDX = 0
-    EVENT_TIMESTAMP_IDX = 1
-    EVENT_RISC_TYPE_IDX = 3
-    EVENT_CORE_COORDS_IDX = 4
-    PERF_COUNTER_ID = 9090
-
-    try:
-        # Process events: extract metadata, add timestamp and coords
-        perf_counter_events = []
-        for event in events:
-            metadata = event[EVENT_METADATA_IDX]
-            if metadata["id"] == PERF_COUNTER_ID:
-                meta_dict = json.loads(metadata["meta_data"].replace(";", ",").replace("'", '"'))
-                perf_counter_events.append(
-                    {
-                        "run_host_id": metadata["run_host_id"],
-                        "trace_id_count": metadata["trace_id_count"],
-                        "record time": event[EVENT_TIMESTAMP_IDX],
-                        "core_x": event[EVENT_CORE_COORDS_IDX][0],
-                        "core_y": event[EVENT_CORE_COORDS_IDX][1],
-                        "risc_type": event[EVENT_RISC_TYPE_IDX],
-                        **meta_dict,
-                    }
-                )
-
-        if perf_counter_events:
-            return pd.DataFrame(perf_counter_events)
-    except (KeyError, TypeError, AttributeError) as e:
-        logger.exception("Failed to extract perf counter events: %s", e)
-    return None
-
-
 # Append device data to device ops and return the list of mapped device op ref list
 def append_device_data(
     ops: Dict[int, OpDict],
@@ -407,223 +384,93 @@ def append_device_data(
     logFolder: Path,
     analyze_noc_traces: bool,
     device_analysis_types: Tuple[str, ...] | List[str],
+    force_legacy_device_logs: bool = False,
 ) -> Tuple[DeviceOpsDict, Dict[int, OpDict]]:
-    """Join host metadata with device profiler entries (and optional NoC stats)."""
+    """Join host metadata with the device perf CSV (and optional NoC stats)."""
 
-    trace_tracker = TraceReplayTracker(traceReplays)
-    devicesOps, hasTraceRuns = get_device_op_data(ops)
-    if hasTraceRuns and not trace_tracker.has_traces():
-        raise AssertionError("Host ops reference trace runs but trace replay metadata was not parsed.")
-    logger.info(f"Appending device data")
-    deviceTimesLog = os.path.join(logFolder, PROFILER_DEVICE_SIDE_LOG)
-    traceOps = {}
-    if os.path.isfile(deviceTimesLog):
-        setup = device_post_proc_config.default_setup()
-        if device_analysis_types:
-            allAnalysis = setup.timerAnalysis
-            pickedAnalysis = {}
-            for analysis in device_analysis_types:
-                assert analysis in allAnalysis, f" {analysis} is not calculated in device analysis"
-                pickedAnalysis[analysis] = allAnalysis[analysis]
+    if device_analysis_types:
+        logger.warning("device_analysis_types is not supported when using cpp_device_perf_report.csv; ignoring option.")
 
-            setup.timerAnalysis = pickedAnalysis
-        setup.deviceInputLog = deviceTimesLog
-        deviceData = import_log_run_stats(setup)
-        freq = deviceData["deviceInfo"]["freq"]
-        for device in devicesOps:
-            assert device in deviceData["devices"]
-            deviceOpsTime = deviceData["devices"][device]["cores"]["DEVICE"]["riscs"]["TENSIX"]["ops"]
-            deviceDispatchOpsTime = deviceData["devices"][device]["cores"]["DEVICE"]["riscs"]["TENSIX"]["dispatch_ops"]
-            deviceOpsTime.sort(key=device_op_compare_time)
-            if hasTraceRuns:
-                generatedHostData = []
-                opIDHostDataDict = {}
-                for deviceOp in devicesOps[device]:
-                    opID = deviceOp["global_call_count"]
-                    assert (
-                        opID not in opIDHostDataDict
-                    ), f"Host op ID cannot be repeated: op ID {opID} was reported twice by the host"
-                    opIDHostDataDict[opID] = copy.deepcopy(deviceOp)
+    device_perf_report = Path(logFolder) / PROFILER_CPP_DEVICE_PERF_REPORT
 
-                for deviceOpTime in deviceOpsTime:
-                    if len(deviceOpTime["timeseries"]) > 0:
-                        timeID, ts, statData, risc, core = deviceOpTime["timeseries"][0]
-                        assert "run_host_id" in timeID, "Device op ID missing: Device data must provide op ID"
-                        deviceOpID = timeID["run_host_id"]
-                        assert (
-                            deviceOpID in opIDHostDataDict
-                        ), f"Device op ID not present: Device op ID {deviceOpID} not present in host data on device {device}"
-                        traceID = opIDHostDataDict[deviceOpID]["metal_trace_id"]
-                        if traceID is not None:
-                            tracy_time, session_id = trace_tracker.consume(device, traceID, deviceOpID)
-                            opIDHostDataDict[deviceOpID]["tracy_time"] = tracy_time
-                            opIDHostDataDict[deviceOpID]["metal_trace_replay_session_id"] = session_id
-                        generatedHostData.append(copy.deepcopy(opIDHostDataDict[deviceOpID]))
-                devicesOps[device] = generatedHostData
+    if force_legacy_device_logs:
+        raise NotImplementedError(
+            "Legacy device log parsing via --force-legacy-device-logs is not currently supported. "
+            f"Please ensure {PROFILER_CPP_DEVICE_PERF_REPORT} is generated during runtime."
+        )
 
-            deviceOpsTime.sort(key=device_op_compare_opID_time)
-            devicesOps[device].sort(key=host_device_op_compare)
+    try:
+        device_perf_by_device = load_device_perf_report(device_perf_report)
+    except FileNotFoundError as exc:
+        raise AssertionError(
+            f"Device perf report {PROFILER_CPP_DEVICE_PERF_REPORT} not found in {logFolder}. "
+            "Ensure the profiler emitted cpp_device_perf_report.csv during runtime."
+        ) from exc
+    host_ops_by_device, _ = get_device_op_data(ops)
+    logger.info("Appending device data")
 
-            dispatchOPAnalysis = {}
-            for deviceDispatchOp in deviceDispatchOpsTime:
-                dispatchOpID = extract_dispatch_op_id(deviceDispatchOp)
-                dispatchOPAnalysis[dispatchOpID] = deviceDispatchOp["analysis"]
+    for device_id in host_ops_by_device:
+        assert (
+            device_id in device_perf_by_device
+        ), f"Device {device_id} present in host logs but missing from {PROFILER_CPP_DEVICE_PERF_REPORT}"
 
-            # attach op dispatch analysis to op analysis
-            for deviceOp in deviceOpsTime:
-                opID = deviceOp["timeseries"][0][0]["run_host_id"]
-                if opID in dispatchOPAnalysis:
-                    for dispatchAnalysis in dispatchOPAnalysis[opID]:
-                        deviceOp["analysis"][dispatchAnalysis] = dispatchOPAnalysis[opID][dispatchAnalysis]
-                    del dispatchOPAnalysis[opID]
+        enriched_ops = []
+        for host_op in host_ops_by_device[device_id]:
+            op_id = int(host_op["global_call_count"])
+            assert (
+                op_id in device_perf_by_device[device_id]
+            ), f"Device data missing: Op {op_id} not present in {PROFILER_CPP_DEVICE_PERF_REPORT} for device {device_id}"
 
-            assert len(dispatchOPAnalysis) == 0, "Unrecognized dispatch OPs are presentent by dispatch cores"
+            perf_row = device_perf_by_device[device_id][op_id].copy()
+            enriched_op = copy.deepcopy(host_op)
 
-            if len(devicesOps[device]) != len(deviceOpsTime):
-                deviceOPId = None
-                hostOPId = None
-                for deviceOp, deviceOpTime in zip(devicesOps[device], deviceOpsTime):
-                    if len(deviceOpTime["timeseries"]) > 0:
-                        timeID, ts, statData, risc, core = deviceOpTime["timeseries"][0]
-                        if "zone_name" in timeID and "FW" in timeID["zone_name"]:
-                            if "run_host_id" in timeID:
-                                if timeID["run_host_id"] != deviceOp["global_call_count"]:
-                                    deviceOPId = timeID["run_host_id"]
-                                    hostOPId = deviceOp["global_call_count"]
-                                    break
+            core_count = perf_row.get("CORE COUNT")
+            if core_count is not None:
+                enriched_op["core_usage"] = {"count": core_count, "cores": []}
 
-                if deviceOPId and hostOPId:
-                    assert False, (
-                        f"Device data mismatch: Expected {len(devicesOps[device])} "
-                        f"but received {len(deviceOpsTime)} ops on device {device}. "
-                        f"Device is showing op ID {deviceOPId} when host is showing op ID {hostOPId}"
-                    )
-                else:
-                    assert (
-                        False
-                    ), f"Device data mismatch: Expected {len(devicesOps[device])} but received {len(deviceOpsTime)} ops on device {device}"
-            for deviceOp, deviceOpTime in zip(devicesOps[device], deviceOpsTime):
-                cores = set()
-                for timeID, ts, statData, risc, core in deviceOpTime["timeseries"]:
-                    if "zone_name" in timeID and "FW" in timeID["zone_name"]:
-                        if "run_host_id" in timeID:
-                            assert (
-                                timeID["run_host_id"] == deviceOp["global_call_count"]
-                            ), f"op id {timeID['run_host_id']} reported by device {device} is not matching assigned op id {deviceOp['global_call_count']}"
-                        if core not in cores:
-                            cores.add(core)
-                deviceOp["core_usage"] = {"count": len(cores), "cores": [str(core) for core in cores]}
-                deviceOp["device_time"] = {
-                    analysis: {"series": data["series"], "stats": data["stats"]}
-                    for analysis, data in deviceOpTime["analysis"].items()
-                }
-                for analysis, data in deviceOp["device_time"].items():
-                    for sample in data["series"]:
-                        sample["duration_ns"] = sample["duration_cycles"] * 1000 / freq
-            traceOps = {}
+            metal_trace_id = perf_row.get("METAL TRACE ID")
+            if metal_trace_id is not None:
+                enriched_op["metal_trace_id"] = metal_trace_id
 
-            # Check if perf counters data is available
-            events = deviceData["devices"][device]["cores"]["DEVICE"]["riscs"]["TENSIX"]["events"]
-            perf_counter_df = extract_perf_counters(events["perf_counter_data"])
-            if perf_counter_df is not None and not perf_counter_df.empty:
-                total_compute_cores = deviceData["deviceInfo"]["max_compute_cores"]
+            session_id = perf_row.get("METAL TRACE REPLAY SESSION ID")
+            if session_id is not None:
+                enriched_op["metal_trace_replay_session_id"] = session_id
+                tracy_time = lookup_trace_replay_timestamp(traceReplays, device_id, metal_trace_id, session_id)
+                if tracy_time is not None:
+                    enriched_op["tracy_time"] = tracy_time
 
-                # For each counter type, divide counter value by ref cnt to get util metrics per core
-                #   then group by runtime id and trace id counter to get util metric for all cores in a single op
-                #   then get aggregate statistics for this distribution of values (min, median, max)
-                perf_counter_df["Util"] = perf_counter_df["value"] / perf_counter_df["ref cnt"] * 100
+            enriched_op["_device_perf_row"] = perf_row
+            enriched_ops.append(enriched_op)
 
-                # SFPU Counter aggregations
-                sfpu_counters_grouped = perf_counter_df[perf_counter_df["counter type"] == "SFPU_COUNTER"].groupby(
-                    ["run_host_id", "trace_id_count"], group_keys=True
-                )
-                agg_sfpu_util_min = sfpu_counters_grouped["Util"].min()
-                agg_sfpu_util_median = sfpu_counters_grouped["Util"].median()
-                agg_sfpu_util_max = sfpu_counters_grouped["Util"].max()
-                avg_sfpu_count = sfpu_counters_grouped["value"].sum() / total_compute_cores
+        host_ops_by_device[device_id] = enriched_ops
 
-                # FPU Counter aggregations
-                fpu_counters_grouped = perf_counter_df[perf_counter_df["counter type"] == "FPU_COUNTER"].groupby(
-                    ["run_host_id", "trace_id_count"], group_keys=True
-                )
-                agg_fpu_util_min = fpu_counters_grouped["Util"].min()
-                agg_fpu_util_median = fpu_counters_grouped["Util"].median()
-                agg_fpu_util_max = fpu_counters_grouped["Util"].max()
-                avg_fpu_count = fpu_counters_grouped["value"].sum() / total_compute_cores
+    trace_ops_by_augmented_id: Dict[int, OpDict] = {}
+    for device_id, per_device_ops in host_ops_by_device.items():
+        for op in per_device_ops:
+            if "metal_trace_replay_session_id" in op:
+                augmented_id = op["global_call_count"] | (op["metal_trace_replay_session_id"] << TRACE_OP_ID_BITSHIFT)
+                trace_copy = copy.deepcopy(op)
+                trace_copy["global_call_count"] = augmented_id
+                trace_ops_by_augmented_id[augmented_id] = trace_copy
+            else:
+                ops[op["global_call_count"]] = op
 
-                # MATH Counter aggregations
-                math_counters_grouped = perf_counter_df[perf_counter_df["counter type"] == "MATH_COUNTER"].groupby(
-                    ["run_host_id", "trace_id_count"], group_keys=True
-                )
-                agg_math_util_min = math_counters_grouped["Util"].min()
-                agg_math_util_median = math_counters_grouped["Util"].median()
-                agg_math_util_max = math_counters_grouped["Util"].max()
-                avg_math_count = math_counters_grouped["value"].sum() / total_compute_cores
+    # if enabled, analyze noc trace files present in log folder and add
+    # relevant statistics to 'ops' dict
+    if analyze_noc_traces:
+        npe_stats = analyzeNoCTraces(logFolder)
+        if npe_stats is not None:
+            ops_found = 0
+            for op_id in ops:
+                op_npe_stats = npe_stats.getDatapointByID(op_id)
+                if op_npe_stats is not None:
+                    ops_found += 1
+                    ops[op_id]["NOC UTIL (%)"] = round(op_npe_stats.result.overall_avg_link_util, 1)
+                    ops[op_id]["DRAM BW UTIL (%)"] = round(op_npe_stats.result.dram_bw_util, 1)
+                    ops[op_id]["NPE CONG IMPACT (%)"] = round(op_npe_stats.result.getCongestionImpact(), 2)
+            logger.info(f"Analyzed {ops_found} operations with tt-npe trace data.")
 
-                for deviceOp in devicesOps[device]:
-                    # get trace id counter and global_call_count/runtime id
-                    trace_id_counter = deviceOp.get("metal_trace_replay_session_id", -1)
-                    global_call_count = deviceOp["global_call_count"]
-
-                    # add device freq for use later
-                    deviceOp["freq"] = deviceData["deviceInfo"]["freq"]
-
-                    # SFPU Counter
-                    deviceOp["SFPU Util Min (%)"] = agg_sfpu_util_min.get((global_call_count, trace_id_counter), nan)
-                    deviceOp["SFPU Util Median (%)"] = agg_sfpu_util_median.get(
-                        (global_call_count, trace_id_counter), nan
-                    )
-                    deviceOp["SFPU Util Max (%)"] = agg_sfpu_util_max.get((global_call_count, trace_id_counter), nan)
-                    # FPU Counter
-                    deviceOp["FPU Util Min (%)"] = agg_fpu_util_min.get((global_call_count, trace_id_counter), nan)
-                    deviceOp["FPU Util Median (%)"] = agg_fpu_util_median.get(
-                        (global_call_count, trace_id_counter), nan
-                    )
-                    deviceOp["FPU Util Max (%)"] = agg_fpu_util_max.get((global_call_count, trace_id_counter), nan)
-                    # MATH Counter
-                    deviceOp["MATH Util Min (%)"] = agg_math_util_min.get((global_call_count, trace_id_counter), nan)
-                    deviceOp["MATH Util Median (%)"] = agg_math_util_median.get(
-                        (global_call_count, trace_id_counter), nan
-                    )
-                    deviceOp["MATH Util Max (%)"] = agg_math_util_max.get((global_call_count, trace_id_counter), nan)
-
-                    deviceOp["avg_sfpu_count"] = avg_sfpu_count.get((global_call_count, trace_id_counter), nan)
-                    deviceOp["avg_fpu_count"] = avg_fpu_count.get((global_call_count, trace_id_counter), nan)
-                    deviceOp["avg_math_count"] = avg_math_count.get((global_call_count, trace_id_counter), nan)
-
-            # if enabled, analyze noc trace files present in log folder and add
-            # relevant statistics to devicesOps dict
-            if analyze_noc_traces:
-                npe_stats = analyzeNoCTraces(logFolder)
-                if npe_stats is not None:
-                    ops_found = 0
-                    for deviceOp in devicesOps[device]:
-                        metal_trace_id = deviceOp.get("metal_trace_id", None)
-                        metal_trace_replay_session_id = deviceOp.get("metal_trace_replay_session_id", None)
-                        op_npe_stats = npe_stats.getDatapointByID(
-                            deviceOp["global_call_count"], metal_trace_id, metal_trace_replay_session_id
-                        )
-                        if op_npe_stats is not None:
-                            ops_found += 1
-                            deviceOp["NOC UTIL (%)"] = round(op_npe_stats.result.overall_avg_link_util, 1)
-                            deviceOp["DRAM BW UTIL (%)"] = round(op_npe_stats.result.dram_bw_util, 1)
-                            deviceOp["NPE CONG IMPACT (%)"] = round(op_npe_stats.result.getCongestionImpact(), 2)
-                    logger.info(f"Analyzed {ops_found} operations with tt-npe trace data.")
-
-            # Tag trace ops with a UID
-            for device in devicesOps:
-                for deviceOp in devicesOps[device]:
-                    if "metal_trace_replay_session_id" in deviceOp:
-                        deviceOp["global_call_count"] = (
-                            deviceOp["global_call_count"]
-                            | deviceOp["metal_trace_replay_session_id"] << TRACE_OP_ID_BITSHIFT
-                        )
-                        traceOps[deviceOp["global_call_count"]] = deviceOp
-                    else:
-                        # Update host reported device op with device populated version
-                        ops[deviceOp["global_call_count"]] = deviceOp
-
-    return devicesOps, traceOps
+    return host_ops_by_device, trace_ops_by_augmented_id
 
 
 def get_device_data_generate_report(
@@ -695,7 +542,7 @@ def get_device_data_generate_report(
                 i += 1
                 deviceOp = {}
                 cores = set()
-                for timeID, ts, statData, risc, core in deviceOpTime["timeseries"]:
+                for timeID, _, _, _, core in deviceOpTime["timeseries"]:
                     if "zone_name" in timeID and "FW" in timeID["zone_name"]:
                         if core not in cores:
                             cores.add(core)
@@ -798,15 +645,15 @@ def get_device_data_generate_report(
 
                     perCoreRowDicts.append(perCoreRowDict)
 
-        rowDictHeaders = set()
+        csv_row_headers = set()
         for row in rowDicts:
             for k in row:
-                rowDictHeaders.add(k)
+                csv_row_headers.add(k)
         if export_csv:
             with open(allOpsCSVPath, "w") as allOpsCSV:
                 allHeaders = []
                 for header in OPS_CSV_HEADER:
-                    if header in rowDictHeaders:
+                    if header in csv_row_headers:
                         allHeaders.append(header)
                 writer = csv.DictWriter(allOpsCSV, fieldnames=allHeaders)
                 writer.writeheader()
@@ -874,10 +721,12 @@ def generate_reports(
     logger.info(f"Generating OPs CSV")
     allOpsCSVPath = os.path.join(outFolder, f"{name}.csv")
     with open(allOpsCSVPath, "w") as allOpsCSV:
-        rowDicts = []
+        csv_rows = []
 
-        devicePreOpTime = {}
-        devicePreOpDMStartTime = {}
+        prev_device_kernel_end_cycle = {}
+        prev_device_dm_start_cycle = {}
+        prev_device_fw_end_cycle: Dict[int, int] = {}
+        device_ns_per_cycle: Dict[int, Optional[float]] = {}
 
         tensorCSVData = {
             "INPUT": {
@@ -921,7 +770,7 @@ def generate_reports(
 
             return headers, data
 
-        def add_io_data(tensors, ioType):
+        def add_io_data(tensors, ioType, target_row):
             ioFields = ["shape", "layout", "dtype", "storage_type"]
             for count, tensor in enumerate(tensors):
                 for ioField in ioFields:
@@ -930,7 +779,7 @@ def generate_reports(
                     fields, data = io_tensor_to_csv(ioField, ioData)
                     for field in fields:
                         header = f"{ioType}_{count}_{field}".upper()
-                        rowDict[header] = data[field]
+                        target_row[header] = data[field]
                         if count > tensorCSVData[ioType]["maxCount"]:
                             tensorCSVData[ioType]["headers"].append(header)
                 if count > tensorCSVData[ioType]["maxCount"]:
@@ -948,189 +797,196 @@ def generate_reports(
             ret = int(ret)
             return ret
 
-        rowKeys = list(ops) + list(traceOps) + list(signposts)
-        rowKeys.sort(key=row_compare)
+        timeline_keys = list(ops) + list(traceOps) + list(signposts)
+        timeline_keys.sort(key=row_compare)
         childCallKeys = set()
-        for row in rowKeys:
+        for row in timeline_keys:
             if type(row) is int:
                 if row > ((1 << TRACE_OP_ID_BITSHIFT) - 1):
-                    opData = traceOps[row]
+                    timeline_op_record = traceOps[row]
                 else:
-                    opData = ops[row]
-                if "child_calls" in opData:
-                    for childCall in opData["child_calls"]:
+                    timeline_op_record = ops[row]
+                if "child_calls" in timeline_op_record:
+                    for childCall in timeline_op_record["child_calls"]:
                         childCallKeys.add(f"{childCall}_TT_HOST_FUNC [ns]")
 
-        for row in rowKeys:
-            rowDict = {}
+        for row in timeline_keys:
+            csv_row = {}
             if type(row) is str and "sp" in row:
                 headerAndMessage = signposts[row]["data"].split(": ")[-1].split("\n")
-                rowDict["OP CODE"] = headerAndMessage[0]
-                rowDict["OP TYPE"] = "signpost"
+                csv_row["OP CODE"] = headerAndMessage[0]
+                csv_row["OP TYPE"] = "signpost"
                 if len(headerAndMessage) > 1:
-                    rowDict["ATTRIBUTES"] = headerAndMessage[1]
-                rowDict["HOST START TS"] = int(signposts[row]["tracy_time"])
+                    csv_row["ATTRIBUTES"] = headerAndMessage[1]
+                csv_row["HOST START TS"] = int(signposts[row]["tracy_time"])
             elif type(row) is int:
                 op = row
                 if op > ((1 << TRACE_OP_ID_BITSHIFT) - 1):
-                    opData = traceOps[op]
-                    opData["global_call_count"] = ((1 << TRACE_OP_ID_BITSHIFT) - 1) & op
+                    device_op_record = traceOps[op]
+                    device_op_record["global_call_count"] = ((1 << TRACE_OP_ID_BITSHIFT) - 1) & op
+                    active_op_record = device_op_record
                 else:
-                    opData = ops[op]
-                    opData["metal_trace_replay_session_id"] = ""
-                    if "trac_id" not in opData or opData["metal_trace_id"] is None:
-                        opData["metal_trace_id"] = ""
+                    host_op_record = ops[op]
+                    host_op_record["metal_trace_replay_session_id"] = ""
+                    if "trac_id" not in host_op_record or host_op_record["metal_trace_id"] is None:
+                        host_op_record["metal_trace_id"] = ""
+                    active_op_record = host_op_record
 
-                for field, fieldData in opData.items():
+                for field, fieldData in active_op_record.items():
                     headerField = csv_header_format(field)
                     if headerField in OPS_CSV_HEADER:
-                        rowDict[headerField] = fieldData
+                        csv_row[headerField] = fieldData
 
-                assert "host_time" in opData, "Corrupted op data"
-                rowDict["HOST START TS"] = int(opData["host_time"]["ns_since_start"])
-                rowDict["HOST END TS"] = int(opData["host_time"]["ns_since_start"]) + int(
-                    opData["host_time"]["exec_time_ns"]
+                assert "host_time" in active_op_record, "Corrupted op data"
+                csv_row["HOST START TS"] = int(active_op_record["host_time"]["ns_since_start"])
+                csv_row["HOST END TS"] = int(active_op_record["host_time"]["ns_since_start"]) + int(
+                    active_op_record["host_time"]["exec_time_ns"]
                 )
-                rowDict["HOST DURATION [ns]"] = int(opData["host_time"]["exec_time_ns"])
+                csv_row["HOST DURATION [ns]"] = int(active_op_record["host_time"]["exec_time_ns"])
 
-                if "NOC UTIL (%)" in opData:
-                    rowDict["NOC UTIL (%)"] = opData.get("NOC UTIL (%)")
-                if "DRAM BW UTIL (%)" in opData:
-                    rowDict["DRAM BW UTIL (%)"] = opData.get("DRAM BW UTIL (%)")
-                if "NPE CONG IMPACT (%)" in opData:
-                    rowDict["NPE CONG IMPACT (%)"] = opData.get("NPE CONG IMPACT (%)")
+                if "NOC UTIL (%)" in active_op_record:
+                    csv_row["NOC UTIL (%)"] = active_op_record.get("NOC UTIL (%)")
+                if "DRAM BW UTIL (%)" in active_op_record:
+                    csv_row["DRAM BW UTIL (%)"] = active_op_record.get("DRAM BW UTIL (%)")
+                if "NPE CONG IMPACT (%)" in active_op_record:
+                    csv_row["NPE CONG IMPACT (%)"] = active_op_record.get("NPE CONG IMPACT (%)")
 
-                if "kernel_info" in opData:
-                    rowDict["COMPUTE KERNEL SOURCE"] = []
-                    rowDict["COMPUTE KERNEL HASH"] = []
-                    rowDict["DATA MOVEMENT KERNEL SOURCE"] = []
-                    rowDict["DATA MOVEMENT KERNEL HASH"] = []
-                    for computeKernel in opData["kernel_info"]["compute_kernels"]:
-                        rowDict["MATH FIDELITY"] = computeKernel["math_fidelity"]
-                        rowDict["COMPUTE KERNEL SOURCE"].append(computeKernel["source"])
-                        rowDict["COMPUTE KERNEL HASH"].append(computeKernel["name"])
+                if "kernel_info" in active_op_record:
+                    csv_row["COMPUTE KERNEL SOURCE"] = []
+                    csv_row["COMPUTE KERNEL HASH"] = []
+                    csv_row["DATA MOVEMENT KERNEL SOURCE"] = []
+                    csv_row["DATA MOVEMENT KERNEL HASH"] = []
+                    for computeKernel in active_op_record["kernel_info"]["compute_kernels"]:
+                        csv_row["MATH FIDELITY"] = computeKernel["math_fidelity"]
+                        csv_row["COMPUTE KERNEL SOURCE"].append(computeKernel["source"])
+                        csv_row["COMPUTE KERNEL HASH"].append(computeKernel["name"])
 
-                    for dmKernel in opData["kernel_info"]["datamovement_kernels"]:
-                        rowDict["DATA MOVEMENT KERNEL SOURCE"].append(dmKernel["source"])
-                        rowDict["DATA MOVEMENT KERNEL HASH"].append(dmKernel["name"])
+                    for dmKernel in active_op_record["kernel_info"]["datamovement_kernels"]:
+                        csv_row["DATA MOVEMENT KERNEL SOURCE"].append(dmKernel["source"])
+                        csv_row["DATA MOVEMENT KERNEL HASH"].append(dmKernel["name"])
 
-                    for kernel, kernelSize in opData["kernel_info"]["kernel_sizes"].items():
-                        rowDict[kernel.upper().replace("_", " ") + " [B]"] = kernelSize
+                    for kernel, kernelSize in active_op_record["kernel_info"]["kernel_sizes"].items():
+                        csv_row[kernel.upper().replace("_", " ") + " [B]"] = kernelSize
 
-                if "core_usage" in opData:
-                    rowDict["CORE COUNT"] = opData["core_usage"]["count"]
+                if "core_usage" in active_op_record:
+                    csv_row["CORE COUNT"] = active_op_record["core_usage"]["count"]
 
-                if "device_time" in opData:
-                    assert "device_id" in opData, "Op has device data without device_id"
-                    deviceID = opData["device_id"]
-                    for analysis, data in opData["device_time"].items():
+                deviceID = active_op_record.get("device_id")
+                if deviceID is not None:
+                    deviceID = int(deviceID)
+                if "device_time" in active_op_record:
+                    assert deviceID is not None, "Op has device data without device_id"
+                    for analysis, data in active_op_record["device_time"].items():
                         analysisData = data["series"]
                         analysisStats = data["stats"]
                         freq = analysisData[0]["duration_cycles"] / analysisData[0]["duration_ns"]
                         if "per_core" in analysis:
                             assert len(analysisData) >= 1, "Unexpected device data format"
                             headerField = f"{csv_header_format(analysis)} MIN [ns]"
-                            rowDict[headerField] = f"{analysisStats['Min'] / freq:.0f}"
+                            csv_row[headerField] = f"{analysisStats['Min'] / freq:.0f}"
                             headerField = f"{csv_header_format(analysis)} MAX [ns]"
-                            rowDict[headerField] = f"{analysisStats['Max'] / freq:.0f}"
+                            csv_row[headerField] = f"{analysisStats['Max'] / freq:.0f}"
                             headerField = f"{csv_header_format(analysis)} AVG [ns]"
-                            rowDict[headerField] = f"{analysisStats['Average'] / freq:.0f}"
+                            csv_row[headerField] = f"{analysisStats['Average'] / freq:.0f}"
                         else:
                             headerField = f"{csv_header_format(analysis)} [ns]"
                             assert len(analysisData) == 1, "Unexpected device data format"
-                            rowDict[headerField] = f"{analysisData[0]['duration_ns']:.0f}"
+                            csv_row[headerField] = f"{analysisData[0]['duration_ns']:.0f}"
                         if analysis == "device_fw_duration":
-                            rowDict["DEVICE FW START CYCLE"] = analysisData[0]["start_cycle"]
-                            rowDict["DEVICE FW END CYCLE"] = analysisData[0]["end_cycle"]
-                        if analysis == "device_kernel_duration":
-                            if deviceID in devicePreOpTime:
-                                rowDict["OP TO OP LATENCY [ns]"] = round(
-                                    (analysisData[0]["start_cycle"] - devicePreOpTime[deviceID]) / freq
-                                )
-                            else:
-                                rowDict["OP TO OP LATENCY [ns]"] = 0
-                            devicePreOpTime[deviceID] = analysisData[0]["end_cycle"]
-                        if analysis == "device_kernel_duration_dm_start":
-                            if deviceID in devicePreOpDMStartTime:
-                                rowDict["OP TO OP LATENCY BR/NRISC START [ns]"] = round(
-                                    (analysisData[0]["start_cycle"] - devicePreOpDMStartTime[deviceID]) / freq
-                                )
-                            else:
-                                rowDict["OP TO OP LATENCY BR/NRISC START [ns]"] = 0
-                            devicePreOpDMStartTime[deviceID] = analysisData[0]["end_cycle"]
+                            csv_row["DEVICE FW START CYCLE"] = analysisData[0]["start_cycle"]
+                            csv_row["DEVICE FW END CYCLE"] = analysisData[0]["end_cycle"]
+                device_perf_row = active_op_record.pop("_device_perf_row", None)
+                if device_perf_row:
+                    perf_device_id = device_perf_row.get("DEVICE ID", deviceID)
+                    if perf_device_id is None:
+                        perf_device_id = deviceID
+                    ns_per_cycle = device_ns_per_cycle.get(perf_device_id)
+                    if ns_per_cycle is None:
+                        ns_per_cycle = compute_ns_per_cycle(device_perf_row)
+                        device_ns_per_cycle[perf_device_id] = ns_per_cycle
 
-                if "child_calls" in opData:
-                    for childCall, duration in opData["child_calls"].items():
+                    latency_ns: Optional[int] = None
+                    start_cycle = device_perf_row.get("DEVICE FW START CYCLE")
+                    prev_end_cycle = prev_device_fw_end_cycle.get(perf_device_id)
+                    if (
+                        ns_per_cycle
+                        and start_cycle is not None
+                        and prev_end_cycle is not None
+                        and start_cycle >= prev_end_cycle
+                    ):
+                        latency_ns = round((start_cycle - prev_end_cycle) * ns_per_cycle)
+                    elif start_cycle is not None and prev_end_cycle is not None:
+                        latency_ns = 0
+
+                    if latency_ns is not None:
+                        csv_row["OP TO OP LATENCY [ns]"] = latency_ns
+                        csv_row["OP TO OP LATENCY BR/NRISC START [ns]"] = latency_ns
+
+                    end_cycle = device_perf_row.get("DEVICE FW END CYCLE")
+                    if end_cycle is not None:
+                        prev_device_fw_end_cycle[perf_device_id] = end_cycle
+
+                    if "OP TO OP LATENCY [ns]" not in csv_row and deviceID is not None:
+                        csv_row["OP TO OP LATENCY [ns]"] = 0
+                    if "OP TO OP LATENCY BR/NRISC START [ns]" not in csv_row and deviceID is not None:
+                        csv_row["OP TO OP LATENCY BR/NRISC START [ns]"] = 0
+
+                    skip_headers = {
+                        "GLOBAL CALL COUNT",
+                        "DEVICE ID",
+                        "CORE COUNT",
+                        "METAL TRACE ID",
+                        "METAL TRACE REPLAY SESSION ID",
+                        "OP TO OP LATENCY [ns]",
+                        "OP TO OP LATENCY BR/NRISC START [ns]",
+                    }
+                    for header, value in device_perf_row.items():
+                        if header in skip_headers:
+                            continue
+                        if header not in OPS_CSV_HEADER:
+                            continue
+                        if value in (None, ""):
+                            continue
+                        if header not in csv_row or csv_row[header] == "":
+                            csv_row[header] = value
+
+                if "child_calls" in active_op_record:
+                    for childCall, duration in active_op_record["child_calls"].items():
                         headerField = f"{childCall}_TT_HOST_FUNC [ns]"
-                        rowDict[headerField] = f"{duration:.0f}"
+                        csv_row[headerField] = f"{duration:.0f}"
 
-                assert "input_tensors" in opData, "Ops must have input tensors"
-                if "optional_input_tensors" in opData:
-                    add_io_data(opData["input_tensors"] + opData["optional_input_tensors"], "INPUT")
+                assert "input_tensors" in active_op_record, "Ops must have input tensors"
+                if "optional_input_tensors" in active_op_record:
+                    add_io_data(
+                        active_op_record["input_tensors"] + active_op_record["optional_input_tensors"],
+                        "INPUT",
+                        csv_row,
+                    )
                 else:
-                    add_io_data(opData["input_tensors"], "INPUT")
+                    add_io_data(active_op_record["input_tensors"], "INPUT", csv_row)
 
-                if "output_tensors" in opData:
-                    add_io_data(opData["output_tensors"], "OUTPUT")
+                if "output_tensors" in active_op_record:
+                    add_io_data(active_op_record["output_tensors"], "OUTPUT", csv_row)
 
-                if "performance_model" in opData:
-                    rowDict["PM IDEAL [ns]"] = opData["performance_model"]["ideal_ns"]
-                    rowDict["PM COMPUTE [ns]"] = opData["performance_model"]["compute_ns"]
-                    rowDict["PM BANDWIDTH [ns]"] = opData["performance_model"]["bandwidth_ns"]
-                    rowDict["PM REQ I BW"] = opData["performance_model"]["input_bws"]
-                    rowDict["PM REQ O BW"] = opData["performance_model"]["output_bws"]
+                if "performance_model" in active_op_record:
+                    csv_row["PM IDEAL [ns]"] = active_op_record["performance_model"]["ideal_ns"]
+                    csv_row["PM COMPUTE [ns]"] = active_op_record["performance_model"]["compute_ns"]
+                    csv_row["PM BANDWIDTH [ns]"] = active_op_record["performance_model"]["bandwidth_ns"]
+                    csv_row["PM REQ I BW"] = active_op_record["performance_model"]["input_bws"]
+                    csv_row["PM REQ O BW"] = active_op_record["performance_model"]["output_bws"]
 
-                    if "DEVICE KERNEL DURATION [ns]" in rowDict:
+                    if "DEVICE KERNEL DURATION [ns]" in csv_row:
                         try:
                             fpu_util = (
                                 100.0
-                                * float(rowDict["PM COMPUTE [ns]"])
-                                / float(rowDict["DEVICE KERNEL DURATION [ns]"])
+                                * float(csv_row["PM COMPUTE [ns]"])
+                                / float(csv_row["DEVICE KERNEL DURATION [ns]"])
                             )
-                            rowDict["PM FPU UTIL (%)"] = round(fpu_util, 3)
+                            csv_row["PM FPU UTIL (%)"] = round(fpu_util, 3)
                         except ZeroDivisionError:
-                            rowDict["PM FPU UTIL (%)"] = 0.0
+                            csv_row["PM FPU UTIL (%)"] = 0.0
 
-                # get time from first core start to last core end
-                kernel_duration = (
-                    float(rowDict["DEVICE KERNEL DURATION [ns]"]) if "DEVICE KERNEL DURATION [ns]" in rowDict else nan
-                )
-                freq = float(opData.get("freq")) if "freq" in opData else nan
-                kernel_duration_cycles = kernel_duration * freq / 1000
-                if "SFPU Util Min (%)" in opData:
-                    rowDict["SFPU Util Min (%)"] = opData.get("SFPU Util Min (%)")
-                if "SFPU Util Median (%)" in opData:
-                    rowDict["SFPU Util Median (%)"] = opData.get("SFPU Util Median (%)")
-                if "SFPU Util Max (%)" in opData:
-                    rowDict["SFPU Util Max (%)"] = opData.get("SFPU Util Max (%)")
-                if "avg_sfpu_count" in opData and not isnan(kernel_duration_cycles):
-                    rowDict["Avg SFPU util on full grid (%)"] = (
-                        opData.get("avg_sfpu_count") / kernel_duration_cycles * 100
-                    )
-
-                if "FPU Util Min (%)" in opData:
-                    rowDict["FPU Util Min (%)"] = opData.get("FPU Util Min (%)")
-                if "FPU Util Median (%)" in opData:
-                    rowDict["FPU Util Median (%)"] = opData.get("FPU Util Median (%)")
-                if "FPU Util Max (%)" in opData:
-                    rowDict["FPU Util Max (%)"] = opData.get("FPU Util Max (%)")
-                if "avg_fpu_count" in opData and not isnan(kernel_duration_cycles):
-                    rowDict["Avg FPU util on full grid (%)"] = (
-                        opData.get("avg_fpu_count") / kernel_duration_cycles * 100
-                    )
-
-                if "MATH Util Min (%)" in opData:
-                    rowDict["MATH Util Min (%)"] = opData.get("MATH Util Min (%)")
-                if "MATH Util Median (%)" in opData:
-                    rowDict["MATH Util Median (%)"] = opData.get("MATH Util Median (%)")
-                if "MATH Util Max (%)" in opData:
-                    rowDict["MATH Util Max (%)"] = opData.get("MATH Util Max (%)")
-                if "avg_math_count" in opData and not isnan(kernel_duration_cycles):
-                    rowDict["Avg Math util on full grid (%)"] = (
-                        opData.get("avg_math_count") / kernel_duration_cycles * 100
-                    )
-
-            rowDicts.append(rowDict)
+            csv_rows.append(csv_row)
 
         ioHeaderIndex = OPS_CSV_HEADER.index("INPUTS")
         allHeaders = (
@@ -1142,10 +998,10 @@ def generate_reports(
         )
         writer = csv.DictWriter(allOpsCSV, fieldnames=allHeaders)
         writer.writeheader()
-        for rowDict in rowDicts:
-            for field, fieldData in rowDict.items():
-                rowDict[field] = str(fieldData).replace(",", ";")
-            writer.writerow(rowDict)
+        for csv_row in csv_rows:
+            for field, fieldData in csv_row.items():
+                csv_row[field] = str(fieldData).replace(",", ";")
+            writer.writerow(csv_row)
     logger.info(f"OPs csv generated at: {allOpsCSVPath}")
 
 
@@ -1179,6 +1035,7 @@ def process_ops(
     device_only: bool = False,
     analyze_noc_traces: bool = False,
     device_analysis_types: Tuple[str, ...] | List[str] = (),
+    force_legacy_device_logs: bool = False,
 ) -> None:
     """Top-level entry point used by both CLI and importers."""
 
@@ -1191,7 +1048,12 @@ def process_ops(
 
     if ops and not device_only:
         deviceOps, traceOps = append_device_data(
-            ops, traceReplays, logFolder, analyze_noc_traces, device_analysis_types
+            ops,
+            traceReplays,
+            logFolder,
+            analyze_noc_traces,
+            device_analysis_types,
+            force_legacy_device_logs=force_legacy_device_logs,
         )
         generate_reports(ops, deviceOps, traceOps, signposts, logFolder, reportFolder, date, name_append)
     else:
@@ -1209,10 +1071,23 @@ def process_ops(
     "--analyze-noc-traces", is_flag=True, help="Use tt-npe to analyze profiler noc event trace files (if available)"
 )
 @click.option("-a", "--device-analysis-types", multiple=True, help="Subset of analysis types to be performed on device")
-def main(output_folder, name_append, date, device_only, analyze_noc_traces, device_analysis_types):
+@click.option(
+    "--force-legacy-device-logs",
+    is_flag=True,
+    help="Force use of legacy device log parsing (currently not supported).",
+)
+def main(output_folder, name_append, date, device_only, analyze_noc_traces, device_analysis_types, force_legacy_device_logs):
     if output_folder:
         output_folder = Path(output_folder)
-    process_ops(output_folder, name_append, date, device_only, analyze_noc_traces, device_analysis_types)
+    process_ops(
+        output_folder,
+        name_append,
+        date,
+        device_only,
+        analyze_noc_traces,
+        device_analysis_types,
+        force_legacy_device_logs=force_legacy_device_logs,
+    )
 
 
 if __name__ == "__main__":
