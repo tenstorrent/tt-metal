@@ -94,7 +94,7 @@ inline __attribute__((always_inline)) void signal_subordinate_erisc_completion()
     *subordinate_erisc_run = RUN_SYNC_MSG_DONE;
 }
 
-int main() {
+extern "C" int main() {
     configure_csr();
     WAYPOINT("I");
     do_crt1((uint32_t*)INIT_LOCAL_L1_SCRATCH_BASE);

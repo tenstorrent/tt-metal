@@ -12,6 +12,10 @@
 
 #include "noc_parameters.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /*
 
   Basic NOC API
@@ -578,5 +582,9 @@ uint32_t noc_ecc_get_num_header_sec();
 uint32_t noc_ecc_get_num_header_ded();
 
 //////
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif  // ndef _NOC_H_
