@@ -785,8 +785,6 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
 
     // Track CB allocations per-device for distributed workloads
     // CBs are physically written to L1 on each device at this point
-    // Track them here to show L1 usage on all devices, not just device 0
-    // ✅ FIXED: Track ALL CBs (including globally allocated ones)
     for (const auto& circular_buffer : program.impl().circular_buffers()) {
         tt::tt_metal::GraphTracker::instance().track_allocate_cb(
             circular_buffer->core_ranges(),

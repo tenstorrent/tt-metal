@@ -1,0 +1,10 @@
+# .textproto: Descriptors of deployment characteristics of system
+# host: fields to be updated whenever hostnames in deployment are udpated
+hosts {
+node_type: "N300_QB"
+host: "host_1"
+}
+hosts {
+node_type: "N300_QB"
+host: "host_2"
+}

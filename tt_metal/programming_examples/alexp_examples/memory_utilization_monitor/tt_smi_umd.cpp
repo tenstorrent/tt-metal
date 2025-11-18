@@ -1145,48 +1145,8 @@ public:
             std::vector<DeviceInfo> devices;
             uint32_t num_devices = 0;
 
-            if (server_available_) {
-                num_devices = get_num_devices();
-
-                for (uint32_t i = 0; i < num_devices; ++i) {
-                    auto dev_info = query_device_info(i);
-                    auto stats = query_device_stats(i);
-
-                    DeviceInfo dev;
-                    dev.device_id = i;
-                    dev.arch_name = get_arch_name(dev_info.arch_type);
-                    dev.total_dram = dev_info.total_dram_size;
-                    dev.total_l1 = dev_info.total_l1_size;
-                    dev.total_l1_small = dev_info.total_l1_size;  // L1_SMALL is part of L1 space
-                    dev.total_trace = dev_info.total_l1_size;     // TRACE is also part of L1 space
-                    dev.used_dram = stats.dram_allocated;
-                    dev.used_l1 = stats.l1_allocated;
-                    dev.used_l1_small = stats.l1_small_allocated;
-                    dev.used_trace = stats.trace_allocated;
-                    dev.used_cb = stats.cb_allocated;          // NEW
-                    dev.used_kernel = stats.kernel_allocated;  // NEW
-
-                    // Ring buffer stats (not available without opening device)
-                    dev.ringbuffer_total = 0;
-                    dev.ringbuffer_used = 0;
-                    dev.ringbuffer_programs = 0;
-
-                    // Read telemetry via UMD or sysfs (show status on first run)
-                    if (use_sysfs) {
-                        dev.telemetry = read_telemetry_sysfs(i);
-                    } else {
-                        auto* tt_device = get_umd_device(i, first_run);
-                        if (tt_device) {
-                            dev.telemetry = read_telemetry_from_cached_device(tt_device);
-                        } else {
-                            // Device initialization failed - likely in use by another process
-                            dev.telemetry = TelemetryData();  // Empty telemetry
-                        }
-                    }
-
-                    devices.push_back(dev);
-                }
-            } else {
+            // ALWAYS enumerate devices directly (don't rely on allocation server for device info)
+            {
                 // Without server, enumerate devices using cluster descriptor
                 // This handles both local PCIe and remote devices
                 ensure_cluster_descriptor_initialized();
@@ -1294,6 +1254,36 @@ public:
                     }
                 }
                 num_devices = devices.size();
+            }
+
+            // If allocation server is available, query it for memory usage stats
+            if (server_available_) {
+                for (auto& dev : devices) {
+                    try {
+                        auto stats = query_device_stats(dev.device_id);
+                        dev.used_dram = stats.dram_allocated;
+                        dev.used_l1 = stats.l1_allocated;
+                        dev.used_l1_small = stats.l1_small_allocated;
+                        dev.used_trace = stats.trace_allocated;
+                        dev.used_cb = stats.cb_allocated;
+                        dev.used_kernel = stats.kernel_allocated;
+
+                        // Optionally get total DRAM/L1 sizes from server if we don't have them
+                        if (dev.total_dram == 0 || dev.total_l1 == 0) {
+                            auto dev_info = query_device_info(dev.device_id);
+                            if (dev_info.total_dram_size > 0) {
+                                dev.total_dram = dev_info.total_dram_size;
+                            }
+                            if (dev_info.total_l1_size > 0) {
+                                dev.total_l1 = dev_info.total_l1_size;
+                                dev.total_l1_small = dev_info.total_l1_size;
+                                dev.total_trace = dev_info.total_l1_size;
+                            }
+                        }
+                    } catch (...) {
+                        // If query fails for this device, keep the default values (0)
+                    }
+                }
             }
 
             if (first_run && !use_sysfs) {

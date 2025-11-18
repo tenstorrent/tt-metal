@@ -201,21 +201,23 @@ private:
     }
 
     void detect_devices() {
-        // Use UMD-only APIs for device detection (no hugepage allocation)
-        std::cout << "🔍 Device detection (using UMD - no hugepage allocation):" << std::endl;
+        // Device detection using UMD Cluster to get real SocDescriptors with harvesting
+        std::cout << "🔍 Device detection (using UMD Cluster for accurate specs):" << std::endl;
 
         try {
-            // Detect devices using cluster descriptor (doesn't allocate hugepages!)
-            std::unique_ptr<tt::umd::ClusterDescriptor> cluster_descriptor =
-                tt::umd::Cluster::create_cluster_descriptor();
+            // Create a minimal UMD Cluster with 0 hugepage channels (just for querying device info)
+            std::unique_ptr<tt::umd::Cluster> cluster = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
+                .num_host_mem_ch_per_mmio_device = 0,  // Don't allocate hugepages
+            });
 
-            if (!cluster_descriptor) {
+            if (!cluster) {
                 std::cout << "   No devices detected" << std::endl;
                 std::cout << "   Server will track allocations anyway" << std::endl;
                 return;
             }
 
-            size_t detected_num_chips = cluster_descriptor->get_number_of_chips();
+            auto all_chip_ids = cluster->get_target_device_ids();
+            size_t detected_num_chips = all_chip_ids.size();
 
             if (detected_num_chips == 0) {
                 std::cout << "   No devices detected" << std::endl;
@@ -231,44 +233,73 @@ private:
 
             num_available_devices_ = detected_num_chips;
 
-            // Get device specs from cluster descriptor (no hugepage allocation!)
-            for (size_t i = 0; i < detected_num_chips; ++i) {
+            // Get cluster descriptor for topology info
+            auto* cluster_desc = cluster->get_cluster_description();
+
+            // Iterate through all devices and get their real specs
+            size_t idx = 0;
+            for (int chip_id : all_chip_ids) {
+                if (idx >= MAX_DEVICES) {
+                    break;
+                }
+                idx++;
+
                 try {
-                    // Get arch from cluster descriptor
-                    tt::ARCH arch = cluster_descriptor->get_arch(i);
+                    // Get the actual SocDescriptor from the cluster (has real harvesting info!)
+                    const tt::umd::SocDescriptor& soc_desc = cluster->get_soc_descriptor(chip_id);
 
-                    // Create SOC descriptor from arch (no device initialization needed!)
-                    tt::umd::SocDescriptor soc_desc(arch);
+                    // Get arch from soc descriptor
+                    tt::ARCH arch = soc_desc.arch;
 
-                    // Extract device information from SOC descriptor
+                    // Extract device information
+                    size_t num_dram_channels = soc_desc.get_num_dram_channels();
+                    uint32_t l1_size_per_core = soc_desc.worker_l1_size;
                     uint32_t grid_x = soc_desc.grid_size.x;
                     uint32_t grid_y = soc_desc.grid_size.y;
-                    size_t num_dram_channels = soc_desc.get_num_dram_channels();
-                    uint32_t dram_size_per_channel = soc_desc.dram_bank_size;
-                    uint32_t l1_size_per_core = soc_desc.worker_l1_size;
+
+                    // Get DRAM size - use dram_bank_size if available
+                    uint64_t dram_size_per_channel = soc_desc.dram_bank_size;
+                    std::cout << "DRAM size per channel: " << dram_size_per_channel << std::endl;
+                    std::cout << "Number of DRAM channels: " << num_dram_channels << std::endl;
+                    std::cout << "L1 size per core: " << l1_size_per_core << std::endl;
+                    std::cout << "Grid size: " << grid_x << "x" << grid_y << std::endl;
+                    std::cout << "Arch: " << arch_to_string(arch) << std::endl;
+                    std::cout << "Is remote: " << (cluster_desc ? cluster_desc->is_chip_remote(chip_id) : false)
+                              << std::endl;
+                    // If dram_bank_size is 0, this is likely because UMD doesn't populate it
+                    // Use a default value based on architecture (Blackhole = ~4GB per channel)
+                    // if (dram_size_per_channel == 0) {
+                    //     if (arch == tt::ARCH::BLACKHOLE) {
+                    //         dram_size_per_channel = 4278190080ULL;  // From blackhole_140_arch.yaml
+                    //     } else if (arch == tt::ARCH::WORMHOLE_B0) {
+                    //         dram_size_per_channel = 2147483648ULL;  // From wormhole_b0_80_arch.yaml
+                    //     } else if (arch == tt::ARCH::GRAYSKULL) {
+                    //         dram_size_per_channel = 1073741824ULL;  // From grayskull_120_arch.yaml
+                    //     }
+                    // }
 
                     uint64_t total_dram = (uint64_t)num_dram_channels * dram_size_per_channel;
                     uint64_t total_l1 = (uint64_t)l1_size_per_core * grid_x * grid_y;
 
                     // Store device info
-                    device_info_[i].is_available = true;
-                    device_info_[i].arch_type = static_cast<uint32_t>(arch);
-                    device_info_[i].num_dram_channels = num_dram_channels;
-                    device_info_[i].dram_size_per_channel = dram_size_per_channel;
-                    device_info_[i].l1_size_per_core = l1_size_per_core;
-                    device_info_[i].total_dram_size = total_dram;
-                    device_info_[i].total_l1_size = total_l1;
-                    device_info_[i].grid_x = grid_x;
-                    device_info_[i].grid_y = grid_y;
+                    device_info_[chip_id].is_available = true;
+                    device_info_[chip_id].arch_type = static_cast<uint32_t>(arch);
+                    device_info_[chip_id].num_dram_channels = num_dram_channels;
+                    device_info_[chip_id].dram_size_per_channel = dram_size_per_channel;
+                    device_info_[chip_id].l1_size_per_core = l1_size_per_core;
+                    device_info_[chip_id].total_dram_size = total_dram;
+                    device_info_[chip_id].total_l1_size = total_l1;
+                    device_info_[chip_id].grid_x = grid_x;
+                    device_info_[chip_id].grid_y = grid_y;
 
-                    bool is_remote = cluster_descriptor->is_chip_remote(i);
-                    std::cout << "   Device " << i << ": " << arch_to_string(arch) << " ("
+                    bool is_remote = cluster_desc ? cluster_desc->is_chip_remote(chip_id) : false;
+                    std::cout << "   Device " << chip_id << ": " << arch_to_string(arch) << " ("
                               << (total_dram / (1024 * 1024 * 1024)) << "GB DRAM, " << (total_l1 / (1024 * 1024))
                               << "MB L1) " << (is_remote ? "[Remote]" : "[Local]") << std::endl;
 
                 } catch (const std::exception& e) {
-                    std::cerr << "   Warning: Could not query device " << i << ": " << e.what() << std::endl;
-                    device_info_[i].is_available = false;
+                    std::cerr << "   Warning: Could not query device " << chip_id << ": " << e.what() << std::endl;
+                    device_info_[chip_id].is_available = false;
                 }
             }
 
