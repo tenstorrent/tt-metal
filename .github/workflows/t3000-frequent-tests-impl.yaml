@@ -12,6 +12,10 @@ on:
       wheel-artifact-name:
         required: true
         type: string
+      model:
+        required: false
+        type: string
+        default: "all"
       extra-tag:
         required: false
         type: string
@@ -22,6 +26,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # TODO: filter the matrix based on ${{ inputs.model }}
         test-group: [
           { name: "t3k tteager tests", arch: wormhole_b0, cmd: run_t3000_tteager_tests, timeout: 30, owner_id: U05ACKAJTHS}, #Naif Tarafdar
           { name: "t3k ethernet tests", arch: wormhole_b0, cmd: run_t3000_ethernet_tests, timeout: 10, owner_id: ULMEPM2MA}, #Sean Nijjar

@@ -27,7 +27,7 @@ on:
         type: string
         default: "in-service"
       t3000-unit:
-        description: "Demo tests: Select `all`, specific model or `disabled`"
+        description: "Unit tests: Select `all`, specific model or `disabled`"
         type: choice
         default: disabled
         options:
@@ -78,9 +78,31 @@ on:
           - wan22
           - mochi
       t3000-frequent:
-        required: false
-        type: boolean
-        default: false
+        description: "Frequent tests: Select `all`, specific model or `disabled`"
+        type: choice
+        default: disabled
+        options:
+          - disabled
+          - all
+          - tteager
+          - ethernet
+          - trace stress
+          - falcon40b
+          - llama3.2-vision
+          - n300 mesh llama3.2-vision
+          - llama3.2-90b-vision
+          - llama3
+          - llama3 accuracy
+          - llama3_70n90b accuracy
+          - llama3_90b
+          # - llama3_70b
+          # - mixtral
+          - resnet
+          - sd35_large
+          - flux1
+          - mistral
+          - wan2.2
+          - mochi
       t3000-model-perf:
         required: false
         type: boolean
