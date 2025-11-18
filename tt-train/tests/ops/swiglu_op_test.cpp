@@ -9,6 +9,7 @@
 #include <xtensor-blas/xlinalg.hpp>
 
 #include "autograd/auto_context.hpp"
+#include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
 
 class SwiGLUOpTest : public ::testing::Test {
@@ -98,16 +99,27 @@ void CompareKernelVsReference(
     EXPECT_TRUE(xt::all(xt::isfinite(result_kernel_xtensor))) << "SwiGLU kernel result contains NaN or Inf values";
     EXPECT_TRUE(xt::all(xt::isfinite(result_reference))) << "SwiGLU reference result contains NaN or Inf values";
 
-    // We use dynamic tolerances because the output magnitude of SwiGLU grows with input/hidden size
-    // (due to large dot-product summations in the matmuls). A fixed absolute tolerance would either:
-    //   - fail for large tensors (legitimate numerical growth triggers abs-error check), or
-    //   - be too loose for small tensors (hiding real bugs).
-    // The kernel runs in BF16 internally, so we allow ~2% relative error vs the FP32 reference.
-    // The absolute tolerance is scaled to the magnitude of the reference output for this test case.
-    float rtol = 2e-2f;
-    float atol = rtol * static_cast<float>(xt::amax(xt::abs(result_reference))());
-    EXPECT_TRUE(xt::allclose(result_kernel_xtensor, result_reference, rtol, atol))
-        << "SwiGLU kernel and reference implementations differ";
+    // We validate using relative L2 error instead of elementwise allclose().
+    //
+    // SwiGLU involves two matmuls + SiLU, so the output magnitude scales with
+    // hidden_dim and tensor size. Combined with BF16 internal math (≈1e-2 relative
+    // noise per element), elementwise tolerances become unstable: they may fail on
+    // large tensors (outliers) or fail on small ones (tiny reference values).
+    //
+    // Relative L2 is scale-invariant and reflects the total numerical deviation of
+    // the tensor, giving consistent results across all shapes. A threshold of 0.01
+    // is standard for BF16 vs FP32 reference comparisons.
+    auto diff = result_kernel_xtensor - result_reference;
+
+    // Compute L2 norms.
+    float diff_l2 = std::sqrt(xt::sum(xt::square(diff))());
+    float ref_l2 = std::sqrt(xt::sum(xt::square(result_reference))());
+    const float eps = 1e-12f;
+    float rel_l2 = diff_l2 / (ref_l2 + eps);
+
+    // Check the error bound.
+    const float tolerance = 1e-2f;
+    EXPECT_LT(rel_l2, tolerance) << "Relative L2 error too large: " << rel_l2 << " (expected < " << tolerance << ")";
 }
 
 /**
@@ -120,23 +132,33 @@ void CompareKernelVsReference(
  *   - C: feature dimension (width/embedding dimension)
  * @param hidden_dim Hidden dimension for the weight matrices
  */
-static void CompareKernelVsReferenceWithShape(const std::vector<uint32_t>& input_shape, uint32_t hidden_dim) {
+static void CompareKernelVsReferenceWithShape(const std::vector<uint32_t>& input_shape, const uint32_t hidden_dim) {
     using namespace ttml;
 
-    // Generate random input data
-    // TODO(maciek): Use ttml::core::parallel_generate for random data generation.
-    const float bound = 1.0F;
-    xt::random::seed(42);
-    xt::xarray<float> input_data = xt::random::rand<float>(input_shape, -bound, bound);
+    // Generate random input data using parallel_generate (following RMSNorm pattern)
+    auto& rng = autograd::ctx().get_generator();
+
+    const float bound = 1.0f;
+
+    xt::xarray<float> input_data = xt::empty<float>(input_shape);
+    core::parallel_generate<float>(
+        input_data, [bound]() { return std::uniform_real_distribution<float>(-bound, bound); }, /* seed */ rng());
 
     // Create weight tensors: w1, w3 [1, 1, C, H], w2 [1, 1, H, C]
-    uint32_t input_dim = input_shape.back();
+    const uint32_t input_dim = input_shape.back();
     std::vector<uint32_t> w1_w3_shape = {1, 1, input_dim, hidden_dim};
     std::vector<uint32_t> w2_shape = {1, 1, hidden_dim, input_dim};
 
-    xt::xarray<float> w1_data = xt::random::rand<float>(w1_w3_shape, -bound, bound);
-    xt::xarray<float> w2_data = xt::random::rand<float>(w2_shape, -bound, bound);
-    xt::xarray<float> w3_data = xt::random::rand<float>(w1_w3_shape, -bound, bound);
+    xt::xarray<float> w1_data = xt::empty<float>(w1_w3_shape);
+    core::parallel_generate<float>(
+        w1_data, [bound]() { return std::uniform_real_distribution<float>(-bound, bound); }, /* seed */ rng());
+
+    xt::xarray<float> w2_data = xt::empty<float>(w2_shape);
+    core::parallel_generate<float>(
+        w2_data, [bound]() { return std::uniform_real_distribution<float>(-bound, bound); }, /* seed */ rng());
+    xt::xarray<float> w3_data = xt::empty<float>(w1_w3_shape);
+    core::parallel_generate<float>(
+        w3_data, [bound]() { return std::uniform_real_distribution<float>(-bound, bound); }, /* seed */ rng());
 
     CompareKernelVsReference(input_data, w1_data, w2_data, w3_data);
 }

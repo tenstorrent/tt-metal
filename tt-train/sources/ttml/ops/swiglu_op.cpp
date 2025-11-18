@@ -25,8 +25,6 @@ autograd::TensorPtr swiglu(
         throw std::runtime_error("swiglu only supports rank-4 input tensors.");
     }
 
-    auto device = &autograd::ctx().get_device();
-
     ttnn::Tensor swiglu_fw_result =
         ttml::metal::swiglu_fw(tensor->get_value(), w1->get_value(), w2->get_value(), w3->get_value());
     auto out = autograd::create_tensor(swiglu_fw_result);
