@@ -79,23 +79,16 @@ Tensor BcastOperation::invoke(
         }
     }
 
-    // Format inputs: device operation requires TILE layout, but API accepts both TILE and ROW_MAJOR
+    // Format inputs: Convert to TILE layout if needed
     auto format_input = [](const Tensor& input) -> Tensor {
         if (input.layout() == Layout::TILE) {
-            // Already in TILE layout - no formatting needed (already tile-aligned)
+            // Already in TILE layout - no formatting needed
             return input;
         } else {
             // ROW_MAJOR → TILE conversion needed
-            // Use compute_padded_shape to calculate tile-aligned shape
             Shape tile_aligned_shape = compute_padded_shape(input.padded_shape(), TILE_HEIGHT, TILE_WIDTH);
-
-            PadValue pad_value_variant;
-            if (input.dtype() == DataType::BFLOAT16 || input.dtype() == DataType::FLOAT32) {
-                pad_value_variant = 0.0f;
-            } else {
-                pad_value_variant = (uint32_t)0;
-            }
-            // tilize_with_val_padding handles both padding and tilization
+            PadValue pad_value_variant =
+                input.dtype() == DataType::BFLOAT16 || input.dtype() == DataType::FLOAT32 ? 0.0f : (uint32_t)0;
             return ttnn::tilize_with_val_padding(input, tile_aligned_shape, pad_value_variant, input.memory_config());
         }
     };
