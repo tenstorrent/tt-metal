@@ -20,6 +20,7 @@ from models.common.utility_functions import skip_for_blackhole, skip_for_wormhol
     [
         ([1, 1, 256, 128], 3, 1, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 32),
         ([1, 1, 256, 256], 3, 2, 1, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 64),
+        ([1, 1, 512, 256], 3, 2, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 64, 64),
         # 2 row tests
         ([1, 1, 512, 128], 3, 1, 1, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 64, 32),
         ([1, 1, 512, 128], 3, 2, 1, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 64, 32),
@@ -36,6 +37,7 @@ from models.common.utility_functions import skip_for_blackhole, skip_for_wormhol
     ids=[
         "1tile1chunk1worker1row1link",
         "1tile1chunk1worker1row2link",
+        "1tile1chunk2worker1row2link",
         # 2 row tests
         "2tile1chunk1worker2row1link",
         "2tile1chunk1worker2row2link",

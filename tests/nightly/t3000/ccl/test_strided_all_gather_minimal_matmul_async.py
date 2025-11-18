@@ -55,6 +55,7 @@ def run_strided_all_gather_minimal_matmul_impl(
     mm_core_grid=None,
     use_non_fused=True,
     shard_weights=False,
+    ag_core_grid_offset=(0, 6),
 ):
     torch.manual_seed(0)
 
@@ -230,7 +231,7 @@ def run_strided_all_gather_minimal_matmul_impl(
                 weight_tensor_mesh_list[i],
                 dim=dim,
                 multi_device_global_semaphore=ccl_semaphore_handles[i],
-                strided_all_gather_core_grid_offset=(0, 6),
+                strided_all_gather_core_grid_offset=ag_core_grid_offset,
                 num_links=num_links,
                 memory_config_ag=mem_config_ag,
                 topology=all_gather_topology,
