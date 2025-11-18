@@ -48,6 +48,10 @@ struct TelemetrySnapshot {
     std::unordered_map<uint16_t, std::string> metric_unit_display_label_by_code;
     std::unordered_map<uint16_t, std::string> metric_unit_full_label_by_code;
 
+    // Physical link information (immutable, sent once per metric)
+    // Maps metric path to physical link topology info as JSON
+    std::unordered_map<std::string, nlohmann::json> physical_link_info;
+
     void clear() {
         bool_metrics.clear();
         uint_metrics.clear();
@@ -63,6 +67,7 @@ struct TelemetrySnapshot {
         metric_labels.clear();
         metric_unit_display_label_by_code.clear();
         metric_unit_full_label_by_code.clear();
+        physical_link_info.clear();
     }
 
     /**
@@ -141,6 +146,11 @@ private:
         // Labels are only sent once (initial snapshot), never in deltas
         for (const auto& [path, labels] : other.metric_labels) {
             metric_labels.insert({path, labels});  // Use insert to preserve existing (never overwrite)
+        }
+
+        // Merge physical link info (immutable, sent once per metric)
+        for (const auto& [path, info] : other.physical_link_info) {
+            physical_link_info.insert({path, info});
         }
     }
 
@@ -334,6 +344,19 @@ private:
             // Labels are immutable, only sent once - use insert to preserve existing
             metric_labels.insert({path, labels});
         }
+
+        // Merge physical link info (immutable, sent once per metric)
+        for (const auto& [path, info] : other.physical_link_info) {
+            auto result = physical_link_info.insert({path, info});
+            if (!result.second) {  // Key already exists
+                if (result.first->second != info) {
+                    log_error(
+                        tt::LogAlways,
+                        "Physical link info redefinition detected for path '{}': existing and new values differ",
+                        path);
+                }
+            }
+        }
     }
 
 public:
@@ -355,6 +378,7 @@ public:
          {"metric_labels", t.metric_labels},
          {"metric_unit_display_label_by_code", t.metric_unit_display_label_by_code},
          {"metric_unit_full_label_by_code", t.metric_unit_full_label_by_code},
+         {"physical_link_info", t.physical_link_info},
      };
 }
 
@@ -375,4 +399,8 @@ static inline void from_json(const nlohmann::json &j, TelemetrySnapshot &t) {
     }
     j.at("metric_unit_display_label_by_code").get_to(t.metric_unit_display_label_by_code);
     j.at("metric_unit_full_label_by_code").get_to(t.metric_unit_full_label_by_code);
+
+    if (j.contains("physical_link_info")) {
+        j.at("physical_link_info").get_to(t.physical_link_info);
+    }
 }
