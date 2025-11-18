@@ -37,7 +37,7 @@ def run_strided_all_gather_impl(
     mm_block_w,
     num_iters=1,
     enable_trace=True,
-    cluster_axis=None,
+    cluster_axis=1,
     tiles_per_chunk=None,
     num_workers_per_link=None,
     num_buffers_per_channel=None,
