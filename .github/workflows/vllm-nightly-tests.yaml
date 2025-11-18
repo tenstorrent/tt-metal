@@ -7,6 +7,16 @@ on:
         description: "vLLM branch or sha"
         required: false
         default: dev
+      test-v1:
+        required: false
+        default: true
+        type: boolean
+        description: "include vLLM v1 tests?"
+      test-v0:
+        required: false
+        default: true
+        type: boolean
+        description: "include vLLM v0 tests?"
   schedule:
     - cron: '0 0 * * *' # This cron schedule runs the workflow every day at 12am UTC
 
@@ -28,3 +38,5 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       vllm-commit: ${{ inputs.vllm-commit || 'dev' }}
+      test-v1: ${{ inputs.test-v1 || true }}
+      test-v0: ${{ inputs.test-v0 || true }}
