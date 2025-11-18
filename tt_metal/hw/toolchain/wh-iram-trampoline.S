@@ -18,7 +18,6 @@
 
 .global	wh_iram_trampoline
 .type	wh_iram_trampoline,@function
-.func	wh_iram_trampoline
 wh_iram_trampoline:
 	/* Save context */
 	addi sp, sp, -CONTEXT_SIZE
@@ -42,4 +41,3 @@ wh_iram_trampoline:
 	/*Program flow will end here as ncrisc will go into reset*/
 0:	j 0b
 .size	wh_iram_trampoline, .-wh_iram_trampoline
-.endfunc

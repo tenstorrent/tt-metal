@@ -100,7 +100,7 @@ void l1_to_ncrisc_iram_copy_wait() {
 }
 #endif
 
-int main(int argc, char* argv[]) {
+extern "C" int main(int argc, char* argv[]) {
     configure_csr();
     WAYPOINT("I");
 

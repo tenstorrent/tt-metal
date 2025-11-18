@@ -105,6 +105,29 @@ if(NOT EXISTS "${GPP_CMD}")
     message(FATAL_ERROR "GPP_CMD path '${GPP_CMD}' does not exist. Please check your configuration.")
 endif()
 
+# Check if LLVM should be used for libraries (when TT_METAL_KERNEL_COMPILER=llvm)
+set(USE_LLVM_FOR_LIBS FALSE)
+if(DEFINED ENV{TT_METAL_KERNEL_COMPILER})
+    if("$ENV{TT_METAL_KERNEL_COMPILER}" STREQUAL "llvm")
+        find_program(LLVM_CMD clang++ PATHS /usr/lib/llvm-17/bin NO_DEFAULT_PATH)
+        if(LLVM_CMD)
+            set(USE_LLVM_FOR_LIBS TRUE)
+            set(LIB_COMPILER "${LLVM_CMD}")
+            message(STATUS "Using LLVM for firmware libraries: ${LLVM_CMD}")
+        else()
+            message(
+                WARNING
+                "TT_METAL_KERNEL_COMPILER=llvm set but clang++ not found in /usr/lib/llvm-17/bin, using GCC"
+            )
+            set(LIB_COMPILER "${GPP_CMD}")
+        endif()
+    else()
+        set(LIB_COMPILER "${GPP_CMD}")
+    endif()
+else()
+    set(LIB_COMPILER "${GPP_CMD}")
+endif()
+
 execute_process(
     COMMAND
         ${GPP_CMD} --version
@@ -247,7 +270,8 @@ set(GPP_FLAGS_blackhole -mcpu=tt-bh)
 # Define common flags for all architectures
 set(GPP_FLAGS_common
     -std=c++17
-    -flto=auto
+    # NOTE: -flto=auto removed because LLVM's linker cannot read GCC LTO bitcode
+    # Libraries need to be compiled as regular object files to work with both GCC and LLVM linkers
     -ffast-math
     -fno-use-cxa-atexit
     -fno-exceptions
@@ -262,6 +286,52 @@ set(GPP_FLAGS_common
     -Wno-unused-function
     -Os
     -fno-tree-loop-distribute-patterns
+)
+
+# LLVM-specific flags for library compilation (common between C and C++)
+set(LLVM_FLAGS_base
+    -target
+    riscv32
+    -march=rv32im
+    -mabi=ilp32
+    -ffreestanding
+    -nostdlib
+    -ffast-math
+    -fno-use-cxa-atexit
+    -Wall
+    -Werror
+    -Wno-deprecated-declarations
+    -Wno-deprecated # Allow treating .c files as C++ (clang++ behavior)
+    -Wno-unknown-pragmas
+    -Wno-error=parentheses
+    -Wno-unused-variable
+    -Wno-unused-function
+    -Wno-unknown-attributes
+    -Wno-microsoft-anon-tag
+    -Wno-empty-body
+    -Os
+    -falign-functions=4
+)
+
+# C++-specific flags for LLVM
+set(LLVM_FLAGS_cxx
+    ${LLVM_FLAGS_base}
+    -std=c++17
+    -fno-exceptions
+    -Wno-deprecated # Suppress warning about treating .c files as C++ in clang++
+)
+
+# C-specific flags for LLVM
+set(LLVM_FLAGS_c
+    -x
+    c # Tell clang++ to treat input as C, not C++
+    ${LLVM_FLAGS_base}
+    -std=c11
+    # For C files, include C headers (not C++) from GCC toolchain
+    -isystem
+    ${SFPI_BASE}/sfpi/compiler/riscv-tt-elf/include
+    -isystem
+    ${SFPI_BASE}/sfpi/compiler/lib/gcc/riscv-tt-elf/15.1.0/include
 )
 
 # We are going to build 5 or 6 object files foreach ARCH
@@ -297,11 +367,14 @@ foreach(ARCH IN LISTS ARCHS)
     #     list(APPEND HW_OBJ_SRC_PAIRS "tmu-crt0.o:tt_metal/hw/toolchain/tmu-crt0.S")
     # endif()
 
-    # Set GPP_FLAGS based on ARCH
-    set(GPP_FLAGS
-        ${GPP_FLAGS_${ARCH}}
-        ${GPP_FLAGS_common}
-    )
+    # For LLVM, we'll set flags per-file based on C vs C++
+    # For GCC, use the common flags
+    if(NOT USE_LLVM_FOR_LIBS)
+        set(LIB_FLAGS
+            ${GPP_FLAGS_${ARCH}}
+            ${GPP_FLAGS_common}
+        )
+    endif()
 
     # Dump object files to this directory
     set(HW_OBJ_DIR ${PROJECT_SOURCE_DIR}/runtime/hw/lib/${ARCH})
@@ -341,19 +414,40 @@ foreach(ARCH IN LISTS ARCHS)
         list(GET HW_PAIR_LIST 0 HWOBJ)
         list(GET HW_PAIR_LIST 1 HWSRC)
         set(HW_OUTPUT_FILE "${HW_OBJ_DIR}/${HWOBJ}")
+
+        # For LLVM, use C++ mode for all files since headers mix C and C++ code
+        if(USE_LLVM_FOR_LIBS)
+            # Compile everything as C++ because headers like tensix.h include C++ code
+            # even when included from .c files
+            set(FILE_LIB_FLAGS ${LLVM_FLAGS_cxx})
+            # Add GCC's RISC-V C++ toolchain headers
+            list(
+                APPEND
+                FILE_LIB_FLAGS
+                -isystem
+                ${SFPI_BASE}/sfpi/compiler/riscv-tt-elf/include/c++/15.1.0
+                -isystem
+                ${SFPI_BASE}/sfpi/compiler/riscv-tt-elf/include/c++/15.1.0/riscv-tt-elf
+                -isystem
+                ${SFPI_BASE}/sfpi/compiler/riscv-tt-elf/include
+            )
+        else()
+            set(FILE_LIB_FLAGS ${LIB_FLAGS})
+        endif()
+
         add_custom_command(
             OUTPUT
                 ${HW_OUTPUT_FILE}
             COMMAND
                 ${CMAKE_COMMAND} -E make_directory ${HW_OBJ_DIR}
             COMMAND
-                ${GPP_CMD} ${GPP_FLAGS} ${GPP_DEFINES} ${GPP_INCLUDES} -c -o ${HW_OBJ_DIR}/${HWOBJ}
+                ${LIB_COMPILER} ${FILE_LIB_FLAGS} ${GPP_DEFINES} ${GPP_INCLUDES} -c -o ${HW_OBJ_DIR}/${HWOBJ}
                 ${PROJECT_SOURCE_DIR}/${HWSRC}
             DEPENDS
                 ${PROJECT_SOURCE_DIR}/${HWSRC}
                 # If the compiler changes, rebuild
                 ../sfpi-version
-            COMMENT "Building ${ARCH} hw lib ${HWOBJ}"
+            COMMENT "Building ${ARCH} hw lib ${HWOBJ} with ${LIB_COMPILER}"
             VERBATIM
         )
         list(APPEND OBJ_FILES ${HW_OUTPUT_FILE})

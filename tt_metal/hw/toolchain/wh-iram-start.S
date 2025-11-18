@@ -10,7 +10,6 @@
 
 .global _start
 .type   _start, @function
-.func	_start
 _start:
 	// kernel_launch is responsible for the rest of crt -- clear bss, copy data image, run global constructors
 	.option push
@@ -36,4 +35,3 @@ _start:
 	addi sp, sp, (16 * 4)
 	tail    kernel_launch
 .size _start, .-_start
-.endfunc

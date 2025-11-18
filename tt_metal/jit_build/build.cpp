@@ -153,19 +153,22 @@ void JitBuildEnv::init(
     if (!sfpi_found) {
         TT_THROW("sfpi not found at {} or {}", sfpi_roots[0], sfpi_roots[1]);
     }
-    
+
     // Check for LLVM compiler override (will be used for kernels only, not firmware)
     const char* compiler_override = std::getenv("TT_METAL_KERNEL_COMPILER");
-    bool llvm_requested = (compiler_override != nullptr && 
-                           (std::string(compiler_override) == "llvm" || std::string(compiler_override) == "clang"));
-    
+    bool llvm_requested =
+        (compiler_override != nullptr &&
+         (std::string(compiler_override) == "llvm" || std::string(compiler_override) == "clang"));
+
     if (llvm_requested) {
         std::string llvm_path = "/usr/lib/llvm-17/bin/clang++";
         if (std::filesystem::exists(llvm_path)) {
             // Store LLVM path for later use with kernels (not firmware)
             this->gpp_llvm_ = (use_ccache ? "ccache " : "") + llvm_path + " ";
-            log_info(tt::LogBuildKernels, "LLVM/Clang available at {} for kernel compilation", llvm_path);
-            log_warning(tt::LogBuildKernels, "LLVM mode: Will use LLVM for kernels only. Firmware will use GCC. SFPU/compute kernels will NOT compile.");
+            log_info(tt::LogBuildKernels, "LLVM/Clang available at {} for firmware compilation", llvm_path);
+            log_warning(
+                tt::LogBuildKernels,
+                "LLVM mode: Will use LLVM for standalone firmware only. Dispatch/SFPU/compute kernels will use GCC.");
         } else {
             TT_THROW("LLVM compiler requested but not found at {}", llvm_path);
         }
@@ -187,17 +190,19 @@ void JitBuildEnv::init(
         "-Wno-error=multistatement-macros -Wno-error=parentheses "
         "-Wno-error=unused-but-set-variable -Wno-unused-variable "
         "-Wno-unused-function ";
-    
-    // Set up LLVM flags if requested (for kernels only)
+
+    // Set up LLVM flags if requested (for both kernels and firmware)
     if (llvm_requested && !this->gpp_llvm_.empty()) {
-        // NOTE: -flto is NOT used because we need to link LLVM .o files with GCC-compiled .o files (noc.o, substitutes.o)
-        // LTO produces bitcode that can't be linked with regular ELF objects
+        // Start WITHOUT LTO to test basic LLVM compatibility
+        // Firmware exports symbols to kernels, so both must use the same compiler/ABI
         string llvm_common_flags = "-std=c++17 -ffast-math -fno-exceptions ";
         // Match GCC's -mcpu=tt-bh which uses rv32im (without 'c' compressed extension)
         // This avoids relocation alignment issues caused by 2-byte compressed instructions
         llvm_common_flags += "-target riscv32 -march=rv32im -mabi=ilp32 ";
         llvm_common_flags += "-ffreestanding -nostdlib ";
-        
+        // Enable function/data sections so linker can garbage-collect unused/empty sections
+        llvm_common_flags += "-ffunction-sections -fdata-sections ";
+
         // Add GCC's RISC-V toolchain headers so LLVM can find <cstdint>, <unistd.h>, etc.
         // Use the same SFPI path we found for GCC
         if (!this->gpp_include_dir_.empty()) {
@@ -207,11 +212,11 @@ void JitBuildEnv::init(
             llvm_common_flags += "-isystem " + sfpi_root + "/compiler/riscv-tt-elf/include/c++/15.1.0/riscv-tt-elf ";
             llvm_common_flags += "-isystem " + sfpi_root + "/compiler/riscv-tt-elf/include ";
         }
-        
+
         if (rtoptions.get_riscv_debug_info_enabled()) {
             llvm_common_flags += "-g ";
         }
-        
+
         this->cflags_llvm_ = llvm_common_flags;
         this->cflags_llvm_ +=
             "-MMD "
@@ -223,28 +228,27 @@ void JitBuildEnv::init(
             "-Wno-unused-function "
             "-Wno-unknown-attributes "  // LLVM doesn't know GCC's custom attributes like rvtt_l1_ptr
             "-Wno-microsoft-anon-tag "
-            "-Wno-empty-body "          // LLVM complains about empty while loops
-            "-falign-functions=4 ";     // Force 4-byte alignment to avoid misaligned relocations
-        
-        // Linker uses base flags but WITHOUT -flto (we're linking with GCC-compiled .o files)
+            "-Wno-empty-body "       // LLVM complains about empty while loops
+            "-falign-functions=4 ";  // Force 4-byte alignment to avoid misaligned relocations
+
+        // Linker uses the same base flags (NO LTO for now)
         this->lflags_llvm_ = llvm_common_flags;
-        // Remove -flto from linker flags to allow mixing LLVM and GCC object files
-        size_t lto_pos = this->lflags_llvm_.find("-flto");
-        if (lto_pos != std::string::npos) {
-            this->lflags_llvm_.erase(lto_pos, 6);  // Remove "-flto " (6 chars including space)
-        }
         this->lflags_llvm_ += "-Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles ";
+        // Tell the linker to garbage-collect unused sections (including empty .data)
+        this->lflags_llvm_ += "-Wl,--gc-sections ";
         // Link with GCC's compiler runtime library for functions like __ashldi3
         // Use the blackhole variant (bh-ilp32) to match our target
         // gpp_include_dir_ is /path/to/sfpi/include, so go to ../compiler/lib/gcc/...
         std::string sfpi_root = this->gpp_include_dir_.substr(0, this->gpp_include_dir_.rfind("/include"));
         std::string libgcc_path = sfpi_root + "/compiler/lib/gcc/riscv-tt-elf/15.1.0/bh-ilp32";
-        // Use GCC's linker (ld.bfd) instead of LLVM's linker (ld.lld) for better RISC-V support
-        // This avoids relocation alignment issues specific to ld.lld
-        std::string gcc_linker_path = sfpi_root + "/compiler/bin/riscv-tt-elf-ld";
-        this->lflags_llvm_ += "-fuse-ld=" + gcc_linker_path + " ";
-        // Strip debug info to avoid DWARF 5 relocation incompatibilities between GCC and LLVM
-        this->lflags_llvm_ += "-L" + libgcc_path + " -lgcc -Wl,--strip-debug ";
+        // Use LLVM's own linker (ld.lld) which properly handles LLVM-compiled objects and libraries
+        // This avoids ABI/symbol incompatibilities when mixing GCC and LLVM
+        this->lflags_llvm_ += "-fuse-ld=lld ";
+        // Link with libgcc and libc for runtime support
+        // Order matters: substitutes.o provides atexit/exit, libc provides setjmp
+        // We link libc AFTER object files so linker prefers substitutes.o implementations
+        std::string libc_path = sfpi_root + "/compiler/riscv-tt-elf/lib/bh-ilp32";
+        this->lflags_llvm_ += "-L" + libgcc_path + " -L" + libc_path + " -lgcc -Wl,--strip-debug ";
     }
 
     // Defines
@@ -468,15 +472,15 @@ void JitBuildState::compile_one(
     const string& out_dir, const JitBuildSettings* settings, const string& src, const string& obj) const {
     // ZoneScoped;
 
-    // Choose compiler: LLVM for DM user kernels only (not firmware, dispatch, or compute/SFPU kernels)
-    // Dispatch kernels have complex template code that requires GCC
-    // Compute/SFPU kernels (trisck.cc) use GCC-specific extensions and SFPU builtins
-    string defines_check = this->defines_;
-    bool is_dispatch_kernel = (defines_check.find("-DDISPATCH_KERNEL=1") != std::string::npos);
-    bool is_trisc_kernel = (src.find("trisck.cc") != std::string::npos);  // Compute/SFPU kernel
-    bool use_llvm_for_this_build = !this->is_fw_ && !is_dispatch_kernel && !is_trisc_kernel && !env_.gpp_llvm_.empty();
+    // Choose compiler: LLVM for standalone firmware only
+    // Dispatch kernels have template code bugs (uint8_t vs size_t mismatch) that LLVM rejects
+    // SFPU/compute kernels (trisc) require GCC SFPU builtins
+    bool is_firmware_build = this->is_fw_;
+    bool is_trisc_kernel = (src.find("trisck.cc") != std::string::npos) || (src.find("trisc.cc") != std::string::npos);
+    // Use LLVM only for standalone firmware - dispatch kernels must use GCC due to template bugs
+    bool use_llvm_for_this_build = is_firmware_build && !is_trisc_kernel && !env_.gpp_llvm_.empty();
     string compiler = use_llvm_for_this_build ? env_.gpp_llvm_ : env_.gpp_;
-    
+
     // For LLVM, start with LLVM base flags and add HAL flags (filtering GCC-specific ones)
     // For GCC, use the already-configured cflags
     string cflags;
@@ -485,26 +489,38 @@ void JitBuildState::compile_one(
         // Add HAL-specific flags from this->cflags_, but filter out GCC-only flags
         string hal_flags = this->cflags_;
         // Remove GCC-specific flags that LLVM doesn't support
-        std::vector<std::string> gcc_only_flags = {
-            "-mcpu=tt-bh", "-mcpu=tt-wh", "-mcpu=tt-gs",
-            "-fno-rvtt-sfpu-replay", "-fno-tree-loop-distribute-patterns",
+        // Need to handle flags with values (e.g. -Werror=stack-usage=1912) by finding the full flag
+        std::vector<std::string> gcc_only_flag_prefixes = {
+            "-mcpu=tt-bh",
+            "-mcpu=tt-wh",
+            "-mcpu=tt-gs",
+            "-fno-rvtt-sfpu-replay",
+            "-fno-tree-loop-distribute-patterns",
             "-flto=auto",  // LLVM uses -flto without =auto
-            "-Werror=multistatement-macros", "-Wno-error=multistatement-macros",
-            "-Werror=unused-but-set-variable", "-Wno-error=unused-but-set-variable",
-            "-tensix"  // GCC-specific Tensix architecture flag
+            "-Werror=multistatement-macros",
+            "-Wno-error=multistatement-macros",
+            "-Werror=unused-but-set-variable",
+            "-Wno-error=unused-but-set-variable",
+            "-Werror=stack-usage",  // LLVM doesn't support stack-usage warning (may have =value)
+            "-tensix"               // GCC-specific Tensix architecture flag
         };
-        for (const auto& flag : gcc_only_flags) {
-            size_t pos = hal_flags.find(flag);
+        for (const auto& prefix : gcc_only_flag_prefixes) {
+            size_t pos = hal_flags.find(prefix);
             while (pos != std::string::npos) {
-                hal_flags.erase(pos, flag.length());
-                pos = hal_flags.find(flag);
+                // Find the end of this flag (next space or end of string)
+                size_t end_pos = hal_flags.find(' ', pos);
+                if (end_pos == std::string::npos) {
+                    end_pos = hal_flags.length();
+                }
+                hal_flags.erase(pos, end_pos - pos + 1);  // +1 to include the space
+                pos = hal_flags.find(prefix);
             }
         }
         cflags += hal_flags;
     } else {
         cflags = this->cflags_;
     }
-    
+
     string cmd{"cd " + out_dir + " && " + compiler};
     string defines = this->defines_;
 
@@ -606,40 +622,30 @@ bool JitBuildState::need_link(const string& out_dir) const {
 
 void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings) const {
     // ZoneScoped;
-    // Choose compiler: LLVM for DM user kernels only (not firmware, dispatch, or compute/SFPU kernels)
-    string defines_check = this->defines_;
-    bool is_dispatch_kernel = (defines_check.find("-DDISPATCH_KERNEL=1") != std::string::npos);
-    bool is_trisc_kernel = (out_dir.find("/trisc") != std::string::npos);  // Compute/SFPU kernel
-    bool use_llvm_for_this_build = !this->is_fw_ && !is_dispatch_kernel && !is_trisc_kernel && !env_.gpp_llvm_.empty();
+    // Choose linker: MUST match compile_one logic!
+    // Use LLVM linker only for standalone firmware (not dispatch, not trisc)
+    bool is_firmware_build = this->is_fw_;
+    bool is_trisc_kernel = (out_dir.find("/trisc") != std::string::npos);
+    // Use LLVM linker only if we used LLVM compiler (for standalone firmware)
+    bool use_llvm_for_this_build = is_firmware_build && !is_trisc_kernel && !env_.gpp_llvm_.empty();
     string compiler = use_llvm_for_this_build ? env_.gpp_llvm_ : env_.gpp_;
-    
-    // For LLVM, use LLVM linker flags plus linker script from this->lflags_ (filtered)
-    // For GCC, use GCC linker flags (which already includes linker script)
+
+    // Choose linker flags based on compiler
     string lflags;
     if (use_llvm_for_this_build) {
+        // LLVM linker flags: use LLVM's own linker (ld.lld) via clang++ driver
         lflags = env_.lflags_llvm_;
-        // LLVM needs the linker script, but filter out GCC-specific flags
-        string hal_lflags = this->lflags_;
-        std::vector<std::string> gcc_only_flags = {
-            "-mcpu=tt-bh", "-mcpu=tt-wh", "-mcpu=tt-gs",
-            "-fno-rvtt-sfpu-replay", "-fno-tree-loop-distribute-patterns",
-            "-flto=auto",  // LLVM uses -flto without =auto
-            "-Werror=multistatement-macros", "-Wno-error=multistatement-macros",
-            "-Werror=unused-but-set-variable", "-Wno-error=unused-but-set-variable",
-            "-tensix"  // GCC-specific Tensix architecture flag
-        };
-        for (const auto& flag : gcc_only_flags) {
-            size_t pos = hal_lflags.find(flag);
-            while (pos != std::string::npos) {
-                hal_lflags.erase(pos, flag.length());
-                pos = hal_lflags.find(flag);
-            }
+        // Add the linker script (not included in env_.lflags_llvm_ by default)
+        lflags += fmt::format("-T{} ", this->linker_script_);
+        // For kernels (not firmware), emit relocations so we can relocate the binary
+        if (!this->is_fw_) {
+            lflags += "-Wl,--emit-relocs ";
         }
-        lflags += hal_lflags;
     } else {
+        // GCC linker flags (already includes linker script)
         lflags = this->lflags_;
     }
-    
+
     string cmd{"cd " + out_dir + " && " + compiler};
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_build_map_enabled()) {
         lflags += "-Wl,-Map=" + out_dir + this->target_name_ + ".map ";
@@ -662,6 +668,10 @@ void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings
     // Append common args provided by the build state
     cmd += lflags;
     cmd += this->link_objs_;
+    // For LLVM, add -lc after object files so linker prefers substitutes.o implementations
+    if (use_llvm_for_this_build) {
+        cmd += "-lc ";
+    }
     std::string elf_name = out_dir + this->target_name_ + ".elf";
     cmd += "-o " + elf_name;
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_log_kernels_compilation_commands()) {

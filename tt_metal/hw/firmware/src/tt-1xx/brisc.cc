@@ -330,7 +330,7 @@ inline void barrier_remote_cb_interface_setup(uint8_t noc_index, uint32_t end_cb
 #endif
 }
 
-int main() {
+extern "C" int main() {
     configure_csr();
     WAYPOINT("I");
 

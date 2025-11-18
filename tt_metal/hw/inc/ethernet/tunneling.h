@@ -52,7 +52,7 @@ routing_info_t* routing_info = (routing_info_t*)(eth_l1_mem::address_map::ERISC_
 // Context Switch Config
 tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE);
 
-extern uint32_t __erisc_jump_table;
+extern "C" uint32_t __erisc_jump_table;
 volatile uint32_t* RtosTable =
     (volatile uint32_t*)&__erisc_jump_table;  // Rtos Jump Table. Runtime application needs rtos function handles.;
 
