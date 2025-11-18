@@ -43,7 +43,7 @@ std::string get_python_callstack(int max_frames) {
         return "";  // Python not available
     }
 
-#ifdef HAS_PYTHON_HEADERS
+#if defined(HAS_PYTHON_HEADERS) && HAS_PYTHON_HEADERS
     // Define types for Python API functions we need
     using PyGILState_Ensure_t = PyGILState_STATE (*)();
     using PyGILState_Release_t = void (*)(PyGILState_STATE);
