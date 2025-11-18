@@ -191,7 +191,7 @@ def main():
             generate_logs_folder(os.path.abspath(outputFolder))
         )
 
-    if options.cpp_post_process:
+    if True:
         os.environ["TT_METAL_PROFILER_CPP_POST_PROCESS"] = "1"
 
     if options.device_memory_profiler:
