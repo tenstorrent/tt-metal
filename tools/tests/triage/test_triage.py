@@ -25,8 +25,21 @@ def cause_hang_with_app(request):
         [app_path_str] + args,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        env={**os.environ, **app_configuration.get("env", {})},
     )
-    time.sleep(timeout)
+    auto_timeout = app_configuration.get("auto_timeout", False)
+    if auto_timeout:
+        # Wait for the application to hang itself
+        try:
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            pass
+
+        # Check if the process has exited
+        if proc.returncode is None:
+            raise RuntimeError("The application did not hang as expected.")
+    else:
+        time.sleep(timeout)
     request.cls.app_configuration = app_configuration
     try:
         yield
@@ -47,10 +60,23 @@ def cause_hang_with_app(request):
     "cause_hang_with_app",
     [
         (
+            # Manual hang detection with timeout from outside
             "tools/tests/triage/hang_apps/add_2_integers_hang/triage_hang_app_add_2_integers_hang",
             [],
             {"option": "value"},
             3,
+        ),
+        (
+            # Automatic hang detection with timeout inside the app and serialization of Inspector RPC data
+            "tools/tests/triage/hang_apps/add_2_integers_hang/triage_hang_app_add_2_integers_hang",
+            [],
+            {
+                "auto_timeout": True,
+                "env": {
+                    "TT_METAL_OPERATION_TIMEOUT_SECONDS": "0.5",
+                },
+            },
+            5,
         ),
     ],
     indirect=True,
