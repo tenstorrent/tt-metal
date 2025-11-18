@@ -203,24 +203,34 @@ FORCE_INLINE
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_UNICAST_SCATTER_WRITE: {
+            const auto& scatter = header.command_fields.unicast_scatter_write;
+            const uint8_t chunk_count = scatter.chunk_count;
+            ASSERT(
+                chunk_count >= NOC_SCATTER_WRITE_MIN_CHUNKS && chunk_count <= NOC_SCATTER_WRITE_MAX_CHUNKS,
+                "scatter chunk_count must be between 2 and 4");
+
             size_t offset = 0;
-            size_t chunk_size;
-            for (size_t i = 0; i < NOC_SCATTER_WRITE_MAX_CHUNKS; ++i) {
-                if (i == NOC_SCATTER_WRITE_MAX_CHUNKS - 1) {
-                    chunk_size = payload_size_bytes - offset;
-                } else {
-                    chunk_size = header.command_fields.unicast_scatter_write.chunk_size[i];
-                }
-                const auto dest_address = header.command_fields.unicast_scatter_write.noc_address[i];
+            const uint8_t last_chunk_index = chunk_count - 1;
+            for (uint8_t i = 0; i < last_chunk_index; ++i) {
+                const uint16_t chunk_size = scatter.chunk_size[i];
                 noc_async_write_one_packet_with_trid<update_counter, false>(
                     payload_start_address + offset,
-                    dest_address,
+                    scatter.noc_address[i],
                     chunk_size,
                     transaction_id,
                     tt::tt_fabric::local_chip_data_cmd_buf,
                     tt::tt_fabric::edm_to_local_chip_noc);
                 offset += chunk_size;
             }
+
+            const uint16_t final_chunk_size = static_cast<uint16_t>(payload_size_bytes - offset);
+            noc_async_write_one_packet_with_trid<update_counter, false>(
+                payload_start_address + offset,
+                scatter.noc_address[last_chunk_index],
+                final_chunk_size,
+                transaction_id,
+                tt::tt_fabric::local_chip_data_cmd_buf,
+                tt::tt_fabric::edm_to_local_chip_noc);
         } break;
         case tt::tt_fabric::NocSendType::NOC_MULTICAST_WRITE:
         case tt::tt_fabric::NocSendType::NOC_MULTICAST_ATOMIC_INC:

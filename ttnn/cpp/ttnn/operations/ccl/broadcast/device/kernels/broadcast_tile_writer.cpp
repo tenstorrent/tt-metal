@@ -104,9 +104,7 @@ void kernel_main() {
         scatter_route_id,
         starts,
         ranges,
-        NocUnicastScatterCommandHeader{
-            {0, 0},  // ignore
-            static_cast<uint16_t>(tensor0_page_size)},
+        NocUnicastScatterCommandHeader({0, 0}, {static_cast<uint16_t>(tensor0_page_size)}),
         tensor0_page_size * 2);
 
     uint32_t num_total_targets = num_targets_forward_direction + num_targets_backward_direction;
@@ -162,11 +160,10 @@ void kernel_main() {
                         fabric_connection,
                         scatter_route_id,
                         l1_read_addr,
-                        tt::tt_fabric::NocUnicastScatterCommandHeader{
+                        tt::tt_fabric::NocUnicastScatterCommandHeader(
                             {linear::addrgen_detail::get_noc_address(tensor0_addrgen, tile_id, 0),
-                             linear::addrgen_detail::get_noc_address(tensor0_addrgen, tile_id + 1, 0)},
-                            static_cast<uint16_t>(tensor0_page_size)},  // ignore
-                        tensor0_page_size * 2);                         // ignore
+                             linear::addrgen_detail::get_noc_address(tensor0_addrgen, tile_id + 1, 0)}),
+                        tensor0_page_size * 2);
                     noc_async_writes_flushed();
                     l1_read_addr += tensor0_page_size * 2;
                     tile_id += 2;

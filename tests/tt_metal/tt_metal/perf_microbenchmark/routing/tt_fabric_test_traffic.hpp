@@ -180,16 +180,19 @@ struct NocUnicastWriteAtomicIncFields {
 
 struct NocUnicastScatterWriteFields {
     static constexpr uint32_t MAX_CHUNKS = 2;
+    static constexpr uint32_t DEFAULT_CHUNK_COUNT = MAX_CHUNKS;
 
     NocUnicastScatterWriteFields(
         uint32_t payload_size_bytes,
         const std::array<uint32_t, MAX_CHUNKS>& dst_addresses,
         const std::array<uint16_t, MAX_CHUNKS - 1>& chunk_sizes,
-        std::optional<uint32_t> dst_noc_encoding = std::nullopt) :
+        std::optional<uint32_t> dst_noc_encoding = std::nullopt,
+        uint32_t chunk_count = DEFAULT_CHUNK_COUNT) :
         payload_size_bytes(payload_size_bytes),
         dst_addresses(dst_addresses),
         chunk_sizes(chunk_sizes),
-        dst_noc_encoding(dst_noc_encoding) {}
+        dst_noc_encoding(dst_noc_encoding),
+        chunk_count(chunk_count) {}
 
     template <bool IS_SOURCE>
     std::vector<uint32_t> get_args() const {
@@ -202,14 +205,15 @@ struct NocUnicastScatterWriteFields {
 
         std::vector<uint32_t> args;
         args.push_back(payload_size_bytes);
-        for (uint32_t i = 0; i < MAX_CHUNKS; i++) {
+        args.push_back(chunk_count);
+        for (uint32_t i = 0; i < chunk_count; i++) {
             args.push_back(dst_addresses[i]);
         }
         if (dst_noc_encoding.has_value()) {
             args.push_back(dst_noc_encoding.value());
         }
         // Add chunk sizes (only MAX_CHUNKS-1 since last is implicit)
-        for (uint32_t i = 0; i < MAX_CHUNKS - 1; i++) {
+        for (uint32_t i = 0; i < (chunk_count - 1); i++) {
             args.push_back(static_cast<uint32_t>(chunk_sizes[i]));
         }
 
@@ -220,6 +224,7 @@ struct NocUnicastScatterWriteFields {
     std::array<uint32_t, MAX_CHUNKS> dst_addresses;
     std::array<uint16_t, MAX_CHUNKS - 1> chunk_sizes;
     std::optional<uint32_t> dst_noc_encoding;
+    uint32_t chunk_count;
 };
 
 // create memory maps
