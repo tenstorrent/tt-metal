@@ -1441,7 +1441,7 @@ void FabricEriscDatamoverBuilder::connect_to_downstream_edm_impl(
     // Setup VC1 connection if needed
     constexpr uint32_t ds_index = 1;
     auto vc1_send_chan = builder_config::get_sender_channel_count(is_2D_routing) - 1;
-    
+
     this->setup_downstream_vc_connection(vc1_edm_builder, ds_index, vc1_send_chan, true);
 }
 

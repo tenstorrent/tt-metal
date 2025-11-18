@@ -115,9 +115,9 @@ void FabricRouterBuilder::connect_to_downstream_router_over_noc(
 
     auto get_downstream_builder_for_vc = [&](uint32_t vc_index, uint32_t sender_channel_idx) -> FabricDatamoverBuilderBase* {
         auto mapping = other.channel_mapping_.get_sender_mapping(vc_index, sender_channel_idx);
-        
+
         if (mapping.builder_type == BuilderType::TENSIX) {
-            TT_FATAL(other.tensix_builder_.has_value(), 
+            TT_FATAL(other.tensix_builder_.has_value(),
                      "Channel mapping requires TENSIX builder for VC{} channel {}, but tensix builder not present",
                      vc_index, sender_channel_idx);
             return &other.tensix_builder_.value();
@@ -133,9 +133,9 @@ void FabricRouterBuilder::connect_to_downstream_router_over_noc(
         TT_FATAL(
             !erisc_builder_->build_in_worker_connection_mode,
             "Tried to connect router to downstream in worker connection mode");
-            
+
         // Helper to get the downstream builder for a specific VC based on channel mapping
-        
+
         uint32_t sender_channel_idx = get_downstream_sender_channel(is_2D_routing, other.get_direction());
         // Connect VC0
         connect_vc(0, get_downstream_builder_for_vc(0, sender_channel_idx), sender_channel_idx);
