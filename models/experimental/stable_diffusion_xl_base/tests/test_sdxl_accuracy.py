@@ -250,9 +250,7 @@ def test_accuracy_sdxl(
 
     logger.info(f"Test results saved to {OUT_ROOT}/{new_file_name}")
 
-    with open(
-        f"{OUT_ROOT}/{RESULTS_FILE_NAME}", "w"
-    ) as f:  # this is for CI and test_sdxl_accuracy_with_reset.py compatibility
+    with open(f"{OUT_ROOT}/{RESULTS_FILE_NAME}", "w") as f:  # this is for CI compatibility
         json.dump(data, f, indent=4)
 
     logger.info(f"Test results saved to {OUT_ROOT}/{RESULTS_FILE_NAME}")
