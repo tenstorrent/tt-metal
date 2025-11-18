@@ -162,7 +162,7 @@ jobs:
               echo "run-perplexity=${{ inputs.t3000-perplexity }}" >> $GITHUB_OUTPUT
               ;;
             "model-pr")
-              echo "run-unit=true" >> $GITHUB_OUTPUT  
+              echo "run-unit=true" >> $GITHUB_OUTPUT
               echo "run-demo=true" >> $GITHUB_OUTPUT
               echo "run-frequent=true" >> $GITHUB_OUTPUT
               echo "run-model-perf=false" >> $GITHUB_OUTPUT
