@@ -10,12 +10,12 @@ namespace ttml::serialization::tar_format {
 
 // Tar format constants based on POSIX.1-1988 (ustar) format
 // Block size and offsets/sizes from POSIX tar specification
-namespace {
-constexpr size_t BLOCK_SIZE = 512;
-constexpr size_t END_BLOCKS = 2;  // Two empty blocks mark end of archive
-}  // namespace
+inline constexpr size_t BLOCK_SIZE = 512;
+inline constexpr size_t END_BLOCKS = 2;  // Two empty blocks mark end of archive
+
 
 // Tar header field offsets and sizes (in bytes)
+// Note: tar.h documents these offsets in comments but does not define them as constants.
 // Note: tar.h documents these offsets in comments but does not define them as constants.
 // We define them here based on the POSIX tar.h specification documentation.
 namespace header {
