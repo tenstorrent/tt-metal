@@ -62,7 +62,7 @@ class TrainingConfig:
         self.steps = int(tc.get("max_steps", 1000))
         self.eval_every = int(tc.get("eval_every", 200))
         self.gradient_accumulation_steps = int(tc.get("gradient_accumulation_steps", 1))
-
+        self.model_config = tc.get("model_config", None)
 
 class TransformerConfig:
     """Configuration for transformer model hyperparameters."""
@@ -152,7 +152,7 @@ def load_config(path: str):
 
 def get_configs(training_config_name : str, 
                 device_config_name : str, 
-                model_config_name : str,
+                model_config_name : str = "",
                 multihost_config_name: str = "",
                 configs_root: str = f"{os.environ['TT_METAL_HOME']}/tt-train/configs/"
                 ) -> dict[TrainingConfig, DeviceConfig, TransformerConfig, MultiHostConfig]:
@@ -163,14 +163,18 @@ def get_configs(training_config_name : str,
         training_config_name += ".yaml"
     if(not(device_config_name.endswith(".yaml"))):
         device_config_name += ".yaml"
-    if(not(model_config_name.endswith(".yaml"))):
+    if(model_config_name != "" and not(model_config_name.endswith(".yaml"))):
         model_config_name += ".yaml"
     if(multihost_config_name != "" and not(multihost_config_name.endswith(".yaml"))):
         multihost_config_name += ".yaml"
 
     training_config = load_config(os.path.join(configs_root, "training_configs", training_config_name))
     device_config = load_config(os.path.join(configs_root, "device_configs", device_config_name))
-    model_config = load_config(os.path.join(configs_root, "model_configs", model_config_name))
+
+    if training_config.model_config is not None:
+        model_config = load_config(os.path.join(configs_root, "model_configs", training_config.model_config))
+    else:
+        model_config = load_config(os.path.join(configs_root, "model_configs", model_config_name))
 
     if multihost_config_name != "":
         multihost_config = load_config(os.path.join(configs_root, "multihost_configs", multihost_config_name))

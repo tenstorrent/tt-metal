@@ -108,10 +108,9 @@ struct TrainingConfig {
     // accumulate batches for gradient update
     uint32_t gradient_accumulation_steps = 1;
     std::string model_path;
+    std::string model_config;
     std::string data_path;
-    std::string tokenizer_type = "char";
     std::string scheduler_type = "identity";
-    std::string tokenizer_path = std::string(DATA_FOLDER) + gpt2_tokenizer_file_name;
     bool use_clip_grad_norm = false;
     float clip_grad_norm_max_norm = 1.0F;
 
@@ -135,10 +134,9 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.gradient_accumulation_steps =
         training_config["gradient_accumulation_steps"].as<uint32_t>(config.gradient_accumulation_steps);
     config.model_path = training_config["model_path"].as<std::string>("");
+    config.model_config = training_config["model_config"].as<std::string>("");
     config.data_path = training_config["data_path"].as<std::string>(std::string(DATA_FOLDER) + "/shakespeare.txt");
-    config.tokenizer_type = training_config["tokenizer_type"].as<std::string>(config.tokenizer_type);
     config.scheduler_type = training_config["scheduler_type"].as<std::string>(config.scheduler_type);
-    config.tokenizer_path = training_config["tokenizer_path"].as<std::string>(config.tokenizer_path);
     config.use_clip_grad_norm = training_config["use_clip_grad_norm"].as<bool>(config.use_clip_grad_norm);
     config.clip_grad_norm_max_norm =
         training_config["clip_grad_norm_max_norm"].as<float>(config.clip_grad_norm_max_norm);
@@ -322,7 +320,6 @@ int main(int argc, char **argv) {
 
     app.add_option("--training", training_config_name, "Training Config name")->default_val(training_config_name);
     app.add_option("--device", device_config_name, "Device Config name")->default_val(device_config_name);
-    app.add_option("--model", model_config_name, "Model Config name")->default_val(model_config_name);
     app.add_option("--multihost", multihost_config_name, "Multihost Config name")->default_val(multihost_config_name);
 
     app.add_option("-t,--add_time_to_name", add_time_to_name, "Add time to run name")->default_val(add_time_to_name);
@@ -335,6 +332,8 @@ int main(int argc, char **argv) {
 
     TrainingConfig training_config = parse_config(YAML::LoadFile(training_config_name));
     DeviceConfig device_config = parse_device_config(YAML::LoadFile(device_config_name));
+
+    model_config_name = std::string(tt_metal_home) + "tt-train/configs/model_configs/" + training_config.model_config;
     ModelConfig model_config = parse_model_config(YAML::LoadFile(model_config_name));
 
     MultihostConfig multihost_config;
