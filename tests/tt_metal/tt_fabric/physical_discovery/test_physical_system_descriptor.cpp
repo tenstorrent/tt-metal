@@ -133,6 +133,8 @@ TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
         physical_system_desc.dump_to_yaml();
         log_info(tt::LogTest, "Dumping Physical System Descriptor to Text Proto");
         physical_system_desc.emit_to_text_proto();
+        log_info(tt::LogTest, "Dumping Physical System Descriptor to Text Proto to file");
+        physical_system_desc.emit_to_text_proto("bh_32x4_physical_system_descriptor.textproto");
     }
 }
 

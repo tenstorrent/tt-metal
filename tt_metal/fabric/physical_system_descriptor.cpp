@@ -11,6 +11,7 @@
 #include <umd/device/soc_descriptor.hpp>
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/distributed_context.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 #include "tt_metal/llrt/tunnels_from_mmio_device.hpp"
 #include "tt_metal/llrt/hal.hpp"
@@ -157,32 +158,116 @@ void PhysicalSystemDescriptor::resolve_hostname_uniqueness() {
     using namespace tt::tt_metal::distributed::multihost;
     constexpr uint32_t controller_rank = 0;
     auto my_rank = *(distributed_context_->rank());
+    auto world_size = *(distributed_context_->size());
+
+    log_info(tt::LogFabric, "Rank {}: Starting resolve_hostname_uniqueness (world_size={})", my_rank, world_size);
+
+    // Warm-up communication to establish MPI connections and synchronize.
+    // This is critical when using rankfiles with hostnames, as MPI connections
+    // may not be fully established when this function is called.
+    // We use bidirectional point-to-point communication to both "warm up" connections
+    // and synchronize all ranks, avoiding the barrier which may hang with rankfiles.
+    if (world_size > 1) {
+        int warmup_msg = 1;
+        if (my_rank == controller_rank) {
+            // Rank 0: bidirectional communication with each other rank for synchronization
+            for (std::size_t rank = 1; rank < world_size; rank++) {
+                // First, receive from other rank (ensures they're ready)
+                log_info(tt::LogFabric, "Rank {}: Sync: waiting to receive from rank {}", my_rank, rank);
+                int recv_msg = 0;
+                distributed_context_->recv(
+                    tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&recv_msg), sizeof(recv_msg)),
+                    Rank{rank},
+                    Tag{999});  // Use a different tag for sync
+                log_info(tt::LogFabric, "Rank {}: Sync: received from rank {}", my_rank, rank);
+
+                // Then, send back to acknowledge (completes synchronization)
+                log_info(tt::LogFabric, "Rank {}: Sync: sending acknowledgment to rank {}", my_rank, rank);
+                distributed_context_->send(
+                    tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&warmup_msg), sizeof(warmup_msg)),
+                    Rank{rank},
+                    Tag{998});  // Different tag for acknowledgment
+                log_info(tt::LogFabric, "Rank {}: Sync: sent acknowledgment to rank {}", my_rank, rank);
+            }
+            log_info(tt::LogFabric, "Rank {}: Sync completed, all ranks synchronized", my_rank);
+        } else {
+            // Other ranks: send to rank 0, then receive acknowledgment
+            log_info(tt::LogFabric, "Rank {}: Sync: sending ready signal to rank 0", my_rank);
+            distributed_context_->send(
+                tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&warmup_msg), sizeof(warmup_msg)),
+                Rank{controller_rank},
+                Tag{999});
+            log_info(tt::LogFabric, "Rank {}: Sync: sent ready signal, waiting for acknowledgment", my_rank);
+
+            int recv_msg = 0;
+            distributed_context_->recv(
+                tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&recv_msg), sizeof(recv_msg)),
+                Rank{controller_rank},
+                Tag{998});
+            log_info(tt::LogFabric, "Rank {}: Sync: received acknowledgment, synchronized", my_rank);
+        }
+    }
+    log_info(tt::LogFabric, "Rank {}: Starting hostname exchange", my_rank);
 
     if (my_rank == controller_rank) {
         std::vector<std::string> hostnames = {};
-        hostnames.push_back(get_host_name());
-        for (std::size_t rank = 0; rank < *(distributed_context_->size()); rank++) {
+        auto my_hostname = get_host_name();
+        hostnames.push_back(my_hostname);
+        log_info(
+            tt::LogFabric,
+            "Rank {} (controller): My hostname is '{}', waiting to receive from {} ranks",
+            my_rank,
+            my_hostname,
+            world_size - 1);
+
+        for (std::size_t rank = 0; rank < world_size; rank++) {
             if (rank != controller_rank) {
+                log_info(
+                    tt::LogFabric,
+                    "Rank {} (controller): Waiting to receive hostname size from rank {}",
+                    my_rank,
+                    rank);
                 std::size_t peer_hostname_size = 0;
                 distributed_context_->recv(
                     tt::stl::Span<std::byte>(
                         reinterpret_cast<std::byte*>(&peer_hostname_size), sizeof(peer_hostname_size)),
                     Rank{rank},
                     Tag{0});
+                log_info(
+                    tt::LogFabric,
+                    "Rank {} (controller): Received hostname size {} from rank {}",
+                    my_rank,
+                    peer_hostname_size,
+                    rank);
+
                 std::vector<uint8_t> serialized_peer_hostname(peer_hostname_size);
+                log_info(
+                    tt::LogFabric,
+                    "Rank {} (controller): Waiting to receive hostname data from rank {}",
+                    my_rank,
+                    rank);
                 distributed_context_->recv(
                     tt::stl::as_writable_bytes(
                         tt::stl::Span<uint8_t>(serialized_peer_hostname.data(), serialized_peer_hostname.size())),
                     Rank{rank},
                     Tag{0});
-
-                hostnames.push_back(std::string(serialized_peer_hostname.begin(), serialized_peer_hostname.end()));
+                auto peer_hostname = std::string(serialized_peer_hostname.begin(), serialized_peer_hostname.end());
+                log_info(
+                    tt::LogFabric,
+                    "Rank {} (controller): Received hostname '{}' from rank {}",
+                    my_rank,
+                    peer_hostname,
+                    rank);
+                hostnames.push_back(peer_hostname);
             }
         }
         all_hostnames_unique_ = std::set<std::string>(hostnames.begin(), hostnames.end()).size() == hostnames.size();
+        log_info(
+            tt::LogFabric, "Rank {} (controller): All hostnames received. Unique: {}", my_rank, all_hostnames_unique_);
 
-        for (std::size_t rank = 0; rank < *(distributed_context_->size()); rank++) {
+        for (std::size_t rank = 0; rank < world_size; rank++) {
             if (rank != controller_rank) {
+                log_info(tt::LogFabric, "Rank {} (controller): Sending uniqueness result to rank {}", my_rank, rank);
                 distributed_context_->send(
                     tt::stl::Span<std::byte>(
                         reinterpret_cast<std::byte*>(&all_hostnames_unique_), sizeof(all_hostnames_unique_)),
@@ -190,37 +275,56 @@ void PhysicalSystemDescriptor::resolve_hostname_uniqueness() {
                     Tag{0});
             }
         }
+        log_info(tt::LogFabric, "Rank {} (controller): Finished resolve_hostname_uniqueness", my_rank);
     } else {
         auto host_name = get_host_name();
+        log_info(
+            tt::LogFabric,
+            "Rank {}: My hostname is '{}', sending to controller rank {}",
+            my_rank,
+            host_name,
+            controller_rank);
+
         auto serialized_hostname = std::vector<uint8_t>(host_name.begin(), host_name.end());
         std::size_t serialized_hostname_size = serialized_hostname.size();
+        log_info(tt::LogFabric, "Rank {}: Sending hostname size {} to controller", my_rank, serialized_hostname_size);
         distributed_context_->send(
             tt::stl::Span<std::byte>(
                 reinterpret_cast<std::byte*>(&serialized_hostname_size), sizeof(serialized_hostname_size)),
             Rank{controller_rank},
             Tag{0});
+
+        log_info(tt::LogFabric, "Rank {}: Sending hostname '{}' to controller", my_rank, host_name);
         distributed_context_->send(
             tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_hostname.data(), serialized_hostname.size())),
             Rank{controller_rank},
             Tag{0});
 
+        log_info(tt::LogFabric, "Rank {}: Waiting to receive uniqueness result from controller", my_rank);
         distributed_context_->recv(
             tt::stl::Span<std::byte>(
                 reinterpret_cast<std::byte*>(&all_hostnames_unique_), sizeof(all_hostnames_unique_)),
             Rank{controller_rank},
             Tag{0});
+        log_info(
+            tt::LogFabric,
+            "Rank {}: Received uniqueness result: {}, finished resolve_hostname_uniqueness",
+            my_rank,
+            all_hostnames_unique_);
     }
 }
 
 void PhysicalSystemDescriptor::run_discovery(bool run_global_discovery, bool run_live_discovery) {
-    // Barrier to ensure all MPI ranks are synchronized and ready to communicate.
-    // This is especially important when using rankfiles with hostnames that may require DNS resolution,
-    // as MPI connections may not be fully established when discovery starts.
-    distributed_context_->barrier();
+    auto my_rank = *(distributed_context_->rank());
+    log_info(tt::LogFabric, "Rank {}: Starting run_discovery, calling resolve_hostname_uniqueness", my_rank);
     this->resolve_hostname_uniqueness();
+    log_info(tt::LogFabric, "Rank {}: Finished resolve_hostname_uniqueness, starting local discovery", my_rank);
     this->run_local_discovery(run_live_discovery);
+    log_info(tt::LogFabric, "Rank {}: Finished local discovery", my_rank);
     if (run_global_discovery) {
+        log_info(tt::LogFabric, "Rank {}: Starting global discovery", my_rank);
         this->run_global_discovery();
+        log_info(tt::LogFabric, "Rank {}: Finished global discovery", my_rank);
     }
 }
 
@@ -235,24 +339,36 @@ void PhysicalSystemDescriptor::clear() {
 }
 
 void PhysicalSystemDescriptor::run_local_discovery(bool run_live_discovery) {
+    auto my_rank = *(distributed_context_->rank());
+    log_info(tt::LogFabric, "Rank {}: run_local_discovery: starting", my_rank);
     this->clear();
+    log_info(tt::LogFabric, "Rank {}: run_local_discovery: cleared", my_rank);
 
     if (!run_live_discovery || target_device_type_ != TargetDevice::Silicon) {
         TT_FATAL(cluster_ != nullptr, "PhysicalSystemDescriptor must be initialized with a valid UMD cluster reference in order to run live discovery");
         tt::umd::Cluster& cluster = *cluster_;
+        log_info(
+            tt::LogFabric, "Rank {}: run_local_discovery: creating cluster descriptor from existing cluster", my_rank);
         cluster_desc_ = std::make_unique<tt::umd::ClusterDescriptor>(*cluster.get_cluster_description());
     } else {
         // As part of live discovery, we create a new cluster descriptor to query the latest state from UMD.
         // Otherwise, we use the existing cluster descriptor, which may be stale with respect to the state of
         // the hardware.
+        log_info(tt::LogFabric, "Rank {}: run_local_discovery: creating new cluster descriptor", my_rank);
         cluster_desc_ = tt::umd::Cluster::create_cluster_descriptor();
     }
+    log_info(tt::LogFabric, "Rank {}: run_local_discovery: got cluster descriptor", my_rank);
     const auto& chip_unique_ids = cluster_desc_->get_chip_unique_ids();
     const auto& eth_connections = cluster_desc_->get_ethernet_connections();
     auto cross_host_eth_connections = cluster_desc_->get_ethernet_connections_to_remote_devices();
+    log_info(
+        tt::LogFabric,
+        "Rank {}: run_local_discovery: got connections, chip_unique_ids size={}",
+        my_rank,
+        chip_unique_ids.size());
 
-    auto my_rank = *(distributed_context_->rank());
     auto hostname = this->my_host_name();
+    log_info(tt::LogFabric, "Rank {}: run_local_discovery: my_host_name()={}", my_rank, hostname);
     host_to_mobo_name_[hostname] = get_mobo_name();
     host_to_rank_[hostname] = my_rank;
 
@@ -322,20 +438,31 @@ void PhysicalSystemDescriptor::run_local_discovery(bool run_live_discovery) {
 
     system_graph_.host_connectivity_graph[hostname] = {};
     // Get Ethernet Firmware Version from the driver - Initialize to 0 if not available
+    log_info(tt::LogFabric, "Rank {}: run_local_discovery: getting ethernet firmware version", my_rank);
     ethernet_firmware_version_ = cluster_->get_ethernet_firmware_version().value_or(tt::umd::semver_t(0, 0, 0));
+    log_info(tt::LogFabric, "Rank {}: run_local_discovery: completed", my_rank);
 }
 
 void PhysicalSystemDescriptor::run_global_discovery() {
     using namespace tt::tt_metal::distributed::multihost;
     constexpr uint32_t controller_rank = 0;
     auto my_rank = *(distributed_context_->rank());
+    log_info(tt::LogFabric, "Rank {}: run_global_discovery: calling exchange_metadata(true)", my_rank);
     this->exchange_metadata(true);
+    log_info(tt::LogFabric, "Rank {}: run_global_discovery: exchange_metadata(true) completed", my_rank);
     if (my_rank == controller_rank) {
+        log_info(tt::LogFabric, "Rank {}: run_global_discovery: controller: removing unresolved nodes", my_rank);
         this->remove_unresolved_nodes();
+        log_info(
+            tt::LogFabric, "Rank {}: run_global_discovery: controller: generating cross host connections", my_rank);
         this->generate_cross_host_connections();
+        log_info(tt::LogFabric, "Rank {}: run_global_discovery: controller: validating graphs", my_rank);
         this->validate_graphs();
+        log_info(tt::LogFabric, "Rank {}: run_global_discovery: controller: validation completed", my_rank);
     }
+    log_info(tt::LogFabric, "Rank {}: run_global_discovery: calling exchange_metadata(false)", my_rank);
     this->exchange_metadata(false);
+    log_info(tt::LogFabric, "Rank {}: run_global_discovery: exchange_metadata(false) completed", my_rank);
 }
 
 void PhysicalSystemDescriptor::merge(PhysicalSystemDescriptor&& other) {
@@ -400,6 +527,7 @@ void PhysicalSystemDescriptor::exchange_metadata(bool issue_gather) {
         return;
     }
     auto my_rank = *(distributed_context_->rank());
+    log_info(tt::LogFabric, "Rank {}: exchange_metadata: starting, issue_gather={}", my_rank, issue_gather);
     std::set<uint32_t> sender_ranks;
     std::set<uint32_t> receiver_ranks;
 
@@ -410,6 +538,12 @@ void PhysicalSystemDescriptor::exchange_metadata(bool issue_gather) {
                 sender_ranks.insert(rank);
             }
         }
+        log_info(
+            tt::LogFabric,
+            "Rank {}: exchange_metadata: gather mode - sender_ranks={}, receiver_ranks={}",
+            my_rank,
+            sender_ranks.size(),
+            receiver_ranks.size());
     } else {
         sender_ranks.insert(controller_rank);
         for (std::size_t rank = 0; rank < *(distributed_context_->size()); rank++) {
@@ -417,46 +551,140 @@ void PhysicalSystemDescriptor::exchange_metadata(bool issue_gather) {
                 receiver_ranks.insert(rank);
             }
         }
+        log_info(
+            tt::LogFabric,
+            "Rank {}: exchange_metadata: scatter mode - sender_ranks={}, receiver_ranks={}",
+            my_rank,
+            sender_ranks.size(),
+            receiver_ranks.size());
     }
 
     if (sender_ranks.find(my_rank) != sender_ranks.end()) {
+        log_info(tt::LogFabric, "Rank {}: exchange_metadata: I am a sender, serializing descriptor", my_rank);
         auto serialized_desc = serialize_physical_system_descriptor_to_bytes(*this);
         std::size_t desc_size = serialized_desc.size();
+        log_info(
+            tt::LogFabric,
+            "Rank {}: exchange_metadata: serialized descriptor size={}, sending to {} receivers",
+            my_rank,
+            desc_size,
+            receiver_ranks.size());
 
         for (auto rank : receiver_ranks) {
+            log_info(tt::LogFabric, "Rank {}: exchange_metadata: sending size to rank {}", my_rank, rank);
             distributed_context_->send(
                 tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&desc_size), sizeof(desc_size)),
                 Rank{rank},
                 Tag{0});
 
+            log_info(tt::LogFabric, "Rank {}: exchange_metadata: sending descriptor data to rank {}", my_rank, rank);
             distributed_context_->send(
                 tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_desc.data(), serialized_desc.size())),
                 Rank{rank},
                 Tag{0});
+            log_info(tt::LogFabric, "Rank {}: exchange_metadata: sent descriptor to rank {}", my_rank, rank);
         }
+        log_info(tt::LogFabric, "Rank {}: exchange_metadata: finished sending to all receivers", my_rank);
     } else {
+        log_info(
+            tt::LogFabric,
+            "Rank {}: exchange_metadata: I am a receiver, waiting for {} senders",
+            my_rank,
+            sender_ranks.size());
         for (auto rank : sender_ranks) {
+            log_info(tt::LogFabric, "Rank {}: exchange_metadata: waiting to receive size from rank {}", my_rank, rank);
             std::size_t peer_descriptor_size = 0;
             distributed_context_->recv(
                 tt::stl::Span<std::byte>(
                     reinterpret_cast<std::byte*>(&peer_descriptor_size), sizeof(peer_descriptor_size)),
                 Rank{rank},
                 Tag{0});
+            log_info(
+                tt::LogFabric,
+                "Rank {}: exchange_metadata: received size {} from rank {}",
+                my_rank,
+                peer_descriptor_size,
+                rank);
             std::vector<uint8_t> serialized_peer_desc(peer_descriptor_size);
+            log_info(
+                tt::LogFabric,
+                "Rank {}: exchange_metadata: waiting to receive descriptor data from rank {}",
+                my_rank,
+                rank);
             distributed_context_->recv(
                 tt::stl::as_writable_bytes(
                     tt::stl::Span<uint8_t>(serialized_peer_desc.data(), serialized_peer_desc.size())),
                 Rank{rank},
                 Tag{0});
+            log_info(
+                tt::LogFabric,
+                "Rank {}: exchange_metadata: received descriptor from rank {}, deserializing",
+                my_rank,
+                rank);
             auto peer_desc = deserialize_physical_system_descriptor_from_bytes(serialized_peer_desc);
+            log_info(
+                tt::LogFabric,
+                "Rank {}: exchange_metadata: validating and merging descriptor from rank {}",
+                my_rank,
+                rank);
             this->validate_eth_fw_versions(
                 peer_desc.get_ethernet_firmware_version(),
                 asic_descriptors_.begin()->second.host_name,
                 peer_desc.get_asic_descriptors().begin()->second.host_name);
             this->merge(std::move(peer_desc));
+            log_info(tt::LogFabric, "Rank {}: exchange_metadata: merged descriptor from rank {}", my_rank, rank);
+        }
+        log_info(tt::LogFabric, "Rank {}: exchange_metadata: finished receiving from all senders", my_rank);
+    }
+
+    // Synchronize all ranks using point-to-point communication instead of barrier.
+    // Barriers hang with rankfiles, so we use the same synchronization pattern as resolve_hostname_uniqueness.
+    auto world_size = *(distributed_context_->size());
+    if (world_size > 1) {
+        int sync_msg = 1;
+        if (my_rank == controller_rank) {
+            // Rank 0: bidirectional communication with each other rank for synchronization
+            for (std::size_t rank = 1; rank < world_size; rank++) {
+                log_info(
+                    tt::LogFabric, "Rank {}: exchange_metadata sync: waiting to receive from rank {}", my_rank, rank);
+                int recv_msg = 0;
+                distributed_context_->recv(
+                    tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&recv_msg), sizeof(recv_msg)),
+                    Rank{rank},
+                    Tag{997});  // Use a different tag for exchange_metadata sync
+                log_info(tt::LogFabric, "Rank {}: exchange_metadata sync: received from rank {}", my_rank, rank);
+
+                log_info(
+                    tt::LogFabric, "Rank {}: exchange_metadata sync: sending acknowledgment to rank {}", my_rank, rank);
+                distributed_context_->send(
+                    tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&sync_msg), sizeof(sync_msg)),
+                    Rank{rank},
+                    Tag{996});  // Different tag for acknowledgment
+                log_info(
+                    tt::LogFabric, "Rank {}: exchange_metadata sync: sent acknowledgment to rank {}", my_rank, rank);
+            }
+            log_info(tt::LogFabric, "Rank {}: exchange_metadata sync: all ranks synchronized", my_rank);
+        } else {
+            // Other ranks: send to rank 0, then receive acknowledgment
+            log_info(tt::LogFabric, "Rank {}: exchange_metadata sync: sending ready signal to rank 0", my_rank);
+            distributed_context_->send(
+                tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&sync_msg), sizeof(sync_msg)),
+                Rank{controller_rank},
+                Tag{997});
+            log_info(
+                tt::LogFabric,
+                "Rank {}: exchange_metadata sync: sent ready signal, waiting for acknowledgment",
+                my_rank);
+
+            int recv_msg = 0;
+            distributed_context_->recv(
+                tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&recv_msg), sizeof(recv_msg)),
+                Rank{controller_rank},
+                Tag{996});
+            log_info(tt::LogFabric, "Rank {}: exchange_metadata sync: received acknowledgment, synchronized", my_rank);
         }
     }
-    distributed_context_->barrier();
+    log_info(tt::LogFabric, "Rank {}: exchange_metadata: synchronization completed", my_rank);
 }
 
 void PhysicalSystemDescriptor::generate_cross_host_connections() {
