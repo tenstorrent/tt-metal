@@ -626,6 +626,7 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
     uint32_t num_cores_x,
     bool is_in_tiled,
     int block_size) {
+    std::cout << "num_cores_x: " << num_cores_x << "\n";
     auto core_id_to_noc_coords =
         [is_block_sharded, transpose_mcast, device, num_cores_x](uint32_t core_id) -> CoreCoord {
         auto core_coord = is_block_sharded ? (transpose_mcast ? CoreCoord(core_id, 0) : CoreCoord(0, core_id))
@@ -639,7 +640,10 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
                                // input sticks that can be padding, local copy/transfer, or remote copy/transfer
     uint32_t core_id = 0;
     for (auto [output_boundary, input_boundary] : shard_boundaries) {
+        auto [output_boundary_start, output_boundary_end] = output_boundary;
         auto [input_start, input_end] = input_boundary;
+        std::cout << "output_boundary: " << output_boundary_start << " to " << output_boundary_end << "\n";
+        std::cout << "input_boundary: " << input_start << " to " << input_end << "\n";
         for (uint32_t global_idx = input_start; global_idx <= input_end; ++global_idx) {
             uint32_t dst_core_id = core_id;
             uint32_t local_idx = global_idx - input_start;
@@ -683,6 +687,7 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
                 pad_config[dst_core_id].push_back({dst_start, length});
             }
         } else if (is_local) {
+            std::cout << "Local gather on core " << src_core_id << " to core " << dst_core_id << "\n";
             CoreCoord noc_xy = core_id_to_noc_coords(dst_core_id);
             local_config[src_core_id].first = {noc_xy.x, noc_xy.y, 3 * data.size()};
             local_config[src_core_id].second = data;
@@ -691,11 +696,13 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
                 CoreCoord noc_xy = core_id_to_noc_coords(src_core_id);
                 remote_config[dst_core_id].push_back({{noc_xy.x, noc_xy.y, 3 * data.size()}, data});
             } else {
+                std::cout << "Remote read gather from core " << src_core_id << " to core " << dst_core_id << "\n";
                 CoreCoord noc_xy = core_id_to_noc_coords(dst_core_id);
                 remote_config[src_core_id].push_back({{noc_xy.x, noc_xy.y, 3 * data.size()}, data});
             }
         }
     }
+    std::cout << "Pad config:\n";
 
     std::vector<GatherConfig> gather_configs(num_cores_nhw);
     for (int core_id = 0; core_id < local_config.size(); core_id++) {
