@@ -21,7 +21,7 @@ def create_global_semaphores(mesh_device, num_devices, cores, initial_value):
     return ccl_semaphore_handles
 
 
-def run_strided_all_gather_impl(
+def run_strided_all_gather_minimal_matmul_impl(
     mesh_device,
     num_devices,
     M,
@@ -42,7 +42,7 @@ def run_strided_all_gather_impl(
     subblock_w,
     num_iters=1,
     enable_trace=True,
-    cluster_axis=None,
+    cluster_axis=1,
     num_workers_per_link=None,
     num_buffers_per_channel=None,
     allowed_pcc=1,
@@ -395,7 +395,7 @@ def run_strided_all_gather_impl(
     indirect=["device_params"],
     ids=["fabric_ring", "fabric_linear"],
 )
-def test_strided_all_gather_async(
+def test_strided_all_gather_minimal_matmul_async(
     mesh_device,
     M,
     K,
@@ -432,7 +432,7 @@ def test_strided_all_gather_async(
         mm_block_n // TILE_SIZE
     ), f"block_n size is {mm_block_n // TILE_SIZE} tiles, but only {Nt_per_core} tiles of work per core"
 
-    run_strided_all_gather_impl(
+    run_strided_all_gather_minimal_matmul_impl(
         mesh_device,
         mesh_device.get_num_devices(),
         M,
