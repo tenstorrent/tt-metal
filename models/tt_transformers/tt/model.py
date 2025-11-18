@@ -439,7 +439,7 @@ class Transformer(LightweightModule):
                 persistent_output_buffer=None,
                 dim=3,
                 multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
-                num_links=num_links,
+                num_links=4,  # num_links,
                 memory_config=tt_logits.memory_config(),
                 cluster_axis=cluster_axis,
                 topology=self.args.ccl_topology(),
