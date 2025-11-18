@@ -1869,6 +1869,29 @@ HostName TopologyMapper::get_hostname_for_fabric_node_id(FabricNodeId fabric_nod
     return physical_system_descriptor_.get_host_name_for_asic(it->second);
 }
 
+int TopologyMapper::get_mpi_rank_for_mesh_host_rank(MeshId mesh_id, MeshHostRankId host_rank) const {
+    // Find a fabric node with this mesh_id and host_rank
+    // Use the coordinate range to find a chip_id, then get the fabric node id
+    auto coord_range_it = mesh_host_rank_coord_ranges_.find(std::make_pair(mesh_id, host_rank));
+    TT_FATAL(
+        coord_range_it != mesh_host_rank_coord_ranges_.end(),
+        "TopologyMapper: host_rank {} not found for mesh {}",
+        host_rank.get(),
+        mesh_id.get());
+
+    // Get a chip_id from the coordinate range (use the start coordinate)
+    const auto& coord_range = coord_range_it->second;
+    MeshCoordinate start_coord = coord_range.start_coord();
+    ChipId chip_id = mesh_graph_.coordinate_to_chip(mesh_id, start_coord);
+    FabricNodeId fabric_node_id(mesh_id, chip_id);
+
+    // Get the hostname for this fabric node
+    HostName hostname = get_hostname_for_fabric_node_id(fabric_node_id);
+
+    // Get the MPI rank for this hostname from physical_system_descriptor
+    return static_cast<int>(physical_system_descriptor_.get_rank_for_hostname(hostname));
+}
+
 void TopologyMapper::print_logical_adjacency_map(const std::unordered_map<MeshId, LogicalAdjacencyMap>& adj_map) const {
     log_debug(tt::LogFabric, "TopologyMapper: Logical Adjacency Map:");
     for (const auto& [mesh_id, node_map] : adj_map) {
