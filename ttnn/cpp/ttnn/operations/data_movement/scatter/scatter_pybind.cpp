@@ -47,7 +47,7 @@ void bind_scatter(py::module& module) {
                const ttnn::Tensor& index_tensor,
                const ttnn::Tensor& source_tensor,
                const std::optional<tt::tt_metal::MemoryConfig>& opt_out_memory_config,
-               const std::optional<scatter::ScatterReductionType>& opt_reduction) -> Tensor {
+               const std::optional<std::string>& opt_reduction) -> Tensor {
                 return self(input_tensor, dim, index_tensor, source_tensor, opt_out_memory_config, opt_reduction);
             },
             py::arg("input").noconvert(),
