@@ -13,4 +13,4 @@ TILE_WIDTH = 32
 def test_manual_seed(device):
     torch.manual_seed(0)
 
-    ttnn.manual_seed(device, 42)
+    ttnn.manual_seed(device=device, seeds=42)

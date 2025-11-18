@@ -1,0 +1,59 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "manual_seed_operation.hpp"
+#include "manual_seed/device/manual_seed_device_operation_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/types.hpp"
+
+using namespace tt::tt_metal;
+
+namespace ttnn::operations::reduction::manual_seed {
+
+ManualSeedDeviceOperation::program_factory_t ManualSeedDeviceOperation::select_program_factory(
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
+    return program::ManualSeedProgramFactory{};
+}
+void ManualSeedDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {}
+
+void ManualSeedDeviceOperation::validate_on_program_cache_miss(
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {}
+
+ManualSeedDeviceOperation::spec_return_value_t ManualSeedDeviceOperation::compute_output_specs(
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
+    const TensorSpec tensor_spec(
+        ttnn::Shape{1}, TensorLayout{DataType::UINT32, PageConfig{Layout::ROW_MAJOR}, MemoryConfig()});
+    return tensor_spec;
+}
+
+ManualSeedDeviceOperation::tensor_return_value_t ManualSeedDeviceOperation::create_output_tensors(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto output_specs = compute_output_specs(operation_attributes, tensor_args);
+    return create_device_tensor(output_specs, operation_attributes.device);
+}
+
+std::tuple<operation_attributes_t, tensor_args_t> ManualSeedDeviceOperation::invoke(
+    MeshDevice& device, std::variant<uint32_t, Tensor> seeds, std::optional<std::variant<uint32_t, Tensor>> user_ids) {
+    // Prepare operation attributes
+    operation_attributes_t operation_attributes{};
+    operation_attributes.device = &device;
+    if (std::holds_alternative<uint32_t>(seeds)) {
+        operation_attributes.seeds = std::get<uint32_t>(seeds);
+    }
+    if (user_ids.has_value() && std::holds_alternative<uint32_t>(user_ids.value())) {
+        operation_attributes.user_ids = std::get<uint32_t>(user_ids.value());
+    }
+    // Prepare tensor arguments
+    tensor_args_t tensor_args{};
+    if (std::holds_alternative<Tensor>(seeds)) {
+        tensor_args.seeds = std::get<Tensor>(seeds);
+    }
+    if (user_ids.has_value() && std::holds_alternative<Tensor>(user_ids.value())) {
+        tensor_args.user_ids = std::get<Tensor>(user_ids.value());
+    }
+    // Return prepared arguments
+    return {operation_attributes, tensor_args};
+}
+}  // namespace ttnn::operations::reduction::manual_seed

@@ -26,7 +26,7 @@ void bind_manual_seed_operation(py::module& module) {
                 user_ids (int or ttnn.Tensor, optional): An optional user ID or tensor of user IDs associated with the seeds.
 
             Returns:
-                None
+                Tensor: An empty tensor, as this operation does not produce a meaningful output. To be changed in the future.
         )doc";
     using OperationType = decltype(ttnn::manual_seed);
     bind_registered_operation(
@@ -37,10 +37,10 @@ void bind_manual_seed_operation(py::module& module) {
             [](const OperationType& self,
                MeshDevice& device,
                std::variant<uint32_t, ttnn::Tensor> seeds,
-               std::optional<std::variant<uint32_t, ttnn::Tensor>> user_ids) -> uint32_t {
+               std::optional<std::variant<uint32_t, ttnn::Tensor>> user_ids) -> Tensor {
                 return self(device, seeds, user_ids);
             },
-            py::arg("device").noconvert(),
+            py::arg("device"),
             py::arg("seeds"),
             py::kw_only(),
             py::arg("user_ids") = std::nullopt});

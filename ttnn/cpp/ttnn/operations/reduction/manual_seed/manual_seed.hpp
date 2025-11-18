@@ -9,9 +9,10 @@
 #include "ttnn/decorators.hpp"
 
 namespace ttnn::operations::reduction {
+
 // NOTE: This OP does not return anything, but register_operation currently does not handle void return types.
 struct ExecuteManualSeed {
-    static uint32_t invoke(
+    static Tensor invoke(
         MeshDevice& device,
         std::variant<uint32_t, Tensor> seeds,
         std::optional<std::variant<uint32_t, Tensor>> user_ids = std::nullopt);
