@@ -95,9 +95,12 @@ size_t find_max_eth_channels(const std::vector<tt_metal::IDevice*>& all_active_d
 FabricTensixDatamoverConfig::FabricTensixDatamoverConfig() {
     // Initialize channel mappings and configurations, skipping the rest initilization if there are no ethernet found
     if (!initialize_channel_mappings()) {
+        std::cout << "Fabric Tensix Datamover Config Constructor: Skipping channel mappings and buffer allocations"
+                  << std::endl;
         return;
     }
     calculate_buffer_allocations();
+    std::cout << "Fabric Tensix Datamover Config Constructor: Calculated buffer allocations" << std::endl;
     create_mux_configs();
 }
 
@@ -226,8 +229,17 @@ void FabricTensixDatamoverConfig::calculate_buffer_allocations() {
     }
 
     // Calculate buffers per channel based on available space and max channels
+    std::cout << "Fabric Mux Buffer Allocation" << std::endl;
+    std::cout << "l1_base: " << l1_base << std::endl;
+    std::cout << "l1_size: " << l1_size << std::endl;
+    std::cout << "l1_alignment: " << l1_alignment << std::endl;
+    std::cout << "num_channels_: " << num_channels_ << std::endl;
+    std::cout << "buffer_size_bytes_full_size_channel_: " << buffer_size_bytes_full_size_channel_ << std::endl;
     size_t space_needed_for_max_channels = num_channels_ * buffer_size_bytes_full_size_channel_;
     num_buffers_per_channel_ = std::bit_floor(space_per_risc / space_needed_for_max_channels);
+    std::cout << "space_needed_for_max_channels: " << space_needed_for_max_channels << std::endl;
+    std::cout << "space_per_risc: " << space_per_risc << std::endl;
+    std::cout << "num_buffers_per_channel_: " << num_buffers_per_channel_ << std::endl;
 
     // Set base addresses for each RISC ID with proper L1 alignment
     for (size_t risc_id = 0; risc_id < num_used_riscs_per_tensix_; ++risc_id) {
@@ -492,6 +504,9 @@ std::vector<uint32_t> FabricTensixDatamoverBuilder::get_compile_time_args(tt::tt
     const auto channel_allocator =
         dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator_base);
     TT_FATAL(channel_allocator != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator.");
+    std::cout << "Inside get_compile_time_args" << std::endl;
+    std::cout << "channel_allocator->get_sender_channel_number_of_slots(0): "
+              << channel_allocator->get_sender_channel_number_of_slots(0) << std::endl;
     fabric_mux_config_->set_fabric_endpoint_channel_num_buffers(
         channel_allocator->get_sender_channel_number_of_slots(0));
     fabric_mux_config_->set_wait_for_fabric_endpoint_ready(true);
