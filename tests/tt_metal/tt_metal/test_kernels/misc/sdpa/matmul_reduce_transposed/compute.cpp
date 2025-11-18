@@ -62,9 +62,6 @@ void matmul_blocks(
         sfpu_reduce_max_sdpa_init(subblock_w);
 
         for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
-            // PACK(( DPRINT << "[matmul_blocks] in0_subblock: " << in0_subblock << ", in1_subblock: " << in1_subblock
-            // << ENDL() ));
-
             tile_regs_acquire();
 
             uint32_t dst_index = 0;
@@ -77,11 +74,21 @@ void matmul_blocks(
                 in0_index++;
                 in1_index += N;
             }
+
+            // for(int k = 0; k < 10000; k ++){
+            //     TTI_NOP;
+            // }
+
             tile_regs_commit();
 
             tile_regs_wait();
 
-            // Now pack the tiles after reduce has processed them
+#ifdef TRISC_PACK
+            for (int k = 0; k < 750; k++) {
+                TTI_NOP;
+            }
+#endif
+
             uint32_t pack_dst_idx = dst_index;
             uint32_t out_col_offset = in1_subblock * subblock_w;
             for (uint32_t r = 0; r < subblock_h; r++) {
@@ -109,7 +116,6 @@ void matmul_blocks(
     }
     cb_push_back(matmul_out_cb, output_num_tiles);
     cb_push_back(reduce_out_cb, total_reduce_tiles);
-    // UNPACK(( DPRINT << "[matmul_blocks] packed reduce tiles: " << total_reduce_tiles << ENDL() ));
 }
 
 namespace NAMESPACE {
