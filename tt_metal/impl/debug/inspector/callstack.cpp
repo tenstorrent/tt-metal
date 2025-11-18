@@ -265,23 +265,6 @@ std::string get_cpp_callstack(int max_frames) {
                         if (status == 0 && demangled) {
                             func_info = std::string(demangled);
                             free(demangled);
-
-                            // Simplify function name - remove template parameters and namespace details
-                            size_t template_pos = func_info.find('<');
-                            if (template_pos != std::string::npos) {
-                                func_info = func_info.substr(0, template_pos);
-                            }
-
-                            // Extract just the function name from namespace::class::function
-                            size_t last_colon = func_info.rfind("::");
-                            if (last_colon != std::string::npos && last_colon + 2 < func_info.length()) {
-                                // Keep class::function or just function
-                                size_t prev_colon = func_info.rfind("::", last_colon - 1);
-                                if (prev_colon != std::string::npos) {
-                                    func_info = func_info.substr(prev_colon + 2);
-                                }
-                            }
-
                             found_function = true;
                         }
                     } else if (!is_just_offset && !mangled.empty()) {
@@ -295,17 +278,6 @@ std::string get_cpp_callstack(int max_frames) {
                             // Successfully demangled
                             func_info = std::string(demangled);
                             free(demangled);
-
-                            // Simplify: just keep the function name, strip parameters and templates
-                            size_t paren = func_info.find('(');
-                            if (paren != std::string::npos) {
-                                func_info = func_info.substr(0, paren);
-                            }
-                            size_t template_pos = func_info.find('<');
-                            if (template_pos != std::string::npos) {
-                                func_info = func_info.substr(0, template_pos);
-                            }
-
                             found_function = true;
                         } else {
                             // Not a mangled name, use as-is (e.g., "main", "perform_final_add")
