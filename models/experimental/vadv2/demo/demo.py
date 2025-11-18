@@ -370,7 +370,16 @@ def test_torch_demo(model_location_generator):
     cfg = Config.fromfile(os.path.join(os.path.dirname(__file__), "config.py"))
     # # 2. Build dataloader
     dataloader = Runner.build_dataloader(cfg.val_dataloader)
-    outputs = single_cpu_test(torch_model, dataloader)
+    time_tag = time.strftime("%Y%m%d_%H%M%S")
+    vis_dir = osp.join("test", "vad_torch_results", time_tag, "visualizations")
+    outputs = single_cpu_test(
+        torch_model,
+        dataloader,
+        vis_dir=vis_dir,
+        class_names=cfg.get("class_names"),
+        max_vis_images=4,
+        score_thr=0.2,
+    )
 
     tmp = {}
     # 3. evaluation part -  WIP
@@ -394,9 +403,17 @@ def test_torch_demo(model_location_generator):
     print(dataset.evaluate(outputs["bbox_results"], **eval_kwargs))
 
 
-def single_cpu_test(torch_model, dataloader):
+def single_cpu_test(
+    torch_model,
+    dataloader,
+    vis_dir=None,
+    class_names=None,
+    max_vis_images=0,
+    score_thr=0.2,
+):
     results = []
     prog_bar = ProgressBar(81)
+    vis_count = 0
     for i, data in enumerate(dataloader):
         from models.experimental.vadv2.demo.data_container import DataContainer
 
@@ -427,6 +444,20 @@ def single_cpu_test(torch_model, dataloader):
                 gt_attr_labels=[[data["gt_attr_labels"]]],
             )
         results.extend(result)
+
+        if vis_dir and vis_count < max_vis_images:
+            os.makedirs(vis_dir, exist_ok=True)
+            for result_item in result:
+                if vis_count >= max_vis_images:
+                    break
+                visualize_sample_prediction(
+                    data,
+                    result_item,
+                    vis_dir,
+                    class_names,
+                    score_thr=score_thr,
+                )
+                vis_count += 1
 
         batch_size = len(result)
         for _ in range(batch_size):
