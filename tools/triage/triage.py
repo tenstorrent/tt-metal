@@ -75,7 +75,6 @@ from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.elf import ElfVariable
 from typing import Any, Callable, Iterable, TypeVar
 from types import ModuleType
-from run_checks import DeviceDescription
 
 
 @dataclass
