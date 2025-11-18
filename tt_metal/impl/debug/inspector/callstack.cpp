@@ -29,7 +29,7 @@
 
 namespace tt::tt_metal::inspector {
 
-std::string get_python_callstack() {
+std::string get_python_callstack(int max_frames) {
     // Try to get Python callstack if we're called from Python
     // Use dlsym to dynamically load Python functions at runtime
     // This avoids linking against Python libraries for pure C++ builds
@@ -91,7 +91,6 @@ std::string get_python_callstack() {
     try {
         PyFrameObject* frame = dyn_PyEval_GetFrame();  // Borrowed reference
         int frame_count = 0;
-        const int max_frames = 20;
 
         if (frame != nullptr) {
             // Traverse up the stack to collect user frames
@@ -206,7 +205,7 @@ std::string get_python_callstack() {
     return "";  // Return empty string if Python callstack not available
 }
 
-std::string get_cpp_callstack() {
+std::string get_cpp_callstack(int max_frames) {
     void* buffer[64];
     int nptrs = backtrace(buffer, 64);
 
@@ -215,7 +214,6 @@ std::string get_cpp_callstack() {
         if (symbols != nullptr) {
             std::stringstream callstack;
             int valid_frames = 0;
-            const int max_frames = 20;
 
             // Skip the first 3 frames (this function, get_callstack, and track_operation)
             for (int i = 3; i < nptrs && i < 64 && valid_frames < max_frames; ++i) {
