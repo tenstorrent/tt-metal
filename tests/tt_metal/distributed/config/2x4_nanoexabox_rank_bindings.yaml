@@ -12,4 +12,4 @@ rank_bindings:
 
 global_env:
   TT_METAL_HOME: "/home/ttuser/git/tt-metal-2"
-mesh_graph_desc_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/nano_exabox_1x8_mesh_graph_descriptor.yaml"
+mesh_graph_desc_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/nano_exabox_1x8_mesh_graph_descriptor.textproto"

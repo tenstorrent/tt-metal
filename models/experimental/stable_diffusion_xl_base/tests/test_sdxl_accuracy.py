@@ -23,7 +23,7 @@ from models.experimental.stable_diffusion_xl_base.utils.clip_fid_ranges import (
     accuracy_check_clip,
     accuracy_check_fid,
     get_appr_delta_metric,
-    TARGET_JSON_PATH,
+    get_model_targets,
 )
 
 test_demo.__test__ = False
@@ -163,11 +163,7 @@ def test_accuracy_sdxl(
     avg_gen_end_to_end = profiler.get("end_to_end_generation")
     model_name = "sdxl-tp" if use_cfg_parallel else "sdxl"
 
-    with open(TARGET_JSON_PATH) as f:
-        targets = json.load(f)
-    if use_cfg_parallel:
-        for key in ["functional", "complete", "target"]:
-            targets["perf"][key] /= 2
+    targets = get_model_targets(model_name)
 
     data = {
         "model": model_name,
@@ -215,24 +211,28 @@ def test_accuracy_sdxl(
                 "device": get_device_name(),
                 "average_clip": average_clip_score,
                 "deviation_clip": deviation_clip_score,
-                "clip_accuracy_check_approx": accuracy_check_clip(average_clip_score, num_prompts, mode="approx"),
-                "clip_accuracy_check_valid": accuracy_check_clip(average_clip_score, num_prompts, mode="valid"),
-                "delta_clip": get_appr_delta_metric(average_clip_score, num_prompts, score_type="clip"),
+                "clip_accuracy_check_approx": accuracy_check_clip(
+                    model_name, average_clip_score, num_prompts, mode="approx"
+                ),
+                "clip_accuracy_check_valid": accuracy_check_clip(
+                    model_name, average_clip_score, num_prompts, mode="valid"
+                ),
+                "delta_clip": get_appr_delta_metric(model_name, average_clip_score, num_prompts, score_type="clip"),
                 "fid_score": fid_score,
-                "fid_accuracy_check_approx": accuracy_check_fid(fid_score, num_prompts, mode="approx"),
-                "fid_accuracy_check_valid": accuracy_check_fid(fid_score, num_prompts, mode="valid"),
-                "delta_fid": get_appr_delta_metric(fid_score, num_prompts, score_type="fid"),
+                "fid_accuracy_check_approx": accuracy_check_fid(model_name, fid_score, num_prompts, mode="approx"),
+                "fid_accuracy_check_valid": accuracy_check_fid(model_name, fid_score, num_prompts, mode="valid"),
+                "delta_fid": get_appr_delta_metric(model_name, fid_score, num_prompts, score_type="fid"),
                 "accuracy_check": min(
-                    accuracy_check_fid(fid_score, num_prompts, mode="approx"),
-                    accuracy_check_clip(average_clip_score, num_prompts, mode="approx"),
+                    accuracy_check_fid(model_name, fid_score, num_prompts, mode="approx"),
+                    accuracy_check_clip(model_name, average_clip_score, num_prompts, mode="approx"),
                 ),
                 "accuracy_check_delta": min(
-                    accuracy_check_fid(fid_score, num_prompts, mode="delta"),
-                    accuracy_check_clip(average_clip_score, num_prompts, mode="delta"),
+                    accuracy_check_fid(model_name, fid_score, num_prompts, mode="delta"),
+                    accuracy_check_clip(model_name, average_clip_score, num_prompts, mode="delta"),
                 ),
                 "accuracy_check_valid": min(
-                    accuracy_check_fid(fid_score, num_prompts, mode="valid"),
-                    accuracy_check_clip(average_clip_score, num_prompts, mode="valid"),
+                    accuracy_check_fid(model_name, fid_score, num_prompts, mode="valid"),
+                    accuracy_check_clip(model_name, average_clip_score, num_prompts, mode="valid"),
                 ),
             }
         ],
@@ -250,9 +250,7 @@ def test_accuracy_sdxl(
 
     logger.info(f"Test results saved to {OUT_ROOT}/{new_file_name}")
 
-    with open(
-        f"{OUT_ROOT}/{RESULTS_FILE_NAME}", "w"
-    ) as f:  # this is for CI and test_sdxl_accuracy_with_reset.py compatibility
+    with open(f"{OUT_ROOT}/{RESULTS_FILE_NAME}", "w") as f:  # this is for CI compatibility
         json.dump(data, f, indent=4)
 
     logger.info(f"Test results saved to {OUT_ROOT}/{RESULTS_FILE_NAME}")

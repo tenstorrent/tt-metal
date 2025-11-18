@@ -726,11 +726,6 @@ void bind_bitwise_binary_ops_operation(
                  - 2, 3, 4
 
             {6}
-
-        Example:
-            >>> tensor1 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor2 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> output = {1}(tensor1, tensor2/scalar)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -1192,11 +1187,6 @@ void bind_prelu(
                  - {4}
 
             {7}
-
-        Example:
-            >>> tensor1 = {5}
-            >>> tensor2 = {6}
-            >>> output = {1}(tensor1, tensor2/scalar)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -1639,12 +1629,6 @@ void bind_binary_overload_operation(
                  - 2, 3, 4
 
             {5}
-
-        Example:
-            >>> tensor1 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor2 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> output = {1}(tensor1, tensor2/scalar)
-
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -2372,7 +2356,7 @@ void py_module(py::module& module) {
         R"doc(Computes squared difference of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}} = \verb|squared_difference|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
         ". ",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT16)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16)doc");
 
     detail::bind_binary_operation(
         module,
@@ -2710,7 +2694,7 @@ void py_module(py::module& module) {
         ttnn::squared_difference_,
         R"doc(Performs squared_difference in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\verb|squared_difference|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16)doc");
 
     detail::bind_inplace_operation_with_fast_approx(
         module,
