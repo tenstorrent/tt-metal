@@ -8,6 +8,7 @@
 #include <fmt/format.h>
 
 #include <cstdint>
+#include <filesystem>
 #include <fstream>
 #include <stdexcept>
 #include <string>
@@ -18,8 +19,10 @@
 // Include generated FlatBuffer code
 #include "tar_reader.hpp"
 #include "tar_writer.hpp"
+#include "ttml_tensor_generated.h"
 
 namespace {
+
 // Compile-time strlen for constexpr strings (consteval ensures compile-time evaluation)
 consteval size_t constexpr_strlen(const char* str) {
     size_t len = 0;
@@ -28,13 +31,24 @@ consteval size_t constexpr_strlen(const char* str) {
     }
     return len;
 }
+
 }  // namespace
-#include "ttml_tensor_generated.h"
 
 namespace ttml::serialization {
 
 class FlatBufferFile::Impl {
 public:
+    explicit Impl(bool use_tarball) : m_use_tarball(use_tarball) {
+    }
+
+    void set_use_tarball(bool use_tarball) {
+        m_use_tarball = use_tarball;
+    }
+
+    bool get_use_tarball() const {
+        return m_use_tarball;
+    }
+
     // Methods to store different types
     void put(std::string_view key, bool value) {
         m_data[std::string(key)] = value;
@@ -216,8 +230,18 @@ public:
         return "data";  // Default prefix for keys without '/'
     }
 
-    // Serialization method - creates multiple flatbuffer files grouped by prefix
-    void serialize(std::string_view filename) {
+    // Helper function to get base filename without extension
+    std::string get_base_filename(std::string_view filename) const {
+        std::string fname(filename);
+        // Remove .tar extension if present
+        if (fname.size() >= 4 && fname.substr(fname.size() - 4) == ".tar") {
+            return fname.substr(0, fname.size() - 4);
+        }
+        return fname;
+    }
+
+    // Helper function to group data by prefix and build flatbuffer files
+    std::vector<std::pair<std::string, std::vector<uint8_t>>> build_flatbuffer_files() const {
         // Group data by top-level prefix
         std::unordered_map<std::string, std::unordered_map<std::string, ValueType>> grouped_data;
 
@@ -231,11 +255,9 @@ public:
             grouped_data[prefix][suffix] = value;
         }
 
-        // Create tarball in memory with multiple files
-        TarWriter tar_writer;
-
         // Build a flatbuffer file for each prefix group
-        bool added_any_files = false;
+        std::vector<std::pair<std::string, std::vector<uint8_t>>> flatbuffer_files;
+
         for (const auto& [prefix, data_subset] : grouped_data) {
             if (data_subset.empty()) {
                 continue;  // Skip empty groups
@@ -245,18 +267,64 @@ public:
                 // This shouldn't happen if data_subset is not empty, but check anyway
                 continue;
             }
-            std::string filename_in_tar = prefix + ".flatbuffer";
-            tar_writer.add_file(filename_in_tar, flatbuffer_data.data(), flatbuffer_data.size());
-            added_any_files = true;
+            std::string file_name = prefix + ".flatbuffer";
+            flatbuffer_files.emplace_back(file_name, std::move(flatbuffer_data));
         }
 
-        // Ensure we have at least one file (should always be true if m_data is not empty)
-        if (!added_any_files && !m_data.empty()) {
-            throw std::runtime_error("Failed to create any flatbuffer files during serialization");
+        return flatbuffer_files;
+    }
+
+    // Serialization method - tarball version
+    void serialize_tarball(
+        std::string_view filename, const std::vector<std::pair<std::string, std::vector<uint8_t>>>& flatbuffer_files) {
+        // Create tarball in memory with multiple files
+        TarWriter tar_writer;
+
+        for (const auto& [file_name, flatbuffer_data] : flatbuffer_files) {
+            tar_writer.add_file(file_name, flatbuffer_data.data(), flatbuffer_data.size());
         }
 
         // Write tarball to file (single write operation)
         tar_writer.write_to_file(std::string(filename));
+    }
+
+    // Serialization method - non-tarball version
+    void serialize_non_tarball(
+        std::string_view filename, const std::vector<std::pair<std::string, std::vector<uint8_t>>>& flatbuffer_files) {
+        // Write individual files
+        std::string base_filename = get_base_filename(filename);
+
+        for (const auto& [file_name, flatbuffer_data] : flatbuffer_files) {
+            // Construct individual filename: base_filename_prefix.flatbuffer
+            std::string individual_filename = base_filename + "_" + file_name;
+
+            std::ofstream file(individual_filename, std::ios::binary);
+            if (!file.is_open()) {
+                throw std::runtime_error(fmt::format("Failed to open file for writing: {}", individual_filename));
+            }
+
+            file.write(reinterpret_cast<const char*>(flatbuffer_data.data()), flatbuffer_data.size());
+            if (!file.good()) {
+                throw std::runtime_error(
+                    fmt::format("Failed to write flatbuffer data to file: {}", individual_filename));
+            }
+        }
+    }
+
+    // Serialization method - dispatches to tarball or non-tarball version
+    void serialize(std::string_view filename) {
+        auto flatbuffer_files = build_flatbuffer_files();
+
+        // Ensure we have at least one file (should always be true if m_data is not empty)
+        if (flatbuffer_files.empty() && !m_data.empty()) {
+            throw std::runtime_error("Failed to create any flatbuffer files during serialization");
+        }
+
+        if (m_use_tarball) {
+            serialize_tarball(filename, flatbuffer_files);
+        } else {
+            serialize_non_tarball(filename, flatbuffer_files);
+        }
     }
 
     // Helper function to deserialize a flatbuffer and merge into m_data with prefix
@@ -278,8 +346,8 @@ public:
         }
 
         // Deserialize each key-value pair and add prefix
-        // Note: If prefix is "data" (default for keys without '/'), don't add it back
-        // to preserve the original key structure
+        // Note: If prefix is "data" (default for keys without '/') or empty (non-tarball mode),
+        // don't add it back to preserve the original key structure
         for (const auto* kv_pair : *ttml_data->pairs()) {
             if (!kv_pair || !kv_pair->key()) {
                 continue;
@@ -287,8 +355,8 @@ public:
 
             std::string suffix(kv_pair->key()->c_str());
             std::string key;
-            if (prefix == "data") {
-                // Keys without '/' were stored with default prefix "data"
+            if (prefix.empty() || prefix == "data") {
+                // Keys without '/' were stored with default prefix "data" or empty prefix (non-tarball)
                 // Don't add prefix back to preserve original key structure
                 key = suffix;
             } else {
@@ -412,8 +480,8 @@ public:
         }
     }
 
-    // Deserialization method - reads multiple flatbuffer files from tarball
-    void deserialize(std::string_view filename) {
+    // Deserialization method - tarball version
+    void deserialize_tarball(std::string_view filename) {
         // Read tarball
         TarReader tar_reader;
         try {
@@ -422,9 +490,6 @@ public:
             // Re-throw tar reading errors (invalid tarball, empty file, etc.)
             throw;
         }
-
-        // Clear existing data
-        m_data.clear();
 
         // Get list of all files in tarball
         auto files = tar_reader.list_files();
@@ -473,6 +538,78 @@ public:
             throw std::runtime_error(
                 "Tarball does not contain any .flatbuffer files: " + std::string(filename) +
                 ". Files found: " + (files.empty() ? "(empty)" : file_list));
+        }
+    }
+
+    // Deserialization method - non-tarball version
+    void deserialize_non_tarball(std::string_view filename) {
+        // Read individual flatbuffer files
+        std::string base_filename = get_base_filename(filename);
+        std::string base_path = std::filesystem::path(filename).parent_path().string();
+        if (base_path.empty()) {
+            base_path = ".";
+        }
+
+        std::string base_name = std::filesystem::path(base_filename).filename().string();
+        std::string search_pattern = base_name + "_";
+        constexpr const char* flatbuffer_ext = ".flatbuffer";
+
+        bool found_any_files = false;
+
+        // Search for files matching the pattern: base_name_*.flatbuffer
+        try {
+            for (const auto& entry : std::filesystem::directory_iterator(base_path)) {
+                if (!entry.is_regular_file()) {
+                    continue;
+                }
+
+                std::string entry_name = entry.path().filename().string();
+
+                // Check if filename starts with search_pattern and ends with .flatbuffer
+                if (entry_name.size() >= search_pattern.size() + constexpr_strlen(flatbuffer_ext) &&
+                    entry_name.substr(0, search_pattern.size()) == search_pattern &&
+                    entry_name.substr(entry_name.size() - constexpr_strlen(flatbuffer_ext)) == flatbuffer_ext) {
+                    // Extract prefix from filename: remove base_name_ prefix and .flatbuffer extension
+                    std::string prefix = entry_name.substr(
+                        search_pattern.size(),
+                        entry_name.size() - search_pattern.size() - constexpr_strlen(flatbuffer_ext));
+
+                    // Read the file
+                    std::ifstream file(entry.path(), std::ios::binary | std::ios::ate);
+                    if (!file.is_open()) {
+                        continue;  // Skip files we can't open
+                    }
+
+                    size_t file_size = file.tellg();
+                    file.seekg(0, std::ios::beg);
+
+                    std::vector<uint8_t> buffer(file_size);
+                    file.read(reinterpret_cast<char*>(buffer.data()), file_size);
+                    if (file.good() || file_size == 0) {
+                        deserialize_flatbuffer(buffer, prefix);
+                        found_any_files = true;
+                    }
+                }
+            }
+        } catch (const std::filesystem::filesystem_error& e) {
+            throw std::runtime_error(fmt::format("Failed to read directory for flatbuffer files: {}", e.what()));
+        }
+
+        if (!found_any_files) {
+            throw std::runtime_error(
+                fmt::format("No flatbuffer files found matching pattern: {}_*.flatbuffer in {}", base_name, base_path));
+        }
+    }
+
+    // Deserialization method - dispatches to tarball or non-tarball version
+    void deserialize(std::string_view filename) {
+        // Clear existing data
+        m_data.clear();
+
+        if (m_use_tarball) {
+            deserialize_tarball(filename);
+        } else {
+            deserialize_non_tarball(filename);
         }
     }
 
@@ -548,6 +685,7 @@ public:
 
 private:
     std::unordered_map<std::string, ValueType> m_data;
+    bool m_use_tarball;
 
     // Helper function to get value from m_data
     template <typename T>
@@ -565,7 +703,7 @@ private:
     }
 };
 
-FlatBufferFile::FlatBufferFile() : m_impl(std::make_unique<Impl>()) {
+FlatBufferFile::FlatBufferFile(bool use_tarball) : m_impl(std::make_unique<Impl>(use_tarball)) {
 }
 
 FlatBufferFile::~FlatBufferFile() {
@@ -641,6 +779,14 @@ void FlatBufferFile::put(std::string_view key, std::span<const std::string> valu
 
 void FlatBufferFile::put(std::string_view key, const ValueType& value) {
     m_impl->put(key, value);
+}
+
+void FlatBufferFile::set_use_tarball(bool use_tarball) {
+    m_impl->set_use_tarball(use_tarball);
+}
+
+bool FlatBufferFile::get_use_tarball() const {
+    return m_impl->get_use_tarball();
 }
 
 void FlatBufferFile::serialize(std::string_view filename) {

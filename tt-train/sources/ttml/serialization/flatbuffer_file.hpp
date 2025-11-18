@@ -33,7 +33,8 @@ using ValueType = std::variant<
 
 class FlatBufferFile {
 public:
-    FlatBufferFile();
+    // Constructor with optional tarballing (defaults to true for backward compatibility)
+    explicit FlatBufferFile(bool use_tarball = true);
     ~FlatBufferFile();
 
     // Copy constructor
@@ -47,6 +48,12 @@ public:
 
     // Move assignment operator
     FlatBufferFile& operator=(FlatBufferFile&& other) = delete;
+
+    // Set whether to use tarball format (can be changed at runtime)
+    void set_use_tarball(bool use_tarball);
+
+    // Get whether tarball format is enabled
+    [[nodiscard]] bool get_use_tarball() const;
 
     // Methods to put different types
     void put(std::string_view key, bool value);
