@@ -18,22 +18,22 @@ def _ntuple(x, n):
     return tuple(repeat(x, n))
 
 
-def get_conv3d_config(in_channels, grid_size):
+def get_conv3d_config(in_channels, out_channels, kernel_size, grid_size):
     config_to_blocking = {
-        # (in_channels) -> (C_in_block, C_out_block, T_out_block, H_out_block, W_out_block)
-        96: (96, 32, 1, 32, 2),
-        192: (192, 96, 1, 4, 4),
-        96: (96, 96, 1, 32, 2),
-        384: (192, 96, 1, 16, 1),
-        192: (96, 96, 1, 64, 1),
-        32: (32, 384, 1, 8, 8),
+        # (in_channels, out_channels, kernel_size) -> (C_in_block, C_out_block, T_out_block, H_out_block, W_out_block)
+        (96, 32, (3, 3, 3)): (96, 32, 1, 32, 2),
+        (192, 96, (1, 3, 3)): (192, 96, 1, 4, 4),
+        (96, 96, (3, 3, 3)): (96, 96, 1, 32, 2),
+        (384, 192, (1, 3, 3)): (192, 96, 1, 16, 1),
+        (192, 192, (3, 3, 3)): (96, 96, 1, 64, 1),
+        (32, 384, (3, 3, 3)): (32, 384, 1, 8, 8),
         # (16, 384, (3, 3, 3)): (16, 32, 1, 1, 1),
-        192: (96, 128, 1, 32, 1),
-        384: (128, 128, 1, 16, 2),
-        384: (128, 128, 1, 16, 2),
+        (192, 384, (3, 3, 3)): (96, 128, 1, 32, 1),
+        (384, 384, (3, 3, 3)): (128, 128, 1, 16, 2),
+        (384, 768, (3, 3, 3)): (128, 128, 1, 16, 2),
     }
 
-    blocking = config_to_blocking.get(in_channels, None)
+    blocking = config_to_blocking.get((in_channels, out_channels, kernel_size), None)
     if blocking is None:
         C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = in_channels, 32, 1, 1, 1
         logger.warning(

@@ -238,6 +238,8 @@ class WanCausalConv3d:
 
         self.conv_config = get_conv3d_config(
             self.in_channels,
+            self.out_channels,
+            self.kernel_size,
             grid_size=self.mesh_device.compute_with_storage_grid_size(),
         )
 
@@ -636,6 +638,8 @@ class WanConv2d:
 
         self.conv_config = get_conv3d_config(
             self.in_channels,
+            self.out_channels,
+            self.kernel_size,
             grid_size=self.mesh_device.compute_with_storage_grid_size(),
         )
         logger.info(f"Loaded conv_config: {self.conv_config}")
