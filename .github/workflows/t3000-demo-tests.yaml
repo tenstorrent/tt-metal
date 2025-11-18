@@ -22,7 +22,7 @@ on:
           - resnet50
           - sentence_bert
           - sd35_large
-          - flux1
+          - flux1-dev
           - mistral
           - qwen3
           - qwen25_vl
