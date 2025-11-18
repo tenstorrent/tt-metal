@@ -27,6 +27,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <tracy/Tracy.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include <impl/debug/inspector/inspector.hpp>
 
 namespace tt::tt_metal {
 
@@ -444,6 +445,10 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
 
         // Handler for timeout
         auto fetch_on_timeout = [&]() {
+            // Serialize Inspector RPC data before throwing
+            log_info(LogAlways, "Timeout detected - serializing Inspector RPC data");
+            Inspector::serialize_rpc();
+
             TT_THROW("TIMEOUT: device timeout in fetch queue wait, potential hang detected");
         };
 
@@ -495,6 +500,11 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
     // Handler for the timeout
     auto on_timeout = [&exit_condition]() {
         exit_condition.store(true);
+
+        // Serialize Inspector RPC data before throwing
+        log_info(LogAlways, "Timeout detected - serializing Inspector RPC data");
+        Inspector::serialize_rpc();
+
         TT_THROW("TIMEOUT: device timeout, potential hang detected, the device is unrecoverable");
     };
 
