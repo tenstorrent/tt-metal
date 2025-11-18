@@ -1255,6 +1255,39 @@ class ModelArgs:
             )
             logger.info(f"LM head grid: {self.lm_head_core_grid}")
 
+        self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
+
+    def get_trace_prefill_supported_seq_lens(self):
+        default_supported_seq_lens = {
+            "N150": [128, 256, 512],
+            "N300": [128, 256, 512, 1024],
+            "T3K": [128, 256, 512, 1024],
+            "TG": [128, 256, 512, 1024],
+        }
+
+        # TODO: If no specific sequence lengths are listed for a model and device, the default one will be used (from the default_supported_seq_lens dictionary)
+        model_specific_supported_seq_lens = {
+            # EXAMPLE: "gemma-3-4b": {
+            #     "N150": [128, 256, 512, 1024, 2048],
+            # }
+        }
+
+        model_name = self.base_model_name
+        device_name = self.device_name
+
+        # Try model-specific sequence lengths first
+        result = model_specific_supported_seq_lens.get(model_name, {}).get(device_name)
+        if result:
+            return result
+
+        # Fall back to default sequence lengths
+        result = default_supported_seq_lens.get(device_name)
+        if result:
+            return result
+
+        # No supported sequence lengths found, return empty list
+        return []
+
     def can_enable_trace(self, prefill_seq_len):
         """
         This function is used to determine if trace should be enabled for the prefill.
@@ -1265,17 +1298,17 @@ class ModelArgs:
         """
         # Trace in prefill is currently supported only for Llama-3.1-8B
         # TODO: (https://github.com/tenstorrent/tt-metal/issues/25722) Support all other models that use tt_transformers
-        if self.base_model_name != "Llama-3.1-8B":
-            return False
+
         if hasattr(self, "sliding_window") and getattr(self, "sliding_window") != None:
             return False
 
-        if self.device_name == "N150":
-            allowed_seq_lens = [128, 256, 512, 1024]
-        else:
-            allowed_seq_lens = [128, 256, 512, 1024, 2048, 4096, 8192]
+        allowed_seq_lens = self.trace_prefill_supported_seq_lens
 
-        return prefill_seq_len in allowed_seq_lens and prefill_seq_len <= self.max_prefill_chunk_size
+        return (
+            prefill_seq_len in allowed_seq_lens
+            and prefill_seq_len <= self.max_prefill_chunk_size
+            and prefill_seq_len <= self.max_seq_len
+        )
 
     def get_xqkv_prefill_mem_cfg(self, seq_len):
         return ttnn.create_sharded_memory_config(
@@ -1787,7 +1820,18 @@ class ModelArgs:
                 config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
                 config.num_layers = self.n_layers
                 config.num_hidden_layers = self.n_layers
-                model = AutoModelForCausalLM.from_config(config)
+
+                try:
+                    # .from_pretrained + _init_weights works faster than .from_config
+                    model = AutoModelForCausalLM.from_pretrained(
+                        self.CKPT_DIR, config=config, torch_dtype="auto", local_files_only=True
+                    )
+                    model.apply(model._init_weights)
+                except Exception as e:
+                    logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
+                    model = AutoModelForCausalLM.from_config(config)
+
+                # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
                 state_dict = model.state_dict()
             else:
                 reference_model = Transformer(self)
@@ -2297,7 +2341,17 @@ class ModelArgs:
                 config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
                 config.num_layers = self.n_layers
                 config.num_hidden_layers = self.n_layers
-                model = AutoModel.from_config(config)
+
+                try:
+                    # .from_pretrained + _init_weights works faster than .from_config
+                    model = AutoModel.from_pretrained(
+                        self.CKPT_DIR, config=config, torch_dtype="auto", local_files_only=True
+                    )
+                    model.apply(model._init_weights)
+                except Exception as e:
+                    logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
+                    model = AutoModel.from_config(config)
+                # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
             else:
                 if self.cache_hf_flag and self.cached_hf_model is None:
                     model = AutoModel.from_pretrained(self.CKPT_DIR)
@@ -2352,7 +2406,17 @@ class ModelArgs:
                 config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
                 config.num_layers = self.n_layers
                 config.num_hidden_layers = self.n_layers
-                model = AutoModelForCausalLM.from_config(config)
+
+                try:
+                    # .from_pretrained + _init_weights works faster than .from_config
+                    model = AutoModelForCausalLM.from_pretrained(
+                        self.CKPT_DIR, config=config, torch_dtype="auto", local_files_only=True
+                    )
+                    model.apply(model._init_weights)
+                except Exception as e:
+                    logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
+                    model = AutoModelForCausalLM.from_config(config)
+                # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
             else:
                 if self.is_gemma:
                     from transformers import Gemma3ForConditionalGeneration

@@ -26,5 +26,7 @@ static constexpr uint32_t ETH_PROFILER_CHECK =
 static_assert(ETH_LAUNCH_CHECK == 0);
 static_assert(ETH_PROFILER_CHECK == 0);
 static_assert(MEM_IERISC_FIRMWARE_BASE % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT == 0);
+static_assert(MEM_AERISC_ROUTING_TABLE_BASE % 16 == 0, "Eth routing table base must be 16-byte aligned");
+static_assert(MEM_IERISC_ROUTING_TABLE_BASE % 16 == 0, "Eth routing table base must be 16-byte aligned");
 // This is where base firmware starts
 static_assert(MEM_ERISC_TOP < 0x70000);

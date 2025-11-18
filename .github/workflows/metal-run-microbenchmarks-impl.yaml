@@ -24,9 +24,9 @@ jobs:
           {
             arch: wormhole_b0,
             runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"],
-            name: "N300 Moreh ubench",
+            name: "N300 DRAM ubench",
             cmd: "./tests/scripts/run_moreh_microbenchmark.sh",
-          },  # Yu Gao
+          }, # Yu Gao
           {
             arch: wormhole_b0,
             runs-on: ["arch-wormhole_b0", "pipeline-perf", "config-t3000", "in-service"],
@@ -51,6 +51,12 @@ jobs:
             name: "WH Data Movement Regressions",
             cmd: "pytest -svv tests/tt_metal/tt_metal/data_movement/python/test_data_movement.py --gtest-filter Directed --verbose-log",
           }, # Ata Tuzuner
+          {
+            arch: blackhole,
+            runs-on: ["BH", "pipeline-perf", "P150", "in-service"],
+            name: "BH P150 DRAM ubench",
+            cmd: "./tests/scripts/run_moreh_microbenchmark.sh",
+          }, # Yu Gao
           {
             arch: blackhole,
             runs-on: ["BH", "pipeline-perf", "in-service"],

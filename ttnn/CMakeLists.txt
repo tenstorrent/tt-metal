@@ -98,6 +98,7 @@ target_sources(
         core/tensor/types.cpp
         core/tensor/unit_mesh/unit_mesh_utils.cpp
         core/tensor/xtensor/partition.cpp
+        core/tensor/to_string.cpp
 )
 target_include_directories(
     ttnn_core
@@ -236,6 +237,7 @@ set(TTNN_SRC_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_vit/nlp_create_qkv_heads_vit_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_boltz/nlp_create_qkv_heads_boltz_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/nlp_kv_cache_load_slice/nlp_kv_cache_load_slice_${PY_BINDING}.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/fused_distributed_rmsnorm/rmsnorm_distributed_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/rotary_embedding/rotary_embedding_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/rotary_embedding_llama_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/rotary_embedding_llama_${PY_BINDING}.cpp
@@ -243,6 +245,7 @@ set(TTNN_SRC_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/rotate_half/rotate_half_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/split_query_key_value_and_split_heads/split_query_key_value_and_split_heads_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward_${PY_BINDING}.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/reduction/integral_image/intimg_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/full/full_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/full_like/full_like_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/generic/generic_op_${PY_BINDING}.cpp
@@ -438,7 +441,6 @@ set_target_properties(
 )
 
 file(GLOB_RECURSE ttnn_kernels cpp/ttnn/operations/copy/typecast/device/kernels/*)
-file(GLOB_RECURSE api api/*)
 target_sources(
     ttnncpp
     PUBLIC
@@ -446,7 +448,68 @@ target_sources(
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/api ${CMAKE_CURRENT_SOURCE_DIR}/cpp
         FILES
-            ${api}
+            api/tools/profiler/op_profiler.hpp
+            api/ttnn/async_runtime.hpp
+            api/ttnn/cluster.hpp
+            api/ttnn/common/constants.hpp
+            api/ttnn/common/guard.hpp
+            api/ttnn/common/queue_id.hpp
+            api/ttnn/config.hpp
+            api/ttnn/core.hpp
+            api/ttnn/decorators.hpp
+            api/ttnn/device.hpp
+            api/ttnn/device_operation.hpp
+            api/ttnn/distributed/api.hpp
+            api/ttnn/distributed/bidirectional_fabric_socket.hpp
+            api/ttnn/distributed/create_socket.hpp
+            api/ttnn/distributed/distributed_configs.hpp
+            api/ttnn/distributed/distributed_pybind.hpp
+            api/ttnn/distributed/distributed_tensor.hpp
+            api/ttnn/distributed/fabric_socket.hpp
+            api/ttnn/distributed/host_ccl.hpp
+            api/ttnn/distributed/isocket.hpp
+            api/ttnn/distributed/mpi_socket.hpp
+            api/ttnn/distributed/tensor_topology.hpp
+            api/ttnn/distributed/types.hpp
+            api/ttnn/events.hpp
+            api/ttnn/global_circular_buffer.hpp
+            api/ttnn/global_semaphore.hpp
+            api/ttnn/graph/graph_argument_serializer.hpp
+            api/ttnn/graph/graph_consts.hpp
+            api/ttnn/graph/graph_operation_queries.hpp
+            api/ttnn/graph/graph_processor.hpp
+            api/ttnn/graph/graph_pybind.hpp
+            api/ttnn/graph/graph_query_op_constraints.hpp
+            api/ttnn/graph/graph_query_op_runtime.hpp
+            api/ttnn/graph/graph_trace_utils.hpp
+            api/ttnn/mesh_device_operation_adapter.hpp
+            api/ttnn/mesh_device_operation_utils.hpp
+            api/ttnn/old_infra_device_operation.hpp
+            api/ttnn/operation.hpp
+            api/ttnn/operation_concepts.hpp
+            api/ttnn/reports.hpp
+            api/ttnn/run_operation.hpp
+            api/ttnn/tensor/host_buffer/functions.hpp
+            api/ttnn/tensor/layout/alignment.hpp
+            api/ttnn/tensor/layout/layout.hpp
+            api/ttnn/tensor/layout/page_config.hpp
+            api/ttnn/tensor/layout/tensor_layout.hpp
+            api/ttnn/tensor/memory_config/memory_config.hpp
+            api/ttnn/tensor/serialization.hpp
+            api/ttnn/tensor/shape/shape.hpp
+            api/ttnn/tensor/storage.hpp
+            api/ttnn/tensor/tensor.hpp
+            api/ttnn/tensor/tensor_attributes.hpp
+            api/ttnn/tensor/tensor_impl.hpp
+            api/ttnn/tensor/tensor_spec.hpp
+            api/ttnn/tensor/tensor_utils.hpp
+            api/ttnn/tensor/to_string.hpp
+            api/ttnn/tensor/types.hpp
+            api/ttnn/tensor/unit_mesh/unit_mesh_utils.hpp
+            api/ttnn/tensor/xtensor/conversion_utils.hpp
+            api/ttnn/tensor/xtensor/partition.hpp
+            api/ttnn/tensor/xtensor/xtensor_all_includes.hpp
+            api/ttnn/types.hpp
             cpp/ttnn/operations/copy/typecast/typecast.hpp
             cpp/ttnn/operations/creation.hpp
             cpp/ttnn/operations/functions.hpp
@@ -664,11 +727,13 @@ set(FixmeOpIncDirs
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp
 )
 
+add_subdirectory(cpp/ttnn/deprecated)
 add_subdirectory(cpp/ttnn/operations/bernoulli)
 add_subdirectory(cpp/ttnn/operations/ccl)
 add_subdirectory(cpp/ttnn/operations/conv)
 add_subdirectory(cpp/ttnn/operations/core)
 add_subdirectory(cpp/ttnn/operations/data_movement)
+add_subdirectory(cpp/ttnn/operations/debug)
 add_subdirectory(cpp/ttnn/operations/eltwise/binary)
 add_subdirectory(cpp/ttnn/operations/eltwise/binary_backward)
 add_subdirectory(cpp/ttnn/operations/eltwise/binary_ng)
@@ -690,10 +755,10 @@ add_subdirectory(cpp/ttnn/operations/experimental/bcast_to)
 add_subdirectory(cpp/ttnn/operations/experimental/ccl)
 add_subdirectory(cpp/ttnn/operations/experimental/cnn)
 add_subdirectory(cpp/ttnn/operations/experimental/conv3d)
-add_subdirectory(cpp/ttnn/operations/experimental/minimal_matmul)
 add_subdirectory(cpp/ttnn/operations/experimental/copy)
 add_subdirectory(cpp/ttnn/operations/experimental/dropout)
 add_subdirectory(cpp/ttnn/operations/experimental/matmul)
+add_subdirectory(cpp/ttnn/operations/experimental/minimal_matmul)
 add_subdirectory(cpp/ttnn/operations/experimental/padded_slice)
 add_subdirectory(cpp/ttnn/operations/experimental/paged_cache)
 add_subdirectory(cpp/ttnn/operations/experimental/plusone)
@@ -701,26 +766,25 @@ add_subdirectory(cpp/ttnn/operations/experimental/reduction)
 add_subdirectory(cpp/ttnn/operations/experimental/reshape)
 add_subdirectory(cpp/ttnn/operations/experimental/slice_write)
 add_subdirectory(cpp/ttnn/operations/experimental/ssm)
+add_subdirectory(cpp/ttnn/operations/experimental/test)
 add_subdirectory(cpp/ttnn/operations/experimental/transformer)
 add_subdirectory(cpp/ttnn/operations/experimental/unary_backward)
 add_subdirectory(cpp/ttnn/operations/experimental/where)
-add_subdirectory(cpp/ttnn/operations/experimental/test)
 add_subdirectory(cpp/ttnn/operations/full)
 add_subdirectory(cpp/ttnn/operations/full_like)
 add_subdirectory(cpp/ttnn/operations/index_fill)
+add_subdirectory(cpp/ttnn/operations/kernel_helper_functions)
 add_subdirectory(cpp/ttnn/operations/kv_cache)
 add_subdirectory(cpp/ttnn/operations/loss)
 add_subdirectory(cpp/ttnn/operations/matmul)
 add_subdirectory(cpp/ttnn/operations/moreh)
+add_subdirectory(cpp/ttnn/operations/normalization)
+add_subdirectory(cpp/ttnn/operations/point_to_point)
+add_subdirectory(cpp/ttnn/operations/pool)
 add_subdirectory(cpp/ttnn/operations/prefetcher)
+add_subdirectory(cpp/ttnn/operations/rand)
 add_subdirectory(cpp/ttnn/operations/reduction)
 add_subdirectory(cpp/ttnn/operations/sliding_window)
 add_subdirectory(cpp/ttnn/operations/transformer)
 add_subdirectory(cpp/ttnn/operations/uniform)
-add_subdirectory(cpp/ttnn/operations/pool)
-add_subdirectory(cpp/ttnn/operations/point_to_point)
-add_subdirectory(cpp/ttnn/operations/normalization)
-add_subdirectory(cpp/ttnn/operations/rand)
-add_subdirectory(cpp/ttnn/operations/debug)
-add_subdirectory(cpp/ttnn/deprecated)
 add_subdirectory(examples)

@@ -33,6 +33,15 @@ Tensor MorehClipGradNorm::invoke(
     const std::optional<const Tensor>& total_norm,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    // Early validation: if error_if_nonfinite is true, check if norm_type itself is NaN
+    if (error_if_nonfinite && std::isnan(norm_type)) {
+        TT_FATAL(
+            false,
+            "The total norm of order {} for gradients from `parameters` is non-finite, so it cannot be "
+            "clipped. To disable this error and scale the gradients by the non-finite norm anyway, set "
+            "`error_if_nonfinite=False`",
+            norm_type);
+    }
     auto device = inputs.at(0).device();
     const auto compute_kernel_config_val =
         init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);

@@ -41,27 +41,27 @@ public:
 
     IGraphProcessor() = default;
 
-    virtual void track_allocate(const tt::tt_metal::Buffer* buffer) {};
+    virtual void track_allocate(const tt::tt_metal::Buffer* /*buffer*/) {};
 
-    virtual void track_deallocate(tt::tt_metal::Buffer* buffer) {};
+    virtual void track_deallocate(tt::tt_metal::Buffer* /*buffer*/) {};
 
     virtual void track_allocate_cb(
-        const CoreRangeSet& core_range_set,
-        uint64_t addr,
-        uint64_t size,
-        bool is_globally_allocated,
-        const IDevice* device) {};
+        const CoreRangeSet& /*core_range_set*/,
+        uint64_t /*addr*/,
+        uint64_t /*size*/,
+        bool /*is_globally_allocated*/,
+        const IDevice* /*device*/) {};
 
-    virtual void track_deallocate_cb(const IDevice* device) {};
+    virtual void track_deallocate_cb(const IDevice* /*device*/) {};
 
-    virtual void track_program(tt::tt_metal::Program* program, const IDevice* device) {};
+    virtual void track_program(tt::tt_metal::Program* /*program*/, const IDevice* /*device*/) {};
 
-    virtual void track_function_start(std::string_view function_name, std::span<std::any> input_parameters) {};
+    virtual void track_function_start(std::string_view /*function_name*/, std::span<std::any> /*input_parameters*/){};
 
     virtual void track_function_end() {};
-    virtual void track_function_end(const std::any& output_tensors) {};
+    virtual void track_function_end(const std::any& /*output_tensors*/) {};
 
-    virtual void begin_capture(RunMode mode) {};
+    virtual void begin_capture(RunMode /*mode*/){};
 
     virtual nlohmann::json end_capture() { return nullptr; };
 

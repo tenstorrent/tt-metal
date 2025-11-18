@@ -9,6 +9,7 @@
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
 #include <array>
@@ -352,13 +353,17 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             std::pair<bool, int>(unicast_go_signals, num_virtual_eth_cores));
 
         if (sysmem_manager.get_bypass_mode()) {
-            this->capture_program_trace_on_subgrid(
-                device_range,
-                program_cmd_seq,
-                dispatch_metadata.stall_first,
-                dispatch_metadata.stall_before_program,
-                program.get_runtime_id());
-            active_sub_grids.push_back(device_range);
+            auto local_mesh_range = mesh_device_->get_view().get_local_mesh_coord_range();
+            auto local_device_range = local_mesh_range.intersection(device_range);
+            if (local_device_range.has_value()) {
+                this->capture_program_trace_on_subgrid(
+                    local_device_range.value(),
+                    program_cmd_seq,
+                    dispatch_metadata.stall_first,
+                    dispatch_metadata.stall_before_program,
+                    program.get_runtime_id());
+                active_sub_grids.push_back(local_device_range.value());
+            }
         } else {
             this->write_program_cmds_to_subgrid(
                 device_range,
@@ -383,9 +388,8 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         for (const auto& sub_grid : active_sub_grids) {
             active_sub_grids_set.merge(sub_grid);
         }
-        TT_FATAL(active_sub_grids_set.size() == 1, "Cannot support non convex grids.");
         this->capture_go_signal_trace_on_unused_subgrids(
-            active_sub_grids_set.ranges().front(),
+            active_sub_grids_set,
             sub_device_id,
             expected_num_workers_completed,
             mcast_go_signals,
@@ -513,6 +517,11 @@ void FDMeshCommandQueue::finish_nolock(tt::stl::Span<const SubDeviceId> sub_devi
 void FDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
     auto lock = lock_api_function_();
     this->finish_nolock(sub_device_ids);
+
+    // Barrier across all hosts of the mesh
+    auto distributed_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_distributed_context(
+        mesh_device_->get_view().mesh_id());
+    distributed_context->barrier();
 }
 
 void FDMeshCommandQueue::write_shard_to_device(
@@ -985,15 +994,21 @@ void FDMeshCommandQueue::capture_program_trace_on_subgrid(
 }
 
 void FDMeshCommandQueue::capture_go_signal_trace_on_unused_subgrids(
-    const MeshCoordinateRange& active_grid,
+    const MeshCoordinateRangeSet& active_grids_set,
     const SubDeviceId& sub_device_id,
     uint32_t expected_num_workers_completed,
     bool mcast_go_signals,
     bool unicast_go_signals,
     const program_dispatch::ProgramDispatchMetadata& dispatch_md) {
-    MeshCoordinateRange full_grid(mesh_device_->shape());
-    MeshCoordinateRangeSet unused_grids = subtract(full_grid, active_grid);
-    for (const auto& unused_grid : unused_grids.ranges()) {
+    // TODO: #31963 Handle the case where there are multiple active grids.
+    TT_FATAL(active_grids_set.size() <= 1, "Cannot support non convex grids.");
+    MeshCoordinateRange full_grid(mesh_device_->get_view().get_local_mesh_coord_range());
+    MeshCoordinateRangeSet unused_grids_set(full_grid);
+    if (active_grids_set.size() == 1) {
+        MeshCoordinateRange active_grid = active_grids_set.ranges().front();
+        unused_grids_set = subtract(full_grid, active_grid);
+    }
+    for (const auto& unused_grid : unused_grids_set.ranges()) {
         if (!mesh_device_->is_local(unused_grid.start_coord())) {
             continue;
         }
@@ -1160,6 +1175,57 @@ void FDMeshCommandQueue::capture_expected_worker_count_reset_cmd(
             sysmem_manager_offset,
             sysmem_manager.get_issue_queue_write_ptr(id_) - sysmem_manager_offset};
         ordered_mesh_trace_md_.push_back(mesh_trace_md);
+    }
+}
+
+void FDMeshCommandQueue::wait_for_completion(bool reset_launch_msg_state) {
+    if (in_use_) {
+        size_t num_sub_devices = mesh_device_->num_sub_devices();
+        for (auto device : mesh_device_->get_devices()) {
+            TT_FATAL(!device->sysmem_manager().get_bypass_mode(), "Cannot reset worker state during trace capture");
+        }
+        cq_shared_state_->sub_device_cq_owner.clear();
+        cq_shared_state_->sub_device_cq_owner.resize(num_sub_devices);
+        for (auto device : mesh_device_->get_devices()) {
+            program_dispatch::reset_worker_dispatch_state_on_device(
+                mesh_device_,
+                device->sysmem_manager(),
+                id_,
+                this->virtual_program_dispatch_core(),
+                expected_num_workers_completed_,
+                reset_launch_msg_state);
+        }
+        program_dispatch::reset_config_buf_mgrs_and_expected_workers(
+            config_buffer_mgr_,
+            expected_num_workers_completed_,
+            mesh_device_->num_sub_devices(),
+            mesh_device_->allocator()->get_config().l1_unreserved_base);
+        if (reset_launch_msg_state) {
+            std::for_each(
+                this->cq_shared_state_->worker_launch_message_buffer_state.begin(),
+                this->cq_shared_state_->worker_launch_message_buffer_state.begin() + num_sub_devices,
+                std::mem_fn(&LaunchMessageRingBufferState::reset));
+        }
+        finish();
+    }
+}
+
+void FDMeshCommandQueue::finish_and_reset_in_use() {
+    if (in_use_) {
+        auto lock = lock_api_function_();
+        uint32_t current_event = reference_sysmem_manager().get_current_event(id_);
+        for (auto device : mesh_device_->get_devices()) {
+            TT_ASSERT(
+                device->sysmem_manager().get_last_completed_event(id_) == current_event,
+                "Current event must be equal to last completed event");
+            bool is_reference_cq = &device->sysmem_manager() == &reference_sysmem_manager();
+            // Ensure the next command will be recorded as event 0
+            device->sysmem_manager().set_current_and_last_completed_event(
+                id_, is_reference_cq ? UINT32_MAX : 0, UINT32_MAX);
+        }
+        finish_nolock({});
+
+        in_use_ = false;
     }
 }
 

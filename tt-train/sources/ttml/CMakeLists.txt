@@ -27,6 +27,7 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/core/mesh_device.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/not_null.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/random.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/random_sse.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/scoped.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/system_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/system_utils.hpp
@@ -148,6 +149,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/sgd.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/no_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/no_op.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/sgd_fused.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/sgd_fused.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/schedulers/lambda_scheduler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/schedulers/lambda_scheduler.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/schedulers/linear_scheduler.cpp
@@ -253,6 +256,14 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_program_factory.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_program_factory.cpp
+    # SGD Fused Optimizer
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/sgd_fused/sgd_fused.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/sgd_fused/sgd_fused.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/sgd_fused/device/sgd_fused_device_operation_types.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/sgd_fused/device/sgd_fused_device_operation.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/sgd_fused/device/sgd_fused_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/sgd_fused/device/sgd_fused_program_factory.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/sgd_fused/device/sgd_fused_program_factory.cpp
 )
 
 list(APPEND SOURCES ${METAL_OPS_FILES})
@@ -346,6 +357,7 @@ if(NOT TARGET TT::Metalium)
                     INTERFACE_INCLUDE_DIRECTORIES
                         "${METALIUM_INCLUDE_DIRS}"
             )
+            target_link_libraries(TTNN::TTNN INTERFACE TT::Metalium)
             message(STATUS "Successfully found _ttnncpp.so at ${TTNNCPP_LIBRARY}")
         else()
             message(FATAL_ERROR "_ttnncpp.so not found in ${METALIUM_LIB_PATH}")
@@ -392,6 +404,7 @@ target_link_libraries(
         Boost::core
         Boost::container
         tt-logger
+        simde::simde
 )
 
 message(STATUS "xtensor_SOURCE_DIR: ${xtensor_SOURCE_DIR}")
@@ -492,17 +505,43 @@ target_include_directories(_ttml PUBLIC ${PROJECT_SOURCE_DIR})
 install(
     TARGETS
         _ttml
-    ARCHIVE
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}
     LIBRARY
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}
-        COMPONENT tar
+        DESTINATION ttml
+        COMPONENT ttml
 )
+
+# Install Python source files
 install(
-    TARGETS
-        _ttml
-        DESTINATION
-        ${PROJECT_SOURCE_DIR}/tt-train/sources/ttml
-        COMPONENT
-        tt_pybinds
+    DIRECTORY
+        ${CMAKE_CURRENT_SOURCE_DIR}/ttml
+    DESTINATION ttml
+    COMPONENT ttml
+    FILES_MATCHING
+    PATTERN
+    "*.py"
+    PATTERN
+    "__pycache__"
+        EXCLUDE
 )
+
+# CPack configuration for creating ttml deb package
+set(CPACK_GENERATOR "DEB")
+set(CPACK_PACKAGE_NAME "ttml")
+set(CPACK_PACKAGE_VERSION "1.0.0")
+set(CPACK_PACKAGE_VENDOR "Tenstorrent")
+set(CPACK_PACKAGE_DESCRIPTION "TT Machine Learning Library - Training framework for Tenstorrent hardware")
+set(CPACK_PACKAGE_CONTACT "support@tenstorrent.com")
+set(CPACK_DEBIAN_PACKAGE_MAINTAINER "Tenstorrent")
+
+# Component-based packaging
+set(CPACK_DEB_COMPONENT_INSTALL ON)
+set(CPACK_COMPONENTS_ALL ttml)
+
+# Debian-specific settings
+set(CPACK_DEBIAN_TTML_PACKAGE_NAME "ttml")
+set(CPACK_DEBIAN_TTML_FILE_NAME "ttml-${CPACK_PACKAGE_VERSION}-Linux.deb")
+
+# Set the package architecture
+set(CPACK_DEBIAN_PACKAGE_ARCHITECTURE "amd64")
+
+include(CPack)

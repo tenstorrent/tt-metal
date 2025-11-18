@@ -38,7 +38,8 @@ std::ostream& operator<<(std::ostream& os, const FabricNodeId& fabric_node_id);
 
 class RoutingTableGenerator {
 public:
-    explicit RoutingTableGenerator(const std::string& mesh_graph_desc_file);
+    explicit RoutingTableGenerator(
+        const std::string& mesh_graph_desc_file, std::optional<FabricConfig> fabric_config = std::nullopt);
     ~RoutingTableGenerator() = default;
 
     void dump_to_yaml();

@@ -18,7 +18,6 @@ class PhysicalSystemDescriptor;
 }  // namespace tt::tt_metal
 
 using HostName = std::string;
-using HostRank = std::vector<HostName>;  // HostName is the hostname, the index is the host rank
 
 namespace tt::tt_fabric {
 
@@ -63,6 +62,14 @@ public:
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         const LocalMeshBinding& local_mesh_binding,
         const std::vector<std::pair<AsicPosition, FabricNodeId>>& fixed_asic_position_pinnings);
+
+    // Construct a TopologyMapper from a pre-provided logical mesh chip to physical chip mapping.
+    // Skips discovery and builds fabric node id to asic id mapping directly from the provided mapping.
+    TopologyMapper(
+        const MeshGraph& mesh_graph,
+        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+        const LocalMeshBinding& local_mesh_binding,
+        const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping);
 
     /**
      * @brief Get logical mesh graph connectivity
@@ -153,6 +160,32 @@ public:
     MeshShape get_mesh_shape(MeshId mesh_id, std::optional<MeshHostRankId> host_rank = std::nullopt) const;
 
     /**
+     * @brief Get hostname for a switch
+     *
+     * Maps switch_id to mesh_id internally and retrieves the hostname from the mesh mapping.
+     *
+     * @param switch_id The switch ID to get hostname for
+     * @return HostName The hostname of the switch
+     */
+    HostName get_hostname_for_switch(SwitchId switch_id) const;
+
+    /**
+     * @brief Get hostname for a mesh
+     *
+     * @param mesh_id The mesh ID to get hostname for
+     * @return HostName The hostname of the mesh
+     */
+    HostName get_hostname_for_mesh(MeshId mesh_id) const;
+
+    /**
+     * @brief Get hostname for a fabric node id
+     *
+     * @param fabric_node_id The fabric node id to get hostname for
+     * @return HostName The hostname of the fabric node id
+     */
+    HostName get_hostname_for_fabric_node_id(FabricNodeId fabric_node_id) const;
+
+    /**
      * @brief Get the coordinate range for the global mesh or a host's submesh
      *
      * When host_rank is not provided, returns the full logical mesh coordinate range (0..N-1, 0..M-1).
@@ -211,7 +244,39 @@ private:
      * to the ASIC IDs of the physical descriptor. Uses MPI through distributed context
      * to gather the mappings from all ranks.
      */
-    HostMeshMapping build_host_mesh_mapping();
+    HostMeshMapping build_host_mesh_mapping() const;
+
+    /**
+     * @brief Build the mapping between host ranks and host names
+     *
+     * This method iterates through all hosts in the physical system descriptor and creates mappings
+     * based on the host names and fabric chip IDs from the mesh_container, mapping them
+     * to the ASIC IDs of the physical descriptor. Uses MPI through distributed context
+     * to gather the mappings from all ranks.
+     */
+    std::unordered_map<MeshId, std::unordered_map<tt::tt_metal::AsicID, MeshHostRankId>>
+    build_asic_id_to_mesh_rank_mapping() const;
+
+    /**
+     * @brief Build the mapping between fabric node IDs and host ranks
+     *
+     * This method iterates through all fabric node IDs in the mesh graph and creates mappings
+     * based on the fabric node IDs and host ranks from the local mesh binding, mapping them
+     * to the host ranks of the physical descriptor.
+     */
+    std::unordered_map<MeshId, std::unordered_map<FabricNodeId, MeshHostRankId>>
+    build_fabric_node_id_to_mesh_rank_mapping() const;
+
+    /**
+     * @brief Validate that all meshes in the mesh graph descriptor have rank bindings
+     *
+     * Compares the mesh IDs from the mesh graph descriptor with the mesh IDs that have
+     * hosts bound to them in rank_bindings.yaml. Throws an error if any meshes are missing
+     * bindings, listing all unbound mesh IDs.
+     *
+     * @param mesh_id_host_names Mapping of mesh IDs to the set of host names participating in each mesh
+     */
+    void validate_mesh_id_host_names(const HostMeshMapping& mesh_id_host_names) const;
 
     /**
      * @brief Build logical adjacency maps from mesh graph connectivity
@@ -255,12 +320,17 @@ private:
      * 3. Maintains consistency by ensuring logical edges are present in the physical topology
      * 4. Creates bidirectional mappings in both fabric_node_id_to_asic_id_ and asic_id_to_fabric_node_id_
      *
+     * @param mesh_id Mesh ID
      * @param adjacency_map_physical Physical adjacency maps for each mesh
      * @param adjacency_map_logical Logical adjacency maps for each mesh
+     * @param host_name_to_mesh_rank Mapping of host names to mesh ranks
      */
     void populate_fabric_node_id_to_asic_id_mappings(
-        const std::unordered_map<MeshId, PhysicalAdjacencyMap>& adjacency_map_physical,
-        const std::unordered_map<MeshId, LogicalAdjacencyMap>& adjacency_map_logical);
+        MeshId mesh_id,
+        const PhysicalAdjacencyMap& adjacency_map_physical,
+        const LogicalAdjacencyMap& adjacency_map_logical,
+        const std::unordered_map<tt::tt_metal::AsicID, MeshHostRankId>& asic_id_to_mesh_rank,
+        const std::unordered_map<FabricNodeId, MeshHostRankId>& fabric_node_id_to_mesh_rank);
 
     /**
      * @brief Broadcast the mapping to all hosts
@@ -294,7 +364,13 @@ private:
     std::unordered_map<std::pair<MeshId, MeshHostRankId>, MeshCoordinateRange, hash_pair> mesh_host_rank_coord_ranges_;
 
     // Rebuild host-rank containers purely from fabric_node_id_to_asic_id_ mapping
-    void rebuild_host_rank_structs_from_mapping();
+    void rebuild_host_rank_structs_from_mapping(
+        const std::unordered_map<MeshId, std::unordered_map<tt::tt_metal::AsicID, MeshHostRankId>>&
+            asic_id_to_mesh_rank);
+
+    void print_logical_adjacency_map(const std::unordered_map<MeshId, LogicalAdjacencyMap>& adj_map) const;
+
+    void print_physical_adjacency_map(const std::unordered_map<MeshId, PhysicalAdjacencyMap>& adj_map) const;
 };
 
 }  // namespace tt::tt_fabric
