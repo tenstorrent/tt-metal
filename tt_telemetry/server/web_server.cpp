@@ -12,6 +12,7 @@
 #include <sstream>
 #include <thread>
 #include <vector>
+#include <numeric>
 
 #include <httplib.h>
 
@@ -23,6 +24,7 @@
 #include <server/prom_formatter.hpp>
 #include <unistd.h>
 #include <climits>
+#include <sys/stat.h>
 
 using json = nlohmann::json;
 
@@ -150,17 +152,88 @@ private:
         return buffer.str();
     }
 
+    // Get the directory containing the executable
+    std::string get_executable_dir() {
+        char result[PATH_MAX];
+        ssize_t count = readlink("/proc/self/exe", result, PATH_MAX);
+        if (count != -1) {
+            result[count] = '\0';
+            // Find last directory separator
+            for (ssize_t i = count - 1; i >= 0; --i) {
+                if (result[i] == '/') {
+                    result[i] = '\0';
+                    return std::string(result);
+                }
+            }
+        }
+        return "";
+    }
+
+    // Check if a directory exists
+    bool dir_exists(const std::string& path) {
+        struct stat info;
+        if (stat(path.c_str(), &info) != 0) {
+            return false;
+        }
+        return (info.st_mode & S_IFDIR) != 0;
+    }
+
+    // Find the frontend directory by searching multiple possible locations
+    std::string find_frontend_dir(const std::string& override_path = "") {
+        std::vector<std::string> search_paths;
+
+        // If override path provided, try it first
+        if (!override_path.empty()) {
+            search_paths.push_back(join_paths(override_path, "tt_telemetry/frontend/static"));
+        }
+
+        // Get executable directory
+        std::string exe_dir = get_executable_dir();
+        if (!exe_dir.empty()) {
+            // Try relative to executable (for installed/built binaries)
+            search_paths.push_back(join_paths(exe_dir, "frontend/static"));
+
+            // Try source tree location (for dev builds running from build directory)
+            search_paths.push_back(join_paths(exe_dir, "../../tt_telemetry/frontend/static"));
+        }
+
+        // Try current working directory as fallback
+        search_paths.push_back("tt_telemetry/frontend/static");
+        search_paths.push_back("frontend/static");
+
+        // Find first existing directory
+        for (const auto& path : search_paths) {
+            if (dir_exists(path)) {
+                log_info(tt::LogAlways, "Found frontend directory at: {}", path);
+                return path;
+            }
+        }
+
+        throw std::runtime_error(
+            "Could not locate frontend directory. Searched: " +
+            std::accumulate(
+                search_paths.begin(),
+                search_paths.end(),
+                std::string(),
+                [](const std::string& a, const std::string& b) { return a + (a.empty() ? "" : ", ") + b; }));
+    }
+
 public:
     WebServer(const std::string& metal_home = "") : started_at_(std::chrono::steady_clock::now()) {
-        if (!metal_home.empty()) {
-            metal_home_ = metal_home;
+        // Find frontend directory using search logic
+        std::string frontend_base = find_frontend_dir(metal_home);
+        // Extract base path (remove "tt_telemetry/frontend/static" or "frontend/static" suffix)
+        if (frontend_base.ends_with("tt_telemetry/frontend/static")) {
+            metal_home_ =
+                frontend_base.substr(0, frontend_base.length() - 32);  // Remove "/tt_telemetry/frontend/static"
+        } else if (frontend_base.ends_with("frontend/static")) {
+            metal_home_ = frontend_base.substr(0, frontend_base.length() - 15);  // Remove "/frontend/static"
         } else {
-            const char* env_metal_home = std::getenv("TT_METAL_HOME");
-            if (env_metal_home != nullptr) {
-                metal_home_ = std::string(env_metal_home);
-            } else {
-                throw std::runtime_error("TT_METAL_HOME environment variable not set and no metal_home provided");
-            }
+            metal_home_ = frontend_base;
+        }
+        // Ensure metal_home_ is set to the directory that contains the frontend path we need
+        if (!metal_home_.empty() && metal_home_.back() == '/') {
+            metal_home_.pop_back();
         }
     }
 
@@ -222,13 +295,10 @@ public:
                         "<p>Local path: " +
                         full_path +
                         "</p>"
-                        "<p>Metal home: " +
+                        "<p>Frontend base directory: " +
                         metal_home_ +
                         "</p>"
-                        "<p>Make sure Metal home (set via either TT_METAL_HOME or --metal-src-dir) points to the "
-                        "tt_metal repository and contains " +
-                        full_path +
-                        ".</p>"
+                        "<p>Frontend files not found. Use --metal-src-dir to override the search path.</p>"
                         "</body></html>";
                     res.set_content(error_html, "text/html");
                 }

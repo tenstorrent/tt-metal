@@ -107,6 +107,16 @@ target_link_libraries(
         protobuf::libprotobuf # Add protobuf library for compatibility
 )
 
+# Copy frontend files to build directory so they're accessible relative to the executable
+add_custom_command(
+    TARGET tt_telemetry_server
+    POST_BUILD
+    COMMAND
+        ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/frontend/static
+        ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/frontend/static
+    COMMENT "Copying frontend files to build directory"
+)
+
 # Add tests subdirectory
 if(TT_METAL_BUILD_TESTS)
     add_subdirectory(tests)
