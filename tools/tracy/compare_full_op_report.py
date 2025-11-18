@@ -75,9 +75,9 @@ def compare_cells(
     headers_b: List[str],
     rows_b: List[List[str]],
     max_differences: int,
-) -> Tuple[List[str], List[str]]:
+) -> Tuple[List[str], Set[str]]:
     differences: List[str] = []
-    allowed: List[str] = []
+    allowed_headers: Set[str] = set()
 
     len_a = len(rows_a) + (1 if headers_a else 0)
     len_b = len(rows_b) + (1 if headers_b else 0)
@@ -119,28 +119,29 @@ def compare_cells(
             header_hint = describe_header(headers_a, col_index) or describe_header(headers_b, col_index)
 
             if normalized_header in IGNORED_HEADERS:
-                allowed.append(
-                    f"Row {row_index + 1}, Column {col_index + 1}{header_hint}: '{value_a}' != '{value_b}' (ignored)"
-                )
-                continue
+                a_missing = value_a in ("", "0")
+                b_missing = value_b in ("", "0")
+                if a_missing != b_missing:
+                    allowed_headers.add(normalized_header or header_hint)
+                    continue
 
             differences.append(f"Row {row_index + 1}, Column {col_index + 1}{header_hint}: '{value_a}' != '{value_b}'")
             if len(differences) >= max_differences:
-                return differences, allowed
+                return differences, allowed_headers
 
     # Report any leftover rows explicitly once the shared ones match.
     if len(all_rows_a) > len(all_rows_b):
         for row_index in range(len(all_rows_b), len(all_rows_a)):
             differences.append(f"Extra row {row_index + 1} only present in first file: {all_rows_a[row_index]}")
             if len(differences) >= max_differences:
-                return differences, allowed
+                return differences, allowed_headers
     elif len(all_rows_b) > len(all_rows_a):
         for row_index in range(len(all_rows_a), len(all_rows_b)):
             differences.append(f"Extra row {row_index + 1} only present in second file: {all_rows_b[row_index]}")
             if len(differences) >= max_differences:
-                return differences, allowed
+                return differences, allowed_headers
 
-    return differences, allowed
+    return differences, allowed_headers
 
 
 @click.command()
@@ -160,7 +161,7 @@ def main(first_csv: Path, second_csv: Path, max_differences: int) -> None:
     sorted_a = sort_rows(data_a, headers_a)
     sorted_b = sort_rows(data_b, headers_b)
 
-    differences, allowed = compare_cells(
+    differences, allowed_headers = compare_cells(
         headers_a,
         sorted_a,
         headers_b,
@@ -168,10 +169,11 @@ def main(first_csv: Path, second_csv: Path, max_differences: int) -> None:
         max_differences=max_differences,
     )
 
-    if allowed:
-        click.echo("Allowed differences (per-core stats columns):")
-        for note in allowed:
-            click.echo(f" * {note}")
+    if allowed_headers:
+        click.echo(
+            "Allowed differences because one file had empty values for these headers: "
+            + ", ".join(sorted(allowed_headers))
+        )
 
     if differences:
         click.echo("CSV files differ:")
