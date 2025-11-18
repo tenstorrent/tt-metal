@@ -421,28 +421,45 @@ public:
 
     /** @brief Reserves the specified number of pages on the remote circular buffer
      *
-     * This is intended to be called by the producer core.
+     * This will block until the specified number of pages are available on the remote circular buffer.
+     *
+     * This is intended to be called by the sender core.
      */
     void reserve_back(uint32_t num_pages) { remote_cb_reserve_back(remote_cb_index_, num_pages); }
 
     /** @brief Pushes the specified number of pages to the remote circular buffer
      *
-     * This is intended to be called by the producer core.
+     * Must call reserve_back before calling this function.
+     *
+     * This is intended to be called by the sender core.
      */
+    template <bool skip_ptr_update = true>
     void push_back(
         experimental::CircularBuffer& src_local_cb,
         uint32_t num_pages,
         uint32_t num_rows,
         uint32_t coalesced_num_pages_per_row,
         uint32_t coalesced_page_size) {
-        remote_cb_push_back_and_write_pages(
+        remote_cb_push_back_and_write_pages<skip_ptr_update>(
             remote_cb_index_,
-            src_local_cb.get_write_ptr(),
+            src_local_cb.get_read_ptr(),
             num_pages,
             num_rows,
             coalesced_num_pages_per_row,
             coalesced_page_size,
             noc_.get_noc_id());
+    }
+
+    /** @brief Resizes the remote circular buffer's page size
+     *
+     * Resizes the remote circular buffer's page size. This may result in noc transactions for synchronizing with the
+     * receiver core.
+     *
+     * This is intended to be called by the sender core.
+     */
+    template <bool skip_ptr_update = true>
+    void set_receiver_page_size(uint32_t page_size) {
+        resize_remote_receiver_cb_interface<skip_ptr_update>(remote_cb_index_, page_size, noc_.get_noc_id());
     }
 
     /** @brief Waits for the specified number of pages to be available in the remote circular buffer
@@ -461,6 +478,24 @@ public:
      */
     void pop_front(uint32_t num_pages) { remote_cb_pop_front(remote_cb_index_, num_pages, noc_.get_noc_id()); }
 
+    /** @brief Resizes the remote circular buffer's page size
+     *
+     * Resizes the remote circular buffer's page size. This may result in noc transactions for synchronizing with the
+     * sender core.
+     *
+     * This is intended to be called by the receiver core.
+     *
+     */
+    template <bool skip_ptr_update = true>
+    void set_sender_page_size(uint32_t page_size) {
+        resize_remote_sender_cb_interface<skip_ptr_update>(remote_cb_index_, page_size, noc_.get_noc_id());
+    }
+
+    /** @brief Waits for all pages to be consumed by the receiver core
+     *
+     */
+    void barrier() { remote_cb_sender_barrier(remote_cb_index_); }
+
     /** @brief Writes the read/write pointers to L1
      *
      * The read/write pointers of the remote circular buffers are stored in L1, so that subsequent programs can resume
@@ -468,17 +503,11 @@ public:
      * repeated L1 reads/writes. This requires the user to call this program at the end of their kernel execution in
      * order to write the final value back to L1. This should only be called by one RISC per core which has the final
      * updated value.
+     *
+     * This can be called by either the sender or receiver core.
+     *
      */
     void commit() { update_remote_cb_config_in_l1(remote_cb_index_); }
-
-    /** @brief Resizes the remote circular buffer's page size
-     *
-     * Resizes the remote circular buffer's page size. This may result in noc transactions for synchronizing with the
-     * receiver cores.
-     */
-    void set_page_size(uint32_t page_size) {
-        resize_remote_receiver_cb_interface(remote_cb_index_, page_size, noc_.get_noc_id());
-    }
 
 private:
     uint32_t remote_cb_index_;
