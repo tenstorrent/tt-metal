@@ -5,7 +5,9 @@
 import pytest
 import ttnn
 
-from tests.nightly.t3000.ccl.test_strided_all_gather_async import run_strided_all_gather_impl
+from tests.nightly.t3000.ccl.test_strided_all_gather_minimal_matmul_async import (
+    run_strided_all_gather_minimal_matmul_impl,
+)
 from models.common.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
 
 
@@ -19,7 +21,7 @@ from models.common.utility_functions import skip_for_blackhole, skip_for_wormhol
     "M, K, N, dim, num_links, num_workers_per_link, layout, ag_input_dtype, mm_block_m, mm_block_k, mm_block_n, subblock_h, subblock_w, mm_core_grid, shard_weights",
     [
         (64, 256, 512, 3, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
-        (64, 512, 512, 3, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
+        (64, 512, 512, 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 64, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
     ],
     ids=[
         "base1link",  # 1 forward pass through K
@@ -61,7 +63,7 @@ from models.common.utility_functions import skip_for_blackhole, skip_for_wormhol
     indirect=["device_params"],
     ids=["fabric_ring", "fabric_linear"],
 )
-def test_strided_all_gather_async(
+def test_strided_all_gather_minimal_matmul_async(
     mesh_device,
     M,
     K,
@@ -86,7 +88,7 @@ def test_strided_all_gather_async(
     use_non_fused,
     shard_weights,
 ):
-    run_strided_all_gather_impl(
+    run_strided_all_gather_minimal_matmul_impl(
         mesh_device,
         mesh_device.get_num_devices(),
         M,
