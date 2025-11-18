@@ -26,6 +26,7 @@ struct ExecuteStridedAllGatherMinimalMatmulAsync {
         ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
         const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt,
         std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
+        std::optional<uint32_t> cluster_axis = std::nullopt,
         const std::optional<const Tensor>& bias = std::nullopt,
         std::optional<operations::unary::UnaryWithParam> fused_activation = std::nullopt,
         const std::optional<const minimal_matmul::MinimalMatmulConfig>& config = std::nullopt,

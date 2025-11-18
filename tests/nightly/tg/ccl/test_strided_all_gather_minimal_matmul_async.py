@@ -16,36 +16,21 @@ from models.common.utility_functions import skip_for_blackhole, skip_for_wormhol
 @skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 @pytest.mark.parametrize(
-    "ag_output_shape, dim, num_links, num_workers_per_link, tiles_per_chunk, layout, ag_input_dtype, mm_cores_y, mm_block_h, mm_block_w",
+    "M, K, N, dim, num_links, num_workers_per_link, layout, ag_input_dtype, mm_block_m, mm_block_k, mm_block_n, subblock_h, subblock_w, mm_core_grid, shard_weights",
     [
-        ([1, 1, 256, 128], 3, 1, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 32),
-        ([1, 1, 256, 256], 3, 2, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 32),
-        # 2 row tests
-        ([1, 1, 64, 256], 3, 1, 1, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 64, 32),
-        # 4 row tests
-        ([1, 1, 128, 256], 3, 1, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 64, 32),
-        # Multiple y core tests
-        ([1, 1, 128, 256], 3, 1, 1, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 2, 32, 32),
-        # Full tests
-        ([1, 1, 4096, 2560], 3, 1, 2, 1024, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 4096, 320),
+        (64, 256, 512, 3, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
+        (64, 512, 512, 3, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
     ],
     ids=[
-        "1tile1chunk1worker1row1link",
-        "1tile1chunk1worker1row2link",
-        # 2 row tests
-        "2tile1chunk1worker2row",
-        # 4 row tests
-        "2tile2chunk2worker4row",
-        # Multiple y core tests
-        "2tile2chunk1worker4row2ycores",
-        # Full tests
-        "4k4k",
+        "base1link",  # 1 forward pass through K
+        "base2link",  # 1 forward pass through K
     ],
 )
 @pytest.mark.parametrize(
-    "mem_config_input, mem_config_ag",
+    "mem_config_input, mem_config_ag, mem_config_mm",
     [
         (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         )
@@ -60,6 +45,14 @@ from models.common.utility_functions import skip_for_blackhole, skip_for_wormhol
     ids=["perf", "check"],
 )
 @pytest.mark.parametrize(
+    "use_non_fused",
+    [
+        True,
+        False,
+    ],
+    ids=["separate", "fused"],
+)
+@pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Ring),
@@ -70,38 +63,52 @@ from models.common.utility_functions import skip_for_blackhole, skip_for_wormhol
 )
 def test_strided_all_gather_async(
     mesh_device,
-    ag_output_shape,
+    M,
+    K,
+    N,
     dim,
     num_links,
     ag_input_dtype,
     layout,
     mem_config_input,
     mem_config_ag,
+    mem_config_mm,
     enable_trace,
     all_gather_topology,
     num_iters,
     num_workers_per_link,
-    tiles_per_chunk,
-    mm_cores_y,
-    mm_block_h,
-    mm_block_w,
+    mm_block_m,
+    mm_block_k,
+    mm_block_n,
+    subblock_h,
+    subblock_w,
+    mm_core_grid,
+    use_non_fused,
+    shard_weights,
 ):
     run_strided_all_gather_impl(
         mesh_device,
         mesh_device.get_num_devices(),
-        ag_output_shape,
+        M,
+        K,
+        N,
         dim,
         num_links,
         ag_input_dtype,
         layout,
         mem_config_input,
         mem_config_ag,
+        mem_config_mm,
         all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
         num_workers_per_link=num_workers_per_link,
-        tiles_per_chunk=tiles_per_chunk,
-        mm_cores_y=mm_cores_y,
-        mm_block_h=mm_block_h,
-        mm_block_w=mm_block_w,
+        mm_block_m=mm_block_m,
+        mm_block_k=mm_block_k,
+        mm_block_n=mm_block_n,
+        subblock_h=subblock_h,
+        subblock_w=subblock_w,
+        mm_core_grid=mm_core_grid,
+        use_non_fused=use_non_fused,
+        shard_weights=shard_weights,
     )

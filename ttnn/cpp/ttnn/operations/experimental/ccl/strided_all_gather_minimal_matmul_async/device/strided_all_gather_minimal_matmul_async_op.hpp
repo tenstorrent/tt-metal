@@ -120,6 +120,7 @@ std::vector<Tensor> strided_all_gather_minimal_matmul_async(
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
     const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
+    std::optional<uint32_t> cluster_axis = std::nullopt,
     const std::optional<const Tensor>& bias = std::nullopt,
     const std::optional<MemoryConfig>& memory_config_mm = std::nullopt,
     std::optional<operations::unary::UnaryWithParam> fused_activation = std::nullopt,

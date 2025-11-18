@@ -39,13 +39,12 @@ void bind_strided_all_gather_minimal_matmul_async(
                const ttnn::ccl::Topology topology,
                const std::optional<GlobalSemaphore>& barrier_semaphore,
                std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
-
+               std::optional<uint32_t> cluster_axis,
                const std::optional<const Tensor>& bias,
                std::optional<unary::UnaryWithParam> fused_activation,
                const std::optional<const minimal_matmul::MinimalMatmulConfig>& config,
                const std::optional<ttnn::MemoryConfig>& memory_config_mm,
                const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-
                std::optional<uint32_t> num_workers_per_link,
                std::optional<uint32_t> num_buffers_per_channel) -> std::vector<ttnn::Tensor> {
                 return self(
@@ -59,13 +58,12 @@ void bind_strided_all_gather_minimal_matmul_async(
                     topology,
                     barrier_semaphore,
                     sub_device_id,
-
+                    cluster_axis,
                     bias,
                     fused_activation,
                     config,
                     memory_config_mm,
                     compute_kernel_config,
-
                     num_workers_per_link,
                     num_buffers_per_channel);
             },
@@ -80,13 +78,12 @@ void bind_strided_all_gather_minimal_matmul_async(
             py::arg("topology") = ttnn::ccl::Topology::Ring,
             py::arg("barrier_semaphore") = std::nullopt,
             py::arg("subdevice_id") = std::nullopt,
-
+            py::arg("cluster_axis") = std::nullopt,
             py::arg("bias") = std::nullopt,
             py::arg("fused_activation") = std::nullopt,
             py::arg("config") = std::nullopt,
             py::arg("memory_config_mm") = std::nullopt,
             py::arg("compute_kernel_config") = std::nullopt,
-
             py::arg("num_workers_per_link") = std::nullopt,
             py::arg("num_buffers_per_channel") = std::nullopt});
 }

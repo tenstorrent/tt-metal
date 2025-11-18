@@ -129,8 +129,7 @@ Tensor strided_all_gather_async_impl(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
         "strided_all_gather_async op is only supported for Fast Dispatch");
 
-    uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, std::nullopt);
-
+    uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
     TT_FATAL(
         num_devices > 1, "strided_all_gather_async op will only work for num_devices > 1, but has {}", num_devices);
     ttnn::ccl::Topology ccl_topology = topology;

@@ -169,6 +169,7 @@ tt::tt_metal::operation::Hash StridedAllGatherMinimalMatmulAsync::compute_progra
         this->strided_all_gather_async_struct.ring_size,
         this->strided_all_gather_async_struct.output_mem_config,
         this->strided_all_gather_async_struct.topology,
+        this->strided_all_gather_async_struct.cluster_axis,
         this->strided_all_gather_async_struct.sub_device_id.has_value(),
         this->strided_all_gather_async_struct.sub_device_id.has_value()
             ? input_tensors[0].device()->worker_cores(
@@ -201,6 +202,7 @@ std::vector<ttnn::Tensor> strided_all_gather_minimal_matmul_async(
     const ttnn::ccl::Topology topology,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
+    std::optional<uint32_t> cluster_axis,
     const std::optional<const Tensor>& bias,
     const std::optional<MemoryConfig>& memory_config_mm,
     std::optional<operations::unary::UnaryWithParam> fused_activation,
@@ -218,16 +220,17 @@ std::vector<ttnn::Tensor> strided_all_gather_minimal_matmul_async(
     }
 
     /* AllGather setup */
+    uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
     ttnn::StridedAllGatherAsync strided_all_gather_async_struct = ttnn::StridedAllGatherAsync(
         devices,
         dim,
         num_links,
-        devices.size(),
+        num_devices,
         memory_config_ag.value_or(input_tensor.memory_config()),
         topology,
         multi_device_global_semaphore,
         sub_device_id,
-        /*cluster_axis=*/std::nullopt,
+        cluster_axis,
         barrier_semaphore,
         /*tiles_per_chunk=*/std::nullopt,
         num_workers_per_link,
