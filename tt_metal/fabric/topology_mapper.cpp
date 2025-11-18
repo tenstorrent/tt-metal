@@ -10,6 +10,7 @@
 #include <functional>
 #include <optional>
 #include <tuple>
+#include <map>
 
 #include <tt-logger/tt-logger.hpp>
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
@@ -25,17 +26,6 @@
 namespace tt::tt_fabric {
 
 namespace {
-// Encodes a MeshId and MeshHostRankId into a single 64-bit value for transport.
-std::uint64_t encode_mesh_id_and_rank(MeshId mesh_id, MeshHostRankId host_rank) {
-    return (static_cast<std::uint64_t>(mesh_id.get()) << 32) | static_cast<std::uint64_t>(host_rank.get());
-}
-
-std::pair<MeshId, MeshHostRankId> decode_mesh_id_and_rank(std::uint64_t encoded_value) {
-    return {
-        MeshId{static_cast<std::uint32_t>(encoded_value >> 32)},
-        MeshHostRankId{static_cast<std::uint32_t>(encoded_value & 0xFFFFFFFF)}};
-}
-
 // Encodes MPI rank, MeshId and MeshHostRankId into a single 64-bit value for transport.
 // Format: mpi_rank (16 bits) | mesh_id (16 bits) | host_rank (32 bits)
 std::uint64_t encode_mpi_rank_mesh_id_and_rank(int mpi_rank, MeshId mesh_id, MeshHostRankId host_rank) {
@@ -296,24 +286,11 @@ void TopologyMapper::build_mapping() {
 
     generate_mapping_locally_ = (mesh_graph_.get_mesh_ids().size() == 1) &&
                                 (mesh_graph_.get_host_ranks(local_mesh_binding_.mesh_ids[0]).size() == 1);
-    // Build MPI rank -> mesh host rank mapping via distributed all-gather of local bindings.
-    auto mpi_rank_to_mesh_host_rank = build_mpi_rank_to_mesh_host_rank_mapping();
-
     // Build ASIC ID to mesh rank mapping using the gathered mesh bindings directly
+    // This function gathers mesh_id and host_rank from all MPI ranks and maps them to ASICs
     auto asic_id_to_mesh_rank = build_asic_id_to_mesh_rank_mapping();
-    // Sort for deterministic iteration across hosts
-    std::vector<std::pair<MeshId, std::unordered_map<tt::tt_metal::AsicID, MeshHostRankId>>> sorted_asic_mapping(
-        asic_id_to_mesh_rank.begin(), asic_id_to_mesh_rank.end());
-    std::sort(sorted_asic_mapping.begin(), sorted_asic_mapping.end(), [](const auto& a, const auto& b) {
-        return a.first.get() < b.first.get();
-    });
-    for (const auto& [mesh_id, asic_id_to_mesh_rank_map] : sorted_asic_mapping) {
-        std::vector<std::pair<tt::tt_metal::AsicID, MeshHostRankId>> sorted_asic_entries(
-            asic_id_to_mesh_rank_map.begin(), asic_id_to_mesh_rank_map.end());
-        std::sort(sorted_asic_entries.begin(), sorted_asic_entries.end(), [](const auto& a, const auto& b) {
-            return a.first.get() < b.first.get();
-        });
-        for (const auto& [asic_id, mesh_rank] : sorted_asic_entries) {
+    for (const auto& [mesh_id, asic_id_to_mesh_rank_map] : asic_id_to_mesh_rank) {
+        for (const auto& [asic_id, mesh_rank] : asic_id_to_mesh_rank_map) {
             log_info(
                 tt::LogFabric,
                 "TopologyMapper: host {} has mesh rank {}",
@@ -358,101 +335,9 @@ void TopologyMapper::build_mapping() {
     rebuild_host_rank_structs_from_mapping(asic_id_to_mesh_rank);
 }
 
-std::unordered_map<int, MeshHostRankId> TopologyMapper::build_mpi_rank_to_mesh_host_rank_mapping() const {
-    std::unordered_map<int, MeshHostRankId> mpi_rank_to_mesh_host_rank;
-    auto global_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
-    const std::size_t world_size = *global_context->size();
-
-    // Single-host or uninitialized distributed context: compute mapping locally without any collectives
-    if (world_size == 1 || generate_mapping_locally_) {
-        auto my_rank = *global_context->rank();
-        mpi_rank_to_mesh_host_rank[my_rank] = local_mesh_binding_.host_rank;
-        return mpi_rank_to_mesh_host_rank;
-    }
-
-    // 1) All-gather counts (how many meshes each rank owns)
-    const std::uint32_t local_count = static_cast<std::uint32_t>(local_mesh_binding_.mesh_ids.size());
-    std::vector<std::uint32_t> counts(world_size, 0);
-    all_gather_with_timeout(
-        global_context,
-        ttsl::Span<std::byte>(
-            reinterpret_cast<std::byte*>(const_cast<std::uint32_t*>(&local_count)), sizeof(std::uint32_t)),
-        ttsl::as_writable_bytes(ttsl::Span<std::uint32_t>(counts.data(), counts.size())),
-        "mesh count all_gather");
-
-    const std::uint32_t max_count = counts.empty() ? 0 : *std::max_element(counts.begin(), counts.end());
-
-    // 2) All-gather fixed-width list of encoded (mesh_id, host_rank) per rank
-    const std::uint64_t sentinel = std::numeric_limits<std::uint64_t>::max();
-    std::vector<std::uint64_t> send_values(max_count, sentinel);
-    for (std::uint32_t i = 0; i < local_count; ++i) {
-        send_values[i] = encode_mesh_id_and_rank(local_mesh_binding_.mesh_ids[i], local_mesh_binding_.host_rank);
-    }
-
-    std::vector<std::uint64_t> gathered(static_cast<std::size_t>(world_size) * max_count, sentinel);
-    if (max_count > 0) {
-        all_gather_with_timeout(
-            global_context,
-            ttsl::Span<std::byte>(
-                reinterpret_cast<std::byte*>(send_values.data()), send_values.size() * sizeof(std::uint64_t)),
-            ttsl::as_writable_bytes(ttsl::Span<std::uint64_t>(gathered.data(), gathered.size())),
-            "mesh binding all_gather");
-    }
-
-    // 3) Populate mpi_rank_to_mesh_host_rank using gathered data
-    // For each MPI rank, use the first mesh host rank (assuming single mesh per host)
-    for (std::size_t mpi_rank = 0; mpi_rank < world_size; ++mpi_rank) {
-        const auto entries_for_rank = counts[mpi_rank];
-        if (entries_for_rank > 0) {
-            const auto encoded = gathered[mpi_rank * max_count];
-            if (encoded != sentinel) {
-                const auto [mesh_id, host_rank] = decode_mesh_id_and_rank(encoded);
-                mpi_rank_to_mesh_host_rank[static_cast<int>(mpi_rank)] = host_rank;
-            }
-        }
-    }
-
-    return mpi_rank_to_mesh_host_rank;
-}
-
-void TopologyMapper::validate_mesh_id_host_names(const HostMeshMapping& mesh_id_host_names) const {
-    // Get all mesh IDs from the mesh graph descriptor
-    const auto mesh_graph_mesh_ids = mesh_graph_.get_mesh_ids();
-
-    // Collect mesh IDs that have hosts bound to them from rank bindings
-    std::unordered_set<MeshId> bound_mesh_ids;
-    for (const auto& [mesh_id, _] : mesh_id_host_names) {
-        bound_mesh_ids.insert(mesh_id);
-    }
-
-    // Find meshes that are in the mesh graph but not bound to any host
-    std::vector<MeshId> unbound_mesh_ids;
-    for (const auto& mesh_id : mesh_graph_mesh_ids) {
-        if (bound_mesh_ids.find(mesh_id) == bound_mesh_ids.end()) {
-            unbound_mesh_ids.push_back(mesh_id);
-        }
-    }
-
-    // Throw error if any meshes are missing bindings
-    if (!unbound_mesh_ids.empty()) {
-        std::string unbound_list;
-        for (size_t i = 0; i < unbound_mesh_ids.size(); ++i) {
-            if (i > 0) {
-                unbound_list += ", ";
-            }
-            unbound_list += std::to_string(*unbound_mesh_ids[i]);
-        }
-        TT_THROW(
-            "The following mesh IDs are defined in the mesh graph descriptor but have no hosts bound to them in "
-            "rank_bindings.yaml: {}. Please add rank bindings for these mesh IDs or remove them from the mesh graph "
-            "descriptor.",
-            unbound_list);
-    }
-}
-
-std::unordered_map<MeshId, std::unordered_map<FabricNodeId, MeshHostRankId>>
-TopologyMapper::build_fabric_node_id_to_mesh_rank_mapping() const {
-    std::unordered_map<MeshId, std::unordered_map<FabricNodeId, MeshHostRankId>> mapping;
+std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> TopologyMapper::build_fabric_node_id_to_mesh_rank_mapping()
+    const {
+    std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> mapping;
     for (const auto& mesh_id : mesh_graph_.get_mesh_ids()) {
         for (const auto& [_, chip_id] : mesh_graph_.get_chip_ids(mesh_id)) {
             auto host_rank = mesh_graph_.get_host_rank_for_chip(mesh_id, chip_id);
@@ -463,9 +348,9 @@ TopologyMapper::build_fabric_node_id_to_mesh_rank_mapping() const {
     return mapping;
 }
 
-std::unordered_map<MeshId, std::unordered_map<tt::tt_metal::AsicID, MeshHostRankId>>
-TopologyMapper::build_asic_id_to_mesh_rank_mapping() const {
-    std::unordered_map<MeshId, std::unordered_map<tt::tt_metal::AsicID, MeshHostRankId>> mapping;
+std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> TopologyMapper::build_asic_id_to_mesh_rank_mapping()
+    const {
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> mapping;
     auto global_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
     const std::size_t world_size = *global_context->size();
 
@@ -519,25 +404,19 @@ TopologyMapper::build_asic_id_to_mesh_rank_mapping() const {
 
     // Step 3: Use the gathered mesh bindings directly to build the mapping
     // Decode MPI rank, mesh_id and host_rank from gathered data and map to ASICs
-    // Build a map from MPI rank to (mesh_id, host_rank) pairs
-    std::unordered_map<int, std::vector<std::pair<MeshId, MeshHostRankId>>> mpi_rank_to_mesh_bindings;
+    // Build an ordered map from MPI rank to (mesh_id, host_rank) pairs for deterministic iteration
+    std::map<int, std::map<MeshId, MeshHostRankId>> mpi_rank_to_mesh_bindings;
     for (std::size_t idx = 0; idx < gathered.size(); ++idx) {
         const auto encoded = gathered[idx];
         if (encoded == sentinel) {
             continue;
         }
         const auto [gathered_mpi_rank, mesh_id, host_rank] = decode_mpi_rank_mesh_id_and_rank(encoded);
-        mpi_rank_to_mesh_bindings[gathered_mpi_rank].emplace_back(mesh_id, host_rank);
+        mpi_rank_to_mesh_bindings[gathered_mpi_rank][mesh_id] = host_rank;
     }
 
     // Step 4: For each MPI rank in the gathered data, assign mesh host rank to ASICs
-    // Sort mpi_rank_to_mesh_bindings for deterministic iteration across hosts
-    std::vector<std::pair<int, std::vector<std::pair<MeshId, MeshHostRankId>>>> sorted_mpi_bindings(
-        mpi_rank_to_mesh_bindings.begin(), mpi_rank_to_mesh_bindings.end());
-    std::sort(sorted_mpi_bindings.begin(), sorted_mpi_bindings.end(), [](const auto& a, const auto& b) {
-        return a.first < b.first;
-    });
-    for (const auto& [gathered_mpi_rank, mesh_bindings] : sorted_mpi_bindings) {
+    for (const auto& [gathered_mpi_rank, mesh_bindings] : mpi_rank_to_mesh_bindings) {
         // Get the hostname for this MPI rank
         auto host_it = mpi_rank_to_host.find(gathered_mpi_rank);
         if (host_it == mpi_rank_to_host.end()) {
@@ -547,16 +426,8 @@ TopologyMapper::build_asic_id_to_mesh_rank_mapping() const {
         const auto& host_name = host_it->second;
         auto asics = physical_system_descriptor_.get_asics_connected_to_host(host_name);
 
-        // Sort mesh_bindings for deterministic iteration
-        std::vector<std::pair<MeshId, MeshHostRankId>> sorted_mesh_bindings = mesh_bindings;
-        std::sort(sorted_mesh_bindings.begin(), sorted_mesh_bindings.end(), [](const auto& a, const auto& b) {
-            if (a.first.get() != b.first.get()) {
-                return a.first.get() < b.first.get();
-            }
-            return a.second.get() < b.second.get();
-        });
         // For each mesh_id this MPI rank participates in, use the host_rank from gathered data
-        for (const auto& [mesh_id, host_rank] : sorted_mesh_bindings) {
+        for (const auto& [mesh_id, host_rank] : mesh_bindings) {
             // Use the host_rank directly from the gathered data (which comes from local_mesh_binding_.host_rank)
             // This is the mesh host rank set via TT_MESH_HOST_RANK environment variable
             for (const auto& asic : asics) {
@@ -599,8 +470,7 @@ std::unordered_map<MeshId, LogicalAdjacencyMap> TopologyMapper::build_adjacency_
 }
 
 std::unordered_map<MeshId, PhysicalAdjacencyMap> TopologyMapper::build_adjacency_map_physical(
-    const std::unordered_map<MeshId, std::unordered_map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank)
-    const {
+    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank) const {
     std::unordered_map<MeshId, PhysicalAdjacencyMap> adjacency_map;
 
     auto get_local_adjacents =
@@ -656,8 +526,8 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
     const MeshId mesh_id,
     const PhysicalAdjacencyMap& adjacency_map_physical,
     const LogicalAdjacencyMap& adjacency_map_logical,
-    const std::unordered_map<tt::tt_metal::AsicID, MeshHostRankId>& asic_id_to_mesh_rank,
-    const std::unordered_map<FabricNodeId, MeshHostRankId>& fabric_node_id_to_mesh_rank) {
+    const std::map<tt::tt_metal::AsicID, MeshHostRankId>& asic_id_to_mesh_rank,
+    const std::map<FabricNodeId, MeshHostRankId>& fabric_node_id_to_mesh_rank) {
     auto& phys_adj = adjacency_map_physical;
     auto& log_adj = adjacency_map_logical;
 
@@ -1783,7 +1653,7 @@ MeshContainer<ChipId> TopologyMapper::get_chip_ids(MeshId mesh_id, std::optional
 }
 
 void TopologyMapper::rebuild_host_rank_structs_from_mapping(
-    const std::unordered_map<MeshId, std::unordered_map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank) {
+    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank) {
     // Derive per-mesh host sets and per-host coord ranges from current mapping
     std::unordered_map<MeshId, std::unordered_set<MeshHostRankId>> mesh_to_hosts;
     std::unordered_map<MeshId, std::unordered_map<MeshHostRankId, MeshCoordinateRange>> mesh_host_to_range;
@@ -1792,16 +1662,10 @@ void TopologyMapper::rebuild_host_rank_structs_from_mapping(
 
     // Precompute coordinate per chip from MeshGraph
     std::unordered_map<MeshId, std::unordered_map<ChipId, MeshCoordinate>> per_mesh_chip_to_coord;
-    // Sort fabric_node_id_to_asic_id_ for deterministic iteration across hosts
-    std::vector<std::pair<FabricNodeId, tt::tt_metal::AsicID>> sorted_fabric_nodes(
+    // Convert to ordered map for deterministic iteration across hosts
+    std::map<FabricNodeId, tt::tt_metal::AsicID> ordered_fabric_nodes(
         fabric_node_id_to_asic_id_.begin(), fabric_node_id_to_asic_id_.end());
-    std::sort(sorted_fabric_nodes.begin(), sorted_fabric_nodes.end(), [](const auto& a, const auto& b) {
-        if (a.first.mesh_id.get() != b.first.mesh_id.get()) {
-            return a.first.mesh_id.get() < b.first.mesh_id.get();
-        }
-        return a.first.chip_id < b.first.chip_id;
-    });
-    for (const auto& [fabric_node_id, _] : sorted_fabric_nodes) {
+    for (const auto& [fabric_node_id, asic_id] : ordered_fabric_nodes) {
         auto& m = per_mesh_chip_to_coord[fabric_node_id.mesh_id];
         if (m.find(fabric_node_id.chip_id) == m.end()) {
             m.emplace(
@@ -1810,7 +1674,7 @@ void TopologyMapper::rebuild_host_rank_structs_from_mapping(
     }
 
     // Accumulate coordinates per host
-    for (const auto& [fabric_node_id, asic_id] : sorted_fabric_nodes) {
+    for (const auto& [fabric_node_id, asic_id] : ordered_fabric_nodes) {
         const auto mesh_id_val = fabric_node_id.mesh_id;
         const auto host_rank = asic_id_to_mesh_rank.at(mesh_id_val).at(asic_id);
         mesh_to_hosts[mesh_id_val].insert(host_rank);
@@ -1819,22 +1683,17 @@ void TopologyMapper::rebuild_host_rank_structs_from_mapping(
     }
 
     // Build minimal wraparound-aware ranges per host
-    // Sort mesh_host_to_coords for deterministic iteration across hosts
-    std::vector<std::pair<MeshId, std::unordered_map<MeshHostRankId, std::vector<MeshCoordinate>>>>
-        sorted_mesh_host_coords(mesh_host_to_coords.begin(), mesh_host_to_coords.end());
-    std::sort(sorted_mesh_host_coords.begin(), sorted_mesh_host_coords.end(), [](const auto& a, const auto& b) {
-        return a.first.get() < b.first.get();
-    });
-    for (const auto& [mesh_id, host_coords_map] : sorted_mesh_host_coords) {
+    // Convert to ordered maps for deterministic iteration across hosts
+    std::map<MeshId, std::map<MeshHostRankId, std::vector<MeshCoordinate>>> ordered_mesh_host_coords;
+    for (const auto& [mesh_id, host_coords_map] : mesh_host_to_coords) {
+        for (const auto& [host_rank, coords] : host_coords_map) {
+            ordered_mesh_host_coords[mesh_id][host_rank] = coords;
+        }
+    }
+    for (const auto& [mesh_id, host_coords_map] : ordered_mesh_host_coords) {
         const auto shape = mesh_graph_.get_mesh_shape(mesh_id);
         auto& range_map = mesh_host_to_range[mesh_id];
-        // Sort host_coords_map for deterministic iteration
-        std::vector<std::pair<MeshHostRankId, std::vector<MeshCoordinate>>> sorted_host_coords(
-            host_coords_map.begin(), host_coords_map.end());
-        std::sort(sorted_host_coords.begin(), sorted_host_coords.end(), [](const auto& a, const auto& b) {
-            return a.first.get() < b.first.get();
-        });
-        for (const auto& [host_rank, coords] : sorted_host_coords) {
+        for (const auto& [host_rank, coords] : host_coords_map) {
             // Compute unique values per dimension
             std::vector<uint32_t> unique_r;
             std::vector<uint32_t> unique_c;
@@ -1900,27 +1759,25 @@ void TopologyMapper::rebuild_host_rank_structs_from_mapping(
     mesh_host_ranks_.clear();
     mesh_host_rank_coord_ranges_.clear();
     std::size_t max_mesh_index = 0;
-    // Sort mesh_to_hosts for deterministic iteration
-    std::vector<std::pair<MeshId, std::unordered_set<MeshHostRankId>>> sorted_mesh_to_hosts(
+    // Convert to ordered map for deterministic iteration
+    std::map<MeshId, std::unordered_set<MeshHostRankId>> ordered_mesh_to_hosts(
         mesh_to_hosts.begin(), mesh_to_hosts.end());
-    std::sort(sorted_mesh_to_hosts.begin(), sorted_mesh_to_hosts.end(), [](const auto& a, const auto& b) {
-        return a.first.get() < b.first.get();
-    });
-    for (const auto& [mid, _] : sorted_mesh_to_hosts) {
+    for (const auto& [mid, _] : ordered_mesh_to_hosts) {
         max_mesh_index = std::max<std::size_t>(max_mesh_index, *mid + 1);
     }
     mesh_host_ranks_.resize(max_mesh_index, MeshContainer<MeshHostRankId>(MeshShape{1, 1}, MeshHostRankId{0}));
-    for (const auto& [mesh_id, hosts] : sorted_mesh_to_hosts) {
-        const auto& range_map = mesh_host_to_range.at(mesh_id);
+    // Convert range_map to ordered map for deterministic iteration
+    std::map<MeshId, std::map<MeshHostRankId, MeshCoordinateRange>> ordered_mesh_host_to_range;
+    for (const auto& [mesh_id, range_map] : mesh_host_to_range) {
+        for (const auto& [host_rank, range] : range_map) {
+            ordered_mesh_host_to_range[mesh_id].emplace(host_rank, range);
+        }
+    }
+    for (const auto& [mesh_id, hosts] : ordered_mesh_to_hosts) {
+        const auto& range_map = ordered_mesh_host_to_range.at(mesh_id);
         std::set<std::uint32_t> rows;
         std::set<std::uint32_t> cols;
-        // Sort range_map for deterministic iteration
-        std::vector<std::pair<MeshHostRankId, MeshCoordinateRange>> sorted_range_map(
-            range_map.begin(), range_map.end());
-        std::sort(sorted_range_map.begin(), sorted_range_map.end(), [](const auto& a, const auto& b) {
-            return a.first.get() < b.first.get();
-        });
-        for (const auto& [host_rank, range] : sorted_range_map) {
+        for (const auto& [host_rank, range] : range_map) {
             rows.insert(range.start_coord()[0]);
             cols.insert(range.start_coord()[1]);
         }
@@ -1936,13 +1793,13 @@ void TopologyMapper::rebuild_host_rank_structs_from_mapping(
         };
         // Compute base_rank as min over host_ranks
         std::uint32_t base_rank = std::numeric_limits<std::uint32_t>::max();
-        for (const auto& [host_rank, _] : sorted_range_map) {
+        for (const auto& [host_rank, _] : range_map) {
             base_rank = std::min(base_rank, host_rank.get());
         }
         for (std::uint32_t r : row_list) {
             for (std::uint32_t c : col_list) {
                 // find host_rank whose range starts at (r,c)
-                for (const auto& [original_host_rank, range] : sorted_range_map) {
+                for (const auto& [original_host_rank, range] : range_map) {
                     if (range.start_coord()[0] == r && range.start_coord()[1] == c) {
                         std::size_t idx = (row_index(r) * host_grid_shape[1]) + col_index(c);
                         std::uint32_t norm_rank = original_host_rank.get() - base_rank;
