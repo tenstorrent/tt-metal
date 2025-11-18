@@ -186,6 +186,19 @@ public:
     HostName get_hostname_for_fabric_node_id(FabricNodeId fabric_node_id) const;
 
     /**
+     * @brief Get MPI rank for a mesh_id and host_rank pair
+     *
+     * Uses the topology mapper's fabric node to ASIC mapping to determine which hostname
+     * owns the given (mesh_id, host_rank) pair, then returns the MPI rank for that hostname
+     * from the physical system descriptor.
+     *
+     * @param mesh_id The mesh ID
+     * @param host_rank The mesh host rank
+     * @return int The MPI rank associated with this (mesh_id, host_rank) pair
+     */
+    int get_mpi_rank_for_mesh_host_rank(MeshId mesh_id, MeshHostRankId host_rank) const;
+
+    /**
      * @brief Get the coordinate range for the global mesh or a host's submesh
      *
      * When host_rank is not provided, returns the full logical mesh coordinate range (0..N-1, 0..M-1).
