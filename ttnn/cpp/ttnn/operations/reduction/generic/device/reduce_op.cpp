@@ -9,6 +9,7 @@
 
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
+#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/run_operation.hpp"
 
 using namespace tt::constants;
@@ -166,7 +167,9 @@ Tensor reduce(
     auto parallelization_strategy =
         Reduce{reduce_math, reduce_dim, scaler, output_mem_config}.get_parallelization_strategy({input_tensor});
     auto is_multicore_hw = parallelization_strategy == ReduceOpParallelizationStrategy::MULTI_CORE_HW;
+    float pad_value = reduce_math == ReduceOpMath::MAX ? -std::numeric_limits<float>::infinity() : 0;
 
+    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Expected input tensor to be on device");
     TT_FATAL(
         input_tensor.device() != nullptr,
         "input_tensor.device() == nullptr, No device found, move input_tensor to device");
@@ -178,6 +181,9 @@ Tensor reduce(
         /*default_approx_mode=*/false,
         /*default_fp32_acc=*/true));
 
+    // Reduce only works with tile layout, so we need to tilize the input tensor if neccessary
+    auto tilized_input = ttnn::operations::experimental::auto_format::AutoFormat::format_input_tensor(
+        input_tensor, pad_value, Layout::TILE);
     if (is_multicore_hw) {
         const Tensor output_tensor = operation::run(
                                          Reduce{
@@ -187,7 +193,7 @@ Tensor reduce(
                                              output_mem_config,
                                              output_dtype.value_or(input_tensor.dtype()),
                                              config},
-                                         {input_tensor})
+                                         {tilized_input})
                                          .at(0);
         return operation::run(
                    Reduce{
@@ -208,7 +214,7 @@ Tensor reduce(
                        output_mem_config,
                        output_dtype.value_or(input_tensor.dtype()),
                        config},
-                   {input_tensor})
+                   {tilized_input})
             .at(0);
     }
 }

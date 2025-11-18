@@ -25,21 +25,8 @@ Tensor RotateHalfOperation::invoke(const Tensor& input_tensor, const std::option
         input_tensor.padded_shape()[-1],
         TILE_WIDTH * 2);
 
-    // Format input: Convert to TILE layout if needed
-    auto format_input = [](const Tensor& input) -> Tensor {
-        if (input.layout() == Layout::TILE) {
-            return input;
-        } else {
-            Shape tile_aligned_shape =
-                data_movement::compute_padded_shape(input.padded_shape(), TILE_HEIGHT, TILE_WIDTH);
-            PadValue pad_val =
-                input.dtype() == DataType::BFLOAT16 || input.dtype() == DataType::FLOAT32 ? 0.0f : (uint32_t)0;
-            return ttnn::tilize_with_val_padding(input, tile_aligned_shape, pad_val, input.memory_config());
-        }
-    };
-
-    Tensor formatted_input = format_input(input_tensor);
-
+    using namespace ttnn::operations::experimental::auto_format;
+    Tensor formatted_input = AutoFormat::format_input_tensor(input_tensor, 0, Layout::TILE);
     return tt::tt_metal::operation::run(
                RotateHalf{memory_config.value_or(input_tensor.memory_config())}, {formatted_input})
         .at(0);

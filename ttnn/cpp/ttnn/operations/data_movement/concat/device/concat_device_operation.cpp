@@ -194,6 +194,7 @@ Tensor concat_impl(
         }
 
         // Format inputs if layout conversion is needed
+        using namespace ttnn::operations::experimental::auto_format;
         std::vector<Tensor> formatted_tensors = [&]() {
             if (input_layout == target_layout) {
                 // No formatting needed - inputs already in target layout
@@ -203,18 +204,7 @@ Tensor concat_impl(
                 std::vector<Tensor> formatted_tensors;
                 formatted_tensors.reserve(input_tensors.size());
                 for (const auto& input_tensor : input_tensors) {
-                    // Use compute_padded_shape to calculate tile-aligned shape
-                    Shape tile_aligned_shape =
-                        compute_padded_shape(input_tensor.padded_shape(), TILE_HEIGHT, TILE_WIDTH);
-
-                    PadValue pad_value_variant;
-                    if (input_tensor.dtype() == DataType::BFLOAT16 || input_tensor.dtype() == DataType::FLOAT32) {
-                        pad_value_variant = 0.0f;
-                    } else {
-                        pad_value_variant = (uint32_t)0;
-                    }
-                    formatted_tensors.push_back(ttnn::tilize_with_val_padding(
-                        input_tensor, tile_aligned_shape, pad_value_variant, input_tensor.memory_config()));
+                    formatted_tensors.push_back(AutoFormat::format_input_tensor(input_tensor, 0, Layout::TILE));
                 }
                 return formatted_tensors;
             }
