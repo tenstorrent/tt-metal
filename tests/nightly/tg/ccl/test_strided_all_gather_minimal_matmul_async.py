@@ -20,12 +20,24 @@ from models.common.utility_functions import skip_for_blackhole, skip_for_wormhol
 @pytest.mark.parametrize(
     "M, K, N, dim, num_links, num_workers_per_link, layout, ag_input_dtype, mm_block_m, mm_block_k, mm_block_n, subblock_h, subblock_w, mm_core_grid, shard_weights",
     [
-        (64, 256, 512, 3, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
-        (64, 512, 512, 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 64, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
+        (512, 256, 512, 3, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
+        (512, 512, 512, 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 64, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
+        (4096, 4096, 4096, 3, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
+        (4096, 4096, 4096, 3, 4, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 64, 64, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
+        (4096, 4096, 4096, 3, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(4, 4), False),
+        (4096, 4096, 4096, 3, 4, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 64, 64, 32, 1, 1, ttnn.CoreCoord(4, 4), False),
+        (4096, 4096, 4096, 3, 1, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 256, 256, 256, 2, 2, ttnn.CoreCoord(4, 4), False),
+        (4096, 4096, 4096, 3, 4, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 256, 256, 256, 2, 2, ttnn.CoreCoord(4, 4), False),
     ],
     ids=[
         "base1link",  # 1 forward pass through K
         "base2link",  # 1 forward pass through K
+        "4k4k4k1link",
+        "4k4k4k4link",
+        "4x4mmcores1link",
+        "4x4mmcores4link",
+        "fulltest1link",
+        "fulltest4link",
     ],
 )
 @pytest.mark.parametrize(

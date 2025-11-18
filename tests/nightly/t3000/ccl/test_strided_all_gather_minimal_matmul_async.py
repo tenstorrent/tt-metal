@@ -236,6 +236,7 @@ def run_strided_all_gather_minimal_matmul_impl(
                 topology=all_gather_topology,
                 barrier_semaphore=barrier_semaphore_handles[i],
                 subdevice_id=worker_sub_device_id,
+                cluster_axis=cluster_axis,
                 bias=bias_tensor_mesh_list[i] if use_bias else None,
                 fused_activation=activation_fn,
                 config=matmul_config,
