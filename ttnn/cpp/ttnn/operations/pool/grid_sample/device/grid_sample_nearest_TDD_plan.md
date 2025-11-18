@@ -1,7 +1,7 @@
 # TDD Implementation Plan for Grid Sample Nearest Neighbor Mode
 
 ## Executive Summary
-This document outlines a test-driven development plan for implementing the "nearest" sampling mode for the TTNN grid_sample operation. The plan follows a strict 7-stage progression, with each stage having failing tests that drive minimal implementation.
+This document outlines a test-driven development plan for implementing the "nearest" sampling mode for the TTNN grid_sample operation. The plan follows a strict 7-stage progression, with each stage having failing tests that drive minimal implementation. Work ONLY with debug builds.
 
 ## Architecture Overview
 
