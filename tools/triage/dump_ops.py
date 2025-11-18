@@ -554,9 +554,6 @@ script_config = ScriptConfig(
     depends=["run_checks", "dispatcher_data"],
 )
 
-# Module-level variable to store collected host_id and operation names
-_collected_host_id_op_names = []
-
 
 @dataclass
 class DumpOpsData:
@@ -1071,10 +1068,6 @@ def run(args, context: Context):
         )
         all_ops_data.extend(device_ops)
         all_host_id_op_names.extend(host_id_op_names)
-
-    # Save host_id_op_names to a module-level variable for access in __main__
-    global _collected_host_id_op_names
-    _collected_host_id_op_names = all_host_id_op_names
 
     # Generate tests if requested
     if generate_test:
