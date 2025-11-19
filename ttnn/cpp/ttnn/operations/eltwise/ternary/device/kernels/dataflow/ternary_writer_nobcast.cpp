@@ -22,9 +22,7 @@ void kernel_main() {
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
     constexpr auto dst_args = TensorAccessorArgs<1>();
 
-#ifdef DST_SHARDED
-    cb_wait_front(cb_id_out, dst_num_tiles);
-#else
+#if !DST_SHARDED
     constexpr uint32_t onetile = 1;
     const uint32_t tile_bytes = get_tile_size(cb_id_out);
     const auto s = TensorAccessor(dst_args, dst_addr, tile_bytes);
