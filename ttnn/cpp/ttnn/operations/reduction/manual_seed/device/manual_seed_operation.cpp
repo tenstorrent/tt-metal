@@ -22,31 +22,38 @@ ManualSeedDeviceOperation::program_factory_t ManualSeedDeviceOperation::select_p
 }
 void ManualSeedDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    // Only one of seeds (tensor_args or operation_attributes) must be set
     TT_FATAL(
         tensor_args.seeds.has_value() != operation_attributes.seeds.has_value(),
         "Either tensor_args.seeds or operation_attributes.seeds must be set, but not both.");
 
+    // Only one of user_ids (tensor_args or operation_attributes) can be set
+    TT_FATAL(
+        !(tensor_args.user_ids.has_value() && operation_attributes.user_ids.has_value()),
+        "Either tensor_args.user_ids or operation_attributes.user_ids must be set, but not both.");
+
+    // Case 1: Seeds provided as tensor
     if (tensor_args.seeds.has_value()) {
-        TT_FATAL(
-            !operation_attributes.user_ids.has_value(),
-            "Seeds were provided as a tensor, so user_ids must not be provided as an scalar.");
         const auto& seeds_tensor = tensor_args.seeds.value();
         TT_FATAL(seeds_tensor.dtype() == DataType::UINT32, "Seeds tensor must be of type UINT32.");
-        // TODO: More validations to be added when implementing device logic
-    }
-    if (tensor_args.user_ids.has_value()) {
-        const auto& user_ids_tensor = tensor_args.user_ids.value();
-        TT_FATAL(user_ids_tensor.dtype() == DataType::UINT32, "User IDs tensor must be of type UINT32.");
+        // If user_ids are provided, they must also be a tensor
+        if (tensor_args.user_ids.has_value()) {
+            const auto& user_ids_tensor = tensor_args.user_ids.value();
+            TT_FATAL(user_ids_tensor.dtype() == DataType::UINT32, "User IDs tensor must be of type UINT32.");
+        }
+        // If operation_attributes.user_ids is set, error
         TT_FATAL(
             !operation_attributes.user_ids.has_value(),
-            "Either tensor_args.user_ids or operation_attributes.user_ids must be set, but not both.");
-        // TODO: More validations to be added when implementing device logic
+            "Seeds were provided as a tensor, so user_ids must not be provided as a scalar.");
     }
+    // Case 2: Seeds provided as scalar (operation_attributes)
     if (operation_attributes.seeds.has_value()) {
+        // If user_ids are provided, they must also be a scalar (operation_attributes)
         TT_FATAL(
             !tensor_args.user_ids.has_value(),
-            "Seeds were provided as a scalar, so user_ids must not be provided as an tensor.");
+            "Seeds were provided as a scalar, so user_ids must not be provided as a tensor.");
     }
+    // TODO: More validations to be added when implementing device logic
 }
 
 void ManualSeedDeviceOperation::validate_on_program_cache_miss(

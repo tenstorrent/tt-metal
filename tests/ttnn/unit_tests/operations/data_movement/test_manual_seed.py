@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+import torch
 import ttnn
 
 
@@ -28,13 +29,13 @@ def test_manual_short_with_user_id(device):
 
 def test_manual_tensors(device):
     """Test manual_seed with tensor inputs for both seeds and user_ids, verifying tensor-based API."""
-    seed_tensor = ttnn.rand([42], dtype=ttnn.uint32, layout=ttnn.Layout.ROW_MAJOR, device=device)
-    user_id_tensor = ttnn.rand([7], dtype=ttnn.uint32, layout=ttnn.Layout.ROW_MAJOR, device=device)
+    seed_tensor = ttnn.from_torch(torch.Tensor([42]), dtype=ttnn.uint32, layout=ttnn.Layout.ROW_MAJOR, device=device)
+    user_id_tensor = ttnn.from_torch(torch.Tensor([7]), dtype=ttnn.uint32, layout=ttnn.Layout.ROW_MAJOR, device=device)
     ttnn.manual_seed(device=device, seeds=seed_tensor, user_ids=user_id_tensor)
 
 
 def test_manual_tensors_wrong_config(device):
     """Test that manual_seed raises ValueError when mixing tensor seeds with scalar user_ids (invalid configuration)."""
-    seed_tensor = ttnn.rand([42], dtype=ttnn.uint32, layout=ttnn.Layout.ROW_MAJOR, device=device)
+    seed_tensor = ttnn.from_torch(torch.Tensor([42]), dtype=ttnn.uint32, layout=ttnn.Layout.ROW_MAJOR, device=device)
     with pytest.raises(Exception):
         ttnn.manual_seed(device=device, seeds=seed_tensor, user_ids=7)
