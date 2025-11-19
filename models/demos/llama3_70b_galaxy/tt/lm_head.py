@@ -170,14 +170,21 @@ class LMHead(LightweightModule):
                 output = ttnn.experimental.minimal_matmul(
                     input_tensor=x,
                     weight_tensor=weight,
-                    # config=ttnn.MinimalMatmulConfig(
-                    #     M_block_size=4,
-                    #     K_block_size=8,
-                    #     N_block_size=16,
-                    #     subblock_h=4,
-                    #     subblock_w=2,
-                    #     compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
-                    # ),
+                    config=ttnn.MinimalMatmulConfig(
+                        M_block_size=2,
+                        K_block_size=8,
+                        N_block_size=16,
+                        subblock_h=2,
+                        subblock_w=4,
+                        compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
+                    ),
+                    compute_kernel_config=ttnn.init_device_compute_kernel_config(
+                        self.mesh_device.arch(),
+                        math_fidelity=ttnn.MathFidelity.HiFi2,
+                        math_approx_mode=False,
+                        fp32_dest_acc_en=False,
+                        packer_l1_acc=True,
+                    ),
                 )
                 x.deallocate(True)
                 outputs.append(output)

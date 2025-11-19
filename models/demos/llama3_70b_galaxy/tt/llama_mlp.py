@@ -229,12 +229,19 @@ class TtLlamaMLP(LightweightModule):
             weight_tensor=self.w1_interleaved if use_w1_w3_interleaved else self.w1,
             # fused_activation=ttnn.UnaryOpType.SILU,
             config=ttnn.MinimalMatmulConfig(
-                M_block_size=8,
-                K_block_size=8,
+                M_block_size=16,
+                K_block_size=4,
                 N_block_size=8,
-                subblock_h=2,
+                subblock_h=4,
                 subblock_w=2,
                 compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
+            ),
+            compute_kernel_config=ttnn.init_device_compute_kernel_config(
+                self.mesh_device.arch(),
+                math_fidelity=ttnn.MathFidelity.LoFi,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
             ),
         )
         w1_out_reduced = self.tt_ccl.line_reduce_scatter(
@@ -257,12 +264,19 @@ class TtLlamaMLP(LightweightModule):
             input_tensor=x,
             weight_tensor=self.w3_interleaved if use_w1_w3_interleaved else self.w3,
             config=ttnn.MinimalMatmulConfig(
-                M_block_size=8,
-                K_block_size=8,
+                M_block_size=16,
+                K_block_size=4,
                 N_block_size=8,
-                subblock_h=2,
+                subblock_h=4,
                 subblock_w=2,
                 compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
+            ),
+            compute_kernel_config=ttnn.init_device_compute_kernel_config(
+                self.mesh_device.arch(),
+                math_fidelity=ttnn.MathFidelity.LoFi,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
             ),
         )
         ttnn.deallocate(x)
@@ -296,12 +310,19 @@ class TtLlamaMLP(LightweightModule):
             input_tensor=w2_in_gathered,
             weight_tensor=self.w2_interleaved,
             config=ttnn.MinimalMatmulConfig(
-                M_block_size=8,
-                K_block_size=8,
+                M_block_size=16,
+                K_block_size=4,
                 N_block_size=8,
-                subblock_h=2,
+                subblock_h=4,
                 subblock_w=2,
                 compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
+            ),
+            compute_kernel_config=ttnn.init_device_compute_kernel_config(
+                self.mesh_device.arch(),
+                math_fidelity=ttnn.MathFidelity.LoFi,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
             ),
         )
         ttnn.deallocate(w2_in)
