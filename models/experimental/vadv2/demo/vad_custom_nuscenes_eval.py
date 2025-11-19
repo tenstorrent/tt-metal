@@ -684,6 +684,20 @@ class NuScenesEval_custom(NuScenesEval):
         )
         self.gt_boxes = load_gt(self.nusc, self.eval_set, DetectionBox_modified, verbose=verbose)
 
+        # Filter ground truth to only include samples that are in predictions
+        # This is needed when evaluating on a subset of the data
+        if self.data_infos is not None and len(self.pred_boxes.sample_tokens) < len(self.gt_boxes.sample_tokens):
+            if verbose:
+                print(
+                    f"Filtering GT boxes to match {len(self.pred_boxes.sample_tokens)} prediction samples (from {len(self.gt_boxes.sample_tokens)} total)"
+                )
+            pred_sample_tokens = set(self.pred_boxes.sample_tokens)
+            filtered_gt_boxes = EvalBoxes()
+            for sample_token in pred_sample_tokens:
+                if sample_token in self.gt_boxes.boxes:
+                    filtered_gt_boxes.add_boxes(sample_token, self.gt_boxes.boxes[sample_token])
+            self.gt_boxes = filtered_gt_boxes
+
         assert set(self.pred_boxes.sample_tokens) == set(
             self.gt_boxes.sample_tokens
         ), "Samples in split doesn't match samples in predictions."
