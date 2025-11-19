@@ -63,6 +63,7 @@ namespace distributed {
 class MeshCommandQueue;
 class MeshDeviceView;
 struct MeshTraceBuffer;
+class MeshCommandQueueBase;
 
 using DeviceIds = std::vector<int>;
 
@@ -114,7 +115,7 @@ private:
     std::shared_ptr<MeshDevice> parent_mesh_;
     std::vector<std::weak_ptr<MeshDevice>> submeshes_;
 
-    tt::stl::SmallVector<std::unique_ptr<MeshCommandQueue>> mesh_command_queues_;
+    tt::stl::SmallVector<std::unique_ptr<MeshCommandQueueBase>> mesh_command_queues_;
 
     std::unique_ptr<SubDeviceManagerTracker> sub_device_manager_tracker_;
     uint32_t trace_buffers_size_ = 0;
