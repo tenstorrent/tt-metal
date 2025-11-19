@@ -797,27 +797,19 @@ private:
                 "topology.",
                 test.name,
                 sender.device);
-
-            TT_FATAL(
-                pattern.destination.has_value() && pattern.destination->device.has_value(),
-                "Test '{}': Line sync pattern for sender on device {} must have destination specified by 'device' for "
-                "NeighborExchange topology.",
-                test.name,
-                sender.device);
-
         } else {
             TT_FATAL(
                 pattern.ftype.has_value() && pattern.ftype.value() == ChipSendType::CHIP_MULTICAST,
                 "Test '{}': Line sync pattern for sender on device {} must use CHIP_MULTICAST.",
                 test.name,
                 sender.device);
-
-            TT_FATAL(
-                pattern.destination.has_value() && pattern.destination->hops.has_value(),
-                "Test '{}': Line sync pattern for sender on device {} must have destination specified by 'hops'.",
-                test.name,
-                sender.device);
         }
+
+        TT_FATAL(
+            pattern.destination.has_value() && pattern.destination->hops.has_value(),
+            "Test '{}': Line sync pattern for sender on device {} must have destination specified by 'hops'.",
+            test.name,
+            sender.device);
 
         TT_FATAL(
             pattern.ntype.has_value() && pattern.ntype.value() == NocSendType::NOC_UNICAST_ATOMIC_INC,
@@ -1081,10 +1073,6 @@ private:
         log_debug(LogTest, "Expanding neighbor_exchange pattern for test: {}", test.name);
         auto neighbor_pairs = this->route_manager_.get_neighbor_exchange_pairs();
         if (!neighbor_pairs.empty()) {
-            for (const auto& pair : neighbor_pairs) {
-                std::cout << "Neighbor exchange pair: " << pair.first.chip_id << " -> " << pair.second.chip_id
-                          << std::endl;
-            }
             add_senders_from_pairs(test, neighbor_pairs, base_pattern);
         }
     }
@@ -1177,8 +1165,7 @@ private:
                 sync_patterns.size(),
                 src_device.chip_id,
                 sync_val);
-            std::cout << "expand sync patterns for device " << src_device.chip_id << " with sync value " << sync_val
-                      << std::endl;
+
             // Create sender config with all split sync patterns
             // Sync always uses link 0 (no override allowed)
             SenderConfig sync_sender = {.device = src_device, .patterns = std::move(sync_patterns), .link_id = 0};
@@ -1208,48 +1195,27 @@ private:
         base_sync_pattern.num_packets = 1;                              // Single sync signal
         base_sync_pattern.atomic_inc_val = 1;                           // Increment by 1
 
-        // Topology-specific routing
-        // NeighborExchange topology only supports devices synchronizing with their nearest neighbors, so generate their
-        // patterns separately
-        if (topology == tt::tt_fabric::Topology::NeighborExchange) {
-            // Get the IDs of all devices adjacent to the source device
-            const auto& nearest_neighbor_node_ids = this->route_manager_.get_nearest_neighbor_node_ids(src_device);
-            sync_val = nearest_neighbor_node_ids.size();
+        // Start by calculating multi-directional hops
+        auto [multi_directional_hops, multi_directional_sync_val] =
+            this->route_manager_.get_sync_hops_and_val(src_device, devices);
 
-            // Create a separate traffic pattern for each neighbor
-            for (const auto& [_, neighbor_node_id] : nearest_neighbor_node_ids) {
-                TrafficPatternConfig sync_pattern = base_sync_pattern;
-                sync_pattern.destination = DestinationConfig{.device = neighbor_node_id};
-                sync_patterns.push_back(std::move(sync_pattern));
-            }
+        sync_val = multi_directional_sync_val;
 
-            return {sync_patterns, sync_val};
-        }
+        // Split multi-directional hops into single-direction patterns
+        auto split_hops_vec = this->route_manager_.split_multicast_hops(multi_directional_hops);
 
-        // For all other topologies, we can use the same pattern for all neighbors
-        else {
-            // Start by calculating multi-directional hops
-            auto [multi_directional_hops, multi_directional_sync_val] =
-                this->route_manager_.get_sync_hops_and_val(src_device, devices);
-
-            sync_val = multi_directional_sync_val;
-
-            // Split multi-directional hops into single-direction patterns
-            auto split_hops_vec = this->route_manager_.split_multicast_hops(multi_directional_hops);
-
-            log_debug(
-                LogTest,
-                "Splitting sync pattern for device {} from 1 multi-directional to {} single-direction patterns",
-                src_device.chip_id,
-                split_hops_vec.size());
-            // Create separate sync pattern for each mcast direction. This is required since test infra only handle
-            // mcast for one direction. Ex, mcast to E/W will split into EAST and WEST patterns.
-            sync_patterns.reserve(split_hops_vec.size());
-            for (const auto& single_direction_hops : split_hops_vec) {
-                TrafficPatternConfig sync_pattern = base_sync_pattern;
-                sync_pattern.destination = DestinationConfig{.hops = single_direction_hops};
-                sync_patterns.push_back(std::move(sync_pattern));
-            }
+        log_debug(
+            LogTest,
+            "Splitting sync pattern for device {} from 1 multi-directional to {} single-direction patterns",
+            src_device.chip_id,
+            split_hops_vec.size());
+        // Create separate sync pattern for each mcast direction. This is required since test infra only handle
+        // mcast for one direction. Ex, mcast to E/W will split into EAST and WEST patterns.
+        sync_patterns.reserve(split_hops_vec.size());
+        for (const auto& single_direction_hops : split_hops_vec) {
+            TrafficPatternConfig sync_pattern = base_sync_pattern;
+            sync_pattern.destination = DestinationConfig{.hops = single_direction_hops};
+            sync_patterns.push_back(std::move(sync_pattern));
         }
         return {sync_patterns, sync_val};
     }
