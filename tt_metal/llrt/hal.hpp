@@ -344,7 +344,7 @@ public:
     Hal(tt::ARCH arch,
         bool is_base_routing_fw_enabled,
         bool enable_2_erisc_mode,
-        uint32_t profiler_dram_bank_size_per_risc_bytes = 0);
+        uint32_t profiler_dram_bank_size_per_risc_bytes);
 
     tt::ARCH get_arch() const { return arch_; }
 

@@ -738,7 +738,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
 
         // TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT
         // Specifies the maximum number of programs supported by the profiler.
-        // Default: 1000
+        // Default: nullopt (uses profiler default)
         // Usage: export TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=500
         case EnvVarID::TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT: {
             // Only set the program support count if device profiler is also enabled

@@ -13,12 +13,15 @@ namespace tt {
 
 namespace tt_metal {
 
-uint32_t get_profiler_dram_bank_size_per_risc_bytes(uint32_t profiler_program_support_count) {
+uint32_t get_profiler_dram_bank_size_per_risc_bytes(std::optional<uint32_t> profiler_program_support_count) {
+    if (!profiler_program_support_count.has_value()) {
+        profiler_program_support_count = DEFAULT_PROFILER_PROGRAM_SUPPORT_COUNT;
+    }
     const uint32_t dram_bank_size_per_risc_bytes =
         kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE *
         (kernel_profiler::PROFILER_L1_PROGRAM_ID_COUNT + kernel_profiler::PROFILER_L1_GUARANTEED_MARKER_COUNT +
          kernel_profiler::PROFILER_L1_OP_MIN_OPTIONAL_MARKER_COUNT) *
-        profiler_program_support_count * sizeof(uint32_t);
+        profiler_program_support_count.value() * sizeof(uint32_t);
     TT_ASSERT(dram_bank_size_per_risc_bytes > kernel_profiler::PROFILER_L1_BUFFER_SIZE);
     return dram_bank_size_per_risc_bytes;
 }
