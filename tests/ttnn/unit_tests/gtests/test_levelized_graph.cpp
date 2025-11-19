@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <nlohmann/json.hpp>
-#include <sstream>
 #include <string>
 
 #include <tt-metalium/graph_tracking.hpp>
@@ -100,7 +99,7 @@ TEST_F(TestLevelizedGraphCapture, SimpleBinaryOp) {
 
     vertex_0 = levelized_graph_2.get_vertex(0);
     vertex_1 = levelized_graph_2.get_vertex(1);
-    auto vertex_2 = levelized_graph_2.get_vertex(2);
+    const auto& vertex_2 = levelized_graph_2.get_vertex(2);
     EXPECT_EQ(vertex_0.name, "tt::tt_metal::create_device_tensor");
     EXPECT_EQ(vertex_1.name, "ttnn::add");
     EXPECT_EQ(vertex_2.name, "ttnn::prim::binary_ng");
@@ -157,9 +156,9 @@ TEST_F(TestLevelizedGraphCapture, ReductionOp) {
     EXPECT_TRUE(
         std::ranges::all_of(levelized_graph.vertices(), [&](const auto& vertex) { return vertex.internals.empty(); }));
 
-    auto vertex_0 = levelized_graph.get_vertex(0);
+    const auto& vertex_0 = levelized_graph.get_vertex(0);
     auto vertex_1 = levelized_graph.get_vertex(1);
-    auto vertex_2 = levelized_graph.get_vertex(2);
+    const auto& vertex_2 = levelized_graph.get_vertex(2);
     EXPECT_EQ(vertex_0.name, "tt::tt_metal::create_device_tensor");
     EXPECT_EQ(vertex_1.name, "ttnn::sum");
     EXPECT_EQ(vertex_2.name, "ttnn::mean");
@@ -245,9 +244,9 @@ TEST_F(TestLevelizedGraphCapture, OutputLayoutInfo) {
     EXPECT_TRUE(
         std::ranges::all_of(levelized_graph.vertices(), [&](const auto& vertex) { return vertex.internals.empty(); }));
 
-    auto vertex_0 = levelized_graph.get_vertex(0);
+    const auto& vertex_0 = levelized_graph.get_vertex(0);
     auto vertex_1 = levelized_graph.get_vertex(1);
-    auto vertex_2 = levelized_graph.get_vertex(2);
+    const auto& vertex_2 = levelized_graph.get_vertex(2);
     EXPECT_EQ(vertex_0.name, "tt::tt_metal::create_device_tensor");
     EXPECT_EQ(vertex_1.name, "ttnn::sum");
     EXPECT_EQ(vertex_2.name, "ttnn::softmax");
@@ -323,9 +322,9 @@ TEST_F(TestLevelizedGraphCapture, MatmulWithBiasTest) {
     EXPECT_TRUE(
         std::ranges::all_of(levelized_graph.vertices(), [&](const auto& vertex) { return vertex.internals.empty(); }));
 
-    auto vertex_0 = levelized_graph.get_vertex(0);
+    const auto& vertex_0 = levelized_graph.get_vertex(0);
     auto vertex_1 = levelized_graph.get_vertex(1);
-    auto vertex_2 = levelized_graph.get_vertex(2);
+    const auto& vertex_2 = levelized_graph.get_vertex(2);
     EXPECT_EQ(vertex_0.name, "tt::tt_metal::create_device_tensor");
     EXPECT_EQ(vertex_1.name, "ttnn::matmul");
     EXPECT_EQ(vertex_2.name, "ttnn::add");
@@ -394,7 +393,7 @@ TEST_F(TestLevelizedGraphCapture, CompositeOpTest) {
     EXPECT_TRUE(
         std::ranges::all_of(levelized_graph.vertices(), [&](const auto& vertex) { return vertex.internals.empty(); }));
 
-    auto vertex_0 = levelized_graph.get_vertex(0);
+    const auto& vertex_0 = levelized_graph.get_vertex(0);
     auto vertex_1 = levelized_graph.get_vertex(1);
     EXPECT_EQ(vertex_0.name, "tt::tt_metal::create_device_tensor");
     EXPECT_EQ(vertex_1.name, "ttnn::digamma");
@@ -480,7 +479,7 @@ TEST_F(TestLevelizedGraphCapture, MultiplySelfTest) {
 
     vertex_0 = levelized_graph_2.get_vertex(0);
     vertex_1 = levelized_graph_2.get_vertex(1);
-    auto vertex_2 = levelized_graph_2.get_vertex(2);
+    const auto& vertex_2 = levelized_graph_2.get_vertex(2);
     EXPECT_EQ(vertex_0.name, "tt::tt_metal::create_device_tensor");
     EXPECT_EQ(vertex_1.name, "ttnn::multiply");
     EXPECT_EQ(vertex_2.name, "ttnn::prim::binary_ng");
@@ -531,9 +530,9 @@ TEST_F(TestLevelizedGraphCapture, ForkTest) {
     EXPECT_TRUE(std::ranges::all_of(
         levelized_graph.vertices(), [&](const auto& vertex) { return vertex.stacking_level == 1; }));
 
-    auto vertex_0 = levelized_graph.get_vertex(0);
+    const auto& vertex_0 = levelized_graph.get_vertex(0);
     auto vertex_1 = levelized_graph.get_vertex(1);
-    auto vertex_2 = levelized_graph.get_vertex(2);
+    const auto& vertex_2 = levelized_graph.get_vertex(2);
     EXPECT_EQ(vertex_0.name, "tt::tt_metal::create_device_tensor");
     EXPECT_EQ(vertex_1.name, "ttnn::add");
     EXPECT_EQ(vertex_2.name, "ttnn::subtract");
@@ -599,8 +598,8 @@ TEST_F(TestLevelizedGraphCapture, JoinTest) {
     EXPECT_TRUE(std::ranges::all_of(
         levelized_graph.vertices(), [&](const auto& vertex) { return vertex.stacking_level == 1; }));
 
-    auto vertex_0 = levelized_graph.get_vertex(0);
-    auto vertex_1 = levelized_graph.get_vertex(1);
+    const auto& vertex_0 = levelized_graph.get_vertex(0);
+    const auto& vertex_1 = levelized_graph.get_vertex(1);
     auto vertex_2 = levelized_graph.get_vertex(2);
     EXPECT_EQ(vertex_0.name, "tt::tt_metal::create_device_tensor");
     EXPECT_EQ(vertex_1.name, "tt::tt_metal::create_device_tensor");
@@ -660,7 +659,7 @@ TEST_F(TestLevelizedGraphCapture, ExtractLevelizedGraphJsonTest) {
     // Verify first vertex (create_device_tensor)
     EXPECT_TRUE(levelized_graph_json[0].is_object());
     EXPECT_TRUE(levelized_graph_json[0].contains(ttnn::graph::kCounter));
-    EXPECT_TRUE(levelized_graph_json[0].contains(ttnn::graph::kStackiingLevel));
+    EXPECT_TRUE(levelized_graph_json[0].contains(ttnn::graph::kStackingLevel));
     EXPECT_TRUE(levelized_graph_json[0].contains(ttnn::graph::kName));
     EXPECT_TRUE(levelized_graph_json[0].contains(ttnn::graph::kInEdges));
     EXPECT_TRUE(levelized_graph_json[0].contains(ttnn::graph::kOutEdges));
@@ -668,7 +667,7 @@ TEST_F(TestLevelizedGraphCapture, ExtractLevelizedGraphJsonTest) {
     EXPECT_TRUE(levelized_graph_json[0].contains(ttnn::graph::kOutputShape));
 
     EXPECT_EQ(levelized_graph_json[0][ttnn::graph::kName], "tt::tt_metal::create_device_tensor");
-    EXPECT_EQ(levelized_graph_json[0][ttnn::graph::kStackiingLevel], 1);
+    EXPECT_EQ(levelized_graph_json[0][ttnn::graph::kStackingLevel], 1);
     EXPECT_EQ(levelized_graph_json[0][ttnn::graph::kCounter], 0);
     EXPECT_TRUE(levelized_graph_json[0][ttnn::graph::kInEdges].is_array());
     EXPECT_TRUE(levelized_graph_json[0][ttnn::graph::kInEdges].empty());
@@ -682,7 +681,7 @@ TEST_F(TestLevelizedGraphCapture, ExtractLevelizedGraphJsonTest) {
     // Verify second vertex (add)
     EXPECT_TRUE(levelized_graph_json[1].is_object());
     EXPECT_EQ(levelized_graph_json[1][ttnn::graph::kName], "ttnn::add");
-    EXPECT_EQ(levelized_graph_json[1][ttnn::graph::kStackiingLevel], 1);
+    EXPECT_EQ(levelized_graph_json[1][ttnn::graph::kStackingLevel], 1);
     EXPECT_EQ(levelized_graph_json[1][ttnn::graph::kCounter], 1);
     EXPECT_TRUE(levelized_graph_json[1][ttnn::graph::kInEdges].is_array());
     EXPECT_EQ(levelized_graph_json[1][ttnn::graph::kInEdges].size(), 2);  // both inputs from vertex 0
@@ -713,7 +712,7 @@ TEST_F(TestLevelizedGraphCapture, ExtractLevelizedGraphJsonTest) {
 
     // Verify that primitives at level 2 have no internals
     for (const auto& vertex : levelized_graph_json_2) {
-        if (vertex[ttnn::graph::kStackiingLevel] == 2) {
+        if (vertex[ttnn::graph::kStackingLevel] == 2) {
             EXPECT_TRUE(vertex.contains(ttnn::graph::kInternals));
             EXPECT_TRUE(vertex[ttnn::graph::kInternals].is_array());
             EXPECT_TRUE(vertex[ttnn::graph::kInternals].empty());

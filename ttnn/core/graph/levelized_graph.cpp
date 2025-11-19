@@ -15,7 +15,7 @@ namespace {
 nlohmann::json to_json(const ttnn::graph::LevelizedGraph::Vertex& data) {
     nlohmann::json j;
     j[ttnn::graph::kCounter] = data.id;
-    j[ttnn::graph::kStackiingLevel] = data.stacking_level;
+    j[ttnn::graph::kStackingLevel] = data.stacking_level;
     j[ttnn::graph::kName] = data.name;
     j[ttnn::graph::kArguments] = data.arguments;
     j[ttnn::graph::kInEdges] = data.in_edges;
@@ -91,14 +91,14 @@ void LevelizedGraph::populate_vertices(const nlohmann::json& trace, std::size_t 
 
     auto valid_starts =
         trace | std::views::filter([&](const auto& node) {
-            return node[kNodeType] == kNodeFunctionStart && node[kStackiingLevel].template get<size_t>() <= max_level;
+            return node[kNodeType] == kNodeFunctionStart && node[kStackingLevel].template get<size_t>() <= max_level;
         });
     std::ranges::for_each(valid_starts, [&](const auto& node) {
         // Create a new vertex
         Vertex vertex;
         vertex.id = graph.size();
         vertex.name = node[kParams][kName].template get<std::string>();
-        vertex.stacking_level = node[kStackiingLevel].template get<size_t>();
+        vertex.stacking_level = node[kStackingLevel].template get<size_t>();
 
         // Extract arguments if they exist
         if (node.contains(kArguments) && node[kArguments].is_array()) {
@@ -138,7 +138,7 @@ void LevelizedGraph::populate_tensor_to_producer_end_map(const nlohmann::json& t
     auto fn_ends = trace | std::views::filter([&](const auto& node) { return node[kNodeType] == kNodeFunctionEnd; });
     std::ranges::for_each(fn_ends, [&](const auto& node) {
         int end_counter = node[kCounter].template get<int>();
-        size_t end_level = node[kStackiingLevel].template get<size_t>();
+        size_t end_level = node[kStackingLevel].template get<size_t>();
         auto tensor_counters = get_valid_connections(node, trace) | std::views::filter([&](const auto& conn_counter) {
                                    return trace[conn_counter][kNodeType] == kNodeTensor;
                                });
@@ -154,7 +154,7 @@ void LevelizedGraph::populate_tensor_to_producer_end_map(const nlohmann::json& t
                 int existing_end_counter = existing_it->second;
                 if (existing_end_counter >= 0 && static_cast<size_t>(existing_end_counter) < trace.size()) {
                     const auto& existing_end_node = trace[existing_end_counter];
-                    size_t existing_level = existing_end_node[kStackiingLevel].get<size_t>();
+                    size_t existing_level = existing_end_node[kStackingLevel].get<size_t>();
                     if (end_level < existing_level) {
                         // This function_end is more outer, use it
                         tensor_to_producer_end[tensor_counter] = end_counter;
@@ -228,7 +228,7 @@ void LevelizedGraph::populate_internals(const nlohmann::json& trace, std::size_t
                         std::views::filter([&](const auto& node) { return node[kNodeType] == kNodeFunctionStart; }) |
                         std::views::filter([&](const auto& node) {
                             int child_counter = node[kCounter].template get<int>();
-                            size_t child_level = node[kStackiingLevel].template get<size_t>();
+                            size_t child_level = node[kStackingLevel].template get<size_t>();
                             return child_level == parent_level + 1 && child_counter > function_start_counter &&
                                    child_counter < function_end_counter && child_level <= max_level;
                         }) |

@@ -40,7 +40,7 @@ nlohmann::json to_json(const ttnn::graph::GraphProcessor::Vertex& data) {
     j[ttnn::graph::kParams] = data.params;
     j[ttnn::graph::kArguments] = data.arguments;
     j[ttnn::graph::kConnections] = data.connections;
-    j[ttnn::graph::kStackiingLevel] = data.stacking_level;
+    j[ttnn::graph::kStackingLevel] = data.stacking_level;
     return j;
 }
 
