@@ -470,9 +470,11 @@ class Embedding(Module):
     ) -> None:
         super().__init__()
 
+        # use row major layout since ttnn.embedding allocates the embedding tensor again otherwise
         self.weight = Parameter(
             total_shape=[dictionary_size, embedding_size],
             mesh_axes=[None, mesh_axis],
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             device=device,
         )
 
