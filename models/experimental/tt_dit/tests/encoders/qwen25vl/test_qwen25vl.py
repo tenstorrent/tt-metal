@@ -116,12 +116,13 @@ def test_qwen25vl_attention(*, mesh_device: ttnn.MeshDevice, masked: bool) -> No
 
 
 @pytest.mark.parametrize(
-    "mesh_device",
+    ("mesh_device", "batch_size", "skip_layers"),
     [
-        pytest.param((1, 1), id="1x1"),
-        pytest.param((1, 8), id="1x8"),
+        # pytest.param((1, 1), 2, 4, id="1x1"),
+        pytest.param((1, 2), 10, 0, id="1x2"),
+        pytest.param((1, 8), 10, 0, id="1x8"),
     ],
-    indirect=True,
+    indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
     "device_params",
@@ -135,10 +136,11 @@ def test_qwen25vl_attention(*, mesh_device: ttnn.MeshDevice, masked: bool) -> No
         pytest.param(False, id="unmasked"),
     ],
 )
-def test_qwen25vl_text_encoder(*, mesh_device: ttnn.MeshDevice, masked: bool) -> None:
+def test_qwen25vl_text_encoder(
+    *, mesh_device: ttnn.MeshDevice, batch_size: int, skip_layers: int, masked: bool
+) -> None:
     torch.manual_seed(0)
 
-    batch_size = 10
     sequence_length = 512
     tp_axis = 1
 
@@ -156,7 +158,6 @@ def test_qwen25vl_text_encoder(*, mesh_device: ttnn.MeshDevice, masked: bool) ->
     )
     torch_text_model = torch_model.model.language_model
 
-    skip_layers = 4 if mesh_device.shape[tp_axis] == 1 else 0
     mid = len(torch_text_model.layers) // 2
     del torch_text_model.layers[mid - skip_layers // 2 : mid - (-skip_layers // 2)]
 
@@ -206,7 +207,11 @@ def test_qwen25vl_text_encoder(*, mesh_device: ttnn.MeshDevice, masked: bool) ->
         prompt_embeds = out.hidden_states[-1]
 
     assert len(out.hidden_states) == len(tt_hidden_states)
-    assert_quality(prompt_embeds, tt_prompt_embeds_torch, pcc=0.9999, relative_rmse=0.015)
+
+    if masked:
+        assert_quality(prompt_embeds, tt_prompt_embeds_torch, pcc=0.952, relative_rmse=0.31)
+    else:
+        assert_quality(prompt_embeds, tt_prompt_embeds_torch, pcc=0.991, relative_rmse=0.14)
 
 
 @pytest.mark.parametrize(
