@@ -44,6 +44,8 @@ bool is_input_batched(const ttnn::Shape& shape) {
  *
  * @param input_tensor_a First input tensor
  * @param input_tensor_b Second input tensor
+ * @param transpose_a Whether to transpose the first input tensor
+ * @param transpose_b Whether to transpose the second input tensor
  * @param memory_config Memory configuration for the output tensor
  * @param dtype Data type for the output tensor
  * @param bias Optional bias tensor to add to the result
@@ -54,9 +56,11 @@ Tensor handle_zero_volume_matmul(
     const Tensor& input_tensor_b,
     const MemoryConfig& memory_config,
     const std::optional<DataType>& dtype,
+    const bool transpose_a,
+    const bool transpose_b,
     const std::optional<const ttnn::Tensor>& bias = std::nullopt) {
     // Calculate the expected output shape
-    ttnn::Shape output_shape = compute_matmul_output_shape(input_tensor_a, input_tensor_b);
+    ttnn::Shape output_shape = compute_matmul_output_shape(input_tensor_a, input_tensor_b, transpose_a, transpose_b);
 
     // Use the appropriate data type (either from parameters or from input tensor)
     DataType output_dtype = dtype.value_or(input_tensor_a.dtype());
@@ -91,8 +95,8 @@ static bool get_post_process_bias(
     const std::optional<const MatmulProgramConfig>& program_config,
     const std::optional<const CoreCoord>& user_core_coord,
     const MemoryConfig& output_mem_config,
-    const ttnn::Tensor& input_tensor_a_adjusted,
-    const ttnn::Tensor& input_tensor_b_adjusted) {
+    const ttnn::Tensor& input_tensor_a,
+    const ttnn::Tensor& input_tensor_b) {
     // Determine if we should post-process bias based on the program config
     // MatmulMultiCoreProgramConfig doesn't support bias fusion, so we need to apply it as a post-process
     bool post_process_bias = false;
@@ -117,14 +121,14 @@ static bool get_post_process_bias(
             // Be conservative and post-process bias for non-DRAM outputs
             if (output_mem_config.buffer_type() != BufferType::DRAM) {
                 post_process_bias = true;
-            } else if (!input_tensor_a_adjusted.is_sharded()) {
+            } else if (!input_tensor_a.is_sharded()) {
                 // For DRAM output, check if all tensors are DRAM interleaved
                 bool all_dram_interleaved =
-                    input_tensor_a_adjusted.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
-                    input_tensor_b_adjusted.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
+                    input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
+                    input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
                     output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED &&
-                    input_tensor_a_adjusted.memory_config().buffer_type() == BufferType::DRAM &&
-                    input_tensor_b_adjusted.memory_config().buffer_type() == BufferType::DRAM;
+                    input_tensor_a.memory_config().buffer_type() == BufferType::DRAM &&
+                    input_tensor_b.memory_config().buffer_type() == BufferType::DRAM;
 
                 // If not all DRAM interleaved, MatmulMultiCoreProgramConfig is more likely
                 if (!all_dram_interleaved) {
@@ -152,44 +156,30 @@ ttnn::Tensor bound_matmul(
     // Check for zero volume tensors
     if (input_tensor_a.logical_volume() == 0 || input_tensor_b.logical_volume() == 0) [[unlikely]] {
         return detail::handle_zero_volume_matmul(
-            input_tensor_a, input_tensor_b, parameters.output_mem_config, parameters.output_dtype, bias);
+            input_tensor_a,
+            input_tensor_b,
+            parameters.output_mem_config,
+            parameters.output_dtype,
+            parameters.transpose_a,
+            parameters.transpose_b,
+            bias);
     }
 
-    const auto& input_tensor_a_adjusted = parameters.transpose_a
-                                              ? ttnn::transpose(input_tensor_a, -1, -2, input_tensor_a.memory_config())
-                                              : input_tensor_a;
     const auto& input_tensor_b_adjusted =
         (input_tensor_b.logical_shape().rank() == 1)
             ? ttnn::reshape(input_tensor_b, ttnn::Shape({input_tensor_b.logical_shape()[-1], 1}))
-        : parameters.transpose_b ? ttnn::transpose(input_tensor_b, -1, -2, input_tensor_b.memory_config())
-                                 : input_tensor_b;
-
-    const auto input_tensor_a_shape = input_tensor_a_adjusted.logical_shape();
-    const auto input_tensor_b_shape = input_tensor_b_adjusted.logical_shape();
-
-    const auto width_a = input_tensor_a_shape[-1];
-    const auto height_b = input_tensor_b_shape[-2];
-
-    if (width_a != height_b) {
-        TT_THROW(
-            "ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor ({} != {}). "
-            "The shape of first tensor was {} and the shape of second tensor was {})",
-            width_a,
-            height_b,
-            input_tensor_a_shape,
-            input_tensor_b_shape);
-    }
+            : input_tensor_b;
 
     bool post_process_bias = get_post_process_bias(
         bias,
         parameters.program_config,
         parameters.user_core_coord,
         parameters.output_mem_config,
-        input_tensor_a_adjusted,
+        input_tensor_a,
         input_tensor_b_adjusted);
 
     auto output_tensor = matmul(
-        input_tensor_a_adjusted,
+        input_tensor_a,
         input_tensor_b_adjusted,
         post_process_bias ? std::nullopt : bias,
         parameters,
@@ -197,7 +187,9 @@ ttnn::Tensor bound_matmul(
 
     if (input_tensor_b.logical_shape().rank() == 1) [[unlikely]] {
         output_tensor = ttnn::reshape(
-            output_tensor, ttnn::operations::matmul::compute_matmul_output_shape(input_tensor_a, input_tensor_b));
+            output_tensor,
+            ttnn::operations::matmul::compute_matmul_output_shape(
+                input_tensor_a, input_tensor_b, parameters.transpose_a, parameters.transpose_b));
     }
 
     // Apply bias as post-processing if needed
