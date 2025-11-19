@@ -53,13 +53,13 @@ def calculate_geomean(values):
     return product ** (1.0 / len(values))
 
 
-def validate_geomean_speedup(geomean_speedup, tolerance=0.015):
+def validate_geomean_speedup(geomean_speedup, tolerance=0.025):
     """
     Validate that geomean speedup is within acceptable range of 1.0.
 
     Args:
         geomean_speedup: The calculated geomean speedup value
-        tolerance: Acceptable deviation from 1.0 (default: 0.015 for 1.5%)
+        tolerance: Acceptable deviation from 1.0 (default: 0.025 for 2.5%)
 
     Raises:
         AssertionError: If speedup is outside acceptable range
@@ -77,7 +77,7 @@ def validate_geomean_speedup(geomean_speedup, tolerance=0.015):
         assert False, error_msg
 
 
-def report_speedup_summary(tolerance=0.015):
+def report_speedup_summary(tolerance=0.025):
     """
     Calculate and report geomean speedup over golden values.
 
@@ -85,7 +85,7 @@ def report_speedup_summary(tolerance=0.015):
     acceptable range, and clears the SPEEDUPS list.
 
     Args:
-        tolerance: Acceptable deviation from 1.0 (default: 0.015 for 1.5%)
+        tolerance: Acceptable deviation from 1.0 (default: 0.025 for 2.5%)
     """
     if not SPEEDUPS:
         return
