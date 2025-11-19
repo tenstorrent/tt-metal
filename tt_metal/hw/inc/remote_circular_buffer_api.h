@@ -474,10 +474,10 @@ public:
             noc.get_noc_id());
     }
 
-    /** @brief Resizes the remote receiver's circular buffer page size
+    /** @brief Resizes the sender's circular buffer page size
      *
-     * Resizes the remote circular buffer's page size. This may result in noc transactions for synchronizing with the
-     * receiver core.
+     * Resizes the sender circular buffer's page size. This may result in noc transactions for synchronizing with the
+     * remote receiver core.
      *
      * This is intended to be called by the sender core.
      *
@@ -490,7 +490,7 @@ public:
      * @param cmd_buf The command buffer to use for the remote pointer update
      */
     template <RemotePointerUpdate update_remote_pointer = RemotePointerUpdate::UPDATE_OVER_NOC>
-    void set_receiver_page_size(
+    void set_sender_page_size(
         uint32_t page_size,
         experimental::Noc& noc,
         uint8_t noc_mode = detail::default_noc_mode,
@@ -523,10 +523,10 @@ public:
         remote_cb_pop_front(remote_cb_index_, num_pages, noc.get_noc_id());
     }
 
-    /** @brief Resizes the remote sender's circular buffer page size
+    /** @brief Resizes the receiver's circular buffer page size
      *
-     * Resizes the remote circular buffer's page size. This may result in noc transactions for synchronizing with the
-     * sender core.
+     * Resizes the receiver's circular buffer page size. This may result in noc transactions for synchronizing with the
+     * remote sender core.
      *
      * This is intended to be called by the receiver core.
      *
@@ -539,7 +539,7 @@ public:
      * @param cmd_buf The command buffer to use for the remote pointer update
      */
     template <RemotePointerUpdate update_remote_pointer = RemotePointerUpdate::UPDATE_OVER_NOC>
-    void set_sender_page_size(
+    void set_receiver_page_size(
         uint32_t page_size,
         experimental::Noc& noc,
         uint8_t noc_mode = detail::default_noc_mode,
