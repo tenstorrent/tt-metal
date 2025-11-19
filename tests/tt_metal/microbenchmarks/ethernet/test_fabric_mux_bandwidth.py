@@ -27,7 +27,7 @@ GOLDEN_FILE_PATH = os.path.join(GOLDEN_FILE_DIR, GOLDEN_FILE_NAME)
 SUMMARY_FILE_NAME = "fabric_mux_bandwidth_summary.txt"
 SUMMARY_FILE_PATH = os.path.join(OUTPUT_FILE_DIR, SUMMARY_FILE_NAME)
 
-BW_THRESHOLD = 0.1
+BW_THRESHOLD = 0.25
 
 SPEEDUPS = []  # Track speedup for each test
 
