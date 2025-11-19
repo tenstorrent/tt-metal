@@ -17,7 +17,6 @@
 #include <unordered_map>
 
 #include <fmt/ranges.h>
-#include <tt-logger/tt-logger.hpp>
 #include <third_party/umd/device/api/umd/device/cluster.hpp>
 
 enum class MetricUnit : uint16_t {

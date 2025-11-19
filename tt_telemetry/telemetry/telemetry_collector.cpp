@@ -40,7 +40,12 @@ static std::string format_end_time(std::chrono::seconds duration_from_now) {
     auto end_time_system = std::chrono::system_clock::now() + duration_from_now;
     auto end_time_t = std::chrono::system_clock::to_time_t(end_time_system);
     std::tm tm_buf{};
-    localtime_r(&end_time_t, &tm_buf);
+    if (!localtime_r(&end_time_t, &tm_buf)) {
+        // Fallback to UTC if local time conversion fails
+        if (!gmtime_r(&end_time_t, &tm_buf)) {
+            return "unknown time";
+        }
+    }
     std::array<char, 32> time_str{};
     std::strftime(time_str.data(), time_str.size(), "%Y-%m-%d %H:%M:%S", &tm_buf);
     return std::string(time_str.data());
@@ -133,11 +138,6 @@ static std::string get_cluster_wide_telemetry_path(const Metric& metric) {
     std::vector<std::string> path_components{static_cast<const char*>(hostname_)};
     const auto& local_path = metric.telemetry_path();
     path_components.insert(path_components.end(), local_path.begin(), local_path.end());
-
-    // Join with '/' using more efficient approach
-    if (path_components.empty()) {
-        return {};
-    }
 
     // Pre-calculate total size to avoid reallocations
     size_t total_size = path_components.size() - 1;  // separators
