@@ -32,7 +32,7 @@
 #include "tt_metal/hw/inc/utils/utils.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_txq_setup.h"
 #include "hostdevcommon/fabric_common.h"
-#include "hostdevcommon/fabric_telemetry_common.h"
+#include "fabric_telemetry_msgs.h"
 
 #include <array>
 #include <cstddef>
@@ -2000,10 +2000,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     std::array<uint8_t, num_eth_ports>& port_direction_table,
     std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids_ordered) {
     size_t did_nothing_count = 0;
-    using FabricTelemetryT = std::conditional_t<
-        (NUM_ACTIVE_ERISCS == 2),
-        FabricTelemetry<FabricArch::BLACKHOLE>,
-        FabricTelemetry<FabricArch::WORMHOLE_B0>>;
+    using FabricTelemetryT = FabricTelemetry;
     FabricTelemetryT local_fabric_telemetry{};
     auto fabric_telemetry = reinterpret_cast<volatile FabricTelemetryT*>(MEM_AERISC_FABRIC_TELEMETRY_BASE);
     *termination_signal_ptr = tt::tt_fabric::TerminationSignal::KEEP_RUNNING;

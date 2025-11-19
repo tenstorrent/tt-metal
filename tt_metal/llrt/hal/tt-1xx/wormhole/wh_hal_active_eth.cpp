@@ -6,6 +6,7 @@
 #define COMPILE_FOR_ERISC
 
 #include "dev_msgs.h"
+#include "fabric_telemetry_msgs.h"
 using namespace tt::tt_metal::wormhole::active_eth;
 
 #include "eth_l1_address_map.h"
@@ -24,6 +25,10 @@ namespace tt::tt_metal::wormhole {
 // This file is intended to be wrapped inside arch-specific namespace.
 namespace active_eth_dev_msgs {
 #include "hal/generated/dev_msgs_impl.hpp"
+}
+
+namespace active_eth_fabric_telemetry {
+#include "hal/generated/fabric_telemetry_impl.hpp"
 }
 
 HalCoreInfoType create_active_eth_mem_map(bool is_base_routing_fw_enabled) {
@@ -142,7 +147,8 @@ HalCoreInfoType create_active_eth_mem_map(bool is_base_routing_fw_enabled) {
         std::move(processor_classes_names),
         false /*supports_cbs*/,
         false /*supports_receiving_multicast_cmds*/,
-        active_eth_dev_msgs::create_factory()};
+        active_eth_dev_msgs::create_factory(),
+        active_eth_fabric_telemetry::create_factory()};
 }
 
 }  // namespace tt::tt_metal::wormhole
