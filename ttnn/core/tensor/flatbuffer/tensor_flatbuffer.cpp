@@ -21,15 +21,15 @@
 #include "tt-metalium/tensor/storage.hpp"
 #include "tt-metalium/tensor/tensor_utils.hpp"
 
-#include "tt-metalium/tensor/mesh_shape_generated.h"
+#include "mesh_shape_generated.h"
 #include <tt-metalium/serialized_descriptors/mesh_coordinate_generated.h>
-#include "tt-metalium/tensor/tensor_generated.h"
+#include "tensor_generated.h"
 
 #include <vector>
 #include <cstdint>
 #include <unordered_map>
 
-namespace tt::tt_metal {
+namespace ttnn {
 namespace {
 
 flatbuffers::Offset<tt::tt_metal::distributed::flatbuffer::MeshCoordinate> to_flatbuffer(
@@ -57,7 +57,7 @@ tt::tt_metal::distributed::MeshShape from_flatbuffer(const flatbuffer::MeshShape
 
 tt::tt_metal::HostBuffer create_host_buffer_from_bytes(
     uint64_t size_bytes,
-    const TensorSpec& spec,
+    const tt::tt_metal::TensorSpec& spec,
     tt::stl::Span<std::byte> data,
     const tt::tt_metal::MemoryPin& memory_pin) {
     switch (spec.data_type()) {
@@ -161,9 +161,11 @@ tt::tt_metal::TensorTopology from_flatbuffer(const flatbuffer::TensorTopology* f
 }  // namespace
 
 flatbuffers::Offset<flatbuffer::Tensor> to_flatbuffer(
-    const Tensor& tensor, flatbuffers::FlatBufferBuilder& builder, std::vector<tt::tt_metal::HostBuffer>& buffers) {
+    const tt::tt_metal::Tensor& tensor,
+    flatbuffers::FlatBufferBuilder& builder,
+    std::vector<tt::tt_metal::HostBuffer>& buffers) {
     TT_FATAL(buffers.empty(), "Buffers vector must be empty");
-    TT_FATAL(!is_device_tensor(tensor), "Device tensors are not supported in flatbuffer serialization");
+    TT_FATAL(!tt::tt_metal::is_device_tensor(tensor), "Device tensors are not supported in flatbuffer serialization");
 
     auto tensor_spec_offset = to_flatbuffer(tensor.tensor_spec(), builder);
 
@@ -213,7 +215,7 @@ flatbuffers::Offset<flatbuffer::Tensor> to_flatbuffer(
     return tensor_offset;
 }
 
-Tensor from_flatbuffer(
+tt::tt_metal::Tensor from_flatbuffer(
     const flatbuffer::Tensor* fb_tensor,
     tt::stl::Span<std::byte> tensor_data,
     const tt::tt_metal::MemoryPin& memory_pin) {
@@ -250,7 +252,7 @@ Tensor from_flatbuffer(
         fb_topology != nullptr ? from_flatbuffer(fb_topology)
                                : tt::tt_metal::TensorTopology::create_fully_replicated_tensor_topology(ttnn_mesh_shape);
 
-    return Tensor(std::move(host_storage), spec, std::move(topology));
+    return tt::tt_metal::Tensor(std::move(host_storage), spec, std::move(topology));
 }
 
-}  // namespace tt::tt_metal
+}  // namespace ttnn

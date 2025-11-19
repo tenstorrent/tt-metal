@@ -472,8 +472,6 @@ target_sources(
             api/ttnn/tensor/tensor.hpp
             api/ttnn/tensor/serialization.hpp
             api/ttnn/tensor/host_buffer/functions.hpp
-            api/ttnn/tensor/flatbuffer/tensor_spec_flatbuffer.hpp
-            api/ttnn/tensor/flatbuffer/tensor_flatbuffer.hpp
             api/ttnn/tensor/types.hpp
             api/ttnn/tensor/to_string.hpp
             api/ttnn/types.hpp

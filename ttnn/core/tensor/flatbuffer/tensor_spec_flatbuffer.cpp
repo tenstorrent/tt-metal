@@ -2,10 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/tensor/flatbuffer/tensor_spec_flatbuffer.hpp"
-#include <tt_stl/small_vector.hpp>
+#include "tensor/flatbuffer/tensor_spec_flatbuffer.hpp"
 
-namespace tt::tt_metal {
+namespace ttnn {
 namespace {
 
 CoreRangeSet from_flatbuffer(const flatbuffer::CoreRangeSet* core_range_set) {
@@ -168,7 +167,7 @@ flatbuffers::Offset<flatbuffer::NdShardSpec> to_flatbuffer(
 
 tt::tt_metal::NdShardSpec from_flatbuffer(const flatbuffer::NdShardSpec* spec) {
     return tt::tt_metal::NdShardSpec(
-        tt::tt_metal::Shape(ttsl::SmallVector<uint32_t>(spec->shard_shape()->cbegin(), spec->shard_shape()->cend())),
+        tt::tt_metal::Shape(SmallVector<uint32_t>(spec->shard_shape()->cbegin(), spec->shard_shape()->cend())),
         from_flatbuffer(spec->grid()),
         from_flatbuffer(spec->orientation()),
         from_flatbuffer(spec->shard_distribution_strategy()));
@@ -192,9 +191,8 @@ tt::tt_metal::TensorLayout from_flatbuffer(const flatbuffer::TensorLayout* layou
     return tt::tt_metal::TensorLayout::restore_from_serialized(
         from_flatbuffer(layout->data_type()),
         page_config,
-        tt::tt_metal::from_flatbuffer(layout->memory_config()),
-        tt::tt_metal::Alignment(
-            ttsl::SmallVector<uint32_t>(layout->alignment()->cbegin(), layout->alignment()->cend())));
+        ttnn::from_flatbuffer(layout->memory_config()),
+        tt::tt_metal::Alignment(SmallVector<uint32_t>(layout->alignment()->cbegin(), layout->alignment()->cend())));
 }
 
 flatbuffers::Offset<flatbuffer::TensorLayout> to_flatbuffer(
@@ -211,7 +209,7 @@ flatbuffers::Offset<flatbuffer::TensorLayout> to_flatbuffer(
             to_flatbuffer(layout.get_data_type()),
             flatbuffer::PageConfig::tile,
             flatbuffer::CreateTilePageConfig(builder, flat_tile).Union(),
-            tt::tt_metal::to_flatbuffer(layout.get_memory_config(), builder),
+            ttnn::to_flatbuffer(layout.get_memory_config(), builder),
             flat_alignment);
     } else if (page_config.get_layout() == tt::tt_metal::Layout::ROW_MAJOR) {
         return flatbuffer::CreateTensorLayout(
@@ -219,7 +217,7 @@ flatbuffers::Offset<flatbuffer::TensorLayout> to_flatbuffer(
             to_flatbuffer(layout.get_data_type()),
             flatbuffer::PageConfig::row_major,
             flatbuffer::CreateRowMajorPageConfig(builder).Union(),
-            tt::tt_metal::to_flatbuffer(layout.get_memory_config(), builder),
+            ttnn::to_flatbuffer(layout.get_memory_config(), builder),
             flat_alignment);
     }
     TT_THROW("Unsupported PageConfig type to flatbuffer.");
@@ -272,8 +270,8 @@ flatbuffers::Offset<flatbuffer::TensorSpec> to_flatbuffer(
 
 tt::tt_metal::TensorSpec from_flatbuffer(const flatbuffer::TensorSpec* spec) {
     return tt::tt_metal::TensorSpec(
-        Shape(ttsl::SmallVector<uint32_t>(spec->shape()->cbegin(), spec->shape()->cend())),
+        tt::tt_metal::Shape(SmallVector<uint32_t>(spec->shape()->cbegin(), spec->shape()->cend())),
         from_flatbuffer(spec->tensor_layout()));
 }
 
-}  // namespace tt::tt_metal
+}  // namespace ttnn

@@ -56,7 +56,7 @@ void dump_tensor_flatbuffer(const std::string& file_name, const Tensor& tensor) 
 
         std::vector<HostBuffer> buffers;
         flatbuffers::FlatBufferBuilder builder;
-        auto tensor_offset = tt::tt_metal::to_flatbuffer(cpu_tensor, builder, buffers);
+        auto tensor_offset = ttnn::to_flatbuffer(cpu_tensor, builder, buffers);
         // To be able to read flatbuffer data with `mmap` safely, make sure the serialized flatbuffer is aligned to at
         // least 8 bytes, just like `header_size`. Individual `buffers` are aligned according to their element size,
         // which is already what we need for `mmap` to work.
@@ -101,9 +101,9 @@ Tensor load_tensor_flatbuffer(const std::string& file_name, distributed::MeshDev
         "Tensor header size is too large; this most likely indicates data corruption.");
     flatbuffers::Verifier verifier(header_start, header_size);
     TT_FATAL(
-        tt::tt_metal::flatbuffer::VerifyTensorBuffer(verifier),
+        ttnn::flatbuffer::VerifyTensorBuffer(verifier),
         "Cannot validate tensor data; this most likely indicates data corruption.");
-    auto fb_tensor = tt::tt_metal::flatbuffer::GetTensor(header_start);
+    auto fb_tensor = ttnn::flatbuffer::GetTensor(header_start);
 
     const uint64_t data_offset = sizeof(header_size) + header_size;
     const uint64_t data_size = file_size - data_offset;
@@ -113,8 +113,7 @@ Tensor load_tensor_flatbuffer(const std::string& file_name, distributed::MeshDev
         (reinterpret_cast<uintptr_t>(data_region) & (kFlatbufferAlignment - 1)) == 0,
         "Tensor data pointer must be 8-byte aligned!");
 
-    Tensor tensor =
-        tt::tt_metal::from_flatbuffer(fb_tensor, tt::stl::Span<std::byte>(data_region, data_size), memory_pin);
+    Tensor tensor = ttnn::from_flatbuffer(fb_tensor, tt::stl::Span<std::byte>(data_region, data_size), memory_pin);
     if (device != nullptr) {
         tensor = tensor.to_device(device, tensor.tensor_spec().memory_config());
     }
