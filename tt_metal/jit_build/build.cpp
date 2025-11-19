@@ -26,6 +26,7 @@
 #include "env_lib.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/profiler/profiler_state_manager.hpp"
 #include "jit_build/kernel_args.hpp"
 #include "jit_build/depend.hpp"
 #include "jit_build_settings.hpp"
@@ -178,11 +179,12 @@ void JitBuildEnv::init(
         }
         this->defines_ += "-DPROFILE_KERNEL=" + std::to_string(profiler_options) + " ";
 
+        const uint32_t profiler_dram_bank_size_per_risc_bytes =
+            get_profiler_dram_bank_size_per_risc_bytes(rtoptions.get_profiler_program_support_count());
         this->defines_ += "-DPROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC=" +
-                          std::to_string(get_profiler_dram_bank_size_per_risc_bytes(rtoptions) / sizeof(uint32_t)) +
-                          " ";
-        this->defines_ += "-DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=" +
-                          std::to_string(get_profiler_dram_bank_size_per_risc_bytes(rtoptions)) + " ";
+                          std::to_string(profiler_dram_bank_size_per_risc_bytes / sizeof(uint32_t)) + " ";
+        this->defines_ +=
+            "-DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=" + std::to_string(profiler_dram_bank_size_per_risc_bytes) + " ";
     }
     if (rtoptions.get_profiler_noc_events_enabled()) {
         // force profiler on if noc events are being profiled
