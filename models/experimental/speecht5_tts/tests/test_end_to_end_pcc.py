@@ -15,11 +15,12 @@ Pipeline:
 """
 
 import sys
+from pathlib import Path
 import torch
 import ttnn
 
-# Add parent directory to path
-sys.path.append("/home/ttuser/ssinghal/PR-fix/speecht5_tts/tt-metal")
+# Add tt-metal root directory to path
+sys.path.append(str(Path(__file__).parent.parent.parent.parent))
 
 from transformers import SpeechT5ForTextToSpeech, SpeechT5Processor
 from models.experimental.speecht5_tts.reference import (
@@ -127,7 +128,13 @@ def test_end_to_end_pcc():
         speech_decoder_prenet_layers=2,
         speech_decoder_prenet_dropout=0.5,
     )
-    decoder_params = preprocess_decoder_parameters(hf_model.speecht5.decoder, ttnn_decoder_config, device)
+
+    # Create speaker embeddings for precomputation (random but deterministic)
+    torch.manual_seed(42)
+    speaker_embeddings = torch.randn(1, 512)  # batch_size=1, embedding_dim=512
+    decoder_params = preprocess_decoder_parameters(
+        hf_model.speecht5.decoder, ttnn_decoder_config, device, speaker_embeddings
+    )
     ttnn_decoder = TTNNSpeechT5Decoder(device=device, parameters=decoder_params, config=ttnn_decoder_config)
 
     # TTNN Postnet
