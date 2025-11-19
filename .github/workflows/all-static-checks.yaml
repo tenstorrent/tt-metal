@@ -171,40 +171,6 @@ jobs:
           else
             echo "✅ No increase in InterleavedAddrGen usages found in changed files."
           fi
-  check-legacy-device-op:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0  # Fetch all history for git diff comparison
-      - uses: actions/setup-python@v5.0.0
-        with:
-          python-version: '3.10'
-      - name: Check for new legacy device operation classes
-        run: |
-          # Get the base branch for comparison
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            BASE_REF="origin/${{ github.event.pull_request.base.ref }}"
-          else
-            BASE_REF="HEAD^"
-          fi
-
-          LEGACY_FILES=$(python3 scripts/detect_legacy_device_op.py --base-ref "$BASE_REF")
-          EXIT_CODE=$?
-
-          if [ "$EXIT_CODE" -eq 1 ]; then
-            echo "❌ ERROR: Detected new classes following legacy concept OldDeviceOperation"
-            echo "   (class implements non-static member functions: validate, compute_output_specs, create_program)"
-            echo ""
-            echo "Files with legacy classes:"
-            echo "$LEGACY_FILES"
-            echo ""
-            echo "Please follow the documentation to add a new operation:"
-            echo "https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/adding_new_ttnn_operation.html"
-            exit 1
-          else
-            echo "✅ No new legacy device operation classes detected."
-          fi
   check-sweeps-workflow:
     runs-on: ubuntu-latest
     steps:

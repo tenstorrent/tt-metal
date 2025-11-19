@@ -172,9 +172,27 @@ def main():
         if not legacy_files:
             return 0
 
-        # Output detected legacy classes
-        for filepath in legacy_files:
-            print(f"{filepath}")
+        # Output helpful error message for pre-commit
+        if args.check_new_only:
+            print("❌ ERROR: Detected new classes following legacy concept OldDeviceOperation", file=sys.stderr)
+            print(
+                "   (class implements non-static member functions: validate, compute_output_specs, create_program)",
+                file=sys.stderr,
+            )
+            print("", file=sys.stderr)
+            print("Files with legacy classes:", file=sys.stderr)
+            for filepath in legacy_files:
+                print(f"  - {filepath}", file=sys.stderr)
+            print("", file=sys.stderr)
+            print("Please follow the modern device operation pattern instead:", file=sys.stderr)
+            print(
+                "  - See documentation: https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/adding_new_ttnn_operation.html",
+                file=sys.stderr,
+            )
+        else:
+            # Output detected legacy classes to stdout (for CI/scripting, when not in pre-commit mode)
+            for filepath in legacy_files:
+                print(f"{filepath}")
 
         return 1
     else:
