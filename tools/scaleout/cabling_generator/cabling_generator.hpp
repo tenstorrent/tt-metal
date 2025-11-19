@@ -98,6 +98,11 @@ public:
     // Constructor
     CablingGenerator(const std::string& cluster_descriptor_path, const std::string& deployment_descriptor_path);
 
+    // Constructor with just hostnames (no physical location info)
+    CablingGenerator(const std::string& cluster_descriptor_path, const std::vector<std::string>& hostnames);
+
+    CablingGenerator() = default;
+
     // Getters for all data
     const std::vector<Host>& get_deployment_hosts() const;
     const std::vector<LogicalChannelConnection>& get_chip_connections() const;
