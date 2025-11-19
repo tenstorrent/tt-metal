@@ -10,6 +10,7 @@
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
 
+#include "compute_kernel_api.h"
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
@@ -628,6 +629,7 @@ void MAIN {
         if constexpr (use_negative_mask == false) {
             index_h_offset = 0;
             add_bcast_rows_init_short(cb_inbeta, cb_beta);
+            silu_tile_init();
             cb_reserve_back(cb_outbeta, per_core_MN);
             cb_wait_front(cb_beta, per_core_N);
             for (uint32_t i = 0; i < per_core_M; ++i) {
@@ -635,6 +637,7 @@ void MAIN {
                     tile_regs_acquire();
                     uint32_t index = j + index_h_offset;
                     add_tiles_bcast_rows(cb_inbeta, cb_beta, index, j, dst0);
+                    silu_tile(dst0);
                     tile_regs_commit();
                     tile_regs_wait();
                     pack_tile(dst0, cb_outbeta);
@@ -648,12 +651,14 @@ void MAIN {
         } else {
             // cb_in has data required for beta, so we do it inplace
             add_bcast_rows_init_short(cb_in, cb_beta);
+            silu_tile_init();
             cb_wait_front(cb_beta, per_core_N);
             cb_wait_front(cb_in, per_core_MN);
             for (uint32_t i = 0; i < per_core_M; i++) {
                 for (uint32_t j = 0; j < per_core_N; j++) {
                     tile_regs_acquire();
                     add_tiles_bcast_rows(cb_in, cb_beta, 0, j, dst0);
+                    silu_tile(dst0);
                     tile_regs_commit();
                     cb_pop_front(cb_in, 1);
                     cb_reserve_back(cb_in, 1);
