@@ -1,4 +1,4 @@
-namespace tt.tt_metal.flatbuffer;
+namespace ttnn.flatbuffer;
 
 table MeshShape {
     // The dimensions of the mesh

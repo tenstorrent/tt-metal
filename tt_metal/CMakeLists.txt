@@ -19,24 +19,10 @@ GENERATE_FBS_HEADER(
 )
 set(API_GENERATED_HEADERS ${FBS_GENERATED_HEADER_FILE})
 
-set(TENSOR_FLATBUFFER_SCHEMAS
-    ${CMAKE_CURRENT_SOURCE_DIR}/impl/tensor/flatbuffer/mesh_shape.fbs
-    ${CMAKE_CURRENT_SOURCE_DIR}/impl/tensor/flatbuffer/tensor_spec.fbs
-    ${CMAKE_CURRENT_SOURCE_DIR}/impl/tensor/flatbuffer/tensor_topology.fbs
-    ${CMAKE_CURRENT_SOURCE_DIR}/impl/tensor/flatbuffer/tensor.fbs
-)
-
-set(TENSOR_FLATBUFFER_GENERATED_HEADERS)
-foreach(FBS_FILE ${TENSOR_FLATBUFFER_SCHEMAS})
-    GENERATE_FBS_HEADER(${FBS_FILE} TARGET TT::Metalium OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/api/tt-metalium/tensor/)
-    list(APPEND TENSOR_FLATBUFFER_GENERATED_HEADERS ${FBS_GENERATED_HEADER_FILE})
-endforeach()
-
 add_custom_target(
     metalium_GeneratedHeaders
     DEPENDS
         ${API_GENERATED_HEADERS}
-        ${TENSOR_FLATBUFFER_GENERATED_HEADERS}
     COMMENT "Generating all FlatBuffer headers"
 )
 
@@ -131,7 +117,6 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/tensor/layout/page_config.hpp
     api/tt-metalium/tensor/layout/tensor_layout.hpp
     api/tt-metalium/tensor/tensor.hpp
-    api/tt-metalium/tensor/serialization.hpp
     api/tt-metalium/tensor/storage.hpp
     api/tt-metalium/tensor/host_buffer/functions.hpp
     api/tt-metalium/tensor/tensor_impl.hpp
@@ -139,8 +124,6 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/tensor/xtensor/xtensor_all_includes.hpp
     api/tt-metalium/tensor/xtensor/partition.hpp
     api/tt-metalium/tensor/xtensor/conversion_utils.hpp
-    api/tt-metalium/tensor/flatbuffer/tensor_spec_flatbuffer.hpp
-    api/tt-metalium/tensor/flatbuffer/tensor_flatbuffer.hpp
     api/tt-metalium/tensor/types.hpp
     api/tt-metalium/tensor/tensor_spec.hpp
     api/tt-metalium/tensor/tensor_attributes.hpp

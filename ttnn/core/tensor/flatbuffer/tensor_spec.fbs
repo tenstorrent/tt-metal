@@ -1,4 +1,4 @@
-namespace tt.tt_metal.flatbuffer;
+namespace ttnn.flatbuffer;
 
 table CoreCoord {
     x: int;

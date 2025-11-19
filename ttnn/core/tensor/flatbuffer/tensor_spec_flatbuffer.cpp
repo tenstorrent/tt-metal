@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt-metalium/tensor/flatbuffer/tensor_spec_flatbuffer.hpp"
+#include "ttnn/tensor/flatbuffer/tensor_spec_flatbuffer.hpp"
 #include <tt_stl/small_vector.hpp>
 
 namespace tt::tt_metal {
