@@ -214,11 +214,10 @@ void py_module(py::module& module) {
         .def("id", &MeshDevice::id)
         .def("get_device_ids", &MeshDevice::get_device_ids)
         .def(
-            "get_device_id",
+            "get_chip_id",
             [](MeshDevice& self, const MeshCoordinate& coord) {
-                auto* device = self.get_device(coord);
-                TT_FATAL(device, "Device ID requested for MeshCoord {} not found.", coord);
-                return device->id();
+                auto fabric_node_id = self.get_fabric_node_id(coord);
+                return fabric_node_id.chip_id;
             })
         .def(
             "create_submesh",

@@ -112,7 +112,7 @@ class TensorShardingInfo:
             # Generate distribution->mesh coordinate pairs using the coord_mapper
             for distribution_coord, mesh_coord in self._iter_distribution_to_mesh_coords():
                 try:
-                    device_id = mesh_device.get_device_id(mesh_coord)
+                    device_id = mesh_device.get_chip_id(mesh_coord)
 
                     # Record representative for each distribution axis
                     if distribution_shape_rank == 1:
@@ -136,7 +136,7 @@ class TensorShardingInfo:
         try:
             mesh_device = self.tensor.device()
             for i, mesh_coord in enumerate(self.mesh_coords):
-                dev_id = mesh_device.get_device_id(mesh_coord)
+                dev_id = mesh_device.get_chip_id(mesh_coord)
                 mapping[dev_id] = i
 
         except Exception as e:
@@ -317,7 +317,7 @@ def _create_replication_color_mapping(sharding_info):
         for device_id in sharding_info.device_to_shard_map.keys():
             coord = None
             for test_coord in ttnn.MeshCoordinateRange(mesh_device.shape):
-                if mesh_device.get_device_id(test_coord) == device_id:
+                if mesh_device.get_chip_id(test_coord) == device_id:
                     coord = test_coord
                     break
 
@@ -400,7 +400,7 @@ def _get_rich_table(
                 coord = ttnn.MeshCoordinate(row_idx, col_idx)
                 if storage_type == ttnn.StorageType.DEVICE:
                     locality = "Local\n" if view.is_local(coord) else "Remote\n"
-                    device_id = mesh_device.get_device_id(ttnn.MeshCoordinate(row_idx, col_idx))
+                    device_id = mesh_device.get_chip_id(ttnn.MeshCoordinate(row_idx, col_idx))
                     device_id_str = f"Dev. ID: {device_id}\n" if view.is_local(coord) else "Unknown\n"
                 else:
                     locality = "Local\n" if host_buffer.is_local(coord) else "Remote\n"
