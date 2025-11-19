@@ -252,18 +252,10 @@ python demo/multimodal_chat_demo.py --interactive
 | **DVAE Full Pipeline** | **-0.006657** | ❌ FAIL | TTNN conv2d blocked |
 | **Qwen LLM** | TBD | ⚠️ TBD | Integration in progress |
 
-### Interpretation
-- **PCC > 0.99**: Excellent numerical agreement (negligible differences)
-- **PCC > 0.95**: Good agreement (minor quantization effects)
-- **PCC > 0.90**: Acceptable for production use
-- **PCC < 0.10**: Major implementation issues (essentially random)
-
----
-
 ## 🚀 Available Demos and Interfaces
 
 ### 1. Text Generation Demo
-**Status**: ✅ **Fully Functional**
+**Status**: ✅ **Gets stuck at prefill**
 ```bash
 python demo/text_generation_demo.py
 ```
@@ -272,7 +264,7 @@ python demo/text_generation_demo.py
 - Performance benchmarking
 
 ### 2. CLI Multimodal Chat Demo
-**Status**: ⚠️ **Text-Only Mode Working**
+**Status**: ⚠️ **Not working, not tested**
 ```bash
 python demo/multimodal_chat_demo.py --text "Hello"
 python demo/multimodal_chat_demo.py --interactive
@@ -521,51 +513,6 @@ models/experimental/minicpm_o_2_6/
 - **Weight Generation**: Reproducible random weights for testing
 - **Reference PyTorch**: Essential for numerical validation
 - **Modular Design**: Easy component swapping and upgrades
-
----
-
-## 🚀 Production Readiness Assessment
-
-### ✅ **Ready for Production**
-- Text generation pipeline
-- Component-level numerical accuracy
-- Memory management and optimization
-- Error handling and validation
-- Testing infrastructure
-
-### ⚠️ **Needs Completion**
-- DVAE conv2d resolution
-- Multimodal integration
-- Real weight loading
-- Audio output pipeline
-
-### 📊 **Maturity Level**
-- **Code Quality**: ⭐⭐⭐⭐⭐ (Production-ready)
-- **Testing Coverage**: ⭐⭐⭐⭐⭐ (Comprehensive)
-- **Documentation**: ⭐⭐⭐⭐⭐ (Complete)
-- **Numerical Accuracy**: ⭐⭐⭐⭐⭐ (Excellent for implemented components)
-- **Integration Completeness**: ⭐⭐⭐ (85% complete)
-
----
-
-## 📞 Support and Resources
-
-### Key Contacts
-- **TTNN Team**: For conv2d integration issues
-- **MiniCPM Team**: For model architecture questions
-- **Implementation Team**: For code and integration issues
-
-### Useful References
-- **TTNN Documentation**: `ttnn/ttnn/operations/`
-- **MiniCPM Paper**: Original model architecture
-- **Qwen Documentation**: Base LLM information
-- **Test Suite**: `run_all_pcc_tests.py` for validation
-
----
-
-**Status as of**: November 19, 2025
-**Next Major Milestone**: DVAE conv2d resolution and multimodal integration
-**Contact**: MiniCPM-o-2_6 TTNN Implementation Team
 
 ---
 
