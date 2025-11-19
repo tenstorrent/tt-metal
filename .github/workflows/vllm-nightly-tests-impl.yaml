@@ -150,7 +150,6 @@ jobs:
             mesh-device: T3K,
             override-tt-config: "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"worker_l1_size\": 1344544, \"trace_region_size\": 21448704, \"l1_small_size\": 24576}",
             tt-llama-text-ver: tt_transformers,
-            #structured-output: true,
             multimodal: true,
             use-vllm-v1: true,
             co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
@@ -233,7 +232,6 @@ jobs:
             override-tt-config: "{\"dispatch_core_axis\": \"col\", \"sample_on_device_mode\": \"all\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 184915840}",
             additional-args: "--data_parallel_size 4 --max_num_seqs 8",
             use-vllm-v1: true,
-            #structured-output: true,
             multimodal: false,
             co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
             co-owner-2-id: U08CEGF78ET, # Salar Hosseini Khorasgani
