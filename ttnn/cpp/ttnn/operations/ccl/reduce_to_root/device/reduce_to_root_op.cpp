@@ -148,8 +148,12 @@ ReduceToRootOp::spec_return_value_t ReduceToRootOp::compute_output_specs(
         input_tensor[0].tensor_spec(), input_tensor[1].tensor_spec(), input_tensor[2].tensor_spec()};
 
     std::vector<TensorSpec> intermediate_specs;
+    // TODO:fix that to have only two intermediate tensors: one for l and one for sm
     for (uint32_t i = 0; i < 3; i++) {
         uint32_t input_num_pages = data_movement::get_num_pages(tensor_args.input_tensor[i]);
+        if (i > 0) {
+            input_num_pages *= 2;
+        }
         auto [packet_size_bytes, num_pages_per_packet, num_page_segments, total_packets] =
             detail::compute_aligned_packet_dims(
                 input_tensor[i].dtype(),
