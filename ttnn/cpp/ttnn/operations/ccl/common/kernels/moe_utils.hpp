@@ -14,13 +14,13 @@ enum class Polarity : uint8_t {
     POSITIVE,
 };
 
-namespace routing_state {
-
 enum class ReverseMode : uint8_t {
     NEVER = 0,
-    ALWAYS = 1,
+    PER_TOKEN = 1,
     ON_TIE = 2,
 };
+
+namespace routing_state {
 
 struct PolarState {
     std::array<Polarity, 2> polarity_table = {Polarity::NEGATIVE, Polarity::NEGATIVE};
@@ -45,7 +45,7 @@ struct PolarState {
             if (positive_distance == negative_distance) {
                 polarity_table[axis] = reverse(polarity);
             }
-        } else if constexpr (ReverseMode == ReverseMode::ALWAYS) {
+        } else if constexpr (ReverseMode == ReverseMode::PER_TOKEN) {
             polarity_table[axis] = reverse(polarity);
         }
         return result;
@@ -53,7 +53,7 @@ struct PolarState {
 };
 
 PolarState polar_state;
-}
+}  // namespace routing_state
 
 template <size_t Size>
 inline void open_direction_connections(
@@ -178,7 +178,7 @@ uint32_t manhattan_distance(uint32_t linearized_src_mesh_coord, uint32_t lineari
            topological_distance<Topology>(src_col, dest_col, MeshCols);
 }
 
-template <tt::tt_fabric::Topology Topology, uint32_t MeshRows, uint32_t MeshCols, bool AlwaysReverse>
+template <tt::tt_fabric::Topology Topology, uint32_t MeshRows, uint32_t MeshCols, ReverseMode RevMode>
 uint32_t get_route(uint32_t linearized_src_mesh_coord, uint32_t linearized_dest_mesh_coord) {
     auto [src_row, src_col] = get_mesh_coords<MeshRows, MeshCols>(linearized_src_mesh_coord);
     auto [dest_row, dest_col] = get_mesh_coords<MeshRows, MeshCols>(linearized_dest_mesh_coord);
@@ -192,7 +192,7 @@ uint32_t get_route(uint32_t linearized_src_mesh_coord, uint32_t linearized_dest_
             // with wrap around, we can go either East or West. Choose the shorter route
             uint32_t east_distance = directional_wrap_distance<MeshCols>(src_col, dest_col, Polarity::POSITIVE);
             uint32_t west_distance = directional_wrap_distance<MeshCols>(src_col, dest_col, Polarity::NEGATIVE);
-            return routing_state::polar_state.polar_compare_stateful<AlwaysReverse>(
+            return routing_state::polar_state.polar_compare_stateful<RevMode>(
                 east_distance, eth_chan_directions::EAST, west_distance, eth_chan_directions::WEST, 1);
         }
     } else {
@@ -202,7 +202,7 @@ uint32_t get_route(uint32_t linearized_src_mesh_coord, uint32_t linearized_dest_
             // with wrap around, we can go either North or South. Choose the shorter route
             uint32_t south_distance = directional_wrap_distance<MeshRows>(src_row, dest_row, Polarity::POSITIVE);
             uint32_t north_distance = directional_wrap_distance<MeshRows>(src_row, dest_row, Polarity::NEGATIVE);
-            return routing_state::polar_state.polar_compare_stateful<AlwaysReverse>(
+            return routing_state::polar_state.polar_compare_stateful<RevMode>(
                 south_distance, eth_chan_directions::SOUTH, north_distance, eth_chan_directions::NORTH, 0);
         }
     }
@@ -453,7 +453,7 @@ template <
     uint32_t MeshCols,
     int32_t FabricMaxPacketSzBytes,
     typename AddrGenType,
-    ReverseMode ReverseMode>
+    ReverseMode RevMode>
 inline void fabric_send_chip_unicast_noc_unicast_1d(
     AddrGenType addrgen,
     std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
@@ -468,7 +468,8 @@ inline void fabric_send_chip_unicast_noc_unicast_1d(
         manhattan_distance<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
     fabric_set_unicast_route<false>((volatile tt_l1_ptr LowLatencyPacketHeader*)packet_header, distance);
 
-    uint32_t route = get_route<Topology, MeshRows, MeshCols, ReverseMode>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
+    uint32_t route =
+        get_route<Topology, MeshRows, MeshCols, RevMode>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
     fabric_send_noc_unicast<FabricMaxPacketSzBytes>(
         addrgen,
         fabric_connections[route],
@@ -486,7 +487,7 @@ template <
     uint32_t MeshRows,
     uint32_t MeshCols,
     int32_t FabricMaxPacketSzBytes,
-    ReverseMode ReverseMode>
+    ReverseMode RevMode>
 inline void l1_only_fabric_send_chip_unicast_noc_unicast_with_semaphore_1d(
     std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header,
@@ -503,7 +504,8 @@ inline void l1_only_fabric_send_chip_unicast_noc_unicast_with_semaphore_1d(
         manhattan_distance<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
     fabric_set_unicast_route<false>((volatile tt_l1_ptr LowLatencyPacketHeader*)packet_header, distance);
 
-    uint32_t route = get_route<Topology, MeshRows, MeshCols, ReverseMode>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
+    uint32_t route =
+        get_route<Topology, MeshRows, MeshCols, RevMode>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
     return l1_only_fabric_send_noc_unicast_with_semaphore<FabricMaxPacketSzBytes>(
         fabric_connections[route],
         packet_header,
@@ -523,7 +525,7 @@ template <
     uint32_t MeshCols,
     int32_t FabricMaxPacketSzBytes,
     typename AddrGenType,
-    ReverseMode ReverseMode>
+    ReverseMode RevMode>
 inline void fabric_send_chip_unicast_noc_unicast_with_semaphore_1d(
     AddrGenType addrgen,
     std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
@@ -541,7 +543,8 @@ inline void fabric_send_chip_unicast_noc_unicast_with_semaphore_1d(
         manhattan_distance<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
     fabric_set_unicast_route<false>((volatile tt_l1_ptr LowLatencyPacketHeader*)packet_header, distance);
 
-    uint32_t route = get_route<Topology, MeshRows, MeshCols, ReverseMode>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
+    uint32_t route =
+        get_route<Topology, MeshRows, MeshCols, RevMode>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
     return fabric_send_noc_unicast_with_semaphore<FabricMaxPacketSzBytes>(
         addrgen,
         fabric_connections[route],
@@ -557,7 +560,12 @@ inline void fabric_send_chip_unicast_noc_unicast_with_semaphore_1d(
 }
 
 // Fabric send for NOC unicast semaphore increment only in 1D topology (no payload)
-template <uint32_t LinearizedSrcMeshCoord, tt::tt_fabric::Topology Topology, uint32_t MeshRows, uint32_t MeshCols, ReverseMode ReverseMode>
+template <
+    uint32_t LinearizedSrcMeshCoord,
+    tt::tt_fabric::Topology Topology,
+    uint32_t MeshRows,
+    uint32_t MeshCols,
+    ReverseMode RevMode>
 inline void fabric_send_chip_unicast_noc_unicast_semaphore_only_1d(
     std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header,
@@ -573,7 +581,8 @@ inline void fabric_send_chip_unicast_noc_unicast_semaphore_only_1d(
         manhattan_distance<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
     fabric_set_unicast_route<false>((volatile tt_l1_ptr LowLatencyPacketHeader*)packet_header, distance);
 
-    uint32_t route = get_route<Topology, MeshRows, MeshCols, ReverseMode>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
+    uint32_t route =
+        get_route<Topology, MeshRows, MeshCols, RevMode>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
 
     // Send only the packet header (for semaphore increment)
     fabric_connections[route].wait_for_empty_write_slot();
@@ -609,7 +618,7 @@ template <
     uint32_t MeshCols,
     ReplicateGroup Axis,
     uint32_t NumDevices,
-    ReverseMode ReverseMode = ReverseMode::NEVER>
+    ReverseMode RevMode = ReverseMode::NEVER>
 inline void send_init_semaphore_to_configured_targets(
     std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header,
@@ -643,11 +652,11 @@ inline void send_init_semaphore_to_configured_targets(
                     Topology,
                     MeshRows,
                     MeshCols,
-                    ReverseMode>(fabric_connections, packet_header, device_idx, init_noc_semaphore_addr, 1, false);
+                    RevMode>(fabric_connections, packet_header, device_idx, init_noc_semaphore_addr, 1, false);
             } else {
                 const auto& dest_chip_id = dest_chip_ids[device_idx];
                 const auto& dest_mesh_id = dest_mesh_ids[device_idx];
-                fabric_send_chip_unicast_noc_unicast_semaphore_only<SrcChipId, MeshRows, MeshCols, ReverseMode>(
+                fabric_send_chip_unicast_noc_unicast_semaphore_only<SrcChipId, MeshRows, MeshCols>(
                     fabric_connections, packet_header, dest_chip_id, dest_mesh_id, init_noc_semaphore_addr, 1, false);
             }
         }

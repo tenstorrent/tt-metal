@@ -25,6 +25,8 @@ void kernel_main() {
     constexpr uint32_t num_devices = get_compile_time_arg_val(15);
     constexpr uint32_t tokens_per_device = get_compile_time_arg_val(20);
 
+    constexpr tt::tt_fabric::Topology topology = (tt::tt_fabric::Topology)get_compile_time_arg_val(22);
+
     constexpr uint32_t src_mesh_id = get_compile_time_arg_val(23);
     constexpr uint32_t src_chip_id = get_compile_time_arg_val(24);
 
@@ -39,6 +41,9 @@ void kernel_main() {
 
     constexpr bool write_page_by_page = get_compile_time_arg_val(35);
     constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(36);
+
+    constexpr ReverseMode reverse_mode =
+        has_wrap_around<topology>() && is_1d_topology<topology>() ? ReverseMode::ON_TIE : ReverseMode::NEVER;
 
     constexpr auto input_args = TensorAccessorArgs<37>();
     constexpr auto indices_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
@@ -101,14 +106,17 @@ void kernel_main() {
 
     // wait for all other devices to finish dispatching their input tokens and metadata
     uint32_t my_device_offset = tokens_per_device * dispatch_index;
+    constexpr uint32_t additional_increments = reverse_mode != ReverseMode::NEVER ? dispatch_devices - 1 : 0;
     if constexpr (write_page_by_page) {
         // if the writer is directly sending the metadata to its output buffer, we just wait for the semaphore to be set
-        noc_semaphore_wait((uint32_t*)global_semaphore_address, (token_end_idx - token_start_idx) * dispatch_devices);
+        noc_semaphore_wait(
+            (uint32_t*)global_semaphore_address,
+            (token_end_idx - token_start_idx) * dispatch_devices + additional_increments);
         noc_semaphore_set((uint32_t*)global_semaphore_address, 0);
     } else {
         // if the writer is sending the metadata to the intermediate buffer, we need to write our metadata to the final
         // buffer
-        noc_semaphore_wait((uint32_t*)global_semaphore_address, dispatch_devices);
+        noc_semaphore_wait((uint32_t*)global_semaphore_address, dispatch_devices + additional_increments);
         noc_semaphore_set((uint32_t*)global_semaphore_address, 0);
 
         for (uint32_t t = token_start_idx; t < token_end_idx; t++) {
