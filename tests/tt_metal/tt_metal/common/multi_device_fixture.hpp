@@ -224,4 +224,12 @@ protected:
     }
 };
 
+class MeshDevice4x8Fabric2DFixture : public MeshDeviceFixtureBase {
+protected:
+    MeshDevice4x8Fabric2DFixture() :
+        MeshDeviceFixtureBase(Config{
+            .mesh_shape = MeshShape{4, 8}, .num_cqs = 1, .fabric_config = tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC}) {
+    }
+};
+
 }  // namespace tt::tt_metal

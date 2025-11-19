@@ -22,7 +22,7 @@
 
 namespace tt::tt_metal {
 
-class FabricSendRecv2x4Fixture : public MeshDevice2x4Fabric2DFixture,
+class FabricSendRecv2x4Fixture : public MeshDevice4x8Fabric2DFixture,
                                  public testing::WithParamInterface<SocketTestArgs> {};
 
 template <typename T>
