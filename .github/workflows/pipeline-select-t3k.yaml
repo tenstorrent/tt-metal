@@ -9,7 +9,7 @@ on:
         type: choice
         options:
           - manual
-          - model-pr
+          - models-pr
           - models-accuracy
         default: manual
       build-type:
@@ -160,7 +160,7 @@ jobs:
               echo "run-profiler=${{ inputs.t3000-profiler }}" >> $GITHUB_OUTPUT
               echo "run-perplexity=${{ inputs.t3000-perplexity }}" >> $GITHUB_OUTPUT
               ;;
-            "model-pr")
+            "models-pr")
               echo "run-unit=true" >> $GITHUB_OUTPUT
               echo "run-demo=true" >> $GITHUB_OUTPUT
               echo "run-frequent=true" >> $GITHUB_OUTPUT
