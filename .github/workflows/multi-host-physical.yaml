@@ -1,8 +1,5 @@
 name: Multi-Host Deployment (Physical)
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
     inputs:
       t3k_multihost:

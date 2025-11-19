@@ -6,8 +6,9 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/bfloat16.hpp>
-#include "tt-metalium/constants.hpp"
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -86,17 +87,24 @@ int main() {
     // These kernels work together to form a pipeline. The reader reads data from the DRAM buffer and makes them
     // available in the compute kernel. The compute kernel does math and pushes the result into the writer kernel. The
     // writer kernel writes the result back to DRAM.
+    std::vector<uint32_t> reader_args;
+    TensorAccessorArgs(*src0_dram_buffer->get_backing_buffer()).append_to(reader_args);
+    TensorAccessorArgs(*src1_dram_buffer->get_backing_buffer()).append_to(reader_args);
     KernelHandle binary_reader_kernel_id = CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "add_2_integers_hang/kernels/dataflow/reader_binary_1_tile.cpp",
         core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_args});
 
+    std::vector<uint32_t> writer_args;
+    TensorAccessorArgs(*dst_dram_buffer->get_backing_buffer()).append_to(writer_args);
     KernelHandle unary_writer_kernel_id = CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "add_2_integers_hang/kernels/dataflow/writer_1_tile.cpp",
         core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = writer_args});
 
     // This kernel performs the actual addition of the two input tiles
     KernelHandle eltwise_binary_kernel_id = CreateKernel(
@@ -140,7 +148,16 @@ int main() {
     // Add the program to the workload and execute it.
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
-    distributed::Finish(cq);
+    try {
+        distributed::Finish(cq);
+    } catch (std::runtime_error& e) {
+        if (std::string(e.what()).find("device timeout") != std::string::npos) {
+            printf("Device timeout detected as expected.\n");
+            std::_Exit(0);
+        } else {
+            throw;
+        }
+    }
 
     // Data can be read from a MeshBuffer using the ReadShard function. This function is used to read data from a
     // specific shard of a MeshBuffer. The shard is specified by the MeshCoordinate. The last argument indicates if the
