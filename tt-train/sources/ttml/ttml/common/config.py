@@ -7,6 +7,7 @@ import os
 import yaml
 from typing import Union
 
+
 class DeviceConfig:
     """Configuration for device mesh and distributed training."""
 
@@ -28,10 +29,14 @@ class DeviceConfig:
         self.enable_ddp = device_config.get("enable_ddp", False)
 
         # Based on current configs, DDP and TP cannot be both enabled
-        assert not(self.enable_ddp and self.enable_tp), "DDP and TP cannot be both enabled."
+        assert not (
+            self.enable_ddp and self.enable_tp
+        ), "DDP and TP cannot be both enabled."
 
         # we currently support only [1, N] mesh shapes
-        assert self.mesh_shape[0] == 1, f"Only [1, N] mesh shapes are supported, got {self.mesh_shape}"
+        assert (
+            self.mesh_shape[0] == 1
+        ), f"Only [1, N] mesh shapes are supported, got {self.mesh_shape}"
 
     def total_devices(self) -> int:
         """Get total number of devices in mesh.
@@ -71,6 +76,7 @@ class TrainingConfig:
         self.eps = float(tc.get("eps", 1e-8))
         self.weight_decay = float(tc.get("weight_decay", 0.01))
 
+
 class TransformerConfig:
     """Configuration for transformer model hyperparameters."""
 
@@ -108,7 +114,9 @@ class TransformerConfig:
             self.scaling_factor = self.rope.get("scaling_factor", None)
             self.high_freq_factor = self.rope.get("high_freq_factor", None)
             self.low_freq_factor = self.rope.get("low_freq_factor", None)
-            self.original_context_length = self.rope.get("original_context_length", None)
+            self.original_context_length = self.rope.get(
+                "original_context_length", None
+            )
 
 
 class PipelineParallelHostConfig:
@@ -119,7 +127,9 @@ class PipelineParallelHostConfig:
 
     def __init__(self, cfg: dict):
         self.num_blocks = int(cfg.get("num_blocks", 0))
-        self.blocks_per_rank = {int(k): int(v) for k, v in dict(cfg.get("blocks_per_rank", {})).items()}
+        self.blocks_per_rank = {
+            int(k): int(v) for k, v in dict(cfg.get("blocks_per_rank", {})).items()
+        }
 
 
 class MultiHostConfig:
@@ -141,7 +151,9 @@ class MultiHostConfig:
         self.socket_type = str(mh.get("socket_type", "mpi")).strip().lower()
 
         pp_cfg = mh.get("pipeline_parallel_config")
-        self.pipeline_parallel_config = PipelineParallelHostConfig(pp_cfg) if isinstance(pp_cfg, dict) else None
+        self.pipeline_parallel_config = (
+            PipelineParallelHostConfig(pp_cfg) if isinstance(pp_cfg, dict) else None
+        )
 
 
 def load_config(path: str):
@@ -157,22 +169,23 @@ def load_config(path: str):
         config = yaml.safe_load(f)
     return config
 
-def get_configs(training_config_name : str, 
-                device_config_name : str, 
-                model_config_name : str = "",
-                multihost_config_name: str = "",
-                configs_root: str = f"{os.environ['TT_METAL_HOME']}/tt-train/configs/"
-                ) -> dict[TrainingConfig, DeviceConfig, TransformerConfig, MultiHostConfig]:
 
+def get_configs(
+    training_config_name: str,
+    device_config_name: str,
+    model_config_name: str = "",
+    multihost_config_name: str = "",
+    configs_root: str = f"{os.environ['TT_METAL_HOME']}/tt-train/configs/",
+) -> dict[TrainingConfig, DeviceConfig, TransformerConfig, MultiHostConfig]:
     """Load all configurations given their filenames."""
-    
-    if(not(training_config_name.endswith(".yaml"))):
+
+    if not (training_config_name.endswith(".yaml")):
         training_config_name += ".yaml"
-    if(not(device_config_name.endswith(".yaml"))):
+    if not (device_config_name.endswith(".yaml")):
         device_config_name += ".yaml"
-    if(model_config_name != "" and not(model_config_name.endswith(".yaml"))):
+    if model_config_name != "" and not (model_config_name.endswith(".yaml")):
         model_config_name += ".yaml"
-    if(multihost_config_name != "" and not(multihost_config_name.endswith(".yaml"))):
+    if multihost_config_name != "" and not (multihost_config_name.endswith(".yaml")):
         multihost_config_name += ".yaml"
 
     # Load training config
@@ -180,8 +193,10 @@ def get_configs(training_config_name : str,
     if os.path.isabs(training_config_name):
         training_config = load_config(training_config_name)
     else:
-        training_config = load_config(os.path.join(configs_root, "training_configs", training_config_name))
-    
+        training_config = load_config(
+            os.path.join(configs_root, "training_configs", training_config_name)
+        )
+
     training_config = TrainingConfig(training_config)
 
     # Load device config
@@ -189,25 +204,32 @@ def get_configs(training_config_name : str,
     if os.path.isabs(device_config_name):
         device_config = load_config(device_config_name)
     else:
-        device_config = load_config(os.path.join(configs_root, "device_configs", device_config_name))
+        device_config = load_config(
+            os.path.join(configs_root, "device_configs", device_config_name)
+        )
 
     # Load model config
 
     if training_config.model_config is not None:
-
         if os.path.isfile(training_config.model_config):
             model_config = load_config(training_config.model_config)
         elif os.path.isabs(training_config.model_config):
             model_config = load_config(training_config.model_config)
         else:
-            raise ValueError(f"Model config path {training_config.model_config} is not valid.")
+            raise ValueError(
+                f"Model config path {training_config.model_config} is not valid."
+            )
     else:
-        model_config = load_config(os.path.join(configs_root, "model_configs", model_config_name))
+        model_config = load_config(
+            os.path.join(configs_root, "model_configs", model_config_name)
+        )
 
     # Load multihost config
 
     if multihost_config_name != "":
-        multihost_config = load_config(os.path.join(configs_root, "multihost_configs", multihost_config_name))
+        multihost_config = load_config(
+            os.path.join(configs_root, "multihost_configs", multihost_config_name)
+        )
     else:
         multihost_config = {}
 
@@ -215,7 +237,9 @@ def get_configs(training_config_name : str,
     device_config = DeviceConfig(device_config)
     multihost_config = MultiHostConfig(multihost_config)
 
-    return {"training": training_config, 
-            "device": device_config, 
-            "model": model_config, 
-            "multihost": multihost_config}
+    return {
+        "training": training_config,
+        "device": device_config,
+        "model": model_config,
+        "multihost": multihost_config,
+    }
