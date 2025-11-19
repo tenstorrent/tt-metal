@@ -897,16 +897,7 @@ class TtModelArgs:
                         subblock_w=2,
                         compute_with_storage_grid_size=ttnn.CoreCoord(7, 9),
                     )
-                elif seq_len <= 8192:
-                    return ttnn.MinimalMatmulConfig(
-                        M_block_size=8,
-                        K_block_size=8,
-                        N_block_size=8,
-                        subblock_h=2,
-                        subblock_w=4,
-                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
-                    )
-                elif seq_len <= 16384:
+                elif seq_len <= 16384:  # Both 8K and 16K share the same config
                     return ttnn.MinimalMatmulConfig(
                         M_block_size=8,
                         K_block_size=8,
