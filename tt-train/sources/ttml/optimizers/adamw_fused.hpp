@@ -48,9 +48,11 @@ public:
 
 private:
     size_t m_steps{0};
+    float m_beta1_pow{1.0F};
+    float m_beta2_pow{1.0F};
     AdamWFusedConfig m_config;
-    ttml::serialization::NamedParameters m_first_moment;
-    ttml::serialization::NamedParameters m_second_moment;
+    ttml::serialization::NamedParameters m_exp_avg;
+    ttml::serialization::NamedParameters m_exp_avg_sq;
 };
 
 }  // namespace ttml::optimizers
