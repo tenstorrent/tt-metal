@@ -19,7 +19,7 @@ from ....utils.test import line_params, ring_params
 @pytest.mark.parametrize(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology",
     [
-        [(1, 4), (1, 4), 0, 1, 1, False, line_params, ttnn.Topology.Linear],
+        [(1, 4), (1, 4), 0, 1, 2, False, line_params, ttnn.Topology.Linear],
         [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear],
         # WH (ring) on 4x8
         [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring],
@@ -263,10 +263,10 @@ def test_pipeline_performance(
     elif tuple(mesh_device.shape) == (1, 4) and height == 480:
         assert is_blackhole(), "1x4 is only supported for blackhole"
         expected_metrics = {
-            "text_encoding_time": 15.0,
-            "denoising_time": 1000.0,
-            "vae_decoding_time": 90.0,
-            "total_time": 1105.0,
+            "text_encoding_time": 17.0,
+            "denoising_time": 540.0,
+            "vae_decoding_time": 60.0,
+            "total_time": 617.0,
         }
     elif tuple(mesh_device.shape) == (1, 4) and height == 720:
         assert is_blackhole(), "1x4 is only supported for blackhole"
