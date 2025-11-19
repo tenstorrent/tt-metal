@@ -13,7 +13,8 @@ import ttnn
 
 from ...layers.embeddings import Embedding
 from ...layers.linear import ColParallelLinear, RowParallelLinear
-from ...layers.module import Module, ModuleList, Parameter
+from ...layers.module import Module, ModuleList
+from ...layers.normalization import RMSNorm
 from ...parallel.config import EncoderParallelConfig
 from ...parallel.manager import CCLManager
 
@@ -391,21 +392,18 @@ class Qwen25VlMlp(Module):
         return x
 
 
-class Qwen25VlRmsNorm(Module):
+class Qwen25VlRmsNorm(RMSNorm):
     def __init__(self, size: int, *, eps: float, ctx: Qwen25VlContext) -> None:
-        super().__init__()
+        super().__init__(size, norm_eps=eps, bias=False, mesh_device=ctx.device)
 
-        self.weight = Parameter(total_shape=[size], device=ctx.device)
-        self._eps = eps
-
-    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        if "weight" in state:
-            state["weight"] = state["weight"].reshape([-1])
+        self._compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+        )
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        norm = ttnn.mean(ttnn.pow(x, 2), dim=-1, keepdim=True)
-        norm = ttnn.rsqrt(norm + self._eps)
-        return x * (norm * self.weight.data)
+        return super().forward(x, compute_kernel_config=self._compute_kernel_config)
 
 
 def _apply_rope(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
