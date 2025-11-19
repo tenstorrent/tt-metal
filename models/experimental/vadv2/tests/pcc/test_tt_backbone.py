@@ -78,7 +78,7 @@ def custom_preprocessor(model, name):
         return parameters
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 20 * 1024}], indirect=True)
 def test_vadv2_backbone(
     device,
     reset_seeds,
