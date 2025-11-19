@@ -112,12 +112,9 @@ class ModelArgs:
         )
 
     def get_trace_prefill_supported_seq_lens(self):
-        default_supported_seq_lens = {
-            "N150": [128],
-            "N300": [128],
-            "T3K": [128],
-            "TG": [128],
-        }
+        # No supported sequence lengths for GPT-OSS model, see issue below
+        # TODO: https://github.com/tenstorrent/tt-metal/issues/32818
+        default_supported_seq_lens = {}
 
         # TODO: If no specific sequence lengths are listed for a model and device, the default one will be used (from the default_supported_seq_lens dictionary)
         model_specific_supported_seq_lens = {
