@@ -141,6 +141,28 @@ auto get_operation_name(const typename device_operation_t::operation_attributes_
     }
 }
 
+// Helper to create tensors from specs if create_output_tensors is not provided
+template <typename device_operation_t>
+typename device_operation_t::tensor_return_value_t create_tensors_from_specs(
+    const typename device_operation_t::operation_attributes_t& operation_attributes,
+    const typename device_operation_t::tensor_args_t& tensor_args,
+    IDevice* device) {
+    auto output_specs = device_operation_t::compute_output_specs(operation_attributes, tensor_args);
+    // Use transform_object_of_type to convert TensorSpec to Tensor, preserving structure for tuples/vectors
+    // The transformation converts each TensorSpec to Tensor while preserving the container structure
+    using spec_return_value_t = typename device_operation_t::spec_return_value_t;
+    using tensor_return_value_t = typename device_operation_t::tensor_return_value_t;
+
+    if constexpr (std::same_as<spec_return_value_t, TensorSpec> && std::same_as<tensor_return_value_t, Tensor>) {
+        // Simple case: single TensorSpec -> single Tensor
+        return create_device_tensor(output_specs, device);
+    } else {
+        // Complex case: tuple/vector/array of TensorSpec -> tuple/vector/array of Tensor
+        return tt::stl::reflection::transform_object_of_type<TensorSpec>(
+            [device](const TensorSpec& spec) -> Tensor { return create_device_tensor(spec, device); }, output_specs);
+    }
+}
+
 // GCC 12 has a bug that causes a segfault when using reflection to log tensors in debug mode.
 // If building with clang, allow this to be compiled
 #if !defined(NDEBUG) && defined(__clang__)
@@ -221,6 +243,19 @@ void dispatch_to_mesh_workload_factory(const ProgramFactory& program_factory, co
         program_factory);
 }
 
+// Helper to call validate_on_program_cache_hit with default implementation
+template <typename device_operation_t>
+void validate_on_program_cache_hit_with_default(
+    const typename device_operation_t::operation_attributes_t& operation_attributes,
+    const typename device_operation_t::tensor_args_t& tensor_args) {
+    if constexpr (requires { device_operation_t::validate_on_program_cache_hit(operation_attributes, tensor_args); }) {
+        device_operation_t::validate_on_program_cache_hit(operation_attributes, tensor_args);
+    } else {
+        // Default implementation: call validate_on_program_cache_miss
+        device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
+    }
+}
+
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
 void handle_mesh_adapter_cache_hit(
     const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
@@ -229,7 +264,7 @@ void handle_mesh_adapter_cache_hit(
     ttnn::MeshDevice* mesh_device,
     tt::tt_metal::program_cache::detail::ProgramCache& program_cache,
     tt::stl::hash::hash_t program_hash) {
-    mesh_device_operation_t::validate_on_program_cache_hit(operation_attributes, tensor_args);
+    detail::validate_on_program_cache_hit_with_default<mesh_device_operation_t>(operation_attributes, tensor_args);
 
     auto& cached_program_factory = program_cache.get(program_hash);
     auto program_factory_index = cached_program_factory.program_factory_index;
@@ -466,14 +501,21 @@ template <DeviceOperationConcept device_operation_t>
 typename device_operation_t::tensor_return_value_t launch_on_device(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args) {
-    auto tensor_return_value = device_operation_t::create_output_tensors(operation_attributes, tensor_args);
+    typename device_operation_t::tensor_return_value_t tensor_return_value;
+    auto first_tensor = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args);
+    auto mesh_device = first_tensor.device();
+
+    // Use create_output_tensors if available, otherwise create from compute_output_specs
+    if constexpr (requires { device_operation_t::create_output_tensors(operation_attributes, tensor_args); }) {
+        tensor_return_value = device_operation_t::create_output_tensors(operation_attributes, tensor_args);
+    } else {
+        tensor_return_value =
+            detail::create_tensors_from_specs<device_operation_t>(operation_attributes, tensor_args, mesh_device);
+    }
     if (!mesh_device_operation_utils::all_tensors_have_uniform_storage(tensor_args)) {
         mesh_device_operation_utils::filter_tensor_shards(
             mesh_device_operation_utils::extract_tensor_coordinates(tensor_args), tensor_return_value);
     }
-
-    auto first_tensor = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args);
-    auto mesh_device = first_tensor.device();
 
     // Check if op provides custom output topologies
     std::vector<tt::tt_metal::TensorTopology> custom_topologies;
