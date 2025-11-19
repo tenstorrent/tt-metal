@@ -608,6 +608,7 @@ def shard_and_save(
     layout: ttnn.Layout | None = None,
     memory_config: ttnn.MemoryConfig | None = None,
     _torch_impl: bool = False,
+    convert_meta=False,
 ) -> SavedWeight:
     """Shard a tensor and save it to a file."""
     assert all(isinstance(shard_dim, (int, NoneType)) for shard_dim in shard_dims)
@@ -677,16 +678,19 @@ def shard_and_save(
     if path.exists():
         logger.warning(f"Overwriting existing cache file: {path}")
     ttnn.dump_tensor(path, ttnn_tensor)
-    path_str = str(path)
-    mesh_idx = path_str.find("mesh_")
-    if mesh_idx == -1:
-        raise ValueError(f"Expected 'mesh_' in path: {path}")
-    # Skip past "mesh_<rows>x<cols>/" to get relative path
-    parts = path_str[mesh_idx:].split("/", 1)
-    if len(parts) < 2:
-        raise ValueError(f"Invalid path structure after 'mesh_': {path}")
-    relative_path = Path(parts[1])
-    return SavedWeight(relative_path, memory_config)
+
+    if not convert_meta:
+        path_str = str(path)
+        mesh_idx = path_str.find("mesh_")
+        if mesh_idx == -1:
+            raise ValueError(f"Expected 'mesh_' in path: {path}")
+        # Skip past "mesh_<rows>x<cols>/" to get relative path
+        parts = path_str[mesh_idx:].split("/", 1)
+        if len(parts) < 2:
+            raise ValueError(f"Invalid path structure after 'mesh_': {path}")
+        path = Path(parts[1])
+
+    return SavedWeight(path, memory_config)
 
 
 def _shard_device_impl(
@@ -880,10 +884,20 @@ def _check_weights_exist_and_convert(root_path: Path, weight_config: WeightConfi
         if entry is None:
             continue
         if isinstance(entry, SavedWeight):
-            if not (root_path / entry.path).exists() or entry.path.suffix != TENSOR_CACHE_EXTENSION:
+            if (
+                not (entry.path.is_absolute())
+                and not (root_path / entry.path).exists()
+                or entry.path.suffix != TENSOR_CACHE_EXTENSION
+            ):
                 return False
-            elif (root_path / entry.path).exists() and entry.path.suffix == TENSOR_CACHE_EXTENSION:
+            elif (
+                not (entry.path.is_absolute())
+                and (root_path / entry.path).exists()
+                and entry.path.suffix == TENSOR_CACHE_EXTENSION
+            ):
                 entry.path = root_path / entry.path
+            elif entry.path.is_absolute() and (not entry.path.exists() or entry.path.suffix != TENSOR_CACHE_EXTENSION):
+                return False
         elif not _check_weights_exist_and_convert(root_path, entry):
             return False
     return True
