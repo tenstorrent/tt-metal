@@ -49,6 +49,13 @@ def main():
         default=True,
     )
     parser.add_option(
+        "--op-support-count",
+        dest="op_support_count",
+        action="store",
+        help="Maximum number of ops that can be supported by the profiler",
+        type="int",
+    )
+    parser.add_option(
         "--child-functions",
         type="string",
         help="Comma separated list of child function to have their duration included for parent OPs",
@@ -256,6 +263,9 @@ def main():
 
     if options.device_memory_profiler:
         os.environ["TT_METAL_MEM_PROFILER"] = "1"
+
+    if options.op_support_count:
+        os.environ["TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT"] = str(options.op_support_count)
 
     if len(args) > 0:
         doReport = False
