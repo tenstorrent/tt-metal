@@ -20,12 +20,11 @@
 #include <tt_metal/fabric/physical_system_descriptor.hpp>
 
 #include <telemetry/metric.hpp>
+#include <topology/topology.hpp>
 
 namespace tt::scaleout_tools::fsd::proto {
 class FactorySystemDescriptor;
 }
-
-class TopologyHelper;
 
 // Base class for all Ethernet metrics to share common path prefix
 class EthernetMetricBase {
@@ -49,6 +48,7 @@ public:
     void update(
         const std::unique_ptr<tt::umd::Cluster>& cluster,
         std::chrono::steady_clock::time_point start_of_update_cycle) override;
+    std::unordered_map<std::string, std::string> labels() const override;
 
 private:
     tt::tt_metal::TrayID tray_id_;
@@ -57,6 +57,7 @@ private:
     uint32_t channel_;
     std::chrono::steady_clock::time_point last_force_refresh_time_;
     uint32_t link_up_addr_;
+    std::optional<PhysicalLinkInfo> link_info_;
 };
 
 class EthernetCRCErrorCountMetric : public UIntMetric, public EthernetMetricBase {
@@ -74,6 +75,7 @@ public:
     void update(
         const std::unique_ptr<tt::umd::Cluster>& cluster,
         std::chrono::steady_clock::time_point start_of_update_cycle) override;
+    std::unordered_map<std::string, std::string> labels() const override;
 
 private:
     tt::tt_metal::TrayID tray_id_;
@@ -82,6 +84,7 @@ private:
     uint32_t channel_;
     tt::umd::CoreCoord ethernet_core_;
     uint32_t crc_addr_;
+    std::optional<PhysicalLinkInfo> link_info_;
 };
 
 class EthernetRetrainCountMetric : public UIntMetric, public EthernetMetricBase {
@@ -99,6 +102,7 @@ public:
     void update(
         const std::unique_ptr<tt::umd::Cluster>& cluster,
         std::chrono::steady_clock::time_point start_of_update_cycle) override;
+    std::unordered_map<std::string, std::string> labels() const override;
 
 private:
     tt::tt_metal::TrayID tray_id_;
@@ -107,6 +111,7 @@ private:
     uint32_t channel_;
     tt::umd::CoreCoord ethernet_core_;
     uint32_t retrain_count_addr_;
+    std::optional<PhysicalLinkInfo> link_info_;
 };
 
 class EthernetCorrectedCodewordCountMetric : public UIntMetric, public EthernetMetricBase {
@@ -124,6 +129,7 @@ public:
     void update(
         const std::unique_ptr<tt::umd::Cluster>& cluster,
         std::chrono::steady_clock::time_point start_of_update_cycle) override;
+    std::unordered_map<std::string, std::string> labels() const override;
 
 private:
     tt::tt_metal::TrayID tray_id_;
@@ -132,6 +138,7 @@ private:
     uint32_t channel_;
     tt::umd::CoreCoord ethernet_core_;
     uint32_t corr_addr_;
+    std::optional<PhysicalLinkInfo> link_info_;
 };
 
 class EthernetUncorrectedCodewordCountMetric : public UIntMetric, public EthernetMetricBase {
@@ -149,6 +156,7 @@ public:
     void update(
         const std::unique_ptr<tt::umd::Cluster>& cluster,
         std::chrono::steady_clock::time_point start_of_update_cycle) override;
+    std::unordered_map<std::string, std::string> labels() const override;
 
 private:
     tt::tt_metal::TrayID tray_id_;
@@ -157,6 +165,7 @@ private:
     uint32_t channel_;
     tt::umd::CoreCoord ethernet_core_;
     uint32_t uncorr_addr_;
+    std::optional<PhysicalLinkInfo> link_info_;
 };
 
 void create_ethernet_metrics(

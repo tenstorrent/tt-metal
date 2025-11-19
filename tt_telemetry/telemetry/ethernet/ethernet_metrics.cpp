@@ -98,36 +98,46 @@ void create_ethernet_metrics(
     log_info(tt::LogAlways, "Created Ethernet metrics");
 }
 
-// Helper to initialize common Ethernet endpoint labels
-static void init_ethernet_labels(
-    Metric* metric,
+// Helper to get physical link info for Ethernet metrics
+static std::optional<PhysicalLinkInfo> get_physical_link_info_for_endpoint(
     tt::tt_metal::TrayID tray_id,
     tt::tt_metal::ASICLocation asic_location,
     uint32_t channel,
     const std::unique_ptr<TopologyHelper>& topology_helper) {
-    // Set base labels for this Ethernet endpoint
-    metric->set_label("tray", std::to_string(*tray_id));
-    metric->set_label("chip", std::to_string(*asic_location));
-    metric->set_label("channel", std::to_string(channel));
+    if (!topology_helper) {
+        return std::nullopt;
+    }
 
-    // Add physical link info
     EthernetEndpoint endpoint{tray_id, asic_location, channel};
-    auto link_info = topology_helper->get_physical_link_info(endpoint);
+    return topology_helper->get_physical_link_info(endpoint);
+}
+
+// Helper to construct labels for Ethernet metrics (base + optional topology info)
+static std::unordered_map<std::string, std::string> build_ethernet_labels(
+    tt::tt_metal::TrayID tray_id,
+    tt::tt_metal::ASICLocation asic_location,
+    uint32_t channel,
+    const std::optional<PhysicalLinkInfo>& link_info) {
+    std::unordered_map<std::string, std::string> result;
+    result["tray"] = std::to_string(*tray_id);
+    result["chip"] = std::to_string(*asic_location);
+    result["channel"] = std::to_string(channel);
+
     if (link_info.has_value()) {
-        metric->set_label("port_type", std::to_string(static_cast<int>(link_info->port_type)));
-        // port_id is a StrongType, not optional - just access its value directly
-        metric->set_label("port_id", std::to_string(*link_info->port_id));
+        result["port_type"] = std::to_string(static_cast<int>(link_info->port_type));
+        result["port_id"] = std::to_string(*link_info->port_id);
 
         if (link_info->remote_endpoint.has_value()) {
             const auto& remote = link_info->remote_endpoint.value();
-            metric->set_label("remote_hostname", remote.hostname);
-            // tray and asic are StrongTypes, not optionals - access values directly
-            metric->set_label("remote_tray", std::to_string(*remote.tray));
-            metric->set_label("remote_chip", std::to_string(*remote.asic));
-            metric->set_label("remote_channel", std::to_string(remote.channel));
-            metric->set_label("remote_rack", std::to_string(remote.rack));
+            result["remote_hostname"] = remote.hostname;
+            result["remote_tray"] = std::to_string(*remote.tray);
+            result["remote_chip"] = std::to_string(*remote.asic);
+            result["remote_channel"] = std::to_string(remote.channel);
+            result["remote_rack"] = std::to_string(remote.rack);
         }
     }
+
+    return result;
 }
 
 /**************************************************************************************************
@@ -150,10 +160,8 @@ EthernetEndpointUpMetric::EthernetEndpointUpMetric(
     channel_(channel),
     last_force_refresh_time_(std::chrono::steady_clock::time_point::min()),
     link_up_addr_(
-        hal->get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::LINK_UP)) {
-    // Initialize common Ethernet labels
-    init_ethernet_labels(this, tray_id, asic_location, channel, topology_helper);
-}
+        hal->get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::LINK_UP)),
+    link_info_(get_physical_link_info_for_endpoint(tray_id, asic_location, channel, topology_helper)) {}
 
 const std::vector<std::string> EthernetEndpointUpMetric::telemetry_path() const {
     auto path = ethernet_base_path();
@@ -178,6 +186,10 @@ void EthernetEndpointUpMetric::update(
     set_timestamp_now();
 }
 
+std::unordered_map<std::string, std::string> EthernetEndpointUpMetric::labels() const {
+    return build_ethernet_labels(tray_id_, asic_location_, channel_, link_info_);
+}
+
 /**************************************************************************************************
  EthernetCRCErrorCountMetric
 
@@ -199,9 +211,7 @@ EthernetCRCErrorCountMetric::EthernetCRCErrorCountMetric(
     ethernet_core_ = cluster->get_soc_descriptor(chip_id).get_eth_core_for_channel(channel, tt::CoordSystem::LOGICAL);
     crc_addr_ = hal->get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::CRC_ERR);
-
-    // Initialize common Ethernet labels
-    init_ethernet_labels(this, tray_id, asic_location, channel, topology_helper);
+    link_info_ = get_physical_link_info_for_endpoint(tray_id, asic_location, channel, topology_helper);
 }
 
 const std::vector<std::string> EthernetCRCErrorCountMetric::telemetry_path() const {
@@ -216,6 +226,10 @@ void EthernetCRCErrorCountMetric::update(
     cluster->read_from_device(&crc_error_val, chip_id_, ethernet_core_, crc_addr_, sizeof(uint32_t));
     value_ = uint64_t(crc_error_val);
     set_timestamp_now();
+}
+
+std::unordered_map<std::string, std::string> EthernetCRCErrorCountMetric::labels() const {
+    return build_ethernet_labels(tray_id_, asic_location_, channel_, link_info_);
 }
 
 /**************************************************************************************************
@@ -237,9 +251,7 @@ EthernetRetrainCountMetric::EthernetRetrainCountMetric(
     ethernet_core_ = cluster->get_soc_descriptor(chip_id).get_eth_core_for_channel(channel, tt::CoordSystem::LOGICAL);
     retrain_count_addr_ = hal->get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::RETRAIN_COUNT);
-
-    // Initialize common Ethernet labels
-    init_ethernet_labels(this, tray_id, asic_location, channel, topology_helper);
+    link_info_ = get_physical_link_info_for_endpoint(tray_id, asic_location, channel, topology_helper);
 }
 
 const std::vector<std::string> EthernetRetrainCountMetric::telemetry_path() const {
@@ -254,6 +266,10 @@ void EthernetRetrainCountMetric::update(
     cluster->read_from_device(&data, chip_id_, ethernet_core_, retrain_count_addr_, sizeof(uint32_t));
     value_ = uint64_t(data);
     set_timestamp_now();
+}
+
+std::unordered_map<std::string, std::string> EthernetRetrainCountMetric::labels() const {
+    return build_ethernet_labels(tray_id_, asic_location_, channel_, link_info_);
 }
 
 /**************************************************************************************************
@@ -277,9 +293,7 @@ EthernetCorrectedCodewordCountMetric::EthernetCorrectedCodewordCountMetric(
     ethernet_core_ = cluster->get_soc_descriptor(chip_id).get_eth_core_for_channel(channel, tt::CoordSystem::LOGICAL);
     corr_addr_ = hal->get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::CORR_CW);
-
-    // Initialize common Ethernet labels
-    init_ethernet_labels(this, tray_id, asic_location, channel, topology_helper);
+    link_info_ = get_physical_link_info_for_endpoint(tray_id, asic_location, channel, topology_helper);
 }
 
 const std::vector<std::string> EthernetCorrectedCodewordCountMetric::telemetry_path() const {
@@ -296,6 +310,10 @@ void EthernetCorrectedCodewordCountMetric::update(
     cluster->read_from_device(&lo, chip_id_, ethernet_core_, corr_addr_ + 4, sizeof(uint32_t));
     value_ = (static_cast<uint64_t>(hi) << 32) | static_cast<uint64_t>(lo);
     set_timestamp_now();
+}
+
+std::unordered_map<std::string, std::string> EthernetCorrectedCodewordCountMetric::labels() const {
+    return build_ethernet_labels(tray_id_, asic_location_, channel_, link_info_);
 }
 
 /**************************************************************************************************
@@ -319,9 +337,7 @@ EthernetUncorrectedCodewordCountMetric::EthernetUncorrectedCodewordCountMetric(
     ethernet_core_ = cluster->get_soc_descriptor(chip_id).get_eth_core_for_channel(channel, tt::CoordSystem::LOGICAL);
     uncorr_addr_ = hal->get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNCORR_CW);
-
-    // Initialize common Ethernet labels
-    init_ethernet_labels(this, tray_id, asic_location, channel, topology_helper);
+    link_info_ = get_physical_link_info_for_endpoint(tray_id, asic_location, channel, topology_helper);
 }
 
 const std::vector<std::string> EthernetUncorrectedCodewordCountMetric::telemetry_path() const {
@@ -338,4 +354,8 @@ void EthernetUncorrectedCodewordCountMetric::update(
     cluster->read_from_device(&lo, chip_id_, ethernet_core_, uncorr_addr_ + 4, sizeof(uint32_t));
     value_ = (static_cast<uint64_t>(hi) << 32) | static_cast<uint64_t>(lo);
     set_timestamp_now();
+}
+
+std::unordered_map<std::string, std::string> EthernetUncorrectedCodewordCountMetric::labels() const {
+    return build_ethernet_labels(tray_id_, asic_location_, channel_, link_info_);
 }
