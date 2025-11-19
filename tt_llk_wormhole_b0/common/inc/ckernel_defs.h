@@ -236,6 +236,13 @@ enum class ActivationType
     Hardsigmoid = 4,
 };
 
+enum class RoundingMode : uint8_t
+{
+    None  = 0,
+    Trunc = 1,
+    Floor = 2,
+};
+
 enum class BinaryOp : uint8_t
 {
     ADD           = 0,
