@@ -8,6 +8,7 @@
 #include <chrono>
 #include <functional>
 #include <iomanip>
+#include <mutex>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
@@ -18,6 +19,10 @@
 namespace tt::telemetry {
 
 namespace {
+
+// Track emitted label conflict warnings to avoid log spam
+static std::unordered_set<std::string> emitted_conflicts;
+static std::mutex emitted_conflicts_mutex;
 
 // Structure to hold parsed metric information
 struct ParsedMetric {
@@ -176,12 +181,19 @@ void process_metrics(
                     // Merge custom labels into parsed labels (custom labels override path labels if conflict)
                     for (const auto& [key, val] : custom_it->second) {
                         if (parsed.labels.find(key) != parsed.labels.end()) {
-                            log_warning(
-                                tt::LogAlways,
-                                "Custom label '{}' for metric '{}' overrides path-derived label value '{}'",
-                                key,
-                                path,
-                                parsed.labels[key]);
+                            // Log once per unique path+key conflict to avoid spam
+                            std::string conflict_id = path + "|" + key;
+                            {
+                                std::lock_guard<std::mutex> lock(emitted_conflicts_mutex);
+                                if (emitted_conflicts.insert(conflict_id).second) {
+                                    log_warning(
+                                        tt::LogDebug,
+                                        "Custom label '{}' for metric '{}' overrides path-derived label value '{}'",
+                                        key,
+                                        path,
+                                        parsed.labels[key]);
+                                }
+                            }
                         }
                         parsed.labels[key] = val;
                     }
