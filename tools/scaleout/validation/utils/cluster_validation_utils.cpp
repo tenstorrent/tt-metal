@@ -20,6 +20,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <enchantum/enchantum.hpp>
+#include <tt-metalium/control_plane.hpp>
 
 namespace tt::scaleout_tools {
 
@@ -1244,6 +1245,8 @@ void reset_cross_node_ethernet_links(
             cluster.read_core(reset, sizeof(uint32_t), tt_cxy_pair(src_chip_id, src_coord), 0x1EFC);
         }
     }
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+    distributed_context.barrier();
 }
 
 void reset_ethernet_links(
@@ -1344,6 +1347,83 @@ AsicTopology generate_asic_topology_from_connections(
         }
     }
     return asic_topology;
+}
+
+tt::tt_metal::AsicTopology build_reset_topology(
+    const std::string& reset_host,
+    uint32_t reset_tray_id,
+    uint32_t reset_asic_location,
+    uint32_t reset_channel,
+    PhysicalSystemDescriptor& physical_system_descriptor) {
+    log_output_rank0("Building reset topology for specific link:");
+    log_output_rank0("  Host: " + reset_host);
+    log_output_rank0("  Tray ID: " + std::to_string(reset_tray_id));
+    log_output_rank0("  ASIC Location: " + std::to_string(reset_asic_location));
+    log_output_rank0("  Channel: " + std::to_string(reset_channel));
+
+    tt::tt_metal::AsicID src_asic_id = physical_system_descriptor.get_asic_id(
+        reset_host, tt::tt_metal::TrayID(reset_tray_id), tt::tt_metal::ASICLocation(reset_asic_location));
+    uint8_t src_channel = static_cast<uint8_t>(reset_channel);
+
+    log_output_rank0("  Resolved Source ASIC ID: " + std::to_string(*src_asic_id));
+
+    auto [dst_asic_id, dst_channel] =
+        physical_system_descriptor.get_connected_asic_and_channel(src_asic_id, src_channel);
+
+    log_output_rank0("  Discovered Destination ASIC ID: " + std::to_string(*dst_asic_id));
+    log_output_rank0("  Discovered Destination Channel: " + std::to_string(dst_channel));
+
+    const auto& asic_descriptors = physical_system_descriptor.get_asic_descriptors();
+    TT_FATAL(
+        asic_descriptors.find(dst_asic_id) != asic_descriptors.end(),
+        "Could not find ASIC descriptor for destination ASIC ID: {}",
+        dst_asic_id);
+    std::string dst_host = asic_descriptors.at(dst_asic_id).host_name;
+    bool is_local = (reset_host == dst_host);
+
+    log_output_rank0("  Destination Host: " + dst_host);
+    log_output_rank0("  Connection Type: " + std::string(is_local ? "Local" : "Remote"));
+
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+    if (!is_local && *distributed_context.size() < 2) {
+        TT_THROW("Cross-node link reset requires running with both hosts.");
+    }
+
+    tt::tt_metal::AsicTopology asic_topology;
+
+    tt::tt_metal::EthConnection src_to_dst_conn;
+    src_to_dst_conn.src_chan = src_channel;
+    src_to_dst_conn.dst_chan = dst_channel;
+    src_to_dst_conn.is_local = is_local;
+
+    tt::tt_metal::EthConnection dst_to_src_conn;
+    dst_to_src_conn.src_chan = dst_channel;
+    dst_to_src_conn.dst_chan = src_channel;
+    dst_to_src_conn.is_local = is_local;
+
+    asic_topology[src_asic_id].push_back({dst_asic_id, {src_to_dst_conn}});
+    asic_topology[dst_asic_id].push_back({src_asic_id, {dst_to_src_conn}});
+
+    log_output_rank0("Reset topology built successfully");
+
+    return asic_topology;
+}
+
+void perform_link_reset(
+    const std::string& reset_host,
+    uint32_t reset_tray_id,
+    uint32_t reset_asic_location,
+    uint32_t reset_channel,
+    PhysicalSystemDescriptor& physical_system_descriptor) {
+    bool link_retrain_supported = tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::WORMHOLE_B0;
+    TT_FATAL(link_retrain_supported, "Link reset is only supported on WORMHOLE_B0 architecture");
+
+    AsicTopology reset_topology =
+        build_reset_topology(reset_host, reset_tray_id, reset_asic_location, reset_channel, physical_system_descriptor);
+
+    reset_ethernet_links(physical_system_descriptor, reset_topology);
+
+    log_output_rank0("Link reset completed. Please run the validation tool again to verify the link.");
 }
 
 }  // namespace tt::scaleout_tools
