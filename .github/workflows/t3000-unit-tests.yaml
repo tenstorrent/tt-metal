@@ -22,10 +22,10 @@ on:
           - llama3.2-90b-vision
           # - llama3.1-70b
           - llama3.2-90b
+          - mistral
           - mixtral
           - grok
           - unet shallow
-          - mistral
           - qwen25_vl
           - gemma3-small
   schedule:
