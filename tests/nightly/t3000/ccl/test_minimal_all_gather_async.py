@@ -1019,7 +1019,7 @@ def _get_tensors(input_shape, mesh_shape, dim, cluster_axis, dtype, memory_confi
     return tt_input, torch_reference
 
 
-def _compare_tensor_topology(tt_input, tt_out_tensor, cluster_axis, dim):
+def _assert_tensor_topology(tt_input, tt_out_tensor, cluster_axis, dim):
     tile_size = tt_input.spec.tile.tile_shape[0]
     rank = len(tt_input.shape)
     gather_dim_normalized = dim if dim >= 0 else rank + dim
@@ -1033,9 +1033,7 @@ def _compare_tensor_topology(tt_input, tt_out_tensor, cluster_axis, dim):
 
     # Create expected topology based on which all-gather path was used
     if is_tile_padded:
-        expected_topology = ttnn.TensorTopology(
-            input_topology.distribution_shape(), list(input_topology.placements()), input_topology.mesh_coords()
-        )
+        expected_topology = input_topology
     else:
         expected_placements = list(input_topology.placements())
         expected_placements[cluster_axis] = ttnn.PlacementReplicate()
