@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <ctime>
 #include <fstream>
 #include <iomanip>
 #include <sstream>
@@ -72,7 +73,9 @@ void TarWriter::write_header(std::vector<uint8_t>& tarball, const FileEntry& ent
     header[SIZE_OFFSET + SIZE_SIZE - 1] = '\0';
 
     // Modification time (octal, null-terminated, padded with nulls)
-    std::string mtime_str = to_octal(MTIME, MTIME_SIZE - 1);
+    // Use current time (Unix timestamp)
+    std::time_t current_time = std::time(nullptr);
+    std::string mtime_str = to_octal(static_cast<uint64_t>(current_time), MTIME_SIZE - 1);
     size_t mtime_len = std::min(mtime_str.size(), MTIME_SIZE - 1);
     std::memcpy(header.data() + MTIME_OFFSET, mtime_str.c_str(), mtime_len);
     // Ensure null termination and padding

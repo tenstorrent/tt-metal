@@ -39,6 +39,8 @@ consteval size_t constexpr_strlen(const char* str) {
     return len;
 }
 
+constexpr const char* flatbuffer_ext = ".flatbuffer";
+
 }  // namespace
 
 namespace ttml::serialization {
@@ -322,7 +324,7 @@ public:
                     if (!chunk.empty() && current_chunk_size + item_size > MAX_ESTIMATED_SIZE) {
                         auto chunk_data = build_flatbuffer(chunk);
                         if (!chunk_data.empty()) {
-                            std::string file_name = prefix + "_chunk" + std::to_string(chunk_index) + ".flatbuffer";
+                            std::string file_name = prefix + "_chunk" + std::to_string(chunk_index) + flatbuffer_ext;
                             flatbuffer_files.emplace_back(file_name, std::move(chunk_data));
                             chunk_index++;
                         }
@@ -338,7 +340,7 @@ public:
                 if (!chunk.empty()) {
                     auto chunk_data = build_flatbuffer(chunk);
                     if (!chunk_data.empty()) {
-                        std::string file_name = prefix + "_chunk" + std::to_string(chunk_index) + ".flatbuffer";
+                        std::string file_name = prefix + "_chunk" + std::to_string(chunk_index) + flatbuffer_ext;
                         flatbuffer_files.emplace_back(file_name, std::move(chunk_data));
                     }
                 }
@@ -349,7 +351,7 @@ public:
                     // This shouldn't happen if data_subset is not empty, but check anyway
                     continue;
                 }
-                std::string file_name = prefix + ".flatbuffer";
+                std::string file_name = prefix + flatbuffer_ext;
                 flatbuffer_files.emplace_back(file_name, std::move(flatbuffer_data));
             }
         }
@@ -587,7 +589,6 @@ public:
 
         // Deserialize each flatbuffer file
         bool found_flatbuffer = false;
-        constexpr const char* flatbuffer_ext = ".flatbuffer";
         constexpr size_t flatbuffer_ext_len = constexpr_strlen(flatbuffer_ext);
 
         for (const auto& file_name : files) {
@@ -635,7 +636,6 @@ public:
 
         std::string base_name = std::filesystem::path(base_filename).filename().string();
         std::string search_pattern = base_name + "_";
-        constexpr const char* flatbuffer_ext = ".flatbuffer";
 
         bool found_any_files = false;
 

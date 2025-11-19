@@ -34,7 +34,7 @@ using ValueType = std::variant<
 class FlatBufferFile {
 public:
     // Constructor with optional tarballing (defaults to true for backward compatibility)
-    explicit FlatBufferFile(bool use_tarball = false);
+    explicit FlatBufferFile(bool use_tarball = true);
     ~FlatBufferFile();
 
     // Copy constructor
