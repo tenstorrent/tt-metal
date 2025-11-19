@@ -13,7 +13,7 @@ namespace py = pybind11;
 
 void bind_manual_seed_operation(py::module& module) {
     auto doc = R"doc(
-            Sets the manual seed for random number generation on the specified device.
+            Sets a seed to pseudo random number generators (PRNGs) on the specified device.
 
             This operation allows users to set a specific seed or a tensor of seeds for random number generation,
             ensuring reproducibility in operations that rely on randomness.
