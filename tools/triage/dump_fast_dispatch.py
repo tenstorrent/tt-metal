@@ -305,7 +305,6 @@ def run(args, context: Context):
     dispatch_core_pairs = []
     # Relevant dispatcher kernel names
     dispatcher_kernel_names = {"cq_dispatch", "cq_dispatch_subordinate", "cq_prefetch"}
-    # Remove the line: unique_id_to_device = {device.unique_id: device for device in run_checks.devices}
 
     # Go through all cores in the core_lookup (now keyed by unique_id)
     # And check if they have dispatcher kernels loaded
