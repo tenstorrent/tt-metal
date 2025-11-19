@@ -100,20 +100,29 @@ void start_perf_counter() {
 };
 
 void stop_perf_counter() {
+    // stop all counters first
     for (auto counter_group: counter_groups) {
         if (PROFILE_PERF_COUNTERS & get_flag_for_counter_group(counter_group)) {
-            // stop counters
             volatile tt_reg_ptr uint32_t* cntl_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(get_cntl_register_for_counter_group(counter_group));
             cntl_reg[2] = PERF_CNT_STOP_VALUE;
             cntl_reg[2] = 0;
+        }
+    }
 
-            // read data  
+    // read data from all counters in all enabled groups  
+    for (auto counter_group: counter_groups) {
+        if (PROFILE_PERF_COUNTERS & get_flag_for_counter_group(counter_group)) {
+            volatile tt_reg_ptr uint32_t* cntl_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(get_cntl_register_for_counter_group(counter_group));
             volatile tt_reg_ptr uint32_t* read_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(get_read_register_for_counter_group(counter_group));
             const std::pair<PerfCounterType, uint16_t> counters[] = { {PerfCounterType::FPU_COUNTER, 0}, {PerfCounterType::SFPU_COUNTER, 1}, {PerfCounterType::MATH_COUNTER, 257} };
             uint32_t counters_size = sizeof(counters) / sizeof(counters[0]);
             for (unsigned int i = 0; i < 3; i++) {
                 uint32_t counter_sel = counters[i].second;
                 cntl_reg[1] = counter_sel << PERF_CNT_SELECT_SHIFT | PERF_CNT_CONTINUOUS_MODE;
+                // wait for registers to update
+                for (int i = 0; i < 10; i++) {
+                    asm("nop");
+                }
                 PerfCounter counter(read_reg[1], read_reg[0], counters[i].first);
                 timeStampedData<12345>(counter.raw_data);
             }
@@ -121,15 +130,22 @@ void stop_perf_counter() {
     }
 };
 
+struct PerfCounterWrapper {
+    PerfCounterWrapper() { kernel_profiler::start_perf_counter(); }
+    ~PerfCounterWrapper() { kernel_profiler::stop_perf_counter(); }
+};
+
 }  // namespace kernel_profiler
 
 #define StartPerfCounters() kernel_profiler::start_perf_counter();
 #define StopPerfCounters() kernel_profiler::stop_perf_counter();
+#define PerfCountersRaii() kernel_profiler::PerfCounterWrapper _perf_counter_wrapper_;
 
 #else
 
 // null macros when perf counters are disabled
 #define StartPerfCounters()
 #define StopPerfCounters()
+#define PerfCountersRaii()
 
 #endif

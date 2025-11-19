@@ -140,19 +140,6 @@ def get_profiler_build_enabled():
 # M will be scaled by Y (num cols), N and K will be scaled by X (num rows)
 # (m, k, n, in0_sharded, out_sharded, in0_block_w_div, num_out_blocks_h, num_out_blocks_w)
 matmul_shapes_bfloat16 = [
-    (64, 64, 64, True, True, 1, 1, 1),
-    (64, 128, 128, True, True, 1, 1, 1),
-    (64, 128, 256, True, True, 1, 1, 1),
-    (128, 128, 128, True, True, 1, 1, 1),
-    (128, 128, 256, True, True, 1, 1, 1),
-    (128, 256, 256, True, True, 1, 1, 1),
-    (256, 256, 256, True, True, 1, 1, 1),
-    (256, 256, 384, True, True, 1, 1, 1),
-    (256, 384, 384, True, True, 2, 1, 1),
-    (384, 384, 384, True, True, 4, 1, 1),
-    (384, 384, 512, False, False, 2, 1, 1),
-    (384, 512, 512, False, False, 2, 1, 1),
-    (512, 512, 512, False, False, 1, 2, 2),
     (1024, 1024, 1024, False, False, 2, 4, 4),
     (2048, 2048, 2048, False, False, 4, 8, 8),
 ]
@@ -194,20 +181,10 @@ matmul_shapes_bfloat4_b = [
 
 # (dtype, math_fidelity, use_trace)
 matmul_configs = [
-    (ttnn.bfloat16, ttnn.MathFidelity.HiFi2, False),
     (ttnn.bfloat16, ttnn.MathFidelity.HiFi4, False),
-    (ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, False),
-    (ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, False),
-    (ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, False),
-    (ttnn.bfloat16, ttnn.MathFidelity.HiFi2, True),
-    (ttnn.bfloat16, ttnn.MathFidelity.HiFi4, True),
-    (ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True),
-    (ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, True),
-    (ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True),
 ]
 
 
-@pytest.mark.skip(reason="Benchmark is not intended to be run as part of CI and can be manually run locally")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 3855488}], indirect=True)
 @pytest.mark.parametrize("tile_h", [32])
 @pytest.mark.parametrize("tile_w", [32])

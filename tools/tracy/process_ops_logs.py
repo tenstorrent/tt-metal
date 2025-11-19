@@ -7,6 +7,7 @@
 # Debug shebang
 #!/usr/bin/env -S python3 -m pdb
 
+from math import nan
 import os
 import csv
 from pathlib import Path
@@ -480,17 +481,17 @@ def append_device_data(ops, traceReplays, logFolder, analyze_noc_traces, device_
 
         for op_id in ops:
             # SFPU Counter
-            ops[op_id]["SFPU Util Min (%)"] = agg_sfpu_util_min[op_id]
-            ops[op_id]["SFPU Util Median (%)"] = agg_sfpu_util_median[op_id]
-            ops[op_id]["SFPU Util Max (%)"] = agg_sfpu_util_max[op_id]
+            ops[op_id]["SFPU Util Min (%)"] = agg_sfpu_util_min[op_id] if op_id in agg_sfpu_util_min else nan
+            ops[op_id]["SFPU Util Median (%)"] = agg_sfpu_util_median[op_id] if op_id in agg_sfpu_util_median else nan
+            ops[op_id]["SFPU Util Max (%)"] = agg_sfpu_util_max[op_id] if op_id in agg_sfpu_util_max else nan
             # FPU Counter
-            ops[op_id]["FPU Util Min (%)"] = agg_fpu_util_min[op_id]
-            ops[op_id]["FPU Util Median (%)"] = agg_fpu_util_median[op_id]
-            ops[op_id]["FPU Util Max (%)"] = agg_fpu_util_max[op_id]
+            ops[op_id]["FPU Util Min (%)"] = agg_fpu_util_min[op_id] if op_id in agg_fpu_util_min else nan
+            ops[op_id]["FPU Util Median (%)"] = agg_fpu_util_median[op_id] if op_id in agg_fpu_util_median else nan
+            ops[op_id]["FPU Util Max (%)"] = agg_fpu_util_max[op_id] if op_id in agg_fpu_util_max else nan
             # MATH Counter
-            ops[op_id]["MATH Util Min (%)"] = agg_math_util_min[op_id]
-            ops[op_id]["MATH Util Median (%)"] = agg_math_util_median[op_id]
-            ops[op_id]["MATH Util Max (%)"] = agg_math_util_max[op_id]
+            ops[op_id]["MATH Util Min (%)"] = agg_math_util_min[op_id] if op_id in agg_math_util_min else nan
+            ops[op_id]["MATH Util Median (%)"] = agg_math_util_median[op_id] if op_id in agg_math_util_median else nan
+            ops[op_id]["MATH Util Max (%)"] = agg_math_util_max[op_id] if op_id in agg_math_util_max else nan
 
     return devicesOps, traceOps
 

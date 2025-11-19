@@ -59,12 +59,13 @@ uint32_t _start() {
     ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #endif
     wait_for_go_message();
+    PerfCountersRaii();
     DeviceZoneScopedMainChildN("TRISC-KERNEL");
     EARLY_RETURN_FOR_DEBUG
     WAYPOINT("K");
-    StartPerfCounters();
+    //StartPerfCounters();
     run_kernel();
-    StopPerfCounters();
+    //StopPerfCounters();
     WAYPOINT("KD");
     EARLY_RETURN_FOR_DEBUG_EXIT;
 #endif
