@@ -26,7 +26,7 @@ Tensor RotateHalfOperation::invoke(const Tensor& input_tensor, const std::option
         TILE_WIDTH * 2);
 
     using namespace ttnn::operations::experimental::auto_format;
-    Tensor formatted_input = AutoFormat::format_input_tensor(input_tensor, 0, Layout::TILE);
+    Tensor formatted_input = AutoFormat::format_tensor(input_tensor, 0, Layout::TILE);
     return tt::tt_metal::operation::run(
                RotateHalf{memory_config.value_or(input_tensor.memory_config())}, {formatted_input})
         .at(0);

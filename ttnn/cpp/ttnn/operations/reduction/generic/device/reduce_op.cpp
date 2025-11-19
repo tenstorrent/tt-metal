@@ -182,8 +182,8 @@ Tensor reduce(
         /*default_fp32_acc=*/true));
 
     // Reduce only works with tile layout, so we need to tilize the input tensor if neccessary
-    auto tilized_input = ttnn::operations::experimental::auto_format::AutoFormat::format_input_tensor(
-        input_tensor, pad_value, Layout::TILE);
+    auto tilized_input =
+        ttnn::operations::experimental::auto_format::AutoFormat::format_tensor(input_tensor, pad_value, Layout::TILE);
     if (is_multicore_hw) {
         const Tensor output_tensor = operation::run(
                                          Reduce{

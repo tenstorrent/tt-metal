@@ -99,7 +99,7 @@ Tensor AutoFormat::format_tensor(
     return formatted_input;
 }
 
-Tensor AutoFormat::format_input_tensor(
+Tensor AutoFormat::format_tensor(
     const Tensor& input, float pad_value, Layout target_layout, std::optional<MemoryConfig> target_mem_config) {
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Input tensor must be on device.");
     auto padded_shape = pad_to_tile_shape(input.padded_shape());
