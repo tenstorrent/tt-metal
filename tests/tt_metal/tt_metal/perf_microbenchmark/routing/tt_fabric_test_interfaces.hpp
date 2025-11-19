@@ -44,7 +44,6 @@ public:
     virtual uint32_t get_l1_alignment() const = 0;
     virtual uint32_t get_max_payload_size_bytes() const = 0;
     virtual bool is_2D_routing_enabled() const = 0;
-    virtual bool is_dynamic_routing_enabled() const = 0;
 
     // Data reading helpers
     virtual std::unordered_map<CoreCoord, std::vector<uint32_t>> read_buffer_from_cores(

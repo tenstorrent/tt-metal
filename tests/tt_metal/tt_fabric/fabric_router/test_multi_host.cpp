@@ -72,8 +72,7 @@ TEST(MultiHost, TestDualGalaxyControlPlaneInit) {
     auto control_plane = std::make_unique<ControlPlane>(dual_galaxy_mesh_graph_desc_path.string());
 
     control_plane->configure_routing_tables_for_fabric_ethernet_channels(
-        tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
-        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
 }
 
 TEST(MultiHost, TestDualGalaxyFabric2DSanity) {
@@ -82,8 +81,7 @@ TEST(MultiHost, TestDualGalaxyFabric2DSanity) {
         GTEST_SKIP();
     }
     tt::tt_metal::MetalContext::instance().set_fabric_config(
-        tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
-        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
 
     // Validate control plane apis
@@ -140,8 +138,7 @@ TEST(MultiHost, TestDual2x4ControlPlaneInit) {
     auto control_plane = std::make_unique<ControlPlane>(dual_galaxy_mesh_graph_desc_path.string());
 
     control_plane->configure_routing_tables_for_fabric_ethernet_channels(
-        tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
-        tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
 }
 
 TEST(MultiHost, TestDual2x4Fabric2DSanity) {
@@ -151,8 +148,7 @@ TEST(MultiHost, TestDual2x4Fabric2DSanity) {
     }
 
     tt::tt_metal::MetalContext::instance().set_fabric_config(
-        tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
-        tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
 
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
@@ -206,19 +202,17 @@ TEST(MultiHost, TestSplit2x2ControlPlaneInit) {
     auto control_plane = std::make_unique<ControlPlane>(split_2x2_mesh_graph_desc_path.string());
 
     control_plane->configure_routing_tables_for_fabric_ethernet_channels(
-        tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
-        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
 }
 
 TEST(MultiHost, TestSplit2x2Fabric2DSanity) {
     tt::tt_metal::MetalContext::instance().set_fabric_config(
-        tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
-        tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
 
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& intermesh_connections = get_all_intermesh_connections(control_plane);
-    EXPECT_EQ(intermesh_connections.size(), 4);  // Bidirectional
+    EXPECT_EQ(intermesh_connections.size(), 8);  // Bidirectional
     for (const auto& [src_node_id, dst_node_id] : intermesh_connections) {
         const auto& direction = control_plane.get_forwarding_direction(src_node_id, dst_node_id);
         EXPECT_TRUE(direction.has_value());
@@ -244,7 +238,7 @@ TEST(MultiHost, TestSplit2x2Fabric1DSanity) {
     // Validate control plane apis
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& intermesh_connections = get_all_intermesh_connections(control_plane);
-    EXPECT_EQ(intermesh_connections.size(), 4);  // Bidirectional
+    EXPECT_EQ(intermesh_connections.size(), 8);  // Bidirectional
     for (const auto& [src_node_id, dst_node_id] : intermesh_connections) {
         const auto& direction = control_plane.get_forwarding_direction(src_node_id, dst_node_id);
         EXPECT_TRUE(direction.has_value());
@@ -269,8 +263,7 @@ TEST(MultiHost, TestBigMesh2x4ControlPlaneInit) {
     auto control_plane = std::make_unique<ControlPlane>(big_mesh_2x4_mesh_graph_desc_path.string());
 
     control_plane->configure_routing_tables_for_fabric_ethernet_channels(
-        tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
-        tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
 }
 
 TEST(MultiHost, TestBigMesh2x4Fabric2DSanity) {
@@ -281,8 +274,7 @@ TEST(MultiHost, TestBigMesh2x4Fabric2DSanity) {
     }
 
     tt::tt_metal::MetalContext::instance().set_fabric_config(
-        tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
-        tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
 
     // Validate control plane apis
@@ -330,6 +322,114 @@ TEST(MultiHost, TestBigMesh2x4Fabric1DSanity) {
     }
 }
 
+TEST(MultiHost, Test32x4QuadGalaxyControlPlaneInit) {
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
+        log_info(tt::LogTest, "This test is only for GALAXY");
+        GTEST_SKIP();
+    }
+    const std::filesystem::path quad_galaxy_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/32x4_quad_galaxy_torus_xy_graph_descriptor.textproto";
+    auto control_plane = std::make_unique<ControlPlane>(quad_galaxy_mesh_graph_desc_path.string());
+
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels(
+        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+}
+
+TEST(MultiHost, Test32x4QuadGalaxyFabric2DSanity) {
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
+        log_info(tt::LogTest, "This test is only for GALAXY");
+        GTEST_SKIP();
+    }
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY,
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
+    // Validate control plane apis
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto fabric_type = get_fabric_type(tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY);
+
+    FabricNodeId src_node_id(MeshId{0}, 3);  // On host rank 0
+    MeshCoordinate src_mesh_coord(0, 3);
+    FabricNodeId dst_node_id(MeshId{0}, 96);  // On host rank 3
+    MeshCoordinate dst_mesh_coord(0, 96);
+
+    RoutingDirection expected_direction;
+    RoutingDirection expected_reverse_direction;
+    if (fabric_type == tt::tt_fabric::FabricType::TORUS_XY) {
+        expected_direction = RoutingDirection::N;
+        expected_reverse_direction = RoutingDirection::S;
+    } else {
+        expected_direction = RoutingDirection::S;
+        expected_reverse_direction = RoutingDirection::N;
+    }
+
+    auto host_local_coord_range = control_plane.get_coord_range(MeshId{0}, MeshScope::LOCAL);
+    if (host_local_coord_range.contains(src_mesh_coord)) {
+        const auto& direction = control_plane.get_forwarding_direction(src_node_id, dst_node_id);
+        EXPECT_EQ(direction, expected_direction);
+
+        const auto& eth_chans_by_direction =
+            control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id, expected_direction);
+        EXPECT_TRUE(!eth_chans_by_direction.empty());
+        const auto& eth_chans = control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id);
+        EXPECT_TRUE(!eth_chans.empty());
+    }
+
+    if (host_local_coord_range.contains(dst_mesh_coord)) {
+        const auto& reverse_direction = control_plane.get_forwarding_direction(dst_node_id, src_node_id);
+        EXPECT_EQ(reverse_direction, expected_reverse_direction);
+
+        const auto& eth_chans = control_plane.get_forwarding_eth_chans_to_chip(dst_node_id, src_node_id);
+        EXPECT_TRUE(!eth_chans.empty());
+        const auto& eth_chans_by_direction =
+            control_plane.get_forwarding_eth_chans_to_chip(dst_node_id, src_node_id, expected_reverse_direction);
+        EXPECT_TRUE(!eth_chans_by_direction.empty());
+    }
+}
+
+TEST(MultiHost, Test32x4QuadGalaxyFabric1DSanity) {
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
+        log_info(tt::LogTest, "This test is only for GALAXY");
+        GTEST_SKIP();
+    }
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        tt::tt_fabric::FabricConfig::FABRIC_1D_RING,
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
+    // Validate control plane apis
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    FabricNodeId src_node_id(MeshId{0}, 3);  // On host rank 0
+    MeshCoordinate src_mesh_coord(0, 3);
+    FabricNodeId dst_node_id(MeshId{0}, 96);  // On host rank 3
+    MeshCoordinate dst_mesh_coord(0, 96);
+
+    auto host_local_coord_range = control_plane.get_coord_range(MeshId{0}, MeshScope::LOCAL);
+    if (host_local_coord_range.contains(src_mesh_coord)) {
+        const auto& direction = control_plane.get_forwarding_direction(src_node_id, dst_node_id);
+        EXPECT_EQ(direction, RoutingDirection::N);
+
+        const auto& eth_chans_by_direction =
+            control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id, RoutingDirection::N);
+        EXPECT_TRUE(!eth_chans_by_direction.empty());
+        const auto& eth_chans = control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id);
+        EXPECT_TRUE(!eth_chans.empty());
+    }
+
+    if (host_local_coord_range.contains(dst_mesh_coord)) {
+        const auto& reverse_direction = control_plane.get_forwarding_direction(dst_node_id, src_node_id);
+        EXPECT_EQ(reverse_direction, RoutingDirection::S);
+
+        const auto& eth_chans = control_plane.get_forwarding_eth_chans_to_chip(dst_node_id, src_node_id);
+        EXPECT_TRUE(!eth_chans.empty());
+        const auto& eth_chans_by_direction =
+            control_plane.get_forwarding_eth_chans_to_chip(dst_node_id, src_node_id, RoutingDirection::S);
+        EXPECT_TRUE(!eth_chans_by_direction.empty());
+    }
+}
+
 TEST(MultiHost, TestQuadGalaxyControlPlaneInit) {
     if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
         log_info(tt::LogTest, "This test is only for GALAXY");
@@ -341,8 +441,7 @@ TEST(MultiHost, TestQuadGalaxyControlPlaneInit) {
     auto control_plane = std::make_unique<ControlPlane>(quad_galaxy_mesh_graph_desc_path.string());
 
     control_plane->configure_routing_tables_for_fabric_ethernet_channels(
-        tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
-        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
 }
 
 TEST(MultiHost, TestQuadGalaxyFabric2DSanity) {
@@ -351,13 +450,13 @@ TEST(MultiHost, TestQuadGalaxyFabric2DSanity) {
         GTEST_SKIP();
     }
     tt::tt_metal::MetalContext::instance().set_fabric_config(
-        tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY,
+        tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY,
         tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
 
     // Validate control plane apis
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    const auto fabric_type = get_fabric_type(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY);
+    const auto fabric_type = get_fabric_type(tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY);
 
     FabricNodeId src_node_id(MeshId{0}, 3);  // On host rank 0
     MeshCoordinate src_mesh_coord(0, 3);
@@ -452,7 +551,7 @@ TEST(MultiHost, TestBHQB4x4ControlPlaneInit) {
     auto control_plane = std::make_unique<ControlPlane>(bhqb_mesh_graph_desc_path.string());
 
     control_plane->configure_routing_tables_for_fabric_ethernet_channels(
-        tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY,
+        tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY,
         tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
 }
 
@@ -463,7 +562,7 @@ TEST(MultiHost, TestBHQB4x4Fabric2DSanity) {
     }
 
     tt::tt_metal::MetalContext::instance().set_fabric_config(
-        tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY,
+        tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY,
         tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
 
@@ -524,7 +623,7 @@ TEST(MultiHost, TestClosetBox3PodTTSwitchControlPlaneInit) {
     auto control_plane = std::make_unique<ControlPlane>(mesh_graph_desc_path.string());
 
     control_plane->configure_routing_tables_for_fabric_ethernet_channels(
-        tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY,
+        tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY,
         tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
 }
 
@@ -542,7 +641,7 @@ TEST(MultiHost, TestBHQB4x4RelaxedControlPlaneInit) {
     auto control_plane = std::make_unique<ControlPlane>(bhqb_mesh_graph_desc_path.string());
 
     control_plane->configure_routing_tables_for_fabric_ethernet_channels(
-        tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY,
+        tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY,
         tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
 }
 
