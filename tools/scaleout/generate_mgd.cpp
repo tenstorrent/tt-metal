@@ -7,6 +7,10 @@
 #include <fstream>
 #include <algorithm>
 #include <sstream>
+#include <set>
+#include <google/protobuf/text_format.h>
+#include <google/protobuf/io/zero_copy_stream_impl.h>
+#include "cabling_descriptor/schemas/cluster_config.pb.h"
 
 namespace tt::scaleout_tools {
 
@@ -30,6 +34,99 @@ std::unordered_map<std::string, NodeTypeInfo> create_node_type_lookup() {
         {"BH_GALAXY_Y_TORUS", {{8, 4}, tt::tt_fabric::proto::Architecture::BLACKHOLE, 2}},   // BH Galaxy: 2 channels
         {"BH_GALAXY_XY_TORUS", {{8, 4}, tt::tt_fabric::proto::Architecture::BLACKHOLE, 2}},  // BH Galaxy: 2 channels
     };
+}
+
+// Helper function to recursively collect all host_ids from a GraphInstance
+void collect_host_ids(
+    const cabling_generator::proto::GraphInstance& instance,
+    std::set<uint32_t>& host_ids) {
+    for (const auto& [child_name, child_mapping] : instance.child_mappings()) {
+        if (child_mapping.has_host_id()) {
+            // This is a leaf node with a host_id
+            host_ids.insert(child_mapping.host_id());
+        } else if (child_mapping.has_sub_instance()) {
+            // This is a nested graph, recurse into it
+            collect_host_ids(child_mapping.sub_instance(), host_ids);
+        }
+    }
+}
+
+// Helper function to find node type by traversing the graph template hierarchy
+std::string find_node_type_from_template(
+    const std::string& template_name,
+    const cabling_generator::proto::ClusterDescriptor& cluster_desc) {
+    
+    auto it = cluster_desc.graph_templates().find(template_name);
+    if (it == cluster_desc.graph_templates().end()) {
+        throw std::runtime_error("Graph template '" + template_name + "' not found in cabling descriptor");
+    }
+    
+    const auto& graph_template = it->second;
+    
+    // Traverse children to find a node reference
+    for (const auto& child : graph_template.children()) {
+        if (child.has_node_ref()) {
+            // Found a node reference - this is the node type
+            return child.node_ref().node_descriptor();
+        } else if (child.has_graph_ref()) {
+            // Recurse into nested graph to find node type
+            return find_node_type_from_template(child.graph_ref().graph_template(), cluster_desc);
+        }
+    }
+    
+    throw std::runtime_error("No node references found in graph template '" + template_name + "'");
+}
+
+CablingDescriptorInfo get_cabling_descriptor_info(const std::string& cabling_descriptor_path) {
+    // Open and parse the cabling descriptor protobuf file
+    std::ifstream file(cabling_descriptor_path);
+    if (!file.is_open()) {
+        throw std::runtime_error("Cannot open cabling descriptor file: " + cabling_descriptor_path);
+    }
+
+    // Read the entire file into a string
+    std::stringstream buffer;
+    buffer << file.rdbuf();
+    file.close();
+
+    // Parse the protobuf
+    cabling_generator::proto::ClusterDescriptor cluster_desc;
+    if (!google::protobuf::TextFormat::ParseFromString(buffer.str(), &cluster_desc)) {
+        throw std::runtime_error("Failed to parse cabling descriptor protobuf: " + cabling_descriptor_path);
+    }
+
+    CablingDescriptorInfo info;
+    
+    // Collect all host_ids from the root instance
+    if (cluster_desc.has_root_instance()) {
+        collect_host_ids(cluster_desc.root_instance(), info.host_ids);
+    }
+
+    if (info.host_ids.empty()) {
+        throw std::runtime_error("No host_ids found in cabling descriptor: " + cabling_descriptor_path);
+    }
+
+    // Validate host IDs are contiguous and start from 0
+    uint32_t expected_max = info.host_ids.size() - 1;
+    uint32_t actual_max = *info.host_ids.rbegin();
+    if (actual_max != expected_max) {
+        throw std::runtime_error(
+            "Host IDs must be contiguous starting from 0. Found " + 
+            std::to_string(info.host_ids.size()) + " hosts but max host_id is " + 
+            std::to_string(actual_max) + " (expected " + std::to_string(expected_max) + ")");
+    }
+
+    info.num_hosts = info.host_ids.size();
+    
+    // Extract node type from the root instance's template
+    if (cluster_desc.has_root_instance()) {
+        info.node_type = find_node_type_from_template(
+            cluster_desc.root_instance().template_name(), 
+            cluster_desc
+        );
+    }
+
+    return info;
 }
 
 std::vector<std::string> generate_hostnames(size_t num_hosts) {
@@ -67,47 +164,28 @@ void generate_mesh_graph_descriptor(
         std::cout << "Reading cabling descriptor: " << cabling_descriptor_path << std::endl;
     }
 
-    // First pass: determine number of hosts by parsing the cabling descriptor
-    // We'll use a temporary hostname list to figure out the actual number of hosts needed
-    std::vector<std::string> temp_hostnames;
-    for (int i = 0; i < 256; ++i) {  // Max reasonable cluster size
-        temp_hostnames.push_back("M" + std::to_string(i));
+    // Parse the cabling descriptor to extract cluster information
+    auto cabling_info = get_cabling_descriptor_info(cabling_descriptor_path);
+    
+    if (verbose) {
+        std::cout << "Found " << cabling_info.num_hosts << " host(s) with node type: " 
+                  << cabling_info.node_type << std::endl;
+        std::cout << "Host IDs: ";
+        for (auto id : cabling_info.host_ids) {
+            std::cout << id << " ";
+        }
+        std::cout << std::endl;
     }
 
-    auto temp_cabling = CablingGenerator(cabling_descriptor_path, temp_hostnames);
-    auto hosts = temp_cabling.get_deployment_hosts();
+    // Generate hostnames based on the number of hosts
+    std::vector<std::string> hostnames = generate_hostnames(cabling_info.num_hosts);
 
-    // Now generate the actual hostnames based on the number of hosts discovered
-    std::vector<std::string> hostnames = generate_hostnames(hosts.size());
-
-    // Create the final cabling descriptor with the correct number of hostnames
+    // Create the cabling generator to get chip connections
     auto cabling_descriptor = CablingGenerator(cabling_descriptor_path, hostnames);
-    hosts = cabling_descriptor.get_deployment_hosts();
     auto chip_connections = cabling_descriptor.get_chip_connections();
 
-    // Validate we have at least one host
-    if (hosts.empty()) {
-        throw std::runtime_error("No hosts found in cabling descriptor");
-    }
-
-    // Validate homogeneous cluster (all hosts must have the same node type)
-    const std::string& expected_node_type = hosts[0].node_type;
-    for (const auto& host : hosts) {
-        if (host.node_type != expected_node_type) {
-            throw std::runtime_error(
-                "Heterogeneous clusters not supported. Expected all hosts to have node type '" + expected_node_type +
-                "', but found '" + host.node_type + "' on " + host.hostname);
-        }
-    }
-
     // Log cluster configuration
-    std::cout << "Discovered " << hosts.size() << " host(s) in cabling descriptor" << std::endl;
-    std::cout << "Node type: " << expected_node_type << std::endl;
-    if (verbose) {
-        for (const auto& host : hosts) {
-            std::cout << "  " << host.hostname << ": " << host.node_type << std::endl;
-        }
-    }
+    std::cout << "Node type: " << cabling_info.node_type << std::endl;
 
     // Compute intermesh connections
     auto intermesh_connections = compute_intermesh_connections(hostnames, chip_connections);
@@ -136,10 +214,10 @@ void generate_mesh_graph_descriptor(
     tt::tt_fabric::proto::MeshGraphDescriptor mgd;
 
     // Determine architecture, device topology, and channel count from node type
-    auto it = node_type_lookup.find(expected_node_type);
+    auto it = node_type_lookup.find(cabling_info.node_type);
     if (it == node_type_lookup.end()) {
         throw std::runtime_error(
-            "Unknown node type '" + expected_node_type + "'. " +
+            "Unknown node type '" + cabling_info.node_type + "'. " +
             "Supported types: N300_LB_DEFAULT, N300_QB_DEFAULT, WH_GALAXY*, P150_LB, P150_QB_AE_DEFAULT, " +
             "P300_QB_GE, BH_GALAXY*. Please add this node type to the node_type_lookup table if needed.");
     }
@@ -179,7 +257,7 @@ void generate_mesh_graph_descriptor(
     graph_desc->set_type("FABRIC");
 
     // Add mesh instances (all using the same mesh descriptor)
-    for (size_t i = 0; i < hosts.size(); ++i) {
+    for (size_t i = 0; i < cabling_info.num_hosts; ++i) {
         auto* instance = graph_desc->add_instances();
         auto* mesh_ref = instance->mutable_mesh();
         mesh_ref->set_mesh_descriptor("M0");
@@ -189,36 +267,28 @@ void generate_mesh_graph_descriptor(
     // Add connections between meshes
     for (const auto& [src_host, conn] : intermesh_connections) {
         for (const auto& [dst_host, count] : conn) {
-            // Find host indices
-            int src_idx = -1, dst_idx = -1;
-            for (size_t i = 0; i < hosts.size(); ++i) {
-                if (hosts[i].hostname == src_host) {
-                    src_idx = i;
-                }
-                if (hosts[i].hostname == dst_host) {
-                    dst_idx = i;
-                }
-            }
+            // Parse mesh ID from hostname (format: "M{id}")
+            // Since hostnames are generated as "M0", "M1", etc., we can extract the ID
+            int src_idx = std::stoi(src_host.substr(1));
+            int dst_idx = std::stoi(dst_host.substr(1));
 
-            if (src_idx >= 0 && dst_idx >= 0) {
-                auto* connection = graph_desc->add_connections();
+            auto* connection = graph_desc->add_connections();
 
-                // Add source node
-                auto* src_node = connection->add_nodes();
-                auto* src_mesh_ref = src_node->mutable_mesh();
-                src_mesh_ref->set_mesh_descriptor("M0");
-                src_mesh_ref->set_mesh_id(src_idx);
+            // Add source node
+            auto* src_node = connection->add_nodes();
+            auto* src_mesh_ref = src_node->mutable_mesh();
+            src_mesh_ref->set_mesh_descriptor("M0");
+            src_mesh_ref->set_mesh_id(src_idx);
 
-                // Add destination node
-                auto* dst_node = connection->add_nodes();
-                auto* dst_mesh_ref = dst_node->mutable_mesh();
-                dst_mesh_ref->set_mesh_descriptor("M0");
-                dst_mesh_ref->set_mesh_id(dst_idx);
+            // Add destination node
+            auto* dst_node = connection->add_nodes();
+            auto* dst_mesh_ref = dst_node->mutable_mesh();
+            dst_mesh_ref->set_mesh_descriptor("M0");
+            dst_mesh_ref->set_mesh_id(dst_idx);
 
-                // Set channels (no policy for cleaner output)
-                auto* conn_channels = connection->mutable_channels();
-                conn_channels->set_count(count);
-            }
+            // Set channels (no policy for cleaner output)
+            auto* conn_channels = connection->mutable_channels();
+            conn_channels->set_count(count);
         }
     }
 
@@ -270,7 +340,7 @@ void generate_mesh_graph_descriptor(
 
     // Write instances in compact format
     mgd_file << "  # Instances: mesh ids 0";
-    for (size_t i = 1; i < hosts.size(); ++i) {
+    for (size_t i = 1; i < cabling_info.num_hosts; ++i) {
         mgd_file << "," << i;
     }
     mgd_file << " (all " << device_dims[0] << "x" << device_dims[1] << ")\n";
@@ -331,7 +401,7 @@ void generate_mesh_graph_descriptor(
     std::cout << "\n✓ Mesh Graph Descriptor successfully generated" << std::endl;
     std::cout << "  Output: " << output_path << std::endl;
     std::cout << "  Format: " << (format == OutputFormat::YAML ? "YAML" : "TextProto") << std::endl;
-    std::cout << "  Meshes: " << hosts.size() << std::endl;
+    std::cout << "  Meshes: " << cabling_info.num_hosts << std::endl;
     std::cout << "  Connections: " << total_connections << std::endl;
 
     // Note: Currently both YAML and TextProto use the same protobuf text format

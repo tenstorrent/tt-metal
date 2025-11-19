@@ -22,6 +22,16 @@ struct NodeTypeInfo {
 // Create lookup table for node types
 std::unordered_map<std::string, NodeTypeInfo> create_node_type_lookup();
 
+// Information extracted from cabling descriptor
+struct CablingDescriptorInfo {
+    size_t num_hosts;
+    std::string node_type;  // e.g., "N300_LB_DEFAULT", "WH_GALAXY"
+    std::set<uint32_t> host_ids;  // All unique host IDs found
+};
+
+// Extract cluster information from cabling descriptor by parsing the protobuf
+CablingDescriptorInfo get_cabling_descriptor_info(const std::string& cabling_descriptor_path);
+
 // Generate hostnames based on number of hosts
 std::vector<std::string> generate_hostnames(size_t num_hosts);
 
