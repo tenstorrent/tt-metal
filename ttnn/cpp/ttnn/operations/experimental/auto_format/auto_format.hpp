@@ -87,7 +87,7 @@ public:
      * @param target_mem_config Optional memory configuration
      * @return Formatted tensor
      */
-    static Tensor format_input_tensor(
+    static Tensor format_tensor(
         const Tensor& input,
         tt::tt_metal::distributed::MeshDevice* device,
         const ttnn::Shape& padded_shape,

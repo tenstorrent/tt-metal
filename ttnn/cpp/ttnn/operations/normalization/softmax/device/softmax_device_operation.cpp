@@ -412,7 +412,7 @@ Tensor softmax(
             .pad_shape = input_pad_shape,
             .pad_value = -std::numeric_limits<float>::infinity(),
             .target_layout = tt::tt_metal::Layout::TILE};
-        auto formatted_input_tensor = ttnn::operations::experimental::auto_format::AutoFormat::format_input_tensor(
+        auto formatted_input_tensor = ttnn::operations::experimental::auto_format::AutoFormat::format_tensor(
             input_tensor_4D,
             input_tensor_4D.device(),
             input_format_params.pad_shape,
@@ -470,7 +470,7 @@ Tensor scale_mask_softmax(
         .pad_shape = input_pad_shape,
         .pad_value = -std::numeric_limits<float>::infinity(),
         .target_layout = tt::tt_metal::Layout::TILE};
-    auto formatted_input_tensor = ttnn::operations::experimental::auto_format::AutoFormat::format_input_tensor(
+    auto formatted_input_tensor = ttnn::operations::experimental::auto_format::AutoFormat::format_tensor(
         input_tensor,
         input_tensor.device(),
         input_format_params.pad_shape,
@@ -508,7 +508,7 @@ Tensor scale_mask_softmax(
             .pad_shape = mask_pad_shape,
             .pad_value = -std::numeric_limits<float>::infinity(),
             .target_layout = tt::tt_metal::Layout::TILE};
-        auto formatted_mask = ttnn::operations::experimental::auto_format::AutoFormat::format_input_tensor(
+        auto formatted_mask = ttnn::operations::experimental::auto_format::AutoFormat::format_tensor(
             mask.value(),
             mask.value().device(),
             mask_format_params.pad_shape,
