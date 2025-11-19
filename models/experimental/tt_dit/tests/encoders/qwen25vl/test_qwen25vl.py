@@ -254,6 +254,8 @@ def test_qwen25vl_encoder_pair(*, mesh_device: ttnn.MeshDevice, prompts: list[st
 
     tt_encoder_pair = Qwen25VlTokenizerEncoderPair(
         checkpoint,
+        tokenizer_subfolder="tokenizer",
+        encoder_subfolder="text_encoder",
         use_torch=False,
         device=mesh_device,
         parallel_config=parallel_config,
