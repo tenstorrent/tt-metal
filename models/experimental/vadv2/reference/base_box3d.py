@@ -242,3 +242,12 @@ class BaseInstance3DBoxes(object):
 
 class LiDARInstance3DBoxes(BaseInstance3DBoxes):
     YAW_AXIS = 2
+
+    @property
+    def gravity_center(self):
+        """torch.Tensor: A tensor with center of each box in the gravity center (middle of z-axis)."""
+        bottom_center = self.tensor[:, :3]
+        gravity_center = torch.zeros_like(bottom_center)
+        gravity_center[:, :2] = bottom_center[:, :2]  # x, y same as bottom
+        gravity_center[:, 2] = bottom_center[:, 2] + self.tensor[:, 5] * 0.5  # z + height/2
+        return gravity_center
