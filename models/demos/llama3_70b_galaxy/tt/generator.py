@@ -173,7 +173,6 @@ class Generator:
             and prefill_seq_lens[0] * batch < 128 * 1024
             and tt_out_logits_all_users is None
             and not return_logits
-            # and not self.model.args.is_qwen
         ):
             use_batched_prefill = True
 
