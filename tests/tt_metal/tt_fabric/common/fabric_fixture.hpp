@@ -190,9 +190,6 @@ protected:
 using Fabric1DTensixFixture =
     FabricTensixFixtureTemplate<tt::tt_fabric::FabricConfig::FABRIC_1D, tt::tt_fabric::FabricTensixConfig::MUX>;
 
-using Fabric2DTensixUdmFixture =
-    FabricTensixFixtureTemplate<tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricTensixConfig::UDM>;
-
 using NightlyFabric2DTensixUdmFixture =
     FabricTensixFixtureTemplate<tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricTensixConfig::UDM>;
 
