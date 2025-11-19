@@ -2013,7 +2013,9 @@ std::vector<MeshId> ControlPlane::get_local_mesh_id_bindings() const {
 
 MeshHostRankId ControlPlane::get_local_host_rank_id_binding() const { return this->local_mesh_binding_.host_rank; }
 
-TopologyMapper ControlPlane::get_topology_mapper() const { return this->topology_mapper_; }
+const TopologyMapper* ControlPlane::get_topology_mapper() const {
+    return this->topology_mapper_.get();
+}
 
 MeshCoordinate ControlPlane::get_local_mesh_offset() const {
     auto coord_range = this->get_coord_range(this->get_local_mesh_id_bindings()[0], MeshScope::LOCAL);
