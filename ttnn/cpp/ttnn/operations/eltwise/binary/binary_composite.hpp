@@ -139,7 +139,8 @@ struct ExecuteBiasGelu {
         tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
         tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
         tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt) {
+        std::optional<bool> use_legacy = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
         return BinaryOperation<binary_op_type>::invoke(
             input_tensor_a_arg,
             input_tensor_b_arg,
@@ -149,7 +150,8 @@ struct ExecuteBiasGelu {
             post_activations,
             lhs_activations,
             rhs_activations,
-            use_legacy);
+            use_legacy,
+            sub_core_grids);
     }
 
     static Tensor invoke(
@@ -161,7 +163,8 @@ struct ExecuteBiasGelu {
         tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
         tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
         tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt) {
+        std::optional<bool> use_legacy = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
         return ttnn::gelu(
             ttnn::add(input_tensor_a, bias, std::nullopt, memory_config, optional_output_tensor),
             true,
@@ -177,7 +180,8 @@ struct ExecuteBiasGelu {
         const std::optional<Tensor>& output = std::nullopt,
         tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
         tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {}) {
+        tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
         return BinaryOperation<binary_op_type>::invoke(
             input_tensor_a,
             input_tensor_b,
@@ -186,7 +190,8 @@ struct ExecuteBiasGelu {
             output,
             lhs_activations,
             rhs_activations,
-            post_activations);
+            post_activations,
+            sub_core_grids);
     }
 
     static Tensor invoke(
