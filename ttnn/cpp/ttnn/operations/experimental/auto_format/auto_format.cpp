@@ -20,26 +20,6 @@
 
 namespace ttnn::operations::experimental::auto_format {
 
-// This code is a workaround for cases where we need to remove autoformat but other dependent ops
-// are not quite ready. So here we basically just put the tensor back on device.
-// Used in backward_ops.cpp
-// See: Remove auto format within permute_op.cpp #9404
-Tensor AutoFormat::move_tensor_to_device_and_pad(
-    const Tensor& input,
-    tt::tt_metal::distributed::MeshDevice* device,
-    Layout target_layout,
-    std::optional<MemoryConfig> target_mem_config) {
-    using namespace tt::constants;
-    const auto& device_shape = input.padded_shape();
-    const Shape new_device_shape(
-        {device_shape[0],
-         device_shape[1],
-         (device_shape[-2] % TILE_HEIGHT != 0 ? (device_shape[-2] / TILE_HEIGHT + 1) * TILE_HEIGHT : device_shape[-2]),
-         (device_shape[-1] % TILE_WIDTH != 0 ? (device_shape[-1] / TILE_WIDTH + 1) * TILE_WIDTH : device_shape[-1])});
-    return AutoFormat::format_tensor(
-        input, device, new_device_shape, PadValue(0.0f), target_layout, std::move(target_mem_config));
-}
-
 Tensor AutoFormat::format_tensor(
     const Tensor& input,
     tt::tt_metal::distributed::MeshDevice* device,
