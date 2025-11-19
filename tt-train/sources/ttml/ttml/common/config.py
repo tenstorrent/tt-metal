@@ -65,6 +65,12 @@ class TrainingConfig:
         self.model_config = tc.get("model_config", None)
         self.use_bpe = tc.get("use_bpe", True)
 
+        self.lr = float(tc.get("lr", 3e-4))
+        self.beta1 = float(tc.get("beta1", 0.9))
+        self.beta2 = float(tc.get("beta2", 0.999))
+        self.eps = float(tc.get("eps", 1e-8))
+        self.weight_decay = float(tc.get("weight_decay", 0.01))
+
 class TransformerConfig:
     """Configuration for transformer model hyperparameters."""
 
