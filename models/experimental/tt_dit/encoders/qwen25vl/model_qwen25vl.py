@@ -249,8 +249,8 @@ class Qwen25VlAttention(Module):
             v = v.unflatten(0, [self._group_count, 1, self._head_dim])
 
             # convert to interleaved ROPE format
-            q = q.unflatten(2, [2, -1]).transpose(2, 3).flatten(2, 3)
-            k = k.unflatten(2, [2, -1]).transpose(2, 3).flatten(2, 3)
+            # q = q.unflatten(2, [2, -1]).transpose(2, 3).flatten(2, 3)
+            # k = k.unflatten(2, [2, -1]).transpose(2, 3).flatten(2, 3)
 
             # pad group size
             q = _pad(q, self._group_size_padding, dim=1)
@@ -409,7 +409,15 @@ class Qwen25VlRmsNorm(Module):
 
 
 def _apply_rope(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
-    return x * cos + ttnn.alt_complex_rotate90(x) * sin
+    # interleaved format leads to lower PCC
+    # return x * cos + ttnn.alt_complex_rotate90(x) * sin
+    return x * cos + _rotate_half(x) * sin
+
+
+def _rotate_half(x: ttnn.Tensor) -> ttnn.Tensor:
+    x1 = x[..., : x.shape[-1] // 2]
+    x2 = x[..., x.shape[-1] // 2 :]
+    return ttnn.concat([ttnn.neg(x2), x1], dim=-1)
 
 
 def optimal_groups(group_count: int, group_size: int, device_count: int) -> tuple[int, int, int]:
@@ -494,7 +502,7 @@ def create_rope_tensors(
     sin = torch.cat([m[i % 3] for i, m in enumerate(sin.split(s, dim=-1))], dim=-1).unsqueeze(1)
 
     # convert to interleaved format
-    cos = cos.unflatten(-1, [2, -1]).transpose(-2, -1).flatten(-2, -1)
-    sin = sin.unflatten(-1, [2, -1]).transpose(-2, -1).flatten(-2, -1)
+    # cos = cos.unflatten(-1, [2, -1]).transpose(-2, -1).flatten(-2, -1)
+    # sin = sin.unflatten(-1, [2, -1]).transpose(-2, -1).flatten(-2, -1)
 
     return cos, sin
