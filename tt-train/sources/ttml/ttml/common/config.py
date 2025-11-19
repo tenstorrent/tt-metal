@@ -63,6 +63,7 @@ class TrainingConfig:
         self.eval_every = int(tc.get("eval_every", 200))
         self.gradient_accumulation_steps = int(tc.get("gradient_accumulation_steps", 1))
         self.model_config = tc.get("model_config", None)
+        self.use_bpe = tc.get("use_bpe", True)
 
 class TransformerConfig:
     """Configuration for transformer model hyperparameters."""
@@ -159,7 +160,7 @@ def get_configs(training_config_name : str,
 
     """Load all configurations given their filenames."""
     
-    if(not(training_config.endswith(".yaml"))):
+    if(not(training_config_name.endswith(".yaml"))):
         training_config_name += ".yaml"
     if(not(device_config_name.endswith(".yaml"))):
         device_config_name += ".yaml"
@@ -168,20 +169,47 @@ def get_configs(training_config_name : str,
     if(multihost_config_name != "" and not(multihost_config_name.endswith(".yaml"))):
         multihost_config_name += ".yaml"
 
-    training_config = load_config(os.path.join(configs_root, "training_configs", training_config_name))
-    device_config = load_config(os.path.join(configs_root, "device_configs", device_config_name))
+    # Load training config
+
+    if os.path.isabs(training_config_name):
+        training_config = load_config(training_config_name)
+    else:
+        training_config = load_config(os.path.join(configs_root, "training_configs", training_config_name))
+    
+    training_config = TrainingConfig(training_config)
+
+    # Load device config
+
+    if os.path.isabs(device_config_name):
+        device_config = load_config(device_config_name)
+    else:
+        device_config = load_config(os.path.join(configs_root, "device_configs", device_config_name))
+
+    # Load model config
 
     if training_config.model_config is not None:
-        model_config = load_config(os.path.join(configs_root, "model_configs", training_config.model_config))
+
+        if os.path.isfile(training_config.model_config):
+            model_config = load_config(training_config.model_config)
+        elif os.path.isabs(training_config.model_config):
+            model_config = load_config(training_config.model_config)
+        else:
+            raise ValueError(f"Model config path {training_config.model_config} is not valid.")
     else:
         model_config = load_config(os.path.join(configs_root, "model_configs", model_config_name))
+
+    # Load multihost config
 
     if multihost_config_name != "":
         multihost_config = load_config(os.path.join(configs_root, "multihost_configs", multihost_config_name))
     else:
         multihost_config = {}
 
-    return {"training": TrainingConfig(training_config), 
-            "device": DeviceConfig(device_config), 
-            "model": TransformerConfig(model_config), 
-            "multihost": MultiHostConfig(multihost_config)}
+    model_config = TransformerConfig(model_config)
+    device_config = DeviceConfig(device_config)
+    multihost_config = MultiHostConfig(multihost_config)
+
+    return {"training": training_config, 
+            "device": device_config, 
+            "model": model_config, 
+            "multihost": multihost_config}
