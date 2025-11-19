@@ -214,7 +214,7 @@ class RunChecks:
         """Run a check function on each device, collecting results."""
         result: list[PerDeviceCheckResult] = []
         for device in self.devices:
-            check_result = check(device)  # Pass underlying Device to check function
+            check_result = check(device)
             # Use the common result collection helper
             self._collect_results(result, check_result, PerDeviceCheckResult, device=device_desc)
         return result if len(result) > 0 else None
@@ -230,7 +230,7 @@ class RunChecks:
         def per_device_blocks_check(device_desc: DeviceDescription) -> list[PerBlockCheckResult] | None:
             """Check all block locations for a single device."""
             result: list[PerBlockCheckResult] = []
-            device = device_desc.device  # Extract Device from DeviceDescription
+            device = device_desc.device
             for block_type in block_types_to_check:
                 for location in self.block_locations[device][block_type]:
                     check_result = check(location)
