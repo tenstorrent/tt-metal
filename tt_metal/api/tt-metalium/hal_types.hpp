@@ -43,7 +43,6 @@ enum class HalL1MemAddrType : uint8_t {
     UNCORR_CW,  // Link status - Uncorrected Codewords count
     LINK_UP,    // Link status - Link up status
     FABRIC_TELEMETRY,
-    FABRIC_ROUTER_CONFIG,
     FABRIC_ROUTING_TABLE,
     FABRIC_EXIT_NODE_TABLE,
     FABRIC_ROUTING_PATH_1D,
