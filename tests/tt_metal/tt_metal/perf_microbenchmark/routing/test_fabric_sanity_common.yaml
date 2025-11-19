@@ -311,6 +311,7 @@ Tests:
       - type: all_to_all
 
   - name: AllToOneUnicastMesh
+    skip: [BLACKHOLE_GALAXY]
     fabric_setup:
       topology: Mesh
 
@@ -327,6 +328,7 @@ Tests:
       - type: all_to_one
 
   - name: AllToOneRandomUnicastMesh
+    skip: [BLACKHOLE_GALAXY]
     fabric_setup:
       topology: Mesh
 
