@@ -40,4 +40,13 @@ private:
     uint64_t hash_;
 };
 
+class BuildLock {
+public:
+    BuildLock(const std::string& out_dir);
+    ~BuildLock();
+
+private:
+    int fd_;
+};
+
 }  // namespace tt::jit_build::utils

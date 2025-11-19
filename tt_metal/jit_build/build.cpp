@@ -606,6 +606,7 @@ void JitBuildState::build(const JitBuildSettings* settings) const {
                          : this->out_path_ + settings->get_full_kernel_name() + this->target_name_ + "/";
 
     fs::create_directories(out_dir);
+    jit_build::utils::BuildLock build_lock(out_dir);
     if (compile(out_dir, settings) > 0 || need_link(out_dir)) {
         link(out_dir, settings);
         if (this->is_fw_) {
