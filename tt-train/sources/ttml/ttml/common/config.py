@@ -169,11 +169,11 @@ def load_config(path: str):
         config = yaml.safe_load(f)
     return config
 
+
 def get_training_config(
     training_config_src: str,
     configs_root: str = f"{os.environ['TT_METAL_HOME']}/tt-train/configs/",
-    ) -> TrainingConfig:
-
+) -> TrainingConfig:
     """Load training configuration given its filename."""
 
     if os.path.isabs(training_config_src):
@@ -187,11 +187,11 @@ def get_training_config(
 
     return training_config
 
+
 def get_device_config(
     device_config_src: str,
     configs_root: str = f"{os.environ['TT_METAL_HOME']}/tt-train/configs/",
-    ) -> DeviceConfig:
-
+) -> DeviceConfig:
     """Load device configuration given its filename."""
 
     if os.path.isabs(device_config_src):
@@ -205,10 +205,10 @@ def get_device_config(
 
     return device_config
 
+
 def get_model_config(
     model_config_src: str,
-    ) -> TransformerConfig:
-
+) -> TransformerConfig:
     """Load model configuration given its filename."""
 
     model_config = load_config(model_config_src)
@@ -216,11 +216,11 @@ def get_model_config(
 
     return model_config
 
+
 def get_multihost_config(
     multihost_config_src: str,
     configs_root: str = f"{os.environ['TT_METAL_HOME']}/tt-train/configs/",
-    ) -> MultiHostConfig:
-
+) -> MultiHostConfig:
     """Load multihost configuration given its filename."""
 
     if os.path.isabs(multihost_config_src):
@@ -233,4 +233,3 @@ def get_multihost_config(
     multihost_config = MultiHostConfig(multihost_config)
 
     return multihost_config
-
