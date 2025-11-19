@@ -297,7 +297,8 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt::tt_metal::NOC::RISCV_1_default,
             .compile_args = writer_cta,
-            .defines = defines});
+            .defines = defines,
+            .opt_level = tt::tt_metal::KernelBuildOptLevel::Os});
 
     // Writer kernel RT args (base): dst_base, rx_x, rx_y, sem_l1
     std::vector<uint32_t> writer_rt = {
