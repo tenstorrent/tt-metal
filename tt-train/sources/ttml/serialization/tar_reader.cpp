@@ -4,6 +4,8 @@
 
 #include "tar_reader.hpp"
 
+#include <tar.h>
+
 #include <algorithm>
 #include <cstring>
 #include <fstream>
@@ -45,6 +47,41 @@ bool TarReader::parse_header(const uint8_t* header, std::string& filename, size_
         return false;
     }
 
+    // Validate magic number (ustar format)
+    if (std::memcmp(header + MAGIC_OFFSET, TMAGIC, TMAGLEN - 1) != 0 || header[MAGIC_OFFSET + TMAGLEN - 1] != '\0') {
+        throw std::runtime_error("Invalid tar header: missing or invalid magic number");
+    }
+
+    // Validate version
+    if (std::memcmp(header + VERSION_OFFSET, TVERSION, TVERSLEN) != 0) {
+        throw std::runtime_error("Invalid tar header: invalid version");
+    }
+
+    // Validate type flag (should be regular file)
+    if (header[TYPE_FLAG_OFFSET] != REGTYPE && header[TYPE_FLAG_OFFSET] != AREGTYPE) {
+        throw std::runtime_error("Invalid tar header: unsupported file type");
+    }
+
+    // Validate checksum
+    uint32_t calculated_checksum = 0;
+    for (size_t i = 0; i < HEADER_SIZE; ++i) {
+        if (i >= CHECKSUM_OFFSET && i < CHECKSUM_OFFSET + CHECKSUM_SIZE) {
+            // Checksum field treated as spaces during calculation
+            calculated_checksum += static_cast<uint8_t>(' ');
+        } else {
+            calculated_checksum += static_cast<uint8_t>(header[i]);
+        }
+    }
+
+    // Read stored checksum
+    char checksum_str[CHECKSUM_SIZE + 1] = {0};
+    std::memcpy(checksum_str, header + CHECKSUM_OFFSET, CHECKSUM_SIZE);
+    uint32_t stored_checksum = static_cast<uint32_t>(read_octal(checksum_str, CHECKSUM_SIZE));
+
+    if (calculated_checksum != stored_checksum) {
+        throw std::runtime_error("Invalid tar header: checksum mismatch");
+    }
+
     // Read filename (null-terminated)
     filename.clear();
     for (size_t i = 0; i < FILENAME_SIZE && header[FILENAME_OFFSET + i] != 0; ++i) {
@@ -53,6 +90,10 @@ bool TarReader::parse_header(const uint8_t* header, std::string& filename, size_
     // Trim trailing spaces (tar format may pad with spaces before null)
     while (!filename.empty() && filename.back() == ' ') {
         filename.pop_back();
+    }
+
+    if (filename.empty()) {
+        throw std::runtime_error("Invalid tar header: empty filename");
     }
 
     // Read file size (octal)
@@ -134,17 +175,48 @@ void TarReader::read_from_file(std::string_view filename) {
 
     while (offset + HEADER_SIZE <= tarball.size()) {
         const uint8_t* header = tarball.data() + offset;
+
+        // Check for end-of-archive marker (two consecutive empty blocks)
+        bool is_empty_block = true;
+        for (size_t i = 0; i < HEADER_SIZE; ++i) {
+            if (header[i] != 0) {
+                is_empty_block = false;
+                break;
+            }
+        }
+
+        if (is_empty_block) {
+            // Check if next block is also empty (end-of-archive marker)
+            if (offset + HEADER_SIZE * 2 <= tarball.size()) {
+                bool next_is_empty = true;
+                for (size_t i = 0; i < HEADER_SIZE; ++i) {
+                    if (tarball[offset + HEADER_SIZE + i] != 0) {
+                        next_is_empty = false;
+                        break;
+                    }
+                }
+                if (next_is_empty) {
+                    // Two consecutive empty blocks - end of archive
+                    break;
+                }
+            } else {
+                // Single empty block at end - also end of archive
+                break;
+            }
+        }
+
         std::string file_name;
         size_t file_size;
 
         if (!parse_header(header, file_name, file_size)) {
-            // Two consecutive empty blocks indicate end of archive
+            // parse_header returned false (shouldn't happen if we checked above, but be safe)
             break;
         }
 
         offset += HEADER_SIZE;
 
-        if (offset + file_size > tarball.size()) {
+        // Validate file size is reasonable and doesn't exceed archive bounds
+        if (file_size > tarball.size() || offset + file_size > tarball.size()) {
             throw std::runtime_error("Invalid tarball: file extends beyond archive");
         }
 
@@ -155,10 +227,14 @@ void TarReader::read_from_file(std::string_view filename) {
 
         offset += file_size;
 
-        // Pad to block boundary
+        // Pad to block boundary (file data must be padded to 512-byte boundary)
         size_t remainder = file_size % BLOCK_SIZE;
         if (remainder != 0) {
-            offset += BLOCK_SIZE - remainder;
+            size_t padding = BLOCK_SIZE - remainder;
+            if (offset + padding > tarball.size()) {
+                throw std::runtime_error("Invalid tarball: padding extends beyond archive");
+            }
+            offset += padding;
         }
     }
 }
