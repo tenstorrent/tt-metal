@@ -40,10 +40,11 @@ public:
         const ttnn::Tensor& sliced_input_tensor, IOShape output_slice_start, IOShape output_slice_end) = 0;
     virtual std::string name() = 0;
 };
+
 void run_sliced_op(
     const ttnn::Tensor& input_tensor,
     ttnn::Tensor& output_tensor,
-    OpSliceAttr* op_slice_attr,
+    std::vector<OpSliceAttr*> op_slice_attr,
     Op2DSliceConfig dram_slice_config);
 
 }  // namespace ttnn::operations::op_slicing

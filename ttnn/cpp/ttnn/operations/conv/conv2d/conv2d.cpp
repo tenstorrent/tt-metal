@@ -413,9 +413,9 @@ Result conv2d_DRAM(
         conv_config,
         compute_config,
         device);
-
+    std::vector<op_slicing::OpSliceAttr*> slice_attr_vector = {&slice_attr};
     ttnn::operations::op_slicing::run_sliced_op(
-        input_tensor_on_device, dram_output_tensor, &slice_attr, dram_slice_config);
+        input_tensor_on_device, dram_output_tensor, slice_attr_vector, dram_slice_config);
 
     if (should_deallocate_act) {
         input_tensor_on_device.deallocate(true);
