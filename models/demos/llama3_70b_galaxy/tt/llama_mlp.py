@@ -53,10 +53,7 @@ class TtLlamaMLP(LightweightModule):
         if args.dummy_weights:
             cache_name = lambda _: None
         else:
-            if args.is_qwen:
-                cache_name = lambda name: weight_cache_path / (state_dict_prefix + f".{name}")
-            else:
-                cache_name = lambda name: weight_cache_path / (state_dict_prefix + f".{name}" + "prefetcher")
+            cache_name = lambda name: weight_cache_path / (state_dict_prefix + f".{name}" + "prefetcher")
 
         w1_w3_mem_config = self.model_config[
             "W1W3_RING_MEMCFG"

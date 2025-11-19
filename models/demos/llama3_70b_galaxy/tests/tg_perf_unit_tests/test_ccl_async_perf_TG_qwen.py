@@ -29,7 +29,9 @@ def test_ag_tg_qwen_perf(
 
     subdir = "qwen_ccl_perf"
     if galaxy_type == "6U":
-        command = f"pytest tests.ttnn/unit_tests/operations/ccl/test_ccl_async_TG_qwen.py::test_all_gather_6u_qwen -k {ag_type}"
+        command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py::test_all_gather_6u_llama -k {ag_type}"
+    else:
+        command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py::test_all_gather_tg_llama -k {ag_type}"
     cols = ["DEVICE KERNEL"]
     op_name = "AllGatherAsync"
     warmup_iters = warmup_iters * 32  # 5 iterations per device
@@ -83,9 +85,10 @@ def test_ar_tg_qwen_perf(
     step_name = f"all_reduce_{ar_type}"
 
     subdir = "qwen_ccl_perf"
-    command = (
-        f"pytest tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_qwen.py::test_all_reduce_6U_qwen -k {ar_type}"
-    )
+    if galaxy_type == "6U":
+        command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py::test_all_reduce_6U_llama -k {ar_type}_qwen"
+    else:
+        command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py::test_all_reduce_tg_llama -k {ar_type}_qwen"
     cols = ["DEVICE KERNEL"]
     op_name = "AllReduceAsync"
     warmup_iters = warmup_iters * 32  # 5 iterations per device
@@ -139,7 +142,10 @@ def test_rms_perf(
     step_name = f"rms_test"
 
     subdir = "qwen_ccl_perf"
-    command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_qwen_fuse_rms_TG.py::test_tg_trace_rms_fuse"
+    if galaxy_type == "6U":
+        command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_minimals.py::test_6u_trace_rms_fuse_qwen"
+    else:
+        command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_minimals.py::test_tg_trace_rms_fuse_qwen"
     cols = ["DEVICE KERNEL"]
     op_name = "RMSAllGather"
     warmup_iters = warmup_iters * 32  # 5 iterations per device
@@ -240,7 +246,7 @@ def test_ag_matmul_tg_qwen_perf(
     step_name = f"all_gather_matmul"
 
     subdir = "qwen_ccl_perf"
-    command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_qwen.py::test_qwen_all_gather_matmul"
+    command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py::test_llama_all_gather_matmul -k ff2_qwen"
     cols = ["DEVICE KERNEL"]
     op_name = "QwenAllGatherMatmulAsync"
     warmup_iters = warmup_iters * 32  # 5 iterations per device
