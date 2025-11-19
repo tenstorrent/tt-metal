@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 #include "matmul_dataflow_common.hpp"
+#include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/fused_receiver_utils.hpp"
 
 void kernel_main() {
     constexpr uint32_t M_tiles = get_compile_time_arg_val(0);
@@ -66,6 +67,14 @@ void kernel_main() {
     constexpr uint32_t cb_id_in2 = tt::CBIndex::c_4;
 #endif
 
+#ifdef FUSE_AG
+    // Receiver for ccl fusing
+    MinimalMatmulOpReceiver fused_op_receiver;
+    if constexpr (is_injector_core) {
+        fused_op_receiver = MinimalMatmulOpReceiver(true, argidx);
+    }
+#endif
+
     volatile tt_l1_ptr uint32_t* in0_valid_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_valid_semaphore_addr);
     *(in0_valid_semaphore_addr_ptr) = VALID;
@@ -103,6 +112,11 @@ void kernel_main() {
         uint32_t m_tile_end = std::min(m_tile + M_block_tiles, M_end_tile);
         uint32_t current_M_block_tiles = m_tile_end - m_tile;
         uint32_t current_block_bytes = current_M_block_tiles * K_block_tiles * in0_tile_size;
+#ifdef FUSE_AG
+        if constexpr (is_injector_core) {
+            fused_op_receiver.reset();
+        }
+#endif
 
         // When striding M block, in0 gets no reuse
         reuse_block = false;
@@ -139,6 +153,11 @@ void kernel_main() {
 
                 uint32_t in0_start_address = get_write_ptr(cb_id_in0);
                 if constexpr (is_injector_core) {
+#ifdef FUSE_AG
+                    if (is_injector_core && n_block_iter == 0) {
+                        k_block = fused_op_receiver.compute_actual_k_block_iter();
+                    }
+#endif
                     read_in0_block_sync<M_block_tiles, K_block_tiles>(
                         in0_reader,
                         in0_shape,
@@ -195,7 +214,13 @@ void kernel_main() {
 
             k_forward = !k_forward;
             // We get reuse on in0 when striding N block
-            reuse_block = true;
+#ifdef FUSE_AG
+            if (n_block_iter > 0) {
+#endif
+                reuse_block = true;
+#ifdef FUSE_AG
+            }
+#endif
 
             defer_write_m_tile = m_tile;
             defer_write_m_tile_end = m_tile_end;
@@ -215,7 +240,9 @@ void kernel_main() {
                 }
             }
         }
+#ifndef FUSE_AG
         n_forward = !n_forward;
+#endif
     }
     noc_async_write_barrier();
     noc_async_atomic_barrier();
