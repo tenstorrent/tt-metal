@@ -29,30 +29,34 @@ constexpr auto kComputeKernelPath =
 // reader runtime args
 constexpr uint32_t kParamAddrIdx = 0;
 constexpr uint32_t kGradAddrIdx = 1U;
-constexpr uint32_t kFirstMomentAddrIdx = 2U;
-constexpr uint32_t kSecondMomentAddrIdx = 3U;
-constexpr uint32_t kLrIdx = 4U;
-constexpr uint32_t kBeta1Idx = 5U;
-constexpr uint32_t kBeta2Idx = 6U;
-constexpr uint32_t kEpsilonIdx = 7U;
-constexpr uint32_t kWeightDecayIdx = 8U;
+constexpr uint32_t kExpAvgAddrIdx = 2U;
+constexpr uint32_t kExpAvgSqAddrIdx = 3U;
 // compute runtime args
 constexpr uint32_t kComputeLrIdx = 0U;
 constexpr uint32_t kComputeBeta1Idx = 1U;
 constexpr uint32_t kComputeBeta2Idx = 2U;
 constexpr uint32_t kComputeEpsilonIdx = 3U;
 constexpr uint32_t kComputeWeightDecayIdx = 4U;
+constexpr uint32_t kComputeStepSizeIdx = 5U;
+constexpr uint32_t kComputeInvSqrtBiasCorrection2Idx = 6U;
+constexpr uint32_t kComputeOneMinusBeta1Idx = 7U;
+constexpr uint32_t kComputeOneMinusBeta2Idx = 8U;
 // writer runtime args
 constexpr uint32_t kOutputAddrIdx = 0;
-constexpr uint32_t kFirstMomentAddrIdxOut = 1U;
-constexpr uint32_t kSecondMomentAddrIdxOut = 2U;
+constexpr uint32_t kExpAvgAddrIdxOut = 1U;
+constexpr uint32_t kExpAvgSqAddrIdxOut = 2U;
 
 constexpr auto kParamCbIndex = tt::CBIndex::c_0;
 constexpr auto kGradCbIndex = tt::CBIndex::c_1;
-constexpr auto kFirstMomentCbIndex = tt::CBIndex::c_2;
-constexpr auto kSecondMomentCbIndex = tt::CBIndex::c_3;
+constexpr auto kExpAvgCbIndex = tt::CBIndex::c_2;
+constexpr auto kExpAvgSqCbIndex = tt::CBIndex::c_3;
 
 constexpr auto kOutputCbIndex = tt::CBIndex::c_16;
+constexpr auto kExpAvgOutCbIndex = tt::CBIndex::c_17;
+constexpr auto kExpAvgSqOutCbIndex = tt::CBIndex::c_18;
+
+constexpr auto kMomentumCbIndex = tt::CBIndex::c_24;
+constexpr auto kVarianceCbIndex = tt::CBIndex::c_25;
 
 }  // namespace
 
@@ -78,14 +82,16 @@ void assign_per_core_runtime_args(
     const AdamWFusedKernels& kernels,
     const tt::tt_metal::Buffer* param_buffer,
     const tt::tt_metal::Buffer* grad_buffer,
-    const tt::tt_metal::Buffer* first_moment_buffer,
-    const tt::tt_metal::Buffer* second_moment_buffer,
+    const tt::tt_metal::Buffer* exp_avg_buffer,
+    const tt::tt_metal::Buffer* exp_avg_sq_buffer,
     const float lr,
     const float beta1,
     const float beta2,
+    const float beta1_pow,
+    const float beta2_pow,
     const float epsilon,
     const float weight_decay,
-    const uint32_t step,
+    [[maybe_unused]] const uint32_t step,
     const tt::tt_metal::Buffer* output_buffer,
     uint32_t num_cores,
     uint32_t num_cores_y,
@@ -93,6 +99,17 @@ void assign_per_core_runtime_args(
     uint32_t num_tiles_per_core_group_2,
     const tt::tt_metal::CoreRangeSet& core_group_1,
     const tt::tt_metal::CoreRangeSet& core_group_2) {
+    float one_minus_beta1 = 1.0f - beta1;
+    float one_minus_beta2 = 1.0f - beta2;
+
+    float bias_correction1 = 1.0f - beta1_pow;
+    float bias_correction2 = 1.0f - beta2_pow;
+    float step_size = lr / bias_correction1;
+    float inv_sqrt_bc2 = 1.0f / std::sqrt(bias_correction2);
+
+    // Update:
+    // theta_t = theta_{t-1} - step_size * (m_t / ((sqrt(v_t) * inv_sqrt_bc2) + epsilon))
+
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
@@ -106,7 +123,7 @@ void assign_per_core_runtime_args(
             TT_THROW("Core {} not in specified core ranges", core);
         }
 
-        // Reader kernel: (param_addr, grad_addr, first_moment_addr, second_moment_addr, lr, beta1, beta2, epsilon,
+        // Reader kernel: (param_addr, grad_addr, exp_avg_addr, exp_avg_sq_addr, lr, beta1, beta2, epsilon,
         // weight_decay, number_of_tiles, offset_in_tiles)
         SetRuntimeArgs(
             program,
@@ -114,13 +131,8 @@ void assign_per_core_runtime_args(
             core,
             {param_buffer->address(),
              grad_buffer->address(),
-             first_moment_buffer->address(),
-             second_moment_buffer->address(),
-             std::bit_cast<uint32_t>(lr),
-             std::bit_cast<uint32_t>(beta1),
-             std::bit_cast<uint32_t>(beta2),
-             std::bit_cast<uint32_t>(epsilon),
-             std::bit_cast<uint32_t>(weight_decay),
+             exp_avg_buffer->address(),
+             exp_avg_sq_buffer->address(),
              num_tiles_per_core,
              num_tiles_written});
 
@@ -134,7 +146,11 @@ void assign_per_core_runtime_args(
                  std::bit_cast<uint32_t>(beta1),
                  std::bit_cast<uint32_t>(beta2),
                  std::bit_cast<uint32_t>(epsilon),
-                 std::bit_cast<uint32_t>(weight_decay)});
+                 std::bit_cast<uint32_t>(weight_decay),
+                 std::bit_cast<uint32_t>(step_size),
+                 std::bit_cast<uint32_t>(inv_sqrt_bc2),
+                 std::bit_cast<uint32_t>(one_minus_beta1),
+                 std::bit_cast<uint32_t>(one_minus_beta2)});
         } else if (core_group_2.contains(core)) {
             SetRuntimeArgs(
                 program,
@@ -144,19 +160,23 @@ void assign_per_core_runtime_args(
                  std::bit_cast<uint32_t>(beta1),
                  std::bit_cast<uint32_t>(beta2),
                  std::bit_cast<uint32_t>(epsilon),
-                 std::bit_cast<uint32_t>(weight_decay)});
+                 std::bit_cast<uint32_t>(weight_decay),
+                 std::bit_cast<uint32_t>(step_size),
+                 std::bit_cast<uint32_t>(inv_sqrt_bc2),
+                 std::bit_cast<uint32_t>(one_minus_beta1),
+                 std::bit_cast<uint32_t>(one_minus_beta2)});
         } else {
             TT_THROW("Core {} not in specified core ranges", core);
         }
 
-        // Writer kernel: (param_out_addr, first_moment_addr, second_moment_addr, number_of_tiles, offset_in_tiles)
+        // Writer kernel: (param_out_addr, exp_avg_addr, exp_avg_sq_addr, number_of_tiles, offset_in_tiles)
         SetRuntimeArgs(
             program,
             kernels.writer,
             core,
             {output_buffer->address(),
-             first_moment_buffer->address(),
-             second_moment_buffer->address(),
+             exp_avg_buffer->address(),
+             exp_avg_sq_buffer->address(),
              num_tiles_per_core,
              num_tiles_written});
 
@@ -173,11 +193,13 @@ AdamWFusedProgramFactory::cached_program_t AdamWFusedProgramFactory::create(
     // -------------------------------------------------------------------------
     const auto& param = tensor_args.param;
     const auto& grad = tensor_args.grad;
-    const auto& first_moment = tensor_args.first_moment;
-    const auto& second_moment = tensor_args.second_moment;
+    const auto& exp_avg = tensor_args.exp_avg;
+    const auto& exp_avg_sq = tensor_args.exp_avg_sq;
     const auto& lr = operation_attributes.lr;
     const auto& beta1 = operation_attributes.beta1;
     const auto& beta2 = operation_attributes.beta2;
+    const auto& beta1_pow = operation_attributes.beta1_pow;
+    const auto& beta2_pow = operation_attributes.beta2_pow;
     const auto& epsilon = operation_attributes.epsilon;
     const auto& weight_decay = operation_attributes.weight_decay;
     const auto& step = operation_attributes.step;
@@ -212,7 +234,7 @@ AdamWFusedProgramFactory::cached_program_t AdamWFusedProgramFactory::create(
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_tiles_to_process);
 
-    uint32_t block_size = std::min(4U, num_tiles_per_core_group_1);
+    uint32_t block_size = std::min(2U, num_tiles_per_core_group_1);
     // -------------------------------------------------------------------------
     // 2) Create and configure circular buffers
     // -------------------------------------------------------------------------
@@ -228,14 +250,36 @@ AdamWFusedProgramFactory::cached_program_t AdamWFusedProgramFactory::create(
     [[maybe_unused]] auto cb_grad = create_circular_buffer(
         program, all_cores, kGradCbIndex, input_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
 
-    [[maybe_unused]] auto cb_first_moment = create_circular_buffer(
-        program, all_cores, kFirstMomentCbIndex, input_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
+    [[maybe_unused]] auto cb_exp_avg = create_circular_buffer(
+        program, all_cores, kExpAvgCbIndex, input_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
 
-    [[maybe_unused]] auto cb_second_moment = create_circular_buffer(
-        program, all_cores, kSecondMomentCbIndex, input_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
+    [[maybe_unused]] auto cb_exp_avg_sq = create_circular_buffer(
+        program, all_cores, kExpAvgSqCbIndex, input_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
 
     [[maybe_unused]] auto cb_output = create_circular_buffer(
         program, all_cores, kOutputCbIndex, output_data_format, bfloat16_single_tile_size_bytes, num_output_tiles);
+
+    [[maybe_unused]] auto cb_exp_avg_out = create_circular_buffer(
+        program, all_cores, kExpAvgOutCbIndex, output_data_format, bfloat16_single_tile_size_bytes, num_output_tiles);
+
+    [[maybe_unused]] auto cb_exp_avg_sq_out = create_circular_buffer(
+        program, all_cores, kExpAvgSqOutCbIndex, output_data_format, bfloat16_single_tile_size_bytes, num_output_tiles);
+
+    [[maybe_unused]] auto cb_momentum = create_circular_buffer(
+        program,
+        all_cores,
+        kMomentumCbIndex,
+        intermediate_data_format,
+        float32_single_tile_size_bytes,
+        num_output_tiles);
+
+    [[maybe_unused]] auto cb_variance = create_circular_buffer(
+        program,
+        all_cores,
+        kVarianceCbIndex,
+        intermediate_data_format,
+        float32_single_tile_size_bytes,
+        num_output_tiles);
 
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
@@ -243,8 +287,8 @@ AdamWFusedProgramFactory::cached_program_t AdamWFusedProgramFactory::create(
 
     auto* param_buffer = param.buffer();
     auto* grad_buffer = grad.buffer();
-    auto* first_moment_buffer = first_moment.buffer();
-    auto* second_moment_buffer = second_moment.buffer();
+    auto* exp_avg_buffer = exp_avg.buffer();
+    auto* exp_avg_sq_buffer = exp_avg_sq.buffer();
     auto* output_buffer = output.buffer();
 
     AdamWFusedKernels kernels{};
@@ -252,14 +296,14 @@ AdamWFusedProgramFactory::cached_program_t AdamWFusedProgramFactory::create(
     std::vector<uint32_t> reader_compile_time_args{block_size};
     tt::tt_metal::TensorAccessorArgs(param_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(grad_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(first_moment_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(second_moment_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(exp_avg_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(exp_avg_sq_buffer).append_to(reader_compile_time_args);
     kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, {}, kReaderKernelPath);
 
     std::vector<uint32_t> writer_compile_time_args{block_size};
     tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(first_moment_buffer).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(second_moment_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(exp_avg_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(exp_avg_sq_buffer).append_to(writer_compile_time_args);
     kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, {}, kWriterKernelPath);
 
     // -------------------------------------------------------------------------
@@ -288,11 +332,13 @@ AdamWFusedProgramFactory::cached_program_t AdamWFusedProgramFactory::create(
         kernels,
         param_buffer,
         grad_buffer,
-        first_moment_buffer,
-        second_moment_buffer,
+        exp_avg_buffer,
+        exp_avg_sq_buffer,
         lr,
         beta1,
         beta2,
+        beta1_pow,
+        beta2_pow,
         epsilon,
         weight_decay,
         step,
@@ -339,15 +385,16 @@ void AdamWFusedProgramFactory::override_runtime_arguments(
 
     auto* param_buffer = tensor_args.param.buffer();
     auto* grad_buffer = tensor_args.grad.buffer();
-    auto* first_moment_buffer = tensor_args.first_moment.buffer();
-    auto* second_moment_buffer = tensor_args.second_moment.buffer();
+    auto* exp_avg_buffer = tensor_args.exp_avg.buffer();
+    auto* exp_avg_sq_buffer = tensor_args.exp_avg_sq.buffer();
 
     auto lr = operation_attributes.lr;
     auto beta1 = operation_attributes.beta1;
     auto beta2 = operation_attributes.beta2;
+    auto beta1_pow = operation_attributes.beta1_pow;
+    auto beta2_pow = operation_attributes.beta2_pow;
     auto epsilon = operation_attributes.epsilon;
     auto weight_decay = operation_attributes.weight_decay;
-    auto step = operation_attributes.step;
     auto* output_buffer = tensor_return_value.buffer();
 
     // Only address arguments need updating here; tile counts remain the same as in create().
@@ -358,6 +405,17 @@ void AdamWFusedProgramFactory::override_runtime_arguments(
         core_group_2.ranges().empty() ? compute_group_1_runtime_args
                                       : GetRuntimeArgs(program, adamw_fused_compute_kernel_group_2_id);
 
+    float one_minus_beta1 = 1.0f - beta1;
+    float one_minus_beta2 = 1.0f - beta2;
+
+    float bias_correction1 = 1.0f - beta1_pow;
+    float bias_correction2 = 1.0f - beta2_pow;
+    float step_size = lr / bias_correction1;
+    float inv_sqrt_bc2 = 1.0f / std::sqrt(bias_correction2);
+
+    // Update:
+    // theta_t = theta_{t-1} - step_size * (m_t / ((sqrt(v_t) * inv_sqrt_bc2) + epsilon))
+
     for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
@@ -366,13 +424,8 @@ void AdamWFusedProgramFactory::override_runtime_arguments(
             auto& runtime_args = reader_runtime_args[core.x][core.y];
             runtime_args[kParamAddrIdx] = param_buffer->address();
             runtime_args[kGradAddrIdx] = grad_buffer->address();
-            runtime_args[kFirstMomentAddrIdx] = first_moment_buffer->address();
-            runtime_args[kSecondMomentAddrIdx] = second_moment_buffer->address();
-            runtime_args[kLrIdx] = std::bit_cast<uint32_t>(lr);
-            runtime_args[kBeta1Idx] = std::bit_cast<uint32_t>(beta1);
-            runtime_args[kBeta2Idx] = std::bit_cast<uint32_t>(beta2);
-            runtime_args[kEpsilonIdx] = std::bit_cast<uint32_t>(epsilon);
-            runtime_args[kWeightDecayIdx] = std::bit_cast<uint32_t>(weight_decay);
+            runtime_args[kExpAvgAddrIdx] = exp_avg_buffer->address();
+            runtime_args[kExpAvgSqAddrIdx] = exp_avg_sq_buffer->address();
         }
         if (core_group_1.contains(core)) {
             [[maybe_unused]] auto& runtime_args = compute_group_1_runtime_args[core.x][core.y];
@@ -381,6 +434,10 @@ void AdamWFusedProgramFactory::override_runtime_arguments(
             runtime_args[kComputeBeta2Idx] = std::bit_cast<uint32_t>(beta2);
             runtime_args[kComputeEpsilonIdx] = std::bit_cast<uint32_t>(epsilon);
             runtime_args[kComputeWeightDecayIdx] = std::bit_cast<uint32_t>(weight_decay);
+            runtime_args[kComputeStepSizeIdx] = std::bit_cast<uint32_t>(step_size);
+            runtime_args[kComputeInvSqrtBiasCorrection2Idx] = std::bit_cast<uint32_t>(inv_sqrt_bc2);
+            runtime_args[kComputeOneMinusBeta1Idx] = std::bit_cast<uint32_t>(one_minus_beta1);
+            runtime_args[kComputeOneMinusBeta2Idx] = std::bit_cast<uint32_t>(one_minus_beta2);
         } else if (core_group_2.contains(core)) {
             [[maybe_unused]] auto& runtime_args = compute_group_2_runtime_args[core.x][core.y];
             runtime_args[kComputeLrIdx] = std::bit_cast<uint32_t>(lr);
@@ -388,6 +445,10 @@ void AdamWFusedProgramFactory::override_runtime_arguments(
             runtime_args[kComputeBeta2Idx] = std::bit_cast<uint32_t>(beta2);
             runtime_args[kComputeEpsilonIdx] = std::bit_cast<uint32_t>(epsilon);
             runtime_args[kComputeWeightDecayIdx] = std::bit_cast<uint32_t>(weight_decay);
+            runtime_args[kComputeStepSizeIdx] = std::bit_cast<uint32_t>(step_size);
+            runtime_args[kComputeInvSqrtBiasCorrection2Idx] = std::bit_cast<uint32_t>(inv_sqrt_bc2);
+            runtime_args[kComputeOneMinusBeta1Idx] = std::bit_cast<uint32_t>(one_minus_beta1);
+            runtime_args[kComputeOneMinusBeta2Idx] = std::bit_cast<uint32_t>(one_minus_beta2);
         } else {
             TT_THROW("Core {} not in specified core ranges", core);
         }
@@ -395,8 +456,8 @@ void AdamWFusedProgramFactory::override_runtime_arguments(
         {
             auto& runtime_args = writer_runtime_args[core.x][core.y];
             runtime_args[kOutputAddrIdx] = output_buffer->address();
-            runtime_args[kFirstMomentAddrIdxOut] = first_moment_buffer->address();
-            runtime_args[kSecondMomentAddrIdxOut] = second_moment_buffer->address();
+            runtime_args[kExpAvgAddrIdxOut] = exp_avg_buffer->address();
+            runtime_args[kExpAvgSqAddrIdxOut] = exp_avg_sq_buffer->address();
         }
     }
 }

@@ -63,12 +63,13 @@ void AdamWFusedDeviceOperation::validate_on_program_cache_miss(
 
     const auto& param = tensor_args.param;
     const auto& grad = tensor_args.grad;
-    const auto& first_moment = tensor_args.first_moment;
-    const auto& second_moment = tensor_args.second_moment;
+    const auto& exp_avg = tensor_args.exp_avg;
+    const auto& exp_avg_sq = tensor_args.exp_avg_sq;
     check_tensor(param, "Parameter", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
     check_tensor(grad, "Gradient", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
-    check_tensor(first_moment, "First Momentum Buffer", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
-    check_tensor(second_moment, "Second Momentum Buffer", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
+    check_tensor(exp_avg, "Exponential Average Buffer", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
+    check_tensor(
+        exp_avg_sq, "Exponential Average Squared Buffer", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
 }
 
 AdamWFusedDeviceOperation::spec_return_value_t AdamWFusedDeviceOperation::compute_output_specs(
@@ -95,26 +96,32 @@ ttsl::hash::hash_t AdamWFusedDeviceOperation::compute_program_hash(
 std::tuple<operation_attributes_t, tensor_args_t> AdamWFusedDeviceOperation::invoke(
     const ttnn::Tensor& param,
     const ttnn::Tensor& grad,
-    const ttnn::Tensor& first_moment,
-    const ttnn::Tensor& second_moment,
+    const ttnn::Tensor& exp_avg,
+    const ttnn::Tensor& exp_avg_sq,
     float lr,
     float beta1,
     float beta2,
+    float beta1_pow,
+    float beta2_pow,
     float epsilon,
-    float weight_decay) {
+    float weight_decay,
+    uint32_t step) {
     return {
         operation_attributes_t{
             .lr = lr,
             .beta1 = beta1,
             .beta2 = beta2,
+            .beta1_pow = beta1_pow,
+            .beta2_pow = beta2_pow,
             .epsilon = epsilon,
             .weight_decay = weight_decay,
+            .step = step,
         },
         tensor_args_t{
             .param = param,
             .grad = grad,
-            .first_moment = first_moment,
-            .second_moment = second_moment,
+            .exp_avg = exp_avg,
+            .exp_avg_sq = exp_avg_sq,
         }};
 }
 

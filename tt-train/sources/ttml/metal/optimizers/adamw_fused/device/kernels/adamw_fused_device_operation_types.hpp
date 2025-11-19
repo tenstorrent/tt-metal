@@ -12,6 +12,8 @@ struct operation_attributes_t {
     float lr{};
     float beta1{};
     float beta2{};
+    float beta1_pow{};
+    float beta2_pow{};
     float epsilon{};
     float weight_decay{};
     uint32_t step{};
@@ -21,8 +23,8 @@ struct tensor_args_t {
     const ttnn::Tensor& param;
     const ttnn::Tensor& grad;
 
-    const ttnn::Tensor& first_moment;
-    const ttnn::Tensor& second_moment;
+    const ttnn::Tensor& exp_avg;
+    const ttnn::Tensor& exp_avg_sq;
 };
 
 using tensor_return_value_t = ttnn::Tensor;
