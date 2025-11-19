@@ -221,6 +221,12 @@ public:
      */
     MeshContainer<ChipId> get_chip_ids(MeshId mesh_id, std::optional<MeshHostRankId> host_rank = std::nullopt) const;
 
+    // In topology_mapper.hpp - add to public methods:
+    std::map<FabricNodeId, ChipId> get_global_logical_mesh_chip_id_to_physical_chip_id_mapping() const;
+
+    // Also useful - get all hostnames involved:
+    std::unordered_map<FabricNodeId, HostName> get_global_fabric_node_id_to_hostname_mapping() const;
+
 private:
     /**
      * @brief Build the mapping between fabric node IDs and physical ASIC IDs

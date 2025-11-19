@@ -1651,4 +1651,22 @@ void TopologyMapper::print_physical_adjacency_map(
     }
 }
 
+std::map<FabricNodeId, ChipId> TopologyMapper::get_global_logical_mesh_chip_id_to_physical_chip_id_mapping() const {
+    std::map<FabricNodeId, ChipId> mapping;
+    // Include ALL fabric nodes, not just local ones
+    for (const auto& [fabric_node_id, asic_id] : fabric_node_id_to_asic_id_) {
+        mapping[fabric_node_id] = get_physical_chip_id_from_asic_id(asic_id);
+    }
+    return mapping;
+}
+
+std::unordered_map<FabricNodeId, HostName> TopologyMapper::get_global_fabric_node_id_to_hostname_mapping() const {
+    std::unordered_map<FabricNodeId, HostName> mapping;
+    for (const auto& [fabric_node_id, asic_id] : fabric_node_id_to_asic_id_) {
+        mapping[fabric_node_id] = physical_system_descriptor_.get_host_name_for_asic(asic_id);
+    }
+    return mapping;
+}
+
+
 }  // namespace tt::tt_fabric
