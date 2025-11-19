@@ -51,16 +51,6 @@ public:
      */
     static ttnn::Shape pad_to_tile_shape(const ttnn::Shape& unpadded_shape);
 
-    /**
-     * Checks if a tensor matches the required format specifications
-     * @param a Input tensor to check
-     * @param shape Required shape
-     * @param target_layout Required layout
-     * @return True if tensor matches all format requirements
-     */
-    static bool check_input_tensor_format(
-        const Tensor& a, const ttnn::Shape& shape, tt::tt_metal::Layout target_layout = tt::tt_metal::Layout::TILE);
-
     // This code is a workaround for cases where we need to remove autoformat but other dependent ops
     // are not quite ready. So here we basically just put the tensor back on device.
     // Used in backward_ops.cpp
