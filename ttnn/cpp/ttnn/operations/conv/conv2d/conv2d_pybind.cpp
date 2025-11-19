@@ -62,7 +62,6 @@ void py_bind_conv2d(py::module& module) {
         Note:
 
             The :attr: `input_tensor` supports the following data type and layout:
-
             .. list-table:: input_tensor
                 :header-rows: 1
 
@@ -76,7 +75,6 @@ void py_bind_conv2d(py::module& module) {
                   - TILE
 
             The :attr: `output_tensor` supports the following data type and layout:
-
             .. list-table:: output_tensor
                 :header-rows: 1
 
@@ -90,7 +88,6 @@ void py_bind_conv2d(py::module& module) {
                   - TILE
 
             The :attr: `weights_tensor` on the host, supports the following data type and layout:
-
             .. list-table:: weights_tensor (host)
                 :header-rows: 1
 
@@ -102,7 +99,6 @@ void py_bind_conv2d(py::module& module) {
                   - ROW_MAJOR
 
             The :attr: `weights_tensor` prepared on device, supports the following data type and layout:
-
             .. list-table:: weights_tensor (prepared on device)
                 :header-rows: 1
 
@@ -116,7 +112,6 @@ void py_bind_conv2d(py::module& module) {
                   - TILE
 
             The :attr: `bias_tensor` on the host, supports the following data type and layout:
-
             .. list-table:: bias_tensor (host)
                 :header-rows: 1
 
@@ -128,7 +123,6 @@ void py_bind_conv2d(py::module& module) {
                   - ROW_MAJOR
 
             The :attr: `bias_tensor` prepared on device, supports the following data type and layout:
-
             .. list-table:: bias_tensor (prepared on device)
                 :header-rows: 1
 
