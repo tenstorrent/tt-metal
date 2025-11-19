@@ -27,47 +27,47 @@ from typing import Optional
 import torch
 import ttnn
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+use_signpost = True
 
 # ============================================================================
 # Memory Management Utilities - Comprehensive L1 Optimization
 # ============================================================================
 
 
-def ensure_l1_memory(tensor):
-    """
-    Ensure tensor is in L1 memory for optimal performance.
-    Moves tensor to L1 if not already there.
-    """
-    return ttnn.to_memory_config(tensor, ttnn.L1_MEMORY_CONFIG)
+def l1_width_sharded_memory(hidden_states):
+    """L1 width sharded memory"""
+    # Calculate shard dimensions for width sharding
+    if len(hidden_states.shape) == 4:
+        batch_size, __, seq_len, hidden_size = hidden_states.padded_shape
+    elif len(hidden_states.shape) == 3:
+        batch_size, seq_len, hidden_size = hidden_states.padded_shape
+    else:
+        raise ValueError(f"Unsupported shape: {hidden_states.shape}")
 
+    num_cores = hidden_size // ttnn.TILE_SIZE
 
-def move_to_l1_if_dram(tensor):
-    """
-    Conditionally move tensor to L1 only if it's currently in DRAM.
-    Avoids unnecessary moves if already in L1.
-    """
-    try:
-        if hasattr(tensor, "memory_config") and tensor.memory_config.buffer_type == ttnn.BufferType.DRAM:
-            return ttnn.to_memory_config(tensor, ttnn.L1_MEMORY_CONFIG)
-    except:
-        # If we can't check memory config, assume it's DRAM and move to L1
-        pass
-    return ttnn.to_memory_config(tensor, ttnn.L1_MEMORY_CONFIG)
-
-
-def l1_reshape(tensor, *args, **kwargs):
-    """Reshape with L1 memory output"""
-    return ttnn.reshape(tensor, *args, memory_config=ttnn.L1_MEMORY_CONFIG, **kwargs)
-
-
-def l1_permute(tensor, *args, **kwargs):
-    """Permute with L1 memory output"""
-    return ttnn.permute(tensor, *args, memory_config=ttnn.L1_MEMORY_CONFIG, **kwargs)
-
-
-def l1_concat(tensors, *args, **kwargs):
-    """Concat with L1 memory output"""
-    return ttnn.concat(tensors, *args, memory_config=ttnn.L1_MEMORY_CONFIG, **kwargs)
+    if num_cores % 8 == 0:
+        core_grid = ttnn.CoreGrid(y=num_cores // 8, x=8)
+    else:
+        core_grid = ttnn.CoreGrid(y=1, x=num_cores)
+    num_cores = core_grid.x * core_grid.y
+    shard_width = (hidden_size + num_cores - 1) // num_cores  # Divide width across cores
+    # Create width sharded memory config for tensor
+    width_sharded_mem_config = ttnn.create_sharded_memory_config(
+        shape=[batch_size * seq_len, shard_width],  # Height is batch*seq_len, width is sharded
+        core_grid=core_grid,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    # Apply width sharding to hidden_states
+    return ttnn.to_memory_config(hidden_states, width_sharded_mem_config)
 
 
 # ============================================================================
@@ -81,29 +81,11 @@ def get_high_perf_compute_config():
     Uses HiFi4 for speed while maintaining L1 memory optimization.
     """
     return ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_fidelity=ttnn.MathFidelity.HiFi2,
         math_approx_mode=False,
-        fp32_dest_acc_en=False,
+        fp32_dest_acc_en=True,
         packer_l1_acc=True,  # Keep L1 accumulation for memory efficiency
     )
-
-
-def l1_matmul(a, b, *args, **kwargs):
-    """Matmul with L1 memory config and high-performance compute kernel"""
-    if "compute_kernel_config" not in kwargs:
-        kwargs["compute_kernel_config"] = get_high_perf_compute_config()
-    if "memory_config" not in kwargs:
-        kwargs["memory_config"] = ttnn.L1_MEMORY_CONFIG
-    return ttnn.matmul(a, b, *args, **kwargs)
-
-
-def l1_linear(input_tensor, weight, bias=None, *args, **kwargs):
-    """Linear layer with L1 memory config and high-performance compute kernel"""
-    if "compute_kernel_config" not in kwargs:
-        kwargs["compute_kernel_config"] = get_high_perf_compute_config()
-    if "memory_config" not in kwargs:
-        kwargs["memory_config"] = ttnn.L1_MEMORY_CONFIG
-    return ttnn.linear(input_tensor, weight, bias=bias, *args, **kwargs)
 
 
 @dataclass
@@ -148,13 +130,29 @@ class TTNNSpeechDecoderPrenet:
 
     def _consistent_dropout(self, inputs_embeds, p):
         """
-        TTNN consistent dropout implementation: temporarily disabled for PCC debugging.
+        TTNN consistent dropout implementation.
 
         HF applies dropout during inference (unusual but by design per paper §2.2).
-        For now, disable dropout to isolate numerical precision issues.
         """
-        # Temporarily disable dropout for PCC debugging
-        return inputs_embeds
+        # Create probability tensor from first element in batch
+        prob_tensor = ttnn.full(
+            inputs_embeds[0].shape,
+            p,
+            dtype=ttnn.bfloat16,
+            device=inputs_embeds.device(),
+            layout=ttnn.TILE_LAYOUT,
+        )
+
+        # Generate Bernoulli mask (0s and 1s)
+        mask = ttnn.bernoulli(prob_tensor, 0, dtype=ttnn.bfloat16)
+
+        # Repeat mask across batch dimension
+        batch_size = inputs_embeds.shape[0]
+        all_masks = ttnn.repeat(ttnn.unsqueeze(mask, 0), [batch_size, 1, 1])
+
+        # Apply mask and scale
+        scale = 1.0 / (1.0 - p)
+        return ttnn.multiply(ttnn.where(all_masks == 1, inputs_embeds, 0), scale)
 
     def __call__(
         self,
@@ -172,9 +170,9 @@ class TTNNSpeechDecoderPrenet:
             hidden_states: [batch, seq_len, hidden_size]
         """
         # PHASE 1: Ensure inputs are in L1
-        hidden_states = ensure_l1_memory(decoder_input_values)
+        hidden_states = ttnn.to_memory_config(decoder_input_values, ttnn.L1_MEMORY_CONFIG)
         if speaker_embeddings is not None:
-            speaker_embeddings = ensure_l1_memory(speaker_embeddings)
+            speaker_embeddings = ttnn.to_memory_config(speaker_embeddings, ttnn.L1_MEMORY_CONFIG)
 
         # PHASE 2: Prenet layers with ReLU and consistent dropout
         for i in range(self.config.speech_decoder_prenet_layers):
@@ -184,14 +182,11 @@ class TTNNSpeechDecoderPrenet:
                 bias=self.parameters["prenet_layers"][i]["bias"],
                 memory_config=self.L1_MEMCFG,
             )
-            hidden_states = ensure_l1_memory(hidden_states)
 
             hidden_states = ttnn.relu(hidden_states)
-            hidden_states = ensure_l1_memory(hidden_states)
 
             # Apply HF's consistent dropout (L1 output)
             hidden_states = self._consistent_dropout(hidden_states, self.config.speech_decoder_prenet_dropout)
-            hidden_states = ensure_l1_memory(hidden_states)
 
         # PHASE 3: Final projection (L1 output)
         hidden_states = ttnn.linear(
@@ -200,47 +195,36 @@ class TTNNSpeechDecoderPrenet:
             bias=self.parameters["final_layer"]["bias"],
             memory_config=self.L1_MEMCFG,
         )
-        hidden_states = ensure_l1_memory(hidden_states)
 
         # PHASE 4: Add scaled positional encoding (ensure slice uses L1)
         seq_len = hidden_states.shape[1]
         pe_slice = self.parameters["positional_encoding"][:, :seq_len, :]
-        pe_slice = ensure_l1_memory(pe_slice)  # Ensure sliced positional encoding is in L1
+        pe_slice = ttnn.to_memory_config(pe_slice, ttnn.L1_MEMORY_CONFIG)  # Ensure sliced positional encoding is in L1
 
         # Scale positional encoding (L1 output)
         pe_scaled = ttnn.multiply(
             pe_slice, self.parameters["encode_positions_alpha"], memory_config=ttnn.L1_MEMORY_CONFIG
         )
-        pe_scaled = ensure_l1_memory(pe_scaled)
 
         # Add positional encoding (L1 output)
         hidden_states = ttnn.add(hidden_states, pe_scaled, memory_config=ttnn.L1_MEMORY_CONFIG)
-        hidden_states = ensure_l1_memory(hidden_states)
-
-        # Apply dropout after positional encoding (L1 output)
-        hidden_states = self._consistent_dropout(hidden_states, self.config.dropout)
-        hidden_states = ensure_l1_memory(hidden_states)
 
         # PHASE 5: Add speaker embeddings if provided
         if speaker_embeddings is not None:
             # L2 normalization of speaker embeddings (L1 outputs)
             speaker_squared = ttnn.multiply(speaker_embeddings, speaker_embeddings, memory_config=ttnn.L1_MEMORY_CONFIG)
-            speaker_squared = ensure_l1_memory(speaker_squared)
 
             speaker_sum = ttnn.sum(speaker_squared, dim=-1, keepdim=True, memory_config=ttnn.L1_MEMORY_CONFIG)
-            speaker_sum = ensure_l1_memory(speaker_sum)
 
             speaker_norm = ttnn.sqrt(speaker_sum)
-            speaker_norm = ensure_l1_memory(speaker_norm)
 
             speaker_embeddings_normalized = ttnn.divide(
                 speaker_embeddings, speaker_norm, memory_config=ttnn.L1_MEMORY_CONFIG
             )
-            speaker_embeddings_normalized = ensure_l1_memory(speaker_embeddings_normalized)
 
             # Expand to match sequence length (L1 output)
             batch_size = hidden_states.shape[0]
-            speaker_embeddings_expanded = l1_reshape(
+            speaker_embeddings_expanded = ttnn.reshape(
                 speaker_embeddings_normalized,
                 [batch_size, 1, self.config.speaker_embedding_dim],
             )
@@ -251,12 +235,12 @@ class TTNNSpeechDecoderPrenet:
                 [1, seq_len, 1],
                 memory_config=ttnn.L1_MEMORY_CONFIG,
             )
-            speaker_embeddings_expanded = ensure_l1_memory(speaker_embeddings_expanded)
 
             # Concatenate with hidden states (L1 output)
-            hidden_states = l1_concat(
+            hidden_states = ttnn.concat(
                 [hidden_states, speaker_embeddings_expanded],
                 dim=-1,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
             )
 
             # Project back to hidden size (L1 output)
@@ -266,14 +250,12 @@ class TTNNSpeechDecoderPrenet:
                 bias=self.parameters["speaker_embeds_layer"]["bias"],
                 memory_config=self.L1_MEMCFG,
             )
-            hidden_states = ensure_l1_memory(hidden_states)
 
             # ReLU after speaker projection (L1 output)
-            hidden_states = ttnn.relu(hidden_states)
-            hidden_states = ensure_l1_memory(hidden_states)
+            hidden_states = ttnn.relu(hidden_states, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # PHASE 6: Final output must be in L1
-        return ensure_l1_memory(hidden_states)
+        return hidden_states
 
 
 class TTNNSpeechT5FeedForward:
@@ -294,28 +276,33 @@ class TTNNSpeechT5FeedForward:
         Feed-forward network with comprehensive L1 memory management.
         """
         # PHASE 1: Ensure input is in L1
-        hidden_states = ensure_l1_memory(hidden_states)
+        # hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
 
         # Intermediate dense (L1 output)
-        hidden_states = l1_linear(
+        hidden_states = ttnn.linear(
             hidden_states,
             self.parameters["intermediate_dense"]["weight"],
             bias=self.parameters["intermediate_dense"]["bias"],
+            # memory_config=ttnn.L1_MEMORY_CONFIG,
+            compute_kernel_config=get_high_perf_compute_config(),
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
         )
 
         # GELU activation (L1 output)
-        hidden_states = ttnn.gelu(hidden_states)
-        hidden_states = ensure_l1_memory(hidden_states)
+        hidden_states = ttnn.gelu(hidden_states)  # , memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # Output dense (high-performance compute kernel)
-        hidden_states = l1_linear(
+        hidden_states = ttnn.linear(
             hidden_states,
             self.parameters["output_dense"]["weight"],
             bias=self.parameters["output_dense"]["bias"],
+            # memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            compute_kernel_config=get_high_perf_compute_config(),
         )
 
         # PHASE 2: Final output must be in L1
-        return ensure_l1_memory(hidden_states)
+        return hidden_states
 
 
 class TTNNSpeechT5Attention:
@@ -339,51 +326,49 @@ class TTNNSpeechT5Attention:
         self.scaling = 1.0 / math.sqrt(self.head_dim)
         self.L1_MEMCFG = ttnn.L1_MEMORY_CONFIG
 
-        # Initialize KV cache for self-attention (not cross-attention)
-        self.layer_past = None
-
-    def reset_cache(self):
-        """Reset the KV cache for a new sequence."""
-        self.layer_past = None
-
     def _reshape_for_multihead(self, tensor: ttnn.Tensor, batch: int, seq_len: int) -> ttnn.Tensor:
         """
         Reshape [B, S, H] -> [B*NH, S, HD] with L1 memory management.
         where NH = num_heads, HD = head_dim
         """
         # PHASE 1: Ensure input is in L1
-        tensor = ensure_l1_memory(tensor)
+        tensor = ttnn.to_memory_config(tensor, ttnn.L1_MEMORY_CONFIG)
 
         # [B, S, H] -> [B, S, NH, HD] (L1)
-        tensor = l1_reshape(tensor, [batch, seq_len, self.num_heads, self.head_dim])
+        tensor = ttnn.reshape(
+            tensor, [batch, seq_len, self.num_heads, self.head_dim], memory_config=ttnn.L1_MEMORY_CONFIG
+        )
 
         # [B, S, NH, HD] -> [B, NH, S, HD] (L1)
-        tensor = l1_permute(tensor, [0, 2, 1, 3])
+        tensor = ttnn.permute(tensor, [0, 2, 1, 3], memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # [B, NH, S, HD] -> [B*NH, S, HD] (L1)
-        tensor = l1_reshape(tensor, [batch * self.num_heads, seq_len, self.head_dim])
+        tensor = ttnn.reshape(
+            tensor, [batch * self.num_heads, seq_len, self.head_dim], memory_config=ttnn.L1_MEMORY_CONFIG
+        )
 
         # PHASE 2: Output must be in L1
-        return ensure_l1_memory(tensor)
+        return tensor
 
     def _reshape_from_multihead(self, tensor: ttnn.Tensor, batch: int, seq_len: int) -> ttnn.Tensor:
         """
         Reshape [B*NH, S, HD] -> [B, S, H] with L1 memory management.
         """
         # PHASE 1: Ensure input is in L1
-        tensor = ensure_l1_memory(tensor)
+        tensor = ttnn.to_memory_config(tensor, ttnn.L1_MEMORY_CONFIG)
 
         # [B*NH, S, HD] -> [B, NH, S, HD] (L1)
-        tensor = l1_reshape(tensor, [batch, self.num_heads, seq_len, self.head_dim])
+        tensor = ttnn.reshape(
+            tensor, [batch, self.num_heads, seq_len, self.head_dim], memory_config=ttnn.L1_MEMORY_CONFIG
+        )
 
         # [B, NH, S, HD] -> [B, S, NH, HD] (L1)
-        tensor = l1_permute(tensor, [0, 2, 1, 3])
+        tensor = ttnn.permute(tensor, [0, 2, 1, 3], memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # [B, S, NH, HD] -> [B, S, H] (L1)
-        tensor = l1_reshape(tensor, [batch, seq_len, self.hidden_size])
+        tensor = ttnn.reshape(tensor, [batch, seq_len, self.hidden_size], memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        # PHASE 2: Output must be in L1
-        return ensure_l1_memory(tensor)
+        return tensor
 
     def __call__(
         self,
@@ -405,150 +390,237 @@ class TTNNSpeechT5Attention:
         batch, seq_len, _ = hidden_states.shape
 
         # PHASE 1: Ensure inputs are in L1
-        hidden_states = ensure_l1_memory(hidden_states)
+        """
+        hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
         if key_value_states is not None:
-            key_value_states = ensure_l1_memory(key_value_states)
+            key_value_states = ttnn.to_memory_config(key_value_states, ttnn.L1_MEMORY_CONFIG)
         if attention_mask is not None:
-            attention_mask = ensure_l1_memory(attention_mask)
+            attention_mask = ttnn.to_memory_config(attention_mask, ttnn.L1_MEMORY_CONFIG)
+        """
 
         # Determine if this is cross-attention
         is_cross_attention = key_value_states is not None
 
-        # PHASE 2: Q always from hidden_states (high-performance compute kernel)
-        query = l1_linear(
-            hidden_states,
-            self.parameters["q_proj"]["weight"],
-            bias=self.parameters["q_proj"]["bias"],
-        )
+        if not is_cross_attention:
+            qkv_states = ttnn.linear(
+                hidden_states,
+                self.parameters["qkv_proj"]["weight"],
+                bias=self.parameters["qkv_proj"]["bias"],
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                compute_kernel_config=get_high_perf_compute_config(),
+            )
+            qkv_states = ttnn.unsqueeze(qkv_states, dim=1)
+
+            # (
+            #     query_states,
+            #     key_states,
+            #     value_states,
+            # ) = ttnn.transformer.split_query_key_value_and_split_heads(
+            #     qkv_states,
+            #     memory_config=ttnn.L1_MEMORY_CONFIG,
+            #     num_heads=self.num_heads,
+            # )
+
+            (
+                query,
+                key,
+                value,
+            ) = ttnn.experimental.nlp_create_qkv_heads(
+                qkv_states,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                num_heads=self.num_heads,
+                num_kv_heads=self.num_heads,
+                transpose_k_heads=True,
+            )
+            ttnn.deallocate(qkv_states)
+            """
+            query = ttnn.linear(
+                hidden_states,
+                self.parameters["q_proj"]["weight"],
+                bias=self.parameters["q_proj"]["bias"],
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                compute_kernel_config=get_high_perf_compute_config(),
+            )
+
+            # Apply scaling (L1 output)
+            query = ttnn.multiply(query, self.scaling, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+            key = ttnn.linear(
+                hidden_states,
+                self.parameters["k_proj"]["weight"],
+                bias=self.parameters["k_proj"]["bias"],
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                compute_kernel_config=get_high_perf_compute_config(),
+            )
+
+            value = ttnn.linear(
+                hidden_states,
+                self.parameters["v_proj"]["weight"],
+                bias=self.parameters["v_proj"]["bias"],
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                compute_kernel_config=get_high_perf_compute_config(),
+            )
+
+            kv_seq_len = seq_len
+
+
+            query = ttnn.unsqueeze(query, dim=1)
+            query = ttnn.experimental.nlp_create_qkv_heads(
+                query,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                num_heads=self.num_heads,
+                num_kv_heads=0,
+            )[0]
+
+            key = ttnn.unsqueeze(key, dim=1)
+            key = ttnn.experimental.nlp_create_qkv_heads(
+                key,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                num_heads=self.num_heads,
+                num_kv_heads=0,
+            )[0]
+            key = ttnn.permute(key, [0, 1, 3, 2])
+
+            value = ttnn.unsqueeze(value, dim=1)
+            value = ttnn.experimental.nlp_create_qkv_heads(
+                value,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                num_heads=self.num_heads,
+                num_kv_heads=0,
+            )[0]
+            """
+
+        else:
+            # PHASE 2: Q always from hidden_states (high-performance compute kernel)
+            query = ttnn.linear(
+                hidden_states,
+                self.parameters["q_proj"]["weight"],
+                bias=self.parameters["q_proj"]["bias"],
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                compute_kernel_config=get_high_perf_compute_config(),
+            )
+
+            # Cross-attention: K, V from encoder
+
+            kv_states = ttnn.linear(
+                key_value_states,
+                self.parameters["kv_proj"]["weight"],
+                bias=self.parameters["kv_proj"]["bias"],
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                compute_kernel_config=get_high_perf_compute_config(),
+            )
+            kv_states = ttnn.unsqueeze(kv_states, dim=1)
+            kv_states_hidden_size = kv_states.shape[3]
+            key, value = ttnn.split(kv_states, [kv_states_hidden_size // 2, kv_states_hidden_size // 2], dim=3)
+            # ttnn.deallocate(kv_states)
+            """
+            key = ttnn.linear(
+                key_value_states,
+                self.parameters["k_proj"]["weight"],
+                #bias=self.parameters["k_proj"]["bias"],
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                compute_kernel_config=get_high_perf_compute_config(),
+            )
+            key = ttnn.unsqueeze(key, dim=1)
+
+            value = ttnn.linear(
+                key_value_states,
+                self.parameters["v_proj"]["weight"],
+                #bias=self.parameters["v_proj"]["bias"],
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                compute_kernel_config=get_high_perf_compute_config(),
+            )
+            value = ttnn.unsqueeze(value, dim=1)
+
+
+            print("kv_states", kv_states[0])
+            print("-----------")
+            print("--------------------------------")
+            print("keys_states", key_states[0][0][0])
+            print("-----------")
+            print("key", key[0][0][0])
+            print("--------------------------------")
+            print("value_states", value_states[0][0][0])
+            print("-----------")
+            print("value", value[0][0][0])
+            print("--------------------------------")
+            """
+
+            query = ttnn.unsqueeze(query, dim=1)
+            query = ttnn.experimental.nlp_create_qkv_heads(
+                query,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                num_heads=self.num_heads,
+                num_kv_heads=0,
+            )[0]
+
+            key = ttnn.experimental.nlp_create_qkv_heads(
+                key,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                num_heads=self.num_heads,
+                num_kv_heads=0,
+            )[0]
+
+            value = ttnn.experimental.nlp_create_qkv_heads(
+                value,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                num_heads=self.num_heads,
+                num_kv_heads=0,
+            )[0]
+            key = ttnn.permute(key, [0, 1, 3, 2])
 
         # Apply scaling (L1 output)
         query = ttnn.multiply(query, self.scaling, memory_config=ttnn.L1_MEMORY_CONFIG)
-        query = ensure_l1_memory(query)
 
-        # PHASE 3: K, V computation with KV caching for self-attention
-        if is_cross_attention:
-            # Cross-attention: K, V from encoder (no caching)
-            key = l1_linear(
-                key_value_states,
-                self.parameters["k_proj"]["weight"],
-                bias=self.parameters["k_proj"]["bias"],
-            )
+        # PHASE 5: Compute attention scores: Q @ K^T (L1 outputs)
+        # key_t = ttnn.permute(key, [0, 2, 1])
 
-            value = l1_linear(
-                key_value_states,
-                self.parameters["v_proj"]["weight"],
-                bias=self.parameters["v_proj"]["bias"],
-            )
-
-            kv_seq_len = key_value_states.shape[1]
-        else:
-            # Self-attention with KV caching
-            if self.layer_past is None:
-                # First step: compute K, V for entire current sequence
-                key = l1_linear(
-                    hidden_states,
-                    self.parameters["k_proj"]["weight"],
-                    bias=self.parameters["k_proj"]["bias"],
-                )
-
-                value = l1_linear(
-                    hidden_states,
-                    self.parameters["v_proj"]["weight"],
-                    bias=self.parameters["v_proj"]["bias"],
-                )
-
-                # Initialize cache with current KV
-                self.layer_past = (key, value)
-            else:
-                # Subsequent steps: compute K, V for new tokens only and concatenate
-                # Get the last token from hidden_states (new token)
-                new_hidden_states = ttnn.slice(
-                    hidden_states,
-                    [0, seq_len - 1, 0],
-                    [batch, seq_len, self.hidden_size],
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
-                )
-
-                new_key = l1_linear(
-                    new_hidden_states,
-                    self.parameters["k_proj"]["weight"],
-                    bias=self.parameters["k_proj"]["bias"],
-                )
-
-                new_value = l1_linear(
-                    new_hidden_states,
-                    self.parameters["v_proj"]["weight"],
-                    bias=self.parameters["v_proj"]["bias"],
-                )
-
-                # Concatenate with cached KV
-                cached_key, cached_value = self.layer_past
-                key = l1_concat([cached_key, new_key], dim=1)
-                value = l1_concat([cached_value, new_value], dim=1)
-
-                # Update cache
-                self.layer_past = (key, value)
-
-            kv_seq_len = key.shape[1]
-
-        # PHASE 4: Reshape for multi-head attention (L1 outputs)
-        query = self._reshape_for_multihead(query, batch, seq_len)
-        key = self._reshape_for_multihead(key, batch, kv_seq_len)
-        value = self._reshape_for_multihead(value, batch, kv_seq_len)
-
-        # PHASE 5: Use optimized scaled dot product attention
-        # Reshape for attention: [B*NH, S, HD] -> [B, NH, S, HD]
-        query_reshaped = l1_reshape(query, [batch, self.num_heads, seq_len, self.head_dim])
-        key_reshaped = l1_reshape(key, [batch, self.num_heads, kv_seq_len, self.head_dim])
-        value_reshaped = l1_reshape(value, [batch, self.num_heads, kv_seq_len, self.head_dim])
-
-        # Determine if causal attention is needed (self-attention only)
-        is_causal = attention_mask is not None
-
-        # Convert to DRAM for SDPA (required)
-        query_dram = ttnn.to_memory_config(query_reshaped, ttnn.DRAM_MEMORY_CONFIG)
-        key_dram = ttnn.to_memory_config(key_reshaped, ttnn.DRAM_MEMORY_CONFIG)
-        value_dram = ttnn.to_memory_config(value_reshaped, ttnn.DRAM_MEMORY_CONFIG)
-
-        # For causal attention, SDPA handles the masking internally, so don't provide attn_mask
-        attn_mask_param = (
-            None
-            if is_causal
-            else (
-                ttnn.to_memory_config(attention_mask, ttnn.DRAM_MEMORY_CONFIG) if attention_mask is not None else None
-            )
+        attn_weights = ttnn.matmul(
+            query, key, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=get_high_perf_compute_config()
         )
 
-        # Use optimized scaled dot product attention
-        attn_output = ttnn.transformer.scaled_dot_product_attention(
-            query_dram,
-            key_dram,
-            value_dram,
-            is_causal=is_causal,
-            attn_mask=attn_mask_param,
-            scale=self.scaling,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        # PHASE 6: Apply attention mask if provided (L1 outputs)
+        if attention_mask is not None:
+            """
+            # Expand mask for all heads: [B, 1, S, KS] -> [B*NH, S, KS]
+            # attention_mask already has shape [B, 1, S, KS]
+            mask_expanded = ttnn.reshape(attention_mask, [batch, 1, seq_len, kv_seq_len])
+            mask_expanded = ttnn.repeat(mask_expanded, [1, self.num_heads, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
+            mask_expanded = ttnn.reshape(mask_expanded, [batch * self.num_heads, seq_len, kv_seq_len])
+
+            # Add mask to attention weights (L1 output)
+            attn_weights = ttnn.add(attn_weights, mask_expanded, memory_config=ttnn.L1_MEMORY_CONFIG)
+            """
+            attn_weights = ttnn.add(attn_weights, attention_mask, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+        # PHASE 7: Softmax (L1 output)
+        attn_weights = ttnn.softmax(attn_weights, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+        # PHASE 8: Apply attention to values (L1 output)
+        attn_output = ttnn.matmul(
+            attn_weights,
+            value,
+            # memory_config=ttnn.L1_MEMORY_CONFIG,
+            compute_kernel_config=get_high_perf_compute_config(),
         )
-
-        # Convert back to L1 for consistency with rest of pipeline
-        attn_output = ensure_l1_memory(attn_output)
-
-        # Reshape back to [B*NH, S, HD] for output projection
-        attn_output = l1_reshape(attn_output, [batch * self.num_heads, seq_len, self.head_dim])
 
         # PHASE 9: Reshape back to [B, S, H] (L1 output)
-        attn_output = self._reshape_from_multihead(attn_output, batch, seq_len)
+        # attn_output = self._reshape_from_multihead(attn_output, batch, seq_len)
+        attn_output = ttnn.transformer.concatenate_heads(
+            attn_output,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
 
         # PHASE 10: Output projection (L1 output)
-        output = l1_linear(
+        output = ttnn.linear(
             attn_output,
             self.parameters["out_proj"]["weight"],
             bias=self.parameters["out_proj"]["bias"],
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            compute_kernel_config=get_high_perf_compute_config(),
         )
-        output = ensure_l1_memory(output)
-
         # PHASE 11: Final output must be in L1
-        return ensure_l1_memory(output)
+        return output
 
 
 class TTNNSpeechT5DecoderLayer:
@@ -562,10 +634,10 @@ class TTNNSpeechT5DecoderLayer:
     3. Feed-Forward + Residual + LayerNorm
     """
 
-    def __init__(self, device, parameters, config: TTNNDecoderConfig):
+    def __init__(self, device, parameters, config: TTNNDecoderConfig, max_sequence_length: int = 20):
         self.device = device
         self.config = config
-
+        self.max_sequence_length = max_sequence_length
         # Self-attention
         self.self_attn = TTNNSpeechT5Attention(
             device,
@@ -592,111 +664,114 @@ class TTNNSpeechT5DecoderLayer:
         self.encoder_attn_layer_norm_params = parameters["encoder_attn_layer_norm"]
         self.final_layer_norm_params = parameters["final_layer_norm"]
 
-    def reset_cache(self):
-        """Reset the KV cache for self-attention in this layer."""
-        self.self_attn.reset_cache()
+        per_core_M = math.ceil(self.max_sequence_length / ttnn.TILE_SIZE)
+        core_grid_x = 8
+        core_grid_y = config.hidden_size // (core_grid_x * ttnn.TILE_SIZE)
+        core_grid = ttnn.CoreGrid(y=core_grid_y, x=core_grid_x)
+        self.program_configs = {
+            "layernorm_1_program_config": ttnn.LayerNormShardedMultiCoreProgramConfig(
+                compute_with_storage_grid_size=(core_grid.x, core_grid.y),
+                subblock_w=1,
+                block_h=per_core_M,
+                block_w=1,
+                inplace=False,
+            ),
+        }
 
     def __call__(
         self,
         hidden_states: ttnn.Tensor,
-        encoder_hidden_states: ttnn.Tensor = None,
+        encoder_hidden_states: ttnn.Tensor,
         attention_mask: Optional[ttnn.Tensor] = None,
-        cross_attn_cache: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         """
         Decoder layer with comprehensive L1 memory management.
 
         Args:
             hidden_states: [batch, seq_len, hidden_size]
-            encoder_hidden_states: [batch, enc_seq_len, hidden_size] - for cross-attn (optional if cache provided)
+            encoder_hidden_states: [batch, enc_seq_len, hidden_size]
             attention_mask: [batch, 1, seq_len, seq_len] - causal mask for self-attn
-            cross_attn_cache: [batch, seq_len, hidden_size] - pre-computed cross-attention output
 
         Returns:
             hidden_states: [batch, seq_len, hidden_size]
         """
+        signpost(header="Decoder Layer Start")
+        ttnn.ReadDeviceProfiler(self.device)
+
         # PHASE 1: Ensure all inputs are in L1
-        hidden_states = ensure_l1_memory(hidden_states)
-        encoder_hidden_states = ensure_l1_memory(encoder_hidden_states)
+        # hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
+        # encoder_hidden_states = ttnn.to_memory_config(encoder_hidden_states, ttnn.L1_MEMORY_CONFIG)
+
+        hidden_states = l1_width_sharded_memory(hidden_states)
+        encoder_hidden_states = l1_width_sharded_memory(encoder_hidden_states)
+
         if attention_mask is not None:
-            attention_mask = ensure_l1_memory(attention_mask)
+            attention_mask = ttnn.to_memory_config(attention_mask, ttnn.L1_MEMORY_CONFIG)
 
         # PHASE 2: Self-attention sub-layer (POST-NORM, with causal masking)
         residual = hidden_states
-        residual = ensure_l1_memory(residual)
 
         hidden_states = self.self_attn(
             hidden_states,
             attention_mask=attention_mask,
             key_value_states=None,  # Self-attention
         )
-        hidden_states = ensure_l1_memory(hidden_states)
 
         # Dropout skipped for inference
-        hidden_states = ttnn.add(residual, hidden_states, memory_config=ttnn.L1_MEMORY_CONFIG)
-        hidden_states = ensure_l1_memory(hidden_states)
+        hidden_states = ttnn.add(residual, hidden_states)  # , memory_config=ttnn.L1_MEMORY_CONFIG)
 
         hidden_states = ttnn.layer_norm(
             hidden_states,
             weight=self.self_attn_layer_norm_params["weight"],
             bias=self.self_attn_layer_norm_params["bias"],
             epsilon=self.config.layer_norm_eps,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            # memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            program_config=self.program_configs["layernorm_1_program_config"],
         )
-        hidden_states = ensure_l1_memory(hidden_states)
 
         # PHASE 3: Cross-attention sub-layer (POST-NORM)
-        if cross_attn_cache is not None:
-            # Use pre-computed cross-attention cache
-            hidden_states = cross_attn_cache
-            hidden_states = ensure_l1_memory(hidden_states)
-        else:
-            # Compute cross-attention normally
-            residual = hidden_states
-            residual = ensure_l1_memory(residual)
+        residual = hidden_states
 
-            hidden_states = self.encoder_attn(
-                hidden_states,
-                attention_mask=None,  # No causal mask for cross-attention
-                key_value_states=encoder_hidden_states,  # Cross-attention
-            )
-            hidden_states = ensure_l1_memory(hidden_states)
+        hidden_states = self.encoder_attn(
+            hidden_states,
+            attention_mask=None,  # No causal mask for cross-attention
+            key_value_states=encoder_hidden_states,  # Cross-attention
+        )
 
-            # Dropout skipped for inference
-            hidden_states = ttnn.add(residual, hidden_states, memory_config=ttnn.L1_MEMORY_CONFIG)
-            hidden_states = ensure_l1_memory(hidden_states)
+        # Dropout skipped for inference
+        hidden_states = ttnn.add(residual, hidden_states)  # , memory_config=ttnn.L1_MEMORY_CONFIG)
 
-            hidden_states = ttnn.layer_norm(
-                hidden_states,
-                weight=self.encoder_attn_layer_norm_params["weight"],
-                bias=self.encoder_attn_layer_norm_params["bias"],
-                epsilon=self.config.layer_norm_eps,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-            )
-            hidden_states = ensure_l1_memory(hidden_states)
+        hidden_states = ttnn.layer_norm(
+            hidden_states,
+            weight=self.encoder_attn_layer_norm_params["weight"],
+            bias=self.encoder_attn_layer_norm_params["bias"],
+            epsilon=self.config.layer_norm_eps,
+            # memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            program_config=self.program_configs["layernorm_1_program_config"],
+        )
 
         # PHASE 4: Feed-forward sub-layer (POST-NORM)
         residual = hidden_states
-        residual = ensure_l1_memory(residual)
 
         hidden_states = self.feed_forward(hidden_states)
-        hidden_states = ensure_l1_memory(hidden_states)
 
         # Dropout skipped for inference
-        hidden_states = ttnn.add(residual, hidden_states, memory_config=ttnn.L1_MEMORY_CONFIG)
-        hidden_states = ensure_l1_memory(hidden_states)
+        hidden_states = ttnn.add(residual, hidden_states)  # , memory_config=ttnn.L1_MEMORY_CONFIG)
 
         hidden_states = ttnn.layer_norm(
             hidden_states,
             weight=self.final_layer_norm_params["weight"],
             bias=self.final_layer_norm_params["bias"],
             epsilon=self.config.layer_norm_eps,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            # memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            program_config=self.program_configs["layernorm_1_program_config"],
         )
-        hidden_states = ensure_l1_memory(hidden_states)
 
         # PHASE 5: Final output must be in L1
-        return ensure_l1_memory(hidden_states)
+        return hidden_states
 
 
 class TTNNSpeechT5Decoder:
@@ -710,94 +785,34 @@ class TTNNSpeechT5Decoder:
     4. Return hidden states
     """
 
-    def __init__(self, device, parameters, config: TTNNDecoderConfig):
-        print("  [Decoder Init] Starting...")
+    def __init__(self, device, parameters, config: TTNNDecoderConfig, max_sequence_length: int = 20):
         self.device = device
         self.config = config
         self.parameters = parameters
+        self.max_sequence_length = max_sequence_length  # Store the max length
 
         # Speech decoder prenet
-        print("  [Decoder Init] Creating prenet...")
         self.prenet = TTNNSpeechDecoderPrenet(
             device,
             parameters["prenet"],
             config,
         )
-        print("  [Decoder Init] Prenet done")
 
         # Decoder layers
-        print(f"  [Decoder Init] Creating {config.num_layers} decoder layers...")
         self.layers = []
         for i in range(config.num_layers):
-            print(f"  [Decoder Init] Creating layer {i+1}/{config.num_layers}...")
             layer = TTNNSpeechT5DecoderLayer(
                 device,
                 parameters["layers"][i],
                 config,
+                max_sequence_length=self.max_sequence_length,
             )
             self.layers.append(layer)
-        print("  [Decoder Init] All layers created")
 
         # Pre-compute causal masks for common sequence lengths
         # This avoids dynamic tensor creation during forward pass (required for trace)
-        print("  [Decoder Init] Pre-computing causal masks...")
         self.causal_mask_cache = {}
         self._precompute_causal_masks()
-        print("  [Decoder Init] Done!")
-
-    def reset_cache(self):
-        """Reset KV caches for all decoder layers."""
-        for layer in self.layers:
-            layer.reset_cache()
-
-    def precompute_cross_attention(self, encoder_hidden_states: ttnn.Tensor, seq_len: int = 1) -> ttnn.Tensor:
-        """
-        Pre-compute cross-attention for the initial sequence.
-        This avoids recomputing cross-attention on every autoregressive step.
-
-        Args:
-            encoder_hidden_states: [batch, enc_seq_len, hidden_size]
-            seq_len: Initial sequence length (default: 1 for single token)
-
-        Returns:
-            cross_attn_cache: [batch, seq_len, hidden_size] - cross-attention output for initial sequence
-        """
-        batch_size = encoder_hidden_states.shape[0]
-
-        # Create initial hidden states (zeros for the initial token/frame)
-        initial_hidden_states = ttnn.zeros(
-            [batch_size, seq_len, self.config.hidden_size],
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
-
-        # Apply prenet to initial hidden states
-        hidden_states = self.prenet(initial_hidden_states)
-        hidden_states = ensure_l1_memory(hidden_states)
-
-        # Pass through decoder layers to compute cross-attention
-        for layer in self.layers:
-            hidden_states = layer(
-                hidden_states=hidden_states,
-                encoder_hidden_states=encoder_hidden_states,
-                attention_mask=None,  # No self-attention mask needed for pre-computation
-                cross_attn_cache=None,  # Force cross-attention computation
-            )
-            hidden_states = ensure_l1_memory(hidden_states)
-
-        # Final layer norm
-        hidden_states = ttnn.layer_norm(
-            hidden_states,
-            weight=self.final_layer_norm_params["weight"],
-            bias=self.final_layer_norm_params["bias"],
-            epsilon=self.config.layer_norm_eps,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
-        hidden_states = ensure_l1_memory(hidden_states)
-
-        return hidden_states
 
     def _precompute_causal_masks(self):
         """
@@ -805,10 +820,9 @@ class TTNNSpeechT5Decoder:
         This avoids dynamic tensor creation during forward pass, which is
         required for trace support.
 
-        Pre-computes for lengths: 20
-        Note: Add more lengths as needed for your use case.
+        Pre-computes for lengths: 20 and the configured max_sequence_length
         """
-        common_lengths = [20]
+        common_lengths = [20, self.max_sequence_length]
 
         for seq_len in common_lengths:
             # Create causal mask in PyTorch
@@ -867,7 +881,6 @@ class TTNNSpeechT5Decoder:
         decoder_input_values: ttnn.Tensor,
         encoder_hidden_states: ttnn.Tensor,
         speaker_embeddings: Optional[ttnn.Tensor] = None,
-        cross_attn_cache: Optional[ttnn.Tensor] = None,
         timing_details: bool = False,
     ) -> ttnn.Tensor:
         """
@@ -877,7 +890,6 @@ class TTNNSpeechT5Decoder:
             decoder_input_values: [batch, seq_len, num_mel_bins]
             encoder_hidden_states: [batch, enc_seq_len, hidden_size]
             speaker_embeddings: [batch, speaker_embedding_dim] - optional
-            cross_attn_cache: [batch, seq_len, hidden_size] - pre-computed cross-attention (optional)
             timing_details: If True, return (output, timing_dict)
 
         Returns:
@@ -887,18 +899,20 @@ class TTNNSpeechT5Decoder:
 
         timing = {}
 
+        signpost(header="Decoder --> Start")
+        ttnn.ReadDeviceProfiler(self.device)
+
         # PHASE 1: Ensure all inputs are in L1
         start_time = time.time()
-        decoder_input_values = ensure_l1_memory(decoder_input_values)
-        encoder_hidden_states = ensure_l1_memory(encoder_hidden_states)
+        decoder_input_values = ttnn.to_memory_config(decoder_input_values, ttnn.L1_MEMORY_CONFIG)
+        encoder_hidden_states = ttnn.to_memory_config(encoder_hidden_states, ttnn.L1_MEMORY_CONFIG)
         if speaker_embeddings is not None:
-            speaker_embeddings = ensure_l1_memory(speaker_embeddings)
+            speaker_embeddings = ttnn.to_memory_config(speaker_embeddings, ttnn.L1_MEMORY_CONFIG)
         timing["memory_input"] = time.time() - start_time
 
         # PHASE 2: Prenet processing (L1 output)
         start_time = time.time()
         hidden_states = self.prenet(decoder_input_values, speaker_embeddings=speaker_embeddings)
-        hidden_states = ensure_l1_memory(hidden_states)
         timing["prenet"] = time.time() - start_time
 
         seq_len = hidden_states.shape[1]
@@ -906,7 +920,6 @@ class TTNNSpeechT5Decoder:
         # PHASE 3: Create causal attention mask (L1 output)
         start_time = time.time()
         causal_mask = self._create_causal_mask(seq_len)
-        causal_mask = ensure_l1_memory(causal_mask)
         timing["causal_mask"] = time.time() - start_time
 
         # PHASE 4: Pass through decoder layers with L1 management
@@ -919,7 +932,6 @@ class TTNNSpeechT5Decoder:
                 encoder_hidden_states=encoder_hidden_states,
                 attention_mask=causal_mask,
             )
-            hidden_states = ensure_l1_memory(hidden_states)
             layer_times.append(time.time() - layer_start)
 
         timing["decoder_layers"] = time.time() - start_time
@@ -927,12 +939,11 @@ class TTNNSpeechT5Decoder:
 
         # PHASE 5: Final output must be in L1
         start_time = time.time()
-        final_output = ensure_l1_memory(hidden_states)
         timing["memory_output"] = time.time() - start_time
-
+        final_output = hidden_states
         if timing_details:
             return final_output, timing
-        return final_output
+        return hidden_states
 
 
 def preprocess_decoder_parameters(torch_model, config: TTNNDecoderConfig, device):
@@ -953,7 +964,6 @@ def preprocess_decoder_parameters(torch_model, config: TTNNDecoderConfig, device
     Returns:
         parameters: Dict of TTNN tensors
     """
-    print("[Preprocess Decoder] Starting...")
     parameters = {}
 
     # Memory configs
@@ -964,6 +974,32 @@ def preprocess_decoder_parameters(torch_model, config: TTNNDecoderConfig, device
     def convert_linear(torch_linear):
         weight = torch_linear.weight.data  # [out, in]
         bias = torch_linear.bias.data if torch_linear.bias is not None else None
+
+        return {
+            "weight": ttnn.from_torch(
+                weight.T,  # Transpose for TTNN
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=DRAM_MEMCFG,
+            ),
+            "bias": ttnn.from_torch(
+                bias.unsqueeze(0).unsqueeze(0),  # [256] -> [1, 1, 256] for proper broadcasting
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=DRAM_MEMCFG,
+            )
+            if bias is not None
+            else None,
+        }
+
+    def convert_linear_from_dict(torch_linear):
+        weight = torch_linear["weight"]  # [out, in]
+        if "bias" in torch_linear.keys():
+            bias = torch_linear["bias"]
+        else:
+            bias = None
 
         return {
             "weight": ttnn.from_torch(
@@ -1045,19 +1081,84 @@ def preprocess_decoder_parameters(torch_model, config: TTNNDecoderConfig, device
         layer_params = {}
 
         # Self-attention
+        num_heads = 12
+        head_size = 64
+        hidden_size = num_heads * head_size * 3
+        qkv_weight = torch.cat(
+            [
+                layer.self_attn.q_proj.weight.data,
+                layer.self_attn.k_proj.weight.data,
+                layer.self_attn.v_proj.weight.data,
+            ],
+            dim=0,
+        )
+        qkv_bias = torch.cat(
+            [
+                layer.self_attn.q_proj.bias.data,
+                layer.self_attn.k_proj.bias.data,
+                layer.self_attn.v_proj.bias.data,
+            ],
+            dim=0,
+        )
+
+        qkv_proj = {}
+        qkv_proj = {
+            "weight": qkv_weight,
+            "bias": qkv_bias,
+        }
+
         layer_params["self_attn"] = {
             "q_proj": convert_linear(layer.self_attn.q_proj),
             "k_proj": convert_linear(layer.self_attn.k_proj),
             "v_proj": convert_linear(layer.self_attn.v_proj),
             "out_proj": convert_linear(layer.self_attn.out_proj),
+            "qkv_proj": convert_linear_from_dict(qkv_proj),
         }
 
         # Cross-attention
+        """
+        hidden_size = num_heads * head_size * 2 # k + v
+        kv_weight = torch.cat(
+            [
+                layer.encoder_attn.k_proj.weight.data.reshape([num_heads, head_size, -1]),
+                layer.encoder_attn.v_proj.weight.data.reshape([num_heads, head_size, -1]),
+            ],
+            dim=1,
+        ).reshape([hidden_size, -1])
+        kv_bias = torch.cat(
+            [
+                layer.encoder_attn.k_proj.bias.data.reshape([num_heads, head_size]),
+                layer.encoder_attn.v_proj.bias.data.reshape([num_heads, head_size]),
+            ],
+            dim=1,
+        ).reshape([hidden_size])
+        """
+        kv_weight = torch.cat(
+            [
+                layer.encoder_attn.k_proj.weight.data,
+                layer.encoder_attn.v_proj.weight.data,
+            ],
+            dim=0,
+        )
+        kv_bias = torch.cat(
+            [
+                layer.encoder_attn.k_proj.bias.data,
+                layer.encoder_attn.v_proj.bias.data,
+            ],
+            dim=0,
+        )
+
+        kv_proj = {}
+        kv_proj = {
+            "weight": kv_weight,
+            "bias": kv_bias,
+        }
         layer_params["encoder_attn"] = {
             "q_proj": convert_linear(layer.encoder_attn.q_proj),
             "k_proj": convert_linear(layer.encoder_attn.k_proj),
             "v_proj": convert_linear(layer.encoder_attn.v_proj),
             "out_proj": convert_linear(layer.encoder_attn.out_proj),
+            "kv_proj": convert_linear_from_dict(kv_proj),
         }
 
         # Feed-forward
@@ -1073,5 +1174,4 @@ def preprocess_decoder_parameters(torch_model, config: TTNNDecoderConfig, device
 
         parameters["layers"].append(layer_params)
 
-    print("[Preprocess Decoder] Done!")
     return parameters

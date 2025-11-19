@@ -91,6 +91,13 @@ class TTNNSpeechDecoderPrenet:
         self.config = config
         self.L1_MEMCFG = ttnn.L1_MEMORY_CONFIG
 
+        # Precomputed constants (always available for performance)
+        self.dropout_scale = (
+            1.0 / (1.0 - self.config.speech_decoder_prenet_dropout)
+            if self.config.speech_decoder_prenet_dropout > 0.0
+            else 1.0
+        )
+
     def _consistent_dropout(self, inputs_embeds, p):
         """
         TTNN consistent dropout implementation.
@@ -145,7 +152,21 @@ class TTNNSpeechDecoderPrenet:
             hidden_states = ttnn.relu(hidden_states)
 
             # Apply HF's consistent dropout (L1 output)
-            hidden_states = self._consistent_dropout(hidden_states, self.config.speech_decoder_prenet_dropout)
+            # Use precomputed dropout mask for performance
+            mask = self.parameters["dropout_masks"][i]
+            # Slice mask to match current sequence length [seq_len, hidden_size]
+            seq_len = hidden_states.shape[1]
+            mask_sliced = mask[:seq_len, :]
+            # Expand mask to match batch dimension [batch, seq_len, hidden_size]
+            batch_size = hidden_states.shape[0]
+            mask_expanded = ttnn.unsqueeze(mask_sliced, 0)  # [1, seq_len, hidden_size]
+            mask_expanded = ttnn.repeat(mask_expanded, [batch_size, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
+            # Apply mask: hidden_states = (mask == 1) * hidden_states * scale
+            hidden_states = ttnn.multiply(
+                ttnn.where(mask_expanded == 1, hidden_states, 0),
+                self.dropout_scale,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
 
         # PHASE 3: Final projection (L1 output)
         hidden_states = ttnn.linear(
@@ -168,50 +189,31 @@ class TTNNSpeechDecoderPrenet:
         # Add positional encoding (L1 output)
         hidden_states = ttnn.add(hidden_states, pe_scaled, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        # PHASE 5: Add speaker embeddings if provided
-        if speaker_embeddings is not None:
-            # L2 normalization of speaker embeddings (L1 outputs)
-            speaker_squared = ttnn.multiply(speaker_embeddings, speaker_embeddings, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # PHASE 5: Add speaker embeddings (precomputed for performance)
+        # Expand precomputed speaker embeddings to match sequence length (L1 output)
+        speaker_embeddings_expanded = ttnn.repeat(
+            self.parameters["speaker_embeddings_normalized"],
+            [1, seq_len, 1],
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
 
-            speaker_sum = ttnn.sum(speaker_squared, dim=-1, keepdim=True, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # Concatenate with hidden states (L1 output)
+        hidden_states = ttnn.concat(
+            [hidden_states, speaker_embeddings_expanded],
+            dim=-1,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
 
-            speaker_norm = ttnn.sqrt(speaker_sum)
+        # Project back to hidden size (L1 output)
+        hidden_states = ttnn.linear(
+            hidden_states,
+            self.parameters["speaker_embeds_layer"]["weight"],
+            bias=self.parameters["speaker_embeds_layer"]["bias"],
+            memory_config=self.L1_MEMCFG,
+        )
 
-            speaker_embeddings_normalized = ttnn.divide(
-                speaker_embeddings, speaker_norm, memory_config=ttnn.L1_MEMORY_CONFIG
-            )
-
-            # Expand to match sequence length (L1 output)
-            batch_size = hidden_states.shape[0]
-            speaker_embeddings_expanded = ttnn.reshape(
-                speaker_embeddings_normalized,
-                [batch_size, 1, self.config.speaker_embedding_dim],
-            )
-
-            # Repeat for sequence length (L1 output)
-            speaker_embeddings_expanded = ttnn.repeat(
-                speaker_embeddings_expanded,
-                [1, seq_len, 1],
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-            )
-
-            # Concatenate with hidden states (L1 output)
-            hidden_states = ttnn.concat(
-                [hidden_states, speaker_embeddings_expanded],
-                dim=-1,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-            )
-
-            # Project back to hidden size (L1 output)
-            hidden_states = ttnn.linear(
-                hidden_states,
-                self.parameters["speaker_embeds_layer"]["weight"],
-                bias=self.parameters["speaker_embeds_layer"]["bias"],
-                memory_config=self.L1_MEMCFG,
-            )
-
-            # ReLU after speaker projection (L1 output)
-            hidden_states = ttnn.relu(hidden_states, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # ReLU after speaker projection (L1 output)
+        hidden_states = ttnn.relu(hidden_states, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # PHASE 6: Final output must be in L1
         return hidden_states
@@ -747,8 +749,38 @@ class TTNNSpeechT5Decoder:
             return final_output, timing
         return hidden_states
 
+    def prepare_decode_inputs(
+        self,
+        decoder_input_values: ttnn.Tensor,
+        encoder_hidden_states: ttnn.Tensor,
+        speaker_embeddings: Optional[ttnn.Tensor] = None,
+    ):
+        """
+        Prepare inputs for trace execution by ensuring proper memory config.
 
-def preprocess_decoder_parameters(torch_model, config: TTNNDecoderConfig, device):
+        This method separates input preparation from the forward pass to support trace capture.
+
+        Args:
+            decoder_input_values: [batch, seq_len, num_mel_bins]
+            encoder_hidden_states: [batch, enc_seq_len, hidden_size]
+            speaker_embeddings: [batch, speaker_embedding_dim] - optional
+
+        Returns:
+            List of prepared input tensors
+        """
+        # Ensure all inputs are in L1 memory config for trace compatibility
+        prepared_decoder_input = ttnn.to_memory_config(decoder_input_values, ttnn.L1_MEMORY_CONFIG)
+        prepared_encoder_hidden = ttnn.to_memory_config(encoder_hidden_states, ttnn.L1_MEMORY_CONFIG)
+        prepared_speaker_emb = None
+        if speaker_embeddings is not None:
+            prepared_speaker_emb = ttnn.to_memory_config(speaker_embeddings, ttnn.L1_MEMORY_CONFIG)
+
+        return [prepared_decoder_input, prepared_encoder_hidden, prepared_speaker_emb]
+
+
+def preprocess_decoder_parameters(
+    torch_model, config: TTNNDecoderConfig, device, speaker_embeddings: Optional[torch.Tensor] = None
+):
     """
     Preprocess PyTorch decoder parameters for TTNN.
 
@@ -758,10 +790,15 @@ def preprocess_decoder_parameters(torch_model, config: TTNNDecoderConfig, device
     - Data type (bfloat16)
     - Layout (TILE_LAYOUT)
 
+    Also precomputes constant values for performance:
+    - Normalized speaker embeddings (if provided)
+    - Bernoulli dropout masks for prenet layers
+
     Args:
         torch_model: PyTorch SpeechT5Decoder model
         config: TTNNDecoderConfig
         device: TTNN device
+        speaker_embeddings: Optional speaker embeddings [batch, speaker_dim] to precompute
 
     Returns:
         parameters: Dict of TTNN tensors
@@ -846,6 +883,59 @@ def preprocess_decoder_parameters(torch_model, config: TTNNDecoderConfig, device
 
     # Speaker embeddings layer
     prenet_params["speaker_embeds_layer"] = convert_linear(torch_model.prenet.speaker_embeds_layer)
+
+    # Precompute speaker embeddings (required for performance)
+    # L2 normalization (exact same as HF implementation)
+    speaker_embeddings_normalized = torch.nn.functional.normalize(speaker_embeddings, p=2, dim=-1)
+
+    # Reshape to [batch, 1, speaker_dim] for easy expansion later
+    batch_size = speaker_embeddings.shape[0]
+    speaker_embeddings_normalized = speaker_embeddings_normalized.reshape(batch_size, 1, config.speaker_embedding_dim)
+
+    # Convert to TTNN and store in DRAM (weights memory)
+    prenet_params["speaker_embeddings_normalized"] = ttnn.from_torch(
+        speaker_embeddings_normalized,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=DRAM_MEMCFG,
+    )
+
+    # Pre-generate dropout masks for prenet layers (required for performance)
+    # Use same dropout probability as prenet layers (0.5 as per HF)
+    prenet_dropout_p = config.speech_decoder_prenet_dropout
+    prenet_params["dropout_masks"] = []
+
+    # Generate mask for each prenet layer
+    # We need to determine the expected input shape for each layer
+    input_shapes = []
+    input_shape = config.num_mel_bins  # First layer input
+    for i in range(config.speech_decoder_prenet_layers):
+        if i < config.speech_decoder_prenet_layers - 1:
+            output_shape = config.speech_decoder_prenet_units
+        else:
+            output_shape = config.speech_decoder_prenet_units  # Last prenet layer before final projection
+
+        input_shapes.append((config.max_position_embeddings, output_shape))  # Assume max seq len
+        input_shape = output_shape
+
+    # Generate masks for each prenet layer
+    for seq_len, hidden_size in input_shapes:
+        # Create probability tensor matching the expected output shape after ReLU
+        prob_tensor = torch.full((seq_len, hidden_size), prenet_dropout_p, dtype=torch.float32)
+
+        # Generate Bernoulli mask (consistent across batches as per HF)
+        mask = torch.bernoulli(prob_tensor)
+
+        # Convert to TTNN
+        mask_ttnn = ttnn.from_torch(
+            mask,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=DRAM_MEMCFG,  # Store masks in DRAM like weights
+        )
+        prenet_params["dropout_masks"].append(mask_ttnn)
 
     parameters["prenet"] = prenet_params
 

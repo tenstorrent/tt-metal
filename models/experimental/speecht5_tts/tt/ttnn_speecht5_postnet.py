@@ -25,14 +25,14 @@ from dataclasses import dataclass
 
 def get_high_perf_compute_config():
     """
-    Get compute kernel config optimized for maximum core utilization and performance.
-    Uses HiFi4 for speed while maintaining L1 memory optimization.
+    Get compute kernel config optimized for accuracy and numerical stability.
+    Uses HiFi4 with FP32 accumulation for improved postnet accuracy.
     """
     return ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=False,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=True,  # Keep L1 accumulation for memory efficiency
+        fp32_dest_acc_en=True,  # Enable FP32 destination accumulation for better accuracy
+        packer_l1_acc=False,  # Disable L1 accumulation when using FP32 dest acc
     )
 
 
@@ -389,6 +389,22 @@ class TTNNSpeechT5SpeechDecoderPostnet:
         if timing_details:
             return (outputs_before_postnet, outputs_after_postnet, stop_logits), timing
         return outputs_before_postnet, outputs_after_postnet, stop_logits
+
+    def prepare_postnet_inputs(self, hidden_states: ttnn.Tensor):
+        """
+        Prepare inputs for trace execution by ensuring proper memory config.
+
+        This method separates input preparation from the forward pass to support trace capture.
+
+        Args:
+            hidden_states: [batch, seq_len, hidden_size] - decoder output
+
+        Returns:
+            List of prepared input tensors
+        """
+        # Ensure input is in L1 memory config for trace compatibility
+        prepared_hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
+        return [prepared_hidden_states]
 
 
 def preprocess_postnet_parameters(torch_model, config: TTNNPostNetConfig, device):

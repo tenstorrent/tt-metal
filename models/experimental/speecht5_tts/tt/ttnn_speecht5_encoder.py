@@ -476,6 +476,22 @@ class TTNNSpeechT5Encoder:
 
         return (hidden_states,)
 
+    def prepare_encoder_inputs(self, input_ids: ttnn.Tensor):
+        """
+        Prepare inputs for trace execution by ensuring proper memory config.
+
+        This method separates input preparation from the forward pass to support trace capture.
+
+        Args:
+            input_ids: [batch, seq_len] - token IDs
+
+        Returns:
+            List of prepared input tensors
+        """
+        # Ensure input is in L1 memory config for trace compatibility
+        prepared_input_ids = ttnn.to_memory_config(input_ids, ttnn.L1_MEMORY_CONFIG)
+        return [prepared_input_ids]
+
     def _precompute_position_bias_for_common_lengths(self):
         """
         Pre-compute position bias tensors for common sequence lengths.

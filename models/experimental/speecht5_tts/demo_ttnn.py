@@ -40,15 +40,16 @@ from models.experimental.speecht5_tts.tt.ttnn_speecht5_postnet import (
     TTNNPostNetConfig,
     preprocess_postnet_parameters,
 )
+from models.experimental.speecht5_tts.tt.ttnn_speecht5_generator import SpeechT5Generator
 
 
 def get_high_perf_compute_config():
-    """Get optimized compute kernel configuration."""
+    """Get optimized compute kernel configuration with FP32 accumulation."""
     return ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=False,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=False,
+        fp32_dest_acc_en=True,  # Enable FP32 destination accumulation for better accuracy
+        packer_l1_acc=False,  # Disable L1 accumulation when using FP32 dest acc
     )
 
 
@@ -64,6 +65,8 @@ def generate_speech_ttnn(
     max_steps=100,
     return_stats=False,
     warmup_mode=False,
+    enable_trace=False,
+    generator=None,
 ):
     """
     Generate speech using optimized TTNN SpeechT5 pipeline.
@@ -80,6 +83,8 @@ def generate_speech_ttnn(
         max_steps: Maximum number of generation steps (default: 100)
         return_stats: If True, return statistics along with speech (default: False)
         warmup_mode: If True, skip vocoder and detailed timing for faster warm-up (default: False)
+        enable_trace: If True, use trace execution for decoder and postnet (default: False)
+        generator: SpeechT5Generator instance for trace support (required if enable_trace=True)
 
     Returns:
         torch.Tensor: Generated audio waveform (if return_stats=False)
@@ -102,8 +107,19 @@ def generate_speech_ttnn(
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
-    # Encoder forward pass
-    encoder_output = ttnn_encoder(ttnn_input_ids)[0]
+    # Import time for timing measurements
+    import time
+
+    # Encoder forward pass (with timing)
+    encoder_start = time.time()
+    if enable_trace and generator is not None:
+        # Use trace execution for faster inference
+        seq_len = ttnn_input_ids.shape[1]
+        encoder_output = generator._execute_encoder_trace(seq_len, ttnn_input_ids)
+    else:
+        # Use regular execution
+        encoder_output = ttnn_encoder(ttnn_input_ids)[0]
+    encoder_time = time.time() - encoder_start
 
     # No KV cache for this demo
 
@@ -122,13 +138,14 @@ def generate_speech_ttnn(
     # Maximum steps for generation (default: 100)
 
     # Autoregressive generation loop with detailed timing
-    import time
-
     total_decoder_time = 0.0
     total_postnet_time = 0.0
     total_conversion_time = 0.0
     total_concat_time = 0.0
     steps_completed = 0
+
+    # Complete decoder loop timing
+    decoder_loop_start = time.time()
 
     for step in range(max_steps):
         step_start = time.time()
@@ -145,23 +162,35 @@ def generate_speech_ttnn(
 
         # PHASE 1: Decoder inference (includes prenet + 6 transformer layers)
         decoder_inference_start = time.time()
-        if (
-            step < 1 and not warmup_mode
-        ):  # Collect timing for first 10 steps for detailed breakdown (skip in warmup mode)
-            decoder_hidden_states, decoder_timing = ttnn_decoder(
-                decoder_input_values=output_sequence_ttnn,
-                encoder_hidden_states=encoder_output,
-                speaker_embeddings=ttnn_speaker_embeddings,
-                timing_details=True,
-            )
-        else:
-            decoder_hidden_states = ttnn_decoder(
-                decoder_input_values=output_sequence_ttnn,
-                encoder_hidden_states=encoder_output,
-                speaker_embeddings=ttnn_speaker_embeddings,
+        if enable_trace and generator is not None:
+            # Use trace execution for faster inference
+            current_seq_len = output_sequence_ttnn.shape[1]
+            decoder_hidden_states = generator._execute_decoder_trace(
+                current_seq_len, output_sequence_ttnn, encoder_output, ttnn_speaker_embeddings
             )
             if step < 1 and warmup_mode:
                 decoder_timing = {}  # Dummy timing dict for warmup mode
+            else:
+                decoder_timing = {}  # Trace execution doesn't provide detailed timing
+        else:
+            # Use regular execution
+            if (
+                step < 1 and not warmup_mode
+            ):  # Collect timing for first 10 steps for detailed breakdown (skip in warmup mode)
+                decoder_hidden_states, decoder_timing = ttnn_decoder(
+                    decoder_input_values=output_sequence_ttnn,
+                    encoder_hidden_states=encoder_output,
+                    speaker_embeddings=ttnn_speaker_embeddings,
+                    timing_details=True,
+                )
+            else:
+                decoder_hidden_states = ttnn_decoder(
+                    decoder_input_values=output_sequence_ttnn,
+                    encoder_hidden_states=encoder_output,
+                    speaker_embeddings=ttnn_speaker_embeddings,
+                )
+                if step < 1 and warmup_mode:
+                    decoder_timing = {}  # Dummy timing dict for warmup mode
         decoder_inference_time = time.time() - decoder_inference_start
 
         # PHASE 2: Memory management
@@ -176,15 +205,24 @@ def generate_speech_ttnn(
 
         # PHASE 1: Postnet inference (conv layers + stop logits)
         postnet_inference_start = time.time()
-        if (
-            step < 1 and not warmup_mode
-        ):  # Collect timing for first 10 steps for detailed breakdown (skip in warmup mode)
-            postnet_output, postnet_timing = ttnn_postnet(decoder_hidden_states, timing_details=True)
-            mel_before, mel_after, stop_logits = postnet_output
-        else:
-            mel_before, mel_after, stop_logits = ttnn_postnet(decoder_hidden_states)
+        if enable_trace and generator is not None:
+            # Use trace execution for faster inference
+            mel_before, mel_after, stop_logits = generator._execute_postnet_trace(decoder_hidden_states)
             if step < 1 and warmup_mode:
                 postnet_timing = {}  # Dummy timing dict for warmup mode
+            else:
+                postnet_timing = {}  # Trace execution doesn't provide detailed timing
+        else:
+            # Use regular execution
+            if (
+                step < 1 and not warmup_mode
+            ):  # Collect timing for first 10 steps for detailed breakdown (skip in warmup mode)
+                postnet_output, postnet_timing = ttnn_postnet(decoder_hidden_states, timing_details=True)
+                mel_before, mel_after, stop_logits = postnet_output
+            else:
+                mel_before, mel_after, stop_logits = ttnn_postnet(decoder_hidden_states)
+                if step < 1 and warmup_mode:
+                    postnet_timing = {}  # Dummy timing dict for warmup mode
         postnet_inference_time = time.time() - postnet_inference_start
 
         # PHASE 2: Memory management
@@ -244,6 +282,9 @@ def generate_speech_ttnn(
         if (step + 1) % 20 == 0:
             print(" ✓", flush=True)
 
+    # End decoder loop timing
+    decoder_loop_time = time.time() - decoder_loop_start
+
     # Transfer final spectrogram from device to host (only final transfer)
     if spectrogram_ttnn is not None:
         final_spectrogram = ttnn.to_torch(spectrogram_ttnn)
@@ -268,9 +309,19 @@ def generate_speech_ttnn(
         ttnn.deallocate(spectrogram_ttnn)
 
     if return_stats:
+        # Calculate TTFT (Time To First Token) and token/sec
+        ttft = encoder_time  # Encoder processes input to generate first context
+        avg_token_time = decoder_loop_time / max(steps_completed, 1) if steps_completed > 0 else 0
+        token_per_sec = 1.0 / avg_token_time if avg_token_time > 0 else 0
+
         stats = {
             "steps_completed": steps_completed,
             "final_seq_len": current_seq_len,
+            "ttft": ttft,  # Time To First Token (encoder time)
+            "avg_token_time": avg_token_time,  # Average time per token (decoder + postnet)
+            "token_per_sec": token_per_sec,  # Tokens per second
+            "encoder_time": encoder_time,
+            "decoder_loop_time": decoder_loop_time,
             "total_decoder_time": total_decoder_time,
             "total_postnet_time": total_postnet_time,
             "total_conversion_time": total_conversion_time,
@@ -294,6 +345,9 @@ def main():
         "--output_dir", default=".", help="Output directory for audio files (default: current directory)"
     )
     parser.add_argument("--max_steps", type=int, default=100, help="Maximum number of generation steps (default: 100)")
+    parser.add_argument(
+        "--enable_trace", action="store_true", help="Enable TTNN trace for faster inference (default: False)"
+    )
 
     args = parser.parse_args()
 
@@ -360,7 +414,7 @@ def main():
             postnet_kernel=model.config.speech_decoder_postnet_kernel,
         )
 
-        # Create TTNN models
+        # Create individual TTNN models
         ttnn_encoder = TTNNSpeechT5Encoder(
             device,
             preprocess_encoder_parameters(model.speecht5.encoder, encoder_config, device),
@@ -369,7 +423,7 @@ def main():
 
         ttnn_decoder = TTNNSpeechT5Decoder(
             device,
-            preprocess_decoder_parameters(model.speecht5.decoder, decoder_config, device),
+            preprocess_decoder_parameters(model.speecht5.decoder, decoder_config, device, speaker_embeddings),
             decoder_config,
             max_sequence_length=args.max_steps,  # Pass the max_steps value
         )
@@ -380,13 +434,31 @@ def main():
             postnet_config,
         )
 
+        # Create generator wrapper for trace support
+        generator = SpeechT5Generator(
+            encoder=ttnn_encoder,
+            decoder=ttnn_decoder,
+            postnet=ttnn_postnet,
+            device=device,
+            max_steps=args.max_steps,
+        )
+
         # Warm-up phase to compile TTNN operations (separate from timing)
         import time
 
         warmup_start_time = time.time()
-        print("🔥 Warming up TTNN operations...")
-        print("   This may take ~30-45 seconds as TTNN compiles kernels for optimal performance")
-        print("   TTNN will optimize operations for the decoder, postnet, and memory management")
+        if args.enable_trace:
+            print("🔥 Warming up TTNN operations with trace capture...")
+            print("   This may take ~2-3 minutes as TTNN captures traces for encoder, decoder and postnet")
+            print("   TTNN will pre-compile operations for all sequence lengths")
+            generator.warmup_encoder_traces()
+            generator.warmup_decode_traces()
+            print("   Performing final trace validation run...")
+        else:
+            print("🔥 Warming up TTNN operations...")
+            print("   This may take ~30-45 seconds as TTNN compiles kernels for optimal performance")
+            print("   TTNN will optimize operations for the decoder, postnet, and memory management")
+
         warmup_text = "Hi there. How are you? What are you doing? How Can I help you? Do you need any help? Hi there. How are you? What are you doing? How Can I help you? Do you need any help?Hi there. How are you? What are you doing? How Can I help you? Do you need any help?"
         warmup_speech = generate_speech_ttnn(
             warmup_text,
@@ -399,10 +471,15 @@ def main():
             device,
             max_steps=args.max_steps,
             warmup_mode=True,
+            enable_trace=args.enable_trace,
+            generator=generator,  # Pass generator for trace support
         )
         warmup_duration = time.time() - warmup_start_time
         print(f"✅ Warm-up completed in {warmup_duration:.1f}s (generated {len(warmup_speech)} samples)")
-        print("   TTNN kernels are now optimized - subsequent inference will be much faster!")
+        if args.enable_trace:
+            print("   TTNN traces are now captured - subsequent inference will be much faster!")
+        else:
+            print("   TTNN kernels are now optimized - subsequent inference will be much faster!")
 
         # Generate speech for each input text
         results = []
@@ -427,6 +504,8 @@ def main():
                 device,
                 max_steps=args.max_steps,
                 return_stats=True,
+                enable_trace=args.enable_trace,
+                generator=generator,
             )
             generation_time = time.time() - generation_start
 
@@ -447,32 +526,36 @@ def main():
                 "tokens_generated": tokens_generated,
                 "tokens_per_sec": tokens_per_sec,
                 "sequence_length": generation_stats.get("final_seq_len", 0),
+                "ttft": generation_stats.get("ttft", 0),
+                "token_per_sec": generation_stats.get("token_per_sec", 0),
+                "encoder_time": generation_stats.get("encoder_time", 0),
+                "decoder_loop_time": generation_stats.get("decoder_loop_time", 0),
             }
             results.append(result)
 
         # Display summary table
-        print("\n" + "=" * 120)
+        print("\n" + "=" * 140)
         print("📊 INFERENCE SUMMARY")
-        print("=" * 120)
-        print(f"{'#':<4} {'Text':<30} {'Tokens':<8} {'Time(s)':<10} {'Audio(s)':<8} {'T/s':<8}")
-        print("-" * 104)
+        print("=" * 140)
+        print(f"{'#':<4} {'Text':<25} {'Tokens':<8} {'TTFT(ms)':<9} {'Token/s':<10} {'Time(s)':<10} {'Audio(s)':<8}")
+        print("-" * 114)
 
         total_generation_time = 0
         total_tokens = 0
         total_audio_duration = 0
 
         for i, result in enumerate(results, 1):
-            truncated_text = result["text"][:25] + "..." if len(result["text"]) > 28 else result["text"]
+            truncated_text = result["text"][:20] + "..." if len(result["text"]) > 23 else result["text"]
             print(
-                f"{i:<4} {truncated_text:<30} {result['tokens_generated']:<8} {result['generation_time']:<10.3f} {result['audio_duration']:<8.1f} {result['tokens_per_sec']:<8.2f}"
+                f"{i:<4} {truncated_text:<25} {result['tokens_generated']:<8} {result.get('ttft', 0)*1000:<8.0f} {result.get('token_per_sec', 0):<10.2f} {result['generation_time']:<10.3f} {result['audio_duration']:<8.1f}"
             )
             total_generation_time += result["generation_time"]
             total_tokens += result["tokens_generated"]
             total_audio_duration += result["audio_duration"]
 
-        print("-" * 104)
+        print("-" * 114)
         print(
-            f"{'TOTAL':<4} {'':<30} {total_tokens:<8} {total_generation_time:<10.3f} {total_audio_duration:<8.1f} {total_tokens/total_generation_time:<8.2f}"
+            f"{'TOTAL':<4} {'':<25} {total_tokens:<8} {'-':<9} {'-':<10} {total_generation_time:<10.3f} {total_audio_duration:<8.1f}"
         )
 
         print(f"\n📈 Overall Statistics:")

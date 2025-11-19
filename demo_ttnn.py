@@ -43,12 +43,12 @@ from models.experimental.speecht5_tts.tt.ttnn_speecht5_postnet import (
 
 
 def get_high_perf_compute_config():
-    """Get optimized compute kernel configuration."""
+    """Get optimized compute kernel configuration with FP32 accumulation."""
     return ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=False,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=False,
+        fp32_dest_acc_en=True,  # Enable FP32 destination accumulation for better accuracy
+        packer_l1_acc=False,  # Disable L1 accumulation when using FP32 dest acc
     )
 
 
@@ -406,7 +406,7 @@ def main():
 
         ttnn_decoder = TTNNSpeechT5Decoder(
             device,
-            preprocess_decoder_parameters(model.speecht5.decoder, decoder_config, device),
+            preprocess_decoder_parameters(model.speecht5.decoder, decoder_config, device, speaker_embeddings),
             decoder_config,
         )
 

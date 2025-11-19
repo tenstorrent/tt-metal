@@ -1,264 +1,448 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
 # SPDX-License-Identifier: Apache-2.0
 
 """
-TTNN SpeechT5 Autoregressive Generator.
-Implements the generation loop for text-to-speech.
+SpeechT5 TTS Generator with Trace Support.
+
+Manages trace capture and execution for SpeechT5 TTS models.
+Supports encoder, decoder, and postnet traces for optimal performance.
 """
 
 import torch
 import ttnn
-from typing import Optional
+from collections import defaultdict
+from loguru import logger
+
+from models.tt_transformers.tt.common import copy_host_to_device
 
 
-class TTNNSpeechT5Generator:
+class SpeechT5Generator:
     """
-    Autoregressive generator for SpeechT5 TTS using TTNN.
+    Generator wrapper for SpeechT5 TTS models with trace support.
 
-    This class implements the generation loop that produces mel spectrograms
-    from text token IDs autoregressively (one step at a time).
+    Manages trace capture and execution for encoder, decoder, and postnet components.
+    Follows the pattern established in Galaxy LLM implementation.
     """
 
-    def __init__(
-        self,
-        encoder,
-        decoder,
-        postnet,
-        device,
-        reduction_factor: int = 2,
-        max_decoder_steps: int = 200,
-        stop_threshold: float = 0.5,
-        num_mel_bins: int = 80,
-    ):
+    def __init__(self, encoder, decoder, postnet, device, max_steps: int = 100):
         """
-        Initialize generator.
+        Initialize SpeechT5Generator with trace support.
 
         Args:
-            encoder: TTNN encoder model
-            decoder: TTNN decoder model
-            postnet: TTNN post-net model
+            encoder: TTNNSpeechT5Encoder instance
+            decoder: TTNNSpeechT5Decoder instance
+            postnet: TTNNSpeechT5SpeechDecoderPostnet instance
             device: TTNN device
-            reduction_factor: Number of mel frames generated per decoder step (default: 2)
-            max_decoder_steps: Maximum number of decoder steps (default: 200)
-            stop_threshold: Threshold for stop token prediction (default: 0.5)
-            num_mel_bins: Number of mel bins (default: 80 for SpeechT5)
+            max_steps: Maximum number of generation steps (for decoder trace prewarming)
         """
         self.encoder = encoder
         self.decoder = decoder
         self.postnet = postnet
         self.device = device
-        self.reduction_factor = reduction_factor
-        self.max_decoder_steps = max_decoder_steps
-        self.stop_threshold = stop_threshold
-        self.num_mel_bins = num_mel_bins
+        self.max_steps = max_steps
 
-    def generate(
-        self,
-        input_ids: torch.Tensor,
-        speaker_embeddings: Optional[torch.Tensor] = None,
-        verbose: bool = True,
-    ) -> torch.Tensor:
+        # Decoder trace storage (keyed by sequence length)
+        self.trace_id_decoder = defaultdict(lambda: None)
+        self.trace_inputs_decoder = defaultdict(lambda: None)
+        self.trace_output_decoder = defaultdict(lambda: None)
+
+        # Postnet trace storage (fixed input shape)
+        self.trace_id_postnet = None
+        self.trace_inputs_postnet = None
+        self.trace_output_postnet = None
+
+        # Encoder trace storage (keyed by sequence length)
+        self.trace_id_encoder = defaultdict(lambda: None)
+        self.trace_inputs_encoder = defaultdict(lambda: None)
+        self.trace_output_encoder = defaultdict(lambda: None)
+
+        # Trace warmup flags
+        self.decode_traces_warmup = False
+        self.encoder_traces_warmup = False
+
+        # Common encoder lengths to pre-warm traces for
+        self.common_encoder_lengths = [10, 20, 50, 100, 200]
+
+    def warmup_decode_traces(self):
         """
-        Generate mel spectrogram from text token IDs.
+        Pre-warm decoder and postnet traces for all sequence lengths from 1 to max_steps.
+
+        This ensures traces are captured during initialization, avoiding compilation
+        overhead during inference.
+        """
+        if self.decode_traces_warmup:
+            return
+
+        self.decode_traces_warmup = True
+        logger.info(f"Warming up decoder and postnet traces for sequence lengths 1 to {self.max_steps}")
+
+        # Create dummy inputs for trace capture
+        batch_size = 1
+        num_mel_bins = 80
+        hidden_size = 768
+        encoder_seq_len = 50  # Dummy encoder sequence length
+
+        # Dummy encoder output for decoder input
+        encoder_hidden_states = ttnn.from_torch(
+            torch.randn(batch_size, encoder_seq_len, hidden_size),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+
+        # Dummy speaker embeddings
+        speaker_embeddings = ttnn.from_torch(
+            torch.randn(batch_size, 512),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+
+        try:
+            # Capture postnet trace first (fixed input shape)
+            logger.info("Capturing postnet trace...")
+            self._capture_postnet_trace()
+
+            # Capture decoder traces for each sequence length
+            for seq_len in range(1, self.max_steps + 1):
+                if seq_len % 20 == 0 or seq_len == 1:
+                    logger.info(f"Capturing decoder trace for sequence length {seq_len}...")
+
+                self._capture_decoder_trace(seq_len)
+
+                # Clean up dummy inputs for next iteration
+                if seq_len < self.max_steps:
+                    ttnn.deallocate(encoder_hidden_states)
+                    ttnn.deallocate(speaker_embeddings)
+
+                    encoder_hidden_states = ttnn.from_torch(
+                        torch.randn(batch_size, encoder_seq_len, hidden_size),
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=self.device,
+                        memory_config=ttnn.L1_MEMORY_CONFIG,
+                    )
+                    speaker_embeddings = ttnn.from_torch(
+                        torch.randn(batch_size, 512),
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=self.device,
+                        memory_config=ttnn.L1_MEMORY_CONFIG,
+                    )
+
+        except Exception as e:
+            logger.error(f"Error during decode trace warmup: {e}")
+            raise
+        finally:
+            # Clean up dummy tensors
+            ttnn.deallocate(encoder_hidden_states)
+            ttnn.deallocate(speaker_embeddings)
+
+        logger.info("Decoder and postnet trace warmup completed")
+
+    def warmup_encoder_traces(self, common_lengths=None):
+        """
+        Pre-warm encoder traces for common input sequence lengths.
 
         Args:
-            input_ids: Token IDs [batch, seq_len]
-            speaker_embeddings: Speaker embeddings [batch, 1, hidden_size] or [batch, hidden_size]
-            verbose: Print progress messages
+            common_lengths: List of sequence lengths to pre-warm traces for.
+                           If None, uses self.common_encoder_lengths.
+        """
+        if self.encoder_traces_warmup:
+            return
+
+        if common_lengths is None:
+            common_lengths = self.common_encoder_lengths
+
+        self.encoder_traces_warmup = True
+        logger.info(f"Warming up encoder traces for sequence lengths: {common_lengths}")
+
+        # Create dummy input for trace capture
+        batch_size = 1
+        vocab_size = 81  # SpeechT5 vocab size
+
+        try:
+            for seq_len in common_lengths:
+                logger.info(f"Capturing encoder trace for sequence length {seq_len}...")
+
+                self._capture_encoder_trace(seq_len)
+
+        except Exception as e:
+            logger.error(f"Error during encoder trace warmup: {e}")
+            raise
+
+        logger.info("Encoder trace warmup completed")
+
+    def _capture_encoder_trace(self, seq_len: int):
+        """
+        Capture encoder trace for a specific sequence length.
+
+        Args:
+            seq_len: Sequence length for encoder input
+        """
+        batch_size = 1
+
+        # Create dummy input tokens (using a range for deterministic testing)
+        input_ids = ttnn.from_torch(
+            torch.arange(seq_len, dtype=torch.int32).unsqueeze(0),  # [1, seq_len]
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+
+        # First run to compile operations
+        encoder_output = self.encoder(input_ids)[0]
+        ttnn.synchronize_device(self.device)
+
+        # Prepare inputs for trace capture
+        host_inputs = self.encoder.prepare_encoder_inputs(input_ids)
+        device_inputs = copy_host_to_device(host_inputs, mesh_device=self.device)
+
+        # Capture trace
+        trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
+        transformed_inputs = self.encoder.prepare_encoder_inputs(input_ids)
+        trace_output = self.encoder(input_ids)[0]
+        ttnn.end_trace_capture(self.device, trace_id, cq_id=0)
+        ttnn.synchronize_device(self.device)
+
+        # Store trace information
+        self.trace_id_encoder[seq_len] = trace_id
+        self.trace_inputs_encoder[seq_len] = device_inputs
+        self.trace_output_encoder[seq_len] = trace_output
+
+        # Clean up
+        ttnn.deallocate(input_ids)
+        ttnn.deallocate(encoder_output)
+
+    def _execute_encoder_trace(self, seq_len: int, input_ids):
+        """
+        Execute encoder trace for given sequence length.
+
+        Args:
+            seq_len: Sequence length key for trace lookup
+            input_ids: Input token IDs
 
         Returns:
-            mel_spectrogram: Generated mel spectrogram [batch, frames, num_mel_bins]
+            Encoder output hidden states
         """
-        batch_size = input_ids.shape[0]
+        # Find the nearest pre-warmed trace length
+        trace_seq_len = self._get_encoder_trace_length(seq_len)
 
-        if verbose:
-            print(f"\n{'='*80}")
-            print(f"TTNN AUTOREGRESSIVE GENERATION")
-            print(f"{'='*80}")
-
-        # Step 1: Encode input text (run once)
-        if verbose:
-            print(f"\n[1/4] Encoding text...")
-            print(f"      Input: {batch_size} samples, {input_ids.shape[1]} tokens")
-
-        encoder_hidden_states = self._encode(input_ids)
-
-        if verbose:
-            print(
-                f"      ✓ Encoder output shape: {encoder_hidden_states.shape if hasattr(encoder_hidden_states, 'shape') else 'N/A'}"
+        if trace_seq_len not in self.trace_id_encoder or self.trace_id_encoder[trace_seq_len] is None:
+            logger.warning(
+                f"No encoder trace found for sequence length {trace_seq_len}, falling back to non-traced execution"
             )
+            return self.encoder(input_ids)[0]
 
-        # Step 2: Speaker embeddings (shape handling done in _generate_mel_frames)
-        if speaker_embeddings is not None and verbose:
-            if hasattr(speaker_embeddings, "shape"):
-                print(f"\n[2/4] Speaker embeddings: {speaker_embeddings.shape}")
+        # Prepare inputs and copy to device
+        host_inputs = self.encoder.prepare_encoder_inputs(input_ids)
+        copy_host_to_device(
+            host_tensors=host_inputs,
+            device_tensors=self.trace_inputs_encoder[trace_seq_len],
+        )
 
-        # Step 3: Autoregressive generation loop
-        if verbose:
-            print(f"\n[3/4] Generating mel frames (autoregressive)...")
-            print(f"      Max steps: {self.max_decoder_steps}")
-            print(f"      Reduction factor: {self.reduction_factor}")
+        # Execute trace
+        ttnn.execute_trace(self.device, self.trace_id_encoder[trace_seq_len], cq_id=0, blocking=False)
 
-        refined_mel = self._generate_mel_frames(encoder_hidden_states, speaker_embeddings, batch_size, verbose)
+        return self.trace_output_encoder[trace_seq_len]
 
-        # Mel frames are already refined by post-net in the loop
-        if verbose:
-            print(f"      ✓ Final mel shape: {refined_mel.shape}")
-            print(f"      ✓ Total frames: {refined_mel.shape[1]}")
-            print(f"      ✓ Estimated duration: {refined_mel.shape[1] * 0.0125:.2f} seconds")
-            print(f"\n{'='*80}")
-            print(f"✓ GENERATION COMPLETE")
-            print(f"{'='*80}\n")
+    def _get_encoder_trace_length(self, actual_len: int):
+        """
+        Get the nearest pre-warmed trace length for a given actual length.
 
-        return refined_mel
+        Args:
+            actual_len: Actual input sequence length
 
-    def _encode(self, input_ids) -> ttnn.Tensor:
-        """Run encoder on input IDs (accepts torch.Tensor or ttnn.Tensor)."""
-        # Convert to TTNN if needed
-        if isinstance(input_ids, torch.Tensor):
-            input_ids_ttnn = ttnn.from_torch(
-                input_ids,
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=self.device,
-            )
-        else:
-            input_ids_ttnn = input_ids
+        Returns:
+            Nearest pre-warmed trace length
+        """
+        # Find the smallest pre-warmed length that is >= actual_len
+        for trace_len in sorted(self.common_encoder_lengths):
+            if trace_len >= actual_len:
+                return trace_len
 
-        # Run encoder
-        encoder_output = self.encoder(input_ids_ttnn)
+        # If no length is large enough, use the largest available
+        return max(self.common_encoder_lengths)
 
-        # Extract hidden states (encoder returns tuple)
-        if isinstance(encoder_output, tuple):
-            encoder_hidden_states = encoder_output[0]
-        else:
-            encoder_hidden_states = encoder_output
+    def _capture_decoder_trace(self, seq_len: int):
+        """
+        Capture decoder trace for a specific sequence length.
 
-        return encoder_hidden_states
+        Args:
+            seq_len: Sequence length for decoder input
+        """
+        batch_size = 1
+        num_mel_bins = 80
+        hidden_size = 768
+        encoder_seq_len = 50  # Fixed for dummy input
 
-    def _generate_mel_frames(
-        self,
-        encoder_hidden_states: ttnn.Tensor,
-        speaker_embeddings,
-        batch_size: int,
-        verbose: bool,
-    ) -> torch.Tensor:
-        """Generate mel frames autoregressively (accepts torch.Tensor or ttnn.Tensor for speaker_embeddings)."""
-
-        # Initialize decoder input (start with zeros)
-        decoder_input = self._get_initial_decoder_input(batch_size)
-
-        # Convert speaker embeddings to TTNN if provided and needed
-        speaker_embeddings_ttnn = None
-        if speaker_embeddings is not None:
-            if isinstance(speaker_embeddings, torch.Tensor):
-                # Ensure correct shape [batch, 1, dim] or [batch, dim]
-                if speaker_embeddings.ndim == 2:
-                    speaker_embeddings = speaker_embeddings.unsqueeze(1)
-
-                speaker_embeddings_ttnn = ttnn.from_torch(
-                    speaker_embeddings,
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.device,
-                )
-            else:
-                # Already TTNN tensor
-                speaker_embeddings_ttnn = speaker_embeddings
-
-        mel_frames_list = []
-
-        for step in range(self.max_decoder_steps):
-            # Run decoder for one step - outputs hidden states [B, T, 768]
-            decoder_hidden_states = self.decoder(
-                decoder_input,
-                encoder_hidden_states,
-                speaker_embeddings_ttnn,
-            )
-
-            # Post-net: hidden states → mel frames
-            # Returns: (mel_before_postnet, mel_after_postnet, stop_logits)
-            _, mel_refined, stop_logits_ttnn = self.postnet(decoder_hidden_states)
-
-            # Convert outputs to PyTorch
-            mel_refined_torch = ttnn.to_torch(mel_refined)
-            stop_logits_torch = ttnn.to_torch(stop_logits_ttnn)
-
-            # Store refined mel frames (already processed by post-net)
-            mel_frames_list.append(mel_refined_torch)
-
-            # Check stop condition using stop token prediction
-            # stop_logits shape: [batch, seq_len * reduction_factor]
-            # HF checks the LAST frame's stop probability (not all frames)
-            stop_probs = torch.sigmoid(stop_logits_torch)
-            last_frame_stop_prob = stop_probs[0, -1]  # Check last frame only
-            should_stop = last_frame_stop_prob > self.stop_threshold
-
-            if should_stop:
-                if verbose:
-                    print(f"      ✓ Stop token detected at step {step + 1} (prob: {last_frame_stop_prob:.4f})")
-                break
-
-            # Check max steps as fallback
-            if step >= self.max_decoder_steps - 1:
-                if verbose:
-                    print(f"      ✓ Reached max steps ({self.max_decoder_steps})")
-                break
-
-            # Update decoder input for next step
-            # Use the last reduction_factor mel frames as input
-            decoder_input = ttnn.from_torch(
-                mel_refined_torch[:, -self.reduction_factor :, :],
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.device,
-            )
-
-            if verbose and (step + 1) % 20 == 0:
-                frames_generated = (step + 1) * self.reduction_factor
-                print(f"      Step {step + 1}/{self.max_decoder_steps} - Generated {frames_generated} frames")
-
-        # Concatenate all mel frames
-        all_mel_frames = torch.cat(mel_frames_list, dim=1)
-
-        if verbose:
-            total_steps = len(mel_frames_list)
-            total_frames = all_mel_frames.shape[1]
-            print(f"      ✓ Generated {total_steps} decoder steps")
-            print(f"      ✓ Total mel frames: {total_frames}")
-
-        return all_mel_frames
-
-    def _get_initial_decoder_input(self, batch_size: int) -> ttnn.Tensor:
-        """Get initial decoder input (zeros for cold start)."""
-        # Start with reduction_factor frames of zeros
-        initial_input = torch.zeros(batch_size, self.reduction_factor, self.num_mel_bins)
-
-        # Convert to TTNN
-        initial_input_ttnn = ttnn.from_torch(
-            initial_input,
+        # Create dummy inputs
+        decoder_input_values = ttnn.from_torch(
+            torch.randn(batch_size, seq_len, num_mel_bins),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=self.device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-
-        return initial_input_ttnn
-
-    def _postprocess(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        """Apply post-net to convert hidden states to refined mel spectrogram."""
-        # Convert to TTNN
-        hidden_states_ttnn = ttnn.from_torch(
-            hidden_states,
+        encoder_hidden_states = ttnn.from_torch(
+            torch.randn(batch_size, encoder_seq_len, hidden_size),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=self.device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        speaker_embeddings = ttnn.from_torch(
+            torch.randn(batch_size, 512),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
-        # Run post-net: hidden states → mel frames
-        # Returns: (mel_before_postnet, mel_after_postnet, stop_logits)
-        _, refined_mel_ttnn, _ = self.postnet(hidden_states_ttnn)
+        # First run to compile operations
+        decoder_output = self.decoder(
+            decoder_input_values=decoder_input_values,
+            encoder_hidden_states=encoder_hidden_states,
+            speaker_embeddings=speaker_embeddings,
+        )
+        ttnn.synchronize_device(self.device)
 
-        # Convert back to PyTorch
-        refined_mel = ttnn.to_torch(refined_mel_ttnn)
+        # Prepare inputs for trace capture
+        host_inputs = self.decoder.prepare_decode_inputs(
+            decoder_input_values, encoder_hidden_states, speaker_embeddings
+        )
+        device_inputs = copy_host_to_device(host_inputs, mesh_device=self.device)
 
-        return refined_mel
+        # Capture trace
+        trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
+        transformed_inputs = self.decoder.prepare_decode_inputs(
+            decoder_input_values, encoder_hidden_states, speaker_embeddings
+        )
+        trace_output = self.decoder(
+            decoder_input_values=decoder_input_values,
+            encoder_hidden_states=encoder_hidden_states,
+            speaker_embeddings=speaker_embeddings,
+        )
+        ttnn.end_trace_capture(self.device, trace_id, cq_id=0)
+        ttnn.synchronize_device(self.device)
+
+        # Store trace information
+        self.trace_id_decoder[seq_len] = trace_id
+        self.trace_inputs_decoder[seq_len] = device_inputs
+        self.trace_output_decoder[seq_len] = trace_output
+
+        # Clean up
+        ttnn.deallocate(decoder_input_values)
+        ttnn.deallocate(encoder_hidden_states)
+        ttnn.deallocate(speaker_embeddings)
+        if seq_len > 1:  # Keep the first decoder output for postnet trace
+            ttnn.deallocate(decoder_output)
+
+    def _capture_postnet_trace(self):
+        """
+        Capture postnet trace. Postnet has fixed input shape [batch, 1, hidden_size].
+        """
+        batch_size = 1
+        hidden_size = 768
+
+        # Create dummy decoder output (postnet input)
+        decoder_hidden_states = ttnn.from_torch(
+            torch.randn(batch_size, 1, hidden_size),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+
+        # First run to compile operations
+        mel_before, mel_after, stop_logits = self.postnet(decoder_hidden_states)
+        ttnn.synchronize_device(self.device)
+
+        # Prepare inputs for trace capture
+        host_inputs = self.postnet.prepare_postnet_inputs(decoder_hidden_states)
+        device_inputs = copy_host_to_device(host_inputs, mesh_device=self.device)
+
+        # Capture trace
+        trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
+        transformed_inputs = self.postnet.prepare_postnet_inputs(decoder_hidden_states)
+        trace_mel_before, trace_mel_after, trace_stop_logits = self.postnet(decoder_hidden_states)
+        ttnn.end_trace_capture(self.device, trace_id, cq_id=0)
+        ttnn.synchronize_device(self.device)
+
+        # Store trace information
+        self.trace_id_postnet = trace_id
+        self.trace_inputs_postnet = device_inputs
+        self.trace_output_postnet = (trace_mel_before, trace_mel_after, trace_stop_logits)
+
+        # Clean up
+        ttnn.deallocate(decoder_hidden_states)
+        ttnn.deallocate(mel_before)
+        ttnn.deallocate(mel_after)
+        ttnn.deallocate(stop_logits)
+
+    def _execute_decoder_trace(self, seq_len: int, decoder_input_values, encoder_hidden_states, speaker_embeddings):
+        """
+        Execute decoder trace for given sequence length.
+
+        Args:
+            seq_len: Sequence length key for trace lookup
+            decoder_input_values: Input mel spectrogram values
+            encoder_hidden_states: Encoder output hidden states
+            speaker_embeddings: Speaker embeddings
+
+        Returns:
+            Decoder output hidden states
+        """
+        if seq_len not in self.trace_id_decoder or self.trace_id_decoder[seq_len] is None:
+            logger.warning(
+                f"No decoder trace found for sequence length {seq_len}, falling back to non-traced execution"
+            )
+            return self.decoder(
+                decoder_input_values=decoder_input_values,
+                encoder_hidden_states=encoder_hidden_states,
+                speaker_embeddings=speaker_embeddings,
+            )
+
+        # Prepare inputs and copy to device
+        host_inputs = self.decoder.prepare_decode_inputs(
+            decoder_input_values, encoder_hidden_states, speaker_embeddings
+        )
+        copy_host_to_device(
+            host_tensors=host_inputs,
+            device_tensors=self.trace_inputs_decoder[seq_len],
+        )
+
+        # Execute trace
+        ttnn.execute_trace(self.device, self.trace_id_decoder[seq_len], cq_id=0, blocking=False)
+
+        return self.trace_output_decoder[seq_len]
+
+    def _execute_postnet_trace(self, decoder_hidden_states):
+        """
+        Execute postnet trace.
+
+        Args:
+            decoder_hidden_states: Decoder output hidden states
+
+        Returns:
+            Tuple of (mel_before, mel_after, stop_logits)
+        """
+        if self.trace_id_postnet is None:
+            logger.warning("No postnet trace found, falling back to non-traced execution")
+            return self.postnet(decoder_hidden_states)
+
+        # Prepare inputs and copy to device
+        host_inputs = self.postnet.prepare_postnet_inputs(decoder_hidden_states)
+        copy_host_to_device(
+            host_tensors=host_inputs,
+            device_tensors=self.trace_inputs_postnet,
+        )
+
+        # Execute trace
+        ttnn.execute_trace(self.device, self.trace_id_postnet, cq_id=0, blocking=False)
+
+        return self.trace_output_postnet
