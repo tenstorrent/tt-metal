@@ -180,7 +180,7 @@ jobs:
             co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
             co-owner-2-id: U08BH66EXAL, # Radoica Draskic
           },
-          # V1 tests
+          # vLLM v1 tests
           {
             name: "[WH-T3K][v1] Gemma3-27B",
             model: "google/gemma-3-27b-it",
