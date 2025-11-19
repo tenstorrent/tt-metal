@@ -33,9 +33,6 @@
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 #include "utils.hpp"
 
-namespace {
-constexpr auto gpt2_tokenizer_file_name = "/gpt2-tokenizer.json";
-}
 
 using Model = std::shared_ptr<ttml::models::BaseTransformer>;
 
@@ -506,7 +503,7 @@ int main(int argc, char **argv) {
         model_config.transformer_config);
 
     Model model = std::visit(
-        [&device_config, &training_config, &multihost_config](auto &&arg) -> Model {
+        [&device_config, &multihost_config](auto &&arg) -> Model {
             if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, ttml::models::llama::LlamaConfig>) {
                 if (multihost_config.pipeline_parallel_config) {
                     return ttml::models::distributed::pipeline_parallel_llama::create(

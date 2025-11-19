@@ -210,7 +210,6 @@ def get_configs(
 
     device_config = DeviceConfig(device_config)
 
-
     # Load model config
 
     if training_config.model_config is not None:
