@@ -1,3 +1,0 @@
-device_config:
-  enable_ddp: true
-  mesh_shape: [1, 32]
