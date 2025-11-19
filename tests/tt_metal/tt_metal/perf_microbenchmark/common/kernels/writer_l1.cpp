@@ -61,7 +61,7 @@ void kernel_main() {
             local_cb.wait_front(curr_block_num_tiles);
 
             remote_cb.reserve_back(1);
-            remote_cb.push_back(local_cb, 1, curr_num_tile_rows, curr_coalesced_num_pages, curr_coalesced_page_size);
+            remote_cb.push_back(local_cb, 1, curr_num_tile_rows, curr_coalesced_num_pages, curr_coalesced_page_size, noc_if);
 
             local_cb.pop_front(curr_block_num_tiles);
         }

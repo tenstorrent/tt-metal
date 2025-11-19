@@ -36,6 +36,7 @@ void kernel_main() {
     start_page_size = page_size[0];
 
     experimental::RemoteCircularBuffer remote_cb{remote_cb_id};
+    experimental::Noc noc;
 
     for (uint32_t l = 0; l < num_layers; ++l) {
         uint32_t curr_page_size = page_size[l];
@@ -43,7 +44,7 @@ void kernel_main() {
         uint32_t curr_block_num_tiles = block_num_tiles[l];
 
         uint32_t curr_block_size = curr_block_num_tiles * curr_page_size;
-        remote_cb.set_receiver_page_size(curr_block_size);
+        remote_cb.set_receiver_page_size(curr_block_size, noc);
 
         for (uint32_t block = 0; block < curr_num_blocks; ++block) {
             remote_cb.wait_front(1);

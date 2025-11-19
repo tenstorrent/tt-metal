@@ -463,7 +463,7 @@ public:
         uint32_t num_rows,
         uint32_t coalesced_num_pages_per_row,
         uint32_t coalesced_page_size,
-        experimental::Noc noc = experimental::Noc()) {
+        experimental::Noc& noc) {
         remote_cb_push_back_and_write_pages<update_remote_pointer == RemotePointerUpdate::UPDATE_OVER_NOC>(
             remote_cb_index_,
             src_local_cb.get_read_ptr(),
@@ -492,7 +492,7 @@ public:
     template <RemotePointerUpdate update_remote_pointer = RemotePointerUpdate::UPDATE_OVER_NOC>
     void set_receiver_page_size(
         uint32_t page_size,
-        experimental::Noc noc = experimental::Noc(),
+        experimental::Noc& noc,
         uint8_t noc_mode = detail::default_noc_mode,
         bool posted = true,
         uint8_t cmd_buf = detail::default_cmd_buf) {
@@ -519,7 +519,7 @@ public:
      * @param num_pages The number of pages to pop
      * @param noc The NoC to use for the remote pointer update
      */
-    void pop_front(uint32_t num_pages, experimental::Noc noc = experimental::Noc()) {
+    void pop_front(uint32_t num_pages, experimental::Noc& noc) {
         remote_cb_pop_front(remote_cb_index_, num_pages, noc.get_noc_id());
     }
 
@@ -541,7 +541,7 @@ public:
     template <RemotePointerUpdate update_remote_pointer = RemotePointerUpdate::UPDATE_OVER_NOC>
     void set_sender_page_size(
         uint32_t page_size,
-        experimental::Noc noc = experimental::Noc(),
+        experimental::Noc& noc,
         uint8_t noc_mode = detail::default_noc_mode,
         bool posted = true,
         uint8_t cmd_buf = detail::default_cmd_buf) {
@@ -569,7 +569,6 @@ public:
 
 private:
     uint32_t remote_cb_index_;
-    experimental::Noc noc_;
 };
 
 #endif
