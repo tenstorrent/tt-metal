@@ -169,79 +169,68 @@ def load_config(path: str):
         config = yaml.safe_load(f)
     return config
 
-
-def get_configs(
-    training_config_name: str,
-    device_config_name: str,
-    model_config_name: str = "",
-    multihost_config_name: str = "",
+def get_training_config(
+    training_config_src: str,
     configs_root: str = f"{os.environ['TT_METAL_HOME']}/tt-train/configs/",
-) -> dict[TrainingConfig, DeviceConfig, TransformerConfig, MultiHostConfig]:
-    """Load all configurations given their filenames."""
+    ) -> TrainingConfig:
 
-    if not (training_config_name.endswith(".yaml")):
-        training_config_name += ".yaml"
-    if not (device_config_name.endswith(".yaml")):
-        device_config_name += ".yaml"
-    if model_config_name != "" and not (model_config_name.endswith(".yaml")):
-        model_config_name += ".yaml"
-    if multihost_config_name != "" and not (multihost_config_name.endswith(".yaml")):
-        multihost_config_name += ".yaml"
+    """Load training configuration given its filename."""
 
-    # Load training config
-
-    if os.path.isabs(training_config_name):
-        training_config = load_config(training_config_name)
+    if os.path.isabs(training_config_src):
+        training_config = load_config(training_config_src)
     else:
         training_config = load_config(
-            os.path.join(configs_root, "training_configs", training_config_name)
+            os.path.join(configs_root, "training_configs", training_config_src)
         )
 
     training_config = TrainingConfig(training_config)
 
-    # Load device config
+    return training_config
 
-    if os.path.isabs(device_config_name):
-        device_config = load_config(device_config_name)
+def get_device_config(
+    device_config_src: str,
+    configs_root: str = f"{os.environ['TT_METAL_HOME']}/tt-train/configs/",
+    ) -> DeviceConfig:
+
+    """Load device configuration given its filename."""
+
+    if os.path.isabs(device_config_src):
+        device_config = load_config(device_config_src)
     else:
         device_config = load_config(
-            os.path.join(configs_root, "device_configs", device_config_name)
+            os.path.join(configs_root, "device_configs", device_config_src)
         )
 
     device_config = DeviceConfig(device_config)
 
-    # Load model config
+    return device_config
 
-    if training_config.model_config is not None:
-        if os.path.isfile(training_config.model_config):
-            model_config = load_config(training_config.model_config)
-        elif os.path.isabs(training_config.model_config):
-            model_config = load_config(training_config.model_config)
-        else:
-            raise ValueError(
-                f"Model config path {training_config.model_config} is not valid."
-            )
-    else:
-        model_config = load_config(
-            os.path.join(configs_root, "model_configs", model_config_name)
-        )
+def get_model_config(
+    model_config_src: str,
+    ) -> TransformerConfig:
 
+    """Load model configuration given its filename."""
+
+    model_config = load_config(model_config_src)
     model_config = TransformerConfig(model_config)
 
-    # Load multihost config
+    return model_config
 
-    if multihost_config_name != "":
-        multihost_config = load_config(
-            os.path.join(configs_root, "multihost_configs", multihost_config_name)
-        )
+def get_multihost_config(
+    multihost_config_src: str,
+    configs_root: str = f"{os.environ['TT_METAL_HOME']}/tt-train/configs/",
+    ) -> MultiHostConfig:
+
+    """Load multihost configuration given its filename."""
+
+    if os.path.isabs(multihost_config_src):
+        multihost_config = load_config(multihost_config_src)
     else:
-        multihost_config = {}
+        multihost_config = load_config(
+            os.path.join(configs_root, "multihost_configs", multihost_config_src)
+        )
 
     multihost_config = MultiHostConfig(multihost_config)
 
-    return {
-        "training": training_config,
-        "device": device_config,
-        "model": model_config,
-        "multihost": multihost_config,
-    }
+    return multihost_config
+
