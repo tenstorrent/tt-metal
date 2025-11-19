@@ -165,10 +165,10 @@ void JitBuildEnv::init(
         if (std::filesystem::exists(llvm_path)) {
             // Store LLVM path for later use with kernels (not firmware)
             this->gpp_llvm_ = (use_ccache ? "ccache " : "") + llvm_path + " ";
-            log_info(tt::LogBuildKernels, "LLVM/Clang available at {} for firmware compilation", llvm_path);
+            log_info(tt::LogBuildKernels, "LLVM/Clang available at {} for compilation", llvm_path);
             log_warning(
                 tt::LogBuildKernels,
-                "LLVM mode: Will use LLVM for standalone firmware only. Dispatch/SFPU/compute kernels will use GCC.");
+                "LLVM mode: Will use LLVM for firmware and dispatch kernels. SFPU/compute kernels will use GCC. (ELF loader debugging in progress)");
         } else {
             TT_THROW("LLVM compiler requested but not found at {}", llvm_path);
         }
@@ -193,13 +193,21 @@ void JitBuildEnv::init(
 
     // Set up LLVM flags if requested (for both kernels and firmware)
     if (llvm_requested && !this->gpp_llvm_.empty()) {
-        // Start WITHOUT LTO to test basic LLVM compatibility
+        // Use LTO to reduce code size (needed to stay within firmware size limits with -mno-relax)
         // Firmware exports symbols to kernels, so both must use the same compiler/ABI
-        string llvm_common_flags = "-std=c++17 -ffast-math -fno-exceptions ";
+        // Use -Os (optimize for size) to compensate for -mno-relax bloat
+        string llvm_common_flags = "-std=c++17 -Os -flto -ffast-math -fno-exceptions ";
         // Match GCC's -mcpu=tt-bh which uses rv32im (without 'c' compressed extension)
         // This avoids relocation alignment issues caused by 2-byte compressed instructions
         llvm_common_flags += "-target riscv32 -march=rv32im -mabi=ilp32 ";
         llvm_common_flags += "-ffreestanding -nostdlib ";
+        // Disable PIE and PLT to avoid dynamic relocations (R_RISCV_CALL_PLT)
+        llvm_common_flags += "-fno-pic -fno-pie -fno-plt ";
+        // Disable linker relaxation - the ELF loader expects lui instructions for R_RISCV_HI20 relocations
+        llvm_common_flags += "-mno-relax ";
+        // Ensure volatile semantics are preserved and prevent strict aliasing optimizations
+        // This is critical for dispatch kernels that poll volatile semaphore addresses
+        llvm_common_flags += "-fno-strict-aliasing ";
         // Enable function/data sections so linker can garbage-collect unused/empty sections
         llvm_common_flags += "-ffunction-sections -fdata-sections ";
 
@@ -229,13 +237,20 @@ void JitBuildEnv::init(
             "-Wno-unknown-attributes "  // LLVM doesn't know GCC's custom attributes like rvtt_l1_ptr
             "-Wno-microsoft-anon-tag "
             "-Wno-empty-body "       // LLVM complains about empty while loops
+            "-Wno-unused-but-set-variable "  // Handled with [[maybe_unused]] in source code
+            "-Wno-constant-logical-operand "  // Dispatch kernels use constant && in conditionals
             "-falign-functions=4 ";  // Force 4-byte alignment to avoid misaligned relocations
 
-        // Linker uses the same base flags (NO LTO for now)
+        // Linker uses the same base flags (with LTO to resolve internal calls)
         this->lflags_llvm_ = llvm_common_flags;
         this->lflags_llvm_ += "-Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles ";
-        // Tell the linker to garbage-collect unused sections (including empty .data)
+        // Use --gc-sections to reduce code size
         this->lflags_llvm_ += "-Wl,--gc-sections ";
+        // Force the linker to keep the .data and .bss sections by marking their symbols as undefined/required
+        // This ensures empty sections still get PT_LOAD segments as the ELF loader expects
+        this->lflags_llvm_ += "-Wl,--undefined=__ldm_data_start -Wl,--undefined=__ldm_bss_start ";
+        // Force static linking mode and resolve all calls directly (no PLT)
+        this->lflags_llvm_ += "-static -Wl,--no-dynamic-linker -Wl,--no-undefined -Wl,-Bstatic ";
         // Link with GCC's compiler runtime library for functions like __ashldi3
         // Use the blackhole variant (bh-ilp32) to match our target
         // gpp_include_dir_ is /path/to/sfpi/include, so go to ../compiler/lib/gcc/...
@@ -245,6 +260,7 @@ void JitBuildEnv::init(
         // This avoids ABI/symbol incompatibilities when mixing GCC and LLVM
         this->lflags_llvm_ += "-fuse-ld=lld ";
         // Link with libgcc and libc for runtime support
+        // Note: watcher's atomic operations (__atomic_load_1) are not available with LLVM currently
         // Order matters: substitutes.o provides atexit/exit, libc provides setjmp
         // We link libc AFTER object files so linker prefers substitutes.o implementations
         std::string libc_path = sfpi_root + "/compiler/riscv-tt-elf/lib/bh-ilp32";
@@ -472,13 +488,12 @@ void JitBuildState::compile_one(
     const string& out_dir, const JitBuildSettings* settings, const string& src, const string& obj) const {
     // ZoneScoped;
 
-    // Choose compiler: LLVM for standalone firmware only
-    // Dispatch kernels have template code bugs (uint8_t vs size_t mismatch) that LLVM rejects
+    // Choose compiler: LLVM for firmware and dispatch kernels
     // SFPU/compute kernels (trisc) require GCC SFPU builtins
-    bool is_firmware_build = this->is_fw_;
+    [[maybe_unused]] bool is_firmware_build = this->is_fw_;
     bool is_trisc_kernel = (src.find("trisck.cc") != std::string::npos) || (src.find("trisc.cc") != std::string::npos);
-    // Use LLVM only for standalone firmware - dispatch kernels must use GCC due to template bugs
-    bool use_llvm_for_this_build = is_firmware_build && !is_trisc_kernel && !env_.gpp_llvm_.empty();
+    // Use LLVM for all non-SFPU builds (firmware + dispatch + user kernels)
+    bool use_llvm_for_this_build = !is_trisc_kernel && !env_.gpp_llvm_.empty();
     string compiler = use_llvm_for_this_build ? env_.gpp_llvm_ : env_.gpp_;
 
     // For LLVM, start with LLVM base flags and add HAL flags (filtering GCC-specific ones)
@@ -494,6 +509,7 @@ void JitBuildState::compile_one(
             "-mcpu=tt-bh",
             "-mcpu=tt-wh",
             "-mcpu=tt-gs",
+            "-mno-tt",              // GCC-specific Tensix flags (e.g., -mno-tt-tensix-optimize-replay)
             "-fno-rvtt-sfpu-replay",
             "-fno-tree-loop-distribute-patterns",
             "-flto=auto",  // LLVM uses -flto without =auto
@@ -623,11 +639,11 @@ bool JitBuildState::need_link(const string& out_dir) const {
 void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings) const {
     // ZoneScoped;
     // Choose linker: MUST match compile_one logic!
-    // Use LLVM linker only for standalone firmware (not dispatch, not trisc)
-    bool is_firmware_build = this->is_fw_;
+    // Use LLVM linker for firmware and dispatch kernels, GCC for SFPU/compute (trisc)
+    [[maybe_unused]] bool is_firmware_build = this->is_fw_;
     bool is_trisc_kernel = (out_dir.find("/trisc") != std::string::npos);
-    // Use LLVM linker only if we used LLVM compiler (for standalone firmware)
-    bool use_llvm_for_this_build = is_firmware_build && !is_trisc_kernel && !env_.gpp_llvm_.empty();
+    // Use LLVM linker if we used LLVM compiler (for firmware and dispatch kernels)
+    bool use_llvm_for_this_build = !is_trisc_kernel && !env_.gpp_llvm_.empty();
     string compiler = use_llvm_for_this_build ? env_.gpp_llvm_ : env_.gpp_;
 
     // Choose linker flags based on compiler

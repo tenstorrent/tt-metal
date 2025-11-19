@@ -35,6 +35,7 @@ set(SOURCES
     datasets/generators_test.cpp
     datasets/dataloader_test.cpp
     optimizers/adamw_test.cpp
+    optimizers/sgd_fused_test.cpp
     optimizers/no_op_test.cpp
     modules/distributed/linear_test.cpp
     serialization/model_serializer_test.cpp
@@ -55,6 +56,7 @@ set(SOURCES
     ops/softmax_test.cpp
     ops/silu_op_test.cpp
     ops/sdpa_fw_op_test.cpp
+    ops/swiglu_op_test.cpp
 )
 
 add_executable(ttml_tests ${SOURCES})

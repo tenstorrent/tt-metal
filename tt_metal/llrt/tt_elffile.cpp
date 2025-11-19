@@ -414,7 +414,9 @@ void ElfFile::Impl::Elf<Is64>::LoadImage() {
                 section.sh_offset);
         }
         // If it's allocatable, make sure it's in a segment.
-        if (section.sh_flags & SHF_ALLOC && GetSegmentIx(section) < 0) {
+        // Exception: empty sections (size == 0) don't need to be in a segment since there's nothing to load
+        // This happens with LLVM+LTO when --gc-sections removes all data/bss content
+        if (section.sh_flags & SHF_ALLOC && section.sh_size > 0 && GetSegmentIx(section) < 0) {
             TT_THROW(
                 "{}: allocatable section {} [{},+{})@{} is not in known segment",
                 path_,
@@ -457,13 +459,16 @@ void ElfFile::Impl::Elf<Is64>::LoadImage() {
         if (std::strcmp(GetName(section), ".data") == 0) {
             // Verify this is at the start of segment 1 -- we had a
             // linker script bug at one point.
-            bool in_range = GetSegments().size() >= 2;
-            if (!in_range || section.sh_addr != GetSegments()[1].address) {
-                TT_THROW("{}: .data section at [{},+{}) not at start of data segment at [{},+{})",
-                         path_,
-                         section.sh_addr, section.sh_size,
-                         in_range ? GetSegments()[1].address : 0,
-                         in_range ? GetSegments()[1].membytes : 0);
+            // Skip this check if .data is empty (LLVM+LTO may not create a data segment)
+            if (section.sh_size > 0) {
+                bool in_range = GetSegments().size() >= 2;
+                if (!in_range || section.sh_addr != GetSegments()[1].address) {
+                    TT_THROW("{}: .data section at [{},+{}) not at start of data segment at [{},+{})",
+                             path_,
+                             section.sh_addr, section.sh_size,
+                             in_range ? GetSegments()[1].address : 0,
+                             in_range ? GetSegments()[1].membytes : 0);
+                }
             }
         }
     }
@@ -735,13 +740,15 @@ void ElfFile::Impl::Elf<Is64>::XIPify() {
                     if (!is_to_text) {
                         break;
                     }
-                    // Emit dynamic reloc
+                    // Resolve R_RISCV_32 relocation (used by LLVM for jump tables)
+                    // GCC uses ADD32/SUB32 pairs instead, so this is LLVM-specific
                     log_debug(
-                        tt::LogLLRuntime, "{}: emitting dynamic R_RISCV_32 relocation at {}", path_, reloc.r_offset);
+                        tt::LogLLRuntime, "{}: resolving R_RISCV_32 relocation at {}", path_, reloc.r_offset);
                     address_t value = (symbol->st_value + reloc.r_addend - GetSegments().front().address);
                     Write32(section, reloc.r_offset, value);
-                    auto& seg = GetSegments()[segment_ix];
-                    seg.relocs.push_back(reloc.r_offset - seg.address);
+                    // Don't add to seg.relocs - the relocation is already resolved above
+                    // auto& seg = GetSegments()[segment_ix];
+                    // seg.relocs.push_back(reloc.r_offset - seg.address);
                 } break;
 
                 case R_RISCV_JAL:
