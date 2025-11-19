@@ -322,9 +322,8 @@ SenderReceiverConfig get_device_sender_receiver_config_in_ring(
         } else {
             new_col = line_index % ring_size;
         }
-        auto* device = mesh_view.get_device(MeshCoordinate(new_row, new_col));
-        TT_FATAL(device != nullptr, "Device not found at coordinate {}", MeshCoordinate(new_row, new_col));
-        return device->id();
+        // TODO(p1-0tr): Make sure chip_id matches device_id.
+        return mesh_device->get_fabric_node_id(MeshCoordinate(new_row, new_col)).chip_id;
     };
 
     bool is_last_chip_in_clockwise_direction = config.device_index == (ring_size - 1);
@@ -336,6 +335,7 @@ SenderReceiverConfig get_device_sender_receiver_config_in_ring(
     return config;
 }
 
+// TODO(p1-0tr): Dig into usage in ops and remove this.
 std::vector<IDevice*> get_active_physical_devices(const Tensor& tensor) {
     auto mesh_device = tensor.device();
     std::vector<IDevice*> devices = {};
@@ -346,6 +346,7 @@ std::vector<IDevice*> get_active_physical_devices(const Tensor& tensor) {
     return devices;
 }
 
+// TODO(p1-0tr): Dig into usage in ops and remove this.
 std::vector<IDevice*> get_active_physical_devices(const std::vector<Tensor>& tensor_shards) {
     std::vector<IDevice*> devices;
     devices.reserve(tensor_shards.size());

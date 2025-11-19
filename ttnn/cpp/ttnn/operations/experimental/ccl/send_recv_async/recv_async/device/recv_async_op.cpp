@@ -39,8 +39,8 @@ tt::tt_metal::operation::MeshWorkloadWithCallbacks RecvAsync::create_mesh_worklo
 tt::tt_metal::operation::ProgramWithCallbacks RecvAsync::create_program_at(
     const MeshCoordinate& coord, const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     auto mesh_device = input_tensors[0].device();
-    IDevice* target_device = mesh_device ? mesh_device->get_device(coord) : input_tensors[0].device();
-    return recv_async_multicore(input_tensors[0], target_device, this->mesh_socket);
+    const auto target_fabric_node_id = mesh_device->get_fabric_node_id(coord);
+    return recv_async_multicore(input_tensors[0], target_fabric_node_id, this->mesh_socket);
 }
 
 tt::tt_metal::operation::Hash RecvAsync::compute_program_hash(const std::vector<Tensor>& input_tensors) const {

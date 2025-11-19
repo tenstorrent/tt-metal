@@ -210,16 +210,16 @@ operation::ProgramWithCallbacks RingDistributedScaledDotProductAttention::create
     } else {
         // Infer ring_id from device coordinate (similar to ring_joint_sdpa)
         auto mesh_device = input_tensors[0].device();
-        IDevice* target_device = mesh_device ? mesh_device->get_device(coord) : input_tensors[0].device();
+        const auto& mesh_view = mesh_device->get_view();
+        const auto target_fabric_node_id = mesh_view.get_fabric_node_id(coord);
 
         // Get all devices in the ring (assuming linear layout along one axis)
-        const auto& mesh_view = mesh_device->get_view();
-        std::vector<IDevice*> devices_to_use;
+        std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;
         // For simplicity, assume ring is along the first axis (adjust as needed)
         if (mesh_view.shape()[0] == this->ring_size) {
-            devices_to_use = mesh_view.get_devices_on_column(coord[1]);
+            fabric_node_ids = mesh_view.get_fabric_node_ids_on_column(coord[1]);
         } else if (mesh_view.shape()[1] == this->ring_size) {
-            devices_to_use = mesh_view.get_devices_on_row(coord[0]);
+            fabric_node_ids = mesh_view.get_fabric_node_ids_on_row(coord[0]);
         } else {
             TT_FATAL(
                 false,
@@ -232,13 +232,13 @@ operation::ProgramWithCallbacks RingDistributedScaledDotProductAttention::create
         // Find ring_id (device index in the ring)
         ring_id = 0;
         for (uint32_t i = 0; i < this->ring_size; ++i) {
-            if (devices_to_use.at(i) == target_device) {
+            if (fabric_node_ids.at(i) == target_fabric_node_id) {
                 ring_id = i;
                 break;
             }
         }
 
-        log_debug(tt::LogOp, "Inferred ring_id: {} for device_id: {}", ring_id, target_device->id());
+        log_debug(tt::LogOp, "Inferred ring_id: {} for device_id: {}", ring_id, target_fabric_node_id.chip_id);
     }
 
     return detail::ring_sdpa_multi_core(
