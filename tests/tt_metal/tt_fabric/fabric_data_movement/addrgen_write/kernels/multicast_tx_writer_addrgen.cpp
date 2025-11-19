@@ -27,7 +27,9 @@ using namespace tt::tt_fabric::mesh::experimental;
 //   0: OPERATION_TYPE (OperationType enum: BasicWrite, Scatter, FusedAtomicInc)
 //   1: API_VARIANT (ApiVariant enum: Basic, WithState, SetState) - NOTE: only used for BasicWrite
 //   2: TOTAL_PAGES
-//   3: PAGE_SIZE
+//   3: PAGE_SIZE (actual data size to transfer)
+//   4: ALIGNED_PAGE_SIZE (destination buffer spacing for address calculation)
+//   5: SRC_ALIGNED_PAGE_SIZE (source CB stride for scatter operations)
 //
 // RT args (must match host):
 //   0:  dst_base       (u32)
@@ -45,6 +47,8 @@ void kernel_main() {
     constexpr uint32_t API_VARIANT = get_compile_time_arg_val(CTA_BASE + 1);
     constexpr uint32_t TOTAL_PAGES = get_compile_time_arg_val(CTA_BASE + 2);
     constexpr uint32_t PAGE_SIZE = get_compile_time_arg_val(CTA_BASE + 3);
+    constexpr uint32_t ALIGNED_PAGE_SIZE = get_compile_time_arg_val(CTA_BASE + 4);
+    constexpr uint32_t SRC_ALIGNED_PAGE_SIZE = get_compile_time_arg_val(CTA_BASE + 5);
     constexpr uint32_t CB_ID = tt::CBIndex::c_0;
 
     // Cast to enum types for clearer comparisons
@@ -111,7 +115,10 @@ void kernel_main() {
         senderS.open<true>();
     }
 
-    const auto dst_acc = TensorAccessor(ta_args, /*bank_base=*/dst_base, /*page_size=*/PAGE_SIZE);
+    // For non-scatter: Use ALIGNED_PAGE_SIZE (dst) for address calculation
+    // For scatter: Use SRC_ALIGNED_PAGE_SIZE to match CB stride (less BW efficient but correct)
+    const auto dst_acc = TensorAccessor(ta_args, /*bank_base=*/dst_base, /*page_size=*/ALIGNED_PAGE_SIZE);
+    const auto scatter_acc = TensorAccessor(ta_args, /*bank_base=*/dst_base, /*page_size=*/SRC_ALIGNED_PAGE_SIZE);
 
     // FusedAtomicInc: compute semaphore NOC address before loop
     uint64_t sem_noc = 0;
@@ -154,7 +161,8 @@ void kernel_main() {
             if constexpr (operation_type == OperationType::BasicWrite) {
                 fabric_multicast_noc_unicast_write_set_state(left_packet_header, 0, 0, ranges_w, dst_acc, 0);
             } else if constexpr (operation_type == OperationType::Scatter) {
-                fabric_multicast_noc_scatter_write_set_state(left_packet_header, 0, 0, ranges_w, dst_acc, 0, 1);
+                // Use scatter_acc with SRC_ALIGNED_PAGE_SIZE to match CB stride
+                fabric_multicast_noc_scatter_write_set_state(left_packet_header, 0, 0, ranges_w, scatter_acc, 0, 1);
             }
         }
         if (e_hops > 0) {
@@ -162,7 +170,8 @@ void kernel_main() {
             if constexpr (operation_type == OperationType::BasicWrite) {
                 fabric_multicast_noc_unicast_write_set_state(right_packet_header, 0, 0, ranges_e, dst_acc, 0);
             } else if constexpr (operation_type == OperationType::Scatter) {
-                fabric_multicast_noc_scatter_write_set_state(right_packet_header, 0, 0, ranges_e, dst_acc, 0, 1);
+                // Use scatter_acc with SRC_ALIGNED_PAGE_SIZE to match CB stride
+                fabric_multicast_noc_scatter_write_set_state(right_packet_header, 0, 0, ranges_e, scatter_acc, 0, 1);
             }
         }
         if (n_hops > 0) {
@@ -171,7 +180,8 @@ void kernel_main() {
             if constexpr (operation_type == OperationType::BasicWrite) {
                 fabric_multicast_noc_unicast_write_set_state(north_packet_header, 0, 0, ranges_n, dst_acc, 0);
             } else if constexpr (operation_type == OperationType::Scatter) {
-                fabric_multicast_noc_scatter_write_set_state(north_packet_header, 0, 0, ranges_n, dst_acc, 0, 1);
+                // Use scatter_acc with SRC_ALIGNED_PAGE_SIZE to match CB stride
+                fabric_multicast_noc_scatter_write_set_state(north_packet_header, 0, 0, ranges_n, scatter_acc, 0, 1);
             }
         }
         if (s_hops > 0) {
@@ -180,7 +190,8 @@ void kernel_main() {
             if constexpr (operation_type == OperationType::BasicWrite) {
                 fabric_multicast_noc_unicast_write_set_state(south_packet_header, 0, 0, ranges_s, dst_acc, 0);
             } else if constexpr (operation_type == OperationType::Scatter) {
-                fabric_multicast_noc_scatter_write_set_state(south_packet_header, 0, 0, ranges_s, dst_acc, 0, 1);
+                // Use scatter_acc with SRC_ALIGNED_PAGE_SIZE to match CB stride
+                fabric_multicast_noc_scatter_write_set_state(south_packet_header, 0, 0, ranges_s, scatter_acc, 0, 1);
             }
         }
     }
@@ -205,12 +216,13 @@ void kernel_main() {
                         &senderW, left_packet_header, 0, 0, ranges_w, src_l1_addr, dst_acc, i);
                 }
             } else if constexpr (operation_type == OperationType::Scatter) {
+                // Use scatter_acc with SRC_ALIGNED_PAGE_SIZE to match CB stride
                 if constexpr (api_variant == ApiVariant::Basic) {
                     fabric_multicast_noc_scatter_write(
-                        &senderW, left_packet_header, 0, 0, ranges_w, src_l1_addr, dst_acc, i, i + 1);
+                        &senderW, left_packet_header, 0, 0, ranges_w, src_l1_addr, scatter_acc, i, i + 1);
                 } else {  // WithState or SetState
                     fabric_multicast_noc_scatter_write_with_state(
-                        &senderW, left_packet_header, 0, 0, ranges_w, src_l1_addr, dst_acc, i, i + 1);
+                        &senderW, left_packet_header, 0, 0, ranges_w, src_l1_addr, scatter_acc, i, i + 1);
                 }
             } else if constexpr (operation_type == OperationType::FusedAtomicInc) {
                 fabric_multicast_noc_fused_unicast_with_atomic_inc(
@@ -230,12 +242,13 @@ void kernel_main() {
                         &senderE, right_packet_header, 0, 0, ranges_e, src_l1_addr, dst_acc, i);
                 }
             } else if constexpr (operation_type == OperationType::Scatter) {
+                // Use scatter_acc with SRC_ALIGNED_PAGE_SIZE to match CB stride
                 if constexpr (api_variant == ApiVariant::Basic) {
                     fabric_multicast_noc_scatter_write(
-                        &senderE, right_packet_header, 0, 0, ranges_e, src_l1_addr, dst_acc, i, i + 1);
+                        &senderE, right_packet_header, 0, 0, ranges_e, src_l1_addr, scatter_acc, i, i + 1);
                 } else {  // WithState or SetState
                     fabric_multicast_noc_scatter_write_with_state(
-                        &senderE, right_packet_header, 0, 0, ranges_e, src_l1_addr, dst_acc, i, i + 1);
+                        &senderE, right_packet_header, 0, 0, ranges_e, src_l1_addr, scatter_acc, i, i + 1);
                 }
             } else if constexpr (operation_type == OperationType::FusedAtomicInc) {
                 fabric_multicast_noc_fused_unicast_with_atomic_inc(
@@ -256,12 +269,13 @@ void kernel_main() {
                         &senderN, north_packet_header, 0, 0, ranges_n, src_l1_addr, dst_acc, i);
                 }
             } else if constexpr (operation_type == OperationType::Scatter) {
+                // Use scatter_acc with SRC_ALIGNED_PAGE_SIZE to match CB stride
                 if constexpr (api_variant == ApiVariant::Basic) {
                     fabric_multicast_noc_scatter_write(
-                        &senderN, north_packet_header, 0, 0, ranges_n, src_l1_addr, dst_acc, i, i + 1);
+                        &senderN, north_packet_header, 0, 0, ranges_n, src_l1_addr, scatter_acc, i, i + 1);
                 } else {  // WithState or SetState
                     fabric_multicast_noc_scatter_write_with_state(
-                        &senderN, north_packet_header, 0, 0, ranges_n, src_l1_addr, dst_acc, i, i + 1);
+                        &senderN, north_packet_header, 0, 0, ranges_n, src_l1_addr, scatter_acc, i, i + 1);
                 }
             } else if constexpr (operation_type == OperationType::FusedAtomicInc) {
                 fabric_multicast_noc_fused_unicast_with_atomic_inc(
@@ -282,12 +296,13 @@ void kernel_main() {
                         &senderS, south_packet_header, 0, 0, ranges_s, src_l1_addr, dst_acc, i);
                 }
             } else if constexpr (operation_type == OperationType::Scatter) {
+                // Use scatter_acc with SRC_ALIGNED_PAGE_SIZE to match CB stride
                 if constexpr (api_variant == ApiVariant::Basic) {
                     fabric_multicast_noc_scatter_write(
-                        &senderS, south_packet_header, 0, 0, ranges_s, src_l1_addr, dst_acc, i, i + 1);
+                        &senderS, south_packet_header, 0, 0, ranges_s, src_l1_addr, scatter_acc, i, i + 1);
                 } else {  // WithState or SetState
                     fabric_multicast_noc_scatter_write_with_state(
-                        &senderS, south_packet_header, 0, 0, ranges_s, src_l1_addr, dst_acc, i, i + 1);
+                        &senderS, south_packet_header, 0, 0, ranges_s, src_l1_addr, scatter_acc, i, i + 1);
                 }
             } else if constexpr (operation_type == OperationType::FusedAtomicInc) {
                 fabric_multicast_noc_fused_unicast_with_atomic_inc(

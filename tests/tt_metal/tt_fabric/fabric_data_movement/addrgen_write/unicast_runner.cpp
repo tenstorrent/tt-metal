@@ -264,6 +264,16 @@ Notes:
 
     const uint32_t NUM_PAGES = (p.tensor_bytes + p.page_size - 1) / p.page_size;
 
+    // Calculate aligned page sizes for source (DRAM) and destination (DRAM or L1)
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    uint32_t src_alignment = hal.get_alignment(tt::tt_metal::HalMemType::DRAM);  // Source is always DRAM
+    uint32_t dst_alignment = p.use_dram_dst ? hal.get_alignment(tt::tt_metal::HalMemType::DRAM)
+                                            : hal.get_alignment(tt::tt_metal::HalMemType::L1);
+
+    // Round up to alignment boundary
+    uint32_t src_aligned_page_size = ((p.page_size + src_alignment - 1) / src_alignment) * src_alignment;
+    uint32_t dst_aligned_page_size = ((p.page_size + dst_alignment - 1) / dst_alignment) * dst_alignment;
+
     // For fused atomic inc, each write increments the semaphore, so receiver waits for NUM_PAGES
     // For regular unicast, a single atomic inc is sent after all writes, so receiver waits for 1
     const uint32_t sem_wait_value = is_fused_atomic_inc ? NUM_PAGES : 1u;
@@ -273,8 +283,9 @@ Notes:
     tt::tt_metal::Program sender_prog = tt::tt_metal::CreateProgram();
     const uint32_t CB_ID = tt::CBIndex::c_0;
     // CB holds 8 pages total so the reader can fill 4 while the writer drains 4.
-    auto cb_cfg = tt::tt_metal::CircularBufferConfig(8 * p.page_size, {{CB_ID, tt::DataFormat::Float16}})
-                      .set_page_size(CB_ID, p.page_size);
+    // Use source aligned page size (reader reads from DRAM buffer with DRAM alignment)
+    auto cb_cfg = tt::tt_metal::CircularBufferConfig(8 * src_aligned_page_size, {{CB_ID, tt::DataFormat::Float16}})
+                      .set_page_size(CB_ID, src_aligned_page_size);
     (void)tt::tt_metal::CreateCircularBuffer(sender_prog, p.sender_core, cb_cfg);
 
     // Reader kernel (DRAM->CB) - now uses unified kernel with OPERATION_TYPE compile-time arg
@@ -283,7 +294,8 @@ Notes:
     reader_cta.push_back(static_cast<uint32_t>(operation_type));  // OPERATION_TYPE
     reader_cta.push_back(1u);              // SRC_IS_DRAM
     reader_cta.push_back(NUM_PAGES);
-    reader_cta.push_back(p.page_size);
+    reader_cta.push_back(p.page_size);     // Raw page size (actual data size to transfer)
+    reader_cta.push_back(src_aligned_page_size);  // Aligned page size (source buffer spacing)
 
     auto reader_k = tt::tt_metal::CreateKernel(
         sender_prog,
@@ -302,7 +314,9 @@ Notes:
     writer_cta.push_back(static_cast<uint32_t>(operation_type));  // OPERATION_TYPE
     writer_cta.push_back(static_cast<uint32_t>(api_variant));     // API_VARIANT
     writer_cta.push_back(NUM_PAGES);       // TOTAL_PAGES
-    writer_cta.push_back(p.page_size);     // PAGE_SIZE
+    writer_cta.push_back(p.page_size);     // Raw page size (actual data size to transfer)
+    writer_cta.push_back(dst_aligned_page_size);  // Aligned page size (dest buffer addressing)
+    writer_cta.push_back(src_aligned_page_size);  // Source aligned page size (CB stride for scatter)
 
     auto writer_k = tt::tt_metal::CreateKernel(
         sender_prog,
