@@ -16,7 +16,6 @@ Device
    ttnn.SetDefaultDevice
    ttnn.GetDefaultDevice
    ttnn.format_input_tensor
-   ttnn.format_output_tensor
    ttnn.pad_to_tile_shape
 
 Memory Config

@@ -23,7 +23,10 @@ def format_tensor(x, target_layout, device, output_mem_config, pad_value=0.0):
             return ttnn.tilize(x, memory_config=output_mem_config, use_multicore=True)
     elif x.get_layout() == ttnn.TILE_LAYOUT and target_layout == ttnn.ROW_MAJOR_LAYOUT:
         if x.padded_shape != x.shape:
-            return ttnn.format_output_tensor(x, x.shape_without_padding(), device, target_layout, output_mem_config)
+            s = x.shape
+            return ttnn.untilize_with_unpadding(
+                x, [s[0] - 1, s[1] - 1, s[2] - 1, s[3] - 1], memory_config=output_mem_config
+            )
         else:
             return ttnn.untilize(x, memory_config=output_mem_config, use_multicore=True)
     else:
