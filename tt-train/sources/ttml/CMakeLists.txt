@@ -583,6 +583,10 @@ target_include_directories(ttml PUBLIC ${FLATBUFFER_GENERATED_DIR})
 # contains all generated headers in the correct subdirectory structure
 target_include_directories(ttml PUBLIC ${TTNN_FLATBUFFER_GEN_DIR})
 
+# Define FLATBUFFERS_LARGE_SIZE to use uint64_t for size calculations (must be defined before any flatbuffers headers)
+# Use PUBLIC so any code linking against ttml also gets this definition
+target_compile_definitions(ttml PUBLIC FLATBUFFERS_LARGE_SIZE)
+
 # Link zstd library for compression support
 if(zstd_ADDED)
     # zstd creates different targets depending on build configuration

@@ -2,6 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Define FLATBUFFERS_LARGE_SIZE before any flatbuffers includes
+// This must be defined before flatbuffers.h is included (including in generated headers)
+// Define it as 1 to ensure it's treated as defined
+#ifndef FLATBUFFERS_LARGE_SIZE
+#define FLATBUFFERS_LARGE_SIZE 1
+#endif
+
 #include "flatbuffer_file.hpp"
 
 #include <flatbuffers/flatbuffers.h>
@@ -117,7 +124,11 @@ public:
 
     // Helper function to build a flatbuffer from a subset of data
     std::vector<uint8_t> build_flatbuffer(const std::unordered_map<std::string, ValueType>& data_subset) const {
-        flatbuffers::FlatBufferBuilder builder;
+        // Use a smaller initial buffer size to avoid hitting the 2GB limit
+        // FlatBuffers has a hard limit of ~2GB due to 32-bit signed offsets
+        // If data exceeds this, we need to split it further upstream
+        constexpr size_t INITIAL_BUFFER_SIZE = 512UL * 1024 * 1024;  // 512MB initial size
+        flatbuffers::FlatBufferBuilder builder(INITIAL_BUFFER_SIZE);
         std::vector<flatbuffers::Offset<ttml::flatbuffer::KeyValuePair>> kv_pairs;
 
         for (const auto& [key, value] : data_subset) {
@@ -256,19 +267,91 @@ public:
         }
 
         // Build a flatbuffer file for each prefix group
+        // Split large groups to avoid exceeding FlatBuffers' 2GB limit
         std::vector<std::pair<std::string, std::vector<uint8_t>>> flatbuffer_files;
+        constexpr size_t MAX_ESTIMATED_SIZE = 1500UL * 1024 * 1024;  // ~1.5GB safety limit
 
         for (const auto& [prefix, data_subset] : grouped_data) {
             if (data_subset.empty()) {
                 continue;  // Skip empty groups
             }
-            auto flatbuffer_data = build_flatbuffer(data_subset);
-            if (flatbuffer_data.empty()) {
-                // This shouldn't happen if data_subset is not empty, but check anyway
-                continue;
+
+            // Estimate total size of data_subset
+            size_t estimated_size = 0;
+            for (const auto& [key, value] : data_subset) {
+                estimated_size += key.size() + 100;  // Key + overhead
+                if (std::holds_alternative<std::vector<uint8_t>>(value)) {
+                    estimated_size += std::get<std::vector<uint8_t>>(value).size();
+                } else if (std::holds_alternative<std::vector<int>>(value)) {
+                    estimated_size += std::get<std::vector<int>>(value).size() * sizeof(int);
+                } else if (std::holds_alternative<std::vector<float>>(value)) {
+                    estimated_size += std::get<std::vector<float>>(value).size() * sizeof(float);
+                } else if (std::holds_alternative<std::vector<double>>(value)) {
+                    estimated_size += std::get<std::vector<double>>(value).size() * sizeof(double);
+                } else if (std::holds_alternative<std::vector<uint32_t>>(value)) {
+                    estimated_size += std::get<std::vector<uint32_t>>(value).size() * sizeof(uint32_t);
+                } else if (std::holds_alternative<std::string>(value)) {
+                    estimated_size += std::get<std::string>(value).size();
+                }
             }
-            std::string file_name = prefix + ".flatbuffer";
-            flatbuffer_files.emplace_back(file_name, std::move(flatbuffer_data));
+
+            // If estimated size is too large, split into chunks
+            if (estimated_size > MAX_ESTIMATED_SIZE) {
+                std::vector<std::pair<std::string, ValueType>> items(data_subset.begin(), data_subset.end());
+                size_t chunk_index = 0;
+                size_t current_chunk_size = 0;
+                std::unordered_map<std::string, ValueType> chunk;
+
+                for (const auto& [key, value] : items) {
+                    size_t item_size = key.size() + 100;
+                    if (std::holds_alternative<std::vector<uint8_t>>(value)) {
+                        item_size += std::get<std::vector<uint8_t>>(value).size();
+                    } else if (std::holds_alternative<std::vector<int>>(value)) {
+                        item_size += std::get<std::vector<int>>(value).size() * sizeof(int);
+                    } else if (std::holds_alternative<std::vector<float>>(value)) {
+                        item_size += std::get<std::vector<float>>(value).size() * sizeof(float);
+                    } else if (std::holds_alternative<std::vector<double>>(value)) {
+                        item_size += std::get<std::vector<double>>(value).size() * sizeof(double);
+                    } else if (std::holds_alternative<std::vector<uint32_t>>(value)) {
+                        item_size += std::get<std::vector<uint32_t>>(value).size() * sizeof(uint32_t);
+                    } else if (std::holds_alternative<std::string>(value)) {
+                        item_size += std::get<std::string>(value).size();
+                    }
+
+                    // If adding this item would exceed limit, finalize current chunk
+                    if (!chunk.empty() && current_chunk_size + item_size > MAX_ESTIMATED_SIZE) {
+                        auto chunk_data = build_flatbuffer(chunk);
+                        if (!chunk_data.empty()) {
+                            std::string file_name = prefix + "_chunk" + std::to_string(chunk_index) + ".flatbuffer";
+                            flatbuffer_files.emplace_back(file_name, std::move(chunk_data));
+                            chunk_index++;
+                        }
+                        chunk.clear();
+                        current_chunk_size = 0;
+                    }
+
+                    chunk[key] = value;
+                    current_chunk_size += item_size;
+                }
+
+                // Finalize last chunk
+                if (!chunk.empty()) {
+                    auto chunk_data = build_flatbuffer(chunk);
+                    if (!chunk_data.empty()) {
+                        std::string file_name = prefix + "_chunk" + std::to_string(chunk_index) + ".flatbuffer";
+                        flatbuffer_files.emplace_back(file_name, std::move(chunk_data));
+                    }
+                }
+            } else {
+                // Size is acceptable, build normally
+                auto flatbuffer_data = build_flatbuffer(data_subset);
+                if (flatbuffer_data.empty()) {
+                    // This shouldn't happen if data_subset is not empty, but check anyway
+                    continue;
+                }
+                std::string file_name = prefix + ".flatbuffer";
+                flatbuffer_files.emplace_back(file_name, std::move(flatbuffer_data));
+            }
         }
 
         return flatbuffer_files;
