@@ -447,7 +447,6 @@ public:
      * This is intended to be called by the sender core.
      *
      * @param num_pages The number of pages to reserve
-     * @param noc The NoC to use for the remote circular buffer
      */
     void reserve_back(uint32_t num_pages) { remote_cb_reserve_back(remote_cb_index_, num_pages); }
 
@@ -462,8 +461,7 @@ public:
      * @param num_rows The number of rows to push
      * @param coalesced_num_pages_per_row The number of coalesced pages per row
      * @param coalesced_page_size The size of the coalesced page
-     * @param noc The NoC to use for the remote circular buffer
-     * @param update_remote_pointer The type of remote pointer update
+     * @tparam update_remote_pointer The type of remote pointer update
      */
     template <RemotePointerUpdate update_remote_pointer = RemotePointerUpdate::UPDATE_OVER_NOC>
     void push_back(
@@ -490,7 +488,7 @@ public:
      * This is intended to be called by the sender core.
      *
      * @param page_size The new page size
-     * @param update_remote_pointer The type of remote pointer update
+     * @tparam update_remote_pointer The type of remote pointer update
      */
     template <RemotePointerUpdate update_remote_pointer = RemotePointerUpdate::UPDATE_OVER_NOC>
     void set_receiver_page_size(uint32_t page_size) {
@@ -526,7 +524,7 @@ public:
      * This is intended to be called by the receiver core.
      *
      * @param page_size The new page size
-     * @param update_remote_pointer The type of remote pointer update
+     * @tparam update_remote_pointer The type of remote pointer update
      */
     template <RemotePointerUpdate update_remote_pointer = RemotePointerUpdate::UPDATE_OVER_NOC>
     void set_sender_page_size(uint32_t page_size) {
@@ -543,7 +541,7 @@ public:
      *
      * The read/write pointers of the remote circular buffers are stored in L1, so that subsequent programs can resume
      * where the previous pointers were. During execution, this pointer is cached in a struct for optimal perf to avoid
-     * repeated L1 reads/writes. This requires the user to call this program at the end of their kernel execution in
+     * repeated L1 reads/writes. This requires the user to call this function at the end of their kernel execution in
      * order to write the final value back to L1. This should only be called by one RISC per core which has the final
      * updated value.
      *
