@@ -21,12 +21,12 @@ AdamWFused::AdamWFused(ttml::serialization::NamedParameters parameters, const Ad
     }
     for (const auto& [name, tensor_ptr] : m_parameters) {
         if (tensor_ptr->get_requires_grad()) {
-            m_first_moment.emplace(
+            m_exp_avg.emplace(
                 name,
                 autograd::create_tensor(
                     core::zeros_like(tensor_ptr->get_value(autograd::PreferredPrecision::FULL)),
                     /* requires_grad */ false));
-            m_second_moment.emplace(
+            m_exp_avg_sq.emplace(
                 name,
                 autograd::create_tensor(
                     core::zeros_like(tensor_ptr->get_value(autograd::PreferredPrecision::FULL)),
@@ -51,6 +51,11 @@ void AdamWFused::step() {
         print_stats();
     }
 
+    m_steps++;
+    // Update beta powers: multiply by beta values each step instead of computing pow(beta, step)
+    m_beta1_pow *= m_config.beta1;
+    m_beta2_pow *= m_config.beta2;
+
     for (const auto& [name, theta_ptr] : m_parameters) {
         if (!theta_ptr->is_grad_initialized()) {
             continue;
@@ -59,36 +64,41 @@ void AdamWFused::step() {
         auto gradients = theta_ptr->get_grad();
         auto param = theta_ptr->get_value(autograd::PreferredPrecision::FULL);
 
-        const auto& first_moment = m_first_moment.at(name)->get_value(autograd::PreferredPrecision::FULL);
-        const auto& second_moment = m_second_moment.at(name)->get_value(autograd::PreferredPrecision::FULL);
+        const auto& exp_avg = m_exp_avg.at(name)->get_value(autograd::PreferredPrecision::FULL);
+        const auto& exp_avg_sq = m_exp_avg_sq.at(name)->get_value(autograd::PreferredPrecision::FULL);
 
         ttml::metal::adamw_fused(
             param,
             gradients,
-            first_moment,
-            second_moment,
+            exp_avg,
+            exp_avg_sq,
             m_config.lr,
             m_config.beta1,
             m_config.beta2,
+            m_beta1_pow,
+            m_beta2_pow,
             m_config.epsilon,
             m_config.weight_decay,
             m_steps);
     }
-    m_steps++;
 }
 
 serialization::StateDict AdamWFused::get_state_dict() const {
     serialization::StateDict dict;
-    dict["first_moment"] = m_first_moment;
-    dict["second_moment"] = m_second_moment;
+    dict["exp_avg"] = m_exp_avg;
+    dict["exp_avg_sq"] = m_exp_avg_sq;
     dict["steps"] = m_steps;
+    dict["beta1_pow"] = m_beta1_pow;
+    dict["beta2_pow"] = m_beta2_pow;
     return dict;
 }
 
 void AdamWFused::set_state_dict(const serialization::StateDict& dict) {
-    m_first_moment = std::get<serialization::NamedParameters>(dict.at("first_moment"));
-    m_second_moment = std::get<serialization::NamedParameters>(dict.at("second_moment"));
+    m_exp_avg = std::get<serialization::NamedParameters>(dict.at("exp_avg"));
+    m_exp_avg_sq = std::get<serialization::NamedParameters>(dict.at("exp_avg_sq"));
     m_steps = serialization::get_value_type<size_t>(dict, "steps");
+    m_beta1_pow = serialization::get_value_type<float>(dict, "beta1_pow");
+    m_beta2_pow = serialization::get_value_type<float>(dict, "beta2_pow");
 }
 
 size_t AdamWFused::get_steps() const {
