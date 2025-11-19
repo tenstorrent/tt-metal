@@ -22,7 +22,7 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
 @pytest.mark.parametrize(
     "mesh_device, sp, tp, encoder_tp, vae_tp, topology, num_links",
     [
-        [(1, 2), (1, 0), (2, 1), (2, 1), (2, 1), ttnn.Topology.Linear, 1],
+        [(1, 2), (1, 0), (2, 1), (2, 1), (2, 1), ttnn.Topology.Linear, 2],
         [(2, 2), (2, 0), (2, 1), (2, 1), (2, 1), ttnn.Topology.Linear, 2],
         [(2, 4), (2, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1],
         [(4, 8), (4, 0), (8, 1), (4, 0), (4, 0), ttnn.Topology.Linear, 4],
@@ -284,7 +284,7 @@ def test_flux1_pipeline_performance(
             "total_encoding_time": 0.3,
             "denoising_steps_time": 1.1 * num_inference_steps,
             "vae_decoding_time": 1.6,
-            "total_time": 30.0,
+            "total_time": 29.0,
         }
     else:
         assert False, f"Unknown mesh device for performance comparison: {mesh_device}"
