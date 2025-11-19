@@ -673,4 +673,13 @@ inline void send_init_semaphore_to_configured_targets(
     }
 }
 
+template <tt::tt_fabric::Topology Topology>
+inline constexpr ReverseMode get_supported_reverse_mode() {
+    if constexpr (has_wrap_around<Topology>() && is_1d_topology<Topology>()) {
+        return ReverseMode::ON_TIE;
+    } else {
+        return ReverseMode::NEVER;
+    }
+}
+
 }  // namespace ttnn::operations::ccl::common

@@ -42,8 +42,7 @@ void kernel_main() {
     constexpr bool write_page_by_page = get_compile_time_arg_val(35);
     constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(36);
 
-    constexpr ReverseMode reverse_mode =
-        has_wrap_around<topology>() && is_1d_topology<topology>() ? ReverseMode::ON_TIE : ReverseMode::NEVER;
+    constexpr ReverseMode reverse_mode = get_supported_reverse_mode<topology>();
 
     constexpr auto input_args = TensorAccessorArgs<37>();
     constexpr auto indices_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
