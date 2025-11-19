@@ -63,6 +63,7 @@ class TrainingConfig:
         elif isinstance(yaml_config, dict):
             tc = yaml_config.get("training_config", {})
 
+        self.seed = int(tc.get("seed", 42))
         self.batch_size = int(tc.get("batch_size", 64))
         self.steps = int(tc.get("max_steps", 1000))
         self.eval_every = int(tc.get("eval_every", 200))
@@ -91,7 +92,7 @@ class TransformerConfig:
         if isinstance(yaml_config, str):
             tc = load_config(yaml_config)
         elif isinstance(yaml_config, dict):
-            tc = yaml_config.get("training_config", {})
+            tc = yaml_config.get("transformer_config", {})
 
         # Base parameters
         self.runner_type = tc.get("runner_type", "default")

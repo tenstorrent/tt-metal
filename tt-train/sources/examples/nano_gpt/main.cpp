@@ -104,7 +104,6 @@ struct TrainingConfig {
     bool use_kahan_summation = false;
     // accumulate batches for gradient update
     uint32_t gradient_accumulation_steps = 1;
-    std::string model_path;
     std::string model_config;
     std::string data_path;
     std::string scheduler_type = "identity";
@@ -130,7 +129,6 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.use_kahan_summation = training_config["use_kahan_summation"].as<bool>(config.use_kahan_summation);
     config.gradient_accumulation_steps =
         training_config["gradient_accumulation_steps"].as<uint32_t>(config.gradient_accumulation_steps);
-    config.model_path = training_config["model_path"].as<std::string>("");
     config.model_config = training_config["model_config"].as<std::string>("");
     config.data_path = training_config["data_path"].as<std::string>(std::string(DATA_FOLDER) + "/shakespeare.txt");
     config.scheduler_type = training_config["scheduler_type"].as<std::string>(config.scheduler_type);
@@ -152,7 +150,7 @@ struct MultihostConfig {
 MultihostConfig parse_multihost_config(const YAML::Node &yaml_config) {
     MultihostConfig config;
     auto multihost_config = yaml_config["multihost_config"];
-    config.enable_mpi= multihost_config["enabled"].as<bool>(false);
+    config.enable_mpi = multihost_config["enabled"].as<bool>(false);
     config.num_mh_workers = multihost_config["num_workers"].as<uint32_t>(0U);
 
     auto socket_type_str = multihost_config["socket_type"].as<std::string>("mpi");
@@ -217,7 +215,7 @@ DeviceConfig parse_device_config(const YAML::Node &yaml_config) {
     return config;
 }
 
-struct ModelConfig{
+struct ModelConfig {
     std::string model_type = "gpt2";
     std::string model_path = "";
     std::variant<ttml::models::gpt2::TransformerConfig, ttml::models::llama::LlamaConfig> transformer_config;
@@ -330,7 +328,7 @@ int main(int argc, char **argv) {
     TrainingConfig training_config = parse_config(YAML::LoadFile(training_config_name));
     DeviceConfig device_config = parse_device_config(YAML::LoadFile(device_config_name));
 
-    model_config_name = std::string(tt_metal_home) + "tt-train/configs/model_configs/" + training_config.model_config;
+    model_config_name = std::string(tt_metal_home) + "/tt-train/configs/model_configs/" + training_config.model_config;
     ModelConfig model_config = parse_model_config(YAML::LoadFile(model_config_name));
 
     MultihostConfig multihost_config;
@@ -545,7 +543,7 @@ int main(int argc, char **argv) {
     }
 
     // Load model parameters if in eval mode and model path exists
-    if (!safetensors_path.empty() && !training_config.model_path.empty() && std::filesystem::exists(training_config.model_path)) {
+    if (!safetensors_path.empty() && !model_config.model_path.empty() && std::filesystem::exists(model_config.model_path)) {
         std::string model_name = (model_config.model_type == "llama") ? "llama" : "transformer";
         fmt::print("Loading model parameters\n");
         load_model_parameters(model_config.model_path, model, model_name);
