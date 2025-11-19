@@ -12,15 +12,13 @@ from loguru import logger
 from transformers import AutoConfig
 
 import ttnn
-from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3ForCausalLM
 from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
 from models.demos.deepseek_v3.tt.model.row_batched_model import RowBatchedModel
 from models.demos.deepseek_v3.tt.rope import RotarySetup
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, get_weight_config
-from models.demos.deepseek_v3.utils.hf_model_utils import load_model_weights
 from models.demos.deepseek_v3.utils.run_config import create_run_config
-from models.demos.deepseek_v3.utils.test_utils import add_inv_scale_to_state_dict, get_rope_tensors
+from models.demos.deepseek_v3.utils.test_utils import get_rope_tensors
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
 
@@ -164,56 +162,18 @@ class DeepseekGenerator:
         weight_cache_path = Path(cache_dir) if cache_dir is not None else Path("generated/deepseek_v3")
         weight_cache_path.mkdir(parents=True, exist_ok=True)
 
-        if self.random_weights:
-            if self.single_layer and self.single_layer.lower() == "moe":
-                raise NotImplementedError(
-                    "Random weights with 'moe' single layer is not supported by RowBatchedModel demo yet. Use 'mlp' or disable random mode."
-                )
-            logger.info("Building random weights from HF reference model (ForCausalLM)...")
-            ref_model = DeepseekV3ForCausalLM(self.hf_config).eval()
-            # Ensure parameter/buffer dtype matches downstream expectations (bfloat16)
-            ref_model = ref_model.to(dtype=torch.bfloat16)
-            torch_state = ref_model.state_dict()
-            # Quantize MLP weights as expected by TT converters
-            torch_state = add_inv_scale_to_state_dict(
-                torch_state,
-                block_shape=self.hf_config.quantization_config["weight_block_size"],
-            )
-            model_state = {
-                k: v
-                for k, v in torch_state.items()
-                if k.startswith("model.embed_tokens.")
-                or k.startswith("model.layers.")
-                or k.startswith("model.norm.")
-                or k.startswith("lm_head.")
-            }
-        else:
-            logger.info(f"Loading HF weights from {self.model_path} (this may take a while)...")
-            hf_weights = load_model_weights(self.model_path)
-            logger.info("HF weights loaded")
-
-            if "lm_head.weight" not in hf_weights:
-                raise RuntimeError(
-                    "No HF safetensors found in model path or missing 'lm_head.weight'. "
-                    "Set DEEPSEEK_V3_HF_MODEL to a directory containing DeepSeek-V3 safetensors, or pass --model-path."
-                )
-            model_state = {
-                k: v
-                for k, v in hf_weights.items()
-                if k.startswith("model.embed_tokens.")
-                or k.startswith("model.layers.")
-                or k.startswith("model.norm.")
-                or k.startswith("lm_head.")
-            }
         # Convert weights to TT tensors-on-disk and build weight_config
+        # state_dicts will only be created if cache is invalid
         logger.info("Converting weights to TTNN SavedWeight format (RowBatchedModel)...")
         self.model_weight_config = get_weight_config(
             ModuleClass=RowBatchedModel,
             hf_config=self.hf_config,
-            state_dicts=(model_state,),
             weight_cache_path=weight_cache_path,
             mesh_device=self.mesh_device,
             force_recalculate=False,
+            model_path=self.model_path,
+            random_weights=self.random_weights,
+            single_layer=self.single_layer,
         )
 
     def _prepare_model_states(self) -> None:

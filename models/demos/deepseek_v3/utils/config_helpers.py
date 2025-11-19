@@ -833,15 +833,36 @@ def _get_remove_dim_slices(
 def get_weight_config(
     ModuleClass: type["models.demos.deepseek_v3.utils.abstract_module.AbstractModule"],
     hf_config: PretrainedConfig,
-    state_dicts: tuple[dict[str, torch.Tensor] | None, ...],
     weight_cache_path: Path,
     mesh_device: ttnn.Device,
     force_recalculate: bool,
+    model_path: str | Path | None = None,
+    random_weights: bool = False,
+    single_layer: str | None = None,
+    state_dicts: tuple[dict[str, torch.Tensor] | None, ...] | None = None,
 ):
+    """Get weight config, either from cache or by creating and converting weights.
+
+    Args:
+        ModuleClass: The module class to use for weight conversion
+        hf_config: HuggingFace model configuration
+        weight_cache_path: Path to cache directory
+        mesh_device: TTNN mesh device
+        force_recalculate: If True, force recalculation even if cache exists
+        model_path: Path to HF model directory (required if not random_weights and cache invalid)
+        random_weights: If True, generate random weights (used if cache invalid)
+        single_layer: Optional single layer mode (used if cache invalid)
+        state_dicts: Optional pre-created state_dicts (if provided, used instead of creating new ones)
+
+    Returns:
+        Weight configuration dictionary
+    """
     # weight_cache_path = weight_cache_path / f"{hf_config.num_hidden_layers}_layers"
     weight_cache_path = weight_cache_path / f"{hf_config.num_hidden_layers}_layers_embedding_dp"
     config_path = weight_cache_path / "config.json"
     weight_path = weight_cache_path / "weights"
+
+    # Check if cache is valid first
     for _ in range(1):
         if force_recalculate:
             break
@@ -853,7 +874,18 @@ def get_weight_config(
         logger.info(f"Using weights cached at {weight_cache_path}")
         return weight_config
 
+    # Cache is invalid or missing, need to create state_dicts
     logger.info(f"Caching weights at {weight_cache_path}")
+    if state_dicts is None:
+        # Create state_dicts only when needed
+        model_state = _create_state_dicts(
+            hf_config=hf_config,
+            model_path=model_path,
+            random_weights=random_weights,
+            single_layer=single_layer,
+        )
+        state_dicts = (model_state,)
+
     weight_config = ModuleClass.convert_weights(hf_config, state_dicts, weight_cache_path, mesh_device)
     json.dump(weight_config, config_path.open("w"), cls=WeightConfigEncoder)
     return weight_config
@@ -873,6 +905,103 @@ def _check_weights_exist(root_path: Path, weight_config: WeightConfig) -> bool:
         elif not _check_weights_exist(root_path, entry):
             return False
     return True
+
+
+def _is_weight_cache_valid(
+    hf_config: PretrainedConfig,
+    weight_cache_path: Path,
+    force_recalculate: bool,
+) -> bool:
+    """Check if the weight cache exists and is valid without loading state_dicts.
+
+    Returns True if cache is valid and can be used, False otherwise.
+    """
+    if force_recalculate:
+        return False
+
+    weight_cache_path = weight_cache_path / f"{hf_config.num_hidden_layers}_layers_embedding_dp"
+    config_path = weight_cache_path / "config.json"
+    weight_path = weight_cache_path / "weights"
+
+    if not config_path.exists():
+        return False
+
+    try:
+        weight_config = json.load(config_path.open(), object_hook=try_decode_saved_weight)
+        return _check_weights_exist(weight_path, weight_config)
+    except Exception as e:
+        logger.warning(f"Failed to load or validate weight cache: {e}")
+        return False
+
+
+def _create_state_dicts(
+    hf_config: PretrainedConfig,
+    model_path: str | Path | None,
+    random_weights: bool,
+    single_layer: str | None = None,
+) -> dict[str, torch.Tensor]:
+    """Create state_dicts from either random weights or loaded HF weights.
+
+    Args:
+        hf_config: HuggingFace model configuration
+        model_path: Path to HF model directory (required if not random_weights)
+        random_weights: If True, generate random weights from reference model
+        single_layer: Optional single layer mode (used for validation)
+
+    Returns:
+        Dictionary of model weights filtered to relevant keys
+    """
+    if random_weights:
+        if single_layer and single_layer.lower() == "moe":
+            raise NotImplementedError(
+                "Random weights with 'moe' single layer is not supported yet. Use 'mlp' or disable random mode."
+            )
+        logger.info("Building random weights from HF reference model (ForCausalLM)...")
+        # Import here to avoid circular import
+        from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3ForCausalLM
+        from models.demos.deepseek_v3.utils.test_utils import add_inv_scale_to_state_dict
+
+        ref_model = DeepseekV3ForCausalLM(hf_config).eval()
+        # Ensure parameter/buffer dtype matches downstream expectations (bfloat16)
+        ref_model = ref_model.to(dtype=torch.bfloat16)
+        torch_state = ref_model.state_dict()
+        # Quantize MLP weights as expected by TT converters
+        torch_state = add_inv_scale_to_state_dict(
+            torch_state,
+            block_shape=hf_config.quantization_config["weight_block_size"],
+        )
+        model_state = {
+            k: v
+            for k, v in torch_state.items()
+            if k.startswith("model.embed_tokens.")
+            or k.startswith("model.layers.")
+            or k.startswith("model.norm.")
+            or k.startswith("lm_head.")
+        }
+    else:
+        if model_path is None:
+            raise ValueError("model_path must be provided when random_weights=False")
+        logger.info(f"Loading HF weights from {model_path} (this may take a while)...")
+        # Import here to avoid circular import
+        from models.demos.deepseek_v3.utils.hf_model_utils import load_model_weights
+
+        hf_weights = load_model_weights(str(model_path))
+        logger.info("HF weights loaded")
+
+        if "lm_head.weight" not in hf_weights:
+            raise RuntimeError(
+                "No HF safetensors found in model path or missing 'lm_head.weight'. "
+                "Set DEEPSEEK_V3_HF_MODEL to a directory containing DeepSeek-V3 safetensors, or pass --model-path."
+            )
+        model_state = {
+            k: v
+            for k, v in hf_weights.items()
+            if k.startswith("model.embed_tokens.")
+            or k.startswith("model.layers.")
+            or k.startswith("model.norm.")
+            or k.startswith("lm_head.")
+        }
+    return model_state
 
 
 def get_mesh_coords(mesh_shape: list[int], row: int = None, col: int = None) -> list[ttnn.MeshCoordinate]:
