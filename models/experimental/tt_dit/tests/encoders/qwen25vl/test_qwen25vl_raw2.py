@@ -78,25 +78,8 @@ def test_qwen25vl(
 
     logger.info("running ttnn model...")
     attention_mask = None  # TODO
-    position_ids, _ = torch_model.model.get_rope_index(
-        tokenizer_out.input_ids, attention_mask=tokenizer_out.attention_mask
-    )
 
-    head_dim = torch_model.config.hidden_size // torch_model.config.num_attention_heads
-    inv_freq = torch_model.config.rope_theta ** (
-        -torch.arange(0, head_dim, 2, dtype=torch.int64).to(dtype=torch.float) / head_dim
-    )
-    # In contrast to other models, Qwen2_5_VL has different position ids for the grids
-    # So we expand the inv_freq to shape (3, ...)
-    inv_freq_expanded = inv_freq[None, None, :, None].float().expand(3, position_ids.shape[1], -1, 1)
-    position_ids_expanded = position_ids[:, :, None, :].float()  # shape (3, bs, 1, positions)
-    freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(2, 3)
-    emb = torch.cat((freqs, freqs), dim=-1)
-    cos = emb.cos()
-    sin = emb.sin()
-    mrope_section = torch_model.config.rope_scaling["mrope_section"] * 2
-    cos = torch.cat([m[i % 3] for i, m in enumerate(cos.split(mrope_section, dim=-1))], dim=-1).unsqueeze(1)
-    sin = torch.cat([m[i % 3] for i, m in enumerate(sin.split(mrope_section, dim=-1))], dim=-1).unsqueeze(1)
+    cos, sin = model.create_rope_tensors(len(prompts), tokenizer_out.input_ids.shape[1], attention_mask)
 
     tt_tokens = tensor.from_torch(tokenizer_out.input_ids, device=mesh_device, dtype=ttnn.uint32)
     tt_attention_mask = tensor.from_torch(attention_mask, device=mesh_device) if attention_mask is not None else None
