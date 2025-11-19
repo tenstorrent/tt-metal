@@ -287,6 +287,13 @@ public:
         return tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().is_2D_routing_enabled();
     }
 
+    bool is_dynamic_routing_enabled() const override {
+        return tt::tt_metal::MetalContext::instance()
+            .get_control_plane()
+            .get_fabric_context()
+            .is_dynamic_routing_enabled();
+    }
+
     /**
      * This function takes hop information and computes the actual destination nodes that would be visited during a ring
      * traversal multicast.
@@ -390,6 +397,7 @@ public:
         const std::vector<CoreCoord>& cores,
         uint32_t address,
         uint32_t size_bytes) const {
+
         auto mesh_buffer = create_mesh_buffer_helper(cores, address, size_bytes);
 
         const auto& buffer_distribution_spec =
@@ -416,6 +424,7 @@ public:
     // Process results after barrier_reads() has been called
     std::unordered_map<CoreCoord, std::vector<uint32_t>> complete_read_buffer_from_cores(
         const ReadBufferOperation& op) const {
+
         // Process results (existing splice logic)
         std::unordered_map<CoreCoord, std::vector<uint32_t>> results;
         auto num_words_per_core = op.size_bytes / sizeof(uint32_t);
@@ -478,7 +487,9 @@ public:
         }
     }
 
-    void barrier_reads() const { mesh_device_->mesh_command_queue().finish(); }
+    void barrier_reads() const {
+        mesh_device_->mesh_command_queue().finish();
+    }
 
     void write_buffer_to_ethernet_cores(
         const MeshCoordinate& device_coord,

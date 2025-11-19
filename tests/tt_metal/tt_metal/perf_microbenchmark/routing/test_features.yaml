@@ -233,7 +233,7 @@ Tests:
   - name: "DynamicRouting_CustomAtomics"
     fabric_setup:
       topology: Mesh
-      routing_type: "LowLatency"
+      routing_type: "Dynamic"
 
     senders:
       - device: 0

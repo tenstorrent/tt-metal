@@ -533,9 +533,9 @@ def test_all_broadcast_sharded_2x4(
 
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}, {"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}, {"fabric_config": ttnn.FabricConfig.FABRIC_2D_DYNAMIC}],
     indirect=True,
-    ids=["fabric_linear", "fabric_2d"],
+    ids=["fabric_linear", "fabric_2d_dynamic"],
 )
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 @pytest.mark.parametrize(

@@ -103,13 +103,11 @@ public:
         }
 
         validate_and_setup_control_plane_config(this);
-        this->DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D);
+        this->DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
     }
 
     void TearDown() override {
         if (system_supported()) {
-            const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
-            distributed_context.barrier();
             BaseFabricFixture::DoTearDownTestSuite();
         }
     }
@@ -267,7 +265,7 @@ public:
             GTEST_SKIP() << "Skipping since this is not a supported system.";
         }
 
-        this->DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D);
+        this->DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
     }
 
     void TearDown() override {

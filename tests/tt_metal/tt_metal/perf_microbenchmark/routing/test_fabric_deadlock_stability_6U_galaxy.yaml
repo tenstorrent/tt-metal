@@ -139,8 +139,8 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: XY
-
-      num_links: 2
+      routing_type: LowLatency
+      num_links: 4
 
     defaults:
       ftype: mcast
@@ -161,8 +161,8 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: XY
-
-      num_links: 2
+      routing_type: LowLatency
+      num_links: 4
 
     defaults:
       ftype: mcast
@@ -183,8 +183,8 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: XY
-
-      num_links: 2
+      routing_type: LowLatency
+      num_links: 4
 
     defaults:
       ftype: mcast
@@ -206,8 +206,8 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: XY
-
-      num_links: 2
+      routing_type: LowLatency
+      num_links: 4
 
     defaults:
       ftype: mcast
@@ -229,8 +229,8 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: XY
-
-      num_links: 2
+      routing_type: LowLatency
+      num_links: 4
 
     defaults:
       ftype: mcast
@@ -252,8 +252,8 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: XY
-
-      num_links: 2
+      routing_type: LowLatency
+      num_links: 4
 
     defaults:
       ftype: mcast
@@ -275,8 +275,8 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: XY
-
-      num_links: 2
+      routing_type: LowLatency
+      num_links: 4
 
     defaults:
       ftype: mcast
@@ -303,8 +303,8 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: XY
-
-      num_links: 2
+      routing_type: Dynamic
+      num_links: 4
 
     defaults:
       ftype: mcast
@@ -325,8 +325,8 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: XY
-
-      num_links: 2
+      routing_type: Dynamic
+      num_links: 4
 
     defaults:
       ftype: mcast
@@ -347,8 +347,8 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: XY
-
-      num_links: 2
+      routing_type: Dynamic
+      num_links: 4
 
     defaults:
       ftype: mcast
@@ -369,8 +369,8 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: XY
-
-      num_links: 2
+      routing_type: Dynamic
+      num_links: 4
 
     defaults:
       ftype: mcast
@@ -391,8 +391,8 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: XY
-
-      num_links: 2
+      routing_type: Dynamic
+      num_links: 4
 
     defaults:
       ftype: mcast
@@ -414,8 +414,8 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: XY
-
-      num_links: 2
+      routing_type: Dynamic
+      num_links: 4
 
     defaults:
       ftype: mcast
@@ -437,8 +437,8 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: "XY"
-
-      num_links: 2
+      routing_type: Dynamic
+      num_links: 4
 
     defaults:
       ftype: mcast
@@ -460,8 +460,8 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: XY
-
-      num_links: 2
+      routing_type: Dynamic
+      num_links: 4
 
     defaults:
       ftype: mcast
@@ -483,8 +483,8 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: XY
-
-      num_links: 2
+      routing_type: Dynamic
+      num_links: 4
 
     defaults:
       ftype: mcast
@@ -511,8 +511,8 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: X
-
-      num_links: 2
+      routing_type: LowLatency
+      num_links: 4
 
     defaults:
       ftype: mcast
@@ -533,8 +533,8 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: X
-
-      num_links: 2
+      routing_type: LowLatency
+      num_links: 4
 
     defaults:
       ftype: mcast
@@ -558,8 +558,8 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: Y
-
-      num_links: 2
+      routing_type: LowLatency
+      num_links: 4
 
     defaults:
       ftype: mcast
@@ -580,8 +580,8 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: Y
-
-      num_links: 2
+      routing_type: LowLatency
+      num_links: 4
 
     defaults:
       ftype: mcast
@@ -605,8 +605,8 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: X
-
-      num_links: 2
+      routing_type: Dynamic
+      num_links: 4
 
     defaults:
       ftype: mcast
@@ -627,8 +627,8 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: X
-
-      num_links: 2
+      routing_type: Dynamic
+      num_links: 4
 
     defaults:
       ftype: mcast
@@ -652,8 +652,8 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: Y
-
-      num_links: 2
+      routing_type: Dynamic
+      num_links: 4
 
     defaults:
       ftype: mcast
@@ -674,8 +674,8 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: Y
-
-      num_links: 2
+      routing_type: Dynamic
+      num_links: 4
 
     defaults:
       ftype: mcast

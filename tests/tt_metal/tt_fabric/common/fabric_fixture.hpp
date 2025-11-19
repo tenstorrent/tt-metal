@@ -225,7 +225,19 @@ protected:
     static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
 };
 
-class CustomMeshGraphFabric2DFixture : public BaseFabricFixture {
+class Fabric2DDynamicFixture : public BaseFabricFixture {
+protected:
+    static void SetUpTestSuite() { BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC); }
+    static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
+};
+
+class NightlyFabric2DDynamicFixture : public BaseFabricFixture {
+protected:
+    static void SetUpTestSuite() { BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC); }
+    static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
+};
+
+class CustomMeshGraphFabric2DDynamicFixture : public BaseFabricFixture {
 public:
     static void SetUpTestSuite() {}
     static void TearDownTestSuite() {}
@@ -235,7 +247,7 @@ public:
         const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
         tt::tt_metal::MetalContext::instance().set_custom_fabric_topology(
             mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping);
-        BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D);
+        BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
     }
 
 private:
@@ -247,8 +259,8 @@ private:
     }
 };
 
-class T3kCustomMeshGraphFabric2DFixture
-    : public CustomMeshGraphFabric2DFixture,
+class T3kCustomMeshGraphFabric2DDynamicFixture
+    : public CustomMeshGraphFabric2DDynamicFixture,
       public testing::WithParamInterface<std::tuple<std::string, std::vector<std::vector<EthCoord>>>> {
     void SetUp() override {
         if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::T3K) {

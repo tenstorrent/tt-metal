@@ -5,17 +5,18 @@
 #pragma once
 
 #include "hostdevcommon/fabric_common.h"
-#include "tt_metal/fabric/fabric_edm_packet_header.hpp"
 
 namespace tt::tt_fabric {
 
 // Device-side compressed decoder function for 2D routing
 template <>
 inline bool intra_mesh_routing_path_t<2, true>::decode_route_to_buffer(
-    uint16_t dst_chip_id, volatile uint8_t* out_route_buffer, bool prepend_one_hop) const {
+    uint16_t dst_chip_id, volatile uint8_t* out_route_buffer) const {
+    auto route_ptr = reinterpret_cast<volatile uint32_t*>(out_route_buffer);
+
     if (dst_chip_id >= MAX_CHIPS_LOWLAT) {
         // invalid chip
-        out_route_buffer[0] = 0;
+        route_ptr[0] = 0;
         ASSERT(false);  // catched only watcher enabled. Otherwise make behavior consistent as returning false.
         return false;
     }
@@ -29,8 +30,7 @@ inline bool intra_mesh_routing_path_t<2, true>::decode_route_to_buffer(
 
     if (ns_hops == 0 && ew_hops == 0) {
         // Noop to self
-        out_route_buffer[0] = 0;
-        out_route_buffer[1] = 0;
+        route_ptr[0] = 0;
         return false;
     }
 
@@ -51,7 +51,7 @@ inline bool intra_mesh_routing_path_t<2, true>::decode_route_to_buffer(
 
     if (ns_hops > 0 && ew_hops > 0) {
         // NS forwards for ns_hops - 1
-        for (uint8_t i = 0; i < ns_hops - 1 + prepend_one_hop; ++i) {
+        for (uint8_t i = 0; i < ns_hops - 1; ++i) {
             out_route_buffer[byte_index++] = ns_forward_cmd;
         }
         // EW forwards for ew_hops
@@ -62,20 +62,19 @@ inline bool intra_mesh_routing_path_t<2, true>::decode_route_to_buffer(
         out_route_buffer[byte_index++] = ew_write_cmd_opposite;
     } else if (ns_hops > 0) {
         // Only NS path: (ns_hops - 1) forwards + 1 write(opposite)
-        for (uint8_t i = 0; i < ns_hops - 1 + prepend_one_hop; ++i) {
+        for (uint8_t i = 0; i < ns_hops - 1; ++i) {
             out_route_buffer[byte_index++] = ns_forward_cmd;
         }
         out_route_buffer[byte_index++] = ns_write_cmd_opposite;
     } else if (ew_hops > 0) {
         // Only EW path: (ew_hops - 1) forwards + 1 write(opposite)
-        for (uint8_t i = 0; i < ew_hops - 1 + prepend_one_hop; ++i) {
+        for (uint8_t i = 0; i < ew_hops - 1; ++i) {
             out_route_buffer[byte_index++] = ew_forward_cmd;
         }
         out_route_buffer[byte_index++] = ew_write_cmd_opposite;
     }
 
     out_route_buffer[byte_index] = NOOP;
-    ASSERT(byte_index < HYBRID_MESH_MAX_ROUTE_BUFFER_SIZE);
 
     return true;
 }
@@ -83,7 +82,7 @@ inline bool intra_mesh_routing_path_t<2, true>::decode_route_to_buffer(
 // Device-side decoder function for 1D routing (packed paths)
 template <>
 inline bool intra_mesh_routing_path_t<1, false>::decode_route_to_buffer(
-    uint16_t dst_chip_id, volatile uint8_t* out_route_buffer, bool prepend_one_hop) const {
+    uint16_t dst_chip_id, volatile uint8_t* out_route_buffer) const {
     if (dst_chip_id >= MAX_CHIPS_LOWLAT) {
         // Out of bounds - fill buffer with NOOPs/zeros
         for (uint16_t i = 0; i < SINGLE_ROUTE_SIZE; ++i) {
@@ -104,7 +103,7 @@ inline bool intra_mesh_routing_path_t<1, false>::decode_route_to_buffer(
 // Device-side compressed decoder function for 1D routing
 template <>
 inline bool intra_mesh_routing_path_t<1, true>::decode_route_to_buffer(
-    uint16_t hops, volatile uint8_t* out_route_buffer, bool prepend_one_hop) const {
+    uint16_t hops, volatile uint8_t* out_route_buffer) const {
     return true;
 }
 

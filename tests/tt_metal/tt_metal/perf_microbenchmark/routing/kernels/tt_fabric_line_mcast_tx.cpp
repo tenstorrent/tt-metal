@@ -80,13 +80,7 @@ void kernel_main() {
     zero_l1_buf((uint32_t*)fwd_packet_header, sizeof(PACKET_HEADER_TYPE));
 
     fabric_set_mcast_route(
-        (HybridMeshPacketHeader*)fwd_packet_header,
-        fwd_dev_id,
-        fwd_mesh_id,
-        num_hops_e,
-        num_hops_w,
-        num_hops_n,
-        num_hops_s);
+        (MeshPacketHeader*)fwd_packet_header, fwd_dev_id, fwd_mesh_id, num_hops_e, num_hops_w, num_hops_n, num_hops_s);
 
     setup_connection_and_headers(fwd_fabric_connection, fwd_packet_header, noc_dest_addr, packet_payload_size_bytes);
 

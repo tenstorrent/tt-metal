@@ -172,8 +172,7 @@ struct __attribute__((packed)) intra_mesh_routing_path_t {
     void calculate_chip_to_all_routing_fields(const FabricNodeId& src_fabric_node_id, uint16_t num_chips);
 #else
     // Device-side methods (declared here, implemented in fabric_routing_path_interface.h):
-    inline bool decode_route_to_buffer(
-        uint16_t dst_chip_id, volatile uint8_t* out_route_buffer, bool prepend_one_hop = false) const;
+    inline bool decode_route_to_buffer(uint16_t dst_chip_id, volatile uint8_t* out_route_buffer) const;
 #endif
 };
 // 16 chips * 4 bytes = 64
@@ -199,8 +198,13 @@ struct tensix_routing_l1_info_t {
     compressed_routing_table_t<MAX_NUM_MESHES> inter_mesh_routing_table{};  // 384 bytes
     intra_mesh_routing_path_t<1, false> routing_path_table_1d{};            // 64 bytes
     intra_mesh_routing_path_t<2, true> routing_path_table_2d{};             // 512 bytes
-    exit_node_table_t exit_node_table{};                                    // 1024 bytes
-    uint8_t padding[12] = {};                                               // pad to 16-byte alignment
+#if !defined(ARCH_WORMHOLE) || (defined(ARCH_WORMHOLE) && !defined(COMPILE_FOR_ERISC))
+    // TODO: enable once hybrid routing is supported.
+    //       Currently no enough space on ACTIVE ETH
+    //       https://github.com/tenstorrent/tt-metal/issues/27881
+    exit_node_table_t exit_node_table{};  // 1024 bytes
+#endif
+    uint8_t padding[12] = {};  // pad to 16-byte alignment
 } __attribute__((packed));
 
 struct fabric_connection_info_t {
@@ -241,20 +245,18 @@ struct tensix_fabric_connections_l1_info_t {
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
 
 #if defined(COMPILE_FOR_ERISC)
-#define ROUTING_PATH_BASE_1D (MEM_AERISC_ROUTING_TABLE_BASE + MEM_OFFSET_OF_ROUTING_PATHS)
-#define ROUTING_PATH_BASE_2D (ROUTING_PATH_BASE_1D + MEM_ERISC_FABRIC_ROUTING_PATH_SIZE_1D)
-#define ROUTING_TABLE_BASE (MEM_AERISC_ROUTING_TABLE_BASE)
-#define EXIT_NODE_TABLE_BASE (ROUTING_PATH_BASE_2D + MEM_ERISC_FABRIC_ROUTING_PATH_SIZE_2D)
+#define ROUTING_PATH_BASE_1D MEM_AERISC_FABRIC_ROUTING_PATH_BASE_1D
+#define ROUTING_PATH_BASE_2D MEM_AERISC_FABRIC_ROUTING_PATH_BASE_2D
+// DUMMY
+#define ROUTING_TABLE_BASE 0
 #elif defined(COMPILE_FOR_IDLE_ERISC)
 #define ROUTING_PATH_BASE_1D MEM_IERISC_FABRIC_ROUTING_PATH_BASE_1D
 #define ROUTING_PATH_BASE_2D MEM_IERISC_FABRIC_ROUTING_PATH_BASE_2D
 #define ROUTING_TABLE_BASE MEM_IERISC_ROUTING_TABLE_BASE
-#define EXIT_NODE_TABLE_BASE MEM_IERISC_EXIT_NODE_TABLE_BASE
 #else
 #define ROUTING_PATH_BASE_1D MEM_TENSIX_ROUTING_PATH_BASE_1D
 #define ROUTING_PATH_BASE_2D MEM_TENSIX_ROUTING_PATH_BASE_2D
 #define ROUTING_TABLE_BASE MEM_TENSIX_ROUTING_TABLE_BASE
-#define EXIT_NODE_TABLE_BASE MEM_TENSIX_EXIT_NODE_TABLE_BASE
 #endif
 
 #include "fabric/hw/inc/fabric_routing_table_interface.h"

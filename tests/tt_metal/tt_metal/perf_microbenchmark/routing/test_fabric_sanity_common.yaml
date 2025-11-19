@@ -247,7 +247,7 @@ Tests:
   - name: "SimpleUnicastMeshDynamic"
     fabric_setup:
       topology: Mesh
-
+      routing_type: Dynamic
 
     senders:
       - device: [0, 0]
@@ -262,7 +262,7 @@ Tests:
   - name: "TestNocSendTypesMesh"
     fabric_setup:
       topology: Mesh
-
+      routing_type: Dynamic
 
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc]
@@ -279,7 +279,7 @@ Tests:
   - name: "AllToAllUnicastMeshDynamic"
     fabric_setup:
       topology: Mesh
-
+      routing_type: Dynamic
 
     defaults:
       ftype: unicast
@@ -293,7 +293,7 @@ Tests:
   - name: "AllToAllUnicastTestNocSendTypesMeshDynamic"
     fabric_setup:
       topology: Mesh
-
+      routing_type: Dynamic
 
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc]
@@ -309,7 +309,7 @@ Tests:
   - name: "FullDevicePairingMeshDynamic"
     fabric_setup:
       topology: Mesh
-
+      routing_type: Dynamic
 
     defaults:
       ftype: unicast
@@ -356,7 +356,7 @@ Tests:
   - name: TestPacketSizesMeshDynamic
     fabric_setup:
       topology: Mesh
-
+      routing_type: Dynamic
 
     parametrization_params:
       size: [1024, 2048, 4096]
@@ -373,7 +373,7 @@ Tests:
   - name: AllToAllUnicastTestPacketSizesMeshDynamic
     fabric_setup:
       topology: Mesh
-
+      routing_type: Dynamic
 
     parametrization_params:
       size: [1024, 2048, 4096]
@@ -392,7 +392,7 @@ Tests:
     enable_flow_control: true
     fabric_setup:
       topology: Mesh
-
+      routing_type: Dynamic
 
     parametrization_params:
       ftype: [unicast, mcast]
@@ -406,6 +406,7 @@ Tests:
       - type: all_to_all
 
   - name: AllToOneUnicastMesh
+    skip: [BLACKHOLE_GALAXY]
     fabric_setup:
       topology: Mesh
 
@@ -422,6 +423,7 @@ Tests:
       - type: all_to_one
 
   - name: AllToOneRandomUnicastMesh
+    skip: [BLACKHOLE_GALAXY]
     fabric_setup:
       topology: Mesh
 
@@ -489,7 +491,7 @@ Tests:
     skip: [GALAXY, BLACKHOLE_GALAXY]
     fabric_setup:
       topology: Mesh
-
+      routing_type: Dynamic
       fabric_tensix_config: Mux
 
     defaults:
