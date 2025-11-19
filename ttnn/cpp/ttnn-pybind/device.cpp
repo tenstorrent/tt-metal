@@ -21,7 +21,7 @@
 #include "tools/profiler/op_profiler.hpp"
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/device.hpp"
-#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/hal.hpp>
@@ -271,7 +271,7 @@ void device_module(py::module& m_device) {
 
     m_device.def(
         "SetDefaultDevice",
-        [](MeshDevice* device) { ttnn::operations::experimental::auto_format::AutoFormat::SetDefaultDevice(device); },
+        [](MeshDevice* device) { ttnn::SetDefaultDevice(device); },
         R"doc(
             Sets the default device to use for operations when inputs are not on the device.
 
@@ -289,10 +289,7 @@ void device_module(py::module& m_device) {
 
     m_device.def(
         "GetDefaultDevice",
-        []() {
-            return dynamic_cast<MeshDevice*>(
-                ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice());
-        },
+        []() { return dynamic_cast<MeshDevice*>(ttnn::GetDefaultDevice()); },
         R"doc(
             Gets the default device to use for ops when inputs aren't on device.
 
@@ -309,8 +306,7 @@ void device_module(py::module& m_device) {
     m_device.def(
         "pad_to_tile_shape",
         [](const std::array<uint32_t, 4>& unpadded_shape) -> std::vector<uint32_t> {
-            auto result =
-                ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(ttnn::Shape(unpadded_shape));
+            auto result = ttnn::operations::data_movement::pad_to_tile_shape(ttnn::Shape(unpadded_shape));
             return std::vector<uint32_t>(result.cbegin(), result.cend());
         },
         py::arg("unpadded_shape"),

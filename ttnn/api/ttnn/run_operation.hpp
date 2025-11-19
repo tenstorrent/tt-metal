@@ -17,8 +17,6 @@ namespace tt::tt_metal {
 
 namespace operation {
 
-using ttnn::operations::experimental::auto_format::FormatParams;
-
 template <class OutputTensors = Tensors>
 OutputTensors run(
     DeviceOperation<OutputTensors>&& operation,

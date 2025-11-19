@@ -4,6 +4,8 @@
 
 #include <utility>
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
+#include <tt-metalium/constants.hpp>
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
@@ -1680,8 +1682,7 @@ std::vector<Tensor> ExecuteUnaryBackwardRepeat::invoke(
 Tensor change_layout_to_tile(const Tensor& temp, const MemoryConfig& output_mem_config) {
     auto formatted_input_tensor = temp;
     if (formatted_input_tensor.layout() == Layout::ROW_MAJOR) {
-        auto a_pad_shape =
-            ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(temp.padded_shape());
+        auto a_pad_shape = ttnn::operations::data_movement::pad_to_tile_shape(temp.padded_shape());
         auto need_format = temp.layout() != Layout::TILE || temp.padded_shape() != a_pad_shape;
         if (need_format) {
             formatted_input_tensor = ttnn::operations::experimental::auto_format::AutoFormat::format_tensor(
@@ -1785,8 +1786,7 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
 
         // put the tensor back on device because permute throws it off device
         // See: Remove auto format within permute_op.cpp #9404
-        auto padded_shape =
-            ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(tensor_1.padded_shape());
+        auto padded_shape = ttnn::operations::data_movement::pad_to_tile_shape(tensor_1.padded_shape());
         tensor_2 = ttnn::operations::experimental::auto_format::AutoFormat::format_tensor(
             tensor_2, tensor_1.device(), padded_shape, PadValue(0.0f), tensor_1.layout(), tensor_1.memory_config());
 
@@ -1819,8 +1819,7 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
 
     // put the tensor back on device because permute throws it off device
     // See: Remove auto format within permute_op.cpp #9404
-    auto padded_shape =
-        ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(tensor_2.padded_shape());
+    auto padded_shape = ttnn::operations::data_movement::pad_to_tile_shape(tensor_2.padded_shape());
     tensor_2 = ttnn::operations::experimental::auto_format::AutoFormat::format_tensor(
         tensor_2, tensor_1.device(), padded_shape, PadValue(0.0f), tensor_1.layout(), tensor_1.memory_config());
 

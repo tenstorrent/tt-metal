@@ -15,42 +15,11 @@
 namespace ttnn::operations::experimental::auto_format {
 using PadValue = tt::tt_metal::PadValue;
 
-struct FormatParams {
-    ttnn::Shape pad_shape;
-    float pad_value{};
-    tt::tt_metal::Layout target_layout{tt::tt_metal::Layout::INVALID};
-};
-
 class AutoFormat {
 private:
-    inline static tt::tt_metal::distributed::MeshDevice* device = nullptr;
-
     AutoFormat() = default;
 
 public:
-    /**
-     * Sets the default device to be used for auto-formatting operations
-     * @param dev Pointer to the device to be used
-     */
-    static void SetDefaultDevice(tt::tt_metal::distributed::MeshDevice* dev);
-
-    /**
-     * Gets the default device used for auto-formatting operations
-     * @return Pointer to the default device
-     */
-    static tt::tt_metal::distributed::MeshDevice* GetDefaultDevice();
-
-    /**
-     * Pads a shape to align with tile dimensions
-     * @param unpadded_shape Original shape to be padded
-     * @param pad_c Whether to pad the channel dimension
-     * @param pad_n Whether to pad the batch dimension
-     * @param pad_h Whether to pad the height dimension
-     * @param pad_w Whether to pad the width dimension
-     * @return Padded shape aligned to tile dimensions
-     */
-    static ttnn::Shape pad_to_tile_shape(const ttnn::Shape& unpadded_shape);
-
     /**
      * Formats an input tensor to meet device and layout requirements
      * @param input Input tensor

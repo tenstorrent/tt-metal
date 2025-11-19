@@ -17,7 +17,7 @@
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
-#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
+#include "ttnn/device.hpp"
 #include <variant>
 
 namespace ttnn::operations::binary {
@@ -538,7 +538,7 @@ Tensor _outer(const Tensor& input_a, const Tensor& input_b, const std::optional<
     a_slim = ttnn::to_layout(a_slim, ttnn::TILE_LAYOUT);
     b_slim = ttnn::to_layout(b_slim, ttnn::TILE_LAYOUT);
 
-    auto device = ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice();
+    auto device = ttnn::GetDefaultDevice();
     if (device != nullptr) {
         if (a_slim.storage_type() != tt::tt_metal::StorageType::DEVICE) {
             a_slim = a_slim.to_device(device);

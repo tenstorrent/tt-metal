@@ -10,7 +10,7 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "device/layernorm_op.hpp"
-
+#include "ttnn/device.hpp"
 namespace ttnn::operations::normalization {
 
 ttnn::Tensor ExecuteLayerNorm::invoke(
@@ -33,9 +33,8 @@ ttnn::Tensor ExecuteLayerNorm::invoke(
         return ttnn::clone(input_tensor, /*dtype=*/std::nullopt, output_memory_config, compute_kernel_config);
     }
 
-    auto arch = input_tensor.storage_type() == StorageType::DEVICE
-                    ? input_tensor.device()->arch()
-                    : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
+    auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
+                                                                   : ttnn::GetDefaultDevice()->arch();
     bool approx_mode = false;
     bool fp32_acc = true;
     auto kernel_config_val =

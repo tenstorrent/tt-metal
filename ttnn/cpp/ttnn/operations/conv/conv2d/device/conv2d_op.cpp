@@ -50,17 +50,6 @@ Tensor conv2d(
     std::optional<bool> force_split_reader) {
     TT_FATAL(b.layout() == Layout::TILE,
              "Weights should be in TILE layout.");  // Weights should already be formatted
-    const auto& ashape = input_tensor_shape;
-    auto padded_a_shape = ttnn::Shape({ashape[0], ashape[1], ashape[2], tt::round_up(ashape[3], 16)});
-    experimental::auto_format::FormatParams input_a_format_params = {
-        .pad_shape = padded_a_shape, .pad_value = 0.0, .target_layout = Layout::ROW_MAJOR};
-    experimental::auto_format::FormatParams input_b_format_params = {
-        .pad_shape = b.padded_shape(), .pad_value = 0.0, .target_layout = Layout::TILE};
-    experimental::auto_format::FormatParams input_bias_format_params = {};
-    if (bias.has_value()) {
-        input_bias_format_params = {
-            .pad_shape = bias.value().padded_shape(), .pad_value = 0, .target_layout = Layout::TILE};
-    }
 
     auto conv_op = Conv2d(
         sliding_window_config,
