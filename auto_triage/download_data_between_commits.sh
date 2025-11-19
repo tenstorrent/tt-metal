@@ -21,7 +21,7 @@ fi
 
 START_COMMIT="$1"
 END_COMMIT="$2"
-OUTPUT_FILE="${3:-commit_info.json}"
+OUTPUT_FILE="${3:-auto_triage/outputs/commit_info.json}"
 
 # Validate commits exist
 if ! git rev-parse --verify "$START_COMMIT" >/dev/null 2>&1; then
@@ -158,7 +158,12 @@ if start_marker in content:
 
     # Extract co-authors from commit message (Co-authored-by: Name <email>)
     # Get just the names, not emails
-    co_author_names=$(git log -1 --format="%B" "$commit_sha" 2>/dev/null | grep -i "^Co-authored-by:" | sed 's/^Co-authored-by:\s*//i' | sed 's/<.*>//' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//' | jq -R -s -c 'split("\n") | map(select(length > 0))' 2>/dev/null || echo "[]")
+    co_author_names=$(git log -1 --format="%B" "$commit_sha" 2>/dev/null \
+        | awk '/^Co-authored-by:/ { sub(/^Co-authored-by:[[:space:]]*/, ""); sub(/<.*>/, ""); gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print }' \
+        | jq -R -s -c 'split("\n") | map(select(length > 0))' 2>/dev/null)
+    if [ -z "$co_author_names" ]; then
+        co_author_names="[]"
+    fi
 
     # Combine authors: PR author + commit author + co-authors
     # Filter out bots and empty strings, then get unique values
