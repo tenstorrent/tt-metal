@@ -50,7 +50,7 @@ void kernel_main() {
         uint32_t curr_block_num_tiles = block_num_tiles[l];
 
         uint32_t curr_block_size = curr_block_num_tiles * curr_page_size;
-        remote_cb.set_sender_page_size(curr_block_size, noc);
+        remote_cb.set_sender_page_size(noc, curr_block_size);
         experimental::align_local_cbs_to_remote_cb<1>(remote_cb_id, {cb_id_in1});
 
         for (uint32_t block = 0; block < curr_num_blocks; ++block) {
@@ -59,7 +59,7 @@ void kernel_main() {
             local_cb.push_back(curr_block_num_tiles);
             // wait for compute done
             sync_cb.wait_front(1);
-            remote_cb.pop_front(1);
+            remote_cb.pop_front(noc, 1);
             sync_cb.pop_front(1);
         }
     }

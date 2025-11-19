@@ -55,13 +55,14 @@ void kernel_main() {
         uint32_t curr_receiver_block_num_tiles = curr_block_num_tiles / num_receivers;
 
         uint32_t curr_block_size = curr_receiver_block_num_tiles * curr_page_size;
-        remote_cb.set_receiver_page_size(curr_block_size, noc_if);
+        remote_cb.set_receiver_page_size(noc_if, curr_block_size);
 
         for (uint32_t block = 0; block < curr_num_blocks; ++block) {
             local_cb.wait_front(curr_block_num_tiles);
 
             remote_cb.reserve_back(1);
-            remote_cb.push_back(local_cb, 1, curr_num_tile_rows, curr_coalesced_num_pages, curr_coalesced_page_size, noc_if);
+            remote_cb.push_back(
+                noc_if, local_cb, 1, curr_num_tile_rows, curr_coalesced_num_pages, curr_coalesced_page_size);
 
             local_cb.pop_front(curr_block_num_tiles);
         }
