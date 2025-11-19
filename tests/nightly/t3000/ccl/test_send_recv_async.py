@@ -98,7 +98,7 @@ def run_send_recv_test(
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}], indirect=True)
 def test_send_recv(
-    t3k_mesh_device,
+    mesh_device,
     per_chip_shape,
     layout,
     mem_config,
@@ -106,8 +106,8 @@ def test_send_recv(
     socket_storage_type,
     socket_fifo_size,
 ):
-    sender_mesh_device = t3k_mesh_device.create_submesh(ttnn.MeshShape(1, 4), ttnn.MeshCoordinate(0, 0))
-    receiver_mesh_device = t3k_mesh_device.create_submesh(ttnn.MeshShape(1, 4), ttnn.MeshCoordinate(0, 4))
+    sender_mesh_device = mesh_device.create_submesh(ttnn.MeshShape(1, 4), ttnn.MeshCoordinate(0, 0))
+    receiver_mesh_device = mesh_device.create_submesh(ttnn.MeshShape(1, 4), ttnn.MeshCoordinate(0, 4))
     run_send_recv_test(
         sender_mesh_device,
         receiver_mesh_device,

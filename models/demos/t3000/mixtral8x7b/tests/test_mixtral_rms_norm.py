@@ -15,10 +15,11 @@ from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 
 
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_mixtral_rms_norm_inference(t3k_mesh_device, reset_seeds):
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+def test_mixtral_rms_norm_inference(mesh_device, reset_seeds):
     dtype = ttnn.bfloat16
 
-    model_args = TtModelArgs(t3k_mesh_device)
+    model_args = TtModelArgs(mesh_device)
     state_dict = model_args.load_state_dict()
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
@@ -26,9 +27,9 @@ def test_mixtral_rms_norm_inference(t3k_mesh_device, reset_seeds):
     reference_model = RefRMSNorm(dim=model_args.dim)
     reference_model.load_state_dict(partial_state_dict)
 
-    tt_ccl = TT_CCL(t3k_mesh_device)
+    tt_ccl = TT_CCL(mesh_device)
     tt_model = TtRMSNorm(
-        device=t3k_mesh_device,
+        device=mesh_device,
         dim=model_args.dim,
         state_dict=state_dict,
         layer_num=0,
@@ -43,14 +44,14 @@ def test_mixtral_rms_norm_inference(t3k_mesh_device, reset_seeds):
 
     tt_input = ttnn.from_torch(
         input,
-        device=t3k_mesh_device,
+        device=mesh_device,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ReplicateTensorToMesh(t3k_mesh_device),
+        mesh_mapper=ReplicateTensorToMesh(mesh_device),
     )
 
     tt_output = tt_model(tt_input, mode="decode")
-    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=0))[0]
+    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ConcatMeshToTensor(mesh_device, dim=0))[0]
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch)
 
     logger.info(comp_allclose(reference_output, tt_output_torch))

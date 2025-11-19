@@ -101,7 +101,8 @@ def test_rmsnorm_singledevice(device, is_sharded, reset_seeds):
     "is_sharded",
     (True, False),
 )
-def test_rmsnorm_multidevice(t3k_mesh_device, is_sharded, reset_seeds):
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+def test_rmsnorm_multidevice(mesh_device, is_sharded, reset_seeds):
     dim = 4096
     dtype = ttnn.bfloat8_b
 
@@ -109,7 +110,7 @@ def test_rmsnorm_multidevice(t3k_mesh_device, is_sharded, reset_seeds):
     state_dict = reference_model.state_dict()
 
     tt_model = TtRMSNorm(
-        device=t3k_mesh_device,
+        device=mesh_device,
         dim=dim,
         state_dict=state_dict,
         weight_key="rmsnorm",
@@ -120,14 +121,14 @@ def test_rmsnorm_multidevice(t3k_mesh_device, is_sharded, reset_seeds):
 
     tt_input = ttnn.from_torch(
         input,
-        device=t3k_mesh_device,
+        device=mesh_device,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ReplicateTensorToMesh(t3k_mesh_device),
+        mesh_mapper=ReplicateTensorToMesh(mesh_device),
     )
 
     tt_output = tt_model(tt_input)
-    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=0))[0]
+    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ConcatMeshToTensor(mesh_device, dim=0))[0]
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch)
 
     logger.info(comp_allclose(reference_output, tt_output_torch))
