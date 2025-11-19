@@ -803,7 +803,8 @@ void ControlPlane::order_ethernet_channels() {
             } else if (neighbor_asic_id.has_value()) {
                 // Find the physical chip ID for the neighbor AsicID
                 ChipId neighbor_phys_chip_id = 0;
-                const auto& chip_unique_ids = tt::tt_metal::MetalContext::instance().get_cluster().get_unique_chip_ids();
+                const auto& chip_unique_ids =
+                    tt::tt_metal::MetalContext::instance().get_cluster().get_unique_chip_ids();
                 for (const auto& [physical_chip_id, unique_id] : chip_unique_ids) {
                     if (tt::tt_metal::AsicID{unique_id} == neighbor_asic_id.value()) {
                         neighbor_phys_chip_id = physical_chip_id;
@@ -811,12 +812,16 @@ void ControlPlane::order_ethernet_channels() {
                     }
                 }
                 // Get the soc_desc for the neighbor chip
-                const auto& neighbor_soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(neighbor_phys_chip_id);
-                std::sort(eth_connections.begin(), eth_connections.end(), [&neighbor_soc_desc](const auto& a, const auto& b) {
-                    auto translated_coords_a = neighbor_soc_desc.get_eth_core_for_channel(a.dst_chan, CoordSystem::TRANSLATED);
-                    auto translated_coords_b = neighbor_soc_desc.get_eth_core_for_channel(b.dst_chan, CoordSystem::TRANSLATED);
-                    return translated_coords_a.x < translated_coords_b.x;
-                });
+                const auto& neighbor_soc_desc =
+                    tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(neighbor_phys_chip_id);
+                std::sort(
+                    eth_connections.begin(), eth_connections.end(), [&neighbor_soc_desc](const auto& a, const auto& b) {
+                        auto translated_coords_a =
+                            neighbor_soc_desc.get_eth_core_for_channel(a.dst_chan, CoordSystem::TRANSLATED);
+                        auto translated_coords_b =
+                            neighbor_soc_desc.get_eth_core_for_channel(b.dst_chan, CoordSystem::TRANSLATED);
+                        return translated_coords_a.x < translated_coords_b.x;
+                    });
                 for (uint32_t i = 0; i < eth_connections.size(); i++) {
                     eth_chans[i] = eth_connections[i].src_chan;
                 }
@@ -2749,8 +2754,10 @@ void ControlPlane::validate_torus_setup(tt::tt_fabric::FabricConfig fabric_confi
     auto all_hostnames = physical_system_descriptor_->get_all_hostnames();
     auto cabling_descriptor_path = get_galaxy_cabling_descriptor_path(fabric_config);
     // Check if the cabling descriptor file exists
-    TT_ASSERT(std::filesystem::exists(cabling_descriptor_path),
-              "Cabling descriptor file not found: {}", cabling_descriptor_path);
+    TT_ASSERT(
+        std::filesystem::exists(cabling_descriptor_path),
+        "Cabling descriptor file not found: {}",
+        cabling_descriptor_path);
 
     // Generate GSD YAML from the current physical system descriptor
     YAML::Node gsd_yaml = physical_system_descriptor_->generate_yaml_node();
@@ -2760,8 +2767,8 @@ void ControlPlane::validate_torus_setup(tt::tt_fabric::FabricConfig fabric_confi
         cabling_descriptor_path,
         all_hostnames,
         gsd_yaml,
-        false,                      // strict_validation
-        false                       // assert_on_connection_mismatch
+        false,  // strict_validation
+        false   // assert_on_connection_mismatch
     );
 
     log_debug(tt::LogFabric, "Torus validation passed for configuration: {}", enchantum::to_string(fabric_config));
@@ -2774,12 +2781,10 @@ std::string ControlPlane::get_galaxy_cabling_descriptor_path(tt::tt_fabric::Fabr
         "get_galaxy_cabling_descriptor_path is only supported on Galaxy systems, but cluster type is {}",
         enchantum::to_string(cluster_type));
 
-    static constexpr std::string_view X_TORUS_PATH =
-        "tools/tests/scaleout/cabling_descriptors/wh_galaxy_x_torus_superpod.textproto";
-    static constexpr std::string_view Y_TORUS_PATH =
-        "tools/tests/scaleout/cabling_descriptors/wh_galaxy_y_torus_superpod.textproto";
+    static constexpr std::string_view X_TORUS_PATH = "tt_metal/fabric/cabling_descriptors/wh_galaxy_x_torus.textproto";
+    static constexpr std::string_view Y_TORUS_PATH = "tt_metal/fabric/cabling_descriptors/wh_galaxy_y_torus.textproto";
     static constexpr std::string_view XY_TORUS_PATH =
-        "tools/tests/scaleout/cabling_descriptors/wh_galaxy_xy_torus_superpod.textproto";
+        "tt_metal/fabric/cabling_descriptors/wh_galaxy_xy_torus.textproto";
 
     // Get fabric type from config and map to cabling descriptor paths
     FabricType fabric_type = get_fabric_type(fabric_config);
