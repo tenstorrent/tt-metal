@@ -145,8 +145,13 @@ public:
     void unlock();
 
 private:
-    friend class distributed::MeshDevice;
-
+    // Allow PinMemory free function to construct PinnedMemory
+    friend std::unique_ptr<PinnedMemory> PinMemory(
+        distributed::MeshDevice& mesh_device,
+        const distributed::MeshCoordinateRangeSet& coordinate_range_set,
+        HostBuffer& host_buffer,
+        bool map_to_noc);
+    
     /**
      * @brief Construct PinnedMemory by mapping existing host memory to devices
      * @param devices Vector of devices to map buffers for

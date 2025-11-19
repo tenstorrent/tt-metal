@@ -307,11 +307,56 @@ std::unique_ptr<PinnedMemory> PinMemory(
     const distributed::MeshCoordinateRangeSet& coordinate_range_set,
     HostBuffer& host_buffer,
     bool map_to_noc) {
-    return mesh_device.pin_memory(coordinate_range_set, host_buffer, map_to_noc);
+    // Extract all coordinates from the range set
+    std::vector<MeshCoordinate> coordinates = coordinate_range_set.coords();
+
+    // Convert coordinates to devices using public API
+    std::vector<IDevice*> devices;
+    devices.reserve(coordinates.size());
+
+    for (const auto& coord : coordinates) {
+        // Use public get_device() method which returns nullptr for invalid coords
+        if (auto device = mesh_device.get_device(coord)) {
+            devices.push_back(device);
+        }
+    }
+
+    if (devices.empty()) {
+        throw std::invalid_argument("No valid devices found in the specified coordinate range set");
+    }
+
+    // Extract host pointer and size from HostBuffer
+    auto bytes = host_buffer.view_bytes();
+    void* host_ptr = static_cast<void*>(bytes.data());
+    size_t buffer_size = bytes.size();
+
+    return std::unique_ptr<PinnedMemory>(
+        new PinnedMemory(devices, host_ptr, buffer_size, map_to_noc));
 }
 
+
+// NOTE!
+// This is not exactly equivalent functionality to your original.
+// This isn't cached when MeshDevice is constructed; it's retrieved on demand.
+// Not sure if this is a problem or not. The values retrieved seem like they oughtn't change during the
+// lifetime of the MeshDevice, and the queries are cheap.
+
 experimental::MemoryPinningParameters GetMemoryPinningParameters(distributed::MeshDevice& mesh_device) {
-    return mesh_device.get_memory_pinning_parameters();
+    // Query system capabilities directly - no need to cache
+    bool iommu_enabled = MetalContext::instance().get_cluster().is_iommu_enabled();
+    
+    if (!iommu_enabled) {
+        return MemoryPinningParameters{0u, 0u, false};
+    }
+    
+    auto& hal = MetalContext::instance().hal();
+    const auto device_arch = mesh_device.arch();  // Public method
+    
+    return MemoryPinningParameters{
+        hal.get_max_pinned_memory_count(),
+        hal.get_total_pinned_memory_size(),
+        (device_arch == tt::ARCH::BLACKHOLE)
+    };
 }
 
 }  // namespace tt::tt_metal::experimental
