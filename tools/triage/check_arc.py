@@ -14,7 +14,6 @@ Description:
 from dataclasses import dataclass
 from triage import ScriptConfig, triage_field, hex_serializer, log_check, run_script
 from run_checks import run as get_run_checks
-from datetime import timedelta
 import time
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
@@ -46,7 +45,6 @@ def check_arc_block(arc: NocBlock, postcode: int) -> ArcCheckData:
     heartbeat_1 = read_arc_telemetry_entry(device_id, "TIMER_HEARTBEAT")
     log_check(heartbeat_1 > heartbeat_0, f"ARC heartbeat not increasing: {RED}{heartbeat_1}{RST}.")
 
-    # Compute uptime
     arcclk_mhz = read_arc_telemetry_entry(device_id, "ARCCLK")
     heartbeats_per_second = (heartbeat_1 - heartbeat_0) / delay_seconds
 
