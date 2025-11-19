@@ -127,20 +127,56 @@ def check_file_for_legacy_class(filepath):
     return has_validate and has_compute_output_specs and has_create_program
 
 
+def is_file_newly_added(filepath, base_ref="HEAD"):
+    """
+    Check if a file is newly added (doesn't exist in base_ref).
+    Returns True if file is new, False if it exists in base_ref (modified).
+    """
+    try:
+        subprocess.check_output(
+            ["git", "cat-file", "-e", f"{base_ref}:{filepath}"],
+            stderr=subprocess.DEVNULL,
+        )
+        return False  # File exists in base_ref, so it's modified
+    except subprocess.CalledProcessError:
+        return True  # File doesn't exist in base_ref, so it's new
+
+
 def main():
     parser = argparse.ArgumentParser(description="Detect legacy device operation classes")
-    parser.add_argument("file", nargs="?", help="Path to a .hpp file to check (if not provided, processes git diff)")
+    parser.add_argument(
+        "files", nargs="*", help="Path(s) to .hpp file(s) to check (if not provided, processes git diff)"
+    )
     parser.add_argument(
         "--base-ref", default="origin/main", help="Base git reference for diff mode (default: origin/main)"
     )
+    parser.add_argument(
+        "--check-new-only",
+        action="store_true",
+        help="Only check files that are newly added (not in base_ref). Used by pre-commit.",
+    )
     args = parser.parse_args()
 
-    if args.file:
-        # Single file mode
-        if check_file_for_legacy_class(args.file):
-            print(f"{args.file}")
-            return 1
-        return 0
+    if args.files:
+        # File mode (single or multiple files, e.g., from pre-commit)
+        legacy_files = []
+        for filepath in args.files:
+            # If check-new-only is set, skip files that exist in base_ref (modified files)
+            if args.check_new_only:
+                if not is_file_newly_added(filepath, "HEAD"):
+                    continue  # Skip modified files, only check newly added ones
+
+            if check_file_for_legacy_class(filepath):
+                legacy_files.append(filepath)
+
+        if not legacy_files:
+            return 0
+
+        # Output detected legacy classes
+        for filepath in legacy_files:
+            print(f"{filepath}")
+
+        return 1
     else:
         # Diff mode
         added_hpp_files = get_added_hpp_files(args.base_ref)
