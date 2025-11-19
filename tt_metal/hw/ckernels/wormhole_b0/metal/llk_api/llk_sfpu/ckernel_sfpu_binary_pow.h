@@ -155,7 +155,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_61f_(sfpi::vFloat base, sfpi::vFloat
 
     // Step 1: Compute log2(base)
     // Normalize base to calculation range
-    sfpi::vFloat abs_base = sfpi::setsgn(base, 0);  // set base as positive
+    sfpi::vFloat abs_base = sfpi::abs(base);        // set base as positive
     sfpi::vFloat x = sfpi::setexp(abs_base, 127);   // set exp to exp bias (put base in range of 1-2)
 
     // 5th degree polynomial approx - REMEZ algorithm over [1,2]
