@@ -117,7 +117,8 @@ void process_ethernet_connections(
 
             if (both_mmio || both_non_mmio) {
                 for (const auto& eth_connection : eth_connections) {
-                    operation(src_chip_id, get_eth_core_coord(cluster, src_chip_id, eth_connection.src_chan));
+                    std::forward<Operation>(operation)(
+                        src_chip_id, get_eth_core_coord(cluster, src_chip_id, eth_connection.src_chan));
                 }
             }
         }

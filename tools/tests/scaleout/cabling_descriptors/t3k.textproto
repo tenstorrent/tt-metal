@@ -8,7 +8,7 @@ graph_templates {
   }
 }
 
-# Root instance - just one 5LB graph
+# Root instance - T3K with single node
 root_instance {
   template_name: "T3K"
   child_mappings {

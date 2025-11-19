@@ -94,6 +94,12 @@ std::filesystem::path generate_output_dir() {
 void parse_restart_cable_args(const std::vector<std::string>& args_vec, InputArgs& input_args) {
     input_args.mode = CommandMode::RESTART_CABLE;
 
+    // Check for help flag first
+    if (test_args::has_command_option(args_vec, "--help")) {
+        input_args.help = true;
+        return;
+    }
+
     // Validate that only restart_cable arguments are provided
     for (size_t i = 2; i < args_vec.size(); ++i) {
         const auto& arg = args_vec[i];
