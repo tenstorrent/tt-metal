@@ -54,11 +54,9 @@ def compare_tensors_using_pcc(
             torch_output = output
         matches, actual_pcc = comp_pcc(golden_output, torch_output, desired_pcc)
 
-        output_tensor_id = (
-            output.get_tensor_id() if isinstance(output, ttnn.Tensor) else getattr(output, "tensor_id", None)
-        )
+        output_tensor_id = output.tensor_id if isinstance(output, ttnn.Tensor) else getattr(output, "tensor_id", None)
         golden_tensor_id = (
-            golden_output.get_tensor_id()
+            golden_output.tensor_id
             if isinstance(golden_output, ttnn.Tensor)
             else getattr(golden_output, "tensor_id", None)
         )
@@ -274,26 +272,24 @@ def preprocess_global_golden_function_inputs(function_args, function_kwargs):
     def recursive_preprocess_golden_function_inputs(object_value):
         nonlocal input_index
         if isinstance(object_value, ttnn.Tensor):
-            if object_value.get_tensor_id() is None:
+            if object_value.tensor_id is None:
                 raise RuntimeError(f"Input tensor does not have a tensor_id")
-            if object_value.get_tensor_id() not in TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR:
+            if object_value.tensor_id not in TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR:
                 if (
-                    ttnn.database.query_output_tensor_by_tensor_id(
-                        ttnn.CONFIG.report_path, object_value.get_tensor_id()
-                    )
+                    ttnn.database.query_output_tensor_by_tensor_id(ttnn.CONFIG.report_path, object_value.tensor_id)
                     is not None
                 ):
                     logger.warning(
-                        f"Intermediate tensor with tensor_id {object_value.get_tensor_id()} (input index: {input_index}) is not found in the global golden tensors. Global golden will be skipped"
+                        f"Intermediate tensor with tensor_id {object_value.tensor_id} (input index: {input_index}) is not found in the global golden tensors. Global golden will be skipped"
                     )
                     raise RuntimeError("Intermediate tensor is not found in the global golden tensors")
                 else:
                     logger.warning(
-                        f"Input tensor with tensor_id {object_value.get_tensor_id()} (input index: {input_index})  is not found in the global golden tensors. Creating it from ttnn tensor."
+                        f"Input tensor with tensor_id {object_value.tensor_id} (input index: {input_index})  is not found in the global golden tensors. Creating it from ttnn tensor."
                     )
                     golden_tensor = ttnn.to_torch(object_value)
             else:
-                golden_tensor = TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR[object_value.get_tensor_id()]
+                golden_tensor = TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR[object_value.tensor_id]
             input_index += 1
             return golden_tensor
         elif isinstance(object_value, ttnn.Shape):
@@ -339,9 +335,7 @@ def postprocess_global_golden_function_outputs(outputs, golden_outputs):
             raise TypeError(f"Expected list or tuple, got {type(golden_outputs)}")
 
     for output, golden_output in zip(outputs, golden_outputs):
-        output_tensor_id = (
-            output.get_tensor_id() if isinstance(output, ttnn.Tensor) else getattr(output, "tensor_id", None)
-        )
+        output_tensor_id = output.tensor_id if isinstance(output, ttnn.Tensor) else getattr(output, "tensor_id", None)
         if output_tensor_id is None:
             raise RuntimeError(f"Output tensor does not have a tensor_id")
         TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR[output_tensor_id] = golden_output
