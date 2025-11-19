@@ -155,3 +155,19 @@ FORCE_INLINE void fill_tile_with_first_column(uint32_t cb_id) {
         }
     }
 }
+
+// Does the brodcast for Row major layout tiles witthout immplicit tilization
+// Reads the very first column of the CB and fills the entire tile with the same column.
+// Tile is assumed to have 32-bit elements (float32/int32).
+FORCE_INLINE void fill_tile_with_first_column_rm(uint32_t cb_id) {
+    // Not tested yet! 
+    auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id));
+    // is it not possible to read like QWORD to make this more efficnelty and bulk read and write here ?
+    // start from last to prevent over writin shit ig.
+    for (uint32_t c_i = 31; c_i >= 0; c_i--) {
+        auto src_val = ptr[ci];
+        for (uint32_t r_i = 0; r_i < 32; r_i++) {
+            ptr[ci * 32 + r_i] = src_val;
+        }
+    }
+}

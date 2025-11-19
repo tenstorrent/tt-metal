@@ -8,6 +8,7 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils.hpp"
+#include "debug/dprint.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -31,14 +32,15 @@ void MAIN {
 binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs, cb_post_rhs);
 #endif
 
-    for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
-        PREPROCESS(LHS, cb_pre_lhs, cb_post_lhs, cb_out, num_tiles_per_cycle);
-        cb_wait_front(cb_post_lhs, num_tiles_per_cycle);
 
-        PREPROCESS(RHS, cb_pre_rhs, cb_post_rhs, cb_out, num_tiles_per_cycle);
-        cb_wait_front(cb_post_rhs, num_tiles_per_cycle);
+for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
+    PREPROCESS(LHS, cb_pre_lhs, cb_post_lhs, cb_out, num_tiles_per_cycle);
+    cb_wait_front(cb_post_lhs, num_tiles_per_cycle);
 
-        cb_reserve_back(cb_out, num_tiles_per_cycle);
+    PREPROCESS(RHS, cb_pre_rhs, cb_post_rhs, cb_out, num_tiles_per_cycle);
+    cb_wait_front(cb_post_rhs, num_tiles_per_cycle);
+
+    cb_reserve_back(cb_out, num_tiles_per_cycle);
 
 #if HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)
         binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs, cb_post_rhs);
@@ -55,6 +57,6 @@ binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs, cb_post_rhs);
         cb_push_back(cb_out, num_tiles_per_cycle);
         cb_pop_front(cb_post_lhs, num_tiles_per_cycle);
         cb_pop_front(cb_post_rhs, num_tiles_per_cycle);
-    }
+}
 }
 }  // namespace NAMESPACE

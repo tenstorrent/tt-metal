@@ -25,6 +25,11 @@ enum class KernelName {
     ReaderColBcastNg,
     ReaderRowBColABcastNg,
     ReaderScalarBcastNg,
+    ReaderRmNoBcastNg,
+    ReaderRmScalarBcastNg,
+    ReaderRmRowBcastNg,
+    ReaderRmColBcastNg,
+    WriterRmNoBcastNg,
     ComputeRowBcastNg,
     ComputeRowColBcastNg,
 };

@@ -24,6 +24,10 @@
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils_sfpu.hpp"
 
+#include "debug/dprint.h"  // required in all kernels using DPRINT
+#include "debug/dprint_pages.h"
+#include "debug/dprint_tensix.h"
+
 namespace NAMESPACE {
 void MAIN {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "binary_ng_utils.hpp"
+#include <algorithm>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/cb_utils.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -37,8 +38,8 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> get_shape_dims(cons
         shape.rank() >= 5 ? shape[-5] : 1,
         shape[-4],
         shape[-3],
-        shape[-2] / tile.get_height(),
-        shape[-1] / tile.get_width()};
+        tt::div_up(shape[-2], tile.get_height()),
+        tt::div_up(shape[-1], tile.get_width())};
 }
 
 std::tuple<uint32_t, uint32_t> calculate_compute_kernel_args(
@@ -168,6 +169,18 @@ std::optional<AllShardSpecs> get_shard_specs(
         *get_shard_spec(c)};
 }
 
+bool should_use_row_major_path(
+    const BinaryNgDeviceOperation::operation_attributes_t& operation_attributes,
+    const std::optional<Tensor>& b,
+    bool has_sharding) {
+    if (!b.has_value() || operation_attributes.input_layout_a != Layout::ROW_MAJOR ||
+        operation_attributes.input_layout_b != Layout::ROW_MAJOR || has_sharding) {
+        return false;
+    }
+    return true; // ig need to do this, change this temp bypass acc to constraints!
+    //    return operation_attributes.subtile_broadcast_type == SubtileBroadcastType::NONE;
+}
+
 uint32_t get_shards_per_width(const ShardSpec& shard_spec, TensorMemoryLayout memory_layout) {
     auto num_cores = shard_spec.grid.num_cores();
     if (memory_layout == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED) {
@@ -270,6 +283,44 @@ void set_or_update_runtime_arguments(
     auto bND = b.has_value() ? extract_nD_dims(*b, out_rank) : 1;
     auto cND = extract_nD_dims(c, out_rank);
 
+    Buffer* c_buffer = c.buffer();
+
+    auto src_buffer_a = a.buffer();
+    uint32_t page_size_a = src_buffer_a->page_size();
+    uint32_t aligned_page_size_a = src_buffer_a->aligned_page_size();
+    uint32_t num_pages_a = src_buffer_a->num_pages();
+
+    log_info(
+        tt::LogOp,
+        "A: Source tensor - page_size: {}, aligned_page_size: {}, num_pages: {}",
+        page_size_a,
+        aligned_page_size_a,
+        num_pages_a);
+
+    auto src_buffer_b = b->buffer();
+    uint32_t page_size_b = src_buffer_b->page_size();
+    uint32_t aligned_page_size_b = src_buffer_b->aligned_page_size();
+    uint32_t num_pages_b = src_buffer_b->num_pages();
+
+    log_info(
+        tt::LogOp,
+        "B: Source tensor - page_size: {}, aligned_page_size: {}, num_pages: {}",
+        page_size_b,
+        aligned_page_size_b,
+        num_pages_b);
+
+    auto src_buffer_c = c.buffer();
+    uint32_t page_size_c = src_buffer_c->page_size();
+    uint32_t aligned_page_size_c = src_buffer_c->aligned_page_size();
+    uint32_t num_pages_c = src_buffer_c->num_pages();
+
+    log_info(
+        tt::LogOp,
+        "C: Source tensor - page_size: {}, aligned_page_size: {}, num_pages: {}",
+        page_size_c,
+        aligned_page_size_c,
+        num_pages_c);
+
     const auto [aD, aN, aC, aHt, aWt] = get_shape_dims(a);
     const auto [bD, bN, bC, bHt, bWt] = b.has_value() ? get_shape_dims(*b) : std::tuple{1u, 1u, 1u, 1u, 1u};
     const auto [cD, cN, cC, cHt, cWt] = get_shape_dims(c);
@@ -311,16 +362,46 @@ void set_or_update_runtime_arguments(
     uint32_t num_cores;
     std::vector<CoreCoord> cores;
 
+    const bool row_major_inputs = should_use_row_major_path(operation_attributes, b, has_sharding);
+
     const uint32_t tile_height = c.tensor_spec().tile().get_height();
     const uint32_t tile_width = c.tensor_spec().tile().get_width();
     const uint32_t tile_hw = tile_height * tile_width;
-    const uint32_t c_num_tiles = c.physical_volume() / tile_hw;
+
+    uint32_t c_num_tiles;  // this needs to be const ?
+    // uint32_t c_num_tiles_my;  // thhis was const before,
+
+    if (row_major_inputs) {
+        // do we use c or a here and what about bcast and other kind of thigns man ?
+        uint32_t aligned_row_width = c.buffer()->aligned_page_size() / c.element_size();
+        uint32_t num_rows = c.physical_volume() / c.padded_shape()[-1];
+        uint32_t padded_volume = num_rows * aligned_row_width;
+        c_num_tiles = tt::div_up(padded_volume, tile_hw);
+    } else {
+        c_num_tiles = c.physical_volume() / tile_hw;
+    }
+    // c_num_tiles_my = c_num_tiles;
+    //  the outptu CB allocated shoud depend on thsi airhg , c_num_tiles_mine * c_num_tiel (work dist ? )
+
     uint32_t c_shard_height{}, c_shard_width{}, num_shards_per_width{};
+
+    if (row_major_inputs) {
+        TT_FATAL(aHt > 0, "Row-major binary_ng requires a to have positive tile height");
+        TT_FATAL(aWt > 0, "Row-major binary_ng requires a to have positive tile width");
+        TT_FATAL(bHt > 0, "Row-major binary_ng requires b to have positive tile height");
+        TT_FATAL(bWt > 0, "Row-major binary_ng requires b to have positive tile width");
+    }
 
     ShardShapeGenerator a_shard_shape_generator;
     ShardShapeGenerator b_shard_shape_generator;
     ShardShapeGenerator c_shard_shape_generator;
 
+    log_info(
+        tt::LogOp,
+        "zero_start_grid: {}, c_num_tiles: {}, c_physical_volume",
+        zero_start_grid,
+        c_num_tiles,
+        c.physical_volume());
     if (has_sharding) {
         core_group_1 = grid;
         a_shard_shape_generator = ShardShapeGenerator(shard_specs->a_shard_spec, a);
@@ -354,8 +435,17 @@ void set_or_update_runtime_arguments(
             tt::tt_metal::split_work_to_cores(all_device_cores, c_num_tiles, row_major);
         cores = corerange_to_cores(all_device_cores, {}, row_major);
     }
+    log_info(
+        tt::LogOp,
+        "num_cores: {}, num_tiles_per_core_group_1: {}, num_tiles_per_core_group_2 :{}, num_cores_total: {}",
+        num_cores,
+        num_tiles_per_core_group_1,
+        num_tiles_per_core_group_2,
+        num_cores_total);
 
-    for (uint32_t i = 0, start_tile_id = 0; i < num_cores_total; i++) {
+    uint32_t current_row = 0;
+    for (uint32_t i = 0, start_tile_id = 0; i < num_cores_total; i++) {  // changed from num_coreds_total to num_cores s
+        // need to set other runtim args to zero so we loop ove all here
         const auto& core = cores[i];
 
         uint32_t a_num_tiles = 0;
@@ -366,11 +456,16 @@ void set_or_update_runtime_arguments(
         } else if (core_group_2.contains(core)) {
             c_num_tiles = num_tiles_per_core_group_2;
         } else {
-            handle_args(program, reader_kernel_id, core, std::array<uint32_t, 21>{0});
-            handle_args(program, writer_kernel_id, core, std::array<uint32_t, 11>{0});
+            log_info(tt::LogOp, "core :{} is out ?", i);
+            handle_args(
+                program, reader_kernel_id, core, std::array<uint32_t, 24>{0});  // for other sthis is less right ?
+            // need to fix it here , for tilie tilize paths , right ?
+            handle_args(program, writer_kernel_id, core, std::array<uint32_t, 13>{0});  // this was the isue,
             handle_args(program, compute_kernel_id, core, std::array<uint32_t, 4>{0});
             continue;
         }
+
+        uint32_t num_rows = 0;  // initalize all the row major things toghet e?
 
         uint32_t c_start_id = 0;
         uint32_t c_current_shard_width = 0;
@@ -384,6 +479,96 @@ void set_or_update_runtime_arguments(
                 (i / num_shards_per_width) * (c_shard_height * cWt) + (i % num_shards_per_width) * c_shard_width;
         } else {
             c_start_id = start_tile_id;
+
+            if (row_major_inputs) {
+                auto row_width =
+                    a.buffer()->aligned_page_size() / a.element_size();  /// a.padded_shape()[-1];  // cWt * tile_width;
+
+                c_num_tiles = c_num_tiles * tt::div_up(row_width, tile_hw);
+                // this i a hack
+                // no need to do this ? 21st nov
+
+                // need to consder what to do if a is bcast or b is bcast
+                // or if scalr o rsomethikind fo shit man
+
+
+                log_info(tt::LogOp, "Final used c_num_tiles: {}", c_num_tiles);
+                log_info(
+                    tt::LogOp,
+                    "row_width: {}, mine_row_width: {} ",
+                    row_width,
+                    a.buffer()->aligned_page_size() / a.element_size());
+
+                // we need to fill the tile to aim for max utlizotn
+                // so we a particular no of tiles are allocaed to the fucking this thing
+
+                num_rows = std::max<DeviceAddr>(1, tile_hw / row_width);
+                // 1 is for when row_width > tile_hw alr ?
+
+                log_info(tt::LogOp, "num_rows :{} , row_width: {}", num_rows, row_width);
+
+                const auto rows_touched = [&](uint32_t start_id, uint32_t count) -> uint32_t {
+                    if (count == 0) {
+                        return 0;
+                    }
+                    const uint32_t start_column = start_id % cWt;
+                    return (start_column + count + cWt - 1) / cWt;
+                };
+                const auto cols_touched = [&](uint32_t start_id, uint32_t count) -> uint32_t {
+                    if (count == 0) {
+                        return 0;
+                    }
+                    const uint32_t start_column = start_id % cWt;
+                    const uint32_t first_span = cWt - start_column;
+                    if (count <= first_span) {
+                        return count;
+                    }
+                    const uint32_t remaining = count - first_span;
+                    if (remaining >= cWt) {
+                        return cWt;
+                    }
+                    return std::min(cWt, first_span + remaining);
+                };
+
+                switch (operation_attributes.subtile_broadcast_type) {
+                    case SubtileBroadcastType::NONE: {
+                        a_num_tiles = c_num_tiles;
+                        b_num_tiles = c_num_tiles;
+                        break;
+                    }
+                    case SubtileBroadcastType::COL_B: {
+                        a_num_tiles = c_num_tiles;
+                        b_num_tiles = rows_touched(c_start_id, c_num_tiles);
+                        break;
+                    }
+                    case SubtileBroadcastType::ROW_B: {
+                        a_num_tiles = c_num_tiles;
+                        b_num_tiles = cols_touched(c_start_id, c_num_tiles);
+                        break;
+                    }
+                    case SubtileBroadcastType::COL_A: {
+                        a_num_tiles = rows_touched(c_start_id, c_num_tiles);
+                        b_num_tiles = c_num_tiles;
+                        break;
+                    }
+                    case SubtileBroadcastType::ROW_A: {
+                        a_num_tiles = cols_touched(c_start_id, c_num_tiles);
+                        b_num_tiles = c_num_tiles;
+                        break;
+                    }
+                    case SubtileBroadcastType::SCALAR_A: {
+                        a_num_tiles = 1;
+                        b_num_tiles = c_num_tiles;
+                        break;
+                    }
+                    case SubtileBroadcastType::SCALAR_B: {
+                        a_num_tiles = c_num_tiles;
+                        b_num_tiles = 1;
+                        break;
+                    }
+                    default: break;
+                }
+            }
         }
 
         const bool is_quant_op = operation_attributes.is_quant_op;
@@ -404,7 +589,19 @@ void set_or_update_runtime_arguments(
                 b_num_tiles = b_shard_shape[0] * b_shard_shape[1];  // actual
             }
             std::array writer_runtime_args = {
-                c.buffer()->address(), c_start_id, c_num_tiles, c_current_shard_width, cD, cN, cC, cHt, cWt, cND, 0u};
+                c.buffer()->address(),
+                c_start_id,
+                c_num_tiles,
+                c_current_shard_width,
+                cD,
+                cN,
+                cC,
+                cHt,
+                cWt,  // Need to seperate row major argumetn and tilize agumetn and remove theset higns
+                cND,
+                current_row,
+                num_rows,
+                static_cast<uint32_t>(c_buffer->page_size())};
             handle_args(program, writer_kernel_id, core, writer_runtime_args);
 
             auto [freq, counter] =
@@ -423,7 +620,7 @@ void set_or_update_runtime_arguments(
             // scale is passed as a scalar, so we'll leave this here
             const auto packed_scalar = pack_scalar_runtime_arg(scalar, a.dtype(), is_quant_op);
             std::array writer_runtime_args = {
-                packed_scalar,
+                packed_scalar,  /// here argus offset dontn match
                 c.buffer()->address(),
                 c_start_id,
                 c_num_tiles,
@@ -433,7 +630,10 @@ void set_or_update_runtime_arguments(
                 cC,
                 cHt,
                 cWt,
-                cND};
+                cND,
+                current_row,
+                num_rows,
+                static_cast<uint32_t>(c_buffer->page_size())};
             handle_args(program, writer_kernel_id, core, writer_runtime_args);
 
             std::array compute_runtime_args = {c_num_tiles, 0u, 0u, compute_scalar_value};
@@ -462,10 +662,13 @@ void set_or_update_runtime_arguments(
             bHt * bWt * bC * (bN > 1),
             bHt * bWt * (bC > 1),
             b_num_tiles,
-        };
+            current_row,
+            num_rows,
+            static_cast<uint32_t>(c_buffer->page_size())};
         handle_args(program, reader_kernel_id, core, reader_runtime_args);
 
         start_tile_id += c_num_tiles;
+        current_row += num_rows;
     }
     if (has_sharding) {
         if (a.is_sharded()) {
@@ -481,7 +684,9 @@ void set_or_update_runtime_arguments(
 }
 
 KernelName get_reader_kernel_name_and_defines(
-    const SubtileBroadcastType subtile_broadcast_type, std::map<std::string, std::string>& reader_defines) {
+    // We can do something nice, here and put diff brodcast types or something ?
+    const SubtileBroadcastType subtile_broadcast_type,
+    std::map<std::string, std::string>& reader_defines) {
     if (subtile_broadcast_type == SubtileBroadcastType::NONE) {
         return KernelName::ReaderNoBcastNg;
     } else if (
@@ -580,6 +785,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, tensor_return_value_t& c) {
     using namespace tt;
     using namespace tt::tt_metal;
+    log_info(tt::LogOp, "Star of create here");
 
     const auto& a = tensor_args.input_tensor_a;
     const auto& b = tensor_args.input_tensor_b;
@@ -626,6 +832,34 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     Buffer* a_buffer = a.buffer();
     Buffer* b_buffer = b.has_value() ? b->buffer() : nullptr;
     Buffer* c_buffer = c.buffer();
+    auto tile_hw = a.tensor_spec().tile().get_tile_hw();
+    auto row_width = a.buffer()->aligned_page_size() / a.element_size();
+    // auto num_rows = std::max(1,tile_hw / row_width);
+    auto num_rows = std::max<DeviceAddr>(1, tile_hw / row_width);
+
+    // Print buffer A information
+    log_info(tt::LogOp, "=== Buffer A Information ===");
+    log_info(tt::LogOp, "  address: 0x{:x}", a_buffer->address());
+    log_info(tt::LogOp, "  page_size: {} bytes", a_buffer->page_size());
+    log_info(tt::LogOp, "  num_pages: {}", a_buffer->num_pages());
+    log_info(tt::LogOp, "  size: {} bytes", a_buffer->size());
+    log_info(tt::LogOp, "  buffer_type: {}", a_buffer->buffer_type());
+    log_info(tt::LogOp, "  buffer_layout: {}", a_buffer->buffer_layout());
+    log_info(tt::LogOp, "  is_dram: {}", a_buffer->buffer_type() == BufferType::DRAM);
+    log_info(tt::LogOp, "  is_sharded: {}", a.memory_config().is_sharded());
+
+    // Print tensor shape information
+    auto a_shape = a.logical_shape();
+    log_info(tt::LogOp, "  tensor_shape: [{}, {}, {}, {}]", a_shape[0], a_shape[1], a_shape[2], a_shape[3]);
+    log_info(tt::LogOp, "  tensor_layout: {}", a.layout());
+    log_info(tt::LogOp, "  dtype: {}", a.dtype());
+    log_info(tt::LogOp, "  element_size: {} bytes", a.element_size());
+
+    // Print circular buffer configuration
+    log_info(tt::LogOp, "=== Circular Buffer Configuration ===");
+    log_info(tt::LogOp, "  CB tile_size: {} bytes", a_single_tile_size);
+    log_info(tt::LogOp, "  CB data_format: {}", a_data_format);
+    log_info(tt::LogOp, "  tile_hw: {}", tile_hw);
 
     auto op_type = operation_attributes.binary_op_type;
 
@@ -683,34 +917,84 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     bool op_has_exp =
         op_type == BinaryOpType::LOGADDEXP || op_type == BinaryOpType::LDEXP || op_type == BinaryOpType::LOGADDEXP2;
 
-    // How many tiles to store per input CB (double buffer)
-    auto [a_cb, a_cb_handle] = create_cb(
-        tt::CBIndex::c_0,
-        program,
-        all_device_cores,
-        a_single_tile_size,
-        a_num_tiles_per_shard.value_or(2),
-        a_data_format,
-        a_sharded ? a_buffer : nullptr);
+    // bool a_sharded = a.memory_config().is_sharded();
+    // bool b_sharded = b.has_value() && b->memory_config().is_sharded();
+    // bool c_sharded = c.memory_config().is_sharded();
 
-    if (not compute_kernel_defines["PROCESS_LHS_ACTIVATIONS(i)"].empty()) {
-        auto a_intermediate_format = is_sfpu_op   ? a_data_format
-                                     : op_has_exp ? tt::DataFormat::Float16_b
-                                                  : a_data_format;
-        uint32_t a_intermediate_single_tile_size = tt::tile_size(a_intermediate_format);
-        create_cb(
-            tt::CBIndex::c_3, program, all_device_cores, a_intermediate_single_tile_size, 1, a_intermediate_format);
+    const bool inputs_row_major =
+        CMAKE_UNIQUE_NAMESPACE::should_use_row_major_path(operation_attributes, b, has_sharding);
+
+    // Declare handles at function scope
+    tt::tt_metal::CBHandle a_cb_handle;
+    tt::tt_metal::CBHandle b_cb_handle;
+    //  num_rows * aligned_page_size() OR
+    if (inputs_row_major) {  // Need to split and organize row major branch neatly in the program factory
+
+        // How many tiles to store per input CB (double buffer)
+        auto [a_cb, a_cb_handle_temp] = create_cb(
+            tt::CBIndex::c_0,
+            program,
+            all_device_cores,
+            // page size. if row size is bigger than l1 memory size? if we are reading full row ?
+            a_buffer->aligned_page_size() * num_rows,  // divide a and b the space in l1 mem
+            a_num_tiles_per_shard.value_or(2),
+            a_data_format,
+            a_sharded ? a_buffer : nullptr);
+
+        if (not compute_kernel_defines["PROCESS_LHS_ACTIVATIONS(i)"].empty()) {
+            auto a_intermediate_format = is_sfpu_op   ? a_data_format
+                                         : op_has_exp ? tt::DataFormat::Float16_b
+                                                      : a_data_format;
+            uint32_t a_intermediate_single_tile_size = tt::tile_size(a_intermediate_format);
+            create_cb(
+                tt::CBIndex::c_3, program, all_device_cores, a_intermediate_single_tile_size, 1, a_intermediate_format);
+        }
+        // If b is a scalar, we only need one tile in the CB
+        auto [b_cb, b_cb_handle_temp] = create_cb(
+            tt::CBIndex::c_1,
+            program,
+            all_device_cores,
+            b_buffer->aligned_page_size() * num_rows,
+            // need to share it with a and handle for max in the l1 memmoery limit man
+            // should be same unless there is a bcast or somethign
+            b_buffer == nullptr ? 1 : b_num_tiles_per_shard.value_or(2),
+            b_data_format,
+            b_sharded ? b_buffer : nullptr);
+
+        a_cb_handle = a_cb_handle_temp;
+        b_cb_handle = b_cb_handle_temp;
+
+    } else {
+        // How many tiles to store per input CB (double buffer)
+        auto [a_cb, a_cb_handle_temp] = create_cb(
+            tt::CBIndex::c_0,
+            program,
+            all_device_cores,  // on all device cores or only num_coers ?
+            a_single_tile_size,
+            a_num_tiles_per_shard.value_or(2),
+            a_data_format,
+            a_sharded ? a_buffer : nullptr);
+
+        if (not compute_kernel_defines["PROCESS_LHS_ACTIVATIONS(i)"].empty()) {
+            auto a_intermediate_format = is_sfpu_op   ? a_data_format
+                                         : op_has_exp ? tt::DataFormat::Float16_b
+                                                      : a_data_format;
+            uint32_t a_intermediate_single_tile_size = tt::tile_size(a_intermediate_format);
+            create_cb(
+                tt::CBIndex::c_3, program, all_device_cores, a_intermediate_single_tile_size, 1, a_intermediate_format);
+        }
+        auto [b_cb, b_cb_handle_temp] = create_cb(
+            tt::CBIndex::c_1,
+            program,
+            all_device_cores,
+            b_single_tile_size,
+            b_buffer == nullptr ? 1 : b_num_tiles_per_shard.value_or(2),
+            b_data_format,
+            b_sharded ? b_buffer : nullptr);
+
+        a_cb_handle = a_cb_handle_temp;
+        b_cb_handle = b_cb_handle_temp;
     }
-
-    // If b is a scalar, we only need one tile in the CB
-    auto [b_cb, b_cb_handle] = create_cb(
-        tt::CBIndex::c_1,
-        program,
-        all_device_cores,
-        b_single_tile_size,
-        b_buffer == nullptr ? 1 : b_num_tiles_per_shard.value_or(2),
-        b_data_format,
-        b_sharded ? b_buffer : nullptr);
 
     if (not compute_kernel_defines["PROCESS_RHS_ACTIVATIONS(i)"].empty()) {
         auto b_intermediate_format = is_sfpu_op   ? b_data_format
@@ -720,7 +1004,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         create_cb(
             tt::CBIndex::c_4, program, all_device_cores, b_intermediate_single_tile_size, 1, b_intermediate_format);
     }
-
+    // why does brodcast need more cirucl buffers here ?
     if (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_A ||
         operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_A_COL_B) {
         create_cb(tt::CBIndex::c_5, program, all_device_cores, a_single_tile_size, 2, a_data_format);
@@ -734,18 +1018,31 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         tt::CBIndex::c_2,
         program,
         all_device_cores,
-        c_single_tile_size,
+        c_single_tile_size,  // output tile size, row size ?
         c_num_tiles_per_shard.value_or(2),
         c_data_format,
         c_sharded ? c_buffer : nullptr);
 
+    const bool outputs_row_major = inputs_row_major && operation_attributes.output_layout == Layout::ROW_MAJOR;
+
+    if (inputs_row_major) {
+        TT_FATAL(!has_sharding, "Row-major binary_ng path does not support sharded tensors yet");
+        TT_FATAL(outputs_row_major, "Row-major binary_ng path requires row-major output layout");
+    }
+
     auto kernel_config = CMAKE_UNIQUE_NAMESPACE::BinaryNgKernelConfig(operation_attributes.subtile_broadcast_type);
+    auto reader_kernel = kernel_config.reader_kernel; // need to fetch kernel in a better way
+
     // WRITER KERNEL
     auto writer_kernel = CMAKE_UNIQUE_NAMESPACE::KernelName::WriterScalar;
     auto compute_kernel = CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeScalar;
     if (b.has_value()) {
-        writer_kernel = kernel_config.writer_kernel;
         compute_kernel = kernel_config.compute_kernel;
+        if (inputs_row_major) {
+            writer_kernel = KernelName::WriterRmNoBcastNg;
+        } else {
+            writer_kernel = KernelName::WriterNoBcastNg;
+        }
     }
 
     auto writer_defines = make_dataflow_defines(b_dtype);
@@ -758,13 +1055,28 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
 
     // overwrite reader and write kernel names so that reader reads both and b and
     // writer does not read b.
-    if (b.has_value()) {
-        kernel_config.reader_kernel = CMAKE_UNIQUE_NAMESPACE::get_reader_kernel_name_and_defines(
+    if (inputs_row_major) {
+        switch (operation_attributes.subtile_broadcast_type) {
+            case SubtileBroadcastType::NONE: reader_kernel = KernelName::ReaderRmNoBcastNg; break;
+            case SubtileBroadcastType::SCALAR_A:
+            case SubtileBroadcastType::SCALAR_B: reader_kernel = KernelName::ReaderRmScalarBcastNg; break;
+            case SubtileBroadcastType::ROW_A:
+            case SubtileBroadcastType::ROW_B: reader_kernel = KernelName::ReaderRmRowBcastNg; break;
+            case SubtileBroadcastType::COL_A:
+            case SubtileBroadcastType::COL_B: reader_kernel = KernelName::ReaderRmColBcastNg; break;
+            default:
+                TT_FATAL(
+                    false,
+                    "Row-major binary_ng does not yet support broadcast type {}",
+                    static_cast<int>(operation_attributes.subtile_broadcast_type));
+        }
+    } else if (b.has_value()) {
+        reader_kernel = CMAKE_UNIQUE_NAMESPACE::get_reader_kernel_name_and_defines(
             operation_attributes.subtile_broadcast_type, reader_defines);
-        writer_kernel = KernelName::WriterNoBcastNg;
     }
     std::vector<uint32_t> writer_compile_time_args;
     tt::tt_metal::TensorAccessorArgs(*c_buffer).append_to(writer_compile_time_args);
+
     writer_compile_time_args.push_back(static_cast<uint32_t>(has_sharding));
     tt::tt_metal::KernelHandle writer_kernel_id = tt_metal::CreateKernel(
         program,
@@ -803,7 +1115,12 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
 
     compute_kernel_defines["BCAST_INPUT"] = kernel_config.bcast_input_str();
 
-    const uint32_t num_tiles_per_cycle = 1;  // we produce 1 output tile per read-compute-write cycle
+    uint32_t num_tiles_per_cycle = 1;  // we produce 1 output tile per read-compute-write cycle
+    // num_tiles_per_cycle = tt::div_up(a_buffer->aligned_page_size() / a.element_size(), tile_hw);
+    // why are we not utilizing multipel tiles per cycel ? for bf16
+
+    log_info(tt::LogOp, "num_tiles_per_cycle : {}", num_tiles_per_cycle);
+
     if (CMAKE_UNIQUE_NAMESPACE::is_llk_bcast(operation_attributes.subtile_broadcast_type, a_dtype, b_dtype, c_dtype)) {
         CMAKE_UNIQUE_NAMESPACE::overwrite_compute_kernel_name_and_defines(
             compute_kernel, operation_attributes.subtile_broadcast_type, compute_kernel_defines);
@@ -838,10 +1155,22 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     std::vector<uint32_t> reader_compile_time_args;
     tt::tt_metal::TensorAccessorArgs(*a_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(b_buffer != nullptr ? *b_buffer : *a_buffer).append_to(reader_compile_time_args);
+
     reader_compile_time_args.push_back(static_cast<uint32_t>(has_sharding));
+
+    log_info(
+        tt::LogOp,
+        "reader_kernel :{}, compute_kernel :{}, writer_kernel: {}\
+        reader_kerenl_file_path: {}, compute_kerenl_file_path: {} ",
+        reader_kernel,
+        compute_kernel,
+        writer_kernel,
+        get_kernel_file_path(reader_kernel, is_sfpu_op, is_where_op),
+        get_kernel_file_path(compute_kernel, is_sfpu_op, is_where_op));
+
     tt::tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
         program,
-        get_kernel_file_path(kernel_config.reader_kernel, is_sfpu_op, is_where_op),
+        get_kernel_file_path(reader_kernel, is_sfpu_op, is_where_op), // kerne_config.reader_kenrle was offcical one
         all_device_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args, std::move(reader_defines)));
 

@@ -9,6 +9,7 @@
 
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils.hpp"
+#include "debug/dprint.h"
 
 namespace NAMESPACE {
 
