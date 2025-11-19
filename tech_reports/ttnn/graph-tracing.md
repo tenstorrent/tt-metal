@@ -989,8 +989,8 @@ auto levelized_json = ttnn::graph::extract_levelized_graph(trace, 1);
 
 // Access vertices
 for (const auto& vertex : levelized_graph.vertices()) {
-    std::cout << "Operation: " << vertex.name 
-              << ", Level: " << vertex.stacking_level 
+    std::cout << "Operation: " << vertex.name
+              << ", Level: " << vertex.stacking_level
               << ", Inputs: " << vertex.in_edges.size()
               << ", Outputs: " << vertex.out_edges.size() << std::endl;
 }
