@@ -92,6 +92,7 @@ public:
         const std::optional<std::unordered_set<MeshCoordinate>>& shards,
         bool blocking) override;
 
+    // Returns true if the CQ is in use (has had commands enqueued).
     virtual bool in_use() { return false; }
 };
 

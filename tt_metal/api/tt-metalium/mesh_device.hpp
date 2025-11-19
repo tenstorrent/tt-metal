@@ -129,10 +129,10 @@ private:
     // Recursively quiesce all submeshes.
     void quiesce_internal();
 
-    // Check if the mesh device or any of its parents are in use.
-    bool are_parents_in_use(uint32_t cq_id) const;
-    // Check if the mesh device or any of its children are in use.
-    bool are_children_in_use(uint32_t cq_id) const;
+    // Check if the mesh device or any of its parents have a CQ in use, and returns one of the parent mesh IDs if found.
+    std::optional<int> get_parent_mesh_id_with_in_use_cq(uint32_t cq_id) const;
+    // Check if the mesh device or any of its children have a CQ in use, and returns one of the child mesh IDs if found.
+    std::optional<int> get_child_mesh_id_with_in_use_cq(uint32_t cq_id) const;
 
     void mark_allocations_unsafe();
     void mark_allocations_safe();
