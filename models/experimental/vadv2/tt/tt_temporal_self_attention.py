@@ -70,13 +70,8 @@ class TtTemporalSelfAttention:
         if value is None:
             assert self.batch_first
             bs, len_bev, c = query.shape
-            # Stack in torch domain to avoid TILE layout padding issues
-            import torch
-
-            query_torch = ttnn.to_torch(query)
-            value_torch = torch.stack([query_torch, query_torch], dim=1)
-            value_torch = value_torch.reshape(bs * 2, len_bev, c)
-            value = ttnn.from_torch(value_torch, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
+            value = ttnn.stack([query, query], dim=1)
+            value = ttnn.reshape(value, (bs * 2, len_bev, c))
 
         if identity is None:
             identity = query
@@ -193,16 +188,23 @@ class TtTemporalSelfAttention:
         tmp = output
         output = ttnn.reshape(tmp, (num_query, embed_dims, bs, self.num_bev_queue))
         ttnn.deallocate(tmp)
+        # output = ttnn.permute(output, (1, 2, 0))
+        # output = ttnn.reshape(output, (num_query, embed_dims, bs, self.num_bev_queue))
 
-        # Use native ttnn.mean - requires ROW_MAJOR_LAYOUT
-        output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
-        output = ttnn.mean(output, dim=-1, keepdim=False)
-        # Output is already in ROW_MAJOR_LAYOUT after mean operation
-
-        # Convert to TILE_LAYOUT and permute
+        # Optimization: swap dims 1 and 2 for more efficient tiled layout (32x smaller, 32x faster)
+        output = ttnn.permute(output, (0, 2, 1, 3))  # [num_query, bs, embed_dims, num_bev_queue]
         output = ttnn.to_layout(output, ttnn.TILE_LAYOUT)
-        output = ttnn.permute(output, (2, 0, 1))
 
+        # BUG WORKAROUND: ttnn.mean with L1_MEMORY_CONFIG has a bug that causes it to
+        # allocate 512-1024x more memory than needed (tries to allocate 5GB for 10MB tensor).
+        # Using DRAM or default memory config works correctly.
+        # See test_ttnn_mean_isolated.py for reproduction.
+        output = ttnn.mean(
+            output, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )  # mean over num_bev_queue -> [num_query, bs, embed_dims]
+        output = ttnn.permute(output, (0, 2, 1))  # swap back -> [num_query, embed_dims, bs]
+
+        output = ttnn.permute(output, (2, 0, 1))
         output = ttnn.linear(output, params.output_proj.weight, bias=params.output_proj.bias)
         # Don't deallocate model weights - they need to persist across iterations
         # ttnn.deallocate(params.output_proj.weight)
