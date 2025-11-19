@@ -97,45 +97,43 @@ void kernel_main() {
         }  // wt loop
 
 #if defined FUSE_GAMMA || defined FUSE_BETA
-        if (ncht == 0) {
-            for (uint32_t wt = 0; wt < Wt; wt += blk) {
+        for (uint32_t wt = 0; wt < Wt; wt += blk) {
 #ifdef FUSE_GAMMA
-                {
-                    for (uint32_t r = 0; r < blk; r++) {
-                        cb_reserve_back(cb_gamma, 1);
-                        uint32_t l1_write_addr = get_write_ptr(cb_gamma);
-                        DPRINT << "tile id: " << wt + r << ENDL();
-                        uint64_t gamma_noc_addr = get_noc_addr(wt + r, addrg);
-                        async_read_row_to_tile<0>(gamma_noc_addr, l1_write_addr);
-                        noc_async_read_barrier();
-                        cb_push_back(cb_gamma, 1);
-                    }
+            {
+                for (uint32_t r = 0; r < blk; r++) {
+                    cb_reserve_back(cb_gamma, 1);
+                    uint32_t l1_write_addr = get_write_ptr(cb_gamma);
+                    DPRINT << "tile id: " << wt + r << ENDL();
+                    uint64_t gamma_noc_addr = get_noc_addr(wt + r, addrg);
+                    async_read_row_to_tile<0>(gamma_noc_addr, l1_write_addr);
+                    noc_async_read_barrier();
+                    cb_push_back(cb_gamma, 1);
                 }
+            }
 #endif
 
 #ifdef FUSE_BETA
-                {
-                    // cb_reserve_back(cb_beta, blk);
-                    // uint32_t l1_write_addr = get_write_ptr(cb_beta);
-                    for (uint32_t r = 0; r < blk; r++) {
-                        // uint64_t beta_noc_addr = get_noc_addr(wt + r, addrb);
-                        // noc_async_read(beta_noc_addr, l1_write_addr, 32 * 2);
-                        // beta_noc_addr = get_noc_addr(l1_write_addr + 32);
-                        // noc_async_read_barrier();
-                        // noc_async_read(beta_noc_addr, l1_write_addr + 512, 32);
-                        cb_reserve_back(cb_beta, 1);
-                        uint32_t l1_write_addr = get_write_ptr(cb_beta);
-                        uint64_t beta_noc_addr = get_noc_addr(wt + r, addrb);
-                        async_read_row_to_tile<0>(beta_noc_addr, l1_write_addr);
-                        noc_async_read_barrier();
-                        cb_push_back(cb_beta, 1);
-                    }
+            {
+                // cb_reserve_back(cb_beta, blk);
+                // uint32_t l1_write_addr = get_write_ptr(cb_beta);
+                for (uint32_t r = 0; r < blk; r++) {
+                    // uint64_t beta_noc_addr = get_noc_addr(wt + r, addrb);
+                    // noc_async_read(beta_noc_addr, l1_write_addr, 32 * 2);
+                    // beta_noc_addr = get_noc_addr(l1_write_addr + 32);
                     // noc_async_read_barrier();
-                    // cb_push_back(cb_beta, blk);
+                    // noc_async_read(beta_noc_addr, l1_write_addr + 512, 32);
+                    cb_reserve_back(cb_beta, 1);
+                    uint32_t l1_write_addr = get_write_ptr(cb_beta);
+                    uint64_t beta_noc_addr = get_noc_addr(wt + r, addrb);
+                    async_read_row_to_tile<0>(beta_noc_addr, l1_write_addr);
+                    noc_async_read_barrier();
+                    cb_push_back(cb_beta, 1);
                 }
+                // noc_async_read_barrier();
+                // cb_push_back(cb_beta, blk);
+            }
 #endif
-            }  // wt loop
-        }
+        }  // wt loop
 #endif
     }  // ncht loop
 }
