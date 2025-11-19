@@ -242,7 +242,8 @@ operation::ProgramWithCallbacks slice_rm_multi_core_stride(
     Tensor& output_tensor,
     const ttnn::Shape& slice_start,
     const ttnn::Shape& slice_end,
-    const ttnn::Shape& slice_step) {
+    const ttnn::Shape& slice_step,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     tt::tt_metal::IDevice* device = input_tensor.device();
@@ -261,6 +262,10 @@ operation::ProgramWithCallbacks slice_rm_multi_core_stride(
     uint32_t grid_x = core_allocation.grid_x;
     uint32_t grid_y = core_allocation.grid_y;
     uint32_t num_cores = core_allocation.num_cores;
+
+    if (sub_core_grids.has_value()) {
+        log_warning(tt::LogOp, "sub_core_grids is currently unsupported when step is > 1");
+    }
 
     // DEBUG OUTPUT: Show core allocation decisions for performance analysis
     log_debug(

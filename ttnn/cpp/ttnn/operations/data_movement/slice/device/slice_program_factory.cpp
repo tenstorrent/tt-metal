@@ -186,7 +186,11 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_cb_size(
 }
 
 operation::ProgramWithCallbacks slice_rm_multi_core(
-    const Tensor& a, Tensor& output, const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end) {
+    const Tensor& a,
+    Tensor& output,
+    const ttnn::Shape& output_tensor_start,
+    const ttnn::Shape& output_tensor_end,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     // This should allocate a DRAM buffer on the device
@@ -582,7 +586,11 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 }
 
 operation::ProgramWithCallbacks slice_rm_multi_core_sharded(
-    const Tensor& a, Tensor& output, const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end) {
+    const Tensor& a,
+    Tensor& output,
+    const ttnn::Shape& output_tensor_start,
+    const ttnn::Shape& output_tensor_end,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     const ttnn::Shape output_shape = output.padded_shape();
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
@@ -609,6 +617,10 @@ operation::ProgramWithCallbacks slice_rm_multi_core_sharded(
     CoreCoord grid_size_padded = {bbox_padded.end_coord.x + 1, bbox_padded.end_coord.y + 1};
     uint32_t num_cores_x_padded = grid_size_padded.x;
     uint32_t num_cores_y_padded = grid_size_padded.y;
+
+    if (sub_core_grids.has_value()) {
+        log_warning(tt::LogOp, "sub_core_grids is not used when input tensor is sharded");
+    }
 
     log_debug(tt::LogOp, "num_padded_sticks: {}", num_padded_sticks);
     log_debug(tt::LogOp, "shard_height_padded: {}", shard_height_padded);
@@ -853,7 +865,11 @@ inline __attribute__((always_inline)) void set_slice_runtime_args_tile(
 }
 
 operation::ProgramWithCallbacks slice_tile_multi_core(
-    const Tensor& a, Tensor& output, const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end) {
+    const Tensor& a,
+    Tensor& output,
+    const ttnn::Shape& output_tensor_start,
+    const ttnn::Shape& output_tensor_end,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     // This should allocate a DRAM buffer on the device
@@ -974,7 +990,8 @@ operation::ProgramWithCallbacks slice_multi_core(
     Tensor& output,
     const ttnn::Shape& output_tensor_start,
     const ttnn::Shape& output_tensor_end,
-    const ttnn::Shape& step) {
+    const ttnn::Shape& step,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     bool has_step = false;
     for (int i = 0; i < step.size(); i++) {
         if (step[i] != 1) {
@@ -985,24 +1002,30 @@ operation::ProgramWithCallbacks slice_multi_core(
     switch (a.layout()) {
         case Layout::ROW_MAJOR:
             return a.is_sharded()
-                       ? slice_rm_multi_core_sharded(a, output, output_tensor_start, output_tensor_end)
-                       : (has_step ? slice_rm_multi_core_stride(a, output, output_tensor_start, output_tensor_end, step)
-                                   : slice_rm_multi_core(a, output, output_tensor_start, output_tensor_end));
-        case Layout::TILE: return slice_tile_multi_core(a, output, output_tensor_start, output_tensor_end);
+                       ? slice_rm_multi_core_sharded(a, output, output_tensor_start, output_tensor_end, sub_core_grids)
+                       : (has_step
+                              ? slice_rm_multi_core_stride(
+                                    a, output, output_tensor_start, output_tensor_end, step, sub_core_grids)
+                              : slice_rm_multi_core(a, output, output_tensor_start, output_tensor_end, sub_core_grids));
+        case Layout::TILE:
+            return slice_tile_multi_core(a, output, output_tensor_start, output_tensor_end, sub_core_grids);
         default: TT_ASSERT(false, "Unsupported Layout");
     }
     return {};
 }
 
 operation::ProgramWithCallbacks slice_multi_core_with_tensor_args(
-    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+    const std::vector<Tensor>& input_tensors,
+    std::vector<Tensor>& output_tensors,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     const Tensor& a = input_tensors[0];
     const Tensor& start_tensor = input_tensors[1];
     const Tensor& end_tensor = input_tensors[2];
     Tensor& output = output_tensors[0];
 
     switch (a.layout()) {
-        case Layout::TILE: return slice_tile_multi_core_tensor_args(a, start_tensor, end_tensor, output);
+        case Layout::TILE:
+            return slice_tile_multi_core_tensor_args(a, start_tensor, end_tensor, output, sub_core_grids);
         case Layout::ROW_MAJOR:
             // For now, only support TILE layout with tensor args
             TT_FATAL(
@@ -1031,7 +1054,11 @@ inline __attribute__((always_inline)) void set_slice_runtime_args_tensor_args(
     std::vector<uint32_t>& accumulated_total_per_dim);
 
 operation::ProgramWithCallbacks slice_tile_multi_core_tensor_args(
-    const Tensor& input_tensor, const Tensor& start_tensor, const Tensor& end_tensor, Tensor& output_tensor) {
+    const Tensor& input_tensor,
+    const Tensor& start_tensor,
+    const Tensor& end_tensor,
+    Tensor& output_tensor,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     tt::tt_metal::IDevice* device = input_tensor.device();
 

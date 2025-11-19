@@ -20,6 +20,7 @@ struct SliceDeviceOperation {
     const ttnn::Shape step;
     const tt::tt_metal::MemoryConfig output_mem_config;
     const bool use_tensor_args = false;
+    const std::optional<CoreRangeSet> sub_core_grids = std::nullopt;
     const std::optional<uint32_t> slice_dim = std::nullopt;
     const std::optional<uint32_t> num_devices = std::nullopt;
 
