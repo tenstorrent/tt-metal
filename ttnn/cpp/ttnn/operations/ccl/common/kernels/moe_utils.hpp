@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include <tuple>
+#include <utility>
 
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
@@ -28,25 +29,32 @@ struct PolarState {
     inline Polarity reverse(Polarity p) { return p == Polarity::POSITIVE ? Polarity::NEGATIVE : Polarity::POSITIVE; }
 
     template <ReverseMode ReverseMode>
-    inline uint32_t polar_compare_stateful(
+    inline std::pair<uint32_t, uint32_t> polar_compare_stateful(
         uint32_t positive_distance,
         uint32_t positive_direction,
         uint32_t negative_distance,
         uint32_t negative_direction,
         uint32_t axis) {
         auto polarity = polarity_table[axis];
-        uint32_t result = 0;
-        if (polarity == Polarity::POSITIVE) {
-            result = positive_distance <= negative_distance ? positive_direction : negative_direction;
-        } else {
-            result = positive_distance < negative_distance ? positive_direction : negative_direction;
-        }
-        if constexpr (ReverseMode == ReverseMode::ON_TIE) {
-            if (positive_distance == negative_distance) {
-                polarity_table[axis] = reverse(polarity);
-            }
-        } else if constexpr (ReverseMode == ReverseMode::PER_TOKEN) {
+        std::pair<uint32_t, uint32_t> result;
+        if constexpr (ReverseMode == ReverseMode::PER_TOKEN) {
+            result = polarity == Polarity::POSITIVE ? std::make_pair(positive_direction, positive_distance)
+                                                    : std::make_pair(negative_direction, negative_distance);
             polarity_table[axis] = reverse(polarity);
+            return result;
+        } else {
+            if (polarity == Polarity::POSITIVE) {
+                result = positive_distance <= negative_distance ? std::make_pair(positive_direction, positive_distance)
+                                                                : std::make_pair(negative_direction, negative_distance);
+            } else {
+                result = positive_distance < negative_distance ? std::make_pair(positive_direction, positive_distance)
+                                                               : std::make_pair(negative_direction, negative_distance);
+            }
+            if constexpr (ReverseMode == ReverseMode::ON_TIE) {
+                if (positive_distance == negative_distance) {
+                    polarity_table[axis] = reverse(polarity);
+                }
+            }
         }
         return result;
     }
@@ -179,7 +187,8 @@ uint32_t manhattan_distance(uint32_t linearized_src_mesh_coord, uint32_t lineari
 }
 
 template <tt::tt_fabric::Topology Topology, uint32_t MeshRows, uint32_t MeshCols, ReverseMode RevMode>
-uint32_t get_route(uint32_t linearized_src_mesh_coord, uint32_t linearized_dest_mesh_coord) {
+std::pair<uint32_t, uint32_t> get_route_and_distance(
+    uint32_t linearized_src_mesh_coord, uint32_t linearized_dest_mesh_coord) {
     auto [src_row, src_col] = get_mesh_coords<MeshRows, MeshCols>(linearized_src_mesh_coord);
     auto [dest_row, dest_col] = get_mesh_coords<MeshRows, MeshCols>(linearized_dest_mesh_coord);
     // default_polary is for ties in a ring
@@ -187,7 +196,12 @@ uint32_t get_route(uint32_t linearized_src_mesh_coord, uint32_t linearized_dest_
     // if default is negative, then for a E-W tie, we go West, and for a N-S tie, we go North
     if (src_row == dest_row) {
         if constexpr (!has_wrap_around<Topology>()) {
-            return src_col < dest_col ? eth_chan_directions::EAST : eth_chan_directions::WEST;
+            return src_col < dest_col ? std::make_pair(
+                                            eth_chan_directions::EAST,
+                                            directional_wrap_distance<MeshCols>(src_col, dest_col, Polarity::POSITIVE))
+                                      : std::make_pair(
+                                            eth_chan_directions::WEST,
+                                            directional_wrap_distance<MeshCols>(src_col, dest_col, Polarity::NEGATIVE));
         } else {
             // with wrap around, we can go either East or West. Choose the shorter route
             uint32_t east_distance = directional_wrap_distance<MeshCols>(src_col, dest_col, Polarity::POSITIVE);
@@ -197,7 +211,12 @@ uint32_t get_route(uint32_t linearized_src_mesh_coord, uint32_t linearized_dest_
         }
     } else {
         if constexpr (!has_wrap_around<Topology>()) {
-            return src_row < dest_row ? eth_chan_directions::SOUTH : eth_chan_directions::NORTH;
+            return src_row < dest_row ? std::make_pair(
+                                            eth_chan_directions::SOUTH,
+                                            directional_wrap_distance<MeshRows>(src_row, dest_row, Polarity::POSITIVE))
+                                      : std::make_pair(
+                                            eth_chan_directions::NORTH,
+                                            directional_wrap_distance<MeshRows>(src_row, dest_row, Polarity::NEGATIVE));
         } else {
             // with wrap around, we can go either North or South. Choose the shorter route
             uint32_t south_distance = directional_wrap_distance<MeshRows>(src_row, dest_row, Polarity::POSITIVE);
@@ -464,12 +483,10 @@ inline void fabric_send_chip_unicast_noc_unicast_1d(
     int32_t size_bytes,
     const uint32_t alignment,
     uint32_t offset = 0) {
-    uint32_t distance =
-        manhattan_distance<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
+    auto [route, distance] = get_route_and_distance<Topology, MeshRows, MeshCols, RevMode>(
+        LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
     fabric_set_unicast_route<false>((volatile tt_l1_ptr LowLatencyPacketHeader*)packet_header, distance);
 
-    uint32_t route =
-        get_route<Topology, MeshRows, MeshCols, RevMode>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
     fabric_send_noc_unicast<FabricMaxPacketSzBytes>(
         addrgen,
         fabric_connections[route],
@@ -500,12 +517,10 @@ inline void l1_only_fabric_send_chip_unicast_noc_unicast_with_semaphore_1d(
     uint32_t increment_value,
     bool flush) {
     // This api is only for L1 as it can cause a DRAM hang in blackhole
-    uint32_t distance =
-        manhattan_distance<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
+    auto [route, distance] = get_route_and_distance<Topology, MeshRows, MeshCols, RevMode>(
+        LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
     fabric_set_unicast_route<false>((volatile tt_l1_ptr LowLatencyPacketHeader*)packet_header, distance);
 
-    uint32_t route =
-        get_route<Topology, MeshRows, MeshCols, RevMode>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
     return l1_only_fabric_send_noc_unicast_with_semaphore<FabricMaxPacketSzBytes>(
         fabric_connections[route],
         packet_header,
@@ -539,12 +554,10 @@ inline void fabric_send_chip_unicast_noc_unicast_with_semaphore_1d(
     uint32_t increment_value,
     bool flush,
     uint32_t offset = 0) {
-    uint32_t distance =
-        manhattan_distance<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
+    auto [route, distance] = get_route_and_distance<Topology, MeshRows, MeshCols, RevMode>(
+        LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
     fabric_set_unicast_route<false>((volatile tt_l1_ptr LowLatencyPacketHeader*)packet_header, distance);
 
-    uint32_t route =
-        get_route<Topology, MeshRows, MeshCols, RevMode>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
     return fabric_send_noc_unicast_with_semaphore<FabricMaxPacketSzBytes>(
         addrgen,
         fabric_connections[route],
@@ -577,12 +590,9 @@ inline void fabric_send_chip_unicast_noc_unicast_semaphore_only_1d(
     packet_header->to_noc_unicast_atomic_inc(
         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{noc_remote_semaphore_address, increment_value, flush});
 
-    uint32_t distance =
-        manhattan_distance<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
+    auto [route, distance] = get_route_and_distance<Topology, MeshRows, MeshCols, RevMode>(
+        LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
     fabric_set_unicast_route<false>((volatile tt_l1_ptr LowLatencyPacketHeader*)packet_header, distance);
-
-    uint32_t route =
-        get_route<Topology, MeshRows, MeshCols, RevMode>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
 
     // Send only the packet header (for semaphore increment)
     fabric_connections[route].wait_for_empty_write_slot();
