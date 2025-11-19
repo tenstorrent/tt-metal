@@ -311,8 +311,13 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_fw/device/swiglu_fw_program_factory.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_fw/device/swiglu_fw_program_factory.cpp
     # AdamW Fused Optimizer
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw_fused/adamw_fused.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw_fused/adamw_fused.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw_fused/adamw_fused.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw_fused/device/adamw_fused_device_operation_types.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw_fused/device/adamw_fused_device_operation.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw_fused/device/adamw_fused_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw_fused/device/adamw_fused_program_factory.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw_fused/device/adamw_fused_program_factory.cpp
 )
 
 list(APPEND SOURCES ${METAL_OPS_FILES})

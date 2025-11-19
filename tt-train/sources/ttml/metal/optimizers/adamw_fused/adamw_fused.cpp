@@ -4,25 +4,25 @@
 
 #include "adamw_fused.hpp"
 
-#include <stdexcept>
+#include "device/adamw_fused_device_operation.hpp"
 
 namespace ttml::metal {
 
 ttnn::Tensor adamw_fused(
-    [[maybe_unused]] const ttnn::Tensor& param_in,
-    [[maybe_unused]] const ttnn::Tensor& grad,
-    [[maybe_unused]] const ttnn::Tensor& exp_avg,
-    [[maybe_unused]] const ttnn::Tensor& exp_avg_sq,
-    [[maybe_unused]] const float lr,
-    [[maybe_unused]] const float beta1,
-    [[maybe_unused]] const float beta2,
-    [[maybe_unused]] const float beta1_pow,
-    [[maybe_unused]] const float beta2_pow,
-    [[maybe_unused]] const float epsilon,
-    [[maybe_unused]] const float weight_decay,
-    [[maybe_unused]] const uint32_t step) {
-    // TODO: Implement the fused AdamW kernel
-    throw std::runtime_error("AdamW fused optimizer is not yet implemented");
+    const ttnn::Tensor& param_in,
+    const ttnn::Tensor& grad,
+    const ttnn::Tensor& exp_avg,
+    const ttnn::Tensor& exp_avg_sq,
+    const float lr,
+    const float beta1,
+    const float beta2,
+    const float beta1_pow,
+    const float beta2_pow,
+    const float epsilon,
+    const float weight_decay,
+    const uint32_t step) {
+    return ttnn::prim::ttml_adamw_fused(
+        param_in, grad, exp_avg, exp_avg_sq, lr, beta1, beta2, beta1_pow, beta2_pow, epsilon, weight_decay, step);
 }
 
 }  // namespace ttml::metal
