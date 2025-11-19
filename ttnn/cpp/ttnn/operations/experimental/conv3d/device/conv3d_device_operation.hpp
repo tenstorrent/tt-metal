@@ -122,7 +122,6 @@ struct Conv3dOp {
 
     std::vector<TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
 
-    // Test modification to trigger CI check
     tt::tt_metal::operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
