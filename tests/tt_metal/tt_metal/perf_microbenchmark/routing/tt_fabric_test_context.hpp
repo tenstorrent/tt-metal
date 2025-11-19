@@ -238,7 +238,6 @@ public:
                             .mcast_start_hops = sync_pattern.mcast_start_hops,
                             .seed = config.seed,
                             .is_2D_routing_enabled = fixture_->is_2D_routing_enabled(),
-                            .is_dynamic_routing_enabled = fixture_->is_dynamic_routing_enabled(),
                             .mesh_shape = this->fixture_->get_mesh_shape(),
                             .topology = this->fixture_->get_topology()};
 
@@ -323,7 +322,6 @@ public:
                     .enable_flow_control = config.enable_flow_control,  // Propagate from test-level config
                     .seed = config.seed,
                     .is_2D_routing_enabled = fixture_->is_2D_routing_enabled(),
-                    .is_dynamic_routing_enabled = fixture_->is_dynamic_routing_enabled(),
                     .mesh_shape = this->fixture_->get_mesh_shape(),
                     .topology = this->fixture_->get_topology()};
 
@@ -351,7 +349,7 @@ public:
         }
     }
 
-    void open_devices(const TestFabricSetup& fabric_setup) { fixture_->open_devices(fabric_setup); }
+    bool open_devices(const TestFabricSetup& fabric_setup) { return fixture_->open_devices(fabric_setup); }
 
     void compile_programs() {
         fixture_->setup_workload();
@@ -652,7 +650,7 @@ private:
             dst_node_ids = traffic_config.dst_node_ids.value();
 
             // assign hops for 2d LL and 1D
-            if (!(fixture_->is_dynamic_routing_enabled())) {
+            if (src_node_id.mesh_id == dst_node_ids[0].mesh_id) {
                 hops = this->fixture_->get_hops_to_chip(src_node_id, dst_node_ids[0]);
             }
         }
@@ -740,7 +738,7 @@ private:
                     per_receiver_config.receiver_credit_info->credit_return_address = credit_return_address;
 
                     std::optional<std::unordered_map<RoutingDirection, uint32_t>> reverse_hops = std::nullopt;
-                    if (!fixture_->is_dynamic_routing_enabled()) {
+                    if (src_node_id.mesh_id == dst_node_id.mesh_id) {
                         reverse_hops = fixture_->get_hops_to_chip(dst_node_id, src_node_id);
                     }
                     per_receiver_config.receiver_credit_info->hops = reverse_hops;
@@ -960,8 +958,8 @@ private:
         for (size_t group_start = 0; group_start < all_devices.size(); group_start += MAX_CONCURRENT_DEVICES) {
             size_t group_end = std::min(group_start + MAX_CONCURRENT_DEVICES, all_devices.size());
 
-            log_debug(tt::LogTest, "Processing device group {}-{} of {}",
-                     group_start, group_end - 1, all_devices.size() - 1);
+            log_debug(
+                tt::LogTest, "Processing device group {}-{} of {}", group_start, group_end - 1, all_devices.size() - 1);
 
             // First loop: Initiate non-blocking reads for group
             for (size_t i = group_start; i < group_end; ++i) {
@@ -970,8 +968,7 @@ private:
                     device.device_coord,
                     device.sender_cores,
                     sender_memory_map_.get_result_buffer_address(),
-                    sender_memory_map_.get_result_buffer_size()
-                );
+                    sender_memory_map_.get_result_buffer_size());
             }
 
             // Barrier to wait for all reads in this group to complete

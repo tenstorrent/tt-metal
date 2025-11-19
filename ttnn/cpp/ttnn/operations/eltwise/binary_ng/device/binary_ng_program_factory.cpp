@@ -396,6 +396,7 @@ void set_or_update_runtime_arguments(
             is_quant_op ? std::bit_cast<uint32_t>(
                               operation_attributes.post_activations[0].get_param_if<float>(0).value_or(0.0f))
                         : 0u;
+        uint32_t compute_scalar_value = quantization_zero_point;
 
         if (b.has_value()) {
             if (has_sharding) {
@@ -408,7 +409,12 @@ void set_or_update_runtime_arguments(
 
             auto [freq, counter] =
                 calculate_compute_kernel_args(operation_attributes.subtile_broadcast_type, c_start_id, cHt, cWt);
-            std::array compute_runtime_args = {c_num_tiles, freq, counter, quantization_zero_point};
+            if (operation_attributes.binary_op_type == BinaryOpType::WHERE_TTS ||
+                operation_attributes.binary_op_type == BinaryOpType::WHERE_TST) {
+                compute_scalar_value = pack_scalar_runtime_arg(
+                    operation_attributes.scalar.value(), b.has_value() ? b->dtype() : a.dtype(), false);
+            }
+            std::array compute_runtime_args = {c_num_tiles, freq, counter, compute_scalar_value};
             handle_args(program, compute_kernel_id, core, compute_runtime_args);
         } else {
             const auto scalar = *operation_attributes.scalar;
@@ -430,7 +436,7 @@ void set_or_update_runtime_arguments(
                 cND};
             handle_args(program, writer_kernel_id, core, writer_runtime_args);
 
-            std::array compute_runtime_args = {c_num_tiles, 0u, 0u, quantization_zero_point};
+            std::array compute_runtime_args = {c_num_tiles, 0u, 0u, compute_scalar_value};
             handle_args(program, compute_kernel_id, core, compute_runtime_args);
         }
 
@@ -579,6 +585,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     const auto& b = tensor_args.input_tensor_b;
     const bool is_sfpu_op = operation_attributes.is_sfpu;
     const bool is_quant_op = operation_attributes.is_quant_op;
+    const bool is_where_op = operation_attributes.is_where_op;
     // TODO: For mixed dtypes we need to set this value to the appropriate dtype depending on which LLK is meant to be
     // used.
     const auto input_dtype = operation_attributes.input_dtype;
@@ -761,7 +768,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     writer_compile_time_args.push_back(static_cast<uint32_t>(has_sharding));
     tt::tt_metal::KernelHandle writer_kernel_id = tt_metal::CreateKernel(
         program,
-        get_kernel_file_path(writer_kernel, is_sfpu_op),
+        get_kernel_file_path(writer_kernel, is_sfpu_op, is_where_op),
         all_device_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args, std::move(writer_defines)));
 
@@ -804,9 +811,22 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     } else {
         reader_defines["BCAST_LLK"] = "0";
     }
+
+    if (op_type == BinaryOpType::WHERE_TTS || op_type == BinaryOpType::WHERE_TST) {
+        // Add common fill defines
+        compute_kernel_defines["FILL_LLK"] = "fill_tile";
+        if (b_dtype == DataType::INT32 || b_dtype == DataType::UINT32) {
+            compute_kernel_defines["FILL_LLK"] = "fill_tile_int";
+            compute_kernel_defines["FILL_WITH_VALUE_INT"] = "1";
+        } else {
+            compute_kernel_defines["FILL_WITH_VALUE_FLOAT"] = "1";
+        }
+    }
+    compute_kernel_defines["WHERE_TTS"] = (op_type == BinaryOpType::WHERE_TTS) ? "1" : "0";
+    compute_kernel_defines["WHERE_TST"] = (op_type == BinaryOpType::WHERE_TST) ? "1" : "0";
     auto compute_kernel_id = tt_metal::CreateKernel(
         program,
-        get_kernel_file_path(compute_kernel, is_sfpu_op),
+        get_kernel_file_path(compute_kernel, is_sfpu_op, is_where_op),
         all_device_cores,
         tt_metal::ComputeConfig{
             .fp32_dest_acc_en = fp32_dest_acc_en,
@@ -821,7 +841,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     reader_compile_time_args.push_back(static_cast<uint32_t>(has_sharding));
     tt::tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
         program,
-        get_kernel_file_path(kernel_config.reader_kernel, is_sfpu_op),
+        get_kernel_file_path(kernel_config.reader_kernel, is_sfpu_op, is_where_op),
         all_device_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args, std::move(reader_defines)));
 
