@@ -806,6 +806,21 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
     return this->optimal_dram_bank_to_logical_worker_assignment_;
 }
 
+uint32_t Device::get_worker_noc_hop_distance(CoreCoord logical_src, CoreCoord logical_dst, NOC noc) const {
+    auto src = this->physical_worker_core_from_logical_core(logical_src);
+    auto dst = this->physical_worker_core_from_logical_core(logical_dst);
+    auto grid_size = this->grid_size();
+    if (noc == NOC::NOC_0) {
+        uint32_t dist_right = src.x <= dst.x ? dst.x - src.x : grid_size.x - src.x + dst.x;
+        uint32_t dist_bottom = src.y <= dst.y ? dst.y - src.y : grid_size.y - src.y + dst.y;
+        return dist_right + dist_bottom;
+    } else {
+        uint32_t dist_left = src.x >= dst.x ? src.x - dst.x : grid_size.x - dst.x + src.x;
+        uint32_t dist_top = src.y >= dst.y ? src.y - dst.y : grid_size.y - dst.y + src.y;
+        return dist_left + dist_top;
+    }
+}
+
 HalProgrammableCoreType Device::get_programmable_core_type(CoreCoord virtual_core) const {
     if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(virtual_core, this->id_)) {
         return HalProgrammableCoreType::TENSIX;

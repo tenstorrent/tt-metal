@@ -134,6 +134,30 @@ TEST(GetOptimalDramBankToLogicalWorkerAssignmentAPI, UnitMeshes) {
     }
 }
 
+TEST(GetWorkerNocHopDistanceAPI, UnitMeshes) {
+    auto device_ids_set = tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids();
+    std::vector<int> device_ids(device_ids_set.begin(), device_ids_set.end());
+    auto devs = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(device_ids);
+    for (auto& [_, dev] : devs) {
+        auto noc_0_hop_distance = dev->get_worker_noc_hop_distance(CoreCoord(0, 0), CoreCoord(0, 1), NOC::NOC_0);
+        auto noc_1_hop_distance = dev->get_worker_noc_hop_distance(CoreCoord(0, 0), CoreCoord(0, 1), NOC::NOC_1);
+        EXPECT_EQ(noc_0_hop_distance, 1);
+        EXPECT_EQ(noc_1_hop_distance, dev->grid_size().y - 1);
+        noc_0_hop_distance = dev->get_worker_noc_hop_distance(CoreCoord(0, 1), CoreCoord(0, 0), NOC::NOC_0);
+        noc_1_hop_distance = dev->get_worker_noc_hop_distance(CoreCoord(0, 1), CoreCoord(0, 0), NOC::NOC_1);
+        EXPECT_EQ(noc_0_hop_distance, dev->grid_size().y - 1);
+        EXPECT_EQ(noc_1_hop_distance, 1);
+        noc_0_hop_distance = dev->get_worker_noc_hop_distance(CoreCoord(0, 0), CoreCoord(1, 0), NOC::NOC_0);
+        noc_1_hop_distance = dev->get_worker_noc_hop_distance(CoreCoord(0, 0), CoreCoord(1, 0), NOC::NOC_1);
+        EXPECT_EQ(noc_0_hop_distance, 1);
+        EXPECT_EQ(noc_1_hop_distance, dev->grid_size().x - 1);
+        noc_0_hop_distance = dev->get_worker_noc_hop_distance(CoreCoord(1, 0), CoreCoord(0, 0), NOC::NOC_0);
+        noc_1_hop_distance = dev->get_worker_noc_hop_distance(CoreCoord(1, 0), CoreCoord(0, 0), NOC::NOC_1);
+        EXPECT_EQ(noc_0_hop_distance, dev->grid_size().x - 1);
+        EXPECT_EQ(noc_1_hop_distance, 1);
+    }
+}
+
 TEST(ThrowOnMultipleMeshDeviceInitialization, UnitMeshes) {
     auto device_ids_set = tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids();
     std::vector<int> device_ids(device_ids_set.begin(), device_ids_set.end());

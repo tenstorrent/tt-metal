@@ -99,6 +99,9 @@ public:
     // requests
     virtual std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) = 0;
 
+    // Returns the hop distance between two logical worker coordinates on a given NOC
+    virtual uint32_t get_worker_noc_hop_distance(CoreCoord logical_src, CoreCoord logical_dst, NOC noc) const = 0;
+
     // Convert a logical coordinate to virtual coordinate
     virtual CoreCoord virtual_core_from_logical_core(
         const CoreCoord& logical_coord, const CoreType& core_type) const = 0;

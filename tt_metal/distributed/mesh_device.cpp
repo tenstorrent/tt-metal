@@ -706,6 +706,10 @@ std::vector<CoreCoord> MeshDevice::worker_cores_from_logical_cores(const std::ve
 std::vector<CoreCoord> MeshDevice::get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) {
     return get_devices().front()->get_optimal_dram_bank_to_logical_worker_assignment(noc);
 }
+uint32_t MeshDevice::get_worker_noc_hop_distance(CoreCoord logical_src, CoreCoord logical_dst, NOC noc) const {
+    TT_FATAL(num_devices() == 1, "get_worker_noc_hop_distance() is only supported on unit MeshDevice.");
+    return get_devices().front()->get_worker_noc_hop_distance(logical_src, logical_dst, noc);
+}
 CoreCoord MeshDevice::virtual_core_from_logical_core(const CoreCoord& logical_coord, const CoreType& core_type) const {
     return validate_and_get_reference_value(this->get_devices(), [logical_coord, core_type](const auto* device) {
         return device->virtual_core_from_logical_core(logical_coord, core_type);
