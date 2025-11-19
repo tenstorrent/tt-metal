@@ -2345,116 +2345,6 @@ void reset_noc_trid_barrier_counter(uint32_t id_mask = NOC_CLEAR_OUTSTANDING_REQ
 
 namespace experimental {
 
-/**
- * @brief Provides a safe pointer to a structure of type T in local L1 memory
- */
-template <typename T, typename AddressType = uint32_t>
-class L1Pointer {
-    using difference_type = std::ptrdiff_t;
-
-public:
-    /** @brief Construct a L1Pointer from a raw address
-     *
-     * @param address The raw address of the structure in local L1 memory
-     */
-    L1Pointer(AddressType address) : address_(address) {}
-
-    /** @brief Construct a L1Pointer from a raw pointer
-     *
-     * @param ptr The volatile pointer to the structure in local L1 memory
-     */
-    L1Pointer(volatile T* ptr) : address_(reinterpret_cast<AddressType>(ptr)) {}
-
-    /** @brief Copy constructor
-     *
-     * @param other The other L1Pointer to copy from
-     */
-    L1Pointer(const L1Pointer&) = default;
-
-    /** @brief Copy assignment operator
-     *
-     * @param other The other L1Pointer to copy from
-     * @return A reference to the assigned L1Pointer
-     */
-    L1Pointer& operator=(const L1Pointer&) = default;
-
-    /** @brief Get the raw pointer to the structure in local L1 memory
-     *
-     * @return The raw pointer to the structure in local L1 memory
-     */
-    volatile T* get_unsafe_ptr() const { return reinterpret_cast<T*>(address_); }
-
-    AddressType get_address() const { return address_; }
-
-    /** @brief Get the element at the given index
-     *
-     * @param index The index of the element to get
-     * @return The element at the given index
-     */
-    volatile T& operator[](uint32_t index) const {
-        ASSERT(address >= 0 && (address_ + (index * sizeof(T)) < MEM_L1_SIZE));
-        return get_unsafe_ptr()[index];
-    }
-
-    /** @brief Get a reference to the value
-     *
-     * @return The value at the address
-     */
-    volatile T& operator*() const {
-        ASSERT(address >= 0 && address_ < MEM_L1_SIZE);
-        return get_unsafe_ptr()[0];
-    }
-
-    L1Pointer& operator+=(difference_type offset) {
-        address_ += offset;
-        return *this;
-    }
-
-    L1Pointer& operator-=(difference_type offset) {
-        address_ -= offset;
-        return *this;
-    }
-
-    L1Pointer& operator++() {
-        address_ += sizeof(T);
-        return *this;
-    }
-
-    L1Pointer& operator--() {
-        address_ -= sizeof(T);
-        return *this;
-    }
-
-    L1Pointer operator++(int) {
-        L1Pointer tmp = *this;
-        address_ += sizeof(T);
-        return tmp;
-    }
-
-    L1Pointer operator--(int) {
-        L1Pointer tmp = *this;
-        --(*this);
-        return tmp;
-    }
-
-    L1Pointer operator+(difference_type offset) const { return L1Pointer(address_ + offset); }
-
-    L1Pointer operator-(difference_type offset) const { return L1Pointer(address_ - offset); }
-
-    difference_type operator-(const L1Pointer& other) const { return address_ - other.address_; }
-
-    bool operator==(const L1Pointer& other) const { return address_ == other.address_; }
-    bool operator!=(const L1Pointer& other) const { return address_ != other.address_; }
-    bool operator<(const L1Pointer& other) const { return address_ < other.address_; }
-    bool operator<=(const L1Pointer& other) const { return address_ <= other.address_; }
-    bool operator>(const L1Pointer& other) const { return address_ > other.address_; }
-    bool operator>=(const L1Pointer& other) const { return address_ >= other.address_; }
-    explicit operator bool() const { return address_ != 0; }
-
-private:
-    AddressType address_;
-};
-
 // Forward declaration can be removed when 2.0 objects are split into different headers
 struct MulticastEndpoint;
 
@@ -3340,6 +3230,141 @@ struct noc_traits_t<tensor_accessor::Page> {
         } else {
             return noc_addr;
         }
+    }
+};
+
+/**
+ * @brief Provides a safe pointer to a structure of type T in local L1 memory
+ */
+template <typename T, typename AddressType = uint32_t>
+class L1Memory {
+    using difference_type = std::ptrdiff_t;
+
+public:
+    /** @brief Construct a L1Memory instance from a raw address
+     *
+     * @param address The raw address of the structure in local L1 memory
+     */
+    L1Memory(AddressType address) : address_(address) {}
+
+    /** @brief Construct a L1Memory instance from a raw pointer
+     *
+     * @param ptr The volatile pointer to the structure in local L1 memory
+     */
+    L1Memory(volatile T* ptr) : address_(reinterpret_cast<AddressType>(ptr)) {}
+
+    /** @brief Copy constructor
+     *
+     * @param other The other L1Memory to copy from
+     */
+    L1Memory(const L1Memory&) = default;
+
+    /** @brief Copy assignment operator
+     *
+     * @param other The other L1Memory to copy from
+     * @return A reference to the assigned L1Memory
+     */
+    L1Memory& operator=(const L1Memory&) = default;
+
+    /** @brief Get the raw pointer to the structure in local L1 memory
+     *
+     * @return The raw pointer to the structure in local L1 memory
+     */
+    volatile T* get_unsafe_ptr() const { return reinterpret_cast<T*>(address_); }
+
+    AddressType get_address() const { return address_; }
+
+    /** @brief Get the element at the given index
+     *
+     * @param index The index of the element to get
+     * @return The element at the given index
+     */
+    volatile T& operator[](uint32_t index) const {
+        ASSERT(address >= 0 && (address_ + (index * sizeof(T)) < MEM_L1_SIZE));
+        return get_unsafe_ptr()[index];
+    }
+
+    /** @brief Get a reference to the value
+     *
+     * @return The value at the address
+     */
+    volatile T& operator*() const {
+        ASSERT(address >= 0 && address_ < MEM_L1_SIZE);
+        return get_unsafe_ptr()[0];
+    }
+
+    L1Memory& operator+=(difference_type offset) {
+        address_ += offset;
+        return *this;
+    }
+
+    L1Memory& operator-=(difference_type offset) {
+        address_ -= offset;
+        return *this;
+    }
+
+    L1Memory& operator++() {
+        address_ += sizeof(T);
+        return *this;
+    }
+
+    L1Memory& operator--() {
+        address_ -= sizeof(T);
+        return *this;
+    }
+
+    L1Memory operator++(int) {
+        L1Memory tmp = *this;
+        address_ += sizeof(T);
+        return tmp;
+    }
+
+    L1Memory operator--(int) {
+        L1Memory tmp = *this;
+        --(*this);
+        return tmp;
+    }
+
+    L1Memory operator+(difference_type offset) const { return L1Memory(address_ + offset); }
+
+    L1Memory operator-(difference_type offset) const { return L1Memory(address_ - offset); }
+
+    difference_type operator-(const L1Memory& other) const { return address_ - other.address_; }
+
+    bool operator==(const L1Memory& other) const { return address_ == other.address_; }
+    bool operator!=(const L1Memory& other) const { return address_ != other.address_; }
+    bool operator<(const L1Memory& other) const { return address_ < other.address_; }
+    bool operator<=(const L1Memory& other) const { return address_ <= other.address_; }
+    bool operator>(const L1Memory& other) const { return address_ > other.address_; }
+    bool operator>=(const L1Memory& other) const { return address_ >= other.address_; }
+    explicit operator bool() const { return address_ != 0; }
+
+private:
+    AddressType address_;
+};
+
+template <typename T, typename AddressType>
+struct noc_traits_t<L1Memory<T, AddressType>> {
+    struct src_args_type {
+        AddressType offset_bytes = 0;
+    };
+    struct dst_args_type {};
+    struct dst_args_mcast_type {};
+
+    template <Noc::AddressType address_type>
+    static auto src_addr(const L1Memory<T, AddressType>& src, const Noc&, const src_args_type& args) {
+        static_assert(
+            address_type == Noc::AddressType::LOCAL_L1,
+            "CircularBuffer without mcast range can only be used as L1 source");
+        return src.get_address() + args.offset_bytes;
+    }
+    template <Noc::AddressType address_type>
+    static auto dst_addr(const L1Memory<T, AddressType>& dst, const Noc& noc, const dst_args_type& args) {
+        static_assert(false, "L1Memory cannot be used as NoC destination");
+    }
+    template <Noc::AddressType address_type>
+    static auto dst_addr_mcast(const L1Memory<T, AddressType>& dst, const Noc& noc, const dst_args_mcast_type& args) {
+        static_assert(false, "L1Memory cannot be used as NoC mcast destination");
     }
 };
 
