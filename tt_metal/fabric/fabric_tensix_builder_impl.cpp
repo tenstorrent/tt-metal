@@ -407,8 +407,7 @@ FabricTensixDatamoverRelayConfig::MuxConnectionInfo FabricTensixDatamoverRelayCo
     const std::pair<uint32_t, uint32_t>* noc_coords,
     uint32_t mux_channel_id,
     uint32_t connection_region_idx,
-    uint32_t stream_id,
-    uint32_t relay_stream_id) const {
+    uint32_t stream_id) const {
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
     const auto& tensix_config = fabric_context.get_tensix_config();
     auto mux_config = tensix_config.get_config(FabricTensixCoreType::MUX);
@@ -425,8 +424,7 @@ FabricTensixDatamoverRelayConfig::MuxConnectionInfo FabricTensixDatamoverRelayCo
         .relay_flow_control_semaphore_addr = mux_flow_control_semaphore_regions_[connection_region_idx].get_address(),
         .relay_teardown_semaphore_addr = mux_teardown_semaphore_regions_[connection_region_idx].get_address(),
         .relay_buffer_index_semaphore_addr = mux_buffer_index_semaphore_regions_[connection_region_idx].get_address(),
-        .stream_id = stream_id,
-        .relay_stream_id = relay_stream_id};
+        .stream_id = stream_id};
 }
 
 std::vector<uint32_t> FabricTensixDatamoverRelayConfig::get_compile_time_args(
@@ -449,13 +447,10 @@ std::vector<uint32_t> FabricTensixDatamoverRelayConfig::get_compile_time_args(
     const auto router_to_relay_channel_stream_id =
         tensix_config.get_channel_credits_stream_id(router_to_relay_channel_id, FabricTensixCoreType::RELAY);
 
-    // Build stream IDs arrays using loop
+    // Build stream IDs array using loop
     std::array<uint32_t, NUM_MUX_CONNECTIONS> mux_stream_ids;
-    std::array<uint32_t, NUM_MUX_CONNECTIONS> relay_stream_ids;
     for (uint32_t i = 0; i < NUM_MUX_CONNECTIONS; i++) {
         mux_stream_ids[i] = tensix_config.get_channel_credits_stream_id(mux_channel_ids[i], FabricTensixCoreType::MUX);
-        // local relay stream ids appended after router to relay stream id
-        relay_stream_ids[i] = router_to_relay_channel_stream_id + i + 1;
     }
 
     // Determine which perpendicular directions to check based on relay direction
@@ -491,8 +486,8 @@ std::vector<uint32_t> FabricTensixDatamoverRelayConfig::get_compile_time_args(
         // determines which mux channel the current relay should use: for local always use 0, for east/north relay we
         // use 1, for west/south relay we use 2
         uint32_t curr_idx = (i == 0) ? 0 : idx;
-        mux_infos[i] = get_mux_connection_info(
-            mux_noc_coords[i], mux_channel_ids[curr_idx], i, mux_stream_ids[curr_idx], relay_stream_ids[i]);
+        mux_infos[i] =
+            get_mux_connection_info(mux_noc_coords[i], mux_channel_ids[curr_idx], i, mux_stream_ids[curr_idx]);
     }
 
     std::vector<uint32_t> ct_args = {
@@ -557,16 +552,12 @@ std::vector<uint32_t> FabricTensixDatamoverRelayConfig::get_compile_time_args(
     for (const auto& info : mux_infos) {
         ct_args.push_back(info.stream_id);
     }
-    // Relay stream IDs array (relay's stream IDs for credit tracking)
-    for (const auto& info : mux_infos) {
-        ct_args.push_back(info.relay_stream_id);
-    }
 
     // Final args
-    ct_args.push_back(mux_config->get_status_address());       // 47: local_mux_status_address
-    ct_args.push_back(udm_memory_pool_region_.get_address());  // 48: udm_memory_pool_base_address
-    ct_args.push_back(static_cast<uint32_t>(udm_memory_pool_region_.get_total_size()));  // 49: udm_memory_pool_size
-    ct_args.push_back(static_cast<uint32_t>(direction));                                 // 50: direction
+    ct_args.push_back(mux_config->get_status_address());       // 44: local_mux_status_address
+    ct_args.push_back(udm_memory_pool_region_.get_address());  // 45: udm_memory_pool_base_address
+    ct_args.push_back(static_cast<uint32_t>(udm_memory_pool_region_.get_total_size()));  // 46: udm_memory_pool_size
+    ct_args.push_back(static_cast<uint32_t>(direction));                                 // 47: direction
 
     // Note: router NOC coords and sync address will be added by the builder
     return ct_args;
@@ -893,20 +884,20 @@ std::vector<uint32_t> FabricTensixDatamoverRelayBuilder::get_compile_time_args()
         fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::UDM,
         "Relay builder should only be used in UDM mode");
 
-    // 0-49: All relay channel configuration, mux connection config + arrays (1 + 3x11 fields), and UDM memory pool from
+    // 0-47: All relay channel configuration, mux connection config + arrays (1 + 3x10 fields), and UDM memory pool from
     // config
     auto ct_args = config_->get_compile_time_args(local_fabric_node_id_, link_idx_, direction_);
 
-    // 50-51: Fabric router NOC coordinates
-    ct_args.push_back(router_noc_x_);  // 50: router_noc_x
-    ct_args.push_back(router_noc_y_);  // 51: router_noc_y
+    // 48-49: Fabric router NOC coordinates
+    ct_args.push_back(router_noc_x_);  // 48: router_noc_x
+    ct_args.push_back(router_noc_y_);  // 49: router_noc_y
 
-    // 52: fabric_router_sync_address
+    // 50: fabric_router_sync_address
     const auto& fabric_router_config = fabric_context.get_fabric_router_config(
         tt::tt_fabric::FabricEriscDatamoverType::Default,
         tt::tt_fabric::FabricEriscDatamoverAxis::Short,
         fabric_tensix_config);
-    ct_args.push_back(fabric_router_config.edm_local_tensix_sync_address);  // 52: fabric_router_sync_address
+    ct_args.push_back(fabric_router_config.edm_local_tensix_sync_address);  // 50: fabric_router_sync_address
 
     return ct_args;
 }

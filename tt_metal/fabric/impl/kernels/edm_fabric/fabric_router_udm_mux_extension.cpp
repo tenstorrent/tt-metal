@@ -86,7 +86,8 @@ void setup_channel(
         reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(sender_flow_control_address),
         reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_handshake_address),
         0 /* unused, sender_sync_noc_cmd_buf */,
-        is_persistent_channel ? NUM_BUFFERS : tt::tt_fabric::MUX_TO_WORKER_INTERFACE_STARTING_READ_COUNTER_VALUE);  //
+        tt::tt_fabric::MUX_TO_WORKER_INTERFACE_STARTING_READ_COUNTER_VALUE);  // for udm mux, the initial read counter
+                                                                              // is always 0
     sender_flow_control_address += sizeof(uint32_t) + NOC_ALIGN_PADDING_BYTES;
     connection_handshake_address += sizeof(uint32_t) + NOC_ALIGN_PADDING_BYTES;
 
@@ -127,12 +128,8 @@ void forward_data(
         increment_local_update_ptr_val(my_channel_free_slots_stream_id.get(), 1);
 
         noc_async_writes_flushed();
-        if (is_persistent_channel) {
-            constexpr bool enable_deadlock_avoidance = true;  // not used
-            worker_interface.template notify_persistent_connection_of_free_space<enable_deadlock_avoidance>(1);
-        } else if (channel_connection_established) {
-            worker_interface.notify_worker_of_read_counter_update();
-        }
+
+        worker_interface.notify_worker_of_read_counter_update();
     }
 
     if (!is_persistent_channel) {
@@ -259,6 +256,7 @@ void kernel_main() {
                 header_only_channel_worker_interfaces[i]);
         }
     }
+    // DPRINT << "mux start loop" <<ENDL();
 
     while (!got_immediate_termination_signal(termination_signal_ptr)) {
         for (size_t i = 0; i < NUM_ITERS_BETWEEN_TEARDOWN_CHECKS; i++) {

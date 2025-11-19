@@ -36,7 +36,7 @@ using WorkerToFabricRelaySender = WorkerToFabricEdmSenderImpl<false, FABRIC_RELA
 using FabricRelayStatus = EDMStatus;
 
 template <uint8_t NUM_EDM_BUFFERS>
-using FabricRelayToMuxSender = WorkerToFabricEdmSenderImpl<true, NUM_EDM_BUFFERS>;
+using FabricRelayToMuxSender = WorkerToFabricEdmSenderImpl<false, NUM_EDM_BUFFERS>;
 }  // namespace tt::tt_fabric
 
 constexpr uint8_t NUM_BUFFERS = get_compile_time_arg_val(0);
@@ -99,13 +99,8 @@ constexpr std::array<size_t, NUM_MUX_CONNECTIONS> mux_relay_buffer_index_semapho
 constexpr std::array<size_t, NUM_MUX_CONNECTIONS> mux_free_slots_stream_id =
     fill_array_with_next_n_args<size_t, MUX_FREE_SLOTS_STREAM_ID_START_IDX, NUM_MUX_CONNECTIONS>();
 
-// Relay stream IDs for credit tracking (new array)
-constexpr uint32_t MUX_RELAY_FREE_SLOTS_STREAM_ID_START_IDX = MUX_FREE_SLOTS_STREAM_ID_START_IDX + NUM_MUX_CONNECTIONS;
-constexpr std::array<size_t, NUM_MUX_CONNECTIONS> mux_relay_free_slots_stream_id =
-    fill_array_with_next_n_args<size_t, MUX_RELAY_FREE_SLOTS_STREAM_ID_START_IDX, NUM_MUX_CONNECTIONS>();
-
 // Final compile-time arguments (computed incrementally from last array)
-constexpr size_t LOCAL_MUX_STATUS_ADDRESS_IDX = MUX_RELAY_FREE_SLOTS_STREAM_ID_START_IDX + NUM_MUX_CONNECTIONS;
+constexpr size_t LOCAL_MUX_STATUS_ADDRESS_IDX = MUX_FREE_SLOTS_STREAM_ID_START_IDX + NUM_MUX_CONNECTIONS;
 constexpr size_t mux_status_address = get_compile_time_arg_val(LOCAL_MUX_STATUS_ADDRESS_IDX);
 constexpr size_t udm_memory_pool_base_address = get_compile_time_arg_val(LOCAL_MUX_STATUS_ADDRESS_IDX + 1);
 constexpr size_t udm_memory_pool_size = get_compile_time_arg_val(LOCAL_MUX_STATUS_ADDRESS_IDX + 2);
@@ -328,7 +323,7 @@ void kernel_main() {
                 reinterpret_cast<volatile uint32_t*>(mux_relay_teardown_semaphore_addr[i]),
                 mux_relay_buffer_index_semaphore_addr[i],
                 static_cast<uint32_t>(mux_free_slots_stream_id[i]),
-                StreamId{static_cast<uint32_t>(mux_relay_free_slots_stream_id[i])});
+                StreamId{static_cast<uint32_t>(mux_free_slots_stream_id[i]) /* unused */});
         }
     }
 
