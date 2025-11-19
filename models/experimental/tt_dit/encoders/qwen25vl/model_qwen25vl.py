@@ -72,7 +72,7 @@ class Qwen25VlTextEncoder(Module):
             )
             for _ in range(num_hidden_layers)
         )
-        self.norm = Qwen25VlRmsNorm(hidden_size, eps=rms_norm_eps, device=ctx.device)
+        self.norm = Qwen25VlRmsNorm(hidden_size, eps=rms_norm_eps, ctx=ctx)
 
         self._device = ctx.device
         self._tp_axis = ctx.tp_axis
@@ -157,8 +157,8 @@ class Qwen25VlDecoderLayer(Module):
         self.mlp = Qwen25VlMlp(
             hidden_size=hidden_size, intermediate_size=intermediate_size, hidden_act=hidden_act, ctx=ctx
         )
-        self.input_layernorm = Qwen25VlRmsNorm(hidden_size, eps=rms_norm_eps, device=ctx.device)
-        self.post_attention_layernorm = Qwen25VlRmsNorm(hidden_size, eps=rms_norm_eps, device=ctx.device)
+        self.input_layernorm = Qwen25VlRmsNorm(hidden_size, eps=rms_norm_eps, ctx=ctx)
+        self.post_attention_layernorm = Qwen25VlRmsNorm(hidden_size, eps=rms_norm_eps, ctx=ctx)
 
     def forward(
         self,
@@ -392,10 +392,10 @@ class Qwen25VlMlp(Module):
 
 
 class Qwen25VlRmsNorm(Module):
-    def __init__(self, size: int, *, eps: float, device: ttnn.MeshDevice) -> None:
+    def __init__(self, size: int, *, eps: float, ctx: Qwen25VlContext) -> None:
         super().__init__()
 
-        self.weight = Parameter(total_shape=[size], device=device)
+        self.weight = Parameter(total_shape=[size], device=ctx.device)
         self._eps = eps
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
