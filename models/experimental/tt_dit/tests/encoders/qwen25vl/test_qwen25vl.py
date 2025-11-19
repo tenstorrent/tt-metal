@@ -61,10 +61,10 @@ def test_qwen25vl_attention(
     cos, sin = create_rope_tensors(
         batch_size,
         sequence_length,
+        attention_mask,
         head_dim=torch_model.config.hidden_size // torch_model.config.num_attention_heads,
         rope_theta=torch_model.config.rope_theta,
         mrope_section=torch_model.config.rope_scaling["mrope_section"],
-        attention_mask=attention_mask,
     )
 
     tt_sequence = tensor.from_torch(sequence, device=mesh_device)
@@ -156,7 +156,7 @@ def test_qwen25vl_text_encoder(
 
     tokens = torch.randint(0, torch_model.config.vocab_size, [batch_size, sequence_length])
     attention_mask = torch.randint(0, 2, [batch_size, sequence_length])
-    cos, sin = model.create_rope_tensors(batch_size, sequence_length, attention_mask=attention_mask)
+    cos, sin = model.create_rope_tensors(batch_size, sequence_length, attention_mask)
 
     tt_tokens = tensor.from_torch(tokens, device=mesh_device, dtype=ttnn.uint32)
     tt_attention_mask = tensor.from_torch(attention_mask, device=mesh_device) if attention_mask is not None else None
@@ -167,7 +167,6 @@ def test_qwen25vl_text_encoder(
     tt_hidden_states = model.forward(
         tt_tokens,
         attention_mask=tt_attention_mask,
-        # position_ids=position_ids,
         pos_embeds=(tt_pos_embeds_cos, tt_pos_embeds_sin),
     )
     tt_prompt_embeds = tt_hidden_states[-1]

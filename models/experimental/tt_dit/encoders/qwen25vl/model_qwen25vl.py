@@ -121,15 +121,15 @@ class Qwen25VlTextEncoder(Module):
         return hidden_states_list
 
     def create_rope_tensors(
-        self, batch_size: int, sequence_length: int, *, attention_mask: torch.Tensor | None
+        self, batch_size: int, sequence_length: int, attention_mask: torch.Tensor | None
     ) -> tuple[torch.Tensor, torch.Tensor]:
         return create_rope_tensors(
             batch_size,
             sequence_length,
-            attention_mask=attention_mask,
-            head_dim=self._head_dim,
-            rope_theta=self._rope_theta,
-            mrope_section=self._mrope_section,
+            attention_mask,
+            self._head_dim,
+            self._rope_theta,
+            self._mrope_section,
         )
 
 
@@ -262,6 +262,7 @@ class Qwen25VlAttention(Module):
             q = q.flatten(0, 1).unflatten(0, [self._group_count * s, -1])
             k = k.repeat_interleave(s, dim=0)
             v = v.repeat_interleave(s, dim=0)
+
             # pad group count
             q = _pad(q, self._group_count_padding, dim=0)
             k = _pad(k, self._group_count_padding, dim=0)
@@ -335,6 +336,7 @@ class Qwen25VlAttention(Module):
 
         if self._tp_axis is not None:
             x = self._ccl_manager.all_gather_persistent_buffer(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
+
         x = self.o_proj.forward(x)
 
         if self._tp_axis is not None:
@@ -467,7 +469,6 @@ def prepare_attention_mask(attention_mask: ttnn.Tensor) -> ttnn.Tensor:
 def create_rope_tensors(
     batch_size: int,
     sequence_length: int,
-    *,
     attention_mask: torch.Tensor | None,
     head_dim: int,
     rope_theta: float,
