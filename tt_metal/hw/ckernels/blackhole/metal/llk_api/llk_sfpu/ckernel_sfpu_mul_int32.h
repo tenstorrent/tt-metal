@@ -20,7 +20,8 @@ inline void mul_int32(const uint dst_index_in0, const uint dst_index_in1, const 
     uint offset1 = dst_index_in1 * dst_tile_size;
     uint offset2 = dst_index_out * dst_tile_size;
 
-    constexpr uint z = 0;
+    constexpr uint a0 = 0;
+    constexpr uint b0 = 0;
     constexpr uint a1 = 1;
     constexpr uint b1 = 2;
     constexpr uint b2 = 3;
@@ -29,17 +30,17 @@ inline void mul_int32(const uint dst_index_in0, const uint dst_index_in1, const 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         // b0
-        TT_SFPLOAD(z, INT32, ADDR_MOD_7, offset1);
+        TT_SFPLOAD(b0, INT32, ADDR_MOD_7, offset1);
         // a1
         TT_SFPLOADMACRO((0 << 2) | (a1 & 3), INT32, ADDR_MOD_7, offset0 | (a1 >> 2));
         // b1
         TT_SFPLOADMACRO((1 << 2) | (b1 & 3), INT32, ADDR_MOD_7, offset1 | (b1 >> 2));
         // a0
-        TT_SFPLOAD(z, INT32, ADDR_MOD_7, offset0);
+        TT_SFPLOAD(a0, INT32, ADDR_MOD_7, offset0);
         // b2
         TT_SFPLOADMACRO((2 << 2) | (b2 & 3), INT32, ADDR_MOD_7, offset1 | (b2 >> 2));
         // c = mul24_hi(a0, b2)
-        TTI_SFPMUL24(z, b2, p_sfpu::LCONST_0, c, 1);
+        TTI_SFPMUL24(a0, b2, p_sfpu::LCONST_0, c, 1);
         // b1 = b1 + a1
         TTI_SFPIADD(0, a1, b1, SFPIADD_MOD1_CC_NONE);
         // c
@@ -52,13 +53,11 @@ inline void mul_int32(const uint dst_index_in0, const uint dst_index_in1, const 
 
 template <bool APPROXIMATION_MODE>
 inline void mul_int32_init() {
-
-    constexpr uint z = 0;
     constexpr uint b1 = 2;
     constexpr uint c = 4;
 
     TTI_SFPSHFT2(-23 & 0xfff, 0, 12, 6);
-    TTI_SFPMUL24(z, 0, p_sfpu::LCONST_0, 13, 0);
+    TTI_SFPMUL24(0, 0, p_sfpu::LCONST_0, 13, 0);
     TTI_SFPSHFT(23, b1, 14, 1 | 4);
     TTI_SFPIADD(0, c, 15, SFPIADD_MOD1_CC_NONE);
 
