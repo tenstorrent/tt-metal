@@ -700,10 +700,10 @@ size_t log_worker_to_fabric_edm_sender_rt_args(const std::vector<uint32_t>& args
     log_trace(tt::LogFabric, "arg[{}]: buffer_index_semaphore_id {}", starting_arg_idx, args[starting_arg_idx++]);
     log_trace(
         tt::LogFabric, "arg[{}]: sender_worker_flow_control_semaphore_id {}", starting_arg_idx, args[starting_arg_idx++]);
+    log_trace(tt::LogFabric, "arg[{}]: worker_free_slots_stream_id {}", starting_arg_idx, args[starting_arg_idx++]);
     log_trace(
         tt::LogFabric, "arg[{}]: sender_worker_buffer_index_semaphore_id {}", starting_arg_idx, args[starting_arg_idx++]);
-    log_trace(tt::LogFabric, "arg[{}]: worker_free_slots_stream_id {}", starting_arg_idx, args[starting_arg_idx++]);
-    return starting_arg_idx + 10;
+    return starting_arg_idx + 11;
 }
 
 FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
