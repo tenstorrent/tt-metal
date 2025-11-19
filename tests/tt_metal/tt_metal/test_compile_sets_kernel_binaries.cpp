@@ -48,8 +48,6 @@
 using std::vector;
 using namespace tt;
 
-namespace {
-
 std::string get_latest_kernel_binary_path(
     const std::string& kernel_root_path, const std::shared_ptr<tt_metal::Kernel>& kernel) {
     TT_FATAL(kernel != nullptr, "Error");
@@ -126,8 +124,6 @@ void construct_program(tt_metal::Program& program, tt_metal::IDevice* device, Co
         core,
         tt_metal::ComputeConfig{.compile_args = compute_kernel_args});
 }
-
-}  // namespace
 
 int main(int argc, char** argv) {
     bool pass = true;

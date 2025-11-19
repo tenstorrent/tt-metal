@@ -4,12 +4,11 @@
 
 #include "jit_build_utils.hpp"
 
-#include <pthread.h>
+#include <stdio.h>
 #include <stdlib.h>
-#include <sys/types.h>
 #include <fcntl.h>
 #include <unistd.h>
-#include <cstdio>
+
 #include <filesystem>
 #include <iostream>
 #include <mutex>
@@ -55,16 +54,10 @@ void create_file(const std::string& file_path_str) {
     ofs.close();
 }
 
-struct SharedMutex {
-    volatile bool initialized;
-    pthread_mutex_t mutex;
-};
-
 BuildLock::BuildLock(const std::string& out_dir) : fd_(-1) {
     std::string lock_path = out_dir + ".jit_build_lock";
     fd_ = open(lock_path.c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0600);
     if (fd_ == -1) {
-        perror("open");
         TT_THROW("Failed to create lock file for JIT build lock: {}", lock_path);
     }
     struct flock fl = {
@@ -75,7 +68,6 @@ BuildLock::BuildLock(const std::string& out_dir) : fd_(-1) {
     };
 
     if (fcntl(fd_, F_OFD_SETLKW, &fl) == -1) {
-        perror("fcntl");
         close(fd_);
         TT_THROW("Failed to acquire JIT build lock on file: {}", lock_path);
     }
