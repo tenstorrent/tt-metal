@@ -80,8 +80,9 @@ Tests:
   #     - type: all_to_all
   - name: UnicastAlltoAll
     fabric_setup:
-      topology: Mesh
-
+      topology: Torus
+      torus_config: XY
+      num_links: 2
 
     top_level_iterations: 5
 

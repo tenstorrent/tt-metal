@@ -11,7 +11,7 @@ Tests:
 
     fabric_setup:
       topology: Ring
-      num_links: 4
+      num_links: 2
 
     defaults:
       ftype: mcast
@@ -31,7 +31,7 @@ Tests:
 
     fabric_setup:
       topology: Ring
-      num_links: 4
+      num_links: 2
 
     defaults:
       ftype: mcast
@@ -51,7 +51,7 @@ Tests:
 
     fabric_setup:
       topology: Ring
-      num_links: 4
+      num_links: 2
 
     defaults:
       ftype: mcast
@@ -71,7 +71,7 @@ Tests:
 
     fabric_setup:
       topology: Ring
-      num_links: 4
+      num_links: 2
 
     defaults:
       ftype: mcast
@@ -95,8 +95,8 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: XY
-
-      num_links: 4
+      routing_type: LowLatency
+      num_links: 2
 
     defaults:
       ftype: mcast
@@ -117,8 +117,8 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: XY
-
-      num_links: 4
+      routing_type: LowLatency
+      num_links: 2
 
     defaults:
       ftype: mcast
@@ -140,7 +140,7 @@ Tests:
       topology: Torus
       torus_config: XY
 
-      num_links: 4
+      num_links: 2
 
     defaults:
       ftype: mcast
@@ -162,7 +162,7 @@ Tests:
       topology: Torus
       torus_config: XY
 
-      num_links: 4
+      num_links: 2
 
     defaults:
       ftype: mcast
@@ -184,7 +184,7 @@ Tests:
       topology: Torus
       torus_config: XY
 
-      num_links: 4
+      num_links: 2
 
     defaults:
       ftype: mcast
@@ -207,7 +207,7 @@ Tests:
       topology: Torus
       torus_config: XY
 
-      num_links: 4
+      num_links: 2
 
     defaults:
       ftype: mcast
@@ -230,7 +230,7 @@ Tests:
       topology: Torus
       torus_config: XY
 
-      num_links: 4
+      num_links: 2
 
     defaults:
       ftype: mcast
@@ -253,7 +253,7 @@ Tests:
       topology: Torus
       torus_config: XY
 
-      num_links: 4
+      num_links: 2
 
     defaults:
       ftype: mcast
@@ -276,7 +276,7 @@ Tests:
       topology: Torus
       torus_config: XY
 
-      num_links: 4
+      num_links: 2
 
     defaults:
       ftype: mcast
@@ -304,7 +304,7 @@ Tests:
       topology: Torus
       torus_config: XY
 
-      num_links: 4
+      num_links: 2
 
     defaults:
       ftype: mcast
@@ -326,7 +326,7 @@ Tests:
       topology: Torus
       torus_config: XY
 
-      num_links: 4
+      num_links: 2
 
     defaults:
       ftype: mcast
@@ -348,7 +348,7 @@ Tests:
       topology: Torus
       torus_config: XY
 
-      num_links: 4
+      num_links: 2
 
     defaults:
       ftype: mcast
@@ -370,7 +370,7 @@ Tests:
       topology: Torus
       torus_config: XY
 
-      num_links: 4
+      num_links: 2
 
     defaults:
       ftype: mcast
@@ -392,7 +392,7 @@ Tests:
       topology: Torus
       torus_config: XY
 
-      num_links: 4
+      num_links: 2
 
     defaults:
       ftype: mcast
@@ -415,7 +415,7 @@ Tests:
       topology: Torus
       torus_config: XY
 
-      num_links: 4
+      num_links: 2
 
     defaults:
       ftype: mcast
@@ -438,7 +438,7 @@ Tests:
       topology: Torus
       torus_config: "XY"
 
-      num_links: 4
+      num_links: 2
 
     defaults:
       ftype: mcast
@@ -461,7 +461,7 @@ Tests:
       topology: Torus
       torus_config: XY
 
-      num_links: 4
+      num_links: 2
 
     defaults:
       ftype: mcast
@@ -484,7 +484,7 @@ Tests:
       topology: Torus
       torus_config: XY
 
-      num_links: 4
+      num_links: 2
 
     defaults:
       ftype: mcast
@@ -512,7 +512,7 @@ Tests:
       topology: Torus
       torus_config: X
 
-      num_links: 4
+      num_links: 2
 
     defaults:
       ftype: mcast
@@ -534,7 +534,7 @@ Tests:
       topology: Torus
       torus_config: X
 
-      num_links: 4
+      num_links: 2
 
     defaults:
       ftype: mcast
@@ -559,7 +559,7 @@ Tests:
       topology: Torus
       torus_config: Y
 
-      num_links: 4
+      num_links: 2
 
     defaults:
       ftype: mcast
@@ -581,7 +581,7 @@ Tests:
       topology: Torus
       torus_config: Y
 
-      num_links: 4
+      num_links: 2
 
     defaults:
       ftype: mcast
@@ -606,7 +606,7 @@ Tests:
       topology: Torus
       torus_config: X
 
-      num_links: 4
+      num_links: 2
 
     defaults:
       ftype: mcast
@@ -628,7 +628,7 @@ Tests:
       topology: Torus
       torus_config: X
 
-      num_links: 4
+      num_links: 2
 
     defaults:
       ftype: mcast
@@ -653,7 +653,7 @@ Tests:
       topology: Torus
       torus_config: Y
 
-      num_links: 4
+      num_links: 2
 
     defaults:
       ftype: mcast
@@ -675,7 +675,7 @@ Tests:
       topology: Torus
       torus_config: Y
 
-      num_links: 4
+      num_links: 2
 
     defaults:
       ftype: mcast
