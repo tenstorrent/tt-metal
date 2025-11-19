@@ -224,7 +224,6 @@ private:
     // SystemMemoryManager is the interface to the hardware command queue
     std::vector<std::unique_ptr<CommandQueue>> command_queues_;
 
-    std::set<CoreCoord> compute_cores_;
     std::set<CoreCoord> storage_only_cores_;
     std::set<CoreCoord> ethernet_cores_;
     std::vector<CoreCoord> optimal_dram_bank_to_logical_worker_assignment_;
