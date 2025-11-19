@@ -6,7 +6,7 @@ MoE MLP: Router + Experts with minimal abstraction
 """
 import ttnn
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
-from models.experimental.stable_diffusion_35_large.tt.substate import substate
+from models.demos.gpt_oss.utils.substate import substate
 
 from .experts import Experts
 from .topk import TopKRouter
@@ -49,5 +49,7 @@ class MLP:
     def __call__(self, hidden_states):
         """Forward pass: route -> experts"""
         router_scores, router_indices, router_logits = self.router(hidden_states)
+        router_logits.deallocate()
+        router_indices.deallocate()
         expert_output = self.experts(hidden_states, router_scores)
         return expert_output, router_scores

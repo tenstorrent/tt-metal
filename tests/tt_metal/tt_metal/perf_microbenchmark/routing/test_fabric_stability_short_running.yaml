@@ -82,7 +82,7 @@ Tests:
   - name: "MeshDynamicLooped"
     fabric_setup:
       topology: Mesh
-      routing_type: Dynamic
+
 
     top_level_iterations: 10
 
@@ -103,7 +103,7 @@ Tests:
     enable_flow_control: true
     fabric_setup:
       topology: Mesh
-      routing_type: Dynamic
+
 
     parametrization_params:
       ftype: [unicast, mcast]

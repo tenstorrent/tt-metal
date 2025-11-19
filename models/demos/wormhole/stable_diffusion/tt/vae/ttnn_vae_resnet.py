@@ -121,7 +121,7 @@ class ResnetBlock:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        hidden_states = ttnn.silu(hidden_states)
+        hidden_states = ttnn.silu(hidden_states, output_tensor=hidden_states)
 
         hidden_states = self.conv1(hidden_states)
 

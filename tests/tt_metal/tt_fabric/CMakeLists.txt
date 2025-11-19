@@ -1,7 +1,6 @@
 set(UNIT_TESTS_FABRIC_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/common/utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_routing_tables.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_routing_tables_mgd2.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_mesh_graph_descriptor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_topology_mapper.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_custom_routing_tables.cpp
@@ -220,6 +219,42 @@ target_include_directories(
 
 set_target_properties(
     bench_unicast
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
+)
+
+# ---- Test: addrgen_write (unified test for all addrgen variants) ----
+add_executable(
+    test_addrgen_write
+    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/addrgen_write/test_main.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/addrgen_write/runner.cpp
+)
+
+target_link_libraries(
+    test_addrgen_write
+    PRIVATE
+        tt_metal
+        gtest
+        test_common_libs
+)
+
+add_dependencies(test_addrgen_write tt_metal)
+
+target_include_directories(
+    test_addrgen_write
+    PRIVATE
+        ${PROJECT_SOURCE_DIR}
+        ${UMD_HOME}
+        ${PROJECT_SOURCE_DIR}/tests
+        ${PROJECT_SOURCE_DIR}/tt_metal
+        ${CMAKE_CURRENT_SOURCE_DIR}/common
+        ${PROJECT_BINARY_DIR}/tt_metal/third_party/umd/device/api
+        ${PROJECT_BINARY_DIR}/tt_metal/third_party/umd/device/generated
+)
+
+set_target_properties(
+    test_addrgen_write
     PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric

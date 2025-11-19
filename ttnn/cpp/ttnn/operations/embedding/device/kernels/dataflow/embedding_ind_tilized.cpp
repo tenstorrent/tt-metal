@@ -32,6 +32,7 @@ void kernel_main() {
 
     constexpr uint32_t face_size = 16;
     constexpr uint32_t tile_height = 32;
+    constexpr uint32_t face_hw = face_size * face_size;
 
     prepare_local_cache(cb_id_in2, weights, weight_stick_size, /*pad_token_arg_idx=*/6);
 
@@ -106,17 +107,39 @@ void kernel_main() {
                     offset = 0;
                 } else {
                     curr_tile -= (tiles_per_row - 1);
-                    if (offset < 256) {
+                    if (face % 2 == 0) {
+#if defined ONLY_ONE_FACE_COLUMN
+                        // In this case, we need to ignore face 1 and face 3.
+                        // If we are in the last row of face 0, we need to jump to the start of face 2
+                        // If we are in the last row of face 2, we need to jump to the start of next tile (face 0 of
+                        // next tile)
+                        if (face == 0) {
+                            uint32_t last_column_face_0 = (offset - (face_hw - face_size));
+                            if (last_column_face_0 < (face_size)) {
+                                offset += face_hw;
+                            }
+                            offset += face_size;
+                        } else {
+                            uint32_t last_column_face_2 = (offset - (face_hw * 3 - face_size));
+                            if (last_column_face_2 < (face_size)) {
+                                offset = 0;
+                                curr_tile++;
+                            } else {
+                                offset += face_size;
+                            }
+                        }
+#else
                         offset += face_size;
+#endif
                     } else {
                         offset -= face_size * (face_size - 1);
                     }
                 }
             } else if (face % 2 == 0) {
-                offset += face_size * face_size;
+                offset += face_hw;
             } else {
                 curr_tile++;
-                offset -= face_size * face_size;
+                offset -= face_hw;
                 read_indices = true;
             }
         }

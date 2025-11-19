@@ -11,7 +11,7 @@ class ModelOptimisations:
         self,
         conv_act_dtype=ttnn.bfloat16,
         conv_w_dtype=ttnn.bfloat16,
-        attention_weights_dtype=ttnn.bfloat16,
+        attention_weights_dtype=ttnn.bfloat8_b,
         ff_weights_dtype=ttnn.bfloat8_b,
     ):
         self.conv_configs = {}
@@ -147,7 +147,7 @@ class ModelOptimisations:
             weights_dtype=self.conv_ws_dtype,
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             deallocate_activation=True,
-            reallocate_halo_output=False,
+            reallocate_halo_output=True,
             enable_act_double_buffer=True,
             enable_weights_double_buffer=True,
             reshard_if_not_optimal=True,
@@ -179,7 +179,7 @@ class ModelOptimisations:
         self.conv_configs["ABH_256_ADB_WDB_BS_NO_MOVE"] = ttnn.Conv2dConfig(
             weights_dtype=self.conv_ws_dtype,
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            deallocate_activation=True,
+            deallocate_activation=False,
             reallocate_halo_output=False,
             enable_act_double_buffer=True,
             enable_weights_double_buffer=True,
@@ -318,7 +318,7 @@ class ModelOptimisations:
 
         self.matmul_configs["2D_FF2_SEQ_LEN_4096"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(7, 8),
-            in0_block_w=10,  # max is 10
+            in0_block_w=5,  # max is 10
             out_subblock_h=1,
             out_subblock_w=3,
             per_core_M=16,
@@ -395,11 +395,11 @@ class ModelOptimisations:
 
         self.matmul_configs["2D_TM_LINEAR_640"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(8, 8),
-            in0_block_w=2,
+            in0_block_w=5,  # block sharded input cant use 2 for now, needs optimising
             per_core_M=16,
             per_core_N=3,
-            out_subblock_h=8,
-            out_subblock_w=1,
+            out_subblock_h=1,
+            out_subblock_w=3,  # block sharded output Error: out_subblock_w must be equal to per_core_N or out_subblock_h must be equal to 1.
             transpose_mcast=False,
             fused_activation=None,
         )
@@ -424,6 +424,7 @@ class ModelOptimisations:
             out_subblock_w=3,
             transpose_mcast=False,
             fused_activation=None,
+            fuse_batch=True,
         )
 
         self.matmul_configs["2D_RESNET_CONV_320_640"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -447,6 +448,7 @@ class ModelOptimisations:
             out_subblock_w=5,
             transpose_mcast=False,
             fused_activation=None,
+            fuse_batch=True,
         )
 
         self.matmul_configs["2D_RESNET_CONV_640_1280"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -509,14 +511,14 @@ class ModelOptimisations:
 
         self.matmul_configs["2D_ATTN_QKV_LINEAR_1280"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(8, 8),
-            in0_block_w=4,
+            in0_block_w=5,
             per_core_M=4,
             per_core_N=15,
             out_subblock_h=1,
             out_subblock_w=5,
             transpose_mcast=False,
             fused_activation=None,
-            fuse_batch=False,
+            fuse_batch=True,
         )
 
         self.matmul_configs["2D_RESNET_CONV_1920_1280"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(

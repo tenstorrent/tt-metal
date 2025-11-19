@@ -9,6 +9,7 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -87,14 +88,35 @@ std::vector<T> slice_vec(std::vector<T> const& v, int m, int n) {
     return vec;
 }
 
-void get_max_page_size_and_num_pages(uint32_t num_tiles, uint32_t tile_size, uint32_t& page_size, uint32_t& num_pages) {
+// Returns max_page_size (for non-last pages), num_pages, and last_page_size
+std::tuple<uint32_t, uint32_t, uint32_t> get_max_page_size_and_num_pages(
+    uint32_t num_tiles, uint32_t tile_size, tt::ARCH arch) {
     uint64_t total_size = static_cast<uint64_t>(num_tiles) * tile_size;
 
-    page_size = (8192 / tile_size) * tile_size;
-    while (total_size % page_size != 0 && page_size >= tile_size) {
-        page_size -= tile_size;
+    // NOC_MAX_BURST_SIZE depends on architecture:
+    // - Wormhole B0: NOC_MAX_BURST_WORDS (256) * NOC_WORD_BYTES (256/8 = 32) = 8192 bytes
+    // - Blackhole: NOC_MAX_BURST_WORDS (256) * NOC_WORD_BYTES (512/8 = 64) = 16384 bytes
+    uint32_t max_noc_burst_size;
+    if (arch == tt::ARCH::WORMHOLE_B0) {
+        max_noc_burst_size = 8192;
+    } else if (arch == tt::ARCH::BLACKHOLE) {
+        max_noc_burst_size = 16384;
+    } else {
+        TT_THROW("unknown architecture: {}", arch);
     }
-    num_pages = total_size / page_size;
+
+    // Align max_noc_burst_size down to tile_size boundaries
+    uint32_t max_page_size = (max_noc_burst_size / tile_size) * tile_size;
+
+    if (total_size <= max_page_size) {
+        // If total size fits in one page, use it
+        return {total_size, 1, total_size};
+    } else {
+        // Use max_page_size for all pages except the last one
+        uint32_t num_pages = (total_size + max_page_size - 1) / max_page_size;
+        uint32_t last_page_size = total_size - ((num_pages - 1) * max_page_size);
+        return {max_page_size, num_pages, last_page_size};
+    }
 }
 
 std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
@@ -122,8 +144,10 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
 
     uint32_t cb_index = 0;
     uint32_t cb_size = block_h * block_w * single_tile_size;
-    uint32_t page_size, num_pages;
-    get_max_page_size_and_num_pages(block_num_tiles, single_tile_size, page_size, num_pages);
+    auto [page_size, num_pages, last_page_size] =
+        get_max_page_size_and_num_pages(block_num_tiles, single_tile_size, device->arch());
+
+    log_info(tt::LogTest, "page_size: {}, num_pages: {}, last_page_size: {}", page_size, num_pages, last_page_size);
 
     uint32_t cb_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
     tt_metal::CircularBufferConfig cb_config =
@@ -136,7 +160,8 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
         (std::uint32_t)num_blocks,
         (std::uint32_t)num_pages,
         (std::uint32_t)block_num_tiles,
-        (std::uint32_t)page_size};
+        (std::uint32_t)page_size,
+        (std::uint32_t)last_page_size};
 
     auto reader_kernel = tt_metal::CreateKernel(
         program,
@@ -211,6 +236,23 @@ bool validation(
                 uint32_t result_step = i * num_datum_per_slice;
                 std::vector<float> result_slice(
                     result_bfp8.begin() + result_step, result_bfp8.begin() + result_step + num_datum_per_slice);
+
+                if (input_slice != result_slice) {
+                    return false;
+                }
+            }
+
+        } else if (df == 2) {
+            auto result_bfp4 = unpack_bfp4_tiles_into_float_vec(result_vec, true, true);
+            auto input_bfp4 = unpack_bfp4_tiles_into_float_vec(input_vec, true, true);
+
+            for (uint32_t i = 0; i < num_slices; ++i) {
+                uint32_t input_step = start_index + (i * num_datum_per_slice * num_banks);
+                std::vector<float> input_slice(
+                    input_bfp4.begin() + input_step, input_bfp4.begin() + input_step + num_datum_per_slice);
+                uint32_t result_step = i * num_datum_per_slice;
+                std::vector<float> result_slice(
+                    result_bfp4.begin() + result_step, result_bfp4.begin() + result_step + num_datum_per_slice);
 
                 if (input_slice != result_slice) {
                     return false;
@@ -345,6 +387,9 @@ int main(int argc, char** argv) {
         } else if (df == 1) {
             input_size = k * n * 2;
             tile_format = tt::DataFormat::Float16_b;
+        } else if (df == 2) {
+            input_size = k * n * 576 / 1024;
+            tile_format = tt::DataFormat::Bfp4_b;
         } else {
             TT_THROW("Input data format {} is invalid. Please change.", df);
         }
@@ -382,6 +427,16 @@ int main(int argc, char** argv) {
         std::vector<CoreCoord> all_cores_list;
         get_optimal_dram_bank_to_reader_assignment(device.get(), all_cores_list, all_cores, tt_metal::NOC::NOC_0);
 
+        // Slice all_cores_list to only use the first num_banks cores
+        all_cores_list = slice_vec(all_cores_list, bank_start_id, bank_start_id + num_banks - 1);
+
+        // Rebuild all_cores CoreRangeSet with only the selected cores
+        std::set<CoreRange> selected_cores_set;
+        for (const auto& core : all_cores_list) {
+            selected_cores_set.insert(CoreRange(core));
+        }
+        all_cores = CoreRangeSet(selected_cores_set);
+
         uint32_t num_tiles_per_core = num_tiles / num_cores;
         uint32_t num_tiles_cb = num_tiles_per_core / num_blocks;
 
@@ -407,6 +462,8 @@ int main(int argc, char** argv) {
             // input_vec = create_constant_vector_of_bfp8(
             //     input_size, 100, true);
             input_vec = test_utils::create_random_vector_of_bfp8(input_size, true, 100, 1234);
+        } else if (tile_format == tt::DataFormat::Bfp4_b) {
+            input_vec = test_utils::create_random_vector_of_bfp4(input_size, true, 100, 1234);
         } else {
             // input_vec = create_constant_vector_of_bfloat16(
             //     input_size * total_banks / num_banks, 100);
@@ -514,9 +571,9 @@ int main(int argc, char** argv) {
 
     if (pass) {
         log_info(LogTest, "Test Passed");
+        return 0;
     } else {
         log_error(LogTest, "Test Failed");
+        return 1;
     }
-
-    return 0;
 }

@@ -48,11 +48,7 @@ public:
      * @param num_used_sender_channels Number of sender channels (unused, for interface compatibility)
      * @param num_used_receiver_channels Number of receiver channels to emit
      */
-    void emit_ct_args(
-        std::vector<uint32_t>& ct_args,
-        size_t num_fwd_paths,
-        size_t num_used_sender_channels,
-        size_t num_used_receiver_channels) const override;
+    void emit_ct_args(std::vector<uint32_t>& ct_args) const override;
 
     /**
      * Get the base address for a specific remote receiver channel.

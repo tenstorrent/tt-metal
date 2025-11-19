@@ -334,6 +334,48 @@ TernaryDeviceOperation::invoke(
         .input_dtype = input_a.dtype(),
         .dtype = output_dtype.value_or(input_b.dtype()),
         .compute_kernel_config = std::nullopt,
+        .scalar_input_a = std::nullopt,
+        .scalar_input_b = std::nullopt,
+    };
+
+    tensor_args_t args{
+        .input_tensor_a = input_a,
+        .input_tensor_b = input_b,
+        .input_tensor_c = input_c,
+        .optional_output_tensor = optional_output_tensor};
+
+    return {attributes, args};
+}
+
+std::tuple<TernaryDeviceOperation::operation_attributes_t, TernaryDeviceOperation::tensor_args_t>
+TernaryDeviceOperation::invoke(
+    TernaryOpType op_type,
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const Tensor& input_c,
+    float scalar,
+    const std::optional<const DataType>& output_dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    // This invoke variant is only for operations that need a scalar parameter with TTT variant
+    TT_FATAL(
+        op_type == TernaryOpType::ADDCMUL,
+        "This invoke variant with scalar parameter is only supported for ADDCMUL operation");
+
+    // Detect broadcast type for TTT variant
+    TernaryBroadcastType broadcast_type =
+        get_broadcast_type(input_a.logical_shape(), input_b.logical_shape(), input_c.logical_shape());
+
+    operation_attributes_t attributes{
+        .ternary_op_type = op_type,
+        .ternary_variant = TernaryVariant::TTT,
+        .broadcast_type = broadcast_type,
+        .memory_config = memory_config.value_or(input_b.memory_config()),
+        .input_dtype = input_a.dtype(),
+        .dtype = output_dtype.value_or(input_b.dtype()),
+        .compute_kernel_config = std::nullopt,
+        .scalar_input_a = scalar,  // Reuse scalar_input_a for ADDCMUL scalar value
+        .scalar_input_b = std::nullopt,
     };
 
     tensor_args_t args{

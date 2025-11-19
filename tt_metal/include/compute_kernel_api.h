@@ -140,11 +140,14 @@ ALWI void log_with_base_tile(uint32_t idst, uint32_t base_scale) {
 // TODO: Move to trigonometry.h
 /**
  * Please refer to documentation for any_init.
+ *
+ * If using fast and approximate implementation of tanh_tile(), then tanh_tile_init() should be also be called with
+ * fast_and_approx = true.
  */
+template <bool fast_and_approx = false>
 ALWI void tanh_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_tanh_init<APPROX>()));  // TODO(AP): move out init
+    MATH((llk_math_eltwise_unary_sfpu_tanh_init<fast_and_approx, DST_ACCUM_MODE>()));  // TODO(AP): move out init
 }
-
 
 // TODO: Move to trigonometry.h
 // clang-format off
@@ -154,14 +157,20 @@ ALWI void tanh_tile_init() {
  * acquired state via *acquire_dst* call. This call is blocking and is only
  * available on the compute engine.
  *
+ * If using fast and approximate mode, then tanh_tile_init() should be also be called with fast_and_approx = true beforehand.
+ *
  * Return value: None
  *
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | fast_and_approx | Whether to use fast and approximate mode                                   | bool     | True or False                                         | False    |
  */
- // clang-format on
-ALWI void tanh_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_tanh<APPROX>(idst))); }
+// clang-format on
+template <bool fast_and_approx = false>
+ALWI void tanh_tile(uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_tanh<fast_and_approx, DST_ACCUM_MODE>(idst)));
+}
 
 /**
  * Please refer to documentation for any_init.
@@ -471,11 +480,13 @@ ALWI void silu_tile_init() { MATH((llk_math_eltwise_unary_sfpu_silu_init<APPROX>
  * | i_start_phase   | The start phase of the local sort (should be set to 0)                     | int32    | 0 to 5                                                | False    |
  * | i_end_step      | The end step to perform if i_start_phase == i_end_phase                    | int32    | 4 to 6                                                | False    |
  * | i_start_step    | The start step to perform if i_start_phase == i_end_phase                  | int32    | 4 to 6                                                | False    |
+ * | stable_sort     | Maintain order of indices for equal values                                 | bool     | true, false                                           | False    |
  */
 // clang-format on
+template <bool stable_sort = false>
 ALWI void topk_local_sort(
     uint32_t idst, int idir, int i_end_phase, int i_start_phase = 0, int i_end_step = 0, int i_start_step = 0) {
-    MATH((llk_math_eltwise_unary_sfpu_topk_local_sort<true, DST_ACCUM_MODE>(
+    MATH((llk_math_eltwise_unary_sfpu_topk_local_sort<true, DST_ACCUM_MODE, stable_sort>(
         idst, idir, i_end_phase, i_start_phase, i_end_step, i_start_step)));
 }
 
@@ -507,11 +518,12 @@ ALWI void topk_local_sort(
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | m_iter          | The index of the merge & rebuild iteration of the algorithm                | int32    | 0 to 9                                                | True     |
  * | k               | The number of sorted values to return                                      | int32    | {4, 8, 16, 32, 64}                                    | True     |
+ * | stable_sort     | Maintain order of indices for equal values                                 | bool     | true, false                                           | False    |
  */
 // clang-format on
-template <bool idir = false>
+template <bool idir = false, bool stable_sort = false>
 ALWI void topk_merge(uint32_t idst, int m_iter, int k) {
-    MATH((llk_math_eltwise_unary_sfpu_topk_merge<true, DST_ACCUM_MODE, idir>(idst, m_iter, k)));
+    MATH((llk_math_eltwise_unary_sfpu_topk_merge<true, DST_ACCUM_MODE, idir, stable_sort>(idst, m_iter, k)));
 }
 
 // topK rebuild
@@ -544,10 +556,13 @@ ALWI void topk_merge(uint32_t idst, int m_iter, int k) {
  * | k               | The number of sorted values to return                                      | int32    | {4, 8, 16, 32, 64}                                    | True     |
  * | logk            | The log of K                                                               | int32    | 2 to 6                                                | True     |
  * | skip_second     | Whether or not to skip second tile                                         | int32    | 0 to 1                                                | True     |
+ * | stable_sort     | Maintain order of indices for equal values                                 | bool     | true, false                                           | False    |
  */
 // clang-format on
+template <bool stable_sort = false>
 ALWI void topk_rebuild(uint32_t idst, bool idir, int m_iter, int k, int logk, int skip_second) {
-    MATH((llk_math_eltwise_unary_sfpu_topk_rebuild<true, DST_ACCUM_MODE>(idst, idir, m_iter, k, logk, skip_second)));
+    MATH((llk_math_eltwise_unary_sfpu_topk_rebuild<true, DST_ACCUM_MODE, stable_sort>(
+        idst, idir, m_iter, k, logk, skip_second)));
 }
 
 /**
@@ -629,6 +644,39 @@ ALWI void sfpu_reduce_init() {
         "Unsupported data format. Supported formats: Float32, Int32, UInt32");
     MATH((llk_math_eltwise_unary_sfpu_reduce_init<true, format>()));
 }
+
+// clang-format off
+/**
+ * Performs element-wise add_top_row operation between the top rows of two tiles in DST register.
+ * Takes the top row of tile at dst_tile_0 and adds it with the top row of tile at dst_tile_1,
+ * storing the result in the top row of tile at dst_tile_out.
+ * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Only 32x32 tile dimensions are supported.
+ * All tile indices must reference valid tiles within the DST register.
+ *
+ * | Argument        | Description                                                              | Type      | Valid Range                                           | Required |
+ * |-----------------|--------------------------------------------------------------------------|-----------|-------------------------------------------------------|----------|
+ * | dst_tile_0      | The index of the first tile in DST register                              | uint32_t  | Must be less than the size of the DST register buffer | True     |
+ * | dst_tile_1      | The index of the second tile in DST register                             | uint32_t  | Must be less than the size of the DST register buffer | True     |
+ * | dst_tile_out    | The index of the output tile in DST register                             | uint32_t  | Must be less than the size of the DST register buffer | True     |
+ * | format          | The data format for the add_top_row operation                            | DataFormat| Float32, Int32, UInt32                                | True     |
+ */
+// clang-format on
+template <DataFormat format>
+ALWI void sfpu_add_top_row(uint32_t dst_tile_0, uint32_t dst_tile_1, uint32_t dst_tile_out) {
+    static_assert(
+        format == DataFormat::Float32 || format == DataFormat::Int32 || format == DataFormat::UInt32,
+        "Unsupported data format. Supported formats: Float32, Int32, UInt32");
+
+    MATH((llk_math_eltwise_binary_sfpu_add_top_row<format>(dst_tile_0, dst_tile_1, dst_tile_out)));
+}
+
+/**
+ * Please refer to documentation for any_init.
+ */
+ALWI void sfpu_add_top_row_init() { MATH((llk_math_eltwise_binary_sfpu_add_top_row_init())); }
 
 /**
  * Pauses the cores so that the debug interface can be used to inspect the value of the registers.

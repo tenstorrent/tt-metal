@@ -35,7 +35,7 @@ def test_forward_pass(
     hf_config,
     topk_fallback,
     use_bitonic_sort,
-    tmp_path,
+    cache_path,
     mesh_device,
     set_deterministic_env,
 ):
@@ -48,7 +48,7 @@ def test_forward_pass(
     hf_state_dict = reference_model.state_dict()
 
     # Setup: Convert weights and get weight_config
-    weight_config = MoEGate.convert_weights(hf_config, (hf_state_dict,), tmp_path, mesh_device)
+    weight_config = MoEGate.convert_weights(hf_config, (hf_state_dict,), cache_path, mesh_device)
 
     # Generate appropriate config using utility function
     model_config = get_model_config(

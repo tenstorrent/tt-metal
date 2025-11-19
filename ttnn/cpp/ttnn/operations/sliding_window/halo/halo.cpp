@@ -15,7 +15,6 @@ Tensor HaloOperation::invoke(
     bool transpose_mcast,
     const MemoryConfig& output_memory_config,
     bool is_out_tiled,
-    bool in_place,
     bool config_tensors_in_dram) {
     return halo_op(
         input_tensor,
@@ -25,7 +24,6 @@ Tensor HaloOperation::invoke(
         transpose_mcast,
         output_memory_config,
         is_out_tiled,
-        in_place,
         config_tensors_in_dram);
 }
 };  // namespace ttnn::operations::sliding_window::halo

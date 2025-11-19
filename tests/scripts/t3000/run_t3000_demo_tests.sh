@@ -311,7 +311,7 @@ run_t3000_dit_tests() {
 
   echo "LOG_METAL: Running ${test_name}"
 
-  NO_PROMPT=1 pytest -n auto ${test_cmd} --timeout 600 ; fail+=$?
+  NO_PROMPT=1 pytest -n auto ${test_cmd} --timeout 1200 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)

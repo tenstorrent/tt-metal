@@ -14,7 +14,7 @@
 #include "debug/dprint.h"
 #endif
 
-ALWI void advance_grid_index(
+ALWI void advance_grid_index_bounded(
     uint32_t& in_grid_row_idx,
     uint32_t& grid_stick_idx,
     uint32_t& l1_grid_addr,
@@ -23,7 +23,8 @@ ALWI void advance_grid_index(
     const uint32_t grid_batching_factor,
     const uint32_t grid_stick_nbytes,
     const uint32_t grid_hw,
-    const uint32_t grid_nsticks_per_core) {
+    const uint32_t grid_nsticks_per_core,
+    const uint32_t input_batch) {
     ++in_grid_row_idx;
     if (in_grid_row_idx == grid_batching_factor) {
         in_grid_row_idx = 0;
@@ -32,7 +33,9 @@ ALWI void advance_grid_index(
         ++grid_points_processed;
         if (grid_points_processed == grid_hw) {
             grid_points_processed = 0;
-            ++curr_batch;
+            if (curr_batch + 1 < input_batch) {
+                ++curr_batch;
+            }
         }
     }
 }
@@ -48,18 +51,19 @@ void kernel_main() {
     constexpr uint32_t scalar_cb_index = get_compile_time_arg_val(2);
     constexpr uint32_t input_stick_nbytes = get_compile_time_arg_val(3);
     constexpr uint32_t grid_stick_nbytes = get_compile_time_arg_val(4);
-    constexpr uint32_t input_height = get_compile_time_arg_val(5);
-    constexpr uint32_t input_width = get_compile_time_arg_val(6);
-    constexpr uint32_t grid_batching_factor = get_compile_time_arg_val(7);
-    constexpr uint32_t grid_dtype = get_compile_time_arg_val(8);
-    constexpr uint32_t grid_hw = get_compile_time_arg_val(9);
-    constexpr uint32_t use_precomputed_grid = get_compile_time_arg_val(10);
-    constexpr uint32_t split_reader = get_compile_time_arg_val(11);
-    constexpr uint32_t reader_id = get_compile_time_arg_val(12);
-    constexpr uint32_t grid_nsticks_per_core = get_compile_time_arg_val(13);
+    constexpr uint32_t input_batch = get_compile_time_arg_val(5);
+    constexpr uint32_t input_height = get_compile_time_arg_val(6);
+    constexpr uint32_t input_width = get_compile_time_arg_val(7);
+    constexpr uint32_t grid_batching_factor = get_compile_time_arg_val(8);
+    constexpr uint32_t grid_dtype = get_compile_time_arg_val(9);
+    constexpr uint32_t grid_hw = get_compile_time_arg_val(10);
+    constexpr uint32_t use_precomputed_grid = get_compile_time_arg_val(11);
+    constexpr uint32_t split_reader = get_compile_time_arg_val(12);
+    constexpr uint32_t reader_id = get_compile_time_arg_val(13);
+    constexpr uint32_t grid_nsticks_per_core = get_compile_time_arg_val(14);
 
     // Input tensor accessor for remote NOC reads (updated for new arg count)
-    constexpr auto input_tensor_args = TensorAccessorArgs<14>();
+    constexpr auto input_tensor_args = TensorAccessorArgs<15>();
     const auto input_tensor_accessor = TensorAccessor(input_tensor_args, input_addr, input_stick_nbytes);
 
     // Calculate starting batch from global grid stick position
@@ -85,7 +89,7 @@ void kernel_main() {
 
     // Advance at start if needed
     if constexpr (split_reader && reader_id == 1) {
-        advance_grid_index(
+        advance_grid_index_bounded(
             in_grid_row_idx,
             grid_stick_idx,
             l1_grid_addr,
@@ -94,7 +98,8 @@ void kernel_main() {
             grid_batching_factor,
             grid_stick_nbytes,
             grid_hw,
-            grid_nsticks_per_core);
+            grid_nsticks_per_core,
+            input_batch);
     }
 
     while (grid_stick_idx < grid_nsticks_per_core) {
@@ -112,7 +117,7 @@ void kernel_main() {
             scalar_cb_index>(grid_stick_ptr, in_grid_row_idx, input_tensor_accessor, batch_offset);
 
         // Always advance once after processing
-        advance_grid_index(
+        advance_grid_index_bounded(
             in_grid_row_idx,
             grid_stick_idx,
             l1_grid_addr,
@@ -121,11 +126,12 @@ void kernel_main() {
             grid_batching_factor,
             grid_stick_nbytes,
             grid_hw,
-            grid_nsticks_per_core);
+            grid_nsticks_per_core,
+            input_batch);
 
         // For split reader, advance one more time to skip the coordinate that the other reader will process
         if constexpr (split_reader) {
-            advance_grid_index(
+            advance_grid_index_bounded(
                 in_grid_row_idx,
                 grid_stick_idx,
                 l1_grid_addr,
@@ -134,7 +140,8 @@ void kernel_main() {
                 grid_batching_factor,
                 grid_stick_nbytes,
                 grid_hw,
-                grid_nsticks_per_core);
+                grid_nsticks_per_core,
+                input_batch);
         }
     }
 }

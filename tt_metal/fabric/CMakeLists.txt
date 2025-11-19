@@ -50,6 +50,7 @@ target_sources(
         fabric_context.cpp
         fabric_mux_config.cpp
         fabric_tensix_builder.cpp
+        fabric_types.cpp
         compressed_routing_table.cpp
         compressed_routing_path.cpp
         serialization/router_port_directions.cpp
@@ -88,6 +89,7 @@ target_include_directories(fabric SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 target_link_libraries(
     fabric
     PRIVATE
+        TT::ScaleoutTools
         Metalium::Metal::LLRT
         umd::device
         metal_common_libs

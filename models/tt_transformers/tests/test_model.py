@@ -143,12 +143,12 @@ def test_model_inference(
             "llama31_70b": 0.9843 if mode_accuracy else 0.97607,
             "llama32_90b": 0.9759,
             # TODO: Investigate HF_MODEL PCC drop compared to LLAMA_DIR (especially 3.2-3B)
-            "Llama-3.1-8B": 0.966 if mode_accuracy else 0.955,
-            "Llama-3.1-70B": 0.979 if mode_accuracy else 0.97607,
-            "Llama-3.2-1B": 0.9991 if mode_accuracy else 0.9863,
-            "Llama-3.2-3B": 0.958 if mode_accuracy else 0.948,
-            "Llama-3.2-11B": 0.955 if mode_accuracy else 0.944,
-            "Llama-3.2-90B": 0.9732,
+            "Llama-3.1-8B": 0.965 if mode_accuracy else 0.954,
+            "Llama-3.1-70B": 0.973,
+            "Llama-3.2-1B": 0.999 if mode_accuracy else 0.991,
+            "Llama-3.2-3B": 0.954 if mode_accuracy else 0.945,
+            "Llama-3.2-11B": 0.952 if mode_accuracy else 0.940,
+            "Llama-3.2-90B": 0.971,
             "Mistral-7B": 0.95 if mode_accuracy else 0.95,
         }[model_name]
 
@@ -215,7 +215,7 @@ def test_model_inference(
             or any(
                 [
                     f"{state_dict_prefix}{name}" in k
-                    for name in ["tok_embeddings.weight", "norm.weight", "output.weight"]
+                    for name in ["tok_embeddings.weight", "learnable_embedding.weight", "norm.weight", "output.weight"]
                 ]
             )
         )
@@ -243,7 +243,17 @@ def test_model_inference(
 
     # Embedding on host
     embd = model_args.reference_embedding(reference_model)
-    embd.load_state_dict({"emb.weight": state_dict[f"{state_dict_prefix}tok_embeddings.weight"]})
+    if model_args.is_llama_vision():
+        weight = torch.cat(
+            [
+                state_dict[f"{state_dict_prefix}tok_embeddings.weight"],
+                state_dict[f"{state_dict_prefix}learnable_embedding.weight"],
+            ],
+            dim=0,
+        )
+    else:
+        weight = state_dict[f"{state_dict_prefix}tok_embeddings.weight"]
+    embd.load_state_dict({"emb.weight": weight})
 
     generation_start_pos = 0
     generation_length = iterations

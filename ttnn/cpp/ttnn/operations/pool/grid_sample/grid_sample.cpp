@@ -18,6 +18,7 @@ ttnn::Tensor ExecuteGridSample::invoke(
     const ttnn::Tensor& grid,
     const std::string& mode,
     const std::string& padding_mode,
+    bool align_corners,
     bool use_precomputed_grid,
     bool batch_output_channels,
     const std::optional<MemoryConfig>& memory_config) {
@@ -29,6 +30,7 @@ ttnn::Tensor ExecuteGridSample::invoke(
         GridSample{
             .mode_ = mode,
             .padding_mode_ = padding_mode,
+            .align_corners_ = align_corners,
             .use_precomputed_grid_ = use_precomputed_grid,
             .batch_output_channels_ = batch_output_channels,
             .output_mem_config_ = output_memory_config},

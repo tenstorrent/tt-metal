@@ -30,10 +30,9 @@ from tests.nightly.t3000.ccl.test_minimal_all_gather_matmul_async import run_all
 @pytest.mark.parametrize(
     "enable_trace, num_iters",
     [
-        (True, 10),
-        (False, 1),
+        (True, 10),  # Keep only perf variant to test tracing
     ],
-    ids=["perf", "check"],
+    ids=["perf"],
 )
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",

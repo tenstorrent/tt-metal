@@ -166,7 +166,7 @@ Tests:
   - name: "PacketSizesMeshAllToOneRandomUnicast"
     fabric_setup:
       topology: Mesh
-      routing_type: LowLatency
+
 
     parametrization_params:
       size: [1024, 2048, 4096]
@@ -184,7 +184,7 @@ Tests:
   - name: "PacketSizesMeshAllToOneUnicast"
     fabric_setup:
       topology: Mesh
-      routing_type: LowLatency
+
 
     parametrization_params:
       size: [1024, 2048, 4096]
@@ -202,7 +202,7 @@ Tests:
   - name: "MeshMulticastDynamic"
     fabric_setup:
       topology: Mesh
-      routing_type: Dynamic
+
 
     parametrization_params:
       num_links: [1, 2, 3, 4]
@@ -220,7 +220,7 @@ Tests:
   - name: "PacketSizesMeshMulticastDynamic"
     fabric_setup:
       topology: Mesh
-      routing_type: Dynamic
+
       # more links caused rt args exceed 256
       num_links: 1
 
@@ -239,7 +239,7 @@ Tests:
   - name: "PacketSizesMeshAllToOneUnicastDynamic"
     fabric_setup:
       topology: Mesh
-      routing_type: Dynamic
+
 
     parametrization_params:
       size: [1024, 2048, 4096]
@@ -255,7 +255,7 @@ Tests:
   - name: "PacketSizesMeshAllToOneRandomUnicastDynamic"
     fabric_setup:
       topology: Mesh
-      routing_type: Dynamic
+
 
     parametrization_params:
       size: [1024, 2048, 4096]
@@ -323,7 +323,7 @@ Tests:
   - name: "FabricMuxMeshMulticastDynamic"
     fabric_setup:
       topology: Mesh
-      routing_type: Dynamic
+
       fabric_tensix_config: Mux
 
     parametrization_params:
@@ -343,7 +343,7 @@ Tests:
     enable_flow_control: true
     fabric_setup:
       topology: Mesh
-      routing_type: Dynamic
+
 
     parametrization_params:
       ftype: [unicast, mcast]

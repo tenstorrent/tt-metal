@@ -130,7 +130,7 @@ def run_max_pool2d_with_indices(
     sharding=None,
     ceil_mode=False,
     memory_config=None,
-    in_place=False,
+    run_twice=False,
 ):
     kernel_size = [kernel_h, kernel_w]
     stride = [stride_h, stride_w]
@@ -186,11 +186,30 @@ def run_max_pool2d_with_indices(
         dilation=dilation,
         applied_shard_scheme=sharding,
         ceil_mode=ceil_mode,
-        in_place_halo=in_place,
         deallocate_input=False,
         reallocate_halo_output=True,
         return_indices=True,
     )
+
+    if run_twice:
+        ttnn.deallocate(ttnn_output, True)
+        ttnn.deallocate(ttnn_indices, True)
+        ttnn_output, ttnn_indices = ttnn.max_pool2d(
+            input_tensor=ttnn_input,
+            batch_size=in_n,
+            input_h=in_h,
+            input_w=in_w,
+            channels=in_c,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+            dilation=dilation,
+            applied_shard_scheme=sharding,
+            ceil_mode=ceil_mode,
+            deallocate_input=False,
+            reallocate_halo_output=True,
+            return_indices=True,
+        )
 
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
     # convert indexes to int64 for compatability with torch

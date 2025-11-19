@@ -29,7 +29,7 @@ void kernel_main() {
 
     {
         DeviceZoneScopedN("RISCV0");
-        for (uint32_t i = 0; i < num_of_transactions; i++) {
+        for (uint32_t n = 0; n < num_of_transactions; n++) {
             dst_addr = l1_addr;
             for (uint32_t bank_id = 0; bank_id < num_banks; bank_id++) {
                 uint64_t src_noc_addr = get_noc_addr_from_bank_id<true>(bank_id, src_addr);
