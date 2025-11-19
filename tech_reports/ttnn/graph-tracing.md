@@ -931,3 +931,301 @@ Deallocate Device Buffer
     }
 ]
 ```
+
+## Levelized Graph
+
+While the standard graph trace provides comprehensive information about operations, memory allocations, and execution flow, it can be overwhelming when you only need a simplified view focused on operation-level data flow. The `LevelizedGraph` provides a hierarchical, simplified representation of the graph trace that is particularly useful for generating IR from `ttnn` call traces.
+
+### What is LevelizedGraph?
+
+A `LevelizedGraph` is a simplified, hierarchical representation of traced operations extracted from a graph trace. Unlike the full graph trace which includes all node types (buffer allocations, circular buffers, tensors, etc.), a `LevelizedGraph` focuses only on operation nodes (`function_start` nodes) and organizes them hierarchically based on their stacking level.
+
+#### Key Differences from Standard Graph Trace
+
+1. **Simplified Node Set**: Only stores `function_start` nodes (operations). Other node types like `buffer`, `buffer_allocate`, `circular_buffer_allocate`, `tensor`, etc. are not stored directly, though their information is used to populate vertex metadata.
+
+2. **Bidirectional Edges**: Each vertex stores both `in_edges` (incoming) and `out_edges` (outgoing), representing data flow between operations. This enables constant-time lookup of input tensors for any operation.
+
+3. **Hierarchical Structure**: Vertices are organized by `stacking_level`, which represents the depth of nesting. For example, `ttnn::add` at level 1 may have `ttnn::prim::binary_ng` as an internal operation at level 2.
+
+4. **Internals Tracking**: Each vertex stores its `internals` - a list of vertex IDs representing operations that are called within it at the next stacking level. For instance, a `ttnn::multiply` vertex will have `ttnn::prim::binary_ng` in its `internals` list when extracted with `max_level >= 2`.
+
+5. **Output Information**: Each vertex stores `output_shape` (the shape of tensors produced) and `output_info` (layout and memory configuration information) when available.
+
+6. **Data Flow Focus**: Edges represent pure data flow (which operation produces data consumed by another), not parent-child relationships or memory management events.
+
+### Vertex Structure
+
+Each vertex in a `LevelizedGraph` contains:
+
+* `counter` (or `id`): Unique identifier within the levelized graph
+* `stacking_level`: The depth level of this operation (1 = top-level, 2 = nested, etc.)
+* `name`: The operation name (e.g., `"ttnn::add"`, `"ttnn::prim::binary_ng"`)
+* `arguments`: Array of serialized arguments passed to the operation
+* `in_edges`: Array of vertex IDs representing operations that produce inputs to this operation
+* `out_edges`: Array of vertex IDs representing operations that consume outputs from this operation
+* `internals`: Array of vertex IDs representing operations called within this operation (at `stacking_level + 1`)
+* `output_info`: Array of strings containing layout and memory configuration information (when available)
+* `output_shape`: Array of strings representing the shapes of output tensors
+
+### How to Use
+
+#### In C++
+
+```cpp
+#include "ttnn/graph/graph_processor.hpp"
+#include "ttnn/graph/levelized_graph.hpp"
+
+// Capture a graph trace first
+auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
+// ... your ttnn operations ...
+auto trace = capture.end_graph_capture();
+
+// Extract levelized graph with max_level = 1 (default)
+ttnn::graph::LevelizedGraph levelized_graph(trace, 1);
+
+// Or extract as JSON directly
+auto levelized_json = ttnn::graph::extract_levelized_graph(trace, 1);
+
+// Access vertices
+for (const auto& vertex : levelized_graph.vertices()) {
+    std::cout << "Operation: " << vertex.name 
+              << ", Level: " << vertex.stacking_level 
+              << ", Inputs: " << vertex.in_edges.size()
+              << ", Outputs: " << vertex.out_edges.size() << std::endl;
+}
+```
+
+#### In Python
+
+```python
+import ttnn
+
+# Begin graph capture
+ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NO_DISPATCH)
+# ... your ttnn operations ...
+captured_graph = ttnn.graph.end_graph_capture()
+
+# Extract levelized graph with default max_level = 1
+levelized_graph = ttnn.graph.extract_levelized_graph(captured_graph)
+
+# Or with explicit max_level
+levelized_graph_level_2 = ttnn.graph.extract_levelized_graph(captured_graph, max_level=2)
+
+# The result is a list of dictionaries, each representing a vertex
+for vertex in levelized_graph:
+    print(f"Operation: {vertex['name']}, Level: {vertex['stacking_level']}")
+    print(f"  Inputs: {vertex['in_edges']}")
+    print(f"  Outputs: {vertex['out_edges']}")
+    print(f"  Internals: {vertex['internals']}")
+```
+
+### Example: Multiply-Add Operation
+
+Consider the following operation sequence:
+
+```cpp
+const auto input_a = ttnn::TensorSpec(ttnn::Shape(tt::tt_metal::Array2D{32, 64}), ...);
+const auto input_tensor_a = tt::tt_metal::create_device_tensor(input_a, device);
+const auto input_b = ttnn::TensorSpec(ttnn::Shape(tt::tt_metal::Array2D{32, 64}), ...);
+const auto input_tensor_b = tt::tt_metal::create_device_tensor(input_b, device);
+const auto input_c = ttnn::TensorSpec(ttnn::Shape(tt::tt_metal::Array2D{32, 64}), ...);
+const auto input_tensor_c = tt::tt_metal::create_device_tensor(input_c, device);
+const auto output_tensor = ttnn::multiply(input_tensor_b, input_tensor_c, std::nullopt, std::nullopt);
+const auto output_tensor_1 = ttnn::add(input_tensor_a, output_tensor, std::nullopt, std::nullopt);
+```
+
+#### Levelized Graph with max_level = 1
+
+With `max_level = 1`, the levelized graph shows only top-level operations:
+
+```json
+[
+    {
+        "counter": 0,
+        "stacking_level": 1,
+        "name": "tt::tt_metal::create_device_tensor",
+        "arguments": ["Shape([32, 64])", "DataType::BFLOAT16", ...],
+        "in_edges": [],
+        "out_edges": [4],
+        "internals": [],
+        "output_info": ["Tensor(...)"],
+        "output_shape": ["Shape([32, 64])"]
+    },
+    {
+        "counter": 1,
+        "stacking_level": 1,
+        "name": "tt::tt_metal::create_device_tensor",
+        "arguments": ["Shape([32, 64])", "DataType::BFLOAT16", ...],
+        "in_edges": [],
+        "out_edges": [3],
+        "internals": [],
+        "output_info": ["Tensor(...)"],
+        "output_shape": ["Shape([32, 64])"]
+    },
+    {
+        "counter": 2,
+        "stacking_level": 1,
+        "name": "tt::tt_metal::create_device_tensor",
+        "arguments": ["Shape([32, 64])", "DataType::BFLOAT16", ...],
+        "in_edges": [],
+        "out_edges": [3],
+        "internals": [],
+        "output_info": ["Tensor(...)"],
+        "output_shape": ["Shape([32, 64])"]
+    },
+    {
+        "counter": 3,
+        "stacking_level": 1,
+        "name": "ttnn::multiply",
+        "arguments": ["Tensor(...)", "Tensor(...)", ...],
+        "in_edges": [1, 2],
+        "out_edges": [4],
+        "internals": [],
+        "output_info": ["Tensor(...)"],
+        "output_shape": ["Shape([32, 64])"]
+    },
+    {
+        "counter": 4,
+        "stacking_level": 1,
+        "name": "ttnn::add",
+        "arguments": ["Tensor(...)", "Tensor(...)", ...],
+        "in_edges": [0, 3],
+        "out_edges": [],
+        "internals": [],
+        "output_info": [],
+        "output_shape": ["Shape([32, 64])"]
+    }
+]
+```
+
+At level 1, you see:
+- Three `create_device_tensor` operations creating input tensors
+- One `ttnn::multiply` operation consuming inputs from vertices 1 and 2
+- One `ttnn::add` operation consuming inputs from vertices 0 and 3
+
+The `internals` arrays are empty because nested operations are not included at this level.
+
+You can think of this graph at level 1 like this:
+
+![muladd1](images/muladd_level1.png)
+
+#### Levelized Graph with max_level = 2
+
+With `max_level = 2`, the levelized graph expands to show internal operations:
+
+```json
+[
+    {
+        "counter": 0,
+        "stacking_level": 1,
+        "name": "tt::tt_metal::create_device_tensor",
+        "arguments": ["Shape([32, 64])", "DataType::BFLOAT16", ...],
+        "in_edges": [],
+        "out_edges": [5, 6],
+        "internals": [],
+        "output_info": ["Tensor(...)"],
+        "output_shape": ["Shape([32, 64])"]
+    },
+    {
+        "counter": 1,
+        "stacking_level": 1,
+        "name": "tt::tt_metal::create_device_tensor",
+        "arguments": ["Shape([32, 64])", "DataType::BFLOAT16", ...],
+        "in_edges": [],
+        "out_edges": [3, 4],
+        "internals": [],
+        "output_info": ["Tensor(...)"],
+        "output_shape": ["Shape([32, 64])"]
+    },
+    {
+        "counter": 2,
+        "stacking_level": 1,
+        "name": "tt::tt_metal::create_device_tensor",
+        "arguments": ["Shape([32, 64])", "DataType::BFLOAT16", ...],
+        "in_edges": [],
+        "out_edges": [3, 4],
+        "internals": [],
+        "output_info": ["Tensor(...)"],
+        "output_shape": ["Shape([32, 64])"]
+    },
+    {
+        "counter": 3,
+        "stacking_level": 1,
+        "name": "ttnn::multiply",
+        "arguments": ["Tensor(...)", "Tensor(...)", ...],
+        "in_edges": [1, 2],
+        "out_edges": [5, 6],
+        "internals": [4],
+        "output_info": ["Tensor(...)"],
+        "output_shape": ["Shape([32, 64])"]
+    },
+    {
+        "counter": 4,
+        "stacking_level": 2,
+        "name": "ttnn::prim::binary_ng",
+        "arguments": ["Tensor(...)", "Tensor(...)", "BinaryOpType::MUL", ...],
+        "in_edges": [1, 2],
+        "out_edges": [],
+        "internals": [],
+        "output_info": [],
+        "output_shape": ["Shape([32, 64])"]
+    },
+    {
+        "counter": 5,
+        "stacking_level": 1,
+        "name": "ttnn::add",
+        "arguments": ["Tensor(...)", "Tensor(...)", ...],
+        "in_edges": [0, 3],
+        "out_edges": [],
+        "internals": [6],
+        "output_info": [],
+        "output_shape": ["Shape([32, 64])"]
+    },
+    {
+        "counter": 6,
+        "stacking_level": 2,
+        "name": "ttnn::prim::binary_ng",
+        "arguments": ["Tensor(...)", "Tensor(...)", "BinaryOpType::ADD", ...],
+        "in_edges": [0, 3],
+        "out_edges": [],
+        "internals": [],
+        "output_info": [],
+        "output_shape": ["Shape([32, 64])"]
+    }
+]
+```
+
+At level 2, you can see:
+- Vertex 3 (`ttnn::multiply`) now has `internals: [4]`, indicating it internally calls `ttnn::prim::binary_ng` (vertex 4)
+- Vertex 5 (`ttnn::add`) has `internals: [6]`, indicating it internally calls `ttnn::prim::binary_ng` (vertex 6)
+- Vertices 4 and 6 are at `stacking_level: 2`, showing they are nested operations
+- The `out_edges` of vertex 0 now include both 5 and 6, showing it feeds both the top-level `add` and its internal `binary_ng`
+
+You can think of this graph at level 2 like this:
+
+![muladd2](images/muladd_level2.png)
+
+### Use Cases
+
+The `LevelizedGraph` is particularly useful for:
+
+1. **IR Generation**: When building an IR from `ttnn` traces, you can traverse the levelized graph and decide whether to visit a vertex directly or expand its internals based on your needs.
+
+2. **Dynamic Op Decomposition**: By varying `max_level`, you can dynamically decompose composite operations (like `cosh` or `digamma`) to different depths.
+
+3. **Shape Inference**: The `output_shape` field provides immediate access to output shapes, which is essential for operations like `ttnn::sum` that may have different input and output shapes.
+
+4. **Layout Information**: The `output_info` field captures layout and memory configuration details when available, which is crucial for understanding tensor properties.
+
+5. **Fork/Join Analysis**: The bidirectional edge structure makes it easy to identify cases where a tensor is used by multiple operations (forks) or where multiple tensors feed into one operation (joins).
+
+### Limitations
+
+1. **Argument Order**: Graph capture cannot distinguish the order of arguments in operations like `subtract(%a, %b)` vs `subtract(%b, %a)`. The `in_edges` array preserves the order based on tensor creation order, but this may not always match the call-site argument order.
+
+2. **Incomplete Binary Ops**: In rare cases, graph capture might produce nodes for binary operations with only one input (e.g., when `digamma` is decomposed). This can sometimes be inferred as using the same tensor twice, but may lead to incorrect behavior.
+
+3. **Output Info Availability**: Complete `output_info` for operations without a consumer cannot be inferred from the graph trace. As a result, the return type and layout information of the top-level function may not always be available.
+
+We're working to fix these limitations soon.

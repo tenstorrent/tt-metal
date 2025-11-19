@@ -211,9 +211,6 @@ TEST_F(TestLevelizedGraphCapture, ReductionOp) {
     EXPECT_EQ(
         levelized_graph_2.get_vertex(mean_vertex_it->internals[2]).name, "ttnn::prim::old_infra_device_operation");
     EXPECT_EQ(levelized_graph_2.get_vertex(mean_vertex_it->internals[3]).name, "ttnn::reshape");
-
-    auto levelized_graph_json = ttnn::graph::extract_levelized_graph(ref_json_trace, 2);
-    std::cout << levelized_graph_json.dump(4) << std::endl;
 }
 
 TEST_F(TestLevelizedGraphCapture, OutputLayoutInfo) {
@@ -718,4 +715,81 @@ TEST_F(TestLevelizedGraphCapture, ExtractLevelizedGraphJsonTest) {
             EXPECT_TRUE(vertex[ttnn::graph::kInternals].empty());
         }
     }
+}
+
+TEST_F(TestLevelizedGraphCapture, MultiplyAndAddTest) {
+    tt::tt_metal::IDevice* device = device_;
+
+    auto operation = [&device](tt::tt_metal::DataType datatype) {
+        const auto input_a = ttnn::TensorSpec(
+            ttnn::Shape(tt::tt_metal::Array2D{32, 64}),
+            tt::tt_metal::TensorLayout(
+                datatype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), ttnn::L1_MEMORY_CONFIG));
+        const auto input_tensor_a = tt::tt_metal::create_device_tensor(input_a, device);
+        const auto input_b = ttnn::TensorSpec(
+            ttnn::Shape(tt::tt_metal::Array2D{32, 64}),
+            tt::tt_metal::TensorLayout(
+                datatype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), ttnn::L1_MEMORY_CONFIG));
+        const auto input_tensor_b = tt::tt_metal::create_device_tensor(input_b, device);
+        const auto input_c = ttnn::TensorSpec(
+            ttnn::Shape(tt::tt_metal::Array2D{32, 64}),
+            tt::tt_metal::TensorLayout(
+                datatype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), ttnn::L1_MEMORY_CONFIG));
+        const auto input_tensor_c = tt::tt_metal::create_device_tensor(input_c, device);
+        const auto output_tensor = ttnn::multiply(input_tensor_b, input_tensor_c, std::nullopt, std::nullopt);
+        const auto output_tensor_1 = ttnn::add(input_tensor_a, output_tensor, std::nullopt, std::nullopt);
+    };
+
+    nlohmann::json ref_json_trace;
+    {
+        auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
+        operation(tt::tt_metal::DataType::BFLOAT16);
+        ref_json_trace = capture.end_graph_capture();
+    }
+
+    // Test extract_levelized_graph API - level 1
+    ttnn::graph::LevelizedGraph levelized_graph(ref_json_trace, 1);
+    EXPECT_EQ(levelized_graph.size(), 5);
+    EXPECT_TRUE(std::ranges::all_of(
+        levelized_graph.vertices(), [&](const auto& vertex) { return vertex.stacking_level == 1; }));
+    EXPECT_TRUE(
+        std::ranges::all_of(levelized_graph.vertices(), [&](const auto& vertex) { return vertex.internals.empty(); }));
+    EXPECT_TRUE(std::ranges::none_of(
+        levelized_graph.vertices(), [&](const auto& vertex) { return vertex.output_shape.empty(); }));
+
+    const auto& v_a = levelized_graph.get_vertex(0);
+    const auto& v_b = levelized_graph.get_vertex(1);
+    const auto& v_c = levelized_graph.get_vertex(2);
+    const auto& v_multiply = levelized_graph.get_vertex(3);
+    const auto& v_add = levelized_graph.get_vertex(4);
+
+    EXPECT_EQ(v_a.name, "tt::tt_metal::create_device_tensor");
+    EXPECT_EQ(v_b.name, "tt::tt_metal::create_device_tensor");
+    EXPECT_EQ(v_c.name, "tt::tt_metal::create_device_tensor");
+    EXPECT_EQ(v_multiply.name, "ttnn::multiply");
+    EXPECT_EQ(v_add.name, "ttnn::add");
+
+    // Confirming that the multiply vertex has two inputs: v_b and v_c
+    // Also add should have two inputs: v_a and the output of the multiply vertex
+    // Motivated by this issue: https://github.com/tenstorrent/tt-mlir/issues/5929
+    EXPECT_TRUE(v_multiply.in_edges.size() == 2);
+    EXPECT_EQ(v_multiply.in_edges[0], v_b.id);
+    EXPECT_EQ(v_multiply.in_edges[1], v_c.id);
+    EXPECT_TRUE(v_add.in_edges.size() == 2);
+    EXPECT_EQ(v_add.in_edges[0], v_a.id);
+    EXPECT_EQ(v_add.in_edges[1], v_multiply.id);
+
+    EXPECT_EQ(v_a.out_edges.size(), 1);
+    EXPECT_EQ(v_a.out_edges[0], v_add.id);
+
+    EXPECT_EQ(v_b.out_edges.size(), 1);
+    EXPECT_EQ(v_b.out_edges[0], v_multiply.id);
+
+    EXPECT_EQ(v_c.out_edges.size(), 1);
+    EXPECT_EQ(v_c.out_edges[0], v_multiply.id);
+
+    EXPECT_EQ(v_multiply.out_edges.size(), 1);
+    EXPECT_EQ(v_multiply.out_edges[0], v_add.id);
+
+    EXPECT_EQ(v_add.out_edges.size(), 0);
 }

@@ -13,6 +13,28 @@
 
 namespace ttnn::graph {
 
+/*
+LevelizedGraph allows extracting a hierarchical representation of traced operations at different stacking levels, which
+helps analyze the operation call graph at varying levels of abstraction (particularly useful in generating IR from ttnn
+input). A LevelizedGraph is a collection of vertices where each vertex is mostly identical to GraphProcessor::Vertex
+with a couple of caveats:
+    - LevelizedGraph::Vertex stores both out_edges and in_edges (as opposed to GraphProcessor::Vertex where we only
+      store out_edges (or connections). This helps in constant lookup for incoming edges for a vertex (i.e. identifying
+      input tensors for an op).
+    - LevelizedGraph::Vertex stores the internals of a vertex. This is aligns perfectly with the hierarchical nature of
+      LevelizedGraph. For instance, a ttnn::add node will have ttnn::prim::binary_ng as its internal.
+    - LevelizedGraph::Vertex stores the output_shape of each node. This helps in constant lookup for the output shape of
+      all nodes when building an IR from the trace. For instance, when ttnn::sum(input, 0, true) is applied on an input
+      shaped [(64, 128)], it will store [(1, 128)] as the output_shape.
+    - LevelizedGraph::Vertex stores the output_info of the nodes with a consumer. The output_info essentially tracks the
+      layout information and sharding specs of vertices.
+    - LevelizedGraph only stores one vertex for each op (as opposed to GraphProcessor where we store function_start and
+      function_end nodes for each vertex). In LevelizedGraph we only store the function_strats of nodes (other node
+      types such as capture_start, capture_end, buffer, buffer_allocate, buffer_deallocate, circular_buffer_allocate,
+      circular_buffer_deallocate_all, and tensor are not stored in LevelizedGraph).
+    - The edges of LevelizedGraph represent the data flow (as opposed to the edges of GraphProcessor which represent
+      both data flow and parent-child relationship). This makes walks on LevelizedGraph much less complicated.
+*/
 class LevelizedGraph {
 public:
     using VertexID = std::size_t;
