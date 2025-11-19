@@ -208,6 +208,9 @@ def get_configs(
             os.path.join(configs_root, "device_configs", device_config_name)
         )
 
+    device_config = DeviceConfig(device_config)
+
+
     # Load model config
 
     if training_config.model_config is not None:
@@ -224,6 +227,8 @@ def get_configs(
             os.path.join(configs_root, "model_configs", model_config_name)
         )
 
+    model_config = TransformerConfig(model_config)
+
     # Load multihost config
 
     if multihost_config_name != "":
@@ -233,8 +238,6 @@ def get_configs(
     else:
         multihost_config = {}
 
-    model_config = TransformerConfig(model_config)
-    device_config = DeviceConfig(device_config)
     multihost_config = MultiHostConfig(multihost_config)
 
     return {
