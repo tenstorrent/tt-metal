@@ -15,8 +15,7 @@ void bind_manual_seed_operation(py::module& module) {
     auto doc = R"doc(
             Sets a seed to pseudo random number generators (PRNGs) on the specified device.
 
-            This operation allows users to set a specific seed or a tensor of seeds for random number generation,
-            ensuring reproducibility in operations that rely on randomness.
+            This operation allows users to either set a single seed value to all PRNGs in the device, or to specify potentially different seed values to PRNGs at the cores assigned to the provided user IDs.
 
             Args:
                 device (ttnn.MeshDevice): The device on which to set the manual seed.
