@@ -547,17 +547,16 @@ RingDistributedSdpaMeshWorkloadFactory::create_mesh_workload(
             } else {
                 // Infer ring_id from device coordinate (similar to ring_joint_sdpa)
                 auto* mesh_device = input_tensor_q.device();
-                IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coord) : input_tensor_q.device();
+                auto target_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coord);
 
                 // Ensure mesh_device is not null before dereferencing
-                TT_FATAL(mesh_device != nullptr, "Mesh device must not be null when inferring ring_id");
                 const auto& mesh_view = mesh_device->get_view();
-                std::vector<IDevice*> devices_to_use;
+                std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids_to_use;
                 // For simplicity, assume ring is along the first axis (adjust as needed)
                 if (mesh_view.shape()[0] == operation_attributes.ring_size) {
-                    devices_to_use = mesh_view.get_devices_on_column(mesh_coord[1]);
+                    fabric_node_ids_to_use = mesh_view.get_fabric_node_ids_on_column(mesh_coord[1]);
                 } else if (mesh_view.shape()[1] == operation_attributes.ring_size) {
-                    devices_to_use = mesh_view.get_devices_on_row(mesh_coord[0]);
+                    fabric_node_ids_to_use = mesh_view.get_fabric_node_ids_on_row(mesh_coord[0]);
                 } else {
                     TT_FATAL(
                         false,
@@ -570,12 +569,12 @@ RingDistributedSdpaMeshWorkloadFactory::create_mesh_workload(
                 // Find ring_id (device index in the ring)
                 curr_ring_id = 0;
                 for (uint32_t i = 0; i < operation_attributes.ring_size; ++i) {
-                    if (devices_to_use.at(i) == target_device) {
+                    if (fabric_node_ids_to_use.at(i) == target_fabric_node_id) {
                         curr_ring_id = i;
                         break;
                     }
                 }
-                log_debug(tt::LogOp, "Inferred ring_id: {} for device_id: {}", curr_ring_id, target_device->id());
+                log_debug(tt::LogOp, "Inferred ring_id: {} for fabric_node_id: {}", curr_ring_id, target_fabric_node_id);
             }
             // Create a program for this specific coordinate using the base factory
             const ttnn::MeshCoordinateRange single_coord_range{mesh_coord, mesh_coord};

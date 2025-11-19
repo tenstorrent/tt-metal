@@ -110,27 +110,27 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     auto* mesh_device = tensor_args.input_tensor.device();
-    IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coordinate) : tensor_args.input_tensor.device();
-    std::vector<IDevice*> devices_to_use = {};
+    tt::tt_fabric::FabricNodeId target_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
+    std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids = {};
     const auto& mesh_view = tensor_args.input_tensor.device()->get_view();
     // User specified the cluster-axis. Derive devices based on the current coordinate
     // and the cluster-axis.
-    devices_to_use = (operation_attributes.cluster_axis == 0) ? mesh_view.get_devices_on_column(mesh_coordinate[1])
-                                                              : mesh_view.get_devices_on_row(mesh_coordinate[0]);
-    uint32_t target_ring_size = devices_to_use.size();
+    fabric_node_ids = (operation_attributes.cluster_axis == 0) ? mesh_view.get_fabric_node_ids_on_column(mesh_coordinate[1])
+                                                              : mesh_view.get_fabric_node_ids_on_row(mesh_coordinate[0]);
+    uint32_t target_ring_size = fabric_node_ids.size();
 
     // cluster_axis
-    std::optional<IDevice*> forward_device = std::nullopt;
-    std::optional<IDevice*> backward_device = std::nullopt;
+    std::optional<tt::tt_fabric::FabricNodeId> forward_fabric_node_id = std::nullopt;
+    std::optional<tt::tt_fabric::FabricNodeId> backward_fabric_node_id = std::nullopt;
     uint32_t device_index = 0;  // Initialize device index
     for (uint32_t i = 0; i < target_ring_size; ++i) {
-        if (devices_to_use.at(i) == target_device) {
+        if (fabric_node_ids.at(i) == target_fabric_node_id) {
             device_index = i;
             if (i != 0) {
-                backward_device = devices_to_use.at(i - 1);
+                backward_fabric_node_id = fabric_node_ids.at(i - 1);
             }
             if (i != target_ring_size - 1) {
-                forward_device = devices_to_use.at(i + 1);
+                forward_fabric_node_id = fabric_node_ids.at(i + 1);
             }
         }
     }
@@ -190,8 +190,8 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
             }
         }
     } else {
-        is_first_device = !backward_device.has_value();
-        is_last_device = !forward_device.has_value();
+        is_first_device = !backward_fabric_node_id.has_value();
+        is_last_device = !forward_fabric_node_id.has_value();
         if (!is_first_device) {
             backward_device_offset = 1;
         }
@@ -318,25 +318,17 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                 direction ? backward_device_offset : forward_device_offset};
             if (direction) {
                 writer_rt_args.push_back(false);
-                writer_rt_args.push_back(backward_device.has_value());
-                if (backward_device.has_value()) {
-                    const auto src_fabric_node_id =
-                        tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
-                    const auto dst_fabric_node_id =
-                        tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
+                writer_rt_args.push_back(backward_fabric_node_id.has_value());
+                if (backward_fabric_node_id.has_value()) {
                     tt::tt_fabric::append_fabric_connection_rt_args(
-                        src_fabric_node_id, dst_fabric_node_id, link, program, {core}, writer_rt_args);
+                        target_fabric_node_id, backward_fabric_node_id.value(), link, program, {core}, writer_rt_args);
                 }
             } else {
-                writer_rt_args.push_back(forward_device.has_value());
+                writer_rt_args.push_back(forward_fabric_node_id.has_value());
 
-                if (forward_device.has_value()) {
-                    const auto src_fabric_node_id =
-                        tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
-                    const auto dst_fabric_node_id =
-                        tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
+                if (forward_fabric_node_id.has_value()) {
                     tt::tt_fabric::append_fabric_connection_rt_args(
-                        src_fabric_node_id, dst_fabric_node_id, link, program, {core}, writer_rt_args);
+                        target_fabric_node_id, forward_fabric_node_id.value(), link, program, {core}, writer_rt_args);
                 }
                 writer_rt_args.push_back(false);
             }

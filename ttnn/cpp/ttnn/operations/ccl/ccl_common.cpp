@@ -321,9 +321,7 @@ SenderReceiverConfig get_device_sender_receiver_config_in_ring(
         } else {
             new_col = line_index % ring_size;
         }
-        auto* device = mesh_view.get_device(MeshCoordinate(new_row, new_col));
-        TT_FATAL(device != nullptr, "Device not found at coordinate {}", MeshCoordinate(new_row, new_col));
-        return device->id();
+        return mesh_device->get_fabric_node_id(MeshCoordinate(new_row, new_col)).chip_id;
     };
 
     bool is_last_chip_in_clockwise_direction = config.device_index == (ring_size - 1);
