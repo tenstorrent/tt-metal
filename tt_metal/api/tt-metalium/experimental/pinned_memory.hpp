@@ -144,6 +144,25 @@ public:
      */
     void unlock();
 
+    /**
+     * @brief Pin existing host memory for a specific set of mesh coordinates.
+     *
+     * Creates pinned system memory for the devices covered by the provided mesh coordinate range set,
+     * mapping the existing host buffer to each device. When map_to_noc is true and supported by the
+     * system, the buffer will be mapped to the NOC for direct device access.
+     *
+     * @param mesh_device The mesh device to pin memory for
+     * @param coordinate_range_set Set of mesh coordinates to pin memory for
+     * @param host_buffer Existing host memory to map (must not be null)
+     * @param map_to_noc Whether to map the buffer to the NOC
+     * @return Unique pointer to the created PinnedMemory instance
+     */
+    static std::unique_ptr<PinnedMemory> Create(
+        distributed::MeshDevice& mesh_device,
+        const distributed::MeshCoordinateRangeSet& coordinate_range_set,
+        HostBuffer& host_buffer,
+        bool map_to_noc = false);
+
 private:
     friend class distributed::MeshDevice;
 
@@ -160,24 +179,7 @@ private:
 };
 
 /**
- * @brief Pin existing host memory for a specific set of mesh coordinates. This will eventually be replaced by the
- * MeshDevice::pin_memory method.
- * @param mesh_device The mesh device to pin memory for
- * @param coordinate_range_set Set of mesh coordinates to pin memory for
- * @param host_buffer Existing host memory to map (must not be null)
- * @param buffer_size Size of buffer to map to each device
- * @param map_to_noc Whether to map the buffer to the NOC
- * @return Unique pointer to the created PinnedMemory instance
- */
-std::unique_ptr<PinnedMemory> PinMemory(
-    distributed::MeshDevice& mesh_device,
-    const distributed::MeshCoordinateRangeSet& coordinate_range_set,
-    HostBuffer& host_buffer,
-    bool map_to_noc = false);
-
-/**
- * @brief Get the memory pinning parameters for a mesh device. This will eventually be replaced by the
- * MeshDevice::get_memory_pinning_parameters method.
+ * @brief Get the memory pinning parameters for a mesh device.
  * @param mesh_device The mesh device to get the memory pinning parameters for
  * @return Memory pinning parameters
  */
