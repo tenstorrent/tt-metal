@@ -103,7 +103,7 @@ public:
      * @param target_mem_config Optional memory configuration
      * @return Formatted tensor
      */
-    static Tensor format_input_tensor(
+    static Tensor format_tensor(
         const Tensor& input,
         float pad_value,
         tt::tt_metal::Layout target_layout,

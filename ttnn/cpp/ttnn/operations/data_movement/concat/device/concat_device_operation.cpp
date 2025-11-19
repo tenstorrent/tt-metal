@@ -204,7 +204,7 @@ Tensor concat_impl(
                 std::vector<Tensor> formatted_tensors;
                 formatted_tensors.reserve(input_tensors.size());
                 for (const auto& input_tensor : input_tensors) {
-                    formatted_tensors.push_back(AutoFormat::format_input_tensor(input_tensor, 0, Layout::TILE));
+                    formatted_tensors.push_back(AutoFormat::format_tensor(input_tensor, 0, Layout::TILE));
                 }
                 return formatted_tensors;
             }
