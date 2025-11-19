@@ -899,11 +899,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
     auto out_shard_spec = output.shard_spec().has_value() ? output.shard_spec().value() : shard_spec;
 
     bool row_major = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
-    auto grid = *shard_spec.grid.ranges().begin();
-    uint32_t ncores_x = grid.end_coord.x + 1;
-    uint32_t ncores_y = grid.end_coord.y + 1;
     auto all_cores = shard_spec.grid;
-    uint32_t ncores = all_cores.num_cores();
     uint32_t ntiles_per_block = shard_spec.shape[1] / TILE_WIDTH;
     uint32_t nblocks_per_core = shard_spec.shape[0] / TILE_HEIGHT;
     uint32_t batch = a.physical_volume() / (a.padded_shape()[-2] * a.padded_shape()[-1]);
@@ -1055,7 +1051,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
         }
         tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, all_cores, writer_rt_args);
     } else {
-        cores = grid_to_cores(ncores, ncores_x, ncores_y, row_major);
+        cores = corerange_to_cores(all_cores, std::nullopt, row_major);
         for (uint32_t i = 0; i < cores.size(); ++i) {
             CoreCoord& core = cores[i];
 
