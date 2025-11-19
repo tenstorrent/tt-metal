@@ -6,6 +6,7 @@
 
 #include <llrt/tt_cluster.hpp>
 #include <llrt/get_platform_architecture.hpp>
+#include <impl/profiler/profiler_state_manager.hpp>
 
 std::unique_ptr<tt::tt_metal::Hal> create_hal(const std::unique_ptr<tt::umd::Cluster> &cluster) {
     tt::llrt::RunTimeOptions rtoptions;
@@ -17,5 +18,9 @@ std::unique_ptr<tt::tt_metal::Hal> create_hal(const std::unique_ptr<tt::umd::Clu
     // This parameter doesn't affect the addresses of any buffers in L1. If Metal only has 1 ERISC enabled for Blackhole then telemtry
     // will simply read empty values for the other ERISC.
     constexpr bool is_2_erisc_mode = true;
-    return std::make_unique<tt::tt_metal::Hal>(tt::tt_metal::get_platform_architecture(rtoptions), is_base_routing_fw_enabled, is_2_erisc_mode);
+    return std::make_unique<tt::tt_metal::Hal>(
+        tt::tt_metal::get_platform_architecture(rtoptions),
+        is_base_routing_fw_enabled,
+        is_2_erisc_mode,
+        tt::tt_metal::get_profiler_dram_bank_size_per_risc_bytes(rtoptions.get_profiler_program_support_count()));
 }

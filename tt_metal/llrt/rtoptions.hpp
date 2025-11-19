@@ -138,8 +138,7 @@ class RunTimeOptions {
     bool profiler_buffer_usage_enabled = false;
     bool profiler_noc_events_enabled = false;
     std::string profiler_noc_events_report_path;
-    // return an optional, default to 1000 if not set
-    uint32_t profiler_program_support_count = 1000;
+    std::optional<uint32_t> profiler_program_support_count = std::nullopt;
 
     bool null_kernels = false;
     // Kernels should return early, skipping the rest of the kernel. Kernels
@@ -437,7 +436,7 @@ public:
     bool get_profiler_trace_tracking() const { return profiler_trace_tracking; }
     bool get_profiler_mid_run_dump() const { return profiler_mid_run_dump; }
     bool get_profiler_cpp_post_process() const { return profiler_cpp_post_process; }
-    uint32_t get_profiler_program_support_count() const { return profiler_program_support_count; }
+    std::optional<uint32_t> get_profiler_program_support_count() const { return profiler_program_support_count; }
     bool get_profiler_buffer_usage_enabled() const { return profiler_buffer_usage_enabled; }
     bool get_profiler_noc_events_enabled() const { return profiler_noc_events_enabled; }
     std::string get_profiler_noc_events_report_path() const { return profiler_noc_events_report_path; }
