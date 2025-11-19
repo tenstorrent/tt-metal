@@ -144,9 +144,21 @@ public:
      */
     void unlock();
 
-private:
-    friend class distributed::MeshDevice;
+    /**
+     * @brief Create PinnedMemory for a mesh device and coordinate range
+     * @param mesh_device The mesh device to pin memory for
+     * @param coordinate_range_set Set of mesh coordinates to pin memory for
+     * @param host_buffer Existing host memory to map (must not be null)
+     * @param map_to_noc Whether to map the buffer to the NOC
+     * @return Unique pointer to the created PinnedMemory instance
+     */
+    static std::unique_ptr<PinnedMemory> Create(
+        distributed::MeshDevice& mesh_device,
+        const distributed::MeshCoordinateRangeSet& coordinate_range_set,
+        HostBuffer& host_buffer,
+        bool map_to_noc = false);
 
+private:
     /**
      * @brief Construct PinnedMemory by mapping existing host memory to devices
      * @param devices Vector of devices to map buffers for
