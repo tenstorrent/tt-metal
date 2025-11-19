@@ -100,7 +100,7 @@ bool is_l1_address(uint64_t addr) { return ((addr & 0xFFFFFFFF) < NOC_REG_SPACE_
  * | arg_idx        | Unique Runtime argument index                                           | uint32_t | 0 to 341    | True     |
  */
 // clang-format on
-static FORCE_INLINE uint32_t get_arg_addr(int arg_idx) { return (uint32_t)&rta_l1_base[arg_idx]; }
+static FORCE_INLINE uintptr_t get_arg_addr(int arg_idx) { return (uintptr_t)&rta_l1_base[arg_idx]; }
 
 // clang-format off
 /**
@@ -114,7 +114,7 @@ static FORCE_INLINE uint32_t get_arg_addr(int arg_idx) { return (uint32_t)&rta_l
  * | arg_idx        | Common Runtime argument index                                           | uint32_t | 0 to 341    | True     |
  */
 // clang-format on
-static FORCE_INLINE uint32_t get_common_arg_addr(int arg_idx) { return (uint32_t)&crta_l1_base[arg_idx]; }
+static FORCE_INLINE uintptr_t get_common_arg_addr(int arg_idx) { return (uintptr_t)&crta_l1_base[arg_idx]; }
 
 // clang-format off
 /**
@@ -314,7 +314,7 @@ uint32_t get_read_ptr(uint32_t operand) {
     return rd_ptr_bytes;
 }
 
-inline void wait_for_sync_register_value(uint32_t addr, int32_t val) {
+inline void wait_for_sync_register_value(uintptr_t addr, int32_t val) {
     volatile tt_reg_ptr uint32_t* reg_ptr = (volatile uint32_t*)addr;
     int32_t reg_value;
     WAYPOINT("SW");
@@ -341,7 +341,7 @@ inline void wait_for_sync_register_value(uint32_t addr, int32_t val) {
 // clang-format on
 FORCE_INLINE
 bool cb_pages_reservable_at_back(int32_t operand, int32_t num_pages) {
-    uint32_t pages_acked_ptr = (uint32_t)get_cb_tiles_acked_ptr(operand);
+    uintptr_t pages_acked_ptr = (uintptr_t)get_cb_tiles_acked_ptr(operand);
 
     // while the producer (write-side interface) is waiting for space to free up "tiles_pushed" is not changing
     // "tiles_pushed" is updated by the producer only when the tiles are pushed
@@ -371,7 +371,7 @@ bool cb_pages_reservable_at_back(int32_t operand, int32_t num_pages) {
 // clang-format on
 FORCE_INLINE
 void cb_reserve_back(int32_t operand, int32_t num_pages) {
-    uint32_t pages_acked_ptr = (uint32_t)get_cb_tiles_acked_ptr(operand);
+    uintptr_t pages_acked_ptr = (uintptr_t)get_cb_tiles_acked_ptr(operand);
 
     // while the producer (write-side interface) is waiting for space to free up "tiles_pushed" is not changing
     // "tiles_pushed" is updated by the producer only when the tiles are pushed
@@ -418,7 +418,7 @@ void cb_reserve_back(int32_t operand, int32_t num_pages) {
 FORCE_INLINE
 bool cb_pages_available_at_front(int32_t operand, int32_t num_pages) {
     uint32_t pages_acked = get_cb_tiles_acked_ptr(operand)[0];
-    uint32_t pages_received_ptr = (uint32_t)get_cb_tiles_received_ptr(operand);
+    uintptr_t pages_received_ptr = (uintptr_t)get_cb_tiles_received_ptr(operand);
 
     uint16_t pages_received = ((uint16_t)reg_read(pages_received_ptr)) - pages_acked;
     return num_pages <= pages_received;
@@ -451,7 +451,7 @@ bool cb_pages_available_at_front(int32_t operand, int32_t num_pages) {
 FORCE_INLINE
 void cb_wait_front(int32_t operand, int32_t num_pages) {
     uint32_t pages_acked = get_cb_tiles_acked_ptr(operand)[0];
-    uint32_t pages_received_ptr = (uint32_t)get_cb_tiles_received_ptr(operand);
+    uintptr_t pages_received_ptr = (uintptr_t)get_cb_tiles_received_ptr(operand);
 
     uint16_t pages_received;
 
@@ -2039,7 +2039,7 @@ inline void RISC_POST_HEARTBEAT(uint32_t& heartbeat) {
 // clang-format off
 /**
  * Initiates an asynchronous read for a single packet with size <= NOC_MAX_BURST_SIZE (i.e. maximum packet size).
- * Must first set the transaction id using \a noc_async_read_tile_dram_sharded_set_trid and the stateful registers
+ * Must first set the transaction id using \a noc_async_read_set_trid and the stateful registers
  * using an API such as \a noc_async_read_one_packet_set_state.
  *
  * Return value: None
@@ -2055,9 +2055,9 @@ inline void RISC_POST_HEARTBEAT(uint32_t& heartbeat) {
  */
 // clang-format on
 template <bool skip_ptr_update = false>
-FORCE_INLINE void noc_async_read_tile_dram_sharded_with_state_with_trid(
+FORCE_INLINE void noc_async_read_one_packet_with_state_with_trid(
     uint32_t src_base_addr, uint32_t src_addr, uint32_t dest_addr, uint32_t trid = 0, uint8_t noc = noc_index) {
-    RECORD_NOC_EVENT(NocEventType::READ_DRAM_SHARDED_WITH_STATE);
+    RECORD_NOC_EVENT(NocEventType::READ_WITH_STATE_AND_TRID);
 
     WAYPOINT("NRDW");
     ncrisc_noc_fast_read_with_transaction_id<noc_mode, skip_ptr_update>(
@@ -2078,7 +2078,7 @@ FORCE_INLINE void noc_async_read_tile_dram_sharded_with_state_with_trid(
  */
 // clang-format on
 FORCE_INLINE
-void noc_async_read_tile_dram_sharded_set_trid(uint32_t trid = 0, uint8_t noc = noc_index) {
+void noc_async_read_set_trid(uint32_t trid = 0, uint8_t noc = noc_index) {
     RECORD_NOC_EVENT(NocEventType::READ_SET_TRID);
 
     WAYPOINT("NSTW");
