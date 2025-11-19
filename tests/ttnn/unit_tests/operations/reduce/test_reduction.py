@@ -70,7 +70,7 @@ def test_prod(device, batch_size, c, h, w, dim, keepdim, dtype):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.randn((batch_size, c, h, w), dtype=torch.bfloat16)
-    # tensor.size, which is called by torch.prod) doesn't accept dim=None,
+    # tensor.size, which is called by torch.prod, doesn't accept dim=None,
     # so we need to handle it separately.
     # See https://github.com/pytorch/pytorch/issues/127882
     if dim is None:
