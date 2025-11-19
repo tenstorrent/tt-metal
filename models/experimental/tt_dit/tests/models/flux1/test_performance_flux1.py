@@ -23,7 +23,7 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
     "mesh_device, sp, tp, encoder_tp, vae_tp, topology, num_links",
     [
         [(1, 2), (1, 0), (2, 1), (2, 1), (2, 1), ttnn.Topology.Linear, 1],
-        [(2, 2), (2, 0), (2, 1), (2, 1), (2, 1), ttnn.Topology.Linear, 1],
+        [(2, 2), (2, 0), (2, 1), (2, 1), (2, 1), ttnn.Topology.Linear, 2],
         [(2, 4), (2, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1],
         [(4, 8), (4, 0), (8, 1), (4, 0), (4, 0), ttnn.Topology.Linear, 4],
     ],
@@ -269,12 +269,12 @@ def test_flux1_pipeline_performance(
     elif tuple(mesh_device.shape) == (2, 2):
         assert is_blackhole(), "2x2 is only supported for blackhole"
         expected_metrics = {
-            "clip_encoding_time": 0.1,
-            "t5_encoding_time": 0.4,
-            "total_encoding_time": 0.5,
-            "denoising_steps_time": 0.8 * num_inference_steps,
-            "vae_decoding_time": 2.6,
-            "total_time": 25.0,
+            "clip_encoding_time": 0.05,
+            "t5_encoding_time": 0.25,
+            "total_encoding_time": 0.3,
+            "denoising_steps_time": 0.55 * num_inference_steps,
+            "vae_decoding_time": 1.8,
+            "total_time": 17.5,
         }
     elif tuple(mesh_device.shape) == (1, 2):
         assert is_blackhole(), "1x2 is only supported for blackhole"

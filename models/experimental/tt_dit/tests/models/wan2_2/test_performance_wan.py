@@ -266,10 +266,10 @@ def test_pipeline_performance(
     elif tuple(mesh_device.shape) == (1, 4) and height == 480:
         assert is_blackhole(), "1x4 is only supported for blackhole"
         expected_metrics = {
-            "text_encoding_time": 15.0,
-            "denoising_time": 1000.0,
-            "vae_decoding_time": 90.0,
-            "total_time": 1105.0,
+            "text_encoding_time": 17.0,
+            "denoising_time": 540.0,
+            "vae_decoding_time": 60.0,
+            "total_time": 617.0,
         }
     elif tuple(mesh_device.shape) == (1, 4) and height == 720:
         assert is_blackhole(), "1x4 is only supported for blackhole"
