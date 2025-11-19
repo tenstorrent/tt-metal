@@ -61,7 +61,7 @@ class TtAttention(LightweightModule):
 
         if self.is_self_attention == True:
             self.sdpa_program_config.q_chunk_size = 128
-            self.sdpa_program_config.k_chunk_size = 1024
+            self.sdpa_program_config.k_chunk_size = 1024 if self.heads == 20 else 512
             fused_qkv_weights = torch.cat(
                 [
                     torch.transpose(q_weights, -2, -1),
@@ -130,7 +130,7 @@ class TtAttention(LightweightModule):
                 k_heads,
                 v_heads,
             ) = ttnn.experimental.nlp_create_qkv_heads(
-                qkv_fused, num_heads=self.heads, transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
+                qkv_fused, num_heads=self.heads, transpose_k_heads=False, memory_config=ttnn.L1_MEMORY_CONFIG
             )
             ttnn.deallocate(qkv_fused)
         else:
@@ -161,7 +161,7 @@ class TtAttention(LightweightModule):
                 num_heads=self.heads,
                 num_kv_heads=0,
                 transpose_k_heads=False,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
             )
 
             v_heads, _, _ = ttnn.experimental.nlp_create_qkv_heads(
@@ -169,7 +169,7 @@ class TtAttention(LightweightModule):
                 num_heads=self.heads,
                 num_kv_heads=0,
                 transpose_k_heads=False,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
             )
 
             k_heads, _, _ = ttnn.experimental.nlp_create_qkv_heads(
@@ -177,7 +177,7 @@ class TtAttention(LightweightModule):
                 num_heads=self.heads,
                 num_kv_heads=0,
                 transpose_k_heads=False,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
             )
 
         hidden_states = ttnn.transformer.scaled_dot_product_attention(
@@ -188,6 +188,7 @@ class TtAttention(LightweightModule):
             attn_mask=attention_mask,
             program_config=self.sdpa_program_config,
             compute_kernel_config=self.sdpa_compute_kernel_config,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         hidden_states = ttnn.experimental.nlp_concat_heads(hidden_states, memory_config=ttnn.L1_MEMORY_CONFIG)
 
