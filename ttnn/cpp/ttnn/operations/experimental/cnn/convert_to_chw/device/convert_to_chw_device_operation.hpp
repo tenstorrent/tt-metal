@@ -31,8 +31,7 @@ struct ConvertToCHWDeviceOperation {
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input,
-        const std::optional<DataType>& dtype,
-        const std::optional<Tensor>& preallocated_output = std::nullopt);
+        const std::optional<DataType>& dtype);
 };
 
 }  // namespace ttnn::operations::experimental::cnn
