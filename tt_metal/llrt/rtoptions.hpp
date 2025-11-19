@@ -20,7 +20,6 @@
 #include "llrt/hal.hpp"
 #include "core_coord.hpp"
 #include "dispatch_core_common.hpp"  // For DispatchCoreConfig
-#include "profiler_state_manager.hpp"
 #include "tt_target_device.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/core_coordinates.hpp>
@@ -139,7 +138,8 @@ class RunTimeOptions {
     bool profiler_buffer_usage_enabled = false;
     bool profiler_noc_events_enabled = false;
     std::string profiler_noc_events_report_path;
-    uint32_t profiler_program_support_count = tt_metal::DEFAULT_PROFILER_PROGRAM_SUPPORT_COUNT;
+    // return an optional, default to 1000 if not set
+    uint32_t profiler_program_support_count = 1000;
 
     bool null_kernels = false;
     // Kernels should return early, skipping the rest of the kernel. Kernels
