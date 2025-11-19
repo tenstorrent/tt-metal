@@ -47,7 +47,7 @@ from ....utils.check import assert_quality
 def test_qwen25vl_attention(*, mesh_device: ttnn.MeshDevice, masked: bool) -> None:
     torch.manual_seed(0)
 
-    batch_size = 2
+    batch_size = 10
     sequence_length = 512
     tp_axis = 1
 
@@ -137,7 +137,7 @@ def test_qwen25vl_attention(*, mesh_device: ttnn.MeshDevice, masked: bool) -> No
 def test_qwen25vl_text_encoder(*, mesh_device: ttnn.MeshDevice, masked: bool) -> None:
     torch.manual_seed(0)
 
-    batch_size = 2
+    batch_size = 10
     sequence_length = 512
     tp_axis = 1
 

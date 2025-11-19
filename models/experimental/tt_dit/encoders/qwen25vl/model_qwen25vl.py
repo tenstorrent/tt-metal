@@ -170,14 +170,12 @@ class Qwen25VlDecoderLayer(Module):
         residual = x
         x = self.input_layernorm.forward(x)
         x = self.self_attn.forward(x, causal_mask=causal_attn_mask, pos_embeds=pos_embeds)
-        x += residual
+        x = x + residual
 
         residual = x
         x = self.post_attention_layernorm.forward(x)
         x = self.mlp.forward(x)
-        x += residual
-
-        return x
+        return x + residual
 
 
 # adapted from https://github.com/huggingface/transformers/blob/v4.57.1/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py#L590
