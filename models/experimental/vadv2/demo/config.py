@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 _base_ = [
     # 'mmdet3d::_base_/datasets/nus-3d.py',
     "mmdet3d::_base_/default_runtime.py"
@@ -56,7 +58,7 @@ total_epochs = 12
 
 
 dataset_type = "mmdet3d.VADCustomNuScenesDataset"
-data_root = "/home/ubuntu/work/vadv2_test/tt-metal/models/experimental/vadv2/demo/data/"
+data_root = os.path.join(os.environ.get("TT_METAL_HOME", "."), "models/experimental/vadv2/demo/data/")
 file_client_args = dict(backend="disk")
 
 
