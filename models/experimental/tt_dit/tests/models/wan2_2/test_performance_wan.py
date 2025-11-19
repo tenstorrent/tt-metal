@@ -180,7 +180,7 @@ def test_pipeline_performance(
         prompt_idx = (i + 1) % len(prompts)
         with benchmark_profiler("run", iteration=i):
             with torch.no_grad():
-                result = pipeline(
+                pipeline(
                     prompt=prompts[prompt_idx],
                     negative_prompt=negative_prompt,
                     height=height,
@@ -190,17 +190,6 @@ def test_pipeline_performance(
                     guidance_scale=guidance_scale,
                     guidance_scale_2=guidance_scale_2,
                 )
-
-                if hasattr(result, "frames"):
-                    frames = result.frames
-                else:
-                    frames = result[0] if isinstance(result, tuple) else result
-                frames = frames[0]
-                try:
-                    export_to_video(frames, f"wan_output_video_performance_{i+1}.mp4", fps=16)
-                except AttributeError as e:
-                    logger.info(f"AttributeError: {e}")
-                print(f"✓ Saved video to: wan_output_video_performance_{i+1}.mp4")
 
         # Collect timing data
         all_timings.append(pipeline.timing_data)
