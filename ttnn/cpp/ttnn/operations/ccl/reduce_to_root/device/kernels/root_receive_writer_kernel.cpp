@@ -70,10 +70,10 @@ void kernel_main() {
 
     // write l, s, m from device 0 to intermediate buffers
     write_data(
-        inter_dst_addr_l,
+        get_write_ptr(inter_dst_addr_l),
         num_tiles_l,
-        inter_dst_addr_s,
-        inter_dst_addr_m,
+        get_write_ptr(inter_dst_addr_s),
+        get_write_ptr(inter_dst_addr_m),
         page_bytes,
         core_noc_x,
         core_noc_y,

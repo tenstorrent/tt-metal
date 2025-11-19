@@ -256,10 +256,10 @@ void kernel_main() {
 
     // read local data from own device from intermediate buffer and push to compute cbs
     read_from_local(
-        int_addr_l,
+        get_read_ptr(int_src_l),
         num_tiles_l,
-        int_addr_s,
-        int_addr_m,
+        get_read_ptr(int_src_s),
+        get_read_ptr(int_src_m),
         page_size_bytes,
         core_noc_x,
         core_noc_y,
