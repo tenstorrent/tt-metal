@@ -20,6 +20,36 @@ inline void mul_int32(const uint dst_index_in0, const uint dst_index_in1, const 
     uint offset1 = dst_index_in1 * dst_tile_size;
     uint offset2 = dst_index_out * dst_tile_size;
 
+    // This uses SFPLOADMACRO to achieve a throughput of 8 cycles per input row.
+    //
+    // Notation: [x] means scheduled by SFPLOADMACRO with VD=x.  Variables a0,
+    // a1 are loaded from offset0; b0, b1 from offset1, and c from offset2.
+    //
+    //
+    // t  | Load | Simple                 | MAD                     | Round                 | Store    |
+    // -- | ---- | ---------------------- | ----------------------- | --------------------- | -------- |
+    //  0 |  b0  |                        |                         |                       |          |
+    //  1 | [a1] |                        |                         |                       |          |
+    //  2 | [b1] |                        |                         | [a1] = shft2(a1, -23) |          |
+    //  3 |  a0  |                        | [a1] = mul24_lo(b0, a1) | [b1] = shft2(b1, -23) |          |
+    //  4 | [b2] |                        | [b1] = mul24_lo(a0, b1) |                       |          |
+    //  5 |      |                        |  c   = mul24_hi(a0, b2) |                       |          |
+    //  6 |      |  b1  = iadd(b1, a1)    | [b2] = mul24_lo(a0, b2) |                       |          |
+    //  7 | [c]  | [b1] = iadd(b1, c)     |                         |                       |          |
+    //  8 | .... | [c] = shft(b1, 23)     |                         |                       |          |
+    //  9 | .... | [b2] L16 = iadd(b2, c) |                         |                       |          |
+    // 10 | .... |                        |                         |                       | [c] L16  |
+    //
+    // In pseudocode, this is equivalent to:
+    //
+    // a1 = a >> 23
+    // b1 = b >> 23
+    // cross0 = mul24_lo(a1, b)
+    // cross1 = mul24_lo(a, b1)
+    // lo = mul24_lo(a, b)
+    // hi = mul24_hi(a, b)
+    // result = ((hi + cross0 + cross1) << 23) + lo
+
     constexpr uint a0 = 0;
     constexpr uint b0 = 0;
     constexpr uint a1 = 1;
@@ -56,10 +86,23 @@ inline void mul_int32_init() {
     constexpr uint b1 = 2;
     constexpr uint c = 4;
 
+    // Load instruction templates.  This is more efficient than using
+    // SFPCONFIG, but requires DISABLE_BACKDOOR_LOAD=false (the default).
+
     TTI_SFPSHFT2(-23 & 0xfff, 0, 12, 6);
     TTI_SFPMUL24(0, 0, p_sfpu::LCONST_0, 13, 0);
     TTI_SFPSHFT(23, b1, 14, 1 | 4);
     TTI_SFPIADD(0, c, 15, SFPIADD_MOD1_CC_NONE);
+
+    // Configure macros.
+    // See:
+    // https://github.com/tenstorrent/tt-isa-documentation/blob/main/BlackholeA0/TensixTile/TensixCoprocessor/SFPLOADMACRO.md
+    // For each of simple, MAD, round, store, a macro can use up to one
+    // instruction template.  8 bits for each unit:
+    // 0x80 means set VB=VD instead of VC=VD.
+    // 0x40 means set VD=16 (only readable by scheduled SFPSTORE).
+    // 3 bits for the delay.
+    // 3 bits for template index (4+i), or 3 means SFPSTORE.
 
     // Macro 0:
     {
