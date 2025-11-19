@@ -131,6 +131,7 @@ val_dataloader = dict(
     # sampler=dict(type='DistributedGroupSampler'),
     dataset=dict(
         type=dataset_type,
+        # load_interval=100,
         data_root=data_root,
         pc_range=point_cloud_range,
         ann_file=data_root + "vad_nuscenes_infos_val.pkl",

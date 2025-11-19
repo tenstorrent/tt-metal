@@ -684,19 +684,23 @@ class NuScenesEval_custom(NuScenesEval):
         )
         self.gt_boxes = load_gt(self.nusc, self.eval_set, DetectionBox_modified, verbose=verbose)
 
-        # Filter ground truth to only include samples that are in predictions
-        # This is needed when evaluating on a subset of the data
-        if self.data_infos is not None and len(self.pred_boxes.sample_tokens) < len(self.gt_boxes.sample_tokens):
-            if verbose:
-                print(
-                    f"Filtering GT boxes to match {len(self.pred_boxes.sample_tokens)} prediction samples (from {len(self.gt_boxes.sample_tokens)} total)"
-                )
-            pred_sample_tokens = set(self.pred_boxes.sample_tokens)
-            filtered_gt_boxes = EvalBoxes()
-            for sample_token in pred_sample_tokens:
-                if sample_token in self.gt_boxes.boxes:
-                    filtered_gt_boxes.add_boxes(sample_token, self.gt_boxes.boxes[sample_token])
-            self.gt_boxes = filtered_gt_boxes
+        if self.data_infos is not None:
+            requested_tokens = set()
+            for info in self.data_infos:
+                if isinstance(info, dict):
+                    token = info.get("token", info.get("sample_idx"))
+                    if token is not None:
+                        requested_tokens.add(token)
+            if requested_tokens:
+                pred_tokens = set(self.pred_boxes.sample_tokens)
+                gt_tokens = set(self.gt_boxes.sample_tokens)
+                valid_tokens = requested_tokens & pred_tokens & gt_tokens
+                if not valid_tokens:
+                    valid_tokens = pred_tokens & gt_tokens
+                if valid_tokens and valid_tokens != pred_tokens:
+                    self.pred_boxes = filter_by_sample_token(self.pred_boxes, list(valid_tokens))
+                if valid_tokens and valid_tokens != gt_tokens:
+                    self.gt_boxes = filter_by_sample_token(self.gt_boxes, list(valid_tokens))
 
         assert set(self.pred_boxes.sample_tokens) == set(
             self.gt_boxes.sample_tokens
