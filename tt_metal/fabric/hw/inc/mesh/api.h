@@ -26,6 +26,9 @@ struct is_addrgen : std::false_type {};
 template <typename T>
 struct is_addrgen<T, std::void_t<decltype(std::declval<const T&>().get_noc_addr(0))>> : std::true_type {};
 
+// Import FABRIC_MAX_PACKET_SIZE from addrgen_api.h
+using tt::tt_fabric::linear::FABRIC_MAX_PACKET_SIZE;
+
 // hop info e/w/n/s
 struct MeshMcastRange {
     uint8_t e;
@@ -51,7 +54,7 @@ struct MeshMcastRange {
  * | noc_unicast_command_header            | Destination NOC command header          | tt::tt_fabric::NocUnicastCommandHeader        | True     |
  */
 // clang-format on
-template <typename FabricSenderType>
+template <typename FabricSenderType, bool SetRoute = true>
 FORCE_INLINE void fabric_unicast_noc_unicast_write(
     tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
@@ -62,7 +65,9 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write(
     tt::tt_fabric::NocUnicastCommandHeader noc_unicast_command_header) {
     [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
 
-    fabric_set_unicast_route(packet_header, dst_dev_id, dst_mesh_id);
+    if constexpr (SetRoute) {
+        fabric_set_unicast_route(packet_header, dst_dev_id, dst_mesh_id);
+    }
     packet_header->to_noc_unicast_write(noc_unicast_command_header, size);
     client_interface->wait_for_empty_write_slot();
     client_interface->send_payload_without_header_non_blocking_from_address(src_addr, size);
@@ -84,6 +89,7 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write(
  * | noc_unicast_command_header            | Destination NOC command header          | tt::tt_fabric::NocUnicastCommandHeader        | True     |
  */
 // clang-format on
+template <bool SetRoute = true>
 FORCE_INLINE void fabric_unicast_noc_unicast_write(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
@@ -92,7 +98,7 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write(
     tt::tt_fabric::NocUnicastCommandHeader noc_unicast_command_header) {
     PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
         auto& slot = connection_manager.get(i);
-        fabric_unicast_noc_unicast_write(
+        fabric_unicast_noc_unicast_write<decltype(slot.sender), SetRoute>(
             &slot.sender, packet_header, slot.dst_dev_id, slot.dst_mesh_id, src_addr, size, noc_unicast_command_header);
     });
 }
@@ -391,7 +397,7 @@ FORCE_INLINE void fabric_unicast_noc_unicast_atomic_inc_set_state(
  * | noc_unicast_scatter_command_header    | Scatter write command header            | tt::tt_fabric::NocUnicastScatterCommandHeader  | True     |
  */
 // clang-format on
-template <typename FabricSenderType>
+template <typename FabricSenderType, bool SetRoute = true>
 FORCE_INLINE void fabric_unicast_noc_scatter_write(
     tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
@@ -402,7 +408,9 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write(
     tt::tt_fabric::NocUnicastScatterCommandHeader noc_unicast_scatter_command_header) {
     [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
 
-    fabric_set_unicast_route(packet_header, dst_dev_id, dst_mesh_id);
+    if constexpr (SetRoute) {
+        fabric_set_unicast_route(packet_header, dst_dev_id, dst_mesh_id);
+    }
     packet_header->to_noc_unicast_scatter_write(noc_unicast_scatter_command_header, size);
     client_interface->wait_for_empty_write_slot();
     client_interface->send_payload_without_header_non_blocking_from_address(src_addr, size);
@@ -424,6 +432,7 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write(
  * | noc_unicast_scatter_command_header    | Scatter write command header             | tt::tt_fabric::NocUnicastScatterCommandHeader  | True     |
  */
 // clang-format on
+template <bool SetRoute = true>
 FORCE_INLINE void fabric_unicast_noc_scatter_write(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
@@ -432,7 +441,7 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write(
     tt::tt_fabric::NocUnicastScatterCommandHeader noc_unicast_scatter_command_header) {
     PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
         auto& slot = connection_manager.get(i);
-        fabric_unicast_noc_scatter_write(
+        fabric_unicast_noc_scatter_write<decltype(slot.sender), SetRoute>(
             &slot.sender,
             packet_header,
             slot.dst_dev_id,
@@ -736,7 +745,7 @@ FORCE_INLINE void fabric_unicast_noc_unicast_inline_write_set_state(
  * | noc_fused_unicast_atomic_inc_command_header | Fused command header              | tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader | True  |
  */
 // clang-format on
-template <typename FabricSenderType>
+template <typename FabricSenderType, bool SetRoute = true>
 FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc(
     tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
@@ -747,7 +756,9 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc(
     tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader noc_fused_unicast_atomic_inc_command_header) {
     [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
 
-    fabric_set_unicast_route(packet_header, dst_dev_id, dst_mesh_id);
+    if constexpr (SetRoute) {
+        fabric_set_unicast_route(packet_header, dst_dev_id, dst_mesh_id);
+    }
     packet_header->to_noc_fused_unicast_write_atomic_inc(noc_fused_unicast_atomic_inc_command_header, size);
     client_interface->wait_for_empty_write_slot();
     client_interface->send_payload_without_header_non_blocking_from_address(src_addr, size);
@@ -769,6 +780,7 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc(
  * | noc_fused_unicast_atomic_inc_command_header | Fused command header                  | tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader | True  |
  */
 // clang-format on
+template <bool SetRoute = true>
 FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
@@ -777,7 +789,7 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc(
     tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader noc_fused_unicast_atomic_inc_command_header) {
     PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
         auto& slot = connection_manager.get(i);
-        fabric_unicast_noc_fused_unicast_with_atomic_inc(
+        fabric_unicast_noc_fused_unicast_with_atomic_inc<decltype(slot.sender), SetRoute>(
             &slot.sender,
             packet_header,
             slot.dst_dev_id,
@@ -925,7 +937,7 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state(
  * | noc_unicast_command_header | Destination NOC command header          | tt::tt_fabric::NocUnicastCommandHeader     | True     |
  */
 // clang-format on
-template <typename FabricSenderType>
+template <typename FabricSenderType, bool SetRoute = true>
 FORCE_INLINE void fabric_multicast_noc_unicast_write(
     tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
@@ -937,7 +949,9 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write(
     tt::tt_fabric::NocUnicastCommandHeader noc_unicast_command_header) {
     [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
 
-    fabric_set_mcast_route(packet_header, dst_dev_id, dst_mesh_id, ranges.e, ranges.w, ranges.n, ranges.s);
+    if constexpr (SetRoute) {
+        fabric_set_mcast_route(packet_header, dst_dev_id, dst_mesh_id, ranges.e, ranges.w, ranges.n, ranges.s);
+    }
     packet_header->to_noc_unicast_write(noc_unicast_command_header, size);
     client_interface->wait_for_empty_write_slot();
     client_interface->send_payload_without_header_non_blocking_from_address(src_addr, size);
@@ -1664,7 +1678,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_inline_write_set_state(
  * | noc_fused_unicast_atomic_inc_command_header | Fused command header              | tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader | True |
  */
 // clang-format on
-template <typename FabricSenderType>
+template <typename FabricSenderType, bool SetRoute = true>
 FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc(
     tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
@@ -1676,7 +1690,9 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc(
     tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader noc_fused_unicast_atomic_inc_command_header) {
     [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
 
-    fabric_set_mcast_route(packet_header, dst_dev_id, dst_mesh_id, ranges.e, ranges.w, ranges.n, ranges.s);
+    if constexpr (SetRoute) {
+        fabric_set_mcast_route(packet_header, dst_dev_id, dst_mesh_id, ranges.e, ranges.w, ranges.n, ranges.s);
+    }
     packet_header->to_noc_fused_unicast_write_atomic_inc(noc_fused_unicast_atomic_inc_command_header, size);
     client_interface->wait_for_empty_write_slot();
     client_interface->send_payload_without_header_non_blocking_from_address(src_addr, size);
@@ -1877,15 +1893,46 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write(
     uint32_t page_id,
     uint32_t offset = 0) {
     auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
-    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
 
-    fabric_unicast_noc_unicast_write(
+    // Set route once before sending packets
+    fabric_set_unicast_route(packet_header, dst_dev_id, dst_mesh_id);
+
+    uint32_t remaining_size = page_size;
+    uint32_t current_offset = offset;
+
+    // Send full-size packets (loop skips for small pages)
+    while (remaining_size > FABRIC_MAX_PACKET_SIZE) {
+        auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, current_offset);
+
+        // Call with SetRoute=false since we already set it
+        fabric_unicast_noc_unicast_write<FabricSenderType, false>(
+            client_interface,
+            packet_header,
+            dst_dev_id,
+            dst_mesh_id,
+            src_addr,
+            FABRIC_MAX_PACKET_SIZE,
+            tt::tt_fabric::NocUnicastCommandHeader{noc_address});
+
+        // Wait for hardware to finish reading header before modifying it for next packet
+        noc_async_writes_flushed();
+
+        src_addr += FABRIC_MAX_PACKET_SIZE;
+        current_offset += FABRIC_MAX_PACKET_SIZE;
+        remaining_size -= FABRIC_MAX_PACKET_SIZE;
+    }
+
+    // Send remainder packet (for small pages, this is the only packet)
+    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, current_offset);
+
+    // Call with SetRoute=false since we already set it (no barrier needed after last packet)
+    fabric_unicast_noc_unicast_write<FabricSenderType, false>(
         client_interface,
         packet_header,
         dst_dev_id,
         dst_mesh_id,
         src_addr,
-        page_size,
+        remaining_size,
         tt::tt_fabric::NocUnicastCommandHeader{noc_address});
 }
 
@@ -1914,10 +1961,42 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write(
     uint32_t page_id,
     uint32_t offset = 0) {
     auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
-    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
 
-    fabric_unicast_noc_unicast_write(
-        connection_manager, route_id, src_addr, page_size, tt::tt_fabric::NocUnicastCommandHeader{noc_address});
+    // Set route once for all headers before sending packets
+    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
+        auto& slot = connection_manager.get(i);
+        fabric_set_unicast_route(packet_header, slot.dst_dev_id, slot.dst_mesh_id);
+    });
+
+    uint32_t remaining_size = page_size;
+    uint32_t current_offset = offset;
+
+    // Send full-size packets (loop skips for small pages)
+    while (remaining_size > FABRIC_MAX_PACKET_SIZE) {
+        auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, current_offset);
+
+        // Call with SetRoute=false since we already set it
+        fabric_unicast_noc_unicast_write<false>(
+            connection_manager,
+            route_id,
+            src_addr,
+            FABRIC_MAX_PACKET_SIZE,
+            tt::tt_fabric::NocUnicastCommandHeader{noc_address});
+
+        // Wait to finish reading header before modifying it for next packet
+        noc_async_writes_flushed();
+
+        src_addr += FABRIC_MAX_PACKET_SIZE;
+        current_offset += FABRIC_MAX_PACKET_SIZE;
+        remaining_size -= FABRIC_MAX_PACKET_SIZE;
+    }
+
+    // Send remainder packet (for small pages, this is the only packet)
+    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, current_offset);
+
+    // Call with SetRoute=false since we already set it (no barrier needed after last packet)
+    fabric_unicast_noc_unicast_write<false>(
+        connection_manager, route_id, src_addr, remaining_size, tt::tt_fabric::NocUnicastCommandHeader{noc_address});
 }
 
 // clang-format off
@@ -1954,13 +2033,36 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write_with_state(
     uint32_t page_id,
     uint32_t offset = 0) {
     auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
-    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
 
-    // Call base _with_state to update destination address and size
-    // The route should already be set by _set_state for optimal performance
-    // Note: dst_dev_id/dst_mesh_id are kept for API symmetry but not used by base _with_state
+    uint32_t remaining_size = page_size;
+    uint32_t current_offset = offset;
+
+    // Send full-size packets (loop skips for small pages)
+    while (remaining_size > FABRIC_MAX_PACKET_SIZE) {
+        auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, current_offset);
+
+        // Call basic _with_state function
+        fabric_unicast_noc_unicast_write_with_state<UpdateMask>(
+            client_interface,
+            packet_header,
+            src_addr,
+            tt::tt_fabric::NocUnicastCommandHeader{noc_address},
+            FABRIC_MAX_PACKET_SIZE);
+
+        // Wait for hardware to finish reading header before modifying it for next packet
+        noc_async_writes_flushed();
+
+        src_addr += FABRIC_MAX_PACKET_SIZE;
+        current_offset += FABRIC_MAX_PACKET_SIZE;
+        remaining_size -= FABRIC_MAX_PACKET_SIZE;
+    }
+
+    // Send remainder packet (for small pages, this is the only packet)
+    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, current_offset);
+
+    // Call basic _with_state function (no barrier needed after last packet)
     fabric_unicast_noc_unicast_write_with_state<UpdateMask>(
-        client_interface, packet_header, src_addr, tt::tt_fabric::NocUnicastCommandHeader{noc_address}, page_size);
+        client_interface, packet_header, src_addr, tt::tt_fabric::NocUnicastCommandHeader{noc_address}, remaining_size);
 }
 
 // clang-format off
@@ -1988,10 +2090,36 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write_with_state(
     uint32_t page_id,
     uint32_t offset = 0) {
     auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
-    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
 
+    uint32_t remaining_size = page_size;
+    uint32_t current_offset = offset;
+
+    // Send full-size packets (loop skips for small pages)
+    while (remaining_size > FABRIC_MAX_PACKET_SIZE) {
+        auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, current_offset);
+
+        // Call basic route _with_state function
+        fabric_unicast_noc_unicast_write_with_state(
+            connection_manager,
+            route_id,
+            src_addr,
+            tt::tt_fabric::NocUnicastCommandHeader{noc_address},
+            FABRIC_MAX_PACKET_SIZE);
+
+        // Wait for hardware to finish reading headers before modifying them for next packet
+        noc_async_writes_flushed();
+
+        src_addr += FABRIC_MAX_PACKET_SIZE;
+        current_offset += FABRIC_MAX_PACKET_SIZE;
+        remaining_size -= FABRIC_MAX_PACKET_SIZE;
+    }
+
+    // Send remainder packet (for small pages, this is the only packet)
+    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, current_offset);
+
+    // Call basic route _with_state function (no barrier needed after last packet)
     fabric_unicast_noc_unicast_write_with_state(
-        connection_manager, route_id, src_addr, tt::tt_fabric::NocUnicastCommandHeader{noc_address}, page_size);
+        connection_manager, route_id, src_addr, tt::tt_fabric::NocUnicastCommandHeader{noc_address}, remaining_size);
 }
 
 // clang-format off
@@ -2025,8 +2153,12 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write_set_state(
     auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
     auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
 
+    // Cap initial payload size to hardware limit for large pages
+    // The WithState calls in the loop will handle actual chunking
+    uint32_t init_payload_size = (page_size > FABRIC_MAX_PACKET_SIZE) ? FABRIC_MAX_PACKET_SIZE : page_size;
+
     fabric_unicast_noc_unicast_write_set_state<UpdateMask>(
-        packet_header, dst_dev_id, dst_mesh_id, tt::tt_fabric::NocUnicastCommandHeader{noc_address}, page_size);
+        packet_header, dst_dev_id, dst_mesh_id, tt::tt_fabric::NocUnicastCommandHeader{noc_address}, init_payload_size);
 }
 
 // clang-format off
@@ -2054,8 +2186,12 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write_set_state(
     auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
     auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
 
+    // Cap initial payload size to hardware limit for large pages
+    // The WithState calls in the loop will handle actual chunking
+    uint32_t init_payload_size = (page_size > FABRIC_MAX_PACKET_SIZE) ? FABRIC_MAX_PACKET_SIZE : page_size;
+
     fabric_unicast_noc_unicast_write_set_state(
-        connection_manager, route_id, tt::tt_fabric::NocUnicastCommandHeader{noc_address}, page_size);
+        connection_manager, route_id, tt::tt_fabric::NocUnicastCommandHeader{noc_address}, init_payload_size);
 }
 
 // Fused Unicast Write + Atomic Inc Addrgen Overloads
@@ -2096,14 +2232,42 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc(
     auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
     auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
 
-    fabric_unicast_noc_fused_unicast_with_atomic_inc(
+    // Set route once
+    fabric_set_unicast_route(packet_header, dst_dev_id, dst_mesh_id);
+
+    uint32_t remaining = page_size;
+    uint32_t current_src_addr = src_addr;
+    uint64_t current_noc_addr = noc_address;
+
+    // Send intermediate chunks as regular writes (loop skips for small pages)
+    while (remaining > FABRIC_MAX_PACKET_SIZE) {
+        // Call basic unicast write with SetRoute=false
+        fabric_unicast_noc_unicast_write<FabricSenderType, false>(
+            client_interface,
+            packet_header,
+            dst_dev_id,
+            dst_mesh_id,
+            current_src_addr,
+            FABRIC_MAX_PACKET_SIZE,
+            tt::tt_fabric::NocUnicastCommandHeader{current_noc_addr});
+
+        // Wait for hardware to finish reading header before modifying for next packet
+        noc_async_writes_flushed();
+
+        current_src_addr += FABRIC_MAX_PACKET_SIZE;
+        current_noc_addr += FABRIC_MAX_PACKET_SIZE;
+        remaining -= FABRIC_MAX_PACKET_SIZE;
+    }
+
+    // Final chunk: fused write+atomic inc (for small pages, this is the only packet)
+    fabric_unicast_noc_fused_unicast_with_atomic_inc<FabricSenderType, false>(
         client_interface,
         packet_header,
         dst_dev_id,
         dst_mesh_id,
-        src_addr,
-        page_size,
-        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{noc_address, semaphore_noc_address, val, flush});
+        current_src_addr,
+        remaining,
+        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{current_noc_addr, semaphore_noc_address, val, flush});
 }
 
 // clang-format off
@@ -2139,12 +2303,41 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc(
     auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
     auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
 
-    fabric_unicast_noc_fused_unicast_with_atomic_inc(
+    // Set route once for all headers before sending packets
+    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
+        auto& slot = connection_manager.get(i);
+        fabric_set_unicast_route(packet_header, slot.dst_dev_id, slot.dst_mesh_id);
+    });
+
+    uint32_t remaining = page_size;
+    uint32_t current_src_addr = src_addr;
+    uint64_t current_noc_addr = noc_address;
+
+    // Send intermediate chunks as regular writes (loop skips for small pages)
+    while (remaining > FABRIC_MAX_PACKET_SIZE) {
+        // Call basic unicast write with SetRoute=false
+        fabric_unicast_noc_unicast_write<false>(
+            connection_manager,
+            route_id,
+            current_src_addr,
+            FABRIC_MAX_PACKET_SIZE,
+            tt::tt_fabric::NocUnicastCommandHeader{current_noc_addr});
+
+        // Wait for hardware to finish reading headers before modifying for next packet
+        noc_async_writes_flushed();
+
+        current_src_addr += FABRIC_MAX_PACKET_SIZE;
+        current_noc_addr += FABRIC_MAX_PACKET_SIZE;
+        remaining -= FABRIC_MAX_PACKET_SIZE;
+    }
+
+    // Final chunk: fused write+atomic inc (for small pages, this is the only packet)
+    fabric_unicast_noc_fused_unicast_with_atomic_inc<false>(
         connection_manager,
         route_id,
-        src_addr,
-        page_size,
-        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{noc_address, semaphore_noc_address, val, flush});
+        current_src_addr,
+        remaining,
+        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{current_noc_addr, semaphore_noc_address, val, flush});
 }
 
 // clang-format off
@@ -2190,15 +2383,47 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state(
     auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
     auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
 
-    // Call base _with_state to update WriteDstAddr and PayloadSize
-    // The route and send type should already be set for optimal performance
-    // Note: dst_dev_id/dst_mesh_id kept for API symmetry but not used by base _with_state
+    uint32_t remaining_size = page_size;
+    uint32_t current_offset = offset;
+    uint32_t packet_src_addr = src_addr;
+
+    // Send intermediate chunks as regular writes (loop skips for small pages)
+    while (remaining_size > FABRIC_MAX_PACKET_SIZE) {
+        auto chunk_noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, current_offset);
+
+        // Set noc_send_type to match the command fields
+        packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_WRITE;
+
+        // Call basic unicast write _with_state for intermediate packets
+        fabric_unicast_noc_unicast_write_with_state<
+            UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize>(
+            client_interface,
+            packet_header,
+            packet_src_addr,
+            tt::tt_fabric::NocUnicastCommandHeader{chunk_noc_address},
+            FABRIC_MAX_PACKET_SIZE);
+
+        // Wait for hardware to finish reading header before modifying for next packet
+        noc_async_writes_flushed();
+
+        packet_src_addr += FABRIC_MAX_PACKET_SIZE;
+        current_offset += FABRIC_MAX_PACKET_SIZE;
+        remaining_size -= FABRIC_MAX_PACKET_SIZE;
+    }
+
+    // Final chunk: fused write+atomic inc (for small pages, this is the only packet)
+    auto final_noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, current_offset);
+
+    // Set noc_send_type back to fused for final chunk
+    packet_header->noc_send_type = tt::tt_fabric::NOC_FUSED_UNICAST_ATOMIC_INC;
+
+    // Call basic fused atomic inc _with_state for final packet
     fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state<UpdateMask>(
         client_interface,
         packet_header,
-        src_addr,
-        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{noc_address, semaphore_noc_address, val, flush},
-        page_size);
+        packet_src_addr,
+        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{final_noc_address, semaphore_noc_address, val, flush},
+        remaining_size);
 }
 
 // clang-format off
@@ -2241,6 +2466,10 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state(
     auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
     auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
 
+    // Cap initial payload size to hardware limit for large pages
+    // The WithState calls in the loop will handle actual chunking
+    uint32_t init_payload_size = (page_size > FABRIC_MAX_PACKET_SIZE) ? FABRIC_MAX_PACKET_SIZE : page_size;
+
     // Call base _set_state to set up all header fields
     // This is typically called once before a loop
     fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state<UpdateMask>(
@@ -2248,7 +2477,7 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state(
         dst_dev_id,
         dst_mesh_id,
         tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{noc_address, semaphore_noc_address, val, flush},
-        page_size);
+        init_payload_size);
 }
 
 // clang-format off
@@ -2284,17 +2513,33 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write(
     uint32_t offset0 = 0,
     uint32_t offset1 = 0) {
     auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+
+    // Set route once before sending packets
+    fabric_set_unicast_route(packet_header, dst_dev_id, dst_mesh_id);
+
     auto noc_address0 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id0, offset0);
     auto noc_address1 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id1, offset1);
 
-    fabric_unicast_noc_scatter_write(
-        client_interface,
-        packet_header,
-        dst_dev_id,
-        dst_mesh_id,
-        src_addr,
-        page_size * 2,  // Total payload size (both chunks)
-        tt::tt_fabric::NocUnicastScatterCommandHeader{{noc_address0, noc_address1}, static_cast<uint16_t>(page_size)});
+    if (page_size * 2 <= FABRIC_MAX_PACKET_SIZE) {
+        // Small pages: use scatter operation
+        fabric_unicast_noc_scatter_write<FabricSenderType, false>(
+            client_interface,
+            packet_header,
+            dst_dev_id,
+            dst_mesh_id,
+            src_addr,
+            page_size * 2,
+            tt::tt_fabric::NocUnicastScatterCommandHeader{
+                {noc_address0, noc_address1}, static_cast<uint16_t>(page_size)});
+    } else {
+        // Large pages: fall back to separate unicast writes
+        // The fabric_unicast_noc_unicast_write calls will handle auto-packetization
+        fabric_unicast_noc_unicast_write<FabricSenderType>(
+            client_interface, packet_header, dst_dev_id, dst_mesh_id, src_addr, addrgen, page_id0, offset0);
+
+        fabric_unicast_noc_unicast_write<FabricSenderType>(
+            client_interface, packet_header, dst_dev_id, dst_mesh_id, src_addr + page_size, addrgen, page_id1, offset1);
+    }
 }
 
 // clang-format off
@@ -2340,12 +2585,30 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write_with_state(
     auto noc_address0 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id0, offset0);
     auto noc_address1 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id1, offset1);
 
-    fabric_unicast_noc_scatter_write_with_state<UpdateMask>(
-        client_interface,
-        packet_header,
-        src_addr,
-        tt::tt_fabric::NocUnicastScatterCommandHeader{{noc_address0, noc_address1}, static_cast<uint16_t>(page_size)},
-        page_size * 2);
+    if (page_size * 2 <= FABRIC_MAX_PACKET_SIZE) {
+        // Small pages: use scatter operation
+        fabric_unicast_noc_scatter_write_with_state<UpdateMask>(
+            client_interface,
+            packet_header,
+            src_addr,
+            tt::tt_fabric::NocUnicastScatterCommandHeader{
+                {noc_address0, noc_address1}, static_cast<uint16_t>(page_size)},
+            page_size * 2);
+    } else {
+        // Large pages: fall back to separate unicast writes
+        // The fabric_unicast_noc_unicast_write calls will handle auto-packetization
+        packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_WRITE;
+
+        // The fabric_unicast_noc_unicast_write_with_state calls will handle auto-packetization
+        fabric_unicast_noc_unicast_write_with_state(
+            client_interface, packet_header, dst_dev_id, dst_mesh_id, src_addr, addrgen, page_id0, offset0);
+
+        // Ensure first call completes before starting second
+        noc_async_writes_flushed();
+
+        fabric_unicast_noc_unicast_write_with_state(
+            client_interface, packet_header, dst_dev_id, dst_mesh_id, src_addr + page_size, addrgen, page_id1, offset1);
+    }
 }
 
 // clang-format off
@@ -2383,6 +2646,10 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write_set_state(
     uint32_t offset0 = 0,
     uint32_t offset1 = 0) {
     auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+
+    // Cap payload size to prevent invalid header initialization for large pages
+    uint32_t capped_payload_size = (page_size * 2 > FABRIC_MAX_PACKET_SIZE) ? FABRIC_MAX_PACKET_SIZE : page_size * 2;
+
     auto noc_address0 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id0, offset0);
     auto noc_address1 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id1, offset1);
 
@@ -2391,7 +2658,7 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write_set_state(
         dst_dev_id,
         dst_mesh_id,
         tt::tt_fabric::NocUnicastScatterCommandHeader{{noc_address0, noc_address1}, static_cast<uint16_t>(page_size)},
-        page_size * 2);
+        capped_payload_size);
 }
 
 // clang-format off
@@ -2425,16 +2692,48 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write(
     uint32_t page_id,
     uint32_t offset = 0) {
     auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
-    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
 
-    fabric_multicast_noc_unicast_write(
+    // Set route once before sending packets
+    fabric_set_mcast_route(packet_header, dst_dev_id, dst_mesh_id, ranges.e, ranges.w, ranges.n, ranges.s);
+
+    uint32_t remaining_size = page_size;
+    uint32_t current_offset = offset;
+
+    // Send full-size packets (loop skips for small pages)
+    while (remaining_size > FABRIC_MAX_PACKET_SIZE) {
+        auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, current_offset);
+
+        // Call basic function with SetRoute=false since we already set it
+        fabric_multicast_noc_unicast_write<FabricSenderType, false>(
+            client_interface,
+            packet_header,
+            dst_dev_id,
+            dst_mesh_id,
+            ranges,
+            src_addr,
+            FABRIC_MAX_PACKET_SIZE,
+            tt::tt_fabric::NocUnicastCommandHeader{noc_address});
+
+        // Wait for hardware to finish reading header before modifying it for next packet
+        noc_async_writes_flushed();
+
+        src_addr += FABRIC_MAX_PACKET_SIZE;
+        current_offset += FABRIC_MAX_PACKET_SIZE;
+        remaining_size -= FABRIC_MAX_PACKET_SIZE;
+    }
+
+    // Send remainder packet (for small pages, this is the only packet)
+    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, current_offset);
+
+    // Call basic function with SetRoute=false since we already set it (no barrier needed after last packet)
+    fabric_multicast_noc_unicast_write<FabricSenderType, false>(
         client_interface,
         packet_header,
         dst_dev_id,
         dst_mesh_id,
         ranges,
         src_addr,
-        page_size,
+        remaining_size,
         tt::tt_fabric::NocUnicastCommandHeader{noc_address});
 }
 
@@ -2474,10 +2773,36 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write_with_state(
     uint32_t page_id,
     uint32_t offset = 0) {
     auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
-    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
 
+    uint32_t remaining_size = page_size;
+    uint32_t current_offset = offset;
+
+    // Send full-size packets (loop skips for small pages)
+    while (remaining_size > FABRIC_MAX_PACKET_SIZE) {
+        auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, current_offset);
+
+        // Call basic _with_state function
+        fabric_multicast_noc_unicast_write_with_state<UpdateMask>(
+            client_interface,
+            packet_header,
+            src_addr,
+            tt::tt_fabric::NocUnicastCommandHeader{noc_address},
+            FABRIC_MAX_PACKET_SIZE);
+
+        // Wait for hardware to finish reading header before modifying it for next packet
+        noc_async_writes_flushed();
+
+        src_addr += FABRIC_MAX_PACKET_SIZE;
+        current_offset += FABRIC_MAX_PACKET_SIZE;
+        remaining_size -= FABRIC_MAX_PACKET_SIZE;
+    }
+
+    // Send remainder packet (for small pages, this is the only packet)
+    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, current_offset);
+
+    // Call basic _with_state function (no barrier needed after last packet)
     fabric_multicast_noc_unicast_write_with_state<UpdateMask>(
-        client_interface, packet_header, src_addr, tt::tt_fabric::NocUnicastCommandHeader{noc_address}, page_size);
+        client_interface, packet_header, src_addr, tt::tt_fabric::NocUnicastCommandHeader{noc_address}, remaining_size);
 }
 
 // clang-format off
@@ -2513,8 +2838,17 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write_set_state(
     auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
     auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
 
+    // Cap initial payload size to hardware limit for large pages
+    // The WithState calls in the loop will handle actual chunking
+    uint32_t init_payload_size = (page_size > FABRIC_MAX_PACKET_SIZE) ? FABRIC_MAX_PACKET_SIZE : page_size;
+
     fabric_multicast_noc_unicast_write_set_state<UpdateMask>(
-        packet_header, dst_dev_id, dst_mesh_id, ranges, tt::tt_fabric::NocUnicastCommandHeader{noc_address}, page_size);
+        packet_header,
+        dst_dev_id,
+        dst_mesh_id,
+        ranges,
+        tt::tt_fabric::NocUnicastCommandHeader{noc_address},
+        init_payload_size);
 }
 
 // clang-format off
@@ -2555,15 +2889,41 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write(
     auto noc_address0 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id0, offset0);
     auto noc_address1 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id1, offset1);
 
-    fabric_multicast_noc_scatter_write(
-        client_interface,
-        packet_header,
-        dst_dev_id,
-        dst_mesh_id,
-        ranges,
-        src_addr,
-        page_size * 2,
-        tt::tt_fabric::NocUnicastScatterCommandHeader{{noc_address0, noc_address1}, static_cast<uint16_t>(page_size)});
+    // Set route once before sending packets
+    fabric_set_mcast_route(packet_header, dst_dev_id, dst_mesh_id, ranges.e, ranges.w, ranges.n, ranges.s);
+
+    if (page_size * 2 <= FABRIC_MAX_PACKET_SIZE) {
+        // Small pages: use single scatter operation
+        fabric_multicast_noc_scatter_write<FabricSenderType>(
+            client_interface,
+            packet_header,
+            dst_dev_id,
+            dst_mesh_id,
+            ranges,
+            src_addr,
+            page_size * 2,
+            tt::tt_fabric::NocUnicastScatterCommandHeader{
+                {noc_address0, noc_address1}, static_cast<uint16_t>(page_size)});
+    } else {
+        // Large pages: fall back to separate multicast unicast writes
+        // The fabric_multicast_noc_unicast_write calls will handle auto-packetization
+        fabric_multicast_noc_unicast_write(
+            client_interface, packet_header, dst_dev_id, dst_mesh_id, ranges, src_addr, addrgen, page_id0, offset0);
+
+        // Ensure first call completes before starting second
+        noc_async_writes_flushed();
+
+        fabric_multicast_noc_unicast_write(
+            client_interface,
+            packet_header,
+            dst_dev_id,
+            dst_mesh_id,
+            ranges,
+            src_addr + page_size,  // Offset for second page in CB
+            addrgen,
+            page_id1,
+            offset1);
+    }
 }
 
 // clang-format off
@@ -2611,12 +2971,39 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write_with_state(
     auto noc_address0 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id0, offset0);
     auto noc_address1 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id1, offset1);
 
-    fabric_multicast_noc_scatter_write_with_state<UpdateMask>(
-        client_interface,
-        packet_header,
-        src_addr,
-        tt::tt_fabric::NocUnicastScatterCommandHeader{{noc_address0, noc_address1}, static_cast<uint16_t>(page_size)},
-        page_size * 2);
+    if (page_size * 2 <= FABRIC_MAX_PACKET_SIZE) {
+        // Small pages: use scatter operation
+        fabric_multicast_noc_scatter_write_with_state<UpdateMask>(
+            client_interface,
+            packet_header,
+            src_addr,
+            tt::tt_fabric::NocUnicastScatterCommandHeader{
+                {noc_address0, noc_address1}, static_cast<uint16_t>(page_size)},
+            page_size * 2);
+    } else {
+        // Large pages: fall back to separate multicast unicast writes
+        // Fix header state: kernel initialized noc_send_type as SCATTER_WRITE, but we need UNICAST_WRITE
+        packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_WRITE;
+
+        // Send page0
+        fabric_multicast_noc_unicast_write_with_state(
+            client_interface, packet_header, dst_dev_id, dst_mesh_id, ranges, src_addr, addrgen, page_id0, offset0);
+
+        // Ensure first call completes before starting second
+        noc_async_writes_flushed();
+
+        // Send page1
+        fabric_multicast_noc_unicast_write_with_state(
+            client_interface,
+            packet_header,
+            dst_dev_id,
+            dst_mesh_id,
+            ranges,
+            src_addr + page_size,
+            addrgen,
+            page_id1,
+            offset1);
+    }
 }
 
 // clang-format off
@@ -2656,6 +3043,10 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write_set_state(
     uint32_t offset0 = 0,
     uint32_t offset1 = 0) {
     auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+
+    // Cap payload size to prevent invalid header initialization for large pages
+    uint32_t capped_payload_size = (page_size * 2 > FABRIC_MAX_PACKET_SIZE) ? FABRIC_MAX_PACKET_SIZE : page_size * 2;
+
     auto noc_address0 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id0, offset0);
     auto noc_address1 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id1, offset1);
 
@@ -2665,7 +3056,7 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write_set_state(
         dst_mesh_id,
         ranges,
         tt::tt_fabric::NocUnicastScatterCommandHeader{{noc_address0, noc_address1}, static_cast<uint16_t>(page_size)},
-        page_size * 2);
+        capped_payload_size);
 }
 
 // clang-format off
@@ -2707,15 +3098,44 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc(
     auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
     auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
 
-    fabric_multicast_noc_fused_unicast_with_atomic_inc(
+    // Set route once
+    fabric_set_mcast_route(packet_header, dst_dev_id, dst_mesh_id, ranges.e, ranges.w, ranges.n, ranges.s);
+
+    uint32_t remaining = page_size;
+    uint32_t current_src_addr = src_addr;
+    uint64_t current_noc_addr = noc_address;
+
+    // Send intermediate chunks as regular multicast writes (loop skips for small pages)
+    while (remaining > FABRIC_MAX_PACKET_SIZE) {
+        // Call basic multicast unicast write with SetRoute=false
+        fabric_multicast_noc_unicast_write<FabricSenderType, false>(
+            client_interface,
+            packet_header,
+            dst_dev_id,
+            dst_mesh_id,
+            ranges,
+            current_src_addr,
+            FABRIC_MAX_PACKET_SIZE,
+            tt::tt_fabric::NocUnicastCommandHeader{current_noc_addr});
+
+        // Wait for hardware to finish reading header before modifying for next packet
+        noc_async_writes_flushed();
+
+        current_src_addr += FABRIC_MAX_PACKET_SIZE;
+        current_noc_addr += FABRIC_MAX_PACKET_SIZE;
+        remaining -= FABRIC_MAX_PACKET_SIZE;
+    }
+
+    // Final chunk: fused write+atomic inc (for small pages, this is the only packet)
+    fabric_multicast_noc_fused_unicast_with_atomic_inc<FabricSenderType, false>(
         client_interface,
         packet_header,
         dst_dev_id,
         dst_mesh_id,
         ranges,
-        src_addr,
-        page_size,
-        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{noc_address, semaphore_noc_address, val, flush});
+        current_src_addr,
+        remaining,
+        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{current_noc_addr, semaphore_noc_address, val, flush});
 }
 
 // clang-format off
@@ -2740,7 +3160,8 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc(
 // clang-format on
 template <
     UnicastFusedAtomicIncUpdateMask UpdateMask = UnicastFusedAtomicIncUpdateMask::WriteDstAddr |
-                                                 UnicastFusedAtomicIncUpdateMask::SemaphoreAddr,
+                                                 UnicastFusedAtomicIncUpdateMask::SemaphoreAddr |
+                                                 UnicastFusedAtomicIncUpdateMask::PayloadSize,
     typename FabricSenderType,
     typename AddrGenType,
     typename = std::enable_if_t<is_addrgen<AddrGenType>::value>>
@@ -2757,12 +3178,47 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state(
     auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
     auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
 
+    uint32_t remaining_size = page_size;
+    uint32_t current_offset = offset;
+    uint32_t packet_src_addr = src_addr;
+
+    // Send intermediate chunks as regular multicast writes (loop skips for small pages)
+    while (remaining_size > FABRIC_MAX_PACKET_SIZE) {
+        auto chunk_noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, current_offset);
+
+        // Set noc_send_type to match the command fields
+        packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_WRITE;
+
+        // Call basic multicast unicast write _with_state for intermediate packets
+        fabric_multicast_noc_unicast_write_with_state<
+            UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize>(
+            client_interface,
+            packet_header,
+            packet_src_addr,
+            tt::tt_fabric::NocUnicastCommandHeader{chunk_noc_address},
+            FABRIC_MAX_PACKET_SIZE);
+
+        // Wait for hardware to finish reading header before modifying for next packet
+        noc_async_writes_flushed();
+
+        packet_src_addr += FABRIC_MAX_PACKET_SIZE;
+        current_offset += FABRIC_MAX_PACKET_SIZE;
+        remaining_size -= FABRIC_MAX_PACKET_SIZE;
+    }
+
+    // Final chunk: fused write+atomic inc (for small pages, this is the only packet)
+    auto final_noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, current_offset);
+
+    // Set noc_send_type back to fused for final chunk
+    packet_header->noc_send_type = tt::tt_fabric::NOC_FUSED_UNICAST_ATOMIC_INC;
+
+    // Call basic fused atomic inc _with_state for final packet
     fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state<UpdateMask>(
         client_interface,
         packet_header,
-        src_addr,
-        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{noc_address, semaphore_noc_address, val, flush},
-        page_size);
+        packet_src_addr,
+        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{final_noc_address, semaphore_noc_address, val, flush},
+        remaining_size);
 }
 
 // clang-format off
@@ -2804,13 +3260,16 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state(
     auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
     auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
 
+    // Cap initial payload size to hardware limit for large pages
+    uint32_t init_payload_size = (page_size > FABRIC_MAX_PACKET_SIZE) ? FABRIC_MAX_PACKET_SIZE : page_size;
+
     fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state<UpdateMask>(
         packet_header,
         dst_dev_id,
         dst_mesh_id,
         ranges,
         tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{noc_address, semaphore_noc_address, val, flush},
-        page_size);
+        init_payload_size);
 }
 
 }  // namespace tt::tt_fabric::mesh::experimental
