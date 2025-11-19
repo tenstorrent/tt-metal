@@ -424,7 +424,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
 
     this->channel_buffer_size_bytes = channel_buffer_size_bytes;
     this->num_used_sender_channels = builder_config::get_sender_channel_count(is_2D_routing);
-    this->num_used_receiver_channels = builder_config::num_receiver_channels;
+    this->num_used_receiver_channels = builder_config::get_receiver_channel_count(is_2D_routing);
 
     // Default, assuming deadlock avoidance is enabled
     // -1 to discount for the tensix worker channel
@@ -432,9 +432,11 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
 
     // If not a Ring/Torus, we need to discount for Dateline VC sender and receiver channels
     if (topology == Topology::Linear || topology == Topology::Mesh) {
-        this->num_used_sender_channels -= 1;
-        this->num_used_receiver_channels -= 1;
-        this->num_fwd_paths -= 1;
+        // TODO: fix this. For 2D routing, we need to discount for VC2 sender and receiver channels
+        // only when we have a single mesh. For multi-mesh topologies, we need VC2 for inter-mesh traffic.
+        this->num_used_sender_channels -= is_2D_routing ? 4 : 1;
+        this->num_used_receiver_channels -= is_2D_routing ? 2 : 1;
+        this->num_fwd_paths -= is_2D_routing ? 4 : 1;
     }
 
     for (uint32_t i = 0; i < this->num_used_receiver_channels; i++) {
@@ -976,11 +978,15 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         FabricEriscDatamoverConfig::enable_fabric_counters,
         config.receiver_channels_counters_address[0],
         config.receiver_channels_counters_address[1],
+        config.receiver_channels_counters_address[2],  // VC2 (2D only)
         config.sender_channels_counters_address[0],
         config.sender_channels_counters_address[1],
         config.sender_channels_counters_address[2],
         config.sender_channels_counters_address[3],
         config.sender_channels_counters_address[4],
+        config.sender_channels_counters_address[5],  // VC2 compact 0 (2D only)
+        config.sender_channels_counters_address[6],  // VC2 compact 1 (2D only)
+        config.sender_channels_counters_address[7],  // VC2 compact 2 (2D only)
 
         // fabric pkt header recording
         FabricEriscDatamoverConfig::enable_fabric_pkt_header_recording,
@@ -988,6 +994,8 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         config.receivers_completed_packet_header_cb_address[0],
         FabricEriscDatamoverConfig::receiver_completed_packet_header_cb_size_headers,
         config.receivers_completed_packet_header_cb_address[1],
+        FabricEriscDatamoverConfig::receiver_completed_packet_header_cb_size_headers,
+        config.receivers_completed_packet_header_cb_address[2],  // VC2 (2D only)
         FabricEriscDatamoverConfig::receiver_completed_packet_header_cb_size_headers,
         config.senders_completed_packet_header_cb_address[0],
         FabricEriscDatamoverConfig::sender_completed_packet_header_cb_size_headers,
@@ -999,13 +1007,23 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         FabricEriscDatamoverConfig::sender_completed_packet_header_cb_size_headers,
         config.senders_completed_packet_header_cb_address[4],
         FabricEriscDatamoverConfig::sender_completed_packet_header_cb_size_headers,
+        config.senders_completed_packet_header_cb_address[5],  // VC2 compact 0 (2D only)
+        FabricEriscDatamoverConfig::sender_completed_packet_header_cb_size_headers,
+        config.senders_completed_packet_header_cb_address[6],  // VC2 compact 1 (2D only)
+        FabricEriscDatamoverConfig::sender_completed_packet_header_cb_size_headers,
+        config.senders_completed_packet_header_cb_address[7],  // VC2 compact 2 (2D only)
+        FabricEriscDatamoverConfig::sender_completed_packet_header_cb_size_headers,
         config.risc_configs[risc_id].is_sender_channel_serviced(0),
         config.risc_configs[risc_id].is_sender_channel_serviced(1),
         config.risc_configs[risc_id].is_sender_channel_serviced(2),
         config.risc_configs[risc_id].is_sender_channel_serviced(3),
         config.risc_configs[risc_id].is_sender_channel_serviced(4),
+        config.risc_configs[risc_id].is_sender_channel_serviced(5),  // VC2 compact 0 (2D only)
+        config.risc_configs[risc_id].is_sender_channel_serviced(6),  // VC2 compact 1 (2D only)
+        config.risc_configs[risc_id].is_sender_channel_serviced(7),  // VC2 compact 2 (2D only)
         config.risc_configs[risc_id].is_receiver_channel_serviced(0),
         config.risc_configs[risc_id].is_receiver_channel_serviced(1),
+        config.risc_configs[risc_id].is_receiver_channel_serviced(2),  // VC2 (2D only)
         config.risc_configs[risc_id].enable_handshake(),
         config.risc_configs[risc_id].enable_context_switch(),
         config.risc_configs[risc_id].enable_interrupts(),
@@ -1158,17 +1176,24 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
     // downstream_connection_1->pack_inbound_channel_rt_args(0, rt_args);
     // downstream_connection_2->pack_inbound_channel_rt_args(1, rt_args);
 
+    // // Pack runtime args for all receiver channels based on the actual count
+    // for (uint32_t vc_idx = 0; vc_idx < config.num_used_receiver_channels; vc_idx++) {
+    //     receiver_channel_to_downstream_adapter->pack_inbound_channel_rt_args(vc_idx, rt_args);
+    // }
+
     // Pack runtime args - device side reads fixed MAX_NUM_SENDER_CHANNELS values
     // Only the first NUM_DOWNSTREAM_CHANNELS values are used based on topology
     auto args_pt2 = std::vector<uint32_t>{};
 
     // Pack downstream teardown semaphores (always send MAX_NUM_SENDER_CHANNELS for compatibility)
-    for (uint32_t i = 0; i < builder_config::num_sender_channels; i++) {
+    for (uint32_t i = 0; i < builder_config::num_sender_channels_2d_torus; i++) {
+        // TODO: fix this. Loop should be based on num downstream edms.
         args_pt2.push_back(this->receiver_channels_downstream_teardown_semaphore_id[i].value_or(-1));
     }
 
     // Pack sender flow control semaphores (always send MAX_NUM_SENDER_CHANNELS)
-    for (uint32_t i = 0; i < builder_config::num_sender_channels; i++) {
+    for (uint32_t i = 0; i < builder_config::num_sender_channels_2d_torus; i++) {
+        // TODO: fix this. Loop should be based on num_used_sender_channels
         args_pt2.push_back(this->sender_channels_flow_control_semaphore_id[i]);
     }
 
