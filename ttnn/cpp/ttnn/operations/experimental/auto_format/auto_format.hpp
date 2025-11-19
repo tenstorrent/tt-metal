@@ -108,22 +108,6 @@ public:
         float pad_value,
         tt::tt_metal::Layout target_layout,
         std::optional<tt::tt_metal::MemoryConfig> target_mem_config = std::nullopt);
-
-    /**
-     * Formats an output tensor to meet shape and layout requirements
-     * @param output Output tensor
-     * @param shape Target shape
-     * @param device Target device
-     * @param target_layout Desired layout
-     * @param target_mem_config Optional memory configuration
-     * @return Formatted output tensor
-     */
-    static Tensor format_output_tensor(
-        const Tensor& output,
-        const ttnn::Shape& shape,
-        tt::tt_metal::distributed::MeshDevice* device,
-        tt::tt_metal::Layout target_layout,
-        std::optional<tt::tt_metal::MemoryConfig> target_mem_config = std::nullopt);
 };
 
 }  // namespace ttnn::operations::experimental::auto_format

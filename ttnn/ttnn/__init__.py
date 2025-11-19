@@ -242,7 +242,6 @@ from ttnn.device import (
     SetDefaultDevice,
     GetDefaultDevice,
     format_input_tensor,
-    format_output_tensor,
     pad_to_tile_shape,
     SubDevice,
     SubDeviceId,

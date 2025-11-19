@@ -346,42 +346,6 @@ void device_module(py::module& m_device) {
         )doc");
 
     m_device.def(
-        "format_output_tensor",
-        [](const Tensor& output,
-           const ttnn::SmallVector<uint32_t>& shape,
-           MeshDevice* device,
-           Layout target_layout,
-           std::optional<MemoryConfig> target_mem_config) {
-            return operations::experimental::auto_format::AutoFormat::format_output_tensor(
-                output, ttnn::Shape(shape), device, target_layout, std::move(target_mem_config));
-        },
-        py::arg("output").noconvert(),
-        py::arg("shape"),
-        py::arg("device").noconvert(),
-        py::arg("target_layout").noconvert(),
-        py::arg("target_mem_config").noconvert() = std::nullopt,
-        R"doc(
-        Formats tensor to target layout and unpads to shape.
-
-        Args:
-            output (ttnn.Tensor): Output tensor to format.
-            shape (ttnn.Shape): Desired shape of the tensor.
-            device (ttnn.device.Device): Device where the tensor will be moved.
-            target_layout (ttnn.Layout): Desired tensor layout.
-            target_mem_config (ttnn.MemoryConfig, optional): Desired memory config. Defaults to `None`.
-
-        Returns:
-            ttnn.Tensor: Formatted tensor.
-
-        Note:
-            This functionality is planned for deprecation in the future.
-
-        Example:
-            >>> # Assuming we have a padded tensor of shape [1, 2, 4, 4] with padding of [1, 1, 1, 1] of layout=ttnn.TILE_LAYOUT
-            >>> unpadded_tensor = ttnn.format_output_tensor(output_tensor, shape=[1, 2, 2, 2], device=device, target_layout=ttnn.ROW_MAJOR_LAYOUT, output_mem_config)
-        )doc");
-
-    m_device.def(
         "pad_to_tile_shape",
         [](const std::array<uint32_t, 4>& unpadded_shape) -> std::vector<uint32_t> {
             auto result =

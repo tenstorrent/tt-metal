@@ -90,7 +90,7 @@ Tensor BcastOperation::invoke(
                       {},
                       {output_tensor})
                       .at(0);
-    return AutoFormat::format_output_tensor(output, output.padded_shape(), output.device(), Layout::TILE);
+    return output;
 }
 
 }  // namespace ttnn::operations::data_movement
