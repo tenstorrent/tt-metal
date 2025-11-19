@@ -136,7 +136,7 @@ jobs:
           { arch: wormhole_b0, runner-label: N300 },
           { arch: blackhole, runner-label: P150b },
         ]
-    uses: ./.github/workflows/cpp-post-commit.yaml
+    uses: ./.github/workflows/cpp-l2nightly.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
