@@ -1019,33 +1019,6 @@ def _get_tensors(input_shape, mesh_shape, dim, cluster_axis, dtype, memory_confi
     return tt_input, torch_reference
 
 
-def _assert_tensor_topology(tt_input, tt_out_tensor, cluster_axis, dim):
-    tile_size = tt_input.spec.tile.tile_shape[0]
-    rank = len(tt_input.shape)
-    gather_dim_normalized = dim if dim >= 0 else rank + dim
-    is_tile_padded = gather_dim_normalized >= rank - 2 and (
-        (gather_dim_normalized == rank - 2 and tt_input.shape[-2] % tile_size != 0)
-        or (gather_dim_normalized == rank - 1 and tt_input.shape[-1] % tile_size != 0)
-    )
-
-    input_topology = tt_input.tensor_topology()
-    actual_topology = tt_out_tensor.tensor_topology()
-
-    # Create expected topology based on which all-gather path was used
-    if is_tile_padded:
-        expected_topology = input_topology
-    else:
-        expected_placements = list(input_topology.placements())
-        expected_placements[cluster_axis] = ttnn.PlacementReplicate()
-        expected_topology = ttnn.TensorTopology(
-            input_topology.distribution_shape(), expected_placements, input_topology.mesh_coords()
-        )
-
-    assert (
-        actual_topology == expected_topology
-    ), f"output TensorTopology mismatch (tile_padded={is_tile_padded}):\n  Expected: {expected_topology}\n  Actual: {actual_topology}"
-
-
 MESH_SHAPE = (2, 4)
 LAYOUT = ttnn.TILE_LAYOUT
 
@@ -1087,6 +1060,28 @@ def test_nd(mesh_device, input_shape, dim, cluster_axis, dtype, memory_config, t
         mesh_device,
     )
 
+    tile_size = tt_input.spec.tile.tile_shape[0]
+    rank = len(tt_input.shape)
+    gather_dim_normalized = dim if dim >= 0 else rank + dim
+    is_tile_padded = gather_dim_normalized >= rank - 2 and (
+        (gather_dim_normalized == rank - 2 and tt_input.shape[-2] % tile_size != 0)
+        or (gather_dim_normalized == rank - 1 and tt_input.shape[-1] % tile_size != 0)
+    )
+
+    input_topology = tt_input.tensor_topology()
+
+    # Create expected topology based on which all-gather path was used
+    if is_tile_padded:
+        expected_topology = ttnn.TensorTopology(
+            input_topology.distribution_shape(), list(input_topology.placements()), input_topology.mesh_coords()
+        )
+    else:
+        expected_placements = list(input_topology.placements())
+        expected_placements[cluster_axis] = ttnn.PlacementReplicate()
+        expected_topology = ttnn.TensorTopology(
+            input_topology.distribution_shape(), expected_placements, input_topology.mesh_coords()
+        )
+
     for i in range(NUM_ITERS):
         tt_out_tensor = ttnn.all_gather(
             tt_input,
@@ -1100,7 +1095,10 @@ def test_nd(mesh_device, input_shape, dim, cluster_axis, dtype, memory_config, t
         eq, mess = comp_pcc(torch_reference, tt_output_tensor)
         assert eq, mess
 
-        _compare_tensor_topology(tt_input, tt_out_tensor, cluster_axis, dim)
+        actual_topology = tt_out_tensor.tensor_topology()
+        assert (
+            actual_topology == expected_topology
+        ), f"output TensorTopology mismatch (tile_padded={is_tile_padded}):\n  Expected: {expected_topology}\n  Actual: {actual_topology}"
 
 
 @pytest.mark.parametrize(
