@@ -62,9 +62,6 @@ InputArgs parse_input_args(const std::vector<std::string>& args_vec) {
     }
 
     if (test_args::has_command_option(args_vec, "--cabling-descriptor-path")) {
-        TT_FATAL(
-            test_args::has_command_option(args_vec, "--deployment-descriptor-path"),
-            "Deployment Descriptor Path is required when Cabling Descriptor Path is provided.");
         input_args.cabling_descriptor_path = test_args::get_command_option(args_vec, "--cabling-descriptor-path");
     }
     if (test_args::has_command_option(args_vec, "--deployment-descriptor-path")) {
@@ -119,16 +116,22 @@ InputArgs parse_input_args(const std::vector<std::string>& args_vec) {
     return input_args;
 }
 
-std::string get_factory_system_descriptor_path(const InputArgs& input_args) {
+std::string get_factory_system_descriptor_path(const InputArgs& input_args, const std::vector<std::string>& hostnames) {
     std::string fsd_path;
     if (input_args.cabling_descriptor_path.has_value()) {
         const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
         log_output_rank0("Creating Factory System Descriptor (Golden Representation)");
-        tt::scaleout_tools::CablingGenerator cabling_generator(
-            input_args.cabling_descriptor_path.value(), input_args.deployment_descriptor_path.value());
+        CablingGenerator cabling_generator;
         std::string filename =
-            "generated_factory_system_descriptor_" + std::to_string(*distributed_context.rank()) + ".textproto";
-        fsd_path = input_args.output_path / filename;
+                "generated_factory_system_descriptor_" + std::to_string(*distributed_context.rank()) + ".textproto";
+            fsd_path = input_args.output_path / filename;
+        if (not input_args.deployment_descriptor_path.has_value()) {
+            TT_FATAL(hostnames.size() == 1, "Expected exactly one host in the cluster when no deployment descriptor is provided");
+            cabling_generator = tt::scaleout_tools::CablingGenerator(input_args.cabling_descriptor_path.value(), hostnames);
+        } else {
+            cabling_generator = tt::scaleout_tools::CablingGenerator(
+                input_args.cabling_descriptor_path.value(), input_args.deployment_descriptor_path.value());
+        }
         cabling_generator.emit_factory_system_descriptor(fsd_path);
     } else {
         fsd_path = input_args.fsd_path.value();
@@ -190,7 +193,7 @@ AsicTopology validate_connectivity(const InputArgs& input_args, PhysicalSystemDe
     physical_system_descriptor.dump_to_yaml(gsd_yaml_path);
     log_output_rank0("Validating Factory System Descriptor (Golden Representation) against Global System Descriptor");
     bool log_output = *distributed_context.rank() == 0;
-    const auto fsd_path = get_factory_system_descriptor_path(input_args);
+    const auto fsd_path = get_factory_system_descriptor_path(input_args, physical_system_descriptor.get_all_hostnames());
     auto missing_physical_connections = tt::scaleout_tools::validate_fsd_against_gsd(
         fsd_path, gsd_yaml_path, true, input_args.fail_on_warning, log_output);
     log_output_rank0("Factory System Descriptor (Golden Representation) Validation Complete");
