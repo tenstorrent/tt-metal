@@ -41,6 +41,8 @@ inline __attribute__((always_inline)) void risc_context_switch() {
         ncrisc_noc_counters_init<1>();
     }
 #elif defined(FW_BUILD)
+    // Note, FW always runs with dedicated NOC
+    ncrisc_noc_full_sync();
     service_eth_msg();
     update_boot_results_eth_link_status_check();
     ncrisc_noc_counters_init<1>();
