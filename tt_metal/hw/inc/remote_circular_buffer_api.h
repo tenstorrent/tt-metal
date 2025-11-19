@@ -425,20 +425,11 @@ public:
      */
     enum class RemotePointerUpdate { SKIP, UPDATE_OVER_NOC };
 
-    /** @brief Construct a RemoteCircularBuffer with the default NoC for the kernel
+    /** @brief Construct a RemoteCircularBuffer
      *
      * @param remote_cb_index The index of the remote circular buffer
      */
-    explicit RemoteCircularBuffer(uint32_t remote_cb_index) :
-        remote_cb_index_(remote_cb_index), noc_(experimental::Noc()) {}
-
-    /** @brief Construct a RemoteCircularBuffer with the specified NoC
-     *
-     * @param remote_cb_index The index of the remote circular buffer
-     * @param noc The NoC to use for the remote circular buffer
-     */
-    explicit RemoteCircularBuffer(uint32_t remote_cb_index, experimental::Noc noc) :
-        remote_cb_index_(remote_cb_index), noc_(noc) {}
+    explicit RemoteCircularBuffer(uint32_t remote_cb_index) : remote_cb_index_(remote_cb_index) {}
 
     /** @brief Reserves the specified number of pages on the remote circular buffer
      *
@@ -456,12 +447,14 @@ public:
      *
      * This is intended to be called by the sender core.
      *
+     * @tparam update_remote_pointer The type of remote pointer update
+     *
      * @param src_local_cb The local circular buffer to push from
      * @param num_pages The number of pages to push
      * @param num_rows The number of rows to push
      * @param coalesced_num_pages_per_row The number of coalesced pages per row
      * @param coalesced_page_size The size of the coalesced page
-     * @tparam update_remote_pointer The type of remote pointer update
+     * @param noc The NoC to use for the remote pointer update
      */
     template <RemotePointerUpdate update_remote_pointer = RemotePointerUpdate::UPDATE_OVER_NOC>
     void push_back(
@@ -469,7 +462,8 @@ public:
         uint32_t num_pages,
         uint32_t num_rows,
         uint32_t coalesced_num_pages_per_row,
-        uint32_t coalesced_page_size) {
+        uint32_t coalesced_page_size,
+        experimental::Noc noc = experimental::Noc()) {
         remote_cb_push_back_and_write_pages<update_remote_pointer == RemotePointerUpdate::UPDATE_OVER_NOC>(
             remote_cb_index_,
             src_local_cb.get_read_ptr(),
@@ -477,7 +471,7 @@ public:
             num_rows,
             coalesced_num_pages_per_row,
             coalesced_page_size,
-            noc_.get_noc_id());
+            noc.get_noc_id());
     }
 
     /** @brief Resizes the remote receiver's circular buffer page size
@@ -487,13 +481,23 @@ public:
      *
      * This is intended to be called by the sender core.
      *
-     * @param page_size The new page size
      * @tparam update_remote_pointer The type of remote pointer update
+     *
+     * @param page_size The new page size
+     * @param noc The NoC to use for the remote pointer update
+     * @param noc_mode The NoC mode to use for the remote pointer update
+     * @param posted Whether to use posted semaphore inc
+     * @param cmd_buf The command buffer to use for the remote pointer update
      */
     template <RemotePointerUpdate update_remote_pointer = RemotePointerUpdate::UPDATE_OVER_NOC>
-    void set_receiver_page_size(uint32_t page_size) {
+    void set_receiver_page_size(
+        uint32_t page_size,
+        experimental::Noc noc = experimental::Noc(),
+        uint8_t noc_mode = detail::default_noc_mode,
+        bool posted = true,
+        uint8_t cmd_buf = detail::default_cmd_buf) {
         resize_remote_receiver_cb_interface<update_remote_pointer == RemotePointerUpdate::UPDATE_OVER_NOC>(
-            remote_cb_index_, page_size, noc_.get_noc_id());
+            remote_cb_index_, page_size, noc.get_noc_id(), noc_mode, posted, cmd_buf);
     }
 
     /** @brief Waits for the specified number of pages to be available in the remote circular buffer
@@ -513,8 +517,11 @@ public:
      * This is intended to be called by the receiver core.
      *
      * @param num_pages The number of pages to pop
+     * @param noc The NoC to use for the remote pointer update
      */
-    void pop_front(uint32_t num_pages) { remote_cb_pop_front(remote_cb_index_, num_pages, noc_.get_noc_id()); }
+    void pop_front(uint32_t num_pages, experimental::Noc noc = experimental::Noc()) {
+        remote_cb_pop_front(remote_cb_index_, num_pages, noc.get_noc_id());
+    }
 
     /** @brief Resizes the remote sender's circular buffer page size
      *
@@ -523,13 +530,23 @@ public:
      *
      * This is intended to be called by the receiver core.
      *
-     * @param page_size The new page size
      * @tparam update_remote_pointer The type of remote pointer update
+     *
+     * @param page_size The new page size
+     * @param noc The NoC to use for the remote pointer update
+     * @param noc_mode The NoC mode to use for the remote pointer update
+     * @param posted Whether to use posted semaphore inc
+     * @param cmd_buf The command buffer to use for the remote pointer update
      */
     template <RemotePointerUpdate update_remote_pointer = RemotePointerUpdate::UPDATE_OVER_NOC>
-    void set_sender_page_size(uint32_t page_size) {
+    void set_sender_page_size(
+        uint32_t page_size,
+        experimental::Noc noc = experimental::Noc(),
+        uint8_t noc_mode = detail::default_noc_mode,
+        bool posted = true,
+        uint8_t cmd_buf = detail::default_cmd_buf) {
         resize_remote_sender_cb_interface<update_remote_pointer == RemotePointerUpdate::UPDATE_OVER_NOC>(
-            remote_cb_index_, page_size, noc_.get_noc_id());
+            remote_cb_index_, page_size, noc.get_noc_id(), noc_mode, posted, cmd_buf);
     }
 
     /** @brief Waits for all pages to be consumed by the receiver core
