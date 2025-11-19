@@ -9,13 +9,13 @@
 #include <ttnn/tensor/tensor_utils.hpp>
 
 #include "ttnn/old_infra_device_operation.hpp"
-#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/operation.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include <tracy/Tracy.hpp>
 #include <tt_stl/reflection.hpp>
 #include "ttnn/decorators.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/device.hpp"
 
 namespace tt::tt_metal::operation {
 
@@ -32,7 +32,7 @@ distributed::MeshDevice* get_device(const Tensors& input_tensors, const Optional
             return optional_input_tensor->device_storage().get_device();
         }
     }
-    auto device = ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice();
+    auto device = ttnn::GetDefaultDevice();
     TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to operation are on device");
     return device;
 }

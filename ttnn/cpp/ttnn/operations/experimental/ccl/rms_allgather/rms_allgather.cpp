@@ -4,6 +4,8 @@
 
 #include "rms_allgather.hpp"
 
+#include "ttnn/device.hpp"
+
 namespace ttnn {
 namespace operations::fused::normalization {
 
@@ -25,9 +27,7 @@ ttnn::Tensor ExecuteFusedRMSNorm::invoke(
     const std::optional<const ttnn::Tensor>& weight,
     const std::optional<const ttnn::Tensor>& stats,
     bool use_noc1_only) {
-    auto arch = is_device_tensor(input_tensor)
-                    ? input_tensor.device()->arch()
-                    : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
+    auto arch = is_device_tensor(input_tensor) ? input_tensor.device()->arch() : ttnn::GetDefaultDevice()->arch();
     auto kernel_config_val =
         init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
     const auto& mesh_view = mesh_device.get_view();

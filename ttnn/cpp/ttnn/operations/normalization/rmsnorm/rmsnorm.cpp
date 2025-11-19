@@ -9,6 +9,7 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_op.hpp"
+#include "ttnn/device.hpp"
 
 namespace ttnn::operations::normalization {
 
@@ -43,9 +44,8 @@ ttnn::Tensor ExecuteRMSNorm::invoke(
         return result;
     }
 
-    auto arch = input_tensor.storage_type() == StorageType::DEVICE
-                    ? input_tensor.device()->arch()
-                    : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
+    auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
+                                                                   : ttnn::GetDefaultDevice()->arch();
     auto kernel_config_val =
         init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
     return tt::tt_metal::operation::run(

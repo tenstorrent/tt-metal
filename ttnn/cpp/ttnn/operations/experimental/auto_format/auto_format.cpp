@@ -8,6 +8,7 @@
 
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/data_movement/clone/clone.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/tilize/tilize.hpp"
@@ -81,32 +82,8 @@ Tensor AutoFormat::format_tensor(
     Layout target_layout,
     std::optional<MemoryConfig> target_mem_config) {
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Input tensor must be on device.");
-    auto padded_shape = pad_to_tile_shape(input.padded_shape());
+    auto padded_shape = ttnn::operations::data_movement::pad_to_tile_shape(input.padded_shape());
     return format_tensor(input, input.device(), padded_shape, pad_value, target_layout, std::move(target_mem_config));
-}
-
-void AutoFormat::SetDefaultDevice(tt::tt_metal::distributed::MeshDevice* dev) { device = dev; }
-
-tt::tt_metal::distributed::MeshDevice* AutoFormat::GetDefaultDevice() { return device; }
-
-ttnn::Shape AutoFormat::pad_to_tile_shape(const ttnn::Shape& unpadded_shape) {
-    using namespace tt::constants;
-    auto rank = unpadded_shape.rank();
-    TT_ASSERT(rank >= 1, "rank of shape to pad to tile shape must be at least 1.");
-    SmallVector<uint32_t> padded_shape_vec(rank);
-
-    for (auto i = 0; i < rank; ++i) {
-        padded_shape_vec[i] = unpadded_shape[i];
-    }
-    if (rank >= 1) {
-        auto w = tt::round_up(unpadded_shape[rank - 1], TILE_WIDTH);
-        padded_shape_vec[rank - 1] = w;
-    }
-    if (rank >= 2) {
-        auto h = tt::round_up(unpadded_shape[rank - 2], TILE_HEIGHT);
-        padded_shape_vec[rank - 2] = h;
-    }
-    return Shape(padded_shape_vec);
 }
 
 }  // namespace ttnn::operations::experimental::auto_format
