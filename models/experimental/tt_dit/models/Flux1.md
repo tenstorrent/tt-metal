@@ -30,14 +30,14 @@ Flux comes in two variants:
 | System    | CFG | SP | TP | Current Performance | Target Performance |
 |-----------|-----|----|----|---------------------|--------------------|
 | QuietBox  | 1   | 2  | 4  | 4.70s               | 2.00s              |
-| Galaxy    | 1   | 4  | 8  | 4.70s               | 1.00s              |
+| Galaxy    | 1   | 4  | 8  | 2.40s               | 1.00s              |
 
 ### Dev Variant (28 steps)
 
 | System    | CFG | SP | TP | Current Performance | Target Performance |
 |-----------|-----|----|----|---------------------|--------------------|
 | QuietBox  | 1   | 2  | 4  | 21.60s              | 6.50s              |
-| Galaxy    | 1   | 4  | 8  | 21.60s              | 6.50s              |
+| Galaxy    | 1   | 4  | 8  | 8.00s               | 6.50s              |
 
 ## Prerequisites
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
