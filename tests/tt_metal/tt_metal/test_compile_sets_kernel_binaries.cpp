@@ -39,7 +39,6 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include "tt_metal/detail/kernel_cache.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include <umd/device/types/arch.hpp>
 
@@ -48,6 +47,8 @@
 //////////////////////////////////////////////////////////////////////////////////////////
 using std::vector;
 using namespace tt;
+
+namespace {
 
 std::string get_latest_kernel_binary_path(
     const std::string& kernel_root_path, const std::shared_ptr<tt_metal::Kernel>& kernel) {
@@ -125,6 +126,8 @@ void construct_program(tt_metal::Program& program, tt_metal::IDevice* device, Co
         core,
         tt_metal::ComputeConfig{.compile_args = compute_kernel_args});
 }
+
+}  // namespace
 
 int main(int argc, char** argv) {
     bool pass = true;
@@ -209,7 +212,6 @@ int main(int argc, char** argv) {
                         kernel_name);
                 }
             }
-            tt_metal::detail::ClearKernelCache();
             std::vector<tt_metal::Program> new_programs;
             for (int i = 0; i < num_devices; i++) {
                 auto& device = devices[i];

@@ -32,7 +32,6 @@
 #include "hal_types.hpp"
 #include "hostdevcommon/kernel_structs.h"
 #include "jit_build/build.hpp"
-#include "tt_metal/detail/kernel_cache.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include <umd/device/types/arch.hpp>
 
@@ -49,10 +48,7 @@ struct KernelCacheStatus {
     std::unordered_map<std::string, bool> kernel_name_to_cache_hit;
 };
 
-void ClearKernelCache(const std::string& kernel_root_path) {
-    std::filesystem::remove_all(kernel_root_path);
-    detail::HashLookup::inst().clear();
-}
+void ClearKernelCache(const std::string& kernel_root_path) { std::filesystem::remove_all(kernel_root_path); }
 
 // This assumes binaries are written to specific location: kernel_compile_outpath / kernel_name / hash
 std::unordered_map<std::string, std::string> get_last_program_binary_path(
