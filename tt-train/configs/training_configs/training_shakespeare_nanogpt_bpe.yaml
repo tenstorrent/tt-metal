@@ -8,4 +8,4 @@ training_config:
   learning_rate: 0.0003
   weight_decay: 0.01
   tokenizer_type: bpe
-  model_config: "nanogpt.yaml"
+  model_config: "configs/model_configs/nanogpt.yaml"

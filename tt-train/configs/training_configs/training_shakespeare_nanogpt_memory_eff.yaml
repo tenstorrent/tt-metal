@@ -9,4 +9,4 @@ training_config:
   weight_decay: 0.01
   use_moreh_adamw: true
   use_kahan_summation: false
-  model_config: "nanogpt.yaml"
+  model_config: "configs/model_configs/nanogpt.yaml"
