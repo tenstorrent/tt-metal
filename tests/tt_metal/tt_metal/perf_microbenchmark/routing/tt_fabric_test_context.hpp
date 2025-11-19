@@ -229,9 +229,8 @@ public:
                 std::cout << "PROCESSING SYNC CONFIG FOR DEVICE " << sync_sender.device.chip_id << " WITH SYNC VAL "
                           << sync_config.sync_val << std::endl;
                 if (fixture_->is_local_fabric_node_id(sync_sender.device)) {
-                    std::cout << "Trying to access sync sender core" << std::endl;
                     CoreCoord sync_core = sync_sender.core.value();
-                    std::cout << "Sync sender core: " << sync_core.x << ", " << sync_core.y << std::endl;
+                    std::cout << "SYNC CORE: " << sync_core.x << ", " << sync_core.y << std::endl;
                     const auto& device_coord = this->fixture_->get_device_coord(sync_sender.device);
 
                     // Track global sync core for this device
@@ -271,30 +270,19 @@ public:
                             .dst_noc_encoding = dst_noc_encoding,
                             .link_id = sync_sender.link_id};  // Derive from SenderConfig (always 0 for sync)
 
-                        // Determine destination node IDs based on the topology
-                        // Case 1: If this test uses the NeighborExchange topology, synchronization is handled by
-                        // unicast messages only between adjacent devices.
-                        if (this->fixture_->get_topology() == tt::tt_fabric::Topology::NeighborExchange) {
-                            sync_traffic_sender_config.hops = std::unordered_map<RoutingDirection, uint32_t>{};
-                            sync_traffic_sender_config.dst_node_ids = {dest.device.value()};
+                        // Determine destination node IDs
+                        auto single_direction_hops = dest.hops.value();
+                        sync_traffic_sender_config.hops = single_direction_hops;
+                        // for 2d mcast case
+                        sync_traffic_sender_config.dst_node_ids = this->fixture_->get_dst_node_ids_from_hops(
+                            sync_sender.device, single_direction_hops, sync_traffic_parameters.chip_send_type);
+                        // for 2d, we need to spcify the mcast start node id
+                        if (fixture_->is_2D_routing_enabled() &&
+                            sync_traffic_parameters.chip_send_type == ChipSendType::CHIP_MULTICAST) {
+                            sync_traffic_sender_config.mcast_start_node_id =
+                                fixture_->get_mcast_start_node_id(sync_sender.device, single_direction_hops);
+                        } else {
                             sync_traffic_sender_config.mcast_start_node_id = std::nullopt;
-                        }
-                        // Case 2: In all other topologies, synchronization is handled by multicast messages between all
-                        // devices. Patterns are now already split into single-direction hops
-                        else {
-                            auto single_direction_hops = dest.hops.value();
-                            sync_traffic_sender_config.hops = single_direction_hops;
-                            // for 2d mcast case
-                            sync_traffic_sender_config.dst_node_ids = this->fixture_->get_dst_node_ids_from_hops(
-                                sync_sender.device, single_direction_hops, sync_traffic_parameters.chip_send_type);
-                            // for 2d, we need to spcify the mcast start node id
-                            if (fixture_->is_2D_routing_enabled() &&
-                                sync_traffic_parameters.chip_send_type == ChipSendType::CHIP_MULTICAST) {
-                                sync_traffic_sender_config.mcast_start_node_id =
-                                    fixture_->get_mcast_start_node_id(sync_sender.device, single_direction_hops);
-                            } else {
-                                sync_traffic_sender_config.mcast_start_node_id = std::nullopt;
-                            }
                         }
 
                         // Add sync config to the master sender on this device
@@ -343,6 +331,26 @@ public:
                 // We just need to construct the TrafficConfig and pass it to add_traffic_config.
                 const auto& dest = pattern.destination.value();
 
+                std::cout << "Processing traffic pattern for device " << sender.device.chip_id << std::endl;
+                const auto dest_device = dest.device.value_or(sender.device);
+                if (dest_device != sender.device) {
+                    std::cout << "Destination device: " << dest_device.chip_id << std::endl;
+                }
+                const auto dest_hops = dest.hops.value_or(std::unordered_map<RoutingDirection, uint32_t>{});
+                if (!dest_hops.empty()) {
+                    std::cout << "Destination hops: " << dest_hops.size() << std::endl;
+                    for (const auto& [direction, hops] : dest_hops) {
+                        switch (direction) {
+                            case RoutingDirection::N: std::cout << "North"; break;
+                            case RoutingDirection::E: std::cout << "East"; break;
+                            case RoutingDirection::S: std::cout << "South"; break;
+                            case RoutingDirection::W: std::cout << "West"; break;
+                            default: std::cout << "Unknown direction"; break;
+                        }
+                        std::cout << " -> " << hops << " hops" << std::endl;
+                    }
+                }
+
                 TrafficParameters traffic_parameters = {
                     .chip_send_type = pattern.ftype.value(),
                     .noc_send_type = pattern.ntype.value(),
@@ -383,15 +391,20 @@ public:
     bool open_devices(const TestFabricSetup& fabric_setup) { return fixture_->open_devices(fabric_setup); }
 
     void compile_programs() {
+        std::cout << "Compiling programs" << std::endl;
         fixture_->setup_workload();
+        std::cout << "Finished setting up workload" << std::endl;
         // TODO: should we be taking const ref?
         for (auto& [coord, test_device] : test_devices_) {
             test_device.set_benchmark_mode(performance_test_mode_ == PerformanceTestMode::BANDWIDTH);
             test_device.set_global_sync(global_sync_);
+            std::cout << "Set global sync" << std::endl;
             test_device.set_progress_monitoring_enabled(progress_config_.enabled);
+            std::cout << "Set progress monitoring enabled" << std::endl;
 
             auto device_id = test_device.get_node_id();
             test_device.set_sync_core(device_global_sync_cores_[device_id]);
+            std::cout << "Set sync core" << std::endl;
 
             // Create kernels (latency or normal)
             if (performance_test_mode_ == PerformanceTestMode::LATENCY) {
@@ -407,6 +420,7 @@ public:
             auto& program_handle = test_device.get_program_handle();
             if (program_handle.impl().num_kernels()) {
                 fixture_->enqueue_program(coord, std::move(program_handle));
+                std::cout << "Enqueued program" << std::endl;
             }
         }
     }
@@ -799,6 +813,10 @@ private:
             // assign hops for 2d LL and 1D
             if (src_node_id.mesh_id == dst_node_ids[0].mesh_id) {
                 hops = this->fixture_->get_hops_to_chip(src_node_id, dst_node_ids[0]);
+                // If the topology is NeighborExchange, make sure that all traffic patterns are single-hop.
+                if (fixture_->get_topology() == tt::tt_fabric::Topology::NeighborExchange) {
+                    fixture_->validate_single_hop(hops.value());
+                }
             }
         }
 

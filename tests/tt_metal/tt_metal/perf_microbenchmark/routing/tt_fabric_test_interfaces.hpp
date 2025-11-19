@@ -112,9 +112,10 @@ public:
         const FabricNodeId& src_node_id, const FabricNodeId& dst_node_id, const RoutingDirection& direction) const = 0;
     virtual FabricNodeId get_neighbor_node_id(
         const FabricNodeId& src_node_id, const RoutingDirection& direction, const bool hard_exit = true) const = 0;
-    virtual std::unordered_map<RoutingDirection, FabricNodeId> get_nearest_neighbor_node_ids(
+    virtual std::unordered_map<RoutingDirection, uint32_t> get_hops_to_nearest_neighbors(
         const FabricNodeId& src_node_id) const = 0;
     virtual bool validate_num_links_supported(uint32_t num_links) const = 0;
+    virtual void validate_single_hop(const std::unordered_map<RoutingDirection, uint32_t>& hops) const = 0;
 };
 
 class IDistributedContextManager {

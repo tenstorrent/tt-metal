@@ -982,7 +982,8 @@ public:
         std::vector<std::unordered_map<RoutingDirection, uint32_t>> split_hops;
         split_hops.reserve(4);
 
-        if (this->topology_ == Topology::Linear || this->topology_ == Topology::Ring) {
+        if (this->topology_ == Topology::Linear || this->topology_ == Topology::Ring ||
+            this->topology_ == Topology::NeighborExchange) {
             for (const auto& [dir, hop_count] : hops) {
                 if (hop_count > 0) {
                     split_hops.push_back({{dir, hop_count}});
@@ -1073,7 +1074,7 @@ public:
 
     RoutingDirection get_forwarding_direction(
         const std::unordered_map<RoutingDirection, uint32_t>& hops) const override {
-        if (topology_ == Topology::Linear || topology_ == Topology::Ring) {
+        if (topology_ == Topology::Linear || topology_ == Topology::Ring || topology_ == Topology::NeighborExchange) {
             // for 1d, we expect hops only in one direction to be non-zero
             for (const auto& [direction, hop] : hops) {
                 if (hop != 0) {
@@ -1090,7 +1091,7 @@ public:
                 }
             }
         } else {
-            TT_THROW("Unsupported topology: {} for get_forwarding_direction", topology_);
+            TT_THROW("Unsupported topology: {} for hop-based get_forwarding_direction", topology_);
         }
 
         TT_THROW("Failed to find a forwarding direction for hops: {}", hops);
@@ -1206,6 +1207,12 @@ public:
             case tt::tt_fabric::Topology::Linear: {
                 multi_directional_hops = this->get_full_mcast_hops(src_device);
                 global_sync_val = this->get_num_sync_devices() - 1;
+                break;
+            }
+            case tt::tt_fabric::Topology::NeighborExchange: {
+                // NeighborExchange topology only performs syncs between a device's nearest neighbors
+                multi_directional_hops = this->get_hops_to_nearest_neighbors(src_device);
+                global_sync_val = multi_directional_hops.size();
                 break;
             }
             // for torus, the handling should be same as mesh since we need to sync with all the devices
@@ -1491,21 +1498,36 @@ public:
         distributed_context->barrier();
     }
 
-    // Returns a map of the nearest neighbors for a node in all directions. If there is no neighbor in a direction, the
-    // key will not be present in the map.
-    std::unordered_map<RoutingDirection, FabricNodeId> get_nearest_neighbor_node_ids(
+    // Returns a map of the hops to the nearest neighbors for a node in all directions. If there is no neighbor in a
+    // direction, the key will not be present in the map.
+    std::unordered_map<RoutingDirection, uint32_t> get_hops_to_nearest_neighbors(
         const FabricNodeId& src_device) const override {
-        std::unordered_map<RoutingDirection, FabricNodeId> nearest_neighbor_node_ids;
+        std::unordered_map<RoutingDirection, uint32_t> hops_to_nearest_neighbors;
         const bool hard_exit = false;
         for (const auto& direction :
              {RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W}) {
             const FabricNodeId neighbor_node_id = get_neighbor_node_id(src_device, direction, hard_exit);
             // If there is no neighbor, function will return src_device
             if (neighbor_node_id != src_device) {
-                nearest_neighbor_node_ids.emplace(direction, neighbor_node_id);
+                hops_to_nearest_neighbors[direction] = 1;
             }
         }
-        return nearest_neighbor_node_ids;
+        return hops_to_nearest_neighbors;
+    }
+
+    void validate_single_hop(const std::unordered_map<RoutingDirection, uint32_t>& hops) const override {
+        // A valid hop map will have exactly 1 hop in 1 direction
+        bool hop_encountered = false;
+        for (const auto& [direction, hop_count] : hops) {
+            TT_FATAL((hop_count <= 1), "NeighborExchange topology does not support multi-hop traffic patterns");
+            if (hop_count == 1) {
+                TT_FATAL(
+                    !hop_encountered,
+                    "NeighborExchange topology does not support hops in multiple directions inside the same traffic "
+                    "pattern");
+                hop_encountered = true;
+            }
+        }
     }
 
 private:
