@@ -69,6 +69,10 @@ FORCE_INLINE uint64_t get_noc_address(const AddrGenType& d, const uint32_t id, u
 
 }  // namespace addrgen_detail
 
+// Maximum fabric packet payload size
+// Used for packetization logic in fabric write functions
+inline constexpr uint32_t FABRIC_MAX_PACKET_SIZE = 4352;
+
 // Placeholder max page size for the addrgen until the page size is properly visible by the worker
 // https://github.com/tenstorrent/tt-metal/issues/25966
 static constexpr uint32_t max_fabric_addrgen_payload_size = 4532;
