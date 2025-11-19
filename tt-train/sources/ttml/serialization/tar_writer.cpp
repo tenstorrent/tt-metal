@@ -49,22 +49,34 @@ void TarWriter::write_header(std::vector<uint8_t>& tarball, const FileEntry& ent
     }
     std::memcpy(header.data() + FILENAME_OFFSET, filename.c_str(), filename.size());
 
-    // File mode
-    std::memcpy(header.data() + MODE_OFFSET, MODE, MODE_SIZE);
+    // File mode (null-terminated, padded with nulls)
+    size_t mode_len = std::min(strlen(MODE), MODE_SIZE - 1);
+    std::memcpy(header.data() + MODE_OFFSET, MODE, mode_len);
+    header[MODE_OFFSET + MODE_SIZE - 1] = '\0';
 
-    // UID
-    std::memcpy(header.data() + UID_OFFSET, UID, UID_SIZE);
+    // UID (null-terminated, padded with nulls)
+    size_t uid_len = std::min(strlen(UID), UID_SIZE - 1);
+    std::memcpy(header.data() + UID_OFFSET, UID, uid_len);
+    header[UID_OFFSET + UID_SIZE - 1] = '\0';
 
-    // GID
-    std::memcpy(header.data() + GID_OFFSET, GID, GID_SIZE);
+    // GID (null-terminated, padded with nulls)
+    size_t gid_len = std::min(strlen(GID), GID_SIZE - 1);
+    std::memcpy(header.data() + GID_OFFSET, GID, gid_len);
+    header[GID_OFFSET + GID_SIZE - 1] = '\0';
 
-    // File size (octal)
+    // File size (octal, null-terminated, padded with nulls)
     std::string size_str = to_octal(entry.data.size(), SIZE_SIZE - 1);
-    std::memcpy(header.data() + SIZE_OFFSET, size_str.c_str(), SIZE_SIZE);
+    size_t size_len = std::min(size_str.size(), SIZE_SIZE - 1);
+    std::memcpy(header.data() + SIZE_OFFSET, size_str.c_str(), size_len);
+    // Ensure null termination and padding
+    header[SIZE_OFFSET + SIZE_SIZE - 1] = '\0';
 
-    // Modification time (octal)
+    // Modification time (octal, null-terminated, padded with nulls)
     std::string mtime_str = to_octal(MTIME, MTIME_SIZE - 1);
-    std::memcpy(header.data() + MTIME_OFFSET, mtime_str.c_str(), MTIME_SIZE);
+    size_t mtime_len = std::min(mtime_str.size(), MTIME_SIZE - 1);
+    std::memcpy(header.data() + MTIME_OFFSET, mtime_str.c_str(), mtime_len);
+    // Ensure null termination and padding
+    header[MTIME_OFFSET + MTIME_SIZE - 1] = '\0';
 
     // Link name - empty (already zero-initialized)
 
@@ -73,9 +85,14 @@ void TarWriter::write_header(std::vector<uint8_t>& tarball, const FileEntry& ent
     header[MAGIC_OFFSET + TMAGLEN - 1] = '\0';
 
     // Version (use TVERSION and TVERSLEN directly from tar.h)
+    // TVERSLEN is 2, copy exactly 2 bytes (no null terminator needed)
     std::memcpy(header.data() + VERSION_OFFSET, TVERSION, TVERSLEN);
 
     // User name, Group name, Device major/minor, Prefix - empty (already zero-initialized)
+
+    // Type flag - regular file (use REGTYPE directly from tar.h)
+    // Must be set BEFORE checksum calculation
+    header[TYPE_FLAG_OFFSET] = REGTYPE;
 
     // Calculate checksum (checksum field bytes are treated as spaces during calculation)
     uint32_t checksum = 0;
@@ -88,14 +105,14 @@ void TarWriter::write_header(std::vector<uint8_t>& tarball, const FileEntry& ent
         }
     }
 
-    // Write checksum (octal, null-terminated)
+    // Write checksum (octal, null-terminated, space-terminated)
+    // Format: 6 octal digits + null + space = 8 bytes total
     std::string checksum_str = to_octal(checksum, CHECKSUM_SIZE - 2);
-    std::memcpy(header.data() + CHECKSUM_OFFSET, checksum_str.c_str(), checksum_str.size());
+    size_t checksum_len = std::min(checksum_str.size(), CHECKSUM_SIZE - 2);
+    std::memcpy(header.data() + CHECKSUM_OFFSET, checksum_str.c_str(), checksum_len);
+    // Ensure proper formatting: null terminator at position CHECKSUM_SIZE - 2, space at CHECKSUM_SIZE - 1
     header[CHECKSUM_OFFSET + CHECKSUM_SIZE - 2] = '\0';
     header[CHECKSUM_OFFSET + CHECKSUM_SIZE - 1] = ' ';  // Space after checksum
-
-    // Type flag - regular file (use REGTYPE directly from tar.h)
-    header[TYPE_FLAG_OFFSET] = REGTYPE;
 
     tarball.insert(tarball.end(), header.begin(), header.end());
 }
