@@ -129,10 +129,4 @@ ttnn::Shape AutoFormat::pad_to_tile_shape(const ttnn::Shape& unpadded_shape) {
     return Shape(padded_shape_vec);
 }
 
-bool AutoFormat::check_input_tensor_format(
-    const Tensor& a, const ttnn::Shape& shape, tt::tt_metal::Layout target_layout) {
-    return a.layout() == target_layout && a.padded_shape() == shape &&
-           a.storage_type() == tt::tt_metal::StorageType::DEVICE;
-}
-
 }  // namespace ttnn::operations::experimental::auto_format
