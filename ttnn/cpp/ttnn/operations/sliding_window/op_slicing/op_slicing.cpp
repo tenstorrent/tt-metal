@@ -17,7 +17,7 @@ namespace ttnn::operations::op_slicing {
 void run_sliced_op(
     const ttnn::Tensor& input_tensor,
     ttnn::Tensor& output_tensor,
-    OpSliceAttr* op_slice_attr,
+    std::vector<OpSliceAttr*> op_slice_attr,
     Op2DSliceConfig dram_slice_config) {
     tt::tt_metal::Layout output_layout = output_tensor.layout();
     auto [batch_size, output_height, output_width, output_channels] = output_tensor.logical_shape().to_array_4D();
@@ -59,9 +59,13 @@ void run_sliced_op(
             output_slice_height_end = output_slice_dim_end;
             output_slice_width_start = 0;
             output_slice_width_end = output_width;
-            auto [input_slice_start, input_slice_end] = op_slice_attr->get_input_slice(
-                {output_slice_height_start, output_slice_width_start},
-                {output_slice_height_end, output_slice_width_end});
+            OpSliceAttr::IOShape input_slice_start = {output_slice_height_start, output_slice_width_start};
+            OpSliceAttr::IOShape input_slice_end = {output_slice_height_end, output_slice_width_end};
+            for (auto op_attributes_iter = op_slice_attr.rbegin(); op_attributes_iter != op_slice_attr.rend();
+                 op_attributes_iter++) {
+                std::tie(input_slice_start, input_slice_end) =
+                    (*op_attributes_iter)->get_input_slice(input_slice_start, input_slice_end);
+            }
             std::tie(input_slice_height_start, input_slice_width_start) = input_slice_start;
             std::tie(input_slice_height_end, input_slice_width_end) = input_slice_end;
 
@@ -81,9 +85,13 @@ void run_sliced_op(
             output_slice_width_start = output_slice_dim_start;
             output_slice_width_end = output_slice_dim_end;
 
-            auto [input_slice_start, input_slice_end] = op_slice_attr->get_input_slice(
-                {output_slice_height_start, output_slice_width_start},
-                {output_slice_height_end, output_slice_width_end});
+            OpSliceAttr::IOShape input_slice_start = {output_slice_height_start, output_slice_width_start};
+            OpSliceAttr::IOShape input_slice_end = {output_slice_height_end, output_slice_width_end};
+            for (auto op_attributes_iter = op_slice_attr.rbegin(); op_attributes_iter != op_slice_attr.rend();
+                 op_attributes_iter++) {
+                std::tie(input_slice_start, input_slice_end) =
+                    (*op_attributes_iter)->get_input_slice(input_slice_start, input_slice_end);
+            }
             std::tie(input_slice_height_start, input_slice_width_start) = input_slice_start;
             std::tie(input_slice_height_end, input_slice_width_end) = input_slice_end;
 
@@ -99,24 +107,24 @@ void run_sliced_op(
             }
         }
 
-        log_trace(
-            tt::LogOp,
-            "Op {} DRAM Slicing: Slice {}: Output Slice Start: ({}, {}), End: ({}, {})",
-            op_slice_attr->name(),
-            slice_index,
-            output_slice_height_start,
-            output_slice_width_start,
-            output_slice_height_end,
-            output_slice_width_end);
-        log_trace(
-            tt::LogOp,
-            "Op {} DRAM Slicing: Slice {}: Input Slice Start: ({}, {}), End: ({}, {})",
-            op_slice_attr->name(),
-            slice_index,
-            input_slice_height_start,
-            input_slice_width_start,
-            input_slice_height_end,
-            input_slice_width_end);
+        // log_trace(
+        //     tt::LogOp,
+        //     "Op {} DRAM Slicing: Slice {}: Output Slice Start: ({}, {}), End: ({}, {})",
+        //     op_slice_attr->name(),
+        //     slice_index,
+        //     output_slice_height_start,
+        //     output_slice_width_start,
+        //     output_slice_height_end,
+        //     output_slice_width_end);
+        // log_trace(
+        //     tt::LogOp,
+        //     "Op {} DRAM Slicing: Slice {}: Input Slice Start: ({}, {}), End: ({}, {})",
+        //     op_slice_attr->name(),
+        //     slice_index,
+        //     input_slice_height_start,
+        //     input_slice_width_start,
+        //     input_slice_height_end,
+        //     input_slice_width_end);
 
         const uint32_t output_slice_height = output_slice_height_end - output_slice_height_start;
 
@@ -132,7 +140,7 @@ void run_sliced_op(
             output_slice_height,
             output_slice_width);
 
-        auto sliced_input_tensor_memory_config = op_slice_attr->get_input_memory_config(
+        auto sliced_input_tensor_memory_config = op_slice_attr[0]->get_input_memory_config(
             {output_slice_height_start, output_slice_width_start}, {output_slice_height_end, output_slice_width_end});
 
         const Tensor sliced_input_tensor = ttnn::experimental::padded_slice(
@@ -142,10 +150,13 @@ void run_sliced_op(
             ttnn::SmallVector<uint32_t>{1, 1, 1, 1},  // Step
             sliced_input_tensor_memory_config);
 
-        ttnn::Tensor sliced_output_tensor = op_slice_attr->run_L1_op(
-            sliced_input_tensor,
-            {output_slice_height_start, output_slice_width_start},
-            {output_slice_height_end, output_slice_width_end});
+        ttnn::Tensor sliced_output_tensor = sliced_input_tensor;
+        for (auto this_op_slice_attr : op_slice_attr) {
+            sliced_output_tensor = this_op_slice_attr->run_L1_op(
+                sliced_output_tensor,
+                {output_slice_height_start, output_slice_width_start},
+                {output_slice_height_end, output_slice_width_end});
+        }
 
         // slice_write supports all sharding layouts for tiled inputs. For row major, height & block sharding are
         // supported.

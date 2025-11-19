@@ -69,6 +69,8 @@
 #include "ttnn/operations/prefetcher/prefetcher_pybind.hpp"
 #include "ttnn/operations/reduction/reduction_pybind.hpp"
 #include "ttnn/operations/sliding_window/sliding_window_pybind.hpp"
+#include "ttnn/operations/sliding_window/op_slicing/op_slicing_pybind.hpp"
+
 #include "ttnn/operations/transformer/transformer_pybind.hpp"
 #include "ttnn/operations/uniform/uniform_pybind.hpp"
 #include "ttnn/operations/rand/rand_pybind.hpp"
@@ -148,6 +150,8 @@ void py_module(py::module& module) {
 
     auto m_sliding_window = module.def_submodule("sliding_window", "sliding_window operations");
     sliding_window::py_bind_sliding_window(m_sliding_window);
+    auto m_op_slicing = module.def_submodule("op_slicing", "slicing for 2d operations");
+    op_slicing::py_bind_op_slicing(m_op_slicing);
 
     auto m_conv2d = module.def_submodule("conv", "Convolution operations");
     conv::py_module(m_conv2d);

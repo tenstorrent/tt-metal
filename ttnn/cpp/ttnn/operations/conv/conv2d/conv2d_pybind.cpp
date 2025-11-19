@@ -20,6 +20,7 @@
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "ttnn/operations/sliding_window/sliding_window_pybind.hpp"
+#include "ttnn/operations/sliding_window/op_slicing/op_slicing.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 
@@ -256,6 +257,51 @@ void py_bind_conv2d(py::module& module) {
         py::arg("tensor_shape"),
         py::arg("parallel_config"),
         py::arg("tile_size"));
+    auto py_conv_slice_attr = py::class_<Conv2dSliceAttr>(
+        module,
+        "Conv2dSliceAttr",
+        R"doc(
+        Conv2dSliceAttr is a class that implements the OpSliceAttr interface for Conv2D operations.
+        It is used to determine how the input tensor should be sliced based on the output slice.
+        )doc");
+
+    py_conv_slice_attr.def(
+        py::init<
+            uint32_t,
+            Conv2dSliceAttr::IOShape,
+            uint32_t,
+            uint32_t,
+            std::array<uint32_t, 2>,
+            std::array<uint32_t, 2>,
+            std::array<uint32_t, 4>,
+            std::array<uint32_t, 2>,
+            uint32_t,
+            Layout,
+            DataType,
+            DataType,
+            ttnn::Tensor&,
+            std::optional<std::reference_wrapper<ttnn::Tensor>>,
+            Conv2dConfig&,
+            DeviceComputeKernelConfig&,
+            MeshDevice*>(),
+        py::arg("batch_size"),
+        py::arg("input_shape"),
+        py::arg("input_channels"),
+        py::arg("output_channels"),
+        py::arg("kernel_size"),
+        py::arg("stride"),
+        py::arg("padding_n4"),
+        py::arg("dilation"),
+        py::arg("groups"),
+        py::arg("input_layout"),
+        py::arg("input_dtype"),
+        py::arg("output_dtype"),
+        py::arg("weight_tensor"),
+        py::arg("bias_tensor") = std::nullopt,
+        py::arg("conv_config") = Conv2dConfig(),
+        py::arg("compute_config") = std::nullopt,
+        py::arg("device"));
+    py_conv_slice_attr.def("__repr__", [](const Conv2dSliceConfig& config) { return fmt::format("{}", config); });
 
     auto py_conv_slice_config = py::class_<Conv2dSliceConfig>(
         module,
