@@ -185,6 +185,11 @@ class RunChecks:
             device: {block_type: get_block_locations_to_check(block_type, device) for block_type in BLOCK_TYPES}
             for device in devices
         }
+        # Pre-compute unique_id to device mapping for fast lookup
+        self._unique_id_to_device: dict[int, Device] = {device.unique_id: device for device in devices}
+
+    def get_device_by_unique_id(self, unique_id: int) -> Device | None:
+        return self._unique_id_to_device.get(unique_id)
 
     def _collect_results(
         self, result: list[CheckResult], check_result: object, result_type: type[CheckResult], **kwargs
