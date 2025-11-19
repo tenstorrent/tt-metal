@@ -59,7 +59,7 @@ void matmul_blocks(
     // Width-first traversal: iterate column subblocks outer, row subblocks inner
     for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; ++in1_subblock) {
         // Initialize reduce once per column (before processing any row blocks)
-        sfpu_reduce_max_sdpa_init(subblock_w);
+        sfpu_reduce_max_sdpa_init();
 
         for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
             tile_regs_acquire();
