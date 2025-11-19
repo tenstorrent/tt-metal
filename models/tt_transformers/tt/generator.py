@@ -171,6 +171,14 @@ class Generator:
         enable_trace=True,
         **kwargs,
     ):
+        import time
+
+        start_time = time.time()
+        logger.info(f"🚀 Entering prefill_forward_text at {start_time:.3f}")
+        logger.info(
+            f"Input params: tokens.shape={tokens.shape}, page_table={page_table.shape if page_table is not None else None}"
+        )
+
         if page_table is not None:
             assert isinstance(page_table, torch.Tensor), "page_table mush be torch.Tensor"
         else:
@@ -280,13 +288,22 @@ class Generator:
                 )
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
+        end_time = time.time()
+        logger.info(
+            f"✅ Exiting prefill_forward_text successfully at {end_time:.3f} (elapsed {end_time - start_time:.3f}s)"
+        )
+        logger.info(f"Output: logits shape {output_logits.shape}")
         return output_logits
 
     def prefill_forward_single_user_text(
         self, tokens, page_table, user_id, last_token_idx, kv_cache=None, model_id=-1, **kwargs
     ):
         seq_len = tokens.shape[-1]
-        use_chunked_prefill = seq_len > self.model_args[model_id].max_prefill_chunk_size
+        max_chunk_size = self.model_args[model_id].max_prefill_chunk_size
+        # Don't use chunked prefill for very small chunk sizes as it can cause hangs
+        min_safe_chunk_size = 32  # Minimum chunk size to avoid hangs
+        effective_chunk_size = max(max_chunk_size, min_safe_chunk_size)
+        use_chunked_prefill = seq_len > effective_chunk_size
         if use_chunked_prefill:
             """
             Chunked prefill requires paged attention. There are some strange constraints which we must meet:
@@ -302,7 +319,7 @@ class Generator:
             assert (
                 last_token_idx is not None and last_token_idx < seq_len
             ), "last_token_idx must be provided and less than seq_len"
-            chunk_size = get_max_prefill_chunk_size(seq_len, self.model_args[model_id].max_prefill_chunk_size)
+            chunk_size = get_max_prefill_chunk_size(seq_len, effective_chunk_size)
             block_size = get_block_size(kv_cache)
             last_token_idx_in_chunk = last_token_idx % chunk_size
             # Calculate which chunk contains the last_token_idx
@@ -336,18 +353,48 @@ class Generator:
                     chunk_page_table=chunk_page_table,
                     **kwargs,
                 )
-                tt_logits = self.model[model_id].ttnn_prefill_forward(
-                    chunk_prefill_input,
-                    rot_mats_global=chunk_rot_mats_global_prefill,
-                    rot_mats_local=chunk_rot_mats_local_prefill,
-                    user_id=CHUNK_USER_ID,
-                    page_table=page_table_tt,
-                    chunk_page_table=chunk_page_table_tt,
-                    chunk_start_idx=chunk_start,
-                    get_last_token=(last_token_idx_in_chunk // 32) * 32,
-                    kv_cache=kv_cache,
-                    **kwargs,
+                # Log progress for chunked prefill to aid debugging / tracing
+                chunk_idx = chunk_start // chunk_size
+                total_chunks = (seq_len + chunk_size - 1) // chunk_size
+                logger.info(
+                    f"Prefill chunk {chunk_idx + 1}/{total_chunks}: start={chunk_start}, "
+                    f"end={chunk_end}, chunk_size={chunk_size}"
                 )
+                try:
+                    import time
+
+                    start_ts = time.time()
+                    logger.info(
+                        f"Calling ttnn_prefill_forward for chunk {chunk_idx + 1}/{total_chunks} at {start_ts:.3f}"
+                    )
+                    tt_logits = self.model[model_id].ttnn_prefill_forward(
+                        chunk_prefill_input,
+                        rot_mats_global=chunk_rot_mats_global_prefill,
+                        rot_mats_local=chunk_rot_mats_local_prefill,
+                        user_id=CHUNK_USER_ID,
+                        page_table=page_table_tt,
+                        chunk_page_table=chunk_page_table_tt,
+                        chunk_start_idx=chunk_start,
+                        get_last_token=(last_token_idx_in_chunk // 32) * 32,
+                        kv_cache=kv_cache,
+                        **kwargs,
+                    )
+                    # Ensure device completed
+                    try:
+                        ttnn.synchronize_device(self.model_args[model_id].mesh_device)
+                    except Exception:
+                        pass
+                    end_ts = time.time()
+                    logger.info(
+                        f"ttnn_prefill_forward returned for chunk {chunk_idx + 1}/{total_chunks} (elapsed {end_ts - start_ts:.3f}s)"
+                    )
+                except Exception:
+                    logger.exception(
+                        "Exception during ttnn_prefill_forward for chunk "
+                        f"{chunk_idx + 1}/{total_chunks} (start={chunk_start})"
+                    )
+                    raise
+                logger.info(f"Completed prefill chunk {chunk_idx + 1}/{total_chunks}")
 
                 if chunk_start == last_chunk_start:
                     return tt_logits

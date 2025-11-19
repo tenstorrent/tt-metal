@@ -568,13 +568,13 @@ def nearest_pow_2(x):
 
 def get_max_prefill_chunk_size(seq_len, max_prefill_seq_len):
     """
-    Determine the largest multiple of 2048 that divides `seq_len` and is less than or equal to `max_prefill_seq_len`.
+    Determine the largest multiple of MIN_CHUNK_SIZE that divides `seq_len` and is less than or equal to `max_prefill_seq_len`.
 
     **Assumptions**:
-    - `seq_len` is a multiple of 2048.
-    - `max_prefill_seq_len` is a multiple of 2048.
+    - `seq_len` is a multiple of MIN_CHUNK_SIZE.
+    - `max_prefill_seq_len` is a multiple of MIN_CHUNK_SIZE.
     """
-    MIN_CHUNK_SIZE = 2048
+    MIN_CHUNK_SIZE = 32  # Allow smaller chunks for debugging the hang issue
 
     if not isinstance(seq_len, int) or not isinstance(max_prefill_seq_len, int):
         raise TypeError("Both seq_len and max_prefill_seq_len must be integers.")
@@ -681,6 +681,7 @@ def create_tt_model(
     dtype=ttnn.bfloat8_b,
     state_dict=None,
     num_layers=None,
+    dummy_weights=False,
 ):
     from models.tt_transformers.tt.model import Transformer
     from models.tt_transformers.tt.model_config import ModelArgs
@@ -691,6 +692,7 @@ def create_tt_model(
         max_batch_size=max_batch_size,
         optimizations=optimizations,
         max_seq_len=max_seq_len,
+        dummy_weights=dummy_weights,
     )
     if num_layers is not None:
         tt_model_args.n_layers = num_layers

@@ -2,7 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import time
+
 import torch
+from loguru import logger
 from tqdm import tqdm
 
 import ttnn
@@ -366,19 +369,28 @@ class Transformer(LightweightModule):
         This method will take device tensors and any other args to run forward.
         It returns ttnn device tensors.
         """
-        return self.forward(
-            x,
-            current_pos=None,
-            rot_mats_global=rot_mats_global,
-            rot_mats_local=rot_mats_local,
-            user_id=user_id,
-            mode="prefill",
-            page_table=page_table,
-            chunk_page_table=chunk_page_table,
-            chunk_start_idx=chunk_start_idx,
-            get_last_token=get_last_token,
-            kv_cache=kv_cache,
-        )
+        logger.info(f"Entering Transformer.ttnn_prefill_forward (start_idx={chunk_start_idx}, user_id={user_id})")
+        start_ts = time.time()
+        try:
+            out = self.forward(
+                x,
+                current_pos=None,
+                rot_mats_global=rot_mats_global,
+                rot_mats_local=rot_mats_local,
+                user_id=user_id,
+                mode="prefill",
+                page_table=page_table,
+                chunk_page_table=chunk_page_table,
+                chunk_start_idx=chunk_start_idx,
+                get_last_token=get_last_token,
+                kv_cache=kv_cache,
+            )
+            end_ts = time.time()
+            logger.info(f"Exiting Transformer.ttnn_prefill_forward (elapsed={end_ts - start_ts:.3f}s)")
+            return out
+        except Exception as e:
+            logger.exception(f"Exception in Transformer.ttnn_prefill_forward: {e}")
+            raise
 
     def _increment_decode_positions_device(self, current_pos, rot_mat_idxs):
         ttnn.plus_one(current_pos, skip_negative_entries=True)

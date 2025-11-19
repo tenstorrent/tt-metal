@@ -20,8 +20,13 @@ class Embedding(LightweightModule):
         self.mesh_device = mesh_device
 
         base_name = args.get_state_dict_prefix("", None) + "tok_embeddings.weight"
-        torch_weight = state_dict[base_name].unsqueeze(0).unsqueeze(0)
-        cache_name = None if args.dummy_weights else weight_cache_path / base_name
+        if args.dummy_weights:
+            # Create dummy weights with correct shape for vocab_size x hidden_dim
+            torch_weight = torch.randn(args.vocab_size, args.dim).unsqueeze(0).unsqueeze(0)
+            cache_name = None
+        else:
+            torch_weight = state_dict[base_name].unsqueeze(0).unsqueeze(0)
+            cache_name = weight_cache_path / base_name
         self.weights = ttnn.as_tensor(
             torch_weight,
             dtype=dtype,

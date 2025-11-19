@@ -201,6 +201,14 @@ class TransformerBlock(LightweightModule):
         chunk_start_idx=None,
         kv_cache=None,
     ) -> ttnn.Tensor:
+        import time
+
+        from loguru import logger
+
+        logger.info(
+            f"Entering TransformerBlock.forward layer {self.layer_num} (mode={mode}, chunk_start={chunk_start_idx})"
+        )
+        start_ts = time.time()
         TG = self.args.is_galaxy
         residual = x
         # x is fractured across devices and interleaved in DRAM (for prefill) and sharded in L1 (for decode)
@@ -302,4 +310,6 @@ class TransformerBlock(LightweightModule):
             else activation_dtype or ttnn.bfloat16,
         )
 
+        end_ts = time.time()
+        logger.info(f"Exiting TransformerBlock.forward layer {self.layer_num} (elapsed={end_ts - start_ts:.3f}s)")
         return out  # fractured across devices
