@@ -28,10 +28,6 @@ on:
         required: false
         default: true
         type: boolean
-  workflow_call:
-  push:
-    branches:
-      - mchiou/29851-new-data-movement-workflow
 
 jobs:
   build-artifact:
