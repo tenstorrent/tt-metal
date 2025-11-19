@@ -89,31 +89,32 @@ def test_sum_row_major(device, input_shape, dim, keepdim):
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)
 
 
-# @pytest.mark.parametrize(
-#     "input_shape",
-#     [
-#         (512, 1024, 1, 2),
-#         (1, 128, 256),
-#         (64, 512),
-#         (32, 64, 128),
-#         (8, 16, 32, 64),
-#     ],
-# )
-# def test_sum_global_row_major(device, input_shape):
-#     """Test global sum (no dim specified) with ROW_MAJOR_LAYOUT"""
-#     torch.manual_seed(0)
-#     torch_input_tensor = torch_random(input_shape, -100, 100, dtype=torch.bfloat16)
-#     torch_output_tensor = torch.sum(torch_input_tensor)
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        # https://github.com/tenstorrent/tt-metal/issues/32830
+        # (512, 1024, 1, 2),
+        # (1, 128, 256),
+        (64, 512),
+        # (32, 64, 128),
+        # (8, 16, 32, 64),
+    ],
+)
+def test_sum_global_row_major(device, input_shape):
+    """Test global sum (no dim specified) with ROW_MAJOR_LAYOUT"""
+    torch.manual_seed(0)
+    torch_input_tensor = torch_random(input_shape, -100, 100, dtype=torch.bfloat16)
+    torch_output_tensor = torch.sum(torch_input_tensor)
 
-#     # Create tensor without specifying layout - defaults to ROW_MAJOR
-#     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, device=device)
+    # Create tensor without specifying layout - defaults to ROW_MAJOR
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, device=device)
 
-#     assert input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT, "Input should be in ROW_MAJOR_LAYOUT"
+    assert input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT, "Input should be in ROW_MAJOR_LAYOUT"
 
-#     output_tensor = ttnn.sum(input_tensor)
-#     output_tensor = ttnn.to_torch(output_tensor)
+    output_tensor = ttnn.sum(input_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
 
-#     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)
 
 
 @pytest.mark.parametrize(
