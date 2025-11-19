@@ -1,0 +1,194 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+///
+#include "dataflow_api.h"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
+#include "cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
+#include "../common.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
+
+using tt::data_movement::common::tt_memmove;
+
+inline void receive_data(
+    uint32_t sender_semaphore_addr,
+    uint32_t receiver_cb_id,
+    uint32_t packet_cb_id,
+    uint32_t page_size_bytes,
+    uint32_t alignment,
+    uint32_t max_pages_per_packet,
+    uint32_t page_idx_start,
+    uint32_t page_idx_end,
+    uint32_t page_segments,
+    uint64_t packet_buffer,
+    uint64_t packet_l1_addr,
+    uint32_t receiver_cb_id_s,
+    uint32_t receiver_cb_id_m) {
+    auto local_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_semaphore_addr);
+    noc_semaphore_wait(local_semaphore_ptr, 1);
+
+    const uint32_t aligned_page_size_bytes = align(page_size_bytes, alignment);
+    uint32_t curr_pages_per_packet = std::min(max_pages_per_packet, page_idx_end - page_idx_start);
+    uint32_t packet_idx = page_idx_start / max_pages_per_packet;
+
+    for (uint32_t page_idx = page_idx_start, packet_page_idx = 0; page_idx < page_idx_end; ++page_idx) {
+        cb_reserve_back(receiver_cb_id, 1);
+        const uint32_t dest_page_base_addr = get_write_ptr(receiver_cb_id);
+
+        for (uint32_t page_segment_idx = 0; page_segment_idx < page_segments; ++page_segment_idx) {
+            if (page_idx == page_idx_start || packet_page_idx == curr_pages_per_packet) {
+                const uint64_t packet_noc_addr = get_noc_addr(packet_idx, packet_buffer, 0, 0);
+                noc_async_read(packet_noc_addr, packet_l1_addr, packet_size_bytes);
+                noc_async_read_barrier();
+
+                packet_page_idx = 0;
+                curr_pages_per_packet = std::min(max_pages_per_packet, page_idx_end - page_idx);
+                ++packet_idx;
+            }
+
+            const uint32_t page_offset = page_segment_idx * packet_size_bytes;
+            const uint32_t dest_addr = dest_page_base_addr + page_offset;
+            const uint32_t transfer_size_bytes = std::min(page_size_bytes - page_offset, packet_size_bytes);
+            const uint32_t packet_l1_page_addr = packet_l1_addr + packet_page_idx * aligned_page_size_bytes;
+
+            tt_memmove<false, false, false, 0>(dest_addr, packet_l1_page_addr, transfer_size_bytes);
+            ++packet_page_idx;
+        }
+        cb_push_back(receiver_cb_id, 1);
+    }
+    cb_push_back(packet_cb_id, 1);
+
+    // now receiving s and m
+    cb_reserve_back(receiver_cb_id_s, 1);
+    cb_reserve_back(receiver_cb_id_m, 1);
+    const uint32_t dest_page_base_addr_s = get_write_ptr(receiver_cb_id_s);
+    const uint32_t dest_page_base_addr_m = get_write_ptr(receiver_cb_id_m);
+
+    const uint64_t packet_noc_addr = get_noc_addr(packet_idx, packet_buffer, 0, 0);
+    // read the single packet that contains both s and m to a temporary buffer
+    // then copy first tile to s and second tile to m
+    noc_async_read(packet_noc_addr, packet_l1_addr, page_size_bytes * 2);
+    noc_async_read_barrier();
+
+    tt_memmove<false, false, false, 0>(dest_page_base_addr_s, packet_l1_addr, page_size_bytes);
+    tt_memmove<false, false, false, 0>(
+        dest_page_base_addr_m, packet_l1_addr + aligned_page_size_bytes, page_size_bytes);
+}
+
+void kernel_main() {
+    constexpr uint32_t packet_header_cb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t packet_cb_id = get_compile_time_arg_val(1);
+    constexpr uint32_t receiver_cb_id_l = get_compile_time_arg_val(2);
+    constexpr uint32_t receiver_cb_id_s = get_compile_time_arg_val(3);
+    constexpr uint32_t receiver_cb_id_m = get_compile_time_arg_val(4);
+    constexpr uint32_t alignment = get_compile_time_arg_val(5);
+    constexpr auto packet_buffer_args = TensorAccessorArgs<6>();
+
+    constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
+
+    const auto page_idx_start = get_arg_val<uint32_t>(0);
+    const auto page_idx_end = get_arg_val<uint32_t>(1);
+    const auto max_pages_per_packet = get_arg_val<uint32_t>(2);
+    const auto intermediate_base_addr = get_arg_val<uint32_t>(3);
+    const auto packet_size_bytes = get_arg_val<uint32_t>(4);
+    const auto page_size_bytes = get_arg_val<uint32_t>(5);
+    const auto page_segments = get_arg_val<uint32_t>(6);
+    const uint32_t sender_semaphore_addr = get_arg_val<uint32_t>(7);
+    const uint8_t sender_num_hops = get_arg_val<uint32_t>(8);  // always 1
+    const bool sender_is_forward = get_arg_val<uint32_t>(9);
+    const uint32_t sender_semaphore_addr2 = get_arg_val<uint32_t>(10);
+    const bool sender_is_forward2 = get_arg_val<uint32_t>(11);
+
+    // reusing the last arg for fabric setup, therefore index overlaps.
+    size_t conn_arg_idx = 9;  // was 9 fix that
+
+    auto fabric_connection = FabricConnectionManager::build_from_args<
+        FabricConnectionManager::BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION_START_ONLY>(conn_arg_idx);
+
+    cb_reserve_back(packet_header_cb_id, 1);
+    const uint32_t sem_header_addr = get_write_ptr(packet_header_cb_id);
+    cb_push_back(packet_header_cb_id, 1);
+
+    const uint64_t sender_sem_noc_addr = get_noc_addr(sender_semaphore_addr);
+
+    auto* sem_header_ptr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(sem_header_addr);
+    fabric_set_unicast_route<false>((tt::tt_fabric::LowLatencyPacketHeader*)sem_header_ptr, sender_num_hops);
+    sem_header_ptr->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{sender_sem_noc_addr, 1});
+
+    fabric_connection.open_finish();
+    auto& connection_direction =
+        tt::point_to_point::common::connection_direction_collection(sender_is_forward, fabric_connection);
+
+    connection_direction.wait_for_empty_write_slot();
+    connection_direction.send_payload_flush_blocking_from_address((uint32_t)sem_header_ptr, packet_header_size_bytes);
+
+    fabric_connection.close();
+
+    const auto packet_buffer = TensorAccessor(packet_buffer_args, intermediate_base_addr, packet_size_bytes);
+
+    cb_reserve_back(packet_cb_id, 1);
+    const uint64_t packet_l1_addr = get_write_ptr(packet_cb_id);
+
+    // device 0 is sending data to device 1
+    receive_data(
+        sender_semaphore_addr,
+        receiver_cb_id_l,
+        packet_cb_id,
+        page_size_bytes,
+        alignment,
+        max_pages_per_packet,
+        page_idx_start,
+        page_idx_end,
+        page_segments,
+        packet_buffer.address(),
+        packet_l1_addr,
+        receiver_cb_id_s,
+        receiver_cb_id_m);
+
+    // clean up semaphore in case it is reused
+    noc_semaphore_set(local_semaphore_ptr, 0);
+
+    // now the similar behaviour when device 2 is sending data to device 1
+    // will be waiting on another semaphore, and fabric is for the other direction
+    uint32_t conn_arg_idx_2 = 19;  // get teh new index
+    auto fabric_connection_2 = FabricConnectionManager::build_from_args<
+        FabricConnectionManager::BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION_START_ONLY>(conn_arg_idx_2);
+    cb_reserve_back(packet_header_cb_id, 1);
+    const uint32_t sem_header_addr_2 = get_write_ptr(packet_header_cb_id);
+    cb_push_back(packet_header_cb_id, 1);
+
+    const uint64_t sender_sem_noc_addr_2 = get_noc_addr(sender_semaphore_addr2);
+    auto* sem_header_ptr_2 = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(sem_header_addr_2);
+    fabric_set_unicast_route<false>((tt::tt_fabric::LowLatencyPacketHeader*)sem_header_ptr_2, sender_num_hops);
+    sem_header_ptr_2->to_noc_unicast_atomic_inc(
+        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{sender_sem_noc_addr_2, 1});
+    fabric_connection_2.open_finish();
+    auto& connection_direction_2 =
+        tt::point_to_point::common::connection_direction_collection(sender_is_forward2, fabric_connection_2);
+    connection_direction_2.wait_for_empty_write_slot();
+    connection_direction_2.send_payload_flush_blocking_from_address(
+        (uint32_t)sem_header_ptr_2, packet_header_size_bytes);
+    fabric_connection_2.close();
+
+    auto local_semaphore_ptr_2 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_semaphore_addr2);
+    noc_semaphore_wait(local_semaphore_ptr_2, 1);
+
+    // read again l, s and m from device 2
+    receive_data(
+        sender_semaphore_addr2,
+        receiver_cb_id_l,
+        packet_cb_id,
+        page_size_bytes,
+        alignment,
+        max_pages_per_packet,
+        page_idx_start,
+        page_idx_end,
+        page_segments,
+        packet_buffer.address(),
+        packet_l1_addr,
+        receiver_cb_id_s,
+        receiver_cb_id_m);
+    // clean up semaphore in case it is reused
+    noc_semaphore_set(local_semaphore_ptr_2, 0);
+}
