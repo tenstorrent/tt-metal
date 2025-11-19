@@ -36,6 +36,8 @@ target_sources(
         routing_table_generator.cpp
         mesh_graph.cpp
         erisc_datamover_builder.cpp
+        fabric_router_channel_mapping.cpp
+        fabric_router_builder.cpp
         builder/fabric_core_placement.cpp
         builder/fabric_channel_allocator.cpp
         builder/fabric_static_sized_channels_allocator.cpp
@@ -89,6 +91,7 @@ target_include_directories(fabric SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 target_link_libraries(
     fabric
     PRIVATE
+        TT::ScaleoutTools
         Metalium::Metal::LLRT
         umd::device
         metal_common_libs
