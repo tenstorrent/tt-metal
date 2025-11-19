@@ -2151,8 +2151,12 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write_set_state(
     auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
     auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
 
+    // Cap initial payload size to hardware limit for large pages
+    // The WithState calls in the loop will handle actual chunking
+    uint32_t init_payload_size = (page_size > FABRIC_MAX_PACKET_SIZE) ? FABRIC_MAX_PACKET_SIZE : page_size;
+
     fabric_unicast_noc_unicast_write_set_state<UpdateMask>(
-        packet_header, dst_dev_id, dst_mesh_id, tt::tt_fabric::NocUnicastCommandHeader{noc_address}, page_size);
+        packet_header, dst_dev_id, dst_mesh_id, tt::tt_fabric::NocUnicastCommandHeader{noc_address}, init_payload_size);
 }
 
 // clang-format off
@@ -2180,8 +2184,12 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write_set_state(
     auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
     auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
 
+    // Cap initial payload size to hardware limit for large pages
+    // The WithState calls in the loop will handle actual chunking
+    uint32_t init_payload_size = (page_size > FABRIC_MAX_PACKET_SIZE) ? FABRIC_MAX_PACKET_SIZE : page_size;
+
     fabric_unicast_noc_unicast_write_set_state(
-        connection_manager, route_id, tt::tt_fabric::NocUnicastCommandHeader{noc_address}, page_size);
+        connection_manager, route_id, tt::tt_fabric::NocUnicastCommandHeader{noc_address}, init_payload_size);
 }
 
 // Fused Unicast Write + Atomic Inc Addrgen Overloads
