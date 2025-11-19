@@ -238,7 +238,7 @@ class MochiPipeline(DiffusionPipeline):
                 logger.info(
                     f"Cache does not exist. Creating cache: {cache_path} and loading transformer weights from PyTorch state dict"
                 )
-                self.transformer.load_state_dict(self.torch_transformer.state_dict())
+                self.transformer.load_state_dict(torch_transformer.state_dict())
                 save_cache_dict(self.transformer.to_cached_state_dict(cache_path), cache_path)
             else:
                 logger.info(f"Loading transformer weights from cache: {cache_path}")
