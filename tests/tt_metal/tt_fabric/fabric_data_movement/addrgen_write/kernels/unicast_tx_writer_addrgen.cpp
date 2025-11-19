@@ -115,7 +115,8 @@ void kernel_main() {
     if constexpr (api_variant == ApiVariant::WithState) {
         if constexpr (operation_type == OperationType::BasicWrite) {
             auto initial_noc_addr = tt::tt_fabric::addrgen_detail::get_noc_address(dst_acc, 0, 0);
-            header->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{initial_noc_addr}, PAGE_SIZE);
+            uint32_t init_size = (PAGE_SIZE > 4352) ? 4352 : PAGE_SIZE;
+            header->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{initial_noc_addr}, init_size);
         } else if constexpr (operation_type == OperationType::Scatter) {
             // Use scatter_acc with SRC_ALIGNED_PAGE_SIZE to match CB stride
             auto noc_addr0 = tt::tt_fabric::addrgen_detail::get_noc_address(scatter_acc, 0, 0);
