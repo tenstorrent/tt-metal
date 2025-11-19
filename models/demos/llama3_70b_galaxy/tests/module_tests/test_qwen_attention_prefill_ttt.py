@@ -215,7 +215,7 @@ def test_qwen_attention_inference_prefill_ttt(
     for _ in range(2):
         attention_input = model_args.prepare_residual_tensor_prefill(
             tt_attention_input,
-            force_replicated=False if model_args.is_galaxy else True,
+            force_replicated=False,
         )
 
         tt_out = tt_model(

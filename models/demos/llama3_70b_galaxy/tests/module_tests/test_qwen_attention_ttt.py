@@ -211,7 +211,7 @@ def test_qwen_attention_ttt_inference(
         dtype=ttnn.int32,
         mesh_mapper=ttnn.ShardTensor2dMesh(
             mesh_device,
-            dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+            dims=(None, 0) if batch_size > 1 else (None, None),
             mesh_shape=model_args.cluster_shape,
         ),
     )
@@ -235,7 +235,7 @@ def test_qwen_attention_ttt_inference(
         attention_input = model_args.prepare_residual_tensor_decode(
             tt_attention_input,
             model_args.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"],
-            force_replicated=False if model_args.is_galaxy else True,
+            force_replicated=False,
         )
 
         # Get cos/sin matrices for the current position of each user
@@ -291,7 +291,7 @@ def test_qwen_attention_ttt_inference(
             dtype=ttnn.int32,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 mesh_device,
-                dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+                dims=(None, 0) if batch_size > 1 else (None, None),
                 mesh_shape=model_args.cluster_shape,
             ),
         )
@@ -311,7 +311,7 @@ def test_qwen_attention_ttt_inference(
                             cache,
                             mesh_composer=ttnn.ConcatMesh2dToTensor(
                                 mesh_device,
-                                dims=(1, 0) if model_args.is_galaxy else (0, 1),
+                                dims=(1, 0),
                                 mesh_shape=model_args.cluster_shape,
                             ),
                         )
@@ -348,7 +348,7 @@ def test_qwen_attention_ttt_inference(
                         cache,
                         mesh_composer=ttnn.ConcatMesh2dToTensor(
                             mesh_device,
-                            dims=(1, 0) if model_args.is_galaxy else (0, 1),
+                            dims=(1, 0),
                             mesh_shape=model_args.cluster_shape,
                         ),
                     )[:batch_size, :, :, :]

@@ -301,7 +301,7 @@ def test_qwen_model_ttt_inference(
         dtype=ttnn.int32,
         mesh_mapper=ttnn.ShardTensor2dMesh(
             mesh_device,
-            dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+            dims=(None, 0) if batch_size > 1 else (None, None),
             mesh_shape=model_args.cluster_shape,
         ),
     )
@@ -329,9 +329,7 @@ def test_qwen_model_ttt_inference(
             tt_decode_input = tt_embd(tt_out_tok)
 
             # Convert ttnn tensor to torch tensor
-            mesh_composer = ttnn.ConcatMesh2dToTensor(
-                mesh_device, dims=(3, 1) if model_args.is_galaxy else (1, -1), mesh_shape=model_args.cluster_shape
-            )
+            mesh_composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(3, 1), mesh_shape=model_args.cluster_shape)
 
             outs = [ttnn.to_torch(out, mesh_composer=mesh_composer) for out in tt_out]
             outs = torch.concat(outs, dim=-1)
@@ -343,7 +341,6 @@ def test_qwen_model_ttt_inference(
                 # Use tt_transformers reference model with appropriate dtype
                 ref_input_dtype = get_ref_model_dype(reference_model, model_args_ref.model_name)
                 ref_output = reference_model(pt_decode_input.to(torch.bfloat16), current_pos[0])
-                # breakpoint()
 
             # Increment position
             ttnn.plus_one(
@@ -392,17 +389,6 @@ def test_qwen_model_ttt_inference(
                         pt_out_tok.squeeze(1).tolist()[0]
                     )  # Update generated token to list of ref outputs
 
-                    # Teacher forcing
-                    # tt_out_tok = ttnn.from_torch(
-                    #     pt_out_tok.reshape(1, 1, 1, batch_size),
-                    #     device=mesh_device,
-                    #     dtype=ttnn.uint32,
-                    #     layout=ttnn.ROW_MAJOR_LAYOUT,
-                    #     mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape),
-                    #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    # )
-                    # tt_decode_input = tt_embd(tt_out_tok)
-
             # Measure PCC if also running reference model
             if run_ref_pt:
                 if i == iterations - 1:  # On last iteration in the quick test, set a tighter PCC
@@ -423,59 +409,6 @@ def test_qwen_model_ttt_inference(
                     logger.warning("Qwen Model TTT Failed!")
                 if not passing:
                     all_tests_pass = False
-
-                # Compare KV caches
-                # for l in range(model_args.n_layers):
-                #     pytorch_layer_present = [
-                #         reference_model.cache_k(l).clone()
-                #         .permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
-                #         reference_model.cache_v(l).clone()
-                #         .permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
-                #     ]
-                #     tt_layer_present = []
-                #     for layer_past_i in tt_model.layers[l].attention.layer_past:
-                #         intermediate_tt = ttnn.to_torch(
-                #                 layer_past_i,
-                #                 mesh_composer=ttnn.ConcatMesh2dToTensor(
-                #                     mesh_device,
-                #                     dims=(1, 3) if model_args.is_galaxy else (0, 1),
-                #                     mesh_shape=model_args.cluster_shape,
-                #                 ),
-                #             )
-                #         tt_layer_present.append(
-                #             intermediate_tt[reverse_permutation][:, : model_args.n_kv_heads, :, : model_args.head_dim]
-                #             .reshape(
-                #                 model_args.max_batch_size,
-                #                 paged_attention_config.max_num_blocks // model_args.max_batch_size,
-                #                 model_args.n_kv_heads,
-                #                 paged_attention_config.block_size,
-                #                 model_args.head_dim,
-                #             )
-                #             .transpose(1, 2)
-                #             .reshape(model_args.max_batch_size, model_args.n_kv_heads, -1, model_args.head_dim)[
-                #                 :batch_size, ...
-                #             ]
-                #         )
-
-                #     for kv_cache, (cache_pt, cache_tt) in enumerate(zip(pytorch_layer_present, tt_layer_present)):
-                #         cache_length_to_check = min(
-                #             model_args.max_seq_len, generation_start_pos + generation_length + 1
-                #         )
-                #         # cache_pt = cache_pt[:, :, generation_start_pos:cache_length_to_check, :]
-                #         # cache_tt = cache_tt[:, :, generation_start_pos:cache_length_to_check, :]
-                #         cache_pt = cache_pt[:, :, i, :]
-                #         cache_tt = cache_tt[:, :, i, :]
-                #         does_pass, output_pcc = comp_pcc(cache_pt, cache_tt, pcc)
-                #         if kv_cache == 0:
-                #             logger.info(f"K cache output: {output_pcc}")
-                #         else:
-                #             logger.info(f"V cache output: {output_pcc}")
-
-                #         if does_pass:
-                #             logger.info(f"KV Cache Passed!")
-                #         else:
-                #             logger.warning(f"KV Cache Failed! PCC value is lower than {pcc}")
-                #             kv_cache_tests_pass = False
 
             if not dummy_weights:
                 logger.info(

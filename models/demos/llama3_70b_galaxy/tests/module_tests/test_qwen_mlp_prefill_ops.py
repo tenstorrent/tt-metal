@@ -94,4 +94,3 @@ def test_w1_mm(mesh_device):
 
     ref_torch = torch_input @ w1_torch
     tt_out_torch = ttnn.to_torch(w1_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device=mesh_device, dim=3))
-    breakpoint()
