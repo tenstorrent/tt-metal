@@ -321,7 +321,9 @@ def resolve_execution_order(scripts: dict[str, TriageScript]) -> list[TriageScri
     return script_queue
 
 
-def parse_arguments(scripts: dict[str, TriageScript], script_path: str | None = None) -> ScriptArguments:
+def parse_arguments(
+    scripts: dict[str, TriageScript], script_path: str | None = None, argv: list[str] | None = None
+) -> ScriptArguments:
     from docopt import (
         parse_defaults,
         parse_pattern,
@@ -359,11 +361,13 @@ def parse_arguments(scripts: dict[str, TriageScript], script_path: str | None = 
             utils.ERROR(f"Error parsing arguments for script {script_name}: {e}")
             continue
 
-    argv = parse_argv(TokenStream(sys.argv[1:], DocoptExit), list(combined_options), options_first=False)
+    if argv is None:
+        argv = sys.argv[1:]
+    parsed_argv = parse_argv(TokenStream(argv, DocoptExit), list(combined_options), options_first=False)
     pattern_options = set(combined_pattern.flat(Option))
     for ao in combined_pattern.flat(AnyOptions):
         ao.children = list(set(combined_options) - pattern_options)
-    matched, left, collected = combined_pattern.fix().match(argv)
+    matched, left, collected = combined_pattern.fix().match(parsed_argv)
     if matched and left == []:
         return ScriptArguments(dict((a.name, a.value) for a in (combined_pattern.flat() + collected)))
 
@@ -583,7 +587,11 @@ def _init_ttexalens(args: ScriptArguments) -> Context:
 
 
 def run_script(
-    script_path: str | None = None, args: ScriptArguments | None = None, context: Context | None = None
+    script_path: str | None = None,
+    args: ScriptArguments | None = None,
+    context: Context | None = None,
+    argv: list[str] | None = None,
+    return_result: bool = False,
 ) -> Any:
     # Resolve script path
     if script_path is None:
@@ -610,7 +618,7 @@ def run_script(
 
     # Parse arguments
     if args is None:
-        args = parse_arguments(scripts, script_path)
+        args = parse_arguments(scripts, script_path, argv)
 
         # Setting verbosity level
         try:
@@ -635,6 +643,8 @@ def run_script(
             if script.config.data_provider and result is None:
                 raise TTTriageError(f"{script.name}: Data provider script did not return any data.")
     script = scripts[script_path] if script_path in scripts else None
+    if return_result:
+        return result
     serialize_result(script, result)
 
 
