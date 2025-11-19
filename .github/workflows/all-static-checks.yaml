@@ -35,6 +35,9 @@ jobs:
 
       - name: Run Pre-commit
         uses: pre-commit/action@v3.0.1
+        env:
+          PRE_COMMIT_FROM_REF: ${{ github.event_name == 'pull_request' && format('refs/remotes/origin/{0}', github.event.pull_request.base.ref) || 'HEAD^' }}
+          PRE_COMMIT_TO_REF: HEAD
         with:
           extra_args: |
             --from-ref ${{ github.event_name == 'pull_request' && format('refs/remotes/origin/{0}', github.event.pull_request.base.ref) || 'HEAD^' }} \
