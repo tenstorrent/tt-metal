@@ -237,7 +237,7 @@ cached_workload_t ReduceToRootOp::ReduceToRoot::create_at(
     const auto& root_coordinate = operation_attributes.root_coord;
 
     return reduce_to_root_program_factory(
-        tensor_args, operation_attributes, root_coordinate, tensor_return_value, semaphores);
+        tensor_args, operation_attributes, root_coordinate, mesh_coordinate, tensor_return_value, semaphores);
 
     return {Program{}, shared_variables_t{.semaphores = semaphores}};
 }
