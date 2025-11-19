@@ -43,7 +43,7 @@ run_tg_llama3_long_context_tests() {
   for llama_dir in "$llama70b"; do
     LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "long-4k-b1" --timeout 1000; fail+=$?;
     LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "long-8k-b1" --timeout 1000; fail+=$?;
-    LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "long-16k-b32" --timeout 1000; fail+=$?;
+    LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "long-16k-b1" --timeout 1000; fail+=$?;
     LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "long-32k-b1" --timeout 1000; fail+=$?;
     LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "long-64k-b1" --timeout 1000; fail+=$?;
     LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "long-128k-b1" --timeout 1000; fail+=$?;
