@@ -153,17 +153,16 @@ struct StreamRegAssignments {
     static constexpr uint32_t to_sender_3_pkts_completed_id = 10;
     static constexpr uint32_t to_sender_4_pkts_completed_id = 11;
     // Receiver channel free slots stream IDs
-    static constexpr uint32_t receiver_channel_0_free_slots_from_east_stream_id = 12;
-    static constexpr uint32_t receiver_channel_0_free_slots_from_west_stream_id = 13;
-    static constexpr uint32_t receiver_channel_0_free_slots_from_north_stream_id = 14;
-    static constexpr uint32_t receiver_channel_0_free_slots_from_south_stream_id = 15;
-    static constexpr uint32_t receiver_channel_1_free_slots_from_downstream_stream_id = 16;
+    static constexpr uint32_t vc_0_free_slots_from_downstream_edge_1 = 12;
+    static constexpr uint32_t vc_0_free_slots_from_downstream_edge_2 = 13;
+    static constexpr uint32_t vc_0_free_slots_from_downstream_edge_3 = 14;
+    static constexpr uint32_t vc_1_free_slots_from_downstream_edge_1 = 15;
     // Sender channel free slots stream IDs
-    static constexpr uint32_t sender_channel_1_free_slots_stream_id = 18;
-    static constexpr uint32_t sender_channel_2_free_slots_stream_id = 19;
-    static constexpr uint32_t sender_channel_3_free_slots_stream_id = 20;
-    static constexpr uint32_t sender_channel_4_free_slots_stream_id = 21;
-    static constexpr uint32_t vc1_sender_channel_free_slots_stream_id = 22;
+    static constexpr uint32_t sender_channel_0_free_slots_stream_id = 17;  // for tensix worker
+    static constexpr uint32_t sender_channel_1_free_slots_stream_id = 18;  // for upstream edge on: 1D->VC0, 2D->VC0
+    static constexpr uint32_t sender_channel_2_free_slots_stream_id = 19;  // for upstream edge on: 1D->VC1, 2D->VC0
+    static constexpr uint32_t sender_channel_3_free_slots_stream_id = 20;  // for upstream edge on: 2D->VC0
+    static constexpr uint32_t sender_channel_4_free_slots_stream_id = 21;  // for upstream edge on: 2D->VC1
     // Used by Lite Fabric
     // Consult tt_metal/lite_fabric/hw/inc/constants.hpp to ensure no conflicts
     static constexpr uint32_t reserved_lite_fabric_0_stream_id = 23;
@@ -189,16 +188,14 @@ struct StreamRegAssignments {
             to_sender_2_pkts_completed_id,
             to_sender_3_pkts_completed_id,
             to_sender_4_pkts_completed_id,
-            receiver_channel_0_free_slots_from_east_stream_id,
-            receiver_channel_0_free_slots_from_west_stream_id,
-            receiver_channel_0_free_slots_from_north_stream_id,
-            receiver_channel_0_free_slots_from_south_stream_id,
-            receiver_channel_1_free_slots_from_downstream_stream_id,
+            vc_0_free_slots_from_downstream_edge_1,
+            vc_0_free_slots_from_downstream_edge_2,
+            vc_0_free_slots_from_downstream_edge_3,
+            vc_1_free_slots_from_downstream_edge_1,
             sender_channel_1_free_slots_stream_id,
             sender_channel_2_free_slots_stream_id,
             sender_channel_3_free_slots_stream_id,
             sender_channel_4_free_slots_stream_id,
-            vc1_sender_channel_free_slots_stream_id,
             multi_risc_teardown_sync_stream_id};
         return stream_ids;
     }
@@ -231,7 +228,7 @@ struct FabricEriscDatamoverConfig {
     static constexpr std::size_t dateline_upstream_adjcent_sender_channel_skip_idx = 2;
 
     static constexpr std::size_t num_downstream_edms_vc0 = 1;
-    static constexpr std::size_t num_downstream_edms_2d_vc0 = 4;
+    static constexpr std::size_t num_downstream_edms_2d_vc0 = 3;
     static constexpr std::size_t num_downstream_edms_vc1 = 1;
     static constexpr std::size_t num_downstream_edms = num_downstream_edms_vc0 + num_downstream_edms_vc1;
     static constexpr std::size_t num_downstream_edms_2d = num_downstream_edms_2d_vc0 + num_downstream_edms_vc1;
@@ -436,6 +433,11 @@ size_t log_worker_to_fabric_edm_sender_rt_args(const std::vector<uint32_t>& args
 /*
  * The `FabricEriscDatamoverBuilder` is a general class that is used to build fabric router erisc kernels.
  * It is instantiated per fabric (erisc) router. It works closely with the `FabricEriscDatamoverConfig` class.
+ *
+ * Note on 2-ERISC enablement (Blackhole):
+ *   Builder logic may enable an effective "fabric 2-ERISC" mode by default when the platform exposes
+ *   two ERISCs on the Ethernet core and Fabric Tensix MUX is enabled. Decisions such as ERISC count and
+ *   TXQ selection are derived from this effective mode. A presence-based disable env exists to force-disable.
  */
 class FabricEriscDatamoverBuilder {
 public:
