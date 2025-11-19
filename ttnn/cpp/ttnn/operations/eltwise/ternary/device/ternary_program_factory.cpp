@@ -693,7 +693,6 @@ void set_or_update_runtime_arguments(
         const uint32_t tile_h = tile.get_height();
         const uint32_t tile_w = tile.get_width();
         auto output_dims = extract_tensor_dimensions(output, out_rank, tile_h, tile_w);
-        const auto [cD, cN, cC, cHt, cWt] = get_shape_dims(output);
 
         uint32_t c_start_id = 0;
         if (has_sharding) {
@@ -711,8 +710,8 @@ void set_or_update_runtime_arguments(
                 f_num_tiles = false_shard_shape[0] * false_shard_shape[1];  // actual
             }
             if (is_native_L1_sharding(predicate_tensor, value_true_tensor, value_false_tensor, output)) {
-                c_start_id =
-                    (i / num_shards_per_width) * (c_shard_height * cWt) + (i % num_shards_per_width) * c_shard_width;
+                c_start_id = (i / num_shards_per_width) * (c_shard_height * output_dims.Wt) +
+                             (i % num_shards_per_width) * c_shard_width;
             } else {
                 c_start_id = start_tile_id;
             }
@@ -1119,9 +1118,7 @@ TernaryDeviceOperation::TernaryProgramFactory::cached_program_t TernaryDeviceOpe
     tt_metal::TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
     writer_compile_time_args.push_back(static_cast<uint32_t>(has_sharding && native_sharding));
     std::map<std::string, std::string> writer_defines;
-    if (output_sharded && native_sharding) {
-        writer_defines["DST_SHARDED"] = "1";
-    }
+    writer_defines["DST_SHARDED"] = (output_sharded && native_sharding) ? "1" : "0";
     tt_metal::WriterDataMovementConfig writer_config =
         tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_defines);
 
