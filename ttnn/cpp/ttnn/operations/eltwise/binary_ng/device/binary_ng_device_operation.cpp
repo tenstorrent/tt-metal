@@ -65,7 +65,7 @@ CoreRangeSet get_worker_grid(
     const Tensor& input_tensor_a,
     const Tensor* input_tensor_b,
     const std::optional<Tensor>& output_tensor,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     // If sub_core_grids is provided, use it directly
     if (sub_core_grids.has_value()) {
         return sub_core_grids.value();

@@ -338,7 +338,7 @@ inline auto invoke_binary_ng(
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<bool>& use_legacy,
     const std::optional<bool>& fast_and_approximate_mode,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     if (use_legacy ? *use_legacy
                    : binary::is_legacy_only(lhs, rhs, memory_config, output, lhs_activations, rhs_activations) and
                          (not detail::is_binary_ng_only(lhs, rhs, binary_op_type))) {
@@ -740,7 +740,8 @@ Tensor BinaryOperationSfpu<binary_op_type>::invoke(
         lhs_activations,
         rhs_activations,
         use_legacy,
-        /*fast_and_approximate_mode*/ false);
+        /*fast_and_approximate_mode*/ false,
+        /*sub_core_grids*/ std::nullopt);
 }
 
 template <BinaryOpType binary_op_type>
@@ -780,11 +781,12 @@ Tensor BinaryOperationHypot<binary_op_type>::invoke(
         std::nullopt,
         memory_config,
         optional_output_tensor,
-        {},      // no post_activations
-        {},      // no lhs_activations
-        {},      // no rhs_activations
-        false,   // legacy_flag
-        false);  // fast_and_approximate_mode
+        {},             // no post_activations
+        {},             // no lhs_activations
+        {},             // no rhs_activations
+        false,          // legacy_flag
+        false,          // fast_and_approximate_mode
+        std::nullopt);  // sub_core_grids
 }
 
 template <BinaryOpType binary_op_type>
