@@ -200,7 +200,9 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     auto [num_cores, all_cores, core_group_1, core_group_2, num_sticks_per_core_group_1, num_sticks_per_core_group_2] =
-        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_sticks);
+        sub_core_grids.has_value()
+            ? tt::tt_metal::split_work_to_cores(sub_core_grids.value(), num_unpadded_sticks)
+            : tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_sticks);
 
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
 
@@ -257,7 +259,12 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
     }
 
     auto override_runtime_args_callback =
-        [unary_reader_kernel_id, unary_writer_kernel_id, compute_with_storage_grid_size, src0_cb_index, cb_src0](
+        [unary_reader_kernel_id,
+         unary_writer_kernel_id,
+         compute_with_storage_grid_size,
+         sub_core_grids,
+         src0_cb_index,
+         cb_src0](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -273,7 +280,9 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
                  core_group_2,
                  num_sticks_per_core_group_1,
                  num_sticks_per_core_group_2] =
-                    tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_sticks);
+                    sub_core_grids.has_value()
+                        ? tt::tt_metal::split_work_to_cores(sub_core_grids.value(), num_unpadded_sticks)
+                        : tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_sticks);
 
             const auto tensor_start =
                 static_cast<const ttnn::operations::data_movement::SliceDeviceOperation*>(operation)->slice_start;
@@ -857,7 +866,9 @@ operation::ProgramWithCallbacks slice_tile_multi_core(
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_tiles);
+        sub_core_grids.has_value()
+            ? tt::tt_metal::split_work_to_cores(sub_core_grids.value(), num_unpadded_tiles)
+            : tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_tiles);
 
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
 
@@ -916,6 +927,7 @@ operation::ProgramWithCallbacks slice_tile_multi_core(
     auto override_runtime_args_callback = [unary_reader_kernel_id,
                                            unary_writer_kernel_id,
                                            compute_with_storage_grid_size,
+                                           sub_core_grids,
                                            accumulated_total_per_dim](
                                               const void* operation,
                                               const Program& program,
@@ -928,7 +940,9 @@ operation::ProgramWithCallbacks slice_tile_multi_core(
 
         auto
             [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-                tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_tiles);
+                sub_core_grids.has_value()
+                    ? tt::tt_metal::split_work_to_cores(sub_core_grids.value(), num_unpadded_tiles)
+                    : tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_tiles);
 
         const auto& tensor_start =
             static_cast<const ttnn::operations::data_movement::SliceDeviceOperation*>(operation)->slice_start;
@@ -1031,7 +1045,9 @@ operation::ProgramWithCallbacks slice_tile_multi_core_tensor_args(
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_tiles);
+        sub_core_grids.has_value()
+            ? tt::tt_metal::split_work_to_cores(sub_core_grids.value(), num_unpadded_tiles)
+            : tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_tiles);
 
     tt::tt_metal::Buffer* src_buffer = input_tensor.buffer();
     tt::tt_metal::Buffer* start_buffer = start_tensor.buffer();
@@ -1108,6 +1124,7 @@ operation::ProgramWithCallbacks slice_tile_multi_core_tensor_args(
     auto override_runtime_args_callback = [unary_reader_kernel_id,
                                            unary_writer_kernel_id,
                                            compute_with_storage_grid_size,
+                                           sub_core_grids,
                                            accumulated_total_per_dim](
                                               const void* operation,
                                               const Program& program,
@@ -1122,7 +1139,9 @@ operation::ProgramWithCallbacks slice_tile_multi_core_tensor_args(
 
         auto
             [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-                tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_tiles);
+                sub_core_grids.has_value()
+                    ? tt::tt_metal::split_work_to_cores(sub_core_grids.value(), num_unpadded_tiles)
+                    : tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_tiles);
 
         set_slice_runtime_args_tensor_args<false>(
             src_tensor,
