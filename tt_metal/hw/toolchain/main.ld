@@ -355,3 +355,8 @@ SECTIONS
 /* Tensix memory mapped devices (also visible from brisc). */
 PROVIDE(__instrn_buffer = INSTRN_BUF_BASE);
 #endif
+
+#if defined(TYPE_FIRMWARE) && (defined(COMPILE_FOR_MAIN_AERISC) || defined(COMPILE_FOR_SUBORDINATE_AERISC))
+/* Provide __erisc_jump_table for AERISC firmware (referenced in tunneling.h) */
+PROVIDE (__erisc_jump_table = 0x00009020);
+#endif

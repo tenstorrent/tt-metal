@@ -64,8 +64,8 @@
 
 /////////////
 // Firmware/kernel code holes
-// Increased to 10KB to accommodate non-LTO build for LLVM linking compatibility
-#define MEM_BRISC_FIRMWARE_SIZE (10 * 1024)
+// Increased to 12KB to accommodate LLVM build with watcher/DPRINT enabled
+#define MEM_BRISC_FIRMWARE_SIZE (12 * 1024)
 // TODO: perhaps put NCRISC FW in the scratch area and free 1.5K after init (GS/WH)
 // Increased to 4KB for non-LTO build
 #define MEM_NCRISC_FIRMWARE_SIZE (4 * 1024)

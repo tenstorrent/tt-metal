@@ -64,12 +64,12 @@ struct WorkerToFabricEdmSenderImpl {
     template <ProgrammableCoreType my_core_type>
     static WorkerToFabricEdmSenderImpl build_from_args(std::size_t& arg_idx) {
         constexpr bool is_persistent_fabric = true;
-        uint8_t direction;
+        [[maybe_unused]] uint8_t direction;
         uint8_t edm_worker_x;
         uint8_t edm_worker_y;
         uint32_t edm_buffer_base_addr;
         uint8_t num_buffers_per_channel;
-        uint32_t edm_l1_sem_id;
+        [[maybe_unused]] uint32_t edm_l1_sem_id;
         uint32_t edm_connection_handshake_l1_addr;
         uint32_t edm_worker_location_info_addr;
         uint16_t buffer_size_bytes;

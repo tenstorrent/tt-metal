@@ -45,7 +45,7 @@ FORCE_INLINE auto wrap_increment(T val, size_t max) {
 // This class implements the interface for static sized sender channels.
 // Static sized sender channels have a fixed number of buffer slots, defined
 // at router initialization, and persistent for the lifetime of the router.
-template <typename HEADER_TYPE, uint8_t NUM_BUFFERS>
+template <typename HEADER_TYPE, size_t NUM_BUFFERS>
 class StaticSizedSenderEthChannel : public SenderEthChannelInterface<
                                         HEADER_TYPE,
                                         NUM_BUFFERS,
@@ -99,7 +99,7 @@ constexpr bool USE_STATIC_SIZED_CHANNEL_BUFFERS = true;
 
 // A base Ethernet channel buffer interface class that will be specialized for different
 // channel architectures (e.g. static vs elastic sizing)
-template <typename HEADER_TYPE, uint8_t NUM_BUFFERS, typename DERIVED_T>
+template <typename HEADER_TYPE, size_t NUM_BUFFERS, typename DERIVED_T>
 class EthChannelBufferInterface {
 public:
     explicit EthChannelBufferInterface() = default;
@@ -202,7 +202,7 @@ public:
 // This class implements the interface for static sized receiver/Ethernet channels.
 // Static sized channels have a fixed number of buffer slots, defined
 // at router initialization, and persistent for the lifetime of the router.
-template <typename HEADER_TYPE, uint8_t NUM_BUFFERS>
+template <typename HEADER_TYPE, size_t NUM_BUFFERS>
 class StaticSizedEthChannelBuffer : public EthChannelBufferInterface<
                                         HEADER_TYPE,
                                         NUM_BUFFERS,
@@ -283,7 +283,7 @@ private:
 };
 
 // Helper to select channel buffer implementation based on compile-time flag
-template <bool UseStatic, typename HEADER_TYPE, uint8_t NUM_BUFFERS>
+template <bool UseStatic, typename HEADER_TYPE, size_t NUM_BUFFERS>
 struct ChannelBufferTypeSelector {
     using type = std::conditional_t<
         UseStatic,
@@ -291,7 +291,7 @@ struct ChannelBufferTypeSelector {
         ElasticEthChannelBuffer<HEADER_TYPE>>;
 };
 
-template <bool UseStatic, typename HEADER_TYPE, uint8_t NUM_BUFFERS>
+template <bool UseStatic, typename HEADER_TYPE, size_t NUM_BUFFERS>
 struct SenderChannelTypeSelector {
     using type = std::conditional_t<
         UseStatic,
@@ -302,11 +302,11 @@ struct SenderChannelTypeSelector {
 
 // For backward compatibility until Issue #26311 completed
 // - when NUM_BUFFERS is known at compile time, else can provide a dummy value
-template <typename HEADER_TYPE, uint8_t NUM_BUFFERS>
+template <typename HEADER_TYPE, size_t NUM_BUFFERS>
 using EthChannelBuffer = typename ChannelBufferTypeSelector<
     USE_STATIC_SIZED_CHANNEL_BUFFERS, HEADER_TYPE, NUM_BUFFERS>::type;
 
-template <typename HEADER_TYPE, uint8_t NUM_BUFFERS>
+template <typename HEADER_TYPE, size_t NUM_BUFFERS>
 using SenderEthChannel = typename SenderChannelTypeSelector<
     USE_STATIC_SIZED_CHANNEL_BUFFERS, HEADER_TYPE, NUM_BUFFERS>::type;
 
@@ -684,7 +684,7 @@ struct EdmChannelWorkerInterface {
 
 // Derived class for static-sized sender channels with fixed number of buffer slots.
 // This implements the interface for channels with a known, fixed NUM_BUFFERS at compile time.
-template <uint8_t WORKER_HANDSHAKE_NOC, uint8_t NUM_BUFFERS>
+template <uint8_t WORKER_HANDSHAKE_NOC, size_t NUM_BUFFERS>
 struct StaticSizedSenderChannelWorkerInterface
     : public EdmChannelWorkerInterface<
           WORKER_HANDSHAKE_NOC,
