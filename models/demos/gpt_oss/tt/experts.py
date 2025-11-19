@@ -4,6 +4,7 @@
 import math
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.demos.gpt_oss.config import MeshConfig, Mode, ModeConfig
@@ -361,6 +362,7 @@ class Experts:
                 else:
                     next_states_16 = next_states
                 if seq_len > 1:
+                    logger.info("Synchronization inside prefill tracing?")
                     ttnn.synchronize_device(self.mesh_device)
                 next_states = self.mesh_config.allreduce(
                     next_states_16,
