@@ -261,7 +261,7 @@ private:
      * @return std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> Map from mesh ID to
      * ASIC ID to mesh host rank (ordered for deterministic iteration)
      */
-    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> build_asic_id_to_mesh_rank_mapping() const;
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> build_asic_id_to_mesh_rank_mapping();
 
     /**
      * @brief Build the mapping between fabric node IDs and host ranks
@@ -357,6 +357,9 @@ private:
     // Host-rank metadata for fabric-node-based queries (independent of MeshGraph's storage)
     std::vector<MeshContainer<MeshHostRankId>> mesh_host_ranks_;
     std::map<std::pair<MeshId, MeshHostRankId>, MeshCoordinateRange> mesh_host_rank_coord_ranges_;
+
+    // Mapping from (mesh_id, host_rank) to MPI rank for lookups when fabric node isn't in local mapping
+    std::map<std::pair<MeshId, MeshHostRankId>, int> mesh_host_rank_to_mpi_rank_;
 
     // Rebuild host-rank containers purely from fabric_node_id_to_asic_id_ mapping
     void rebuild_host_rank_structs_from_mapping(

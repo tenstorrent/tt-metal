@@ -355,6 +355,7 @@ LocalMeshBinding ControlPlane::initialize_local_mesh_binding() {
     const auto& host_ranks =
         this->routing_table_generator_->mesh_graph->get_host_ranks(local_mesh_binding.mesh_ids[0]).values();
     if (host_rank_str == nullptr) {
+        local_mesh_binding.host_rank = MeshHostRankId{0};
         TT_FATAL(
             host_ranks.size() == 1 && *host_ranks.front() == 0,
             "TT_MESH_HOST_RANK must be set when multiple host ranks are present in the mesh graph descriptor for mesh "
